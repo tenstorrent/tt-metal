@@ -19,16 +19,14 @@ tt_metal::Program generate_eltwise_unary_program(Device *device) {
         single_tile_size * num_tiles;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
     uint32_t dram_buffer_src0_addr = 0;
-    int dram_src0_channel_id = 0;
 
     uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024;  // 512 MB (upper half)
-    int dram_dst_channel_id = 0;
 
     uint32_t page_size = single_tile_size;
     auto src0_dram_buffer = tt_metal::Buffer(
-        device, dram_buffer_size, dram_buffer_src0_addr, dram_src0_channel_id, page_size, tt_metal::BufferType::DRAM);
+        device, dram_buffer_size, dram_buffer_src0_addr, page_size, tt_metal::BufferType::DRAM);
     auto dst_dram_buffer = tt_metal::Buffer(
-        device, dram_buffer_size, dram_buffer_dst_addr, dram_dst_channel_id, page_size, tt_metal::BufferType::DRAM);
+        device, dram_buffer_size, dram_buffer_dst_addr, page_size, tt_metal::BufferType::DRAM);
 
     auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
     auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
@@ -38,26 +36,24 @@ tt_metal::Program generate_eltwise_unary_program(Device *device) {
     uint32_t num_input_tiles = 2;
     auto cb_src0 = tt_metal::CreateCircularBuffer(
         program,
-        device,
         src0_cb_index,
         core,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        src0_cb_addr,
-        tt::DataFormat::Float16_b);
+        tt::DataFormat::Float16_b,
+        src0_cb_addr);
 
     uint32_t ouput_cb_index = 16;  // output operands start at index 16
     uint32_t output_cb_addr = 400 * 1024;
     uint32_t num_output_tiles = 2;
     auto cb_output = tt_metal::CreateCircularBuffer(
         program,
-        device,
         ouput_cb_index,
         core,
         num_output_tiles,
         num_output_tiles * single_tile_size,
-        output_cb_addr,
-        tt::DataFormat::Float16_b);
+        tt::DataFormat::Float16_b,
+        output_cb_addr);
 
     auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,

@@ -62,9 +62,8 @@ int main(int argc, char **argv) {
         uint32_t dram_buffer_size =  num_sticks * stick_size; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
         uint32_t dram_buffer_src_addr = 0;
-        int dram_src_channel_id = 0;
 
-        auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, dram_src_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, dram_buffer_size, tt_metal::BufferType::DRAM);
 
         auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
         uint32_t l1_buffer_addr = 400 * 1024;
@@ -73,10 +72,7 @@ int main(int argc, char **argv) {
         for(int i = start_core.y; i < start_core.y + num_cores_r; i++) {
             for(int j = start_core.x; j < start_core.x + num_cores_c; j++) {
                 CoreCoord core = {(std::size_t) j, (std::size_t) i};
-                auto l1_bank_ids = device->bank_ids_from_logical_core(core);
-                TT_ASSERT(not l1_bank_ids.empty());
-                auto l1_bank_id = l1_bank_ids.at(0);
-                auto l1_b0 = tt_metal::Buffer(device, per_core_l1_size, l1_buffer_addr, l1_bank_id, per_core_l1_size, tt_metal::BufferType::L1);
+                auto l1_b0 = tt_metal::Buffer(device, per_core_l1_size, l1_buffer_addr, per_core_l1_size, tt_metal::BufferType::L1);
             }
         }
         auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(

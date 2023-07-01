@@ -44,31 +44,12 @@ enum class MemoryAllocator {
     L1_BANKING = 1,
 };
 
-struct AddressDescriptor {
-    u32 offset_bytes = 0;
-    u32 relative_address = 0;
-
-    u32 absolute_address()     const {
-        return offset_bytes + relative_address;
-    }
-};
-
-using BankIdToRelativeAddress = std::unordered_map<u32, AddressDescriptor>;
-
-struct BankDescriptor {
-    u32 offset_bytes = 0;
-    u32 size_bytes = 0;
-    // This is to store offsets for any banks that share a core or node (dram in wh/storage core), so we can view all banks using only bank_id
-    // set to 0 for cores with only 1 bank
-    i32 bank_offset_bytes = 0;
-};
-
 namespace allocator {
 
 struct InitAndAllocFuncs {
     std::function<void(Allocator &, const AllocatorConfig &)> init;
-    std::function<BankIdToRelativeAddress(const AllocatorConfig &, BankManager &, u32, u32, u32, bool)> alloc;
-    std::function<BankIdToRelativeAddress(const AllocatorConfig &, BankManager &, u32, u32, u32, u32)> alloc_at_addr;
+    std::function<u64(const AllocatorConfig &, BankManager &, u64, u64, bool)> alloc;
+    std::function<u64(const AllocatorConfig &, BankManager &, u64, u64, u64)> alloc_at_addr;
 };
 
 // Holds callback functions required by allocators that specify how to initialize the bank managers and what the allocation scheme

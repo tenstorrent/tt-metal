@@ -43,15 +43,13 @@ int main(int argc, char **argv) {
         constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles;
         constexpr uint32_t l1_buffer_addr = 400 * 1024;
 
-        uint32_t l1_bank_id = device->bank_ids_from_logical_core(core).at(0);
-        Buffer l1_buffer = Buffer(device, dram_buffer_size, l1_buffer_addr, l1_bank_id, dram_buffer_size, BufferType::L1);
+        Buffer l1_buffer = Buffer(device, dram_buffer_size, l1_buffer_addr, dram_buffer_size, BufferType::L1);
 
         constexpr uint32_t input_dram_buffer_addr = 0;
-        constexpr int dram_channel = 0;
-        Buffer input_dram_buffer = Buffer(device, dram_buffer_size, input_dram_buffer_addr, dram_channel, dram_buffer_size, BufferType::DRAM);
+        Buffer input_dram_buffer = Buffer(device, dram_buffer_size, input_dram_buffer_addr, dram_buffer_size, BufferType::DRAM);
 
         constexpr uint32_t output_dram_buffer_addr = 512 * 1024;
-        Buffer output_dram_buffer = Buffer(device, dram_buffer_size, output_dram_buffer_addr, dram_channel, dram_buffer_size, BufferType::DRAM);
+        Buffer output_dram_buffer = Buffer(device, dram_buffer_size, output_dram_buffer_addr, dram_buffer_size, BufferType::DRAM);
 
         /*
         * Compile kernels used during execution

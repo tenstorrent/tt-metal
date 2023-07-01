@@ -19,6 +19,7 @@ bool test_free_list() {
 
     auto free_list_allocator = allocator::FreeList(
         max_size_bytes,
+        /*offset*/0,
         min_allocation_size_bytes,
         alignment,
         allocator::FreeList::SearchPolicy::FIRST

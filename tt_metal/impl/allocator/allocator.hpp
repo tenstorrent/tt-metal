@@ -19,42 +19,28 @@ struct Allocator;
 
 namespace allocator {
 
-inline bool accept_all_address_ranges(const std::pair<u32, u32> &range) { return true; }
-
-inline void pass_through_potential_addresses(u32 bank_id, std::vector<std::pair<u32, u32>> &potential_addr_ranges) {}
-
-inline u32 pass_through_adjust_address(u32 address, u32 bank_id) { return address; }
+inline u32 pass_through_address(u32 address) { return address; }
 
 class BankManager {
    public:
-    BankManager() : initialized_(false) {}
+    BankManager() {}
 
-    BankManager(const std::vector<BankDescriptor> &bank_descriptors);
-    BankManager(const std::unordered_map<u32, BankDescriptor> &bank_id_to_descriptor);
+    BankManager(const std::vector<i64> &bank_descriptors, u64 size_bytes, u64 alloc_offset=0);
+    BankManager(const std::unordered_map<u32, i64> &bank_id_to_descriptor, u64 size_bytes, u64 alloc_offset=0);
 
     u32 num_banks() const;
 
-    u32 size(u32 bank_id) const;
+    i64 bank_offset(u32 bank_id) const;
 
-    u32 offset(u32 bank_id) const;
-    i32 bank_offset(u32 bank_id) const;
+    u64 allocate_buffer(u32 size, u32 page_size, bool bottom_up);
 
-    BankIdToRelativeAddress allocate_buffer(
-        u32 starting_bank_id, u32 size, u32 page_size, bool bottom_up,
-        std::function<void(u32, std::vector<std::pair<u32, u32>> &)> adjust_potential_addresses = pass_through_potential_addresses,
-        std::function<bool(const std::pair<u32, u32> &)> filter = accept_all_address_ranges,
-        std::function<u32(u32, u32)> adjust_relative_address = pass_through_adjust_address);
+    u64 allocate_buffer_at_address(u32 size, u32 page_size, u32 relative_address, std::function<u32(u32)> adjust_address = pass_through_address);
 
-    BankIdToRelativeAddress allocate_buffer_at_address(
-        u32 starting_bank_id, u32 size, u32 page_size, u32 absolute_address,
-        std::function<u32(u32, u32)> adjust_absolute_address = pass_through_adjust_address);
-
-    void deallocate_buffer(u32 bank_id, u32 absolute_address);
-
-    // TODO (abhullar): Remove after CB redesign
-    std::vector<std::pair<u32, u32>> available_addresses(u32 bank_id, u32 size_bytes, bool return_absolute_addresses=false) const;
+    void deallocate_buffer(u64 address);
 
     void clear();
+
+    std::optional<u64> lowest_occupied_address(u32 bank_id) const;
 
     Statistics get_statistics(u32 bank_id) const;
 
@@ -67,27 +53,15 @@ class BankManager {
     // DRAM_buffer_addr % 32 == L1_buffer_addr % 32 == 0
     constexpr static u32 alignment_ = 32;
 
-    bool initialized_;
-    std::unordered_map<u32, u32> bank_id_to_offset_;
-    std::unordered_map<u32, u32> bank_id_to_bank_offset_;
-    std::unordered_map<u32, std::unique_ptr<Algorithm>> bank_id_to_allocator_;
+    // This is to store offsets for any banks that share a core or node (dram in wh/storage core), so we can view all banks using only bank_id
+    // Set to 0 for cores/nodes with only 1 bank
+    std::unordered_map<u32, i64> bank_id_to_bank_offset_;
+    std::unique_ptr<Algorithm> allocator_;
 
     void validate_bank_id(u32 bank_id) const;
 
-    BankIdToRelativeAddress allocate_contiguous_buffer(u32 bank_id, u32 size_bytes, bool bottom_up);
-
-    BankIdToRelativeAddress allocate_contiguous_buffer_at_address(u32 bank_id, u32 size_bytes, u32 address);
+    void init_allocator(u64 size_bytes, u64 offset);
 };
-
-u32 find_max_address(const std::vector<std::pair<u32, u32>> &candidate_addr_ranges);
-
-u32 find_address_of_smallest_chunk(const std::vector<std::pair<u32, u32>> &candidate_addr_ranges);
-
-void populate_candidate_address_ranges(
-    std::vector<std::pair<u32, u32>> &candidate_addr_ranges,
-    const std::vector<std::pair<u32, u32>> &potential_addr_ranges,
-    std::function<bool(const std::pair<u32, u32> &)> filter = accept_all_address_ranges
-);
 
 // Functions used to initiate allocator and allocate buffers
 void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &alloc_config);
@@ -112,24 +86,19 @@ Statistics get_statistics(const Allocator &allocator, const BufferType &buffer_t
 
 void dump_memory_blocks(const Allocator &allocator, const BufferType &buffer_type, u32 bank_id, std::ofstream &out);
 
-BankIdToRelativeAddress alloc_one_bank_per_storage_unit(const AllocatorConfig & config, BankManager &bank_manager, u32 starting_bank_id, u32 size, u32 page_size, bool bottom_up);
+std::optional<u64> lowest_occupied_l1_address(const Allocator &allocator, u32 bank_id);
 
-BankIdToRelativeAddress alloc_at_addr_one_bank_per_storage_unit(const AllocatorConfig & config, BankManager &bank_manager, u32 starting_bank_id, u32 size, u32 page_size, u32 absolute_address);
+u64 base_alloc(const AllocatorConfig & config, BankManager &bank_manager, u64 size, u64 page_size, bool bottom_up);
 
-BankIdToRelativeAddress allocate_buffer(Allocator &allocator, u32 starting_bank_id, u32 size, u32 page_size, const BufferType &buffer_type, bool bottom_up);
+u64 base_alloc_at_addr(const AllocatorConfig &config, BankManager &bank_manager, u64 size, u64 page_size, u64 absolute_address);
 
-BankIdToRelativeAddress allocate_buffer_at_address(Allocator &allocator, u32 starting_bank_id, u32 size, u32 page_size, u32 absolute_address, const BufferType &buffer_type);
+u64 allocate_buffer(Allocator &allocator, u32 size, u32 page_size, const BufferType &buffer_type, bool bottom_up);
 
-void deallocate_buffer(Allocator &allocator, u32 bank_id, u32 address, const BufferType &buffer_type);
+u64 allocate_buffer_at_address(Allocator &allocator, u32 size, u32 page_size, u32 relative_address, const BufferType &buffer_type);
+
+void deallocate_buffer(Allocator &allocator, u64 address, const BufferType &buffer_type);
 
 void clear(Allocator &allocatator);
-
-// TODO (abhullar): Circular buffer specific APIs will be removed after CB redesign.
-u32 allocate_circular_buffer(Allocator &allocator, const CoreCoord &logical_core, u32 size_bytes);
-
-u32 allocate_circular_buffer(Allocator &allocator, const CoreCoord &logical_core, u32 start_address, u32 size_bytes);
-
-u32 get_address_for_circular_buffers_across_core_range(Allocator &allocator, const CoreRange &logical_core_range, u32 size_in_bytes);
 
 }  // namespace allocator
 
@@ -138,6 +107,8 @@ struct Allocator {
 
     allocator::BankManager dram_manager;
     allocator::BankManager l1_manager;
+
+    // TODO: Track lowest l1 addresses!
 
     std::unordered_map<u32, u32> bank_id_to_dram_channel;
     std::unordered_map<u32, std::vector<u32>> dram_channel_to_bank_ids;

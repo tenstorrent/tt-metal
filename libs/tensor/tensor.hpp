@@ -33,7 +33,6 @@ enum class DataType {
 
 struct MemoryConfig {
     bool interleaved = true;    // Interleave the data across multiple DRAM banks
-    int bank_id = -1;           // If interleaved is false this has to be specified
     BufferType buffer_type = BufferType::DRAM; // Can be either DRAM or L1
 };
 

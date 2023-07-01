@@ -134,7 +134,7 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
         }
     };
 
-    auto write_cb_config_transfer = [&](const CircularBuffer* cb) {
+    auto write_cb_config_transfer = [&](const CircularBuffer &cb) {
         u32 num_bytes_so_far = program_vector.size() * sizeof(u32);
         u32 num_new_bytes = 16;
 
@@ -143,20 +143,20 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
             initialize_section();
         }
 
-        program_vector.push_back(cb->address() >> 4);
-        program_vector.push_back(cb->size() >> 4);
-        program_vector.push_back(cb->num_tiles());
+        program_vector.push_back(cb.address() >> 4);
+        program_vector.push_back(cb.size() >> 4);
+        program_vector.push_back(cb.num_tiles());
         program_vector.push_back(0);  // Padding
 
         if (DISPATCH_MAP_DUMP != nullptr) {
-            vector<u32> cb_config = {cb->address() >> 4, cb->size() >> 4, cb->num_tiles()};
-            for (auto buffer_index : cb->buffer_indices()) {
+            vector<u32> cb_config = {cb.address() >> 4, cb.size() >> 4, cb.num_tiles()};
+            for (auto buffer_index : cb.buffer_indices()) {
                 string name = "CB: " + std::to_string(buffer_index);
                 update_dispatch_map_dump(name, cb_config, dispatch_dump_file);
             }
         }
 
-        CoreRangeSet cr_set = cb->core_range_set();
+        CoreRangeSet cr_set = cb.core_range_set();
 
         for (const CoreRange& core_range : cr_set.ranges()) {
             CoreCoord physical_start = device->worker_core_from_logical_core(core_range.start);
@@ -164,7 +164,7 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
 
             u32 noc_multicast_encoding = get_noc_multicast_encoding(physical_start, physical_end);
 
-            for (auto buffer_index : cb->buffer_indices()) {
+            for (auto buffer_index : cb.buffer_indices()) {
                 sections.at(current_section_idx)
                     .at(TransferType::CB)
                     .push_back(std::make_tuple(
@@ -242,7 +242,7 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
         write_program_kernel_transfer(kernel, riscv_type);
     }
 
-    for (const CircularBuffer* cb : program.circular_buffers()) {
+    for (const CircularBuffer &cb : program.circular_buffers()) {
         write_cb_config_transfer(cb);
     }
 
@@ -626,7 +626,6 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
 
     // Need to relay the program into DRAM if this is the first time
     // we are seeing it
-    static int channel_id = 0;  // Are there issues with this being static?
 
     const u64 program_id = program.get_id();
     if (not this->program_to_buffer.count(program_id)) {
@@ -638,7 +637,7 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
         this->program_to_buffer.emplace(
             program_id,
             std::make_unique<Buffer>(
-                this->device, program_data_size_in_bytes, channel_id, program_data_size_in_bytes, BufferType::DRAM));
+                this->device, program_data_size_in_bytes, program_data_size_in_bytes, BufferType::DRAM));
 
         this->enqueue_write_buffer(*this->program_to_buffer.at(program_id), program_vector, blocking);
 
@@ -720,6 +719,7 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
         tt_start_debug_print_server(cq.device->cluster(), {0}, {{1, 11}}, hart_mask, device_dispatch_dump_file.c_str());
     }
 
+    program.validate_circular_buffer_region(cq.device);
     cq.enqueue_program(program, blocking);
 
     if (COMPARE_DISPATCH_DEVICE_TO_HOST != nullptr) {

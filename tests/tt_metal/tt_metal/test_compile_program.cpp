@@ -97,7 +97,6 @@ Program create_program(Device *device, const ProgramAttributes &program_attribut
     uint32_t num_input_tiles = 8;
     auto cb_src0 = tt_metal::CreateCircularBuffer(
         program,
-        device,
         program_attributes.src_cb_index,
         core,
         num_input_tiles,
@@ -109,7 +108,6 @@ Program create_program(Device *device, const ProgramAttributes &program_attribut
     uint32_t num_output_tiles = 1;
     auto cb_output = tt_metal::CreateCircularBuffer(
         program,
-        device,
         program_attributes.output_cb_index,
         core,
         num_output_tiles,

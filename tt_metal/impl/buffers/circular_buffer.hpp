@@ -9,24 +9,10 @@ namespace tt {
 namespace tt_metal {
 
 class CircularBuffer {
-   private:
-    enum State : uint8_t {
-        UNALLOCATED = 0,
-        ADDRESS_SPECIFIED = 1,
-        ALLOCATED = 2,
-    };
-
    public:
-    CircularBuffer(
-        Device *device,
-        const CoreRangeSet &core_range_set,
-        const std::set<u32> &buffer_indices,
-        u32 num_tiles,
-        u32 size_in_bytes,
-        DataFormat data_format);
+    CircularBuffer() : core_range_set_({}), num_tiles_(0), size_(0), address_(0), data_format_(DataFormat::Invalid) {}
 
     CircularBuffer(
-        Device *device,
         const CoreRangeSet &core_range_set,
         const std::set<u32> &buffer_indices,
         u32 num_tiles,
@@ -34,18 +20,15 @@ class CircularBuffer {
         u32 address,
         DataFormat data_format);
 
-    // TODO (abhullar): Copy ctor semantics for CB should allocate same size in new space. Uplift when redesigning CB and CB config
-    CircularBuffer(const CircularBuffer &other) = delete;
-    CircularBuffer& operator=(const CircularBuffer &other) = delete;
+    CircularBuffer(const CircularBuffer &other) = default;
+    CircularBuffer& operator=(const CircularBuffer &other) = default;
 
     CircularBuffer(CircularBuffer &&other) = default;
     CircularBuffer& operator=(CircularBuffer &&other) = default;
 
-    ~CircularBuffer();
-
     CoreRangeSet core_range_set() const { return core_range_set_; }
 
-    std::set<u32> buffer_indices() const { return buffer_indices_; }
+    const std::set<u32> &buffer_indices() const { return buffer_indices_; }
 
     u32 num_tiles() const { return num_tiles_; }
 
@@ -57,25 +40,13 @@ class CircularBuffer {
 
     bool is_on_logical_core(const CoreCoord &logical_core) const;
 
-    void reserve(Device*);
-    void deallocate();
-
-    bool is_allocated() {
-        return this->state_ == State::ALLOCATED;
-    }
-
    private:
-
-    friend void DeallocateBuffer(Buffer &buffer);
-
-    Device *device_;
     CoreRangeSet core_range_set_;
-    const std::set<u32> buffer_indices_;        // Buffer IDs unique within a Tensix core (0 to 32)
-    u32 num_tiles_;                  // Size in tiles
+    std::set<u32> buffer_indices_;        // Buffer IDs unique within a Tensix core (0 to 32)
+    u32 num_tiles_;                             // Size in tiles
     u32 size_;
     u32 address_;
-    DataFormat data_format_;              // e.g. fp16, bfp8
-    State state_ = State::UNALLOCATED;
+    DataFormat data_format_;                    // e.g. fp16, bfp8
 };
 
 }  // namespace tt_metal

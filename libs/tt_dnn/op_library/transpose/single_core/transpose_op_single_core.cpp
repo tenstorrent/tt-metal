@@ -50,7 +50,6 @@ Program transpose_wh_single_core(const Tensor &a, Tensor& output) {
     uint32_t num_input_tiles = 2;
     auto cb_src0 = tt_metal::CreateCircularBuffers(
         program,
-        device,
         src0_cb_index,
         core,
         num_input_tiles,
@@ -62,7 +61,6 @@ Program transpose_wh_single_core(const Tensor &a, Tensor& output) {
     uint32_t num_output_tiles = 2;
     auto cb_output = tt_metal::CreateCircularBuffers(
         program,
-        device,
         ouput_cb_index,
         core,
         num_output_tiles,
@@ -165,7 +163,6 @@ Program transpose_hc_single_core(const Tensor &a, Tensor &output) {
     uint32_t num_input_tiles = 2;
     auto cb_src0 = tt_metal::CreateCircularBuffers(
         program,
-        device,
         src0_cb_index,
         core,
         num_input_tiles,
@@ -177,7 +174,6 @@ Program transpose_hc_single_core(const Tensor &a, Tensor &output) {
     uint32_t num_output_tiles = 2;
     auto cb_output = tt_metal::CreateCircularBuffers(
         program,
-        device,
         ouput_cb_index,
         core,
         num_output_tiles,
@@ -279,7 +275,6 @@ Program transpose_cn_single_core(const Tensor &a, Tensor &output) {
     uint32_t num_input_tiles = 2;
     auto cb_src0 = tt_metal::CreateCircularBuffers(
         program,
-        device,
         src0_cb_index,
         core,
         num_input_tiles,
@@ -291,7 +286,6 @@ Program transpose_cn_single_core(const Tensor &a, Tensor &output) {
     uint32_t num_output_tiles = 2;
     auto cb_output = tt_metal::CreateCircularBuffers(
         program,
-        device,
         ouput_cb_index,
         core,
         num_output_tiles,

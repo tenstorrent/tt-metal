@@ -29,26 +29,24 @@ void create_CBs_for_fused_matmul_sb(tt_metal::Program &program, tt_metal::Device
     uint32_t cb0_tiles = M * in0_block_w * 2;
     auto cb_in0 = tt_metal::CreateCircularBuffer(
         program,
-        device,
         in0_cb,
         core,
         cb0_tiles,
         cb0_tiles * single_tile_size,
-        src0_cb_addr,
-        tt::DataFormat::Float16_b
+        tt::DataFormat::Float16_b,
+        src0_cb_addr
     );
 
     uint32_t src1_cb_addr = 250 * 1024;
     uint32_t cb1_tiles = N * in0_block_w * 2;
     auto cb_in1 = tt_metal::CreateCircularBuffer(
         program,
-        device,
         in1_cb,
         core,
         cb1_tiles,
         cb1_tiles * single_tile_size,
-        src1_cb_addr,
-        tt::DataFormat::Float16_b
+        tt::DataFormat::Float16_b,
+        src1_cb_addr
     );
 
 
@@ -57,26 +55,24 @@ void create_CBs_for_fused_matmul_sb(tt_metal::Program &program, tt_metal::Device
         uint32_t matmul_partials_addr = 400 * 1024;
         auto cb_matmul_partials = tt_metal::CreateCircularBuffers(
             program,
-            device,
             {matmul_partials_cb, out0_cb},
             cores,
             num_output_tiles,
             num_output_tiles * single_tile_size,
-            matmul_partials_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            matmul_partials_addr
         );
     } else if (not activations_rm and output_rm) { // no tilize, just untilize
 
         uint32_t matmul_partials_addr = 450 * 1024;
         auto cb_matmul_partials = tt_metal::CreateCircularBuffer(
             program,
-            device,
             matmul_partials_cb,
             core,
             num_output_tiles,
             num_output_tiles * single_tile_size,
-            matmul_partials_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            matmul_partials_addr
         );
 
 
@@ -86,13 +82,12 @@ void create_CBs_for_fused_matmul_sb(tt_metal::Program &program, tt_metal::Device
         uint32_t temp_addr = 600 * 1024;
         auto cb_final_matmul_partials = tt_metal::CreateCircularBuffer(
             program,
-            device,
             untilize_mode_final_matmul_partials_cb,
             core,
             num_output_tiles,
             num_output_tiles * single_tile_size,
-            temp_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            temp_addr
         );
 
         // Supposed to be a small CB only responsible for reorganizing
@@ -101,25 +96,23 @@ void create_CBs_for_fused_matmul_sb(tt_metal::Program &program, tt_metal::Device
         uint32_t reblock_cb_tiles = N; // Only space for one row
         auto cb_reblock = tt_metal::CreateCircularBuffer(
             program,
-            device,
             untilize_mode_reblock_cb,
             core,
             reblock_cb_tiles,
             reblock_cb_tiles * single_tile_size,
-            reblock_cb_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            reblock_cb_addr
         );
 
         uint32_t output_cb_addr = 800 * 1024;
         auto cb_output = tt_metal::CreateCircularBuffer(
             program,
-            device,
             out0_cb,
             core,
             num_output_tiles,
             num_output_tiles * single_tile_size,
-            output_cb_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            output_cb_addr
         );
 
 
@@ -128,25 +121,23 @@ void create_CBs_for_fused_matmul_sb(tt_metal::Program &program, tt_metal::Device
         uint32_t tilized_cb_addr = 400 * 1024;
         auto cb_src0_tilized = tt_metal::CreateCircularBuffer(
             program,
-            device,
             tilize_mode_tilized_in0_cb,
             core,
             cb0_tiles,
             cb0_tiles * single_tile_size,
-            tilized_cb_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            tilized_cb_addr
         );
 
         uint32_t matmul_partials_addr = 550 * 1024;
         auto cb_matmul_partials = tt_metal::CreateCircularBuffers(
             program,
-            device,
             {matmul_partials_cb, out0_cb},
             cores,
             num_output_tiles,
             num_output_tiles * single_tile_size,
-            matmul_partials_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            matmul_partials_addr
         );
     } else { // tilize activations and untilize output
 
@@ -154,38 +145,35 @@ void create_CBs_for_fused_matmul_sb(tt_metal::Program &program, tt_metal::Device
         uint32_t tilized_cb_addr = 300 * 1024;
         auto cb_src0_tilized = tt_metal::CreateCircularBuffer(
             program,
-            device,
             tilize_mode_tilized_in0_cb,
             core,
             num_output_tiles,
             num_output_tiles * single_tile_size,
-            tilized_cb_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            tilized_cb_addr
         );
 
         uint32_t cb_matmul_partials_addr = 440 * 1024;
         auto cb_matmul_partials = tt_metal::CreateCircularBuffer(
             program,
-            device,
             matmul_partials_cb,
             core,
             num_output_tiles,
             num_output_tiles * single_tile_size,
-            cb_matmul_partials_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            cb_matmul_partials_addr
         );
 
         // Shares same address space as matmul partials
         uint32_t temp_addr = 580 * 1024;
         auto cb_final_matmul_partials = tt_metal::CreateCircularBuffer(
             program,
-            device,
             untilize_mode_final_matmul_partials_cb,
             core,
             num_output_tiles,
             num_output_tiles * single_tile_size,
-            temp_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            temp_addr
         );
 
         // Supposed to be a small CB only responsible for reorganizing
@@ -194,25 +182,23 @@ void create_CBs_for_fused_matmul_sb(tt_metal::Program &program, tt_metal::Device
         uint32_t reblock_cb_tiles = N; // Only space for one row
         auto cb_reblock = tt_metal::CreateCircularBuffer(
             program,
-            device,
             untilize_mode_reblock_cb,
             core,
             reblock_cb_tiles,
             reblock_cb_tiles * single_tile_size,
-            reblock_cb_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            reblock_cb_addr
         );
 
         uint32_t output_cb_addr = 860 * 1024;
         auto cb_output = tt_metal::CreateCircularBuffer(
             program,
-            device,
             out0_cb,
             core,
             num_output_tiles,
             num_output_tiles * single_tile_size,
-            output_cb_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            output_cb_addr
         );
     }
 }

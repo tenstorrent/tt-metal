@@ -213,27 +213,27 @@ operation::ProgramWithCallbacks layernorm_(
     }
 
     // Create circular buffers
-    CreateCircularBuffers( program, device, CB::c_in0,       all_cores, in0_t,  in0_t*single_tile_size,  cb_data_format );
-    CreateCircularBuffers( program, device, CB::c_out0,      all_cores, out0_t, out0_t*single_tile_size, cb_data_format );
-    CreateCircularBuffers( program, device, CB::c_intermed1, all_cores, im1_t,  im1_t*single_tile_size,  cb_data_format );
-    CreateCircularBuffers( program, device, CB::c_in2,       all_cores, in2_t,  in2_t*single_tile_size,  cb_data_format );
-    CreateCircularBuffers( program, device, CB::c_in3,       all_cores, in3_t,  in3_t*single_tile_size,  cb_data_format );
-    CreateCircularBuffers( program, device, CB::c_in4,       all_cores, in4_t,  in4_t*single_tile_size,  cb_data_format );
-    CreateCircularBuffers( program, device, CB::c_intermed2, all_cores, im2_t,  im2_t*single_tile_size,  cb_data_format );
-    CreateCircularBuffers( program, device, CB::c_intermed0, all_cores, im0_t,  im0_t*single_tile_size,  cb_data_format );
-    CreateCircularBuffers( program, device, CB::c_intermed3, all_cores, im3_t,  im3_t*single_tile_size,  cb_data_format );
-    CreateCircularBuffers( program, device, CB::c_intermed4, all_cores, im4_t,  im4_t*single_tile_size,  cb_data_format );
-    CreateCircularBuffers( program, device, CB::c_intermed5, all_cores, im5_t,  im5_t*single_tile_size,  cb_data_format );
-    CreateCircularBuffers( program, device, CB::c_in5,       all_cores, in5_t,  in5_t*single_tile_size,  cb_data_format );
-    CreateCircularBuffers( program, device, CB::c_in6,       all_cores, in6_t,  in6_t*single_tile_size,  cb_data_format );
+    CreateCircularBuffers( program, CB::c_in0,       all_cores, in0_t,  in0_t*single_tile_size,  cb_data_format );
+    CreateCircularBuffers( program, CB::c_out0,      all_cores, out0_t, out0_t*single_tile_size, cb_data_format );
+    CreateCircularBuffers( program, CB::c_intermed1, all_cores, im1_t,  im1_t*single_tile_size,  cb_data_format );
+    CreateCircularBuffers( program, CB::c_in2,       all_cores, in2_t,  in2_t*single_tile_size,  cb_data_format );
+    CreateCircularBuffers( program, CB::c_in3,       all_cores, in3_t,  in3_t*single_tile_size,  cb_data_format );
+    CreateCircularBuffers( program, CB::c_in4,       all_cores, in4_t,  in4_t*single_tile_size,  cb_data_format );
+    CreateCircularBuffers( program, CB::c_intermed2, all_cores, im2_t,  im2_t*single_tile_size,  cb_data_format );
+    CreateCircularBuffers( program, CB::c_intermed0, all_cores, im0_t,  im0_t*single_tile_size,  cb_data_format );
+    CreateCircularBuffers( program, CB::c_intermed3, all_cores, im3_t,  im3_t*single_tile_size,  cb_data_format );
+    CreateCircularBuffers( program, CB::c_intermed4, all_cores, im4_t,  im4_t*single_tile_size,  cb_data_format );
+    CreateCircularBuffers( program, CB::c_intermed5, all_cores, im5_t,  im5_t*single_tile_size,  cb_data_format );
+    CreateCircularBuffers( program, CB::c_in5,       all_cores, in5_t,  in5_t*single_tile_size,  cb_data_format );
+    CreateCircularBuffers( program, CB::c_in6,       all_cores, in6_t,  in6_t*single_tile_size,  cb_data_format );
     if (b) {
         // x = a+b in this notation
         // result = ln(x)*gamma + beta
         // if there's no pre-add we use cb_in0 for x, otherwise a is pre-buffered into in0, added into im6, then im6 is used as x
         // b is buffered into c_in1
-        CreateCircularBuffers( program, device, CB::c_intermed6, all_cores, im6_t,  im6_t*single_tile_size,  cb_data_format );
+        CreateCircularBuffers( program, CB::c_intermed6, all_cores, im6_t,  im6_t*single_tile_size,  cb_data_format );
         // c_in1 is input buffer for b
-        CreateCircularBuffers( program, device, CB::c_in1,       all_cores, in1_t,  in1_t*single_tile_size,  cb_data_format );
+        CreateCircularBuffers( program, CB::c_in1,       all_cores, in1_t,  in1_t*single_tile_size,  cb_data_format );
     }
 
     union { float f; uint32_t u; } winv; winv.f = 1.0f / W; // bcast-w scaler

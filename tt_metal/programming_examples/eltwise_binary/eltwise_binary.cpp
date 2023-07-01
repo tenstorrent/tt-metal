@@ -65,15 +65,12 @@ int main(int argc, char **argv) {
         constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
         constexpr uint32_t dram_buffer_src0_addr = 0;
-        constexpr int dram_src0_channel_id = 0;
         constexpr uint32_t dram_buffer_src1_addr = 256 * 1024 * 1024;
-        constexpr int dram_src1_channel_id = 1;
         constexpr uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
-        constexpr int dram_dst_channel_id = 0;
 
-        Buffer src0_dram_buffer = Buffer(device, dram_buffer_size, dram_buffer_src0_addr, dram_src0_channel_id, dram_buffer_size, BufferType::DRAM);
-        Buffer src1_dram_buffer = Buffer(device, dram_buffer_size, dram_buffer_src1_addr, dram_src1_channel_id, dram_buffer_size, BufferType::DRAM);
-        Buffer dst_dram_buffer = Buffer(device, dram_buffer_size, dram_buffer_dst_addr, dram_dst_channel_id, dram_buffer_size, BufferType::DRAM);
+        Buffer src0_dram_buffer = Buffer(device, dram_buffer_size, dram_buffer_src0_addr, dram_buffer_size, BufferType::DRAM);
+        Buffer src1_dram_buffer = Buffer(device, dram_buffer_size, dram_buffer_src1_addr, dram_buffer_size, BufferType::DRAM);
+        Buffer dst_dram_buffer = Buffer(device, dram_buffer_size, dram_buffer_dst_addr, dram_buffer_size, BufferType::DRAM);
 
         /*
          * Use circular buffers to set input and output buffers that the
@@ -81,9 +78,8 @@ int main(int argc, char **argv) {
          */
         constexpr uint32_t src0_cb_index = CB::c_in0;
         constexpr uint32_t num_input_tiles = 2;
-        CircularBuffer *cb_src0 = CreateCircularBuffer(
+        CircularBuffer cb_src0 = CreateCircularBuffer(
             program,
-            device,
             src0_cb_index,
             core,
             num_input_tiles,
@@ -92,9 +88,8 @@ int main(int argc, char **argv) {
         );
 
         constexpr uint32_t src1_cb_index = CB::c_in1;
-        CircularBuffer *cb_src1 = CreateCircularBuffer(
+        CircularBuffer cb_src1 = CreateCircularBuffer(
             program,
-            device,
             src1_cb_index,
             core,
             num_input_tiles,
@@ -104,9 +99,8 @@ int main(int argc, char **argv) {
 
         constexpr uint32_t output_cb_index = CB::c_out0;
         constexpr uint32_t num_output_tiles = 2;
-        CircularBuffer *cb_output = CreateCircularBuffer(
+        CircularBuffer cb_output = CreateCircularBuffer(
             program,
-            device,
             output_cb_index,
             core,
             num_output_tiles,
@@ -229,7 +223,6 @@ int main(int argc, char **argv) {
          */
         cb_src0 = CreateCircularBuffer(
             program_mul,
-            device,
             src0_cb_index,
             core,
             num_input_tiles,
@@ -239,7 +232,6 @@ int main(int argc, char **argv) {
 
         cb_src1 = CreateCircularBuffer(
             program_mul,
-            device,
             src1_cb_index,
             core,
             num_input_tiles,
@@ -249,7 +241,6 @@ int main(int argc, char **argv) {
 
         cb_output = CreateCircularBuffer(
             program_mul,
-            device,
             output_cb_index,
             core,
             num_output_tiles,

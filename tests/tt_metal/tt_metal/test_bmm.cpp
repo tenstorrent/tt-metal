@@ -59,37 +59,34 @@ int main(int argc, char **argv) {
         uint32_t dram_buffer_src0_addr = 0;
         uint32_t dram_buffer_src1_addr = 256 * 1024 * 1024;
         uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
-        uint32_t starting_dram_bank_id = 0;
 
-        auto src0_dram_buffer = tt_metal::Buffer(device, bytesA, dram_buffer_src0_addr, starting_dram_bank_id, single_tile_size, tt_metal::BufferType::DRAM);
-        auto src1_dram_buffer = tt_metal::Buffer(device, bytesB, dram_buffer_src1_addr, starting_dram_bank_id, single_tile_size, tt_metal::BufferType::DRAM);
-        auto dst_dram_buffer = tt_metal::Buffer(device, bytesC, dram_buffer_dst_addr, starting_dram_bank_id, single_tile_size, tt_metal::BufferType::DRAM);
+        auto src0_dram_buffer = tt_metal::Buffer(device, bytesA, dram_buffer_src0_addr, single_tile_size, tt_metal::BufferType::DRAM);
+        auto src1_dram_buffer = tt_metal::Buffer(device, bytesB, dram_buffer_src1_addr, single_tile_size, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = tt_metal::Buffer(device, bytesC, dram_buffer_dst_addr, single_tile_size, tt_metal::BufferType::DRAM);
 
         uint32_t src0_cb_index = 0;
         uint32_t src0_cb_addr = 200 * 1024;
         uint32_t num_input_tiles = 2;
         auto cb_src0 = tt_metal::CreateCircularBuffer(
             program,
-            device,
             src0_cb_index,
             core,
             num_input_tiles,
             num_input_tiles * single_tile_size,
-            src0_cb_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            src0_cb_addr
         );
 
         uint32_t src1_cb_index = 1;
         uint32_t src1_cb_addr = 300 * 1024;
         auto cb_src1 = tt_metal::CreateCircularBuffer(
             program,
-            device,
             src1_cb_index,
             core,
             num_input_tiles,
             num_input_tiles * single_tile_size,
-            src1_cb_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            src1_cb_addr
         );
 
         uint32_t ouput_cb_index = 16; // output operands start at index 16
@@ -97,13 +94,12 @@ int main(int argc, char **argv) {
         uint32_t num_output_tiles = 2;
         auto cb_output = tt_metal::CreateCircularBuffer(
             program,
-            device,
             ouput_cb_index,
             core,
             num_output_tiles,
             num_output_tiles * single_tile_size,
-            output_cb_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            output_cb_addr
         );
 
         bool src0_is_dram = true;

@@ -16,9 +16,8 @@ bool test_interleaved_l1_buffer(tt_metal::Device *device, int num_pages_one, int
     bool pass = true;
 
     uint32_t buffer_size = num_pages_one * page_size;
-    uint32_t starting_bank_id = 0;
 
-    auto interleaved_buffer = tt_metal::Buffer(device, buffer_size, starting_bank_id, page_size, tt_metal::BufferType::L1);
+    auto interleaved_buffer = tt_metal::Buffer(device, buffer_size, page_size, tt_metal::BufferType::L1);
 
     std::vector<uint32_t> host_buffer = create_random_vector_of_bfloat16(
         buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
@@ -32,7 +31,7 @@ bool test_interleaved_l1_buffer(tt_metal::Device *device, int num_pages_one, int
 
     uint32_t second_buffer_size = num_pages_two * page_size;
 
-    auto second_interleaved_buffer = tt_metal::Buffer(device, second_buffer_size, starting_bank_id, page_size, tt_metal::BufferType::L1);
+    auto second_interleaved_buffer = tt_metal::Buffer(device, second_buffer_size, page_size, tt_metal::BufferType::L1);
 
     std::vector<uint32_t> second_host_buffer = create_random_vector_of_bfloat16(
         second_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());

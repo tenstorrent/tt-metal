@@ -176,13 +176,12 @@ std::tuple<tt_metal::Program, tt_metal::DataMovementKernel *, tt_metal::DataMove
             uint32_t cb0_tiles = in0_block_tiles * 2; // double buffer
             auto cb_src0 = tt_metal::CreateCircularBuffer(
                 program,
-                device,
                 src0_cb_index,
                 core,
                 cb0_tiles,
                 cb0_tiles * single_tile_size,
-                src0_cb_addr,
-                tt::DataFormat::Float16_b
+                tt::DataFormat::Float16_b,
+                src0_cb_addr
             );
 
             uint32_t src1_cb_index = 1;
@@ -191,13 +190,12 @@ std::tuple<tt_metal::Program, tt_metal::DataMovementKernel *, tt_metal::DataMove
             uint32_t cb1_tiles = in1_block_tiles * 2; // double buffer
             auto cb_src1 = tt_metal::CreateCircularBuffer(
                 program,
-                device,
                 src1_cb_index,
                 core,
                 cb1_tiles,
                 cb1_tiles * single_tile_size,
-                src1_cb_addr,
-                tt::DataFormat::Float16_b
+                tt::DataFormat::Float16_b,
+                src1_cb_addr
             );
 
             uint32_t ouput_cb_index = 16; // output operands start at index 16
@@ -207,13 +205,12 @@ std::tuple<tt_metal::Program, tt_metal::DataMovementKernel *, tt_metal::DataMove
             CoreRangeSet cores(std::set<CoreRange>{CoreRange{.start=core, .end=core}});
             auto cb_output = tt_metal::CreateCircularBuffers(
                 program,
-                device,
                 {ouput_cb_index, interm0_cb_index},
                 cores,
                 out_CB_tiles,
                 out_CB_size,
-                output_cb_addr,
-                tt::DataFormat::Float16_b
+                tt::DataFormat::Float16_b,
+                output_cb_addr
             );
 
             TT_ASSERT(l1_valid_address < 1024 * 1024);
@@ -374,17 +371,13 @@ int main(int argc, char **argv) {
                 uint32_t dram_buffer_size_weights = single_tile_size * K * per_core_N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
                 uint32_t dram_buffer_size_out = single_tile_size * per_core_M * per_core_N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-                auto src0_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_act, dram_buffer_src0_addr, dram_src0_channel_id, dram_buffer_size_act, tt_metal::BufferType::DRAM);
-                auto src1_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_weights, dram_buffer_src1_addr, dram_src1_channel_id, dram_buffer_size_weights, tt_metal::BufferType::DRAM);
-                auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_out, dram_buffer_dst_addr, dram_dst_channel_id, dram_buffer_size_out, tt_metal::BufferType::DRAM);
-
                 TT_ASSERT(dram_buffer_src0_addr + dram_buffer_size_act < 1024 * 1024 * 1024);
                 TT_ASSERT(dram_buffer_src1_addr + dram_buffer_size_weights < 1024 * 1024 * 1024);
                 TT_ASSERT(dram_buffer_dst_addr + dram_buffer_size_out < 1024 * 1024 * 1024);
 
-                auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
-                auto dram_src1_noc_xy = src1_dram_buffer.noc_coordinates();
-                auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
+                auto dram_src0_noc_xy = device->core_from_dram_channel(dram_src0_channel_id);
+                auto dram_src1_noc_xy = device->core_from_dram_channel(dram_src1_channel_id);
+                auto dram_dst_noc_xy = device->core_from_dram_channel(dram_dst_channel_id);
 
                 auto activations_tilized = tilize(activation_slice, per_core_M * 32, K * 32);
                 auto activations_tile_layout = convert_to_tile_layout(activations_tilized);

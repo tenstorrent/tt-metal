@@ -109,25 +109,15 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
         uint32_t dram_buffer_size_weights = single_tile_size * K * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
         uint32_t dram_buffer_size_out = single_tile_size * M * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-        uint32_t dram_buffer_src0_addr = 0;
-        int dram_src0_channel_id = 0;
-        uint32_t dram_buffer_src1_addr = 0;
-        int dram_src1_channel_id = 1;
-        uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
-        int dram_dst_channel_id = 0;
-
-
-        auto src0_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_act, dram_buffer_src0_addr, dram_src0_channel_id, dram_buffer_size_act, tt_metal::BufferType::DRAM);
-        auto src1_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_weights, dram_buffer_src1_addr, dram_src1_channel_id, dram_buffer_size_weights, tt_metal::BufferType::DRAM);
+        auto src0_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_act, dram_buffer_size_act, tt_metal::BufferType::DRAM);
+        auto src1_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_weights, dram_buffer_size_weights, tt_metal::BufferType::DRAM);
 
         tt_metal::Buffer src2_dram_buffer;
-        uint32_t dram_buffer_src2_addr = 0;
         if (with_bias) {
-            int dram_src2_channel_id = 2;
-            src2_dram_buffer = tt_metal::Buffer(device, single_tile_size * N, dram_buffer_src2_addr, dram_src2_channel_id, single_tile_size * N, tt_metal::BufferType::DRAM);
+            src2_dram_buffer = tt_metal::Buffer(device, single_tile_size * N, single_tile_size * N, tt_metal::BufferType::DRAM);
         }
 
-        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_out, dram_buffer_dst_addr, dram_dst_channel_id, dram_buffer_size_out, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_out, dram_buffer_size_out, tt_metal::BufferType::DRAM);
 
         auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
         auto dram_src1_noc_xy = src1_dram_buffer.noc_coordinates();
@@ -139,13 +129,12 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
         uint32_t cb0_tiles = M * 2;
         auto cb_src0 = tt_metal::CreateCircularBuffer(
             program,
-            device,
             src0_cb_index,
             core,
             cb0_tiles,
             cb0_tiles * single_tile_size,
-            src0_cb_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            src0_cb_addr
         );
 
         uint32_t src1_cb_index = 1;
@@ -153,13 +142,12 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
         uint32_t cb1_tiles = N * 2;
         auto cb_src1 = tt_metal::CreateCircularBuffer(
             program,
-            device,
             src1_cb_index,
             core,
             cb1_tiles,
             cb1_tiles * single_tile_size,
-            src1_cb_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            src1_cb_addr
         );
 
         if (with_bias) {
@@ -168,13 +156,12 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
             uint32_t cb2_tiles = N * 2;
             auto cb_src2 = tt_metal::CreateCircularBuffer(
                 program,
-                device,
                 src2_cb_index,
                 core,
                 cb2_tiles,
                 cb2_tiles * single_tile_size,
-                src2_cb_addr,
-                tt::DataFormat::Float16_b
+                tt::DataFormat::Float16_b,
+                src2_cb_addr
             );
         }
 
@@ -187,13 +174,12 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
         CoreRangeSet cores(std::set<CoreRange>{CoreRange{.start=core, .end=core}});
         auto output_cb = tt_metal::CreateCircularBuffers(
             program,
-            device,
             {ouput_cb_index, intermediate_cb_index},
             cores,
             num_output_tiles,
             num_output_tiles * single_tile_size,
-            output_cb_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            output_cb_addr
         );
 
         string reader_kernel = "tt_metal/kernels/dataflow/reader_matmul_with_bias_blocked.cpp";
@@ -269,10 +255,10 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
         vector<uint32_t> reader_l1_args = {
-            dram_buffer_src0_addr,
+            src0_dram_buffer.address(),
             (std::uint32_t)dram_src0_noc_xy.x,
             (std::uint32_t)dram_src0_noc_xy.y,
-            dram_buffer_src1_addr,
+            src1_dram_buffer.address(),
             (std::uint32_t)dram_src1_noc_xy.x,
             (std::uint32_t)dram_src1_noc_xy.y,
             K,
@@ -286,7 +272,7 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
         if (with_bias) {
             auto dram_src2_noc_xy = src2_dram_buffer.noc_coordinates();
             vector<uint32_t> bias_args = {
-                dram_buffer_src2_addr,
+                src2_dram_buffer.address(),
                 (std::uint32_t)dram_src2_noc_xy.x,
                 (std::uint32_t)dram_src2_noc_xy.y,
                 N,
@@ -306,7 +292,7 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
         tt_metal::SetRuntimeArgs(
             unary_writer_kernel,
             core,
-            {dram_buffer_dst_addr,
+            {dst_dram_buffer.address(),
             (std::uint32_t)dram_dst_noc_xy.x,
             (std::uint32_t)dram_dst_noc_xy.y,
             M * N});

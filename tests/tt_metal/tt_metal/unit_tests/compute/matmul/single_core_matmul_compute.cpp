@@ -47,62 +47,57 @@ void create_CBs_for_fused_matmul(
     uint32_t cb0_tiles = M * in0_block_w * 2;
     auto cb_in0 = tt_metal::CreateCircularBuffer(
         program,
-        device,
         in0_cb,
         core,
         cb0_tiles,
         cb0_tiles * single_tile_size,
-        src0_cb_addr,
-        tt::DataFormat::Float16_b);
+        tt::DataFormat::Float16_b,
+        src0_cb_addr);
 
     uint32_t src1_cb_addr = 250 * 1024;
     uint32_t cb1_tiles = N * in0_block_w * 2;
     auto cb_in1 = tt_metal::CreateCircularBuffer(
         program,
-        device,
         in1_cb,
         core,
         cb1_tiles,
         cb1_tiles * single_tile_size,
-        src1_cb_addr,
-        tt::DataFormat::Float16_b);
+        tt::DataFormat::Float16_b,
+        src1_cb_addr);
 
     if (not activations_rm and not output_rm) {  // no tilize, no untilize
         uint32_t matmul_partials_addr = 400 * 1024;
         auto cb_matmul_partials = tt_metal::CreateCircularBuffer(
             program,
-            device,
             matmul_partials_cb,
             core,
             num_output_tiles,
             num_output_tiles * single_tile_size,
-            matmul_partials_addr,
-            tt::DataFormat::Float16_b);
+            tt::DataFormat::Float16_b,
+            matmul_partials_addr);
 
         // Partials share same L1 address space as output
         uint32_t output_cb_addr = matmul_partials_addr;
         auto cb_output = tt_metal::CreateCircularBuffer(
             program,
-            device,
             out0_cb,
             core,
             num_output_tiles,
             num_output_tiles * single_tile_size,
-            output_cb_addr,
-            tt::DataFormat::Float16_b);
+            tt::DataFormat::Float16_b,
+            output_cb_addr);
 
     } else if (not activations_rm and output_rm) {  // no tilize, just untilize
 
         uint32_t matmul_partials_addr = 450 * 1024;
         auto cb_matmul_partials = tt_metal::CreateCircularBuffer(
             program,
-            device,
             matmul_partials_cb,
             core,
             num_output_tiles,
             num_output_tiles * single_tile_size,
-            matmul_partials_addr,
-            tt::DataFormat::Float16_b);
+            tt::DataFormat::Float16_b,
+            matmul_partials_addr);
 
         // Need a new CB to push output block to since other
         // intermediate read pointer changes in enable reload
@@ -110,13 +105,12 @@ void create_CBs_for_fused_matmul(
         uint32_t temp_addr = 600 * 1024;
         auto cb_final_matmul_partials = tt_metal::CreateCircularBuffer(
             program,
-            device,
             untilize_mode_final_matmul_partials_cb,
             core,
             num_output_tiles,
             num_output_tiles * single_tile_size,
-            temp_addr,
-            tt::DataFormat::Float16_b);
+            tt::DataFormat::Float16_b,
+            temp_addr);
 
         // Supposed to be a small CB only responsible for reorganizing
         // the output blocks to fill the whole "per core output block width"
@@ -124,59 +118,54 @@ void create_CBs_for_fused_matmul(
         uint32_t reblock_cb_tiles = N;  // Only space for one row
         auto cb_reblock = tt_metal::CreateCircularBuffer(
             program,
-            device,
             untilize_mode_reblock_cb,
             core,
             reblock_cb_tiles,
             reblock_cb_tiles * single_tile_size,
-            reblock_cb_addr,
-            tt::DataFormat::Float16_b);
+            tt::DataFormat::Float16_b,
+            reblock_cb_addr);
 
         uint32_t output_cb_addr = 800 * 1024;
         auto cb_output = tt_metal::CreateCircularBuffer(
             program,
-            device,
             out0_cb,
             core,
             num_output_tiles,
             num_output_tiles * single_tile_size,
-            output_cb_addr,
-            tt::DataFormat::Float16_b);
+            tt::DataFormat::Float16_b,
+            output_cb_addr);
 
     } else if (activations_rm and not output_rm) {  // just tilize, no untilize
 
         uint32_t tilized_cb_addr = 400 * 1024;
         auto cb_src0_tilized = tt_metal::CreateCircularBuffer(
             program,
-            device,
             tilize_mode_tilized_in0_cb,
             core,
             cb0_tiles,
             cb0_tiles * single_tile_size,
-            tilized_cb_addr,
-            tt::DataFormat::Float16_b);
+            tt::DataFormat::Float16_b,
+            tilized_cb_addr);
 
         uint32_t matmul_partials_addr = 550 * 1024;
         auto cb_matmul_partials = tt_metal::CreateCircularBuffer(
             program,
-            device,
             matmul_partials_cb,
             core,
             num_output_tiles,
             num_output_tiles * single_tile_size,
-            matmul_partials_addr,
-            tt::DataFormat::Float16_b);
+            tt::DataFormat::Float16_b,
+            matmul_partials_addr);
 
         uint32_t output_cb_addr = matmul_partials_addr;
         auto cb_output = tt_metal::CreateCircularBuffer(
             program,
-            device,
             out0_cb,
             core,
             num_output_tiles,
             num_output_tiles * single_tile_size,
-            output_cb_addr,
-            tt::DataFormat::Float16_b);
+            tt::DataFormat::Float16_b,
+            matmul_partials_addr);
 
     } else {  // tilize activations and untilize output
 
@@ -184,36 +173,33 @@ void create_CBs_for_fused_matmul(
         uint32_t tilized_cb_addr = 300 * 1024;
         auto cb_src0_tilized = tt_metal::CreateCircularBuffer(
             program,
-            device,
             tilize_mode_tilized_in0_cb,
             core,
             num_output_tiles,
             num_output_tiles * single_tile_size,
-            tilized_cb_addr,
-            tt::DataFormat::Float16_b);
+            tt::DataFormat::Float16_b,
+            tilized_cb_addr);
 
         uint32_t cb_matmul_partials_addr = 440 * 1024;
         auto cb_matmul_partials = tt_metal::CreateCircularBuffer(
             program,
-            device,
             matmul_partials_cb,
             core,
             num_output_tiles,
             num_output_tiles * single_tile_size,
-            cb_matmul_partials_addr,
-            tt::DataFormat::Float16_b);
+            tt::DataFormat::Float16_b,
+            cb_matmul_partials_addr);
 
         // Shares same address space as matmul partials
         uint32_t temp_addr = 580 * 1024;
         auto cb_final_matmul_partials = tt_metal::CreateCircularBuffer(
             program,
-            device,
             untilize_mode_final_matmul_partials_cb,
             core,
             num_output_tiles,
             num_output_tiles * single_tile_size,
-            temp_addr,
-            tt::DataFormat::Float16_b);
+            tt::DataFormat::Float16_b,
+            temp_addr);
 
         // Supposed to be a small CB only responsible for reorganizing
         // the output blocks to fill the whole "per core output block width"
@@ -221,24 +207,22 @@ void create_CBs_for_fused_matmul(
         uint32_t reblock_cb_tiles = N;  // Only space for one row
         auto cb_reblock = tt_metal::CreateCircularBuffer(
             program,
-            device,
             untilize_mode_reblock_cb,
             core,
             reblock_cb_tiles,
             reblock_cb_tiles * single_tile_size,
-            reblock_cb_addr,
-            tt::DataFormat::Float16_b);
+            tt::DataFormat::Float16_b,
+            reblock_cb_addr);
 
         uint32_t output_cb_addr = 860 * 1024;
         auto cb_output = tt_metal::CreateCircularBuffer(
             program,
-            device,
             out0_cb,
             core,
             num_output_tiles,
             num_output_tiles * single_tile_size,
-            output_cb_addr,
-            tt::DataFormat::Float16_b);
+            tt::DataFormat::Float16_b,
+            output_cb_addr);
     }
 }
 struct SingleCoreMatmulConfig {
@@ -283,21 +267,18 @@ bool single_core_matmul(tt_metal::Device* device, const SingleCoreMatmulConfig& 
         device,
         dram_buffer_size_input0,
         cfg.input0_dram_byte_address,
-        cfg.input0_dram_channel,
         dram_buffer_size_input0,
         tt_metal::BufferType::DRAM);
     auto input1_dram_buffer = tt_metal::Buffer(
         device,
         dram_buffer_size_input1,
         cfg.input1_dram_byte_address,
-        cfg.input1_dram_channel,
         dram_buffer_size_input1,
         tt_metal::BufferType::DRAM);
     auto output_dram_buffer = tt_metal::Buffer(
         device,
         dram_buffer_size_output,
         cfg.output_dram_byte_address,
-        cfg.output_dram_channel,
         dram_buffer_size_output,
         tt_metal::BufferType::DRAM);
 
@@ -510,21 +491,21 @@ bool single_tile_matmul(tt_metal::Device* device) {
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program = tt_metal::Program();
     auto input0_dram_buffer =
-        tt_metal::Buffer(device, byte_size, in0_dram_addr, 0, byte_size, tt_metal::BufferType::DRAM);
+        tt_metal::Buffer(device, byte_size, in0_dram_addr, byte_size, tt_metal::BufferType::DRAM);
     auto input0_dram_noc_xy = input0_dram_buffer.noc_coordinates();
     auto input1_dram_buffer =
-        tt_metal::Buffer(device, byte_size, in1_dram_addr, 0, byte_size, tt_metal::BufferType::DRAM);
+        tt_metal::Buffer(device, byte_size, in1_dram_addr, byte_size, tt_metal::BufferType::DRAM);
     auto input1_dram_noc_xy = input1_dram_buffer.noc_coordinates();
     auto output_dram_buffer =
-        tt_metal::Buffer(device, byte_size, out_dram_addr, 0, byte_size, tt_metal::BufferType::DRAM);
+        tt_metal::Buffer(device, byte_size, out_dram_addr, byte_size, tt_metal::BufferType::DRAM);
     auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 
     auto l1_input0_cb = tt_metal::CreateCircularBuffer(
-        program, device, in0_cb_index, core, 1, byte_size, in0_l1_addr, tt::DataFormat::Float16_b);
+        program, in0_cb_index, core, 1, byte_size, tt::DataFormat::Float16_b, in0_l1_addr);
     auto l1_input1_cb = tt_metal::CreateCircularBuffer(
-        program, device, in1_cb_index, core, 1, byte_size, in1_l1_addr, tt::DataFormat::Float16_b);
+        program, in1_cb_index, core, 1, byte_size, tt::DataFormat::Float16_b, in1_l1_addr);
     auto l1_output_cb = tt_metal::CreateCircularBuffer(
-        program, device, out_cb_index, core, 1, byte_size, out_l1_addr, tt::DataFormat::Float16_b);
+        program, out_cb_index, core, 1, byte_size, tt::DataFormat::Float16_b, out_l1_addr);
 
     auto reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
@@ -641,21 +622,21 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program = tt_metal::Program();
     auto input0_dram_buffer =
-        tt_metal::Buffer(device, in0_byte_size, in0_dram_addr, 0, in0_byte_size, tt_metal::BufferType::DRAM);
+        tt_metal::Buffer(device, in0_byte_size, in0_dram_addr, in0_byte_size, tt_metal::BufferType::DRAM);
     auto input0_dram_noc_xy = input0_dram_buffer.noc_coordinates();
     auto input1_dram_buffer =
-        tt_metal::Buffer(device, in1_byte_size, in1_dram_addr, 0, in1_byte_size, tt_metal::BufferType::DRAM);
+        tt_metal::Buffer(device, in1_byte_size, in1_dram_addr, in1_byte_size, tt_metal::BufferType::DRAM);
     auto input1_dram_noc_xy = input1_dram_buffer.noc_coordinates();
     auto output_dram_buffer =
-        tt_metal::Buffer(device, out_byte_size, out_dram_addr, 0, out_byte_size, tt_metal::BufferType::DRAM);
+        tt_metal::Buffer(device, out_byte_size, out_dram_addr, out_byte_size, tt_metal::BufferType::DRAM);
     auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 
     auto l1_input0_cb = tt_metal::CreateCircularBuffer(
-        program, device, in0_cb_index, core, M * K, in0_byte_size, in0_l1_addr, tt::DataFormat::Float16_b);
+        program, in0_cb_index, core, M * K, in0_byte_size, tt::DataFormat::Float16_b, in0_l1_addr);
     auto l1_input1_cb = tt_metal::CreateCircularBuffer(
-        program, device, in1_cb_index, core, K * N, in1_byte_size, in1_l1_addr, tt::DataFormat::Float16_b);
+        program, in1_cb_index, core, K * N, in1_byte_size, tt::DataFormat::Float16_b, in1_l1_addr);
     auto l1_output_cb = tt_metal::CreateCircularBuffer(
-        program, device, out_cb_index, core, M * N, out_byte_size, out_l1_addr, tt::DataFormat::Float16_b);
+        program, out_cb_index, core, M * N, out_byte_size, tt::DataFormat::Float16_b, out_l1_addr);
 
     auto reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
@@ -785,23 +766,23 @@ bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program = tt_metal::Program();
     auto input0_dram_buffer =
-        tt_metal::Buffer(device, in0_byte_size, in0_dram_addr, 0, in0_byte_size, tt_metal::BufferType::DRAM);
+        tt_metal::Buffer(device, in0_byte_size, in0_dram_addr, in0_byte_size, tt_metal::BufferType::DRAM);
     auto input0_dram_noc_xy = input0_dram_buffer.noc_coordinates();
     auto input1_dram_buffer =
-        tt_metal::Buffer(device, in1_byte_size, in1_dram_addr, 0, in1_byte_size, tt_metal::BufferType::DRAM);
+        tt_metal::Buffer(device, in1_byte_size, in1_dram_addr, in1_byte_size, tt_metal::BufferType::DRAM);
     auto input1_dram_noc_xy = input1_dram_buffer.noc_coordinates();
     auto output_dram_buffer =
-        tt_metal::Buffer(device, out_byte_size, out_dram_addr, 0, out_byte_size, tt_metal::BufferType::DRAM);
+        tt_metal::Buffer(device, out_byte_size, out_dram_addr, out_byte_size, tt_metal::BufferType::DRAM);
     auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 
     auto l1_input0_cb = tt_metal::CreateCircularBuffer(
-        program, device, in0_cb_index, core, M * K, in0_byte_size, in0_l1_addr, tt::DataFormat::Float16_b);
+        program, in0_cb_index, core, M * K, in0_byte_size, tt::DataFormat::Float16_b, in0_l1_addr);
     auto l1_input1_cb = tt_metal::CreateCircularBuffer(
-        program, device, in1_cb_index, core, K * N, in1_byte_size, in1_l1_addr, tt::DataFormat::Float16_b);
+        program, in1_cb_index, core, K * N, in1_byte_size, tt::DataFormat::Float16_b, in1_l1_addr);
     auto l1_output_cb = tt_metal::CreateCircularBuffer(
-        program, device, out_cb_index, core, M * N, out_byte_size, out_l1_addr, tt::DataFormat::Float16_b);
+        program, out_cb_index, core, M * N, out_byte_size, tt::DataFormat::Float16_b, out_l1_addr);
     auto l1_partials_cb = tt_metal::CreateCircularBuffer(
-        program, device, partials_cb_index, core, M * N, out_byte_size, partials_l1_addr, tt::DataFormat::Float16_b);
+        program, partials_cb_index, core, M * N, out_byte_size, tt::DataFormat::Float16_b, partials_l1_addr);
 
     auto reader_kernel = tt_metal::CreateDataMovementKernel(
         program,

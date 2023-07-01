@@ -178,13 +178,12 @@ int main(int argc, char **argv) {
         for (auto core : cores) {
             auto cb = tt_metal::CreateCircularBuffer(
                 program,
-                device,
                 cb_index,
                 core,
                 cb_size_tiles,
                 cb_size_bytes,
-                cb_addr,
-                tt::DataFormat::Float16_b
+                tt::DataFormat::Float16_b,
+                cb_addr
             );
         }
 
@@ -201,26 +200,18 @@ int main(int argc, char **argv) {
             uint32_t dram_buffer_addr = 0;
             TT_ASSERT(dram_buffer_addr + buffer_size <= 1024 * 1024 * 1024); // 1GB
 
-            src_buffer = tt_metal::Buffer(device, buffer_size, dram_buffer_addr, 0, buffer_size, tt_metal::BufferType::DRAM);
-            dst_buffer = tt_metal::Buffer(device, buffer_size, dram_buffer_addr, 7, buffer_size, tt_metal::BufferType::DRAM);
+            src_buffer = tt_metal::Buffer(device, buffer_size, dram_buffer_addr, buffer_size, tt_metal::BufferType::DRAM);
+            dst_buffer = tt_metal::Buffer(device, buffer_size, dram_buffer_addr + buffer_size, buffer_size, tt_metal::BufferType::DRAM);
 
             src_address = src_buffer.address();
             src_noc_xy = src_buffer.noc_coordinates();
             dst_address = dst_buffer.address();
             dst_noc_xy = dst_buffer.noc_coordinates();
         } else {
-            uint32_t l1_buffer_addr = l1_alloc(buffer_size); // same address on src / dst cores
+            uint32_t l1_buffer_addr = l1_alloc(buffer_size);
 
-            auto src_l1_bank_ids = device->bank_ids_from_logical_core(cores[0]);
-            TT_ASSERT(not src_l1_bank_ids.empty());
-            auto src_l1_bank_id = src_l1_bank_ids.at(0);
-
-            auto dst_l1_bank_ids = device->bank_ids_from_logical_core(cores[num_cores - 1]);
-            TT_ASSERT(not dst_l1_bank_ids.empty());
-            auto dst_l1_bank_id = dst_l1_bank_ids.at(0);
-
-            src_buffer = tt_metal::Buffer(device, buffer_size, l1_buffer_addr, src_l1_bank_id, buffer_size, tt_metal::BufferType::L1);
-            dst_buffer = tt_metal::Buffer(device, buffer_size, l1_buffer_addr, dst_l1_bank_id, buffer_size, tt_metal::BufferType::L1);
+            src_buffer = tt_metal::Buffer(device, buffer_size, l1_buffer_addr, buffer_size, tt_metal::BufferType::L1);
+            dst_buffer = tt_metal::Buffer(device, buffer_size, l1_buffer_addr + buffer_size, buffer_size, tt_metal::BufferType::L1);
 
             src_address = src_buffer.address();
             src_noc_xy = src_buffer.noc_coordinates();

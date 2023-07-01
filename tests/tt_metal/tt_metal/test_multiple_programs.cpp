@@ -35,7 +35,6 @@ tt_metal::Program setup_program_one(tt_metal::Device *device, const CoreCoord &c
     uint32_t num_input_tiles = 2;
     auto cb_src0 = tt_metal::CreateCircularBuffer(
         program,
-        device,
         src0_cb_index,
         core,
         num_input_tiles,
@@ -46,7 +45,6 @@ tt_metal::Program setup_program_one(tt_metal::Device *device, const CoreCoord &c
     uint32_t src1_cb_index = 1;
     auto cb_src1 = tt_metal::CreateCircularBuffer(
         program,
-        device,
         src1_cb_index,
         core,
         num_input_tiles,
@@ -58,7 +56,6 @@ tt_metal::Program setup_program_one(tt_metal::Device *device, const CoreCoord &c
     uint32_t num_output_tiles = 2;
     auto cb_output = tt_metal::CreateCircularBuffer(
         program,
-        device,
         ouput_cb_index,
         core,
         num_output_tiles,
@@ -108,7 +105,6 @@ tt_metal::Program setup_program_two(tt_metal::Device *device, const CoreCoord &c
     uint32_t num_input_tiles = 2;
     auto cb_src0 = tt_metal::CreateCircularBuffer(
         program,
-        device,
         src0_cb_index,
         core,
         num_input_tiles,
@@ -119,7 +115,6 @@ tt_metal::Program setup_program_two(tt_metal::Device *device, const CoreCoord &c
     uint32_t src1_cb_index = 1;
     auto cb_src1 = tt_metal::CreateCircularBuffer(
         program,
-        device,
         src1_cb_index,
         core,
         num_input_tiles,
@@ -131,7 +126,6 @@ tt_metal::Program setup_program_two(tt_metal::Device *device, const CoreCoord &c
     uint32_t num_output_tiles = 2;
     auto cb_output = tt_metal::CreateCircularBuffer(
         program,
-        device,
         ouput_cb_index,
         core,
         num_output_tiles,
@@ -252,16 +246,9 @@ int main(int argc, char **argv) {
 
         uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-        uint32_t dram_buffer_src0_addr = 0;
-        int dram_src0_channel_id = 0;
-        uint32_t dram_buffer_src1_addr = 0;
-        int dram_src1_channel_id = 1;
-        uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
-        int dram_dst_channel_id = 0;
-
-        auto src0_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src0_addr, dram_src0_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
-        auto src1_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src1_addr, dram_src1_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
-        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr, dram_dst_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto src0_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto src1_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
 
         tt_metal::Program program1 = setup_program_one(device, core, single_tile_size);
 

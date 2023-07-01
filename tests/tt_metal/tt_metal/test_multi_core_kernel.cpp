@@ -32,13 +32,12 @@ tt_metal::Program create_program(
             uint32_t num_input_tiles = 8;
             auto cb_src0 = tt_metal::CreateCircularBuffer(
                 program,
-                device,
                 src0_cb_index,
                 core,
                 num_input_tiles,
                 num_input_tiles * single_tile_size,
-                src0_cb_addr,
-                tt::DataFormat::Float16_b
+                tt::DataFormat::Float16_b,
+                src0_cb_addr
             );
 
             uint32_t ouput_cb_index = 16; // output operands start at index 16
@@ -46,13 +45,12 @@ tt_metal::Program create_program(
             uint32_t num_output_tiles = 1;
             auto cb_output = tt_metal::CreateCircularBuffer(
                 program,
-                device,
                 ouput_cb_index,
                 core,
                 num_output_tiles,
                 num_output_tiles * single_tile_size,
-                output_cb_addr,
-                tt::DataFormat::Float16_b
+                tt::DataFormat::Float16_b,
+                output_cb_addr
             );
         }
     }
@@ -210,13 +208,11 @@ bool test_multi_core_kernel_same_runtime_args(tt_metal::Device *device) {
     uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
     uint32_t dram_buffer_src_addr = 0;
-    int dram_src_channel_id = 0;
 
     uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
-    int dram_dst_channel_id = 0;
 
-    auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, dram_src_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
-    auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr, dram_dst_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
+    auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, dram_buffer_size, tt_metal::BufferType::DRAM);
+    auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr, dram_buffer_size, tt_metal::BufferType::DRAM);
 
     ////////////////////////////////////////////////////////////////////////////
     //                  Compile Time Args Setup
@@ -272,17 +268,15 @@ bool test_multi_core_kernel_unique_runtime_args(tt_metal::Device *device) {
     uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
     uint32_t dram_buffer_src_addr = 0;
-    int dram_src_channel_id = 0;
 
     uint32_t dram_buffer_dst_addr_1 = 512 * 1024 * 1024; // 512 MB (upper half)
     uint32_t dram_buffer_dst_addr_2 = dram_buffer_dst_addr_1 + dram_buffer_size;
     uint32_t dram_buffer_dst_addr_3 = dram_buffer_dst_addr_2 + dram_buffer_size;
-    int dram_dst_channel_id = 0;
 
-    auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, dram_src_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
-    auto dst_dram_buffer_1 = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr_1, dram_dst_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
-    auto dst_dram_buffer_2 = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr_2, dram_dst_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
-    auto dst_dram_buffer_3 = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr_3, dram_dst_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
+    auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, dram_buffer_size, tt_metal::BufferType::DRAM);
+    auto dst_dram_buffer_1 = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr_1, dram_buffer_size, tt_metal::BufferType::DRAM);
+    auto dst_dram_buffer_2 = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr_2, dram_buffer_size, tt_metal::BufferType::DRAM);
+    auto dst_dram_buffer_3 = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr_3, dram_buffer_size, tt_metal::BufferType::DRAM);
 
     ////////////////////////////////////////////////////////////////////////////
     //                  Compile Time Args Setup

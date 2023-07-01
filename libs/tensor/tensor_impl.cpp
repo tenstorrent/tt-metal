@@ -66,14 +66,11 @@ namespace detail {
 
 DeviceBuffer allocate_interleaved_buffer_on_device(uint32_t buffer_size_bytes, Device *device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config) {
     uint32_t page_size = get_page_size(data_type, layout, buffer_size_bytes, shape);
-    uint32_t starting_bank_id = 0;
-    return std::make_shared<Buffer>(device, buffer_size_bytes, starting_bank_id, page_size, memory_config.buffer_type);
+    return std::make_shared<Buffer>(device, buffer_size_bytes, page_size, memory_config.buffer_type);
 }
 
 DeviceBuffer allocate_contiguous_buffer_on_device(uint32_t buffer_size_bytes, Device *device, const MemoryConfig& memory_config) {
-    TT_ASSERT(memory_config.bank_id != -1);
-    uint32_t starting_bank_id = memory_config.bank_id;
-    return std::make_shared<Buffer>(device, buffer_size_bytes, starting_bank_id, buffer_size_bytes, memory_config.buffer_type);
+    return std::make_shared<Buffer>(device, buffer_size_bytes, buffer_size_bytes, memory_config.buffer_type);
 }
 
 }

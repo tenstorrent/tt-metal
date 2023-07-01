@@ -36,7 +36,6 @@ void create_cb_bmm_single_core_tilize_untilize(Program &program,
     // in0 (RM)
     auto cb_in0 = CreateCircularBuffer(
         program,
-        device,
         in0_cb,
         core,
         cb0_ntiles,
@@ -46,7 +45,6 @@ void create_cb_bmm_single_core_tilize_untilize(Program &program,
     // in1
     auto cb_in1 = CreateCircularBuffer(
         program,
-        device,
         in1_cb,
         core,
         cb1_ntiles,
@@ -59,18 +57,16 @@ void create_cb_bmm_single_core_tilize_untilize(Program &program,
     // in0 (TM)
     auto cb_src0_tilized = CreateCircularBuffer(
         program,
-        device,
         tilize_mode_tilized_in0_cb,
         core,
         cb0_ntiles,
         cb0_ntiles * tile_size_bytes,
         DataFormat::Float16_b
     );
-    CircularBuffer *cb_matmul_partials;
+    CircularBuffer cb_matmul_partials;
     if (untilize_out) {
         cb_matmul_partials = CreateCircularBuffer(
             program,
-            device,
             matmul_partials_cb,
             core,
             out_ntiles,
@@ -81,7 +77,6 @@ void create_cb_bmm_single_core_tilize_untilize(Program &program,
         CoreRangeSet cores(std::set<CoreRange>{CoreRange{.start=core, .end=core}});
         cb_matmul_partials = CreateCircularBuffers(
             program,
-            device,
             {matmul_partials_cb, out_cb},
             cores,
             out_ntiles,
@@ -94,7 +89,6 @@ void create_cb_bmm_single_core_tilize_untilize(Program &program,
     if (untilize_out) {
         auto cb_final_matmul_partials = CreateCircularBuffer(
             program,
-            device,
             untilize_mode_final_matmul_partials_cb,
             core,
             out_ntiles,
@@ -104,7 +98,6 @@ void create_cb_bmm_single_core_tilize_untilize(Program &program,
         // to reorganize output blocks to fill the whole "per core output block width"
         auto cb_reblock = CreateCircularBuffer(
             program,
-            device,
             untilize_mode_reblock_cb,
             core,
             in1_block_w,                    // a single row of tiles
@@ -118,7 +111,6 @@ void create_cb_bmm_single_core_tilize_untilize(Program &program,
     if (untilize_out) {
         auto cb_output = CreateCircularBuffer(
             program,
-            device,
             out_cb,
             core,
             out_ntiles,

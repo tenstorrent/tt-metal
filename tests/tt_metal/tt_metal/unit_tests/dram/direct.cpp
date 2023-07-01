@@ -23,7 +23,6 @@ namespace unit_tests::dram::direct {
 bool reader_only(
     tt_metal::Device* device,
     const size_t& byte_size,
-    const size_t& dram_channel,
     const size_t& dram_byte_address,
     const size_t& l1_byte_address,
     const CoreCoord& reader_core) {
@@ -34,11 +33,10 @@ bool reader_only(
     tt_metal::Program program = tt_metal::Program();
 
     auto input_dram_buffer =
-        tt_metal::Buffer(device, byte_size, dram_byte_address, dram_channel, byte_size, tt_metal::BufferType::DRAM);
+        tt_metal::Buffer(device, byte_size, dram_byte_address, byte_size, tt_metal::BufferType::DRAM);
     auto dram_noc_xy = input_dram_buffer.noc_coordinates();
-    auto l1_bank_ids = device->bank_ids_from_logical_core(reader_core);
     auto l1_buffer =
-        tt_metal::Buffer(device, byte_size, l1_byte_address, l1_bank_ids.at(0), byte_size, tt_metal::BufferType::L1);
+        tt_metal::Buffer(device, byte_size, l1_byte_address, byte_size, tt_metal::BufferType::L1);
 
     auto reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
@@ -84,7 +82,6 @@ bool reader_only(
 bool writer_only(
     tt_metal::Device* device,
     const size_t& byte_size,
-    const size_t& dram_channel,
     const size_t& dram_byte_address,
     const size_t& l1_byte_address,
     const CoreCoord& writer_core) {
@@ -95,11 +92,11 @@ bool writer_only(
     tt_metal::Program program = tt_metal::Program();
 
     auto output_dram_buffer =
-        tt_metal::Buffer(device, byte_size, dram_byte_address, dram_channel, byte_size, tt_metal::BufferType::DRAM);
+        tt_metal::Buffer(device, byte_size, dram_byte_address, byte_size, tt_metal::BufferType::DRAM);
     auto dram_noc_xy = output_dram_buffer.noc_coordinates();
     auto l1_bank_ids = device->bank_ids_from_logical_core(writer_core);
     auto l1_buffer =
-        tt_metal::Buffer(device, byte_size, l1_byte_address, l1_bank_ids.at(0), byte_size, tt_metal::BufferType::L1);
+        tt_metal::Buffer(device, byte_size, l1_byte_address, byte_size, tt_metal::BufferType::L1);
 
     auto writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
@@ -141,9 +138,7 @@ bool writer_only(
 struct ReaderWriterConfig {
     size_t num_tiles = 0;
     size_t tile_byte_size = 0;
-    size_t output_dram_channel = 0;
     size_t output_dram_byte_address = 0;
-    size_t input_dram_channel = 0;
     size_t input_dram_byte_address = 0;
     size_t l1_byte_address = 0;
     tt::DataFormat l1_data_format = tt::DataFormat::Invalid;
@@ -166,7 +161,6 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
         device,
         byte_size,
         test_config.input_dram_byte_address,
-        test_config.input_dram_channel,
         byte_size,
         tt_metal::BufferType::DRAM);
     auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
@@ -174,20 +168,18 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
         device,
         byte_size,
         test_config.output_dram_byte_address,
-        test_config.output_dram_channel,
         byte_size,
         tt_metal::BufferType::DRAM);
     auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 
     auto l1_cb = tt_metal::CreateCircularBuffer(
         program,
-        device,
         cb_index,
         test_config.core,
         test_config.num_tiles,
         byte_size,
-        test_config.l1_byte_address,
-        test_config.l1_data_format);
+        test_config.l1_data_format,
+        test_config.l1_byte_address);
 
     auto reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
@@ -248,9 +240,7 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
 struct ReaderDatacopyWriterConfig {
     size_t num_tiles = 0;
     size_t tile_byte_size = 0;
-    size_t output_dram_channel = 0;
     size_t output_dram_byte_address = 0;
-    size_t input_dram_channel = 0;
     size_t input_dram_byte_address = 0;
     size_t l1_input_byte_address = 0;
     tt::DataFormat l1_input_data_format = tt::DataFormat::Invalid;
@@ -276,7 +266,6 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
         device,
         byte_size,
         test_config.input_dram_byte_address,
-        test_config.input_dram_channel,
         byte_size,
         tt_metal::BufferType::DRAM);
     auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
@@ -284,29 +273,26 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
         device,
         byte_size,
         test_config.output_dram_byte_address,
-        test_config.output_dram_channel,
         byte_size,
         tt_metal::BufferType::DRAM);
     auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 
     auto l1_input_cb = tt_metal::CreateCircularBuffer(
         program,
-        device,
         input0_cb_index,
         test_config.core,
         test_config.num_tiles,
         byte_size,
-        test_config.l1_input_byte_address,
-        test_config.l1_input_data_format);
+        test_config.l1_input_data_format,
+        test_config.l1_input_byte_address);
     auto l1_output_cb = tt_metal::CreateCircularBuffer(
         program,
-        device,
         output_cb_index,
         test_config.core,
         test_config.num_tiles,
         byte_size,
-        test_config.l1_output_byte_address,
-        test_config.l1_output_data_format);
+        test_config.l1_output_data_format,
+        test_config.l1_output_byte_address);
 
     auto reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
@@ -380,22 +366,20 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
 
 TEST_SUITE("SingleCoreDirectDram") {
     TEST_CASE_FIXTURE(unit_tests::SingleDeviceFixture, "ReaderOnly") {
-        REQUIRE(unit_tests::dram::direct::reader_only(device_, 1 * 1024, 0, 0, UNRESERVED_BASE, {.x = 0, .y = 0}));
-        REQUIRE(unit_tests::dram::direct::reader_only(device_, 2 * 1024, 0, 0, UNRESERVED_BASE, {.x = 0, .y = 0}));
-        REQUIRE(unit_tests::dram::direct::reader_only(device_, 16 * 1024, 0, 0, UNRESERVED_BASE, {.x = 0, .y = 0}));
+        REQUIRE(unit_tests::dram::direct::reader_only(device_, 1 * 1024, 0, UNRESERVED_BASE, {.x = 0, .y = 0}));
+        REQUIRE(unit_tests::dram::direct::reader_only(device_, 2 * 1024, 0, UNRESERVED_BASE, {.x = 0, .y = 0}));
+        REQUIRE(unit_tests::dram::direct::reader_only(device_, 16 * 1024, 0, UNRESERVED_BASE, {.x = 0, .y = 0}));
     }
     TEST_CASE_FIXTURE(unit_tests::SingleDeviceFixture, "WriterOnly") {
-        REQUIRE(unit_tests::dram::direct::writer_only(device_, 1 * 1024, 0, 0, UNRESERVED_BASE, {.x = 0, .y = 0}));
-        REQUIRE(unit_tests::dram::direct::writer_only(device_, 2 * 1024, 0, 0, UNRESERVED_BASE, {.x = 0, .y = 0}));
-        REQUIRE(unit_tests::dram::direct::writer_only(device_, 16 * 1024, 0, 0, UNRESERVED_BASE, {.x = 0, .y = 0}));
+        REQUIRE(unit_tests::dram::direct::writer_only(device_, 1 * 1024, 0, UNRESERVED_BASE, {.x = 0, .y = 0}));
+        REQUIRE(unit_tests::dram::direct::writer_only(device_, 2 * 1024, 0, UNRESERVED_BASE, {.x = 0, .y = 0}));
+        REQUIRE(unit_tests::dram::direct::writer_only(device_, 16 * 1024, 0, UNRESERVED_BASE, {.x = 0, .y = 0}));
     }
     TEST_CASE_FIXTURE(unit_tests::SingleDeviceFixture, "ReaderWriter") {
         unit_tests::dram::direct::ReaderWriterConfig test_config = {
             .num_tiles = 1,
             .tile_byte_size = 2 * 32 * 32,
-            .output_dram_channel = 0,
             .output_dram_byte_address = 0,
-            .input_dram_channel = 0,
             .input_dram_byte_address = 16 * 32 * 32,
             .l1_byte_address = UNRESERVED_BASE,
             .l1_data_format = tt::DataFormat::Float16_b,
@@ -415,9 +399,7 @@ TEST_SUITE("SingleCoreDirectDram") {
         unit_tests::dram::direct::ReaderDatacopyWriterConfig test_config = {
             .num_tiles = 1,
             .tile_byte_size = 2 * 32 * 32,
-            .output_dram_channel = 0,
             .output_dram_byte_address = 0,
-            .input_dram_channel = 0,
             .input_dram_byte_address = 16 * 32 * 32,
             .l1_input_byte_address = UNRESERVED_BASE,
             .l1_input_data_format = tt::DataFormat::Float16_b,

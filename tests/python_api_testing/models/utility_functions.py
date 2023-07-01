@@ -248,7 +248,7 @@ def torch2tt_tensor(
     py_tensor: torch.Tensor,
     tt_device,
     tt_layout=ttl.tensor.Layout.TILE,
-    tt_memory_config=ttl.tensor.MemoryConfig(True, -1),
+    tt_memory_config=ttl.tensor.MemoryConfig(True),
 ):
     size = list(py_tensor.size())
 

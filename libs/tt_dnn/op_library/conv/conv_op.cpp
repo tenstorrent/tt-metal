@@ -35,7 +35,6 @@ void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program &program,
     uint32_t cb0_tiles = act_block_size;
     auto cb_in0 = tt_metal::CreateCircularBuffers(
         program,
-        device,
         in0_cb,
         core,
         cb0_tiles,
@@ -46,7 +45,6 @@ void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program &program,
     uint32_t cb1_tiles = weight_block_size;
     auto cb_in1 = tt_metal::CreateCircularBuffers(
         program,
-        device,
         in1_cb,
         core,
         cb1_tiles,
@@ -57,7 +55,6 @@ void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program &program,
     // Used for placing tilized activations
     auto cb_src0_tilized = tt_metal::CreateCircularBuffers(
         program,
-        device,
         tilize_mode_tilized_in0_cb,
         core,
         cb0_tiles,
@@ -67,7 +64,6 @@ void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program &program,
     if(untilize_out) {
         auto cb_matmul_partials = tt_metal::CreateCircularBuffers(
             program,
-            device,
             matmul_partials_cb,
             core,
             num_output_tiles,
@@ -78,7 +74,6 @@ void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program &program,
         // Shares same address space as matmul partials
         auto cb_final_matmul_partials = tt_metal::CreateCircularBuffers(
             program,
-            device,
             untilize_mode_final_matmul_partials_cb,
             core,
             num_output_tiles,
@@ -91,7 +86,6 @@ void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program &program,
         uint32_t reblock_cb_tiles = reblock_size; // Only space for one row
         auto cb_reblock = tt_metal::CreateCircularBuffers(
             program,
-            device,
             untilize_mode_reblock_cb,
             core,
             reblock_cb_tiles,
@@ -101,7 +95,6 @@ void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program &program,
 
         auto cb_output = tt_metal::CreateCircularBuffers(
             program,
-            device,
             out0_cb,
             core,
             num_output_tiles,
@@ -114,7 +107,6 @@ void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program &program,
         CoreRangeSet cores(std::set<CoreRange>({core}));
         auto cb_matmul_partials = tt_metal::CreateCircularBuffers(
             program,
-            device,
             {matmul_partials_cb, out0_cb},
             cores,
             num_output_tiles,
@@ -679,9 +671,9 @@ Program conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<
 
     uint32_t dram_bank_id = 0;
     auto act_address_map_buffer_size_in_dram = act_address_map.size() * sizeof(uint32_t);
-    auto act_address_map_dram_buffer = tt_metal::Buffer(device, act_address_map_buffer_size_in_dram, dram_bank_id, act_address_map_buffer_size_in_dram, tt_metal::BufferType::DRAM);
+    auto act_address_map_dram_buffer = tt_metal::Buffer(device, act_address_map_buffer_size_in_dram, act_address_map_buffer_size_in_dram, tt_metal::BufferType::DRAM);
     auto weight_address_map_buffer_size_in_dram = weight_address_map.size() * sizeof(uint32_t);
-    auto weight_address_map_dram_buffer = tt_metal::Buffer(device, weight_address_map_buffer_size_in_dram, dram_bank_id, weight_address_map_buffer_size_in_dram, tt_metal::BufferType::DRAM);
+    auto weight_address_map_dram_buffer = tt_metal::Buffer(device, weight_address_map_buffer_size_in_dram, weight_address_map_buffer_size_in_dram, tt_metal::BufferType::DRAM);
     uint32_t act_address_map_dram_addr = act_address_map_dram_buffer.address();
     // DRAM to L1 writes should 32B aligned
     assert(act_address_map_dram_addr%32 == 0);
@@ -715,9 +707,6 @@ Program conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
 
     // L1 buffers
-    auto l1_bank_ids = device->bank_ids_from_logical_core(core_coord);
-    TT_ASSERT(not l1_bank_ids.empty());
-    auto l1_bank_id = l1_bank_ids.at(0);
     // Create scratchpad buffer in L1 to stream in dtx address map from dram
     // One scratchpad buffer is used for both activation and weight address maps
     uint32_t num_address_map_fields_per_transfer = 4; // TODO: (nshanker): remove hardcoded 4 and get this value from output of DTX
@@ -725,17 +714,17 @@ Program conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<
     auto scratch_pad_for_address_map_in_l1_b0_size_bytes = 32;
     // Scratchpad buffer size must also be a multiple of address map fields per transfer. We need all address map fields for a transfer in scratchpad.
     assert(scratch_pad_for_address_map_in_l1_b0_size_bytes % (num_address_map_fields_per_transfer*sizeof(uint32_t)) == 0);
-    auto scratch_pad_for_address_map_l1_buffer = tt_metal::Buffer(device, scratch_pad_for_address_map_in_l1_b0_size_bytes, l1_bank_id, scratch_pad_for_address_map_in_l1_b0_size_bytes, tt_metal::BufferType::L1);
+    auto scratch_pad_for_address_map_l1_buffer = tt_metal::Buffer(device, scratch_pad_for_address_map_in_l1_b0_size_bytes, scratch_pad_for_address_map_in_l1_b0_size_bytes, tt_metal::BufferType::L1);
     uint32_t scratch_pad_for_address_map_l1_address = scratch_pad_for_address_map_l1_buffer.address();
     // DRAM to L1 writes should 32B aligned
     assert(scratch_pad_for_address_map_l1_address%32 == 0);
     // Create address map metadata buffers in L1
     // Metadata vectors are copied to L1 buffers from host before calling LaunchKernels
     auto act_address_map_metadata_l1_b0_size = act_address_map_metadata.size() * sizeof(uint32_t);
-    auto act_address_map_metadata_l1_buffer = tt_metal::Buffer(device, act_address_map_metadata_l1_b0_size, l1_bank_id, act_address_map_metadata_l1_b0_size, tt_metal::BufferType::L1);
+    auto act_address_map_metadata_l1_buffer = tt_metal::Buffer(device, act_address_map_metadata_l1_b0_size, act_address_map_metadata_l1_b0_size, tt_metal::BufferType::L1);
     uint32_t act_address_map_metadata_l1_address = act_address_map_metadata_l1_buffer.address();
     auto weight_address_map_metadata_l1_b0_size = weight_address_map_metadata.size() * sizeof(uint32_t);
-    auto weight_address_map_metadata_l1_buffer = tt_metal::Buffer(device, weight_address_map_metadata_l1_b0_size, l1_bank_id, weight_address_map_metadata_l1_b0_size, tt_metal::BufferType::L1);
+    auto weight_address_map_metadata_l1_buffer = tt_metal::Buffer(device, weight_address_map_metadata_l1_b0_size, weight_address_map_metadata_l1_b0_size, tt_metal::BufferType::L1);
     uint32_t weight_address_map_metadata_l1_address = weight_address_map_metadata_l1_buffer.address();
 
     // out

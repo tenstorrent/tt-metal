@@ -91,25 +91,6 @@ std::vector<Tensor> run_without_program_cache(
     return output_tensors;
 }
 
-struct CircularBufferContext {
-    Program& program;
-
-    CircularBufferContext(Device* device, Program& program) : program(program) {
-        for (auto& circular_buffer :  this->program.circular_buffers()) {
-            if (not circular_buffer->is_allocated()) {
-                circular_buffer->reserve(device);
-            }
-        }
-    }
-
-    ~CircularBufferContext() {
-        for (auto& circular_buffer : this->program.circular_buffers()) {
-            circular_buffer->deallocate();
-        }
-    }
-};
-
-
 std::vector<Tensor> run_with_program_cache(
     const Operation& op,
     const std::vector<Tensor> &input_tensors,
@@ -134,8 +115,6 @@ std::vector<Tensor> run_with_program_cache(
     );
 
     auto& program = program_with_callbacks.program;
-
-    auto cb_context = CircularBufferContext(device, program);
 
     const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
     if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
@@ -274,9 +253,8 @@ Hash hash_tensor(const Tensor& tensor) {
 
 Hash hash_memory_config(const MemoryConfig& memory_config) {
     return fmt::format(
-        "{}_{}_{}",
+        "{}_{}",
         memory_config.interleaved,
-        memory_config.bank_id,
         magic_enum::enum_name(memory_config.buffer_type)
     );
 }

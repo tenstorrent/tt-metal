@@ -11,7 +11,6 @@ struct BufferConfig {
     u32 num_pages;
     u32 page_size;
     BufferType buftype;
-    u32 bank_start;
 };
 
 struct BufferStressTestConfig {
@@ -25,7 +24,7 @@ namespace local_test_functions {
 bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
     Device* device, CommandQueue& cq, const BufferConfig& config) {
     size_t buf_size = config.num_pages * config.page_size;
-    Buffer bufa(device, buf_size, config.bank_start, config.page_size, config.buftype);
+    Buffer bufa(device, buf_size, config.page_size, config.buftype);
     vector<u32> src(buf_size / sizeof(u32), 0);
 
     for (u32 i = 0; i < src.size(); i++) {
@@ -60,7 +59,7 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(Device* device, Comman
             buftype = BufferType::L1;
         }
 
-        Buffer buf(device, buf_size, 0, config.page_size, buftype);
+        Buffer buf(device, buf_size, config.page_size, buftype);
         EnqueueWriteBuffer(cq, buf, src, false);
 
         vector<u32> res;
@@ -80,7 +79,7 @@ TEST_F(CommandQueueHarness, WriteOneTileToDramBank0) {
         GTEST_SKIP();
     }
 
-    BufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::DRAM, .bank_start = 0};
+    BufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::DRAM};
 
     EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device, *this->cq, config));
 }
@@ -93,8 +92,7 @@ TEST_F(CommandQueueHarness, WriteOneTileToAllDramBanks) {
     BufferConfig config = {
         .num_pages = u32(this->device->cluster()->get_soc_desc(this->pcie_id).get_num_dram_channels()),
         .page_size = 2048,
-        .buftype = BufferType::DRAM,
-        .bank_start = 0};
+        .buftype = BufferType::DRAM};
 
     EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device, *this->cq, config));
 }
@@ -108,8 +106,7 @@ TEST_F(CommandQueueHarness, WriteOneTileAcrossAllDramBanksTwiceRoundRobin) {
     BufferConfig config = {
         .num_pages = num_round_robins * (this->device->cluster()->get_soc_desc(this->pcie_id).get_num_dram_channels()),
         .page_size = 2048,
-        .buftype = BufferType::DRAM,
-        .bank_start = 0};
+        .buftype = BufferType::DRAM};
 
     EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device, *this->cq, config));
 }
@@ -122,7 +119,7 @@ TEST_F(CommandQueueHarness, WriteOneTileToL1Bank0) {
         GTEST_SKIP();
     }
 
-    BufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::L1, .bank_start = 0};
+    BufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::L1};
 
     EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device, *this->cq, config));
 }
@@ -135,8 +132,7 @@ TEST_F(CommandQueueHarness, WriteOneTileToAllL1Banks) {
     BufferConfig config = {
         .num_pages = u32(this->device->cluster()->get_soc_desc(this->pcie_id).compute_and_storage_cores.size()),
         .page_size = 2048,
-        .buftype = BufferType::L1,
-        .bank_start = 0};
+        .buftype = BufferType::L1};
 
     EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device, *this->cq, config));
 }
@@ -149,8 +145,7 @@ TEST_F(CommandQueueHarness, WriteOneTileToAllL1BanksTwiceRoundRobin) {
     BufferConfig config = {
         .num_pages = 2 * u32(this->device->cluster()->get_soc_desc(this->pcie_id).compute_and_storage_cores.size()),
         .page_size = 2048,
-        .buftype = BufferType::L1,
-        .bank_start = 0};
+        .buftype = BufferType::L1};
 
     EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device, *this->cq, config));
 }

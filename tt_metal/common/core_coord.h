@@ -216,7 +216,11 @@ class CoreRangeSet {
       }
     }
 
+    CoreRangeSet(const CoreRangeSet &other) = default;
+    CoreRangeSet& operator=(const CoreRangeSet &other) = default;
 
+    CoreRangeSet(CoreRangeSet &&other) = default;
+    CoreRangeSet& operator=(CoreRangeSet &&other) = default;
 
     CoreRangeSet merge ( const std::set<CoreRange> & core_ranges ){
       std::vector<CoreRange> vcr (core_ranges.begin(), core_ranges.end() );

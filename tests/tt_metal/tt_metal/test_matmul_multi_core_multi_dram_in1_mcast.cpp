@@ -127,13 +127,12 @@ std::tuple<tt_metal::Program, tt_metal::DataMovementKernel *, tt_metal::DataMove
             uint32_t cb0_tiles = in0_block_tiles * 2; // double buffer
             auto cb_src0 = tt_metal::CreateCircularBuffer(
                 program,
-                device,
                 src0_cb_index,
                 core,
                 cb0_tiles,
                 cb0_tiles * single_tile_size,
-                src0_cb_addr,
-                tt::DataFormat::Float16_b
+                tt::DataFormat::Float16_b,
+                src0_cb_addr
             );
 
             uint32_t src1_cb_index = 1;
@@ -142,13 +141,12 @@ std::tuple<tt_metal::Program, tt_metal::DataMovementKernel *, tt_metal::DataMove
             uint32_t cb1_tiles = in1_block_tiles * 2; // double buffer
             auto cb_src1 = tt_metal::CreateCircularBuffer(
                 program,
-                device,
                 src1_cb_index,
                 core,
                 cb1_tiles,
                 cb1_tiles * single_tile_size,
-                src1_cb_addr,
-                tt::DataFormat::Float16_b
+                tt::DataFormat::Float16_b,
+                src1_cb_addr
             );
 
             uint32_t ouput_cb_index = 16; // output operands start at index 16
@@ -158,13 +156,12 @@ std::tuple<tt_metal::Program, tt_metal::DataMovementKernel *, tt_metal::DataMove
             l1_valid_address += out_CB_size;
             auto cb_output = tt_metal::CreateCircularBuffers(
                 program,
-                device,
                 {ouput_cb_index, interm0_cb_index},
                 cores,
                 out_CB_tiles,
                 out_CB_size,
-                output_cb_addr,
-                tt::DataFormat::Float16_b
+                tt::DataFormat::Float16_b,
+                output_cb_addr
             );
 
             TT_ASSERT(l1_valid_address < 1024 * 1024);

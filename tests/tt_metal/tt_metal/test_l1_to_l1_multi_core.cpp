@@ -48,7 +48,6 @@ int main(int argc, char **argv) {
         uint32_t tile_size_bytes = 1024 * 2;
         uint32_t total_tiles_size_bytes = num_tiles * tile_size_bytes;
         uint32_t dram_buffer_src_addr = 0;
-        int dram_src_channel_id = 0;
         uint32_t dram_buffer_size = total_tiles_size_bytes;
 
         uint32_t l1_buffer_addr = 400 * 1024;
@@ -60,14 +59,11 @@ int main(int argc, char **argv) {
                     dst_soc_core.y += 1;
                 }
                 std::cout << "Sending from " << j+1 << "," << i+1 << " to " << i+1 << "," << j+1 << std::endl;
-                auto l1_bank_ids = device->bank_ids_from_logical_core(core);
-                TT_ASSERT(not l1_bank_ids.empty());
-                auto l1_bank_id = l1_bank_ids.at(0);
-                auto l1_b0 = tt_metal::Buffer(device, dram_buffer_size, l1_buffer_addr, l1_bank_id, dram_buffer_size, tt_metal::BufferType::L1);
+                auto l1_b0 = tt_metal::Buffer(device, dram_buffer_size, l1_buffer_addr, dram_buffer_size, tt_metal::BufferType::L1);
 
                 std::vector<uint32_t> src_vec = create_constant_vector_of_bfloat16(
                     dram_buffer_size, i * 10 + j);
-                auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, dram_src_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
+                auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, dram_buffer_size, tt_metal::BufferType::DRAM);
                 auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
                 tt_metal::WriteToBuffer(src_dram_buffer, src_vec);
 

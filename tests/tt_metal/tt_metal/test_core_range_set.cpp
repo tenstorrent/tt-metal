@@ -28,7 +28,7 @@ void check_program_is_mapped_to_correct_cores(const tt_metal::Program &program, 
                     }
                 }
                 for (auto cb : program.circular_buffers()) {
-                    TT_ASSERT(cb->is_on_logical_core(logical_core));
+                    TT_ASSERT(cb.is_on_logical_core(logical_core));
                 }
                 for (auto semaphore : program.semaphores() ){
                     TT_ASSERT(semaphore.initialized_on_logical_core(logical_core));
@@ -62,8 +62,7 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
     uint32_t num_tiles = 32;
     uint32_t buffer_size = single_tile_size * num_tiles;
 
-    int dram_src_channel_id = 0;
-    auto src_dram_buffer = tt_metal::Buffer(device, buffer_size, dram_src_channel_id, buffer_size, tt_metal::BufferType::DRAM);
+    auto src_dram_buffer = tt_metal::Buffer(device, buffer_size, buffer_size, tt_metal::BufferType::DRAM);
     auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
 
     std::map<CoreCoord, tt_metal::Buffer> core_to_l1_buffer;
@@ -73,10 +72,7 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
         for (auto x = start.x; x <= end.x; x++) {
             for (auto y = start.y; y <= end.y; y++) {
                 CoreCoord logical_core({.x=x, .y=y});
-                auto l1_bank_ids = device->bank_ids_from_logical_core(logical_core);
-                TT_ASSERT(not l1_bank_ids.empty());
-                auto l1_bank_id = l1_bank_ids.at(0);
-                auto dst_l1_buffer = tt_metal::Buffer(device, buffer_size, l1_bank_id, buffer_size, tt_metal::BufferType::L1);
+                auto dst_l1_buffer = tt_metal::Buffer(device, buffer_size, buffer_size, tt_metal::BufferType::L1);
                 core_to_l1_buffer.emplace(logical_core, dst_l1_buffer);
             }
         }
@@ -88,7 +84,6 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
     uint32_t num_input_tiles = 8;
     auto cb_src0 = tt_metal::CreateCircularBuffers(
         program,
-        device,
         src0_cb_index,
         core_range_set,
         num_input_tiles,
@@ -100,7 +95,6 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
     uint32_t num_output_tiles = 1;
     auto cb_output = tt_metal::CreateCircularBuffers(
         program,
-        device,
         ouput_cb_index,
         core_range_set,
         num_output_tiles,

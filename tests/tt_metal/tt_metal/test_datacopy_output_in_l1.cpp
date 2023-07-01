@@ -56,14 +56,9 @@ int main(int argc, char **argv) {
         uint32_t num_tiles = 32;
         uint32_t buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-        int dram_src_channel_id = 0;
-        auto l1_bank_ids = device->bank_ids_from_logical_core(core);
-        TT_ASSERT(not l1_bank_ids.empty());
-        auto l1_bank_id = l1_bank_ids.at(0);
+        auto src_dram_buffer = tt_metal::Buffer(device, buffer_size, buffer_size, tt_metal::BufferType::DRAM);
 
-        auto src_dram_buffer = tt_metal::Buffer(device, buffer_size, dram_src_channel_id, buffer_size, tt_metal::BufferType::DRAM);
-
-        auto dst_l1_buffer = tt_metal::Buffer(device, buffer_size, l1_bank_id, buffer_size, tt_metal::BufferType::L1);
+        auto dst_l1_buffer = tt_metal::Buffer(device, buffer_size, buffer_size, tt_metal::BufferType::L1);
 
         auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
         auto l1_dst_noc_xy = dst_l1_buffer.noc_coordinates();
@@ -74,7 +69,6 @@ int main(int argc, char **argv) {
         uint32_t num_input_tiles = 8;
         auto cb_src0 = tt_metal::CreateCircularBuffer(
             program,
-            device,
             src0_cb_index,
             core,
             num_input_tiles,
@@ -86,7 +80,6 @@ int main(int argc, char **argv) {
         uint32_t num_output_tiles = 1;
         auto cb_output = tt_metal::CreateCircularBuffer(
             program,
-            device,
             ouput_cb_index,
             core,
             num_output_tiles,

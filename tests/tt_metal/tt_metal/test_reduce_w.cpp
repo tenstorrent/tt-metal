@@ -76,9 +76,7 @@ int main(int argc, char **argv) {
         uint32_t dram_buffer_bytes = single_tile_bytes * num_tensor_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
         uint32_t dram_buffer_src0_addr = 0;
-        int dram_src0_channel_id = 0;
         uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
-        int dram_dst_channel_id = 0;
 
         uint32_t src_page_size = single_tile_bytes;
         uint32_t dst_page_size = single_tile_bytes;
@@ -87,8 +85,8 @@ int main(int argc, char **argv) {
             dst_page_size = dram_buffer_bytes/Wt;
         }
 
-        auto src0_dram_buffer = tt_metal::Buffer(device, dram_buffer_bytes, dram_buffer_src0_addr, dram_src0_channel_id, src_page_size, tt_metal::BufferType::DRAM);
-        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_bytes/Wt, dram_buffer_dst_addr, dram_dst_channel_id, dst_page_size, tt_metal::BufferType::DRAM);
+        auto src0_dram_buffer = tt_metal::Buffer(device, dram_buffer_bytes, dram_buffer_src0_addr, src_page_size, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_bytes/Wt, dram_buffer_dst_addr, dst_page_size, tt_metal::BufferType::DRAM);
         auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
         auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
 
@@ -98,19 +96,12 @@ int main(int argc, char **argv) {
         // this buffer is used in transpose_hc.cpp NCRISC kernel
         auto cb_src0 = tt_metal::CreateCircularBuffer(
             program,
-            device,
             src0_cb_index,
             core,
             num_buffer_tiles,
             num_buffer_tiles * single_tile_bytes,
-            src0_cb_addr,
-            tt::DataFormat::Float16_b
-        );
-
-        auto cb_temp_reduce_tile = tt_metal::CreateCircularBuffer(
-            program, device, CB::c_in2 /* ouput_cb_index */, core, 2 /* one tile */,
-            2 * single_tile_bytes, /* one tile */ 400*1024, /* buf addr */
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            src0_cb_addr
         );
 
         uint32_t ouput_cb_index = 16; // output operands start at index 16
@@ -119,13 +110,19 @@ int main(int argc, char **argv) {
         // this buffer is used in writer_unary.cpp BRISC kernel
         auto cb_output = tt_metal::CreateCircularBuffer(
             program,
-            device,
             ouput_cb_index,
             core,
             num_output_buffer_tiles,
             num_output_buffer_tiles * single_tile_bytes,
-            output_cb_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            output_cb_addr
+        );
+
+        auto cb_temp_reduce_tile = tt_metal::CreateCircularBuffer(
+            program, CB::c_in2 /* ouput_cb_index */, core, 2 /* one tile */,
+            2 * single_tile_bytes, /* one tile */
+            tt::DataFormat::Float16_b,
+            400*1024 /* buf addr */
         );
 
         TT_ASSERT(num_tensor_tiles%Wt == 0);

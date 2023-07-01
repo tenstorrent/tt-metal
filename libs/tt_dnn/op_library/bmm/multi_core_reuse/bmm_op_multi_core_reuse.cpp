@@ -73,7 +73,6 @@ operation::ProgramWithCallbacks create_program(
     uint32_t src0_cb_index = 0;
     auto cb_src0 = tt_metal::CreateCircularBuffers(
         program,
-        device,
         src0_cb_index,
         all_cores,
         in0_CB_tiles,
@@ -84,7 +83,6 @@ operation::ProgramWithCallbacks create_program(
     uint32_t src1_cb_index = 1;
     auto cb_src1 = tt_metal::CreateCircularBuffers(
         program,
-        device,
         src1_cb_index,
         all_cores,
         in1_CB_tiles,
@@ -96,7 +94,6 @@ operation::ProgramWithCallbacks create_program(
     uint32_t interm0_cb_index = 24;
     auto cb_output = tt_metal::CreateCircularBuffers(
         program,
-        device,
         {ouput_cb_index, interm0_cb_index},
         all_cores,
         out_CB_tiles,

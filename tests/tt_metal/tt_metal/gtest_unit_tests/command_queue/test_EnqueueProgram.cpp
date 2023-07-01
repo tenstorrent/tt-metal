@@ -67,13 +67,12 @@ bool test_dummy_EnqueueProgram_with_cbs(Device* device, CommandQueue& cq, const 
     for (u32 cb_id = 0; cb_id < program_config.num_cbs; cb_id++) {
         auto cb = CreateCircularBuffers(
             program,
-            device,
             cb_id,
             program_config.cr_set,
             cb_num_pages,
             cb_size,
-            cb_addr,
-            program_config.cb_config.data_format);
+            program_config.cb_config.data_format,
+            cb_addr);
         cb_addr += cb_size;
     }
 

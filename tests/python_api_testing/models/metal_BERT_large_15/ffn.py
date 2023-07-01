@@ -37,7 +37,7 @@ def feed_forward(
             ttl.tensor.DataType.BFLOAT16,
             device,
             # Force DRAM to fit tensors in L1
-            ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.DRAM),
+            ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
             activation,
             ff1_weighta,
             ff1_biasa,
@@ -203,7 +203,7 @@ def run_ffn_inference(
     # Initialize the device
     ttl.device.InitializeDevice(device, ttl.device.MemoryAllocator.BASIC if dram else ttl.device.MemoryAllocator.L1_BANKING)
     host = ttl.device.GetHost()
-    mem_config = ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.DRAM if dram else ttl.tensor.BufferType.L1)
+    mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM if dram else ttl.tensor.BufferType.L1)
 
     if on_weka:
         model_name = str(

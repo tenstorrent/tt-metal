@@ -64,7 +64,6 @@ Program untilize_single_core(const Tensor &a, Tensor& output) {
     uint32_t num_input_tiles = num_tiles_per_block;
     auto cb_src0 = tt_metal::CreateCircularBuffers(
         program,
-        device,
         src0_cb_index,
         core,
         num_input_tiles,
@@ -76,7 +75,6 @@ Program untilize_single_core(const Tensor &a, Tensor& output) {
     uint32_t num_output_tiles = num_tiles_per_block;
     auto cb_output = tt_metal::CreateCircularBuffers(
         program,
-        device,
         ouput_cb_index,
         core,
         num_output_tiles,
@@ -256,7 +254,6 @@ Program untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, con
     uint32_t num_input_tiles = num_tiles_per_block;
     auto cb_src0 = tt_metal::CreateCircularBuffers(
         program,
-        device,
         src0_cb_index,
         core,
         num_input_tiles,
@@ -268,7 +265,6 @@ Program untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, con
     uint32_t num_output_tiles = num_tiles_per_block;
     auto cb_output = tt_metal::CreateCircularBuffers(
         program,
-        device,
         ouput_cb_index,
         core,
         num_output_tiles,
@@ -278,12 +274,8 @@ Program untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, con
 
     uint32_t temp_buffer_size = alignment + block_row_size;
 
-    auto l1_bank_ids = device->bank_ids_from_logical_core(core.start);
-    TT_ASSERT(not l1_bank_ids.empty());
-    auto l1_bank_id = l1_bank_ids.at(0);
-
     // Cache buffer needs to hold 32B max per bank
-    auto temp_buffer_l1 = tt_metal::Buffer(device, temp_buffer_size, l1_bank_id, temp_buffer_size, tt_metal::BufferType::L1);
+    auto temp_buffer_l1 = tt_metal::Buffer(device, temp_buffer_size, temp_buffer_size, tt_metal::BufferType::L1);
 
     vector<uint32_t> writer_kernel_args = {
         dst_dram_buffer->address(),

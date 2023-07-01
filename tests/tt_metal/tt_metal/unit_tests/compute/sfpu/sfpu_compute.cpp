@@ -94,9 +94,7 @@ namespace unit_tests::compute::sfpu {
 struct SfpuConfig {
     size_t num_tiles = 0;
     size_t tile_byte_size = 0;
-    size_t output_dram_channel = 0;
     size_t output_dram_byte_address = 0;
-    size_t input_dram_channel = 0;
     size_t input_dram_byte_address = 0;
     size_t l1_input_byte_address = 0;
     tt::DataFormat l1_input_data_format = tt::DataFormat::Invalid;
@@ -119,7 +117,6 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
         device,
         byte_size,
         test_config.input_dram_byte_address,
-        test_config.input_dram_channel,
         byte_size,
         tt_metal::BufferType::DRAM);
     auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
@@ -127,7 +124,6 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
         device,
         byte_size,
         test_config.output_dram_byte_address,
-        test_config.output_dram_channel,
         byte_size,
         tt_metal::BufferType::DRAM);
     auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
@@ -167,23 +163,21 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
     for (const CoreRange& core_range : test_config.cores.ranges()) {
         auto l1_input_cb = tt_metal::CreateCircularBuffers(
             program,
-            device,
             0,
             core_range,
             test_config.num_tiles,
             byte_size,
-            test_config.l1_input_byte_address,
-            test_config.l1_input_data_format);
+            test_config.l1_input_data_format,
+            test_config.l1_input_byte_address);
 
         auto l1_output_cb = tt_metal::CreateCircularBuffers(
             program,
-            device,
             16,
             core_range,
             test_config.num_tiles,
             byte_size,
-            test_config.l1_output_byte_address,
-            test_config.l1_output_data_format);
+            test_config.l1_output_data_format,
+            test_config.l1_output_byte_address);
 
         auto reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
@@ -268,9 +262,7 @@ TEST_SUITE("SfpuCompute" * doctest::description("Eltwise unary SFPU tests") * do
         CoreRangeSet core_range_set({core_range});
         unit_tests::compute::sfpu::SfpuConfig test_config = {
             .tile_byte_size = 2 * 32 * 32,
-            .output_dram_channel = 0,
             .output_dram_byte_address = 0,
-            .input_dram_channel = 0,
             .input_dram_byte_address = 16 * 32 * 32,
             .l1_input_byte_address = UNRESERVED_BASE,
             .l1_input_data_format = tt::DataFormat::Float16_b,
@@ -372,9 +364,7 @@ TEST_SUITE("SfpuCompute" * doctest::description("Eltwise unary SFPU tests") * do
         CoreRangeSet core_range_set({core_range});
         unit_tests::compute::sfpu::SfpuConfig test_config = {
             .tile_byte_size = 2 * 32 * 32,
-            .output_dram_channel = 0,
             .output_dram_byte_address = 0,
-            .input_dram_channel = 0,
             .input_dram_byte_address = 16 * 32 * 32,
             .l1_input_byte_address = UNRESERVED_BASE,
             .l1_input_data_format = tt::DataFormat::Float16_b,
@@ -485,9 +475,7 @@ TEST_SUITE("SfpuCompute" * doctest::description("Eltwise unary SFPU tests") * do
         CoreRangeSet core_range_set({core_range});
         unit_tests::compute::sfpu::SfpuConfig test_config = {
             .tile_byte_size = 2 * 32 * 32,
-            .output_dram_channel = 0,
             .output_dram_byte_address = 0,
-            .input_dram_channel = 0,
             .input_dram_byte_address = 16 * 32 * 32,
             .l1_input_byte_address = UNRESERVED_BASE,
             .l1_input_data_format = tt::DataFormat::Float16_b,

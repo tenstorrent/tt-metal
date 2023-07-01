@@ -42,12 +42,9 @@ operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const st
     uint32_t src_buffer_size = alignment + src_stick_size;
     uint32_t dst_buffer_size = alignment + dst_stick_size;
 
-    auto l1_bank_ids = device->bank_ids_from_logical_core(core.start);
-    TT_ASSERT(not l1_bank_ids.empty());
-    auto l1_bank_id = l1_bank_ids.at(0);
-    auto cache_buffer_l1 = tt_metal::Buffer(device, cache_buffer_size, l1_bank_id, cache_buffer_size, tt_metal::BufferType::L1);
-    auto dst_buffer_l1 = tt_metal::Buffer(device, dst_buffer_size, l1_bank_id, dst_buffer_size, tt_metal::BufferType::L1);
-    auto src_buffer_l1 = tt_metal::Buffer(device, src_buffer_size, l1_bank_id, src_buffer_size, tt_metal::BufferType::L1);
+    auto cache_buffer_l1 = tt_metal::Buffer(device, cache_buffer_size, cache_buffer_size, tt_metal::BufferType::L1);
+    auto dst_buffer_l1 = tt_metal::Buffer(device, dst_buffer_size, dst_buffer_size, tt_metal::BufferType::L1);
+    auto src_buffer_l1 = tt_metal::Buffer(device, src_buffer_size, src_buffer_size, tt_metal::BufferType::L1);
 
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
@@ -172,7 +169,6 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
 
     auto cb_src0 = tt_metal::CreateCircularBuffers(
         program,
-        device,
         src0_cb_index,
         core,
         num_input_tiles,
@@ -184,7 +180,6 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
 
     auto cb_src1 = tt_metal::CreateCircularBuffers(
         program,
-        device,
         src1_cb_index,
         core,
         num_input_tiles,

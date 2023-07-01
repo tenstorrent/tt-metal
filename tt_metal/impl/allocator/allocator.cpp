@@ -9,280 +9,105 @@ namespace tt_metal {
 
 namespace allocator {
 
-BankManager::BankManager(const std::vector<BankDescriptor> &bank_descriptors) : initialized_(true) {
+void BankManager::init_allocator(u64 size_bytes, u64 offset) {
+    this->allocator_ = std::make_unique<FreeList>(
+        size_bytes,
+        offset,
+        this->min_allocation_size_bytes_,
+        this->alignment_,
+        FreeList::SearchPolicy::FIRST
+    );
+}
+
+BankManager::BankManager(const std::vector<i64> &bank_offsets, u64 size_bytes, u64 alloc_offset) {
     unsigned int bank_id = 0;
-    for (const auto bank_descriptor : bank_descriptors) {
-        this->bank_id_to_offset_.insert({bank_id, bank_descriptor.offset_bytes});
-        this->bank_id_to_bank_offset_.insert({bank_id, bank_descriptor.bank_offset_bytes});
-        auto allocator = std::make_unique<FreeList>(
-            bank_descriptor.size_bytes,
-            this->min_allocation_size_bytes_,
-            this->alignment_,
-            FreeList::SearchPolicy::FIRST
-        );
-        this->bank_id_to_allocator_.insert({bank_id, std::move(allocator)});
+    for (const auto bank_offset : bank_offsets) {
+        this->bank_id_to_bank_offset_.insert({bank_id, bank_offset});
         bank_id++;
     }
+    this->init_allocator(size_bytes, alloc_offset);
 }
-BankManager::BankManager(const std::unordered_map<u32, BankDescriptor> &bank_id_to_descriptor) : initialized_(true) {
-    for (const auto &[bank_id, bank_descriptor] : bank_id_to_descriptor) {
-        this->bank_id_to_offset_.insert({bank_id, bank_descriptor.offset_bytes});
-        this->bank_id_to_bank_offset_.insert({bank_id, bank_descriptor.bank_offset_bytes});
-        auto allocator = std::make_unique<FreeList>(
-            bank_descriptor.size_bytes,
-            this->min_allocation_size_bytes_,
-            this->alignment_,
-            FreeList::SearchPolicy::FIRST
-        );
-        this->bank_id_to_allocator_.insert({bank_id, std::move(allocator)});
-    }
+
+BankManager::BankManager(const std::unordered_map<u32, i64> &bank_id_to_bank_offset, u64 size_bytes, u64 alloc_offset) : bank_id_to_bank_offset_(bank_id_to_bank_offset) {
+    this->init_allocator(size_bytes, alloc_offset);
 }
 
 u32 BankManager::num_banks() const {
-    TT_ASSERT(bank_id_to_offset_.size() == bank_id_to_allocator_.size());
-    return bank_id_to_allocator_.size();
+    return this->bank_id_to_bank_offset_.size();
 }
 
-u32 BankManager::size(u32 bank_id) const {
-    this->validate_bank_id(bank_id);
-    return this->bank_id_to_allocator_.at(bank_id)->max_size_bytes();
-}
-
-u32 BankManager::offset(u32 bank_id) const {
-    this->validate_bank_id(bank_id);
-    return this->bank_id_to_offset_.at(bank_id);
-}
-i32 BankManager::bank_offset(u32 bank_id) const {
+i64 BankManager::bank_offset(u32 bank_id) const {
     this->validate_bank_id(bank_id);
     return this->bank_id_to_bank_offset_.at(bank_id);
 }
 
 void BankManager::validate_bank_id(u32 bank_id) const {
-    TT_ASSERT(this->bank_id_to_offset_.find(bank_id) != this->bank_id_to_offset_.end());
-    TT_ASSERT(this->bank_id_to_bank_offset_.find(bank_id) != this->bank_id_to_bank_offset_.end());
-    TT_ASSERT(this->bank_id_to_allocator_.find(bank_id) != this->bank_id_to_allocator_.end());
+    log_assert(this->bank_id_to_bank_offset_.find(bank_id) != this->bank_id_to_bank_offset_.end(), "Expected bank {} to be tracked!", bank_id);
 }
 
-BankIdToRelativeAddress BankManager::allocate_contiguous_buffer(u32 bank_id, u32 size_bytes, bool bottom_up) {
-    BankIdToRelativeAddress bank_to_address;
-    this->validate_bank_id(bank_id);
-    auto bank_offset = this->bank_id_to_offset_.at(bank_id);
-    auto address = this->bank_id_to_allocator_.at(bank_id)->allocate(size_bytes, bottom_up);
-    if (not address.has_value()) {
-        TT_THROW("Cannot allocate " + std::to_string(size_bytes) + " bytes for buffer in bank " + std::to_string(bank_id));
-    }
-    bank_to_address.insert({bank_id, {.offset_bytes = bank_offset, .relative_address = address.value()}});
-    return bank_to_address;
-}
-
-BankIdToRelativeAddress BankManager::allocate_contiguous_buffer_at_address(u32 bank_id, u32 size_bytes, u32 address) {
-    BankIdToRelativeAddress bank_to_address;
-    this->validate_bank_id(bank_id);
-    auto bank_offset = this->bank_id_to_offset_.at(bank_id);
-    auto bank_address = address - bank_offset;
-    auto allocated_address = this->bank_id_to_allocator_.at(bank_id)->allocate_at_address(bank_address, size_bytes);
-    if (not allocated_address.has_value()) {
-        TT_THROW("Cannot allocate " + std::to_string(size_bytes) + " bytes for buffer in bank " + std::to_string(bank_id) + " at " + std::to_string(address));
-    }
-    TT_ASSERT(bank_offset + allocated_address.value() == address);
-    bank_to_address.insert({bank_id, {.offset_bytes = bank_offset, .relative_address = allocated_address.value()}});
-    return bank_to_address;
-}
-
-BankIdToRelativeAddress BankManager::allocate_buffer(
-    u32 starting_bank_id, u32 size, u32 page_size, bool bottom_up,
-    std::function<void(u32, std::vector<std::pair<u32, u32>> &)> adjust_potential_addresses,
-    std::function<bool(const std::pair<u32, u32> &)> filter,
-    std::function<u32(u32, u32)> adjust_relative_address) {
-    TT_ASSERT(page_size > 0 and size % page_size == 0);
+u64 BankManager::allocate_buffer(u32 size, u32 page_size, bool bottom_up) {
+    log_assert(page_size > 0 and size % page_size == 0, "Page size {} should be divisible by buffer size {}", page_size, size);
     u32 num_pages = size / page_size;
-    if (num_pages == 1) {
-        return this->allocate_contiguous_buffer(starting_bank_id, size, bottom_up);
-    }
-
     u32 num_banks = this->num_banks();
-    int num_equally_distributed_pages = num_pages / num_banks;
-    int remaining_pages_after_equally_distributing = num_pages % num_banks;
-    u32 total_size_bytes = num_pages * page_size;
+    int num_equally_distributed_pages = num_pages == 1 ? 1 : 1 + ((num_pages - 1) / num_banks);
+    auto size_per_bank = num_equally_distributed_pages * page_size;
 
-    std::unordered_map<u32, u32> bank_id_to_size;
-    std::vector<std::pair<u32, u32>> candidate_addr_ranges;
+    auto address = this->allocator_->allocate(size_per_bank, bottom_up);
+    log_assert(address.has_value(), "Cannot allocate {} KB sized buffer in banks!", size_per_bank / 1024);
 
-    u32 total_accounted = 0;
-    u32 bank_id = starting_bank_id;
-    while (total_accounted < total_size_bytes) {
-        this->validate_bank_id(bank_id);
-        int num_pages_in_bank = num_equally_distributed_pages;
-        if (remaining_pages_after_equally_distributing > 0) {
-            num_pages_in_bank += 1;
-            remaining_pages_after_equally_distributing -= 1;
-        }
-        u32 buffer_size = num_pages_in_bank * page_size;
-        bank_id_to_size.emplace(bank_id, buffer_size);
-        auto potential_addr_ranges = this->bank_id_to_allocator_.at(bank_id)->available_addresses(buffer_size);
-        adjust_potential_addresses(bank_id, potential_addr_ranges);
-        allocator::populate_candidate_address_ranges(candidate_addr_ranges, potential_addr_ranges, filter);
-        total_accounted += buffer_size;
-        bank_id = (bank_id + 1) % num_banks;
-    }
-
-    if (candidate_addr_ranges.empty()) {
-        TT_THROW("Not enough space to interleave " + std::to_string(total_size_bytes) + " bytes across" + std::to_string(num_banks) + " banks");
-    }
-
-    u32 relative_address;
-    if (bottom_up) {
-        relative_address = allocator::find_address_of_smallest_chunk(candidate_addr_ranges);
-    } else {
-        relative_address = allocator::find_max_address(candidate_addr_ranges);
-    }
-
-    BankIdToRelativeAddress bank_to_address;
-    for (auto &[bank_id, buffer_size] : bank_id_to_size) {
-        u32 bank_offset = this->bank_id_to_offset_.at(bank_id);
-        u32 adjusted_relative_address = adjust_relative_address(relative_address, bank_id);
-        u32 absolute_address = adjusted_relative_address + bank_offset;
-        this->allocate_contiguous_buffer_at_address(bank_id, buffer_size, absolute_address);
-        bank_to_address.insert({bank_id, {.offset_bytes = bank_offset, .relative_address = adjusted_relative_address}});
-    }
-    return bank_to_address;
+    return address.value();
 }
 
-BankIdToRelativeAddress BankManager::allocate_buffer_at_address(
-    u32 starting_bank_id, u32 size, u32 page_size, u32 absolute_address,
-    std::function<u32(u32, u32)> adjust_absolute_address) {
-    TT_ASSERT(page_size > 0 and size % page_size == 0);
+u64 BankManager::allocate_buffer_at_address(u32 size, u32 page_size, u32 relative_address, std::function<u32(u32)> adjust_address) {
+    log_assert(page_size > 0 and size % page_size == 0, "Page size {} should be divisible by buffer size {}", page_size, size);
 
     u32 num_pages = size / page_size;
-    if (num_pages == 1) {
-        return this->allocate_contiguous_buffer_at_address(starting_bank_id, size, absolute_address);
-    }
-
     u32 num_banks = this->num_banks();
-    int num_equally_distributed_pages = num_pages / num_banks;
-    int remaining_pages_after_equally_distributing = num_pages % num_banks;
-    u32 total_size_bytes = num_pages * page_size;
+    int num_equally_distributed_pages = num_pages == 1 ? 1 : 1 + ((num_pages - 1) / num_banks);
+    auto size_per_bank = num_equally_distributed_pages * page_size;
 
-    BankIdToRelativeAddress bank_to_address;
-    u32 total_accounted = 0;
-    u32 bank_id = starting_bank_id;
-    while (total_accounted < total_size_bytes) {
-        this->validate_bank_id(bank_id);
-        int num_pages_in_bank = num_equally_distributed_pages;
-        if (remaining_pages_after_equally_distributing > 0) {
-            num_pages_in_bank += 1;
-            remaining_pages_after_equally_distributing -= 1;
-        }
-        u32 buffer_size = num_pages_in_bank * page_size;
-        u32 adjusted_absolute_address = adjust_absolute_address(absolute_address, bank_id);
-        this->allocate_contiguous_buffer_at_address(bank_id, buffer_size, adjusted_absolute_address);
-        u32 bank_offset = this->bank_id_to_offset_.at(bank_id);
-        u32 relative_address = adjusted_absolute_address - bank_offset;
-        bank_to_address.insert({bank_id, {.offset_bytes = bank_offset, .relative_address = relative_address}});
+    auto adjusted_address = adjust_address(relative_address);
 
-        total_accounted += buffer_size;
-        bank_id = (bank_id + 1) % num_banks;
-    }
-    return bank_to_address;
+    auto allocated_address = this->allocator_->allocate_at_address(adjusted_address, size_per_bank);
+    log_assert(allocated_address.has_value(), "Allocating at specified address error: Cannot allocate {} KB sized buffer in banks!", size_per_bank / 1024);
+    log_assert(allocated_address.value() == adjusted_address, "Allocating at specified address error: Allocated address {} is not the same as specified address adjusted for bank {}", allocated_address.value(), adjusted_address);
+
+    return relative_address;
 }
 
-void BankManager::deallocate_buffer(u32 bank_id, u32 absolute_address) {
-    this->validate_bank_id(bank_id);
-    auto bank_offset = this->bank_id_to_offset_.at(bank_id);
-    auto relative_address = absolute_address - bank_offset;
-    this->bank_id_to_allocator_.at(bank_id)->deallocate(relative_address);
-}
-
-std::vector<std::pair<u32, u32>> BankManager::available_addresses(u32 bank_id, u32 size_bytes, bool return_absolute_addresses) const {
-    this->validate_bank_id(bank_id);
-    auto addresses = this->bank_id_to_allocator_.at(bank_id)->available_addresses(size_bytes);
-    auto offset = this->bank_id_to_offset_.at(bank_id);
-    if (return_absolute_addresses) {
-        for (auto &[start_addr, end_addr] : addresses) {
-            start_addr += offset;
-            end_addr += offset;
-        }
-    }
-    return addresses;
+void BankManager::deallocate_buffer(u64 address) {
+    this->allocator_->deallocate(address);
 }
 
 void BankManager::clear() {
-    for (auto &[bank_id, allocator] : this->bank_id_to_allocator_) {
-        allocator->clear();
+    this->allocator_->clear();
+}
+
+std::optional<u64> BankManager::lowest_occupied_address(u32 bank_id) const {
+    auto lowest_address = this->allocator_->lowest_occupied_address();
+    if (not lowest_address.has_value()) {
+        return lowest_address;
     }
+    auto adjusted_abs_addr = lowest_address.value() + this->bank_offset(bank_id);
+    return adjusted_abs_addr;
 }
 
 Statistics BankManager::get_statistics(u32 bank_id) const {
     this->validate_bank_id(bank_id);
-    return this->bank_id_to_allocator_.at(bank_id)->get_statistics();
+    return this->allocator_->get_statistics();
 }
 
 void BankManager::dump_blocks(u32 bank_id, std::ofstream &out) const {
     this->validate_bank_id(bank_id);
-    this->bank_id_to_allocator_.at(bank_id)->dump_blocks(out);
-}
-
-u32 find_max_address(const std::vector<std::pair<u32, u32>> &candidate_addr_ranges) {
-    u32 max_address = candidate_addr_ranges[0].second;
-    for (auto candidate_addr_range : candidate_addr_ranges) {
-        max_address = std::max(max_address, candidate_addr_range.second);
-    }
-    return max_address;
-}
-
-u32 find_address_of_smallest_chunk(const std::vector<std::pair<u32, u32>> &candidate_addr_ranges) {
-    u32 smallest_chunk = candidate_addr_ranges[0].second - candidate_addr_ranges[0].first;
-    u32 address = candidate_addr_ranges[0].first;
-    for (auto candidate_addr_range : candidate_addr_ranges) {
-        u32 range_size = candidate_addr_range.second - candidate_addr_range.first;
-        if (range_size < smallest_chunk) {
-            smallest_chunk = range_size;
-            address = candidate_addr_range.first;
-        }
-    }
-    return address;
-}
-
-void populate_candidate_address_ranges(
-    std::vector<std::pair<u32, u32>> &candidate_addr_ranges,
-    const std::vector<std::pair<u32, u32>> &potential_addr_ranges,
-    std::function<bool(const std::pair<u32, u32> &)> filter) {
-    if (candidate_addr_ranges.empty()) {
-        candidate_addr_ranges = potential_addr_ranges;
-        return;
-    }
-    int i = 0;
-    int j = 0;
-    std::vector<std::pair<u32, u32>> intersecting_addr_ranges;
-    while (i < candidate_addr_ranges.size() and j < potential_addr_ranges.size()) {
-        u32 lower_addr = std::max(candidate_addr_ranges[i].first, potential_addr_ranges[j].first);
-        u32 upper_addr = std::min(candidate_addr_ranges[i].second, potential_addr_ranges[j].second);
-        if (lower_addr <= upper_addr) {
-            std::pair<u32, u32> address_range = {lower_addr, upper_addr};
-            if (filter(address_range)) {
-                intersecting_addr_ranges.push_back(address_range);
-            }
-        }
-        if (candidate_addr_ranges[i].second < potential_addr_ranges[j].second) {
-            i++;
-        } else {
-            j++;
-        }
-    }
-    candidate_addr_ranges = intersecting_addr_ranges;
+    this->allocator_->dump_blocks(out);
 }
 
 void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &alloc_config) {
-    u32 bank_offset = 0;
-    std::vector<BankDescriptor> bank_descriptors (alloc_config.num_dram_channels);
+    std::vector<i64> bank_offsets (alloc_config.num_dram_channels);
     for (u32 channel_id = 0; channel_id < alloc_config.num_dram_channels; channel_id++) {
-        bank_descriptors.at(channel_id) = {
-            .offset_bytes = bank_offset,
-            .size_bytes = static_cast<u32>(alloc_config.dram_bank_size),
-            .bank_offset_bytes = static_cast<i32>(alloc_config.dram_bank_offsets.at(channel_id)),
-        };
+        bank_offsets.at(channel_id) = static_cast<i32>(alloc_config.dram_bank_offsets.at(channel_id));
     }
-    allocator.dram_manager = BankManager(bank_descriptors);
+    allocator.dram_manager = BankManager(bank_offsets, static_cast<u64>(alloc_config.dram_bank_size));
     for (u32 bank_id = 0; bank_id < alloc_config.num_dram_channels; bank_id++) {
         allocator.bank_id_to_dram_channel.insert({bank_id, bank_id});
         allocator.dram_channel_to_bank_ids.insert({bank_id, {bank_id}});
@@ -292,16 +117,10 @@ void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &allo
 void init_one_bank_per_l1(Allocator &allocator, const AllocatorConfig &alloc_config) {
     u32 num_l1_banks = alloc_config.worker_grid_size.y * alloc_config.worker_grid_size.x;
     // Space up to UNRESERVED_BASE is reserved for risc binaries, kernel args, debug and perf monitoring tools
-    u32 offset_bytes = UNRESERVED_BASE;
+    u64 offset_bytes = static_cast<u64>(UNRESERVED_BASE);
     u32 l1_bank_size = alloc_config.worker_l1_size - UNRESERVED_BASE;
-    std::vector<BankDescriptor> bank_descriptors (
-        num_l1_banks,
-        {
-            .offset_bytes = offset_bytes,
-            .size_bytes = l1_bank_size,
-            .bank_offset_bytes = 0,
-        });
-    allocator.l1_manager = BankManager(bank_descriptors);
+    std::vector<i64> bank_offsets (num_l1_banks, 0);
+    allocator.l1_manager = BankManager(bank_offsets, l1_bank_size, offset_bytes);
 
     u32 bank_id = 0;
     for (u32 y = 0; y < alloc_config.worker_grid_size.y; y++) {
@@ -377,45 +196,49 @@ void dump_memory_blocks(const Allocator &allocator, const BufferType &buffer_typ
     }
 }
 
-BankIdToRelativeAddress alloc_one_bank_per_storage_unit(const AllocatorConfig &config, BankManager &bank_manager, u32 starting_bank_id, u32 size, u32 page_size, bool bottom_up) {
-    return bank_manager.allocate_buffer(starting_bank_id, size, page_size, bottom_up);
+std::optional<u64> lowest_occupied_l1_address(const Allocator &allocator, u32 bank_id) {
+    return allocator.l1_manager.lowest_occupied_address(bank_id);
 }
 
-BankIdToRelativeAddress alloc_at_addr_one_bank_per_storage_unit(const AllocatorConfig &config, BankManager &bank_manager, u32 starting_bank_id, u32 size, u32 page_size, u32 absolute_address) {
-    return bank_manager.allocate_buffer_at_address(starting_bank_id, size, page_size, absolute_address);
+u64 base_alloc(const AllocatorConfig &config, BankManager &bank_manager, u64 size, u64 page_size, bool bottom_up) {
+    return bank_manager.allocate_buffer(size, page_size, bottom_up);
 }
 
-BankIdToRelativeAddress allocate_buffer(Allocator &allocator, u32 starting_bank_id, u32 size, u32 page_size, const BufferType &buffer_type, bool bottom_up) {
-    BankIdToRelativeAddress bank_to_address;
+u64 base_alloc_at_addr(const AllocatorConfig &config, BankManager &bank_manager, u64 size, u64 page_size, u64 relative_address) {
+    return bank_manager.allocate_buffer_at_address(size, page_size, relative_address);
+}
+
+u64 allocate_buffer(Allocator &allocator, u32 size, u32 page_size, const BufferType &buffer_type, bool bottom_up) {
+    u64 address = 0;
     switch (buffer_type) {
-        case BufferType::DRAM: return allocator.descriptor.dram.alloc(allocator.config, allocator.dram_manager, starting_bank_id, size, page_size, bottom_up);
-        case BufferType::L1: return allocator.descriptor.l1.alloc(allocator.config, allocator.l1_manager, starting_bank_id, size, page_size, bottom_up);
+        case BufferType::DRAM: return allocator.descriptor.dram.alloc(allocator.config, allocator.dram_manager, size, page_size, bottom_up);
+        case BufferType::L1: return allocator.descriptor.l1.alloc(allocator.config, allocator.l1_manager, size, page_size, bottom_up);
         default: {
             TT_ASSERT(false && "Unsupported buffer type!");
         }
     }
-    return bank_to_address;
+    return address;
 }
 
-BankIdToRelativeAddress allocate_buffer_at_address(Allocator &allocator, u32 starting_bank_id, u32 size, u32 page_size, u32 absolute_address, const BufferType &buffer_type) {
-    BankIdToRelativeAddress bank_to_address;
+u64 allocate_buffer_at_address(Allocator &allocator, u32 size, u32 page_size, u32 relative_address, const BufferType &buffer_type) {
+    u64 address = 0;
     switch (buffer_type) {
-        case BufferType::DRAM: return allocator.descriptor.dram.alloc_at_addr(allocator.config, allocator.dram_manager, starting_bank_id, size, page_size, absolute_address);
-        case BufferType::L1: return allocator.descriptor.l1.alloc_at_addr(allocator.config, allocator.l1_manager, starting_bank_id, size, page_size, absolute_address);
+        case BufferType::DRAM: return allocator.descriptor.dram.alloc_at_addr(allocator.config, allocator.dram_manager, size, page_size, relative_address);
+        case BufferType::L1: return allocator.descriptor.l1.alloc_at_addr(allocator.config, allocator.l1_manager, size, page_size, relative_address);
         default: {
             TT_ASSERT(false && "Unsupported buffer type!");
         }
     }
-    return bank_to_address;
+    return address;
 }
 
-void deallocate_buffer(Allocator &allocator, u32 bank_id, u32 absolute_address, const BufferType &buffer_type) {
+void deallocate_buffer(Allocator &allocator, u64 address, const BufferType &buffer_type) {
     switch (buffer_type) {
         case BufferType::DRAM:
-            allocator.dram_manager.deallocate_buffer(bank_id, absolute_address);
+            allocator.dram_manager.deallocate_buffer(address);
         break;
         case BufferType::L1:
-            allocator.l1_manager.deallocate_buffer(bank_id, absolute_address);
+            allocator.l1_manager.deallocate_buffer(address);
         break;
         default: {
             TT_ASSERT(false && "Unsupported buffer type!");
@@ -426,53 +249,6 @@ void deallocate_buffer(Allocator &allocator, u32 bank_id, u32 absolute_address, 
 void clear(Allocator &allocator) {
     allocator.dram_manager.clear();
     allocator.l1_manager.clear();
-}
-
-u32 allocate_circular_buffer(Allocator &allocator, const CoreCoord &logical_core, u32 size_bytes) {
-    auto bank_indices = bank_ids_from_logical_core(allocator, logical_core);
-    TT_ASSERT(bank_indices.size() == 1);
-    auto bank_id = bank_indices.at(0);
-    static constexpr bool bottom_up = true;
-    auto bank_id_to_rel_address = allocator.l1_manager.allocate_buffer(bank_id, size_bytes, size_bytes, bottom_up);
-    TT_ASSERT(bank_id_to_rel_address.find(bank_id) != bank_id_to_rel_address.end());
-    auto rel_address_desc = bank_id_to_rel_address.at(bank_id);
-    // Return absolute address for circular buffers
-    return rel_address_desc.absolute_address();
-}
-
-u32 allocate_circular_buffer(Allocator &allocator, const CoreCoord &logical_core, u32 start_address, u32 size_bytes) {
-    auto bank_indices = bank_ids_from_logical_core(allocator, logical_core);
-    TT_ASSERT(bank_indices.size() == 1);
-    auto bank_id = bank_indices.at(0);
-    auto bank_id_to_rel_address = allocator.l1_manager.allocate_buffer_at_address(bank_id, size_bytes, size_bytes, start_address);
-    TT_ASSERT(bank_id_to_rel_address.find(bank_id) != bank_id_to_rel_address.end());
-    auto rel_address_desc = bank_id_to_rel_address.at(bank_id);
-    // Return absolute address for circular buffers
-    return rel_address_desc.absolute_address();
-}
-
-u32 get_address_for_circular_buffers_across_core_range(Allocator &allocator, const CoreRange &logical_core_range, u32 size_in_bytes) {
-    std::vector<std::pair<u32, u32>> candidate_addr_ranges;
-    bool get_absolute_addresses = true;
-    auto start_core = logical_core_range.start;
-    auto end_core = logical_core_range.end;
-    for (auto x = start_core.x; x <= end_core.x; x++) {
-        for (auto y = start_core.y; y <= end_core.y; y++) {
-            auto logical_core = CoreCoord(x, y);
-            auto bank_indices = bank_ids_from_logical_core(allocator, logical_core);
-            TT_ASSERT(bank_indices.size() == 1);
-            auto bank_id = bank_indices.at(0);
-            auto potential_addr_ranges = allocator.l1_manager.available_addresses(bank_id, size_in_bytes, get_absolute_addresses);
-            allocator::populate_candidate_address_ranges(candidate_addr_ranges, potential_addr_ranges);
-        }
-    }
-
-    if (candidate_addr_ranges.empty()) {
-        TT_THROW("Not enough space for " + std::to_string(size_in_bytes) +
-            " byte CircularBuffers in cores ranging from " + start_core.str() + " to " + end_core.str());
-    }
-
-    return allocator::find_address_of_smallest_chunk(candidate_addr_ranges);
 }
 
 }  // namespace allocator

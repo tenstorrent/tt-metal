@@ -122,26 +122,24 @@ std::tuple<tt_metal::Program, tt_metal::DataMovementKernel *, tt_metal::DataMove
             l1_valid_address += in0_CB_size;
             auto cb_src0 = tt_metal::CreateCircularBuffer(
                 program,
-                device,
                 in0_CB_index,
                 core,
                 in0_CB_tiles,
                 in0_CB_size,
-                in0_CB_addr,
-                tt::DataFormat::Float16_b
+                tt::DataFormat::Float16_b,
+                in0_CB_addr
             );
 
             uint32_t out_CB_addr = l1_valid_address;
             l1_valid_address += out_CB_size;
             auto cb_output = tt_metal::CreateCircularBuffer(
                 program,
-                device,
                 out_CB_index,
                 core,
                 out_CB_tiles,
                 out_CB_size,
-                out_CB_addr,
-                tt::DataFormat::Float16_b
+                tt::DataFormat::Float16_b,
+                out_CB_addr
             );
 
             TT_ASSERT(l1_valid_address < 1024 * 1024);

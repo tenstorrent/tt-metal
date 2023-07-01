@@ -59,7 +59,7 @@ def test_perf():
     tt_lib.device.SetDefaultDevice(device)
     host = tt_lib.device.GetHost()
 
-    mem_config = tt_lib.tensor.MemoryConfig(True, -1, tt_lib.tensor.BufferType.DRAM if dram else tt_lib.tensor.BufferType.L1)
+    mem_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.DRAM if dram else tt_lib.tensor.BufferType.L1)
 
     HF_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
     HF_model.eval()

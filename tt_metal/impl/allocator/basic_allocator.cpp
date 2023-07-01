@@ -11,13 +11,13 @@ BasicAllocator::BasicAllocator(const AllocatorConfig &alloc_config)
         {
             .dram = {
                 .init=allocator::init_one_bank_per_channel,
-                .alloc=allocator::alloc_one_bank_per_storage_unit,
-                .alloc_at_addr=allocator::alloc_at_addr_one_bank_per_storage_unit
+                .alloc=allocator::base_alloc,
+                .alloc_at_addr=allocator::base_alloc_at_addr
             },
             .l1 = {
                 .init=allocator::init_one_bank_per_l1,
-                .alloc=allocator::alloc_one_bank_per_storage_unit,
-                .alloc_at_addr=allocator::alloc_at_addr_one_bank_per_storage_unit
+                .alloc=allocator::base_alloc,
+                .alloc_at_addr=allocator::base_alloc_at_addr
             }
         }
     ) {}

@@ -74,8 +74,7 @@ need
   constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles;
   constexpr uint32_t l1_buffer_addr = 400 * 1024;
 
-  uint32_t l1_bank_id = device->bank_ids_from_logical_core(core).at(0);
-  Buffer l1_buffer = Buffer(device, dram_buffer_size, l1_buffer_addr, l1_bank_id, dram_buffer_size, BufferType::L1);
+  Buffer l1_buffer = Buffer(device, dram_buffer_size, l1_buffer_addr, dram_buffer_size, BufferType::L1);
 
 For simplicity, let's make the size of all our buffers 50 tiles. We'll also put
 this particular L1 Buffer at location ``400KB``.
@@ -85,11 +84,10 @@ Let's make the input and output DRAM buffers.
 .. code-block:: cpp
 
   constexpr uint32_t input_dram_buffer_addr = 0;
-  constexpr int dram_channel = 0;
-  Buffer input_dram_buffer = Buffer(device, dram_buffer_size, input_dram_buffer_addr, dram_channel, dram_buffer_size, BufferType::DRAM);
+  Buffer input_dram_buffer = Buffer(device, dram_buffer_size, input_dram_buffer_addr, dram_buffer_size, BufferType::DRAM);
 
   constexpr uint32_t output_dram_buffer_addr = 512 * 1024;
-  Buffer output_dram_buffer = Buffer(device, dram_buffer_size, output_dram_buffer_addr, dram_channel, dram_buffer_size, BufferType::DRAM);
+  Buffer output_dram_buffer = Buffer(device, dram_buffer_size, output_dram_buffer_addr, dram_buffer_size, BufferType::DRAM);
 
 Program compilation
 -------------------

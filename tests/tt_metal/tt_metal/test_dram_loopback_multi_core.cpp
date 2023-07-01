@@ -76,13 +76,12 @@ int main(int argc, char **argv) {
         uint32_t transient_buffer_size_tiles = 4;
         uint32_t transient_buffer_size_bytes = transient_buffer_size_tiles * single_tile_size;
         std::uint32_t stream_register_address = STREAM_REG_ADDR(0, 12);
-        int dram_channel_id = 0;
 
         TT_ASSERT(num_output_tiles % transient_buffer_size_tiles == 0);
 
-        auto input_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, dram_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto input_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, dram_buffer_size, tt_metal::BufferType::DRAM);
 
-        auto output_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr, dram_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto output_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr, dram_buffer_size, tt_metal::BufferType::DRAM);
 
         auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
         auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();

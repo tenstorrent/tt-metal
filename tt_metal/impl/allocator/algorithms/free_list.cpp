@@ -10,8 +10,8 @@ namespace tt_metal {
 
 namespace allocator {
 
-FreeList::FreeList(u32 max_size_bytes, u32 min_allocation_size, u32 alignment, FreeList::SearchPolicy search_policy)
-    : search_policy_(search_policy), Algorithm(max_size_bytes, min_allocation_size, alignment) {
+FreeList::FreeList(u64 max_size_bytes, u64 offset_bytes, u64 min_allocation_size, u64 alignment, FreeList::SearchPolicy search_policy)
+    : search_policy_(search_policy), Algorithm(max_size_bytes, offset_bytes, min_allocation_size, alignment) {
     this->init();
 }
 
@@ -27,14 +27,14 @@ bool FreeList::is_allocated(const Block *block) const {
     return block->prev_free == nullptr and block->next_free == nullptr and block != this->free_block_head_ and block != this->free_block_tail_;
 }
 
-std::vector<std::pair<u32, u32>> FreeList::available_addresses(u32 size_bytes) const {
-    u32 alloc_size = size_bytes < this->min_allocation_size_ ? this->min_allocation_size_ : size_bytes;
+std::vector<std::pair<u64, u64>> FreeList::available_addresses(u64 size_bytes) const {
+    u64 alloc_size = size_bytes < this->min_allocation_size_ ? this->min_allocation_size_ : size_bytes;
     alloc_size = this->align(alloc_size);
-    std::vector<std::pair<u32, u32>> addresses;
+    std::vector<std::pair<u64, u64>> addresses;
     FreeList::Block *curr_block = this->free_block_head_;
     while (curr_block != nullptr) {
         if (curr_block->size >= alloc_size) {
-            u32 end_range = (curr_block->address + curr_block->size) - alloc_size;
+            u64 end_range = (curr_block->address + curr_block->size) - alloc_size;
             addresses.push_back({curr_block->address, end_range});
         }
         curr_block = curr_block->next_free;
@@ -42,7 +42,7 @@ std::vector<std::pair<u32, u32>> FreeList::available_addresses(u32 size_bytes) c
     return addresses;
 }
 
-FreeList::Block *FreeList::search_best(u32 size_bytes, bool bottom_up) {
+FreeList::Block *FreeList::search_best(u64 size_bytes, bool bottom_up) {
     FreeList::Block *best_block = nullptr;
     FreeList::Block *curr_block = bottom_up ? this->free_block_head_ : this->free_block_tail_;
     while (curr_block != nullptr) {
@@ -60,7 +60,7 @@ FreeList::Block *FreeList::search_best(u32 size_bytes, bool bottom_up) {
     return best_block;
 }
 
-FreeList::Block *FreeList::search_first(u32 size_bytes, bool bottom_up) {
+FreeList::Block *FreeList::search_first(u64 size_bytes, bool bottom_up) {
     FreeList::Block *curr_block = bottom_up ? this->free_block_head_ : this->free_block_tail_;
     FreeList::Block *first_fit_block = nullptr;
     while (curr_block != nullptr) {
@@ -74,7 +74,7 @@ FreeList::Block *FreeList::search_first(u32 size_bytes, bool bottom_up) {
     return first_fit_block;
 }
 
-FreeList::Block *FreeList::search(u32 size_bytes, bool bottom_up) {
+FreeList::Block *FreeList::search(u64 size_bytes, bool bottom_up) {
     switch (this->search_policy_) {
         case FreeList::SearchPolicy::BEST:
             return search_best(size_bytes, bottom_up);
@@ -148,7 +148,7 @@ void FreeList::update_right_aligned_allocated_block_connections(Block *free_bloc
 }
 
 // Offset marks the start of the allocated block
-FreeList::Block *FreeList::allocate_slice_of_free_block(Block *free_block, u32 offset, u32 size_bytes) {
+FreeList::Block *FreeList::allocate_slice_of_free_block(Block *free_block, u64 offset, u64 size_bytes) {
     TT_ASSERT(free_block->address + offset + size_bytes <= free_block->address + free_block->size);
 
     // Allocated slice spans the entire space of free_block
@@ -179,8 +179,8 @@ FreeList::Block *FreeList::allocate_slice_of_free_block(Block *free_block, u32 o
         TT_ASSERT(case_three);
         // Original: | .................... free_block ....................|
         // Result:   | free_block_mod | allocated_block | next_free_block  |
-        u32 next_free_block_addr = free_block->address + offset + size_bytes;
-        u32 next_free_block_size = (free_block->address + free_block->size) - next_free_block_addr;
+        u64 next_free_block_addr = free_block->address + offset + size_bytes;
+        u64 next_free_block_size = (free_block->address + free_block->size) - next_free_block_addr;
         auto next_free_block = new FreeList::Block{
             .address = next_free_block_addr,
             .size = next_free_block_size,
@@ -213,8 +213,16 @@ FreeList::Block *FreeList::allocate_slice_of_free_block(Block *free_block, u32 o
     return allocated_block;
 }
 
-std::optional<u32> FreeList::allocate(u32 size_bytes, bool bottom_up) {
-    u32 alloc_size = size_bytes < this->min_allocation_size_ ? this->min_allocation_size_ : size_bytes;
+void FreeList::update_lowest_occupied_address(u64 address) {
+    if (not this->lowest_occupied_address_.has_value()) {
+        this->lowest_occupied_address_ = address;
+    } else {
+        this->lowest_occupied_address_ = std::min(this->lowest_occupied_address_.value(), address);
+    }
+}
+
+std::optional<u64> FreeList::allocate(u64 size_bytes, bool bottom_up) {
+    u64 alloc_size = size_bytes < this->min_allocation_size_ ? this->min_allocation_size_ : size_bytes;
     alloc_size = this->align(alloc_size);
     auto free_block = search(alloc_size, bottom_up);
 
@@ -223,16 +231,18 @@ std::optional<u32> FreeList::allocate(u32 size_bytes, bool bottom_up) {
     }
 
     // offset denotes where allocation starts relative to free_block start
-    u32 offset = bottom_up ? 0 : (((free_block->address + free_block->size) - alloc_size) - free_block->address);
+    u64 offset = bottom_up ? 0 : (((free_block->address + free_block->size) - alloc_size) - free_block->address);
     auto allocated_block = allocate_slice_of_free_block(free_block, offset, alloc_size);
 
-    return allocated_block->address;
+    this->update_lowest_occupied_address(allocated_block->address);
+    return allocated_block->address + this->offset_bytes_;
 }
 
-std::optional<u32> FreeList::allocate_at_address(u32 start_address, u32 size_bytes) {
-    TT_ASSERT(start_address % this->alignment_ == 0, "Requested address " + std::to_string(start_address) + " should be " + std::to_string(this->alignment_) + "B aligned");
+std::optional<u64> FreeList::allocate_at_address(u64 absolute_start_address, u64 size_bytes) {
+    TT_ASSERT(absolute_start_address % this->alignment_ == 0, "Requested address " + std::to_string(absolute_start_address) + " should be " + std::to_string(this->alignment_) + "B aligned");
+    auto start_address = absolute_start_address - this->offset_bytes_;
     FreeList::Block *curr_block = this->free_block_head_;
-    u32 alloc_size = size_bytes < this->min_allocation_size_ ? this->min_allocation_size_ : size_bytes;
+    u64 alloc_size = size_bytes < this->min_allocation_size_ ? this->min_allocation_size_ : size_bytes;
     alloc_size = this->align(alloc_size);
     // Look for a free block of size at least size_bytes that encompasses start_address
     while (curr_block != nullptr) {
@@ -241,7 +251,7 @@ std::optional<u32> FreeList::allocate_at_address(u32 start_address, u32 size_byt
                 allocate_slice_of_free_block(curr_block, /*offset=*/0, alloc_size);
                 break;
             } else if ((start_address > curr_block->address) and ((start_address + alloc_size) <= (curr_block->address + curr_block->size))) {
-                u32 start_offset = start_address - curr_block->address;
+                u64 start_offset = start_address - curr_block->address;
                 allocate_slice_of_free_block(curr_block, start_offset, alloc_size);
                 break;
             }
@@ -252,11 +262,11 @@ std::optional<u32> FreeList::allocate_at_address(u32 start_address, u32 size_byt
     if (curr_block == nullptr) {
         return std::nullopt;
     }
-
-    return start_address;
+    this->update_lowest_occupied_address(start_address);
+    return absolute_start_address;
 }
 
-FreeList::Block *FreeList::find_block(u32 address) {
+FreeList::Block *FreeList::find_block(u64 address) {
     FreeList::Block *block = nullptr;
     FreeList::Block *curr_block = this->block_head_;
     while (curr_block != nullptr) {
@@ -268,7 +278,23 @@ FreeList::Block *FreeList::find_block(u32 address) {
     return block;
 }
 
-void FreeList::deallocate(u32 address) {
+void FreeList::update_lowest_occupied_address() {
+    FreeList::Block *block = this->block_head_;
+    while (block != nullptr) {
+        if (this->is_allocated(block)) {
+            break;
+        }
+        block = block->next_block;
+    }
+    if (block == nullptr) {
+        this->lowest_occupied_address_ = std::nullopt;
+    } else {
+        this->lowest_occupied_address_ = block->address;
+    }
+}
+
+void FreeList::deallocate(u64 absolute_address) {
+    u64 address = absolute_address - this->offset_bytes_;
     FreeList::Block *block_to_free = find_block(address);
     if (block_to_free == nullptr or not this->is_allocated(block_to_free)) {
         return;
@@ -338,6 +364,10 @@ void FreeList::deallocate(u32 address) {
             this->free_block_tail_ = block_to_free;
         }
     }
+
+    if (address == this->lowest_occupied_address_) {
+        this->update_lowest_occupied_address();
+    }
 }
 
 void FreeList::reset() {
@@ -373,7 +403,7 @@ Statistics FreeList::get_statistics() const {
             stats.total_free_bytes += curr_block->size;
             if (curr_block->size >= stats.largest_free_block_bytes) {
                 stats.largest_free_block_bytes = curr_block->size;
-                stats.largest_free_block_addrs.push_back(curr_block->address);
+                stats.largest_free_block_addrs.push_back(curr_block->address + this->offset_bytes_);
             }
         }
         curr_block = curr_block->next_block;
@@ -391,7 +421,7 @@ FreeList::~FreeList() {
 
 void FreeList::dump_block(const Block *block, std::ofstream &out) const {
     auto alloc_status = this->is_allocated(block) ? "Y" : "N";
-    out << ",,,Address (KB):," << (block->address) / 1024 << "\n"
+    out << ",,,Address (KB):," << (block->address + this->offset_bytes_) / 1024 << "\n"
         << ",,,Size (KB):," << (block->size) / 1024 << "\n"
         << ",,,Allocated (Y/N):," << alloc_status << "\n";
 }

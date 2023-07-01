@@ -47,12 +47,11 @@ int main(int argc, char **argv) {
         uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
         uint32_t dram_buffer_addr = 0;
-        int dram_channel_id = 0;
         uint32_t local_buffer_addr = 200 * 1024;
 
         uint32_t dest_buffer_addr = 500 * 1024;
 
-        auto dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_addr, dram_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_addr, dram_buffer_size, tt_metal::BufferType::DRAM);
         auto dram_noc_xy = dram_buffer.noc_coordinates();
 
         CoreCoord core_start = {0, 0};

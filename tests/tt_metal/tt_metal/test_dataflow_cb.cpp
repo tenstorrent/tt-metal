@@ -47,12 +47,10 @@ int main(int argc, char **argv) {
         uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
         uint32_t dram_buffer_src_addr = 0;
-        int dram_src_channel_id = 0;
         uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
-        int dram_dst_channel_id = 0;
 
-        auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, dram_src_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
-        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr, dram_dst_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr, dram_buffer_size, tt_metal::BufferType::DRAM);
 
         auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
         auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
@@ -66,52 +64,48 @@ int main(int argc, char **argv) {
         uint32_t num_cb_tiles = 8;
         auto cb0 = tt_metal::CreateCircularBuffer(
             program,
-            device,
             cb0_index,
             core,
             num_cb_tiles,
             num_cb_tiles * single_tile_size,
-            cb0_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            cb0_addr
         );
 
         uint32_t cb1_index = 8;
         uint32_t cb1_addr = 250 * 1024;
         auto cb1 = tt_metal::CreateCircularBuffer(
             program,
-            device,
             cb1_index,
             core,
             num_cb_tiles,
             num_cb_tiles * single_tile_size,
-            cb1_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            cb1_addr
         );
 
         uint32_t cb2_index = 16;
         uint32_t cb2_addr = 300 * 1024;
         auto cb2 = tt_metal::CreateCircularBuffer(
             program,
-            device,
             cb2_index,
             core,
             num_cb_tiles,
             num_cb_tiles * single_tile_size,
-            cb2_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            cb2_addr
         );
 
         uint32_t cb3_index = 24;
         uint32_t cb3_addr = 350 * 1024;
         auto cb3 = tt_metal::CreateCircularBuffer(
             program,
-            device,
             cb3_index,
             core,
             num_cb_tiles,
             num_cb_tiles * single_tile_size,
-            cb3_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            cb3_addr
         );
 
         std::vector<uint32_t> reader_cb_kernel_args = {8, 2};

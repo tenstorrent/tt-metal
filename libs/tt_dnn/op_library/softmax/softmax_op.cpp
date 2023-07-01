@@ -147,16 +147,16 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
 
     // Create circular buffers
     // see softmax.cpp for which buffers are needed
-    CreateCircularBuffers( program, device, CB::c_in0,       all_cores, in0_t,  in0_t *TBYTES,  DataFormat::Float16_b );
-    CreateCircularBuffers( program, device, CB::c_out0,      all_cores, out0_t, out0_t*TBYTES,  DataFormat::Float16_b );
-    CreateCircularBuffers( program, device, CB::c_intermed1, all_cores, im1_t,  im1_t *TBYTES,  DataFormat::Float16_b );
-    CreateCircularBuffers( program, device, CB::c_in2,       all_cores, in2_t,  in2_t *TBYTES,  DataFormat::Float16_b );
-    CreateCircularBuffers( program, device, CB::c_intermed2, all_cores, im2_t,  im2_t *TBYTES,  DataFormat::Float16_b );
-    CreateCircularBuffers( program, device, CB::c_intermed0, all_cores, im0_t,  im0_t *TBYTES,  DataFormat::Float16_b );
+    CreateCircularBuffers( program, CB::c_in0,       all_cores, in0_t,  in0_t *TBYTES,  DataFormat::Float16_b );
+    CreateCircularBuffers( program, CB::c_out0,      all_cores, out0_t, out0_t*TBYTES,  DataFormat::Float16_b );
+    CreateCircularBuffers( program, CB::c_intermed1, all_cores, im1_t,  im1_t *TBYTES,  DataFormat::Float16_b );
+    CreateCircularBuffers( program, CB::c_in2,       all_cores, in2_t,  in2_t *TBYTES,  DataFormat::Float16_b );
+    CreateCircularBuffers( program, CB::c_intermed2, all_cores, im2_t,  im2_t *TBYTES,  DataFormat::Float16_b );
+    CreateCircularBuffers( program, CB::c_intermed0, all_cores, im0_t,  im0_t *TBYTES,  DataFormat::Float16_b );
     if (mask.has_value()) {
-        CreateCircularBuffers( program, device, CB::c_intermed3, all_cores, im3_t,  im3_t *TBYTES,  DataFormat::Float16_b );
-        CreateCircularBuffers( program, device, CB::c_in3,       all_cores, in3_t,  in3_t *TBYTES,  DataFormat::Float16_b );
-        CreateCircularBuffers( program, device, CB::c_in4,       all_cores, in4_t,  in4_t *TBYTES,  DataFormat::Float16_b );
+        CreateCircularBuffers( program, CB::c_intermed3, all_cores, im3_t,  im3_t *TBYTES,  DataFormat::Float16_b );
+        CreateCircularBuffers( program, CB::c_in3,       all_cores, in3_t,  in3_t *TBYTES,  DataFormat::Float16_b );
+        CreateCircularBuffers( program, CB::c_in4,       all_cores, in4_t,  in4_t *TBYTES,  DataFormat::Float16_b );
     }
 
     for (uint32_t icore = 0; icore < num_cores; icore++) {

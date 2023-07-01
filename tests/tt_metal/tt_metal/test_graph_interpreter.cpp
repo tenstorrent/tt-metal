@@ -139,12 +139,10 @@ bool run_chained_sfpu_test(const tt::ARCH& arch, int chain_length) {
         uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
         uint32_t dram_buffer_src_addr = 0;
-        int dram_src_channel_id = 0;
         uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
-        int dram_dst_channel_id = 0;
 
-        auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, dram_src_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
-        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr, dram_dst_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr, dram_buffer_size, tt_metal::BufferType::DRAM);
 
         auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
         auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
@@ -156,39 +154,36 @@ bool run_chained_sfpu_test(const tt::ARCH& arch, int chain_length) {
 
         auto cb_src0 = tt_metal::CreateCircularBuffer(
             program,
-            device,
             src0_cb_index,
             core,
             num_tiles,
             num_tiles * single_tile_size,
-            src0_cb_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            src0_cb_addr
         );
 
         uint32_t ouput_cb_index = 16; // output operands start at index 16
         uint32_t output_cb_addr = 300 * 1024;
         auto cb_output = tt_metal::CreateCircularBuffer(
             program,
-            device,
             ouput_cb_index,
             core,
             num_tiles,
             num_tiles * single_tile_size,
-            output_cb_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            output_cb_addr
         );
 
         uint32_t interm0_cb_index = 24;
         uint32_t interm0_cb_addr = 400 * 1024;
         auto cb_interm0 = tt_metal::CreateCircularBuffer(
             program,
-            device,
             interm0_cb_index,
             core,
             num_tiles,
             num_tiles * single_tile_size,
-            interm0_cb_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            interm0_cb_addr
         );
 
         std::vector<uint32_t> unary_reader_args = {
@@ -371,16 +366,9 @@ bool run_binary_add_and_then_eltwise_gelu_test(const tt::ARCH& arch) {
         uint32_t num_tiles = 1;
         uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-        uint32_t dram_buffer_src0_addr = 0;
-        int dram_src0_channel_id = 0;
-        uint32_t dram_buffer_src1_addr = 0;
-        int dram_src1_channel_id = 1;
-        uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
-        int dram_dst_channel_id = 0;
-
-        auto src0_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src0_addr, dram_src0_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
-        auto src1_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src1_addr, dram_src1_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
-        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr, dram_dst_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto src0_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto src1_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
 
         auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
         auto dram_src1_noc_xy = src1_dram_buffer.noc_coordinates();
@@ -393,13 +381,12 @@ bool run_binary_add_and_then_eltwise_gelu_test(const tt::ARCH& arch) {
 
         auto cb_src0 = tt_metal::CreateCircularBuffer(
             program,
-            device,
             src0_cb_index,
             core,
             num_tiles,
             num_tiles * single_tile_size,
-            src0_cb_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            src0_cb_addr
         );
 
         uint32_t src1_cb_index = 1;
@@ -407,67 +394,63 @@ bool run_binary_add_and_then_eltwise_gelu_test(const tt::ARCH& arch) {
 
         auto cb_src1 = tt_metal::CreateCircularBuffer(
             program,
-            device,
             src1_cb_index,
             core,
             num_tiles,
             num_tiles * single_tile_size,
-            src1_cb_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            src1_cb_addr
         );
 
         uint32_t ouput_cb_index = 16; // output operands start at index 16
         uint32_t output_cb_addr = 400 * 1024;
         auto cb_output = tt_metal::CreateCircularBuffer(
             program,
-            device,
             ouput_cb_index,
             core,
             num_tiles,
             num_tiles * single_tile_size,
-            output_cb_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            output_cb_addr
         );
 
         uint32_t interm0_cb_index = 24;
         uint32_t interm0_cb_addr = 500 * 1024;
         auto cb_interm0 = tt_metal::CreateCircularBuffer(
             program,
-            device,
             interm0_cb_index,
             core,
             num_tiles,
             num_tiles * single_tile_size,
-            interm0_cb_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            interm0_cb_addr
         );
 
         uint32_t interm1_cb_index = 25;
         uint32_t interm1_cb_addr = 600 * 1024;
         auto cb_interm1 = tt_metal::CreateCircularBuffer(
             program,
-            device,
             interm1_cb_index,
             core,
             num_tiles,
             num_tiles * single_tile_size,
-            interm1_cb_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            interm1_cb_addr
         );
 
 
         std::vector<uint32_t> binary_reader_args = {
-            dram_buffer_src0_addr,
+            src0_dram_buffer.address(),
             (std::uint32_t)dram_src0_noc_xy.x,
             (std::uint32_t)dram_src0_noc_xy.y,
-            dram_buffer_src1_addr,
+            src1_dram_buffer.address(),
             (std::uint32_t)dram_src1_noc_xy.x,
             (std::uint32_t)dram_src1_noc_xy.y,
             num_tiles
         };
 
         std::vector<uint32_t> unary_writer_args = {
-            dram_buffer_dst_addr,
+            dst_dram_buffer.address(),
             (std::uint32_t)dram_dst_noc_xy.x,
             (std::uint32_t)dram_dst_noc_xy.y,
             num_tiles
@@ -518,9 +501,9 @@ bool run_binary_add_and_then_eltwise_gelu_test(const tt::ARCH& arch) {
         {
             OpCode op_code = tt::OpCode::Add;
 
-            uint32_t in0 = *cb_src0->buffer_indices().begin();
-            uint32_t in1 = *cb_src1->buffer_indices().begin();
-            uint32_t out = *cb_interm0->buffer_indices().begin();
+            uint32_t in0 = *cb_src0.buffer_indices().begin();
+            uint32_t in1 = *cb_src1.buffer_indices().begin();
+            uint32_t out = *cb_interm0.buffer_indices().begin();
 
             uint32_t pop_input = 1;
 
@@ -541,9 +524,9 @@ bool run_binary_add_and_then_eltwise_gelu_test(const tt::ARCH& arch) {
         {
             OpCode op_code = tt::OpCode::Gelu;
 
-            uint32_t in0 = *cb_interm0->buffer_indices().begin();
-            uint32_t in1 = *cb_interm1->buffer_indices().begin();
-            uint32_t out = *cb_output->buffer_indices().begin();
+            uint32_t in0 = *cb_interm0.buffer_indices().begin();
+            uint32_t in1 = *cb_interm1.buffer_indices().begin();
+            uint32_t out = *cb_output.buffer_indices().begin();
 
             uint32_t pop_input = 1;
 
@@ -660,33 +643,28 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
         uint32_t num_tiles = 1;
         uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-        uint32_t dram_buffer_src_addr = 0;
-
-        uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
-        int dram_dst_channel_id = 0;
         uint32_t num_dram_channels = 5;
 
-        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr, dram_dst_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
 
         auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
 
         std::vector<tt_metal::Buffer> src_dram_buffers;
 
-        std::vector<tt_metal::CircularBuffer *> src_cb_buffers;
+        std::vector<tt_metal::CircularBuffer> src_cb_buffers;
         uint32_t src_cb_index = 0;
         uint32_t src_cb_addr = 200 * 1024;
         for (uint32_t i = 0; i < num_dram_channels; i++){
-            auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, i, dram_buffer_size, tt_metal::BufferType::DRAM);
-            src_dram_buffers.push_back(src_dram_buffer);
+            auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+            src_dram_buffers.push_back(std::move(src_dram_buffer));
             auto src_cb = tt_metal::CreateCircularBuffer(
                 program,
-                device,
                 src_cb_index,
                 core,
                 num_tiles,
                 num_tiles * single_tile_size,
-                src_cb_addr,
-                tt::DataFormat::Float16_b
+                tt::DataFormat::Float16_b,
+                src_cb_addr
             );
             src_cb_buffers.push_back(src_cb);
             src_cb_index++;
@@ -698,28 +676,26 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
         uint32_t output_cb_addr = 700 * 1024;
         auto output_cb_buffer = tt_metal::CreateCircularBuffer(
             program,
-            device,
             output_cb_index,
             core,
             num_tiles,
             num_tiles * single_tile_size,
-            output_cb_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            output_cb_addr
         );
 
-        std::vector<tt_metal::CircularBuffer *> interm_cb_buffers;
+        std::vector<tt_metal::CircularBuffer> interm_cb_buffers;
         uint32_t interm_cb_index = 24;
         uint32_t interm_cb_addr = 800 * 1024;
         for (uint32_t i = 0; i < 3; i++){
             auto interm_cb = tt_metal::CreateCircularBuffer(
                 program,
-                device,
                 interm_cb_index,
                 core,
                 num_tiles,
                 num_tiles * single_tile_size,
-                interm_cb_addr,
-                tt::DataFormat::Float16_b
+                tt::DataFormat::Float16_b,
+                interm_cb_addr
             );
             interm_cb_buffers.push_back(interm_cb);
             interm_cb_index++;
@@ -739,7 +715,7 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
         }
 
         std::vector<uint32_t> unary_writer_args = {
-            dram_buffer_dst_addr,
+            dst_dram_buffer.address(),
             (std::uint32_t)dram_dst_noc_xy.x,
             (std::uint32_t)dram_dst_noc_xy.y,
             num_tiles
@@ -795,10 +771,10 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
             uint32_t in0;
             uint32_t in1;
             uint32_t out;
-            in0 = *src_cb_buffers[0]->buffer_indices().begin();
-            in1 = *src_cb_buffers[1]->buffer_indices().begin();
+            in0 = *src_cb_buffers[0].buffer_indices().begin();
+            in1 = *src_cb_buffers[1].buffer_indices().begin();
 
-            out = *interm_cb_buffers[0]->buffer_indices().begin();
+            out = *interm_cb_buffers[0].buffer_indices().begin();
             uint32_t pop_input0 = 0;
             uint32_t pop_input1 = 1;
 
@@ -823,10 +799,10 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
             uint32_t in0;
             uint32_t in1;
             uint32_t out;
-            in0 = *src_cb_buffers[2]->buffer_indices().begin();
-            in1 = *src_cb_buffers[3]->buffer_indices().begin();
+            in0 = *src_cb_buffers[2].buffer_indices().begin();
+            in1 = *src_cb_buffers[3].buffer_indices().begin();
 
-            out = *interm_cb_buffers[1]->buffer_indices().begin();
+            out = *interm_cb_buffers[1].buffer_indices().begin();
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 0;
 
@@ -851,9 +827,9 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
             uint32_t in0;
             uint32_t in1;
             uint32_t out;
-            in0 = *src_cb_buffers[3]->buffer_indices().begin();
-            in1 = *src_cb_buffers[4]->buffer_indices().begin();
-            out = *interm_cb_buffers[2]->buffer_indices().begin();
+            in0 = *src_cb_buffers[3].buffer_indices().begin();
+            in1 = *src_cb_buffers[4].buffer_indices().begin();
+            out = *interm_cb_buffers[2].buffer_indices().begin();
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 1;
             op_info_t op_info = {
@@ -877,10 +853,10 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
             uint32_t in0;
             uint32_t in1;
             uint32_t out;
-            in0 = *interm_cb_buffers[0]->buffer_indices().begin();
-            in1 = *interm_cb_buffers[1]->buffer_indices().begin();
+            in0 = *interm_cb_buffers[0].buffer_indices().begin();
+            in1 = *interm_cb_buffers[1].buffer_indices().begin();
 
-            out = *interm_cb_buffers[0]->buffer_indices().begin();
+            out = *interm_cb_buffers[0].buffer_indices().begin();
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 0;
 
@@ -905,10 +881,10 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
             uint32_t in0;
             uint32_t in1;
             uint32_t out;
-            in0 = *interm_cb_buffers[1]->buffer_indices().begin();
-            in1 = *interm_cb_buffers[2]->buffer_indices().begin();
+            in0 = *interm_cb_buffers[1].buffer_indices().begin();
+            in1 = *interm_cb_buffers[2].buffer_indices().begin();
 
-            out = *interm_cb_buffers[2]->buffer_indices().begin();
+            out = *interm_cb_buffers[2].buffer_indices().begin();
             uint32_t pop_input0 = 0;
             uint32_t pop_input1 = 1;
 
@@ -933,10 +909,10 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
             uint32_t in0;
             uint32_t in1;
             uint32_t out;
-            in0 = *interm_cb_buffers[1]->buffer_indices().begin();
-            in1 = *interm_cb_buffers[2]->buffer_indices().begin();
+            in0 = *interm_cb_buffers[1].buffer_indices().begin();
+            in1 = *interm_cb_buffers[2].buffer_indices().begin();
 
-            out = *interm_cb_buffers[1]->buffer_indices().begin();
+            out = *interm_cb_buffers[1].buffer_indices().begin();
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 1;
 
@@ -961,10 +937,10 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
             uint32_t in0;
             uint32_t in1;
             uint32_t out;
-            in0 = *interm_cb_buffers[0]->buffer_indices().begin();
-            in1 = *interm_cb_buffers[1]->buffer_indices().begin();
+            in0 = *interm_cb_buffers[0].buffer_indices().begin();
+            in1 = *interm_cb_buffers[1].buffer_indices().begin();
 
-            out = *interm_cb_buffers[0]->buffer_indices().begin();
+            out = *interm_cb_buffers[0].buffer_indices().begin();
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 1;
 
@@ -989,10 +965,10 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
             uint32_t in0;
             uint32_t in1;
             uint32_t out;
-            in0 = *interm_cb_buffers[0]->buffer_indices().begin();
-            in1 = *interm_cb_buffers[0]->buffer_indices().begin();
+            in0 = *interm_cb_buffers[0].buffer_indices().begin();
+            in1 = *interm_cb_buffers[0].buffer_indices().begin();
 
-            out = *interm_cb_buffers[0]->buffer_indices().begin();
+            out = *interm_cb_buffers[0].buffer_indices().begin();
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 0;
 
@@ -1017,10 +993,10 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
             uint32_t in0;
             uint32_t in1;
             uint32_t out;
-            in0 = *src_cb_buffers[0]->buffer_indices().begin();
-            in1 = *interm_cb_buffers[0]->buffer_indices().begin();
+            in0 = *src_cb_buffers[0].buffer_indices().begin();
+            in1 = *interm_cb_buffers[0].buffer_indices().begin();
 
-            out = *interm_cb_buffers[1]->buffer_indices().begin();
+            out = *interm_cb_buffers[1].buffer_indices().begin();
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 0;
 
@@ -1045,10 +1021,10 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
             uint32_t in0;
             uint32_t in1;
             uint32_t out;
-            in0 = *interm_cb_buffers[0]->buffer_indices().begin();
-            in1 = *interm_cb_buffers[1]->buffer_indices().begin();
+            in0 = *interm_cb_buffers[0].buffer_indices().begin();
+            in1 = *interm_cb_buffers[1].buffer_indices().begin();
 
-            out = *output_cb_buffer->buffer_indices().begin();
+            out = *output_cb_buffer.buffer_indices().begin();
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 1;
 

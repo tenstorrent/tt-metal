@@ -28,7 +28,7 @@ def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
         tensor.Layout.ROW_MAJOR
     ).pad(weights_channels_padded_shape, (0,0,0,0), 0)
     weight_tiled_ = tensor.convert_conv_weight_tensor_to_tiled_layout(weight_untiled, weight_block_h, weight_block_w)
-    weight_on_device = weight_tiled_.to(device, tensor.MemoryConfig(False, 0))
+    weight_on_device = weight_tiled_.to(device, tensor.MemoryConfig(False))
     if bias is None:
         bias_on_device = None
     else:

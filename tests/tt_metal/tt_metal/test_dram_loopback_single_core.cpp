@@ -51,11 +51,10 @@ int main(int argc, char **argv) {
         uint32_t input_dram_buffer_addr = 0;
         uint32_t l1_buffer_addr = 400 * 1024;
         uint32_t output_dram_buffer_addr = 512 * 1024;
-        int dram_channel = 0;
 
-        auto input_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, input_dram_buffer_addr, dram_channel, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto input_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, input_dram_buffer_addr, dram_buffer_size, tt_metal::BufferType::DRAM);
 
-        auto output_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, output_dram_buffer_addr, dram_channel, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto output_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, output_dram_buffer_addr, dram_buffer_size, tt_metal::BufferType::DRAM);
 
         auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
         auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();

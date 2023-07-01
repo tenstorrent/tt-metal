@@ -21,9 +21,7 @@ struct BankedDramConfig {
     size_t size_bytes = 0;
     size_t page_size_bytes = 0;
     size_t input_dram_byte_address = 0;
-    size_t input_starting_bank_id = 0;
     size_t output_dram_byte_address = 0;
-    size_t output_starting_bank_id = 0;
     size_t l1_byte_address = 0;
     tt::DataFormat l1_data_format = tt::DataFormat::Invalid;
     CoreCoord target_core;
@@ -68,7 +66,6 @@ bool dram_reader_cb_writer_dram(
         device,
         cfg.size_bytes,
         cfg.input_dram_byte_address,
-        cfg.input_starting_bank_id,
         input_page_size_bytes,
         tt_metal::BufferType::DRAM);
 
@@ -77,20 +74,18 @@ bool dram_reader_cb_writer_dram(
         device,
         cfg.size_bytes,
         cfg.output_dram_byte_address,
-        cfg.output_starting_bank_id,
         output_page_size_bytes,
         tt_metal::BufferType::DRAM);
 
     // buffer_cb CB
     auto buffer_cb = tt_metal::CreateCircularBuffer(
         program,
-        device,
         cb_id,
         cfg.target_core,
         cfg.num_tiles * 2,
         cfg.size_bytes * 2,
-        cfg.l1_byte_address,
-        cfg.l1_data_format);
+        cfg.l1_data_format,
+        cfg.l1_byte_address);
     auto reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
         reader_kernel_name,
@@ -174,9 +169,7 @@ TEST_SUITE("SingleCoreBanked") {
             .size_bytes = 1 * 2 * 32 * 32,
             .page_size_bytes = 2 * 32 * 32,
             .input_dram_byte_address = 0,
-            .input_starting_bank_id = 0,
             .output_dram_byte_address = 512 * 1024 * 1204,
-            .output_starting_bank_id = 0,
             .l1_byte_address = 500 * 32 * 32,
             .l1_data_format = tt::DataFormat::Float16_b,
             .target_core = {.x = 0, .y = 0}};
@@ -210,9 +203,7 @@ TEST_SUITE("SingleCoreBanked") {
             .size_bytes = 1 * 2 * 32 * 32,
             .page_size_bytes = 2 * 32 * 32,
             .input_dram_byte_address = 0,
-            .input_starting_bank_id = 0,
             .output_dram_byte_address = 128 * 1024 * 1204,
-            .output_starting_bank_id = 0,
             .l1_byte_address = 256 * 32 * 32,
             .l1_data_format = tt::DataFormat::Float16_b,
             .target_core = {.x = 0, .y = 0}};
@@ -246,9 +237,7 @@ TEST_SUITE("SingleCoreBanked") {
             .size_bytes = 1 * 2 * 32 * 32,
             .page_size_bytes = 2 * 32 * 32,
             .input_dram_byte_address = 0,
-            .input_starting_bank_id = 0,
             .output_dram_byte_address = 128 * 1024 * 1204,
-            .output_starting_bank_id = 0,
             .l1_byte_address = 256 * 32 * 32,
             .l1_data_format = tt::DataFormat::Float16_b,
             .target_core = {.x = 0, .y = 0}};

@@ -24,10 +24,10 @@ from python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytor
 @pytest.mark.parametrize(
     "memory_config",
     (
-        ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(True, -1, ttl.tensor.BufferType.L1),
-        ttl.tensor.MemoryConfig(False, 1, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(False, 1, ttl.tensor.BufferType.L1),
+        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
+        ttl.tensor.MemoryConfig(False, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(False, ttl.tensor.BufferType.L1),
     ),
 )
 def test_run_datacopy_test(

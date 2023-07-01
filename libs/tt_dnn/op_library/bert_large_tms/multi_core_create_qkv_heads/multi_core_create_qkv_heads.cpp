@@ -153,7 +153,6 @@ operation::ProgramWithCallbacks multi_core_create_qkv_heads(const Tensor &a, Ten
     uint32_t out_cb_tiles = per_core_tiles;
     auto cb_src0 = tt_metal::CreateCircularBuffers(
         program,
-        device,
         src0_cb_index,
         all_cores,
         cb0_tiles,
@@ -164,7 +163,6 @@ operation::ProgramWithCallbacks multi_core_create_qkv_heads(const Tensor &a, Ten
     if (transpose_hw) {
         auto cb_out = tt_metal::CreateCircularBuffers(
             program,
-            device,
             out_cb_index,
             all_cores,
             out_cb_tiles,

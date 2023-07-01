@@ -10,6 +10,7 @@
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
+typedef std::vector<std::unique_ptr<tt_metal::Buffer>> BufferKeeper;
 
 CoreCoord get_logical_coord_from_noc_coord(tt::tt_metal::Device *device, const CoreCoord &noc_coord) {
     auto soc_desc = device->cluster()->get_soc_desc(device->pcie_slot());
@@ -33,40 +34,34 @@ std::vector<uint32_t> get_logical_storage_core_bank_ids(tt_metal::Device *device
     return device->bank_ids_from_logical_core(logical_core);
 }
 
-bool test_l1_buffers_allocated_top_down(tt_metal::Device *device) {
+bool test_l1_buffers_allocated_top_down(tt_metal::Device *device, BufferKeeper &buffers) {
     bool pass = true;
 
-    auto logical_compute_and_storage_bank_ids = get_logical_compute_and_storage_core_bank_ids(device);
-    TT_ASSERT(logical_compute_and_storage_bank_ids.size() == 1);
-    auto compute_and_storage_bank_id = logical_compute_and_storage_bank_ids.at(0);
-    auto logical_storage_core_bank_ids = get_logical_storage_core_bank_ids(device);
-    TT_ASSERT(logical_storage_core_bank_ids.size() == 2);
+    buffers.clear();
+    buffers.resize(5);
 
     uint32_t buffer_0_size_bytes = 128 * 1024;
-    auto l1_buffer_0 = tt_metal::Buffer(device, buffer_0_size_bytes, compute_and_storage_bank_id, buffer_0_size_bytes, tt_metal::BufferType::L1);
-    pass &= l1_buffer_0.address() == (device->l1_size() - buffer_0_size_bytes);
+    buffers[0] = std::move(std::make_unique<tt_metal::Buffer>(device, buffer_0_size_bytes, buffer_0_size_bytes, tt_metal::BufferType::L1));
+    auto total_buffer_size = buffer_0_size_bytes;
+    pass &= buffers[0]->address() == (device->l1_size() - total_buffer_size);
 
     uint32_t buffer_1_size_bytes = 64 * 1024;
-    auto l1_buffer_1 = tt_metal::Buffer(device, buffer_1_size_bytes, compute_and_storage_bank_id, buffer_1_size_bytes, tt_metal::BufferType::L1);
-    pass &= l1_buffer_1.address() == (device->l1_size() - buffer_0_size_bytes - buffer_1_size_bytes);
+    buffers[1] = std::move(std::make_unique<tt_metal::Buffer>(device, buffer_1_size_bytes, buffer_1_size_bytes, tt_metal::BufferType::L1));
+    total_buffer_size += buffer_1_size_bytes;
+    pass &= buffers[1]->address() == (device->l1_size() - total_buffer_size);
 
-    uint32_t buffer_2_size_bytes = 256 * 1024;
-    auto l1_buffer_2 = tt_metal::Buffer(device, buffer_2_size_bytes, compute_and_storage_bank_id, buffer_2_size_bytes, tt_metal::BufferType::L1);
-    pass &= l1_buffer_2.address() == (device->l1_size() - buffer_0_size_bytes - buffer_1_size_bytes - buffer_2_size_bytes);
+    uint32_t buffer_2_size_bytes = 64 * 1024;
+    buffers[2] = std::move(std::make_unique<tt_metal::Buffer>(device, buffer_2_size_bytes, buffer_2_size_bytes, tt_metal::BufferType::L1));
+    total_buffer_size += buffer_2_size_bytes;
+    pass &= buffers[2]->address() == (device->l1_size() - total_buffer_size);
 
-    // storage_l1_buffer_0, storage_l1_buffer_1, and storage_l1_buffer_2 are stored in bank 0
-    auto storage_l1_buffer_0 = tt_metal::Buffer(device, buffer_0_size_bytes, logical_storage_core_bank_ids.at(0), buffer_0_size_bytes, tt_metal::BufferType::L1);
-    pass &= storage_l1_buffer_0.address() == ((device->l1_size()/2) - buffer_0_size_bytes);
+    buffers[3] = std::move(std::make_unique<tt_metal::Buffer>(device, buffer_0_size_bytes, buffer_0_size_bytes, tt_metal::BufferType::L1));
+    total_buffer_size += buffer_0_size_bytes;
+    pass &= buffers[3]->address() == ((device->l1_size()) - total_buffer_size);
 
-    auto storage_l1_buffer_1 = tt_metal::Buffer(device, buffer_1_size_bytes, logical_storage_core_bank_ids.at(0), buffer_1_size_bytes, tt_metal::BufferType::L1);
-    pass &= storage_l1_buffer_1.address() == ((device->l1_size()/2) - buffer_0_size_bytes - buffer_1_size_bytes);
-
-    auto storage_l1_buffer_2 = tt_metal::Buffer(device, buffer_2_size_bytes, logical_storage_core_bank_ids.at(0), buffer_2_size_bytes, tt_metal::BufferType::L1);
-    pass &= storage_l1_buffer_2.address() == ((device->l1_size()/2) - buffer_0_size_bytes - buffer_1_size_bytes - buffer_2_size_bytes);
-
-    // storage_l1_buffer_3 is stored in bank 1
-    auto storage_l1_buffer_3 = tt_metal::Buffer(device, buffer_2_size_bytes, logical_storage_core_bank_ids.at(1), buffer_2_size_bytes, tt_metal::BufferType::L1);
-    pass &= storage_l1_buffer_3.address() == (device->l1_size() - buffer_2_size_bytes);
+    buffers[4] = std::move(std::make_unique<tt_metal::Buffer>(device, buffer_1_size_bytes, buffer_1_size_bytes, tt_metal::BufferType::L1));
+    total_buffer_size += buffer_1_size_bytes;
+    pass &= buffers[4]->address() == ((device->l1_size()) - total_buffer_size);
 
     return pass;
 }
@@ -82,41 +77,38 @@ bool test_circular_buffers_allocated_bottom_up(tt_metal::Device *device, tt_meta
     uint32_t single_tile_size = 2 * 1024;
     constexpr uint32_t src0_cb_index = CB::c_in0;
     constexpr uint32_t num_input_tiles = 2;
-    tt_metal::CircularBuffer *cb_src0 = tt_metal::CreateCircularBuffer(
+    auto cb_src0 = tt_metal::CreateCircularBuffer(
         program,
-        device,
         src0_cb_index,
         logical_core,
         num_input_tiles,
         num_input_tiles * single_tile_size,
         tt::DataFormat::Float16_b
     );
-    pass &= cb_src0->address() == UNRESERVED_BASE;
+    pass &= cb_src0.address() == UNRESERVED_BASE;
 
     constexpr uint32_t src1_cb_index = CB::c_in1;
-    tt_metal::CircularBuffer *cb_src1 = tt_metal::CreateCircularBuffer(
+    auto cb_src1 = tt_metal::CreateCircularBuffer(
         program,
-        device,
         src1_cb_index,
         logical_core,
         num_input_tiles,
         num_input_tiles * single_tile_size,
         tt::DataFormat::Float16_b
     );
-    pass &= (cb_src1->address() == (cb_src0->address() + cb_src0->size()));
+    pass &= (cb_src1.address() == (cb_src0.address() + cb_src0.size()));
 
     constexpr uint32_t output_cb_index = CB::c_out0;
     constexpr uint32_t num_output_tiles = 2;
-    tt_metal::CircularBuffer *cb_output = tt_metal::CreateCircularBuffer(
+    auto cb_output = tt_metal::CreateCircularBuffer(
         program,
-        device,
         output_cb_index,
         logical_core,
         num_output_tiles,
         num_output_tiles * single_tile_size,
         tt::DataFormat::Float16_b
     );
-    pass &= (cb_output->address() == (cb_src1->address() + cb_src1->size()));
+    pass &= (cb_output.address() == (cb_src1.address() + cb_src1.size()));
 
     return pass;
 }
@@ -124,13 +116,9 @@ bool test_circular_buffers_allocated_bottom_up(tt_metal::Device *device, tt_meta
 bool test_l1_buffer_do_not_grow_beyond_512KB(tt_metal::Device *device) {
     bool pass = true;
 
-    auto logical_compute_and_storage_bank_ids = get_logical_compute_and_storage_core_bank_ids(device);
-    TT_ASSERT(logical_compute_and_storage_bank_ids.size() == 1);
-    auto compute_and_storage_bank_id = logical_compute_and_storage_bank_ids.at(0);
-
     try {
         uint32_t buffer_size_bytes = 128 * 1024;
-        auto l1_buffer = tt_metal::Buffer(device, buffer_size_bytes, compute_and_storage_bank_id, buffer_size_bytes, tt_metal::BufferType::L1);
+        auto l1_buffer = tt_metal::Buffer(device, buffer_size_bytes, buffer_size_bytes, tt_metal::BufferType::L1);
     } catch (const std::exception &e) {
         pass = true;
     }
@@ -149,16 +137,15 @@ bool test_circular_buffers_allowed_to_grow_past_512KB(tt_metal::Device *device, 
     uint32_t single_tile_size = 2 * 1024;
     constexpr uint32_t src0_cb_index = CB::c_in7;
     constexpr uint32_t num_input_tiles = 176;
-    tt_metal::CircularBuffer *cb_src0 = tt_metal::CreateCircularBuffer(
+    auto cb_src0 = tt_metal::CreateCircularBuffer(
         program,
-        device,
         src0_cb_index,
         logical_core,
         num_input_tiles,
         num_input_tiles * single_tile_size,
         tt::DataFormat::Float16_b
     );
-    pass &= cb_src0->address() == (UNRESERVED_BASE + ((4 * 1024) * 3));
+    pass &= cb_src0.address() == (UNRESERVED_BASE + ((4 * 1024) * 3));
 
     return pass;
 }
@@ -186,6 +173,7 @@ int main(int argc, char **argv) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(arch, pci_express_slot);
 
+        BufferKeeper buffers;
         tt_metal::Program program = tt_metal::Program();
 
         // NOTE: diagrams are NOT to scale
@@ -211,9 +199,9 @@ int main(int argc, char **argv) {
         // storage core L1
         // --------------------------------------------------------------------
         // |               bank 0              |            bank 1            |
-        // |        | 256 KB | 64 KB | 128 KB  |                     | 256 KB |
+        // |        | 256 KB | 64 KB | 128 KB  |    | 256 KB | 64 KB | 128 KB |
         // --------------------------------------------------------------------
-        pass &= test_l1_buffers_allocated_top_down(device);
+        pass &= test_l1_buffers_allocated_top_down(device, buffers);
 
         // Resulting L1 banks after test_circular_buffers_allocated_bottom_up:
         // compute and storage core L1
@@ -224,7 +212,7 @@ int main(int argc, char **argv) {
         // storage core L1
         // --------------------------------------------------------------------
         // |               bank 0              |            bank 1            |
-        // |        | 256 KB | 64 KB | 128 KB  |                     | 256 KB |
+        // |        | 256 KB | 64 KB | 128 KB  |    | 256 KB | 64 KB | 128 KB |
         // --------------------------------------------------------------------
         pass &= test_circular_buffers_allocated_bottom_up(device, program);
 
@@ -241,7 +229,8 @@ int main(int argc, char **argv) {
         // storage core L1
         // --------------------------------------------------------------------
         // |               bank 0              |            bank 1            |
-        // |        | 256 KB | 64 KB | 128 KB  |                     | 256 KB |
+        // |        | 256 KB | 64 KB | 128 KB  |    | 256 KB | 64 KB | 128 KB |
+        // --------------------------------------------------------------------
         // --------------------------------------------------------------------
         pass &= test_circular_buffers_allowed_to_grow_past_512KB(device, program);
 

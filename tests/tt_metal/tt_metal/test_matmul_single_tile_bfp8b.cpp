@@ -47,16 +47,9 @@ int main(int argc, char **argv) {
         uint32_t num_tiles = 1;
         uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of BFP8_B
 
-        uint32_t dram_buffer_src0_addr = 0;
-        int dram_src0_channel_id = 0;
-        uint32_t dram_buffer_src1_addr = 0;
-        int dram_src1_channel_id = 1;
-        uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
-        int dram_dst_channel_id = 0;
-
-        auto src0_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src0_addr, dram_src0_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
-        auto src1_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src1_addr, dram_src1_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
-        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr, dram_dst_channel_id, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto src0_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto src1_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
 
         auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
         auto dram_src1_noc_xy = src1_dram_buffer.noc_coordinates();
@@ -67,26 +60,24 @@ int main(int argc, char **argv) {
         uint32_t num_input_tiles = 1;
         auto cb_src0 = tt_metal::CreateCircularBuffer(
             program,
-            device,
             src0_cb_index,
             core,
             num_input_tiles,
             num_input_tiles * single_tile_size,
-            src0_cb_addr,
-            tt::DataFormat::Bfp8_b
+            tt::DataFormat::Bfp8_b,
+            src0_cb_addr
         );
 
         uint32_t src1_cb_index = 1;
         uint32_t src1_cb_addr = 300 * 1024;
         auto cb_src1 = tt_metal::CreateCircularBuffer(
             program,
-            device,
             src1_cb_index,
             core,
             num_input_tiles,
             num_input_tiles * single_tile_size,
-            src1_cb_addr,
-            tt::DataFormat::Bfp8_b
+            tt::DataFormat::Bfp8_b,
+            src1_cb_addr
         );
 
         uint32_t ouput_cb_index = 16; // output operands start at index 16
@@ -94,13 +85,12 @@ int main(int argc, char **argv) {
         uint32_t num_output_tiles = 1;
         auto cb_output = tt_metal::CreateCircularBuffer(
             program,
-            device,
             ouput_cb_index,
             core,
             num_output_tiles,
             num_output_tiles * single_tile_size,
-            output_cb_addr,
-            tt::DataFormat::Bfp8_b
+            tt::DataFormat::Bfp8_b,
+            output_cb_addr
         );
 
         auto mm_reader_kernel = tt_metal::CreateDataMovementKernel(
@@ -168,10 +158,10 @@ int main(int argc, char **argv) {
         tt_metal::SetRuntimeArgs(
             mm_reader_kernel,
             core,
-            {dram_buffer_src0_addr,
+            {src0_dram_buffer.address(),
             (std::uint32_t)dram_src0_noc_xy.x,
             (std::uint32_t)dram_src0_noc_xy.y,
-            dram_buffer_src1_addr,
+            src1_dram_buffer.address(),
             (std::uint32_t)dram_src1_noc_xy.x,
             (std::uint32_t)dram_src1_noc_xy.y,
             1,
@@ -183,7 +173,7 @@ int main(int argc, char **argv) {
         tt_metal::SetRuntimeArgs(
             unary_writer_kernel,
             core,
-            {dram_buffer_dst_addr,
+            {dst_dram_buffer.address(),
             (std::uint32_t)dram_dst_noc_xy.x,
             (std::uint32_t)dram_dst_noc_xy.y,
             num_tiles});

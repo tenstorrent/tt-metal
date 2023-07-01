@@ -26,14 +26,12 @@ operation::ProgramWithCallbacks fill_rm_single_core(const Tensor& any, Tensor &o
     TT_ASSERT(W < 1024*num_cb_tiles); // Limitation for simplifying the kernel
     auto cb_src0 = tt_metal::CreateCircularBuffers(
         program,
-        device,
         0, // cb index
         core,
         num_cb_tiles, num_cb_tiles * single_tile_size,
         DataFormat::Float16_b);
     auto cb_src1 = tt_metal::CreateCircularBuffers(
         program,
-        device,
         1, // cb index
         core,
         num_cb_tiles, num_cb_tiles * single_tile_size,

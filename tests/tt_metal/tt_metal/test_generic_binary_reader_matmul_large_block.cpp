@@ -167,16 +167,9 @@ int main(int argc, char **argv) {
         uint32_t dram_buffer_size_weights = single_tile_size * K * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
         uint32_t dram_buffer_size_out = single_tile_size * M * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-        uint32_t dram_buffer_src0_addr = 0;
-        int dram_src0_channel_id = 0;
-        uint32_t dram_buffer_src1_addr = 0;
-        int dram_src1_channel_id = 1;
-        uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
-        int dram_dst_channel_id = 0;
-
-        auto src0_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_act, dram_buffer_src0_addr, dram_src0_channel_id, dram_buffer_size_act, tt_metal::BufferType::DRAM);
-        auto src1_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_weights, dram_buffer_src1_addr, dram_src1_channel_id, dram_buffer_size_weights, tt_metal::BufferType::DRAM);
-        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_out, dram_buffer_dst_addr, dram_dst_channel_id, dram_buffer_size_out, tt_metal::BufferType::DRAM);
+        auto src0_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_act, dram_buffer_size_act, tt_metal::BufferType::DRAM);
+        auto src1_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_weights, dram_buffer_size_weights, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_out, dram_buffer_size_out, tt_metal::BufferType::DRAM);
 
         auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
         auto dram_src1_noc_xy = src1_dram_buffer.noc_coordinates();
@@ -187,13 +180,12 @@ int main(int argc, char **argv) {
         uint32_t cb0_tiles = M * in0_block_w * 2;
         auto cb_src0 = tt_metal::CreateCircularBuffer(
             program,
-            device,
             src0_cb_index,
             core,
             cb0_tiles,
             cb0_tiles * single_tile_size,
-            src0_cb_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            src0_cb_addr
         );
 
         uint32_t src1_cb_index = 1;
@@ -201,13 +193,12 @@ int main(int argc, char **argv) {
         uint32_t cb1_tiles = N * in0_block_w * 2;
         auto cb_src1 = tt_metal::CreateCircularBuffer(
             program,
-            device,
             src1_cb_index,
             core,
             cb1_tiles,
             cb1_tiles * single_tile_size,
-            src1_cb_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            src1_cb_addr
         );
 
         uint32_t ouput_cb_index = 16; // output operands start at index 16
@@ -217,13 +208,12 @@ int main(int argc, char **argv) {
         CoreRangeSet cores(std::set<CoreRange>{CoreRange{.start=core, .end=core}});
         auto cb_output = tt_metal::CreateCircularBuffers(
             program,
-            device,
             {ouput_cb_index, interm0_cb_index},
             cores,
             num_output_tiles,
             num_output_tiles * single_tile_size,
-            output_cb_addr,
-            tt::DataFormat::Float16_b
+            tt::DataFormat::Float16_b,
+            output_cb_addr
         );
 
         // create source addresses
@@ -249,10 +239,10 @@ int main(int argc, char **argv) {
         TT_ASSERT(source_addresses.size() == num_blocks * src0_num_reads_per_block);
 
         std::vector<uint32_t> generic_binary_reader_args {
-            dram_buffer_src0_addr,
+            src0_dram_buffer.address(),
             (uint32_t)dram_src0_noc_xy.x,
             (uint32_t)dram_src0_noc_xy.y,
-            dram_buffer_src1_addr,
+            src1_dram_buffer.address(),
             (uint32_t)dram_src1_noc_xy.x,
             (uint32_t)dram_src1_noc_xy.y,
             (uint32_t)source_addresses.size(),
@@ -272,7 +262,7 @@ int main(int argc, char **argv) {
             tt_metal::NOC::RISCV_1_default);
 
         std::vector<uint32_t> writer_rt_args{
-            dram_buffer_dst_addr,
+            dst_dram_buffer.address(),
             (std::uint32_t)dram_dst_noc_xy.x,
             (std::uint32_t)dram_dst_noc_xy.y,
             (std::uint32_t)out_subblock_h, // num tiles per sub block m

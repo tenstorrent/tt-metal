@@ -134,12 +134,11 @@ void TensorModule(py::module &m_tensor) {
     pyMemoryConfig
         .def(
             py::init<>(
-                [](bool interleaved, int bank_id, BufferType buffer_type) {
-                    return MemoryConfig{.interleaved=interleaved, .bank_id=bank_id, .buffer_type=buffer_type};
+                [](bool interleaved, BufferType buffer_type) {
+                    return MemoryConfig{.interleaved=interleaved, .buffer_type=buffer_type};
                 }
             ),
             py::arg("interleaved") = true,
-            py::arg("bank_id") = -1,
             py::arg("buffer_type") = BufferType::DRAM, R"doc(
                 Create MemoryConfig class.
                 If interleaved is set to True, tensor data will be interleaved across multiple DRAM banks on TT Accelerator device.
@@ -149,11 +148,10 @@ void TensorModule(py::module &m_tensor) {
 
                 .. code-block:: python
 
-                    mem_config = tt_lib.tensor.MemoryConfig(False, 3)
+                    mem_config = tt_lib.tensor.MemoryConfig(False)
             )doc"
         )
         .def_readonly("interleaved", &MemoryConfig::interleaved, "Whether tensor data is interleaved across mulitple DRAM channels")
-        .def_readonly("bank_id", &MemoryConfig::bank_id, "DRAM channel holding tensor data. Only used when tensor is not interleaved")
         .def_readonly("buffer_type", &MemoryConfig::buffer_type, "Buffer type to store tensor data. Can be DRAM or L1");
 
     // Tensor constructors that accept device and .to(device) function use keep alive call policy to communicate that Device needs to outlive Tensor.
@@ -303,7 +301,7 @@ void TensorModule(py::module &m_tensor) {
 
                     py_tensor = torch.randn((1, 1, 32, 32))
                     tt_device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
-                    mem_config = tt_lib.tensor.MemoryConfig(False, 3)
+                    mem_config = tt_lib.tensor.MemoryConfig(False)
                     // ...
                     tt_lib.tensor.Tensor(
                         py_tensor.reshape(-1).tolist(),

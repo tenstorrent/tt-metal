@@ -13,7 +13,6 @@ namespace tt_metal {
 
 // Fwd declares
 enum class BufferType;
-class CircularBuffer;
 class Buffer;
 class Program;
 
@@ -89,8 +88,9 @@ class Device {
     bool close();
     friend bool CloseDevice(Device *device);
 
+    // TODO: Uplift usage of friends. Buffer and Program just need access to allocator
     friend class Buffer;
-    friend class CircularBuffer;
+    friend class Program;
 
     static constexpr TargetDevice target_type_ = TargetDevice::Silicon;
     tt::ARCH arch_;

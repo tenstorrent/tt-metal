@@ -30,9 +30,7 @@ const map<string, string> binary_op_name_to_op_kernel = {
 struct SingleCoreBinaryConfig {
     size_t num_tiles = 0;
     size_t tile_byte_size = 0;
-    size_t output_dram_channel = 0;
     size_t output_dram_byte_address = 0;
-    size_t input_dram_channel = 0;
     size_t input_dram_byte_address = 0;
     size_t l1_input_byte_address = 0;
     tt::DataFormat l1_input_data_format = tt::DataFormat::Invalid;
@@ -56,7 +54,6 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
         device,
         byte_size,
         test_config.input_dram_byte_address,
-        test_config.input_dram_channel,
         byte_size,
         tt_metal::BufferType::DRAM);
     auto input0_dram_noc_xy = input0_dram_buffer.noc_coordinates();
@@ -64,7 +61,6 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
         device,
         byte_size,
         test_config.input_dram_byte_address + byte_size,
-        test_config.input_dram_channel,
         byte_size,
         tt_metal::BufferType::DRAM);
     auto input1_dram_noc_xy = input1_dram_buffer.noc_coordinates();
@@ -72,38 +68,34 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
         device,
         byte_size,
         test_config.output_dram_byte_address,
-        test_config.output_dram_channel,
         byte_size,
         tt_metal::BufferType::DRAM);
     auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 
     auto l1_input0_cb = tt_metal::CreateCircularBuffer(
         program,
-        device,
         0,
         test_config.core,
         test_config.num_tiles,
         byte_size,
-        test_config.l1_input_byte_address,
-        test_config.l1_input_data_format);
+        test_config.l1_input_data_format,
+        test_config.l1_input_byte_address);
     auto l1_input1_cb = tt_metal::CreateCircularBuffer(
         program,
-        device,
         1,
         test_config.core,
         test_config.num_tiles,
         byte_size,
-        test_config.l1_input_byte_address + byte_size,
-        test_config.l1_input_data_format);
+        test_config.l1_input_data_format,
+        test_config.l1_input_byte_address + byte_size);
     auto l1_output_cb = tt_metal::CreateCircularBuffer(
         program,
-        device,
         16,
         test_config.core,
         test_config.num_tiles,
         byte_size,
-        test_config.l1_output_byte_address,
-        test_config.l1_output_data_format);
+        test_config.l1_output_data_format,
+        test_config.l1_output_byte_address);
 
     auto reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
@@ -210,9 +202,7 @@ TEST_SUITE("BinaryCompute") {
     TEST_CASE_FIXTURE(unit_tests::SingleDeviceFixture, "SingleCore") {
         unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
             .tile_byte_size = 2 * 32 * 32,
-            .output_dram_channel = 0,
             .output_dram_byte_address = 0,
-            .input_dram_channel = 0,
             .input_dram_byte_address = 16 * 32 * 32,
             .l1_input_byte_address = UNRESERVED_BASE,
             .l1_input_data_format = tt::DataFormat::Float16_b,

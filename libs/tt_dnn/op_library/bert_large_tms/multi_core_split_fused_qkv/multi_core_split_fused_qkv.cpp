@@ -134,7 +134,6 @@ operation::ProgramWithCallbacks multi_core_split_fused_qkv(const Tensor &a, std:
     uint32_t cb0_tiles = per_core_tiles * 2; // double buffer
     auto cb_src0 = tt_metal::CreateCircularBuffers(
         program,
-        device,
         src0_cb_index,
         all_cores,
         cb0_tiles,

@@ -76,15 +76,10 @@ int main(int argc, char **argv) {
         uint32_t input_dram_buffer_addr = 0;
         uint32_t l1_buffer_addr = 400 * 1024;
         uint32_t address_map_l1_addr = 500 * 1024;
-        int dram_channel = 0;
 
-        auto l1_bank_ids = device->bank_ids_from_logical_core(core);
-        TT_ASSERT(not l1_bank_ids.empty());
-        auto l1_bank_id = l1_bank_ids.at(0);
+        auto input_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, input_dram_buffer_addr, dram_buffer_size, tt_metal::BufferType::DRAM);
 
-        auto input_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, input_dram_buffer_addr, dram_channel, dram_buffer_size, tt_metal::BufferType::DRAM);
-
-        auto l1_b0 = tt_metal::Buffer(device, dram_buffer_size, l1_buffer_addr, l1_bank_id, dram_buffer_size, tt_metal::BufferType::L1);
+        auto l1_b0 = tt_metal::Buffer(device, dram_buffer_size, l1_buffer_addr, dram_buffer_size, tt_metal::BufferType::L1);
 
         auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
 

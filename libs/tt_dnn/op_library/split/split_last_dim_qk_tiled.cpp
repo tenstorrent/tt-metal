@@ -152,7 +152,7 @@ operation::ProgramWithCallbacks split_last_dim_qk_tiled(
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
     auto cb_src0 = tt_metal::CreateCircularBuffers(
-        program, device, src0_cb_index, all_cores, num_input_tiles, num_input_tiles * single_tile_size, cb_data_format);
+        program, src0_cb_index, all_cores, num_input_tiles, num_input_tiles * single_tile_size, cb_data_format);
 
     for (int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
