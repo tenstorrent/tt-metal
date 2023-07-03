@@ -11,6 +11,7 @@ power_of_2() {
     echo $result
 }
 
+export TT_METAL_ENV_IS_DEV
 make tests -j
 ./build/test/build_kernels_for_riscv/test_build_kernel_blank
 ./build/test/build_kernels_for_riscv/test_build_kernel_risc_read_speed
