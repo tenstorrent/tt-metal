@@ -58,7 +58,6 @@ from python_api_testing.models.yolov5.reference.utils.general import (
     xyxy2xywhn,
 )
 
-# from utils.torch_utils import torch_distributed_zero_first
 
 # Parameters
 HELP_URL = "See https://docs.ultralytics.com/yolov5/tutorials/train_custom_data"
@@ -418,7 +417,6 @@ class LoadImages:
         self.orientation = int(
             self.cap.get(cv2.CAP_PROP_ORIENTATION_META)
         )  # rotation degrees
-        # self.cap.set(cv2.CAP_PROP_ORIENTATION_AUTO, 0)  # disable https://github.com/ultralytics/yolov5/issues/8493
 
     def _cv2_rotate(self, im):
         # Rotate a cv2 video manually
@@ -634,7 +632,6 @@ class LoadImagesAndLabels(Dataset):
                             x.replace("./", parent, 1) if x.startswith("./") else x
                             for x in t
                         ]  # to global path
-                        # f += [p.parent / x.lstrip(os.sep) for x in t]  # to global path (pathlib)
                 else:
                     raise FileNotFoundError(f"{prefix}{p} does not exist")
             self.im_files = sorted(
@@ -642,7 +639,7 @@ class LoadImagesAndLabels(Dataset):
                 for x in f
                 if x.split(".")[-1].lower() in IMG_FORMATS
             )
-            # self.img_files = sorted([x for x in f if x.suffix[1:].lower() in IMG_FORMATS])  # pathlib
+
             assert self.im_files, f"{prefix}No images found"
         except Exception as e:
             raise Exception(
@@ -866,12 +863,6 @@ class LoadImagesAndLabels(Dataset):
     def __len__(self):
         return len(self.im_files)
 
-    # def __iter__(self):
-    #     self.count = -1
-    #     print('ran dataset iter')
-    #     #self.shuffled_vector = np.random.permutation(self.nF) if self.augment else np.arange(self.nF)
-    #     return self
-
     def __getitem__(self, index):
         index = self.indices[index]  # linear, shuffled, or image_weights
 
@@ -941,10 +932,6 @@ class LoadImagesAndLabels(Dataset):
                 img = np.fliplr(img)
                 if nl:
                     labels[:, 1] = 1 - labels[:, 1]
-
-            # Cutouts
-            # labels = cutout(img, labels, p=0.5)
-            # nl = len(labels)  # update after cutout
 
         labels_out = torch.zeros((nl, 6))
         if nl:
@@ -1045,7 +1032,6 @@ class LoadImagesAndLabels(Dataset):
         labels4 = np.concatenate(labels4, 0)
         for x in (labels4[:, 1:], *segments4):
             np.clip(x, 0, 2 * s, out=x)  # clip when using random_perspective()
-        # img4, labels4 = replicate(img4, labels4)  # replicate
 
         # Augment
         img4, labels4, segments4 = copy_paste(

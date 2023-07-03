@@ -111,8 +111,6 @@ class iOSModel(torch.nn.Module):
             self.normalize = torch.tensor(
                 [1.0 / w, 1.0 / h, 1.0 / w, 1.0 / h]
             )  # broadcast (slower, smaller)
-            # np = model(im)[0].shape[1]  # number of points
-            # self.normalize = torch.tensor([1. / w, 1. / h, 1. / w, 1. / h]).expand(np, 4)  # explicit (faster, larger)
 
     def forward(self, x):
         xywh, conf, cls = self.model(x)[0].squeeze().split((4, 1, self.nc), 1)
@@ -171,10 +169,6 @@ def export_torchscript(model, im, file, optimize, prefix=colorstr("TorchScript:"
     d = {"shape": im.shape, "stride": int(max(model.stride)), "names": model.names}
     extra_files = {"config.txt": json.dumps(d)}  # torch._C.ExtraFilesMap()
 
-    # Not optimizing for mobile for now
-    # if optimize:  # https://pytorch.org/tutorials/recipes/mobile_interpreter.html
-    #    optimize_for_mobile(ts)._save_for_lite_interpreter(str(f), _extra_files=extra_files)
-    # else:
     ts.save(str(f), _extra_files=extra_files)
 
     return f, None
@@ -421,7 +415,6 @@ def export_engine(
     builder = trt.Builder(logger)
     config = builder.create_builder_config()
     config.max_workspace_size = workspace * 1 << 30
-    # config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, workspace << 30)  # fix TRT 8.4 deprecation notice
 
     flag = 1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
     network = builder.create_network(flag)
@@ -738,7 +731,6 @@ def pipeline_coreml(model, im, file, names, y, prefix=colorstr("CoreML Pipeline:
     out0, out1 = iter(spec.description.output)
     if platform.system() == "Darwin":
         img = Image.new("RGB", (w, h))  # img(192 width, 320 height)
-        # img = torch.zeros((*opt.img_size, 3)).numpy()  # img size(320,192,3) iDetection
         out = model.predict({"image": img})
         out0_shape, out1_shape = out[out0.name].shape, out[out1.name].shape
     else:  # linux and windows can not run model.predict(), get sizes from pytorch output y
@@ -751,24 +743,11 @@ def pipeline_coreml(model, im, file, names, y, prefix=colorstr("CoreML Pipeline:
         spec.description.input[0].type.imageType.height,
     )
     na, nc = out0_shape
-    # na, nc = out0.type.multiArrayType.shape  # number anchors, classes
     assert len(names) == nc, f"{len(names)} names found for nc={nc}"  # check
 
     # Define output shapes (missing)
     out0.type.multiArrayType.shape[:] = out0_shape  # (3780, 80)
     out1.type.multiArrayType.shape[:] = out1_shape  # (3780, 4)
-    # spec.neuralNetwork.preprocessing[0].featureName = '0'
-
-    # Flexible input shapes
-    # from coremltools.models.neural_network import flexible_shape_utils
-    # s = [] # shapes
-    # s.append(flexible_shape_utils.NeuralNetworkImageSize(320, 192))
-    # s.append(flexible_shape_utils.NeuralNetworkImageSize(640, 384))  # (height, width)
-    # flexible_shape_utils.add_enumerated_image_sizes(spec, feature_name='image', sizes=s)
-    # r = flexible_shape_utils.NeuralNetworkImageSizeRange()  # shape ranges
-    # r.add_height_range((192, 640))
-    # r.add_width_range((192, 640))
-    # flexible_shape_utils.update_image_size_range(spec, feature_name='image', size_range=r)
 
     # Print
     print(spec.description)
@@ -950,9 +929,7 @@ def run(
     # Input
     gs = int(max(model.stride))  # grid size (max stride)
     imgsz = [check_img_size(x, gs) for x in imgsz]  # verify img_size are gs-multiples
-    im = torch.zeros(batch_size, 3, *imgsz).to(
-        device
-    )  # image size(1,3,320,192) BCHW iDetection
+    im = torch.zeros(batch_size, 3, *imgsz).to(device)
 
     # Update model
     model.eval()
