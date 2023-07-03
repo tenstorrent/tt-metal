@@ -54,7 +54,7 @@ class TtYolov5Conv2D(torch.nn.Module):
 
         self.device = device
         self.host = tt_lib.device.GetHost()
-        self.conv_on_device = False
+        self.conv_on_device = True
 
         # conv_params = [out_channels, in_channels, kernel_size, kernel_size, stride, stride, padding, padding, dilation, groups]
         self.conv_params = [c2, c1, k, k, s, s, p, p, d, g]

@@ -42,9 +42,10 @@ from python_api_testing.models.yolov5.reference.utils.plots import (
 from utility_functions_new import torch2tt_tensor, tt2torch_tensor
 
 
-def download_images(path):
+def download_images(path, imgsz):
     dataset = load_dataset("huggingface/cats-image")
     image = dataset["test"]["image"][0]
+    image = image.resize(imgsz)
     image.save(path / "input_image.jpg")
 
 
@@ -67,7 +68,7 @@ def test_detection_model():
         device=device,
     )
 
-    download_images(Path(ROOT))
+    download_images(Path(ROOT), (640, 640))
 
     with torch.no_grad():
         tt_module.eval()

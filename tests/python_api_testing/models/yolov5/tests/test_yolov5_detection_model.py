@@ -33,9 +33,10 @@ from python_api_testing.models.utility_functions_new import (
 from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 
-def download_images(path):
+def download_images(path, imgsz):
     dataset = load_dataset("huggingface/cats-image")
     image = dataset["test"]["image"][0]
+    image = image.resize(imgsz)
     image.save(path / "input_image.jpg")
 
 
@@ -57,10 +58,10 @@ def test_Yolov5_detection_model():
     torch.manual_seed(0)
     # test_input = torch.rand(1, 3, 640, 640)
 
-    download_images(Path(ROOT))
-
     stride = max(int(max(refence_module.stride)), 32)  # model stride
     imgsz = check_img_size((640, 640), s=stride)  # check image size
+
+    download_images(Path(ROOT), imgsz)
     dataset = LoadImages(ROOT, img_size=imgsz, stride=stride, auto=True)
 
     for path, test_input, im0s, _, s in dataset:
