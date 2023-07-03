@@ -2,9 +2,9 @@
 test-list:
   transpose-cn:
     shape:
-      start-shape: [2, 2, 1, 2]
+      start-shape: [1, 1, 1, 2]
       end-shape: [32, 32, 96, 96]
-      interval: [2, 2, 1, 2]
+      interval: [1, 1, 1, 2]
       num-shapes: 1
       num-samples: 2048
     datagen:
