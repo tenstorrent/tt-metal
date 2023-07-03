@@ -156,16 +156,16 @@ op_map = {
         "pytorch_op": pytorch_ops.relu,
     },
     "eltwise-power": {
-        "tt_lib_op": partial(tt_lib_ops.eltwise_power, exponent=7),
-        "pytorch_op": partial(pytorch_ops.power, exponent=7),
+        "tt_lib_op": tt_lib_ops.eltwise_power,
+        "pytorch_op": pytorch_ops.power,
     },
     "eltwise-relu_max": {
-        "tt_lib_op": partial(tt_lib_ops.eltwise_relu_max, upper_limit=2),
-        "pytorch_op": partial(pytorch_ops.relu_max, upper_limit=2),
+        "tt_lib_op": tt_lib_ops.eltwise_relu_max,
+        "pytorch_op": pytorch_ops.relu_max,
     },
     "eltwise-relu_min": {
-        "tt_lib_op": partial(tt_lib_ops.eltwise_relu_min, lower_limit=-2),
-        "pytorch_op": partial(pytorch_ops.relu_min, lower_limit=-2),
+        "tt_lib_op": tt_lib_ops.eltwise_relu_min,
+        "pytorch_op": pytorch_ops.relu_min,
     },
     "eltwise-polyval": {
         "tt_lib_op": partial(tt_lib_ops.eltwise_polyval, coeffs=[0.0, 1.0, 2.0, 1.0]),
@@ -179,13 +179,13 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_sigmoid,
         "pytorch_op": pytorch_ops.sigmoid,
     },
-    "eltwise-hard_sigmoid": {
-        "tt_lib_op": tt_lib_ops.eltwise_hard_sigmoid,
-        "pytorch_op": pytorch_ops.hard_sigmoid,
+    "eltwise-hardsigmoid": {
+        "tt_lib_op": tt_lib_ops.eltwise_hardsigmoid,
+        "pytorch_op": pytorch_ops.hardsigmoid,
     },
-    "eltwise-hard_swish": {
-        "tt_lib_op": tt_lib_ops.eltwise_hard_swish,
-        "pytorch_op": pytorch_ops.hard_swish,
+    "eltwise-hardswish": {
+        "tt_lib_op": tt_lib_ops.eltwise_hardswish,
+        "pytorch_op": pytorch_ops.hardswish,
     },
     "eltwise-log": {
         "tt_lib_op": tt_lib_ops.eltwise_log,

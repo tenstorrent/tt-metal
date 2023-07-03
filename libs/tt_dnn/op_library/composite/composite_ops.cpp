@@ -139,18 +139,18 @@ Tensor clip(const Tensor& a,float low, float high) {
 //
 // PyTorch version:
 // hard sigmoid(x) = { x <= -3: 0, x >= +3: +3, x/6 + 0.5 otherwise}
-Tensor hard_sigmoid(const Tensor& a,float scale,float shift) {
+Tensor hardsigmoid(const Tensor& a,float scale,float shift) {
     Tensor a_mac = mac_scalar(a,scale,shift);//multiply and add.
     Tensor a_clip = relu_max(a_mac,1.0f);
     return a_clip;
 }
 
 // Function @hard_swish
-//use transformation y = x * hard_sigmoid( x ) by broadcast
+//use transformation y = x * hardsigmoid( x ) by broadcast
 //Ref: PyTorch
-//hard swish(x) = x*hard_sigmoid(x,scale,shift)
-Tensor hard_swish(const Tensor& a,float scale,float shift) {
-    Tensor a_sigmoid = hard_sigmoid(a,scale,shift);
+//hard swish(x) = x*hardsigmoid(x,scale,shift)
+Tensor hardswish(const Tensor& a,float scale,float shift) {
+    Tensor a_sigmoid = hardsigmoid(a,scale,shift);
     Tensor result_sq = mul(a_sigmoid,a);
     return result_sq;
 }

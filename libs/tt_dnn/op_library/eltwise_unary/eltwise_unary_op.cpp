@@ -82,11 +82,11 @@ string get_op_name_parameterized(UnaryOpType::Enum op_type,float param0) {
     TT_ASSERT( is_parameterized_type(op_type) && "operator should support one parameter" );
 
     switch (op_type) {
-    case UnaryOpType::RELU_MAX: op_name = "relu_max_tile_init(); relu_max_tile(0,"+std::to_string((uint32_t)param0)+"u ); pack_tile(0, tt::CB::c_out0);"; break;
-    case UnaryOpType::RELU_MIN: op_name = "relu_min_tile_init(); relu_min_tile(0,"+std::to_string((uint32_t)param0)+"u ); pack_tile(0, tt::CB::c_out0);"; break;
+    case UnaryOpType::RELU_MAX: op_name = "relu_max_tile_init(); relu_max_tile(0,"+Converter::to_hex(param0)+"u ); pack_tile(0, tt::CB::c_out0);"; break;
+    case UnaryOpType::RELU_MIN: op_name = "relu_min_tile_init(); relu_min_tile(0,"+Converter::to_hex(param0)+"u ); pack_tile(0, tt::CB::c_out0);"; break;
     case UnaryOpType::POWER: op_name = "power_tile_init(); power_tile(0," + std::to_string( (uint32_t) param0) + " ); pack_tile(0, tt::CB::c_out0);"; break;
-        default:
-	  TT_ASSERT( false && "unexpected parameterized type");
+    default:
+      TT_ASSERT( false && "unexpected parameterized type");
     };
     return op_name;
 }

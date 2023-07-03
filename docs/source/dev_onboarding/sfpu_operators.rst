@@ -96,9 +96,9 @@ Sample implementation of a hard swish operator (product of elementwise input ten
 ::
 
      /Ref: PyTorch
-     //hard swish(x) = x*hard_sigmoid(x,scale,shift)
-     Tensor hard_swish(const Tensor& a,float scale,float shift) {
-         Tensor a_sigmoid = hard_sigmoid(a,scale,shift);
+     //hard swish(x) = x*hardsigmoid(x,scale,shift)
+     Tensor hardswish(const Tensor& a,float scale,float shift) {
+         Tensor a_sigmoid = hardsigmoid(a,scale,shift);
          Tensor result_sq = mul(a_sigmoid,a);
          return std::move(result_sq);
      }

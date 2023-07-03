@@ -924,76 +924,78 @@ sfpi_inline void calculate_comp_init_flag(bool check, vFloat& flag1, vFloat& fla
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS>
 inline void calculate_comp(uint exponent_size_8)
 {
-    //invert output and use same comparison check
-    constexpr bool invert_output = ((COMP_MODE == SfpuType::greater_than_equal_zero) ||
-                                    (COMP_MODE == SfpuType::not_equal_zero) ||
-                                    (COMP_MODE == SfpuType::greater_than_zero));
-
-    // output_0 and output_1 hold the outputs use use when a zero or negative check is true/false.
-    // False = 0.0 = kCONST_0 (5/8-bit exponent format)
-    // True  = 1.0 = kCONST_1_FP16B (8-bit exponent format)
-    // SFPU uses 8-bit exponent in operations so loading these constants in 8-bit exponent format.
-    // Although a command flag can tell SFPU to re-bias a 5-bit exponent to 8-bit, we are loading 8-bit
-    // exponent and telling SFPU to not add any bias to these constants.
-    constexpr float output_0 = invert_output ? 0.0f : 1.0f;
-    constexpr float output_1 = invert_output ? 1.0f : 0.0f;
-
-    constexpr bool check_zero = (COMP_MODE == SfpuType::equal_zero) || (COMP_MODE == SfpuType::not_equal_zero);
-    constexpr bool second_check = (COMP_MODE == SfpuType::less_than_equal_zero) || (COMP_MODE == SfpuType::greater_than_zero);
-
-    for (int d = 0; d < ITERATIONS; d++)
+   const vFloat zero = 0.0f;
+   const vFloat one = 1.0f;
+   for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat v = dst_reg[0];
         vFloat flag1, flag2;
-        if constexpr(check_zero)
-        {
-            v_if (sfpu_is_fp16_zero(v, exponent_size_8)) {
-                calculate_comp_init_flag(second_check, flag1, flag2, output_0);
-            } v_else {
-                calculate_comp_init_flag(second_check, flag1, flag2, output_1);
-            }
-            v_endif;
-        }
-        else
-        {
-            v_if (v < 0.0F) {
-                calculate_comp_init_flag(second_check, flag1, flag2, output_0);
-            } v_else {
-                calculate_comp_init_flag(second_check, flag1, flag2, output_1);
-            }
-            v_endif;
+
+	//a[i] == 0
+	if constexpr(COMP_MODE == SfpuType::equal_zero) {
+	    v_if (sfpu_is_fp16_zero(v, exponent_size_8)) {
+	      v = one;
+	    } v_else {
+	      v = zero;
+	    }
+	    v_endif;
+	  }
+
+	//a[i] != 0
+	if constexpr(COMP_MODE == SfpuType::not_equal_zero) {
+	    v_if (sfpu_is_fp16_zero(v, exponent_size_8)) {
+	      v = zero;
+	    } v_else {
+	      v = one;
+	    }
+	    v_endif;
         }
 
-        vFloat result;
-        if constexpr (second_check)
-        {
-            // SfpuType::less_than_equal_zero
-            // flag1 = 0x3F80(1.0) if DST < 0 else 0
-            // flag2 = 0x3F80(1.0) if DST == 0 else 0
-            // Do a bitwise Or (flag1 | flag2) to get <= condition.
-            // flag1 < 0 OR flag2 == 0 => DST is Less than or Equal to zero.
-            // Result will be either 0x0000(0.0) or 0x3F80(1.0)
-            if constexpr (COMP_MODE == SfpuType::less_than_equal_zero) {
-                result = reinterpret<vFloat>(reinterpret<vUInt>(flag1) | reinterpret<vUInt>(flag2));
-            }
-            else
-            {
-                // SfpuType::greater_than_zero
-                // flag1 = 0x3F80(1.0) if DST >= 0 else 0
-                // flag2 = 0x3F80(1.0) if DST != 0 else 0
-                // Do a bitwise And (flag1 & flag2) to get > condition.
-                // flag2 >= 0 AND flag1 != 0 => DST is Greater than zero
-                // Result will be either 0x0000(0.0) or 0x3F80(1.0)
-                result = reinterpret<vFloat>(reinterpret<vUInt>(flag1) & reinterpret<vUInt>(flag2));
-            }
-        } else {
-            result = flag1;
+	//a[i] < 0
+	if constexpr(COMP_MODE == SfpuType::less_than_zero) {
+	    v_if (v >= 0.0f) {
+	      v = zero;
+	    } v_else {
+	      v = one;
+	    }
+	    v_endif;
         }
 
-        dst_reg[0] = result;
-        dst_reg++;
+	//a[i] >= 0
+	if constexpr(COMP_MODE == SfpuType::greater_than_equal_zero) {
+	    v_if (v >= 0.0f) {
+	      v = one;
+	    } v_else {
+	      v = zero;
+	    }
+	    v_endif;
+        }
+
+	//a[i] > 0
+	if constexpr(COMP_MODE == SfpuType::greater_than_zero) {
+	    v_if (v > 0.0f) {
+	      v = one;
+	    } v_else {
+	      v = zero;
+	    }
+	    v_endif;
+        }
+
+	//a[i] <= 0
+	if constexpr(COMP_MODE == SfpuType::less_than_equal_zero) {
+	    v_if (v > 0.0f) {
+	      v = zero;
+	    } v_else {
+	      v = one;
+	    }
+	    v_endif;
+        }
+
+	dst_reg[0] = v;
+	dst_reg++;
     }
 }
+
 
 template <bool APPROXIMATION_MODE>
 inline void calculate_clamp(uint param0, uint param1, uint param2, int ITERATIONS)
@@ -1211,10 +1213,20 @@ inline void calculate_cosine()
     }
 }
 
+union Converter {
+  float f;
+  uint32_t u;
+  static float to_float(uint32_t _v) {
+    Converter c{};
+    c.u = _v;
+    return c.f;
+  }
+};
+
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void relu_max(uint uint_threshold)
 {
-    vFloat threshold((float)uint_threshold);
+    vFloat threshold = Converter::to_float(uint_threshold);
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat a = dst_reg[0];
@@ -1234,18 +1246,20 @@ inline void relu_max(uint uint_threshold)
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void relu_min(uint uint_threshold)
 {
-    vFloat threshold((float)uint_threshold);
+    vFloat threshold = Converter::to_float(uint_threshold);
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat a = dst_reg[0];
         v_if(a < threshold) {
-            a = 0.0f;
+            a = threshold;
         }
         v_endif;
         dst_reg[0] = a;
         dst_reg++;
     }
+
 }
+
 
 inline
 vFloat sigmoid_piecewise_linear_positive(vFloat val) {
@@ -1357,7 +1371,7 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
                        (operation == SfpuType::greater_than_equal_zero) ||
                        (operation == SfpuType::less_than_equal_zero) ||
                        (operation == SfpuType::greater_than_zero)) {
-        calculate_comp<APPROXIMATION_MODE, operation, ITERATIONS>(param5);
+        calculate_comp<APPROXIMATION_MODE, operation, ITERATIONS>(8); //BFLOAT16 - exp
     }
     else if constexpr (operation == SfpuType::clamp) {
         calculate_clamp<APPROXIMATION_MODE, ITERATIONS>(param0, param1, param2);
@@ -1382,7 +1396,7 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
     }
     else if constexpr (operation == SfpuType::relu_min) {
         relu_min<APPROXIMATION_MODE, ITERATIONS>(param0);
-    }
+      }
     else if constexpr (operation == SfpuType::relu_max) {
         relu_max<APPROXIMATION_MODE, ITERATIONS>(param0);
     }

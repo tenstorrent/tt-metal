@@ -52,8 +52,8 @@ def custom_compare(*args, **kwargs):
                 "rad2deg",
                 "threshold",
                 "hypot",
-                "hard_swish",
-                "hard_sigmoid",
+                "hardswish",
+                "hardsigmoid",
                 "ones_like",
                 "zeros_like",
                 "full_like",
@@ -81,8 +81,8 @@ def test_run_eltwise_composite_test(
     options["hypot"] = (1, 100)
     options["cbrt"] = (-1000, 1000)
     options["relu6"] = (-100, 100)
-    options["hard_sigmoid"] = (-100, 100)
-    options["hard_swish"] = (-100, 100)
+    options["hardsigmoid"] = (-100, 100)
+    options["hardswish"] = (-100, 100)
 
     generator = generation_funcs.gen_rand
     function = fn

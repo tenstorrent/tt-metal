@@ -1072,9 +1072,9 @@ void TensorModule(py::module &m_tensor) {
         +----------+-------------------------------+-----------+------------------------------+----------+
     )doc");
 
-    m_tensor.def("hard_sigmoid", &hard_sigmoid,
+    m_tensor.def("hardsigmoid", &hardsigmoid,
 		 py::arg().noconvert(), py::arg("scale") = 1.0f/6.0f, py::arg("shift") = 0.5f, R"doc(
-        Applies the hard sigmoid function to the elements of the input tensor ``arg0``.
+        Applies the hardsigmoid function to the elements of the input tensor ``arg0``.
 
         Input tensor must have BFLOAT16 data type.
 
@@ -1091,7 +1091,7 @@ void TensorModule(py::module &m_tensor) {
         +----------+-------------------------------+-----------+------------------------------+----------+
     )doc");
 
-    m_tensor.def("hard_swish", &hard_swish,
+    m_tensor.def("hardswish", &hardswish,
 		 py::arg().noconvert(), py::arg("scale") = 1.0f/6.0f, py::arg("shift") = 0.5f, R"doc(
         Applies the hard swish function to the elements of the input tensor ``arg0``.
 
@@ -1625,7 +1625,7 @@ void TensorModule(py::module &m_tensor) {
         +----------+---------------------------+-----------+------------------------------+----------+
     )doc");
 
-    m_tensor.def("relu_min", &relu_max, R"doc(
+    m_tensor.def("relu_min", &relu_min, R"doc(
         Returns tensor with the relu min of all of elements of the input tensor ``arg0``.
 
         Input tensor must have BFLOAT16 data type.

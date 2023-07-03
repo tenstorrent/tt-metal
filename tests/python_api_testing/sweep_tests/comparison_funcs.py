@@ -21,7 +21,7 @@ def get_atol_rtol_pcc(golden, calculated):
 
     # One (or both) tensor is all zero
     if torch.any(golden.bool()) != torch.any(calculated.bool()):
-        logger.error("One tensor is all zero")
+        logger.warning("One tensor is all zero")
         cal_pcc = 0.0
 
     # if torch.any(torch.isinf(golden)) or torch.any(torch.isinf(calculated)):

@@ -253,7 +253,7 @@ inline void llk_math_eltwise_unary_sfpu_square_init() {
 
 // Power : y = x^(const param0)
 template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_power(uint dst_index, int vector_mode = Dim::RC, uint pow = 0) {
+inline void llk_math_eltwise_unary_sfpu_power(uint dst_index, uint pow = 0, int vector_mode = Dim::RC) {
     llk_math_eltwise_unary_sfpu<SfpuType::power, APPROXIMATE, dst_sync>(dst_index, vector_mode, pow);
 }
 
@@ -368,6 +368,5 @@ inline void llk_math_eltwise_unary_sfpu_relu_min(uint dst_index,uint param0, int
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_relu_min_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::relu_max, APPROXIMATE>();
+    llk_math_eltwise_unary_sfpu_init<SfpuType::relu_min, APPROXIMATE>();
 }
-

@@ -530,3 +530,14 @@ def gen_unpad_args(input_shapes):
                     }
                 )
             yield input_info
+
+
+def gen_scalar_args(input_shapes, arg_name="scalar", low=-100, high=100, integer=False):
+    for input_info in gen_dtype_layout_device(input_shapes):
+        if input_info is not None:
+            if integer:
+                scalar = torch.tensor(1, dtype=torch.int).random_(low, high).item()
+            else:
+                scalar = torch.Tensor(1).uniform_(low, high).item()
+            input_info.update({arg_name: scalar})
+            yield input_info

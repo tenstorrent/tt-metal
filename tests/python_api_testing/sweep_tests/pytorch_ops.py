@@ -1,5 +1,4 @@
 import torch
-import math
 from tt_lib.utils import (
     _nearest_32 as nearest_32,
     tilize as tilize_util,
@@ -45,12 +44,12 @@ def cbrt(x, *args, **kwargs):
 
 
 def rad2deg(x, *args, **kwargs):
-    result = (180.0 / math.pi) * x
+    result = torch.rad2deg(x)
     return result
 
 
 def deg2rad(x, *args, **kwargs):
-    result = (math.pi / 180.0) * x
+    result = torch.deg2rad(x)
     return result
 
 
@@ -94,12 +93,12 @@ def polyval(x, *args, **kwargs):
 
 def relu_max(x, *args, **kwargs):
     upper_limit = kwargs["upper_limit"]
-    return torch.min(torch.relu(x), torch.tensor(upper_limit))
+    return torch.relu(torch.min(x, torch.tensor(upper_limit)))
 
 
 def relu_min(x, *args, **kwargs):
     lower_limit = kwargs["lower_limit"]
-    return torch.max(torch.relu(x), torch.tensor(lower_limit))
+    return torch.max(x, torch.tensor(lower_limit))
 
 
 def abs(x, *args, **kwargs):
@@ -186,11 +185,11 @@ def sigmoid(x, *args, **kwargs):
     return torch.sigmoid(x)
 
 
-def hard_sigmoid(x, *args, **kwargs):
+def hardsigmoid(x, *args, **kwargs):
     return torch.nn.functional.hardsigmoid(x)
 
 
-def hard_swish(x, *args, **kwargs):
+def hardswish(x, *args, **kwargs):
     return torch.nn.functional.hardswish(x)
 
 

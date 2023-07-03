@@ -107,10 +107,10 @@ Tensor cbrt(const Tensor &input_a);
 //hard sigmoid(x) = { x <= -3: 0, x >= +3: +3, x/6 + 0.5 otherwise}
 //
 //for Theano version use scale = 1.0/5.0f = 0.2f with shift = 0.5f.
-Tensor hard_sigmoid(const Tensor& tensor_a,float scale = 1.0f/6.0f,float shift = 0.5f);
+Tensor hardsigmoid(const Tensor& tensor_a,float scale = 1.0f/6.0f,float shift = 0.5f);
 
-//hard swish(x) = x*hard_sigmoid(x,scale,shift)
-Tensor hard_swish(const Tensor& a,float scale = 1.0f/6.0f,float shift = 0.5f);
+//hard swish(x) = x*hardsigmoid(x,scale,shift)
+Tensor hardswish(const Tensor& a,float scale = 1.0f/6.0f,float shift = 0.5f);
 
 //where - ternary operator y = (predicate) ? value_true : value_false; elementwise
 Tensor where(const Tensor& predicate, const Tensor& value_true, const Tensor& value_false);
