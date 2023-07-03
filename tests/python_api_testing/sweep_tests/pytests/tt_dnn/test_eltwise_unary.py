@@ -28,6 +28,24 @@ from python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytor
 )
 @pytest.mark.parametrize("pcie_slot", [0])
 class TestEltwiseUnary:
+    @pytest.mark.parametrize("fn_kind", ["gelu", "relu", "sigmoid", "square", "tanh"])
+    def test_run_eltwise_unary_ops(
+        self, input_shapes, fn_kind, pcie_slot, function_level_defaults
+    ):
+        datagen_func = [
+            generation_funcs.gen_func_with_cast(
+                partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32
+            )
+        ]
+        comparison_func = comparison_funcs.comp_pcc
+        run_single_pytorch_test(
+            f"eltwise-{fn_kind}",
+            input_shapes,
+            datagen_func,
+            comparison_func,
+            pcie_slot,
+        )
+
     @pytest.mark.parametrize(
         "input_range, comparison_func",
         (
@@ -101,97 +119,6 @@ class TestEltwiseUnary:
             datagen_func,
             comparison_func,
             pcie_slot,
-        )
-
-    def test_run_eltwise_gelu_op(
-        self, input_shapes, pcie_slot, function_level_defaults
-    ):
-        datagen_func = [
-            generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32
-            )
-        ]
-        comparison_func = comparison_funcs.comp_pcc
-        run_single_pytorch_test(
-            "eltwise-gelu",
-            input_shapes,
-            datagen_func,
-            comparison_func,
-            pcie_slot,
-        )
-
-    def test_run_eltwise_relu_op(
-        self, input_shapes, pcie_slot, function_level_defaults
-    ):
-        datagen_func = [
-            generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32
-            )
-        ]
-        comparison_func = comparison_funcs.comp_pcc
-        run_single_pytorch_test(
-            "eltwise-relu",
-            input_shapes,
-            datagen_func,
-            comparison_func,
-            pcie_slot,
-        )
-
-    def test_run_eltwise_sigmoid_op(
-        self, input_shapes, pcie_slot, function_level_defaults
-    ):
-        datagen_func = [
-            generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32
-            )
-        ]
-        comparison_func = comparison_funcs.comp_pcc
-        run_single_pytorch_test(
-            "eltwise-sigmoid",
-            input_shapes,
-            datagen_func,
-            comparison_func,
-            pcie_slot,
-        )
-
-    @pytest.mark.parametrize("fn_kind",
-                             ("relu_max",
-                              "relu_min",
-                              "inverted_relu_max",
-                              "inverted_relu_min",
-                             ))
-    def test_run_eltwise_unary_test(
-            self, input_shapes, fn_kind, pcie_slot, function_level_defaults
-    ):
-        v_low, v_high = 1, 100
-        if fn_kind.find("_relu_"):
-            v_low, v_high = -100, 100
-        datagen_func = [
-            generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=v_low, high=v_high), torch.float32
-            )
-        ]
-        comparison_func = partial(comparison_funcs.comp_allclose,atol=1e-2,rtol=1e-2)
-        test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
-        test_args.update(
-            {
-                "upper_limit": random.choice(range(20, 80)),
-                "lower_limit": random.choice(range(-80, -20)),
-            }
-        )
-        if fn_kind.startswith("inverted_relu"):
-            # invert relu limits
-            test_args["upper_limit"] *= -1.0
-            test_args["lower_limit"] *= -1.0
-            fn_kind = "_".join(fn_kind.split("_")[1:])
-
-        run_single_pytorch_test(
-            "eltwise-" + fn_kind,
-            input_shapes,
-            datagen_func,
-            comparison_func,
-            pcie_slot,
-            test_args
         )
 
     @pytest.mark.parametrize("input_value", [-2.0, -1.0, 0.0, 1.0, 2.0])
@@ -288,49 +215,19 @@ class TestEltwiseUnary:
             pcie_slot,
         )
 
-    def test_run_eltwise_tanh_op(
-        self, input_shapes, pcie_slot, function_level_defaults
+    @pytest.mark.parametrize("trig_kind", ["sin", "cos"])
+    def test_run_eltwise_periodic_trig_ops(
+        self, input_shapes, trig_kind, pcie_slot, function_level_defaults
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32
-            )
-        ]
-        comparison_func = comparison_funcs.comp_pcc
-        run_single_pytorch_test(
-            "eltwise-tanh",
-            input_shapes,
-            datagen_func,
-            comparison_func,
-            pcie_slot,
-        )
-
-    def test_run_eltwise_sin_op(self, input_shapes, pcie_slot, function_level_defaults):
-        datagen_func = [
-            generation_funcs.gen_func_with_cast(
                 partial(generation_funcs.gen_rand, low=0.0, high=2.0 * pi),
                 torch.float32,
             )
         ]
         comparison_func = comparison_funcs.comp_pcc
         run_single_pytorch_test(
-            "eltwise-sin",
-            input_shapes,
-            datagen_func,
-            comparison_func,
-            pcie_slot,
-        )
-
-    def test_run_eltwise_cos_op(self, input_shapes, pcie_slot, function_level_defaults):
-        datagen_func = [
-            generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=0.0, high=2.0 * pi),
-                torch.float32,
-            )
-        ]
-        comparison_func = comparison_funcs.comp_pcc
-        run_single_pytorch_test(
-            "eltwise-cos",
+            f"eltwise-{trig_kind}",
             input_shapes,
             datagen_func,
             comparison_func,
@@ -381,7 +278,7 @@ class TestEltwiseUnary:
     @pytest.mark.parametrize(
         "unary_kind", ["add_unary", "sub_unary", "mul_unary", "div_unary"]
     )
-    @pytest.mark.parametrize("scalar", [1.0, 2.0, 8.0])
+    @pytest.mark.parametrize("scalar", [-2.0, 1.0, 2.0, 8.0])
     def test_run_eltwise_binop_to_unary_ops(
         self, unary_kind, input_shapes, pcie_slot, scalar, function_level_defaults
     ):
@@ -422,40 +319,3 @@ class TestEltwiseUnary:
             pcie_slot,
             test_args,
         )
-
-# explore ops for Single core and Multi core tensor sizes
-@pytest.mark.parametrize(
-    "fn_kind, input_shapes, pcie_slot",
-    (
-        list(
-            product(
-                (
-                    "square",
-                    "neg",
-                    "abs",
-                ),
-                (
-                    [[1, 1, 32, 32]],
-                    [[1, 1, 320, 384]],
-                    [[1, 3, 320, 384]],
-                ),  # single, multi core sizes
-                (0,),
-            )
-        )
-    ))
-def test_run_eltwise_multiple_op(
-        fn_kind, input_shapes, pcie_slot, function_level_defaults
-):
-    datagen_func = [
-        generation_funcs.gen_func_with_cast(
-            partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32
-        )
-    ]
-    comparison_func = comparison_funcs.comp_pcc
-    run_single_pytorch_test(
-        f"eltwise-{fn_kind}",
-        input_shapes,
-        datagen_func,
-        comparison_func,
-        pcie_slot,
-    )

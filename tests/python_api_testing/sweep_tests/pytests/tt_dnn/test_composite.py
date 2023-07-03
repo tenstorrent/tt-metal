@@ -33,6 +33,7 @@ def custom_compare(*args, **kwargs):
     return result
 
 
+# TODO: This function should be split apart instead of having all these if cases
 @pytest.mark.parametrize(
     "fn, input_shapes, pcie_slot",
     list(
@@ -85,7 +86,6 @@ def test_run_eltwise_composite_test(
     options["hardswish"] = (-100, 100)
 
     generator = generation_funcs.gen_rand
-    function = fn
 
     datagen_func = [
         generation_funcs.gen_func_with_cast(
@@ -93,12 +93,23 @@ def test_run_eltwise_composite_test(
             torch.bfloat16,
         )
     ]
+    num_inputs = 1
+    if fn == "mac":
+        num_inputs = 3
+    elif fn == "hypot":
+        num_inputs = 2
+    input_shapes = input_shapes * num_inputs
+    datagen_func = datagen_func * num_inputs
     test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
     test_args.update({"scalar": np.random.randint(-100, 100)})
     if fn == "arange":
         test_args.update({"start": -10, "end": 1024 - 10, "step": 1})
+    elif fn == "polyval":
+        test_args.update({"coeffs": [1.0, 2.0, 1.0, 2.0]})
+    elif fn == "threshold":
+        test_args.update({"threshold": 5.0, "value": 1.0})
     run_single_pytorch_test(
-        "eltwise-%s" % (function),
+        "eltwise-%s" % (fn),
         input_shapes,
         datagen_func,
         partial(custom_compare, function=fn),

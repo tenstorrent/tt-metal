@@ -71,7 +71,9 @@ def linear(x, weight, *args, host, device, dtype, layout, on_device, **kwargs):
 #################### TT-DNN ####################
 ################################################
 @setup_host_and_device
-def eltwise_threshold(x, *args, host, device, dtype, layout, on_device, **kwargs):
+def eltwise_threshold(
+    x, *args, threshold, value, host, device, dtype, layout, on_device, **kwargs
+):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -83,7 +85,7 @@ def eltwise_threshold(x, *args, host, device, dtype, layout, on_device, **kwargs
     if on_device:
         t0 = t0.to(device)
 
-    t1 = ttl.tensor.threshold(t0, kwargs["threshold"], kwargs["value"])
+    t1 = ttl.tensor.threshold(t0, threshold, value)
 
     output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t1.shape()
@@ -114,7 +116,7 @@ def eltwise_relu6(x, *args, host, device, dtype, layout, on_device, **kwargs):
 
 
 @setup_host_and_device
-def eltwise_hypot(x, *args, host, device, dtype, layout, on_device, **kwargs):
+def eltwise_hypot(x, y, *args, host, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -126,10 +128,21 @@ def eltwise_hypot(x, *args, host, device, dtype, layout, on_device, **kwargs):
     if on_device:
         t0 = t0.to(device)
 
-    t1 = ttl.tensor.hypot(t0, t0)
+    t1 = ttl.tensor.Tensor(
+        y.reshape(-1).tolist(),
+        y.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
-        t1.shape()
+    t1 = t1.to(layout)
+    if on_device:
+        t1 = t1.to(device)
+
+    t2 = ttl.tensor.hypot(t0, t1)
+
+    output = torch.Tensor(t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t2.shape()
     )
 
     return output
@@ -376,8 +389,9 @@ def eltwise_relu(x, *args, host, device, dtype, layout, on_device, **kwargs):
 
 
 @setup_host_and_device
-def eltwise_relu_min(x, *args, host, device, dtype, layout, on_device, **kwargs):
-    lower_limit = kwargs["lower_limit"]
+def eltwise_relu_min(
+    x, *args, lower_limit, host, device, dtype, layout, on_device, **kwargs
+):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -399,8 +413,9 @@ def eltwise_relu_min(x, *args, host, device, dtype, layout, on_device, **kwargs)
 
 
 @setup_host_and_device
-def eltwise_relu_max(x, *args, host, device, dtype, layout, on_device, **kwargs):
-    upper_limit = kwargs["upper_limit"]
+def eltwise_relu_max(
+    x, *args, upper_limit, host, device, dtype, layout, on_device, **kwargs
+):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -422,8 +437,7 @@ def eltwise_relu_max(x, *args, host, device, dtype, layout, on_device, **kwargs)
 
 
 @setup_host_and_device
-def eltwise_polyval(x, *args, host, device, dtype, layout, on_device, **kwargs):
-    coeffs = kwargs["coeffs"]
+def eltwise_polyval(x, *args, coeffs, host, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -445,7 +459,7 @@ def eltwise_polyval(x, *args, host, device, dtype, layout, on_device, **kwargs):
 
 
 @setup_host_and_device
-def eltwise_mac(x, *args, host, device, dtype, layout, on_device, **kwargs):
+def eltwise_mac(x, y, z, *args, host, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -457,10 +471,32 @@ def eltwise_mac(x, *args, host, device, dtype, layout, on_device, **kwargs):
     if on_device:
         t0 = t0.to(device)
 
-    t1 = ttl.tensor.mac(t0, t0, t0)
+    t1 = ttl.tensor.Tensor(
+        y.reshape(-1).tolist(),
+        y.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
 
-    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
-        t1.shape()
+    t1 = t1.to(layout)
+    if on_device:
+        t1 = t1.to(device)
+
+    t2 = ttl.tensor.Tensor(
+        z.reshape(-1).tolist(),
+        z.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t2 = t2.to(layout)
+    if on_device:
+        t2 = t2.to(device)
+
+    t3 = ttl.tensor.mac(t0, t1, t2)
+
+    output = torch.Tensor(t3.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t3.shape()
     )
 
     return output
@@ -734,14 +770,13 @@ def ones_like(x, *args, host, device, dtype, layout, on_device, **kwargs):
 
 
 @setup_host_and_device
-def full_like(x, *args, host, device, dtype, layout, on_device, **kwargs):
+def full_like(x, *args, scalar, host, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
         dtype,
         ttl.tensor.Layout.ROW_MAJOR,
     )
-    scalar = kwargs["scalar"]
     t0 = t0.to(layout)
     if on_device:
         t0 = t0.to(device)
@@ -778,8 +813,7 @@ def zeros(x, *args, host, device, dtype, layout, on_device, **kwargs):
 
 
 @setup_host_and_device
-def full(x, *args, host, device, dtype, layout, on_device, **kwargs):
-    scalar = kwargs.pop("scalar")
+def full(x, *args, scalar, host, device, dtype, layout, on_device, **kwargs):
     t1 = ttl.tensor.full(x.shape, scalar)
 
     output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
@@ -790,13 +824,12 @@ def full(x, *args, host, device, dtype, layout, on_device, **kwargs):
 
 
 @setup_host_and_device
-def arange(x, *args, host, device, dtype, layout, on_device, **kwargs):
-    start, end, step = kwargs["start"], kwargs["end"], kwargs.get("step", 1)
+def arange(
+    x, *args, start, end, step=1, host, device, dtype, layout, on_device, **kwargs
+):
     t1 = ttl.tensor.arange(start, end, step)
 
-    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
-        t1.shape()
-    )
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data())
 
     return output
 
@@ -823,15 +856,14 @@ def hardtanh(x, *args, host, device, dtype, layout, on_device, **kwargs):
 
 
 @setup_host_and_device
-def clip(x, *args, host, device, dtype, layout, on_device, **kwargs):
+def clip(x, *args, low, high, host, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
         dtype,
         ttl.tensor.Layout.ROW_MAJOR,
     )
-    high = kwargs["high"]
-    low = kwargs["low"]
+
     t0 = t0.to(layout)
     if on_device:
         t0 = t0.to(device)
@@ -884,14 +916,16 @@ def where(x, y, z, host, device, dtype, layout, on_device, **kwargs):
 
 
 @setup_host_and_device
-def eltwise_div_unary(x, *args, host, device, dtype, layout, on_device, **kwargs):
+def eltwise_div_unary(
+    x, *args, scalar, host, device, dtype, layout, on_device, **kwargs
+):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
         dtype,
         ttl.tensor.Layout.ROW_MAJOR,
     )
-    scalar = kwargs["scalar"]
+
     t0 = t0.to(layout)
     if on_device:
         t0 = t0.to(device)
@@ -906,14 +940,16 @@ def eltwise_div_unary(x, *args, host, device, dtype, layout, on_device, **kwargs
 
 
 @setup_host_and_device
-def eltwise_mul_unary(x, *args, host, device, dtype, layout, on_device, **kwargs):
+def eltwise_mul_unary(
+    x, *args, scalar, host, device, dtype, layout, on_device, **kwargs
+):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
         dtype,
         ttl.tensor.Layout.ROW_MAJOR,
     )
-    scalar = kwargs["scalar"]
+
     t0 = t0.to(layout)
     if on_device:
         t0 = t0.to(device)
@@ -928,14 +964,16 @@ def eltwise_mul_unary(x, *args, host, device, dtype, layout, on_device, **kwargs
 
 
 @setup_host_and_device
-def eltwise_sub_unary(x, *args, host, device, dtype, layout, on_device, **kwargs):
+def eltwise_sub_unary(
+    x, *args, scalar, host, device, dtype, layout, on_device, **kwargs
+):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
         dtype,
         ttl.tensor.Layout.ROW_MAJOR,
     )
-    scalar = kwargs["scalar"]
+
     t0 = t0.to(layout)
     if on_device:
         t0 = t0.to(device)
@@ -950,14 +988,16 @@ def eltwise_sub_unary(x, *args, host, device, dtype, layout, on_device, **kwargs
 
 
 @setup_host_and_device
-def eltwise_add_unary(x, *args, host, device, dtype, layout, on_device, **kwargs):
+def eltwise_add_unary(
+    x, *args, scalar, host, device, dtype, layout, on_device, **kwargs
+):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
         dtype,
         ttl.tensor.Layout.ROW_MAJOR,
     )
-    scalar = kwargs["scalar"]
+
     t0 = t0.to(layout)
     if on_device:
         t0 = t0.to(device)
@@ -1426,6 +1466,7 @@ def matmul(x, y, *args, host, device, dtype, layout, on_device, **kwargs):
 
     return output
 
+
 @setup_host_and_device
 def outer(x, y, *args, host, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
@@ -1456,6 +1497,7 @@ def outer(x, y, *args, host, device, dtype, layout, on_device, **kwargs):
     )
 
     return output
+
 
 @setup_host_and_device
 def bmm(x, y, *args, host, device, dtype, layout, on_device, **kwargs):
@@ -2344,10 +2386,14 @@ def unpad(
 ################################################
 #################### Tensor ####################
 ################################################
-def datacopy(x, pcie_slot, *args, **kwargs):
-    ttl_tensor_dtype = kwargs.get("dtype", ttl.tensor.DataType.BFLOAT16)
-    ttl_tensor_memory_config = kwargs.get("memory_config", ttl.tensor.MemoryConfig())
-
+def datacopy(
+    x,
+    pcie_slot,
+    *args,
+    dtype=ttl.tensor.DataType.BFLOAT16,
+    memory_config=ttl.tensor.MemoryConfig(),
+    **kwargs,
+):
     host = ttl.device.GetHost()
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
     ttl.device.InitializeDevice(device)
@@ -2357,11 +2403,11 @@ def datacopy(x, pcie_slot, *args, **kwargs):
             ttl.tensor.Tensor(
                 x.reshape(-1).tolist(),
                 x.shape,
-                ttl_tensor_dtype,
+                dtype,
                 ttl.tensor.Layout.ROW_MAJOR,
             )
             .to(ttl.tensor.Layout.TILE)
-            .to(device, ttl_tensor_memory_config)
+            .to(device, memory_config)
         )
 
         host_tensor = device_tensor.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
@@ -2372,15 +2418,9 @@ def datacopy(x, pcie_slot, *args, **kwargs):
     return output
 
 
-def tensor_pad(x, pcie_slot, *args, **kwargs):
-    assert "output_tensor_shape" in kwargs
-    assert "input_tensor_start" in kwargs
-    assert "pad_value" in kwargs
-
-    output_tensor_shape = kwargs["output_tensor_shape"]
-    input_tensor_start = kwargs["input_tensor_start"]
-    pad_value = kwargs["pad_value"]
-
+def tensor_pad(
+    x, pcie_slot, *args, output_tensor_shape, input_tensor_start, pad_value, **kwargs
+):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -2395,13 +2435,7 @@ def tensor_pad(x, pcie_slot, *args, **kwargs):
     return output
 
 
-def tensor_unpad(x, pcie_slot, *args, **kwargs):
-    assert "output_tensor_start" in kwargs
-    assert "output_tensor_end" in kwargs
-
-    output_tensor_start = kwargs["output_tensor_start"]
-    output_tensor_end = kwargs["output_tensor_end"]
-
+def tensor_unpad(x, pcie_slot, *args, output_tensor_start, output_tensor_end, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -2416,11 +2450,7 @@ def tensor_unpad(x, pcie_slot, *args, **kwargs):
     return output
 
 
-def pad_to_tile(x, pcie_slot, *args, **kwargs):
-    assert "pad_value" in kwargs
-
-    pad_value = kwargs["pad_value"]
-
+def pad_to_tile(x, pcie_slot, *args, pad_value, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -2435,11 +2465,7 @@ def pad_to_tile(x, pcie_slot, *args, **kwargs):
     return output
 
 
-def unpad_from_tile(x, pcie_slot, *args, **kwargs):
-    assert "output_tensor_shape" in kwargs
-
-    output_tensor_shape = kwargs["output_tensor_shape"]
-
+def unpad_from_tile(x, pcie_slot, *args, output_tensor_shape, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -2455,8 +2481,7 @@ def unpad_from_tile(x, pcie_slot, *args, **kwargs):
 
 
 @setup_host_and_device
-def eltwise_power(x, *args, host, device, dtype, layout, on_device, **kwargs):
-    exponent = kwargs.pop("exponent")
+def eltwise_power(x, *args, exponent, host, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,

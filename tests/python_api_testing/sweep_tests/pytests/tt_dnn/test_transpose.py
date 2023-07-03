@@ -46,7 +46,6 @@ def test_run_transpose_wh_test(input_shapes, pcie_slot, function_level_defaults)
     ),
 )
 def test_run_transpose_hc_test(input_shapes, pcie_slot, function_level_defaults):
-    torch.set_printoptions(sci_mode=False)
     datagen_func = [
         generation_funcs.gen_func_with_cast(
             partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16

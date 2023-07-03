@@ -14,6 +14,10 @@ op_map = {
     ################################################
     #################### TT-DNN ####################
     ################################################
+    "arange": {
+        "tt_lib_op": tt_lib_ops.arange,
+        "pytorch_op": pytorch_ops.arange,
+    },
     # Eltwise unary
     "eltwise-hardtanh": {
         "tt_lib_op": tt_lib_ops.hardtanh,
@@ -168,8 +172,8 @@ op_map = {
         "pytorch_op": pytorch_ops.relu_min,
     },
     "eltwise-polyval": {
-        "tt_lib_op": partial(tt_lib_ops.eltwise_polyval, coeffs=[0.0, 1.0, 2.0, 1.0]),
-        "pytorch_op": partial(pytorch_ops.polyval, coeffs=[0.0, 1.0, 2.0, 1.0]),
+        "tt_lib_op": tt_lib_ops.eltwise_polyval,
+        "pytorch_op": pytorch_ops.polyval,
     },
     "eltwise-mac": {
         "tt_lib_op": tt_lib_ops.eltwise_mac,
@@ -241,8 +245,8 @@ op_map = {
         "pytorch_op": pytorch_ops.hypot,
     },
     "eltwise-threshold": {
-        "tt_lib_op": partial(tt_lib_ops.eltwise_threshold, threshold=5.0, value=1.0),
-        "pytorch_op": partial(pytorch_ops.threshold, threshold=5.0, value=1.0),
+        "tt_lib_op": tt_lib_ops.eltwise_threshold,
+        "pytorch_op": pytorch_ops.threshold,
     },
     "eltwise-relu6": {
         "tt_lib_op": tt_lib_ops.eltwise_relu6,
@@ -265,7 +269,7 @@ op_map = {
     "outer": {
         "tt_lib_op": tt_lib_ops.outer,
         "pytorch_op": pytorch_ops.outer,
-    },    
+    },
     "bmm": {
         "tt_lib_op": tt_lib_ops.bmm,
         "pytorch_op": pytorch_ops.matmul,

@@ -278,6 +278,16 @@ def gen_default_dtype_layout_device(input_shapes):
         ]
 
 
+def gen_default_dtype_layout_rm_device(input_shapes):
+    return [
+        {
+            "dtype": ttl.tensor.DataType.BFLOAT16,
+            "layout": ttl.tensor.Layout.ROW_MAJOR,
+            "on_device": True,
+        }
+    ]
+
+
 def sanitize_args(input_shapes, dtype_device_layout):
     for shape in input_shapes:
         if (
@@ -532,12 +542,109 @@ def gen_unpad_args(input_shapes):
             yield input_info
 
 
-def gen_scalar_args(input_shapes, arg_name="scalar", low=-100, high=100, integer=False):
+def gen_scalar_args(
+    input_shapes, arg_name="scalar", low=-100, high=100, dtype=torch.bfloat16
+):
     for input_info in gen_dtype_layout_device(input_shapes):
         if input_info is not None:
-            if integer:
-                scalar = torch.tensor(1, dtype=torch.int).random_(low, high).item()
+            if dtype.is_floating_point:
+                scalar = torch.tensor(1, dtype=dtype).uniform_(low, high).item()
             else:
-                scalar = torch.Tensor(1).uniform_(low, high).item()
+                scalar = torch.tensor(1, dtype=dtype).random_(low, high).item()
             input_info.update({arg_name: scalar})
             yield input_info
+
+
+def gen_scalar_symmetric_args(
+    input_shapes, arg_name="scalar", low=0.01, high=100, dtype=torch.bfloat16
+):
+    for input_info in gen_scalar_args(input_shapes, arg_name, low, high, dtype):
+        if input_info is not None:
+            sign = (torch.tensor(1, dtype=torch.int).random_(0, 2) * 2 - 1).item()
+            input_info[arg_name] *= sign
+            yield input_info
+
+
+def gen_power_args(input_shapes, low=0, high=10, dtype=torch.int):
+    for input_info in gen_scalar_args(input_shapes, "exponent", low, high, dtype):
+        yield input_info
+
+
+def gen_relu_min_args(input_shapes, low=-100, high=100, dtype=torch.bfloat16):
+    for input_info in gen_scalar_args(input_shapes, "lower_limit", low, high, dtype):
+        yield input_info
+
+
+def gen_relu_max_args(input_shapes, low=-100, high=100, dtype=torch.bfloat16):
+    for input_info in gen_scalar_args(input_shapes, "upper_limit", low, high, dtype):
+        yield input_info
+
+
+def gen_two_scalar_args(
+    input_shapes,
+    arg0_name="scalar0",
+    arg1_name="scalar1",
+    low=-100,
+    high=100,
+    dtype=torch.bfloat16,
+):
+    for input_info in gen_dtype_layout_device(input_shapes):
+        if input_info is not None:
+            if dtype.is_floating_point:
+                scalar0 = torch.tensor(1, dtype=dtype).uniform_(low, high).item()
+                scalar1 = torch.tensor(1, dtype=dtype).uniform_(low, high).item()
+            else:
+                scalar0 = torch.tensor(1, dtype=dtype).random_(low, high).item()
+                scalar1 = torch.tensor(1, dtype=dtype).random_(low, high).item()
+            input_info.update({arg0_name: scalar0, arg1_name: scalar1})
+            yield input_info
+
+
+def gen_clip_args(input_shapes, low=-100, high=100, dtype=torch.bfloat16):
+    for input_info in gen_two_scalar_args(
+        input_shapes, "low", "high", low, high, dtype
+    ):
+        if input_info["low"] > input_info["high"]:
+            input_info["low"], input_info["high"] = (
+                input_info["high"],
+                input_info["low"],
+            )
+        yield input_info
+
+
+def gen_threshold_args(input_shapes, low=-100, high=100, dtype=torch.bfloat16):
+    for input_info in gen_two_scalar_args(
+        input_shapes, "threshold", "value", low, high, dtype
+    ):
+        yield input_info
+
+
+def gen_polyval_args(input_shapes, max_num_coeffs=10, low=-100, high=100):
+    for input_info in gen_dtype_layout_device(input_shapes):
+        if input_info is not None:
+            num_coeffs = (
+                torch.tensor(1, dtype=torch.int).random_(1, max_num_coeffs + 1).item()
+            )
+            coeffs = torch.Tensor(num_coeffs).uniform_(low, high).tolist()
+            input_info.update({"coeffs": coeffs})
+            yield input_info
+
+
+def gen_arange_args(input_shapes, low=-100, high=100):
+    for input_info in gen_two_scalar_args(
+        input_shapes, "start", "end", low, high, torch.int
+    ):
+        if input_info["start"] > input_info["end"]:
+            input_info["start"], input_info["end"] = (
+                input_info["end"],
+                input_info["start"],
+            )
+        elif input_info["start"] == input_info["end"]:
+            input_info["end"] += 1
+        input_info["step"] = (
+            torch.tensor(1, dtype=torch.int)
+            .random_(1, input_info["end"] - input_info["start"] + 1)
+            .item()
+        )
+
+        yield input_info

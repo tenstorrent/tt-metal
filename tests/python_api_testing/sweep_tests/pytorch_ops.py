@@ -29,13 +29,13 @@ def where(x, y, z, *args, **kwargs):
     return torch.where(x > 0, y, z)
 
 
-def arange(x, *args, **kwargs):
-    return torch.arange(kwargs["start"], kwargs["end"], kwargs.get("step", 1))
+def arange(x, *args, start, end, step=1, **kwargs):
+    return torch.arange(start, end, step)
 
 
 # Unary Ops
-def hypot(x, *args, **kwargs):
-    return torch.hypot(x, x)
+def hypot(x, y, *args, **kwargs):
+    return torch.hypot(x, y)
 
 
 def cbrt(x, *args, **kwargs):
@@ -53,9 +53,7 @@ def deg2rad(x, *args, **kwargs):
     return result
 
 
-def threshold(x, *args, **kwargs):
-    threshold = kwargs.pop("threshold")
-    value = kwargs.pop("value")
+def threshold(x, *args, threshold, value, **kwargs):
     result = torch.threshold(x, threshold, value)
     return result
 
@@ -70,34 +68,28 @@ def hardtanh(x, *args, **kwargs):
     return result
 
 
-def clip(x, *args, **kwargs):
-    low = kwargs["low"]
-    high = kwargs["high"]
+def clip(x, *args, low, high, **kwargs):
     result = torch.clip(x, low, high)
     return result
 
 
-def power(x, *args, **kwargs):
-    exponent = kwargs["exponent"]
+def power(x, *args, exponent, **kwargs):
     result = x**exponent
     return result
 
 
-def polyval(x, *args, **kwargs):
-    coeffs = kwargs["coeffs"]
+def polyval(x, *args, coeffs, **kwargs):
     result = x * 0.0
     for coeff in coeffs:
         result = result * x + coeff
     return result
 
 
-def relu_max(x, *args, **kwargs):
-    upper_limit = kwargs["upper_limit"]
+def relu_max(x, *args, upper_limit, **kwargs):
     return torch.relu(torch.min(x, torch.tensor(upper_limit)))
 
 
-def relu_min(x, *args, **kwargs):
-    lower_limit = kwargs["lower_limit"]
+def relu_min(x, *args, lower_limit, **kwargs):
     return torch.max(x, torch.tensor(lower_limit))
 
 
@@ -225,26 +217,22 @@ def silu(x, *args, **kwargs):
     return torch.nn.functional.silu(x)
 
 
-def div_unary(x, *args, **kwargs):
-    scalar = kwargs["scalar"]
+def div_unary(x, *args, scalar, **kwargs):
     result = torch.div(x, scalar)
     return result
 
 
-def mul_unary(x, *args, **kwargs):
-    scalar = kwargs["scalar"]
+def mul_unary(x, *args, scalar, **kwargs):
     result = torch.mul(x, scalar)
     return result
 
 
-def sub_unary(x, *args, **kwargs):
-    scalar = kwargs["scalar"]
+def sub_unary(x, *args, scalar, **kwargs):
     result = torch.sub(x, scalar)
     return result
 
 
-def add_unary(x, *args, **kwargs):
-    scalar = kwargs["scalar"]
+def add_unary(x, *args, scalar, **kwargs):
     result = torch.add(x, scalar)
     return result
 
@@ -259,8 +247,7 @@ def ones_like(x, *args, **kwargs):
     return result
 
 
-def full_like(x, *args, **kwargs):
-    scalar = kwargs["scalar"]
+def full_like(x, *args, scalar, **kwargs):
     result = torch.full_like(x, scalar)
     return result
 
@@ -275,20 +262,13 @@ def ones(x, *args, **kwargs):
     return result
 
 
-def full(x, *args, **kwargs):
-    scalar = kwargs["scalar"]
+def full(x, *args, scalar, **kwargs):
     result = torch.full(x.shape, scalar)
     return result
 
 
 ## Trinary op
-def mac(x, *args, **kwargs):
-    if len(args) == 0:
-        y = x
-        z = x
-    else:
-        y = args[0]
-        z = args[1]
+def mac(x, y, z, *args, **kwargs):
     return x * y + z
 
 
@@ -316,8 +296,10 @@ def mul(x, y, *args, **kwargs):
 def matmul(x, y, *args, **kwargs):
     return torch.matmul(x, y)
 
+
 def outer(x, y, *args, **kwargs):
     return torch.outer(x.squeeze(), y.squeeze())
+
 
 def reduce_sum(x, dims=None, keepdim=True, *args, **kwargs):
     return torch.sum(x, dims, keepdim)
@@ -335,15 +317,11 @@ def transpose(x, dim0=-2, dim1=-1, *args, **kwargs):
     return torch.transpose(x, dim0, dim1)
 
 
-def permute(x, *args, **kwargs):
-    assert "permute_dims" in kwargs
-    permute_dims = kwargs["permute_dims"]
+def permute(x, *args, permute_dims, **kwargs):
     return torch.permute(x, permute_dims)
 
 
-def reshape(x, *args, **kwargs):
-    assert "reshape_dims" in kwargs
-    reshape_dims = kwargs["reshape_dims"]
+def reshape(x, *args, reshape_dims, **kwargs):
     return torch.reshape(x, reshape_dims)
 
 
@@ -391,15 +369,7 @@ def untilize_with_unpadding(x, output_tensor_start, output_tensor_end, *args, **
 ################################################
 #################### Tensor ####################
 ################################################
-def pad(x, *args, **kwargs):
-    assert "output_tensor_shape" in kwargs
-    assert "input_tensor_start" in kwargs
-    assert "pad_value" in kwargs
-
-    output_tensor_shape = kwargs["output_tensor_shape"]
-    input_tensor_start = kwargs["input_tensor_start"]
-    pad_value = kwargs["pad_value"]
-
+def pad(x, *args, output_tensor_shape, input_tensor_start, pad_value, **kwargs):
     input_tensor_shape = x.shape
     input_tensor_end = tuple(
         input_tensor_start[i] + input_tensor_shape[i]
@@ -416,13 +386,7 @@ def pad(x, *args, **kwargs):
     return out
 
 
-def unpad(x, *args, **kwargs):
-    assert "output_tensor_start" in kwargs
-    assert "output_tensor_end" in kwargs
-
-    output_tensor_start = kwargs["output_tensor_start"]
-    output_tensor_end = kwargs["output_tensor_end"]
-
+def unpad(x, *args, output_tensor_start, output_tensor_end, **kwargs):
     out = x[
         output_tensor_start[0] : output_tensor_end[0] + 1,
         output_tensor_start[1] : output_tensor_end[1] + 1,

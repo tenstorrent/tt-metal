@@ -89,16 +89,6 @@ def comp_allclose(golden, calculated, rtol=1e-05, atol=1e-08):
     return torch.allclose(golden, calculated, rtol, atol, True), output_str
 
 
-def comp_allclose_nortol(golden, calculated, atol=1e-08):
-    if golden.dtype != calculated.dtype:
-        calculated = calculated.type(golden.dtype)
-
-    return (
-        torch.allclose(golden, calculated, atol=atol, equal_nan=False),
-        "torch.allclose",
-    )
-
-
 def comp_pcc(golden, calculated, pcc=0.99):
     if golden.dtype != calculated.dtype:
         calculated = calculated.type(golden.dtype)
