@@ -28,56 +28,12 @@ from python_api_testing.models.llama.llama_layer_norm import TtLlamaRMSNorm
 from python_api_testing.models.llama.llama_decoder import TtLlamaDecoderLayer
 from utility_functions_new import comp_pcc
 
-
-class TtLlamaDecoderModelStacked(torch.nn.Module):
-    def __init__(
-        self,
-        device,
-        state_dict,
-        base_url,
-        max_position_embeddings,
-        config,
-        decoder_ids,
-    ):
-        super().__init__()
-        self.decoder_list = torch.nn.Sequential(
-            *[
-                TtLlamaDecoderLayer(
-                    device,
-                    state_dict,
-                    base_url,
-                    decoder_idx,
-                    max_position_embeddings,
-                    config,
-                )
-                for decoder_idx in decoder_ids
-            ]
-        )
-
-    def forward(self, x, y):
-        result = x
-        for idx, decoder_layer in enumerate(self.decoder_list):
-            result = decoder_layer(hidden_states=result, position_ids=y)[0]
-
-        return result
-
-
-class PytorchLlamaDecoderModelStacked(torch.nn.Module):
-    def __init__(self, hf_reference_model, decoder_ids):
-        super().__init__()
-        self.decoder_list = torch.nn.Sequential(
-            *[
-                hf_reference_model.model.layers[decoder_idx]
-                for decoder_idx in decoder_ids
-            ]
-        )
-
-    def forward(self, x, y):
-        result = x
-        for idx, decoder_layer in enumerate(self.decoder_list):
-            result = decoder_layer(hidden_states=result, position_ids=y)[0]
-
-        return result
+from python_api_testing.models.llama_split.tt.stacked_decoders import (
+    TtLlamaDecoderModelStacked,
+)
+from python_api_testing.models.llama_split.reference.cpu_stacked_decoders import (
+    PytorchLlamaDecoderModelStacked,
+)
 
 
 def run_test_llama_decoder_inference(
@@ -94,6 +50,7 @@ def run_test_llama_decoder_inference(
     pcc,
 ):
     # stack decoders
+    start = 0
     decoder_stack_list = [i for i in range(num_decoders + 1)]
 
     # get positions_ids values
@@ -125,7 +82,8 @@ def run_test_llama_decoder_inference(
         base_url,
         max_position_embeddings,
         configuration,
-        decoder_stack_list,
+        start,
+        num_decoders,
     )
 
     tt_out = tt_LlamaDecoder_model(x=tt_llama_input, y=position_ids)
@@ -154,16 +112,16 @@ _batch = 1
 _seq_len = 32
 _max_position_embeddings = 2048
 _on_weka = False
+_num_decoders = 4
 # num_decoders - number of consecutive decoders
 # parameters --------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    "num_decoders, pcc",
-    ((8, 0.98),),
+    "pcc",
+    ((0.98),),
 )
 def test_llama_decoder_inference(
-    num_decoders,
     pcc,
 ):
     # set parameters ================================================================
@@ -174,6 +132,7 @@ def test_llama_decoder_inference(
     seq_len = _seq_len
     max_position_embeddings = _max_position_embeddings
     on_weka = _on_weka
+    num_decoders = _num_decoders
 
     # Prepare input ========================================================================
     llama_input = (torch.rand(batch, seq_len, 4096) * 2) - 1
