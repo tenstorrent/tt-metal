@@ -4,6 +4,9 @@ from loguru import logger
 
 
 def get_atol_rtol_pcc(golden, calculated):
+    if not (golden.is_floating_point() or calculated.is_floating_point()):
+        golden = golden.to(torch.float)
+        calculated = calculated.to(torch.float)
     # Calculate atol and rtol
     cal_atol = torch.max(torch.abs(golden - calculated)).item()
     cal_rtol = torch.max(torch.abs(golden - calculated) / torch.abs(calculated)).item()

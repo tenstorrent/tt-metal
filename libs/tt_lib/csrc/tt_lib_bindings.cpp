@@ -94,6 +94,14 @@ void TensorModule(py::module &m_tensor) {
         .value("ADD", BcastOpMath::Enum::ADD)
         .value("SUB", BcastOpMath::Enum::SUB)
         .value("MUL", BcastOpMath::Enum::MUL);
+    /** TODO: add these to bcast ops - good to have not required
+        .value("GT", BcastOpMath::Enum::GT)
+        .value("LT", BcastOpMath::Enum::LT)
+        .value("GE", BcastOpMath::Enum::GE)
+        .value("LE", BcastOpMath::Enum::LE)
+        .value("EQ", BcastOpMath::Enum::EQ)
+        .value("NEQ", BcastOpMath::Enum::NE);
+    */
 
     py::enum_<BcastOpDim::Enum>(m_tensor, "BcastOpDim")
         .value("H", BcastOpDim::Enum::H)
@@ -911,7 +919,7 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     // *** eltwise binary ***
-    m_tensor.def("add", &add, R"doc(
+    m_tensor.def("add", add, R"doc(
         Perform an eltwise-binary add on two tensors.
 
         Both input tensors must have BFLOAT16 data type, and be of equal shape.
@@ -927,7 +935,7 @@ void TensorModule(py::module &m_tensor) {
         +----------+----------------------+-----------+------------------------------+----------+
     )doc");
 
-    m_tensor.def("sub", &sub, R"doc(
+    m_tensor.def("sub", sub, R"doc(
         Perform an eltwise-binary sub (``arg0 - arg1``) on two tensors.\
 
         Both input tensors must have BFLOAT16 data type, and be of equal shape.
@@ -943,7 +951,7 @@ void TensorModule(py::module &m_tensor) {
         +----------+----------------------+-----------+------------------------------+----------+
     )doc");
 
-    m_tensor.def("mul", &mul, R"doc(
+    m_tensor.def("mul", mul, R"doc(
         Perform an eltwise-binary mul on two tensors.
 
         Both input tensors must have BFLOAT16 data type, and be of equal shape.
@@ -958,6 +966,104 @@ void TensorModule(py::module &m_tensor) {
         | arg1     | Second tensor to mul | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
         +----------+----------------------+-----------+------------------------------+----------+
     )doc");
+
+
+    m_tensor.def("gt", gt, R"doc(
+        Perform an eltwise-binary greater-than, >, on two tensors.
+
+        Both input tensors must have BFLOAT16 data type, and be of equal shape.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+----------------------+-----------+------------------------------+----------+
+        | Argument | Description          | Data type | Valid range                  | Required |
+        +==========+======================+===========+==============================+==========+
+        | arg0     | First tensor to add  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+        | arg1     | Second tensor to add | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+    )doc");
+
+    m_tensor.def("lt", lt, R"doc(
+        Perform an eltwise-binary less-than, <, on two tensors.
+
+        Both input tensors must have BFLOAT16 data type, and be of equal shape.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+----------------------+-----------+------------------------------+----------+
+        | Argument | Description          | Data type | Valid range                  | Required |
+        +==========+======================+===========+==============================+==========+
+        | arg0     | First tensor to add  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+        | arg1     | Second tensor to add | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+    )doc");
+
+    m_tensor.def("lte", lte, R"doc(
+        Perform an eltwise-binary less-than, <=, on two tensors.
+
+        Both input tensors must have BFLOAT16 data type, and be of equal shape.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+----------------------+-----------+------------------------------+----------+
+        | Argument | Description          | Data type | Valid range                  | Required |
+        +==========+======================+===========+==============================+==========+
+        | arg0     | First tensor to add  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+        | arg1     | Second tensor to add | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+    )doc");
+
+    m_tensor.def("gte", gte, R"doc(
+        Perform an eltwise-binary greater-than, >=, on two tensors.
+
+        Both input tensors must have BFLOAT16 data type, and be of equal shape.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+----------------------+-----------+------------------------------+----------+
+        | Argument | Description          | Data type | Valid range                  | Required |
+        +==========+======================+===========+==============================+==========+
+        | arg0     | First tensor to add  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+        | arg1     | Second tensor to add | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+    )doc");
+
+    m_tensor.def("eq", eq, R"doc(
+        Perform an eltwise-binary equal, ==, on two tensors.
+
+        Both input tensors must have BFLOAT16 data type, and be of equal shape.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+----------------------+-----------+------------------------------+----------+
+        | Argument | Description          | Data type | Valid range                  | Required |
+        +==========+======================+===========+==============================+==========+
+        | arg0     | First tensor to add  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+        | arg1     | Second tensor to add | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+    )doc");
+
+    m_tensor.def("ne", ne, R"doc(
+        Perform an eltwise-binary not equal, !=, on two tensors.
+
+        Both input tensors must have BFLOAT16 data type, and be of equal shape.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+----------------------+-----------+------------------------------+----------+
+        | Argument | Description          | Data type | Valid range                  | Required |
+        +==========+======================+===========+==============================+==========+
+        | arg0     | First tensor to add  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+        | arg1     | Second tensor to add | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+----------------------+-----------+------------------------------+----------+
+    )doc");
+
 
     m_tensor.def("max", &tt::tt_metal::max, R"doc(
         Perform an eltwise-binary max on two tensors.
@@ -1365,6 +1471,40 @@ void TensorModule(py::module &m_tensor) {
         | arg0     | Tensor tanh is applied to  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
         +----------+----------------------------+-----------+------------------------------+----------+
     )doc");
+
+#if 0
+    m_tensor.def("bitwise_complement", &bitwise_complement, R"doc(
+        Returns tensor with the bitwise complement of elements of the input tensor ``arg0``.
+
+        Input tensor must have UINT32 data type.
+
+        Output tensor will have UINT32 data type.
+
+        +----------+---------------------------+-----------+------------------------------+----------+
+        | Argument | Description               | Data type | Valid range                  | Required |
+        +==========+===========================+===========+==============================+==========+
+        | arg0     | Tensor bitwise complement |           |                              |          |
+        |          | '~' is applied to         | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+---------------------------+-----------+------------------------------+----------+
+    )doc");
+
+
+    m_tensor.def("logical_not", &logical_not, R"doc(
+        Returns tensor with the logical notof elements of the input tensor ``arg0``.
+
+        Input tensor must have UINT32 data type.
+
+        Output tensor will have UINT32 data type.
+
+        +----------+---------------------------+-----------+------------------------------+----------+
+        | Argument | Description               | Data type | Valid range                  | Required |
+        +==========+===========================+===========+==============================+==========+
+        | arg0     | Tensor logical not        |           |                              |          |
+        |          | '!' is applied to         | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+---------------------------+-----------+------------------------------+----------+
+    )doc");
+#endif
+
 
 #if 0
     m_tensor.def("mean", &mean, R"doc(

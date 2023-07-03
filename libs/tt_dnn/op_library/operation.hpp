@@ -1,6 +1,8 @@
 #pragma once
 
 #include "tt_metal/host_api.hpp"
+#include <experimental/type_traits>
+
 #include <libs/tensor/tensor.hpp>
 
 #include "third_party/magic_enum/magic_enum.hpp"
@@ -10,6 +12,11 @@
 #include <experimental/type_traits>
 
 namespace tt::tt_metal {
+
+template <typename T>
+bool is_power_of_two(T val) {
+    return (val & (val-1))==T(0); 
+}
 
 namespace operation {
 

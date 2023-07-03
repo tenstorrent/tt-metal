@@ -90,6 +90,22 @@ def clip(x, *args, low, high, **kwargs):
     result = torch.clip(x, low, high)
     return result
 
+# Unary Ops and Composite Unary
+def bitwise_complement(x, *args, **kwargs):
+    result = torch.bitwise_not(x)
+    return result
+
+def logical_not(x, *args, **kwargs):
+    result = torch.logical_not(x).to(torch.int32)
+    return result
+
+def cosh(x, *args, **kwargs):
+    result = torch.cosh(x)
+    return result
+
+def sinh(x, *args, **kwargs):
+    result = torch.sinh(x)
+    return result
 
 def power(x, *args, exponent, **kwargs):
     result = x**exponent
@@ -295,6 +311,32 @@ def mac(x, y, z, *args, **kwargs):
 
 
 ## Binary Ops
+
+
+def lte(x, y, *args, **kwargs):
+    return x <= y
+
+
+def lt(x, y, *args, **kwargs):
+    return x < y
+
+
+def gte(x, y, *args, **kwargs):
+    return x >= y
+
+
+def gt(x, y, *args, **kwargs):
+    return x > y
+
+
+def eq(x, y, *args, **kwargs):
+    return x == y
+
+
+def ne(x, y, *args, **kwargs):
+    return x != y
+
+
 def max(x, y, *args, **kwargs):
     return torch.max(x, y)
 

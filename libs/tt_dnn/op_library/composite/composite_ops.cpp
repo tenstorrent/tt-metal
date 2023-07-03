@@ -271,6 +271,22 @@ Tensor max(const Tensor &input_a, const Tensor &input_b)
   return result;
 }
 
+//sinh[x] = (exp[x] - exp[-x])/2
+Tensor sinh(const Tensor& input_a) {
+  Tensor e_pos_x = exp(input_a);
+  Tensor e_neg_x = exp(neg(input_a));
+  Tensor nr_term = sub(e_pos_x,e_neg_x);
+  return std::move( bcast(nr_term ,mk_scalar(0.5f),BcastOpMath::MUL, BcastOpDim::HW) );
+}
+
+//cosh[x] = (exp[x] + exp[-x])/2
+Tensor cosh(const Tensor& input_a) {
+  Tensor e_pos_x = exp(input_a);
+  Tensor e_neg_x = exp(neg(input_a));
+  Tensor nr_term = add(e_pos_x,e_neg_x);
+  return std::move( bcast(nr_term ,mk_scalar(0.5f),BcastOpMath::MUL, BcastOpDim::HW) );
+}
+
 //these ops need more polish - TBD
 #if 0
 /**
@@ -438,6 +454,17 @@ Tensor arange(int32_t start, int32_t end, int32_t step /*= 1*/) {
   return tt::numpy::arange<bfloat16>(start, end, step);
 }
 
+//min(a,b)
+//Tensor min(const Tensor &input_a,const Tensor &input_b) {
+//  Tensor result = where( sub(a,b), a, b );
+//  return result;
+//}
+
+//max(a,b)
+//Tensor max(const Tensor &input_a,const Tensor &input_b) {
+//  Tensor result = where( sub(a,b), b, a );
+//  return result;
+//}
 
 /**
  * outer product = matrix multiply when a = [1,1,N,1] and b = [1,1,1,M]

@@ -1097,6 +1097,7 @@ inline void calculate_abs()
     }
 }
 
+
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_sign()
 {

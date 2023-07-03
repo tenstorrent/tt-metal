@@ -3,6 +3,7 @@ import sys
 import torch
 from pathlib import Path
 from functools import partial
+from itertools import product
 
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
@@ -128,6 +129,42 @@ def test_run_eltwise_mul_test(input_shapes, pcie_slot, function_level_defaults):
     comparison_func = partial(comparison_funcs.comp_pcc)
     run_single_pytorch_test(
         "eltwise-mul",
+        input_shapes,
+        datagen_func,
+        comparison_func,
+        pcie_slot,
+    )
+
+
+@pytest.mark.parametrize(
+    "cmp_kind, input_shapes, pcie_slot",
+    (
+        list(
+            product(
+                ("lt", "gt", "lte", "gte", "ne", "eq"),
+                (
+                    [[1, 1, 32, 32], [1, 1, 32, 32]],
+                    [[1, 1, 64, 32], [1, 1, 64, 32]],
+                    [[1, 1, 320, 384],[1, 1, 320, 384]],
+                ),  # single, multi core sizes
+                (0,),
+            )
+        )
+    ),
+)
+def test_run_eltwise_cmp_test(
+    cmp_kind, input_shapes, pcie_slot, function_level_defaults
+):
+    datagen_func = [
+        generation_funcs.gen_func_with_cast(
+            partial(generation_funcs.gen_randint, low=-100, high=100), torch.float32
+        )
+    ] * 2
+    comparison_func = partial(comparison_funcs.comp_pcc)
+    #if cmp_kind == 'eq':
+    #    comparison_func = partial(comparison_funcs.comp_allclose_nortol)
+    run_single_pytorch_test(
+        f"eltwise-{cmp_kind}",
         input_shapes,
         datagen_func,
         comparison_func,

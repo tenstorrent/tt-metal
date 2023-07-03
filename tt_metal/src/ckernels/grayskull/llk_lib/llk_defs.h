@@ -124,8 +124,11 @@ enum SfpuType
   unused
 };
 
+
 enum SfpiTestType
 {
+  logical_not,
+  bitwise_complement,
   test1,
   test2,
   test3,

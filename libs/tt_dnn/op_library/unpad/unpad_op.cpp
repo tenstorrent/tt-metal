@@ -69,7 +69,7 @@ operation::ProgramWithCallbacks unpad_rm(const Tensor &a, Tensor& output, const 
     std::vector<uint32_t> compile_time_args_vec;
     // Reader compile-time args
     // Data is 32 byte aligned
-    bool src_stick_size_is_power_of_two = (ceil(log2(src_stick_size)) == floor(log2(src_stick_size)));
+    bool src_stick_size_is_power_of_two = is_power_of_two(src_stick_size);
     if (src_stick_size_is_power_of_two) {
         // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
         compile_time_args_vec.push_back(1);
@@ -80,7 +80,7 @@ operation::ProgramWithCallbacks unpad_rm(const Tensor &a, Tensor& output, const 
     }
 
 
-    bool dst_stick_size_is_power_of_two = (ceil(log2(dst_stick_size)) == floor(log2(dst_stick_size)));
+    bool dst_stick_size_is_power_of_two = is_power_of_two(dst_stick_size);
     if (dst_stick_size_is_power_of_two) {
         // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
         compile_time_args_vec.push_back(1);
@@ -209,7 +209,7 @@ operation::ProgramWithCallbacks unpad_tile(const Tensor &a, Tensor& output, cons
     std::vector<uint32_t> compile_time_args_vec;
     // Reader compile-time args
     // Data is 32 byte aligned
-    bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
+    bool tile_size_is_power_of_two = is_power_of_two(single_tile_size);
     if (tile_size_is_power_of_two) {
         // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
         compile_time_args_vec.push_back(1);

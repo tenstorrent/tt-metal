@@ -67,6 +67,23 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_add_unary,
         "pytorch_op": pytorch_ops.add_unary,
     },
+    # Eltwise unary + Composite Unary
+    "eltwise-logical_not": {
+        "tt_lib_op": tt_lib_ops.eltwise_logical_not,
+        "pytorch_op": pytorch_ops.logical_not,
+    },
+    "eltwise-bitwise_complement": {
+        "tt_lib_op": tt_lib_ops.eltwise_bitwise_complement,
+        "pytorch_op": pytorch_ops.bitwise_complement,
+    },
+    "eltwise-sinh": {
+        "tt_lib_op": tt_lib_ops.eltwise_sinh,
+        "pytorch_op": pytorch_ops.sinh,
+    },
+    "eltwise-cosh": {
+        "tt_lib_op": tt_lib_ops.eltwise_cosh,
+        "pytorch_op": pytorch_ops.cosh,
+    },
     "eltwise-ltz": {
         "tt_lib_op": tt_lib_ops.eltwise_ltz,
         "pytorch_op": pytorch_ops.ltz,
@@ -228,6 +245,30 @@ op_map = {
         "pytorch_op": pytorch_ops.tanh,
     },
     # Eltwise binary
+    "eltwise-ne": {
+        "tt_lib_op": tt_lib_ops.eltwise_ne,
+        "pytorch_op": pytorch_ops.ne,
+    },
+    "eltwise-eq": {
+        "tt_lib_op": tt_lib_ops.eltwise_eq,
+        "pytorch_op": pytorch_ops.eq,
+    },
+    "eltwise-lt": {
+        "tt_lib_op": tt_lib_ops.eltwise_lt,
+        "pytorch_op": pytorch_ops.lt,
+    },
+    "eltwise-gt": {
+        "tt_lib_op": tt_lib_ops.eltwise_gt,
+        "pytorch_op": pytorch_ops.gt,
+    },
+    "eltwise-gte": {
+        "tt_lib_op": tt_lib_ops.eltwise_gte,
+        "pytorch_op": pytorch_ops.gte,
+    },
+    "eltwise-lte": {
+        "tt_lib_op": tt_lib_ops.eltwise_lte,
+        "pytorch_op": pytorch_ops.lte,
+    },
     "eltwise-add": {
         "tt_lib_op": tt_lib_ops.eltwise_add,
         "pytorch_op": pytorch_ops.add,

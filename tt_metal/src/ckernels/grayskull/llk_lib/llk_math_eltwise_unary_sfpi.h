@@ -119,3 +119,24 @@ template <DstSync dst_sync = DstSync::SyncFull>
 inline void llk_math_eltwise_unary_sfpi_test14(uint dst_index, uint param0) {
     llk_math_eltwise_unary_sfpi<SfpiTestType::test14, dst_sync>(dst_index, param0);
 }
+
+//Logical Not
+template <DstSync dst_sync = DstSync::SyncFull>
+inline void llk_math_eltwise_unary_sfpi_logical_not(uint dst_index) {
+    llk_math_eltwise_unary_sfpi<SfpiTestType::logical_not, dst_sync>(dst_index);
+}
+
+
+inline void llk_math_eltwise_unary_sfpi_logical_not_init() {
+  llk_math_eltwise_unary_sfpi_init();
+}
+
+//Bitwise Complement
+template <DstSync dst_sync = DstSync::SyncFull>
+inline void llk_math_eltwise_unary_sfpi_bitwise_complement(uint dst_index) {
+  llk_math_eltwise_unary_sfpi<SfpiTestType::bitwise_complement, dst_sync>(dst_index);
+}
+
+inline void llk_math_eltwise_unary_sfpi_bitwise_complement_init() {
+   llk_math_eltwise_unary_sfpi_init();
+}

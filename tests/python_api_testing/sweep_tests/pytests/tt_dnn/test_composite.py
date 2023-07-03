@@ -65,6 +65,8 @@ def custom_compare(*args, **kwargs):
                 "leaky_relu",
                 "hardshrink",
                 "softshrink"
+                "sinh",
+                "cosh"
             ),
             ([[1, 1, 32, 32]], [[1, 3, 320, 64]]),
             (0,),
@@ -80,6 +82,7 @@ def test_run_eltwise_composite_test(
     options["relu_max"] = (-100, +100)
     options["relu_min"] = (-100, +100)
     options["polyval"] = (1, 100)
+
     options["deg2rad"] = (-180, 180)
     options["rad2deg"] = (0, 2 * pi)
     options["hypot"] = (1, 100)
@@ -91,6 +94,10 @@ def test_run_eltwise_composite_test(
     options["softshrink"] = (-100, 100)
     options["leaky_shrink"] = (-100, 100)
     options["softsign"] = (1,100)
+
+    options["sinh"] = (-9, 9)
+    options["cosh"] = options["sinh"]
+
 
     generator = generation_funcs.gen_rand
 
