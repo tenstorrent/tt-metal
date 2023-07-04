@@ -6,6 +6,8 @@ from contextlib import contextmanager
 import dataclasses
 from functools import wraps
 import inspect
+import time
+
 from loguru import logger
 
 import ttnn
@@ -187,6 +189,20 @@ def document_input_tensors(name, function, validate_input_tensors):
     function.__doc__ = f"{doc}\n"
 
 
+def get_devices(arg):
+    devices = set()
+    if isinstance(arg, ttnn.Tensor):
+        if ttnn.has_storage_type_of(arg, ttnn.DEVICE_STORAGE_TYPE):
+            devices.add(arg.device())
+    elif isinstance(arg, (list, tuple)):
+        for element in arg:
+            devices |= get_devices(element)
+    elif isinstance(arg, dict):
+        for value in arg.values():
+            devices |= get_devices(value)
+    return devices
+
+
 REGISTERED_OPERATIONS = set()
 
 
@@ -303,7 +319,18 @@ class Operation:
                             f"Pre-operation hook {hook} returned {hook_return_value} but must return None"
                         )
 
+                if ttnn.TTNN_ENABLE_LOGGING:
+                    start = time.time()
+                    logger.info(f"Started {self.name:50}")
+
                 output = decorated_function(*function_args, **function_kwargs)
+
+                if ttnn.TTNN_ENABLE_LOGGING:
+                    for device in get_devices((function_args, function_kwargs)):
+                        ttnn.synchronize_device(device)
+                    end = time.time()
+                    duration = end - start
+                    logger.info(f"Finished {self.name:50} in {duration:30} seconds")
 
                 for hook in POST_OPERATION_HOOKS:
                     hook_return_value = hook(self, function_args, function_kwargs, output)
