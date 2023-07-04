@@ -23,6 +23,7 @@ void kernel_main() {
 
         #ifndef OPT_READ
 
+        kernel_profiler::mark_time(5);
         for (std::uint32_t j=0; j<num_transactions; j++) {
 
 
@@ -34,7 +35,9 @@ void kernel_main() {
             buffer_dst_addr += transaction_size;
         }
         // wait all reads from all transactions to be flushed (ie received)
+        kernel_profiler::mark_time(6);
         noc_async_read_barrier();
+        kernel_profiler::mark_time(7);
 
         #else
 

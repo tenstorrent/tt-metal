@@ -82,5 +82,5 @@ class Profiler {
         void dumpHostResults(std::string name_append);
 
         //Traverse all cores on the device and dump the device profile results
-        void dumpDeviceResults(tt_cluster *cluster, int pcie_slot, const vector<CoreCoord> &worker_cores);
+        void dumpDeviceResults(tt_cluster *cluster, int pcie_slot, const vector<CoreCoord> &worker_cores, bool flag_NCRISC=true, bool flag_BRISC=true, bool flag_TRISC_0=true, bool flag_TRISC_1=true, bool flag_TRISC_2=true);
 };

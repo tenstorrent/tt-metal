@@ -43,16 +43,19 @@ void kernel_main() {
 
         #else
 
+        kernel_profiler::mark_time(5);
             for (std::uint32_t j=0; j<num_transactions; j++) {
                 std::uint64_t buffer_dst_noc_addr = get_noc_addr(dst_noc_x, dst_noc_y, buffer_dst_addr_);
                 noc_async_write(buffer_src_addr_, buffer_dst_noc_addr, transaction_size_const);
                 buffer_src_addr_ += transaction_size_const;
                 buffer_dst_addr_ += transaction_size_const;
             }
+        kernel_profiler::mark_time(6);
 
         #endif
 
         noc_async_write_barrier();
+        kernel_profiler::mark_time(7);
     }
 
 }

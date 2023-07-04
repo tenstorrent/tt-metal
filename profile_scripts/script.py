@@ -1,18 +1,34 @@
 import sys
 import argparse
+import copy
 
 def profile_issue_barrier(file_name):
     f = open(file_name, "r")
     lines = f.readlines()
     issue = []
     barrier = []
+    buffer = 0
+    transaction = 0
     for line in lines:
-        lst = line.split()
-        issue.append(int(lst[1]))
-        barrier.append(int(lst[-1]))
+        if "Buffer" in line:
+            if len(issue) > 0:
+                issue_avg = sum(issue)/len(issue)
+                barrier_avg = sum(barrier)/len(barrier)
+                print("Buffer: {} Transaction: {} issue: {:.2f} barrier: {:.2f}".format(buffer, transaction, issue_avg, barrier_avg))
+                issue = []
+                barrier = []
+            buffer = int(line.split()[1])
+            transaction = int(line.split()[-1])
+        elif "issue" in line:
+            lst = line.split()
+            issue.append(int(lst[1]))
+            barrier.append(int(lst[-1]))
     issue_avg = sum(issue)/len(issue)
     barrier_avg = sum(barrier)/len(barrier)
-    print("issue: {:.2f} barrier: {:.2f}".format(issue_avg, barrier_avg))
+    print("Buffer: {} Transaction: {} issue: {:.2f} barrier: {:.2f}".format(buffer, transaction, issue_avg, barrier_avg))
+    issue = []
+    barrier = []
+
 
 def print_dram_rw(dic, read_write_bar):
     if read_write_bar:
@@ -86,10 +102,39 @@ def profile_riscv_tensix(file_name, read_write_bar):
             dic[(buffer, transaction)] = time
     print_tensix_bandwidth(dic)
 
+def print_tensix_issue_barrier(file_name):
+    dic_issue = {}
+    dic_barrier = {}
+    f = open(file_name, "r")
+    lines = f.readlines()
+    for line in lines:
+        lst = line.split()
+        if "Buffer" in line:
+            transaction = int(lst[3])
+            buffer = int(lst[1])
+            issue = float(lst[5])
+            barrier = float(lst[-1])
+            dic_issue[(buffer, transaction)] = issue
+            dic_barrier[(buffer, transaction)] = barrier
+        elif "write" in line:
+            print("read")
+            print("issue")
+            print_tensix_bandwidth(dic_issue)
+            print("barrier")
+            print_tensix_bandwidth(dic_barrier)
+            dic = {}
+    print("write")
+    print("issue")
+    print_tensix_bandwidth(dic_issue)
+    print("barrier")
+    print_tensix_bandwidth(dic_barrier)
+
+
+
 def get_args():
     parser = argparse.ArgumentParser('Profile raw results.')
     parser.add_argument("--file-name", help="file to profile")
-    parser.add_argument("--profile-target", choices=["Tensix2Tensix", "DRAM2Tensix", "non_async_readIssueBarrier"], help="profile target choice")
+    parser.add_argument("--profile-target", choices=["Tensix2Tensix", "DRAM2Tensix", "Tensix2Tensix_Issue_Barrier", "Print_Tensix2Tensix_Issue_Barrier"], help="profile target choice")
     parser.add_argument("--read-or-write", choices=["read", "write"], help="read or write choice")
     args = parser.parse_args()
     return args
@@ -103,5 +148,7 @@ if args.profile_target == "Tensix2Tensix":
         profile_riscv_tensix(file_name, 0)
 elif args.profile_target == "DRAM2Tensix":
     profile_riscv_rw_dram(file_name)
-elif args.profile_target == "non_async_readIssueBarrier":
+elif args.profile_target == "Tensix2Tensix_Issue_Barrier":
     profile_issue_barrier(file_name)
+elif args.profile_target == "Print_Tensix2Tensix_Issue_Barrier":
+    print_tensix_issue_barrier(file_name)

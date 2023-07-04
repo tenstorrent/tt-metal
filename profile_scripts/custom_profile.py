@@ -1,5 +1,5 @@
 import sys
-
+import argparse
 
 def print_relative_cycles(file_name):
     f = open(file_name, "r")
@@ -63,7 +63,7 @@ def extract_in0_row_noc_addr(file_name):
         if line[:16] == "in0_row_noc_addr":
             print("noc_async_read({}, {}, dim_x);".format(line.split()[-3], line.split()[-1]))
 
-def profile_noc_async_read_and_barrier_time(file_name):
+def profile_noc_async_read_and_barrier_time_NCRISC(file_name):
     f = open(file_name, "r")
     lines = f.readlines()
     dic_cycle = {}
@@ -74,11 +74,42 @@ def profile_noc_async_read_and_barrier_time(file_name):
             dic_cycle[6] = int(line.split(",")[-1])
         elif "0, 0, 0, NCRISC, 7, " in line:
             dic_cycle[7] = int(line.split(",")[-1])
-    print("issue:", dic_cycle[6]-dic_cycle[5], "barrier: ", dic_cycle[7]-dic_cycle[6])
+    print("issue:", dic_cycle[6]-dic_cycle[5], "barrier:", dic_cycle[7]-dic_cycle[6])
 
-file_name = sys.argv[1]
+def profile_Tensix2Tensix_issue_barrier(file_name, read_or_write):
+    f = open(file_name, "r")
+    lines = f.readlines()
+    dic_cycle = {5:[], 6:[], 7:[]}
+    if read_or_write == "read":
+        prefix = "0, 1, 0, BRISC"
+    elif read_or_write == "write":
+        prefix = "0, 0, 0, NCRISC"
+    for line in lines:
+        if prefix + ", 5, " in line:
+            dic_cycle[5].append(int(line.split(",")[-1]))
+        elif prefix + ", 6, " in line:
+            dic_cycle[6].append(int(line.split(",")[-1]))
+        elif prefix + ", 7, " in line:
+            dic_cycle[7].append(int(line.split(",")[-1]))
+
+    for i in range(4):
+        print("issue:", dic_cycle[6][i]-dic_cycle[5][i], "barrier:", dic_cycle[7][i]-dic_cycle[6][i])
+
+def get_args():
+    parser = argparse.ArgumentParser('Profile raw results.')
+    parser.add_argument("--file-name", help="file to profile")
+    parser.add_argument("--profile-target", choices=["profile_Tensix2Tensix_issue_barrier"], help="profile target choice")
+    parser.add_argument("--read-or-write", choices=["read", "write"], help="read or write choice")
+    args = parser.parse_args()
+    return args
+
+args = get_args()
+file_name = args.file_name
+if args.profile_target == "profile_Tensix2Tensix_issue_barrier":
+    profile_Tensix2Tensix_issue_barrier(file_name, args.read_or_write)
+
 # print_relative_cycles(file_name)
 # test_kernel_profiler_overhead(file_name)
 # profile_test_kernel_profiler_overhead(file_name)
 # extract_in0_row_noc_addr(file_name)
-profile_noc_async_read_and_barrier_time(file_name)
+# profile_noc_async_read_and_barrier_time(file_name)

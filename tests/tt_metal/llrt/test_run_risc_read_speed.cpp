@@ -7,7 +7,7 @@
 #include "utils.hpp"
 #include "common/logger.hpp"
 #include "tensix.h"
-
+#include "tt_metal/host_api.hpp"
 #include "llrt.hpp"
 #include "test_libs/tiles.hpp"
 
@@ -89,6 +89,7 @@ int main(int argc, char** argv)
     std::uint32_t transaction_size;
     std::uint32_t src_noc_x;
     std::uint32_t src_noc_y;
+    std::uint32_t profile;
     try {
         std::tie(arch_name, input_args) =
             test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
@@ -102,6 +103,8 @@ int main(int argc, char** argv)
             test_args::get_command_option_uint32_and_remaining_args(input_args, "--src-noc-x", 1);
         std::tie(src_noc_y, input_args) =
             test_args::get_command_option_uint32_and_remaining_args(input_args, "--src-noc-y", 1);
+        std::tie(profile, input_args) =
+            test_args::get_command_option_uint32_and_remaining_args(input_args, "--profile", 0);
     } catch (const std::exception& e) {
         log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
     }
@@ -113,6 +116,10 @@ int main(int argc, char** argv)
 
 
     try {
+        Profiler tt_metal_profiler = Profiler();
+        std::vector<CoreCoord> core;
+        core.push_back({2,1});
+
         tt_device_params default_params;
         tt_cluster *cluster = new tt_cluster;
         cluster->open_device(arch, target_type, {0}, sdesc_file);
@@ -121,7 +128,10 @@ int main(int argc, char** argv)
 
         // the first worker core starts at (1,1)
         pass = run_risc_read_speed(cluster, 0, {2,1}, buffer_size, num_repetitions, transaction_size, {src_noc_x,src_noc_y});
-
+        if (profile) {
+            log_info(tt::LogBuildKernels, "Dump profile results");
+            tt_metal_profiler.dumpDeviceResults(cluster, 0, core);
+        }
         cluster->close_device();
         delete cluster;
 

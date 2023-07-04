@@ -99,34 +99,35 @@ void Profiler::dumpHostResults(std::string name_prepend)
 void Profiler::dumpDeviceResults (
         tt_cluster *cluster,
         int pcie_slot,
-        const vector<CoreCoord> &worker_cores){
+        const vector<CoreCoord> &worker_cores,
+        bool flag_NCRISC, bool flag_BRISC, bool flag_TRISC_0, bool flag_TRISC_1, bool flag_TRISC_2){
 
     for (const auto &worker_core : worker_cores) {
-        readRiscProfilerResults(
+        if (flag_NCRISC) readRiscProfilerResults(
             cluster,
             pcie_slot,
             worker_core,
             "NCRISC",
             PRINT_BUFFER_NC);
-        readRiscProfilerResults(
+        if (flag_BRISC) readRiscProfilerResults(
             cluster,
             pcie_slot,
             worker_core,
             "BRISC",
             PRINT_BUFFER_BR);
-        readRiscProfilerResults(
+        if (flag_TRISC_0) readRiscProfilerResults(
             cluster,
             pcie_slot,
             worker_core,
             "TRISC_0",
             PRINT_BUFFER_T0);
-	readRiscProfilerResults(
+	if (flag_TRISC_1) readRiscProfilerResults(
 	    cluster,
 	    pcie_slot,
 	    worker_core,
 	    "TRISC_1",
 	    PRINT_BUFFER_T1);
-	readRiscProfilerResults(
+	if (flag_TRISC_2) readRiscProfilerResults(
 	    cluster,
 	    pcie_slot,
 	    worker_core,
@@ -154,6 +155,7 @@ void Profiler::readRiscProfilerResults(
             PRINT_BUFFER_SIZE);
 
     end_index = profile_buffer[kernel_profiler::BUFFER_END_INDEX];
+    // std::cout << "end_index" << end_index << std::endl;
     TT_ASSERT (end_index < (PRINT_BUFFER_SIZE/sizeof(uint32_t)));
     dropped_marker_counter = profile_buffer[kernel_profiler::DROPPED_MARKER_COUNTER];
 
