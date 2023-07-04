@@ -70,7 +70,17 @@ CC ?= gcc
 CXX ?= g++
 CFLAGS ?= -MMD $(WARNINGS) -I. $(CONFIG_CFLAGS) -mavx2 -DBUILD_DIR=\"$(OUT)\"
 CXXFLAGS ?= --std=c++17 -fvisibility-inlines-hidden -Werror
-LDFLAGS ?= $(CONFIG_LDFLAGS) -Wl,-rpath,$(PREFIX)/lib -L$(LIBDIR)/tools -L$(LIBDIR) -ldl
+LDFLAGS ?= $(CONFIG_LDFLAGS) -Wl,-rpath,$(PREFIX)/lib -L$(TT_METAL_HOME)/tt_metal/third_party/common_lib -L$(LIBDIR)/tools -L$(LIBDIR) -ldl  \
+	-lz \
+	-l:libboost_system.so.1.65.1 \
+	-l:libboost_filesystem.so.1.65.1 \
+	-l:libicudata.so.60 \
+	-l:libicui18n.so.60 \
+	-l:libicuuc.so.60 \
+	-l:libboost_thread.so.1.65.1 \
+	-l:libboost_regex.so.1.65.1 \
+	-lpthread \
+	-latomic
 SHARED_LIB_FLAGS = -shared -fPIC
 STATIC_LIB_FLAGS = -fPIC
 ifeq ($(findstring clang,$(CC)),clang)
@@ -93,10 +103,10 @@ LIBS_TO_BUILD = \
 	build_kernels_for_riscv \
 	device \
 	llrt \
+	tools \
 	tt_metal \
 	python_env \
-	libs \
-	tools
+	libs
 
 ifdef TT_METAL_ENV_IS_DEV
 LIBS_TO_BUILD += \

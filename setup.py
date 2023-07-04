@@ -147,15 +147,20 @@ buda_eager_lib_C = Extension("tt_lib._C", sources=[])
 
 ext_modules = [buda_eager_lib_C]
 
-packages = find_namespace_packages(
+# Include tt_metal_C for kernels and src/ and tools
+packages = [*find_namespace_packages(
     where="libs",
-)
+), "tt_metal_C"]
 
 setup(
     url="http://www.tenstorrent.com",
     use_scm_version=get_version(buda_eager_build_config),
     packages=packages,
-    package_dir={"": "libs"},
+    package_dir={
+        "": "libs",
+        "tt_metal_C": "tt_metal",
+    },
+    include_package_data=True,
     long_description_content_type="text/markdown",
     ext_modules=ext_modules,
     cmdclass=dict(build_ext=BUDAEagerBuild),

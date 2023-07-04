@@ -20,7 +20,7 @@ libs/tensor: $(TENSOR_LIB)
 
 $(TENSOR_LIB): $(COMMON_LIB) $(TT_METAL_LIB) $(TENSOR_OBJS)
 	@mkdir -p $(LIBDIR)
-	$(CXX) $(TENSOR_CFLAGS) $(CXXFLAGS) $(SHARED_LIB_FLAGS) -o $@ $^ $(LDFLAGS) $(TENSOR_LDFLAGS)
+	ar rcs -o $@ $(TENSOR_OBJS)
 
 $(OBJDIR)/libs/tensor/%.o: libs/tensor/%.cpp
 	@mkdir -p $(@D)

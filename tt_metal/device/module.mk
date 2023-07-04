@@ -1,5 +1,5 @@
 # Every variable in subdir must be prefixed with subdir (emulating a namespace)
-DEVICE_LIB = $(LIBDIR)/libdevice.so
+DEVICE_LIB = $(LIBDIR)/libdevice.a
 DEVICE_SRCS = \
 	tt_metal/device/tt_device.cpp \
 	tt_metal/device/tt_memory.cpp \
@@ -109,9 +109,12 @@ endif
 # Each module has a top level target as the entrypoint which must match the subdir name
 device: $(DEVICE_LIB)
 
+# Device can be static now since we use compile-time flags for TT_METAL_ARCH
+# anyway
 $(DEVICE_LIB): $(COMMON_LIB) $(DEVICE_OBJS)
 	@mkdir -p $(LIBDIR)
-	$(DEVICE_CXX) $(DEVICE_CXXFLAGS) $(SHARED_LIB_FLAGS) -o $(DEVICE_LIB) $^ $(LDFLAGS) $(DEVICE_LDFLAGS)
+	# $(DEVICE_CXX) $(DEVICE_CXXFLAGS) $(SHARED_LIB_FLAGS) -o $(DEVICE_LIB) $^ $(LDFLAGS) $(DEVICE_LDFLAGS)
+	ar rcs -o $@ $(DEVICE_OBJS)
 
 $(OBJDIR)/tt_metal/device/%.o: tt_metal/device/%.cpp
 	@mkdir -p $(@D)

@@ -8,3 +8,6 @@ yamllint==1.32.0
 # testing
 pytest==7.2.2
 jsbeautifier==1.14.7
+
+# For docs
+-r ../../docs/requirements-docs.txt

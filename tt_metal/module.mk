@@ -15,9 +15,11 @@ include $(TT_METAL_HOME)/tt_metal/python_env/module.mk
 include $(TT_METAL_HOME)/tt_metal/programming_examples/module.mk
 
 TT_METAL_LIB = $(LIBDIR)/libtt_metal.a
+# For future release as a shared library
+# TT_METAL_LIB = $(LIBDIR)/libtt_metal.so
 TT_METAL_DEFINES = -DGIT_HASH=$(shell git rev-parse HEAD)
 TT_METAL_INCLUDES = $(COMMON_INCLUDES)
-TT_METAL_LDFLAGS = -L$(TT_METAL_HOME) -lcommon -lbuild_kernels_for_riscv -lllrt -ltt_metal_impl -ltt_metal_detail
+TT_METAL_LDFLAGS = $(LDFLAGS) -L$(TT_METAL_HOME) -lcommon -lbuild_kernels_for_riscv -lllrt -ltt_metal_impl -ltt_metal_detail
 TT_METAL_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
 
 include $(TT_METAL_HOME)/tt_metal/impl/module.mk
@@ -34,9 +36,14 @@ TT_METAL_DEPS = $(addprefix $(OBJDIR)/, $(TT_METAL_SRCS:.cpp=.d))
 # Each module has a top level target as the entrypoint which must match the subdir name
 tt_metal: $(TT_METAL_LIB)
 
-$(TT_METAL_LIB): $(COMMON_LIB) $(TT_METAL_OBJS) $(TT_METAL_IMPL_LIB) $(TT_METAL_DETAIL_LIB) $(LLRT_LIB) $(BUILD_KERNELS_FOR_RISCV_LIB)
+tt_metal_objs: $(COMMON_OBJS) $(TT_METAL_OBJS) $(DEVICE_OBJS) $(TT_METAL_IMPL_OBJS) $(TT_METAL_DETAIL_OBJS) $(LLRT_OBJS) $(BUILD_KERNELS_FOR_RISCV_OBJS) $(PROFILER_OBJS)
+
+# $(TT_METAL_LIB): $(COMMON_LIB) $(TT_METAL_OBJS) $(DEVICE_LIB) $(TT_METAL_IMPL_LIB) $(TT_METAL_DETAIL_LIB) $(LLRT_LIB) $(BUILD_KERNELS_FOR_RISCV_LIB) $(PROFILER_LIB)
+$(TT_METAL_LIB): tt_metal_objs $(COMMON_LIB) $(DEVICE_LIB) $(TT_METAL_IMPL_LIB) $(TT_METAL_DETAIL_LIB) $(LLRT_LIB) $(BUILD_KERNELS_FOR_RISCV_LIB) $(PROFILER_LIB)
 	@mkdir -p $(LIBDIR)
-	$(CXX) $(TT_METAL_CFLAGS) $(CXXFLAGS) $(SHARED_LIB_FLAGS) -o $@ $^ $(LDFLAGS) $(TT_METAL_LDFLAGS)
+	ar rcs -o $@ $(filter %.o, $^)
+	# For future release as a shared library
+	# $(CXX) $(TT_METAL_CFLAGS) $(CXXFLAGS) $(SHARED_LIB_FLAGS) -o $@ $^ $(LDFLAGS) $(TT_METAL_LDFLAGS)
 
 # TODO: rk: need to use a general way to do the following directives, note that using tt_metal/%.o will
 # include EVERYTHING under tt_metal, forcing the build step to use only build directives in this file

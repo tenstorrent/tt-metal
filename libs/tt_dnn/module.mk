@@ -68,7 +68,7 @@ libs/tt_dnn: $(TT_DNN_LIB)
 
 $(TT_DNN_LIB): $(COMMON_LIB) $(DTX_LIB) $(TT_DNN_OBJS)
 	@mkdir -p $(LIBDIR)
-	$(CXX) $(TT_DNN_CFLAGS) $(CXXFLAGS) $(SHARED_LIB_FLAGS) -o $@ $^ $(LDFLAGS) $(TT_DNN_LDFLAGS)
+	ar rcs -o $@ $(TT_DNN_OBJS)
 
 $(OBJDIR)/libs/tt_dnn/%.o: libs/tt_dnn/%.cpp
 	@mkdir -p $(@D)
