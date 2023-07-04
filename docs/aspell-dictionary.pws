@@ -1,4 +1,4 @@
-personal_ws-1.1 en 541
+personal_ws-1.1 en 545
 ABI
 ADDI
 API
@@ -56,6 +56,7 @@ DataType
 DeallocateBuffer
 DeviceOperation
 DeviceStorage
+DeviceZoneScopedN
 DstMode
 DumpDeviceProfileResults
 ENDL
@@ -177,6 +178,7 @@ WriteToBuffer
 WriteToDevice
 XXXX
 ZoneScoped
+ZoneScopedN
 abovementioned
 acc
 acos
@@ -210,6 +212,7 @@ bool
 boolean
 breakpoint
 brisc
+brisck
 cachable
 cb
 cbid
@@ -494,6 +497,7 @@ tmp
 toctree
 todo
 tracy
+tracy's
 transp
 tril
 trisc

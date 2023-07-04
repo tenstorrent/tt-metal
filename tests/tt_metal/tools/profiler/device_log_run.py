@@ -39,43 +39,15 @@ def filter_device_analysis_data(testOutputFolder):
                     print(line, end="")
 
 
-def beautify_tt_js_blob(testOutputFolder):
-    testFiles = os.scandir(testOutputFolder)
-    for testFile in testFiles:
-        if ".html" in testFile.name:
-            testFilePath = f"{testOutputFolder}/{testFile.name}"
-            with open(testFilePath) as htmlFile:
-                for htmlLine in htmlFile.readlines():
-                    if "!function" in htmlLine:
-                        jsBlobs = htmlLine.rsplit("script", 2)
-                        assert len(jsBlobs) > 2, f"{testFile.name} has more than one JS section"
-                        jsBlob = jsBlobs[1].strip(' <>/"')
-                        beautyJS = jsbeautifier.beautify(jsBlob)
-                        break
-
-            os.remove(testFilePath)
-
-            beautyJS = beautyJS.split("\n")
-            jsLines = []
-            for jsLine in beautyJS:
-                jsLines.append(replace_random_id(jsLine))
-
-            beautyJS = "\n".join(jsLines)
-
-            with open(f"{testFilePath.split('.html')[0]}.js", "w") as jsFile:
-                jsFile.writelines(beautyJS)
-
-
 def run_device_log_compare_golden(test):
     goldenPath = GOLDEN_OUTPUTS_DIR / test
     underTestPath = PROFILER_ARTIFACTS_DIR / "output/device"
 
     ret = os.system(
-        f"cd {PROFILER_SCRIPTS_ROOT} && ./process_device_log.py -d {goldenPath}/profile_log_device.csv --no-print-stats --no-artifacts --no-webapp"
+        f"cd {PROFILER_SCRIPTS_ROOT} && ./process_device_log.py -d {goldenPath}/profile_log_device.csv --no-print-stats --no-artifacts"
     )
     assert ret == 0, f"Log process script crashed with exit code {ret}"
 
-    beautify_tt_js_blob(underTestPath)
     filter_device_analysis_data(underTestPath)
 
     dcmp = dircmp(goldenPath, underTestPath)

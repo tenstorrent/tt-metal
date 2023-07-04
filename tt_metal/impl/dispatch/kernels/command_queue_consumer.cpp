@@ -23,8 +23,12 @@ void kernel_main() {
     setup_completion_queue_write_interface(completion_queue_start_addr, completion_queue_size);
 
     while (true) {
-        // Wait for producer to supply a command
-        db_acquire(db_semaphore_addr, consumer_noc_encoding);
+        DeviceZoneScopedMainN("CQ-CONSUMER-MAIN");
+        {
+            DeviceZoneScopedMainChildN("CQ-CONSUMER-PROD-SEM-ACQ");
+            // Wait for producer to supply a command
+            db_acquire(db_semaphore_addr, consumer_noc_encoding);
+        }
 
         // For each instruction, we need to jump to the relevant part of the device command
         uint32_t command_start_addr = get_command_slot_addr<cmd_base_address, consumer_data_buffer_size>(db_buf_switch);
@@ -85,10 +89,12 @@ void kernel_main() {
 
         completion_queue_push_back(completion_data_size, completion_queue_start_addr, host_completion_queue_write_ptr_addr);
         record_last_completed_event(header->event);
-
-        // notify producer that it has completed a command
-        noc_semaphore_inc(producer_noc_encoding | get_semaphore(0), 1);
-        db_buf_switch = not db_buf_switch;
-        noc_async_write_barrier(); // Barrier for now
+        {
+            DeviceZoneScopedN("CQ-NOTIFY_PROC");
+            // notify producer that it has completed a command
+            noc_semaphore_inc(producer_noc_encoding | get_semaphore(0), 1);
+            db_buf_switch = not db_buf_switch;
+            noc_async_write_barrier(); // Barrier for now
+        }
     }
 }

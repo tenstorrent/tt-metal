@@ -57,7 +57,6 @@ void kernel_main() {
                 for(uint32_t w = 0; w < out_subblock_w; w++) {
                     uint64_t out_tensor_tile_noc_addr = get_noc_addr(out_tensor_tile_id, s);
 
-                    // kernel_profiler::mark_time(9);
                     noc_async_write(l1_read_addr, out_tensor_tile_noc_addr, single_tile_size_bytes);
                     l1_read_addr+=single_tile_size_bytes;
 

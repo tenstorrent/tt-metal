@@ -24,11 +24,6 @@ def test_compute():
 
 
 @run_test
-def test_compute_overlapping_launch():
-    pass
-
-
-@run_test
 def test_full_buffer_nc_b_risc():
     pass
 
@@ -80,11 +75,6 @@ def test_missing_all_defualt_markers():
 
 @run_test
 def test_multi_core_multi_launch():
-    pass
-
-
-@run_test
-def test_out_of_order():
     pass
 
 

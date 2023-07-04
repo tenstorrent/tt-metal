@@ -94,7 +94,6 @@ void kernel_main() {
             ++ out_row_id;
         }
         noc_async_write_barrier();
-        // kernel_profiler::mark_time(14);
         cb_pop_front(out_cb_id, 1);
     }
     #ifdef SHARDED_OUT

@@ -26,6 +26,7 @@ void kernel_main() {
     db_cb_config_t* db_cb_config = get_local_db_cb_config(CQ_CONSUMER_CB_BASE);
     uint32_t l1_consumer_fifo_limit = (db_cb_config->rd_ptr_16B << 4) + (db_cb_config->total_size_16B << 4);
     while (true) {
+        //DeviceZoneScopedMainN("CQ-DISPATCHER");
         // Wait for producer to supply a command
         uint32_t command_start_addr = get_command_slot_addr<cmd_base_address, 0>(db_buf_switch);
         uint32_t program_transfer_start_addr = command_start_addr + ((DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER + DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION * DeviceCommand::NUM_POSSIBLE_BUFFER_TRANSFERS) * sizeof(uint32_t));

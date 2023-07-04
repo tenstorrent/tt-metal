@@ -13,11 +13,38 @@
 */
 
 // TODO: these could be moved to even lower addresses -- 5 RISC-V hexes combined don't need 100 KB
-constexpr static std::uint32_t BRISC_L1_ARG_BASE = 96 * 1024;
-constexpr static std::uint32_t BRISC_L1_RESULT_BASE = 97 * 1024;
-constexpr static std::uint32_t NCRISC_L1_ARG_BASE = 98 * 1024;
-constexpr static std::uint32_t NCRISC_L1_RESULT_BASE = 99 * 1024;
-constexpr static std::uint32_t TRISC_L1_ARG_BASE = 100 * 1024;
+constexpr static std::uint32_t PROFILER_L1_MARKER_UINT32_SIZE = 2;
+constexpr static std::uint32_t PROFILER_L1_MARKER_BYTES_SIZE = PROFILER_L1_MARKER_UINT32_SIZE * sizeof(uint32_t);
+
+constexpr static std::uint32_t PROFILER_L1_PROGRAM_ID_COUNT = 2;
+constexpr static std::uint32_t PROFILER_L1_GUARANTEED_MARKER_COUNT = 4;
+
+constexpr static std::uint32_t PROFILER_L1_OPTIONAL_MARKER_COUNT = 250;
+constexpr static std::uint32_t PROFILER_L1_OP_MIN_OPTIONAL_MARKER_COUNT = 2;
+
+constexpr static std::uint32_t PROFILER_L1_VECTOR_SIZE = (PROFILER_L1_OPTIONAL_MARKER_COUNT + PROFILER_L1_GUARANTEED_MARKER_COUNT + PROFILER_L1_PROGRAM_ID_COUNT) * PROFILER_L1_MARKER_UINT32_SIZE;
+constexpr static std::uint32_t PROFILER_L1_BUFFER_SIZE = PROFILER_L1_VECTOR_SIZE  * sizeof(uint32_t);
+
+constexpr static std::uint32_t PROFILER_L1_BUFFER_BR = 88 * 1024;
+constexpr static std::uint32_t PROFILER_L1_BUFFER_NC = PROFILER_L1_BUFFER_BR + PROFILER_L1_BUFFER_SIZE;
+constexpr static std::uint32_t PROFILER_L1_BUFFER_T0 = PROFILER_L1_BUFFER_NC + PROFILER_L1_BUFFER_SIZE;
+constexpr static std::uint32_t PROFILER_L1_BUFFER_T1 = PROFILER_L1_BUFFER_T0 + PROFILER_L1_BUFFER_SIZE;
+constexpr static std::uint32_t PROFILER_L1_BUFFER_T2 = PROFILER_L1_BUFFER_T1 + PROFILER_L1_BUFFER_SIZE;
+
+constexpr static std::uint32_t PROFILER_L1_END_ADDRESS = PROFILER_L1_BUFFER_T2 + PROFILER_L1_BUFFER_SIZE;
+
+constexpr static std::uint32_t PROFILER_OP_SUPPORT_COUNT = 1000;
+constexpr static std::uint32_t PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC = PROFILER_L1_MARKER_UINT32_SIZE * (PROFILER_L1_PROGRAM_ID_COUNT +  PROFILER_L1_GUARANTEED_MARKER_COUNT + PROFILER_L1_OP_MIN_OPTIONAL_MARKER_COUNT) * PROFILER_OP_SUPPORT_COUNT;
+constexpr static std::uint32_t PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC = PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC * sizeof(uint32_t);
+constexpr static std::uint32_t PROFILER_RISC_COUNT = 5;
+
+static_assert (PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC > PROFILER_L1_BUFFER_SIZE);
+
+constexpr static std::uint32_t BRISC_L1_ARG_BASE = 98 * 1024;
+constexpr static std::uint32_t BRISC_L1_RESULT_BASE = 99 * 1024;
+constexpr static std::uint32_t NCRISC_L1_ARG_BASE = 100 * 1024;
+constexpr static std::uint32_t NCRISC_L1_RESULT_BASE = 101 * 1024;
+constexpr static std::uint32_t TRISC_L1_ARG_BASE = 102 * 1024;
 constexpr static std::uint32_t IDLE_ERISC_L1_ARG_BASE = 32 * 1024;
 constexpr static std::uint32_t IDLE_ERISC_L1_RESULT_BASE = 33 * 1024;
 constexpr static std::uint32_t L1_ALIGNMENT = 16;
@@ -26,13 +53,17 @@ constexpr static std::uint32_t L1_ALIGNMENT = 16;
 // 12 bytes for each buffer: (addr, size, size_in_tiles)
 // addr and size are in 16B words (byte address >> 4)
 // this is a total of 32 * 3 * 4 = 384B
-constexpr static std::uint32_t CIRCULAR_BUFFER_CONFIG_BASE = 101 * 1024;
+constexpr static std::uint32_t CIRCULAR_BUFFER_CONFIG_BASE = 103 * 1024;
 constexpr static std::uint32_t NUM_CIRCULAR_BUFFERS = 32;
 constexpr static std::uint32_t UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG = 4;
 constexpr static std::uint32_t CIRCULAR_BUFFER_CONFIG_SIZE = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
+constexpr static std::uint32_t PROFILER_L1_CONTROL_VECTOR_SIZE = 32;
+constexpr static std::uint32_t PROFILER_L1_CONTROL_BUFFER_SIZE = PROFILER_L1_CONTROL_VECTOR_SIZE * sizeof(uint32_t);
+constexpr static std::uint32_t PROFILER_L1_BUFFER_CONTROL = CIRCULAR_BUFFER_CONFIG_BASE + CIRCULAR_BUFFER_CONFIG_SIZE;
+
 // 4 uint32_t semaphores per core aligned to 16B
-constexpr static std::uint32_t SEMAPHORE_BASE = CIRCULAR_BUFFER_CONFIG_BASE + CIRCULAR_BUFFER_CONFIG_SIZE;
+constexpr static std::uint32_t SEMAPHORE_BASE = PROFILER_L1_BUFFER_CONTROL + PROFILER_L1_CONTROL_BUFFER_SIZE;
 constexpr static std::uint32_t NUM_SEMAPHORES = 4;
 constexpr static std::uint32_t SEMAPHORE_SIZE = NUM_SEMAPHORES * L1_ALIGNMENT;
 
@@ -54,7 +85,7 @@ constexpr static std::uint32_t RING_BUFFER_ADDR = PRINT_BUFFER_START + PRINT_BUF
 constexpr static std::uint32_t RING_BUFFER_SIZE = 128;
 
 // Breakpoint regions
-constexpr static std::uint32_t NCRISC_BREAKPOINT = PRINT_BUFFER_START; //107 * 1024
+constexpr static std::uint32_t NCRISC_BREAKPOINT = PRINT_BUFFER_START;
 constexpr static std::uint32_t TRISC0_BREAKPOINT = NCRISC_BREAKPOINT + 4;
 constexpr static std::uint32_t TRISC1_BREAKPOINT = TRISC0_BREAKPOINT + 4;
 constexpr static std::uint32_t TRISC2_BREAKPOINT = TRISC1_BREAKPOINT + 4;

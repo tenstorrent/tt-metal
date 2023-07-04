@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from .. import tensor as ttl_tensor, device as ttl_device, profiler as ttl_profiler
+from .. import tensor as ttl_tensor, device as ttl_device
 import torch
 from functools import wraps
 from loguru import logger
@@ -56,9 +56,6 @@ def convert_tt_tensor_to_pt_tensor(tt_tensor, output_format):
     ):
         output_format["device"] = tt_tensor.device()
 
-    if ttl_profiler.get_profiler_flag():
-        ttl_profiler.append_input_data(tt_tensor)
-
     tt_tensor = tt_tensor.cpu()
     tt_tensor = tt_tensor.to(ttl_tensor.Layout.ROW_MAJOR)
     torch_tensor = tt_tensor.to_torch()
@@ -95,8 +92,6 @@ def convert_pt_tensor_to_tt_tensor(pt_tensor, output_format):
             and tt_tensor.get_legacy_shape()[3] % 2 == 0
         ):
             tt_tensor = tt_tensor.to(output_format["device"])
-    if ttl_profiler.get_profiler_flag():
-        ttl_profiler.append_output_data(tt_tensor)
     return tt_tensor
 
 
@@ -151,29 +146,6 @@ def convert_tt_tensors_wrapper(func):
         else:
             output_format["layout"] = ttl_tensor.Layout.TILE
 
-        if ttl_profiler.get_profiler_flag():
-            ttl_profiler.start_profiling("fallback_op", ttl_profiler.OpType.python_fallback)
-            # This is to check if this is a function of a class. We add the object id if it is
-            if "." in func.__qualname__:
-                obj_id = id(args[0])
-                split_name = func.__qualname__.rsplit(".", 1)
-                ttl_profiler.set_preferred_name(f"{split_name[0]}_{obj_id}.{split_name[1]}")
-            else:
-                ttl_profiler.set_preferred_name(func.__qualname__)
-
-            # Override str functions for PT and TT Tensors to format/report desired values
-            with custom_tensor_print_handler(ttl_tensor.Tensor), custom_tensor_print_handler(torch.Tensor):
-                if args:
-                    # This if is to skip the 'self' argument of class methods.
-                    # Note that this may not work correctly in all cases
-                    ttl_profiler.append_meta_data(
-                        f"args:({str(args) if '.' not in func.__qualname__ else str(args[1:])})".replace(
-                            ",", ";"
-                        ).replace(" ", "")
-                    )
-                if kwargs:
-                    ttl_profiler.append_meta_data(f"kwargs:({str(kwargs)})".replace(",", "|").replace(" ", ""))
-
         new_args = convert_tt_tensors_to_pt_tensors(args, output_format)
         new_kwargs = convert_tt_tensors_to_pt_tensors(kwargs, output_format)
 
@@ -185,12 +157,6 @@ def convert_tt_tensors_wrapper(func):
 
         # Convert pt tensors in outputs to tt tensors
         new_outputs = convert_pt_tensors_to_tt_tensors(outputs, output_format)
-
-        if ttl_profiler.get_profiler_flag():
-            # Override str functions for PT and TT Tensors to format/report desired values
-            with custom_tensor_print_handler(ttl_tensor.Tensor), custom_tensor_print_handler(torch.Tensor):
-                ttl_profiler.append_meta_data(f"outputs:({str(new_outputs)})".replace(",", "|").replace(" ", ""))
-            ttl_profiler.stop_profiling("fallback_op")
 
         return new_outputs
 

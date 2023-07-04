@@ -28,13 +28,10 @@ inline void RISC_POST_STATUS(uint32_t status) {
   ptr[0] = status;
 }
 void kernel_launch() {
-
+    DeviceZoneScopedMainChildN("ERISC-KERNEL");
     firmware_kernel_common_init((void tt_l1_ptr *)MEM_IERISC_INIT_LOCAL_L1_BASE);
 
     noc_local_state_init(noc_index);
 
-    kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
-
     kernel_main();
-    kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
 }

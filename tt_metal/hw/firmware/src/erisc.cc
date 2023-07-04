@@ -25,9 +25,10 @@ void ApplicationHandler(void) __attribute__((__section__(".init")));
 #endif
 
 namespace kernel_profiler {
-uint32_t wIndex __attribute__((used));
-uint32_t device_function_sums[GLOBAL_SUM_COUNT] __attribute__((used)) = {0};
-uint64_t device_function_starts[GLOBAL_SUM_COUNT] __attribute__((used)) = {0};
+    uint32_t wIndex __attribute__((used));
+    uint32_t stackSize __attribute__((used));
+    uint32_t sums[SUM_COUNT] __attribute__((used));
+    uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 }
 
 uint8_t noc_index = 0;  // TODO: remove hardcoding
@@ -76,12 +77,9 @@ void __attribute__((section("erisc_l1_code"))) Application(void) {
     while (routing_info->routing_enabled) {
         // FD: assume that no more host -> remote writes are pending
         if (mailboxes->launch.run == RUN_MSG_GO) {
+            DeviceZoneScopedMainN("ERISC-FW");
             DEBUG_STATUS('R');
-            kernel_profiler::init_profiler();
-            kernel_profiler::mark_time(CC_MAIN_START);
             kernel_init();
-            kernel_profiler::store_function_sums();
-            kernel_profiler::mark_time(CC_MAIN_END);
         } else {
             internal_::risc_context_switch();
         }

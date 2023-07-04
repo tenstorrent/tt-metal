@@ -69,7 +69,6 @@ FORCE_INLINE  bool noc_read_data_sequence(
             // Queue up another read
             // non blocking - issues noc_async_read
             // issue_read_chunk(noc_reader_buffer_wrptr, ...);
-            // kernel_profiler::mark_time(12);
             #if EMULATE_DRAM_READ_CYCLES == 1
             issue_read_chunk();
             #else
@@ -130,8 +129,6 @@ void kernel_main() {
     const InterleavedAddrGen<src_is_dram> source_address_generator = {
         .bank_base_address = src_addr, .page_size = page_size};
 
-    kernel_profiler::mark_time(10);
-
     // SETUP DATASTRUCTURES
     std::array<uint32_t, MAX_NUM_CHANNELS> transaction_channel_sender_buffer_addresses;
     std::array<uint32_t, MAX_NUM_CHANNELS> transaction_channel_receiver_buffer_addresses;\
@@ -148,7 +145,6 @@ void kernel_main() {
 
     uint32_t eth_sends_completed = 0;
 
-    kernel_profiler::mark_time(11);
     constexpr uint32_t SWITCH_INTERVAL = 100000;
     uint32_t count = 0;
     uint32_t page_index = 0;
@@ -206,7 +202,6 @@ void kernel_main() {
         if (!did_something) {
             if (count++ > SWITCH_INTERVAL) {
                 count = 0;
-                // kernel_profiler::mark_time(15);
                 run_routing();
                 num_context_switches++;
                 if (num_context_switches > max_num_context_switches) {
@@ -252,5 +247,4 @@ void kernel_main() {
     DPRINT << "tx: DONE\n";
     DPRINT << "tx: DONE eth_sends_completed " << (uint32_t)eth_sends_completed << "\n";
     DPRINT << "tx: DONE total_num_message_sends " << (uint32_t)total_num_message_sends << "\n";
-    kernel_profiler::mark_time(16);
 }

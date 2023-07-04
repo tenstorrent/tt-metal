@@ -286,12 +286,10 @@ def run_sweep_tests(test_sweep_parameters, output_folder, output_file, run_tests
 
             test_profiling_key = f"test_sweep_separator - {run_id}"
             logger.info(f"Starting profiling test {test_profiling_key}")
-            tt_lib.profiler.start_profiling(test_profiling_key)
 
             test_pass = run_sweep_test(parameters, device, results_csv_writer)
 
             tt_lib.device.Synchronize(device)
-            tt_lib.profiler.stop_profiling(test_profiling_key)
             logger.info(f"Stopped profiling test {test_profiling_key}")
             run_id += 1
 

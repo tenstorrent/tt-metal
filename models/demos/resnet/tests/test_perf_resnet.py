@@ -81,25 +81,29 @@ def run_perf_resnet(
             profiler.start(f"{iter}_key")
             _ = tt_resnet50(tt_inputs).cpu(blocking=True)
             profiler.end(f"{iter}_key")
+            tt_lib.device.DumpDeviceProfiler(device)
 
         num_warm_iterations = 15
         warm_start = warmup_end
         warm_end = warm_start + num_warm_iterations
 
         outputs = []
-        profiler.start(f"run")
+        inference_time_sum = 0
         for iter in range(warm_start, warm_end):
+            profiler.start(f"run")
             outputs.append(tt_resnet50(tt_inputs).cpu(blocking=False))
+            profiler.end(f"run")
+            inference_time_sum += profiler.get("run")
+            tt_lib.device.DumpDeviceProfiler(device)
 
         tt_lib.device.Synchronize(device)
-        profiler.end(f"run")
 
         # enable_persistent_kernel_cache()
 
     first_iter_time = profiler.get(f"{0}_key")
 
     # ensuring inference time fluctuations is not noise
-    inference_time_avg = profiler.get("run") / num_warm_iterations
+    inference_time_avg = inference_time_sum / num_warm_iterations
 
     cpu_time = profiler.get(cpu_key)
     compile_time = first_iter_time - inference_time_avg

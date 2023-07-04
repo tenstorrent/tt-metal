@@ -43,9 +43,10 @@ constexpr uint32_t num_cbs_to_early_init = 4;  // safe small number to overlap w
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
 namespace kernel_profiler {
-uint32_t wIndex __attribute__((used));
-uint32_t device_function_sums[GLOBAL_SUM_COUNT] __attribute__((used)) = {0};
-uint64_t device_function_starts[GLOBAL_SUM_COUNT] __attribute__((used)) = {0};
+    uint32_t wIndex __attribute__((used));
+    uint32_t stackSize __attribute__((used));
+    uint32_t sums[SUM_COUNT] __attribute__((used));
+    uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 }
 
 inline void RISC_POST_STATUS(uint32_t status) {
@@ -82,7 +83,6 @@ int main() {
     mailboxes->launch.run = RUN_MSG_DONE;
 
     // Cleanup profiler buffer incase we never get the go message
-    kernel_profiler::init_profiler();
     while (1) {
 
         init_sync_registers();
@@ -94,35 +94,34 @@ int main() {
         };
         DEBUG_STATUS('G', 'D');
 
-        kernel_profiler::init_profiler();
-        kernel_profiler::mark_time(CC_MAIN_START);
+        {
+            DeviceZoneScopedMainN("ERISC-FW");
 
-        uint32_t noc_index = mailboxes->launch.brisc_noc_id;
+            uint32_t noc_index = mailboxes->launch.brisc_noc_id;
 
-        //UC FIXME: do i need this?
-        setup_cb_read_write_interfaces(0, num_cbs_to_early_init, true, true);
-
-        // Run the ERISC kernel
-        DEBUG_STATUS('R');
-        //if (mailboxes->launch.enable_brisc) {
             //UC FIXME: do i need this?
-            setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.max_cb_index, true, true);
-            kernel_init();
-        //} else {
-            // This was not initialized in kernel_init
-        //    noc_local_state_init(noc_index);
-        //}
-        DEBUG_STATUS('D');
+            setup_cb_read_write_interfaces(0, num_cbs_to_early_init, true, true);
 
-        mailboxes->launch.run = RUN_MSG_DONE;
+            // Run the ERISC kernel
+            DEBUG_STATUS('R');
+            //if (mailboxes->launch.enable_brisc) {
+                //UC FIXME: do i need this?
+                setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.max_cb_index, true, true);
+                kernel_init();
+            //} else {
+                // This was not initialized in kernel_init
+            //    noc_local_state_init(noc_index);
+            //}
+            DEBUG_STATUS('D');
 
-        // Not including any dispatch related code
-        kernel_profiler::mark_time(CC_MAIN_END);
+            mailboxes->launch.run = RUN_MSG_DONE;
 
-        // Notify dispatcher core that it has completed
-        if (mailboxes->launch.mode == DISPATCH_MODE_DEV) {
-            uint64_t dispatch_addr = NOC_XY_ADDR(NOC_X(DISPATCH_CORE_X), NOC_Y(DISPATCH_CORE_Y), DISPATCH_MESSAGE_ADDR);
-            noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, NOC_UNICAST_WRITE_VC, 1, 31 /*wrap*/, false /*linked*/);
+
+            // Notify dispatcher core that it has completed
+            if (mailboxes->launch.mode == DISPATCH_MODE_DEV) {
+                uint64_t dispatch_addr = NOC_XY_ADDR(NOC_X(DISPATCH_CORE_X), NOC_Y(DISPATCH_CORE_Y), DISPATCH_MESSAGE_ADDR);
+                noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, NOC_UNICAST_WRITE_VC, 1, 31 /*wrap*/, false /*linked*/);
+            }
         }
     }
 

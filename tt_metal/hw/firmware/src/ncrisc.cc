@@ -29,9 +29,10 @@ uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
 namespace kernel_profiler {
-uint32_t wIndex __attribute__((used));
-uint32_t device_function_sums[GLOBAL_SUM_COUNT] __attribute__((used)) = {0};
-uint64_t device_function_starts[GLOBAL_SUM_COUNT] __attribute__((used)) = {0};
+    uint32_t wIndex __attribute__((used));
+    uint32_t stackSize __attribute__((used));
+    uint32_t sums[SUM_COUNT] __attribute__((used));
+    uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 }
 
 extern "C" void ncrisc_resume(void);
@@ -49,22 +50,17 @@ int main(int argc, char *argv[]) {
   mailboxes->ncrisc_halt.resume_addr = (uint32_t)ncrisc_resume;
 
   // Cleanup profiler buffer incase we never get the go message
-  kernel_profiler::init_profiler();
   while (1) {
-
       DEBUG_STATUS('W');
       notify_brisc_and_halt(RUN_SYNC_MSG_DONE);
+      DeviceZoneScopedMainN("NCRISC-FW");
 
-      kernel_profiler::init_profiler();
-      kernel_profiler::mark_time(CC_MAIN_START);
 
       setup_cb_read_write_interfaces(0, mailboxes->launch.max_cb_index, true, true);
 
       DEBUG_STATUS('R');
       kernel_init();
       DEBUG_STATUS('D');
-      kernel_profiler::store_function_sums();
-      kernel_profiler::mark_time(CC_MAIN_END);
   }
 
   return 0;

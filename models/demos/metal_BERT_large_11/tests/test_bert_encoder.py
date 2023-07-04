@@ -151,7 +151,6 @@ def test_bert_encoder_inference(
 
     tt_lib.profiler.set_profiler_location(f"BERT_large_1_encoder_{request.node.callspec.id}")
 
-    tt_lib.profiler.start_profiling("entire_run")
     run_bert_encoder_inference(
         device,
         model_version,
@@ -162,4 +161,3 @@ def test_bert_encoder_inference(
         tt_cache_path,
         model_location_generator,
     )
-    tt_lib.profiler.stop_profiling("entire_run")

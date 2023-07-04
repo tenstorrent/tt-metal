@@ -27,15 +27,11 @@ void MAIN {
 
            copy_tile(tt::CB::c_in0, 0, 0);
 
-           kernel_profiler::mark_time(9997);
-
            for(uint32_t i=0; i < tile_factor; i++) {
 #ifdef SFPU_OP_CHAIN_0
            SFPU_OP_CHAIN_0
 #endif
            }
-           kernel_profiler::mark_time(9998);
-
            pack_tile(0, tt::CB::c_out0);
 
            cb_pop_front(tt::CB::c_in0, 1);

@@ -279,6 +279,7 @@ def device(device_init_destroy):
 
     device = ttl.device.GetDefaultDevice()
     yield device
+    ttl.device.DumpDeviceProfiler(device, True)
     ttl.device.DeallocateBuffers(device)
 
 
@@ -294,6 +295,7 @@ def pcie_devices(request):
     yield [devices[i] for i in range(num_devices)]
 
     for device in devices.values():
+        ttl.device.DumpDeviceProfiler(device, True)
         ttl.device.DeallocateBuffers(device)
 
     ttl.device.CloseDevices(devices)
@@ -311,6 +313,7 @@ def all_devices(request):
     yield [devices[i] for i in range(num_devices)]
 
     for device in devices.values():
+        ttl.device.DumpDeviceProfiler(device, True)
         ttl.device.DeallocateBuffers(device)
 
     ttl.device.CloseDevices(devices)

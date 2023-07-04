@@ -23,6 +23,7 @@ struct address_map {
   static constexpr std::int32_t DATA_BUFFER_SIZE_ETH = 4 * 1024;
   static constexpr std::int32_t DATA_BUFFER_SIZE_NOC = 16 * 1024;
   static constexpr std::int32_t DATA_BUFFER_SIZE = 24 * 1024;
+  static constexpr std::int32_t TOOLS_MAX_L1_SIZE = 3 * 1024;
   // Base addresses
 
   static constexpr std::int32_t FIRMWARE_BASE = 0x9040;
@@ -30,15 +31,22 @@ struct address_map {
   static constexpr std::int32_t COMMAND_Q_BASE = L1_EPOCH_Q_BASE + FIRMWARE_SIZE;
   static constexpr std::int32_t DATA_BUFFER_BASE = COMMAND_Q_BASE + COMMAND_Q_SIZE;
   static constexpr std::int32_t TILE_HEADER_BUFFER_BASE = DATA_BUFFER_BASE + DATA_BUFFER_SIZE;
+
   static constexpr std::int32_t ERISC_RING_BUFFER_ADDR = COMMAND_Q_BASE - 128;
   static constexpr std::int32_t PRINT_BUFFER_ER = ERISC_RING_BUFFER_ADDR - 256;
+  static constexpr std::uint32_t PROFILER_L1_BUFFER_ER = PRINT_BUFFER_ER - PROFILER_L1_BUFFER_SIZE;
+  static constexpr std::uint32_t PROFILER_L1_BUFFER_CONTROL = PROFILER_L1_BUFFER_ER - PROFILER_L1_CONTROL_BUFFER_SIZE;
+
+  static_assert(PROFILER_L1_BUFFER_CONTROL > (COMMAND_Q_BASE - TOOLS_MAX_L1_SIZE));
+  static_assert((ERISC_RING_BUFFER_ADDR % 32) == 0);
+  static_assert((PRINT_BUFFER_ER % 32) == 0);
+  static_assert((PROFILER_L1_BUFFER_ER % 32) == 0);
+  static_assert((PROFILER_L1_BUFFER_CONTROL % 32) == 0);
+
   // Extra 12 bytes is to make sure that the launch message is properly aligned.
-  static constexpr std::int32_t ERISC_MEM_MAILBOX_BASE = PRINT_BUFFER_ER - 128 - 12;
+  static constexpr std::int32_t ERISC_MEM_MAILBOX_BASE = PROFILER_L1_BUFFER_CONTROL - 128 - 12;
   // erisc early exit functionality re-uses mailboxes_t::ncrisc_halt_msg_t::stack_save memory
   static constexpr std::int32_t ERISC_MEM_MAILBOX_STACK_SAVE = ERISC_MEM_MAILBOX_BASE + 4;
-
-  static_assert((PRINT_BUFFER_ER + PRINT_BUFFER_SIZE) < COMMAND_Q_BASE);
-  static_assert((PRINT_BUFFER_ER % 32) == 0);
 
   // TT Metal Specific
   static constexpr std::int32_t ERISC_FIRMWARE_SIZE = 2 * 1024;
@@ -69,7 +77,6 @@ struct address_map {
   // BIDIR Tunneling Kernel Space
   static constexpr std::int32_t ERISC_L1_TUNNEL_BUFFER_SIZE = ERISC_L1_UNRESERVED_SIZE / 2;
 
-  // TODO: risky, is there a check for FW size we can add?
   template <std::size_t A, std::size_t B>
   struct TAssertEquality {
       static_assert(A == B, "Not equal");

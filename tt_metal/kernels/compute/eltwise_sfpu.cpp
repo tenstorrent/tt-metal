@@ -13,8 +13,6 @@ void MAIN {
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_dim = get_compile_time_arg_val(1);
 
-    kernel_profiler::mark_time(9997);
-
     init_sfpu(tt::CB::c_in0);
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         cb_reserve_back(tt::CB::c_out0, per_core_block_dim);
@@ -38,8 +36,6 @@ void MAIN {
         }
         cb_push_back(tt::CB::c_out0, per_core_block_dim);
     }
-
-    kernel_profiler::mark_time(9998);
 
 }
 }

@@ -125,12 +125,10 @@ void MAIN {
     for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; ++ i) {
         // NOTE: Assuming in_ntiles_hw < 8 for now.
         // TODO: subblocking to support this.
-        // kernel_profiler::mark_time(11);
         // tilize
         tilize(out_nelems, in_cb_id, in_ntiles_hw, in_ntiles_c, in_ntiles_hwc, window_hw_padded, in_tiled_cb_id);
         // Reduce H
         reduce_h(out_nelems, in_tiled_cb_id, in_scalar_cb_id, in_ntiles_hw, in_ntiles_c, in_ntiles_hwc, out_ntiles_c, out_cb_id);
-        // kernel_profiler::mark_time(12);
     }
     cb_pop_front(in_scalar_cb_id, 1);
 }

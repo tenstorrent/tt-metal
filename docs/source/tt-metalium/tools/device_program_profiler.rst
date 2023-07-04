@@ -1,12 +1,14 @@
+.. _device_program_profiler:
+
 Device Program Profiler
 =======================
 
 Overview
 --------
 
-Device-side performance profiling is done by annotating device-side code with timestamp markers.
+Device-side performance profiling follows the same scope based profiling method that tracy uses on the host side.
 
-``kernel_profiler::mark_time(uint32_t timer_id)`` is the inline function for storing the execution timestamp of events and associating them with a ``timer_id``.
+The macro ``DeviceZoneScopedN( zone_name )`` is used similar to tracy's ``ZoneScopedN`` macro to profile C++ scopes and assign them a custom name.
 
 
 How to Run
@@ -14,7 +16,7 @@ How to Run
 
 Device-side profiling is only allowed in profiler builds. ``scripts/build_scripts/build_with_profiler_opt.sh`` is the script for building profiler builds.
 
-Because downloading profiler results from device adds high runtime overhead, ``TT_METAL_DEVICE_PROFILER=1`` environment variable has to be set to perform the download.
+Because downloading profiler results can add high runtime overhead, ``TT_METAL_DEVICE_PROFILER=1`` environment variable has to be set to perform the download.
 
 The commands to build and run the ``full_buffer`` example after following :ref:`Getting Started<Getting Started>`:
 
@@ -27,6 +29,8 @@ The commands to build and run the ``full_buffer`` example after following :ref:`
 
 The generated csv is ``profile_log_device.csv`` and is saved under ``{$TT_METAL_HOME}/generated/profiler/.logs`` by default.
 
+``build_with_profiler_opt.sh`` also enables tracy for the build by using the ``ENABLE_TRACY=1`` flag. In tracy builds, device-side profiling data is also sent to tracy's GUI.
+
 
 Example
 -------
@@ -34,7 +38,7 @@ Example
 Description
 ~~~~~~~~~~~
 
-``full_buffer`` is a profiler programming example. It show cases how we can use ``mark_time`` to annotate time on kernel code.
+``full_buffer`` is a profiler programming example. It show cases how we can use ``DeviceZoneScopedN`` to annotate time on kernel code.
 
 In this example device side profiling is used to measure the cycle count on the series of "nop" instructions that are looped.
 
@@ -59,7 +63,7 @@ The kernel code for full buffer is in ``{$TT_METAL_HOME}/tt_metal/programming_ex
     void kernel_main() {
         for (int i = 0; i < LOOP_COUNT; i ++)
         {
-            kernel_profiler::mark_time(5);
+            DeviceZoneScopedN("TEST-FULL");
     //Max unroll size
     #pragma GCC unroll 65534
             for (int j = 0 ; j < LOOP_SIZE; j++)
@@ -71,75 +75,58 @@ The kernel code for full buffer is in ``{$TT_METAL_HOME}/tt_metal/programming_ex
 
 The inner for loop of "nop" instructions is executed multiple times. The count is determined by the define variable ``LOOP_COUNT`` defined by the host side code.
 
-The beginning of each iteration of the outer loop is timestamped under id number 5.
-
-Device-side profiler provides marker information for all RISCs and cores used in the program. The following is the portion of the output csv of the ``full_buffer`` test for NCRISC on core 0,0 on device 0:
+Device-side profiler provides marker information for all RISCs and cores used in the program. The following is the portion of the output csv of the ``full_buffer`` test for BRISC on worker core 1,1 on device 0:
 
 ..  code-block:: c++
 
     ARCH: grayskull, CHIP_FREQ[MHz]: 1202
-    PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset]
-    0, 0, 0, NCRISC, 1, 161095200021778
-    0, 0, 0, NCRISC, 2, 161095200021933
-    0, 0, 0, NCRISC, 5, 161095200021976
-    0, 0, 0, NCRISC, 5, 161095200022211
-    0, 0, 0, NCRISC, 5, 161095200022443
-    0, 0, 0, NCRISC, 5, 161095200022675
-    0, 0, 0, NCRISC, 5, 161095200022907
-    0, 0, 0, NCRISC, 5, 161095200023139
-    0, 0, 0, NCRISC, 5, 161095200023371
-    0, 0, 0, NCRISC, 5, 161095200023603
-    0, 0, 0, NCRISC, 5, 161095200023835
-    0, 0, 0, NCRISC, 5, 161095200024067
-    0, 0, 0, NCRISC, 5, 161095200024299
-    0, 0, 0, NCRISC, 5, 161095200024531
-    0, 0, 0, NCRISC, 3, 161095200026549
-    0, 0, 0, NCRISC, 4, 161095200026598
+    PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], stat value, Run ID, zone name, zone phase, source line, source file
+    0,1,1,BRISC,53427 ,11233712278980,0,0,BRISC-FW    ,begin,315,tt-metal/tt_metal/hw/firmware/src/brisc.cc
+    0,1,1,BRISC,118963,11233712334431,0,0,BRISC-FW    ,end  ,315,tt-metal/tt_metal/hw/firmware/src/brisc.cc
+    0,1,1,BRISC,25255 ,11233712279447,0,0,BRISC-KERNEL,begin,40 ,tt-metal/tt_metal/hw/firmware/src/brisck.cc
+    0,1,1,BRISC,90791 ,11233712325701,0,0,BRISC-KERNEL,end  ,40 ,tt-metal/tt_metal/hw/firmware/src/brisck.cc
+    0,1,1,BRISC,36986 ,11233712279499,0,0,TEST-FULL   ,begin,10 ,./kernel.cpp
+    0,1,1,BRISC,102522,11233712279792,0,0,TEST-FULL   ,end  ,10 ,./kernel.cpp
+    0,1,1,BRISC,36986 ,11233712279863,0,0,TEST-FULL   ,begin,10 ,./kernel.cpp
+    0,1,1,BRISC,102522,11233712280147,0,0,TEST-FULL   ,end  ,10 ,./kernel.cpp
+    0,1,1,BRISC,36986 ,11233712280205,0,0,TEST-FULL   ,begin,10 ,./kernel.cpp
+    0,1,1,BRISC,102522,11233712280470,0,0,TEST-FULL   ,end  ,10 ,./kernel.cpp
+    .
+    .
+    .
+    .
 
-ID numbers 1-4 mark default events that are always reported by the device profiler. You can see that additional to default markers, 12 more markers can be recorded on each RISC.
+You can see that the log starts with ``BRISC-FW`` and ``BRISC-KERNEL`` begin and end entries. These are always present in device profiler data. Following the source file and line number presented in the log is the best way to understand what scope in code they are profiling.
 
-Default markers mark kernel and FW start and end events and are part of the tt_metal device infrastructure. In other words, kernels without any calls to ``kernel_profiler::mark_time(uint32_t timer_id)`` still report these markers.
+In short, ``BRISC-FW`` is profiling the duration of a single iteration of BRISC forever loop. ``BRISC-KERNEL`` is profiling the duration of the kernel main function.
 
-.. list-table:: Default ID to Event table
-   :widths: 15 15
-   :header-rows: 1
+After the default markers, the log presents the data for the ``TEST-FULL`` zone from the full buffer test. Source file is pointing to the intermediate kernel source file that gets
+generated. Future updates will make this field to point to the original kernel file.
 
-   * - ID
-     - Event
-   * - 1
-     - FW Start
-   * - 2
-     - Kernel Start
-   * - 3
-     - Kernel End
-   * - 4
-     - FW End
+In total profiling 125 scopes are supported by device-side profiler. In the snippet above, only the first three entries for the ``TEST-FULL`` scope is shown.
 
-For example, In this run, FW start to Kernel start for the NCRISC took ``161095200021778 - 161095200021933 = 155`` cycles.
-Due to non-deterministic HW behaviour, **Profiling overhead** fluctuates. On average, around 40 cycles is from profiling overhead when calculating durations. Kernels typically take 1000s of cycles and so this overhead is negligible.
+Below is couple of screenshots from tracy's GUI, presenting the full buffer example.
 
-Post-processing the data on ID number 5 can provide stats on how many cycles the inner loop of "nop" instructions took. The difference between each pair of adjacent ID number 5s denotes the duration of one iteration of the outer loop.
+Looking at one iteration of FW loop, you can see that all RISCs are reporting 125 profiled zones under their ``KERNEL`` scope.
 
-In this example, stats on inner loop durations are:
+.. image:: ../_static/tracy-device-zoom-out.png
+    :alt: tract device zoomed out
 
-..  code-block:: c++
+Zooming in to the scopes, you can see single ``TEST-FULL`` zones presented in series.
 
-               Count  =          6
-     Average [cycles] =        232
-         Max [cycles] =        235
-      Median [cycles] =        232
-         Min [cycles] =        232
+.. image:: ../_static/tracy-device-zoom-in.png
+    :alt: tract device zoomed in
 
 
 Limitations
 -----------
 
-* Each core has limited L1 buffer for recording device side markers. Space for only 16 total markers is reserved. 12 of the spots are for custom markers and 4 are for default markers. Flip-side of this limitation is that device-side profiling doesn't use L1 space available for kernels.
+- Each core has limited L1 buffer for recording device side scopes. Space for only 125 scopes is reserved.
 
-* The cycle count from RISCs on the same core are perfectly synced as they all read from the same clock counter.
+- The cycle count from RISCs on the same core are perfectly synced as they all read from the same clock counter.
 
-* The cycle counts from RISCs on different cores are closely synced with minor skews, allowing for accurate comparisons on event timestamps across cores.
+- The cycle counts from RISCs on different cores are closely synced with minor skews, allowing for accurate comparisons on event timestamps across cores.
   **Note** on Grayskull ``tensix_reset`` and ``tt-smi`` soft resets will significantly worsen the skew between core clocks making core to core comparison inaccurate and wrong. Full host
   reboot is required for syncing core clocks if soft reset is used.
 
-* Debug print can not used in kernels that are being profiled.
+- The cycle counts from cores on different devices are usually not synced. Comparing times across devices requires this consideration.

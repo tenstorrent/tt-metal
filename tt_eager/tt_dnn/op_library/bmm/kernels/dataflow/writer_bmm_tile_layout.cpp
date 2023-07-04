@@ -50,7 +50,6 @@ void kernel_main() {
                 uint32_t out_tensor_sb_row_start_tile_id = out_tensor_sbw_start_tile_id;
 
                 cb_wait_front(cb_id_out0, out_subblock_tile_count);
-                // kernel_profiler::mark_time_once(5, &one_time_profile);
                 uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
 
                 for(uint32_t h = 0; h < out_subblock_h; h++) {

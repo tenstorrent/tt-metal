@@ -8,7 +8,6 @@
 #include "ckernel.h"
 #include "ckernel_gpr_map.h"
 #include "llk_param_structs.h"
-#include "tools/profiler/kernel_profiler.hpp"
 
 using namespace ckernel;
 
@@ -39,22 +38,16 @@ uint run_kernel() {
 
 #ifdef UCK_CHLKC_MATH
     zeroacc();
-    kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
     chlkc_math::math_main();
-    kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
 #endif
 
 #ifdef UCK_CHLKC_PACK
-    kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
     chlkc_pack::pack_main();
-    kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
 #endif
 
 #ifdef UCK_CHLKC_UNPACK
     zerosrc();
-    kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
     chlkc_unpack::unpack_main();
-    kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
 #endif
 
 return 0;

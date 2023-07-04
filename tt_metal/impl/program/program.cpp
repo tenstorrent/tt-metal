@@ -1009,6 +1009,7 @@ ProgramDeviceMap ConstructProgramDeviceMap(const Device* device, Program& progra
 
 void Program::compile( Device * device )
 {
+    ZoneScoped;
     bool first_compile_on_device = compile_needed_.find(device->id()) == compile_needed_.end();
     if (not first_compile_on_device and (not compile_needed_.at(device->id()))) {
         return;
@@ -1020,8 +1021,6 @@ void Program::compile( Device * device )
         "dependent on information that is set during device initialization.",
         this->get_id());
 
-    detail::ProfileTTMetalScope profile_this =
-        detail::ProfileTTMetalScope(std::string("CompileProgram ") + std::to_string(device->id()));
     bool profile_kernel = getDeviceProfilerState();
     std::vector<std::shared_future<void>> events;
     DprintServerSetProfilerState(profile_kernel);
@@ -1030,7 +1029,6 @@ void Program::compile( Device * device )
     for (auto &[core_type, kernels] : kernels_) {
        for (auto &[id, kernel]: kernels) {
             events.emplace_back ( detail::async ( [kernel, device, this] {
-                ZoneScoped;
 
                 JitBuildOptions build_options(device->build_env());
                 kernel->set_build_options(build_options);

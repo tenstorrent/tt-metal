@@ -103,133 +103,127 @@ void kernel_main() {
     erisc::datamover::QueueIndexPointer<uint8_t> eth_receiver_rdptr(MAX_NUM_CHANNELS);
     erisc::datamover::QueueIndexPointer<uint8_t> eth_receiver_ackptr(MAX_NUM_CHANNELS);
 
-    kernel_profiler::mark_time(80);
+    {
+        DeviceZoneScopedN("eth_latency");
+        std::array<uint32_t, NUM_TRANSACTION_BUFFERS> transaction_channel_remote_buffer_addresses;
+        erisc::datamover::initialize_transaction_buffer_addresses<NUM_TRANSACTION_BUFFERS>(
+            MAX_NUM_CHANNELS,
+            remote_eth_l1_dst_addr,
+            num_bytes_per_send,
+            transaction_channel_remote_buffer_addresses);
+        std::array<uint32_t, NUM_TRANSACTION_BUFFERS> transaction_channel_local_buffer_addresses;
+        erisc::datamover::initialize_transaction_buffer_addresses<NUM_TRANSACTION_BUFFERS>(
+            MAX_NUM_CHANNELS,
+            local_eth_l1_src_addr,
+            num_bytes_per_send,
+            transaction_channel_local_buffer_addresses);
 
-    std::array<uint32_t, NUM_TRANSACTION_BUFFERS> transaction_channel_remote_buffer_addresses;
-    erisc::datamover::initialize_transaction_buffer_addresses<NUM_TRANSACTION_BUFFERS>(
-        MAX_NUM_CHANNELS,
-        remote_eth_l1_dst_addr,
-        num_bytes_per_send,
-        transaction_channel_remote_buffer_addresses);
-    std::array<uint32_t, NUM_TRANSACTION_BUFFERS> transaction_channel_local_buffer_addresses;
-    erisc::datamover::initialize_transaction_buffer_addresses<NUM_TRANSACTION_BUFFERS>(
-        MAX_NUM_CHANNELS,
-        local_eth_l1_src_addr,
-        num_bytes_per_send,
-        transaction_channel_local_buffer_addresses);
+        constexpr uint32_t SWITCH_INTERVAL = 100000;
+        uint32_t page_index = 0;
+        const uint32_t num_pages_per_l1_buffer = num_bytes_per_send / page_size;
 
-    constexpr uint32_t SWITCH_INTERVAL = 100000;
-    uint32_t page_index = 0;
-    const uint32_t num_pages_per_l1_buffer = num_bytes_per_send / page_size;
+        bool write_in_flight = false;
+        uint32_t num_eth_sends_acked = 0;
+        uint32_t count = 0;
+        uint32_t num_context_switches = 0;
+        uint32_t max_num_context_switches = 1000;
+        bool printed_hang = false;
+        uint32_t num_receives_acked = 0;
 
-    bool write_in_flight = false;
-    uint32_t num_eth_sends_acked = 0;
-    uint32_t count = 0;
-    uint32_t num_context_switches = 0;
-    uint32_t max_num_context_switches = 1000;
-    bool printed_hang = false;
-    uint32_t num_receives_acked = 0;
+        while (num_eth_sends_acked < total_num_message_sends && page_index < num_pages) {
+            bool did_something = false;
 
-    while (num_eth_sends_acked < total_num_message_sends && page_index < num_pages) {
-        bool did_something = false;
-        // kernel_profiler::mark_time(90);
+            bool received = erisc::datamover::deprecated::receiver_eth_accept_payload_sequence(
+                                noc_writer_buffer_wrptr, noc_writer_buffer_ackptr, eth_receiver_rdptr, eth_receiver_ackptr);
+            num_receives_acked = received ? num_receives_acked + 1 : num_receives_acked;
+            did_something = received || did_something;
 
-        bool received = erisc::datamover::deprecated::receiver_eth_accept_payload_sequence(
-                            noc_writer_buffer_wrptr, noc_writer_buffer_ackptr, eth_receiver_rdptr, eth_receiver_ackptr);
-        num_receives_acked = received ? num_receives_acked + 1 : num_receives_acked;
-        did_something = received || did_something;
+            did_something = eth_initiate_noc_write_sequence<MAX_NUM_CHANNELS, dest_is_dram>(
+                                transaction_channel_local_buffer_addresses,
+                                noc_writer_buffer_wrptr,
+                                noc_writer_buffer_ackptr,
+                                eth_receiver_rdptr,
+                                eth_receiver_ackptr,
 
-        did_something = eth_initiate_noc_write_sequence<MAX_NUM_CHANNELS, dest_is_dram>(
-                            transaction_channel_local_buffer_addresses,
-                            noc_writer_buffer_wrptr,
-                            noc_writer_buffer_ackptr,
-                            eth_receiver_rdptr,
-                            eth_receiver_ackptr,
+                                num_pages,
+                                num_pages_per_l1_buffer,
+                                page_size,
+                                page_index,
+                                dest_address_generator) ||
+                            did_something;
 
-                            num_pages,
-                            num_pages_per_l1_buffer,
-                            page_size,
-                            page_index,
-                            dest_address_generator) ||
-                        did_something;
+            did_something = erisc::datamover::deprecated::receiver_noc_read_worker_completion_check_sequence(
+                                noc_writer_buffer_wrptr, noc_writer_buffer_ackptr, noc_index) ||
+                            did_something;
 
-        did_something = erisc::datamover::deprecated::receiver_noc_read_worker_completion_check_sequence(
-                            noc_writer_buffer_wrptr, noc_writer_buffer_ackptr, noc_index) ||
-                        did_something;
+            did_something =
+                erisc::datamover::deprecated::receiver_eth_send_ack_to_sender_sequence(
+                    noc_writer_buffer_wrptr, noc_writer_buffer_ackptr, eth_receiver_rdptr, eth_receiver_ackptr, num_eth_sends_acked) ||
+                did_something;
 
-        did_something =
-            erisc::datamover::deprecated::receiver_eth_send_ack_to_sender_sequence(
-                noc_writer_buffer_wrptr, noc_writer_buffer_ackptr, eth_receiver_rdptr, eth_receiver_ackptr, num_eth_sends_acked) ||
-            did_something;
+            if (!did_something) {
 
-        if (!did_something) {
+                if (count++ > SWITCH_INTERVAL) {
+                    count = 0;
+                    run_routing();
+                    num_context_switches++;
+                    if (num_context_switches > max_num_context_switches) {
+                        if (!printed_hang) {
+                            DPRINT << "rx: HANG\n";
+                            DPRINT << "rx: HANG num_eth_sends_acked " << (uint32_t)num_eth_sends_acked << "\n";
+                            DPRINT << "rx: HANG total_num_message_sends " << (uint32_t)total_num_message_sends << "\n";
+                            for (uint32_t i = 0; i < MAX_NUM_CHANNELS; i++) {
 
-            if (count++ > SWITCH_INTERVAL) {
-                count = 0;
-                // kernel_profiler::mark_time(15);
-                run_routing();
-                num_context_switches++;
-                if (num_context_switches > max_num_context_switches) {
-                    if (!printed_hang) {
-                        DPRINT << "rx: HANG\n";
-                        DPRINT << "rx: HANG num_eth_sends_acked " << (uint32_t)num_eth_sends_acked << "\n";
-                        DPRINT << "rx: HANG total_num_message_sends " << (uint32_t)total_num_message_sends << "\n";
-                        for (uint32_t i = 0; i < MAX_NUM_CHANNELS; i++) {
-
-                            DPRINT << "rx: HANG channel [" << i << "] bytes_sent " << erisc_info->channels[0].bytes_sent << "\n";
-                            DPRINT << "rx: HANG channel [" << i << "] bytes_receiver_ack " << erisc_info->channels[0].receiver_ack << "\n";
-                            DPRINT << "rx: HANG eth_is_receiver_channel_send_acked (" << i << ") " << (eth_is_receiver_channel_send_acked(i) ? "true" : "false") << "\n";
-                            DPRINT << "rx: HANG eth_is_receiver_channel_send_done(" << i << ") " << (eth_is_receiver_channel_send_done(i) ? "true" : "false") << "\n";
+                                DPRINT << "rx: HANG channel [" << i << "] bytes_sent " << erisc_info->channels[0].bytes_sent << "\n";
+                                DPRINT << "rx: HANG channel [" << i << "] bytes_receiver_ack " << erisc_info->channels[0].receiver_ack << "\n";
+                                DPRINT << "rx: HANG eth_is_receiver_channel_send_acked (" << i << ") " << (eth_is_receiver_channel_send_acked(i) ? "true" : "false") << "\n";
+                                DPRINT << "rx: HANG eth_is_receiver_channel_send_done(" << i << ") " << (eth_is_receiver_channel_send_done(i) ? "true" : "false") << "\n";
+                            }
+                            DPRINT << "rx: HANG noc_writer_buffer_ackptr " << (uint32_t)noc_writer_buffer_ackptr.index() << "\n";
+                            DPRINT << "rx: HANG (raw) noc_writer_buffer_ackptr " << (uint32_t)noc_writer_buffer_ackptr.raw_index() << "\n";
+                            DPRINT << "rx: HANG noc_writer_buffer_wrptr " << (uint32_t)noc_writer_buffer_wrptr.index() << "\n";
+                            DPRINT << "rx: HANG (raw) noc_writer_buffer_wrptr " << (uint32_t)noc_writer_buffer_wrptr.raw_index() << "\n";
+                            DPRINT << "rx: HANG eth_receiver_rdptr " << (uint32_t)eth_receiver_rdptr.index() << "\n";
+                            DPRINT << "rx: HANG (raw) eth_receiver_rdptr " << (uint32_t)eth_receiver_rdptr.raw_index() << "\n";
+                            DPRINT << "rx: HANG eth_receiver_ackptr " << (uint32_t)eth_receiver_ackptr.index() << "\n";
+                            DPRINT << "rx: HANG (raw) eth_receiver_ackptr " << (uint32_t)eth_receiver_ackptr.raw_index() << "\n";
+                            DPRINT << "rx: HANG num_receives_acked " << (uint32_t)num_receives_acked << "\n";
+                            printed_hang = true;
+                            num_context_switches = 0;
                         }
-                        DPRINT << "rx: HANG noc_writer_buffer_ackptr " << (uint32_t)noc_writer_buffer_ackptr.index() << "\n";
-                        DPRINT << "rx: HANG (raw) noc_writer_buffer_ackptr " << (uint32_t)noc_writer_buffer_ackptr.raw_index() << "\n";
-                        DPRINT << "rx: HANG noc_writer_buffer_wrptr " << (uint32_t)noc_writer_buffer_wrptr.index() << "\n";
-                        DPRINT << "rx: HANG (raw) noc_writer_buffer_wrptr " << (uint32_t)noc_writer_buffer_wrptr.raw_index() << "\n";
-                        DPRINT << "rx: HANG eth_receiver_rdptr " << (uint32_t)eth_receiver_rdptr.index() << "\n";
-                        DPRINT << "rx: HANG (raw) eth_receiver_rdptr " << (uint32_t)eth_receiver_rdptr.raw_index() << "\n";
-                        DPRINT << "rx: HANG eth_receiver_ackptr " << (uint32_t)eth_receiver_ackptr.index() << "\n";
-                        DPRINT << "rx: HANG (raw) eth_receiver_ackptr " << (uint32_t)eth_receiver_ackptr.raw_index() << "\n";
-                        DPRINT << "rx: HANG num_receives_acked " << (uint32_t)num_receives_acked << "\n";
-                        printed_hang = true;
-                        num_context_switches = 0;
                     }
+                } else {
+                    count++;
                 }
             } else {
-                count++;
+                num_context_switches = 0;
             }
-        } else {
-            num_context_switches = 0;
         }
+
+        while (!ncrisc_noc_nonposted_writes_sent(noc_index));
+        while (!ncrisc_noc_nonposted_writes_flushed(noc_index));
+
+        DPRINT << "rx: DONE\n";
+        DPRINT << "rx: DONE eth_sends_completed " << (uint32_t)num_eth_sends_acked << "\n";
+        DPRINT << "rx: DONE total_num_message_sends " << (uint32_t)total_num_message_sends << "\n";
+
+        DPRINT << "rx: DONE num_eth_sends_acked " << (uint32_t)num_eth_sends_acked << "\n";
+        DPRINT << "rx: DONE total_num_message_sends " << (uint32_t)total_num_message_sends << "\n";
+        for (uint32_t i = 0; i < MAX_NUM_CHANNELS; i++) {
+
+            DPRINT << "rx: DONE channel [" << i << "] bytes_sent " << erisc_info->channels[0].bytes_sent << "\n";
+            DPRINT << "rx: DONE channel [" << i << "] bytes_receiver_ack " << erisc_info->channels[0].receiver_ack << "\n";
+            DPRINT << "rx: DONE eth_is_receiver_channel_send_acked (" << i << ") " << (eth_is_receiver_channel_send_acked(i) ? "true" : "false") << "\n";
+            DPRINT << "rx: DONE eth_is_receiver_channel_send_done(" << i << ") " << (eth_is_receiver_channel_send_done(i) ? "true" : "false") << "\n";
+        }
+        DPRINT << "rx: DONE noc_writer_buffer_ackptr " << (uint32_t)noc_writer_buffer_ackptr.index() << "\n";
+        DPRINT << "rx: DONE (raw) noc_writer_buffer_ackptr " << (uint32_t)noc_writer_buffer_ackptr.raw_index() << "\n";
+        DPRINT << "rx: DONE noc_writer_buffer_wrptr " << (uint32_t)noc_writer_buffer_wrptr.index() << "\n";
+        DPRINT << "rx: DONE (raw) noc_writer_buffer_wrptr " << (uint32_t)noc_writer_buffer_wrptr.raw_index() << "\n";
+        DPRINT << "rx: DONE eth_receiver_rdptr " << (uint32_t)eth_receiver_rdptr.index() << "\n";
+        DPRINT << "rx: DONE (raw) eth_receiver_rdptr " << (uint32_t)eth_receiver_rdptr.raw_index() << "\n";
+        DPRINT << "rx: DONE eth_receiver_ackptr " << (uint32_t)eth_receiver_ackptr.index() << "\n";
+        DPRINT << "rx: DONE (raw) eth_receiver_ackptr " << (uint32_t)eth_receiver_ackptr.raw_index() << "\n";
+        DPRINT << "rx: DONE num_receives_acked " << (uint32_t)num_receives_acked << "\n";
     }
-
-    while (!ncrisc_noc_nonposted_writes_sent(noc_index));
-    while (!ncrisc_noc_nonposted_writes_flushed(noc_index));
-
-    DPRINT << "rx: DONE\n";
-    DPRINT << "rx: DONE eth_sends_completed " << (uint32_t)num_eth_sends_acked << "\n";
-    DPRINT << "rx: DONE total_num_message_sends " << (uint32_t)total_num_message_sends << "\n";
-
-    DPRINT << "rx: DONE num_eth_sends_acked " << (uint32_t)num_eth_sends_acked << "\n";
-    DPRINT << "rx: DONE total_num_message_sends " << (uint32_t)total_num_message_sends << "\n";
-    for (uint32_t i = 0; i < MAX_NUM_CHANNELS; i++) {
-
-        DPRINT << "rx: DONE channel [" << i << "] bytes_sent " << erisc_info->channels[0].bytes_sent << "\n";
-        DPRINT << "rx: DONE channel [" << i << "] bytes_receiver_ack " << erisc_info->channels[0].receiver_ack << "\n";
-        DPRINT << "rx: DONE eth_is_receiver_channel_send_acked (" << i << ") " << (eth_is_receiver_channel_send_acked(i) ? "true" : "false") << "\n";
-        DPRINT << "rx: DONE eth_is_receiver_channel_send_done(" << i << ") " << (eth_is_receiver_channel_send_done(i) ? "true" : "false") << "\n";
-    }
-    DPRINT << "rx: DONE noc_writer_buffer_ackptr " << (uint32_t)noc_writer_buffer_ackptr.index() << "\n";
-    DPRINT << "rx: DONE (raw) noc_writer_buffer_ackptr " << (uint32_t)noc_writer_buffer_ackptr.raw_index() << "\n";
-    DPRINT << "rx: DONE noc_writer_buffer_wrptr " << (uint32_t)noc_writer_buffer_wrptr.index() << "\n";
-    DPRINT << "rx: DONE (raw) noc_writer_buffer_wrptr " << (uint32_t)noc_writer_buffer_wrptr.raw_index() << "\n";
-    DPRINT << "rx: DONE eth_receiver_rdptr " << (uint32_t)eth_receiver_rdptr.index() << "\n";
-    DPRINT << "rx: DONE (raw) eth_receiver_rdptr " << (uint32_t)eth_receiver_rdptr.raw_index() << "\n";
-    DPRINT << "rx: DONE eth_receiver_ackptr " << (uint32_t)eth_receiver_ackptr.index() << "\n";
-    DPRINT << "rx: DONE (raw) eth_receiver_ackptr " << (uint32_t)eth_receiver_ackptr.raw_index() << "\n";
-    DPRINT << "rx: DONE num_receives_acked " << (uint32_t)num_receives_acked << "\n";
-
-    kernel_profiler::mark_time(81);
-
-    kernel_profiler::mark_time(100);
-
 }

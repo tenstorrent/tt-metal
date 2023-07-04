@@ -13,7 +13,7 @@ jobs:
       fail-fast: false
       matrix:
         runner-info: [
-          {arch: grayskull, runs-on: ["grayskull"]},
+          # No GS as tests now require synced starts. GS profiler tests will run on dedicated BMs
           # N150
           {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"]},
           # N300

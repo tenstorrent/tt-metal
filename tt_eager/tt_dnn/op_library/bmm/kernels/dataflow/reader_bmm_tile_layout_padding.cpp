@@ -118,8 +118,6 @@ void kernel_main() {
 
             cb_push_back(cb_id_in0, in0_block_num_tiles);
             cb_push_back(cb_id_in1, in1_block_num_tiles);
-
-            // kernel_profiler::mark_time_once(6, &one_time_profile);
         }
         if (bcast_B == 0) {
             in1_tensor_start_tile_id += KtNt;

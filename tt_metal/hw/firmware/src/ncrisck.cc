@@ -28,6 +28,7 @@ uint32_t noc_nonposted_writes_acked[NUM_NOCS];
 
 void kernel_launch() {
 
+  DeviceZoneScopedMainChildN("NCRISC-KERNEL");
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
 #ifdef KERNEL_RUN_TIME
     uint64_t end_time = c_tensix_core::read_wall_clock() + KERNEL_RUN_TIME;
@@ -38,8 +39,6 @@ void kernel_launch() {
 
     noc_local_state_init(noc_index);
 
-    kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
     kernel_main();
-    kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
 #endif
 }

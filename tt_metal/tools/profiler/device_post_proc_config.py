@@ -7,184 +7,140 @@ from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SI
 
 
 class default_setup(metaclass=MergeMetaclass):
-    timerAnalysis = {
-        "T0 -> BRISC FW start": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"risc": "BRISC", "timerID": 0},
-            "end": {"risc": "BRISC", "timerID": 1},
-        },
-        "TRISC0 kernel start -> TRISC0 kernel end": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"risc": "TRISC_0", "timerID": 2},
-            "end": {"risc": "TRISC_0", "timerID": 3},
-        },
-        "TRISC1 kernel start -> TRISC1 kernel end": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"risc": "TRISC_1", "timerID": 2},
-            "end": {"risc": "TRISC_1", "timerID": 3},
-        },
-        "TRISC2 kernel start -> TRISC2 kernel end": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"risc": "TRISC_2", "timerID": 2},
-            "end": {"risc": "TRISC_2", "timerID": 3},
-        },
-        "BRISC kernel start -> BRISC kernel end": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"risc": "BRISC", "timerID": 2},
-            "end": {"risc": "BRISC", "timerID": 3},
-        },
-        "NCRISC kernel start -> NCRISC kernel end": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"risc": "NCRISC", "timerID": 2},
-            "end": {"risc": "NCRISC", "timerID": 3},
-        },
-        "ANY RISC FW start -> ANY RISC FW end": {
-            "across": "core",
-            "type": "launch_first_last",
-            "start": {"risc": "ANY", "timerID": 1},
-            "end": {"risc": "ANY", "timerID": 4},
-        },
-        "ANY RISC FW end -> BRISC FW start": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"risc": "ANY", "timerID": 4},
-            "end": {"risc": "BRISC", "timerID": 1},
-        },
-        "T0 -> ANY RISC FW end": {
-            "across": "core",
-            "type": "session_first_last",
-            "start": {"risc": "BRISC", "timerID": 0},
-            "end": {"risc": "ANY", "timerID": 4},
-        },
-        "BRISC FW start -> ANY RISC FW end": {
-            "across": "core",
-            "type": "session_first_last",
-            "start": {"risc": "ANY", "timerID": 1},
-            "end": {"risc": "ANY", "timerID": 4},
-        },
-        "T0 -> ANY CORE ANY RISC FW end": {
-            "across": "device",
-            "type": "session_first_last",
-            "start": {"core": "ANY", "risc": "ANY", "timerID": 1},
-            "end": {"core": "ANY", "risc": "ANY", "timerID": 4},
-        },
-    }
-
-    riscsData = {
-        "BRISC": {"color": "light:g"},
-        "NCRISC": {"color": "light:r"},
-        "TRISC_0": {"color": "light:gray"},
-        "TRISC_1": {"color": "light:gray"},
-        "TRISC_2": {"color": "light:gray"},
-        "TENSIX": {"color": "light:b"},
-    }
-
     riscs = [
         "BRISC",
         "NCRISC",
         "TRISC_0",
         "TRISC_1",
         "TRISC_2",
-        # "TENSIX",
+        "ERISC",
     ]
 
-    timerIDLabels = [(0, "Start"), (1, "Firmware Start"), (2, "Kernel start"), (3, "Kernel End"), (4, "Firmware End")]
+    riscTypes = [
+        "BRISC",
+        "NCRISC",
+        "TRISC",
+        "ERISC",
+    ]
 
-    displayStats = ["Count", "Average", "Max", "Median", "Min"]
+    timerAnalysis = {
+        "device_fw_duration": {
+            "across": "ops",
+            "type": "op_first_last",
+            "start": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-FW" for risc in riscTypes]},
+            "end": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-FW" for risc in riscTypes]},
+        },
+        "device_kernel_duration": {
+            "across": "ops",
+            "type": "op_first_last",
+            "start": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in riscTypes]},
+            "end": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in riscTypes]},
+        },
+        "device_brisc_kernel_duration": {
+            "across": "ops",
+            "type": "op_first_last",
+            "start": {"core": "ANY", "risc": "BRISC", "zone_name": "BRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "BRISC", "zone_name": "BRISC-KERNEL"},
+        },
+        "device_ncrisc_kernel_duration": {
+            "across": "ops",
+            "type": "op_first_last",
+            "start": {"core": "ANY", "risc": "NCRISC", "zone_name": "NCRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "NCRISC", "zone_name": "NCRISC-KERNEL"},
+        },
+        "device_trisc0_kernel_duration": {
+            "across": "ops",
+            "type": "op_first_last",
+            "start": {"core": "ANY", "risc": "TRISC_0", "zone_name": "TRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "TRISC_0", "zone_name": "TRISC-KERNEL"},
+        },
+        "device_trisc1_kernel_duration": {
+            "across": "ops",
+            "type": "op_first_last",
+            "start": {"core": "ANY", "risc": "TRISC_1", "zone_name": "TRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "TRISC_1", "zone_name": "TRISC-KERNEL"},
+        },
+        "device_trisc2_kernel_duration": {
+            "across": "ops",
+            "type": "op_first_last",
+            "start": {"core": "ANY", "risc": "TRISC_2", "zone_name": "TRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "TRISC_2", "zone_name": "TRISC-KERNEL"},
+        },
+        "device_erisc_kernel_duration": {
+            "across": "ops",
+            "type": "op_first_last",
+            "start": {"core": "ANY", "risc": "ERISC", "zone_name": "ERISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "ERISC", "zone_name": "ERISC-KERNEL"},
+        },
+        "device_compute_cb_wait_front": {
+            "across": "ops",
+            "type": "sum",
+            "marker": {"risc": "TRISC_0", "zone_name": "CB-COMPUTE-WAIT-FRONT"},
+        },
+        "device_compute_cb_reserve_back": {
+            "across": "ops",
+            "type": "sum",
+            "marker": {"risc": "TRISC_2", "zone_name": "CB-COMPUTE-RESERVE-BACK"},
+        },
+    }
 
-    plotBaseHeight = 200
-    plotPerCoreHeight = 100
+    displayStats = ["Count", "Average", "Max", "Median", "Min", "Sum", "Range"]
 
-    webappPort = 8050
+    detectOps = True
 
     outputFolder = f"output/device"
     deviceInputLog = f"{PROFILER_LOGS_DIR}/{PROFILER_DEVICE_SIDE_LOG}"
-    deviceRearranged = "device_rearranged_timestamps.csv"
     deviceAnalysisData = "device_analysis_data.json"
-    deviceChromeTracing = "device_chrome_tracing.json"
-    devicePerfHTML = "timeline.html"
     deviceStatsTXT = "device_stats.txt"
     deviceTarball = "device_perf_results.tgz"
 
 
-class test_matmul_multi_core_multi_dram(default_setup):
+class test_multi_op(default_setup):
     timerAnalysis = {
-        "Compute~": {
+        "BRISC KERNEL_START->KERNEL_END": {
             "across": "core",
             "type": "adjacent",
-            "start": {"risc": "NCRISC", "timerID": 6},
-            "end": {"risc": "BRISC", "timerID": 5},
-        }
-    }
-
-
-class test_matmul_multi_core_multi_dram_in0_mcast(default_setup):
-    timerAnalysis = {
-        "NCRISC start sender -> BRISC kernel end": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"risc": "NCRISC", "timerID": 10},
-            "end": {"risc": "BRISC", "timerID": 3},
-        },
-        "NCRISC start reciever -> BRISC kernel end": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"risc": "NCRISC", "timerID": 7},
-            "end": {"risc": "BRISC", "timerID": 3},
+            "start": {"core": "ANY", "risc": "BRISC", "zone_name": "BRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "BRISC", "zone_name": "BRISC-KERNEL"},
         },
     }
+    detectOps = False
 
 
-class test_matmul_multi_core_multi_dram_in1_mcast(default_setup):
+class test_custom_cycle_count(default_setup):
     timerAnalysis = {
-        "NCRISC start sender -> BRISC kernel end": {
+        "BRISC KERNEL_START->KERNEL_END": {
             "across": "core",
             "type": "adjacent",
-            "start": {"risc": "NCRISC", "timerID": 20},
-            "end": {"risc": "BRISC", "timerID": 3},
+            "start": {"core": "ANY", "risc": "BRISC", "zone_name": "BRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "BRISC", "zone_name": "BRISC-KERNEL"},
         },
-        "NCRISC start reciever -> BRISC kernel end": {
+        "NCRISC KERNEL_START->KERNEL_END": {
             "across": "core",
             "type": "adjacent",
-            "start": {"risc": "NCRISC", "timerID": 16},
-            "end": {"risc": "BRISC", "timerID": 3},
+            "start": {"core": "ANY", "risc": "NCRISC", "zone_name": "NCRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "NCRISC", "zone_name": "NCRISC-KERNEL"},
+        },
+        "TRISC_0 KERNEL_START->KERNEL_END": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "TRISC_0", "zone_name": "TRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "TRISC_0", "zone_name": "TRISC-KERNEL"},
+        },
+        "TRISC_1 KERNEL_START->KERNEL_END": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "TRISC_1", "zone_name": "TRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "TRISC_1", "zone_name": "TRISC-KERNEL"},
+        },
+        "TRISC_2 KERNEL_START->KERNEL_END": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "TRISC_2", "zone_name": "TRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "TRISC_2", "zone_name": "TRISC-KERNEL"},
         },
     }
-
-
-class test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast(default_setup):
-    timerAnalysis = {
-        "NC_in0_s_in1_r -> B_end": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"risc": "NCRISC", "timerID": 24},
-            "end": {"risc": "BRISC", "timerID": 3},
-        },
-        "NC_in0_s_in1_s -> B_end": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"risc": "NCRISC", "timerID": 29},
-            "end": {"risc": "BRISC", "timerID": 3},
-        },
-        "NC_in0_r_in1_r -> B_end": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"risc": "NCRISC", "timerID": 34},
-            "end": {"risc": "BRISC", "timerID": 3},
-        },
-        "NC_in0_r_in1_s -> B_end": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"risc": "NCRISC", "timerID": 39},
-            "end": {"risc": "BRISC", "timerID": 3},
-        },
-    }
+    detectOps = False
 
 
 class test_full_buffer(default_setup):
@@ -192,10 +148,17 @@ class test_full_buffer(default_setup):
         "Marker Repeat": {
             "across": "core",
             "type": "adjacent",
-            "start": {"risc": "ANY", "timerID": 5},
-            "end": {"risc": "ANY", "timerID": 5},
-        }
+            "start": {"risc": "ANY", "zone_name": "TEST-FULL"},
+            "end": {"risc": "ANY", "zone_name": "TEST-FULL"},
+        },
+        "Marker Repeat ETH": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"risc": "ERISC", "zone_name": "TEST-FULL"},
+            "end": {"risc": "ERISC", "zone_name": "TEST-FULL"},
+        },
     }
+    detectOps = False
 
 
 class test_noc(default_setup):
@@ -203,7 +166,8 @@ class test_noc(default_setup):
         "NoC For Loop": {
             "across": "core",
             "type": "adjacent",
-            "start": {"risc": "NCRISC", "timerID": 5},
-            "end": {"risc": "NCRISC", "timerID": 6},
+            "start": {"risc": "NCRISC", "zone_name": "NOC-FOR-LOOP"},
+            "end": {"risc": "NCRISC", "zone_name": "NOC-FOR-LOOP"},
         }
     }
+    detectOps = False
