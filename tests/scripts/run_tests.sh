@@ -64,6 +64,13 @@ run_post_commit_pipeline_tests() {
     ./tests/scripts/run_pre_post_commit_regressions.sh
 }
 
+run_eager_host_side_api_pipeline_tests() {
+    local tt_arch=$1
+    local pipeline_type=$2
+
+    env pytest tests/python_api_testing/release_tests --tt-arch $tt_arch -m $pipeline_type
+}
+
 run_frequent_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
@@ -143,6 +150,8 @@ run_pipeline_tests() {
         run_frequent_pipeline_tests_multi_threaded "$tt_arch" "$pipeline_type"
     elif [[ $pipeline_type == "frequently_hangs" ]]; then
         run_frequently_hangs_pipeline_tests "$tt_arch" "$pipeline_type"
+    elif [[ $pipeline_type == "eager_host_side" ]]; then
+        run_eager_host_side_api_pipeline_tests "$tt_arch" "$pipeline_type"
     else
         echo "Unknown pipeline: $pipeline_type"
         exit 1
@@ -154,11 +163,6 @@ validate_and_set_env_vars() {
 
     if [[ -z "$TT_METAL_HOME" ]]; then
       echo "Must provide TT_METAL_HOME in environment" 1>&2
-      exit 1
-    fi
-
-    if [ "$TT_METAL_ENV" != "dev" ]; then
-      echo "Must set TT_METAL_ENV as dev" 1>&2
       exit 1
     fi
 

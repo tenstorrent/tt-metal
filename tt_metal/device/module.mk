@@ -113,7 +113,6 @@ device: $(DEVICE_LIB)
 # anyway
 $(DEVICE_LIB): $(COMMON_LIB) $(DEVICE_OBJS)
 	@mkdir -p $(LIBDIR)
-	# $(DEVICE_CXX) $(DEVICE_CXXFLAGS) $(SHARED_LIB_FLAGS) -o $(DEVICE_LIB) $^ $(LDFLAGS) $(DEVICE_LDFLAGS)
 	ar rcs -o $@ $(DEVICE_OBJS)
 
 $(OBJDIR)/tt_metal/device/%.o: tt_metal/device/%.cpp

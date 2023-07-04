@@ -47,5 +47,23 @@ jobs:
       - uses: actions/download-artifact@v3
         with:
           name: eager-dist-${{ matrix.os }}-${{ matrix.arch }}
-      - shell: bash
-        run: ls -hal
+      - name: Create environment with new wheel
+        shell: bash
+        run: |
+          python3 -m venv env
+          source env/bin/activate
+          python -m pip install -r tt_metal/python_env/requirements.txt
+          python -m pip install ./metal_libs-*.whl
+      - name: Install test requirements
+        shell: bash
+        run: |
+          source env/bin/activate
+          python -m pip install -r tests/python_api_testing/requirements.txt
+      - name: Set up dyanmic env vars for test
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - name: Run release tests
+        shell: bash
+        run: |
+          source env/bin/activate
+          ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.arch }} --pipeline-type eager_host_side

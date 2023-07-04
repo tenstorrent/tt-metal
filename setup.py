@@ -108,6 +108,11 @@ buda_eager_build_config = BUDAEagerBuildConfig()
 class BUDAEagerBuild(build_ext):
     @staticmethod
     def get_buda_eager_build_env():
+        """
+        Force production environment when creating the wheel because there's
+        a lot of extra stuff that's added to the environment in dev that the
+        wheel doesn't need
+        """
         return {
             **os.environ.copy(),
             "TT_METAL_HOME": Path(__file__).parent,
@@ -128,6 +133,7 @@ class BUDAEagerBuild(build_ext):
 
         build_env = BUDAEagerBuild.get_buda_eager_build_env()
         subprocess.check_call(["make", "build"], env=build_env)
+        subprocess.check_call(["ls", "-hal", "build/lib"], env=build_env)
 
         fullname = self.get_ext_fullname(ext.name)
         filename = self.get_ext_filename(fullname)
@@ -141,24 +147,23 @@ class BUDAEagerBuild(build_ext):
     def is_editable_install_(self):
         return not os.path.exists(self.build_lib)
 
+# Include tt_metal_C for kernels and src/ and tools
+packages = ["tt_lib", "tt_lib.buda_m_C"]
 
 # Empty sources in order to force a BUDAEagerBuild execution
 buda_eager_lib_C = Extension("tt_lib._C", sources=[])
 
 ext_modules = [buda_eager_lib_C]
 
-# Include tt_metal_C for kernels and src/ and tools
-packages = [*find_namespace_packages(
-    where="libs",
-), "tt_metal_C"]
-
 setup(
     url="http://www.tenstorrent.com",
     use_scm_version=get_version(buda_eager_build_config),
     packages=packages,
     package_dir={
+        # Seems like we can only find package srcs directly if they're at the
+        # first level only, damn
         "": "libs",
-        "tt_metal_C": "tt_metal",
+        "tt_lib.buda_m_C": "tt_metal",
     },
     include_package_data=True,
     long_description_content_type="text/markdown",

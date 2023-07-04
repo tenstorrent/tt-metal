@@ -28,11 +28,6 @@ def function_level_defaults(reset_seeds):
 
 
 @pytest.fixture(scope="session")
-def is_dev_env():
-    return os.environ.get("TT_METAL_ENV", "") == "dev"
-
-
-@pytest.fixture(scope="session")
 def model_location_generator():
     def model_location_generator_(rel_path):
         internal_weka_path = Path("/mnt/MLPerf")

@@ -21,7 +21,7 @@ LLRT_DEPS = $(addprefix $(OBJDIR)/, $(LLRT_SRCS:.cpp=.d))
 # Each module has a top level target as the entrypoint which must match the subdir name
 llrt: $(LLRT_LIB)
 
-$(LLRT_LIB): $(COMMON_LIB) $(NETLIST_LIB) $(LLRT_OBJS) $(DEVICE_LIB)
+$(LLRT_LIB): $(COMMON_LIB) $(LLRT_OBJS) $(DEVICE_LIB)
 	@mkdir -p $(@D)
 	ar rcs -o $@ $(LLRT_OBJS)
 

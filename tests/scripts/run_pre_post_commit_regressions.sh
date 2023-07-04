@@ -7,11 +7,6 @@ if [[ -z "$TT_METAL_HOME" ]]; then
   exit 1
 fi
 
-if [ "$TT_METAL_ENV" != "dev" ]; then
-  echo "Must set TT_METAL_ENV as dev" 1>&2
-  exit 1
-fi
-
 if [[ -z "$ARCH_NAME" ]]; then
   echo "Must provide ARCH_NAME in environment" 1>&2
   exit 1

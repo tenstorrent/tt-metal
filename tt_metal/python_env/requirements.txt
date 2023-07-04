@@ -9,8 +9,8 @@ Pillow==9.5.0
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch==1.13.1+cpu
 
-# For docs
--r ../../docs/requirements-docs.txt
-
 # For profiler
 -r ../tools/profiler/requirements-profiler.txt
+
+# For testing - merging the environments later
+pytest==7.2.2
