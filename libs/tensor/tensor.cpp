@@ -41,30 +41,6 @@ Tensor::Tensor(const HostBuffer& host_buffer, const std::array<uint32_t, 4> &sha
     }
 }
 
-Tensor::Tensor(std::vector<uint32_t> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout)
-    : shape_(shape), strides_(compute_strides()), dtype_(dtype), layout_(layout) {
-    tensor_impl::convert_and_write_data_wrapper(*this, data);
-}
-
-Tensor::Tensor(std::vector<uint32_t> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device, const MemoryConfig &mem_config)
-    : shape_(shape), strides_(compute_strides()), dtype_(dtype), layout_(layout), device_(device), mem_config_(mem_config) {
-    TT_ASSERT(device != nullptr);
-    tensor_impl::validate_on_device_dtype_and_layout(device, dtype, layout);
-    tensor_impl::convert_and_write_data_wrapper(*this, data);
-}
-
-Tensor::Tensor(std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout)
-    : shape_(shape), strides_(compute_strides()), dtype_(dtype), layout_(layout) {
-    tensor_impl::convert_and_write_data_wrapper(*this, data);
-}
-
-Tensor::Tensor(std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device, const MemoryConfig &mem_config)
-    : shape_(shape), strides_(compute_strides()), dtype_(dtype), layout_(layout), device_(device), mem_config_(mem_config) {
-    TT_ASSERT(device != nullptr);
-    tensor_impl::validate_on_device_dtype_and_layout(device, dtype, layout);
-    tensor_impl::convert_and_write_data_wrapper(*this, data);
-}
-
 Tensor::Tensor(const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device, const MemoryConfig &mem_config)
     : shape_(shape), strides_(compute_strides()), dtype_(dtype), layout_(layout), device_(device), mem_config_(mem_config) {
     TT_ASSERT(device != nullptr);

@@ -60,18 +60,6 @@ class Tensor {
         // TODO(arakhmati): modify this constructor to take device buffer
         Tensor(const HostBuffer& host_buffer, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device, const MemoryConfig &mem_config = {.interleaved=true});
 
-        // TODO(arakhmati): delete
-        Tensor(std::vector<uint32_t> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout);
-
-        // TODO(arakhmati): delete
-        Tensor(std::vector<uint32_t> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device, const MemoryConfig &mem_config={.interleaved=true});
-
-        // TODO(arakhmati): delete
-        Tensor(std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout);
-
-        // TODO(arakhmati): delete
-        Tensor(std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device, const MemoryConfig &mem_config={.interleaved=true});
-
         Tensor(const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device, const MemoryConfig &mem_config={.interleaved=true});
 
         Tensor(const Tensor &other) = default;

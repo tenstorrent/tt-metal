@@ -7,6 +7,8 @@
 
 #include "third_party/magic_enum/magic_enum.hpp"
 
+#include <fmt/ranges.h>
+
 namespace tt::tt_metal::operation {
 
 namespace detail {
@@ -262,11 +264,8 @@ Tensor run_with_autoformat(const Operation& op, const Tensor &input_tensor_a, co
 Hash hash_tensor(const Tensor& tensor) {
     const auto shape = tensor.shape();
     return fmt::format(
-        "{}_{}_{}_{}_{}_{}_{}",
-        shape[0],
-        shape[1],
-        shape[2],
-        shape[3],
+        "{}_{}_{}_{}",
+        shape,
         magic_enum::enum_name(tensor.dtype()),
         magic_enum::enum_name(tensor.layout()),
         magic_enum::enum_name(tensor.buffer_type())

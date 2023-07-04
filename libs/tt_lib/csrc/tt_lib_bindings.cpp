@@ -34,6 +34,38 @@ namespace tt {
 
 namespace tt_metal {
 
+
+namespace detail {
+
+
+HostBuffer create_host_buffer_from_list_of_floats(const std::vector<float>& data, DataType data_type) {
+    HostBuffer host_buffer;
+    switch (data_type) {
+        case DataType::BFLOAT8_B:
+        case DataType::FLOAT32: {
+            auto host_buffer = host_buffer::create<float>(data.size());
+            auto host_buffer_view = host_buffer::view_as<float>(host_buffer);
+            for (auto index = 0; index < data.size(); index++) {
+                host_buffer_view[index] = data[index];
+            }
+            return host_buffer;
+        }
+        case DataType::BFLOAT16: {
+            auto host_buffer = host_buffer::create<bfloat16>(data.size());
+            auto host_buffer_view = host_buffer::view_as<bfloat16>(host_buffer);
+            for (auto index = 0; index < data.size(); index++) {
+                host_buffer_view[index] = bfloat16(data[index]);
+            }
+            return host_buffer;
+        }
+        default: {
+            TT_THROW("Cannot create a host buffer!");
+        }
+    }
+}
+
+}
+
 void TensorModule(py::module &m_tensor) {
     // ENUM SECTION
 
@@ -145,8 +177,9 @@ void TensorModule(py::module &m_tensor) {
     pyTensor
         .def(
             py::init<>(
-                [](std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout) {
-                    return Tensor(data, shape, data_type, layout);
+                [](const std::vector<float>& data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout) {
+                    auto host_buffer = detail::create_host_buffer_from_list_of_floats(data, data_type);
+                    return Tensor(host_buffer, shape, data_type, layout);
                 }
             ), R"doc(
                 +---------------+---------------+
@@ -176,8 +209,9 @@ void TensorModule(py::module &m_tensor) {
         )
         .def(
             py::init<>(
-                [](std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device) {
-                    return Tensor(data, shape, data_type, layout, device);
+                [](std::vector<float>& data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device) {
+                    auto host_buffer = detail::create_host_buffer_from_list_of_floats(data, data_type);
+                    return Tensor(host_buffer, shape, data_type, layout, device);
                 }
             ), py::keep_alive<1, 6>(), R"doc(
                 +---------------+---------------+
@@ -216,8 +250,9 @@ void TensorModule(py::module &m_tensor) {
         )
         .def(
             py::init<>(
-                [](std::vector<float> &data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device, const MemoryConfig &mem_config) {
-                    return Tensor(data, shape, data_type, layout, device, mem_config);
+                [](const std::vector<float>& data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device, const MemoryConfig &mem_config) {
+                    auto host_buffer = detail::create_host_buffer_from_list_of_floats(data, data_type);
+                    return Tensor(host_buffer, shape, data_type, layout, device, mem_config);
                 }
             ), py::keep_alive<1, 6>(), R"doc(
                 +---------------+---------------+
@@ -256,33 +291,6 @@ void TensorModule(py::module &m_tensor) {
                         tt_device,
                         mem_config
                     )
-            )doc"
-        )
-        .def(
-            py::init<>(
-                [](std::vector<uint32_t> &data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout) {
-                    return Tensor(data, shape, data_type, layout);
-                }
-            ), R"doc(
-                Not supported.
-            )doc"
-        )
-        .def(
-            py::init<>(
-                [](std::vector<uint32_t> &data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device) {
-                    return Tensor(data, shape, data_type, layout, device);
-                }
-            ), py::keep_alive<1, 6>(), R"doc(
-                Not supported.
-            )doc"
-        )
-        .def(
-            py::init<>(
-                [](std::vector<uint32_t> &data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device, const MemoryConfig &mem_config) {
-                    return Tensor(data, shape, data_type, layout, device, mem_config);
-                }
-            ), py::keep_alive<1, 6>(), R"doc(
-                Not supported.
             )doc"
         )
         .def("deallocate", [](Tensor &self) {
