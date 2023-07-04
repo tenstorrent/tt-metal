@@ -11,7 +11,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 from torchvision import transforms, datasets
 
-from libs import tt_lib as ttl
+import tt_lib as ttl
 from models.utility_functions import pad_activation, pad_weight, tilize_to_list, get_oom_of_float, is_close
 
 input_dim = 1024

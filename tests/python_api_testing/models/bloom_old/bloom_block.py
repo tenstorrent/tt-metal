@@ -3,7 +3,7 @@ import math
 from torch.nn import functional as F
 from torch.nn import LayerNorm
 
-from libs import tt_lib as ttm
+import tt_lib as ttm
 import python_api_testing.models.bloom_old.bloom_utils as bloom_utils
 import python_api_testing.models.bloom_old.bloom_attention as bloom_attention
 import python_api_testing.models.bloom_old.bloom_mlp as bloom_mlp

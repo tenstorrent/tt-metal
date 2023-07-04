@@ -7,7 +7,7 @@ sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
 import torch
-from libs import tt_lib as ttm
+import tt_lib as ttm
 
 from transformers import BloomForCausalLM
 from python_api_testing.sweep_tests.comparison_funcs import comp_pcc

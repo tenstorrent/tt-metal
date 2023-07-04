@@ -1,5 +1,5 @@
 from typing import List, Union, Optional
-from libs.tt_lib import tensor
+from tt_libimport tensor
 
 def Linear(in_features: int, out_features: int, weight: tensor.Tensor, bias: Optional[tensor.Tensor], device):
     """

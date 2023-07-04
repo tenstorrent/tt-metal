@@ -1,4 +1,4 @@
-from libs.tt_lib import tensor
+from tt_libimport tensor
 from .layernorm import Layernorm
 
 def AddAndNorm(gamma: tensor.Tensor, beta: tensor.Tensor, epsilon, var_scaler, H, W, device):

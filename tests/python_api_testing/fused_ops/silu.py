@@ -7,7 +7,7 @@ sys.path.append(f"{f}/../..")
 sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 sys.path.append(f"{f}/../../../../..")
-from libs import tt_lib as ttl
+import tt_lib as ttl
 
 def SiLU(x):
     xs = ttl.tensor.sigmoid(x)

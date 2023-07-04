@@ -6,8 +6,8 @@ sys.path.append(f"{f}/../..")
 
 import numpy as np
 
-from libs import tt_lib as ttl
-from libs.tt_lib.utils import (
+import tt_lib as ttl
+from tt_lib.utils import (
     tilize_to_list,
     tilize,
     untilize,

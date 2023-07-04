@@ -1,9 +1,9 @@
 import torch
 import numpy as np
-from libs import tt_lib as ttl
+import tt_lib as ttl
 from utility_functions import pad_by_zero, unpad_from_zero, torch2tt_tensor
 from python_api_testing.fused_ops.conv import conv as TtConv
-from libs.tt_lib.utils import (
+from tt_lib.utils import (
     _nearest_32 as nearest_32,
 )
 

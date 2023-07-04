@@ -12,8 +12,8 @@ sys.path.append(f"{f}/../../../../..")
 
 import torch
 
-from libs import tt_lib as ttl
-from libs.tt_lib.utils import untilize, tilize_to_list, print_diff_argmax, is_close
+import tt_lib as ttl
+from tt_lib.utils import untilize, tilize_to_list, print_diff_argmax, is_close
 
 
 def ref_stable_softmax(x):

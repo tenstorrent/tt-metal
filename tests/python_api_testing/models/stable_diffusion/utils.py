@@ -7,7 +7,7 @@ sys.path.append(f"{f}/../..")
 
 import torch
 
-# from libs import tt_lib as ttl
+# import tt_lib as ttl
 import tt_lib as ttl
 from utility_functions_new import torch_to_tt_tensor_rm
 

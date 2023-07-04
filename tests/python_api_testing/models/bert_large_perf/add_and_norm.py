@@ -11,10 +11,10 @@ import torch
 from transformers import BertForQuestionAnswering
 import numpy as np
 
-from libs import tt_lib as ttl
+import tt_lib as ttl
 from python_api_testing.models.bert_large_perf.fused_ops.add_and_norm import AddAndNorm
 from python_api_testing.models.bert_large_perf.fused_ops.layernorm import create_var_scaler
-from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
+from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from utility_functions import enable_compile_cache, comp_pcc, comp_allclose
 
 class TtAddAndNormModel(torch.nn.Module):

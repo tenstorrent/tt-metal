@@ -7,8 +7,8 @@ sys.path.append(f"{f}/../..")
 import os
 import yaml
 from python_api_testing.conv.pytorch_conv_tb import ConvTestParameters, generate_conv_tb
-from libs import tt_lib as ttl
-from libs.tt_lib.utils import _nearest_32
+import tt_lib as ttl
+from tt_lib.utils import _nearest_32
 
 def generate_mm_tb_using_conv_tb():
     print("Sweeping over convolution sizes and parameters in conv_tb.yaml.")

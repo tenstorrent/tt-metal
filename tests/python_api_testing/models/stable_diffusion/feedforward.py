@@ -13,7 +13,7 @@ import torch.nn as nn
 from typing import Optional
 
 from tt_lib.fallback_ops import fallback_ops
-# from libs import tt_lib as ttl
+# import tt_lib as ttl
 import tt_lib as ttl
 from python_api_testing.models.stable_diffusion.utils import make_linear
 

@@ -9,7 +9,7 @@ sys.path.append(f"{f}/../..")
 
 # TODO: need to use old style of importing until
 # the rest of the unit tests have been uplifted
-from libs import tt_lib as ttl
+import tt_lib as ttl
 
 # TODO: need to use old utility_functions until the
 # rest of the unit tests use utility_functions_new

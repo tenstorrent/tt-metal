@@ -10,7 +10,7 @@ import torch
 from torch import nn
 from torchvision import transforms, datasets
 
-from libs import tt_lib as ttl
+import tt_lib as ttl
 
 from models.utility_functions import tilize_to_list, untilize, comp_allclose_and_pcc
 

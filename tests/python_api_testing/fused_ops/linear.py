@@ -1,1 +1,1 @@
-from libs.tt_lib.fused_ops.linear import *
+from tt_lib.fused_ops.linear import *

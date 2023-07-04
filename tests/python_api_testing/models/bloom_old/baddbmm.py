@@ -1,4 +1,4 @@
-from libs import tt_lib as ttm
+import tt_lib as ttm
 
 
 def tt_baddbmm(device, input, batch1, batch2, beta=1.0, alpha=1.0) -> ttm.tensor.Tensor:

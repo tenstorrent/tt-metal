@@ -13,10 +13,10 @@ sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
 import time
-from libs import tt_lib as ttl
+import tt_lib as ttl
 from python_api_testing.models.metal_BERT_large_15.embeddings import PytorchEmbeddings
 from python_api_testing.models.metal_BERT_large_15.bert_encoder import TtBertEncoder
-from libs.tt_lib.utils import pad_activation, pad_weight
+from tt_lib.utils import pad_activation, pad_weight
 from utility_functions import (
     enable_compile_cache,
     enable_compilation_reports,

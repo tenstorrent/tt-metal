@@ -5,8 +5,8 @@ import sys
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/../..")
 import torch
-from libs import tt_lib as ttl
-from libs.tt_lib.utils import _nearest_32
+import tt_lib as ttl
+from tt_lib.utils import _nearest_32
 
 def create_conv_act_tensor(torch_tensor, N, C, H, W):
     act_shape = [N, C, H, W]

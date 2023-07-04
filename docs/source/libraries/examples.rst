@@ -17,7 +17,7 @@ These are the steps:
 .. code-block::
 
     import torch
-    from libs import tt_lib as tt_lib
+    import tt_lib as tt_lib
 
     if __name__ == "__main__":
         # Initialize TT Accelerator device on PCI slot 0
@@ -70,8 +70,8 @@ Lastly, we run ``exp`` on TT Accelerator device (suppling it with output from ``
 .. code-block::
 
     import torch
-    from libs import tt_lib as tt_lib
-    from libs.tt_lib.fallback_ops import fallback_ops
+    import tt_lib as tt_lib
+    from tt_lib.fallback_ops import fallback_ops
 
     if __name__ == "__main__":
         # Initialize TT Accelerator device on PCI slot 0
@@ -148,7 +148,7 @@ can be modified as follow:
 .. code-block::
 
     import torch
-    from libs import tt_lib as tt_lib
+    import tt_lib as tt_lib
 
     if __name__ == "__main__":
         # Initialize TT Accelerator device on PCI slot 0

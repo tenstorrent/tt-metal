@@ -13,10 +13,10 @@ sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
 from tests.python_api_testing.models.conftest import model_location_generator_
-from libs import tt_lib as ttl
+import tt_lib as ttl
 from python_api_testing.models.metal_BERT_large_15.mha import TtMultiHeadAttentionModel
 from python_api_testing.models.metal_BERT_large_15.ffn import TtFeedForwardModel
-from libs.tt_lib.utils import pad_activation, pad_weight
+from tt_lib.utils import pad_activation, pad_weight
 from utility_functions import comp_pcc, comp_allclose, profiler
 from tests.python_api_testing.models.metal_BERT_large_15.utils import (
     run_matmul_with_dataformat,

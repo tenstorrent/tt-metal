@@ -1,7 +1,7 @@
 import torch
 from torch.nn import functional as F
 
-from libs import tt_lib as ttm
+import tt_lib as ttm
 from fused_ops.linear import Linear as TtLinear
 
 import python_api_testing.models.bloom_old.bloom_utils as bloom_utils

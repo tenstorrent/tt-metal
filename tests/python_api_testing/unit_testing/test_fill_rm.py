@@ -6,7 +6,7 @@ sys.path.append(f"{f}/../..")
 
 import torch
 
-from libs import tt_lib
+import tt_lib
 from python_api_testing.models.utility_functions import print_diff_argmax
 
 

@@ -1,5 +1,5 @@
 import torch
-from libs import tt_lib as ttm
+import tt_lib as ttm
 import python_api_testing.models.bloom_old.bloom_utils as bloom_utils
 import python_api_testing.models.bloom_old.bloom_model as bloom_model
 from fused_ops.linear import Linear as TtLinear

@@ -9,12 +9,12 @@ f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
 sys.path.append(f"{f}/../..")
 sys.path.append(f"{f}/../../..")
-from libs import tt_lib as ttl
+import tt_lib as ttl
 from python_api_testing.models.bert.mha import TtMultiHeadAttentionModel
 from python_api_testing.models.bert.ffn import TtFeedForwardModel
 from python_api_testing.models.bert.fused_ops.add_and_norm import AddAndNorm
 from python_api_testing.models.bert.fused_ops.linear import Linear
-from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
+from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from utility_functions import comp_pcc, comp_allclose
 
 class TtBertEncoder(torch.nn.Module):

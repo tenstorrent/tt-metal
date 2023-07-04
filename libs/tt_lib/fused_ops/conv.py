@@ -1,6 +1,5 @@
 from typing import List, Union
 from .. import tensor
-#from libs.tt_lib.utils import _nearest_32
 from ..utils import _nearest_32, _nearest_y
 
 

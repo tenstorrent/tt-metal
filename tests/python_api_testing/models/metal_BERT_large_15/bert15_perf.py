@@ -17,7 +17,7 @@ from transformers import AutoImageProcessor
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 from tests.python_api_testing.models.conftest import model_location_generator_
 
-from libs import tt_lib as tt_lib
+import tt_lib as tt_lib
 from utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 from test_bert_batch_dram import TtBertBatchDram
 

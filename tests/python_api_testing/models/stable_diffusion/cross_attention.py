@@ -14,7 +14,7 @@ from torch import nn
 from torch.nn import functional as F
 from diffusers import StableDiffusionPipeline
 
-# from libs import tt_lib as ttl
+# import tt_lib as ttl
 import tt_lib as ttl
 from tt_lib.fallback_ops import fallback_ops
 

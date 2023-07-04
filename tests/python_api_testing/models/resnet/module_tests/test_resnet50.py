@@ -14,7 +14,7 @@ import torch
 from torchvision import models, transforms
 import pytest
 
-from libs import tt_lib as ttl
+import tt_lib as ttl
 from torch_resnet import _make_layer, ResNet, Bottleneck
 from utility_functions import comp_allclose_and_pcc, comp_pcc
 

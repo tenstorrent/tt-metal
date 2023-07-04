@@ -7,7 +7,7 @@ sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
 import torch
-from libs import tt_lib as ttm
+import tt_lib as ttm
 
 from transformers import BloomForQuestionAnswering, AutoTokenizer, BloomTokenizerFast, pipeline
 from utility_functions import print_diff_argmax

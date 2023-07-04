@@ -10,11 +10,11 @@ sys.path.append(f"{f}/../../../..")
 
 from tests.python_api_testing.models.conftest import model_location_generator_
 import time
-from libs import tt_lib as ttl
+import tt_lib as ttl
 from python_api_testing.models.bert.embeddings import PytorchEmbeddings
 from python_api_testing.models.bert.bert_encoder import TtBertEncoder
 from python_api_testing.models.bert.fused_ops.linear import Linear
-from libs.tt_lib.utils import pad_activation, pad_weight
+from tt_lib.utils import pad_activation, pad_weight
 from utility_functions import enable_compile_cache, get_compile_cache_enabled, comp_pcc, comp_allclose
 from utility_functions import profiler
 from utility_functions import disable_compile_cache

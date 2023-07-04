@@ -10,7 +10,7 @@ import os
 import yaml
 import torch
 from loguru import logger
-from libs import tt_lib as ttl
+import tt_lib as ttl
 from python_api_testing.models.utility_functions import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax, pad_weight, is_close
 from python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from python_api_testing.conv.generate_mm_tb_using_conv_tb import generate_mm_tb_using_conv_tb

@@ -13,7 +13,7 @@ import torch
 from torchvision import models
 import pytest
 from loguru import logger
-from libs import tt_lib as ttl
+import tt_lib as ttl
 from python_api_testing.sweep_tests.comparison_funcs import comp_allclose_and_pcc, comp_pcc
 from squeezenet import squeezenet1_1
 

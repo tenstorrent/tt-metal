@@ -14,14 +14,14 @@ import numpy as np
 
 from tests.python_api_testing.models.conftest import model_location_generator_
 
-from libs import tt_lib as ttl
+import tt_lib as ttl
 from python_api_testing.models.metal_BERT_large_15.fused_ops.add_and_norm import (
     AddAndNorm,
 )
 from python_api_testing.models.metal_BERT_large_15.fused_ops.layernorm import (
     create_var_scaler,
 )
-from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
+from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from utility_functions import enable_compile_cache, comp_pcc, comp_allclose
 
 

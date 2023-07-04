@@ -14,9 +14,9 @@ from transformers import BertForQuestionAnswering
 import numpy as np
 
 from tests.python_api_testing.models.conftest import model_location_generator_
-from libs import tt_lib as ttl
-from libs.tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
-from libs.tt_lib.fused_ops.softmax import softmax
+import tt_lib as ttl
+from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
+from tt_lib.fused_ops.softmax import softmax
 from utility_functions import enable_compile_cache, comp_pcc, comp_allclose, profiler
 
 

@@ -10,9 +10,9 @@ sys.path.append(f"{f}/../../../../..")
 
 import torch
 
-from libs import tt_lib as ttl
+import tt_lib as ttl
 
-from libs.tt_lib.utils import (
+from tt_lib.utils import (
     pad_weight,
     tilize_to_list,
     untilize,

@@ -2,7 +2,7 @@ import math
 
 import torch
 import numpy as np
-from libs import tt_lib as ttl
+import tt_lib as ttl
 from models.utility_functions import tt2torch, tilize_to_list
 
 def batchnorm1d_inference(weight, bias, running_mean, running_var, epsilon: float, L: int, device):

@@ -10,7 +10,7 @@ sys.path.append(f"{f}/../..")
 import numpy as np
 import torch
 
-from libs import tt_lib as ttl
+import tt_lib as ttl
 from python_api_testing.models.utility_functions import (
     tilize_to_list,
     tilize,

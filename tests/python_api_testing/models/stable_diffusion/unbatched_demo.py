@@ -25,7 +25,7 @@ from tqdm.auto import tqdm
 
 from utility_functions_new import torch_to_tt_tensor, torch_to_tt_tensor_rm, tt_to_torch_tensor, comp_pcc, comp_allclose_and_pcc, Profiler
 from utility_functions_new import enable_compile_cache, disable_compile_cache
-# from libs import tt_lib as ttl
+# import tt_lib as ttl
 import tt_lib as ttl
 from unet_2d_condition import UNet2DConditionModel as tt_unet_condition
 
