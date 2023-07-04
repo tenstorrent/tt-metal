@@ -9,13 +9,15 @@ namespace tt {
 namespace tt_metal {
 
 enum class BertLargeTMOpType {
-    SPLIT_FUSED_QKV = 0,
-    CREATE_Q_HEAD = 1,
-    CREATE_K_HEAD = 2,
-    CREATE_V_HEAD = 3,
-    CONCAT_HEADS = 4,
+    CREATE_QKV_HEADS = 0,
+    SPLIT_FUSED_QKV = 1,
+    CREATE_Q_HEAD = 2,
+    CREATE_K_HEAD = 3,
+    CREATE_V_HEAD = 4,
+    CONCAT_HEADS = 5,
 };
 
+operation::ProgramWithCallbacks multi_core_create_qkv_heads_from_fused_qkv(const Tensor &input_tensor_a, std::vector<Tensor> &output, CoreCoord compute_and_storage_grid_size);
 operation::ProgramWithCallbacks multi_core_split_fused_qkv(const Tensor &input_tensor_a, std::vector<Tensor> &output, CoreCoord compute_and_storage_grid_size);
 operation::ProgramWithCallbacks multi_core_create_qkv_heads(const Tensor &input_tensor_a, Tensor &output_tensor, CoreCoord compute_and_storage_grid_size, bool transpose_hw);
 operation::ProgramWithCallbacks multi_core_concat_heads(const Tensor &input_tensor_a, Tensor &output_tensor, CoreCoord compute_and_storage_grid_size);
@@ -33,6 +35,10 @@ struct BertLargeTM {
 
 std::ostream& operator<<(std::ostream& os, const BertLargeTM& op);
 
+// TODO: Remove redundant TMs (split and create individual q, k, v heads)?
+inline std::vector<Tensor> bert_large_create_qkv_heads(const Tensor &input_tensor_a, const MemoryConfig& mem_config) {
+    return operation::run(BertLargeTM{BertLargeTMOpType::CREATE_QKV_HEADS, mem_config}, {std::cref(input_tensor_a)});
+}
 inline std::vector<Tensor> bert_large_split_fused_qkv(const Tensor &input_tensor_a, const MemoryConfig& mem_config) {
     return operation::run(BertLargeTM{BertLargeTMOpType::SPLIT_FUSED_QKV, mem_config}, {input_tensor_a});
 }

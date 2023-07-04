@@ -2203,6 +2203,10 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     // Custom BERT TMs
+    m_tensor.def("bert_large_create_qkv_heads", &bert_large_create_qkv_heads,
+        py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        Splits [9, 1, 384, 3072] fused qkv matrix into 3 heads with shapes [9, 16, 384, 64], [9, 16, 64, 384], and [9, 16, 384, 64].
+    )doc");
     m_tensor.def("bert_large_split_fused_qkv", &bert_large_split_fused_qkv,
         py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Splits [9, 1, 384, 3072] fused qkv matrix into 3 heads with shape [9, 1, 384, 1024].

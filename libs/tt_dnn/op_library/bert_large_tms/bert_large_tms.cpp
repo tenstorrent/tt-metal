@@ -12,6 +12,9 @@ namespace tt_metal {
 void BertLargeTM::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     switch (this->bert_large_tm_op_type) {
+        case BertLargeTMOpType::CREATE_QKV_HEADS:
+            TT_ASSERT((input_tensor.shape() == Shape({9, 1, 384, 3072})), "Unsupported input shape");
+            break;
         case BertLargeTMOpType::SPLIT_FUSED_QKV:
             TT_ASSERT((input_tensor.shape() == Shape({9, 1, 384, 3072})), "Unsupported input shape");
             break;
@@ -31,6 +34,9 @@ void BertLargeTM::validate(const std::vector<Tensor>& input_tensors) const {
 std::vector<Shape> BertLargeTM::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     std::vector<Shape> output_shape_vec;
     switch (this->bert_large_tm_op_type) {
+        case BertLargeTMOpType::CREATE_QKV_HEADS:
+            output_shape_vec = {(Shape) {9, 16, 384, 64}, (Shape) {9, 16, 64, 384}, (Shape) {9, 16, 384, 64}};
+            break;
         case BertLargeTMOpType::SPLIT_FUSED_QKV:
             output_shape_vec = {(Shape) {9, 1, 384, 1024}, (Shape) {9, 1, 384, 1024}, (Shape) {9, 1, 384, 1024}};
             break;
@@ -63,6 +69,8 @@ operation::ProgramWithCallbacks BertLargeTM::create_program(const std::vector<Te
     TT_ASSERT((compute_and_storage_grid_size.x <= device_compute_and_storage_grid_size.x && compute_and_storage_grid_size.y <= device_compute_and_storage_grid_size.y), "Unsupported grid shape");
 
     switch (this->bert_large_tm_op_type) {
+        case BertLargeTMOpType::CREATE_QKV_HEADS:
+            return  multi_core_create_qkv_heads_from_fused_qkv(input_tensor, output_tensors, compute_and_storage_grid_size);
         case BertLargeTMOpType::SPLIT_FUSED_QKV:
             return  multi_core_split_fused_qkv(input_tensor, output_tensors, compute_and_storage_grid_size);
         // Q and V heads use transpose_hw=false, while K head requires the additional transpose with transpose_hw=true.

@@ -44,6 +44,7 @@ TT_DNN_SRCS = \
 	libs/tt_dnn/op_library/permute/permute_op.cpp \
 	libs/tt_dnn/op_library/composite/composite_ops.cpp\
 	libs/tt_dnn/op_library/bert_large_tms/bert_large_tms.cpp \
+	libs/tt_dnn/op_library/bert_large_tms/multi_core_create_qkv_heads_from_fused_qkv/multi_core_create_qkv_heads_from_fused_qkv.cpp \
 	libs/tt_dnn/op_library/bert_large_tms/multi_core_split_fused_qkv/multi_core_split_fused_qkv.cpp \
 	libs/tt_dnn/op_library/bert_large_tms/multi_core_create_qkv_heads/multi_core_create_qkv_heads.cpp \
 	libs/tt_dnn/op_library/bert_large_tms/multi_core_concat_heads/multi_core_concat_heads.cpp \
