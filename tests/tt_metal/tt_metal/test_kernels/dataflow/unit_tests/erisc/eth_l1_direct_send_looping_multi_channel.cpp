@@ -41,16 +41,12 @@ void kernel_main() {
 
     eth_setup_handshake(remote_eth_l1_dst_addr, true);
 
-    kernel_profiler::mark_time(10);
     uint32_t j = 0;
     for (uint32_t i = 0; i < total_num_message_sends; i++) {
-        kernel_profiler::mark_time(20);
         if (channels_active[j] != 0) {
-            kernel_profiler::mark_time(21);
             eth_wait_for_receiver_channel_done(j);
             channels_active[j] = 0;
         }
-        kernel_profiler::mark_time(22);
         eth_send_bytes_over_channel(
             local_eth_l1_src_addr,
             remote_eth_l1_dst_addr,
@@ -59,16 +55,12 @@ void kernel_main() {
             num_bytes_per_send,
             num_bytes_per_send_word_size);
         channels_active[j] = 1;
-        kernel_profiler::mark_time(23);
         j = (j + 1) & CHANNEL_MASK;
     }
 
     for (uint32_t j = 0; j < MAX_NUM_CHANNELS; j++) {
-        kernel_profiler::mark_time(24);
         if (channels_active[j] != 0) {
             eth_wait_for_receiver_channel_done(j);
         }
-        kernel_profiler::mark_time(25);
     }
-    kernel_profiler::mark_time(11);
 }

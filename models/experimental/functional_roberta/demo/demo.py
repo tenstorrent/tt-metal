@@ -266,7 +266,6 @@ def test_demo(
     disable_persistent_kernel_cache()
     disable_compilation_reports()
 
-    tt_lib.profiler.set_profiler_location(f"tt_metal/tools/profiler/logs/functional_robert")
     return run_roberta_question_and_answering_inference(
         device=device,
         use_program_cache=use_program_cache,

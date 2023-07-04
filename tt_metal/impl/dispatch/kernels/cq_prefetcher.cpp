@@ -142,6 +142,7 @@ void kernel_main() {
     uint32_t heartbeat = 0;
 #endif
     while (true) {
+        //DeviceZoneScopedMainN("CQ-PREFETCHER");
         if constexpr (read_from_issue_queue) {
             // we will also need to poll the program event buffer
             while (not issue_queue_space_available()) {

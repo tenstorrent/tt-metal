@@ -19,9 +19,6 @@
 
 namespace tt::tt_metal::operation {
 
-bool skip_profile = false;
-std::map<chip_id_t, std::reference_wrapper<Program>> skipped_programs;
-
 namespace detail {
 
 inline bool any_tensor_on_multi_device(const std::vector<Tensor>& tensors) {
@@ -69,44 +66,6 @@ void override_addresses(
     override_addresses_callback(program, input_buffers, output_buffers);
 }
 
-void setup_profiler(const HostOperation& operation, const std::vector<Tensor>& input_tensors) {
-    auto profiler_info = operation.create_profiler_info(input_tensors);
-    if (profiler_info.preferred_name.has_value()) {
-        op_profiler::set_preferred_name(profiler_info.preferred_name.value());
-    }
-    op_profiler::append_meta_data(fmt::format("{}", operation.attributes()));
-}
-
-void setup_profiler(const DeviceOperation& operation, const std::vector<Tensor>& input_tensors, const Program& program) {
-    auto profiler_info = operation.create_profiler_info(input_tensors);
-    if (profiler_info.preferred_name.has_value()) {
-        op_profiler::set_preferred_name(profiler_info.preferred_name.value());
-    }
-    if (profiler_info.parallelization_strategy.has_value()) {
-        op_profiler::set_parallelization_strategy(profiler_info.parallelization_strategy.value());
-    }
-
-    op_profiler::append_kernel_info(program);
-    op_profiler::append_meta_data(fmt::format("{}", operation.attributes()));
-}
-
-void setup_profiler(const DeviceOperation& operation, const std::vector<Tensor>& input_tensors, std::shared_ptr<const Program> program) {
-    setup_profiler(operation, input_tensors, *program);
-}
-
-template <typename OperationType>
-constexpr op_profiler::OpType get_profiler_operation_type() {
-    if constexpr (std::is_same_v<OperationType, HostOperation>) {
-        return op_profiler::OpType::tt_dnn_cpu;
-    } else if constexpr (std::is_same_v<OperationType, DeviceOperation>) {
-        return op_profiler::OpType::tt_dnn_device;
-    } else if constexpr (std::is_same_v<OperationType, ExternalOperation>) {
-        return op_profiler::OpType::python_fallback;
-    } else {
-        static_assert(tt::stl::concepts::always_false_v<OperationType>, "OperationType is not supported!");
-    }
-}
-
 template <typename Function>
 constexpr auto decorate_host_operation(const Function& function) {
     return [function]<typename Operation, typename... Args>(const Operation& operation, Args&&... args) {
@@ -129,21 +88,13 @@ constexpr auto decorate_device_operation(const Function& function) {
 }
 
 std::vector<Tensor> run_host_operation(const HostOperation& operation, const std::vector<Tensor>& input_tensors) {
-    ZoneScoped;
-    ZoneText(operation.get_type_name().c_str(), operation.get_type_name().size());
-
-    auto profile_scope = op_profiler::OpProfileScope(operation.get_type_name(), op_profiler::OpType::tt_dnn_cpu);
-    auto do_profile = op_profiler::get_profiler_flag();
+    ZoneScopedN("TT_DNN_HOST_OP");
+    uint32_t op_id = assign_id();
 
     operation.validate(input_tensors);
     auto output_tensors = operation.compute_output_tensors(input_tensors);
 
-    if (do_profile) {
-        detail::setup_profiler(operation, input_tensors);
-        //op_profiler::set_perf_model(operation.create_op_performance_model(input_tensors, optional_input_tensors, output_tensors));
-    }
-
-    op_profiler::append_all_tensor_io_data(input_tensors, {}, output_tensors);
+    TracyOpTTNNHost(op_id, operation, input_tensors, output_tensors);
 
     return output_tensors;
 }
@@ -156,12 +107,8 @@ std::vector<Tensor> run_device_operation(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     const std::vector<std::optional<Tensor>>& optional_output_tensors) {
-    ZoneScoped;
-    ZoneText(operation.get_type_name().c_str(), operation.get_type_name().size());
-    std::unique_ptr<op_profiler::OpProfileScope> profile_scope;
-    if (!operation::skip_profile) {
-        profile_scope = std::make_unique<op_profiler::OpProfileScope>(operation.get_type_name(), op_profiler::OpType::tt_dnn_device);
-    }
+    ZoneScopedN("TT_DNN_DEVICE_OP");
+    uint32_t op_id = assign_id();
 
     std::function<std::variant<std::shared_ptr<Program>, std::reference_wrapper<Program>>(
         const DeviceOperation&,
@@ -219,6 +166,7 @@ std::vector<Tensor> run_device_operation(
     operation.validate(input_tensors, optional_input_tensors, optional_output_tensors);
     auto output_tensors = operation.create_output_tensors(input_tensors, optional_output_tensors);
     auto program = get_or_create_program(operation, input_tensors, optional_input_tensors, output_tensors);
+    uint32_t device_id = detail::get_device(input_tensors, optional_input_tensors)->id();
 
     // Enqueue or Launch Program
     std::visit(
@@ -243,35 +191,15 @@ std::vector<Tensor> run_device_operation(
                     TT_ASSERT(queue.has_value(), "CommandQueue is required for fast dispatch mode");
                     CommandQueue& cq = queue.value().get();
                     EnqueueProgram(cq, program, false);
-                    if (!operation::skip_profile) {
-                        // Only need to dump device data when in dispatch mode
-                        // LaunchKernel automatically dumps device data
-                        op_profiler::dump_device_profiler_results(device, program);
-                    } else {
-                        if constexpr (std::is_same_v<T, std::shared_ptr<Program>>) {
-                            operation::skipped_programs.emplace(device->id(), *program);
-                        }
-                        else if constexpr( std::is_same_v<T, std::reference_wrapper<Program>> ){
-                            operation::skipped_programs.emplace(device->id(), program );
-                        }
-                    }
                 } else {
                     ::detail::LaunchProgram(device, program);
-                }
-                if (!operation::skip_profile) {
-                    auto do_profile = op_profiler::get_profiler_flag();
-                    if (do_profile) {
-                        detail::setup_profiler(operation, input_tensors, program);
-                        op_profiler::set_perf_model(operation.create_op_performance_model(input_tensors, optional_input_tensors, output_tensors));
-                    }
                 }
             }
         },
         program);
 
-    if (!operation::skip_profile) {
-        op_profiler::append_all_tensor_io_data(input_tensors, optional_input_tensors, output_tensors);
-    }
+    TracyOpTTNNDevice(op_id, device_id, operation, program, input_tensors, optional_input_tensors, output_tensors);
+
     return output_tensors;
 }
 

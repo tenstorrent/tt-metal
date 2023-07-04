@@ -39,7 +39,7 @@ void measure_latency(string kernel_name) {
             .noc = tt_metal::NOC::RISCV_0_default,
             .defines = defines});
 
-    tt::tt_metal::detail::SetProfilerDir(kernel_name + "_microbenchmark");
+    tt::tt_metal::detail::SetDeviceProfilerDir(kernel_name + "_microbenchmark");
     tt::tt_metal::detail::FreshProfilerDeviceLog();
     detail::CompileProgram(device, program);
     tt_metal::detail::LaunchProgram(device, program);

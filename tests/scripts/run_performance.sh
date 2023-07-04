@@ -74,6 +74,10 @@ run_perf_models_cnn_javelin() {
 run_device_perf_models() {
     local test_marker=$1
 
+    #TODO(MO): Until #6560 is fixed, GS device profiler test are grouped with
+    #Model Device perf regression tests to make sure thy run on no-soft-reset BMs
+    tests/scripts/run_profiler_regressions.sh PROFILER
+
     env pytest models/demos/resnet/tests -m $test_marker
 
     env pytest models/demos/metal_BERT_large_11/tests -m $test_marker
