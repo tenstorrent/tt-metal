@@ -10,9 +10,12 @@
 #include <iostream>
 #include <filesystem>
 
+#include "tt_metal/impl/buffers/buffer.hpp"
 #include "llrt/llrt.hpp"
 #include "tools/profiler/profiler_state.hpp"
 #include "tools/profiler/common.hpp"
+#include "tt_metal/third_party/tracy/public/tracy/TracyTTDevice.hpp"
+#include "tt_metal/third_party/tracy/public/common/TracyTTDeviceData.hpp"
 
 using std::chrono::steady_clock;
 using std::chrono::duration;
@@ -36,53 +39,37 @@ struct TimerPeriod {
     steady_clock::time_point stop;
 };
 
-class Profiler {
+struct CoreTracyData
+{
+    std::map<uint32_t, std::map<tracy::TTDeviceEvent, uint64_t, tracy::TTDeviceEvent_cmp>> data;
+    TracyTTCtx tracyContext;
+    bool contextPopulated;
+    uint32_t runCounter;
+};
+
+class HostProfiler {
     private:
+
         // Holds name to timers
         std::unordered_map <std::string, TimerPeriod> name_to_timer_map;
 
         // Recreate host side log file with header
-        bool host_new_log;
-
-        // Recreate device side log file with header
-        bool device_new_log;
-
-        // Device architecture
-        tt::ARCH device_architecture;
-
-        // Device frequency
-        int device_core_frequency;
+        bool new_log;
 
         // Output Dir for Profile Logs
         std::filesystem::path output_dir;
 
         // Turn steady clock start and stop into integer start, stop and duration
         TimerPeriodInt timerToTimerInt(TimerPeriod period);
-        //
+
         //Traverse all timers and dump the results, appending addtional fields
-        void dumpHostResults(
+        void dumpResults(
                 const std::string& timer_name,
                 const std::vector<std::pair<std::string,std::string>>& additional_fields = {});
 
-        // Dumping profile result to file
-        void dumpDeviceResultToFile(
-                int chip_id,
-                int core_x,
-                int core_y,
-                std::string hart_name,
-                uint64_t timestamp,
-                uint32_t timer_id);
-
-        // Helper function for reading risc profile results
-        void readRiscProfilerResults(
-                int device_id,
-                const CoreCoord &worker_core,
-                std::string risc_name,
-                int risc_print_buffer_addr);
-
     public:
         //Constructor
-        Profiler();
+        HostProfiler();
 
         //Mark the steady_clock for the start of the asked name
         void markStart(const std::string& timer_name);
@@ -91,22 +78,84 @@ class Profiler {
         void markStop(const std::string& timer_name, const std::vector<std::pair<std::string,std::string>>& additional_fields = {});
 
         //Set the host side file flag
-        void setHostNewLogFlag(bool new_log_flag);
+        void setNewLogFlag(bool new_log_flag);
+
+        //Change the output dir of host profile logs
+        void setOutputDir(const std::string& new_output_dir);
+};
+
+class DeviceProfiler {
+    private:
+
+        // Recreate device side log file with header
+        bool new_log;
+
+        // Device architecture
+        tt::ARCH device_architecture;
+
+        // Device frequency
+        int device_core_frequency;
+
+        //Smallest timestamp
+        uint64_t smallest_timestamp = (1lu << 63);
+
+        // Output Dir for device Profile Logs
+        std::filesystem::path output_dir;
+
+        // Global custom marker counter
+        uint32_t customMarkerCount = 0;
+
+        // Device-Core run data
+        std::map<std::pair<uint32_t,CoreCoord>, CoreTracyData> device_core_data;
+
+        // Dumping profile result to file
+        void dumpResultToFile(
+                bool debug,
+                uint32_t runID,
+                int device_id,
+                CoreCoord core,
+                int core_flat,
+                int core_flat_read,
+                int core_flat_read_ts,
+                int risc_num,
+                int risc_num_read,
+                int risc_num_read_ts,
+                uint32_t timer_id,
+                uint64_t timestamp
+                );
+
+        // Helper function for reading risc profile results
+        void readRiscProfilerResults(
+                int device_id,
+                vector<std::uint32_t> profile_buffer,
+                const CoreCoord &worker_core);
+
+        //Push device results to tracy
+        void pushTracyDeviceResults(std::pair<uint32_t,CoreCoord> device_core);
+
+        //Track the smallest timestamp dumped to file
+        void firstTimestamp(uint64_t timestamp);
+
+    public:
+        //Constructor
+        DeviceProfiler();
+
+        //DRAM buffer for device side results
+        Buffer output_dram_buffer;
+
 
         //Set the device side file flag
-        void setDeviceNewLogFlag(bool new_log_flag);
+        void setNewLogFlag(bool new_log_flag);
 
         //Set the device architecture
         void setDeviceArchitecture(tt::ARCH device_arch);
 
-        //Change the output dir of the profile logs
+        //Change the output dir of device profile logs
         void setOutputDir(const std::string& new_output_dir);
 
-        // Traverse all tensix cores on the device and dump the device profile results
-        void dumpTensixDeviceResults(int device_id, const vector<CoreCoord>& worker_cores);
+        //Traverse all cores on the device and dump the device profile results
+        void dumpResults(Device *device, const vector<CoreCoord> &worker_cores);
 
-        // Traverse all ethernet cores on the device and dump the device profile results
-        void dumpEthernetDeviceResults(int device_id, const vector<CoreCoord>& eth_cores);
 };
 
 }  // namespace tt_metal

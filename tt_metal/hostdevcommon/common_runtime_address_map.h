@@ -43,6 +43,41 @@ constexpr static std::uint32_t PRINT_BUFFER_T1 = PRINT_BUFFER_T0 + PRINT_BUFFER_
 constexpr static std::uint32_t PRINT_BUFFER_T2 = PRINT_BUFFER_T1 + PRINT_BUFFER_SIZE; // TRISC2
 constexpr static std::uint32_t PRINT_BUFFER_BR = PRINT_BUFFER_T2 + PRINT_BUFFER_SIZE; // BRISC
 
+//TODO:(MO) Change to num elem
+constexpr static std::uint32_t PROFILER_L1_MARKER_UINT32_SIZE = 2;
+constexpr static std::uint32_t PROFILER_L1_MARKER_BYTES_SIZE = PROFILER_L1_MARKER_UINT32_SIZE * sizeof(uint32_t);
+
+constexpr static std::uint32_t PROFILER_L1_PROGRAM_ID_COUNT = 2;
+constexpr static std::uint32_t PROFILER_L1_GUARANTEED_MARKER_COUNT = 4;
+constexpr static std::uint32_t PROFILER_L1_OPTIONAL_MARKER_COUNT = 10;
+//TODO:(MO) Bring after custom host GO msg
+//constexpr static std::uint32_t PROFILER_L1_OPTIONAL_MARKER_COUNT = 250;
+
+constexpr static std::uint32_t PROFILER_L1_VECTOR_SIZE = (PROFILER_L1_OPTIONAL_MARKER_COUNT + PROFILER_L1_GUARANTEED_MARKER_COUNT + PROFILER_L1_PROGRAM_ID_COUNT) * PROFILER_L1_MARKER_UINT32_SIZE;
+constexpr static std::uint32_t PROFILER_L1_BUFFER_SIZE = PROFILER_L1_VECTOR_SIZE  * sizeof(uint32_t);
+constexpr static std::uint32_t PROFILER_L1_CONTROL_VECTOR_SIZE = 32;
+constexpr static std::uint32_t PROFILER_L1_CONTROL_BUFFER_SIZE = PROFILER_L1_CONTROL_VECTOR_SIZE * sizeof(uint32_t);
+
+constexpr static std::uint32_t PROFILER_L1_BUFFER_BR = 108 * 1024;
+constexpr static std::uint32_t PROFILER_L1_BUFFER_NC = PROFILER_L1_BUFFER_BR + PROFILER_L1_BUFFER_SIZE;
+constexpr static std::uint32_t PROFILER_L1_BUFFER_T0 = PROFILER_L1_BUFFER_NC + PROFILER_L1_BUFFER_SIZE;
+constexpr static std::uint32_t PROFILER_L1_BUFFER_T1 = PROFILER_L1_BUFFER_T0 + PROFILER_L1_BUFFER_SIZE;
+constexpr static std::uint32_t PROFILER_L1_BUFFER_T2 = PROFILER_L1_BUFFER_T1 + PROFILER_L1_BUFFER_SIZE;
+constexpr static std::uint32_t PROFILER_L1_BUFFER_CONTROL = PROFILER_L1_BUFFER_T2 + PROFILER_L1_BUFFER_SIZE;
+
+constexpr static std::uint32_t PROFILER_L1_END_ADDRESS = PROFILER_L1_BUFFER_CONTROL + PROFILER_L1_CONTROL_BUFFER_SIZE;
+
+constexpr static std::uint32_t PROFILER_OP_SUPPORT_COUNT = 3;
+//TODO:(MO) Bring after custom host GO msg
+//constexpr static std::uint32_t PROFILER_OP_SUPPORT_COUNT = 900;
+constexpr static std::uint32_t PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC = PROFILER_L1_MARKER_UINT32_SIZE * (PROFILER_L1_PROGRAM_ID_COUNT +  PROFILER_L1_GUARANTEED_MARKER_COUNT) * PROFILER_OP_SUPPORT_COUNT;
+constexpr static std::uint32_t PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC = PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC * sizeof(uint32_t);
+
+constexpr static std::uint32_t PROFILER_RISC_COUNT = 5;
+
+static_assert (PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC > PROFILER_L1_BUFFER_SIZE);
+
+
 constexpr static std::uint32_t L1_UNRESERVED_BASE = 120 * 1024; // Start of unreserved space
 
 // Breakpoint regions
@@ -80,13 +115,14 @@ constexpr static std::uint32_t TRISC2_BP_LNUM = TRISC2_BP_LNUM_MACRO;
 constexpr static std::uint32_t BRISC_BP_LNUM = BRISC_BP_LNUM_MACRO;
 
 // Dispatch message address
-constexpr static std::uint32_t DISPATCH_MESSAGE_ADDR = 110816;
-constexpr static std::uint64_t DISPATCH_MESSAGE_REMOTE_SENDER_ADDR = 110848;
+
+constexpr static std::uint32_t DISPATCH_MESSAGE_ADDR = PROFILER_L1_END_ADDRESS + 224;
+constexpr static std::uint64_t DISPATCH_MESSAGE_REMOTE_SENDER_ADDR = PROFILER_L1_END_ADDRESS + 256;
 
 constexpr static std::uint32_t COMMAND_PTR_SHARD_IDX = 8;
 
 // Command queue pointers
-constexpr static uint32_t CQ_ISSUE_READ_PTR = 110944;
+constexpr static uint32_t CQ_ISSUE_READ_PTR = PROFILER_L1_END_ADDRESS + 352;
 constexpr static uint32_t CQ_ISSUE_WRITE_PTR = CQ_ISSUE_READ_PTR + L1_ALIGNMENT;
 constexpr static uint32_t CQ_COMPLETION_WRITE_PTR = CQ_ISSUE_WRITE_PTR + L1_ALIGNMENT;
 constexpr static uint32_t CQ_COMPLETION_READ_PTR = CQ_COMPLETION_WRITE_PTR + L1_ALIGNMENT;
@@ -99,7 +135,7 @@ static constexpr uint32_t HOST_CQ_COMPLETION_WRITE_PTR = 32;
 static constexpr uint32_t HOST_CQ_FINISH_PTR = 64;
 static constexpr uint32_t CQ_START = 96;
 
-static constexpr uint32_t CQ_CONSUMER_CB_BASE = 111056;
+static constexpr uint32_t CQ_CONSUMER_CB_BASE = PROFILER_L1_END_ADDRESS + 464;
 // CB0
 static constexpr uint32_t CQ_CONSUMER_CB0_ACK = CQ_CONSUMER_CB_BASE;
 static constexpr uint32_t CQ_CONSUMER_CB0_RECV = CQ_CONSUMER_CB0_ACK + L1_ALIGNMENT;

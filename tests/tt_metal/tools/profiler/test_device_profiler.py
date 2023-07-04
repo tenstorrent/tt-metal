@@ -54,32 +54,10 @@ def get_function_name():
     return frame.f_code.co_name
 
 
-def test_custom_cycle_count():
-    REF_CYCLE_COUNT = 52
-    REF_CYCLE_COUNT_HIGH_MULTIPLIER = 100
-    REF_CYCLE_COUNT_LOW_MULTIPLIER = 5
-    REF_RISC_COUNT = 5
-
-    REF_CYCLE_COUNT_MAX = REF_CYCLE_COUNT * REF_CYCLE_COUNT_HIGH_MULTIPLIER
-    REF_CYCLE_COUNT_MIN = REF_CYCLE_COUNT // REF_CYCLE_COUNT_LOW_MULTIPLIER
-
-    devicesData = run_device_profiler_test(doubleRun=True)
-
-    stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
-    riscCount = 0
-    for key in stats.keys():
-        match = re.search(r"^.* kernel start -> .* kernel end$", key)
-        if match:
-            riscCount += 1
-            assert stats[key]["stats"]["Range"] < REF_CYCLE_COUNT_MAX, "Wrong cycle count, too high"
-            assert stats[key]["stats"]["Range"] > REF_CYCLE_COUNT_MIN, "Wrong cycle count, too low"
-    assert riscCount == REF_RISC_COUNT, "Wrong RISC count"
-
-
-def test_full_buffer():
+def test_multi_op():
     REF_COUNT_DICT = {
-        "grayskull": [3240, 2640],  # [108, 88](compute cores) x 5(riscs) x 6(buffer size in marker pairs)
-        "wormhole_b0": [2160, 1920, 1680],  # [72,64,56](compute cores) x 5(riscs) x 6(buffer size in marker pairs)
+        "grayskull": [330, 270],  # [108, 88](compute cores) x 5(riscs) x 6(buffer size in marker pairs)
+        "wormhole_b0": [222, 198, 174],  # [72,64,56](compute cores) x 5(riscs) x 6(buffer size in marker pairs)
     }
 
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
@@ -89,5 +67,47 @@ def test_full_buffer():
 
     stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
 
-    assert "Marker Repeat" in stats.keys(), "Wrong device analysis format"
-    assert stats["Marker Repeat"]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
+    statName = f"BRISC KERNEL_START->KERNEL_END"
+
+    assert statName in stats.keys(), "Wrong device analysis format"
+    assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
+
+
+def test_custom_cycle_count():
+    REF_CYCLE_COUNT_PER_LOOP = 52
+    LOOP_COUNT = 2000
+    REF_CYCLE_COUNT = REF_CYCLE_COUNT_PER_LOOP * LOOP_COUNT
+    REF_CYCLE_COUNT_HIGH_MULTIPLIER = 10
+    REF_CYCLE_COUNT_LOW_MULTIPLIER = 5
+
+    REF_CYCLE_COUNT_MAX = REF_CYCLE_COUNT * REF_CYCLE_COUNT_HIGH_MULTIPLIER
+    REF_CYCLE_COUNT_MIN = REF_CYCLE_COUNT // REF_CYCLE_COUNT_LOW_MULTIPLIER
+
+    devicesData = run_device_profiler_test(setup=True)
+
+    stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
+
+    for risc in ["BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2"]:
+        statName = f"{risc} KERNEL_START->KERNEL_END"
+
+        assert statName in stats.keys(), "Wrong device analysis format"
+        assert stats[statName]["stats"]["Average"] < REF_CYCLE_COUNT_MAX, "Wrong cycle count, too high"
+        assert stats[statName]["stats"]["Average"] > REF_CYCLE_COUNT_MIN, "Wrong cycle count, too low"
+
+
+def test_full_buffer():
+    REF_COUNT_DICT = {
+        "grayskull": [2700, 2200],  # [108, 88](compute cores) x 5(riscs) x 6(buffer size in marker pairs)
+        "wormhole_b0": [1800, 1600, 1400],  # [72,64,56](compute cores) x 5(riscs) x 6(buffer size in marker pairs)
+    }
+
+    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
+    assert ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys()
+
+    devicesData = run_device_profiler_test(setup=True)
+
+    stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
+    statName = "Marker Repeat"
+
+    assert statName in stats.keys(), "Wrong device analysis format"
+    assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"

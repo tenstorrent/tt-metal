@@ -29,10 +29,10 @@ CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
 void __attribute__((section("erisc_l1_code"))) kernel_launch() {
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
-    kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
+    kernel_profiler::mark_kernel_start();
     kernel_main();
-    kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
     uint64_t dispatch_addr = NOC_XY_ADDR(NOC_X(DISPATCH_CORE_X), NOC_Y(DISPATCH_CORE_Y), DISPATCH_MESSAGE_ADDR);
     internal_::notify_dispatch_core_done(dispatch_addr);
     erisc_info->launch_user_kernel = 0;
+    kernel_profiler::mark_kernel_end();
 }

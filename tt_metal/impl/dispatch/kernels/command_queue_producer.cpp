@@ -28,7 +28,9 @@ void kernel_main() {
 
     bool db_buf_switch = false;
     while (true) {
-
+        kernel_profiler::init_profiler();
+        kernel_profiler::mark_fw_start();
+        kernel_profiler::mark_kernel_start();
         issue_queue_wait_front();
         uint32_t rd_ptr = (cq_read_interface.issue_fifo_rd_ptr << 4);
         uint64_t src_noc_addr = pcie_core_noc_encoding | rd_ptr;
@@ -96,5 +98,9 @@ void kernel_main() {
         issue_queue_pop_front<host_issue_queue_read_ptr_addr>(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size);
 
         db_buf_switch = not db_buf_switch;
+
+        kernel_profiler::mark_kernel_end();
+        kernel_profiler::mark_fw_end();
+        kernel_profiler::send_profiler_data_to_dram();
     }
 }

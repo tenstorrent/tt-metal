@@ -4,6 +4,9 @@
 
 #pragma once
 
+#define HOST_SIDE_LOG "profile_log_host.csv"
+#define DEVICE_SIDE_LOG "profile_log_device.csv"
+
 namespace tt {
 
 namespace tt_metal {

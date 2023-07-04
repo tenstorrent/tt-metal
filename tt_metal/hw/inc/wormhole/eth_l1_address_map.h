@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 
@@ -20,6 +21,8 @@ struct address_map {
   static constexpr std::int32_t DATA_BUFFER_SIZE_ETH = 4 * 1024;
   static constexpr std::int32_t DATA_BUFFER_SIZE_NOC = 16 * 1024;
   static constexpr std::int32_t DATA_BUFFER_SIZE = 24 * 1024;
+  static constexpr std::int32_t PRINT_BUFFER_SIZE = 208 ;
+
   // Base addresses
 
   static constexpr std::int32_t FIRMWARE_BASE = 0x9040;
@@ -27,7 +30,11 @@ struct address_map {
   static constexpr std::int32_t COMMAND_Q_BASE = L1_EPOCH_Q_BASE + FIRMWARE_SIZE;
   static constexpr std::int32_t DATA_BUFFER_BASE = COMMAND_Q_BASE + COMMAND_Q_SIZE;
   static constexpr std::int32_t TILE_HEADER_BUFFER_BASE = DATA_BUFFER_BASE + DATA_BUFFER_SIZE;
-  static constexpr std::int32_t ERISC_MEM_MAILBOX_BASE = COMMAND_Q_BASE - 204 - 128;
+
+  static constexpr std::int32_t ERISC_MEM_MAILBOX_BASE = COMMAND_Q_BASE - PROFILER_L1_CONTROL_BUFFER_SIZE - PROFILER_L1_BUFFER_SIZE - PRINT_BUFFER_SIZE - 128;
+
+  static constexpr std::uint32_t PROFILER_L1_BUFFER_ER = COMMAND_Q_BASE - PROFILER_L1_CONTROL_BUFFER_SIZE - PROFILER_L1_BUFFER_SIZE - PRINT_BUFFER_SIZE;
+  static constexpr std::uint32_t PROFILER_L1_BUFFER_CONTROL = COMMAND_Q_BASE - PROFILER_L1_CONTROL_BUFFER_SIZE - PRINT_BUFFER_SIZE;
 
   // TT Metal Specific
   static constexpr std::int32_t ERISC_FIRMWARE_SIZE = 2 * 1024;
@@ -55,7 +62,7 @@ struct address_map {
   static constexpr std::int32_t LAUNCH_ERISC_APP_FLAG = L1_EPOCH_Q_BASE + 4;
 
   // TODO: risky, is there a check for FW size we can add?
-  static constexpr std::int32_t PRINT_BUFFER_ER = COMMAND_Q_BASE - 204;
+  static constexpr std::int32_t PRINT_BUFFER_ER = COMMAND_Q_BASE - PRINT_BUFFER_SIZE;
   template <std::size_t A, std::size_t B>
   struct TAssertEquality {
       static_assert(A == B, "Not equal");

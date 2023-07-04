@@ -102,7 +102,7 @@ namespace op_profiler {
 
         struct OpData {
             string name;
-            Profiler profiler = Profiler();
+            HostProfiler profiler = HostProfiler();
             vector<string> metaDataVector = {};
 
             int opCallCount;
@@ -168,11 +168,12 @@ namespace op_profiler {
                 void setup_profiling_folders (
                         string opName,
                         int callCount,
-                        Profiler& opProfiler,
+                        HostProfiler& opProfiler,
                         bool freshTTmetalLogs = true)
                 {
                     TT_ASSERT (profileFolder != "", "Bad log folder location, folder has been setup wrong");
-                    tt::tt_metal::detail::SetProfilerDir(profileFolder + "/" + opName + "/" + to_string(callCount));
+                    tt::tt_metal::detail::SetHostProfilerDir(profileFolder + "/" + opName + "/" + to_string(callCount));
+                    tt::tt_metal::detail::SetDeviceProfilerDir(profileFolder + "/" + opName + "/" + to_string(callCount));
                     if (freshTTmetalLogs)
                     {
                         tt::tt_metal::detail::FreshProfilerHostLog();
@@ -183,7 +184,7 @@ namespace op_profiler {
                     //If it is the first call to this op, freshen the log
                     if (callCount > 1)
                     {
-                        opProfiler.setHostNewLogFlag(false);
+                        opProfiler.setNewLogFlag(false);
                     }
                 }
 

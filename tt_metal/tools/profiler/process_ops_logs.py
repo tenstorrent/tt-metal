@@ -114,47 +114,48 @@ def append_device_time_data(opCandidatePath, call_count, timeDataDict, deviceLog
         deviceLogPath = os.path.join(opCandidatePath, f"{call_count}", PROFILER_DEVICE_SIDE_LOG)
     if os.path.isfile(deviceLogPath):
         setup = device_post_proc_config.default_setup()
+        setup.intrestingCores = None
         setup.deviceInputLog = deviceLogPath
         setup.timerAnalysis = {
             "FW_START->FW_END": {
                 "across": "device",
-                "type": "session_first_last",
+                "type": "model_first_last",
                 "start": {"core": "ANY", "risc": "ANY", "timerID": 1},
                 "end": {"core": "ANY", "risc": "ANY", "timerID": 4},
             },
             "KERNEL_START->KERNEL_END": {
                 "across": "device",
-                "type": "session_first_last",
+                "type": "model_first_last",
                 "start": {"core": "ANY", "risc": "ANY", "timerID": 2},
                 "end": {"core": "ANY", "risc": "ANY", "timerID": 3},
             },
             "BR_KERNEL_START->BR_KERNEL_END": {
                 "across": "device",
-                "type": "session_first_last",
+                "type": "model_first_last",
                 "start": {"core": "ANY", "risc": "BRISC", "timerID": 2},
                 "end": {"core": "ANY", "risc": "BRISC", "timerID": 3},
             },
             "NC_KERNEL_START->NC_KERNEL_END": {
                 "across": "device",
-                "type": "session_first_last",
+                "type": "model_first_last",
                 "start": {"core": "ANY", "risc": "NCRISC", "timerID": 2},
                 "end": {"core": "ANY", "risc": "NCRISC", "timerID": 3},
             },
             "T0_KERNEL_START->T0_KERNEL_END": {
                 "across": "device",
-                "type": "session_first_last",
+                "type": "model_first_last",
                 "start": {"core": "ANY", "risc": "TRISC_0", "timerID": 2},
                 "end": {"core": "ANY", "risc": "TRISC_0", "timerID": 3},
             },
             "T1_KERNEL_START->T1_KERNEL_END": {
                 "across": "device",
-                "type": "session_first_last",
+                "type": "model_first_last",
                 "start": {"core": "ANY", "risc": "TRISC_1", "timerID": 2},
                 "end": {"core": "ANY", "risc": "TRISC_1", "timerID": 3},
             },
             "T2_KERNEL_START->T2_KERNEL_END": {
                 "across": "device",
-                "type": "session_first_last",
+                "type": "model_first_last",
                 "start": {"core": "ANY", "risc": "TRISC_2", "timerID": 2},
                 "end": {"core": "ANY", "risc": "TRISC_2", "timerID": 3},
             },
