@@ -124,9 +124,7 @@ def test_split_tiled_w(dim, refshape, in_mem_config, out_mem_config, device, dty
             ttl.tensor.Layout.ROW_MAJOR,
         ).to(device)
 
-    ttl.profiler.start_profiling("Run")
     dev_buffers = ttl.tensor.split_dim_two_chunks_tiled(a_t, dim, out_mem_config)
-    ttl.profiler.stop_profiling("Run")
 
     # Check memory of inputs and outputs
     logger.debug(f"in0 is on: {a_t.memory_config().buffer_type}")

@@ -36,8 +36,9 @@ void kernel_launch() {
 
     noc_local_state_init(noc_index);
 
-    kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
-    kernel_main();
-    kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
+    {
+        DeviceZoneScopedMainChildN("BRISC-KERNEL");
+        kernel_main();
+    }
 #endif
 }

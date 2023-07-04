@@ -130,6 +130,7 @@ namespace detail {
 
 std::map<chip_id_t, Device *> CreateDevices(
     std::vector<chip_id_t> device_ids, const uint8_t num_hw_cqs, const std::vector<uint32_t> &l1_bank_remap) {
+    ZoneScoped;
     std::map<chip_id_t, Device *> active_devices;  // TODO: pass this to CloseDevices
     for (const auto &device_id : device_ids) {
         const auto &mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
@@ -138,6 +139,7 @@ std::map<chip_id_t, Device *> CreateDevices(
                  tt::Cluster::instance().get_devices_controlled_by_mmio_device(mmio_device_id)) {
                 Device * dev = new Device(mmio_controlled_device_id, num_hw_cqs, l1_bank_remap);
                 active_devices.insert({mmio_controlled_device_id, dev});
+                detail::InitDeviceProfiler(dev);
             }
         }
     }
@@ -247,8 +249,6 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
 
     void WriteToDevice(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
         ZoneScoped;
-        detail::ProfileTTMetalScope profile_this =
-            detail::ProfileTTMetalScope(std::string("WriteToDevice ") + std::to_string(buffer.device()->id()));
         if(buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED || buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK){
             WriteToDeviceInterleavedContiguous(buffer, host_buffer);
         }
@@ -387,9 +387,6 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
 
     void ReadFromDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer,  bool shard_order) {
         ZoneScoped;
-        detail::ProfileTTMetalScope profile_this =
-            detail::ProfileTTMetalScope(std::string("ReadFromDevice ") + std::to_string(buffer.device()->id()));
-
         host_buffer.clear();  // overwrite the data
         if(buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED
             || buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK){
@@ -468,8 +465,6 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         {//Profiler scope start
         ZoneScoped;
         detail::DispatchStateCheck( false );
-        detail::ProfileTTMetalScope profile_this =
-            detail::ProfileTTMetalScope(std::string("LaunchProgram ") + std::to_string(device->id()));
         detail::CompileProgram(device, program);
         detail::WriteRuntimeArgsToDevice(device, program);
         detail::ConfigureDeviceWithProgram(device, program);
@@ -506,8 +501,6 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         // Used to Launch programs for Slow dispatch.
         bool using_fast_dispatch = fd_bootloader_mode;
         detail::DispatchStateCheck( using_fast_dispatch );
-        detail::ProfileTTMetalScope profile_this =
-            detail::ProfileTTMetalScope(std::string("ConfigureDeviceWithProgram ") + std::to_string(device->id()));
 
         auto device_id = device->id();
 
@@ -641,6 +634,7 @@ Device *CreateDevice(chip_id_t device_id, const uint8_t num_hw_cqs, const std::v
     ZoneScoped;
     Device * dev = new Device(device_id, num_hw_cqs, l1_bank_remap);
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
+    detail::InitDeviceProfiler(dev);
     return dev;
 }
 

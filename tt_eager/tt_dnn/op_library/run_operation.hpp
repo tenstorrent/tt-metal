@@ -17,11 +17,6 @@ namespace tt::tt_metal {
 
 namespace operation {
 
-// Temporary changes to allow multi-device ops to work with op profiler
-// Should be removed with new profiler + software queue changes
-extern bool skip_profile;
-extern std::map<chip_id_t, std::reference_wrapper<Program>> skipped_programs;
-
 template<typename ConcreteOperation>
 std::vector<Tensor> generic_create_output_tensors(
     const ConcreteOperation& operation,
@@ -253,6 +248,12 @@ inline void log_operation(
     const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
     const std::vector<std::optional<Tensor>>& optional_output_tensors = {}) {}
 #endif
+
+inline uint32_t assign_id()
+{
+    static std::atomic<uint32_t> atomic_count{0};
+    return atomic_count.fetch_add(1);
+}
 
 std::vector<Tensor> run(
     const HostOperation& operation,

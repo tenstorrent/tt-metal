@@ -52,6 +52,8 @@ class BankManager {
     void dump_blocks(std::ofstream &out) const;
 
    private:
+    void deallocate_buffer_(uint64_t address);
+
     constexpr static uint32_t min_allocation_size_bytes_ = 32;
 
     // Types of buffers allocated in the banks

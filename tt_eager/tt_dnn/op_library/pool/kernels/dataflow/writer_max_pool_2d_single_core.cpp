@@ -45,7 +45,6 @@ void kernel_main() {
         for (uint32_t out_h_i = start_out_h_i; out_h_i < end_out_h_i; ++ out_h_i) {
             for (uint32_t out_w_i = 0; out_w_i < out_w_loop_count; ++ out_w_i) {
                 cb_wait_front(out_cb_id, out_nelems * out_ntiles_c);
-                // kernel_profiler::mark_time(13);
                 uint32_t out_l1_read_addr = get_read_ptr(out_cb_id);
                 for (uint32_t out_elem_i = 0; out_elem_i < out_nelems; ++ out_elem_i) {
                     // TODO [AS]: skip OOB indices when out_nelems is not multiple of out_w
@@ -84,7 +83,6 @@ void kernel_main() {
                     ++ out_row_id;
                 }
                 noc_async_write_barrier();
-                // kernel_profiler::mark_time(14);
                 cb_pop_front(out_cb_id, out_nelems * out_ntiles_c);
             }
         }

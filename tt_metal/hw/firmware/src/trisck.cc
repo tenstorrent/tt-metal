@@ -35,6 +35,7 @@ volatile tt_reg_ptr uint * mailbox_base[4] = {
 
 void kernel_launch()
 {
+  DeviceZoneScopedMainChildN("TRISC-KERNEL");
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
 #ifdef KERNEL_RUN_TIME
     ckernel::wait(KERNEL_RUN_TIME);

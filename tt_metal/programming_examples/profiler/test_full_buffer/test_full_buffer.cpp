@@ -4,22 +4,21 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "hostdevcommon/common_runtime_address_map.h"
 
 using namespace tt;
 
-bool RunCustomCycle(tt_metal::Device *device, int loop_count, string run_name = " ")
+void RunFillUpAllBuffers(tt_metal::Device *device, int loop_count, bool fast_dispatch)
 {
-    bool pass = true;
-
     CoreCoord compute_with_storage_size = device->compute_with_storage_grid_size();
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {compute_with_storage_size.x - 1, compute_with_storage_size.y - 1};
     CoreRange all_cores(start_core, end_core);
+    auto eth_cores = device->get_active_ethernet_cores(true);
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
     constexpr int loop_size = 200;
-    constexpr bool profile_device = true;
     std::map<string, string> kernel_defines = {
         {"LOOP_COUNT", std::to_string(loop_count)},
         {"LOOP_SIZE", std::to_string(loop_size)}
@@ -29,24 +28,36 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count, string run_name = 
         program, "tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .defines = kernel_defines});
-
     tt_metal::KernelHandle ncrisc_kernel = tt_metal::CreateKernel(
         program, "tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .defines = kernel_defines});
-
     vector<uint32_t> trisc_kernel_args = {};
     tt_metal::KernelHandle trisc_kernel = tt_metal::CreateKernel(
         program, "tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer_compute.cpp",
         all_cores,
-        tt_metal::ComputeConfig{.compile_args = trisc_kernel_args, .defines = kernel_defines}
-    );
+        tt_metal::ComputeConfig{.compile_args = trisc_kernel_args, .defines = kernel_defines});
 
-    EnqueueProgram(device->command_queue(), program, false);
-    Finish(device->command_queue());
-    tt_metal::DumpDeviceProfileResults(device, program);
+    for (auto core : eth_cores)
+    {
+        auto eth_reader_kernel = tt_metal::CreateKernel(
+                program, "tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer_ether.cpp",
+                (CoreCoord){core.x,core.y},
+                tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .defines = kernel_defines});
+    }
 
-    return pass;
+    if (fast_dispatch)
+    {
+        for (int i = 0; i < PROFILER_OP_SUPPORT_COUNT * PROFILER_L1_GUARANTEED_MARKER_COUNT / loop_count; i++)
+        {
+            EnqueueProgram(device->command_queue(), program, false);
+        }
+    }
+    else
+    {
+        tt_metal::detail::LaunchProgram(device, program);
+    }
+
 }
 
 int main(int argc, char **argv) {
@@ -60,8 +71,12 @@ int main(int argc, char **argv) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(device_id);
 
-        int loop_count = 20;
-        pass &= RunCustomCycle(device, loop_count);
+        const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
+
+        constexpr int device_loop_count = 150;
+
+        RunFillUpAllBuffers(device, device_loop_count, USE_FAST_DISPATCH);
+        tt_metal::detail::DumpDeviceProfileResults(device);
 
         pass &= tt_metal::CloseDevice(device);
 

@@ -7,7 +7,7 @@
 
 using namespace tt;
 
-bool RunCustomCycle(tt_metal::Device *device, int loop_count, string run_name = " ")
+bool RunCustomCycle(tt_metal::Device *device, int loop_count, bool dumpProfile = false)
 {
     bool pass = true;
 
@@ -43,7 +43,6 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count, string run_name = 
     );
 
     EnqueueProgram(device->command_queue(), program, false);
-    Finish(device->command_queue());
     tt_metal::DumpDeviceProfileResults(device, program);
 
     return pass;
@@ -61,9 +60,6 @@ int main(int argc, char **argv) {
             tt_metal::CreateDevice(device_id);
 
         int loop_count = 2000;
-        pass &= RunCustomCycle(device, loop_count);
-
-        loop_count = 2001;
         pass &= RunCustomCycle(device, loop_count);
 
         pass &= tt_metal::CloseDevice(device);
