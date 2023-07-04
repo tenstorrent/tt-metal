@@ -28,7 +28,6 @@ from tt_metal.tools.profiler.common import (
     PROFILER_HOST_SIDE_LOG,
     PROFILER_OUTPUT_DIR,
 )
-
 OUT_NAME = "ops_perf_results"
 
 OPS_CSV_HEADER = [
@@ -463,12 +462,12 @@ def print_ops_csv(ops, opsFolder, outputFolder, date, nameAppend):
 
     opsCSVPath = os.path.join(outFolder, f"{name}.csv")
 
-    if os.path.isdir(f"{opsFolder}_device"):
-        os.system(
-            f"mv {opsFolder} ops && mv {opsFolder}_device ops_device && tar -czf {name}.tgz ops ops_device && rm -rf ops ops_device && mv {name}.tgz {outFolder}"
-        )
-    else:
-        os.system(f"mv {opsFolder} ops && tar -czf {name}.tgz ops && rm -rf ops && mv {name}.tgz {outFolder}")
+    # if os.path.isdir(f"{opsFolder}_device"):
+        # os.system(
+            # f"mv {opsFolder} ops && mv {opsFolder}_device ops_device && tar -czf {name}.tgz ops ops_device && rm -rf ops ops_device && mv {name}.tgz {outFolder}"
+        # )
+    # else:
+        # os.system(f"mv {opsFolder} ops && tar -czf {name}.tgz ops && rm -rf ops && mv {name}.tgz {outFolder}")
 
     with open(opsCSVPath, "w") as opsCSV:
         opsWriter = csv.writer(opsCSV, delimiter=",")

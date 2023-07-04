@@ -2,30 +2,58 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-/*
-*
-* Ennums and defines shared between host and device profiler.
-*
-*/
 #pragma once
 
-#define CC_MAIN_START          1U
-#define CC_KERNEL_MAIN_START   2U
-#define CC_KERNEL_MAIN_END     3U
-#define CC_MAIN_END            4U
+inline __attribute__((always_inline)) uint32_t get_flat_id(uint32_t coreX, uint32_t coreY)
+{
+    constexpr uint32_t DRAM_ROW = 6;
+    uint32_t coreFlatID = 0;
+
+    if (coreY > DRAM_ROW){
+        coreX --;
+        coreY --;
+        coreY --;
+    }
+    else{
+        coreX --;
+        coreY --;
+    }
+    coreFlatID = coreY * 3 + (coreX / 3) * 30 + (coreX % 3) ;
+    return coreFlatID;
+}
 
 namespace kernel_profiler{
 /**
  * L1 buffer structure for profiler markers
  * _____________________________________________________________________________________________________
  *|                  |                        |              |             |             |              |
- *| Buffer end index | Dropped marker counter | 1st timer_id | 1st timer_L | 1st timer_H | 2nd timer_id | ...
+
  *|__________________|________________________|______________|_____________|_____________|______________|
  *
  * */
 
-enum BufferIndex {BUFFER_END_INDEX, DROPPED_MARKER_COUNTER, MARKER_DATA_START};
+    constexpr static uint32_t PADDING_MARKER = ((1<<16) - 1);
+    constexpr static uint32_t NOC_ALIGNMENT_FACTOR = 4;
 
-enum TimerDataIndex {TIMER_ID, TIMER_VAL_L, TIMER_VAL_H, TIMER_DATA_UINT32_SIZE};
+    enum BufferIndex {ID_HH, ID_HL, ID_LH, ID_LL, FW_START, FW_START_L, KERNEL_START, KERNEL_START_L, KERNEL_END, KERNEL_END_L, FW_END, FW_END_L, CUSTOM_MARKERS};
+    enum ControlBuffer
+    {
+        HOST_BUFFER_END_INDEX_BR,
+        HOST_BUFFER_END_INDEX_NC,
+        HOST_BUFFER_END_INDEX_T0,
+        HOST_BUFFER_END_INDEX_T1,
+        HOST_BUFFER_END_INDEX_T2,
+        DEVICE_BUFFER_END_INDEX_BR,
+        DEVICE_BUFFER_END_INDEX_NC,
+        DEVICE_BUFFER_END_INDEX_T0,
+        DEVICE_BUFFER_END_INDEX_T1,
+        DEVICE_BUFFER_END_INDEX_T2,
+        FW_RESET_H,
+        FW_RESET_L,
+        DRAM_PROFILER_ADDRESS,
+        CONTROL_BUFFER_SIZE
+    };
+
+
 
 }

@@ -54,7 +54,7 @@ int main(int argc, char *argv[]) {
       notify_brisc_and_halt(RUN_SYNC_MSG_DONE);
 
       kernel_profiler::init_profiler();
-      kernel_profiler::mark_time(CC_MAIN_START);
+      kernel_profiler::mark_fw_start();
 
       setup_cb_read_write_interfaces(0, mailboxes->launch.max_cb_index, true, true);
 
@@ -62,7 +62,8 @@ int main(int argc, char *argv[]) {
       kernel_init();
       DEBUG_STATUS('D');
 
-      kernel_profiler::mark_time(CC_MAIN_END);
+      kernel_profiler::mark_fw_end();
+      kernel_profiler::finish();
   }
 
   return 0;

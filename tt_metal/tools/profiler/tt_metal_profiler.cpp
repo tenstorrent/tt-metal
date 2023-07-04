@@ -6,8 +6,10 @@
 #include "impl/debug/dprint_server.hpp"
 
 #include "tools/profiler/profiler.hpp"
+#include "hostdevcommon/profiler_common.h"
 
 #include "tt_metal/detail/tt_metal.hpp"
+
 
 namespace tt {
 
@@ -21,65 +23,115 @@ void DumpDeviceProfileResults(Device *device, const Program &program) {
 
 namespace detail {
 
-static Profiler tt_metal_profiler = Profiler();
+DeviceProfiler tt_metal_device_profiler;
+HostProfiler tt_metal_host_profiler;
 
-void DumpDeviceProfileResults(
-    Device *device, const std::unordered_map<CoreType, std::vector<CoreCoord>> &logical_cores) {
+void InitDeviceProfiler(Device *device){
 #if defined(PROFILER)
     ZoneScoped;
+
+    tt::tt_metal::InterleavedBufferConfig dram_config{
+                .device= device,
+                .size = PROFILER_FULL_HOST_BUFFER_SIZE,
+                .page_size = PROFILER_FULL_HOST_BUFFER_SIZE_PER_DRAM_BANK,
+                .buffer_type = tt::tt_metal::BufferType::DRAM
+    };
+    tt_metal_device_profiler.output_dram_buffer = tt_metal::CreateBuffer(dram_config);
+
+    CoreCoord compute_with_storage_size = device->logical_grid_size();
+    CoreCoord start_core = {0, 0};
+    CoreCoord end_core = {compute_with_storage_size.x - 1, compute_with_storage_size.y - 1};
+
+    std::vector<uint32_t> control_buffer(kernel_profiler::CONTROL_BUFFER_SIZE, 0);
+    control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] = tt_metal_device_profiler.output_dram_buffer.address();
+
+    for (size_t x=start_core.x; x <= end_core.x; x++)
+    {
+        for (size_t y=start_core.y; y <= end_core.y; y++)
+        {
+            CoreCoord curr_core = {x, y};
+            tt_metal::detail::WriteToDeviceL1(device, curr_core, PROFILER_L1_BUFFER_CONTROL, control_buffer);
+        }
+    }
+
+    std::vector<uint32_t> inputs_DRAM(PROFILER_FULL_HOST_BUFFER_SIZE/sizeof(uint32_t), 0);
+    tt_metal::detail::WriteToBuffer(tt_metal_device_profiler.output_dram_buffer, inputs_DRAM);
+
+#endif
+}
+
+void DumpDeviceProfileResults(Device *device) {
+#if defined(PROFILER)
+    CoreCoord compute_with_storage_size = device->logical_grid_size();
+    CoreCoord start_core = {0, 0};
+    CoreCoord end_core = {compute_with_storage_size.x - 1, compute_with_storage_size.y - 1};
+
+    std::unordered_map<CoreType, std::vector<CoreCoord>> logicalCores;
+    for (size_t y=start_core.y; y <= end_core.y; y++)
+    {
+        for (size_t x=start_core.x; x <= end_core.x; x++)
+        {
+            CoreCoord logical_core = {x, y};
+            logicalCores[CoreType::WORKER].push_back(logical_core);
+        }
+    }
+    DumpDeviceProfileResults(device, logicalCores);
+#endif
+}
+
+void DumpDeviceProfileResults(Device *device, const std::unordered_map<CoreType, std::vector<CoreCoord>> &logical_cores){
+#if defined(PROFILER)
+    ZoneScoped;
+    TT_FATAL(DprintServerIsRunning() == false, "Debug print server is running, cannot dump device profiler data");
     if (getDeviceProfilerState())
     {
-        ProfileTTMetalScope profile_this = ProfileTTMetalScope("DumpDeviceProfileResults");
-        //TODO: (MO) This global is temporary need to update once the new interface is in
-        if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
-            Finish(GetCommandQueue(device));
-        }
-
-        TT_FATAL(DprintServerIsRunning() == false, "Debug print server is running, cannot dump device profiler data");
         auto device_id = device->id();
-        tt_metal_profiler.setDeviceArchitecture(device->arch());
+        tt_metal_device_profiler.setDeviceArchitecture(device->arch());
         if (logical_cores.find(CoreType::WORKER) != logical_cores.end()) {
             auto worker_cores_used_in_program =
                 device->worker_cores_from_logical_cores(logical_cores.at(CoreType::WORKER));
-            tt_metal_profiler.dumpTensixDeviceResults(device_id, worker_cores_used_in_program);
+            tt_metal_device_profiler.dumpResults(device, worker_cores_used_in_program);
         }
-        if (logical_cores.find(CoreType::ETH) != logical_cores.end()) {
-            auto ethernet_cores_used_in_program =
-                device->ethernet_cores_from_logical_cores(logical_cores.at(CoreType::ETH));
-            tt_metal_profiler.dumpEthernetDeviceResults(device_id, ethernet_cores_used_in_program);
-        }
+        tt_metal_device_profiler.pushTracyDeviceResults(device_id);
+        tt_metal_device_profiler.device_data.clear();
     }
 #endif
 }
 
-void SetProfilerDir(std::string output_dir){
+void SetDeviceProfilerDir(std::string output_dir){
 #if defined(PROFILER)
-     tt_metal_profiler.setOutputDir(output_dir);
+     tt_metal_device_profiler.setOutputDir(output_dir);
+#endif
+}
+
+void SetHostProfilerDir(std::string output_dir){
+#if defined(PROFILER)
+     tt_metal_host_profiler.setOutputDir(output_dir);
 #endif
 }
 
 void FreshProfilerHostLog(){
 #if defined(PROFILER)
-     tt_metal_profiler.setHostNewLogFlag(true);
+     tt_metal_host_profiler.setNewLogFlag(true);
 #endif
 }
 
 void FreshProfilerDeviceLog(){
 #if defined(PROFILER)
-     tt_metal_profiler.setDeviceNewLogFlag(true);
+     tt_metal_device_profiler.setNewLogFlag(true);
 #endif
 }
 
 ProfileTTMetalScope::ProfileTTMetalScope (const string& scopeNameArg) : scopeName(scopeNameArg){
 #if defined(PROFILER)
-    tt_metal_profiler.markStart(scopeName);
+    tt_metal_host_profiler.markStart(scopeName);
 #endif
 }
 
 ProfileTTMetalScope::~ProfileTTMetalScope ()
 {
 #if defined(PROFILER)
-    tt_metal_profiler.markStop(scopeName);
+    tt_metal_host_profiler.markStop(scopeName);
 #endif
 }
 

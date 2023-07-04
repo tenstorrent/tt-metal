@@ -28,11 +28,15 @@ void kernel_main() {
     bool db_buf_switch = false;
     while (true) {
 
+        kernel_profiler::init_profiler();
+        kernel_profiler::mark_fw_start();
+        kernel_profiler::mark_kernel_start();
         issue_queue_wait_front();
         uint32_t rd_ptr = (cq_read_interface.issue_fifo_rd_ptr << 4);
         uint64_t src_noc_addr = pcie_core_noc_encoding | rd_ptr;
         noc_async_read(src_noc_addr, command_start_addr, min(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, issue_queue_size - rd_ptr));
         noc_async_read_barrier();
+        //kernel_profiler::mark_time(9);
 
         // Producer information
         volatile tt_l1_ptr uint32_t* command_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(command_start_addr);
@@ -107,5 +111,10 @@ void kernel_main() {
         issue_queue_pop_front<host_issue_queue_read_ptr_addr>(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size);
 
         db_buf_switch = not db_buf_switch;
+
+        kernel_profiler::mark_kernel_end();
+        kernel_profiler::mark_fw_end();
+        kernel_profiler::finish();
+        kernel_profiler::send_profiler_data_to_dram();
     }
 }

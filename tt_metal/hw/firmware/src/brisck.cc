@@ -17,6 +17,7 @@
 #include "noc_nonblocking_api.h"
 #include "firmware_common.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "hostdevcommon/profiler_common.h"
 #include "dataflow_api.h"
 #include "noc_addr_ranges_gen.h"
 
@@ -36,8 +37,8 @@ void kernel_launch() {
 
     noc_local_state_init(noc_index);
 
-    kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
+    kernel_profiler::mark_kernel_start();
     kernel_main();
-    kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
+    kernel_profiler::mark_kernel_end();
 #endif
 }

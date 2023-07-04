@@ -130,6 +130,9 @@ void DeviceModule(py::module &m_device) {
         the FinishCommand. Once set to false, all subsequent commands will immediately notify the device
         that the write pointer has been updated.
     )doc");
+    m_device.def("DumpDeviceProfiler", &detail::DumpDeviceProfiler, R"doc(
+        Dump device side profiling data.
+    )doc");
     m_device.def("DeallocateBuffers", &detail::DeallocateBuffers, R"doc(
         Deallocate all buffers associated with Device handle
     )doc");

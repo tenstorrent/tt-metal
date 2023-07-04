@@ -8,71 +8,17 @@ from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SI
 
 class default_setup(metaclass=MergeMetaclass):
     timerAnalysis = {
-        "T0 -> BRISC FW start": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"risc": "BRISC", "timerID": 0},
-            "end": {"risc": "BRISC", "timerID": 1},
-        },
-        "TRISC0 kernel start -> TRISC0 kernel end": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"risc": "TRISC_0", "timerID": 2},
-            "end": {"risc": "TRISC_0", "timerID": 3},
-        },
-        "TRISC1 kernel start -> TRISC1 kernel end": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"risc": "TRISC_1", "timerID": 2},
-            "end": {"risc": "TRISC_1", "timerID": 3},
-        },
-        "TRISC2 kernel start -> TRISC2 kernel end": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"risc": "TRISC_2", "timerID": 2},
-            "end": {"risc": "TRISC_2", "timerID": 3},
-        },
-        "BRISC kernel start -> BRISC kernel end": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"risc": "BRISC", "timerID": 2},
-            "end": {"risc": "BRISC", "timerID": 3},
-        },
-        "NCRISC kernel start -> NCRISC kernel end": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"risc": "NCRISC", "timerID": 2},
-            "end": {"risc": "NCRISC", "timerID": 3},
-        },
-        "ANY RISC FW start -> ANY RISC FW end": {
-            "across": "core",
-            "type": "launch_first_last",
-            "start": {"risc": "ANY", "timerID": 1},
-            "end": {"risc": "ANY", "timerID": 4},
-        },
-        "ANY RISC FW end -> BRISC FW start": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"risc": "ANY", "timerID": 4},
-            "end": {"risc": "BRISC", "timerID": 1},
-        },
-        "T0 -> ANY RISC FW end": {
-            "across": "core",
-            "type": "session_first_last",
-            "start": {"risc": "BRISC", "timerID": 0},
-            "end": {"risc": "ANY", "timerID": 4},
-        },
-        "BRISC FW start -> ANY RISC FW end": {
-            "across": "core",
-            "type": "session_first_last",
-            "start": {"risc": "ANY", "timerID": 1},
-            "end": {"risc": "ANY", "timerID": 4},
-        },
-        "T0 -> ANY CORE ANY RISC FW end": {
+        "Core (0,0) OPs": {
             "across": "device",
-            "type": "session_first_last",
-            "start": {"core": "ANY", "risc": "ANY", "timerID": 1},
-            "end": {"core": "ANY", "risc": "ANY", "timerID": 4},
+            "type": "adjacent",
+            "start": {"core": (0, 0), "risc": "ANY", "timerID": 1},
+            "end": {"core": (0, 0), "risc": "ANY", "timerID": 4},
+        },
+        "Core (6,9) db acquire": {
+            "across": "device",
+            "type": "adjacent",
+            "start": {"core": (6, 9), "risc": "BRISC", "timerID": 2},
+            "end": {"core": (6, 9), "risc": "BRISC", "timerID": 5},
         },
     }
 
@@ -87,21 +33,33 @@ class default_setup(metaclass=MergeMetaclass):
 
     riscs = [
         "BRISC",
-        "NCRISC",
-        "TRISC_0",
-        "TRISC_1",
-        "TRISC_2",
+        # "NCRISC",
+        # "TRISC_0",
+        # "TRISC_1",
+        # "TRISC_2",
         # "TENSIX",
     ]
 
     timerIDLabels = [(0, "Start"), (1, "Firmware Start"), (2, "Kernel start"), (3, "Kernel End"), (4, "Firmware End")]
 
-    displayStats = ["Count", "Average", "Max", "Median", "Min"]
+    displayStats = ["Count", "Average", "Max", "Median", "Min", "Sum"]
 
     plotBaseHeight = 200
     plotPerCoreHeight = 100
 
     webappPort = 8050
+
+    cycleRange = None
+    # Example
+    # cycleRange = (34.676e9, 60e9)
+
+    # intrestingCores = None
+    # Example
+    intrestingCores = [(0, 0), (0, 9), (6, 9)]
+
+    # ignoreMarkers = None
+    # Example
+    ignoreMarkers = [65535]
 
     outputFolder = f"output/device"
     deviceInputLog = f"{PROFILER_LOGS_DIR}/{PROFILER_DEVICE_SIDE_LOG}"

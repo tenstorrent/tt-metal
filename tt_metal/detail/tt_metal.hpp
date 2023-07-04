@@ -17,6 +17,8 @@
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/host_api.hpp"
 
+#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+
 using std::unique_lock;
 using std::mutex;
 
@@ -121,6 +123,17 @@ namespace tt::tt_metal{
 
 
         /**
+         * Initialize device profiling data buffers
+         *
+         * Return value: void
+         *
+         * | Argument      | Description                                       | Type            | Valid Range               | Required |
+         * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
+         * | device        | The device holding the program being profiled.    | Device *        |                           | True     |
+         * */
+	void InitDeviceProfiler(Device *device);
+
+        /**
          * Read device side profiler data and dump results into device side CSV log
          *
          * Return value: void
@@ -131,17 +144,29 @@ namespace tt::tt_metal{
          * | core_coords   | The logical core coordinates being profiled.      | const std::unordered_map<CoreType, std::vector<CoreCoord>> & |                           | True     |
          * */
         void DumpDeviceProfileResults(Device *device,const std::unordered_map<CoreType, std::vector<CoreCoord>> &logical_cores);
+        void DumpDeviceProfileResults(Device *device);
 
         /**
-         * Set the directory for all CSV logs produced by the profiler instance in the tt-metal module
+         * Set the directory for device-side CSV logs produced by the profiler instance in the tt-metal module
          *
          * Return value: void
          *
          * | Argument     | Description                                             |  Data type  | Valid range              | required |
          * |--------------|---------------------------------------------------------|-------------|--------------------------|----------|
-         * | output_dir   | The output directory that will hold the outpu CSV logs  | std::string | Any valid directory path | No       |
+         * | output_dir   | The output directory that will hold the output CSV logs  | std::string | Any valid directory path | No       |
          * */
-        void SetProfilerDir(std::string output_dir = "");
+        void SetDeviceProfilerDir(std::string output_dir = "");
+
+        /**
+         * Set the directory for all host-side CSV logs produced by the profiler instance in the tt-metal module
+         *
+         * Return value: void
+         *
+         * | Argument     | Description                                             |  Data type  | Valid range              | required |
+         * |--------------|---------------------------------------------------------|-------------|--------------------------|----------|
+         * | output_dir   | The output directory that will hold the output CSV logs  | std::string | Any valid directory path | No       |
+         * */
+        void SetHostProfilerDir(std::string output_dir = "");
 
         /**
          * Start a fresh log for the host side profile results
@@ -232,6 +257,7 @@ namespace tt::tt_metal{
          */
         inline bool WriteToDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t address, std::vector<uint32_t> &host_buffer)
         {
+            ZoneScoped;
             auto worker_core = device->worker_core_from_logical_core(logical_core);
             llrt::write_hex_vec_to_core(device->id(), worker_core, host_buffer, address);
             return true;
@@ -301,6 +327,10 @@ namespace tt::tt_metal{
         {
             DispatchStateCheck(true);
             LAZY_COMMAND_QUEUE_MODE = lazy;
+        }
+        inline void DumpDeviceProfiler(Device * device)
+        {
+            tt::tt_metal::detail::DumpDeviceProfileResults(device);
         }
 
         inline void DeallocateBuffers(Device * device)

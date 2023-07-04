@@ -24,10 +24,12 @@
 #include "noc_addr_ranges_gen.h"
 #include "generated_bank_to_noc_coord_mapping.h"
 #include "circular_buffer.h"
+#include "dataflow_api.h"
 
 #include "debug/status.h"
 #include "debug/dprint.h"
 
+uint8_t noc_index;
 
 constexpr uint32_t RISCV_IC_BRISC_MASK = 0x1;
 constexpr uint32_t RISCV_IC_TRISC0_MASK = 0x2;
@@ -275,7 +277,6 @@ inline void wait_ncrisc_trisc()
 }
 
 int main() {
-
     DEBUG_STATUS('I');
 
     int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
@@ -283,6 +284,7 @@ int main() {
 
     risc_init();
     device_setup();
+    kernel_profiler::mark_BR_fw_first_start();
     noc_init();
 
     // Set ncrisc's resume address to 0 so we know when ncrisc has overwritten it
@@ -298,8 +300,6 @@ int main() {
 
     mailboxes->launch.run = RUN_MSG_DONE;
 
-    // Cleanup profiler buffer incase we never get the go message
-    kernel_profiler::init_profiler();
     while (1) {
 
         init_sync_registers();
@@ -310,8 +310,13 @@ int main() {
         while (mailboxes->launch.run != RUN_MSG_GO);
         DEBUG_STATUS('G', 'D');
 
-        kernel_profiler::init_profiler();
-        kernel_profiler::mark_time(CC_MAIN_START);
+        kernel_profiler::init_profiler(
+                mailboxes->launch.brisc_watcher_kernel_id,
+                mailboxes->launch.ncrisc_watcher_kernel_id,
+                mailboxes->launch.triscs_watcher_kernel_id
+                );
+        kernel_profiler::mark_fw_start();
+
 
         // Always copy ncrisc even if its size is 0 (save branch)...
         l1_to_ncrisc_iram_copy((MEM_NCRISC_INIT_IRAM_L1_BASE >> 4) + ncrisc_kernel_start_offset16,
@@ -324,7 +329,7 @@ int main() {
 
         run_triscs();
 
-        uint32_t noc_index = mailboxes->launch.brisc_noc_id;
+        noc_index = mailboxes->launch.brisc_noc_id;
 
         setup_cb_read_write_interfaces(0, num_cbs_to_early_init, true, true);
         finish_ncrisc_copy_and_run();
@@ -344,14 +349,13 @@ int main() {
 
         mailboxes->launch.run = RUN_MSG_DONE;
 
-        // Not including any dispatch related code
-        kernel_profiler::mark_time(CC_MAIN_END);
-
         // Notify dispatcher core that it has completed
         if (mailboxes->launch.mode == DISPATCH_MODE_DEV) {
             uint64_t dispatch_addr = NOC_XY_ADDR(NOC_X(DISPATCH_CORE_X), NOC_Y(DISPATCH_CORE_Y), DISPATCH_MESSAGE_ADDR);
             noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, 1, 31 /*wrap*/, false /*linked*/);
         }
+        kernel_profiler::mark_fw_end();
+        kernel_profiler::send_profiler_data_to_dram();
     }
 
     return 0;

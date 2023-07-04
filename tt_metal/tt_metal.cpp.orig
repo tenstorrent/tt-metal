@@ -56,7 +56,7 @@ std::optional<uint32_t> get_semaphore_address(const Program &program, const Core
             }
             uint32_t addr = num_semaphores == 0
                                 ? SEMAPHORE_BASE
-                                : program.semaphore_address(num_semaphores - 1) + L1_ALIGNMENT;
+                                : program.semaphore_address(num_semaphores - 1) + ALIGNED_SIZE_PER_SEMAPHORE;
             if (!address.has_value()) {
                 address = addr;
             } else if (addr != address) {
@@ -90,31 +90,6 @@ inline void SetRuntimeArgs(const Program &program, KernelHandle kernel_id, const
 //#define DEBUG_PRINT_SHARD
 
 namespace detail {
-
-std::map<chip_id_t, Device *> CreateDevices(
-    std::vector<chip_id_t> device_ids, const uint8_t num_hw_cqs, const std::vector<uint32_t> &l1_bank_remap) {
-    std::map<chip_id_t, Device *> active_devices;  // TODO: pass this to CloseDevices
-    for (const auto &device_id : device_ids) {
-        const auto &mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
-        if (active_devices.find(mmio_device_id) == active_devices.end()) {
-            for (const auto &mmio_controlled_device_id :
-                 tt::Cluster::instance().get_devices_controlled_by_mmio_device(mmio_device_id)) {
-                active_devices.insert(
-                    {mmio_controlled_device_id, CreateDevice(mmio_controlled_device_id, num_hw_cqs, l1_bank_remap)});
-            }
-        }
-    }
-    // TODO: need to only enable routing for used mmio chips
-    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
-    return active_devices;
-}
-
-void CloseDevices(std::map<chip_id_t, Device *> devices) {
-    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
-    for (const auto &[device_id, dev] : devices) {
-        CloseDevice(dev);
-    }
-}
 
     void print_page(uint32_t dev_page_id, CoreCoord core, uint32_t host_page_id, CoreCoord noc_coordinates, uint32_t l1_address, uint32_t bank_id, std::vector<uint32_t> page){
         std::cout << "dev_page_index " << dev_page_id << " on core " << core.str() << std::endl;
@@ -150,15 +125,18 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         #ifdef DEBUG_PRINT_SHARD
             std::cout << "Writing to Device Sharded " << std::endl;
         #endif
+        auto cores = buffer.all_cores();
+        auto core_bank_ids = buffer.core_bank_indices();
         auto core_host_page_ids = buffer.core_host_page_indices();
 
 
         int dev_page_index = 0;
-        for(int core_index = 0; core_index < buffer.num_cores(); core_index++){
-            auto bank_id = buffer.get_bank_id_from_page_id(dev_page_index);
+        for(int core_index = 0; core_index < cores.size(); core_index++){
+            auto core = cores[core_index];
+            auto bank_id = core_bank_ids[core_index];
             auto host_page_ids = core_host_page_ids[core_index];
             for(auto host_page_id: host_page_ids){
-                auto absolute_address = buffer.page_address(dev_page_index);
+                auto absolute_address = buffer.page_address(bank_id, dev_page_index);
                 auto data_index = host_page_id * num_entries_per_page;
                 std::vector<uint32_t> page;
                 page.insert(
@@ -291,7 +269,7 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
                                   const uint32_t & dev_page_id,
                                   const uint32_t & bank_id
     ){
-        auto absolute_address = dev_buffer.page_address(dev_page_id);
+        auto absolute_address = dev_buffer.page_address(bank_id, dev_page_id);
         auto noc_coordinates = dev_buffer.noc_coordinates(bank_id);
 
         uint32_t num_entries_per_page = page_size/sizeof(uint32_t);
@@ -314,9 +292,18 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
             std::cout << "Reading From Device Height Sharded " << std::endl;
         #endif
 
+        auto cores = buffer.all_cores();
+        auto core_bank_ids = buffer.core_bank_indices();
+        auto core_dev_page_ids = buffer.core_host_page_indices();
+        auto host_page_ids = buffer.dev_page_to_host_page_mapping();
 
         int output_page_index = 0;
-        auto total_pages = buffer.num_pages();
+
+        auto total_pages = cores.size() * buffer.shard_size();
+        auto dev_page_to_core_mapping = buffer.dev_page_to_core_mapping();
+
+
+
         uint32_t page_size = buffer.page_size();
         uint32_t bytes_per_page_entry = sizeof(uint32_t);
         uint32_t num_entries_per_page = page_size / bytes_per_page_entry;
@@ -325,8 +312,10 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
 
 
         for(int dev_page_id=0; dev_page_id<total_pages; dev_page_id++){
-            auto bank_id = buffer.get_bank_id_from_page_id(dev_page_id);
-            auto host_page_id = buffer.get_mapped_page_id(dev_page_id);
+            auto core_index = dev_page_to_core_mapping[dev_page_id];
+            auto core = cores[core_index];
+            auto bank_id = core_bank_ids[core_index];
+            auto host_page_id = host_page_ids[dev_page_id];
             if(!shard_order){
                 read_pages_to_host_helper(
                     device,
@@ -349,6 +338,9 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
                     bank_id
                 );
             }
+            #ifdef DEBUG_PRINT_SHARD
+                print_page(dev_page_id, core, host_page_id, noc_coordinates, absolute_address, bank_id,  page);
+            #endif
         }
 
     }
@@ -400,14 +392,18 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         host_buffer.clear();  // overwrite the data
 
         uint32_t num_entries_per_page = buffer.page_size() / sizeof(uint32_t);
-        uint32_t num_entries_per_shard = num_entries_per_page * buffer.shard_spec().size();
+        uint32_t num_entries_per_shard = num_entries_per_page * buffer.shard_size();
         host_buffer = std::vector<uint32_t>(num_entries_per_shard);
 
         auto page_ids = buffer.dev_pages_in_shard(core_id);
 
+        auto core_bank_ids = buffer.core_bank_indices();
+        auto dev_page_to_core_mapping = buffer.dev_page_to_core_mapping();
+
         uint32_t host_page_id = 0;
         for(auto dev_page_id: page_ids){
-            auto bank_id = buffer.get_bank_id_from_page_id(dev_page_id);
+            auto core_index = dev_page_to_core_mapping[dev_page_id];
+            auto bank_id = core_bank_ids[core_index];
             read_pages_to_host_helper(
                 device,
                 buffer,
@@ -570,10 +566,15 @@ size_t GetNumPCIeDevices() {
 #endif
 }
 
+<<<<<<< HEAD
 Device *CreateDevice(chip_id_t device_id, const uint8_t num_hw_cqs, const std::vector<uint32_t>& l1_bank_remap) {
-    ZoneScoped;
     Device * dev = new Device(device_id, num_hw_cqs, l1_bank_remap);
+=======
+Device *CreateDevice(chip_id_t device_id, const std::vector<uint32_t>& l1_bank_remap) {
+    ZoneScoped;
+    Device * dev = new Device(device_id, l1_bank_remap);
     detail::InitDeviceProfiler(dev);
+>>>>>>> #2291: Update tracy
     return dev;
 }
 
@@ -589,17 +590,17 @@ KernelHandle CreateKernel(Program &program, const std::string &file_name, const 
     return std::visit( [&](auto&& cfg) -> KernelHandle
                         {
                             CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
-                            std::shared_ptr<Kernel> kernel;
+                            Kernel * kernel;
                             using T = std::decay_t<decltype(cfg)>;
                             if constexpr (std::is_same_v<T, DataMovementConfig>) {
                                 detail::CheckDataMovementConfig(program, file_name, core_ranges);
-                                kernel = std::make_shared<DataMovementKernel>(file_name, core_ranges, cfg);
+                                kernel = new DataMovementKernel(file_name, core_ranges, cfg);
                             }
                             else if constexpr (std::is_same_v<T, ComputeConfig>) {
-                                kernel = std::make_shared<ComputeKernel>(file_name, core_ranges, cfg);
+                                kernel = new ComputeKernel(file_name, core_ranges, cfg);
                             }
                             else if constexpr (std::is_same_v<T, experimental::EthernetConfig>) {
-                                kernel = std::make_shared<EthernetKernel>(file_name, core_ranges, cfg);
+                                kernel = new EthernetKernel(file_name, core_ranges, cfg);
                             }
                             return detail::AddKernel(program, kernel);
                         },

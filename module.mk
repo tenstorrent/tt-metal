@@ -22,7 +22,8 @@ CONFIG_CFLAGS += -O3 -flto
 else ifeq ($(CONFIG), ci)  # significantly smaller artifacts
 CONFIG_CFLAGS += -O3 -DDEBUG=DEBUG
 else ifeq ($(CONFIG), assert)
-CONFIG_CFLAGS += -O3 -g -DDEBUG=DEBUG
+CONFIG_CFLAGS += -O3 -g -DDEBUG=DEBUG -fno-omit-frame-pointer
+CONFIG_LDFLAGS += -rdynamic
 else ifeq ($(CONFIG), asan)
 CONFIG_CFLAGS += -O3 -g -DDEBUG=DEBUG -fsanitize=address
 CONFIG_LDFLAGS += -fsanitize=address
@@ -77,7 +78,7 @@ BASE_INCLUDES+=-I./ -I./tt_metal/ -I$(UMD_HOME)/
 WARNINGS ?= -Wdelete-non-virtual-dtor -Wreturn-type -Wswitch -Wuninitialized -Wno-unused-parameter
 CC ?= gcc
 CXX ?= g++
-CFLAGS ?= -MMD $(WARNINGS) -I. $(CONFIG_CFLAGS) -mavx2 -DBUILD_DIR=\"$(OUT)\"
+CFLAGS ?= -MMD -fPIC $(WARNINGS) -I. $(CONFIG_CFLAGS) -mavx2 -DBUILD_DIR=\"$(OUT)\"
 CXXFLAGS ?= --std=c++17 -fvisibility-inlines-hidden -Werror
 
 LDFLAGS ?= $(CONFIG_LDFLAGS) -Wl,-rpath,$(PREFIX)/lib -L$(LIBDIR)/tools -L$(LIBDIR) \

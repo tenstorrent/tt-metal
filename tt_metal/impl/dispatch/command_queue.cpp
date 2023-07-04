@@ -15,12 +15,14 @@
 #include "llrt/watcher.hpp"
 #include "tt_metal/third_party/umd/device/tt_xy_pair.h"
 #include "dev_msgs.h"
+#include "hostdevcommon/common_runtime_address_map.h"
 #include <algorithm> // for copy() and assign()
 #include <iterator> // for back_inserter
 
+#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tt_metal/third_party/tracy/public/tracy/TracyOpenCL.hpp"
 namespace tt::tt_metal {
 
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
 namespace {
 

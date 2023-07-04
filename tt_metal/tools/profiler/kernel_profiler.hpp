@@ -9,6 +9,7 @@
 
 #if defined(COMPILE_FOR_NCRISC) | defined(COMPILE_FOR_BRISC) | defined(COMPILE_FOR_ERISC)
 #include "risc_common.h"
+#include "dataflow_api.h"
 #else
 #include "ckernel.h"
 #endif
@@ -24,63 +25,85 @@ namespace kernel_profiler{
 
     extern uint32_t wIndex;
 
-    inline __attribute__((always_inline)) void init_profiler()
+#if defined(COMPILE_FOR_BRISC)
+    uint32_t profilerBuffer = PROFILER_L1_BUFFER_BR;
+    uint32_t deviceBufferEndIndex = DEVICE_BUFFER_END_INDEX_BR;
+#elif defined(COMPILE_FOR_NCRISC)
+    uint32_t profilerBuffer = PROFILER_L1_BUFFER_NC;
+    uint32_t deviceBufferEndIndex = DEVICE_BUFFER_END_INDEX_NC;
+#elif COMPILE_FOR_TRISC == 0
+    uint32_t profilerBuffer = PROFILER_L1_BUFFER_T0;
+    uint32_t deviceBufferEndIndex = DEVICE_BUFFER_END_INDEX_T0;
+#elif COMPILE_FOR_TRISC == 1
+    uint32_t profilerBuffer = PROFILER_L1_BUFFER_T1;
+    uint32_t deviceBufferEndIndex = DEVICE_BUFFER_END_INDEX_T1;
+#elif COMPILE_FOR_TRISC == 2
+    uint32_t profilerBuffer = PROFILER_L1_BUFFER_T2;
+    uint32_t deviceBufferEndIndex = DEVICE_BUFFER_END_INDEX_T2;
+#endif
+
+    inline __attribute__((always_inline)) void init_profiler(uint16_t briscKernelID = 0, uint16_t ncriscKernelID = 0, uint16_t triscsKernelID = 0)
     {
 #if defined(PROFILE_KERNEL)
-        volatile tt_l1_ptr uint32_t *buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_debug_print_buffer());
-        wIndex = MARKER_DATA_START;
-        buffer [BUFFER_END_INDEX] = wIndex;
-        buffer [DROPPED_MARKER_COUNTER] = 0;
+        volatile tt_l1_ptr uint32_t *profiler_control_buffer = reinterpret_cast<uint32_t*>(PROFILER_L1_BUFFER_CONTROL);
+        profiler_control_buffer[deviceBufferEndIndex] = 0;
+        wIndex = CUSTOM_MARKERS;
+
 #if defined(COMPILE_FOR_BRISC)
-        buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PRINT_BUFFER_NC);
-        buffer [BUFFER_END_INDEX] = wIndex;
-        buffer [DROPPED_MARKER_COUNTER] = 0;
+        volatile tt_l1_ptr uint32_t *briscBuffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_BR);
+        volatile tt_l1_ptr uint32_t *ncriscBuffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_NC);
+        volatile tt_l1_ptr uint32_t *trisc0Buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_T0);
+        volatile tt_l1_ptr uint32_t *trisc1Buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_T1);
+        volatile tt_l1_ptr uint32_t *trisc2Buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_T2);
 
-        buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PRINT_BUFFER_T0);
-        buffer [BUFFER_END_INDEX] = wIndex;
-        buffer [DROPPED_MARKER_COUNTER] = 0;
+        briscBuffer[ID_LH] = briscKernelID;
+        ncriscBuffer[ID_LH] = ncriscKernelID;
+        trisc0Buffer[ID_LH] = triscsKernelID;
+        trisc1Buffer[ID_LH] = triscsKernelID;
+        trisc2Buffer[ID_LH] = triscsKernelID;
+#endif //BRISC_INIT
 
-        buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PRINT_BUFFER_T1);
-        buffer [BUFFER_END_INDEX] = wIndex;
-        buffer [DROPPED_MARKER_COUNTER] = 0;
-
-        buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PRINT_BUFFER_T2);
-        buffer [BUFFER_END_INDEX] = wIndex;
-        buffer [DROPPED_MARKER_COUNTER] = 0;
-#elif defined(COMPILE_FOR_ERISC)
-        buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t *>(eth_l1_mem::address_map::PRINT_BUFFER_ER);
-        buffer[BUFFER_END_INDEX] = wIndex;
-        buffer[DROPPED_MARKER_COUNTER] = 0;
-#endif
 #endif //PROFILE_KERNEL
     }
 
     inline __attribute__((always_inline)) void mark_time(uint32_t timer_id)
     {
 #if defined(PROFILE_KERNEL)
+        //TODO(MO): Add drop counter to control register
+        if (wIndex < PROFILER_L1_VECTOR_SIZE)
+        {
 #if defined(COMPILE_FOR_NCRISC) | defined(COMPILE_FOR_BRISC) | defined(COMPILE_FOR_ERISC)
+            uint32_t time_L = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+            uint32_t time_H = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
+#else
+            uint32_t time_L = ckernel::reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+            uint32_t time_H = ckernel::reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
+#endif
+            volatile tt_l1_ptr uint32_t *buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(profilerBuffer);
+            uint32_t index = wIndex;
+            buffer[index] = ((time_H & 0x0000FFFF) | (timer_id << 16));
+            buffer[index+1] = time_L;
+            wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
+        }
+#endif //PROFILE_KERNEL
+    }
+
+    inline __attribute__((always_inline)) void mark_time_guaranteed_event(uint32_t index)
+    {
+#if defined(PROFILE_KERNEL)
+#if defined(COMPILE_FOR_NCRISC) | defined(COMPILE_FOR_BRISC)
         uint32_t time_L = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
         uint32_t time_H = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
 #else
         uint32_t time_L = ckernel::reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
         uint32_t time_H = ckernel::reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
 #endif
-
-        // Either buffer has room for more markers or the end of FW marker is place on the last marker spot
-        volatile tt_l1_ptr uint32_t *buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_debug_print_buffer());
-	if (((wIndex + (3*TIMER_DATA_UINT32_SIZE)) < (PRINT_BUFFER_SIZE/sizeof(uint32_t))) ||\
-            (((timer_id == CC_MAIN_END) || (timer_id == CC_KERNEL_MAIN_END)) &&\
-             !((wIndex + TIMER_DATA_UINT32_SIZE) > (PRINT_BUFFER_SIZE/sizeof(uint32_t))))) {
-	    buffer[wIndex+TIMER_ID] = timer_id;
-	    buffer[wIndex+TIMER_VAL_L] = time_L;
-	    buffer[wIndex+TIMER_VAL_H] = time_H;
-            wIndex += TIMER_DATA_UINT32_SIZE;
-            buffer [BUFFER_END_INDEX] = wIndex;
-	} else {
-            buffer [DROPPED_MARKER_COUNTER]++;
-	}
+        volatile tt_l1_ptr uint32_t *buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(profilerBuffer);
+        buffer[index] = ((time_H & 0x0000FFFF) | ((index - FW_START + 2) << 15)); // index is 2x marker ID so one less shift, divide by 2
+        buffer[index+1] = time_L;
 #endif //PROFILE_KERNEL
     }
+
 
     inline __attribute__((always_inline)) void mark_time_once(uint32_t timer_id, bool * one_time)
     {
@@ -90,6 +113,113 @@ namespace kernel_profiler{
             mark_time(timer_id);
         }
         *one_time = false;
+#endif //PROFILE_KERNEL
+    }
+
+    inline __attribute__((always_inline)) void mark_BR_fw_first_start()
+    {
+#if defined(PROFILE_KERNEL) & defined(COMPILE_FOR_BRISC)
+        uint32_t time_L = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+        uint32_t time_H = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
+
+        volatile uint32_t *profiler_control_buffer = reinterpret_cast<uint32_t*>(PROFILER_L1_BUFFER_CONTROL);
+
+        profiler_control_buffer[FW_RESET_L] = time_L;
+        profiler_control_buffer[FW_RESET_H] = time_H;
+#endif //PROFILE_KERNEL
+    }
+
+    inline __attribute__((always_inline)) void mark_fw_start()
+    {
+#if defined(PROFILE_KERNEL)
+        mark_time_guaranteed_event(FW_START);
+#endif //PROFILE_KERNEL
+    }
+
+    inline __attribute__((always_inline)) void mark_fw_end()
+    {
+#if defined(PROFILE_KERNEL)
+        mark_time_guaranteed_event(FW_END);
+#endif //PROFILE_KERNEL
+    }
+
+    inline __attribute__((always_inline)) void mark_kernel_start()
+    {
+#if defined(PROFILE_KERNEL)
+        mark_time_guaranteed_event(KERNEL_START);
+#endif //PROFILE_KERNEL
+    }
+
+    inline __attribute__((always_inline)) void mark_kernel_end()
+    {
+#if defined(PROFILE_KERNEL)
+        mark_time_guaranteed_event(KERNEL_END);
+#endif //PROFILE_KERNEL
+    }
+
+    inline __attribute__((always_inline)) void finish()
+    {
+#if defined(PROFILE_KERNEL)
+        for (uint32_t i = 0; i < (wIndex % NOC_ALIGNMENT_FACTOR); i++)
+        {
+            mark_time(PADDING_MARKER);
+        }
+        volatile uint32_t *profiler_control_buffer = reinterpret_cast<uint32_t*>(PROFILER_L1_BUFFER_CONTROL);
+        profiler_control_buffer[kernel_profiler::deviceBufferEndIndex] = wIndex;
+#endif //PROFILE_KERNEL
+    }
+    inline __attribute__((always_inline)) void send_profiler_data_to_dram()
+    {
+#if defined(PROFILE_KERNEL) && defined(COMPILE_FOR_BRISC)
+        volatile uint32_t *profiler_control_buffer = reinterpret_cast<uint32_t*>(PROFILER_L1_BUFFER_CONTROL);
+
+        const uint32_t NOC_ID_MASK = (1 << NOC_ADDR_NODE_ID_BITS) - 1;
+        uint32_t noc_id = noc_local_node_id() & 0xFFF;
+        uint32_t noc_x = noc_id & NOC_ID_MASK;
+        uint32_t noc_y = (noc_id >> NOC_ADDR_NODE_ID_BITS) & NOC_ID_MASK;
+
+        uint32_t core_flat_id = get_flat_id(noc_x, noc_y);
+        uint32_t dram_profiler_address = profiler_control_buffer[DRAM_PROFILER_ADDRESS];
+
+        //TODO(MO): WORMHOLE SUPPORT :Hardcoded for GS need to make it universal and no magic numbers
+        uint32_t dram_noc_x = (core_flat_id / 30) * 3 + 1;
+        uint32_t dram_noc_y = noc_y > 6 ? 6 : 0;
+
+        finish();
+        int hostIndex;
+        int deviceIndex;
+        for (hostIndex = kernel_profiler::HOST_BUFFER_END_INDEX_BR, deviceIndex = kernel_profiler::DEVICE_BUFFER_END_INDEX_BR;
+                (hostIndex <= kernel_profiler::HOST_BUFFER_END_INDEX_T2) && (deviceIndex <= kernel_profiler::DEVICE_BUFFER_END_INDEX_T2);
+                hostIndex++, deviceIndex++)
+        {
+            uint32_t currEndIndex =
+                profiler_control_buffer[deviceIndex] +
+                profiler_control_buffer[hostIndex];
+
+            uint32_t dram_address =
+                dram_profiler_address +
+                //TODO(MO): WORMHOLE SUPPORT : 15 is only foe GS
+                (core_flat_id % 15) * PROFILER_RISC_COUNT * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
+                hostIndex * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
+                profiler_control_buffer[hostIndex] * sizeof(uint32_t);
+
+            if ( currEndIndex < PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC)
+            {
+                uint64_t dram_bank_dst_noc_addr = get_noc_addr(dram_noc_x, dram_noc_y, dram_address);
+                noc_async_write(
+                        PROFILER_L1_BUFFER_BR + hostIndex * PROFILER_L1_BUFFER_SIZE,
+                        dram_bank_dst_noc_addr,
+                        profiler_control_buffer[deviceIndex] * sizeof(uint32_t));
+
+                //TODO(MO): This can go after for loop
+                noc_async_write_barrier();
+                profiler_control_buffer[hostIndex] = currEndIndex;
+            }
+            else
+            {
+                profiler_control_buffer[hostIndex] = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC+1;
+            }
+        }
 #endif //PROFILE_KERNEL
     }
 }

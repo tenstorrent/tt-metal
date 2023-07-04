@@ -17,6 +17,7 @@
 #include "tools/profiler/profiler.hpp"
 #include "tt_metal/third_party/umd/device/util.hpp"
 #include "watcher.hpp"
+#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
 #ifdef ARCH_GRAYSKULL
 static constexpr uint32_t DYNAMIC_TLB_COUNT = 16;

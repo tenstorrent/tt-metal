@@ -39,22 +39,22 @@ uint run_kernel() {
 
 #ifdef UCK_CHLKC_MATH
     zeroacc();
-    kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
+    kernel_profiler::mark_kernel_start();
     chlkc_math::math_main();
-    kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
+    kernel_profiler::mark_kernel_end();
 #endif
 
 #ifdef UCK_CHLKC_PACK
-    kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
+    kernel_profiler::mark_kernel_start();
     chlkc_pack::pack_main();
-    kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
+    kernel_profiler::mark_kernel_end();
 #endif
 
 #ifdef UCK_CHLKC_UNPACK
     zerosrc();
-    kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
+    kernel_profiler::mark_kernel_start();
     chlkc_unpack::unpack_main();
-    kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
+    kernel_profiler::mark_kernel_end();
 #endif
 
 return 0;

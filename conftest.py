@@ -31,7 +31,6 @@ def reset_seeds():
 def function_level_defaults(reset_seeds):
     yield
 
-
 @pytest.fixture(scope="session")
 def model_location_generator():
     def model_location_generator_(model_version, model_subdir=""):
@@ -234,7 +233,6 @@ def reset_tensix(request, silicon_arch_name):
             raise Exception(f"Unrecognized arch for tensix-reset: {silicon_arch_name}")
         assert result.returncode == 0, "Tensix reset script raised error"
 
-
 @pytest.fixture(scope="function")
 def device_init_destroy(request):
     import tt_lib as ttl
@@ -260,6 +258,7 @@ def device(device_init_destroy):
     yield device
     ttl.device.ClearCommandQueueProgramCache(device)
     ttl.device.DeallocateBuffers(device)
+    ttl.device.DumpDeviceProfiler(device)
 
 
 @pytest.fixture(autouse=True)
