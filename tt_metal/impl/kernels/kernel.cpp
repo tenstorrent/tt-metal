@@ -8,6 +8,7 @@
 #include <unordered_set>
 
 #include "third_party/magic_enum/magic_enum.hpp"
+#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
 namespace tt {
 
@@ -125,6 +126,7 @@ void Kernel::set_runtime_args(const CoreCoord &logical_core, const std::vector<u
 }
 
 void DataMovementKernel::set_build_options(build_kernel_for_riscv_options_t &build_options) const {
+    ZoneScoped;
     switch (this->config_.processor) {
         case DataMovementProcessor::RISCV_0: {
             build_options.brisc_kernel_file_name = this->kernel_path_file_name_;

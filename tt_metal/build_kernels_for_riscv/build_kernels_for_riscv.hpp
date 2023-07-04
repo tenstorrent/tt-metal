@@ -9,7 +9,9 @@
 #include "build_kernels_for_riscv/data_format.hpp"
 #include "build_kernels_for_riscv/build_kernel_options.hpp"
 #include "hostdevcommon/common_values.hpp"
+#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
+namespace tt::tt_metal {
 enum RISCID { NC = 0, TR0 = 1, TR1 = 2, TR2 = 3, BR = 4 };
 static_assert(RISCID::TR1 == RISCID::TR0+1 && RISCID::TR2 == RISCID::TR1+1);
 
@@ -54,9 +56,10 @@ inline void generate_binary_for_brisc(
     const std::uint8_t noc_index=0,
     const std::vector<std::uint32_t>& kernel_compile_time_args = {})
 {
-    // PROF_BEGIN("CCGEN_BR")
+    ZoneScoped;
+    const std::string tracyPrefix = "generate_binary_for_brisc_";
+    ZoneName( (tracyPrefix + dir).c_str(), dir.length() + tracyPrefix.length());
     generate_binary_for_risc(RISCID::BR, topts, dir, arch_name, noc_index, kernel_compile_time_args);
-    // PROF_END("CCGEN_BR")
 }
 
 inline void generate_binary_for_ncrisc(
@@ -66,9 +69,10 @@ inline void generate_binary_for_ncrisc(
     const std::uint8_t noc_index=1,
     const std::vector<std::uint32_t>& kernel_compile_time_args = {})
 {
-    // PROF_BEGIN("CCGEN_NC")
+    ZoneScoped;
+    const std::string tracyPrefix = "generate_binary_for_ncrisc_";
+    ZoneName( (tracyPrefix + dir).c_str(), dir.length() + tracyPrefix.length());
     generate_binary_for_risc(RISCID::NC, topts, dir, arch_name, noc_index, kernel_compile_time_args);
-    // PROF_END("CCGEN_NC")
 }
 
 void generate_src_for_triscs(
@@ -103,4 +107,5 @@ void generate_default_bank_to_noc_coord_descriptor(
     string out_dir_path,
     tt::ARCH arch
 );
+}
 }

@@ -122,6 +122,39 @@ class TupleEncoder(json.JSONEncoder):
     def iterencode(self, obj):
         return super().iterencode(self._preprocess_tuple(obj))
 
+def print_chrome_tracing_json(devicesData, setup):
+    chromeTraces = []
+    riscToNum = {
+        "BRISC" : 1,
+        "NCRISC": 2,
+        "TRISC_0": 3,
+        "TRISC_1": 4,
+        "TRISC_2": 5,
+    }
+    for device in devicesData["devices"].keys():
+        minTime = devicesData["devices"][device]["metadata"]["global_min"]["ts"]
+        for timerID, timestamp, risc, core in devicesData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["timeseries"]:
+            x,y = core
+            traceID = riscToNum[risc]+x*100+y*10000
+            phaseType = ""
+            if timerID in [1]:
+                phaseType = "B"
+                chromeTraces.append(
+                    {"name": f"{risc}", "cat": "PERF", "ph": phaseType, "pid": traceID, "tid": traceID, "ts": minTime})
+            elif timerID in [4]:
+                phaseType = "E"
+
+                chromeTraces.append(
+                    {"name": f"{risc}", "cat": "PERF", "ph": phaseType, "pid": traceID, "tid": traceID, "ts": timestamp})
+
+            chromeTraces.append({"name": "thread_name", "ph": "M", "pid": traceID, "tid": traceID,
+                                 "args": {
+                                     "name" : f"{core}"
+                                 }
+                                })
+
+    with open(f"{setup.outputFolder}/{setup.deviceChromeTracing}", "w") as devicesDataJson:
+        json.dump(chromeTraces, devicesDataJson, indent=2, cls=TupleEncoder, sort_keys=True)
 
 def print_json(devicesData, setup):
     with open(f"{setup.outputFolder}/{setup.deviceAnalysisData}", "w") as devicesDataJson:
@@ -968,7 +1001,10 @@ def main(setup, device_input_log, output_folder, port, no_print_stats, no_webapp
         print("ERROR: Bad device profile log format", file=sys.stderr)
         sys.exit(1)
 
+
     prepare_output_folder(setup)
+
+    print_chrome_tracing_json(devicesData, setup)
 
     print_stats_outfile(devicesData, setup)
     print_rearranged_csv(devicesData, setup)

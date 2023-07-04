@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <vector>
 #include "common/assert.hpp"
-#include "tile_math.hpp"
+#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
 using namespace std;
 enum TensorLayout {
@@ -18,6 +18,7 @@ enum TensorLayout {
 
 template <class T, template<typename> typename BufferType>
 std::vector<T> convert_to_tile_layout(const BufferType<T>& data) {
+    ZoneScoped;
     std::vector<T> result;
     TT_ASSERT(data.size() % (32 * 32) == 0);
     int num_tiles = data.size() / (32 * 32);
@@ -60,6 +61,7 @@ std::vector<T> convert_to_tile_layout(const BufferType<T>& data) {
 
 template <class T, template<typename> typename BufferTyp>
 std::vector<T> convert_to_flat_layout(const BufferTyp<T>& data) {
+    ZoneScoped;
     std::vector<T> result;
     TT_ASSERT(data.size() % (32 * 32) == 0);
     int num_tiles = data.size() / (32 * 32);
@@ -85,7 +87,7 @@ std::vector<T> convert_to_flat_layout(const BufferTyp<T>& data) {
 // Converts a 32-swizzled tilized row-major tensor to a linear 32-zero-padded row-major tensor
 template<typename T, template<typename> typename BufferType>
 inline std::vector<T> untilize_nchw(const BufferType<T>& in, const std::vector<std::uint32_t>& shape) {
-
+    ZoneScoped;
     TT_ASSERT(shape.size() == 4);
     TT_ASSERT(shape[2] % 32 == 0 && shape[3] % 32 == 0);
 
@@ -116,6 +118,7 @@ inline std::uint32_t round_up_to_mul32(std::uint32_t val) { return ((val & 31) =
 // Converts a linear non-zero-padded row-major tensor to zero-padded-32 32-swizzled tilized row-major tensor
 template<typename T, template<typename> typename BufferType>
 inline std::vector<T> tilize_nchw(const BufferType<T>& in_rowmajor, const std::vector<std::uint32_t>& shape) {
+    ZoneScoped;
     int N = shape[0], C = shape[1], H = shape[2], W = shape[3];
     int NCHW = N*C*H*W;
     int OH = round_up_to_mul32(H);
@@ -169,6 +172,7 @@ struct TensAddr {
 
 template<typename T, template<typename> typename BufferType>
 inline vector<T> convert_layout(const BufferType<T>& inp, const vector<uint32_t>& shape, TensorLayout inL, TensorLayout outL) {
+    ZoneScoped;
     switch (inL) {
         case TILED32_SWIZZLED:
             if (outL == TILED32_4FACES) {

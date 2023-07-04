@@ -15,6 +15,7 @@ static Profiler tt_metal_profiler = Profiler();
 
 void DumpDeviceProfileResults(Device *device, const Program &program) {
 #if defined(PROFILER)
+    ZoneScoped;
     if (getDeviceProfilerState())
     {
         ProfileTTMetalScope profile_this = ProfileTTMetalScope("DumpDeviceProfileResults");

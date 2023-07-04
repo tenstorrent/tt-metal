@@ -256,3 +256,40 @@ Limitations
   time so processing the cycle counts read from various RISCs is reasonable.
 
 * Debug print can not used in kernels that are being profiled.Correct usage of DPRINT and profiler is suggested in the `add_two_ints.cpp` tt_metal test. If `profile_device` is set, it profiles, if not it prints. The test will error out if DRPRINT and profiler are attempted to be used together.
+
+
+TRACY
+=====
+
+Profiling
+---------
+
+Fresh build with the tracy flag is required for profiling with tracy profiler.
+
+..  code-block:: sh
+
+    make clean
+    make build ENABLE_TRACY=1
+
+With this build, all the marked zones in the code will be profiled.
+
+GUI
+---
+
+On your mac you need install tracy GUI with brew. On your mac terminal run:
+
+..  code-block:: sh
+
+    brew install tracy
+
+Once installed run tracy GUI with:
+
+..  code-block:: sh
+
+    TRACY_DPI_SCALE=1.0 tracy
+
+In the GUI you should start listening to the machine that your are running your code on over port 8086 (e.g. 172.27.28.132:8086) but setting the client address and clicking
+connect.
+
+
+At this point once you run your program, tracy will automatically start profiling.

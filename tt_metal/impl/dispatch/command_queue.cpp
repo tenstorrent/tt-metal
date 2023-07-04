@@ -8,6 +8,8 @@
 
 namespace tt::tt_metal {
 
+#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+
 u64 get_noc_multicast_encoding(const CoreCoord& top_left, const CoreCoord& bottom_right) {
     return NOC_MULTICAST_ENCODING(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
 }
@@ -643,6 +645,7 @@ void CommandQueue::enqueue_command(shared_ptr<Command> command, bool blocking) {
 }
 
 void CommandQueue::enqueue_read_buffer(Buffer& buffer, vector<u32>& dst, bool blocking) {
+    ZoneScopedN("CommandQueue_read_buffer");
     u32 read_buffer_command_size = DeviceCommand::size_in_bytes() + buffer.size();
     if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + read_buffer_command_size >= HUGE_PAGE_SIZE) {
         tt::log_assert(read_buffer_command_size <= HUGE_PAGE_SIZE - 96, "EnqueueReadBuffer command is too large");
@@ -683,6 +686,7 @@ void CommandQueue::enqueue_read_buffer(Buffer& buffer, vector<u32>& dst, bool bl
 }
 
 void CommandQueue::enqueue_write_buffer(Buffer& buffer, vector<u32>& src, bool blocking) {
+    ZoneScopedN("CommandQueue_write_buffer");
     TT_ASSERT(not blocking, "EnqueueWriteBuffer only has support for non-blocking mode currently");
     TT_ASSERT(
         buffer.page_size() < MEM_L1_SIZE - DEVICE_COMMAND_DATA_ADDR,
@@ -704,6 +708,7 @@ void CommandQueue::enqueue_write_buffer(Buffer& buffer, vector<u32>& src, bool b
 }
 
 void CommandQueue::enqueue_program(Program& program, bool blocking) {
+    ZoneScopedN("CommandQueue_enqueue_program");
     TT_ASSERT(not blocking, "EnqueueProgram only has support for non-blocking mode currently");
 
     // Need to relay the program into DRAM if this is the first time
@@ -767,6 +772,7 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
 }
 
 void CommandQueue::finish() {
+    ZoneScopedN("CommandQueue_finish");
     if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + DeviceCommand::size_in_bytes() >= HUGE_PAGE_SIZE) {
         this->wrap();
     }
@@ -788,6 +794,7 @@ void CommandQueue::finish() {
 }
 
 void CommandQueue::wrap() {
+    ZoneScopedN("CommandQueue_wrap");
     tt::log_debug(tt::LogDispatch, "EnqueueWrap");
     EnqueueWrapCommand command(this->device, this->sysmem_writer);
     shared_ptr<EnqueueWrapCommand> p = std::make_shared<EnqueueWrapCommand>(std::move(command));

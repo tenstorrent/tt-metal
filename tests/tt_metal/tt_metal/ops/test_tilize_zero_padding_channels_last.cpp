@@ -60,8 +60,8 @@ int main(int argc, char **argv) {
         Tensor g = Tensor(host_a.storage(), shape, DataType::BFLOAT16, Layout::ROW_MAJOR);
         // TODO: Update when tensor.pad_to_tile() function is added
         auto padded_shape = g.shape();
-        padded_shape[2] = roundup(padded_shape[2], TILE_HEIGHT);
-        padded_shape[3] = roundup(padded_shape[3], TILE_WIDTH);
+        padded_shape[2] = round_up(padded_shape[2], TILE_HEIGHT);
+        padded_shape[3] = round_up(padded_shape[3], TILE_WIDTH);
         Tensor padded_g = g.pad(padded_shape, {0,0,0,0}, 0);
         Tensor golden = padded_g.to(Layout::TILE);
         auto golden_vec =  owned_buffer::get_as<bfloat16>(golden);

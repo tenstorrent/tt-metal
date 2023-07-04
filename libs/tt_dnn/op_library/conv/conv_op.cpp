@@ -209,7 +209,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
     uint32_t num_groups = num_blocks_act_h * num_blocks_act_w * num_blocks_weight_w;
     // writer of conv op partially removes padding on the width
     // it removes the padding done for block width but it doesn't remove padding done for tiled width
-    uint32_t output_channels_padded_to_tile_width = roundup(output_channels, TILE_WIDTH);
+    uint32_t output_channels_padded_to_tile_width = round_up(output_channels, TILE_WIDTH);
     assert(output_channels_padded_to_tile_width <= weight_matrix_width);
     uint32_t num_blocks_output_w = (uint32_t) ceil((double) output_channels_padded_to_tile_width / (double) weight_block_w_datums);
     uint32_t last_block_width_datums = (output_channels_padded_to_tile_width % weight_block_w_datums == 0) ? weight_block_w_datums : (output_channels_padded_to_tile_width % weight_block_w_datums);
@@ -543,7 +543,7 @@ std::vector<Shape> Conv::compute_output_shapes(const std::vector<Tensor>& input_
     auto [conv_output_h, conv_output_w] = compute_conv_output_face_shape(conv_activation_h, conv_activation_w, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w);
 
     // pad the output channels to TILE_WIDTH as conv writer kernel does not remove padding for tile
-    auto output_channels = roundup(this->output_channels, TILE_WIDTH);
+    auto output_channels = round_up(this->output_channels, TILE_WIDTH);
 
     // TODO: Update batch size below
     Shape output_tensor_shape = {1, conv_output_h, conv_output_w, output_channels};
@@ -908,7 +908,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
     uint32_t weight_block_num_tiles = weight_block_w_ntiles * weight_block_h_ntiles;
     // writer of conv op partially removes padding on the width
     // it removes the padding done for block width but it doesn't remove padding done for tiled width
-    uint32_t output_channels_padded_to_tile_width = roundup(output_channels, TILE_WIDTH);
+    uint32_t output_channels_padded_to_tile_width = round_up(output_channels, TILE_WIDTH);
     assert(output_channels_padded_to_tile_width <= Wb);
     uint32_t num_blocks_output_w = (uint32_t) ceil((double) output_channels_padded_to_tile_width / (double) weight_block_w_datums);
     uint32_t last_block_width_datums = (output_channels_padded_to_tile_width % weight_block_w_datums == 0) ? weight_block_w_datums : (output_channels_padded_to_tile_width % weight_block_w_datums);
@@ -1294,7 +1294,7 @@ std::vector<Shape> ConvWithAddressMap::compute_output_shapes(const std::vector<T
     auto [conv_output_h, conv_output_w] = compute_conv_output_face_shape(conv_activation_h, conv_activation_w, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w);
 
     // pad the output channels to TILE_WIDTH as conv writer kernel does not remove padding for tile
-    auto output_channels = roundup(this->output_channels, TILE_WIDTH);
+    auto output_channels = round_up(this->output_channels, TILE_WIDTH);
 
     // TODO: Update batch size below
     Shape output_tensor_shape = {1, conv_output_h, conv_output_w, output_channels};

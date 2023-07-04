@@ -61,15 +61,15 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
     uint32_t im1_t  = 1; // 1/sum(exp(x))
     uint32_t in2_t  = 1; // scaler for reduce coming from reader
     uint32_t in3_t  = 1; // 1/sqrt() scaler tile cb for fused scale/mask/softmax variant
-    uint32_t in4_t  = divup(Wt, block_size)*block_size; // attention mask (N,C,32,W) - Wt is reused for each Ht, NC is cycled
+    uint32_t in4_t  = div_up(Wt, block_size)*block_size; // attention mask (N,C,32,W) - Wt is reused for each Ht, NC is cycled
 
     // cb_exps - keeps exps in CB in L1 to avoid recomputing
-    uint32_t im0_t  = block_size*divup(Wt, block_size);
+    uint32_t im0_t  = block_size*div_up(Wt, block_size);
     TT_ASSERT(im0_t == Wt);
 
     // used for buffering scale-mask
     // can't easily reuse im0_t because cumulative wait for Wt needs to have Wt tiles contiguous free
-    uint32_t im3_t  = block_size*(divup(Wt, block_size)+1);
+    uint32_t im3_t  = block_size*(div_up(Wt, block_size)+1);
     TT_ASSERT(im3_t == Wt+block_size);
 
     TT_ASSERT(Wt % block_size == 0);

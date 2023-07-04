@@ -14,6 +14,7 @@
 using namespace std;
 using namespace tt;
 
+namespace tt::tt_metal {
 
 std::string RISCID_to_string(RISCID id) {
     switch (id) {
@@ -403,6 +404,7 @@ static CompileState pre_compile_for_risc(
     const std::uint8_t noc_index,
     const std::vector<std::uint32_t>& kernel_compile_time_args)
 {
+    ZoneScoped;
 
     // default ARCH_NAME is grayskull in Makefile
     TT_ASSERT( (arch_name.compare("grayskull") == 0) || (arch_name.compare("wormhole") == 0) || (arch_name.compare("wormhole_b0") == 0) );
@@ -459,6 +461,7 @@ static void compile_for_risc(
     RISCID risc_id,
     tt::build_kernel_for_riscv_options_t* build_opts,
     const CompileState& ctx) {
+    ZoneScoped;
 
     struct build_files_t {
         const vector<string> cpps, objs;
@@ -560,6 +563,7 @@ static void compile_for_risc(
 void link_for_risc(RISCID risc_id,
                    tt::build_kernel_for_riscv_options_t* build_opts,
                    const CompileState& ctx) {
+    ZoneScoped;
 
     string pushd_cmd = string("cd ") + ctx.home_ + "tt_metal/src/ckernels && "; // TODO(AP): Optimize
 
@@ -1059,6 +1063,10 @@ void generate_binaries_all_riscs(
     tt::build_kernel_for_riscv_options_t* opts, const std::string& out_dir_path, const std::string& arch_name,
     generate_binaries_params_t p)
 {
+    ZoneScoped;
+    const std::string tracyPrefix = "generate_binaries_all_riscs_";
+    ZoneName( (tracyPrefix + out_dir_path).c_str(), out_dir_path.length() + tracyPrefix.length());
+
     generate_descriptors(opts, out_dir_path);
 
     std::vector<std::thread> threads;
@@ -1095,7 +1103,9 @@ void generate_binaries_for_triscs(
     const std::string& arch_name,
     const std::vector<std::uint32_t>& kernel_compile_time_args)
 {
-
+    ZoneScoped;
+    const std::string tracyPrefix = "generate_binaries_for_triscs_";
+    ZoneName( (tracyPrefix + dir).c_str(), dir.length() + tracyPrefix.length());
     generate_src_for_triscs(topts, dir, arch_name, kernel_compile_time_args);
     auto lambda0 = [=]() { generate_binary_for_risc(RISCID::TR0, topts, dir, arch_name, 0, kernel_compile_time_args); };
     auto lambda1 = [=]() { generate_binary_for_risc(RISCID::TR1, topts, dir, arch_name, 0, kernel_compile_time_args); };
@@ -1116,6 +1126,9 @@ void generate_binaries_for_triscs(
 void generate_descriptors(
     tt::build_kernel_for_riscv_options_t* opts, const std::string &op_dir)
 {
+    ZoneScoped;
+    const std::string tracyPrefix = "generate_descriptors_";
+    ZoneName( (tracyPrefix + op_dir).c_str(), op_dir.length() + tracyPrefix.length());
     string full_path = opts->outpath + op_dir;
     fs::create_directories(full_path);
     try {
@@ -1219,5 +1232,6 @@ void generate_default_bank_to_noc_coord_descriptor(
     }
 
     generate_bank_to_noc_coord_descriptor(build_kernel_for_riscv_options, out_dir_path, dram_bank_map, dram_bank_offset_map, l1_bank_map, l1_bank_offset_map);
+}
 }
 }

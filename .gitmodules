@@ -12,3 +12,6 @@
 [submodule "tt_metal/third_party/taskflow"]
 	path = tt_metal/third_party/taskflow
 	url = https://github.com/taskflow/taskflow
+[submodule "tt_metal/third_party/tracy"]
+	path = tt_metal/third_party/tracy
+	url = git@github.com:tenstorrent-metal/tracy.git

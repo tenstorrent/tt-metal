@@ -1,5 +1,7 @@
 # Every variable in subdir must be prefixed with subdir (emulating a namespace)
 
+include $(TT_METAL_HOME)/tt_metal/tracy.mk
+
 COMMON_INCLUDES = $(BASE_INCLUDES)
 
 ifeq ("$(ARCH_NAME)", "wormhole_b0")
@@ -34,9 +36,9 @@ COMMON_DEPS = $(addprefix $(OBJDIR)/, $(COMMON_SRCS:.cpp=.d))
 # Each module has a top level target as the entrypoint which must match the subdir name
 common: $(COMMON_LIB)
 
-$(COMMON_LIB): $(COMMON_OBJS)
+$(COMMON_LIB): $(TRACY_LIB) $(COMMON_OBJS)
 	@mkdir -p $(@D)
-	ar rcs -o $@ $(COMMON_OBJS)
+	ar rcs -o $@ $(COMMON_OBJS) $(TRACY_LIB)
 
 $(OBJDIR)/tt_metal/common/%.o: tt_metal/common/%.cpp
 	@mkdir -p $(@D)

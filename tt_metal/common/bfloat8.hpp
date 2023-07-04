@@ -8,6 +8,7 @@
 #include "common/assert.hpp"
 #include "common/logger.hpp"
 #include "common/tt_backend_api_types.hpp"
+#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
 using namespace std;
 
@@ -132,6 +133,8 @@ inline uint32_t create_packed_bfp8_packed_as_u32(const std::vector<uint32_t> &u3
 }
 
 inline std::vector<uint32_t> pack_fp32_vec_as_bfp8_tiles(const std::vector<float> &fp32_vec, bool row_major_input, bool is_exp_a) {
+    ZoneScoped;
+
     uint32_t single_bfp8_tile_size = tile_size(tt::DataFormat::Bfp8_b);
     int num_float_in_tile = 1024;
     TT_ASSERT(fp32_vec.size() % num_float_in_tile == 0);
@@ -203,6 +206,8 @@ inline std::vector<uint32_t> pack_fp32_vec_as_bfp8_tiles(const std::vector<float
 }
 
 inline std::vector<float> unpack_bfp8_tiles_into_float_vec(const std::vector<uint32_t> &bfp8_tiles, bool row_major_output, bool is_exp_a) {
+    ZoneScoped;
+
     int num_elements_in_dword = 4;
     uint32_t size_bytes = bfp8_tiles.size() * num_elements_in_dword; // each uint32_t contains 4 BFP8 values
     uint32_t single_bfp8_tile_size = tile_size(tt::DataFormat::Bfp8_b);

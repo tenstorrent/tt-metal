@@ -1,5 +1,6 @@
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
+#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
 #include "common/utils.hpp"
 #include "llrt/llrt.hpp"
@@ -12,6 +13,7 @@ size_t Device::detect_num_available_devices(const TargetDevice target_type) {
     return tt_cluster::detect_available_devices(target_type).size();
 }
 void Device::initialize_cluster() {
+    ZoneScoped;
     std::set<chip_id_t> target_device_ids = {pcie_slot_};
     tt_device_params default_params;
     if (getenv("TT_METAL_VERSIM_DUMP_CORES")) {
@@ -29,6 +31,7 @@ void Device::initialize_cluster() {
 }
 
 void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
+    ZoneScoped;
     TT_ASSERT(cluster_is_initialized() && "Cluster needs to be initialized!");
     tt::log_assert(
         this->harvesting_initialized_,
@@ -77,6 +80,7 @@ void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
 }
 
 void Device::initialize_harvesting_information() {
+    ZoneScoped;
     if (not cluster_is_initialized()) {
         tt::log_fatal("Device has not been initialized, did you forget to call InitializeDevice?");
     }
@@ -150,6 +154,7 @@ void Device::initialize_harvesting_information() {
 }
 
 bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
+    ZoneScoped;
     this->initialize_cluster();
     this->initialize_harvesting_information();
     this->initialize_allocator(l1_bank_remap);

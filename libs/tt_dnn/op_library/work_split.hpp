@@ -21,10 +21,10 @@ struct TilesSplit {
     int tpc_; // unclipped tiles per core
 
     inline TilesSplit(int num_cores, int total_tiles) : num_cores_(num_cores), total_tiles_(total_tiles) {
-        tpc_ = divup(total_tiles_, num_cores_);
+        tpc_ = div_up(total_tiles_, num_cores_);
     }
 
-    // number of tiles per core for divup split
+    // number of tiles per core for div_up split
     inline uint32_t get_tpc() const { return tpc_; }
 
     // number of tiles per core for close to even split with multiples of 8 going to each core

@@ -59,8 +59,8 @@ int main(int argc, char **argv) {
         Tensor host_a = a.cpu(); // Move tensor a to host to validate
         // TODO: Update when tensor.pad_to_tile() function is added
         auto padded_shape = a.shape();
-        padded_shape[2] = roundup(padded_shape[2], TILE_HEIGHT);
-        padded_shape[3] = roundup(padded_shape[3], TILE_WIDTH);
+        padded_shape[2] = round_up(padded_shape[2], TILE_HEIGHT);
+        padded_shape[3] = round_up(padded_shape[3], TILE_WIDTH);
         Tensor padded_host_a = host_a.pad(padded_shape, {0,0,0,0}, 0);
         Tensor golden = padded_host_a.to(Layout::TILE);
         auto golden_vec =  owned_buffer::get_as<bfloat16>(golden);

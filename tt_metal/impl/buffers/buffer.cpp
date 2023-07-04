@@ -118,7 +118,7 @@ u64 Buffer::page_address(u32 bank_id, u32 page_index) const {
         this->address_ + this->device_->l1_bank_offset_from_bank_id(bank_id);
 
     int pages_handled_in_bank = (int)page_index / num_banks;
-    auto offset = (roundup(this->page_size_, ADDRESS_ALIGNMENT) * pages_handled_in_bank);
+    auto offset = (round_up(this->page_size_, ADDRESS_ALIGNMENT) * pages_handled_in_bank);
     return base_page_address + offset;
 }
 

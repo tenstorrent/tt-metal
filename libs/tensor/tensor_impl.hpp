@@ -8,6 +8,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 namespace tt {
 
 namespace tt_metal {
@@ -244,6 +245,7 @@ std::vector<T> read_data_from_device(const Tensor &tensor, uint32_t size_in_byte
 
 template <typename T, template<typename> typename BufferType>
 inline void write_data_to_device_buffer(const BufferType<T>& data_to_write, DeviceBuffer buffer, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config) {
+    ZoneScoped;
     // TODO(arakhmati): can we use generators in this function to go from `data_to_write` to `uint32_data`?
     // And effectively get rid of any additional allocation
 
@@ -266,6 +268,7 @@ inline void write_data_to_device_buffer(const BufferType<T>& data_to_write, Devi
 
 template <typename T, template<typename> typename BufferType>
 inline DeviceBuffer initialize_data_on_device(const BufferType<T>& data_to_write, Device* device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config) {
+    ZoneScoped;
     TT_ASSERT(device != nullptr);
     auto packed_size_in_bytes = packed_buffer_size_bytes<T>(data_to_write.size());
     auto device_buffer = allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config);

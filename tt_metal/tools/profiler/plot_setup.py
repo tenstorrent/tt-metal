@@ -104,6 +104,7 @@ class default_setup(metaclass=MergeMetaclass):
     deviceInputLog = "logs/profile_log_device.csv"
     deviceRearranged = "device_rearranged_timestamps.csv"
     deviceAnalysisData = "device_analysis_data.json"
+    deviceChromeTracing = "device_chrome_tracing.json"
     devicePerfHTML = "timeline.html"
     deviceStatsTXT = "device_stats.txt"
     deviceTarball = "device_perf_results.tgz"

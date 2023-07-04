@@ -6,7 +6,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
-
+#include "tt_metal/common/tile_math.hpp"
 #include "dtx/dtx.hpp"
 #include "dtx/dtx_passes.hpp"
 
@@ -524,8 +524,8 @@ Tensor tilize_with_zero_padding(const Tensor &input_tensor_a, const MemoryConfig
     auto shape = input_tensor_a.shape();
 
 
-    shape[2] = roundup(shape[2], TILE_HEIGHT);
-    shape[3] = roundup(shape[3], TILE_WIDTH);
+    shape[2] = round_up(shape[2], TILE_HEIGHT);
+    shape[3] = round_up(shape[3], TILE_WIDTH);
     return tilize_with_val_padding(input_tensor_a, shape, {0, 0, 0, 0}, 0, output_mem_config);
 }
 

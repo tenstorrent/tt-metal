@@ -52,7 +52,7 @@ u64 BankManager::allocate_buffer(u32 size, u32 page_size, bool bottom_up) {
     u32 num_banks = this->num_banks();
     int num_equally_distributed_pages = num_pages == 1 ? 1 : 1 + ((num_pages - 1) / num_banks);
     // Each page needs to be at a 32B aligned address
-    auto size_per_bank = num_equally_distributed_pages * roundup(page_size, ADDRESS_ALIGNMENT);
+    auto size_per_bank = num_equally_distributed_pages * round_up(page_size, ADDRESS_ALIGNMENT);
 
     auto address = this->allocator_->allocate(size_per_bank, bottom_up);
     log_assert(address.has_value(), "Cannot allocate {} KB sized buffer in banks!", size_per_bank / 1024);
@@ -67,7 +67,7 @@ u64 BankManager::allocate_buffer_at_address(u32 size, u32 page_size, u32 relativ
     u32 num_banks = this->num_banks();
     int num_equally_distributed_pages = num_pages == 1 ? 1 : 1 + ((num_pages - 1) / num_banks);
     // Each page needs to be at a 32B aligned address
-    auto size_per_bank = num_equally_distributed_pages * roundup(page_size, ADDRESS_ALIGNMENT);
+    auto size_per_bank = num_equally_distributed_pages * round_up(page_size, ADDRESS_ALIGNMENT);
 
     auto adjusted_address = adjust_address(relative_address);
 

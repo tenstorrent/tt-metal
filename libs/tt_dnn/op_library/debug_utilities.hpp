@@ -1,7 +1,6 @@
 #pragma once
 
 
-#include "tt_metal/common/tile_math.hpp"
 #include "tt_metal/common/core_coord.h"
 
 #include "tt_metal/host_api.hpp"

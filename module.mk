@@ -1,5 +1,6 @@
 CONFIG ?= assert
 ENABLE_PROFILER ?= 0
+ENABLE_TRACY ?= 0
 ENABLE_CODE_TIMERS ?= 0
 # TODO: enable OUT to be per config (this impacts all scripts that run tests)
 # OUT ?= build_$(DEVICE_RUNNER)_$(CONFIG)
@@ -108,6 +109,11 @@ ifeq ($(ENABLE_PROFILER), 1)
 CFLAGS += -DPROFILER
 endif
 
+ifeq ($(ENABLE_TRACY), 1)
+CFLAGS += -DTRACY_ENABLE -fno-omit-frame-pointer -fPIC
+LDFLAGS += -rdynamic
+endif
+
 LIBS_TO_BUILD = \
 	common \
 	build_kernels_for_riscv \
@@ -116,6 +122,7 @@ LIBS_TO_BUILD = \
 	llrt \
 	tools \
 	tt_metal \
+	tracy \
 	libs
 
 ifdef TT_METAL_ENV_IS_DEV

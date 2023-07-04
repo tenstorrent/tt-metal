@@ -10,6 +10,7 @@
 #include "tt_stl/reflection.hpp"
 
 #include "third_party/magic_enum/magic_enum.hpp"
+#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
 namespace tt::tt_metal::operation {
 
@@ -102,6 +103,7 @@ std::vector<Tensor> run_without_program_cache(
     const DeviceOperation& operation,
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) {
+    ZoneScoped;
 
     auto device = detail::get_device(input_tensors, optional_input_tensors);
     auto output_tensors = operation.create_output_tensors(input_tensors);
@@ -129,6 +131,7 @@ std::vector<Tensor> run_with_program_cache(
     const DeviceOperation& operation,
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) {
+    ZoneScoped;
 
     auto device = detail::get_device(input_tensors, optional_input_tensors);
     auto output_tensors = operation.create_output_tensors(input_tensors);
@@ -165,6 +168,8 @@ std::vector<Tensor> run(
     const HostOperation& operation,
     const std::vector<Tensor>& input_tensors
 ) {
+    ZoneScoped;
+    ZoneName(operation.get_type_name().c_str(),operation.get_type_name().size());
     log_operation(operation, input_tensors);
 
     auto profile_scope = op_profiler::OpProfileScope(operation.get_type_name(), op_profiler::OpType::tt_dnn_cpu);

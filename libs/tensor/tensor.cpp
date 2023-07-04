@@ -6,10 +6,13 @@
 #include "common/bfloat16.hpp"
 #include "llrt/llrt.hpp"
 #include "tt_metal/common/constants.hpp"
+#include "tt_metal/common/tile_math.hpp"
 
 #include "tt_stl/reflection.hpp"
 
 #include "third_party/magic_enum/magic_enum.hpp"
+#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+
 
 
 using namespace tt::constants;
@@ -47,6 +50,8 @@ Tensor::~Tensor() {
 }
 
 void Tensor::deallocate() {
+    ZoneScoped;
+
     std::visit(
         [](auto&& storage)
         {
@@ -72,6 +77,8 @@ void Tensor::deallocate() {
 }
 
 Tensor Tensor::to(Device *target_device, const MemoryConfig &mem_config) const {
+    ZoneScoped;
+
     if (storage_type() == StorageType::DEVICE) {
         TT_ASSERT(this->device() == target_device && "Currently do not support moving between devices");
         return *this;
@@ -81,6 +88,7 @@ Tensor Tensor::to(Device *target_device, const MemoryConfig &mem_config) const {
 }
 
 Tensor Tensor::cpu() const {
+    ZoneScoped;
     if (storage_type() == StorageType::OWNED) {
         return *this;
     }
@@ -88,6 +96,7 @@ Tensor Tensor::cpu() const {
 }
 
 Tensor Tensor::to(Layout target_layout) const {
+    ZoneScoped;
     TT_ASSERT(this->storage_type() != StorageType::DEVICE && "Bring tensor to host before converting to target layout");
     return tensor_impl::to_layout_wrapper(*this, target_layout);
 }
@@ -97,22 +106,25 @@ void Tensor::print(Layout print_layout, bool pretty_print) const {
 }
 
 Tensor Tensor::pad(const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value) const {
+    ZoneScoped;
     TT_ASSERT(this->storage_type() == StorageType::OWNED or this->storage_type() == StorageType::BORROWED && "Tensor must be on host for padding");
     TT_ASSERT(this->layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for padding");
     return tensor_impl::pad_wrapper(*this, output_tensor_shape, input_tensor_start, pad_value);
 }
 
 Tensor Tensor::unpad(const Shape &output_tensor_start, const Shape &output_tensor_end) const {
+    ZoneScoped;
     TT_ASSERT(this->storage_type() == StorageType::OWNED && "Tensor must be on host for unpadding");
     TT_ASSERT(this->layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for unpadding");
     return tensor_impl::unpad_wrapper(*this, output_tensor_start, output_tensor_end);
 }
 
 Tensor Tensor::pad_to_tile(float pad_value) const {
+    ZoneScoped;
     uint32_t h = this->shape()[2];
     uint32_t w = this->shape()[3];
-    uint32_t padded_h = roundup(h, TILE_HEIGHT);
-    uint32_t padded_w = roundup(w, TILE_WIDTH);
+    uint32_t padded_h = round_up(h, TILE_HEIGHT);
+    uint32_t padded_w = round_up(w, TILE_WIDTH);
 
     auto padding = Padding({{0, 0}, {0, 0}, {0, padded_h - h}, {0, padded_w - w}}, Padding::PadValue::Any);
 
@@ -123,6 +135,8 @@ Tensor Tensor::pad_to_tile(float pad_value) const {
 }
 
 Tensor Tensor::unpad_from_tile(const Shape &output_tensor_shape) const {
+    ZoneScoped;
+
     TT_ASSERT(this->shape()[0] == output_tensor_shape[0] && this->shape()[1] == output_tensor_shape[1], "Input shape must match output shape apart from last 2 dims");
     TT_ASSERT(this->shape()[2] % TILE_HEIGHT == 0 && this->shape()[3] % TILE_WIDTH==0, "Last 2 dims of input shape must be multiples of 32");
     TT_ASSERT(this->shape()[2] - TILE_HEIGHT < output_tensor_shape[2] && this->shape()[3] - TILE_WIDTH < output_tensor_shape[3], "Last 2 dims of output must be within range to have been padded to input");
@@ -235,6 +249,7 @@ tt::stl::reflection::Attributes Tensor::attributes() const {
 }
 
 Tensor create_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config) {
+    ZoneScoped;
     uint32_t packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
     auto device_buffer = tensor_impl::allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config);
     return Tensor(DeviceStorage{device_buffer, device, memory_config}, shape, data_type, layout);

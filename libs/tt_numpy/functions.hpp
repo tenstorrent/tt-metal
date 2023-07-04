@@ -3,6 +3,7 @@
 #include <tensor/owned_buffer.hpp>
 #include <tensor/owned_buffer_functions.hpp>
 #include <tensor/types.hpp>
+#include <common/tile_math.hpp>
 
 #include <optional>
 #include <random>
@@ -90,7 +91,7 @@ static Tensor arange(int64_t start, int64_t stop, int64_t step, const Layout lay
     // Current implementation restrictions
     TT_ASSERT(step > 0, "Step must be greater than 0");
     TT_ASSERT(start < stop, "Start must be less than step");
-    auto size = divup((stop - start), step);
+    auto size = div_up((stop - start), step);
     auto owned_buffer  = tt_metal::owned_buffer::create<T>(size);
 
     auto index = 0;
