@@ -3,9 +3,12 @@ import torch
 from torch import nn
 import tt_lib
 
-from tt_lib.fused_ops.linear import Linear as TtLinear
+from loguru import logger
 from tt_lib.fused_ops.softmax import softmax as tt_softmax
-from python_api_testing.models.t5.t5_utils import torch2tt_tensor, tt2torch_tensor
+from python_api_testing.models.utility_functions_new import (
+    torch2tt_tensor,
+    tt2torch_tensor,
+)
 
 
 def t5_shape_tt(states, batch_size, n_heads, key_value_proj_dim, device):
@@ -310,47 +313,15 @@ class TtT5Attention(nn.Module):
         self.inner_dim = self.n_heads * self.key_value_proj_dim
         self.device = device
 
-        self.q_weights = torch2tt_tensor(
-            state_dict[f"{base_address}.q.weight"], tt_lib.device.GetHost()
-        )
-        self.k_weights = torch2tt_tensor(
-            state_dict[f"{base_address}.k.weight"], tt_lib.device.GetHost()
-        )
-        self.v_weights = torch2tt_tensor(
-            state_dict[f"{base_address}.v.weight"], tt_lib.device.GetHost()
-        )
-        self.o_weights = torch2tt_tensor(
-            state_dict[f"{base_address}.o.weight"], tt_lib.device.GetHost()
-        )
+        self.q_weights = torch2tt_tensor(state_dict[f"{base_address}.q.weight"], device)
+        self.k_weights = torch2tt_tensor(state_dict[f"{base_address}.k.weight"], device)
+        self.v_weights = torch2tt_tensor(state_dict[f"{base_address}.v.weight"], device)
+        self.o_weights = torch2tt_tensor(state_dict[f"{base_address}.o.weight"], device)
 
-        self.q = TtLinear(
-            self.d_model,
-            self.inner_dim,
-            weight=self.q_weights.data(),
-            bias=None,
-            device=device,
-        )
-        self.k = TtLinear(
-            self.d_model,
-            self.inner_dim,
-            weight=self.k_weights.data(),
-            bias=None,
-            device=device,
-        )
-        self.v = TtLinear(
-            self.d_model,
-            self.inner_dim,
-            weight=self.v_weights.data(),
-            bias=None,
-            device=device,
-        )
-        self.o = TtLinear(
-            self.d_model,
-            self.inner_dim,
-            weight=self.o_weights.data(),
-            bias=None,
-            device=device,
-        )
+        self.q_weights = tt_lib.tensor.transpose(self.q_weights)
+        self.k_weights = tt_lib.tensor.transpose(self.k_weights)
+        self.v_weights = tt_lib.tensor.transpose(self.v_weights)
+        self.o_weights = tt_lib.tensor.transpose(self.o_weights)
 
         if self.has_relative_attention_bias:
             self.relative_attention_bias = nn.Embedding(
@@ -488,16 +459,25 @@ class TtT5Attention(nn.Module):
             # return states.transpose(1, 2).contiguous().view(batch_size, -1, self.inner_dim)
             return t5_unshape_tt(states, batch_size, self.inner_dim, self.device)
 
-        def project(hidden_states, proj_layer, key_value_states, past_key_value):
+        def project(hidden_states, proj_weights, key_value_states, past_key_value):
             """projects hidden states correctly to key/query states"""
             if key_value_states is None:
                 # self-attn
                 # (batch_size, n_heads, seq_length, dim_per_head)
-                hidden_states = shape(proj_layer(hidden_states))
+
+                logger.debug(f"hidden_states shape {hidden_states.shape()}")
+                logger.debug(f"proj_weights shape {proj_weights.shape()}")
+
+                hidden_states = shape(tt_lib.tensor.matmul(hidden_states, proj_weights))
             elif past_key_value is None:
                 # cross-attn
                 # (batch_size, n_heads, seq_length, dim_per_head)
-                hidden_states = shape(proj_layer(key_value_states))
+
+                logger.debug(f"hidden_states shape {key_value_states.shape()}")
+                logger.debug(f"proj_weights shape {proj_weights.shape()}")
+                hidden_states = shape(
+                    tt_lib.tensor.matmul(key_value_states, proj_weights)
+                )
 
             if past_key_value is not None:
                 if key_value_states is None:
@@ -511,27 +491,36 @@ class TtT5Attention(nn.Module):
                     # the provided `key_value_states` to support prefix tuning
                     # cross-attn
                     # (batch_size, n_heads, seq_length, dim_per_head)
-                    hidden_states = shape(proj_layer(key_value_states))
+
+                    logger.debug(f"hidden_states shape {key_value_states.shape()}")
+                    logger.debug(f"proj_weights shape {proj_weights.shape()}")
+                    hidden_states = shape(
+                        tt_lib.tensor.matmul(key_value_states, proj_weights)
+                    )
                 else:
                     # cross-attn
                     hidden_states = past_key_value
             return hidden_states
 
         # get query states
+        logger.debug(f"hidden_states shape {hidden_states.shape()}")
+        logger.debug(f"q_weights shape {self.q_weights.shape()}")
+
         query_states = shape(
-            self.q(hidden_states)
+            tt_lib.tensor.matmul(hidden_states, self.q_weights)
+            # self.q(hidden_states)
         )  # (batch_size, n_heads, seq_length, dim_per_head)
 
         # get key/value states
         key_states = project(
             hidden_states,
-            self.k,
+            self.k_weights,
             key_value_states,
             past_key_value[0] if past_key_value is not None else None,
         )
         value_states = project(
             hidden_states,
-            self.v,
+            self.v_weights,
             key_value_states,
             past_key_value[1] if past_key_value is not None else None,
         )
@@ -604,7 +593,11 @@ class TtT5Attention(nn.Module):
 
         attn_output = tt_lib.tensor.bmm(attn_weights, value_states)
         attn_output = unshape(attn_output)  # (batch_size, seq_length, dim)
-        attn_output = self.o(attn_output)
+
+        logger.debug(f"attn_output shape {attn_output.shape()}")
+        logger.debug(f"self.o_weights shape {self.o_weights.shape()}")
+
+        attn_output = tt_lib.tensor.matmul(attn_output, self.o_weights)
 
         present_key_value_state = (
             (key_states, value_states) if (self.is_decoder and use_cache) else None

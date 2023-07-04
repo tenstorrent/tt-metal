@@ -19,7 +19,10 @@ from transformers import AutoTokenizer, T5Tokenizer, T5ForConditionalGeneration
 from transformers.generation.configuration_utils import GenerationConfig
 
 from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
-from python_api_testing.models.t5.t5_utils import torch2tt_tensor, tt2torch_tensor
+from python_api_testing.models.utility_functions_new import (
+    torch2tt_tensor,
+    tt2torch_tensor,
+)
 from python_api_testing.models.t5.t5_for_conditional_generation import (
     TtT5ForConditionalGeneration as TtT5Model,
 )
@@ -262,10 +265,9 @@ def pad_input_32(tensor, value):
     return tensor
 
 
-def run_generate(input_sentance, run_tt_model, device):
-    # tokenizer = T5Tokenizer.from_pretrained("t5-small")
-    tokenizer = AutoTokenizer.from_pretrained("t5-small", model_max_length=32)
-    hf_reference_model = T5ForConditionalGeneration.from_pretrained("t5-small")
+def run_generate(input_sentance, run_tt_model, device, model_name):
+    tokenizer = AutoTokenizer.from_pretrained(model_name, model_max_length=32)
+    hf_reference_model = T5ForConditionalGeneration.from_pretrained(model_name)
     hf_reference_model.eval()
 
     # Prepare input
@@ -343,7 +345,7 @@ def run_generate(input_sentance, run_tt_model, device):
     return tokenizer.decode(decoder_input_ids[0], skip_special_tokens=True)
 
 
-def test_T5ForConditionalGeneration():
+def run_T5ForConditionalGeneration(model_name):
     input_sentance = "translate English to German: The house is wonderful."
     correct_output = "Das Haus ist wunderbar."
 
@@ -362,12 +364,18 @@ def test_T5ForConditionalGeneration():
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
 
-    output_sentance = run_generate(input_sentance, run_tt_model=True, device=device)
+    output_sentance = run_generate(
+        input_sentance, run_tt_model=True, device=device, model_name=model_name
+    )
     logger.info(f"Decoded output: {output_sentance}")
 
     tt_lib.device.CloseDevice(device)
     assert output_sentance == correct_output
 
 
-if __name__ == "__main__":
-    test_T5ForConditionalGeneration()
+# def test_T5ForConditionalGeneration():
+#     run_T5ForConditionalGeneration("t5-small")
+
+
+def test_T5ForConditionalGeneration_flan():
+    run_T5ForConditionalGeneration("google/flan-t5-small")

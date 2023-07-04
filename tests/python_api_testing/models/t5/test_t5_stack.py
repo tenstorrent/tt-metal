@@ -12,14 +12,17 @@ import json
 import tt_lib
 from loguru import logger
 
-from transformers import T5Model
+from transformers import T5Model, AutoModelForSeq2SeqLM
 from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
-from python_api_testing.models.t5.t5_utils import torch2tt_tensor, tt2torch_tensor
+from python_api_testing.models.utility_functions_new import (
+    torch2tt_tensor,
+    tt2torch_tensor,
+)
 from python_api_testing.models.t5.t5_stack import TtT5Stack
 
 
-def run_test_T5Stack_inference(device):
-    hf_reference_model = T5Model.from_pretrained("t5-small")
+def run_test_T5Stack_inference(device, model_name):
+    hf_reference_model = T5Model.from_pretrained(model_name)
     hf_reference_model.eval()
 
     config = json.loads(hf_reference_model.config.to_json_string())
@@ -52,20 +55,25 @@ def run_test_T5Stack_inference(device):
     tt_out = tt2torch_tensor(last_hidden_state)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.98)
-
-    logger.info(comp_allclose(pt_out, tt_out))
     logger.info(pcc_message)
-
-    assert does_pass
 
     if does_pass:
         logger.info("test_T5Stack_inference Passed!")
     else:
         logger.warning("test_T5Stack_inference Failed!")
 
+    assert does_pass
+
 
 def test_T5Stack_inference():
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
-    run_test_T5Stack_inference(device)
+    run_test_T5Stack_inference(device, "t5-small")
+    tt_lib.device.CloseDevice(device)
+
+
+def test_T5Stack_inference_flan():
+    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    tt_lib.device.InitializeDevice(device)
+    run_test_T5Stack_inference(device, "google/flan-t5-small")
     tt_lib.device.CloseDevice(device)

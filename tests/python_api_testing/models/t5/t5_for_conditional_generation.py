@@ -5,9 +5,11 @@ from torch import nn
 import tt_lib
 from typing import Optional, Tuple
 
-from python_api_testing.models.t5.t5_utils import torch2tt_tensor, tt2torch_tensor
+from python_api_testing.models.utility_functions_new import (
+    torch2tt_tensor,
+    tt2torch_tensor,
+)
 from python_api_testing.models.t5.t5_stack import TtT5Stack
-from tt_lib.fused_ops.linear import Linear as TtLinear
 from loguru import logger
 
 
@@ -100,22 +102,9 @@ class TtT5ForConditionalGeneration(nn.Module):
             decoder_config, state_dict, "decoder", device, self.shared
         )
 
-        self.lm_head_weights = torch2tt_tensor(
-            state_dict[f"lm_head.weight"], tt_lib.device.GetHost()
-        )
-        self.lm_head = TtLinear(
-            in_features=config["d_model"],
-            out_features=config["vocab_size"],
-            weight=self.lm_head_weights.data(),
-            bias=None,
-            device=device,
-        )
+        self.lm_head_weights = torch2tt_tensor(state_dict[f"lm_head.weight"], device)
 
-        # self.lm_head = nn.Linear(config["d_model"], config["vocab_size"], bias=False)
-        # self.lm_head.weight = nn.Parameter(state_dict[f"lm_head.weight"])
-
-        # Initialize weights and apply final processing
-        # self.post_init()
+        self.lm_head_weights = tt_lib.tensor.transpose(self.lm_head_weights)
 
         # Model parallel
         self.model_parallel = False
@@ -283,7 +272,7 @@ class TtT5ForConditionalGeneration(nn.Module):
             sequence_output = sequence_output * (self.model_dim**-0.5)
             sequence_output = torch2tt_tensor(sequence_output, self.device)
 
-        lm_logits = self.lm_head(sequence_output)
+        lm_logits = tt_lib.tensor.matmul(sequence_output, self.lm_head_weights)
         loss = None
 
         # Back to torch

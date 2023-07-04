@@ -16,7 +16,10 @@ from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 from loguru import logger
 from tt_lib.fused_ops.softmax import softmax as tt_softmax
-from python_api_testing.models.t5.t5_utils import torch2tt_tensor, tt2torch_tensor
+from python_api_testing.models.utility_functions_new import (
+    torch2tt_tensor,
+    tt2torch_tensor,
+)
 from python_api_testing.models.t5.t5_attention import (
     TtT5Attention,
     t5_unshape_pt,
@@ -152,9 +155,9 @@ def run_test_softmax(device):
         logger.warning("Test softmax Failed!")
 
 
-def run_test_T5Attention_inference(device, block, use_mask):
+def run_test_T5Attention_inference(device, block, use_mask, model_name):
     hugging_face_reference_model = T5Model.from_pretrained(
-        "t5-small"
+        model_name
     )  # , torch_dtype=torch.float16)
     hugging_face_reference_model.eval()
 
@@ -201,16 +204,14 @@ def run_test_T5Attention_inference(device, block, use_mask):
     tt_out = tt2torch_tensor(tt_out)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.98)
-
-    logger.info(comp_allclose(pt_out, tt_out))
     logger.info(pcc_message)
-
-    assert does_pass
 
     if does_pass:
         logger.info("test_T5Attention_inference Passed!")
     else:
         logger.warning("test_T5Attention_inference Failed!")
+
+    assert does_pass
 
 
 def test_t5_shape():
@@ -251,21 +252,36 @@ def test_t5_unshape():
 def test_T5Attention_block_0_no_mask():
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
-    run_test_T5Attention_inference(device, block=0, use_mask=False)
+    run_test_T5Attention_inference(
+        device, block=0, use_mask=False, model_name="t5-small"
+    )
     tt_lib.device.CloseDevice(device)
 
 
 def test_T5Attention_block_2_no_mask():
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
-    run_test_T5Attention_inference(device, block=2, use_mask=False)
+    run_test_T5Attention_inference(
+        device, block=2, use_mask=False, model_name="t5-small"
+    )
     tt_lib.device.CloseDevice(device)
 
 
 def test_T5Attention_block_0_with_mask():
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
-    run_test_T5Attention_inference(device, block=0, use_mask=True)
+    run_test_T5Attention_inference(
+        device, block=0, use_mask=True, model_name="t5-small"
+    )
+    tt_lib.device.CloseDevice(device)
+
+
+def test_T5Attention_block_0_no_mask_flan_t5():
+    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    tt_lib.device.InitializeDevice(device)
+    run_test_T5Attention_inference(
+        device, block=0, use_mask=False, model_name="google/flan-t5-small"
+    )
     tt_lib.device.CloseDevice(device)
 
 

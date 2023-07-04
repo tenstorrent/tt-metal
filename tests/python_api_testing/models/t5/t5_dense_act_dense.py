@@ -1,8 +1,7 @@
 from torch import nn
 import tt_lib
 
-from python_api_testing.models.t5.t5_utils import torch2tt_tensor
-from tt_lib.fused_ops.linear import Linear as TtLinear
+from python_api_testing.models.utility_functions_new import torch2tt_tensor
 
 
 # class T5DenseActDense(nn.Module):
@@ -44,35 +43,22 @@ class TtT5DenseActDense(nn.Module):
         # dense_act_fn = config["dense_act_fn"]
 
         self.out_proj_wi = torch2tt_tensor(
-            state_dict[f"{base_address}.wi.weight"], tt_lib.device.GetHost()
+            state_dict[f"{base_address}.wi.weight"], device
         )
         self.out_proj_w0 = torch2tt_tensor(
-            state_dict[f"{base_address}.wo.weight"], tt_lib.device.GetHost()
+            state_dict[f"{base_address}.wo.weight"], device
         )
 
-        self.wi = TtLinear(
-            in_features=d_model,
-            out_features=d_ff,
-            weight=self.out_proj_wi.data(),
-            bias=None,
-            device=device,
-        )
-        self.wo = TtLinear(
-            in_features=d_ff,
-            out_features=d_model,
-            weight=self.out_proj_w0.data(),
-            bias=None,
-            device=device,
-        )
+        self.out_proj_wi = tt_lib.tensor.transpose(self.out_proj_wi)
+        self.out_proj_w0 = tt_lib.tensor.transpose(self.out_proj_w0)
 
         # self.dropout = nn.Dropout(dropout_rate)
-
         # activation function
         self.act = tt_lib.tensor.relu
 
     def forward(self, hidden_states):
-        hidden_states = self.wi(hidden_states)
+        hidden_states = tt_lib.tensor.matmul(hidden_states, self.out_proj_wi)
         hidden_states = self.act(hidden_states)
         # hidden_states = self.dropout(hidden_states)
-        hidden_states = self.wo(hidden_states)
+        hidden_states = tt_lib.tensor.matmul(hidden_states, self.out_proj_w0)
         return hidden_states

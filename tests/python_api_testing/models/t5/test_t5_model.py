@@ -16,14 +16,16 @@ from loguru import logger
 
 from transformers import AutoTokenizer, T5Tokenizer, T5Model
 from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
-from python_api_testing.models.t5.t5_utils import torch2tt_tensor, tt2torch_tensor
+from python_api_testing.models.utility_functions_new import (
+    torch2tt_tensor,
+    tt2torch_tensor,
+)
 from python_api_testing.models.t5.t5_model import TtT5Model
 
 
-def run_test_T5Model_inference(device, use_attention_mask):
-    # tokenizer = T5Tokenizer.from_pretrained("t5-small")
-    tokenizer = AutoTokenizer.from_pretrained("t5-small", model_max_length=32)
-    hf_reference_model = T5Model.from_pretrained("t5-small")
+def run_test_T5Model_inference(device, use_attention_mask, model_name):
+    tokenizer = AutoTokenizer.from_pretrained(model_name, model_max_length=32)
+    hf_reference_model = T5Model.from_pretrained(model_name)
     hf_reference_model.eval()
 
     config = json.loads(hf_reference_model.config.to_json_string())
@@ -59,7 +61,7 @@ def run_test_T5Model_inference(device, use_attention_mask):
     pt_out = pt_out.last_hidden_state
     pt_out = pt_out.unsqueeze(0)
 
-    hf_reference_model = T5Model.from_pretrained("t5-small", torch_dtype=torch.float16)
+    hf_reference_model = T5Model.from_pretrained(model_name, torch_dtype=torch.float16)
     hf_reference_model.eval()
 
     tt_model = TtT5Model(config, hf_reference_model.state_dict(), device)
@@ -71,8 +73,6 @@ def run_test_T5Model_inference(device, use_attention_mask):
     )
     tt_out = tt2torch_tensor(tt_model_outputs[0])
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.98)
-
-    logger.info(comp_allclose(pt_out, tt_out))
     logger.info(pcc_message)
 
     pt_decoded_out = tokenizer.decode(pt_out[0][0].softmax(0).argmax(1))
@@ -81,20 +81,25 @@ def run_test_T5Model_inference(device, use_attention_mask):
     logger.info(f"Pt decoded output: {pt_decoded_out}")
     logger.info(f"Tt decoded output: {tt_decoded_out}")
 
-    assert does_pass
-
     if does_pass:
         logger.info("test_T5Model_inference Passed!")
     else:
         logger.warning("test_T5Model_inference Failed!")
 
+    assert does_pass
+
 
 def test_T5Model_inference():
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
-    run_test_T5Model_inference(device, use_attention_mask=True)
+    run_test_T5Model_inference(device, use_attention_mask=True, model_name="t5-small")
     tt_lib.device.CloseDevice(device)
 
 
-if __name__ == "__main__":
-    test_T5Model_inference()
+def test_T5Model_inference_flan():
+    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    tt_lib.device.InitializeDevice(device)
+    run_test_T5Model_inference(
+        device, use_attention_mask=True, model_name="google/flan-t5-small"
+    )
+    tt_lib.device.CloseDevice(device)

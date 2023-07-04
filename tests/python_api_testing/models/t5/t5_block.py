@@ -1,7 +1,10 @@
 import torch
 from torch import nn
 
-from python_api_testing.models.t5.t5_utils import torch2tt_tensor, tt2torch_tensor
+from python_api_testing.models.utility_functions_new import (
+    torch2tt_tensor,
+    tt2torch_tensor,
+)
 from python_api_testing.models.t5.t5_layer_self_attention import TtT5LayerSelfAttention
 from python_api_testing.models.t5.t5_layer_cross_attention import (
     TtT5LayerCrossAttention,

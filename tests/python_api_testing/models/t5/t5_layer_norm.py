@@ -1,6 +1,9 @@
 import torch
 import tt_lib
-from python_api_testing.models.t5.t5_utils import tt2torch_tensor, torch2tt_tensor
+from python_api_testing.models.utility_functions_new import (
+    tt2torch_tensor,
+    torch2tt_tensor,
+)
 
 
 # class T5LayerNorm(nn.Module):

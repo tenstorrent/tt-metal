@@ -12,17 +12,18 @@ import torch
 import tt_lib
 from loguru import logger
 
-from transformers import T5Model
+from transformers import T5Model, AutoModelForSeq2SeqLM
 from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 from python_api_testing.models.utility_functions_new import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
-from python_api_testing.models.t5.t5_dense_act_dense import TtT5DenseActDense
+from python_api_testing.models.t5.t5_dense_gated_act_dense import TtT5DenseGatedActDense
 
 
-def run_test_T5DenseActDense_inference(device):
-    hugging_face_reference_model = T5Model.from_pretrained("t5-small")
+def run_test_T5DenseGatedActDense_inference(device):
+    hugging_face_reference_model = T5Model.from_pretrained("google/flan-t5-small")
+    # hugging_face_reference_model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-small")
     hugging_face_reference_model.eval()
 
     config = json.loads(hugging_face_reference_model.config.to_json_string())
@@ -47,26 +48,26 @@ def run_test_T5DenseActDense_inference(device):
     pt_out = hf_reference_module(test_input)[0].unsqueeze(1)
 
     # T5-small config file: https://huggingface.co/t5-small/resolve/main/config.json
-    tt_model = TtT5DenseActDense(
+    tt_model = TtT5DenseGatedActDense(
         config, hugging_face_reference_model.state_dict(), base_address, device
     )
     tt_out = tt_model(torch2tt_tensor(test_input, device))
     tt_out = tt2torch_tensor(tt_out)
 
-    does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.98)
+    does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)
     logger.info(pcc_message)
 
     if does_pass:
-        logger.info("test_T5DenseActDense_inference Passed!")
+        logger.info("test_T5DenseGatedActDense_inference Passed!")
     else:
-        logger.warning("test_T5DenseActDense_inference Failed!")
+        logger.warning("test_T5DenseGatedActDense_inference Failed!")
 
     assert does_pass
 
 
-def test_T5DenseActDense_inference():
+def test_T5DenseGatedActDense_inference():
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     host = tt_lib.device.GetHost()
-    run_test_T5DenseActDense_inference(device)
+    run_test_T5DenseGatedActDense_inference(device)
     tt_lib.device.CloseDevice(device)
