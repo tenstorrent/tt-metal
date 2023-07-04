@@ -20,8 +20,8 @@ def test_noc_unicast_vs_multicast_to_single_core_latency():
         "LATENCY": {
             "across": "core",
             "type": "adjacent",
-            "start": {"risc": "BRISC", "timerID": 5},
-            "end": {"risc": "BRISC", "timerID": 6},
+            "start": {"risc": "BRISC", "zone_name": "NOC-LATENCY"},
+            "end": {"risc": "BRISC", "zone_name": "NOC-LATENCY"},
         },
     }
     setup.deviceInputLog = "unicast_to_single_core_microbenchmark/profile_log_device.csv"

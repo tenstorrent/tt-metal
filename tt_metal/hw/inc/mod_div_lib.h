@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <climits>
+
 inline __attribute__((always_inline)) unsigned int mulsi3 (unsigned int a, unsigned int b)
 {
     unsigned int r = 0;

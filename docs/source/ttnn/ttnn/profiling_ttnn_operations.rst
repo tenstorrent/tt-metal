@@ -22,7 +22,17 @@ The headers for the CSV are explained under `Perf Report Headers`_.
 
 **IMPORTANT NOTES**:
 
+- If this is the first time you are running ``profile_this.py``, it requires `developer dependencies <https://github.com/tenstorrent-metal/tt-metal/blob/main/INSTALLING.md#step-4-installing-developer-dependencies>`_ to be installed.
 - If you have done a reset on your GS device with ``tt_smi`` or ``tensix_reset.sh``, profiling results are not valid due to tensix cores' skewed timer starts. You need to perform a full reboot with ``sudo reboot`` on your host machine to align the timer starts. WH does not have this issue and profiling can be performed after ``tt_smi`` resets.
+
+- In order to populate program cache, tests should run their inference layer at least twice and should run it in the same process. If pytest is being used, that would be running in
+  the same pytest run. Only the host times for the second run of the layer should be analyzed as the first run was populating the cache and will have much higher times for host side.
+
+- The first 1000 ops for each device is automatically collected by pytest fixtures at the end of your test.
+  If your test has more than 1000 ops, ``ttl.device.DumpDeviceProfiler(device)`` should be called at every n number of layers that total to less than 1000 ops in order to avoid dropping profiling data of new ops.
+  For example for resnet with around 120 ops for a single inference layer, if the test calls the layer more than 8 times, ``ttl.device.DumpDeviceProfiler(device)`` should be called at least every eighth layer run.
+  If profiling data is dropped, you will receive warning messages in the execution log mentioning which RISC of what core of what device dropped profiling data. Note that dispatch
+  cores fill up their profiling buffers faster and if only those cores are giving warnings your OP analysis is not affected.
 
 Perf Report Headers
 -------------------
@@ -43,10 +53,9 @@ The headers of the columns with their descriptions is below:
 
 - **GLOBAL CALL COUNT**: The index of the op in the execution pipeline
 
-- **ATTRIBUTES**: Any additional attribute or meta-data that can be manually added during the execution of the op
+- **DEVICE ID**: ID of the device the operation ran on
 
-    - ``op_profiler::append_meta_data`` can be used on the C++ side to add to this field
-    - ``ttl.profiler.append_meta_data`` can be used on the Python side to add to this field
+- **ATTRIBUTES**: Operation attributes
 
 - **MATH FIDELITY**: Math fidelity of the fields
 
@@ -68,7 +77,6 @@ The headers of the columns with their descriptions is below:
 - **DEVICE FW START CYCLE**: Tensix cycle count from the earliest RISC of the earliest core of the device that executed the OP kernel
 
 - **DEVICE FW END CYCLE**: Tensix cycle count from the latest RISC of the latest core of the device that executed the OP kernel
-
 - **DEVICE FW DURATION [ns]**: FW duration on the device for the OP, calculated as (last FW end cycle - first FW start cycle)/core_frequency with cycle markers chosen across all cores and all RISCs
 
 - **DEVICE KERNEL DURATION [ns]**: Kernel duration on the device for the OP, calculated as (last Kernel end cycle - first Kernel start cycle)/core_frequency with cycle markers chosen across all cores and all RISCs
@@ -97,10 +105,11 @@ The headers of the columns with their descriptions is below:
 
 - **Input & Output Tensor Headers**: Header template is {Input/Output}_{IO Number}_{Field}. e.g. INPUT_0_MEMORY
 
-    - *W*: Tensor batch count
-    - *Z*: Tensor channel count
-    - *Y*: Tensor Height
-    - *X*: Tensor Width
+    - *SHAPE*
+        - W: Tensor batch count
+        - Z: Tensor channel count
+        - Y: Tensor Height
+        - X: Tensor Width
     - *LAYOUT*:
         - ROW_MAJOR
         - TILE
@@ -115,17 +124,6 @@ The headers of the columns with their descriptions is below:
         - dec_0_l1
         - host
 
-- **CALL DEPTH**: Level of the OP in the call stack. If OP call other OPs the child OP will have a CALL DEPTH one more than the CALL DEPTH of the caller
-
-- **TT_METAL API calls**: Statistics on tt_metal calls, particularly how many times they were called during the OP and what was their average duration in nanoseconds
-
-    - CompileProgram
-    - ConfigureDeviceWithProgram
-    - LaunchProgram
-    - ReadFromDevice
-    - WriteToDevice
-    - DumpDeviceProfileResults
-
 
 profile_this description
 ------------------------
@@ -138,13 +136,7 @@ CLI options of the  ``profile_this.py`` script are:
 
 - ``-n``, ``--name-append``: Name to be appended to ``csv`` and ``tgz`` filenames and also be used as the folder name under the given or default output folder
 
-- ``-d``, ``--device-only``: Only profile device side, note in this mode host side readings will still be reported but should be ignored
-
-- ``-m``, ``--host-only``: Only profile host side
-
 This scripts performs the following items:
 
-1. Checks if the project is correctly built with ``PROFILER="enabled"``
-2. Executes the provided under test command to generate both host and device side profiling logs
-3. Post-processes all the collected logs and aggregate them into the perf csv with a timestamped name.
-4. Compress all the raw host and device side logs into a tarball for future reference.
+1. Executes the provided under test command to generate both host and device side profiling logs
+2. Post-processes all the collected logs and aggregate them into the perf csv with a timestamped name.

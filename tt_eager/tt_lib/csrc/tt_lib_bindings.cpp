@@ -156,20 +156,22 @@ void DeviceModule(py::module &m_device) {
         the FinishCommand. Once set to false, all subsequent commands will immediately notify the device
         that the write pointer has been updated.
     )doc");
+    m_device.def("DumpDeviceProfiler", &detail::DumpDeviceProfiler, py::arg("device"), py::arg("free_buffers") = false, R"doc(
+        Dump device side profiling data.
+
+        +------------------+----------------------------------+-----------------------+-------------+----------+
+        | Argument         | Description                      | Data type             | Valid range | Required |
+        +==================+==================================+=======================+=============+==========+
+        | device           | Device to dump profiling data of | tt_lib.device.Device  |             | Yes      |
+        | free_buffers     | Option to free buffer            | bool                  |             | No       |
+        +------------------+----------------------------------+-----------------------+-------------+----------+
+    )doc");
     m_device.def("DeallocateBuffers", &detail::DeallocateBuffers, R"doc(
         Deallocate all buffers associated with Device handle
     )doc");
 }
 
 void ProfilerModule(py::module &m_profiler) {
-    py::enum_<op_profiler::OpType>(m_profiler, "OpType")
-        .value("python_fallback", op_profiler::OpType::python_fallback)
-        .value("custom_zone", op_profiler::OpType::custom_zone);
-
-    m_profiler.def("get_profiler_flag", &op_profiler::get_profiler_flag, R"doc(
-        Gets the profiling flag.
-    )doc");
-
     m_profiler.def("set_profiler_location", &op_profiler::set_profiler_location, R"doc(
         Sets the profiling root folder.
 
@@ -178,67 +180,7 @@ void ProfilerModule(py::module &m_profiler) {
         +==================+================================================+=======================+=============+==========+
         | profilerLocation | Profiling output folder under the              | string                | Valid dir   | Yes      |
         |                  | parent folder generated/profiler/.logs         |                       |             |          |
-        |                  | Default : generated/profiler/.logs/ops/        |                       |             |          |
-        +------------------+------------------------------------------------+-----------------------+-------------+----------+
-    )doc");
-
-    m_profiler.def("append_meta_data", &op_profiler::append_meta_data, R"doc(
-        Append extra information regardig the op.
-
-        +------------------+------------------------+-----------------------+------------------+----------+
-        | Argument         | Description            | Data type             | Valid range      | Required |
-        +==================+========================+=======================+==================+==========+
-        | metaData         | Meta Data              | string                | Non-empty string | Yes      |
-        +------------------+------------------------+-----------------------+------------------+----------+
-    )doc");
-
-    m_profiler.def("append_input_data", &op_profiler::append_input_data, R"doc(
-        Append op input information .
-
-        +------------------+------------------------+-----------------------+------------------+----------+
-        | Argument         | Description            | Data type             | Valid range      | Required |
-        +==================+========================+=======================+==================+==========+
-        | input            | Input tensor           | Tensor                | Valid Tensor     | Yes      |
-        +------------------+------------------------+-----------------------+------------------+----------+
-    )doc");
-
-    m_profiler.def("append_output_data", &op_profiler::append_output_data, R"doc(
-        Append op output information .
-
-        +------------------+------------------------+-----------------------+------------------+----------+
-        | Argument         | Description            | Data type             | Valid range      | Required |
-        +==================+========================+=======================+==================+==========+
-        | output           | output tensor          | Tensor                | Valid Tensor     | Yes      |
-        +------------------+------------------------+-----------------------+------------------+----------+
-    )doc");
-
-    m_profiler.def("set_preferred_name", &op_profiler::set_preferred_name<string>, R"doc(
-        Set a name to be appended to the name that profiler started with.
-
-        +------------------+------------------------+-----------------------+------------------+----------+
-        | Argument         | Description            | Data type             | Valid range      | Required |
-        +==================+========================+=======================+==================+==========+
-        | name             | Preferred Name         | String                | Valid String     | Yes      |
-        +------------------+------------------------+-----------------------+------------------+----------+
-    )doc");
-
-    m_profiler.def("start_profiling",
-		  &op_profiler::start_profiling,py::arg("opName"), py::arg("opType") = op_profiler::OpType::custom_zone, R"doc(
-        Start profiling op.
-        +------------------+------------------------------------------------+-----------------------+-------------+----------+
-        | Argument         | Description                                    | Data type             | Valid range | Required |
-        +==================+================================================+=======================+=============+==========+
-        | opName             | Name of the op or zone to be profiled          | string                |             | Yes      |
-        | opType             | Fallback op or custom zone                     | string                |             | No       |
-        +------------------+------------------------------------------------+-----------------------+-------------+----------+
-    )doc");
-
-    m_profiler.def("stop_profiling", &op_profiler::stop_profiling, R"doc(
-        Stop profiling op.
-        +------------------+------------------------------------------------+-----------------------+-------------+----------+
-        | Argument         | Description                                    | Data type             | Valid range | Required |
-        +==================+================================================+=======================+=============+==========+
-        | name             | Name of the op or zone to stop profiling       | string                |             | Yes      |
+        |                  | Default : generated/profiler/.logs/            |                       |             |          |
         +------------------+------------------------------------------------+-----------------------+-------------+----------+
     )doc");
 

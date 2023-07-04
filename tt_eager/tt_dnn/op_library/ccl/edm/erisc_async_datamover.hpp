@@ -470,7 +470,6 @@ FORCE_INLINE bool sender_eth_send_data_sequence(
     if (data_ready_for_send) {
         bool consumer_ready_to_accept = eth_is_receiver_channel_send_done(eth_sender_rdptr.index());
         if (consumer_ready_to_accept) {
-            // kernel_profiler::mark_time(14);
             // Queue up another send
             uint32_t sender_buffer_address = transaction_channel_sender_buffer_addresses[eth_sender_rdptr.index()];
             uint32_t receiver_buffer_address = transaction_channel_receiver_buffer_addresses[eth_sender_rdptr.index()];
@@ -610,7 +609,6 @@ FORCE_INLINE bool receiver_eth_send_ack_to_sender_sequence(
         bool buffer_writes_flushed = ncrisc_noc_nonposted_writes_sent(noc_index);
         // bool buffer_writes_flushed = ncrisc_noc_nonposted_writes_flushed(noc_index);
         if (buffer_writes_flushed) {
-            // kernel_profiler::mark_time(15);
             // DPRINT << "rx: accepting payload, sending receive ack on channel " << (uint32_t)noc_writer_buffer_wrptr
             // << "\n";
             eth_receiver_channel_done(eth_receiver_ackptr.index());

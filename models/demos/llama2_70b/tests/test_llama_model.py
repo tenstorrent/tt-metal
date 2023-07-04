@@ -132,6 +132,8 @@ def run_test_LlamaModel_inference(
 
         for device in devices:
             tt_lib.device.Synchronize(device)
+            if i % 8 == 0:
+                tt_lib.device.DumpDeviceProfiler(device)
 
         print(f"Done synchronizing devices")
 

@@ -19,7 +19,8 @@ Mac users can use brew to install tracy. On your terminal run:
 
 ..  code-block:: sh
 
-    wget -P ~/ https://raw.githubusercontent.com/Homebrew/homebrew-core/52ec9be8d6fbef66888abe0fbdb96f8b4f4e4e0c/Formula/t/tracy.rb
+    brew uninstall tracy #Remove any old version of tracy
+    wget -P ~/ --no-check-certificate --no-cache --no-cookies https://raw.githubusercontent.com/tenstorrent-metal/tracy/master/tracy.rb
     brew install ~/tracy.rb
     rm ~/tracy.rb
 
@@ -27,7 +28,7 @@ Once installed run tracy GUI with:
 
 ..  code-block:: sh
 
-    TRACY_DPI_SCALE=1.0 tracy
+    tracy
 
 The application will start showing a window similar to the image below.
 
@@ -42,8 +43,8 @@ Set client address to the IP address of the remote machine, listen over port 808
 Once the host machine starts running a tracy enabled application, GUI will automatically start collecting profiling data and will draw it in real time.
 
 
-Profiling
----------
+Profiling Host
+--------------
 
 C++
 ~~~
@@ -146,3 +147,10 @@ Add  ``-l`` option to enable line-level profiling:
 ..  code-block:: sh
 
     python -m tracy -p -l -m pytest models/experimental/bert_large_performant/unit_tests/test_bert_large_split_and_transform_qkv_heads.py::test_split_query_key_value_and_split_heads_with_program_cache
+
+Profiling Device
+----------------
+
+In tracy enabled builds, device data of all active cores on devices used for the test will automatically show up.
+
+Please refer to :ref:`Device Program Profiler<device_program_profiler>` for more detailed overview of device side profiling with tracy.

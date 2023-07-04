@@ -137,8 +137,6 @@ void kernel_main() {
         .data_format = output_data_format
     };
 
-    kernel_profiler::mark_time(7);
-
     for (uint32_t b = 0; b < batch; b++) {
         uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id;
         for(uint32_t block = 0; block < num_blocks; block++) {
@@ -315,6 +313,4 @@ void kernel_main() {
         cb_pop_front(cb_id_out0, padded_block_tiles_h_skip);
         out_tensor_start_tile_id += MtNt;
     }
-
-    kernel_profiler::mark_time(8);
 }
