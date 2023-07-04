@@ -15,7 +15,7 @@ import torch
 
 from diffusers import StableDiffusionPipeline
 
-# import tt_lib as ttl
+
 import tt_lib as ttl
 
 from typing import Optional

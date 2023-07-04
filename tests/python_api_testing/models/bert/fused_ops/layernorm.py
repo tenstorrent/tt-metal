@@ -2,7 +2,7 @@ import math
 
 import torch
 
-from tt_libimport tensor, device
+from tt_lib import tensor, device
 from tt_lib.utils import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax, pad_weight, tt2torch as t2t, tt2torch_rm as t2trm, roundup32, float_to_bits
 
 # This ref implementation is only here for debugging
