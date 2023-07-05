@@ -248,10 +248,9 @@ class TtHighResolutionModule(nn.Module):
             y = x[0]
             if i:
                 module_list = self.fuse_layers[i][0][0]
-                top = module_list.pop(0)
-                y = top(y) if top else y
-                for module in module_list:
-                    y = module(y) if module is not None else y
+                y = module_list[0](y) if module_list[0] else y
+                for k in range(1, len(module_list)):
+                    y = module_list[k](y) if module_list[k] is not None else y
 
             for j in range(1, self.num_branches):
                 if i == j:
@@ -259,10 +258,9 @@ class TtHighResolutionModule(nn.Module):
                 else:
                     res = x[j]
                     module_list = self.fuse_layers[i][j]
-                    top = module_list.pop(0)
-                    res = top(res) if top else res
-                    for module in module_list:
-                        res = module(res) if module is not None else res
+                    res = module_list[0](res) if module_list[0] else res
+                    for k in range(1, len(module_list)):
+                        res = module_list[k](res) if module_list[k] is not None else res
                     y = tt_lib.tensor.add(y, res)
             x_fuse.append(tt_lib.tensor.relu(y))
 
