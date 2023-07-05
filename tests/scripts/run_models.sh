@@ -97,3 +97,4 @@ env pytest tests/python_api_testing/models/yolov3 -k bottleneck_module
 env pytest tests/python_api_testing/models/yolov3 -k detect_module
 env pytest tests/python_api_testing/models/yolov3 -k detection_model
 env pytest tests/python_api_testing/models/yolov3 -k upsample_module
+env pytest tests/python_api_testing/models/nanogpt -k nanogpt_model_real

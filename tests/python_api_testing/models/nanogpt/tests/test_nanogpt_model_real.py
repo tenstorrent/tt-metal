@@ -30,7 +30,7 @@ from utility_functions_new import (
     torch_to_tt_tensor_rm,
 )
 
-def run_nanogpt_model_test(device, pcc):
+def run_nanogpt_model_real_test(device, pcc):
     # Prepare input
 
     model_hf = GPT2LMHeadModel.from_pretrained('gpt2')
@@ -94,10 +94,10 @@ def run_nanogpt_model_test(device, pcc):
         ),
     ),
 )
-def test_nanogpt_model(pcc):
+def test_nanogpt_model_real(pcc):
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
 
-    run_nanogpt_model_test(device, pcc)
+    run_nanogpt_model_real_test(device, pcc)
     tt_lib.device.CloseDevice(device)
