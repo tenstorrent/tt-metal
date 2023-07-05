@@ -35,7 +35,7 @@ jobs:
           os: ${{ inputs.os }}
       - uses: ./.github/actions/install-metal-dev-deps
         with:
-          os: ${{ matrix.os }}
+          os: ${{ inputs.os }}
       - name: Set up dyanmic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
