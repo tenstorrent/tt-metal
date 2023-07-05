@@ -21,8 +21,9 @@ namespace tensor_impl {
 // ======================================================================================
 //                        Data type converters, packers, and unpackers
 // ======================================================================================
+// TODO(arakhmati): Should cast_vec be a generator?
 template <typename T1, typename T2>
-inline std::vector<T1> cast_vec(std::vector<T2> &data_to_convert) {
+inline std::vector<T1> cast_vec(const span_t<T2>& data_to_convert) {
     std::vector<T1> converted_data;
     for (auto datum : data_to_convert) {
         converted_data.push_back(static_cast<T1>(datum));
@@ -31,7 +32,7 @@ inline std::vector<T1> cast_vec(std::vector<T2> &data_to_convert) {
 }
 
 template <>
-inline std::vector<float> cast_vec(std::vector<bfloat16> &data_to_convert) {
+inline std::vector<float> cast_vec(const span_t<bfloat16>& data_to_convert) {
     std::vector<float> converted_data;
     for (auto datum : data_to_convert) {
         converted_data.push_back(datum.to_float());
@@ -40,7 +41,7 @@ inline std::vector<float> cast_vec(std::vector<bfloat16> &data_to_convert) {
 }
 
 template <>
-inline std::vector<uint32_t> cast_vec(std::vector<bfloat16> &data_to_convert) {
+inline std::vector<uint32_t> cast_vec(const span_t<bfloat16>& data_to_convert) {
     std::vector<uint32_t> converted_data;
     for (auto datum : data_to_convert) {
         converted_data.push_back((uint32_t)datum.to_uint16());
@@ -48,23 +49,25 @@ inline std::vector<uint32_t> cast_vec(std::vector<bfloat16> &data_to_convert) {
     return converted_data;
 }
 
+// TODO(arakhmati): Should pack_vec_into_uint32_vec be a generator?
 template <typename T>
-constexpr inline std::vector<uint32_t> pack_vec_into_uint32_vec(std::vector<T> &data_to_pack) {
+constexpr inline std::vector<uint32_t> pack_vec_into_uint32_vec(const span_t<T>& data_to_pack) {
     TT_THROW("Don't know how to pack data into uint32 vector generically!");
 }
 
 template <>
-inline std::vector<uint32_t> pack_vec_into_uint32_vec(std::vector<uint32_t> &data_to_pack) {
-    return data_to_pack;
+inline std::vector<uint32_t> pack_vec_into_uint32_vec(const span_t<uint32_t>& data_to_pack) {
+    return std::vector(std::begin(data_to_pack), std::end(data_to_pack));
 }
 
 template <>
-inline std::vector<uint32_t> pack_vec_into_uint32_vec(std::vector<bfloat16> &data_to_pack) {
-    return pack_bfloat16_vec_into_uint32_vec(data_to_pack);
+inline std::vector<uint32_t> pack_vec_into_uint32_vec(const span_t<bfloat16>& data_to_pack) {
+    auto bfloat16_vec = std::vector(std::begin(data_to_pack), std::end(data_to_pack));
+    return pack_bfloat16_vec_into_uint32_vec(bfloat16_vec);
 }
 
 template <>
-inline std::vector<uint32_t> pack_vec_into_uint32_vec(std::vector<float> &data_to_pack) {
+inline std::vector<uint32_t> pack_vec_into_uint32_vec(const span_t<float>& data_to_pack) {
     std::vector<uint32_t> uint32_data;
     assert(data_to_pack.size() % 2 == 0);
     for (auto i = 0; i < data_to_pack.size(); i += 2) {
@@ -263,9 +266,9 @@ DeviceBuffer allocate_buffer_on_device(
 
 template <typename T>
 std::vector<T> read_data_from_device(const Tensor &tensor, uint32_t size_in_bytes) {
-    std::vector<uint32_t> device_data;
     TT_ASSERT(tensor.buffer()->size() == size_in_bytes);
 
+    std::vector<uint32_t> device_data;
     const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
     if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
         EnqueueReadBuffer(*HACK_CQ, *tensor.buffer(), device_data, true);
@@ -276,7 +279,8 @@ std::vector<T> read_data_from_device(const Tensor &tensor, uint32_t size_in_byte
     std::vector<T> unpacked_data;
     if (tensor.dtype() == DataType::BFLOAT8_B) {
         std::vector<float> float_unpacked_data = unpack_bfp8_tiles_into_float_vec(device_data, /*row_major_output=*/false, /*is_exp_a=*/false);
-        unpacked_data = cast_vec<T>(float_unpacked_data);
+        auto float_unpacked_data_view = span_t(float_unpacked_data);
+        unpacked_data = cast_vec<T>(float_unpacked_data_view);
     } else {
         unpacked_data = unpack_uint32_vec<T>(device_data);
     }
@@ -284,10 +288,13 @@ std::vector<T> read_data_from_device(const Tensor &tensor, uint32_t size_in_byte
 }
 
 template <typename T>
-inline void write_data_to_device_buffer(DeviceBuffer buffer, std::vector<T> &data, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config) {
+inline void write_data_to_device_buffer(const span_t<T>& data_to_write, DeviceBuffer buffer, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config) {
+    // TODO(arakhmati): can we use generators in this function to go from `data_to_write` to `uint32_data`?
+    // And effectively get rid of any additional allocation
+
     std::vector<uint32_t> uint32_data;
     if (data_type == DataType::BFLOAT8_B) {
-        std::vector<float> float_data = cast_vec<float>(data);
+        std::vector<float> float_data = cast_vec<float>(data_to_write);
         uint32_data = pack_fp32_vec_as_bfp8_tiles(float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
     } else if (data_type == DataType::BFLOAT16) {
         if (memory_config.interleaved) {
@@ -299,9 +306,9 @@ inline void write_data_to_device_buffer(DeviceBuffer buffer, std::vector<T> &dat
         } else {
             TT_ASSERT(volume(shape) % 2 == 0, "Input tensor volume must be a multiple of 2 to pack contiguous data");
         }
-        uint32_data = pack_vec_into_uint32_vec<T>(data);
+        uint32_data = pack_vec_into_uint32_vec<T>(data_to_write);
     } else {
-        uint32_data = pack_vec_into_uint32_vec<T>(data);
+        uint32_data = pack_vec_into_uint32_vec<T>(data_to_write);
     }
 
     const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
@@ -313,30 +320,27 @@ inline void write_data_to_device_buffer(DeviceBuffer buffer, std::vector<T> &dat
 }
 
 template <typename T>
-inline DeviceBuffer initialize_data_on_device(std::vector<T> &data, Device* device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config) {
+inline DeviceBuffer initialize_data_on_device(const span_t<T>& data_to_write, Device* device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config) {
     TT_ASSERT(device != nullptr);
     uint32_t packed_size_in_bytes;
     if (data_type == DataType::BFLOAT8_B) {
-        packed_size_in_bytes = packed_buffer_size_bytes<bfloat8_b>(data.size());
+        packed_size_in_bytes = packed_buffer_size_bytes<bfloat8_b>(data_to_write.size());
     } else {
-        packed_size_in_bytes = packed_buffer_size_bytes<T>(data.size());
+        packed_size_in_bytes = packed_buffer_size_bytes<T>(data_to_write.size());
     }
     auto device_buffer = allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config);
-    write_data_to_device_buffer<T>(device_buffer, data, shape, data_type, layout, memory_config);
+    write_data_to_device_buffer<T>(data_to_write, device_buffer, shape, data_type, layout, memory_config);
     return device_buffer;
 }
 
 template <typename T>
 inline DeviceBuffer device_buffer_from_host_buffer(const HostBuffer& host_buffer, Device* device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config) {
-    // TODO(arakhmati): remove copying
-    auto view = host_buffer::view_as<T>(host_buffer);
-    auto data = std::vector(view.begin(), view.end());
-
-    TT_ASSERT(volume(shape) == data.size(), "Tensor shape and number of data elements does not match");
+    auto data_to_write = host_buffer::view_as<T>(host_buffer);
+    TT_ASSERT(volume(shape) == data_to_write.size(), "Tensor shape and number of data elements does not match");
     if (layout == Layout::TILE) {
         TT_ASSERT((shape[2] % tt::constants::TILE_HEIGHT == 0 && shape[3] % tt::constants::TILE_WIDTH == 0), "Tensor shape incompatible for specified layout");
     }
-    return initialize_data_on_device<T>(data, device, shape, data_type, layout, memory_config);
+    return initialize_data_on_device<T>(data_to_write, device, shape, data_type, layout, memory_config);
 }
 
 // ======================================================================================

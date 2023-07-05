@@ -1,5 +1,7 @@
 #pragma once
 
+#include <vector>
+
 template<typename T>
 class span_t {
    T* pointer_;
@@ -8,6 +10,9 @@ class span_t {
 public:
     span_t(T* pointer, std::size_t size) noexcept
         : pointer_{pointer}, size_{size}
+    {}
+    span_t(std::vector<T>& vector) noexcept
+        : pointer_{vector.data()}, size_{vector.size()}
     {}
 
     T& operator[](std::size_t index) noexcept {
@@ -27,6 +32,14 @@ public:
     }
 
     T* end() noexcept {
+        return this->pointer_ + this->size_;
+    }
+
+    const T* begin() const noexcept {
+        return this->pointer_;
+    }
+
+    const T* end() const noexcept {
         return this->pointer_ + this->size_;
     }
 };
