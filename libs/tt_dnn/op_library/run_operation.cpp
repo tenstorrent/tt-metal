@@ -198,7 +198,7 @@ Tensor run_without_autoformat(const Operation& op, const Tensor &input_tensor) {
     if (input_tensor_on_dev.on_host()) {
         input_tensor_on_dev = input_tensor_on_dev.to(device);
     }
-    return run(op, {input_tensor}).at(0);
+    return run(op, {input_tensor_on_dev}).at(0);
 }
 
 Tensor run_with_autoformat(const Operation& op, const Tensor &input_tensor, float pad_value, bool pad_c) {
