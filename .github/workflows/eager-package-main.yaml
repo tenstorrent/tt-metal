@@ -41,6 +41,9 @@ jobs:
       - uses: ./.github/actions/install-metal-deps
         with:
           os: ${{ matrix.os }}
+      - uses: ./.github/actions/install-metal-dev-deps
+        with:
+          os: ${{ matrix.os }}
       - uses: actions/download-artifact@v3
         with:
           name: eager-dist-${{ matrix.os }}-${{ matrix.arch }}
