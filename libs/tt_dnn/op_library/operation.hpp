@@ -1,7 +1,5 @@
 #pragma once
 
-#include "tt_dnn/op_library/types.hpp"
-
 #include "tt_metal/host_api.hpp"
 #include <libs/tensor/tensor.hpp>
 

@@ -9,7 +9,7 @@ def convert_to_datatype_on_device(x, target_dtype, host, device):
 
     logger.warning(f"Converting tensor {x.shape()} from {x.dtype()} to {target_dtype}!")
 
-    mem_config = ttl.tensor.MemoryConfig(True, -1, x.buffer_type())
+    mem_config = ttl.tensor.MemoryConfig(True, -1, x.memory_config().buffer_type)
     x = x.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
     x = (
         ttl.tensor.Tensor(
@@ -51,7 +51,7 @@ def run_matmul_with_dataformat(matmul, target_dtype, device, output_mem_config, 
     logger.warning(
         f"Converting tensor {in0.shape()} from {in0.dtype()} to {target_dtype}!"
     )
-    mem_config = ttl.tensor.MemoryConfig(True, -1, in0.buffer_type())
+    mem_config = ttl.tensor.MemoryConfig(True, -1, in0.memory_config().buffer_type)
     in0 = in0.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
     in0 = (
         ttl.tensor.Tensor(
@@ -67,7 +67,7 @@ def run_matmul_with_dataformat(matmul, target_dtype, device, output_mem_config, 
     logger.warning(
         f"Converting tensor {in1.shape()} from {in1.dtype()} to {target_dtype}!"
     )
-    mem_config = ttl.tensor.MemoryConfig(True, -1, in1.buffer_type())
+    mem_config = ttl.tensor.MemoryConfig(True, -1, in1.memory_config().buffer_type)
     in1 = in1.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
     in1 = (
         ttl.tensor.Tensor(
@@ -83,7 +83,7 @@ def run_matmul_with_dataformat(matmul, target_dtype, device, output_mem_config, 
         logger.warning(
             f"Converting tensor {bias.shape()} from {bias.dtype()} to {target_dtype}!"
         )
-        mem_config = ttl.tensor.MemoryConfig(True, -1, bias.buffer_type())
+        mem_config = ttl.tensor.MemoryConfig(True, -1, bias.memory_config().buffer_type)
         bias = bias.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
         bias = (
             ttl.tensor.Tensor(

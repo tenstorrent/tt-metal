@@ -57,12 +57,12 @@ def run_bert_large_pre_softmax_bmm_test(
     t2 = ttl.tensor.bert_large_pre_softmax_bmm(a_t, b_t, out_mem_config)
 
     # Check memory of inputs and outputs
-    assert a_t.buffer_type() == in0_mem_config.buffer_type
-    assert b_t.buffer_type() == in1_mem_config.buffer_type
-    assert t2.buffer_type() == out_mem_config.buffer_type
-    logger.debug(f"in0 is on: {a_t.buffer_type()}")
-    logger.debug(f"in1 is on: {b_t.buffer_type()}")
-    logger.debug(f"out is on: {t2.buffer_type()}")
+    assert a_t.memory_config().buffer_type == in0_mem_config.buffer_type
+    assert b_t.memory_config().buffer_type == in1_mem_config.buffer_type
+    assert t2.memory_config().buffer_type == out_mem_config.buffer_type
+    logger.debug(f"in0 is on: {a_t.memory_config().buffer_type}")
+    logger.debug(f"in1 is on: {b_t.memory_config().buffer_type}")
+    logger.debug(f"out is on: {t2.memory_config().buffer_type}")
 
     assert t2.shape() == out_shape
     tt_host_rm = t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR)

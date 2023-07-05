@@ -497,8 +497,6 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_bert_large_(co
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
     // Pass in cshape instead
-    // std::array<uint32_t, 4> cshape{ashape[0], ashape[1], ashape[2], bshape[3]}; // C=A*B, N1MK*11KN->N1MN
-    //tt_metal::Tensor output = tt_metal::Tensor(cshape, a.dtype(), tt::tt_metal::Layout::TILE, device, mem_config);
     tt_metal::Buffer *out_buffer = output.buffer();
     TT_ASSERT(out_buffer != nullptr, "Output buffer should be allocated on device!");
 

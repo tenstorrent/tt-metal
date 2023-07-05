@@ -43,12 +43,12 @@ def run_bert_large_create_qkv_heads_test(
         out = ttl.tensor.bert_large_create_q_head(a_t, out_mem_config)
 
     # Check memory of inputs and outputs
-    assert a_t.buffer_type() == in0_mem_config.buffer_type
-    assert out.buffer_type() == out_mem_config.buffer_type
+    assert a_t.memory_config().buffer_type == in0_mem_config.buffer_type
+    assert out.memory_config().buffer_type == out_mem_config.buffer_type
 
     which_head_str = "K head" if transpose_hw else "Q/V head"
-    logger.debug(f"in0 is on: {a_t.buffer_type()}")
-    logger.debug(f"out ({which_head_str}) is on: {out.buffer_type()}")
+    logger.debug(f"in0 is on: {a_t.memory_config().buffer_type}")
+    logger.debug(f"out ({which_head_str}) is on: {out.memory_config().buffer_type}")
 
     if transpose_hw:
         expected_out_shape = [9, 16, 64, 384]

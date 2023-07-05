@@ -37,30 +37,15 @@ struct MemoryConfig {
     BufferType buffer_type = BufferType::DRAM; // Can be either DRAM or L1
 };
 
-// Forward declarations
-class Tensor;
-
-namespace tensor_impl {
-    void allocate_interleaved_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes);
-
-    void allocate_contiguous_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes);
-
-    template <typename T>
-    void write_data(Tensor &tensor, std::vector<T> &data);
-}
-
 class Tensor {
 
     public:
         // ======================================================================================
         //                                  Hi Level APIs
         // ======================================================================================
-        Tensor(const HostBuffer& host_buffer, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout);
+        Tensor(const HostBuffer& host_buffer, const Shape& shape, DataType dtype, Layout layout);
 
-        // TODO(arakhmati): modify this constructor to take device buffer
-        Tensor(const HostBuffer& host_buffer, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device, const MemoryConfig &mem_config = {.interleaved=true});
-
-        Tensor(const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device, const MemoryConfig &mem_config={.interleaved=true});
+        Tensor(const DeviceBuffer& device_buffer, const Shape& shape, DataType dtype, Layout layout, Device *device, const MemoryConfig &mem_config = {.interleaved=true});
 
         Tensor(const Tensor &other) = default;
         Tensor& operator=(const Tensor &other) = default;
@@ -94,17 +79,17 @@ class Tensor {
         // ======================================================================================
         //                                  Low Level APIs
         // ======================================================================================
-        const std::array<uint32_t, 4>& reshape(int N, int C, int H, int W); // TODO: delete this function
-        Tensor reshape(const std::array<uint32_t, 4>& new_shape) const;
+        const Shape& reshape(int N, int C, int H, int W); // TODO: delete this function
+        Tensor reshape(const Shape& new_shape) const;
 
         // ======================================================================================
         //                                      Getters
         // ======================================================================================
-        const std::array<uint32_t, 4>& shape() const { return this->shape_; }
+        const Shape& shape() const { return this->shape_; }
 
-        const std::array<uint32_t, 4>& strides() const { return this->strides_; }
+        const std::array<uint32_t, 4> strides() const;
 
-        uint32_t volume() const { return shape_[0] * shape_[1] * shape_[2] * shape_[3]; }
+        uint32_t volume() const;
 
         DataType dtype() const { return dtype_; }
 
@@ -112,49 +97,38 @@ class Tensor {
 
         Device *device() const { return device_; }
 
-        Buffer *buffer() const { return buffer_.get(); }
+        Buffer *buffer() const { return device_buffer_.get(); }
 
-        HostBufferDataType* data_ptr() const { return this->data_->data(); }
+        const HostBuffer& host_buffer() const { return this->host_buffer_; }
 
-        const HostBuffer& host_buffer() const { return this->data_; }
-
-        bool is_allocated_on_host() const { return bool(this->data_); }
-        bool is_allocated_on_device() const { return bool(this->buffer_); }
+        bool is_allocated_on_host() const { return bool(this->host_buffer_); }
+        bool is_allocated_on_device() const { return bool(this->device_buffer_); }
 
         bool on_host() const { return device_ == nullptr; }
 
-        bool interleaved() const;
-
-        BufferType buffer_type() const { return mem_config_.buffer_type; };
+        const MemoryConfig& memory_config() const { return this->memory_config_; };
 
         // Size in bytes of a single element held in tensor
         uint32_t element_size() const;
 
     private:
-        const std::array<uint32_t, 4> compute_strides() const {
-            return {shape_[1]*shape_[2]*shape_[3], shape_[2]*shape_[3], shape_[3], 1};
-        }
-
-        friend void tensor_impl::allocate_interleaved_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes);
-
-        friend void tensor_impl::allocate_contiguous_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes);
-
-        template <typename T>
-        friend void tensor_impl::write_data(Tensor &tensor, std::vector<T> &data);
 
         std::array<uint32_t, 4> shape_;             // Outer-most dimension first
-        std::array<uint32_t, 4> strides_;           // Outer-most dimension first
         DataType dtype_;
         Layout layout_;
 
+        // TODO(arakhmati): use std::variant to for storage
+
         // Host Storage
-        HostBuffer data_{};                 // Unpopulated if tensor is on device
+        HostBuffer host_buffer_{};                 // Unpopulated if tensor is on device
 
         // Device Storage
         Device *device_ = nullptr;                  // Set if tensor is allocated on device
-        std::shared_ptr<Buffer> buffer_{};  // Tensors on device are backed by an underlying buffer
-        MemoryConfig mem_config_;
+        std::shared_ptr<Buffer> device_buffer_{};  // Tensors on device are backed by an underlying buffer
+        MemoryConfig memory_config_;
 };
+
+Tensor create_device_tensor(const Shape& shape, DataType dtype, Layout layout, Device *device, const MemoryConfig& memory_config = {.interleaved=true});
 
 }  // namespace tt_metal
 

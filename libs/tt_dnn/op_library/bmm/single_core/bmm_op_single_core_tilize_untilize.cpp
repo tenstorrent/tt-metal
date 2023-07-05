@@ -183,8 +183,8 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &in0,
     // int hart_mask = DPRINT_HART_NC | DPRINT_HART_BR;
     tt_start_debug_print_server(device->cluster(), {0}, {debug_core});
 
-    const std::array<uint32_t, 4> out_shape{in0_batch, in0_channel, in0_height, in1_width};
-    Tensor output = Tensor(out_shape,
+    const Shape out_shape{in0_batch, in0_channel, in0_height, in1_width};
+    Tensor output = create_device_tensor(out_shape,
                             in0.dtype(),
                             untilize_out ? Layout::ROW_MAJOR : Layout::TILE,
                             device);

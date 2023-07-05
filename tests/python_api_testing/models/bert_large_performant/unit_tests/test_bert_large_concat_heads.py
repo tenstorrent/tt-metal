@@ -37,11 +37,11 @@ def run_bert_large_concat_heads_test(dtype, in0_mem_config, out_mem_config):
     out = ttl.tensor.bert_large_concat_heads(a_t, out_mem_config)
 
     # Check memory of inputs and outputs
-    assert a_t.buffer_type() == in0_mem_config.buffer_type
-    assert out.buffer_type() == out_mem_config.buffer_type
+    assert a_t.memory_config().buffer_type == in0_mem_config.buffer_type
+    assert out.memory_config().buffer_type == out_mem_config.buffer_type
 
-    logger.debug(f"in0 is on: {a_t.buffer_type()}")
-    logger.debug(f"out is on: {out.buffer_type()}")
+    logger.debug(f"in0 is on: {a_t.memory_config().buffer_type}")
+    logger.debug(f"out is on: {out.memory_config().buffer_type}")
 
     assert out.shape() == [9, 1, 384, 1024]
     tt_host_rm_out = out.to(host).to(ttl.tensor.Layout.ROW_MAJOR)

@@ -13,40 +13,13 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor::Tensor(const HostBuffer& host_buffer, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout)
-    : data_(host_buffer), shape_(shape), strides_(compute_strides()), dtype_(dtype), layout_(layout) {
-}
+Tensor::Tensor(const HostBuffer& host_buffer, const Shape& shape, DataType dtype, Layout layout)
+    : host_buffer_(host_buffer), shape_(shape), dtype_(dtype), layout_(layout) {}
 
-Tensor::Tensor(const HostBuffer& host_buffer, const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device, const MemoryConfig &mem_config)
-    : shape_(shape), strides_(compute_strides()), dtype_(dtype), layout_(layout), device_(device), mem_config_(mem_config) {
+Tensor::Tensor(const DeviceBuffer& device_buffer, const Shape& shape, DataType dtype, Layout layout, Device *device, const MemoryConfig &memory_config)
+    : device_buffer_(device_buffer), shape_(shape), dtype_(dtype), layout_(layout), device_(device), memory_config_(memory_config) {
     TT_ASSERT(device != nullptr);
     tensor_impl::validate_on_device_dtype_and_layout(device, dtype, layout);
-    switch (dtype) {
-        case DataType::UINT32: {
-            tensor_impl::convert_and_write_data_wrapper<uint32_t>(*this, host_buffer);
-            break;
-        }
-        case DataType::FLOAT32: {
-            tensor_impl::convert_and_write_data_wrapper<float>(*this, host_buffer);
-            break;
-        }
-        case DataType::BFLOAT16: {
-            tensor_impl::convert_and_write_data_wrapper<bfloat16>(*this, host_buffer);
-            break;
-        }
-        case DataType::BFLOAT8_B: {
-            tensor_impl::convert_and_write_data_wrapper<float>(*this, host_buffer);
-            break;
-        }
-    }
-}
-
-Tensor::Tensor(const std::array<uint32_t, 4> &shape, DataType dtype, Layout layout, Device *device, const MemoryConfig &mem_config)
-    : shape_(shape), strides_(compute_strides()), dtype_(dtype), layout_(layout), device_(device), mem_config_(mem_config) {
-    TT_ASSERT(device != nullptr);
-    tensor_impl::validate_on_device_dtype_and_layout(device, dtype, layout);
-    uint32_t packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(dtype, volume());
-    tensor_impl::allocate_buffer_on_device(*this, packed_size_in_bytes);
 }
 
 Tensor::~Tensor() {
@@ -54,12 +27,12 @@ Tensor::~Tensor() {
 }
 
 void Tensor::deallocate() {
-    if (not on_host() and this->is_allocated_on_device() and this->buffer_.use_count() == 1) {
-        DeallocateBuffer(*this->buffer_);
+    if (not on_host() and this->is_allocated_on_device() and this->device_buffer_.use_count() == 1) {
+        DeallocateBuffer(*this->device_buffer_);
     }
 
-    this->data_.reset();
-    this->buffer_.reset();
+    this->host_buffer_.reset();
+    this->device_buffer_.reset();
 }
 
 Tensor Tensor::to(Device *target_device, const MemoryConfig &mem_config) const {
@@ -122,18 +95,11 @@ void Tensor::pretty_print() const {
     print(Layout::ROW_MAJOR, /*pretty_print=*/true);
 }
 
-bool Tensor::interleaved() const {
-    if (this->on_host()) {
-        return false;
-    }
-    return mem_config_.interleaved;
-}
-
 uint32_t Tensor::element_size() const {
     return tensor_impl::element_size_bytes_wrapper(this->dtype_);
 }
 
-const std::array<uint32_t, 4>& Tensor::reshape(int N, int C, int H, int W) {
+const Shape& Tensor::reshape(int N, int C, int H, int W) {
     auto new_shape = infer_dims_for_reshape(N, C, H, W, this->volume());
 
     if (this->layout() == Layout::TILE) {
@@ -141,16 +107,34 @@ const std::array<uint32_t, 4>& Tensor::reshape(int N, int C, int H, int W) {
     }
 
     shape_ = new_shape;
-    strides_ = compute_strides();
 
     return shape_;
 }
 
-Tensor Tensor::reshape(const std::array<uint32_t, 4>& new_shape) const {
+Tensor Tensor::reshape(const Shape& new_shape) const {
     auto new_tensor = *this;
     new_tensor.shape_ = new_shape;
-    new_tensor.strides_ = new_tensor.compute_strides();
     return new_tensor;
+}
+
+namespace detail {
+const std::array<uint32_t, 4> compute_strides(const Shape& shape) {
+    return {shape[1] * shape[2] * shape[3], shape[2] * shape[3], shape[3], 1};
+}
+}
+
+const std::array<uint32_t, 4> Tensor::strides() const {
+    return detail::compute_strides(this->shape_);
+}
+
+uint32_t Tensor::volume() const {
+    return tt::tt_metal::volume(this->shape_);
+}
+
+Tensor create_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config) {
+    uint32_t packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, volume(shape));
+    auto device_buffer = tensor_impl::allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config);
+    return Tensor(device_buffer, shape, data_type, layout, device, memory_config);
 }
 
 }  // namespace tt_metal

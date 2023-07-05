@@ -37,14 +37,14 @@ def run_bert_large_split_fused_qkv_test(dtype, in0_mem_config, out_mem_config):
     q, k, v = ttl.tensor.bert_large_split_fused_qkv(a_t, out_mem_config)
 
     # Check memory of inputs and outputs
-    assert a_t.buffer_type() == in0_mem_config.buffer_type
-    assert q.buffer_type() == out_mem_config.buffer_type
-    assert k.buffer_type() == out_mem_config.buffer_type
-    assert v.buffer_type() == out_mem_config.buffer_type
-    logger.debug(f"in0 is on: {a_t.buffer_type()}")
-    logger.debug(f"q is on: {q.buffer_type()}")
-    logger.debug(f"k is on: {k.buffer_type()}")
-    logger.debug(f"v is on: {v.buffer_type()}")
+    assert a_t.memory_config().buffer_type == in0_mem_config.buffer_type
+    assert q.memory_config().buffer_type == out_mem_config.buffer_type
+    assert k.memory_config().buffer_type == out_mem_config.buffer_type
+    assert v.memory_config().buffer_type == out_mem_config.buffer_type
+    logger.debug(f"in0 is on: {a_t.memory_config().buffer_type}")
+    logger.debug(f"q is on: {q.memory_config().buffer_type}")
+    logger.debug(f"k is on: {k.memory_config().buffer_type}")
+    logger.debug(f"v is on: {v.memory_config().buffer_type}")
 
     assert q.shape() == [9, 1, 384, 1024]
     assert k.shape() == [9, 1, 384, 1024]

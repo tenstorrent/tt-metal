@@ -243,8 +243,6 @@ void validate_on_device_dtype_and_layout(Device *device, DataType dtype, Layout 
 // ======================================================================================
 std::tuple<int, int, int> get_interleaved_read_write_unit_metadata(DataType dtype, Layout layout, uint32_t total_size_bytes, const std::array<uint32_t, 4>& shape);
 
-void allocate_contiguous_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes);
-
 // -----------------------------------------------------------------------------------------------------------------------------------------------
 // ===============================================================================================================================================
 //                                                              High Level APIs
@@ -254,9 +252,14 @@ void allocate_contiguous_buffer_on_device(Tensor &tensor, uint32_t buffer_size_b
 // ======================================================================================
 //                           Data reader, writer, and initializers
 // ======================================================================================
-void allocate_interleaved_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes);
-
-void allocate_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes);
+DeviceBuffer allocate_buffer_on_device(
+    uint32_t buffer_size_bytes,
+    Device *device,
+    const Shape& shape,
+    DataType data_type,
+    Layout layout,
+    const MemoryConfig& memory_config
+);
 
 template <typename T>
 std::vector<T> read_data_from_device(const Tensor &tensor, uint32_t size_in_bytes) {
@@ -281,20 +284,20 @@ std::vector<T> read_data_from_device(const Tensor &tensor, uint32_t size_in_byte
 }
 
 template <typename T>
-inline void write_data_to_device(const Tensor &tensor, std::vector<T> &data) {
+inline void write_data_to_device_buffer(DeviceBuffer buffer, std::vector<T> &data, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config) {
     std::vector<uint32_t> uint32_data;
-    if (tensor.dtype() == DataType::BFLOAT8_B) {
+    if (data_type == DataType::BFLOAT8_B) {
         std::vector<float> float_data = cast_vec<float>(data);
         uint32_data = pack_fp32_vec_as_bfp8_tiles(float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
-    } else if (tensor.dtype() == DataType::BFLOAT16) {
-        if (tensor.interleaved()) {
-            if (tensor.layout() == Layout::ROW_MAJOR) {
-                TT_ASSERT(tensor.shape()[3] % 2 == 0, "Input tensor width must be a multiple of 2 to pack interleaved row major data");
-            } else if (tensor.layout() == Layout::CHANNELS_LAST) {
-                TT_ASSERT(tensor.shape()[1] % 2 == 0, "Input tensor channel must be a multiple of 2 to pack interleaved channels last data");
+    } else if (data_type == DataType::BFLOAT16) {
+        if (memory_config.interleaved) {
+            if (layout == Layout::ROW_MAJOR) {
+                TT_ASSERT(shape[3] % 2 == 0, "Input tensor width must be a multiple of 2 to pack interleaved row major data");
+            } else if (layout == Layout::CHANNELS_LAST) {
+                TT_ASSERT(shape[1] % 2 == 0, "Input tensor channel must be a multiple of 2 to pack interleaved channels last data");
             }
         } else {
-            TT_ASSERT(tensor.volume() % 2 == 0, "Input tensor volume must be a multiple of 2 to pack contiguous data");
+            TT_ASSERT(volume(shape) % 2 == 0, "Input tensor volume must be a multiple of 2 to pack contiguous data");
         }
         uint32_data = pack_vec_into_uint32_vec<T>(data);
     } else {
@@ -303,69 +306,37 @@ inline void write_data_to_device(const Tensor &tensor, std::vector<T> &data) {
 
     const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
     if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
-        EnqueueWriteBuffer(*HACK_CQ, *tensor.buffer(), uint32_data, false);
+        EnqueueWriteBuffer(*HACK_CQ, *buffer, uint32_data, false);
     } else {
-        WriteToBuffer(*tensor.buffer(), uint32_data);
+        WriteToBuffer(*buffer, uint32_data);
     }
 }
 
 template <typename T>
-inline void initialize_data_on_device(Tensor &tensor, std::vector<T> &data) {
-    TT_ASSERT(tensor.device() != nullptr);
+inline DeviceBuffer initialize_data_on_device(std::vector<T> &data, Device* device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config) {
+    TT_ASSERT(device != nullptr);
     uint32_t packed_size_in_bytes;
-    if (tensor.dtype() == DataType::BFLOAT8_B) {
+    if (data_type == DataType::BFLOAT8_B) {
         packed_size_in_bytes = packed_buffer_size_bytes<bfloat8_b>(data.size());
     } else {
         packed_size_in_bytes = packed_buffer_size_bytes<T>(data.size());
     }
-    allocate_buffer_on_device(tensor, packed_size_in_bytes);
-    write_data_to_device<T>(tensor, data);
+    auto device_buffer = allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config);
+    write_data_to_device_buffer<T>(device_buffer, data, shape, data_type, layout, memory_config);
+    return device_buffer;
 }
 
 template <typename T>
-inline void write_data(Tensor &tensor, std::vector<T> &data) {
-    TT_ASSERT(tensor.volume() == data.size(), "Tensor shape and number of data elements does not match");
-    if (tensor.layout() == Layout::TILE) {
-        TT_ASSERT((tensor.shape()[2] % tt::constants::TILE_HEIGHT == 0 && tensor.shape()[3] % tt::constants::TILE_WIDTH == 0), "Tensor shape incompatible for specified layout");
-    }
-    if (tensor.on_host()) {
-        // TODO(arakhmati): remove copying
-        auto data_ptr = reinterpret_cast<HostBufferDataType*>(data.data());
-        auto num_bytes = sizeof(T) * data.size();
-        tensor.data_ = std::make_shared<HostBufferContainer>(data_ptr, data_ptr + num_bytes);
-    } else {
-        initialize_data_on_device<T>(tensor, data);
-    }
-}
+inline DeviceBuffer device_buffer_from_host_buffer(const HostBuffer& host_buffer, Device* device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config) {
+    // TODO(arakhmati): remove copying
+    auto view = host_buffer::view_as<T>(host_buffer);
+    auto data = std::vector(view.begin(), view.end());
 
-template <typename T1, typename T2>
-inline void convert_and_write_data(Tensor &tensor, std::vector<T2> &data) {
-    if (std::is_same<T1, T2>::value) {
-        write_data(tensor, data);
-    } else {
-        std::vector<T1> converted_data = cast_vec<T1>(data);
-        write_data(tensor, converted_data);
-    }
-}
-
-template <typename T1, typename T2>
-inline void convert_layout_or_type_and_write_data(Tensor &tensor, std::vector<T2> &data) {
-    auto layout = tensor.layout();
-    auto shape = tensor.shape();
+    TT_ASSERT(volume(shape) == data.size(), "Tensor shape and number of data elements does not match");
     if (layout == Layout::TILE) {
-        std::cout << "Converting from row major to tile " << std::endl;
-        data = convert_layout_row_major_to_tile(shape, data);
+        TT_ASSERT((shape[2] % tt::constants::TILE_HEIGHT == 0 && shape[3] % tt::constants::TILE_WIDTH == 0), "Tensor shape incompatible for specified layout");
     }
-    else if (layout == Layout::CHANNELS_LAST) {
-        std::cout << "Converting from tile to channels last " << std::endl;
-        data = convert_layout_row_major_to_channels_last(shape, data);
-    }
-    if (std::is_same<T1, T2>::value) {
-        write_data(tensor, data);
-    } else {
-        std::vector<T1> converted_data = cast_vec<T1>(data);
-        write_data(tensor, converted_data);
-    }
+    return initialize_data_on_device<T>(data, device, shape, data_type, layout, memory_config);
 }
 
 // ======================================================================================
@@ -388,27 +359,19 @@ inline Tensor to_host(const Tensor &tensor) {
     return Tensor(output_buffer, tensor.shape(), tensor.dtype(), tensor.layout());
 }
 
-
 template <typename T>
-void inline convert_and_write_data_wrapper(Tensor &tensor, const HostBuffer &host_buffer) {
-    // TODO(arakhmati): remove copying
-    auto view = host_buffer::view_as<T>(host_buffer);
-    auto data = std::vector(view.begin(), view.end());
-    const static std::map<DataType, std::function<void(Tensor &, std::vector<T> &)>> write_data_map = {
-        {DataType::BFLOAT16, &convert_and_write_data<bfloat16, T>},
-        {DataType::FLOAT32, &convert_and_write_data<float, T>},
-        {DataType::UINT32, &convert_and_write_data<uint32_t, T>},
-        {DataType::BFLOAT8_B, &convert_and_write_data<float, T>}
-    };
-    write_data_map.at(tensor.dtype())(tensor, data);
-}
-
-template <typename T>
-inline Tensor to_device(const Tensor &tensor, Device *target_device, const MemoryConfig &mem_config) {
+inline Tensor to_device(const Tensor &tensor, Device *target_device, const MemoryConfig &memory_config) {
     TT_ASSERT(target_device != nullptr && "Need target device in order to move tensor to device!");
-    TT_ASSERT(tensor.data_ptr() != nullptr && "Need data to exist in order to move it to device");
+    TT_ASSERT(tensor.is_allocated_on_host() && "Need data to exist in order to move it to device");
 
-    return Tensor(tensor.host_buffer(), tensor.shape(), tensor.dtype(), tensor.layout(), target_device, mem_config);
+    auto shape = tensor.shape();
+    auto data_type = tensor.dtype();
+    auto layout = tensor.layout();
+
+    auto device_buffer = tensor_impl::device_buffer_from_host_buffer<T>(
+        tensor.host_buffer(), target_device, shape, data_type, layout, memory_config
+    );
+    return Tensor(device_buffer, shape, data_type, layout, target_device, memory_config);
 }
 
 template <typename T>

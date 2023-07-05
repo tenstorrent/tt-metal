@@ -269,7 +269,7 @@ Tensor large_bmm_single_core_single_block_(const Tensor& a, const Tensor &b, boo
     } else {
         out_layout = tt::tt_metal::Layout::TILE;
     }
-    tt_metal::Tensor output = tt_metal::Tensor(
+    tt_metal::Tensor output = tt_metal::create_device_tensor(
         cshape,
         a.dtype(),
         out_layout,

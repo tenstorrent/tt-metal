@@ -182,7 +182,7 @@ std::vector<Tensor> generic_create_output_tensors(
     std::vector<Tensor> output_tensors;
     output_tensors.reserve(output_shapes.size());
     for (const auto& output_shape : output_shapes) {
-        output_tensors.emplace_back(Tensor(output_shape, input_tensor.dtype(), output_layout, input_tensor.device(), output_mem_config));
+        output_tensors.emplace_back(create_device_tensor(output_shape, input_tensor.dtype(), output_layout, input_tensor.device(), output_mem_config));
     }
     return output_tensors;
 }
@@ -268,7 +268,7 @@ Hash hash_tensor(const Tensor& tensor) {
         shape,
         magic_enum::enum_name(tensor.dtype()),
         magic_enum::enum_name(tensor.layout()),
-        magic_enum::enum_name(tensor.buffer_type())
+        hash_memory_config(tensor.memory_config())
     );
 }
 

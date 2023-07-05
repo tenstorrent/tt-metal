@@ -62,23 +62,27 @@ uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes,
     return page_size;
 }
 
-void allocate_interleaved_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes) {
-    uint32_t page_size = get_page_size(tensor.dtype(), tensor.layout(), buffer_size_bytes, tensor.shape());
+namespace detail {
+
+DeviceBuffer allocate_interleaved_buffer_on_device(uint32_t buffer_size_bytes, Device *device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config) {
+    uint32_t page_size = get_page_size(data_type, layout, buffer_size_bytes, shape);
     uint32_t starting_bank_id = 0;
-    tensor.buffer_ = std::make_shared<Buffer>(tensor.device(), buffer_size_bytes, starting_bank_id, page_size, tensor.buffer_type());
+    return std::make_shared<Buffer>(device, buffer_size_bytes, starting_bank_id, page_size, memory_config.buffer_type);
 }
 
-void allocate_contiguous_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes) {
-    TT_ASSERT(tensor.mem_config_.bank_id != -1);
-    uint32_t starting_bank_id = tensor.mem_config_.bank_id;
-    tensor.buffer_ = std::make_shared<Buffer>(tensor.device(), buffer_size_bytes, starting_bank_id, buffer_size_bytes, tensor.buffer_type());
+DeviceBuffer allocate_contiguous_buffer_on_device(uint32_t buffer_size_bytes, Device *device, const MemoryConfig& memory_config) {
+    TT_ASSERT(memory_config.bank_id != -1);
+    uint32_t starting_bank_id = memory_config.bank_id;
+    return std::make_shared<Buffer>(device, buffer_size_bytes, starting_bank_id, buffer_size_bytes, memory_config.buffer_type);
 }
 
-void allocate_buffer_on_device(Tensor &tensor, uint32_t buffer_size_bytes) {
-    if (tensor.interleaved()) {
-        allocate_interleaved_buffer_on_device(tensor, buffer_size_bytes);
+}
+
+DeviceBuffer allocate_buffer_on_device(uint32_t buffer_size_bytes, Device *device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config) {
+    if (memory_config.interleaved) {
+        return detail::allocate_interleaved_buffer_on_device(buffer_size_bytes, device, shape, data_type, layout, memory_config);
     } else {
-        allocate_contiguous_buffer_on_device(tensor, buffer_size_bytes);
+        return detail::allocate_contiguous_buffer_on_device(buffer_size_bytes, device, memory_config);
     }
 }
 

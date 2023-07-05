@@ -2,7 +2,6 @@
 #include <type_traits>
 #include "common/constants.hpp"
 
-#include "tt_dnn/op_library/types.hpp"
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"

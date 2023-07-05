@@ -91,7 +91,7 @@ bool test_tensor_move_semantics(Device *device, Host *host) {
     pass &= host_a_copy_data == bfloat_data_view;
 
     // dev tensor to dev tensor move constructor
-    Tensor dev_a = Tensor(bfloat_data, single_tile_shape, DataType::BFLOAT16, Layout::TILE, device);
+    Tensor dev_a = Tensor(bfloat_data, single_tile_shape, DataType::BFLOAT16, Layout::TILE).to(device);
     auto og_buffer_a = dev_a.buffer();
     Tensor dev_a_copy = std::move(dev_a);
     pass &= (dev_a.buffer() == nullptr and dev_a_copy.buffer() == og_buffer_a);
@@ -122,7 +122,7 @@ bool test_tensor_move_semantics(Device *device, Host *host) {
     auto bfloat_data_four = random_tensor_four.host_buffer();
     auto bfloat_data_four_view = host_buffer::view_as<bfloat16>(bfloat_data_four);
     Tensor host_e = Tensor(bfloat_data_four, single_tile_shape, DataType::BFLOAT16, Layout::TILE);
-    Tensor dev_e_copy = Tensor(host_c_copy.host_buffer(), single_tile_shape, DataType::BFLOAT16, Layout::TILE, device);
+    Tensor dev_e_copy = Tensor(host_c_copy.host_buffer(), single_tile_shape, DataType::BFLOAT16, Layout::TILE).to(device);
     dev_e_copy = std::move(host_e);
     pass &= (dev_e_copy.on_host());
     auto dev_e_copy_data = host_buffer::view_as<bfloat16>(dev_e_copy);
@@ -131,8 +131,8 @@ bool test_tensor_move_semantics(Device *device, Host *host) {
     // dev tensor updated with dev tensor copy assignment
     auto random_tensor_five = tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), single_tile_shape);
     auto bfloat_data_five = random_tensor_four.host_buffer();
-    Tensor dev_b = Tensor(bfloat_data_five, single_tile_shape, DataType::BFLOAT16, Layout::TILE, device);
-    Tensor dev_b_copy = Tensor(dev_e_copy.host_buffer(), single_tile_shape, DataType::BFLOAT16, Layout::TILE, device);
+    Tensor dev_b = Tensor(bfloat_data_five, single_tile_shape, DataType::BFLOAT16, Layout::TILE).to(device);
+    Tensor dev_b_copy = Tensor(dev_e_copy.host_buffer(), single_tile_shape, DataType::BFLOAT16, Layout::TILE).to(device);
     dev_b_copy = std::move(dev_b);
     pass &= (not dev_b_copy.on_host());
     auto dev_b_copy_on_host = dev_b_copy.to(host);

@@ -163,13 +163,13 @@ def run_layernorm_tests(test_id, dtype, in0_mem_config, out_mem_config):
                 assert False
             logger.info("Done")
 
-            assert ttx.buffer_type() == in0_mem_config.buffer_type
-            assert tty.buffer_type() == in0_mem_config.buffer_type
-            assert ttz.buffer_type() == out_mem_config.buffer_type
+            assert ttx.memory_config().buffer_type == in0_mem_config.buffer_type
+            assert tty.memory_config().buffer_type == in0_mem_config.buffer_type
+            assert ttz.memory_config().buffer_type == out_mem_config.buffer_type
 
-            logger.debug(f"ttx is on: {ttx.buffer_type()}")
-            logger.debug(f"tty is on: {tty.buffer_type()}")
-            logger.debug(f"ttz is on: {ttz.buffer_type()}")
+            logger.debug(f"ttx is on: {ttx.memory_config().buffer_type}")
+            logger.debug(f"tty is on: {tty.memory_config().buffer_type}")
+            logger.debug(f"ttz is on: {ttz.memory_config().buffer_type}")
 
             t2_data = ttz.to(host).data()
 

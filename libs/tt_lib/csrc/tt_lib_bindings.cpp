@@ -23,6 +23,7 @@
 #include "tt_dnn/op_library/program_cache.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "tensor/host_buffer.hpp"
+#include "tensor/tensor_impl.hpp"
 #include "tensor/tensor_utils.hpp"
 
 #include "tt_lib_bindings.hpp"
@@ -57,6 +58,25 @@ HostBuffer create_host_buffer_from_list_of_floats(const std::vector<float>& data
                 host_buffer_view[index] = bfloat16(data[index]);
             }
             return host_buffer;
+        }
+        default: {
+            TT_THROW("Cannot create a host buffer!");
+        }
+    }
+}
+
+DeviceBuffer create_device_buffer_from_host_buffer(const HostBuffer& host_buffer, const Shape& shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& memory_config) {
+    switch (data_type) {
+        case DataType::BFLOAT8_B:
+        case DataType::FLOAT32: {
+            return tensor_impl::device_buffer_from_host_buffer<float>(
+                host_buffer, device, shape, data_type, layout, memory_config
+            );
+        }
+        case DataType::BFLOAT16: {
+            return tensor_impl::device_buffer_from_host_buffer<bfloat16>(
+                host_buffer, device, shape, data_type, layout, memory_config
+            );
         }
         default: {
             TT_THROW("Cannot create a host buffer!");
@@ -177,7 +197,7 @@ void TensorModule(py::module &m_tensor) {
     pyTensor
         .def(
             py::init<>(
-                [](const std::vector<float>& data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout) {
+                [](const std::vector<float>& data, const Shape& shape, DataType data_type, Layout layout) {
                     auto host_buffer = detail::create_host_buffer_from_list_of_floats(data, data_type);
                     return Tensor(host_buffer, shape, data_type, layout);
                 }
@@ -209,9 +229,10 @@ void TensorModule(py::module &m_tensor) {
         )
         .def(
             py::init<>(
-                [](std::vector<float>& data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device) {
+                [](std::vector<float>& data, const Shape& shape, DataType data_type, Layout layout, Device *device) {
                     auto host_buffer = detail::create_host_buffer_from_list_of_floats(data, data_type);
-                    return Tensor(host_buffer, shape, data_type, layout, device);
+                    auto device_buffer = detail::create_device_buffer_from_host_buffer(host_buffer, shape, data_type, layout, device, MemoryConfig{});
+                    return Tensor(device_buffer, shape, data_type, layout, device);
                 }
             ), py::keep_alive<1, 6>(), R"doc(
                 +---------------+---------------+
@@ -250,9 +271,10 @@ void TensorModule(py::module &m_tensor) {
         )
         .def(
             py::init<>(
-                [](const std::vector<float>& data, const std::array<uint32_t, 4> &shape, DataType data_type, Layout layout, Device *device, const MemoryConfig &mem_config) {
+                [](const std::vector<float>& data, const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config) {
                     auto host_buffer = detail::create_host_buffer_from_list_of_floats(data, data_type);
-                    return Tensor(host_buffer, shape, data_type, layout, device, mem_config);
+                    auto device_buffer = detail::create_device_buffer_from_host_buffer(host_buffer, shape, data_type, layout, device, memory_config);
+                    return Tensor(device_buffer, shape, data_type, layout, device, memory_config);
                 }
             ), py::keep_alive<1, 6>(), R"doc(
                 +---------------+---------------+
@@ -715,14 +737,14 @@ void TensorModule(py::module &m_tensor) {
                 layout = tt_tensor.layout()
 
         )doc")
-        .def("buffer_type", [](const Tensor &self) {
-            return self.buffer_type();
+        .def("memory_config", [](const Tensor &self) {
+            return self.memory_config();
         }, R"doc(
             Get buffer type of TT Tensor.
 
             .. code-block:: python
 
-                buffer_type = tt_tensor.buffer_type()
+                memory_config = tt_tensor.memory_config()
 
         )doc")
         .def("dtype", [](const Tensor &self) {

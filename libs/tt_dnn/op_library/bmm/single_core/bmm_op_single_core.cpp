@@ -543,7 +543,7 @@ void create_CBs_for_fused_matmul_old_alloc(tt_metal::Program& program,
 }
 Tensor create_output_dram_buffer(Device * device, DataType data_type, uint32_t M, uint32_t N, bool untilize_out) {
     std::array<uint32_t, 4> cshape{1, 1, M, N};
-    tt_metal::Tensor output = tt_metal::Tensor(
+    tt_metal::Tensor output = tt_metal::create_device_tensor(
         cshape,
         data_type,
         untilize_out ? tt::tt_metal::Layout::ROW_MAJOR : tt::tt_metal::Layout::TILE,
