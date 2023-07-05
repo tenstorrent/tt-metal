@@ -12,6 +12,11 @@ class CommandQueueHarness : public ::testing::Test {
 
     void SetUp() override {
         this->arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+
+        if (this->arch != tt::ARCH::GRAYSKULL) {
+            GTEST_SKIP();
+        }
+
         const int pci_express_slot = 0;
         this->device = tt::tt_metal::CreateDevice(arch, pci_express_slot);
         tt::tt_metal::InitializeDevice(this->device, tt::tt_metal::MemoryAllocator::L1_BANKING);
