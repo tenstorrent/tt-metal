@@ -45,7 +45,10 @@ from utility_functions_new import torch2tt_tensor, tt2torch_tensor
 def download_images(path, imgsz):
     dataset = load_dataset("huggingface/cats-image")
     image = dataset["test"]["image"][0]
-    image = image.resize(imgsz)
+
+    if imgsz is not None:
+        image = image.resize(imgsz)
+
     image.save(path / "input_image.jpg")
 
 
@@ -68,8 +71,6 @@ def test_detection_model():
         device=device,
     )
 
-    download_images(Path(ROOT), (640, 640))
-
     with torch.no_grad():
         tt_module.eval()
         refence_module.eval()
@@ -77,6 +78,8 @@ def test_detection_model():
         # Load data
         stride = max(int(max(refence_module.stride)), 32)  # model stride
         imgsz = check_img_size((640, 640), s=stride)  # check image size
+
+        download_images(Path(ROOT), None)
         dataset = LoadImages(ROOT, img_size=imgsz, stride=stride, auto=True)
         names = refence_module.names
 

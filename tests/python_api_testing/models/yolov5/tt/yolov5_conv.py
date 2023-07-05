@@ -38,6 +38,7 @@ class TtYolov5Conv2D(torch.nn.Module):
         p=None,
         g=1,
         d=1,
+        conv_on_device=False,
     ):
         super().__init__()
 
@@ -54,7 +55,7 @@ class TtYolov5Conv2D(torch.nn.Module):
 
         self.device = device
         self.host = tt_lib.device.GetHost()
-        self.conv_on_device = True
+        self.conv_on_device = conv_on_device
 
         # conv_params = [out_channels, in_channels, kernel_size, kernel_size, stride, stride, padding, padding, dilation, groups]
         self.conv_params = [c2, c1, k, k, s, s, p, p, d, g]
@@ -63,8 +64,6 @@ class TtYolov5Conv2D(torch.nn.Module):
             self.conv_bias = self.conv_bias.unsqueeze(-1).unsqueeze(-1)
 
             logger.debug(f"Using TtConv for params {self.conv_params}")
-            logger.debug(f"conv_weight shape {self.conv_weight.shape}")
-            logger.debug(f"conv_bias shape {self.conv_bias.shape}")
 
             self.conv = run_conv_on_device_wrapper(
                 self.conv_weight.reshape(-1).tolist(),

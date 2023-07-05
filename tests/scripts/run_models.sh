@@ -81,6 +81,8 @@ env pytest tests/python_api_testing/models/roberta -k roberta_classification_hea
 env pytest tests/python_api_testing/models/roberta -k roberta_for_token_classification
 env pytest tests/python_api_testing/models/roberta -k roberta_for_multiple_choice
 
+env pytest tests/python_api_testing/models/yolov5/tests -k Yolov5_detection_model
+
 env pytest tests/python_api_testing/models/bloom -k baddbmm
 env pytest tests/python_api_testing/models/bloom -k bloom_attention
 env pytest tests/python_api_testing/models/bloom -k bloom_block

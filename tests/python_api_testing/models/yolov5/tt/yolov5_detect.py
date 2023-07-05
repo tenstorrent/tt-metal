@@ -42,10 +42,7 @@ class TtYolov5Detect(torch.nn.Module):
     def forward(self, x):
         z = []  # inference output
         for i in range(self.nl):
-            blalla = x[i]
-            bla_res = self.m[i](blalla)
-
-            x[i] = bla_res  # conv
+            x[i] = self.m[i](x[i])  # conv
             x[i] = tt2torch_tensor(x[i])
 
             bs, _, ny, nx = x[i].shape  # x(bs,255,20,20) to x(bs,3,20,20,85)

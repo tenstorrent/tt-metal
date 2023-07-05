@@ -268,8 +268,8 @@ def test_Yolov5_Conv2D_real():
     logger.debug(f"dilation {dilation}")
 
     torch.manual_seed(0)
-    # test_input = torch.rand(1, 3, 480, 640)
-    test_input = get_test_input(refence_module)
+    test_input = torch.rand(1, 3, 480, 640)
+    # test_input = get_test_input(refence_module)
 
     pt_out = refence_module(test_input)
 
@@ -284,6 +284,7 @@ def test_Yolov5_Conv2D_real():
         p=padding,
         g=groups,
         d=dilation[0],
+        conv_on_device=True,
     )
 
     # CHANNELS_LAST
