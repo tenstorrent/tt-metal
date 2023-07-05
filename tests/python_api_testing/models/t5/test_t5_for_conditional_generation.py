@@ -297,7 +297,7 @@ def run_generate(input_sentance, run_tt_model, device, model_name):
     encoder_outputs = None
     use_cache = False
 
-    for i in range(2048):
+    for i in range(64):
         # PyTorch forward pass
         pt_out = hf_reference_model(
             input_ids=input_ids,
@@ -315,13 +315,12 @@ def run_generate(input_sentance, run_tt_model, device, model_name):
                 use_cache=use_cache,
             )
             encoder_outputs = tt_out.encoder_outputs
+            next_token_logits = tt_out.logits
 
             does_pass, pcc_message = comp_pcc(pt_out.logits, tt_out.logits, 0.98)
             logger.info(pcc_message)
         else:
-            tt_out = pt_out
-
-        next_token_logits = tt_out.logits
+            next_token_logits = pt_out.logits
 
         # pre-process distribution
         next_tokens_scores = logits_processor(input_ids, next_token_logits)
@@ -346,31 +345,52 @@ def run_generate(input_sentance, run_tt_model, device, model_name):
 
 
 def run_T5ForConditionalGeneration(model_name):
-    input_sentance = "translate English to German: The house is wonderful."
-    correct_output = "Das Haus ist wunderbar."
+    # input_sentance = "translate English to German: The house is wonderful."
+    # if model_name == "t5-small":
+    #     correct_output = "Das Haus ist wunderbar."
+    # elif model_name == "google/flan-t5-small":
+    #     correct_output = "Das Haus ist schön."
 
     # input_sentance = "summarize: QuillBot's Summarizer wants to change how you read! Instead of reading through loads of documents, you can get a short annotated summary or bullet points with all the key information."
-    # correct_output = "QuillBot's Summarizer wants to change how you read. instead of reading through loads of documents, you can get a short annotated summary or bullet points with all the key information."
+    # if model_name == "t5-small":
+    #     correct_output = "QuillBot's Summarizer wants to change how you read. instead of reading through loads of documents, you can get a short annotated summary or bullet points with all the key information."
+    # elif model_name == "google/flan-t5-small":
+    #     correct_output = "QuillBot's Summarizer is a free eBook that lets you read your documents."
 
     # input_sentance = "translate English to French: Welcome to NYC"
-    # correct_output = "Bienvenue à NYC"
+    # if model_name == "t5-small":
+    #     correct_output = "Bienvenue à NYC"
+    # elif model_name == "google/flan-t5-small":
+    #     correct_output = "Accueil à NCT"
 
     # input_sentance = "The <extra_id_0> walks in <extra_id_1> park"
-    # correct_output = "park offers the park."
+    # if model_name == "t5-small":
+    #     correct_output = "park offers the park."
+    # elif model_name == "google/flan-t5-small":
+    #     correct_output = "a swansea swansea swansea swansea swansea swansea swansea swansea swansea swansea s"
 
-    # input_sentance = "summarize: I'm sitting here in a boring room. It's just another rainy Sunday afternoon. I'm wasting my time I got nothing to do. I'm hanging around I'm waiting for you. But nothing ever happens. And I wonder"
-    # correct_output = "i'm sitting here in a boring room. I'm wasting my time I got nothing to do. I wonder if nothing ever happens."
+    input_sentance = "summarize: I'm sitting here in a boring room. It's just another rainy Sunday afternoon. I'm wasting my time I got nothing to do. I'm hanging around I'm waiting for you. But nothing ever happens. And I wonder"
+    if model_name == "t5-small":
+        correct_output = "i'm sitting here in a boring room. I'm wasting my time I got nothing to do. I wonder if nothing ever happens."
+    elif model_name == "google/flan-t5-small":
+        correct_output = "I'm wasting my time."
 
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
 
-    output_sentance = run_generate(
+    pt_output_sentance = run_generate(
+        input_sentance, run_tt_model=False, device=device, model_name=model_name
+    )
+
+    tt_output_sentance = run_generate(
         input_sentance, run_tt_model=True, device=device, model_name=model_name
     )
-    logger.info(f"Decoded output: {output_sentance}")
+
+    logger.info(f"Pt Decoded output: {pt_output_sentance}")
+    logger.info(f"Tt Decoded output: {tt_output_sentance}")
 
     tt_lib.device.CloseDevice(device)
-    assert output_sentance == correct_output
+    assert tt_output_sentance == correct_output
 
 
 # def test_T5ForConditionalGeneration():

@@ -21,7 +21,7 @@ from python_api_testing.models.utility_functions_new import (
 from python_api_testing.models.t5.t5_block import TtT5Block
 
 
-def run_test_T5Block_inference(device, model_name):
+def run_test_T5Block_inference(device, model_name, input_h, input_w):
     hf_reference_model = T5Model.from_pretrained(model_name)
     hf_reference_model.eval()
 
@@ -40,7 +40,7 @@ def run_test_T5Block_inference(device, model_name):
 
     # Prepare input
     torch.manual_seed(0)
-    test_input = (torch.rand(32, 128, 512) * 2) - 1
+    test_input = (torch.rand(32, input_h, input_w) * 2) - 1
 
     # PyTorch output
     pt_out = hf_reference_module(test_input)[0].unsqueeze(0)
@@ -61,22 +61,29 @@ def run_test_T5Block_inference(device, model_name):
     logger.info(pcc_message)
 
     if does_pass:
-        logger.info("test_T5Block_inference Passed!")
+        logger.info(f"test_T5Block_inference {model_name} Passed!")
     else:
-        logger.warning("test_T5Block_inference Failed!")
+        logger.warning(f"test_T5Block_inference {model_name} Failed!")
 
     assert does_pass
 
 
-def test_T5Block_inference():
+def test_T5Block_inference_t5_small():
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
-    run_test_T5Block_inference(device, "t5-small")
+    run_test_T5Block_inference(device, "t5-small", 64, 512)
     tt_lib.device.CloseDevice(device)
 
 
-def test_T5Block_inference_flan():
+def test_T5Block_inference_flan_t5_small():
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
-    run_test_T5Block_inference(device, "google/flan-t5-small")
+    run_test_T5Block_inference(device, "google/flan-t5-small", 64, 512)
+    tt_lib.device.CloseDevice(device)
+
+
+def test_T5Block_inference_t5_base():
+    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    tt_lib.device.InitializeDevice(device)
+    run_test_T5Block_inference(device, "t5-base", 64, 768)
     tt_lib.device.CloseDevice(device)

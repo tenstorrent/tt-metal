@@ -155,7 +155,9 @@ def run_test_softmax(device):
         logger.warning("Test softmax Failed!")
 
 
-def run_test_T5Attention_inference(device, block, use_mask, model_name):
+def run_test_T5Attention_inference(
+    device, block, use_mask, model_name, input_h, input_w
+):
     hugging_face_reference_model = T5Model.from_pretrained(
         model_name
     )  # , torch_dtype=torch.float16)
@@ -163,7 +165,7 @@ def run_test_T5Attention_inference(device, block, use_mask, model_name):
 
     # Input is (batch_size, seq_length, dim)
     torch.manual_seed(0)
-    test_input = ((torch.rand(1, 32, 512) * 2) - 1) / 512
+    test_input = ((torch.rand(1, input_h, input_w) * 2) - 1) / 512
 
     # "/ 2" is added beacuse of Tt device precision. Not to hit limits of float16
     mask = -65504.0 * torch.cat([torch.zeros(7), torch.ones(25)]) / 2
@@ -207,9 +209,9 @@ def run_test_T5Attention_inference(device, block, use_mask, model_name):
     logger.info(pcc_message)
 
     if does_pass:
-        logger.info("test_T5Attention_inference Passed!")
+        logger.info(f"test_T5Attention_inference {model_name} Passed!")
     else:
-        logger.warning("test_T5Attention_inference Failed!")
+        logger.warning(f"test_T5Attention_inference {model_name} Failed!")
 
     assert does_pass
 
@@ -249,41 +251,51 @@ def test_t5_unshape():
     tt_lib.device.CloseDevice(device)
 
 
-def test_T5Attention_block_0_no_mask():
+def test_T5Attention_block_0_no_mask_t5_small():
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     run_test_T5Attention_inference(
-        device, block=0, use_mask=False, model_name="t5-small"
+        device, block=0, use_mask=False, model_name="t5-small", input_h=32, input_w=512
     )
     tt_lib.device.CloseDevice(device)
 
 
-def test_T5Attention_block_2_no_mask():
+def test_T5Attention_block_2_no_mask_t5_small():
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     run_test_T5Attention_inference(
-        device, block=2, use_mask=False, model_name="t5-small"
+        device, block=2, use_mask=False, model_name="t5-small", input_h=32, input_w=512
     )
     tt_lib.device.CloseDevice(device)
 
 
-def test_T5Attention_block_0_with_mask():
+def test_T5Attention_block_0_with_mask_t5_small():
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     run_test_T5Attention_inference(
-        device, block=0, use_mask=True, model_name="t5-small"
+        device, block=0, use_mask=True, model_name="t5-small", input_h=32, input_w=512
     )
     tt_lib.device.CloseDevice(device)
 
 
-def test_T5Attention_block_0_no_mask_flan_t5():
+def test_T5Attention_block_0_no_mask_flan_t5_small():
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     run_test_T5Attention_inference(
-        device, block=0, use_mask=False, model_name="google/flan-t5-small"
+        device,
+        block=0,
+        use_mask=False,
+        model_name="google/flan-t5-small",
+        input_h=32,
+        input_w=512,
     )
     tt_lib.device.CloseDevice(device)
 
 
-if __name__ == "__main__":
-    test_T5Attention_block_0_with_mask()
+def test_T5Attention_block_0_no_mask_t5_base():
+    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    tt_lib.device.InitializeDevice(device)
+    run_test_T5Attention_inference(
+        device, block=0, use_mask=False, model_name="t5-base", input_h=32, input_w=768
+    )
+    tt_lib.device.CloseDevice(device)
