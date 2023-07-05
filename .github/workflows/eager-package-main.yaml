@@ -38,6 +38,9 @@ jobs:
           submodules: recursive
           token: ${{ secrets.CHECKOUT_TOKEN }}
           lfs: true
+      - uses: ./.github/actions/install-metal-deps
+        with:
+          os: ${{ matrix.os }}
       - uses: actions/download-artifact@v3
         with:
           name: eager-dist-${{ matrix.os }}-${{ matrix.arch }}
