@@ -82,24 +82,31 @@ def run_test_T5Model_inference(device, use_attention_mask, model_name):
     logger.info(f"Tt decoded output: {tt_decoded_out}")
 
     if does_pass:
-        logger.info("test_T5Model_inference Passed!")
+        logger.info(f"test_T5Model_inference {model_name} Passed!")
     else:
-        logger.warning("test_T5Model_inference Failed!")
+        logger.warning(f"test_T5Model_inference {model_name} Failed!")
 
     assert does_pass
 
 
-def test_T5Model_inference():
+def test_T5Model_inference_t5_small():
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     run_test_T5Model_inference(device, use_attention_mask=True, model_name="t5-small")
     tt_lib.device.CloseDevice(device)
 
 
-def test_T5Model_inference_flan():
+def test_T5Model_inference_flan_t5_small():
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     run_test_T5Model_inference(
         device, use_attention_mask=True, model_name="google/flan-t5-small"
     )
+    tt_lib.device.CloseDevice(device)
+
+
+def test_T5Model_inference_t5_base():
+    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    tt_lib.device.InitializeDevice(device)
+    run_test_T5Model_inference(device, use_attention_mask=True, model_name="t5-base")
     tt_lib.device.CloseDevice(device)
