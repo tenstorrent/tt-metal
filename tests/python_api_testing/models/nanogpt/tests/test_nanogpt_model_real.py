@@ -30,7 +30,7 @@ from utility_functions_new import (
     torch_to_tt_tensor_rm,
 )
 
-def run_nanogpt_model_real_test(device, pcc):
+def run_nanogpt_model_real_test(device, pcc, prompt):
     # Prepare input
 
     model_hf = GPT2LMHeadModel.from_pretrained('gpt2')
@@ -43,7 +43,7 @@ def run_nanogpt_model_real_test(device, pcc):
     enc = tiktoken.get_encoding("gpt2")
     encode = lambda s: enc.encode(s, allowed_special={"<|endoftext|>"})
 
-    start_ids = encode("How are you?")
+    start_ids = encode(prompt)
 
     x = (torch.tensor(start_ids, dtype=torch.long, device='cpu')[None, ...])
 
@@ -87,17 +87,18 @@ def run_nanogpt_model_real_test(device, pcc):
 
 
 @pytest.mark.parametrize(
-    "pcc",
+    "pcc, prompt",
     (
         (
             0.99,
+            "How are you?"
         ),
     ),
 )
-def test_nanogpt_model_real(pcc):
+def test_nanogpt_model_real(pcc, prompt):
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
 
-    run_nanogpt_model_real_test(device, pcc)
+    run_nanogpt_model_real_test(device, pcc, prompt)
     tt_lib.device.CloseDevice(device)

@@ -15,7 +15,7 @@ from transformers import GPT2LMHeadModel
 from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 from loguru import logger
-import python_api_testing.models.nanogpt.utils as nanogpt_utils
+import python_api_testing.models.nanogpt.helper_funcs as nanogpt_utils
 import python_api_testing.models.nanogpt.tt.nanogpt_attention as nanogpt_attention
 
 

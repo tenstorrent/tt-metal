@@ -2,7 +2,7 @@ import torch
 from torch.nn import functional as F
 
 import tt_lib
-import python_api_testing.models.nanogpt.utils as nanogpt_utils
+import python_api_testing.models.nanogpt.helper_funcs as nanogpt_utils
 import math
 
 from utility_functions_new import (
