@@ -464,17 +464,10 @@ class TtT5Attention(nn.Module):
             if key_value_states is None:
                 # self-attn
                 # (batch_size, n_heads, seq_length, dim_per_head)
-
-                logger.debug(f"hidden_states shape {hidden_states.shape()}")
-                logger.debug(f"proj_weights shape {proj_weights.shape()}")
-
                 hidden_states = shape(tt_lib.tensor.matmul(hidden_states, proj_weights))
             elif past_key_value is None:
                 # cross-attn
                 # (batch_size, n_heads, seq_length, dim_per_head)
-
-                logger.debug(f"hidden_states shape {key_value_states.shape()}")
-                logger.debug(f"proj_weights shape {proj_weights.shape()}")
                 hidden_states = shape(
                     tt_lib.tensor.matmul(key_value_states, proj_weights)
                 )
@@ -491,9 +484,6 @@ class TtT5Attention(nn.Module):
                     # the provided `key_value_states` to support prefix tuning
                     # cross-attn
                     # (batch_size, n_heads, seq_length, dim_per_head)
-
-                    logger.debug(f"hidden_states shape {key_value_states.shape()}")
-                    logger.debug(f"proj_weights shape {proj_weights.shape()}")
                     hidden_states = shape(
                         tt_lib.tensor.matmul(key_value_states, proj_weights)
                     )
@@ -503,9 +493,6 @@ class TtT5Attention(nn.Module):
             return hidden_states
 
         # get query states
-        logger.debug(f"hidden_states shape {hidden_states.shape()}")
-        logger.debug(f"q_weights shape {self.q_weights.shape()}")
-
         query_states = shape(
             tt_lib.tensor.matmul(hidden_states, self.q_weights)
             # self.q(hidden_states)
@@ -593,10 +580,6 @@ class TtT5Attention(nn.Module):
 
         attn_output = tt_lib.tensor.bmm(attn_weights, value_states)
         attn_output = unshape(attn_output)  # (batch_size, seq_length, dim)
-
-        logger.debug(f"attn_output shape {attn_output.shape()}")
-        logger.debug(f"self.o_weights shape {self.o_weights.shape()}")
-
         attn_output = tt_lib.tensor.matmul(attn_output, self.o_weights)
 
         present_key_value_state = (
