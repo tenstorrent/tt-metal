@@ -4,7 +4,7 @@ import torch
 import numpy as np
 from loguru import logger
 from tt_lib.utils import _nearest_32
-
+from os import environ
 
 
 def is_close(a, b, rtol=1e-2, atol=1e-2, max_mag=2.0, max_mag_fraction=0.02):
@@ -358,6 +358,9 @@ def torch_to_tt_tensor(py_tensor, device):
     return tt_tensor
 
 def prep_report(model_name: str, batch_size: int, inference_and_compile_time: float, inference_time: float, comments: str, inference_time_cpu: float=None):
+    environ['TZ'] = 'America/Toronto'
+    time.tzset()
+    today = time.strftime("%Y_%m_%d")
 
     def write_dict_to_file(csv_path, dict_res):
         columns = ", ".join([str(d) for d in dict_res.keys()])
@@ -371,9 +374,9 @@ def prep_report(model_name: str, batch_size: int, inference_and_compile_time: fl
 
 
     compile_time = inference_and_compile_time - inference_time
-    gs_throughput = batch_size * (1/inference_time)
+    gs_throughput = "{:.4f}".format(batch_size * (1/inference_time))
     cpu_throughput = batch_size * (1/inference_time_cpu) if inference_time_cpu else "unknown"
-    cpu_throughput = "{:.5f}".format(cpu_throughput) if not isinstance(cpu_throughput, str) else cpu_throughput
+    cpu_throughput = "{:.4f}".format(cpu_throughput) if not isinstance(cpu_throughput, str) else cpu_throughput
     dict_res = {
         "Model": model_name,
         "Setting": comments,
@@ -382,10 +385,10 @@ def prep_report(model_name: str, batch_size: int, inference_and_compile_time: fl
         "Second Run (sec)":  "{:.2f}".format(inference_time),
         "Compile Time (sec)": "{:.2f}".format(compile_time),
         "Inference Time GS (sec)": "{:.2f}".format(inference_time),
-        "Throughput GS (batch*inf/sec)": "{:.2f}".format(gs_throughput),
+        "Throughput GS (batch*inf/sec)": gs_throughput,
         "Inference Time CPU (sec)": "{:.2f}".format(inference_time_cpu),
         "Throughput CPU (batch*inf/sec)": cpu_throughput,
     }
 
-    csv_file = f"perf_{model_name}.csv"
+    csv_file = f"perf_{model_name}_{today}.csv"
     write_dict_to_file(csv_file, dict_res)
