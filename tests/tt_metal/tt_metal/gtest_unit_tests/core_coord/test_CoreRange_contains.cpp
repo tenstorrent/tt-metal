@@ -1,6 +1,4 @@
 
-#include <memory>
-
 #include "gtest/gtest.h"
 #include "tt_metal/common/core_coord.h"
 #include "../basic_harness.hpp"
