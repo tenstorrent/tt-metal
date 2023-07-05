@@ -1822,7 +1822,7 @@ void TensorModule(py::module &m_tensor) {
 
     // *** tensor manipulation ***
     m_tensor.def("reshape", &reshape, R"doc(
-        Changes shape of tensor ``arg0`` to new shape ``[W, Z, Y, X]``. The X dimension of input and output tensor must have same size.
+        Returns a tensor with the new shape of ``[W, Z, Y, X]``. The X dimension of input and output tensor must have same size.
 
         Input tensor must be on host device, in TILE layout, and have BFLOAT16 data type.
 

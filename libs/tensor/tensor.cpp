@@ -99,19 +99,16 @@ uint32_t Tensor::element_size() const {
     return tensor_impl::element_size_bytes_wrapper(this->dtype_);
 }
 
-const Shape& Tensor::reshape(int N, int C, int H, int W) {
+Tensor Tensor::reshape(int N, int C, int H, int W) {
     auto new_shape = infer_dims_for_reshape(N, C, H, W, this->volume());
+    return this->reshape(new_shape);
+}
 
+Tensor Tensor::reshape(const Shape& new_shape) const {
     if (this->layout() == Layout::TILE) {
         TT_ASSERT(new_shape[2] % TILE_HEIGHT == 0 && new_shape[3] % TILE_WIDTH == 0 && "Expected a multiple of 32 for H, W (or -1 evaluating to such) in Tensor::reshape()!");
     }
 
-    shape_ = new_shape;
-
-    return shape_;
-}
-
-Tensor Tensor::reshape(const Shape& new_shape) const {
     auto new_tensor = *this;
     new_tensor.shape_ = new_shape;
     return new_tensor;

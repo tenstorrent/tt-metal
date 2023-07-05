@@ -79,7 +79,7 @@ class Tensor {
         // ======================================================================================
         //                                  Low Level APIs
         // ======================================================================================
-        const Shape& reshape(int N, int C, int H, int W); // TODO: delete this function
+        Tensor reshape(int N, int C, int H, int W);
         Tensor reshape(const Shape& new_shape) const;
 
         // ======================================================================================

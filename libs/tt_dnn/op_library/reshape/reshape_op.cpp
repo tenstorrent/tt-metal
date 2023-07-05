@@ -378,7 +378,7 @@ Tensor reshape (Tensor &input_tensor_a, int N, int C, int H, int W) {
     ) {
         // Don't need to do a check here to see the H and W both divisible by 32
         // since handled within the tensor reshape method
-        input_tensor_a.reshape(N, C, H, W);
+        input_tensor_a = input_tensor_a.reshape(N, C, H, W);
         return input_tensor_a;
     }
     return operation::run_without_autoformat(Reshape{N, C, H, W}, input_tensor_a);
