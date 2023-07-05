@@ -25,5 +25,10 @@ class CommandQueueHarness : public ::testing::Test {
         this->pcie_id = 0;
     }
 
-    void TearDown() override { tt::tt_metal::CloseDevice(this->device); }
+    void TearDown() override {
+        if (this->arch != tt::ARCH::GRAYSKULL) {
+            GTEST_SKIP();
+        }
+        tt::tt_metal::CloseDevice(this->device);
+    }
 };
