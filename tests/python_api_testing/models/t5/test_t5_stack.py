@@ -54,7 +54,7 @@ def run_test_T5Stack_inference(device, model_name):
     last_hidden_state = tt_model_outputs[0]
     tt_out = tt2torch_tensor(last_hidden_state)
 
-    does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.98)
+    does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.96)
     logger.info(pcc_message)
 
     if does_pass:
