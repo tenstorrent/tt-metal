@@ -6,21 +6,23 @@ on:
       environment:
         required: True
         type: string
+      os:
+        required: True
+        type: string
+      arch:
+        required: True
+        type: string
     secrets:
       CHECKOUT_TOKEN:
         required: True
 
 jobs:
   build-eager-package:
-    strategy:
-      matrix:
-        arch: [grayskull, wormhole_b0]
-        os: [ubuntu-20.04]
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ inputs.os }}
     environment: ${{ inputs.environment }}
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.arch }}
+      ARCH_NAME: ${{ inputs.arch }}
     steps:
       - uses: actions/checkout@v3
         with:
@@ -29,7 +31,7 @@ jobs:
           lfs: true
       - uses: ./.github/actions/install-metal-deps
         with:
-          os: ${{ matrix.os }}
+          os: ${{ inputs.os }}
       - name: Set up dyanmic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
@@ -42,5 +44,5 @@ jobs:
       - name: Upload distribution as artifact
         uses: actions/upload-artifact@v3
         with:
-          name: eager-dist
+          name: eager-dist-${{ inputs.os }}-${{ inputs.arch }}
           path: dist/

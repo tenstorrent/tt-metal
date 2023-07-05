@@ -1,3 +1,4 @@
+---
 name: eager - Package on main
 
 on:
@@ -5,12 +6,40 @@ on:
   push:
     branches: ["main"]
 
+# TODO: RK - need to change this to every push later once
+# we go public
 jobs:
   build-eager-package:
-    # TODO: RK - need to change this to every push later once
-    # we go public
+    strategy:
+      matrix:
+        os: [ubuntu-20.04]
+        arch: [grayskull, wormhole_b0]
     uses: ./.github/workflows/eager-package.yaml
     with:
       environment: dev
+      os: ${{ matrix.os }}
+      arch: ${{ matrix.arch }}
     secrets:
       CHECKOUT_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
+  test-eager-package:
+    needs: build-eager-package
+    strategy:
+      matrix:
+        os: [ubuntu-20.04]
+        arch: [grayskull, wormhole_b0]
+    runs-on: ${{ matrix.os }}
+    environment: production
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+          token: ${{ secrets.CHECKOUT_TOKEN }}
+          lfs: true
+      - uses: actions/download-artifact@v3
+        with:
+          name: eager-dist-${{ matrix.os }}-${{ matrix.arch }}
+      - shell: bash
+        run: ls -hal
