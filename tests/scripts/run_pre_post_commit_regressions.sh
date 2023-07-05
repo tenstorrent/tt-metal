@@ -38,6 +38,7 @@ else
 fi
 
 ./build/test/tt_metal/unit_tests
+./build/test/tt_metal/gtest_unit_tests
 
 echo "Checking docs build..."
 
