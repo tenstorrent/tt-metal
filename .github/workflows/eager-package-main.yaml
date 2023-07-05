@@ -33,17 +33,17 @@ jobs:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.arch }}
     steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+          token: ${{ secrets.CHECKOUT_TOKEN }}
+          lfs: true
       - uses: ./.github/actions/install-metal-deps
         with:
           os: ${{ matrix.os }}
       - uses: ./.github/actions/install-metal-dev-deps
         with:
           os: ${{ matrix.os }}
-      - uses: actions/checkout@v3
-        with:
-          submodules: recursive
-          token: ${{ secrets.CHECKOUT_TOKEN }}
-          lfs: true
       - uses: actions/download-artifact@v3
         with:
           name: eager-dist-${{ matrix.os }}-${{ matrix.arch }}
