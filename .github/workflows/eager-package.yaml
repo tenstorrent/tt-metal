@@ -29,6 +29,7 @@ jobs:
           submodules: recursive
           token: ${{ secrets.CHECKOUT_TOKEN }}
           lfs: true
+          fetch-depth: 0
       - uses: ./.github/actions/install-metal-deps
         with:
           os: ${{ inputs.os }}
