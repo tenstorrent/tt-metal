@@ -1,4 +1,5 @@
 #include "debug_tools.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/program.hpp"
 #include "tt_metal/llrt/tt_debug_print_server.hpp"
@@ -590,7 +591,7 @@ void send_dispatch_kernel_to_device(Device* device) {
     build_kernel_for_riscv_options.brisc_defines = brisc_defines;
     bool profile = false;
 
-    GenerateBankToNocCoordHeaders(device, &build_kernel_for_riscv_options, "command_queue");
+    detail::GenerateBankToNocCoordHeaders(device, &build_kernel_for_riscv_options, "command_queue");
     generate_binary_for_risc(
         RISCID::BR, &build_kernel_for_riscv_options, build_kernel_for_riscv_options.name, arch_name, 0, {}, profile);
 

@@ -566,43 +566,7 @@ bool ReadFromDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t ad
     tt_metal_profiler.markStop("ReadFromDeviceL1");
     return pass;
 }
-void GenerateBankToNocCoordHeaders(
-    Device *device,
-    build_kernel_for_riscv_options_t *build_options,
-    const std::string &op_path_suffix)
-{
-    // Basic Allocator generates number of banks which may not be power of 2, so we could just pad and alias for now
-    const size_t num_dram_banks = device->num_banks(BufferType::DRAM);
-    const size_t num_dram_banks_pow2 = std::pow(2, std::ceil(std::log2(num_dram_banks)));
-    std::vector<CoreCoord> dram_noc_coord_per_bank(num_dram_banks);
-    std::vector<i32> dram_offsets_per_bank(num_dram_banks);
-    for (unsigned bank_id = 0; bank_id < num_dram_banks; bank_id++) {
-        dram_noc_coord_per_bank[bank_id] = device->core_from_dram_channel(device->dram_channel_from_bank_id(bank_id));
-        dram_offsets_per_bank[bank_id] = device->dram_bank_offset_from_bank_id(bank_id);
-    }
-    const size_t num_l1_banks = device->num_banks(BufferType::L1);
-    const size_t num_l1_banks_pow2 = std::pow(2, std::ceil(std::log2(num_l1_banks)));
-    std::vector<CoreCoord> l1_noc_coord_per_bank(num_l1_banks_pow2);
-    std::vector<i32> l1_offset_per_bank(num_l1_banks_pow2);
-    for (unsigned bank_id = 0; bank_id < num_l1_banks_pow2; bank_id++) {
-        if (bank_id < num_l1_banks) {
-            l1_noc_coord_per_bank[bank_id] = device->worker_core_from_logical_core(device->logical_core_from_bank_id(bank_id));
-            l1_offset_per_bank[bank_id] = device->l1_bank_offset_from_bank_id(bank_id);
-        } else {
-            l1_noc_coord_per_bank[bank_id] = device->worker_core_from_logical_core(device->logical_core_from_bank_id(0));
-            l1_offset_per_bank[bank_id] = device->l1_bank_offset_from_bank_id(0);
-        }
-    }
-    // Generate header file in proper location
-    generate_bank_to_noc_coord_descriptor (
-        build_options,
-        op_path_suffix,
-        dram_noc_coord_per_bank,
-        dram_offsets_per_bank,
-        l1_noc_coord_per_bank,
-        l1_offset_per_bank
-    );
-}
+
 bool GenerateBinaries(
     Device *device,
     build_kernel_for_riscv_options_t *build_options,
@@ -615,7 +579,7 @@ bool GenerateBinaries(
     generate_descriptors(build_options, op_path_suffix);
     try {
         if (auto dm_kernel = dynamic_cast<DataMovementKernel *>(kernel)) {
-            GenerateBankToNocCoordHeaders(device, build_options, op_path_suffix);
+            detail::GenerateBankToNocCoordHeaders(device, build_options, op_path_suffix);
             switch (dm_kernel->data_movement_processor()) {
                 case (DataMovementProcessor::RISCV_0): {
                     generate_binary_for_brisc(

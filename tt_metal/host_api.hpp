@@ -804,12 +804,6 @@ bool LaunchKernels(Device *device, const Program &program, bool stagger_start = 
 
 bool WriteToDeviceL1(Device *device, const CoreCoord &core, op_info_t op_info, int op_idx);
 
-
-void GenerateBankToNocCoordHeaders(
-    Device *device,
-    build_kernel_for_riscv_options_t *build_options,
-    const std::string &op_path);
-
 void Synchronize();
 
 }  // namespace tt_metal
