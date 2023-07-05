@@ -37,6 +37,9 @@ jobs:
       - uses: ./.github/actions/install-metal-deps
         with:
           os: ubuntu-20.04
+      - uses: ./.github/actions/install-metal-dev-deps
+        with:
+          os: ubuntu-20.04
       - name: Build tt-metal
         run: make build
       - name: Activate and build docs
