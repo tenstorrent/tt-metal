@@ -14,6 +14,7 @@
 #include "tt_metal/detail/reports/compilation_reporter.hpp"
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 
+//TODO(MO): hack until ticket #1184 is in
 bool enable_fw_profile_hack = false;
 
 namespace tt {

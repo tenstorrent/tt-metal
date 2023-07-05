@@ -6,9 +6,13 @@
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "tensor/tensor.hpp"
 
+//TODO(MO): hack until ticket #1184 is in
+extern bool enable_fw_profile_hack;
+
 namespace tt {
 
 namespace tt_metal {
+
 
 namespace op_profiler {
 
@@ -283,6 +287,9 @@ namespace op_profiler {
                 void set_profiler_flag(bool doProfile)
                 {
                     profileOps = doProfile;
+
+                    //TODO(MO): hack until ticket #1184 is in
+                    enable_fw_profile_hack = doProfile;
                 }
 
                 void set_profiler_location(const string& profilerLogFolder)
