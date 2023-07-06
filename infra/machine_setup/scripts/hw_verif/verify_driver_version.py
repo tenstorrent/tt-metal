@@ -43,4 +43,4 @@ if __name__ == "__main__":
     measured_version = f"{driver_ver}, {kernel_split}, {platform}"
     print(measured_version)
 
-    assert driver_ver == "1.18.1", measured_version
+    assert driver_ver == "1.20.1", measured_version
