@@ -320,10 +320,6 @@ ComputeKernel *CreateComputeKernel(
     return kernel;
 }
 
-uint32_t DatumSize(const DataFormat &data_format) {
-    return tt::datum_size(data_format);
-}
-
 uint32_t TileSize(const DataFormat &data_format) {
     return tt::tile_size(data_format);
 }
