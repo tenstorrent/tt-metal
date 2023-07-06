@@ -44,3 +44,11 @@ def mnist_sample_input(model_location_generator):
     path = model_location_generator(sample_path)
     im = Image.open(path)
     return im
+
+
+@pytest.fixture
+def iam_ocr_sample_input(model_location_generator):
+    sample_path = "tt_dnn-models/samples/iam_ocr_image.jpg"
+    path = model_location_generator(sample_path)
+    im = Image.open(path)
+    return im
