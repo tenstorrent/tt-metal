@@ -53,7 +53,7 @@ def run_nanogpt_block_test(device, pcc):
     config_args['block_size'] = 1024 # always 1024 for GPT model checkpoints
     config_args['bias'] = True # always True for GPT model checkpoints
 
-    config = nanogpt_attention.GPTConfig(**config_args)
+    config = GPTConfig(**config_args)
 
 
     tt_test_in = torch2tt_tensor(test_in, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)

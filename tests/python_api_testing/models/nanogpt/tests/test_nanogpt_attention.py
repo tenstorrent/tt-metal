@@ -16,9 +16,8 @@ from transformers import GPT2LMHeadModel
 from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 from loguru import logger
-import python_api_testing.models.nanogpt.helper_funcs as nanogpt_utils
 import python_api_testing.models.nanogpt.tt.nanogpt_attention as nanogpt_attention
-
+from python_api_testing.models.nanogpt.tt.nanogpt_config import GPTConfig
 
 from utility_functions_new import (
     torch2tt_tensor,
@@ -53,7 +52,7 @@ def run_nanogpt_attn_test(device, pcc):
     config_args['bias'] = True # always True for GPT model checkpoints
     # we can override the dropout rate, if desired
 
-    config = nanogpt_attention.GPTConfig(**config_args)
+    config = GPTConfig(**config_args)
 
     tt_test_in = torch2tt_tensor(test_in, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
 

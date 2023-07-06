@@ -17,6 +17,7 @@ from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 from loguru import logger
 import python_api_testing.models.nanogpt.tt.nanogpt_mlp as nanogpt_mlp
+from python_api_testing.models.nanogpt.tt.nanogpt_config import GPTConfig
 
 from utility_functions_new import (
     torch2tt_tensor,
@@ -38,7 +39,22 @@ def run_nanogpt_mlp_test(device, pcc):
 
     tt_test_in = torch2tt_tensor(test_in, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
 
-    tt_mlp = nanogpt_mlp.TtMLP(base_address, sd, device)
+
+    model_type = 'gpt2'
+
+    # n_layer, n_head and n_embd are determined from model_type
+    config_args = {
+        model_type:         dict(n_layer=12, n_head=12, n_embd=768),  # 124M params
+    }[model_type]
+
+    config_args['vocab_size'] = 50257 # always 50257 for GPT model checkpoints
+    config_args['block_size'] = 1024 # always 1024 for GPT model checkpoints
+    config_args['bias'] = True # always True for GPT model checkpoints
+    # we can override the dropout rate, if desired
+
+    config = GPTConfig(**config_args)
+
+    tt_mlp = nanogpt_mlp.TtMLP(base_address, config, sd, device)
 
     tt_out = tt_mlp.forward(
         tt_test_in

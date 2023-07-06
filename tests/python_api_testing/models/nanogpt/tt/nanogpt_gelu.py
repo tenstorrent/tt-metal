@@ -2,7 +2,6 @@ import torch
 from torch.nn import functional as F
 
 import tt_lib
-import python_api_testing.models.nanogpt.helper_funcs as nanogpt_utils
 from tt_lib.fallback_ops import fallback_ops
 
 import math

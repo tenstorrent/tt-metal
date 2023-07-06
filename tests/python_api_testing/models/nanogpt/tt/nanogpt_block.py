@@ -54,7 +54,7 @@ class TtBlock(nn.Module):
             self.gamma_2, self.beta_2, eps=1e-5, normalized_shape=config.n_embd
         )
 
-        self.mlp = nanogpt_mlp.TtMLP(f"{base_address}.mlp", state_dict, device)
+        self.mlp = nanogpt_mlp.TtMLP(f"{base_address}.mlp", self.config, state_dict, device)
 
     def forward(self, x):
         tmp = self.attn.forward(self.ln_1(x))
