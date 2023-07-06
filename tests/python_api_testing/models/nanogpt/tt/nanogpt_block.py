@@ -24,6 +24,7 @@ class TtBlock(nn.Module):
         super().__init__()
 
         self.device = device
+        self.config = config
 
         self.beta_1 = torch2tt_tensor(
             state_dict[f"{base_address}.ln_1.bias"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR

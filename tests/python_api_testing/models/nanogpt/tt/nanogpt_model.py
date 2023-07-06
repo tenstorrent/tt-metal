@@ -133,12 +133,20 @@ class TtGPT(nn.Module):
                 tt_logits, _ = self.forward(idx_cond)
                 # pluck the logits at the final step and scale by desired temperature
 
+                #logits = tt2torch_tensor(tt_logits)
                 #logits = logits[:, :, -1, :] / temperature
-                slice_list = [slice(None), slice(None), slice(-1), slice(None)]
+
+                logits_shapes = tt_logits.shape()
+
+                slice_list = [slice(None), slice(None), slice(logits_shapes[2]-1, logits_shapes[2]), slice(None)]
                 tt_logits = fallback_ops.tensor_slice(tt_logits, slice_list)
 
-                logits = tt2torch_tensor(tt_logits)
+                tt_temperature = fallback_ops.full(tt_logits.shape(), temperature)
 
+                tt_temperature = tt_lib.tensor.recip(tt_temperature)
+                tt_logits = tt_lib.tensor.mul(tt_logits, tt_temperature)
+
+                logits = tt2torch_tensor(tt_logits)
             # optionally crop the logits to only the top k options
                 if top_k is not None:
                     v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
@@ -153,6 +161,7 @@ class TtGPT(nn.Module):
 
                 # sample from the distribution
                 idx_next = torch.multinomial(probs, num_samples=1)
+
             # append sampled index to the running sequence and continue
                 idx = torch.cat((idx, idx_next), dim=1)
 
