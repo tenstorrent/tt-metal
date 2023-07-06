@@ -42,9 +42,9 @@ class BankManager {
 
     std::optional<u64> lowest_occupied_address(u32 bank_id) const;
 
-    Statistics get_statistics(u32 bank_id) const;
+    Statistics get_statistics() const;
 
-    void dump_blocks(u32 bank_id, std::ofstream &out) const;
+    void dump_blocks(std::ofstream &out) const;
 
    private:
     constexpr static u32 min_allocation_size_bytes_ = 32;
@@ -82,9 +82,9 @@ std::vector<u32> bank_ids_from_dram_channel(const Allocator &allocator, u32 dram
 
 std::vector<u32> bank_ids_from_logical_core(const Allocator &allocator, const CoreCoord &logical_core);
 
-Statistics get_statistics(const Allocator &allocator, const BufferType &buffer_type, u32 bank_id);
+Statistics get_statistics(const Allocator &allocator, const BufferType &buffer_type);
 
-void dump_memory_blocks(const Allocator &allocator, const BufferType &buffer_type, u32 bank_id, std::ofstream &out);
+void dump_memory_blocks(const Allocator &allocator, const BufferType &buffer_type, std::ofstream &out);
 
 std::optional<u64> lowest_occupied_l1_address(const Allocator &allocator, u32 bank_id);
 

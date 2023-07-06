@@ -288,14 +288,14 @@ std::vector<uint32_t> Device::bank_ids_from_logical_core(const CoreCoord &logica
     return allocator::bank_ids_from_logical_core(*this->allocator_, logical_core);
 }
 
-allocator::Statistics Device::get_memory_allocation_statistics(const BufferType &buffer_type, u32 bank_id) const {
+allocator::Statistics Device::get_memory_allocation_statistics(const BufferType &buffer_type) const {
     this->check_allocator_is_initialized();
-    return allocator::get_statistics(*this->allocator_, buffer_type, bank_id);
+    return allocator::get_statistics(*this->allocator_, buffer_type);
 }
 
-void Device::dump_memory_blocks(const BufferType &buffer_type, u32 bank_id, std::ofstream &out) const {
+void Device::dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out) const {
     this->check_allocator_is_initialized();
-    return allocator::dump_memory_blocks(*this->allocator_, buffer_type, bank_id, out);
+    return allocator::dump_memory_blocks(*this->allocator_, buffer_type, out);
 }
 
 }  // namespace tt_metal

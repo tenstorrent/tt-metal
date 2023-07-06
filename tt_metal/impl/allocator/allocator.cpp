@@ -92,13 +92,11 @@ std::optional<u64> BankManager::lowest_occupied_address(u32 bank_id) const {
     return adjusted_abs_addr;
 }
 
-Statistics BankManager::get_statistics(u32 bank_id) const {
-    this->validate_bank_id(bank_id);
+Statistics BankManager::get_statistics() const {
     return this->allocator_->get_statistics();
 }
 
-void BankManager::dump_blocks(u32 bank_id, std::ofstream &out) const {
-    this->validate_bank_id(bank_id);
+void BankManager::dump_blocks(std::ofstream &out) const {
     this->allocator_->dump_blocks(out);
 }
 
@@ -172,11 +170,11 @@ std::vector<u32> bank_ids_from_logical_core(const Allocator &allocator, const Co
     return allocator.logical_core_to_bank_ids.at(logical_core);
 }
 
-Statistics get_statistics(const Allocator &allocator, const BufferType &buffer_type, u32 bank_id) {
+Statistics get_statistics(const Allocator &allocator, const BufferType &buffer_type) {
     Statistics stats;
     switch (buffer_type) {
-        case BufferType::DRAM: return allocator.dram_manager.get_statistics(bank_id);
-        case BufferType::L1: return allocator.l1_manager.get_statistics(bank_id);
+        case BufferType::DRAM: return allocator.dram_manager.get_statistics();
+        case BufferType::L1: return allocator.l1_manager.get_statistics();
         default: {
             log_assert(false, "Unsupported buffer type!");
         }
@@ -184,11 +182,11 @@ Statistics get_statistics(const Allocator &allocator, const BufferType &buffer_t
     return stats;
 }
 
-void dump_memory_blocks(const Allocator &allocator, const BufferType &buffer_type, u32 bank_id, std::ofstream &out) {
+void dump_memory_blocks(const Allocator &allocator, const BufferType &buffer_type, std::ofstream &out) {
     switch (buffer_type) {
-        case BufferType::DRAM: allocator.dram_manager.dump_blocks(bank_id, out);
+        case BufferType::DRAM: allocator.dram_manager.dump_blocks(out);
         break;
-        case BufferType::L1: allocator.l1_manager.dump_blocks(bank_id, out);
+        case BufferType::L1: allocator.l1_manager.dump_blocks(out);
         break;
         default: {
             log_assert(false, "Unsupported buffer type!");
