@@ -1,3 +1,17 @@
+<!-- toc -->
+
+   * [Installing](#installing)
+      * [From source on a Tenstorrent machine](#from-source-on-a-tenstorrent-machine)
+      * [From a release wheel (BUDA-Eager only)](#from-a-release-wheel-buda-eager-only)
+   * [Getting started](#getting-started)
+      * [Environment setup](#environment-setup)
+      * [Running example programs](#running-example-programs)
+   * [Documentation](#documentation)
+   * [Contributing](#contributing)
+   * [Communication](#communication)
+
+<!-- tocstop -->
+
 ## Installing
 
 ### From source on a Tenstorrent machine

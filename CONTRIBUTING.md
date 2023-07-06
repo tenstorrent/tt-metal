@@ -1,12 +1,19 @@
-# Table of Contents
-
 <!-- toc -->
 
-- [Contributing to tt-metal](#contributing-to-tt-metal)
-- [Machine setup](#machine-setup)
-- [Developing tt-metal](#developing-tt-metal)
-- [Debugging Tips](#debugging-tips)
-- [Contribution standards](#contribution-standards)
+   * [Contributing to tt-metal](#contributing-to-tt-metal)
+   * [Machine setup](#machine-setup)
+      * [Hugepages setup](#hugepages-setup)
+   * [Developing tt-metal](#developing-tt-metal)
+      * [Building and viewing the documentation locally](#building-and-viewing-the-documentation-locally)
+   * [Debugging tips](#debugging-tips)
+   * [Contribution standards](#contribution-standards)
+      * [CI/CD Guidelines](#cicd-guidelines)
+      * [Documentation](#documentation)
+      * [Git rules and guidelines](#git-rules-and-guidelines)
+      * [Code reviews](#code-reviews)
+      * [New feature and design specifications](#new-feature-and-design-specifications)
+      * [Release flows](#release-flows)
+      * [Logging, assertions, and exceptions](#logging-assertions-and-exceptions)
 
 <!-- tocstop -->
 
