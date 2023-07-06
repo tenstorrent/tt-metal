@@ -380,7 +380,7 @@ Program tilize_with_zero_padding_single_core(const Tensor &a, Tensor &output) {
         (uint32_t) dram_dst_noc_xy.y,
         (uint32_t) (output.shape()[0] * output.shape()[1] * output.shape()[2] * output.shape()[3] / TILE_HW)}
     );
-    std::vector<uint32_t> zero_buffer_stick(row_size_datum, 0);
+    std::vector<uint32_t> zero_buffer_stick(row_size_bytes / sizeof(uint32_t), 0);
     // TODO(arakhmati): add program cache support?
     tt_metal::WriteToDeviceL1(device, core.start, zero_buffer_l1_addr, zero_buffer_stick);
 
