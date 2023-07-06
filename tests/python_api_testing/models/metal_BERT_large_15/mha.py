@@ -89,41 +89,14 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, mem_config):
 
         return qkv
 
-    def op2_split(qkv):
-        # profiler.start("___op2_split")
-        Q, K, V = ttl.tensor.bert_large_split_fused_qkv(qkv, mem_config)
-        # profiler.end("___op2_split")
+    def op2to6_create_qkv_heads(qkv):
+        # profiler.start("___op2to6_create_qkv_heads")
+        q_heads, kt_heads, v_heads = ttl.tensor.bert_large_create_qkv_heads(
+            qkv, mem_config
+        )
+        # profiler.end("___op2to6_create_qkv_heads")
 
-        return Q, K, V
-
-    def op3_create_heads(Q):
-        # profiler.start("___op3_make_attention_heads")
-        q_heads = ttl.tensor.bert_large_create_q_head(Q, mem_config)
-        # profiler.end("___op3_make_attention_heads")
-
-        return q_heads
-
-    def op4_create_heads(K):
-        # profiler.start("___op4_make_attention_heads")
-        # NOTE: This merges in transpose_hw (op6)
-        k_heads = ttl.tensor.bert_large_create_k_head(K, mem_config)
-        # profiler.end("___op4_make_attention_heads")
-
-        return k_heads
-
-    def op5_create_heads(V):
-        # profiler.start("___op5_make_attention_heads")
-        v_heads = ttl.tensor.bert_large_create_v_head(V, mem_config)
-        # profiler.end("___op5_make_attention_heads")
-
-        return v_heads
-
-    def op6_transpose_hw(K):
-        # profiler.start("___op6_transpose_hw")
-        kt = ttl.tensor.transpose(K)
-        # profiler.end("___op6_transpose_hw")
-
-        return kt
+        return q_heads, kt_heads, v_heads
 
     def op7_bmm(Q_heads, K_T_heads):
         # profiler.start("___op7_bmm")
@@ -172,20 +145,10 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, mem_config):
         # profiler.start("__mha")
         qkv = op1_qkv_fused(activation, qkv_weight, qkv_bias)
         # activation.deallocate()
-        Q, K, V = op2_split(qkv)
+
+        Q_heads, K_T_heads, V_heads = op2to6_create_qkv_heads(qkv)
         qkv.deallocate()
 
-        Q_heads = op3_create_heads(Q)
-        Q.deallocate()
-        K_T_heads = op4_create_heads(K)
-        K.deallocate()
-        V_heads = op5_create_heads(V)
-        V.deallocate()
-
-        """
-        # No longer needed as op4 already returns K_head transposed
-        K_T_heads = op6_transpose_hw(K_heads)
-        """
         qkt = op7_bmm(Q_heads, K_T_heads)
         Q_heads.deallocate()
         K_T_heads.deallocate()
@@ -234,7 +197,16 @@ class TtMultiHeadAttentionModel(torch.nn.Module):
         hidden_dim = qw.shape[-1]
 
         self.mha = mha(
-            qw, qb, kw, kb, vw, vb, hidden_dim, config.num_attention_heads, device, mem_config
+            qw,
+            qb,
+            kw,
+            kb,
+            vw,
+            vb,
+            hidden_dim,
+            config.num_attention_heads,
+            device,
+            mem_config,
         )
 
     def forward(self, activation, attention_mask=None):
@@ -260,9 +232,16 @@ def run_mha_inference(
 ):
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     # Initialize the device
-    ttl.device.InitializeDevice(device, ttl.device.MemoryAllocator.BASIC if dram else ttl.device.MemoryAllocator.L1_BANKING)
+    ttl.device.InitializeDevice(
+        device,
+        ttl.device.MemoryAllocator.BASIC
+        if dram
+        else ttl.device.MemoryAllocator.L1_BANKING,
+    )
     host = ttl.device.GetHost()
-    mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM if dram else ttl.tensor.BufferType.L1)
+    mem_config = ttl.tensor.MemoryConfig(
+        True, ttl.tensor.BufferType.DRAM if dram else ttl.tensor.BufferType.L1
+    )
 
     if on_weka:
         model_name = str(
@@ -294,7 +273,9 @@ def run_mha_inference(
     ) - 1
     bert_attention_mask = torch.zeros(batch, 1, 1, seq_len)
     extended_bert_attention_mask = torch.zeros(batch, 1, 32, seq_len)
-    pytorch_out = pytorch_mha_model(mha_input.squeeze(1), bert_attention_mask).unsqueeze(1)
+    pytorch_out = pytorch_mha_model(
+        mha_input.squeeze(1), bert_attention_mask
+    ).unsqueeze(1)
 
     pad_mha_input = pad_activation(mha_input)
     tt_mha_input = ttl.tensor.Tensor(
@@ -332,7 +313,7 @@ def run_mha_inference(
     if not passing:
         logger.error(f"Output PCC < {pcc}")
 
-    assert(passing)
+    assert passing
     # print_diff_argmax(pytorch_out, tt_out1)
     # assert np.allclose(pytorch_out.detach().numpy(), tt_out1, 1e-5, 0.17)
 
