@@ -149,23 +149,6 @@ std::vector<Tensor> run(
     }
 }
 
-std::vector<Tensor> generic_create_output_tensors(
-    const Operation& op,
-    const std::vector<Tensor> &input_tensors,
-    Layout output_layout,
-    const MemoryConfig &output_mem_config
-) {
-    const auto& input_tensor = input_tensors.at(0);
-    const auto& output_shapes = op.compute_output_shapes(input_tensors);
-
-    std::vector<Tensor> output_tensors;
-    output_tensors.reserve(output_shapes.size());
-    for (const auto& output_shape : output_shapes) {
-        output_tensors.emplace_back(create_device_tensor(output_shape, input_tensor.dtype(), output_layout, input_tensor.device(), output_mem_config));
-    }
-    return output_tensors;
-}
-
 Tensor run_without_autoformat(const Operation& op, const Tensor &input_tensor) {
     Device* device;
     if (input_tensor.storage_type() == StorageType::HOST) {

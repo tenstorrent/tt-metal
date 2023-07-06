@@ -181,7 +181,7 @@ class Operation {
     template< typename T >
     struct Implementation : Interface {
 
-        Implementation(const T& t) : object(t) {}
+        explicit Implementation(const T& t) : object(t) {}
 
         void validate(const std::vector<Tensor> &input_tensors) const override {
             if constexpr (detail::implements_validate<T>()) {
@@ -293,7 +293,7 @@ class Operation {
 
   public:
     template <typename T>
-    Operation(T&& operation): implementation_(std::make_unique<Implementation<T>>(std::forward<T>(operation))) {}
+    explicit Operation(T&& operation): implementation_(std::make_unique<Implementation<T>>(std::forward<T>(operation))) {}
 
     void validate(
         const std::vector<Tensor> &input_tensors,
