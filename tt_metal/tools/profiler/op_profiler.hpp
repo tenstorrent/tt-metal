@@ -5,6 +5,7 @@
 
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "tensor/tensor.hpp"
+#include "tools/profiler/profiler.hpp"
 
 //TODO(MO): hack until ticket #1184 is in
 extern bool enable_fw_profile_hack;

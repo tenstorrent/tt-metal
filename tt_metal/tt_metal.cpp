@@ -7,7 +7,9 @@
 #include "tt_metal/host_api.hpp"
 #include "llrt/tt_debug_print_server.hpp"
 
+#include "tools/profiler/profiler.hpp"
 #include "tools/cpuprof/cpuprof.h"
+
 #include "common/executor.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 
