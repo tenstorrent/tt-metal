@@ -23,6 +23,7 @@ from loguru import logger
 import python_api_testing.models.nanogpt.tt.nanogpt_block as nanogpt_block
 import python_api_testing.models.nanogpt.tt.nanogpt_attention as nanogpt_attention
 import python_api_testing.models.nanogpt.tt.nanogpt_model as nanogpt_model
+from python_api_testing.models.nanogpt.tt.nanogpt_config import GPTConfig
 
 from utility_functions_new import (
     torch2tt_tensor,
@@ -63,7 +64,7 @@ def run_nanogpt_model_real_test(device, pcc, prompt):
     config_args['block_size'] = 1024 # always 1024 for GPT model checkpoints
     config_args['bias'] = True # always True for GPT model checkpoints
 
-    config = nanogpt_attention.GPTConfig(**config_args)
+    config = GPTConfig(**config_args)
 
     tt_test_in = torch2tt_tensor(x, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
 
