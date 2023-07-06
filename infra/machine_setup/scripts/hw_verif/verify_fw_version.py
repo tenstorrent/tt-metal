@@ -54,7 +54,7 @@ if __name__ == "__main__":
 
     expected_fw_values_by_arch = {
         "grayskull": (
-            ("2022-08-31", "2022-09-06"),
+            ("2023-06-28",),
             ("1.0.0",),
         ),
         "wormhole_b0": (
