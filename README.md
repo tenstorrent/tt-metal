@@ -66,6 +66,8 @@ If you're using a customer-facing cloud machine, navigate to
 We appreciate any contributions. Please review the [contributor's
 guide](CONTRIBUTING.md) for more information.
 
+## Communication
+
 Announcements from the Tenstorrent team regarding this project will be in the
 [discussions
 page](https://github.com/orgs/tenstorrent-metal/discussions/categories/announcements).

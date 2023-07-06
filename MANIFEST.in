@@ -2,7 +2,7 @@
 include Makefile
 include module.mk
 
-# Sources and build files for BudaM
+# Sources and build files for BUDA-M
 include tt_metal/host_api.hpp
 include tt_metal/tt_metal.cpp
 recursive-include tt_metal/build_kernels_for_riscv *.h *.cpp *.cc module.mk *.py
@@ -27,7 +27,7 @@ recursive-include tt_metal/src/firmware module.mk riscv/*
 graft tt_metal/third_party
 recursive-exclude tt_metal/third_party **/doxygen/* **/docs/*
 
-# BudaEager sources
+# BUDA-Eager sources
 recursive-include libs/ *.py *.hpp *.cpp module.mk
 
 # Things we never wanna see

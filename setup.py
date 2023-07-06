@@ -12,7 +12,7 @@ from setuptools import setup, Extension, find_namespace_packages
 from setuptools.command.build_ext import build_ext
 
 
-class BudaEagerBuildConstants:
+class BUDAEagerBuildConstants:
     BUDA_EAGER_SO_SRC_LOCATION = "build/lib/libtt_lib_csrc.so"
 
 
@@ -96,16 +96,16 @@ def get_version(buda_eager_build_config):
 
 
 @dataclass(frozen=True)
-class BudaEagerBuildConfig:
+class BUDAEagerBuildConfig:
     is_dev_build = get_is_dev_build()
     is_srcdir_build = get_is_srcdir_build()
     arch_name = get_arch_name()
 
 
-buda_eager_build_config = BudaEagerBuildConfig()
+buda_eager_build_config = BUDAEagerBuildConfig()
 
 
-class BudaEagerBuild(build_ext):
+class BUDAEagerBuild(build_ext):
     @staticmethod
     def get_buda_eager_build_env():
         return {
@@ -126,7 +126,7 @@ class BudaEagerBuild(build_ext):
             ), f"Editable install detected in a non-srcdir environment, aborting"
             return
 
-        build_env = BudaEagerBuild.get_buda_eager_build_env()
+        build_env = BUDAEagerBuild.get_buda_eager_build_env()
         subprocess.check_call(["make", "build"], env=build_env)
 
         fullname = self.get_ext_fullname(ext.name)
@@ -135,14 +135,14 @@ class BudaEagerBuild(build_ext):
         build_lib = self.build_lib
         full_lib_path = build_lib + "/" + filename
 
-        src = BudaEagerBuildConstants.BUDA_EAGER_SO_SRC_LOCATION
+        src = BUDAEagerBuildConstants.BUDA_EAGER_SO_SRC_LOCATION
         self.copy_file(src, full_lib_path)
 
     def is_editable_install_(self):
         return not os.path.exists(self.build_lib)
 
 
-# Empty sources in order to force a BudaEagerBuild execution
+# Empty sources in order to force a BUDAEagerBuild execution
 buda_eager_lib_C = Extension("tt_lib._C", sources=[])
 
 ext_modules = [buda_eager_lib_C]
@@ -158,6 +158,6 @@ setup(
     package_dir={"": "libs"},
     long_description_content_type="text/markdown",
     ext_modules=ext_modules,
-    cmdclass=dict(build_ext=BudaEagerBuild),
+    cmdclass=dict(build_ext=BUDAEagerBuild),
     zip_safe=False,
 )

@@ -12,14 +12,14 @@ Welcome to TT-Metal documentation!
    get_started/installation
 
 .. toctree::
-   :caption: TT-Metal
+   :caption: BUDA-M
 
    apis/index
    examples/index
    tools/index
 
 .. toctree::
-   :caption: Libraries
+   :caption: BUDA-Eager
 
    libraries/index
 
@@ -29,7 +29,7 @@ Welcome to TT-Metal documentation!
    tt_metal_models/get_started
 
 .. toctree::
-   :caption: Developer Onboarding (Internal Devs)
+   :caption: Developer Notes
 
    dev_onboarding/get_started
    dev_onboarding/sfpu_operators
