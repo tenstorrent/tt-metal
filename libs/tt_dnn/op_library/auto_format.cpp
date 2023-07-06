@@ -18,7 +18,7 @@ Tensor AutoFormat::format_input_tensor(const Tensor &a, Device * device, const s
     bool pad_input = a.shape() != padded_shape;
     bool convert_layout = a.layout() != target_layout;
     if (!convert_layout && !pad_input) {
-        if (a.on_host()) {
+        if (a.storage_type() == StorageType::HOST) {
             return a.to(device);
         } else {
             // Should never hit this to avoid unnecessary copies
@@ -27,7 +27,7 @@ Tensor AutoFormat::format_input_tensor(const Tensor &a, Device * device, const s
         }
     }
     // ON DEVICE PADDING/CONVERSIONS
-    if (!a.on_host()) {
+    if (a.storage_type() == StorageType::DEVICE) {
         if (convert_layout && !pad_input) {
             if (target_layout == Layout::TILE) {
                 return tilize(a);
@@ -91,7 +91,7 @@ Tensor AutoFormat::format_output_tensor(const Tensor &output, const std::array<u
     }
 
     // ON DEVICE UNPADDING/CONVERSIONS
-    if (!formatted_output.on_host()) {
+    if (formatted_output.storage_type() == StorageType::DEVICE) {
         if (!unpad_output && convert_layout) {
             // If target layout is tile but shape does not support tile, we don't do any conversions
             if (target_layout == Layout::TILE) {
@@ -128,7 +128,7 @@ Tensor AutoFormat::format_output_tensor(const Tensor &output, const std::array<u
     auto host = GetHost();
     // Unpad formatted_output if necessary
     if (unpad_output) {
-        if (!formatted_output.on_host()) {
+        if (formatted_output.storage_type() == StorageType::DEVICE) {
             formatted_output = formatted_output.to(host);
         }
         // Requires RM for unpad
@@ -140,7 +140,7 @@ Tensor AutoFormat::format_output_tensor(const Tensor &output, const std::array<u
 
     // Converts layout if necessary, result will always be on host
     if (target_layout != formatted_output.layout()) {
-        if (!formatted_output.on_host()) {
+        if (formatted_output.storage_type() == StorageType::DEVICE) {
             formatted_output = formatted_output.to(host);
         }
         // Default to RM layout if we can't match the input layout
@@ -158,7 +158,7 @@ Tensor AutoFormat::format_output_tensor(const Tensor &output, const std::array<u
     }
 
     // Send formatted_output to device if possible
-    if (formatted_output.on_host()) {
+    if (formatted_output.storage_type() == StorageType::HOST) {
         // Check that shape is supported on device
         if ((formatted_output.layout() == Layout::ROW_MAJOR && formatted_output.shape()[3] % 2 == 0) ||
             (formatted_output.layout() == Layout::CHANNELS_LAST && formatted_output.shape()[1] % 2 == 0) ||

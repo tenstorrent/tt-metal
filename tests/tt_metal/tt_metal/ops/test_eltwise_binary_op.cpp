@@ -25,7 +25,7 @@ Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b)
         auto value = BinaryFunction{}(input_a_view[index].to_float(), input_b_view[index].to_float());
         output_view[index] = bfloat16(value);
     }
-    return Tensor(output_buffer, input_tensor_a.shape(), input_tensor_a.dtype(), input_tensor_a.layout());
+    return Tensor(HostStorage{output_buffer}, input_tensor_a.shape(), input_tensor_a.dtype(), input_tensor_a.layout());
 }
 
 template<auto Operation>

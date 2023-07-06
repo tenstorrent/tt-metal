@@ -262,7 +262,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_generalized_(const Tenso
     const auto& ashape = a.shape(), bshape = b.shape();
 
     // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(not a.on_host() and not b.on_host(), "Operands to matmul need to be on device!");
+    TT_ASSERT(a.storage_type() == StorageType::DEVICE and b.storage_type() == StorageType::DEVICE, "Operands to matmul need to be on device!");
     TT_ASSERT(a.device() == b.device(), "Operands to matmul need to be on the same device!");
     TT_ASSERT(a.buffer() != nullptr and b.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
 

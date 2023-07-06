@@ -29,7 +29,7 @@ class AutoFormat {
         }
 
         static bool check_input_tensor_format(const Tensor &a, const std::array<uint32_t, 4>& shape, Layout target_layout = Layout::TILE) {
-            if (a.layout() == target_layout && a.shape() == shape && !a.on_host()) {
+            if (a.layout() == target_layout && a.shape() == shape && a.storage_type() == StorageType::DEVICE) {
                 return true;
             }
             return false;

@@ -26,7 +26,7 @@ Tensor mk_scalar(T value) {
     auto buffer = host_buffer::create<bfloat16>(volume(shape));
     auto buffer_view = host_buffer::view_as<bfloat16>(buffer);
     buffer_view[0] = value;
-    Tensor scalar = Tensor(buffer, shape, DataType::BFLOAT16, Layout::ROW_MAJOR);
+    Tensor scalar = Tensor(HostStorage{buffer}, shape, DataType::BFLOAT16, Layout::ROW_MAJOR);
     return scalar;
 }
 

@@ -26,7 +26,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &a, Tensor& out
     tt_metal::Program program = tt_metal::Program();
 
     // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(not a.on_host(), "Operand to reduce op needs to be on device!");
+    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to reduce op needs to be on device!");
     TT_ASSERT(a.device() != nullptr, "Operand to reduce op needs to be on device!");
 
     uint32_t single_tile_size = a.element_size() * TILE_HW;

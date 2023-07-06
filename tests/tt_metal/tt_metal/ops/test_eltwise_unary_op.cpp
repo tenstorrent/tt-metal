@@ -40,7 +40,7 @@ Tensor host_function(const Tensor& input_tensor) {
         output_view[index] = bfloat16(value);
     }
 
-    return Tensor(output_buffer, input_tensor.shape(), input_tensor.dtype(), input_tensor.layout());
+    return Tensor(HostStorage{output_buffer}, input_tensor.shape(), input_tensor.dtype(), input_tensor.layout());
 }
 
 template <auto Operation>
@@ -69,7 +69,7 @@ void test_operation_infrastructure() {
 
     auto program_hash = op.compute_program_hash({input_tensor});
     TT_ASSERT(
-        program_hash == "tt::tt_metal::EltwiseUnary{.op_type=SQRT,.param=std::nullopt}_[1, 1, 32, 32]_BFLOAT16_TILE_true_DRAM",
+        program_hash == "tt::tt_metal::EltwiseUnary{.op_type=SQRT,.param=std::nullopt}_[1, 1, 32, 32]_BFLOAT16_TILE_nullopt",
         fmt::format("Actual value is {}", program_hash)
     );
 

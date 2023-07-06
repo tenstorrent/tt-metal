@@ -40,7 +40,7 @@ static Tensor full(const Shape& shape, T value) {
     auto host_buffer  = host_buffer::create<T>(tt_metal::volume(shape));
     auto host_view = host_buffer::view_as<T>(host_buffer);
     std::fill(std::begin(host_view), std::end(host_view), value);
-    return Tensor(host_buffer, shape, data_type, Layout::ROW_MAJOR);
+    return Tensor(HostStorage{host_buffer}, shape, data_type, Layout::ROW_MAJOR);
 }
 
 } // namespace detail
@@ -98,7 +98,7 @@ static Tensor arange(int64_t start, int64_t stop, int64_t step) {
          host_view[index++] = static_cast<T>(value);
         }
     }
-    return Tensor(host_buffer, {1, 1, 1, static_cast<uint32_t>(size)}, data_type, Layout::ROW_MAJOR);
+    return Tensor(HostStorage{host_buffer}, {1, 1, 1, static_cast<uint32_t>(size)}, data_type, Layout::ROW_MAJOR);
 }
 
 namespace random {
@@ -133,7 +133,7 @@ static Tensor uniform(T low, T high, const Shape& shape) {
         }
     }
 
-    return Tensor(output_buffer, shape, data_type, Layout::ROW_MAJOR);
+    return Tensor(HostStorage{output_buffer}, shape, data_type, Layout::ROW_MAJOR);
 }
 
 static Tensor random(const Shape& shape, const DataType data_type = DataType::BFLOAT16) {

@@ -71,7 +71,7 @@ Tensor permute(const Tensor &a, uint32_t N, uint32_t C, uint32_t H, uint32_t W) 
     Device * device;
 
     // Get the device
-    if (a.on_host()) {
+    if (a.storage_type() == StorageType::HOST) {
         device = AutoFormat::GetDefaultDevice();
         TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
     } else {

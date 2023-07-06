@@ -14,7 +14,7 @@ namespace tt_metal {
 
 Program untilize_single_core(const Tensor &a, Tensor& output) {
 
-    TT_ASSERT(not a.on_host(), "Operand to untilize needs to be on device!");
+    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to untilize needs to be on device!");
     TT_ASSERT(a.buffer() != nullptr, "Operand to untilize needs to be allocated in a buffer on device!");
 
     tt_metal::Program program = tt_metal::Program();
@@ -187,7 +187,7 @@ Tensor untilize(const Tensor &input_tensor_a) {
 
 Program untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
 
-    TT_ASSERT(not a.on_host(), "Operand to untilize needs to be on device!");
+    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to untilize needs to be on device!");
     TT_ASSERT(a.buffer() != nullptr, "Operand to untilize needs to be allocated in a buffer on device!");
 
     const std::array<uint32_t, 4> output_shape = output.shape();

@@ -13,13 +13,18 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor::Tensor(const HostBuffer& host_buffer, const Shape& shape, DataType dtype, Layout layout)
-    : host_buffer_(host_buffer), shape_(shape), dtype_(dtype), layout_(layout) {}
+namespace detail {
+template<class>
+inline constexpr bool always_false_v = false;
+}
 
-Tensor::Tensor(const DeviceBuffer& device_buffer, const Shape& shape, DataType dtype, Layout layout, Device *device, const MemoryConfig &memory_config)
-    : device_buffer_(device_buffer), shape_(shape), dtype_(dtype), layout_(layout), device_(device), memory_config_(memory_config) {
-    TT_ASSERT(device != nullptr);
-    tensor_impl::validate_on_device_dtype_and_layout(device, dtype, layout);
+Tensor::Tensor(const HostStorage& storage, const Shape& shape, DataType dtype, Layout layout)
+    : storage_(storage), shape_(shape), dtype_(dtype), layout_(layout) {}
+
+Tensor::Tensor(const DeviceStorage& storage, const Shape& shape, DataType dtype, Layout layout)
+    : storage_(storage), shape_(shape), dtype_(dtype), layout_(layout) {
+    TT_ASSERT(storage.device != nullptr);
+    tensor_impl::validate_on_device_dtype_and_layout(storage.device, dtype, layout);
 }
 
 Tensor::~Tensor() {
@@ -27,32 +32,45 @@ Tensor::~Tensor() {
 }
 
 void Tensor::deallocate() {
-    if (not on_host() and this->is_allocated_on_device() and this->device_buffer_.use_count() == 1) {
-        DeallocateBuffer(*this->device_buffer_);
-    }
-
-    this->host_buffer_.reset();
-    this->device_buffer_.reset();
+    std::visit(
+        [](auto&& storage)
+        {
+            using T = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<T, HostStorage>) {
+                storage.buffer.reset();
+            }
+            else if constexpr (std::is_same_v<T, DeviceStorage>) {
+                if (storage.buffer.use_count() == 1) {
+                     DeallocateBuffer(*storage.buffer);
+                }
+                storage.buffer.reset();
+            }
+            else {
+                static_assert(detail::always_false_v<T>, "non-exhaustive visitor!");
+            }
+        },
+        this->storage_
+    );
 }
 
 Tensor Tensor::to(Device *target_device, const MemoryConfig &mem_config) const {
-    if (on_host()) {
+    if (storage_type() == StorageType::HOST) {
         tensor_impl::validate_on_device_dtype_and_layout(target_device, this->dtype(), this->layout());
         return tensor_impl::to_device_wrapper(*this, target_device, mem_config);
     }
-    TT_ASSERT(this->device_ == target_device && "Currently do not support moving between devices");
+    TT_ASSERT(this->device_storage().value().device == target_device && "Currently do not support moving between devices");
     return Tensor(*this);
 }
 
 Tensor Tensor::to(Host *host) const {
-    if (on_host()) {
+    if (storage_type() == StorageType::HOST) {
         return *this;
     }
     return tensor_impl::to_host_wrapper(*this);
 }
 
 Tensor Tensor::to(Layout target_layout) const {
-    TT_ASSERT(on_host() && "Bring tensor to host before converting to target layout");
+    TT_ASSERT(this->storage_type() == StorageType::HOST && "Bring tensor to host before converting to target layout");
     return tensor_impl::to_layout_wrapper(*this, target_layout);
 }
 
@@ -61,13 +79,13 @@ void Tensor::print(Layout print_layout, bool pretty_print) const {
 }
 
 Tensor Tensor::pad(const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) const {
-    TT_ASSERT(on_host() && "Tensor must be on host for padding");
+    TT_ASSERT(this->storage_type() == StorageType::HOST && "Tensor must be on host for padding");
     TT_ASSERT(this->layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for padding");
     return tensor_impl::pad_wrapper(*this, output_tensor_shape, input_tensor_start, pad_value);
 }
 
 Tensor Tensor::unpad(const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) const {
-    TT_ASSERT(on_host() && "Tensor must be on host for unpadding");
+    TT_ASSERT(this->storage_type() == StorageType::HOST && "Tensor must be on host for unpadding");
     TT_ASSERT(this->layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for unpadding");
     return tensor_impl::unpad_wrapper(*this, output_tensor_start, output_tensor_end);
 }
@@ -114,6 +132,50 @@ Tensor Tensor::reshape(const Shape& new_shape) const {
     return new_tensor;
 }
 
+bool Tensor::is_allocated() const {
+    return std::visit(
+        [] (auto&& storage) -> bool
+        {
+            return bool(storage.buffer);
+        },
+        this->storage_
+    );
+}
+
+
+StorageType Tensor::storage_type() const {
+    return std::visit(
+        [] (auto&& storage) -> StorageType
+        {
+            using T = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<T, HostStorage>) {
+                return StorageType::HOST;
+            }
+            else if constexpr (std::is_same_v<T, DeviceStorage>) {
+                return StorageType::DEVICE;
+            }
+            else {
+                static_assert(detail::always_false_v<T>, "non-exhaustive visitor!");
+            }
+        },
+        this->storage_
+    );
+}
+
+const std::optional<HostStorage> Tensor::host_storage() const {
+    if (std::holds_alternative<HostStorage>(this->storage_)) {
+        return std::get<HostStorage>(this->storage_);
+    }
+    return std::nullopt;
+}
+
+const std::optional<DeviceStorage> Tensor::device_storage() const {
+    if (std::holds_alternative<DeviceStorage>(this->storage_)) {
+        return std::get<DeviceStorage>(this->storage_);
+    }
+    return std::nullopt;
+}
+
 namespace detail {
 const std::array<uint32_t, 4> compute_strides(const Shape& shape) {
     return {shape[1] * shape[2] * shape[3], shape[2] * shape[3], shape[3], 1};
@@ -131,7 +193,7 @@ uint32_t Tensor::volume() const {
 Tensor create_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config) {
     uint32_t packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, volume(shape));
     auto device_buffer = tensor_impl::allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config);
-    return Tensor(device_buffer, shape, data_type, layout, device, memory_config);
+    return Tensor(DeviceStorage{device_buffer, device, memory_config}, shape, data_type, layout);
 }
 
 }  // namespace tt_metal

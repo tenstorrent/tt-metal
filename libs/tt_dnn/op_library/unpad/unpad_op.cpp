@@ -10,7 +10,7 @@ namespace tt_metal {
 
 Program unpad_rm(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
 
-    TT_ASSERT(not a.on_host(), "Operand to unpad needs to be on device!");
+    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to unpad needs to be on device!");
     TT_ASSERT(a.buffer() != nullptr, "Operand to unpad needs to be allocated in a buffer on device!");
 
     const std::array<uint32_t, 4> output_shape = output.shape();
@@ -122,7 +122,7 @@ Program unpad_rm(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> 
 
 Program unpad_tile(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
 
-    TT_ASSERT(not a.on_host(), "Operand to unpad needs to be on device!");
+    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to unpad needs to be on device!");
     TT_ASSERT(a.buffer() != nullptr, "Operand to unpad needs to be allocated in a buffer on device!");
 
     const std::array<uint32_t, 4> output_shape = output.shape();

@@ -230,7 +230,7 @@ Tensor large_bmm_single_core_single_block_(const Tensor& a, const Tensor &b, boo
     TT_ASSERT(Wb % TILE_WIDTH == 0, "Width of tensor b needs to be divisible by 32");
 
     // Device compatibility checks
-    TT_ASSERT(not a.on_host() and not b.on_host(), "Operands to large matmul need to be on device!");
+    TT_ASSERT(a.storage_type() == StorageType::DEVICE and b.storage_type() == StorageType::DEVICE, "Operands to large matmul need to be on device!");
     TT_ASSERT(a.device() == b.device(), "Operands to large matmul need to be on the same device!");
     TT_ASSERT(a.buffer() != nullptr and b.buffer() != nullptr, "Operands to large matmul need to be allocated in buffers on device!");
 

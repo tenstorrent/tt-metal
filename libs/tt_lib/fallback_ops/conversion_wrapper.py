@@ -47,7 +47,7 @@ def custom_tensor_print_handler(tensor_cls):
 
 def convert_tt_tensor_to_pt_tensor(tt_tensor, host, output_format):
     # Update output_format with format of first encountered arg
-    if output_format.get("device", None) is None and not tt_tensor.on_host():
+    if output_format.get("device", None) is None and tt_tensor.storage_type() == ttl_tensor.StorageType.DEVICE:
         output_format["device"] = tt_tensor.device()
 
     if output_format.get("dtype", None) is None:
@@ -56,7 +56,7 @@ def convert_tt_tensor_to_pt_tensor(tt_tensor, host, output_format):
     if ttl_profiler.get_profiler_flag():
         ttl_profiler.append_input_data(tt_tensor)
     # Convert to PT Tensor
-    if not tt_tensor.on_host():
+    if tt_tensor.storage_type() == ttl_tensor.StorageType.DEVICE:
         tt_tensor = tt_tensor.to(host)
 
     if tt_tensor.layout() != ttl_tensor.Layout.ROW_MAJOR:

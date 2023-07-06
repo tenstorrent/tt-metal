@@ -152,7 +152,7 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &in0,
     TT_ASSERT(in1_width % constants::TILE_WIDTH == 0, "Input tensor in1 width needs to be divisible by TILE_WIDTH");
 
     // device compatibility checks
-    TT_ASSERT(!in0.on_host() && !in1.on_host(), "Operands need to be on the device!");
+    TT_ASSERT(in0.storage_type() == StorageType::DEVICE and in1.storage_type() == StorageType::DEVICE, "Operands need to be on the device!");
     TT_ASSERT(in0.device() == in1.device(), "Operands need to be on the same device!");
     TT_ASSERT(in0.buffer() != nullptr && in1.buffer() != nullptr, "Operands need to have buffers allocated on the device!");
 

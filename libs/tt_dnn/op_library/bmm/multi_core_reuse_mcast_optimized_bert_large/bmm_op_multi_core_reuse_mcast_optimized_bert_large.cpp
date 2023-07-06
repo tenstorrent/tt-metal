@@ -889,7 +889,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_optimized_bert_lar
     const auto& ashape = a.shape(), bshape = b.shape();
 
     // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(not a.on_host() and not b.on_host(), "Operands to matmul need to be on device!");
+    TT_ASSERT(a.storage_type() == StorageType::DEVICE and b.storage_type() == StorageType::DEVICE, "Operands to matmul need to be on device!");
     TT_ASSERT(a.device() == b.device(), "Operands to matmul need to be on the same device!");
     TT_ASSERT(a.buffer() != nullptr and b.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
 
@@ -898,7 +898,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_optimized_bert_lar
     tt_metal::Buffer* bias_buffer = nullptr;
     if (bias.has_value()) {
         auto& c = bias.value();
-        TT_ASSERT(not c.on_host());
+        TT_ASSERT(c.storage_type() == StorageType::DEVICE);
         TT_ASSERT(a.device() == c.device(), "Operands to matmul need to be on the same device!");
         TT_ASSERT(c.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
 

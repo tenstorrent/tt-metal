@@ -31,9 +31,9 @@ enum class DataType {
     BFLOAT8_B = 3
 };
 
-struct MemoryConfig {
-    bool interleaved = true;    // Interleave the data across multiple DRAM banks
-    BufferType buffer_type = BufferType::DRAM; // Can be either DRAM or L1
+enum class StorageType {
+    HOST = 0,
+    DEVICE = 1,
 };
 
 class Tensor {
@@ -42,9 +42,8 @@ class Tensor {
         // ======================================================================================
         //                                  Hi Level APIs
         // ======================================================================================
-        Tensor(const HostBuffer& host_buffer, const Shape& shape, DataType dtype, Layout layout);
-
-        Tensor(const DeviceBuffer& device_buffer, const Shape& shape, DataType dtype, Layout layout, Device *device, const MemoryConfig &mem_config = {.interleaved=true});
+        Tensor(const HostStorage& storage, const Shape& shape, DataType dtype, Layout layout);
+        Tensor(const DeviceStorage& storage, const Shape& shape, DataType dtype, Layout layout);
 
         Tensor(const Tensor &other) = default;
         Tensor& operator=(const Tensor &other) = default;
@@ -94,37 +93,26 @@ class Tensor {
 
         Layout layout() const { return layout_; }
 
-        Device *device() const { return device_; }
+        bool is_allocated() const;
 
-        Buffer *buffer() const { return device_buffer_.get(); }
+        // TODO(arakhmati): clean up the methods below
+        StorageType storage_type() const;
 
-        const HostBuffer& host_buffer() const { return this->host_buffer_; }
+        const std::optional<HostStorage> host_storage() const;
+        const std::optional<DeviceStorage> device_storage() const;
 
-        bool is_allocated_on_host() const { return bool(this->host_buffer_); }
-        bool is_allocated_on_device() const { return bool(this->device_buffer_); }
-
-        bool on_host() const { return device_ == nullptr; }
-
-        const MemoryConfig& memory_config() const { return this->memory_config_; };
+        Buffer* buffer() const { return this->device_storage().value().buffer.get(); }
+        Device* device() const { return this->device_storage().value().device; }
+        const MemoryConfig memory_config() const { return this->device_storage().value().memory_config; };
 
         // Size in bytes of a single element held in tensor
         uint32_t element_size() const;
 
     private:
-
-        std::array<uint32_t, 4> shape_;             // Outer-most dimension first
+        Storage storage_;
+        Shape shape_;      // Outer-most dimension first
         DataType dtype_;
         Layout layout_;
-
-        // TODO(arakhmati): use std::variant to for storage
-
-        // Host Storage
-        HostBuffer host_buffer_{};                 // Unpopulated if tensor is on device
-
-        // Device Storage
-        Device *device_ = nullptr;                  // Set if tensor is allocated on device
-        std::shared_ptr<Buffer> device_buffer_{};  // Tensors on device are backed by an underlying buffer
-        MemoryConfig memory_config_;
 };
 
 Tensor create_device_tensor(const Shape& shape, DataType dtype, Layout layout, Device *device, const MemoryConfig& memory_config = {.interleaved=true});

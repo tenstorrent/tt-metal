@@ -15,7 +15,7 @@ namespace detail {
 
 static Device* get_device(const std::vector<Tensor> &input_tensors) {
     for (auto &input_tensor : input_tensors) {
-        if (not input_tensor.on_host()) {
+        if (input_tensor.storage_type() == StorageType::DEVICE) {
             return input_tensor.device();
         }
     }
@@ -168,7 +168,7 @@ std::vector<Tensor> generic_create_output_tensors(
 
 Tensor run_without_autoformat(const Operation& op, const Tensor &input_tensor) {
     Device* device;
-    if (input_tensor.on_host()) {
+    if (input_tensor.storage_type() == StorageType::HOST) {
         device = AutoFormat::GetDefaultDevice();
         TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
     } else {
@@ -176,7 +176,7 @@ Tensor run_without_autoformat(const Operation& op, const Tensor &input_tensor) {
     }
 
     auto input_tensor_on_dev = input_tensor;
-    if (input_tensor_on_dev.on_host()) {
+    if (input_tensor_on_dev.storage_type() == StorageType::HOST) {
         input_tensor_on_dev = input_tensor_on_dev.to(device);
     }
     return run(op, {input_tensor_on_dev}).at(0);
@@ -184,7 +184,7 @@ Tensor run_without_autoformat(const Operation& op, const Tensor &input_tensor) {
 
 Tensor run_with_autoformat(const Operation& op, const Tensor &input_tensor, float pad_value, bool pad_c) {
     Device* device;
-    if (input_tensor.on_host()) {
+    if (input_tensor.storage_type() == StorageType::HOST) {
         device = AutoFormat::GetDefaultDevice();
         TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
     } else {
@@ -208,10 +208,10 @@ Tensor run_with_autoformat(const Operation& op, const Tensor &input_tensor, floa
 
 Tensor run_with_autoformat(const Operation& op, const Tensor &input_tensor_a, const Tensor &input_tensor_b, float pad_value) {
     Device* device;
-    if (input_tensor_a.on_host() && input_tensor_b.on_host()) {
+    if (input_tensor_a.storage_type() == StorageType::HOST && input_tensor_b.storage_type() == StorageType::HOST) {
         device = AutoFormat::GetDefaultDevice();
         TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
-    } else if (!input_tensor_a.on_host()){
+    } else if (input_tensor_a.storage_type() == StorageType::DEVICE){
         device = input_tensor_a.device();
     } else {
         device = input_tensor_b.device();
@@ -247,7 +247,7 @@ Hash hash_tensor(const Tensor& tensor) {
         shape,
         magic_enum::enum_name(tensor.dtype()),
         magic_enum::enum_name(tensor.layout()),
-        hash_memory_config(tensor.memory_config())
+        tensor.storage_type() == StorageType::HOST ? "nullopt" : hash_memory_config(tensor.memory_config())
     );
 }
 

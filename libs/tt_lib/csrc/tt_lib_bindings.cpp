@@ -126,6 +126,10 @@ void TensorModule(py::module &m_tensor) {
         .value("DRAM", BufferType::DRAM)
         .value("L1", BufferType::L1);
 
+    py::enum_<StorageType>(m_tensor, "StorageType")
+        .value("HOST", StorageType::HOST)
+        .value("DEVICE", StorageType::DEVICE);
+
     auto pyMemoryConfig = py::class_<MemoryConfig>(m_tensor, "MemoryConfig", R"doc(
         Class defining memory configuration for storing tensor data on TT Accelerator device.
         There are eight DRAM memory banks on TT Accelerator device, indexed as 0, 1, 2, ..., 7.
@@ -197,7 +201,7 @@ void TensorModule(py::module &m_tensor) {
             py::init<>(
                 [](const std::vector<float>& data, const Shape& shape, DataType data_type, Layout layout) {
                     auto host_buffer = detail::create_host_buffer_from_list_of_floats(data, data_type);
-                    return Tensor(host_buffer, shape, data_type, layout);
+                    return Tensor(HostStorage{host_buffer}, shape, data_type, layout);
                 }
             ), R"doc(
                 +---------------+---------------+
@@ -229,8 +233,9 @@ void TensorModule(py::module &m_tensor) {
             py::init<>(
                 [](std::vector<float>& data, const Shape& shape, DataType data_type, Layout layout, Device *device) {
                     auto host_buffer = detail::create_host_buffer_from_list_of_floats(data, data_type);
-                    auto device_buffer = detail::create_device_buffer_from_host_buffer(host_buffer, shape, data_type, layout, device, MemoryConfig{});
-                    return Tensor(device_buffer, shape, data_type, layout, device);
+                    auto memory_config = MemoryConfig{};
+                    auto device_buffer = detail::create_device_buffer_from_host_buffer(host_buffer, shape, data_type, layout, device, memory_config);
+                    return Tensor(DeviceStorage{device_buffer, device, memory_config}, shape, data_type, layout);
                 }
             ), py::keep_alive<1, 6>(), R"doc(
                 +---------------+---------------+
@@ -272,7 +277,7 @@ void TensorModule(py::module &m_tensor) {
                 [](const std::vector<float>& data, const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config) {
                     auto host_buffer = detail::create_host_buffer_from_list_of_floats(data, data_type);
                     auto device_buffer = detail::create_device_buffer_from_host_buffer(host_buffer, shape, data_type, layout, device, memory_config);
-                    return Tensor(device_buffer, shape, data_type, layout, device, memory_config);
+                    return Tensor(DeviceStorage{device_buffer, device, memory_config}, shape, data_type, layout);
                 }
             ), py::keep_alive<1, 6>(), R"doc(
                 +---------------+---------------+
@@ -663,14 +668,14 @@ void TensorModule(py::module &m_tensor) {
                 shape = tt_tensor.shape()
 
         )doc")
-        .def("on_host", [](const Tensor &self) {
-            return self.on_host();
+        .def("storage_type", [](const Tensor &self) {
+            return self.storage_type();
         }, R"doc(
             Check if the tensor is on host
 
             .. code-block:: python
 
-                on_host = tt_tensor.on_host()
+                storage_type = tt_tensor.storage_type()
 
         )doc")
         .def("device", [](const Tensor &self) {
@@ -684,7 +689,7 @@ void TensorModule(py::module &m_tensor) {
 
         )doc")
         .def("data", [](const Tensor &self) -> std::optional<std::variant<const vector<uint32_t>, const vector<float>, const vector<bfloat16>>> {
-            TT_ASSERT(self.is_allocated_on_host(), "Host buffer must be allocated!");
+            TT_ASSERT(self.storage_type() == StorageType::HOST and self.is_allocated(), "Host buffer must be allocated!");
             switch (self.dtype()) {
                 case DataType::UINT32:
                 {

@@ -17,7 +17,7 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
     Program program{};
 
     // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(not a.on_host() and not b.on_host(), "Operands to eltwise binary need to be on device!");
+    TT_ASSERT(a.storage_type() == StorageType::DEVICE and b.storage_type() == StorageType::DEVICE, "Operands to eltwise binary need to be on device!");
     TT_ASSERT(a.device() == b.device(), "Operands to eltwise binary need to be on the same device!");
     TT_ASSERT(a.buffer() != nullptr and b.buffer() != nullptr, "Operands to eltwise binary need to be allocated in buffers on device!");
 

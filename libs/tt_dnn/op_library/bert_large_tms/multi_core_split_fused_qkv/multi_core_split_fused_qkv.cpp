@@ -14,7 +14,7 @@ operation::ProgramWithCallbacks multi_core_split_fused_qkv(const Tensor &a, std:
     const auto& ashape = a.shape();
 
     TT_ASSERT(ashape[0] == 9 and ashape[1] == 1 and ashape[2] == 384 and ashape[3] == 3072, "Input shape to this TM must be [9, 1, 384, 3072]!");
-    TT_ASSERT(not a.on_host(), "Operands to TM need to be on device!");
+    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_ASSERT(a.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
     TT_ASSERT(a.dtype() == tt::tt_metal::DataType::BFLOAT16 || a.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
 

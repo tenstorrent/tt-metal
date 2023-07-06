@@ -37,7 +37,7 @@ namespace tt_metal {
                 }
             }
         }
-        auto rm_tensor = Tensor(output_buffer, output_shape, conv_weight_tensor.dtype(), Layout::ROW_MAJOR);
+        auto rm_tensor = Tensor(HostStorage{output_buffer}, output_shape, conv_weight_tensor.dtype(), Layout::ROW_MAJOR);
         return rm_tensor.to(Layout::TILE);
     }
 

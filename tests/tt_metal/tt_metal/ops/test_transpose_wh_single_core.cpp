@@ -17,7 +17,7 @@ using namespace constants;
 //////////////////////////////////////////////////////////////////////////////////////////
 
 Tensor perform_transpose_wh(Tensor& input_tensor) {
-    TT_ASSERT(input_tensor.on_host());
+    TT_ASSERT(input_tensor.storage_type() == StorageType::HOST);
     auto ashape = input_tensor.shape();
     TT_ASSERT(ashape.size() == 4);
     auto bshape = ashape;
@@ -54,7 +54,7 @@ Tensor perform_transpose_wh(Tensor& input_tensor) {
             }
         }
     }
-    return tt_metal::Tensor(output_buffer, bshape, input_tensor.dtype(), tt::tt_metal::Layout::TILE);
+    return tt_metal::Tensor(HostStorage{output_buffer}, bshape, input_tensor.dtype(), tt::tt_metal::Layout::TILE);
 }
 
 int main(int argc, char **argv) {

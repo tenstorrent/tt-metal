@@ -12,7 +12,7 @@ namespace tt {
 namespace tt_metal {
 
 void SplitTiled::boiler_plate_asserts(const Tensor &a) const {
-    TT_ASSERT(not a.on_host(), "Operands to TM need to be on device!");
+    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_ASSERT(a.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
     TT_ASSERT(
         a.dtype() == tt::tt_metal::DataType::BFLOAT16 || a.dtype() == tt::tt_metal::DataType::BFLOAT8_B,

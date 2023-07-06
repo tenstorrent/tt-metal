@@ -13,7 +13,7 @@ namespace tt_metal {
 
 operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
 
-    TT_ASSERT(not a.on_host(), "Operand to pad needs to be on device!");
+    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to pad needs to be on device!");
     TT_ASSERT(a.buffer() != nullptr, "Operand to pad needs to be allocated in a buffer on device!");
 
     tt_metal::Program program{};
@@ -145,7 +145,7 @@ operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const st
 
 operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
 
-    TT_ASSERT(not a.on_host(), "Operand to pad needs to be on device!");
+    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to pad needs to be on device!");
     TT_ASSERT(a.buffer() != nullptr, "Operand to pad needs to be allocated in a buffer on device!");
 
     tt_metal::Program program{};

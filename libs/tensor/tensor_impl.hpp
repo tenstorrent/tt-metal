@@ -266,14 +266,15 @@ DeviceBuffer allocate_buffer_on_device(
 
 template <typename T>
 std::vector<T> read_data_from_device(const Tensor &tensor, uint32_t size_in_bytes) {
-    TT_ASSERT(tensor.buffer()->size() == size_in_bytes);
+    auto device_buffer = tensor.device_storage().value().buffer;
+    TT_ASSERT(device_buffer->size() == size_in_bytes);
 
     std::vector<uint32_t> device_data;
     const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
     if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
-        EnqueueReadBuffer(*HACK_CQ, *tensor.buffer(), device_data, true);
+        EnqueueReadBuffer(*HACK_CQ, *device_buffer, device_data, true);
     } else {
-        ReadFromBuffer(*tensor.buffer(), device_data);
+        ReadFromBuffer(*device_buffer, device_data);
     }
 
     std::vector<T> unpacked_data;
@@ -348,9 +349,12 @@ inline DeviceBuffer device_buffer_from_host_buffer(const HostBuffer& host_buffer
 // ======================================================================================
 template <typename T>
 inline Tensor to_host(const Tensor &tensor) {
-    TT_ASSERT(tensor.buffer() != nullptr, "Need DRAM buffers on device to exist to copy data to host!");
-    TT_ASSERT(tensor.device() != nullptr && "Need device to be set copy data from device to host!");
-    uint32_t size_in_bytes = tensor.buffer()->size();
+    auto device_storage = tensor.device_storage().value();
+    auto device_buffer = device_storage.buffer;
+    auto device = device_storage.device;
+    TT_ASSERT(tensor.storage_type() == StorageType::DEVICE and tensor.is_allocated(), "Need DRAM buffers on device to exist to copy data to host!");
+    TT_ASSERT(device != nullptr && "Need device to be set copy data from device to host!");
+    uint32_t size_in_bytes = device_buffer->size();
     auto data_vec = read_data_from_device<T>(tensor, size_in_bytes);
 
     // TODO(arakhmati): remove copying
@@ -360,22 +364,23 @@ inline Tensor to_host(const Tensor &tensor) {
         output_view[index] = data_vec[index];
     }
 
-    return Tensor(output_buffer, tensor.shape(), tensor.dtype(), tensor.layout());
+    return Tensor(HostStorage{output_buffer}, tensor.shape(), tensor.dtype(), tensor.layout());
 }
 
 template <typename T>
 inline Tensor to_device(const Tensor &tensor, Device *target_device, const MemoryConfig &memory_config) {
+    auto host_storage = tensor.host_storage().value();
     TT_ASSERT(target_device != nullptr && "Need target device in order to move tensor to device!");
-    TT_ASSERT(tensor.is_allocated_on_host() && "Need data to exist in order to move it to device");
+    TT_ASSERT(tensor.is_allocated() && "Need data to exist in order to move it to device");
 
     auto shape = tensor.shape();
     auto data_type = tensor.dtype();
     auto layout = tensor.layout();
 
     auto device_buffer = tensor_impl::device_buffer_from_host_buffer<T>(
-        tensor.host_buffer(), target_device, shape, data_type, layout, memory_config
+        host_storage.buffer, target_device, shape, data_type, layout, memory_config
     );
-    return Tensor(device_buffer, shape, data_type, layout, target_device, memory_config);
+    return Tensor(DeviceStorage{device_buffer, target_device, memory_config}, shape, data_type, layout);
 }
 
 template <typename T>
@@ -426,7 +431,7 @@ inline Tensor to_layout(const Tensor &tensor, Layout target_layout) {
     for (auto index = 0; index < data.size(); index++) {
         output_view[index] = data[index];
     }
-    return Tensor(output_buffer, tensor.shape(), tensor.dtype(), target_layout);
+    return Tensor(HostStorage{output_buffer}, tensor.shape(), tensor.dtype(), target_layout);
 }
 
 // ======================================================================================
@@ -499,7 +504,7 @@ inline Tensor pad(const Tensor &tensor, const std::array<uint32_t, 4> &output_te
         output_view[output_index++] = pad_value_;
     }
 
-    return Tensor(output_buffer, output_tensor_shape, tensor.dtype(), tensor.layout());
+    return Tensor(HostStorage{output_buffer}, output_tensor_shape, tensor.dtype(), tensor.layout());
 }
 
 template <typename T>
@@ -548,7 +553,7 @@ inline Tensor unpad(const Tensor &tensor, const std::array<uint32_t, 4> &output_
         }
     }
 
-    return Tensor(output_buffer, output_tensor_shape, tensor.dtype(), tensor.layout());
+    return Tensor(HostStorage{output_buffer}, output_tensor_shape, tensor.dtype(), tensor.layout());
 }
 
 // ======================================================================================
@@ -556,7 +561,7 @@ inline Tensor unpad(const Tensor &tensor, const std::array<uint32_t, 4> &output_
 // ======================================================================================
 template <typename T>
 inline void print(const Tensor &tensor, Layout print_layout, bool pretty_print) {
-    if (not tensor.on_host()) {
+    if (tensor.storage_type() == StorageType::DEVICE ) {
         auto temp_tensor = to_host<T>(tensor);
         print<T>(temp_tensor, print_layout, pretty_print);
         return;

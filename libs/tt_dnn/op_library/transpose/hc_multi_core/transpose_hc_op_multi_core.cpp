@@ -13,7 +13,7 @@ namespace tt_metal {
 
 Program transpose_hc_multi_core(const Tensor &a, Tensor &output) {
 
-    TT_ASSERT(not a.on_host(), "Operand to transpose_hc needs to be on device!");
+    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
     TT_ASSERT(a.buffer() != nullptr, "Operand to transpose_hc needs to be allocated in a buffer on device!");
 
     const auto shape = a.shape();

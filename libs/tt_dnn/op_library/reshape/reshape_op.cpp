@@ -13,7 +13,7 @@ namespace tt_metal {
 operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor &output, int N, int C, int H, int W) {
 
     // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(not a.on_host(), "Operand to reshape needs to be on device!");
+    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to reshape needs to be on device!");
     TT_ASSERT(a.buffer() != nullptr, "Operand to reshape needs to be allocated in a buffer on device!");
 
 
@@ -147,7 +147,7 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
 operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& output, int N, int C, int H, int W) {
 
     // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(not a.on_host(), "Operand to reshape needs to be on device!");
+    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to reshape needs to be on device!");
     TT_ASSERT(a.buffer() != nullptr, "Operand to reshape needs to be allocated in a buffer on device!");
 
     tt_metal::Program program = tt_metal::Program();

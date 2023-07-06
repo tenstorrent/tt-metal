@@ -43,7 +43,8 @@ const span_t<T> view_as(const HostBuffer& host_buffer) {
 template<typename T>
 const span_t<T> view_as(const Tensor& tensor) {
     validate_datatype<T>(tensor);
-    return host_buffer::view_as<T>(tensor.host_buffer());
+    auto buffer = tensor.host_storage().value().buffer;
+    return host_buffer::view_as<T>(buffer);
 }
 
 template<typename T>

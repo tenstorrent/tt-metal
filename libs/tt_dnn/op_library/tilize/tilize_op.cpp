@@ -16,7 +16,7 @@ namespace tt_metal {
 Program tilize_single_core(const Tensor &a, Tensor& output) {
 
     // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(not a.on_host(), "Operand to tilize needs to be on device!");
+    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to tilize needs to be on device!");
     TT_ASSERT(a.buffer() != nullptr, "Operand to tilize needs to be allocated in a buffer on device!");
 
     tt_metal::Program program = tt_metal::Program();
@@ -208,7 +208,7 @@ Tensor tilize(const Tensor &input_tensor_a) {
 Program tilize_with_zero_padding_single_core(const Tensor &a, Tensor &output) {
 
     // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(not a.on_host(), "Operand to tilize needs to be on device!");
+    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to tilize needs to be on device!");
     TT_ASSERT(a.buffer() != nullptr, "Operand to tilize needs to be allocated in a buffer on device!");
 
     tt_metal::Program program = tt_metal::Program();
@@ -384,7 +384,7 @@ Tensor tilize_with_zero_padding(const Tensor &input_tensor_a) {
 Program tilize_with_val_padding(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
 
     // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(not a.on_host(), "Operand to tilize needs to be on device!");
+    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to tilize needs to be on device!");
     TT_ASSERT(a.buffer() != nullptr, "Operand to tilize needs to be allocated in a buffer on device!");
 
     auto output_shape = output.shape();
