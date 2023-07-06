@@ -3,6 +3,8 @@ from torch.nn import functional as F
 
 import tt_lib
 import python_api_testing.models.nanogpt.helper_funcs as nanogpt_utils
+from tt_lib.fallback_ops import fallback_ops
+
 import math
 
 from utility_functions_new import (
@@ -22,17 +24,14 @@ def new_gelu(x):
 def tt_nanogpt_gelu(x, device):
     z = x
 
-    k1 = torch.full(x.shape(), 0.5)
-    tt_k1 = torch2tt_tensor(k1, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+    tt_k1 = fallback_ops.full(x.shape(), 0.5)
 
-    k2 = torch.full(x.shape(), 0.044715)
-    tt_k2 = torch2tt_tensor(k2, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+    tt_k2 = fallback_ops.full(x.shape(), 0.044715)
 
-    k3 = torch.full(x.shape(), 2.0)
-    tt_k3 = torch2tt_tensor(k3, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+    tt_k3 = fallback_ops.full(x.shape(), 2.0)
 
-    k4 = torch.full(x.shape(), math.pi)
-    tt_k4 = torch2tt_tensor(k4, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+    tt_k4 = fallback_ops.full(x.shape(), math.pi)
+
     tt_k4_recip = tt_lib.tensor.recip(tt_k4)
 
     new_factor = tt_lib.tensor.mul(tt_k3, tt_k4_recip)
@@ -49,8 +48,7 @@ def tt_nanogpt_gelu(x, device):
     sumtanh = tt_lib.tensor.mul(new_factor, factor3)
     tanh = tt_lib.tensor.tanh(sumtanh)
 
-    k5 = torch.full(x.shape(), 1.0)
-    tt_k5 = torch2tt_tensor(k5, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+    tt_k5 = fallback_ops.full(x.shape(), 1.0)
 
     total = tt_lib.tensor.add(tt_k5, tanh)
     output = tt_lib.tensor.mul(factor1, total)

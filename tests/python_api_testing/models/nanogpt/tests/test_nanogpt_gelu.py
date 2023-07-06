@@ -56,5 +56,7 @@ def run_nanogpt_gelu_test(device, pcc):
 def test_nanogpt_gelu_inference(pcc):
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
+    tt_lib.device.SetDefaultDevice(device)
+
     run_nanogpt_gelu_test(device, pcc)
     tt_lib.device.CloseDevice(device)

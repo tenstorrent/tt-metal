@@ -5,6 +5,8 @@ import tt_lib
 import python_api_testing.models.nanogpt.helper_funcs as nanogpt_utils
 import python_api_testing.models.nanogpt.tt.nanogpt_mlp as nanogpt_mlp
 import python_api_testing.models.nanogpt.tt.nanogpt_attention as nanogpt_attention
+from python_api_testing.models.nanogpt.tt.nanogpt_config import GPTConfig
+
 
 import python_api_testing.models.nanogpt.tt.nanogpt_block as nanogpt_block
 from tt_lib.fallback_ops import fallback_ops
@@ -22,41 +24,8 @@ from utility_functions_new import (
     torch_to_tt_tensor_rm,
 )
 
-@dataclass
-class GPTConfig:
-    block_size: int = 1024
-    vocab_size: int = 50304  # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
-    n_layer: int = 12
-    n_head: int = 12
-    n_embd: int = 768
-    dropout: float = 0.0
-    bias: bool = True  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
-
-"""
-class GPT(nn.Module):
-
-    def __init__(self, config):
-        super().__init__()
-        assert config.vocab_size is not None
-        assert config.block_size is not None
-        self.config = config
-
-        self.transformer = nn.ModuleDict(dict(
-            wte = nn.Embedding(config.vocab_size, config.n_embd),
-            wpe = nn.Embedding(config.block_size, config.n_embd),
-            drop = nn.Dropout(config.dropout),
-            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-            ln_f = LayerNorm(config.n_embd, bias=config.bias),
-        ))
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        # with weight tying when using torch.compile() some warnings get generated:
-        # "UserWarning: functional_call was passed multiple values for tied weights.
-        # This behavior is deprecated and will be an error in future versions"
-        # not 100% sure what this is, so far seems to be harmless. TODO investigate
-        self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
-"""
 class TtGPT(nn.Module):
-    def __init__(self, config, state_dict, device):
+    def __init__(self, config: GPTConfig(), state_dict, device):
         super().__init__()
 
         assert config.vocab_size is not None
@@ -174,43 +143,15 @@ class TtGPT(nn.Module):
                     logits[logits < v[:, [-1]]] = -float('Inf')
 
             # apply softmax to convert logits to (normalized) probabilities
-                probs = F.softmax(logits, dim=-1)
+                tt_logits = torch_to_tt_tensor_rm(logits, self.device, put_on_device=False)
+                tt_probs = fallback_ops.softmax(tt_logits, dim=-1)
+                probs = tt2torch_tensor(tt_probs)
                 probs = probs.squeeze(0)
+                probs = probs.squeeze(0)
+
                 # sample from the distribution
                 idx_next = torch.multinomial(probs, num_samples=1)
             # append sampled index to the running sequence and continue
                 idx = torch.cat((idx, idx_next), dim=1)
 
             return idx
-
-
-    def generate_2(self, idx, max_new_tokens, temperature=1.0, top_k=None):
-            """
-            Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
-            the sequence max_new_tokens times, feeding the predictions back into the model each time.
-            Most likely you'll want to make sure to be in model.eval() mode of operation for this.
-            """
-            for _ in range(max_new_tokens):
-                # if the sequence context is growing too long we must crop it at block_size
-                idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
-                # forward the model to get the logits for the index in the sequence
-
-                tt_logits, _ = self.forward(idx_cond)
-                # pluck the logits at the final step and scale by desired temperature
-                logits = tt2torch_tensor(tt_logits)
-
-                #logits = logits[:, -1, :] / temperature
-                # optionally crop the logits to only the top k options
-                #tt_logits = nanogpt_utils.torch2tt_tensor(logits, device)
-            # pluck the logits at the final step and scale by desired temperature
-                logits = logits[:, :, -1, :] / temperature
-            # optionally crop the logits to only the top k options
-                if top_k is not None:
-                    v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-                    logits[logits < v[:, [-1]]] = -float('Inf')
-
-            # apply softmax to convert logits to (normalized) probabilities
-                probs = F.softmax(logits, dim=-1)
-                probs = probs.squeeze(0)
-
-            return probs

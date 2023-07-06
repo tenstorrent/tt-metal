@@ -25,6 +25,9 @@ import python_api_testing.models.nanogpt.helper_funcs as nanogpt_utils
 import python_api_testing.models.nanogpt.tt.nanogpt_block as nanogpt_block
 import python_api_testing.models.nanogpt.tt.nanogpt_attention as nanogpt_attention
 import python_api_testing.models.nanogpt.tt.nanogpt_model as nanogpt_model
+from python_api_testing.models.nanogpt.tt.nanogpt_config import GPTConfig
+
+
 
 from utility_functions_new import (
     torch2tt_tensor,
@@ -63,7 +66,7 @@ def run_nanogpt_model_test(device, prompt, temperature, max_new_tokens):
     config_args['block_size'] = 1024 # always 1024 for GPT model checkpoints
     config_args['bias'] = True # always True for GPT model checkpoints
 
-    config = nanogpt_attention.GPTConfig(**config_args)
+    config = GPTConfig(**config_args)
 
     tt_model = nanogpt_model.TtGPT(config, sd, device)
 

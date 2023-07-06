@@ -9,6 +9,7 @@ sys.path.append(f"{f}/../../../..")
 
 import torch
 import tt_lib
+import pytest
 
 from transformers import GPT2LMHeadModel
 
@@ -25,7 +26,7 @@ from utility_functions_new import (
     torch_to_tt_tensor_rm,
 )
 
-def run_nanogpt_attn_test(device):
+def run_nanogpt_attn_test(device, pcc):
     # Prepare input
 
     model_hf = GPT2LMHeadModel.from_pretrained('gpt2')
@@ -64,7 +65,7 @@ def run_nanogpt_attn_test(device):
 
     tt_out_converted = tt2torch_tensor(tt_out)
 
-    does_pass, pcc_message = comp_pcc(pt_out[0], tt_out_converted, 0.99)
+    does_pass, pcc_message = comp_pcc(pt_out[0], tt_out_converted, pcc)
     logger.info(pcc_message)
 
     if does_pass:
@@ -74,13 +75,18 @@ def run_nanogpt_attn_test(device):
 
     assert does_pass
 
-def test_nanogpt_attn():
+@pytest.mark.parametrize(
+    "pcc",
+    (
+        (
+            0.99,
+        ),
+    ),
+)
+def test_nanogpt_attn(pcc):
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
 
-    run_nanogpt_attn_test(device)
+    run_nanogpt_attn_test(device, pcc)
     tt_lib.device.CloseDevice(device)
-
-if __name__ == "__main__":
-    test_nanogpt_attn()

@@ -4,6 +4,7 @@ import torch.nn as nn
 import tt_lib
 import python_api_testing.models.nanogpt.tt.nanogpt_mlp as nanogpt_mlp
 import python_api_testing.models.nanogpt.tt.nanogpt_attention as nanogpt_attention
+from python_api_testing.models.nanogpt.tt.nanogpt_config import GPTConfig
 
 from tt_lib.fallback_ops import fallback_ops
 
@@ -18,18 +19,8 @@ from utility_functions_new import (
     torch_to_tt_tensor_rm,
 )
 
-@dataclass
-class GPTConfig:
-    block_size: int = 1024
-    vocab_size: int = 50304  # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
-    n_layer: int = 12
-    n_head: int = 12
-    n_embd: int = 768
-    dropout: float = 0.0
-    bias: bool = True  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
-
 class TtBlock(nn.Module):
-    def __init__(self, config, state_dict, base_address, device):
+    def __init__(self, config: GPTConfig(), state_dict, base_address, device):
         super().__init__()
 
         self.device = device

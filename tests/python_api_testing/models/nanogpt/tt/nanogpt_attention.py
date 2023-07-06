@@ -6,6 +6,8 @@ import python_api_testing.models.nanogpt.helper_funcs as nanogpt_utils
 from dataclasses import dataclass
 import math
 from tt_lib.fallback_ops import fallback_ops
+from python_api_testing.models.nanogpt.tt.nanogpt_config import GPTConfig
+
 
 from transformers import GPT2LMHeadModel
 
@@ -15,19 +17,9 @@ from utility_functions_new import (
     torch_to_tt_tensor_rm,
 )
 
-@dataclass
-class GPTConfig:
-    block_size: int = 1024
-    vocab_size: int = 50304 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
-    n_layer: int = 12
-    n_head: int = 12
-    n_embd: int = 768
-    dropout: float = 0.0
-    bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
-
 class TtCausalSelfAttention(nn.Module):
 
-    def __init__(self, config, state_dict, base_address, device):
+    def __init__(self, config: GPTConfig(), state_dict, base_address, device):
         super().__init__()
         assert config.n_embd % config.n_head == 0
 
@@ -93,7 +85,7 @@ class TtCausalSelfAttention(nn.Module):
         tt_v = torch_to_tt_tensor_rm(v, self.device, put_on_device=False)
 
         #y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-        tt_y = nanogpt_utils.tt_matmul(tt_att, tt_v, self.device)
+        tt_y = tt_lib.tensor.bmm(tt_att, tt_v)
 
         #y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
         tt_y = tt_lib.tensor.transpose_hc(tt_y)
