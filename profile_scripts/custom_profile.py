@@ -95,10 +95,46 @@ def profile_Tensix2Tensix_issue_barrier(file_name, read_or_write):
     for i in range(4):
         print("issue:", dic_cycle[6][i]-dic_cycle[5][i], "barrier:", dic_cycle[7][i]-dic_cycle[6][i])
 
+def profile_Tensix2Tensix_fine_grain(file_name, read_or_write):
+    f = open(file_name, "r")
+    lines = f.readlines()
+    dic_cycle = {}
+    if read_or_write == "read":
+        prefix = "0, 1, 0, BRISC"
+    elif read_or_write == "write":
+        prefix = "0, 0, 0, NCRISC"
+    for line in lines:
+        if prefix + ", 11, " in line:
+            dic_cycle[11] = int(line.split(",")[-1])
+        elif prefix + ", 12, " in line:
+            dic_cycle[12] = int(line.split(",")[-1])
+        elif prefix + ", 13, " in line:
+            dic_cycle[13] = int(line.split(",")[-1])
+        elif prefix + ", 14, " in line:
+            dic_cycle[14] = int(line.split(",")[-1])
+        elif prefix + ", 15, " in line:
+            dic_cycle[15] = int(line.split(",")[-1])
+        elif prefix + ", 16, " in line:
+            dic_cycle[16] = int(line.split(",")[-1])
+        elif prefix + ", 17, " in line:
+            dic_cycle[17] = int(line.split(",")[-1])
+        elif prefix + ", 18, " in line:
+            dic_cycle[18] = int(line.split(",")[-1])
+        elif prefix + ", 5, " in line:
+            dic_cycle[5] = int(line.split(",")[-1])
+        elif prefix + ", 6, " in line:
+            dic_cycle[6] = int(line.split(",")[-1])
+
+    print("5:", dic_cycle[11]-dic_cycle[5], end=" ")
+    for i in range(11, 18):
+        print("{}:".format(i), dic_cycle[i+1]-dic_cycle[i], end=" ")
+    print("6:", dic_cycle[6]-dic_cycle[18], end=" ")
+    print()
+
 def get_args():
     parser = argparse.ArgumentParser('Profile raw results.')
     parser.add_argument("--file-name", help="file to profile")
-    parser.add_argument("--profile-target", choices=["profile_Tensix2Tensix_issue_barrier"], help="profile target choice")
+    parser.add_argument("--profile-target", choices=["profile_Tensix2Tensix_issue_barrier", "profile_Tensix2Tensix_fine_grain"], help="profile target choice")
     parser.add_argument("--read-or-write", choices=["read", "write"], help="read or write choice")
     args = parser.parse_args()
     return args
@@ -107,6 +143,8 @@ args = get_args()
 file_name = args.file_name
 if args.profile_target == "profile_Tensix2Tensix_issue_barrier":
     profile_Tensix2Tensix_issue_barrier(file_name, args.read_or_write)
+if args.profile_target == "profile_Tensix2Tensix_fine_grain":
+    profile_Tensix2Tensix_fine_grain(file_name, args.read_or_write)
 
 # print_relative_cycles(file_name)
 # test_kernel_profiler_overhead(file_name)

@@ -26,8 +26,36 @@ def profile_issue_barrier(file_name):
     issue_avg = sum(issue)/len(issue)
     barrier_avg = sum(barrier)/len(barrier)
     print("Buffer: {} Transaction: {} issue: {:.2f} barrier: {:.2f}".format(buffer, transaction, issue_avg, barrier_avg))
-    issue = []
-    barrier = []
+
+def profile_fine_grain(file_name):
+    f = open(file_name, "r")
+    lines = f.readlines()
+    dic = {}
+    for i in range(11, 18):
+        dic[i] = []
+    buffer = 0
+    transaction = 0
+    for line in lines:
+        if "Buffer" in line:
+            if len(dic[11]) > 0:
+                print("Buffer: {} Transaction: {}".format(buffer, transaction), end=" ")
+                for i in range(11, 18):
+                    avg = sum(dic[i])/len(dic[i])
+                    print("{}: {:.2f}".format(i, avg), end=" ")
+                    dic[i] = []
+                print()
+            buffer = int(line.split()[1])
+            transaction = int(line.split()[-1])
+        elif "11:" in line:
+            lst = line.split()
+            for i in range(11, 18):
+                dic[i].append(int(lst[(i-11)*2+1]))
+    print("Buffer: {} Transaction: {}".format(buffer, transaction), end=" ")
+    for i in range(11, 18):
+        avg = sum(dic[i])/len(dic[i])
+        print("{}: {:.2f}".format(i, avg), end=" ")
+    print()
+
 
 
 def print_dram_rw(dic, read_write_bar):
@@ -134,7 +162,7 @@ def print_tensix_issue_barrier(file_name):
 def get_args():
     parser = argparse.ArgumentParser('Profile raw results.')
     parser.add_argument("--file-name", help="file to profile")
-    parser.add_argument("--profile-target", choices=["Tensix2Tensix", "DRAM2Tensix", "Tensix2Tensix_Issue_Barrier", "Print_Tensix2Tensix_Issue_Barrier"], help="profile target choice")
+    parser.add_argument("--profile-target", choices=["Tensix2Tensix", "DRAM2Tensix", "Tensix2Tensix_Issue_Barrier", "Tensix2Tensix_Fine_Grain", "Print_Tensix2Tensix_Issue_Barrier"], help="profile target choice")
     parser.add_argument("--read-or-write", choices=["read", "write"], help="read or write choice")
     args = parser.parse_args()
     return args
@@ -150,5 +178,7 @@ elif args.profile_target == "DRAM2Tensix":
     profile_riscv_rw_dram(file_name)
 elif args.profile_target == "Tensix2Tensix_Issue_Barrier":
     profile_issue_barrier(file_name)
+elif args.profile_target == "Tensix2Tensix_Fine_Grain":
+    profile_fine_grain(file_name)
 elif args.profile_target == "Print_Tensix2Tensix_Issue_Barrier":
     print_tensix_issue_barrier(file_name)
