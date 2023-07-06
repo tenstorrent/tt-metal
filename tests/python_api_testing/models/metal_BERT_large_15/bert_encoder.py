@@ -18,9 +18,6 @@ from python_api_testing.models.metal_BERT_large_15.mha import TtMultiHeadAttenti
 from python_api_testing.models.metal_BERT_large_15.ffn import TtFeedForwardModel
 from tt_lib.utils import pad_activation, pad_weight
 from utility_functions import comp_pcc, comp_allclose, profiler
-from tests.python_api_testing.models.metal_BERT_large_15.utils import (
-    run_matmul_with_dataformat,
-)
 
 
 class TtBertEncoder(torch.nn.Module):
@@ -135,15 +132,7 @@ class TtBertEncoder(torch.nn.Module):
         self, mha_res, attention_output_weight, attention_output_bias
     ):
         # profiler.start("__op11_mm_plus_bias")
-        mha_out = run_matmul_with_dataformat(
-            ttl.tensor.bert_large_selfout_matmul,
-            ttl.tensor.DataType.BFLOAT16,
-            self.device,
-            self.mem_config,
-            mha_res,
-            attention_output_weight,
-            attention_output_bias,
-        )
+        mha_out = ttl.tensor.bert_large_selfout_matmul(mha_res, attention_output_weight, attention_output_bias, mem_config=self.mem_config)
         # profiler.end("__op11_mm_plus_bias")
 
         return mha_out
@@ -304,6 +293,7 @@ def run_bert_encoder_inference(
         ("phiyodr/bert-large-finetuned-squad2", 9, 384, True, True, 0.99),
         ("phiyodr/bert-large-finetuned-squad2", 9, 384, True, False, 0.99),
     ),
+    ids=["DRAM", "L1"],
 )
 def test_bert_encoder_inference(
     model_version, batch, seq_len, on_weka, dram, pcc, model_location_generator

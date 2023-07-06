@@ -18,9 +18,6 @@ from tests.python_api_testing.models.conftest import model_location_generator_
 import tt_lib as ttl
 from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from utility_functions import enable_compile_cache, comp_pcc, comp_allclose, profiler
-from tests.python_api_testing.models.metal_BERT_large_15.utils import (
-    run_matmul_with_dataformat,
-)
 
 
 def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
@@ -87,15 +84,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, mem_config):
 
     def op1_qkv_fused(activation, qkv_weight, qkv_bias):
         # profiler.start("___op1_qkv_fused")
-        qkv = run_matmul_with_dataformat(
-            ttl.tensor.bert_large_fused_qkv_matmul,
-            ttl.tensor.DataType.BFLOAT16,
-            device,
-            mem_config,
-            activation,
-            qkv_weight,
-            qkv_bias,
-        )
+        qkv = ttl.tensor.bert_large_fused_qkv_matmul(activation, qkv_weight, qkv_bias, mem_config=mem_config)
         # profiler.end("___op1_qkv_fused")
 
         return qkv
@@ -138,15 +127,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, mem_config):
 
     def op7_bmm(Q_heads, K_T_heads):
         # profiler.start("___op7_bmm")
-        qkt = run_matmul_with_dataformat(
-            ttl.tensor.bert_large_pre_softmax_bmm,
-            ttl.tensor.DataType.BFLOAT16,
-            device,
-            # Force DRAM to fit tensors in L1, PCC issue
-            ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
-            Q_heads,
-            K_T_heads,
-        )
+        qkt = ttl.tensor.bert_large_pre_softmax_bmm(Q_heads, K_T_heads, mem_config=ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM))
         # profiler.end("___op7_bmm")
 
         return qkt
@@ -170,14 +151,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, mem_config):
 
     def op9_bmm(attention_scores, V_heads):
         # profiler.start("___op9_bmm")
-        weighted_activation = run_matmul_with_dataformat(
-            ttl.tensor.bert_large_post_softmax_bmm,
-            ttl.tensor.DataType.BFLOAT16,
-            device,
-            mem_config,
-            attention_scores,
-            V_heads,
-        )
+        weighted_activation = ttl.tensor.bert_large_post_softmax_bmm(attention_scores, V_heads, mem_config=mem_config)
         # profiler.end("___op9_bmm")
 
         return weighted_activation
@@ -369,6 +343,7 @@ def run_mha_inference(
         ("phiyodr/bert-large-finetuned-squad2", 9, 384, True, True, 0.99),
         ("phiyodr/bert-large-finetuned-squad2", 9, 384, True, False, 0.99),
     ),
+    ids=["DRAM", "L1"],
 )
 def test_mha_inference(
     model_version, batch, seq_len, on_weka, dram, pcc, model_location_generator
