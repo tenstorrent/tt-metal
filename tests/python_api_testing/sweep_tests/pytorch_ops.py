@@ -79,7 +79,7 @@ def power(x, *args, exponent, **kwargs):
 
 
 def polyval(x, *args, coeffs, **kwargs):
-    result = x * 0.0
+    result = 0.0
     for coeff in coeffs:
         result = result * x + coeff
     return result

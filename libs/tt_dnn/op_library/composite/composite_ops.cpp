@@ -172,14 +172,11 @@ Tensor polyval(const Tensor &input_tensor,std::vector<float> coeffs) {
     return  mk_filled_tensor_like( input_tensor, coeffs[0] );
   }
 
-  std::vector<Tensor> results(coeffs.size(),input_tensor); //pipeline
-  results[0] =
-		       bcast(input_tensor,mk_scalar(coeffs[0]),BcastOpMath::MUL,BcastOpDim::HW);
-  for(int idx=1; idx < coeffs.size(); idx++) {
-    Tensor& last = results[idx-1];
-    results[idx] =  bcast( mul(last,input_tensor) , mk_scalar(coeffs[idx]), BcastOpMath::ADD,BcastOpDim::HW);
+  Tensor result = bcast(input_tensor, mk_scalar(coeffs[0]), BcastOpMath::MUL,BcastOpDim::HW);
+  for(int idx=1; idx < coeffs.size() - 1; idx++) {
+    result = mul(input_tensor, bcast(result, mk_scalar(coeffs[idx]), BcastOpMath::ADD,BcastOpDim::HW ));
   }
-  return results[coeffs.size()-1];
+  return bcast(result, mk_scalar(coeffs.back()), BcastOpMath::ADD,BcastOpDim::HW );
 }
 
 // Function: MAC
@@ -233,27 +230,20 @@ Tensor mk_zero_tensor_like(const Tensor& reference_tensor) {
   return zero_like;
 }
 
-//Function sign
-//compute sgn(x) = (x>=0) - (x=<0);
-//Tensor sign(const Tensor& x) {
-//  return  sub(gez(x),lez(x)) );
-//}
 
 //min(a,b) = a - (a - b > 0 )*(a-b)
-Tensor min(const Tensor &input_a,const Tensor &input_b)
+Tensor min(const Tensor &input_a, const Tensor &input_b)
 {
-  Tensor t_diff = sub(input_a,input_b);
-  Tensor t_flag  = gtz(t_diff);
-  Tensor result = sub(input_a, mul(t_flag,t_diff) );
+  Tensor t_diff = sub(input_a, input_b);
+  Tensor result = where(t_diff, input_b, input_a);
   return result;
 }
 
 //max(a,b) = a + (b - a > 0 )*(b-a)
-Tensor max(const Tensor &input_a,const Tensor &input_b)
+Tensor max(const Tensor &input_a, const Tensor &input_b)
 {
-  Tensor t_diff = sub(input_b,input_a);
-  Tensor t_flag  = gtz(t_diff);
-  Tensor result = add(input_a, mul(t_flag,t_diff) );
+  Tensor t_diff = sub(input_b, input_a);
+  Tensor result = where(t_diff, input_b, input_a);
   return result;
 }
 
@@ -351,16 +341,13 @@ Tensor relu6(const Tensor &input_a) {
 
 
 
-//threshold(a,t,v) = (a < t)*v + (a > t)*a
-Tensor threshold(const Tensor &input_a,float threshold, float value) {
+//threshold(a,t,v) = (a <= t)*v + (a > t)*a
+Tensor threshold(const Tensor &input_a, float threshold, float value) {
   Tensor t_value = mk_scalar(value);
   Tensor t_threshold = mk_scalar(threshold);
-  auto bcast_sub = [](const Tensor& a, const Tensor& b) -> Tensor {
-		     return bcast(a,b,BcastOpMath::SUB, BcastOpDim::HW);
-		   };
-  Tensor t0 = bcast_sub(input_a,t_threshold);
-  Tensor t1 = bcast(ltz(t0),t_value,BcastOpMath::MUL, BcastOpDim::HW);
-  Tensor t2 = mul(gtz(t0),input_a);
+  Tensor t0 = bcast(input_a, t_threshold, BcastOpMath::SUB, BcastOpDim::HW);
+  Tensor t1 = bcast(lez(t0), t_value, BcastOpMath::MUL, BcastOpDim::HW);
+  Tensor t2 = mul(gtz(t0), input_a);
   return add(t1,t2);
 }
 
