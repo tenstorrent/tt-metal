@@ -1,8 +1,16 @@
 import os
 from common import get_smi_log_lines, check_not_empty, get_tt_arch_from_cmd_line
 
+def is_eth_fw_version_line(tt_arch, line):
+    matches = "ETH FW Version" in line
 
-def get_fw_versions_and_dates():
+    if matches:
+        assert tt_arch != "grayskull"
+        assert tt_arch in ("wormhole_b0", "wormhole", "blackhole")
+
+    return matches
+
+def get_fw_versions_and_dates(tt_arch):
     log_lines = get_smi_log_lines()
 
     version_list = []
@@ -12,6 +20,9 @@ def get_fw_versions_and_dates():
         occurs_version = line.find("FW Version")
 
         if occurs_version > -1:
+            # Do not match ETH FW Version line
+            if is_eth_fw_version_line(tt_arch, line):
+                continue
             version_splitted = line.split(":")
             version_tmp = version_splitted[1]
 
@@ -34,7 +45,9 @@ def get_fw_versions_and_dates():
 
 
 if __name__ == "__main__":
-    version_list, date_list = get_fw_versions_and_dates()
+    tt_arch = get_tt_arch_from_cmd_line()
+
+    version_list, date_list = get_fw_versions_and_dates(tt_arch)
 
     assert len(version_list) == len(date_list)
     assert check_not_empty(version_list)
@@ -49,8 +62,6 @@ if __name__ == "__main__":
             ("9.0.0",),
         ),
     }
-
-    tt_arch = get_tt_arch_from_cmd_line()
 
     expected_tt_archs = tuple(expected_fw_values_by_arch.keys())
 

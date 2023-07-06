@@ -13,13 +13,13 @@ ASSETS_DIR=$TT_METAL_HOME/infra/machine_setup/assets
 # FULL_REPO_NAME=tenstorrent-software/pybuda
 FULL_REPO_NAME=tenstorrent-metal/tt-metal-sys-eng-packages
 
-PYBUDA_GS_RELEASE=v1.0.23-tt-external.2f4901c8-2.gs
-PYBUDA_WH_RELEASE=v1.0.24-tt-external.e67d8051-2.wh_b0
+PYBUDA_GS_RELEASE=v1.0.23-tt-external.2f4901c8-3-driver.gs
+PYBUDA_WH_RELEASE=v1.0.24-tt-external.e67d8051-3.wh_b0
 GS_TT_SMI_FILENAME=tt-smi_2023-06-16-0283a02404487eea
-WH_TT_SMI_FILENAME=tt-smi
-GS_TT_FLASH_FILENAME=tt-flash_2023-05-29-193a3ae8a8719d03
+WH_TT_SMI_FILENAME=tt-smi-wh-8.4.0.0_2023-06-29-96bed10da092442c
+GS_TT_FLASH_FILENAME=tt-flash_2022-09-06-fae5785cae3807a6
 WH_TT_FLASH_FILENAME=tt-flash_7.8.2.0_2023-03-29-ea858ffb9a5c19e3
-GS_TT_DRIVER_FILENAME=install_ttkmd_1.18.1.bash
+GS_TT_DRIVER_FILENAME=install_ttkmd_1.20.1.bash
 
 PYBUDA_GS_RELEASE_ID=$(curl -L -H "Authorization: Bearer $GITHUB_TOKEN" \
 	-H "X-GitHub-Api-Version: 2022-11-28" \
