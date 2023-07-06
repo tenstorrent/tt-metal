@@ -62,6 +62,29 @@ Please refer to the [initial Getting Started
 page](docs/source/get_started/installation.rst) then please read the the
 [developer's page](docs/source/dev_onboarding/get_started.rst).
 
+### Building and viewing the documentation locally
+
+1. First, ensure that you have [built the project and activated the Python
+environment](docs/source/get_started/installation.rst).
+
+2. Build the HTML Documentation page.
+
+```
+cd docs
+make all
+```
+
+You can customize the port by using the `PORT=<port>` environment variable. If
+you're using a customer-facing cloud machine, please disregard this point.
+
+3. Navigate to the docs page.
+
+Navigate your web browser to `http://<ip address>:<port>`, where `<ip address>`
+is the IP address of the machine on which you launched the web server. For
+example: `http://10.250.37.37:4242`, for port ``4242``.
+
+If you forwarded your port, navigate to `http://localhost:8888`.
+
 ## Debugging tips
 
 - To print within a kernel the following must be added:

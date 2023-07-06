@@ -3,8 +3,6 @@
 Getting Started
 ===============
 
-CI-Generated.
-
 Setting up the dev environment
 ------------------------------
 
