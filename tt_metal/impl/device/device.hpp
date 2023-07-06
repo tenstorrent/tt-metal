@@ -21,7 +21,7 @@ class Device {
    public:
     static size_t detect_num_available_devices(const TargetDevice target_type = TargetDevice::Silicon);
     friend void tt_gdb(Device* device, int chip_id, const vector<CoreCoord> cores, vector<string> ops);
-    Device(tt::ARCH arch, int pcie_slot) : arch_(arch), cluster_(nullptr), pcie_slot_(pcie_slot), closed_(false), allocator_scheme_(MemoryAllocator::BASIC) {}
+    Device(tt::ARCH arch, int pcie_slot) : arch_(arch), pcie_slot_(pcie_slot), allocator_scheme_(MemoryAllocator::BASIC) {}
 
     ~Device();
 
@@ -39,6 +39,8 @@ class Device {
     MemoryAllocator allocator_scheme() const { return this->allocator_scheme_; }
 
     tt_cluster *cluster() const;  // Need to access cluster in llrt APIs
+
+    bool is_initialized() const { return this->initialized_; }
 
     int num_dram_channels() const;
 
@@ -96,11 +98,11 @@ class Device {
 
     static constexpr TargetDevice target_type_ = TargetDevice::Silicon;
     tt::ARCH arch_;
-    tt_cluster *cluster_;
+    tt_cluster *cluster_ = nullptr;
     int pcie_slot_;
-    std::unique_ptr<Allocator> allocator_;
+    std::unique_ptr<Allocator> allocator_ = nullptr;
     MemoryAllocator allocator_scheme_;
-    bool closed_;
+    bool initialized_ = false;
 
     bool harvesting_initialized_ = false;
     CoreCoord post_harvested_worker_grid_size_ = {};

@@ -149,7 +149,7 @@ bool Device::initialize(const MemoryAllocator &memory_allocator, const std::vect
     this->initialize_cluster();
     this->initialize_harvesting_information();
     this->initialize_allocator(memory_allocator, l1_bank_remap);
-    this->closed_ = false;
+    this->initialized_ = true;
     return true;
 }
 
@@ -158,7 +158,7 @@ bool Device::close() {
     cluster_->close_device();
     cluster_ = nullptr;
     allocator::clear(*this->allocator_);
-    this->closed_ = true;
+    this->initialized_ = false;
     return true;
 }
 

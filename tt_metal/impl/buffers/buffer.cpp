@@ -118,7 +118,7 @@ u64 Buffer::page_address(u32 bank_id, u32 page_index) const {
 }
 
 void Buffer::deallocate() {
-    if (this->device_ == nullptr or this->device_->closed_) {
+    if (this->device_ == nullptr or not this->device_->initialized_) {
         return;
     }
     log_assert(this->device_->allocator_ != nullptr, "Expected allocator to be initialized!");

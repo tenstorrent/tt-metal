@@ -841,6 +841,11 @@ void AddBlankKernels(Device *device, Program &program, bool profile_kernel) {
 }
 
 bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
+    log_assert(
+        device->is_initialized(),
+        "Device needs to be initialized before program {} compilation! Generating headers for banking information is dependent on information that is set during device initialization.", program.get_id()
+    );
+
     // Currently we want to support both slow and fast dispatch until we
     // fully move over to fast, so using this env var method to set all
     // the kernels to using fast dispatch mode.
@@ -879,7 +884,7 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
     bool pass = true;
     tt_metal_profiler.markStart("CompileProgram");
     std::vector< std::future<void> > events;
-    TT_ASSERT(!(profile_kernel && tt_is_print_server_running()), "Debug print server is running, profiling is not allowed");
+    log_assert(!(profile_kernel && tt_is_print_server_running()), "Debug print server is running, profiling is not allowed");
     tt_set_profiler_state_for_debug_print(profile_kernel);
 
     {
