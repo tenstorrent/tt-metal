@@ -9,7 +9,7 @@ Welcome to TT-Metal documentation!
 .. toctree::
    :caption: Get Started
 
-   get_started/installation
+   get_started/get_started
 
 .. toctree::
    :caption: BUDA-M
