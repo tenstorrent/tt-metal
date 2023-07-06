@@ -17,8 +17,8 @@ Running your first BUDA-M program
 
 To run any of these programming examples, ensure that you have cloned and
 installed this project from source and activated and setup the necessary
-environment. If you just came from there after reading the source installation
-and environment setup instructions, please continue.
+environment. If you just came from the repo README after reading the source
+installation and environment setup instructions, please continue.
 
 Compile and execute an example application on Grayskull:
 
