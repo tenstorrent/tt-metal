@@ -5,6 +5,8 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 
+#include <fmt/ranges.h>
+
 using namespace tt::constants;
 
 namespace tt {
@@ -12,7 +14,7 @@ namespace tt {
 namespace tt_metal {
 
 
-Program untilize_single_core(const Tensor &a, Tensor& output) {
+operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& output) {
 
     TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to untilize needs to be on device!");
     TT_ASSERT(a.buffer() != nullptr, "Operand to untilize needs to be allocated in a buffer on device!");
@@ -147,7 +149,37 @@ Program untilize_single_core(const Tensor &a, Tensor& output) {
         writer_kernel_args
     );
 
-    return program;
+    auto override_runtime_args_callback = [
+        reader_kernel=unary_reader_kernel,
+        writer_kernel=unary_writer_kernel
+    ](
+        const std::vector<Buffer*>& input_buffers,
+        const std::vector<Buffer*>& output_buffers
+    ) {
+
+        auto src_dram_buffer = input_buffers.at(0);
+        auto src_dram_noc_xy = src_dram_buffer->noc_coordinates();
+
+        auto dst_dram_buffer = output_buffers.at(0);
+
+        CoreCoord core = {0, 0};
+
+        {
+            auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+            runtime_args[0] = src_dram_buffer->address();
+            runtime_args[1] = uint32_t(src_dram_noc_xy.x);
+            runtime_args[2] = uint32_t(src_dram_noc_xy.y);
+            SetRuntimeArgs(reader_kernel, core, runtime_args);
+        }
+
+        {
+            auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+            runtime_args[0] = dst_dram_buffer->address();
+            SetRuntimeArgs(writer_kernel, core, runtime_args);
+        }
+    };
+
+    return {std::move(program), override_runtime_args_callback};
 }
 
 
@@ -175,6 +207,22 @@ operation::ProgramWithCallbacks Untilize::create_program(const std::vector<Tenso
     return {untilize_single_core(input_tensor_a, output_tensor)};
 }
 
+operation::Hash Untilize::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+
+    return fmt::format(
+        "{}_{}",
+         *this,
+         operation::hash_tensor(input_tensor)
+    );
+}
+
+std::ostream& operator<<(std::ostream& os, const Untilize& op) {
+    os << boost::core::demangle(typeid(op).name());
+    os << "{}";
+    return os;
+}
+
 Tensor untilize(const Tensor &input_tensor_a) {
     // No-op (Will do a tensor copy)
     if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
@@ -185,7 +233,7 @@ Tensor untilize(const Tensor &input_tensor_a) {
 }
 
 
-Program untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
+operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
 
     TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to untilize needs to be on device!");
     TT_ASSERT(a.buffer() != nullptr, "Operand to untilize needs to be allocated in a buffer on device!");
@@ -357,7 +405,37 @@ Program untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, con
         writer_kernel_args
     );
 
-    return program;
+    auto override_runtime_args_callback = [
+        reader_kernel=unary_reader_kernel,
+        writer_kernel=unary_writer_kernel
+    ](
+        const std::vector<Buffer*>& input_buffers,
+        const std::vector<Buffer*>& output_buffers
+    ) {
+
+        auto src_dram_buffer = input_buffers.at(0);
+        auto src_dram_noc_xy = src_dram_buffer->noc_coordinates();
+
+        auto dst_dram_buffer = output_buffers.at(0);
+
+        CoreCoord core = {0, 0};
+
+        {
+            auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+            runtime_args[0] = src_dram_buffer->address();
+            runtime_args[1] = uint32_t(src_dram_noc_xy.x);
+            runtime_args[2] = uint32_t(src_dram_noc_xy.y);
+            SetRuntimeArgs(reader_kernel, core, runtime_args);
+        }
+
+        {
+            auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+            runtime_args[0] = dst_dram_buffer->address();
+            SetRuntimeArgs(writer_kernel, core, runtime_args);
+        }
+    };
+
+    return {std::move(program), override_runtime_args_callback};
 }
 
 void UntilizeWithUnpadding::validate(const std::vector<Tensor> &input_tensors) const {
@@ -401,6 +479,26 @@ operation::ProgramWithCallbacks UntilizeWithUnpadding::create_program(const std:
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     return {untilize_with_unpadding_single_core(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end)};
+}
+
+operation::Hash UntilizeWithUnpadding::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+
+    return fmt::format(
+        "{}_{}",
+         *this,
+         operation::hash_tensor(input_tensor)
+    );
+}
+
+std::ostream& operator<<(std::ostream& os, const UntilizeWithUnpadding& op) {
+    os << boost::core::demangle(typeid(op).name());
+    os << "{";
+    os << fmt::format("output_tensor_start={}", op.output_tensor_start);
+    os << fmt::format(",output_tensor_end={}", op.output_tensor_end);
+    os << fmt::format(",output_tensor_shape={}", op.output_tensor_shape);
+    os << "}";
+    return os;
 }
 
 Tensor untilize_with_unpadding(const Tensor &input_tensor_a, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
