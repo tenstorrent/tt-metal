@@ -94,6 +94,8 @@ def generate_attn_mask(N, C, W, dev, offs, dtype, mem_config):
 
 
 def run_softmax_tests(test_id, dtype, in0_mem_config):
+    if dtype == ttl.tensor.DataType.BFLOAT8_B:
+        pytest.skip("Skipping BFP8_B tests since output is incorrect")
     torch.manual_seed(123)
     random.seed(123)
 
@@ -164,8 +166,11 @@ import pytest
 )
 @pytest.mark.parametrize(
     "dtype",
-    (ttl.tensor.DataType.BFLOAT16,),
-    ids=["BFLOAT16"],
+    (
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.DataType.BFLOAT8_B,
+    ),
+    ids=["BFLOAT16", "BFLOAT8_B"],
 )
 @pytest.mark.parametrize(
     "test_id",
