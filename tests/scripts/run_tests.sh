@@ -74,7 +74,8 @@ run_frequent_pipeline_tests() {
     fi
 
     # Switch to modules only soon
-    ./build_tt_metal.sh
+    make clean
+    make build
     make tests
 
     source build/python_env/bin/activate
@@ -114,7 +115,8 @@ run_frequently_hangs_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
 
-    ./build_tt_metal.sh
+    make clean
+    make build
     make tests
 
     source build/python_env/bin/activate
