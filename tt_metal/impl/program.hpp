@@ -17,6 +17,9 @@ namespace tt_metal {
 // Fwd declares
 namespace detail{
     void ValidateCircularBufferRegion(const Program &program, const Device *device, std::optional<CoreCoord> logical_core);
+    void AddKernel ( Program & program, Kernel * kernel);
+    void AddSemaphore ( Program & program, const CoreRangeSet & crs, uint32_t address, uint32_t init_value);
+    void AddCircularBuffer ( Program & program, CircularBuffer *circular_buffer);
 }
 
 struct KernelGroup {
@@ -100,92 +103,13 @@ class Program {
     std::vector<Semaphore> semaphores_;
     CoreRangeSet worker_crs_;
 
-    friend DataMovementKernel *CreateDataMovementKernel(
-        Program &program,
-        const std::string &file_name,
-        const CoreCoord &core,
-        const std::vector<uint32_t> &compile_args,
-        DataMovementProcessor processor_type,
-        NOC noc);
-
-    friend DataMovementKernel *CreateDataMovementKernel(
-        Program &program,
-        const std::string &file_name,
-        const CoreCoord &core,
-        DataMovementProcessor processor_type,
-        NOC noc);
-
-    friend DataMovementKernel *CreateDataMovementKernel(
-        Program &program,
-        const std::string &file_name,
-        const CoreRange &core_range,
-        const std::vector<uint32_t> &compile_args,
-        DataMovementProcessor processor_type,
-        NOC noc);
-
-    friend DataMovementKernel *CreateDataMovementKernel(
-        Program &program,
-        const std::string &file_name,
-        const CoreRange &core_range,
-        DataMovementProcessor processor_type,
-        NOC noc);
-
-    friend DataMovementKernel *CreateDataMovementKernel(
-        Program &program,
-        const std::string &file_name,
-        const CoreRangeSet &core_range_set,
-        const std::vector<uint32_t> &compile_args,
-        DataMovementProcessor processor_type,
-        NOC noc);
-
-    friend DataMovementKernel *CreateDataMovementKernel(
-        Program &program,
-        const std::string &file_name,
-        const CoreRangeSet &core_range_set,
-        DataMovementProcessor processor_type,
-        NOC noc);
-
-    friend ComputeKernel *CreateComputeKernel(
-        Program &program,
-        const std::string &file_name,
-        const CoreCoord &core,
-        const std::vector<uint32_t> &compile_args,
-        MathFidelity math_fidelity,
-        bool fp32_dest_acc_en,
-        bool math_approx_mode);
-
-    friend ComputeKernel *CreateComputeKernel(
-        Program &program,
-        const std::string &file_name,
-        const CoreRange &core_range,
-        const std::vector<uint32_t> &compile_args,
-        MathFidelity math_fidelity,
-        bool fp32_dest_acc_en,
-        bool math_approx_mode);
-
-    friend ComputeKernel *CreateComputeKernel(
-        Program &program,
-        const std::string &file_name,
-        const CoreRangeSet &core_range_set,
-        const std::vector<uint32_t> &compile_args,
-        MathFidelity math_fidelity,
-        bool fp32_dest_acc_en,
-        bool math_approx_mode);
-
-    friend const CircularBuffer &CreateCircularBuffers(
-        Program &program,
-        const std::set<uint32_t> &buffer_indices,
-        const CoreRangeSet &core_range_set,
-        uint32_t num_tiles,
-        uint32_t size_in_bytes,
-        DataFormat data_format,
-        std::optional<uint32_t> l1_address);
-
     friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device, std::optional<CoreCoord> logical_core);
 
-    friend uint32_t CreateSemaphore(Program &program, const CoreRange &core_range, uint32_t initial_value);
+    friend void detail::AddKernel ( Program & program, Kernel *kernel);
 
-    friend uint32_t CreateSemaphore(Program &program, const CoreRangeSet &core_range_set, uint32_t initial_value);
+    friend void detail::AddSemaphore ( Program & program, const CoreRangeSet & crs, uint32_t address, uint32_t init_value);
+
+    friend void detail::AddCircularBuffer ( Program & program, CircularBuffer *circular_buffer);
 
     void add_kernel(Kernel *kernel) { kernels_.push_back(kernel); }
 

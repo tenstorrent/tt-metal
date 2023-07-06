@@ -197,7 +197,7 @@ DataMovementKernel *CreateDataMovementKernel(
     DataMovementProcessor processor_type,
     NOC noc) {
     DataMovementKernel *kernel = new DataMovementKernel(file_name, core, compile_args, processor_type, noc);
-    program.add_kernel(kernel);
+    detail::AddKernel( program, kernel);
     return kernel;
 }
 
@@ -208,7 +208,7 @@ DataMovementKernel *CreateDataMovementKernel(
     DataMovementProcessor processor_type,
     NOC noc) {
     DataMovementKernel *kernel = new DataMovementKernel(file_name, core, processor_type, noc);
-    program.add_kernel(kernel);
+    detail::AddKernel( program, kernel);
     return kernel;
 }
 
@@ -221,7 +221,7 @@ DataMovementKernel *CreateDataMovementKernel(
     NOC noc) {
     TT_ASSERT(core_range.start == core_range.end or core_range.start < core_range.end && "Invalid core range!");
     DataMovementKernel *kernel = new DataMovementKernel(file_name, core_range, compile_args, processor_type, noc);
-    program.add_kernel(kernel);
+    detail::AddKernel( program, kernel);
     return kernel;
 }
 
@@ -233,7 +233,7 @@ DataMovementKernel *CreateDataMovementKernel(
     NOC noc) {
     TT_ASSERT(core_range.start == core_range.end or core_range.start < core_range.end && "Invalid core range!");
     DataMovementKernel *kernel = new DataMovementKernel(file_name, core_range, processor_type, noc);
-    program.add_kernel(kernel);
+    detail::AddKernel( program, kernel);
     return kernel;
 }
 
@@ -245,7 +245,7 @@ DataMovementKernel *CreateDataMovementKernel(
     DataMovementProcessor processor_type,
     NOC noc) {
     DataMovementKernel *kernel = new DataMovementKernel(file_name, core_range_set, compile_args, processor_type, noc);
-    program.add_kernel(kernel);
+    detail::AddKernel( program, kernel);
     return kernel;
 }
 
@@ -256,7 +256,7 @@ DataMovementKernel *CreateDataMovementKernel(
     DataMovementProcessor processor_type,
     NOC noc) {
     DataMovementKernel *kernel = new DataMovementKernel(file_name, core_range_set, processor_type, noc);
-    program.add_kernel(kernel);
+    detail::AddKernel( program, kernel);
     return kernel;
 }
 
@@ -275,7 +275,7 @@ ComputeKernel *CreateComputeKernel(
         math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode);
-    program.add_kernel(kernel);
+    detail::AddKernel( program, kernel);
     return kernel;
 }
 
@@ -295,7 +295,7 @@ ComputeKernel *CreateComputeKernel(
         math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode);
-    program.add_kernel(kernel);
+    detail::AddKernel( program, kernel);
     return kernel;
 }
 
@@ -314,7 +314,7 @@ ComputeKernel *CreateComputeKernel(
         math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode);
-    program.add_kernel(kernel);
+    detail::AddKernel( program, kernel);
     return kernel;
 }
 
@@ -398,7 +398,7 @@ uint32_t CreateSemaphore(Program &program, const CoreRange &core_range, uint32_t
     auto end_core = core_range.end;
     TT_ASSERT(start_core == end_core or start_core < end_core && "Invalid core range!");
     uint32_t address = get_semaphore_address(program, core_range);
-    program.add_semaphore(CoreRangeSet({core_range}), address, initial_value);
+    detail::AddSemaphore(program, CoreRangeSet({core_range}), address, initial_value);
     return address;
 }
 
@@ -412,7 +412,7 @@ uint32_t CreateSemaphore(Program &program, const CoreRangeSet &core_range_set, u
             TT_ASSERT(addr == address);
         }
     }
-    program.add_semaphore(core_range_set, address, initial_value);
+    detail::AddSemaphore(program, core_range_set, address, initial_value);
     return address;
 }
 
