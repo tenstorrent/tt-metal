@@ -130,13 +130,13 @@ class TtGPT(nn.Module):
 
                 tt_logits, _ = self.forward(idx_cond)
                 # pluck the logits at the final step and scale by desired temperature
+
+                #logits = logits[:, :, -1, :] / temperature
+                slice_list = [slice(None), slice(None), slice(-1), slice(None)]
+                tt_logits = fallback_ops.tensor_slice(tt_logits, slice_list)
+
                 logits = tt2torch_tensor(tt_logits)
 
-                #logits = logits[:, -1, :] / temperature
-                # optionally crop the logits to only the top k options
-                #tt_logits = nanogpt_utils.torch2tt_tensor(logits, device)
-            # pluck the logits at the final step and scale by desired temperature
-                logits = logits[:, :, -1, :] / temperature
             # optionally crop the logits to only the top k options
                 if top_k is not None:
                     v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
