@@ -2,11 +2,11 @@ import torch
 from torch.nn import functional as F
 import torch.nn as nn
 import tt_lib
-import python_api_testing.models.nanogpt.helper_funcs as nanogpt_utils
 from dataclasses import dataclass
 import math
 from tt_lib.fallback_ops import fallback_ops
 from python_api_testing.models.nanogpt.tt.nanogpt_config import GPTConfig
+from python_api_testing.models.helper_funcs import Linear
 
 
 from transformers import GPT2LMHeadModel
@@ -23,9 +23,11 @@ class TtCausalSelfAttention(nn.Module):
         super().__init__()
         assert config.n_embd % config.n_head == 0
 
+        self.config = config
+
         # key, query, value projections for all heads, but in a batch
-        self.attn_dropout = nn.Dropout(config.dropout)
-        self.resid_dropout = nn.Dropout(config.dropout)
+        self.attn_dropout = nn.Dropout(self.config.dropout)
+        self.resid_dropout = nn.Dropout(self.config.dropout)
 
 
         self.device = device
@@ -41,6 +43,9 @@ class TtCausalSelfAttention(nn.Module):
             self.tt_weight_c_proj, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
         )
 
+        self.tt_weight_c_attn = tt_lib.tensor.transpose(self.tt_weight_c_attn)
+        self.tt_weight_c_proj = tt_lib.tensor.transpose(self.tt_weight_c_proj)
+
         # Load biases
         self.tt_bias_c_attn = torch2tt_tensor(
             state_dict[f"{base_address}.c_attn.bias"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
@@ -49,17 +54,22 @@ class TtCausalSelfAttention(nn.Module):
             state_dict[f"{base_address}.c_proj.bias"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
         )
 
-        self.n_head = config.n_head
-        self.n_embd = config.n_embd
-        self.dropout = config.dropout
+        self.n_head = self.config.n_head
+        self.n_embd = self.config.n_embd
+        self.dropout = self.config.dropout
 
-        self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size)).view(1, 1, config.block_size, config.block_size))
+        self.register_buffer("bias", torch.tril(torch.ones(self.config.block_size, self.config.block_size)).view(1, 1, self.config.block_size, self.config.block_size))
+
+        self.c_attn = Linear(self.config.n_embd, 3 * config.n_embd, self.tt_weight_c_attn, self.tt_bias_c_attn)
+        self.c_proj = Linear(self.config.n_embd, self.config.n_embd, self.tt_weight_c_proj, self.tt_bias_c_proj)
+
 
     def forward(self, x):
 
         _, B, T, C = x.shape() # batch size, sequence length, embedding dimensionality (n_embd)
 
-        x1 = nanogpt_utils.tt_linear(x, self.tt_weight_c_attn, self.tt_bias_c_attn)
+        x1 = self.c_attn(x)
+
         pt_x1 = tt2torch_tensor(x1)
         pt_x1 = pt_x1.squeeze(0)
 
@@ -93,7 +103,8 @@ class TtCausalSelfAttention(nn.Module):
 
 
         # output projection
-        x2 = nanogpt_utils.tt_linear(tt_y, self.tt_weight_c_proj, self.tt_bias_c_proj)
+        x2 = self.c_proj(tt_y)
+
         pt_x2 = tt2torch_tensor(x2)
 
         y = self.resid_dropout(pt_x2)

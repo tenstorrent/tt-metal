@@ -2,7 +2,8 @@ import torch
 from torch.nn import functional as F
 import torch.nn as nn
 import tt_lib
-import python_api_testing.models.nanogpt.helper_funcs as nanogpt_utils
+from python_api_testing.models.helper_funcs import Linear
+
 import python_api_testing.models.nanogpt.tt.nanogpt_mlp as nanogpt_mlp
 import python_api_testing.models.nanogpt.tt.nanogpt_attention as nanogpt_attention
 from python_api_testing.models.nanogpt.tt.nanogpt_config import GPTConfig
@@ -72,16 +73,16 @@ class TtGPT(nn.Module):
             normalized_shape=config.n_embd,
         )
 
-        self.lm_weight = state_dict["lm_head.weight"]
+        lm_weight = state_dict["lm_head.weight"]
 
         # Push weights to Tt device
-        self.tt_weight_lm_head = torch2tt_tensor(
-            self.lm_weight, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
+        tt_lm_weight = torch2tt_tensor(
+            lm_weight, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
         )
 
-        self.tt_weight_lm_head = tt_lib.tensor.transpose(self.tt_weight_lm_head)
+        self.lm_head = Linear(self.config.n_embd, self.config.vocab_size, tt_lm_weight)
 
-        self.wte.weight = nn.Parameter(self.lm_weight) # https://paperswithcode.com/method/weight-tying
+        self.wte.weight = nn.Parameter(lm_weight) # https://paperswithcode.com/method/weight-tying
 
 
     def forward(self, idx):
@@ -112,7 +113,8 @@ class TtGPT(nn.Module):
         x = x[:, [-1], :]
         tt_x = torch2tt_tensor(x, self.device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
 
-        logits = nanogpt_utils.tt_linear(tt_x, weight=self.tt_weight_lm_head, bias=None)
+        logits = self.lm_head(tt_x)
+
         loss = None
 
         return logits, loss
