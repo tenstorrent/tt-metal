@@ -6,6 +6,9 @@
 #include "tt_metal/common/constants.hpp"
 #include "dtx/dtx.hpp"
 #include "dtx/dtx_passes.hpp"
+
+#include <fmt/ranges.h>
+
 using namespace tt::constants;
 
 namespace tt {
@@ -13,7 +16,7 @@ namespace tt {
 namespace tt_metal {
 
 
-Program tilize_single_core(const Tensor &a, Tensor& output) {
+operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& output) {
 
     // TODO: Build some sort of dispatcher based on location of op operands
     TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to tilize needs to be on device!");
@@ -159,7 +162,37 @@ Program tilize_single_core(const Tensor &a, Tensor& output) {
         (uint32_t) num_tiles}
     );
 
-    return program;
+    auto override_runtime_args_callback = [
+        reader_kernel=unary_reader_kernel,
+        writer_kernel=unary_writer_kernel
+    ](
+        const std::vector<Buffer*>& input_buffers,
+        const std::vector<Buffer*>& output_buffers
+    ) {
+
+        auto src_dram_buffer = input_buffers.at(0);
+
+        auto dst_dram_buffer = output_buffers.at(0);
+        auto dst_dram_noc_xy = dst_dram_buffer->noc_coordinates();
+
+        CoreCoord core = {0, 0};
+
+        {
+            auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+            runtime_args[0] = src_dram_buffer->address();
+            SetRuntimeArgs(reader_kernel, core, runtime_args);
+        }
+
+        {
+            auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+            runtime_args[0] = dst_dram_buffer->address();
+            runtime_args[1] = uint32_t(dst_dram_noc_xy.x);
+            runtime_args[2] = uint32_t(dst_dram_noc_xy.y);
+            SetRuntimeArgs(writer_kernel, core, runtime_args);
+        }
+    };
+
+    return {std::move(program), override_runtime_args_callback};
 }
 
 void Tilize::validate(const std::vector<Tensor> &input_tensors) const {
@@ -193,7 +226,23 @@ std::vector<Tensor> Tilize::create_output_tensors(const std::vector<Tensor> &inp
 operation::ProgramWithCallbacks Tilize::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    return {tilize_single_core(input_tensor_a, output_tensor)};
+    return tilize_single_core(input_tensor_a, output_tensor);
+}
+
+operation::Hash Tilize::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+
+    return fmt::format(
+        "{}_{}",
+         *this,
+         operation::hash_tensor(input_tensor)
+    );
+}
+
+std::ostream& operator<<(std::ostream& os, const Tilize& op) {
+    os << boost::core::demangle(typeid(op).name());
+    os << "{}";
+    return os;
 }
 
 Tensor tilize(const Tensor &input_tensor_a) {
@@ -332,6 +381,7 @@ Program tilize_with_zero_padding_single_core(const Tensor &a, Tensor &output) {
         (uint32_t) (output.shape()[0] * output.shape()[1] * output.shape()[2] * output.shape()[3] / TILE_HW)}
     );
     std::vector<uint32_t> zero_buffer_stick(row_size_datum, 0);
+    // TODO(arakhmati): add program cache support?
     tt_metal::WriteToDeviceL1(device, core.start, zero_buffer_l1_addr, zero_buffer_stick);
 
     return program;
@@ -381,7 +431,7 @@ Tensor tilize_with_zero_padding(const Tensor &input_tensor_a) {
     return operation::run_without_autoformat(TilizeWithZeroPadding(), input_tensor_a);
 }
 
-Program tilize_with_val_padding(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
+operation::ProgramWithCallbacks tilize_with_val_padding(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
 
     // TODO: Build some sort of dispatcher based on location of op operands
     TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to tilize needs to be on device!");
@@ -569,7 +619,37 @@ Program tilize_with_val_padding(const Tensor &a, Tensor& output, const std::arra
         (uint32_t) num_tiles}
     );
 
-    return program;
+    auto override_runtime_args_callback = [
+        reader_kernel=unary_reader_kernel,
+        writer_kernel=unary_writer_kernel
+    ](
+        const std::vector<Buffer*>& input_buffers,
+        const std::vector<Buffer*>& output_buffers
+    ) {
+
+        auto src_dram_buffer = input_buffers.at(0);
+
+        auto dst_dram_buffer = output_buffers.at(0);
+        auto dst_dram_noc_xy = dst_dram_buffer->noc_coordinates();
+
+        CoreCoord core = {0, 0};
+
+        {
+            auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+            runtime_args[0] = src_dram_buffer->address();
+            SetRuntimeArgs(reader_kernel, core, runtime_args);
+        }
+
+        {
+            auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+            runtime_args[0] = dst_dram_buffer->address();
+            runtime_args[1] = uint32_t(dst_dram_noc_xy.x);
+            runtime_args[2] = uint32_t(dst_dram_noc_xy.y);
+            SetRuntimeArgs(writer_kernel, core, runtime_args);
+        }
+    };
+
+    return {std::move(program), override_runtime_args_callback};
 }
 
 void TilizeWithValPadding::validate(const std::vector<Tensor> &input_tensors) const {
@@ -598,7 +678,27 @@ std::vector<Tensor> TilizeWithValPadding::create_output_tensors(const std::vecto
 operation::ProgramWithCallbacks TilizeWithValPadding::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    return {tilize_with_val_padding(input_tensor_a, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value)};
+    return tilize_with_val_padding(input_tensor_a, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
+}
+
+operation::Hash TilizeWithValPadding::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+
+    return fmt::format(
+        "{}_{}",
+         *this,
+         operation::hash_tensor(input_tensor)
+    );
+}
+
+std::ostream& operator<<(std::ostream& os, const TilizeWithValPadding& op) {
+    os << boost::core::demangle(typeid(op).name());
+    os << "{";
+    os << fmt::format("output_tensor_shape={}", op.output_tensor_shape);
+    os << fmt::format(",input_tensor_start={}", op.input_tensor_start);
+    os << fmt::format(",pad_value={}", op.pad_value);
+    os << "}";
+    return os;
 }
 
 Tensor tilize_with_val_padding(const Tensor &input_tensor_a, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
