@@ -58,14 +58,14 @@ Currently, the most convenient way to develop is to do so on our cloud
 machines. They have prerequisite dependencies, model files, and other settings
 set up for users.
 
-Please refer to the [initial Getting Started
-page](docs/source/get_started/installation.rst) then please read the the
-[developer's page](docs/source/dev_onboarding/get_started.rst).
+Please refer to the [README](README.md) for source installation and environment
+setup instructions, then please read the the [developer's
+page](docs/source/dev_onboarding/get_started.rst).
 
 ### Building and viewing the documentation locally
 
 1. First, ensure that you have [built the project and activated the Python
-environment](docs/source/get_started/installation.rst).
+environment](docs/source/get_started/get_started.rst).
 
 2. Build the HTML Documentation page.
 

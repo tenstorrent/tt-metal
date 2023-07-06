@@ -39,8 +39,24 @@ git clone git@github.com:tenstorrent-metal/tt-metal.git --recurse-submodules
 cd tt-metal
 ```
 
-You should look ahead to [Getting started](#getting-started) to further build
-and use this project.
+4. Set up the environment. Note that this setup is required **every time you
+   want to use this project**.
+
+```
+export ARCH_NAME=<arch name>
+export TT_METAL_HOME=<this repo dir>
+export PYTHONPATH=<this repo dir>
+export TT_METAL_ENV=<dev/production>
+```
+
+5. Build the project.
+
+```
+make build
+```
+
+You should look ahead to [Getting started](#getting-started) to further use
+this project.
 
 ### From a release wheel (BUDA-Eager only)
 
@@ -48,8 +64,39 @@ Coming soon!
 
 ## Getting started
 
+### Environment setup
+
+If you just came reading from building from source, you can read ahead to
+[running an example](#running-example-programs).
+
+Otherwise, you must set up the necessary environment variables to use this
+project every time:
+
+```
+export ARCH_NAME=<arch name>
+export TT_METAL_ENV=<dev/production>
+```
+
+where ``<arch name>`` is your target, which could be:
+
+- ``grayskull``
+- ``wormhole_b0``
+
+etc...
+
+If you're setting up an environment from source, you must further set up the
+environment with:
+
+```
+export TT_METAL_HOME=<this repo dir>
+export PYTHONPATH=<this repo dir>
+source build/python_env/bin/activate
+```
+
+### Running example programs
+
 After installing, please refer to our [Getting Started
-page](https://tenstorrent-metal.github.io/tt-metal/latest/get_started/installation.html)
+page](https://tenstorrent-metal.github.io/tt-metal/latest/get_started/get_started.html)
 in our documentation.
 
 ## Documentation

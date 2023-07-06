@@ -9,42 +9,16 @@ https://github.com/tenstorrent-metal/tt-metal
 To be added to the repo, please contact Jasmina or Davor at:
 jvasiljevic@tenstorrent.com, dcapalija@tenstorrent.com.
 
-Installation instructions are in the GitHub repository front-page README.
-
-Setting up the required environment
------------------------------------
-
-You must repeat this setup process any time you're working with the project,
-including if you're a developer.
-
-First, run a command to set up the target architecture of your build.
-
-::
-
-    export ARCH_NAME=<arch name>
-
-where ``<arch name>`` is your target, which could be:
-
-- ``grayskull``
-- ``wormhole_b0``
-
-etc...
-
-If you're building from source, it's now time to build:
-
-::
-
-    export TT_METAL_HOME=$(pwd)
-    make build
-
-Activate the built Python environment.
-
-::
-
-    source build/python_env/bin/activate
+Installation and environment setup instructions are in the GitHub repository
+front-page README.
 
 Running your first BUDA-M program
 ---------------------------------
+
+To run any of these programming examples, ensure that you have cloned and
+installed this project from source and activated and setup the necessary
+environment. If you just came from there after reading the source installation
+and environment setup instructions, please continue.
 
 Compile and execute an example application on Grayskull:
 
