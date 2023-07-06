@@ -89,8 +89,8 @@ inline void llk_unpack_AB_matmul_hw_configure(const llk_unpack_AB_matmul_params_
     configure_unpack_AB(get_operand_id(unpack_AB_params->unpB_operand), get_operand_id(unpack_AB_params->unpA_operand), 
                         srca_height, srcb_height, is_row_pool, transpose_xy_srca, is_fp32_dest_acc_en, srnd_fpu_en);
 
-    // Override the default tile size to be 32x32
-    TTI_SETADCXX(0b11, TILE_WIDTH*TILE_HEIGHT-1, 0x0);
+    // Configure tile size
+    configure_unpack_AB_tile_size(unpack_AB_params->in0_tile_dims, unpack_AB_params->in1_tile_dims);
 }
 
 template<bool is_fp32_dest_acc_en = false, bool srnd_fpu_en = false>
@@ -112,7 +112,7 @@ inline void llk_unpack_AB_matmul_init(const std::uint32_t transpose=0, const std
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose);
 
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
-    TTI_SETADCXX(0b11, TILE_WIDTH*TILE_HEIGHT-1, 0x0);
+    configure_unpack_AB_tile_size(in0_tile_dims, in1_tile_dims);
 
     TT_SETDMAREG(0, LOWER_HALFWORD(kt_dim), 0, LO_16(p_gpr_unpack::KT_DIM)); // store kt_dim to gpr for scaling tile size
 }

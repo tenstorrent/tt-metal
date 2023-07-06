@@ -17,6 +17,11 @@ enum Dim {
     Invalid = 0xFF,
 };
 
+enum TileDim {
+    R_IDX = 0,
+    C_IDX = 1,
+};
+
 enum PoolType {
     SUM,
     AVG,

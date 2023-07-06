@@ -316,6 +316,31 @@ namespace ckernel::unpacker
       reset_config_context();
    }
 
+
+   inline void configure_unpack_AB_tile_size(const std::uint32_t in0_tile_dims[2] = default_tile_dims, const std::uint32_t in1_tile_dims[2] = default_tile_dims) {
+
+     TTI_SETADCXX(0b11, TILE_WIDTH*TILE_HEIGHT-1, 0x0);
+
+     /*
+     if ((in0_tile_dims[TileDim::R_IDX] <= FACE_HEIGHT) && (in0_tile_dims[TileDim::C_IDX] <= FACE_WIDTH)) {
+       TTI_SETADCXX(0b10, FACE_HEIGHT*FACE_WIDTH-1, 0x0); //16x16
+     } else if (in0_tile_dims[TileDim::R_IDX] <= FACE_HEIGHT) { 
+       TTI_SETADCXX(0b10, FACE_HEIGHT*TILE_WIDTH-1, 0x0); //16x32
+     } else if (in0_tile_dims[TileDim::C_IDX] <= FACE_WIDTH) { 
+       TTI_SETADCXX(0b10, FACE_HEIGHT*FACE_WIDTH-1, 0x0); //16x16+16x16
+     }
+
+     if ((in1_tile_dims[TileDim::R_IDX] <= FACE_HEIGHT) && (in1_tile_dims[TileDim::C_IDX] <= FACE_WIDTH)) {
+       TTI_SETADCXX(0b01, FACE_HEIGHT*FACE_WIDTH-1, 0x0); //16x16
+     } else if (in1_tile_dims[TileDim::R_IDX] <= FACE_HEIGHT) { 
+       TTI_SETADCXX(0b01, FACE_HEIGHT*TILE_WIDTH-1, 0x0); //16x32
+     } else if (in1_tile_dims[TileDim::C_IDX] <= FACE_WIDTH) { 
+       TTI_SETADCXX(0b01, FACE_HEIGHT*FACE_WIDTH-1, 0x0); //16x16+16x16
+     }
+     */
+
+   }
+
    inline uint32_t get_operand_id(uint32_t operand) 
    {
       return (operand>=INTERMEDIATE_BASE_ID) ? operand - 8 : operand - OPERAND_BASE_ID;
