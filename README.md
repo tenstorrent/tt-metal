@@ -55,6 +55,12 @@ export TT_METAL_ENV=<dev/production>
 make build
 ```
 
+6. Activate the built Python environment.
+
+```
+source build/python_env/bin/activate
+```
+
 You should look ahead to [Getting started](#getting-started) to further use
 this project.
 
