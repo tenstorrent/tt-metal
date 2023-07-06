@@ -57,14 +57,24 @@ operation::ProgramWithCallbacks Transpose::create_program(const std::vector<Tens
 
     switch (parallelization_strategy) {
         case TransposeOpParallelizationStrategy::MULTI_CORE_WH:
-            return {transpose_wh_multi_core(input_tensor, output_tensor)};
+            return transpose_wh_multi_core(input_tensor, output_tensor);
             break;
         case TransposeOpParallelizationStrategy::MULTI_CORE_HC:
-            return {transpose_hc_multi_core(input_tensor, output_tensor)};
+            return transpose_hc_multi_core(input_tensor, output_tensor);
             break;
         default:
-            return {transpose_single_core(input_tensor, output_tensor, this->dim)};
+            return transpose_single_core(input_tensor, output_tensor, this->dim);
     }
+}
+
+operation::Hash Transpose::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+
+    return fmt::format(
+        "{}_{}",
+         *this,
+         operation::hash_tensor(input_tensor)
+    );
 }
 
 TransposeOpParallelizationStrategy::Enum Transpose::get_parallelization_strategy(const std::vector<Tensor>& input_tensors) const {
@@ -78,6 +88,14 @@ TransposeOpParallelizationStrategy::Enum Transpose::get_parallelization_strategy
     } else {
         return TransposeOpParallelizationStrategy::SINGLE_CORE;
     }
+}
+
+std::ostream& operator<<(std::ostream& os, const Transpose& op) {
+    os << boost::core::demangle(typeid(op).name());
+    os << "{";
+    os << ".dim=" << magic_enum::enum_name(op.dim);
+    os << "}";
+    return os;
 }
 
 Tensor transpose_(const Tensor &a, TransposeOpDim::Enum transpose_dim) {
