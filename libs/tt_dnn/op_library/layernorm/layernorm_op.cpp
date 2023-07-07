@@ -42,7 +42,7 @@ operation::ProgramWithCallbacks layernorm_(
     TT_ASSERT(H > 0 && W > 0 && NC > 0);
 
     // Kernels are configured to support BFLOAT8_B, but bad pcc so we need mixed precision support in compute
-    TT_ASSERT(a.dtype() == DataType::BFLOAT16);
+    TT_ASSERT(a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B);
     const auto& a_dtype = a.dtype();
     TT_ASSERT(not b.has_value() || b.value().dtype() == a_dtype);
     TT_ASSERT(not gamma.has_value() || gamma.value().dtype() == a_dtype);
