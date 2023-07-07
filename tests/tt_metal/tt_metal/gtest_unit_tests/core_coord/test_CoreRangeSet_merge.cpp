@@ -8,7 +8,7 @@ namespace basic_tests::CoreRangeSet{
 
 TEST_F(CoreCoordHarness, TestCoreRangeSetMerge)
 {
-
+    EXPECT_EQ ( ::CoreRangeSet({cr1}).merge({cr1}).ranges() , std::set<::CoreRange>( {cr1}) );
     EXPECT_EQ ( ::CoreRangeSet({cr1}).merge({cr2}).merge({cr3}).ranges() , std::set<::CoreRange>( {cr1,cr2,cr3}) );
     EXPECT_EQ ( ::CoreRangeSet({cr1, cr2, cr3}).merge({cr4}).ranges() , std::set<::CoreRange>( {cr4}) );
 
