@@ -1,0 +1,1 @@
+tt-smi -tr all

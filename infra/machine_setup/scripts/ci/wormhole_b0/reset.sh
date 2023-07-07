@@ -1,0 +1,1 @@
+tt-smi -wr all
