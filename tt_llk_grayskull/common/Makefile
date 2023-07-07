@@ -60,8 +60,11 @@ DISABLE_FWLOG ?= 1
 
 # provide in command line or kernel makefile
 RISCV_TOOLCHAIN_DIR = $(BUDA_HOME)/src/firmware/riscv/toolchain
+
 SOURCES ?= 
-SOURCES += $(wildcard src/*.cc)
+
+SOURCES += src/ckernel_unity.cc
+
 OUTPUT_DIR ?= out
 
 .PHONY: build
@@ -72,7 +75,10 @@ build : $(OUTPUT_DIR)
 	@$(PRINT_SUCCESS)
 
 include $(FIRMWARE_RISCV_DIR)/toolchain/riscv.mk
-ck_common_prereqs: $(OUTPUT_DIR) $(OUTPUT_DIR)/ckernel.o $(OUTPUT_DIR)/ckernel_template.o $(OUTPUT_DIR)/ckernel_main.o $(OUTPUT_DIR)/ckernel_perf_unpack_pack.o $(EXTRA_OBJECTS)
+
+# instead of building each file separately, we build them all together in ckernel_unity.cc
+# if you need to add new cc file, add it to ckernel_unity.cc
+ck_common_prereqs: $(OUTPUT_DIR) $(OUTPUT_DIR)/ckernel_unity.o $(EXTRA_OBJECTS)
 
 clean:
 	rm -rf out
