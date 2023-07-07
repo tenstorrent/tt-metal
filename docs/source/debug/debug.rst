@@ -56,7 +56,7 @@ For example, below is a dummy brisc kernel running on core 1-1:
 
 .. code-block:: cpp
 
-    #include "dataflow_api.h"
+    #include "dataflow_kernel_api.h"
 
     void kernel_main() {
         volatile uint32_t dst_addr  = get_arg_val<uint32_t>(0);

@@ -7,7 +7,7 @@
 #endif
 #include "ckernel_globals.h"
 #include "tools/profiler/kernel_profiler.hpp"
-#include "dataflow_api.h"
+#include "dataflow_kernel_api.h"
 #include "tensix_functions.h"
 
 #include "kernel.cpp"
@@ -40,10 +40,10 @@ void kernel_launch() {
 
     firmware_kernel_common_init((void *)MEM_NCRISC_INIT_LOCAL_L1_BASE);
 
-    setup_cb_read_write_interfaces();
+    dataflow_internal::setup_cb_read_write_interfaces();
 
-    init_dram_bank_to_noc_coord_lookup_tables();
-    init_l1_bank_to_noc_coord_lookup_tables();
+    dataflow_internal::init_dram_bank_to_noc_coord_lookup_tables();
+    dataflow_internal::init_l1_bank_to_noc_coord_lookup_tables();
 
     noc_init(loading_noc);
 

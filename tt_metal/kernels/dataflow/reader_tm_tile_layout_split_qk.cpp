@@ -1,6 +1,6 @@
 #include <stdint.h>
 
-#include "dataflow_api.h"
+#include "dataflow_kernel_api.h"
 
 // #define DEBUG
 #ifdef DEBUG
@@ -13,7 +13,7 @@ void kernel_main() {
     uint32_t in0_tensor_addr = get_arg_val<uint32_t>(1);
 
     // COMPILE TIME ARGS
-    // interleaved accessor args
+    // dataflow::Interleaved accessor args
     constexpr uint32_t in0_is_dram = get_compile_time_arg_val(1);
     constexpr uint32_t z = get_compile_time_arg_val(2);
     constexpr uint32_t out_num_tiles_per_tensor = get_compile_time_arg_val(3);
@@ -30,10 +30,10 @@ void kernel_main() {
 
 #define tile_dtype_is_bfloat16 get_compile_time_arg_val(0) == 1
 #if (tile_dtype_is_bfloat16)
-    const InterleavedAddrGenFast<in0_is_dram_bool> s0 = {
+    const dataflow::InterleavedAddrGenFast<in0_is_dram_bool> s0 = {
         .bank_base_address = in0_tensor_addr, .page_size = single_tile_size_bytes, .data_format = DataFormat::Float16};
 #else
-    const InterleavedAddrGenFast<in0_is_dram_bool> s0 = {
+    const dataflow::InterleavedAddrGenFast<in0_is_dram_bool> s0 = {
         .bank_base_address = in0_tensor_addr, .page_size = single_tile_size_bytes, .data_format = DataFormat::Bfp8_b};
 #endif
 
@@ -56,11 +56,11 @@ void kernel_main() {
             for (uint32_t j = 0; j < out_num_tiles_per_tensor_y; j++) {
                 for (uint32_t i = 0; i < out_num_tiles_per_tensor_x; i++) {
                     uint32_t tile_id = y_stride_cum + tensor_stride_cum + z_stride_cum + i;
-                    cb_reserve_back(cb_id_in0, 1);
-                    uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-                    noc_async_read_tile(tile_id + in0_tensor_tile_id, s0, l1_write_addr_in0);
-                    noc_async_read_barrier();
-                    cb_push_back(cb_id_in0, 1);
+                    dataflow::cb_reserve_back(cb_id_in0, 1);
+                    uint32_t l1_write_addr_in0 = dataflow::get_write_ptr(cb_id_in0);
+                    dataflow::noc_async_read_tile(tile_id + in0_tensor_tile_id, s0, l1_write_addr_in0);
+                    dataflow::noc_async_read_barrier();
+                    dataflow::cb_push_back(cb_id_in0, 1);
 #ifdef DEBUG
                     DPRINT << "Reader Tile ID: " << tile_id << ENDL();
                     DPRINT << "Reader Address: " << l1_write_addr_in0 << ENDL();
