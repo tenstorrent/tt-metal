@@ -86,7 +86,10 @@ static Tensor zeros_like(const Tensor& input_tensor, std::optional<DataType> dat
 template<typename T>
 static Tensor arange(int64_t start, int64_t stop, int64_t step) {
     constexpr DataType data_type = detail::get_data_type<T>();
-    auto size = (stop - start) / step;
+    // Current implementation restrictions
+    TT_ASSERT(step > 0, "Step must be greater than 0");
+    TT_ASSERT(start < stop, "Start must be less than step");
+    auto size = divup((stop - start), step);
     auto host_buffer  = host_buffer::create<T>(size);
     auto host_view = host_buffer::view_as<T>(host_buffer);
 
