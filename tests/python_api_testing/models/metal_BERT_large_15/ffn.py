@@ -11,14 +11,22 @@ sys.path.append(f"{f}/../../../..")
 
 import torch
 from transformers import BertForQuestionAnswering
-from tests.python_api_testing.models.conftest import model_location_generator_
 import tt_lib as ttl
 from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from utility_functions import comp_pcc, comp_allclose
 
+from python_api_testing.models.metal_BERT_large_15.model_config import get_model_config
+
 
 def feed_forward(
-    ffn_dim, hidden_dim, ff1_weighta, ff1_biasa, ff2_weighta, ff2_biasa, device, mem_config
+    ffn_dim,
+    hidden_dim,
+    ff1_weighta,
+    ff1_biasa,
+    ff2_weighta,
+    ff2_biasa,
+    device,
+    model_config,
 ):
     # Weights pre-transposed on host​. No on-the fly transpose of W.
     # ff1_weighta = ttl.tensor.transpose(ff1_weighta)
@@ -29,7 +37,13 @@ def feed_forward(
     # output = [1, 9, 384, 4096]
     def op13_MM_bias_gelu(activation, ff1_weighta, ff1_biasa):
         # profiler.start("___op13_MM_bias_gelu")
-        output_plus_bias_act = ttl.tensor.bert_large_ff1_matmul(activation, ff1_weighta, ff1_biasa, True, mem_config=ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM))
+        output_plus_bias_act = ttl.tensor.bert_large_ff1_matmul(
+            activation,
+            ff1_weighta,
+            ff1_biasa,
+            True,
+            mem_config=model_config["OP13_FF1_MM_OUTPUT_MEMCFG"],
+        )
         # profiler.end("___op13_MM_bias_gelu")
 
         return output_plus_bias_act
@@ -39,7 +53,12 @@ def feed_forward(
     # output = [1, 9, 384, 1024]
     def op14_MM_bias(activation, ff2_weighta, ff2_biasa):
         # profiler.start("___op14_MM_bias")
-        output_plus_bias = ttl.tensor.bert_large_ff2_matmul(activation, ff2_weighta, ff2_biasa, mem_config=mem_config)
+        output_plus_bias = ttl.tensor.bert_large_ff2_matmul(
+            activation,
+            ff2_weighta,
+            ff2_biasa,
+            mem_config=model_config["OP14_FF2_MM_OUTPUT_MEMCFG"],
+        )
         # profiler.end("___op14_MM_bias")
 
         return output_plus_bias
@@ -61,7 +80,7 @@ def feed_forward(
 
 
 class TtFeedForwardModel(torch.nn.Module):
-    def __init__(self, encoder_idx, state_dict, device, mem_config):
+    def __init__(self, encoder_idx, state_dict, device, model_config):
         super().__init__()
 
         # FF1 params
@@ -85,21 +104,21 @@ class TtFeedForwardModel(torch.nn.Module):
             ttl.tensor.Tensor(
                 encoder0_ff1_weight.reshape(-1).tolist(),
                 encoder0_ff1_weight.shape,
-                ttl.tensor.DataType.BFLOAT16,
+                model_config["OP13_FF1_MM_WEIGHTS_DTYPE"],
                 ttl.tensor.Layout.ROW_MAJOR,
             )
             .to(ttl.tensor.Layout.TILE)
-            .to(device)
+            .to(device, model_config["OP13_FF1_MM_WEIGHTS_MEMCFG"])
         )
         encoder0_ff1_bias = (
             ttl.tensor.Tensor(
                 encoder0_ff1_bias.reshape(-1).tolist(),
                 encoder0_ff1_bias.shape,
-                ttl.tensor.DataType.BFLOAT16,
+                model_config["OP13_FF1_MM_BIAS_DTYPE"],
                 ttl.tensor.Layout.ROW_MAJOR,
             )
             .to(ttl.tensor.Layout.TILE)
-            .to(device)
+            .to(device, model_config["OP13_FF1_MM_BIAS_MEMCFG"])
         )
 
         # FF2 params
@@ -121,21 +140,21 @@ class TtFeedForwardModel(torch.nn.Module):
             ttl.tensor.Tensor(
                 encoder0_ff2_weight.reshape(-1).tolist(),
                 encoder0_ff2_weight.shape,
-                ttl.tensor.DataType.BFLOAT16,
+                model_config["OP14_FF2_MM_WEIGHTS_DTYPE"],
                 ttl.tensor.Layout.ROW_MAJOR,
             )
             .to(ttl.tensor.Layout.TILE)
-            .to(device)
+            .to(device, model_config["OP14_FF2_MM_WEIGHTS_MEMCFG"])
         )
         encoder0_ff2_bias = (
             ttl.tensor.Tensor(
                 encoder0_ff2_bias.reshape(-1).tolist(),
                 encoder0_ff2_bias.shape,
-                ttl.tensor.DataType.BFLOAT16,
+                model_config["OP14_FF2_MM_BIAS_DTYPE"],
                 ttl.tensor.Layout.ROW_MAJOR,
             )
             .to(ttl.tensor.Layout.TILE)
-            .to(device)
+            .to(device, model_config["OP14_FF2_MM_BIAS_MEMCFG"])
         )
 
         self.ffn = feed_forward(
@@ -145,7 +164,7 @@ class TtFeedForwardModel(torch.nn.Module):
             encoder0_ff2_weight,
             encoder0_ff2_bias,
             device,
-            mem_config,
+            model_config,
         )
 
     def forward(self, activation):
@@ -176,13 +195,17 @@ def summarize_stats(t, name):
 
 
 def run_ffn_inference(
-    model_version, batch, seq_len, on_weka, dram, pcc, model_location_generator
+    model_version, batch, seq_len, on_weka, pcc, model_config, model_location_generator
 ):
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     # Initialize the device
-    ttl.device.InitializeDevice(device, ttl.device.MemoryAllocator.BASIC if dram else ttl.device.MemoryAllocator.L1_BANKING)
+    ttl.device.InitializeDevice(
+        device,
+        ttl.device.MemoryAllocator.BASIC
+        if not model_config["L1_BANKING"]
+        else ttl.device.MemoryAllocator.L1_BANKING,
+    )
     host = ttl.device.GetHost()
-    mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM if dram else ttl.tensor.BufferType.L1)
 
     if on_weka:
         model_name = str(
@@ -198,7 +221,7 @@ def run_ffn_inference(
         model_name, torchscript=False
     )
     tt_ffn_model = TtFeedForwardModel(
-        0, hugging_face_reference_model.state_dict(), device, mem_config
+        0, hugging_face_reference_model.state_dict(), device, model_config
     )
     pytorch_ffn_model = PytorchFeedForwardModel(hugging_face_reference_model)
 
@@ -215,10 +238,12 @@ def run_ffn_inference(
     tilized_ffn_input = ttl.tensor.Tensor(
         pad_ffn_input.reshape(-1).tolist(),
         pad_ffn_input.shape,
-        ttl.tensor.DataType.BFLOAT16,
+        model_config["OP12_LAYERNORM_OUTPUT_DTYPE"],
         ttl.tensor.Layout.ROW_MAJOR,
     ).to(ttl.tensor.Layout.TILE)
-    tilized_ffn_input = tilized_ffn_input.to(device, mem_config)
+    tilized_ffn_input = tilized_ffn_input.to(
+        device, model_config["OP12_LAYERNORM_OUTPUT_MEMCFG"]
+    )
 
     tt_out = tt_ffn_model(tilized_ffn_input).to(host)
     tt_out = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
@@ -238,32 +263,47 @@ def run_ffn_inference(
     if not passing:
         logger.error(f"Output PCC < {pcc}")
 
-    assert(passing)
+    assert passing
 
 
 @pytest.mark.parametrize(
-    "model_version, batch, seq_len, on_weka, dram, pcc",
+    "mem_config",
     (
-        ("phiyodr/bert-large-finetuned-squad2", 9, 384, True, True, 0.99),
-        ("phiyodr/bert-large-finetuned-squad2", 9, 384, True, False, 0.99),
+        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
     ),
     ids=["DRAM", "L1"],
 )
+@pytest.mark.parametrize(
+    "dtype",
+    (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),
+    ids=["BFLOAT8_B", "BFLOAT16"],
+)
+@pytest.mark.parametrize(
+    "model_version, batch, seq_len, on_weka, pcc",
+    (("phiyodr/bert-large-finetuned-squad2", 9, 384, True, 0.99),),
+    ids=["BERT_LARGE"],
+)
 def test_ffn_inference(
-    model_version, batch, seq_len, on_weka, dram, pcc, model_location_generator
+    model_version,
+    batch,
+    seq_len,
+    on_weka,
+    pcc,
+    dtype,
+    mem_config,
+    model_location_generator,
 ):
+    model_config = get_model_config(dtype, mem_config)
+
+    ttl.profiler.set_profiler_flag(False)
+    ttl.profiler.set_profiler_location("tt_metal/tools/profiler/logs/BERT_large_ffn")
     run_ffn_inference(
-        model_version, batch, seq_len, on_weka, dram, pcc, model_location_generator
-    )
-
-
-if __name__ == "__main__":
-    test_ffn_inference(
-        "phiyodr/bert-large-finetuned-squad2",
-        9,
-        384,
-        True,
-        True,
-        0.99,
-        model_location_generator_,
+        model_version,
+        batch,
+        seq_len,
+        on_weka,
+        pcc,
+        model_config,
+        model_location_generator,
     )

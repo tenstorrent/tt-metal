@@ -2,7 +2,6 @@ import pytest
 from loguru import logger
 import torch
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
-from tests.python_api_testing.models.conftest import model_location_generator_
 import sys
 from pathlib import Path
 import csv
@@ -29,10 +28,14 @@ from utility_functions import (
 )
 from utility_functions import profiler
 
+from python_api_testing.models.metal_BERT_large_15.model_config import get_model_config
+
 
 class TtBertBatchDram(torch.nn.Module):
-    def __init__(self, config, hugging_face_reference_model, device, mem_config):
+    def __init__(self, config, hugging_face_reference_model, device, model_config):
         super().__init__()
+        self.device = device
+        self.model_config = model_config
 
         # NOTE: Once we make embeddings run on device, pass in state dict
         # instead of model itself
@@ -49,7 +52,7 @@ class TtBertBatchDram(torch.nn.Module):
 
         self.encoders = torch.nn.ModuleList(
             [
-                TtBertEncoder(config, encoder_idx, state_dict, device, mem_config)
+                TtBertEncoder(config, encoder_idx, state_dict, device, model_config)
                 for encoder_idx in range(config.num_hidden_layers)
             ]
         )
@@ -61,54 +64,60 @@ class TtBertBatchDram(torch.nn.Module):
             ttl.tensor.Tensor(
                 weight.reshape(-1).tolist(),
                 weight.shape,
-                ttl.tensor.DataType.BFLOAT16,
+                model_config["QA_LINEAR_WEIGHTS_DTYPE"],
                 ttl.tensor.Layout.ROW_MAJOR,
             )
             .to(ttl.tensor.Layout.TILE)
-            .to(device)
+            .to(device, model_config["QA_LINEAR_WEIGHTS_MEMCFG"])
         )
         bias = pad_weight(state_dict["qa_outputs.bias"])
         bias = (
             ttl.tensor.Tensor(
                 bias.reshape(-1).tolist(),
                 bias.shape,
-                ttl.tensor.DataType.BFLOAT16,
+                model_config["QA_LINEAR_BIAS_DTYPE"],
                 ttl.tensor.Layout.ROW_MAJOR,
             )
             .to(ttl.tensor.Layout.TILE)
-            .to(device)
+            .to(device, model_config["QA_LINEAR_BIAS_MEMCFG"])
         )
 
         # QA linear
         # TODO: Replace with custom op with fused bias?
         def qa_linear_(activation):
-            output = ttl.tensor.matmul(activation, weight, mem_config)
+            output = ttl.tensor.matmul(
+                activation, weight, model_config["QA_LINEAR_OUTPUT_MEMCFG"]
+            )
             output_plus_bias = ttl.tensor.bcast(
-                output, bias, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H, mem_config
+                output,
+                bias,
+                ttl.tensor.BcastOpMath.ADD,
+                ttl.tensor.BcastOpDim.H,
+                model_config["QA_LINEAR_OUTPUT_MEMCFG"],
             )
             return output_plus_bias
 
         self.qa_linear = qa_linear_
 
-        self.device = device
-        self.mem_config = mem_config
-
     def model_preprocessing(self, input_ids, attention_mask=None, token_type_ids=None):
         embeddings = self.embeddings(input_ids, token_type_ids)
         # Convert to tt tensor
         pad_embeddings = pad_activation(embeddings)
-        tt_embeddings = ttl.tensor.Tensor(
-            pad_embeddings.reshape(-1).tolist(),
-            (
-                pad_embeddings.shape[0],
-                1,
-                pad_embeddings.shape[-2],
-                pad_embeddings.shape[-1],
-            ),
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
-        ).to(ttl.tensor.Layout.TILE)
-        tt_embeddings = tt_embeddings.to(self.device, self.mem_config)
+        tt_embeddings = (
+            ttl.tensor.Tensor(
+                pad_embeddings.reshape(-1).tolist(),
+                (
+                    pad_embeddings.shape[0],
+                    1,
+                    pad_embeddings.shape[-2],
+                    pad_embeddings.shape[-1],
+                ),
+                self.model_config["OP1_FUSED_QKV_MM_INPUT_DTYPE"],
+                ttl.tensor.Layout.ROW_MAJOR,
+            )
+            .to(ttl.tensor.Layout.TILE)
+            .to(self.device, self.model_config["OP1_FUSED_QKV_MM_INPUT_MEMCFG"])
+        )
 
         if attention_mask is not None:
             extended_attention_mask = self.get_extended_attention_mask(
@@ -118,19 +127,21 @@ class TtBertBatchDram(torch.nn.Module):
                 extended_attention_mask, -100000
             )  # Limit neg value that goes into exp
             extended_attention_mask = pad_activation(extended_attention_mask)
-            tt_attention_mask = ttl.tensor.Tensor(
-                extended_attention_mask.reshape(-1).tolist(),
-                extended_attention_mask.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            ).to(ttl.tensor.Layout.TILE)
-            tt_attention_mask = tt_attention_mask.to(self.device, self.mem_config)
+            tt_attention_mask = (
+                ttl.tensor.Tensor(
+                    extended_attention_mask.reshape(-1).tolist(),
+                    extended_attention_mask.shape,
+                    self.model_config["OP8_SOFTMAX_ATTENTION_MASK_DTYPE"],
+                    ttl.tensor.Layout.ROW_MAJOR,
+                )
+                .to(ttl.tensor.Layout.TILE)
+                .to(self.device, self.model_config["OP8_SOFTMAX_ATTENTION_MASK_MEMCFG"])
+            )
         else:
             tt_attention_mask = attention_mask
         return tt_embeddings, tt_attention_mask
 
-    def forward(self, PERF_CNT, tt_embeddings, tt_attention_mask = None):
-
+    def forward(self, PERF_CNT, tt_embeddings, tt_attention_mask=None):
         print(f"Num encoders {len(self.encoders)}")
 
         for i in range(PERF_CNT):
@@ -161,8 +172,8 @@ def run_bert_question_and_answering_inference(
     real_input,
     attention_mask,
     token_type_ids,
-    dram,
     pcc,
+    model_config,
     model_location_generator,
     PERF_CNT,
 ):
@@ -170,9 +181,13 @@ def run_bert_question_and_answering_inference(
     torch.manual_seed(1234)
 
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device, ttl.device.MemoryAllocator.BASIC if dram else ttl.device.MemoryAllocator.L1_BANKING)
+    ttl.device.InitializeDevice(
+        device,
+        ttl.device.MemoryAllocator.BASIC
+        if not model_config["L1_BANKING"]
+        else ttl.device.MemoryAllocator.L1_BANKING,
+    )
     host = ttl.device.GetHost()
-    mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM if dram else ttl.tensor.BufferType.L1)
 
     if on_weka:
         model_name = str(
@@ -199,7 +214,7 @@ def run_bert_question_and_answering_inference(
         hugging_face_reference_model.config,
         hugging_face_reference_model,
         device,
-        mem_config,
+        model_config,
     )
 
     profiler.start("processing_of_input")
@@ -256,7 +271,6 @@ def run_bert_question_and_answering_inference(
     tt_bert_input = tt_bert_model.model_preprocessing(**bert_input)
     profiler.end("processing_of_input")
 
-    # tt_bert_input = ttl.tensor.Tensor(pad_activation(bert_input).reshape(-1).tolist(), bert_input.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
     profiler.start("hugging_face_reference_model")
     pytorch_out = hugging_face_reference_model(**bert_input)
     profiler.end("hugging_face_reference_model")
@@ -354,12 +368,33 @@ def run_bert_question_and_answering_inference(
 
 
 @pytest.mark.parametrize(
-    "model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, dram, pcc",
+    "mem_config",
     (
-        ("phiyodr/bert-large-finetuned-squad2", 9, 384, True, True, True, True, True, 0.98),
-        ("phiyodr/bert-large-finetuned-squad2", 9, 384, True, True, True, True, False, 0.98),
+        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
     ),
     ids=["DRAM", "L1"],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),
+    ids=["BFLOAT8_B", "BFLOAT16"],
+)
+@pytest.mark.parametrize(
+    "model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc",
+    (
+        (
+            "phiyodr/bert-large-finetuned-squad2",
+            9,
+            384,
+            True,
+            True,
+            True,
+            True,
+            0.98,
+        ),
+    ),
+    ids=["BERT_LARGE"],
 )
 def test_bert_batch_dram(
     model_version,
@@ -369,10 +404,13 @@ def test_bert_batch_dram(
     real_input,
     attention_mask,
     token_type_ids,
-    dram,
     pcc,
+    dtype,
+    mem_config,
     model_location_generator,
 ):
+    model_config = get_model_config(dtype, mem_config)
+
     # This test will run BERT-Large once with cache disabled.
     # Then it will enable cache and run BERT-Large PERF_CNT number of times.
     # Performance is reported only for PERF_CNT number of runs.
@@ -392,19 +430,41 @@ def test_bert_batch_dram(
         real_input,
         attention_mask,
         token_type_ids,
-        dram,
         pcc,
+        model_config,
         model_location_generator,
         PERF_CNT,
     )
 
+
 @pytest.mark.parametrize(
-    "model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, dram, pcc",
+    "mem_config",
     (
-        ("phiyodr/bert-large-finetuned-squad2", 9, 384, True, True, True, True, True, 0.98),
-        ("phiyodr/bert-large-finetuned-squad2", 9, 384, True, True, True, True, False, 0.98),
+        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
     ),
     ids=["DRAM", "L1"],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),
+    ids=["BFLOAT8_B", "BFLOAT16"],
+)
+@pytest.mark.parametrize(
+    "model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc",
+    (
+        (
+            "phiyodr/bert-large-finetuned-squad2",
+            9,
+            384,
+            True,
+            True,
+            True,
+            True,
+            0.98,
+        ),
+    ),
+    ids=["BERT_LARGE"],
 )
 def test_bert_batch_dram_with_program_cache(
     use_program_cache,
@@ -415,10 +475,13 @@ def test_bert_batch_dram_with_program_cache(
     real_input,
     attention_mask,
     token_type_ids,
-    dram,
     pcc,
+    dtype,
+    mem_config,
     model_location_generator,
 ):
+    model_config = get_model_config(dtype, mem_config)
+
     # This test will run BERT-Large once with cache disabled.
     # Then it will enable cache and run BERT-Large PERF_CNT number of times.
     # Performance is reported only for PERF_CNT number of runs.
@@ -428,7 +491,9 @@ def test_bert_batch_dram_with_program_cache(
     disable_compilation_reports()
 
     ttl.profiler.set_profiler_flag(False)
-    ttl.profiler.set_profiler_location("tt_metal/tools/profiler/logs/BERT_large_full_with_program_cache/")
+    ttl.profiler.set_profiler_location(
+        "tt_metal/tools/profiler/logs/BERT_large_full_with_program_cache/"
+    )
 
     run_bert_question_and_answering_inference(
         model_version,
@@ -438,25 +503,10 @@ def test_bert_batch_dram_with_program_cache(
         real_input,
         attention_mask,
         token_type_ids,
-        dram,
         pcc,
+        model_config,
         model_location_generator,
         PERF_CNT,
     )
 
     assert ttl.program_cache.num_entries() == 12
-
-
-if __name__ == "__main__":
-    test_bert_batch_dram(
-        "phiyodr/bert-large-finetuned-squad2",
-        9,
-        384,
-        True,
-        True,
-        True,
-        True,
-        False,
-        0.98,
-        model_location_generator_,
-    )

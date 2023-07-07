@@ -14,13 +14,14 @@ import torch
 from transformers import BertForQuestionAnswering
 import numpy as np
 
-from tests.python_api_testing.models.conftest import model_location_generator_
 import tt_lib as ttl
 from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from utility_functions import enable_compile_cache, comp_pcc, comp_allclose, profiler
 
+from python_api_testing.models.metal_BERT_large_15.model_config import get_model_config
 
-def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
+
+def torch2tt_tensor(py_tensor: torch.Tensor, tt_device, dtype, mem_config):
     size = list(py_tensor.size())
 
     while len(size) < 4:
@@ -30,11 +31,11 @@ def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
         ttl.tensor.Tensor(
             py_tensor.reshape(-1).tolist(),
             size,
-            ttl.tensor.DataType.BFLOAT16,
+            dtype,
             ttl.tensor.Layout.ROW_MAJOR,
         )
         .to(ttl.tensor.Layout.TILE)
-        .to(tt_device)
+        .to(tt_device, mem_config)
     )
 
     return tt_tensor
@@ -49,7 +50,7 @@ def tt2torch_tensor(tt_tensor):
     return py_output
 
 
-def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, mem_config):
+def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, model_config):
     assert isinstance(num_heads, int) and num_heads > 0
 
     # Weights pre-transposed on host​. No on-the fly transpose of W​
@@ -60,31 +61,30 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, mem_config):
     qkv_weight = torch.cat((qw, kw, vw), -1)
     qkv_bias = torch.cat((qb, kb, vb), -1)
 
-    qkv_weight = torch2tt_tensor(qkv_weight, device)
-    qkv_bias = torch2tt_tensor(qkv_bias, device)
+    qkv_weight = torch2tt_tensor(
+        qkv_weight,
+        device,
+        model_config["OP1_FUSED_QKV_MM_WEIGHTS_DTYPE"],
+        model_config["OP1_FUSED_QKV_MM_WEIGHTS_MEMCFG"],
+    )
+    qkv_bias = torch2tt_tensor(
+        qkv_bias,
+        device,
+        model_config["OP1_FUSED_QKV_MM_BIAS_DTYPE"],
+        model_config["OP1_FUSED_QKV_MM_BIAS_MEMCFG"],
+    )
 
     # Used to scale down the input to the softmax
     freciprocal_of_sqrt_hidden_dim = 1 / math.sqrt(hidden_dim // num_heads)
-    reciprocal_of_sqrt_hidden_dim_tensor = ttl.tensor.Tensor(
-        [1 / math.sqrt(hidden_dim // num_heads)] + [0 for _ in range(32 * 32 - 1)],
-        [1, 1, 32, 32],
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.TILE,
-        device,
-    )
-
-    def multiply_by_sqrt_hidden_dim(x):
-        return ttl.tensor.bcast(
-            x,
-            reciprocal_of_sqrt_hidden_dim_tensor,
-            ttl.tensor.BcastOpMath.MUL,
-            ttl.tensor.BcastOpDim.HW,
-            mem_config,
-        )
 
     def op1_qkv_fused(activation, qkv_weight, qkv_bias):
         # profiler.start("___op1_qkv_fused")
-        qkv = ttl.tensor.bert_large_fused_qkv_matmul(activation, qkv_weight, qkv_bias, mem_config=mem_config)
+        qkv = ttl.tensor.bert_large_fused_qkv_matmul(
+            activation,
+            qkv_weight,
+            qkv_bias,
+            mem_config=model_config["OP1_FUSED_QKV_MM_OUTPUT_MEMCFG"],
+        )
         # profiler.end("___op1_qkv_fused")
 
         return qkv
@@ -92,7 +92,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, mem_config):
     def op2to6_create_qkv_heads(qkv):
         # profiler.start("___op2to6_create_qkv_heads")
         q_heads, kt_heads, v_heads = ttl.tensor.bert_large_create_qkv_heads(
-            qkv, mem_config
+            qkv, mem_config=model_config["OP2TO6_CREATE_QKV_HEADS_OUTPUT_MEMCFG"]
         )
         # profiler.end("___op2to6_create_qkv_heads")
 
@@ -100,7 +100,11 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, mem_config):
 
     def op7_bmm(Q_heads, K_T_heads):
         # profiler.start("___op7_bmm")
-        qkt = ttl.tensor.bert_large_pre_softmax_bmm(Q_heads, K_T_heads, mem_config=ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM))
+        qkt = ttl.tensor.bert_large_pre_softmax_bmm(
+            Q_heads,
+            K_T_heads,
+            mem_config=model_config["OP7_PRE_SOFTMAX_BMM_OUTPUT_MEMCFG"],
+        )
         # profiler.end("___op7_bmm")
 
         return qkt
@@ -116,15 +120,21 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, mem_config):
                 freciprocal_of_sqrt_hidden_dim, attention_mask, qkt
             )
         else:
-            attention_score_input = multiply_by_sqrt_hidden_dim(qkt)
-            attention_scores = ttl.tensor.softmax_in_place(attention_score_input)
+            # No pass in mha sub-graph or full bert encoder uses this anymore
+            assert (
+                False
+            ), "Must provide attention_mask to scale_mask_softmax in mha sub-graph!"
         # profiler.end("___op8_scale_mask_softmax")
 
         return attention_scores
 
     def op9_bmm(attention_scores, V_heads):
         # profiler.start("___op9_bmm")
-        weighted_activation = ttl.tensor.bert_large_post_softmax_bmm(attention_scores, V_heads, mem_config=mem_config)
+        weighted_activation = ttl.tensor.bert_large_post_softmax_bmm(
+            attention_scores,
+            V_heads,
+            mem_config=model_config["OP9_POST_SOFTMAX_BMM_OUTPUT_MEMCFG"],
+        )
         # profiler.end("___op9_bmm")
 
         return weighted_activation
@@ -136,7 +146,9 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, mem_config):
             return x
         else:
             # profiler.start("___op10_unmake_attention_heads")
-            retval = ttl.tensor.bert_large_concat_heads(x, mem_config)
+            retval = ttl.tensor.bert_large_concat_heads(
+                x, mem_config=model_config["OP10_CONCAT_ATTENTION_HEADS_OUTPUT_MEMCFG"]
+            )
             # profiler.end("___op10_unmake_attention_heads")
 
             return retval
@@ -172,7 +184,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, mem_config):
 
 
 class TtMultiHeadAttentionModel(torch.nn.Module):
-    def __init__(self, config, encoder_idx, state_dict, device, mem_config):
+    def __init__(self, config, encoder_idx, state_dict, device, model_config):
         super().__init__()
         qw = pad_weight(
             state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.query.weight"]
@@ -206,7 +218,7 @@ class TtMultiHeadAttentionModel(torch.nn.Module):
             hidden_dim,
             config.num_attention_heads,
             device,
-            mem_config,
+            model_config,
         )
 
     def forward(self, activation, attention_mask=None):
@@ -228,20 +240,17 @@ class PytorchMultiHeadAttentionModel(torch.nn.Module):
 
 
 def run_mha_inference(
-    model_version, batch, seq_len, on_weka, dram, pcc, model_location_generator
+    model_version, batch, seq_len, on_weka, pcc, model_config, model_location_generator
 ):
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     # Initialize the device
     ttl.device.InitializeDevice(
         device,
         ttl.device.MemoryAllocator.BASIC
-        if dram
+        if not model_config["L1_BANKING"]
         else ttl.device.MemoryAllocator.L1_BANKING,
     )
     host = ttl.device.GetHost()
-    mem_config = ttl.tensor.MemoryConfig(
-        True, ttl.tensor.BufferType.DRAM if dram else ttl.tensor.BufferType.L1
-    )
 
     if on_weka:
         model_name = str(
@@ -261,7 +270,7 @@ def run_mha_inference(
         0,
         hugging_face_reference_model.state_dict(),
         device,
-        mem_config,
+        model_config,
     )
     pytorch_mha_model = PytorchMultiHeadAttentionModel(hugging_face_reference_model)
 
@@ -281,20 +290,22 @@ def run_mha_inference(
     tt_mha_input = ttl.tensor.Tensor(
         pad_mha_input.reshape(-1).tolist(),
         pad_mha_input.shape,
-        ttl.tensor.DataType.BFLOAT16,
+        model_config["OP1_FUSED_QKV_MM_INPUT_DTYPE"],
         ttl.tensor.Layout.ROW_MAJOR,
     ).to(ttl.tensor.Layout.TILE)
-    tt_mha_input = tt_mha_input.to(device, mem_config)
+    tt_mha_input = tt_mha_input.to(
+        device, model_config["OP1_FUSED_QKV_MM_INPUT_MEMCFG"]
+    )
 
     tt_bert_attention_mask = (
         ttl.tensor.Tensor(
             extended_bert_attention_mask.reshape(-1).tolist(),
             extended_bert_attention_mask.shape,
-            ttl.tensor.DataType.BFLOAT16,
+            model_config["OP8_SOFTMAX_ATTENTION_MASK_DTYPE"],
             ttl.tensor.Layout.ROW_MAJOR,
         )
         .to(ttl.tensor.Layout.TILE)
-        .to(device, mem_config)
+        .to(device, model_config["OP8_SOFTMAX_ATTENTION_MASK_MEMCFG"])
     )
 
     tt_out = tt_mha_model(tt_mha_input, tt_bert_attention_mask).to(host)
@@ -319,30 +330,44 @@ def run_mha_inference(
 
 
 @pytest.mark.parametrize(
-    "model_version, batch, seq_len, on_weka, dram, pcc",
+    "mem_config",
     (
-        ("phiyodr/bert-large-finetuned-squad2", 9, 384, True, True, 0.99),
-        ("phiyodr/bert-large-finetuned-squad2", 9, 384, True, False, 0.99),
+        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
     ),
     ids=["DRAM", "L1"],
 )
+@pytest.mark.parametrize(
+    "dtype",
+    (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),
+    ids=["BFLOAT8_B", "BFLOAT16"],
+)
+@pytest.mark.parametrize(
+    "model_version, batch, seq_len, on_weka, pcc",
+    (("phiyodr/bert-large-finetuned-squad2", 9, 384, True, 0.99),),
+    ids=["BERT_LARGE"],
+)
 def test_mha_inference(
-    model_version, batch, seq_len, on_weka, dram, pcc, model_location_generator
+    model_version,
+    batch,
+    seq_len,
+    on_weka,
+    pcc,
+    dtype,
+    mem_config,
+    model_location_generator,
 ):
-    # enable_compile_cache()
+    model_config = get_model_config(dtype, mem_config)
+
+    ttl.profiler.set_profiler_flag(False)
+    ttl.profiler.set_profiler_location("tt_metal/tools/profiler/logs/BERT_large_mha")
 
     run_mha_inference(
-        model_version, batch, seq_len, on_weka, dram, pcc, model_location_generator
-    )
-
-
-if __name__ == "__main__":
-    test_mha_inference(
-        "phiyodr/bert-large-finetuned-squad2",
-        9,
-        384,
-        True,
-        True,
-        0.99,
-        model_location_generator_,
+        model_version,
+        batch,
+        seq_len,
+        on_weka,
+        pcc,
+        model_config,
+        model_location_generator,
     )
