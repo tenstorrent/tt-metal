@@ -17,12 +17,6 @@ struct Tilize {
     operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
 };
 
-struct TilizeWithZeroPadding {
-    void validate(const std::vector<Tensor> &input_tensors) const;
-    std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
-    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-};
 
 struct TilizeWithValPadding {
     const std::array<uint32_t, 4> output_tensor_shape;
