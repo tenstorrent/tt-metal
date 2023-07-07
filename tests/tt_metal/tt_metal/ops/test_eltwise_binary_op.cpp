@@ -4,6 +4,7 @@
 
 #include "tensor/tensor.hpp"
 #include "tensor/host_buffer.hpp"
+#include "tensor/host_buffer_functions.hpp"
 
 #include "constants.hpp"
 
@@ -15,15 +16,14 @@ using tt::tt_metal::Layout;
 
 template<typename BinaryFunction>
 Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
-    auto input_a_view = host_buffer::view_as<bfloat16>(input_tensor_a);
-    auto input_b_view = host_buffer::view_as<bfloat16>(input_tensor_b);
+    auto input_a_buffer = host_buffer::get_as<bfloat16>(input_tensor_a);
+    auto input_b_buffer = host_buffer::get_as<bfloat16>(input_tensor_b);
 
     auto output_buffer = host_buffer::create<bfloat16>(input_tensor_a.volume());
-    auto output_view = host_buffer::view_as<bfloat16>(output_buffer);
 
-    for (auto index = 0; index < output_view.size(); index++) {
-        auto value = BinaryFunction{}(input_a_view[index].to_float(), input_b_view[index].to_float());
-        output_view[index] = bfloat16(value);
+    for (auto index = 0; index < output_buffer.size(); index++) {
+        auto value = BinaryFunction{}(input_a_buffer[index].to_float(), input_b_buffer[index].to_float());
+        output_buffer[index] = bfloat16(value);
     }
     return Tensor(HostStorage{output_buffer}, input_tensor_a.shape(), input_tensor_a.dtype(), input_tensor_a.layout());
 }

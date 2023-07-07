@@ -37,7 +37,7 @@ void Tensor::deallocate() {
         {
             using T = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<T, HostStorage>) {
-                storage.buffer.reset();
+                std::visit([](auto&& buffer) { buffer.reset(); }, storage.buffer);
             }
             else if constexpr (std::is_same_v<T, DeviceStorage>) {
                 if (storage.buffer.use_count() == 1) {
@@ -54,12 +54,12 @@ void Tensor::deallocate() {
 }
 
 Tensor Tensor::to(Device *target_device, const MemoryConfig &mem_config) const {
-    if (storage_type() == StorageType::HOST) {
-        tensor_impl::validate_on_device_dtype_and_layout(target_device, this->dtype(), this->layout());
-        return tensor_impl::to_device_wrapper(*this, target_device, mem_config);
+    if (storage_type() == StorageType::DEVICE) {
+        TT_ASSERT(this->device_storage().value().device == target_device && "Currently do not support moving between devices");
+        return *this;
     }
-    TT_ASSERT(this->device_storage().value().device == target_device && "Currently do not support moving between devices");
-    return Tensor(*this);
+    tensor_impl::validate_on_device_dtype_and_layout(target_device, this->dtype(), this->layout());
+    return tensor_impl::to_device_wrapper(*this, target_device, mem_config);
 }
 
 Tensor Tensor::to(Host *host) const {
@@ -134,9 +134,18 @@ Tensor Tensor::reshape(const Shape& new_shape) const {
 
 bool Tensor::is_allocated() const {
     return std::visit(
-        [] (auto&& storage) -> bool
+        [](auto&& storage) -> bool
         {
-            return bool(storage.buffer);
+            using T = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<T, HostStorage>) {
+                return std::visit([](auto&& buffer) -> bool { return buffer.is_allocated(); }, storage.buffer);
+            }
+            else if constexpr (std::is_same_v<T, DeviceStorage>) {
+                return bool(storage.buffer);
+            }
+            else {
+                static_assert(detail::always_false_v<T>, "non-exhaustive visitor!");
+            }
         },
         this->storage_
     );
