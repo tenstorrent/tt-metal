@@ -19,27 +19,53 @@ struct Conv {
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
 
-    Conv(uint32_t in0_bh, uint32_t in0_bw, uint32_t in1_bw, uint32_t out_sh, uint32_t out_sw, const std::vector<int>&c_params, bool unt_out = true)
-        : in0_block_h(in0_bh),
-          in0_block_w(in0_bw),
-          in1_block_w(in1_bw),
-          out_subblock_h(out_sh),
-          out_subblock_w(out_sw),
+    Conv(uint32_t act_bh, uint32_t act_bw, uint32_t weight_bw, uint32_t out_sh, uint32_t out_sw, const std::vector<int>&c_params, bool unt_out = true)
+        : act_block_h_ntiles(act_bh),
+          act_block_w_ntiles(act_bw),
+          weight_block_w_ntiles(weight_bw),
+          out_subblock_h_ntiles(out_sh),
+          out_subblock_w_ntiles(out_sw),
           untilize_out(unt_out),
           conv_params(c_params) {}
 
     // additional parameters
     std::vector<int> conv_params;
-    uint32_t in0_block_h, in0_block_w, in1_block_w, out_subblock_h, out_subblock_w;
+    uint32_t act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles;
     bool untilize_out;
 };
 
-Tensor conv(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t in0_block_h, uint32_t in0_block_w, uint32_t in1_block_w,
-             uint32_t out_subblock_h, uint32_t out_subblock_w);
-Program conv_single_core(const Tensor& A, const Tensor& B, vector<int> conv_params, uint32_t in0_block_h, uint32_t in0_block_w, uint32_t in1_block_w,
-             uint32_t out_subblock_h, uint32_t out_subblock_w, bool untilize_out, Tensor& output); // Tilizes a, untilizes b
-Program conv_as_large_bmm_single_core_single_block(const Tensor& A, const Tensor& B, bool untilize_out, bool use_single_bank_reader); // Allows support for tilizing a, untilize b
-std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> compute_conv_op_block_info(uint32_t M, uint32_t K, uint32_t N);
+Tensor conv(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
+             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles);
+Program conv_single_core(const Tensor& A, const Tensor& B, vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
+             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, bool untilize_out, Tensor& output); // Tilizes a, untilizes b
+
+struct ConvWithAddressMap {
+    void validate(const std::vector<Tensor>& input_tensors) const;
+    std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
+    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
+
+    ConvWithAddressMap(uint32_t act_bh, uint32_t act_bw, uint32_t weight_bw, uint32_t out_sh, uint32_t out_sw, const std::vector<int>&c_params, bool unt_out = true)
+        : act_block_h_ntiles(act_bh),
+          act_block_w_ntiles(act_bw),
+          weight_block_w_ntiles(weight_bw),
+          out_subblock_h_ntiles(out_sh),
+          out_subblock_w_ntiles(out_sw),
+          untilize_out(unt_out),
+          conv_params(c_params) {}
+
+    // additional parameters
+    std::vector<int> conv_params;
+    uint32_t act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles;
+    bool untilize_out;
+};
+
+Tensor conv_with_address_map(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
+             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles);
+Program conv_with_address_map_single_core(const Tensor& A, const Tensor& B, vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
+             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, bool untilize_out, Tensor& output); // Tilizes a, untilizes b
+
+
 }  // namespace tt_metal
 
 }  // namespace tt

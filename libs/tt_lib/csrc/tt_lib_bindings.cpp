@@ -2244,6 +2244,22 @@ void TensorModule(py::module &m_tensor) {
         +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
     )doc");
 
+    m_tensor.def("conv_with_address_map", &conv_with_address_map, R"doc(
+        Perform a conv ``A x B`` with two tensors
+        This op tilizes tensor A and untilizes the output
+        Reader kernel uses an address map which pre-computed on the host to read activations and weights
+
+        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
+        | Argument     | Description                                                                                | Data type | Valid range | Required |
+        +==============+============================================================================================+===========+=============+==========+
+        | a            | Conv activation TT tensor (CHANNELS LAST                                                   | Tensor    |             | Yes      |
+        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
+        | b            | Conv weight TT tensor (TILED)                                                              | Tensor    |             | Yes      |
+        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
+        | conv_params  | Conv parameters list: kernel size H, kernel size W ,stride H,stride W,pad H,pad W          |Vector<int>|             | Yes      |
+        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
+    )doc");
+
     // Custom BERT TMs
     m_tensor.def("bert_large_create_qkv_heads", &bert_large_create_qkv_heads,
         py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
@@ -2295,7 +2311,6 @@ void TensorModule(py::module &m_tensor) {
         py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Perform a bert_large_post_softmax_bmm batched matmul by reshaping tensor A to [9, 16, 384, 384] first, then returning ``[9, 16, 384, 384] x [9, 16, 384, 64]``.
     )doc");
-    m_tensor.def("compute_conv_op_block_info", &compute_conv_op_block_info);
 
     // softmax
     m_tensor.def("softmax_in_place", &softmax_in_place,
