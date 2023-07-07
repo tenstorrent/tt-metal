@@ -222,6 +222,14 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.mac
 
+.. autofunction:: tt_lib.tensor.sigmoid
+
+.. autofunction:: tt_lib.tensor.hardsigmoid
+
+.. autofunction:: tt_lib.tensor.swish
+
+.. autofunction:: tt_lib.tensor.hardswish
+
 Tensor unary relational operations
 ----------------------------------
 .. autofunction:: tt_lib.tensor.ltz
@@ -291,14 +299,6 @@ Tensor creation operations
 .. autofunction:: tt_lib.tensor.zeros_like
 
 .. autofunction:: tt_lib.tensor.full_like
-
-.. autofunction:: tt_lib.tensor.sigmoid
-
-.. autofunction:: tt_lib.tensor.hardsigmoid
-
-.. autofunction:: tt_lib.tensor.swish
-
-.. autofunction:: tt_lib.tensor.hardswish
 
 Broadcast and Reduce
 --------------------
