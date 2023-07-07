@@ -26,6 +26,14 @@ Measuring read and write requires 2 separate tests. The following explanations a
 bash profile_scripts/Tensix2Tensix_issue_barrier.sh
 ```
 
+## Tensix to Tensix Read/Write fine grain profile
+
+Similar to previous issue and barrier profiling, but add more profiler markers in `tt_metal/src/firmwareriscv/grayskull/noc_nonblocking_api.h`.
+
+```
+bash profile_scripts/Tensix2Tensix_fine_grain.sh
+```
+
 ## DRAM to Tensix read/write speed
 
 Measuring read and write requires 1 test. The src code to measure read speed between DRAM and tensix cores is `tests/tt_metal/llrt/test_run_risc_rw_read_speed_banked_dram.cpp`. Compile all tests src codes by `make tests`. The compiled binary is `./build/test/llrt/test_run_risc_rw_speed_banked_dram`, which will be executed by host machine. But before executing this binary, we need to build the corresponding kernels (under `built_kernel` directory) by executing `./build/test/build_kernels_for_riscv/test_build_kernel_risc_rw_speed_banked_dram`. Kernel binaries will be sent to and executed by Tensix baby-riscv cores. In the script `profile_scripts/DRAM2Tensix.sh`, adjust DRAM channels by specify `DRAM_channel_pow_2`.

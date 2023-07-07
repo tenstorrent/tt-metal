@@ -30,7 +30,7 @@ def profile_issue_barrier(file_name):
 def profile_fine_grain(file_name):
     f = open(file_name, "r")
     lines = f.readlines()
-    dic = {}
+    dic = {5:[], 6:[]}
     for i in range(11, 18):
         dic[i] = []
     buffer = 0
@@ -39,21 +39,31 @@ def profile_fine_grain(file_name):
         if "Buffer" in line:
             if len(dic[11]) > 0:
                 print("Buffer: {} Transaction: {}".format(buffer, transaction), end=" ")
+                avg = sum(dic[5])/len(dic[5])
+                print("{}: {:.2f}".format(5, avg), end=" ")
                 for i in range(11, 18):
                     avg = sum(dic[i])/len(dic[i])
                     print("{}: {:.2f}".format(i, avg), end=" ")
                     dic[i] = []
+                avg = sum(dic[6])/len(dic[6])
+                print("{}: {:.2f}".format(6, avg), end=" ")
                 print()
             buffer = int(line.split()[1])
             transaction = int(line.split()[-1])
         elif "11:" in line:
             lst = line.split()
+            dic[5].append(int(lst[1]))
+            dic[6].append(int(lst[-1]))
             for i in range(11, 18):
-                dic[i].append(int(lst[(i-11)*2+1]))
+                dic[i].append(int(lst[(i-9)*2+1]))
     print("Buffer: {} Transaction: {}".format(buffer, transaction), end=" ")
+    avg = sum(dic[5])/len(dic[5])
+    print("{}: {:.2f}".format(5, avg), end=" ")
     for i in range(11, 18):
         avg = sum(dic[i])/len(dic[i])
         print("{}: {:.2f}".format(i, avg), end=" ")
+    avg = sum(dic[6])/len(dic[6])
+    print("{}: {:.2f}".format(6, avg), end=" ")
     print()
 
 

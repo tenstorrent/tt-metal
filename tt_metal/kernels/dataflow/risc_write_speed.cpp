@@ -16,6 +16,20 @@ void kernel_main() {
     // Use this reg for cmd buf
     std::uint32_t cmd_buf = NCRISC_WR_REG_CMD_BUF;
 
+        // kernel_profiler::mark_time(5);
+        // kernel_profiler::mark_time(6);
+        // kernel_profiler::mark_time(7);
+        // kernel_profiler::mark_time(8);
+        // kernel_profiler::mark_time(9);
+        // kernel_profiler::mark_time(10);
+        // kernel_profiler::mark_time(11);
+        // kernel_profiler::mark_time(12);
+        // kernel_profiler::mark_time(13);
+        // kernel_profiler::mark_time(14);
+        // kernel_profiler::mark_time(15);
+        // kernel_profiler::mark_time(16);
+
+
     // DRAM NOC src address
 
     for (std::uint32_t i=0; i<num_repetitions; i++) {

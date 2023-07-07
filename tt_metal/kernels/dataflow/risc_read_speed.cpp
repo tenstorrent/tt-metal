@@ -15,6 +15,19 @@ void kernel_main() {
 
     // DRAM NOC src address
 
+        // kernel_profiler::mark_time(5);
+        // kernel_profiler::mark_time(6);
+        // kernel_profiler::mark_time(7);
+        // kernel_profiler::mark_time(8);
+        // kernel_profiler::mark_time(9);
+        // kernel_profiler::mark_time(10);
+        // kernel_profiler::mark_time(11);
+        // kernel_profiler::mark_time(12);
+        // kernel_profiler::mark_time(13);
+        // kernel_profiler::mark_time(14);
+        // kernel_profiler::mark_time(15);
+        // kernel_profiler::mark_time(16);
+
     for (std::uint32_t i=0; i<num_repetitions; i++) {
         // reset these to the original value for each repetition
         buffer_dst_addr  = get_arg_val<uint32_t>(0);

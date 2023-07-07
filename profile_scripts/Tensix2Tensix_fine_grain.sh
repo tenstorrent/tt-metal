@@ -45,9 +45,9 @@ echo "Buffer: "$buffer" Transaction: "$transaction >> log/Tensix2Tensix_write_sp
 for i in {1..10}
 do
 ./build/test/llrt/test_run_risc_read_speed --buffer-size $buffer --transaction-size $transaction --num-repetitions 1 --profile 1
-python3 profile_scripts/custom_profile.py --file-name tt_metal/tools/profiler/logs/profile_log_device.csv --profile-target profile_Tensix2Tensix_fine_grain >> log/Tensix2Tensix_read_speed_fine_grain.log --read-or-write read
+python3 profile_scripts/custom_profile.py --file-name tt_metal/tools/profiler/logs/profile_log_device.csv --profile-target profile_Tensix2Tensix_fine_grain --read-or-write read >> log/Tensix2Tensix_read_speed_fine_grain.log
 ./build/test/llrt/test_run_risc_write_speed --buffer-size $buffer --transaction-size $transaction --num-repetitions 1 --profile 1
-python3 profile_scripts/custom_profile.py --file-name tt_metal/tools/profiler/logs/profile_log_device.csv --profile-target profile_Tensix2Tensix_fine_grain >> log/Tensix2Tensix_write_speed_fine_grain.log --read-or-write write
+python3 profile_scripts/custom_profile.py --file-name tt_metal/tools/profiler/logs/profile_log_device.csv --profile-target profile_Tensix2Tensix_fine_grain --read-or-write write >> log/Tensix2Tensix_write_speed_fine_grain.log
 done
 
 fi
