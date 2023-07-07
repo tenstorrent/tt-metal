@@ -193,6 +193,17 @@ but in general retaining the data.
 
 .. autofunction:: tt_lib.tensor.permute
 
+.. autofunction:: tt_lib.tensor.tilize
+
+.. autofunction:: tt_lib.tensor.untilize
+
+.. autofunction:: tt_lib.tensor.tilize_with_val_padding
+
+.. autofunction:: tt_lib.tensor.untilize_with_unpadding
+
+.. autofunction:: tt_lib.tensor.pad
+
+.. autofunction:: tt_lib.tensor.unpad
 
 Broadcast and Reduce
 --------------------
@@ -279,18 +290,6 @@ base operations together.
 
 Other Operations
 ----------------
-
-.. autofunction:: tt_lib.tensor.tilize
-
-.. autofunction:: tt_lib.tensor.untilize
-
-.. autofunction:: tt_lib.tensor.tilize_with_val_padding
-
-.. autofunction:: tt_lib.tensor.untilize_with_unpadding
-
-.. autofunction:: tt_lib.tensor.pad
-
-.. autofunction:: tt_lib.tensor.unpad
 
 .. autofunction:: tt_lib.tensor.fill_rm
 
