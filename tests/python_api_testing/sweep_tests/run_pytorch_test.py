@@ -44,7 +44,7 @@ def run_pytorch_test(args):
         try:
             pytorch_test_configs_yaml = yaml.safe_load(stream)
         except yaml.YAMLError as exc:
-            print(exc)
+            logger.error(exc)
 
     assert "test-list" in pytorch_test_configs_yaml
     pytorch_test_list = pytorch_test_configs_yaml["test-list"]
@@ -105,13 +105,9 @@ def run_pytorch_test(args):
 
         ################# RUN TEST SWEEP #################
         with open(results_csv_path, "a", newline="") as results_csv:
-            results_csv_writer = csv.DictWriter(
-                results_csv, fieldnames=get_test_fieldnames(test_name)
-            )
-            if not skip_header:
-                results_csv_writer.writeheader()
-                results_csv.flush()
+            results_csv_writer = None
 
+            init_file = True
             for input_shapes, datagen_funcs in shapes_and_datagen(
                 shape_dict, datagen_dict
             ):
@@ -119,6 +115,18 @@ def run_pytorch_test(args):
                     generated_test_args.update(
                         test_args
                     )  # specified test args overrides generated test args
+
+                    # Moved this here so that we don't need to maintain a hardcoded list of headers per op
+                    if init_file:
+                        results_csv_writer = csv.DictWriter(
+                            results_csv,
+                            fieldnames=get_test_fieldnames(generated_test_args.keys()),
+                        )
+                        if not skip_header:
+                            results_csv_writer.writeheader()
+                            results_csv.flush()
+                        init_file = False
+
                     data_seed = int(time.time())
                     torch.manual_seed(data_seed)
 
