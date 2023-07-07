@@ -21,7 +21,7 @@ struct hlk_args_t {
     std::int32_t dummy;
 };
 }
-void run_compile_blank() {
+void run_compile_blank(tt_metal::Device *device) {
 
     // Create and config an OP
     tt::build_kernel_for_riscv_options_t build_kernel_for_riscv_options("dummy_type","blank_op");
@@ -37,6 +37,7 @@ void run_compile_blank() {
     build_kernel_for_riscv_options.brisc_kernel_file_name = "tt_metal/kernels/dataflow/blank.cpp";
 
     generate_binaries_params_t params;
+    GenerateBankToNocCoordHeaders(device, &build_kernel_for_riscv_options, build_kernel_for_riscv_options.name);
     generate_binaries_all_riscs(&build_kernel_for_riscv_options, build_kernel_for_riscv_options.name, "grayskull", params);
 }
 
@@ -126,6 +127,8 @@ bool run_chained_sfpu_test(const tt::ARCH& arch, int chain_length) {
             tt_metal::CreateDevice(arch, pci_express_slot);
 
         pass &= tt_metal::InitializeDevice(device);
+
+        run_compile_blank(device);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -1123,10 +1126,6 @@ int main(int argc, char **argv) {
         log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
     }
     const tt::ARCH arch = tt::get_arch_from_string(arch_name);
-
-    // Run compile blank kernel here so that HACK_FOR_GRAPH_INTERPRETER doesn't
-    // meddle with the compilation
-    run_compile_blank();
 
     // Trivial chain of sfpu ops
     char env[] = "HACK_FOR_GRAPH_INTERPRETER=1";
