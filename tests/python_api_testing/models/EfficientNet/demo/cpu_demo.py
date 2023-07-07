@@ -35,7 +35,7 @@ def preprocess():
     Define the transform for the input image/frames.
     Resize, crop, convert to tensor, and apply ImageNet normalization stats.
     """
-    transform =  torchvision.transforms.Compose([
+    transform = torchvision.transforms.Compose([
         torchvision.transforms.ToPILImage(),
         torchvision.transforms.Resize(256),
         torchvision.transforms.CenterCrop(224),
