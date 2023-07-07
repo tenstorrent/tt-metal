@@ -39,7 +39,7 @@ def test_osa_stage_inference(pcc, reset_seeds):
     tt_model = TtOsaStage(
         in_chs=1,
         mid_chs=128,
-        out_chs=128,
+        out_chs=256,
         layer_per_block=3,
         residual=False,
         depthwise=True,

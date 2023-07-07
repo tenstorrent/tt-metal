@@ -1,10 +1,16 @@
 import torch.nn as nn
 
-from python_api_testing.models.vovnet.tt.conv_norm_act import TtConvNormAct
-from python_api_testing.models.vovnet.tt.sequential_append_list import (
+from pathlib import Path
+import sys
+
+f = f"{Path(__file__).parent}"
+sys.path.append(f"{f}/../../..")
+
+from models.vovnet.tt.conv_norm_act import TtConvNormAct
+from models.vovnet.tt.sequential_append_list import (
     TtSequentialAppendList,
 )
-from python_api_testing.models.vovnet.tt.effective_se_module import (
+from models.vovnet.tt.effective_se_module import (
     TtEffectiveSEModule,
 )
 
@@ -18,7 +24,8 @@ class TtOsaBlock(nn.Module):
         mid_chs=64,
         out_chs=64,
         layer_per_block=3,
-        residual=False,
+        groups=64,
+        residual=True,
         depthwise=True,
         base_address=None,
         state_dict=None,
@@ -36,8 +43,8 @@ class TtOsaBlock(nn.Module):
         if self.depthwise and next_in_chs != mid_chs:
             assert not residual
             self.conv_reduction = TtConvNormAct(
-                in_channels=64,
-                out_channels=128,
+                in_channels=next_in_chs,
+                out_channels=mid_chs,
                 kernel_size=1,
                 stride=1,
                 padding=0,
@@ -59,15 +66,15 @@ class TtOsaBlock(nn.Module):
             layer_per_block=layer_per_block,
             state_dict=state_dict,
             base_address=f"{base_address}",
-            in_channels=128,
-            groups=128,
+            in_channels=mid_chs,
+            groups=groups,
         )
 
         # feature aggregation
         next_in_chs = in_chs + layer_per_block * mid_chs
         self.conv_concat = TtConvNormAct(
-            in_channels=448,
-            out_channels=256,
+            in_channels=next_in_chs,
+            out_channels=out_chs,
             kernel_size=1,
             stride=1,
             padding=0,
@@ -84,8 +91,8 @@ class TtOsaBlock(nn.Module):
         )
 
         self.attn = TtEffectiveSEModule(
-            in_channels=256,
-            out_channels=256,
+            in_channels=out_chs,
+            out_channels=out_chs,
             kernel_size=1,
             stride=1,
             dilation=1,

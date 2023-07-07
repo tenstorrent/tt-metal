@@ -13,7 +13,7 @@ from utility_functions_new import (
 )
 from vovnet_utils import create_batchnorm
 import tt_lib
-from tt_lib.fallback_ops import fallback_ops
+from tt_lib import fallback_ops
 
 
 class TtSeparableConvNormAct(nn.Module):
@@ -69,7 +69,7 @@ class TtSeparableConvNormAct(nn.Module):
             in_channels=in_channels,
             out_channels=out_channels,
             kernel_size=kernel_size,
-            stride=stride,
+            stride=1,
             padding=0,
             dilation=dilation,
             padding_mode="zeros",

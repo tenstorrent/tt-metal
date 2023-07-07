@@ -1,8 +1,16 @@
 import torch.nn as nn
 
-from python_api_testing.models.vovnet.tt.osa_block import TtOsaBlock
+from pathlib import Path
+import sys
 
-import tt_lib.fallback_ops
+f = f"{Path(__file__).parent}"
+sys.path.append(f"{f}/..")
+sys.path.append(f"{f}/../../..")
+
+from models.vovnet.tt.osa_block import TtOsaBlock
+
+import tt_lib
+from tt_lib import fallback_ops
 
 
 class TtOsaStage(nn.Module):
@@ -13,9 +21,10 @@ class TtOsaStage(nn.Module):
         out_chs,
         block_per_stage: int = 1,
         layer_per_block: int = 3,
+        groups: int = 64,
         downsample=True,
         residual=True,
-        depthwise=False,
+        depthwise=True,
         base_address=None,
         device=None,
         host=None,
@@ -27,9 +36,7 @@ class TtOsaStage(nn.Module):
         self.state_dict = state_dict
         self.host = host
         if downsample:
-            self.pool = tt_lib.fallback_ops.MaxPool2d(
-                kernel_size=3, stride=2, ceil_mode=True
-            )
+            self.pool = fallback_ops.MaxPool2d(kernel_size=3, stride=2, ceil_mode=True)
         else:
             self.pool = None
 
@@ -38,12 +45,12 @@ class TtOsaStage(nn.Module):
             last_block = i == block_per_stage - 1
             blocks += [
                 TtOsaBlock(
-                    in_chs=1,
-                    mid_chs=128,
-                    out_chs=128,
+                    in_chs=in_chs,
+                    mid_chs=mid_chs,
+                    out_chs=out_chs,
                     layer_per_block=3,
-                    residual=False,
-                    depthwise=True,
+                    residual=residual,
+                    depthwise=depthwise,
                     base_address=self.base_address,
                     state_dict=self.state_dict,
                     device=self.device,
