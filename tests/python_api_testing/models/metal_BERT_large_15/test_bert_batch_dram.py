@@ -20,6 +20,7 @@ from tt_lib.utils import pad_activation, pad_weight
 from utility_functions import (
     enable_compile_cache,
     enable_compilation_reports,
+    disable_compilation_reports,
     enable_memory_reports,
     comp_allclose_and_pcc,
     comp_pcc,
@@ -378,7 +379,7 @@ def test_bert_batch_dram(
     PERF_CNT = 1
 
     disable_compile_cache()
-    enable_compilation_reports()
+    disable_compilation_reports()
 
     ttl.profiler.set_profiler_flag(False)
     ttl.profiler.set_profiler_location("tt_metal/tools/profiler/logs/BERT_large_full/")
@@ -424,7 +425,7 @@ def test_bert_batch_dram_with_program_cache(
     PERF_CNT = 1
 
     disable_compile_cache()
-    enable_compilation_reports()
+    disable_compilation_reports()
 
     ttl.profiler.set_profiler_flag(False)
     ttl.profiler.set_profiler_location("tt_metal/tools/profiler/logs/BERT_large_full_with_program_cache/")
