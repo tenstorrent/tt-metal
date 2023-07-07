@@ -223,50 +223,56 @@ class CoreRangeSet {
     CoreRangeSet& operator=(CoreRangeSet &&other) = default;
 
     CoreRangeSet merge ( const std::set<CoreRange> & core_ranges ){
-      std::vector<CoreRange> vcr (core_ranges.begin(), core_ranges.end() );
-      vcr.insert(vcr.end(), ranges_.begin(), ranges_.end());
+      std::set<CoreRange> scr = core_ranges;
+      scr.insert(ranges_.begin(), ranges_.end());
       std::vector<CoreRange> diffs;
-      std::set<CoreRange> is_contained;
-
+      std::set<CoreRange> filter_set, tmp;
       // Find all CoreRanges that are completely contained by another CoreRange
-      for (auto it1 = vcr.begin(); it1 != vcr.end(); it1++){
-        for (auto it2 = vcr.begin(); it2 != vcr.end(); it2++ ){
+      for (auto it1 = scr.begin(); it1 != scr.end(); it1++){
+        for (auto it2 = scr.begin(); it2 != scr.end(); it2++ ){
           if ( it1 == it2 ){
             continue;
           }
+          // std::cout << "Comparing " << it1->str() << " and " << it2->str() << std::endl;
+
           if ( it1->contains(*it2)){
             // std::cout << it1->str() << " contains " << it2->str() << std::endl;
-            is_contained.insert(*it2);
+            filter_set.insert(*it2);
           }
         }
       }
 
-      // Remove such contained CoreRanges
-      for (auto it1 = vcr.begin(); it1 != vcr.end(); ){
-        if ( is_contained.find( *it1) != is_contained.end() ){
-          it1 = vcr.erase(it1);
-        }else{
-          it1++;
-        }
-      }
+      std::set_difference( std::make_move_iterator( scr.begin() ),
+                           std::make_move_iterator( scr.end() ),
+                           filter_set.begin(), filter_set.end(),
+        std::inserter(tmp, tmp.end()));
 
+      scr.swap(tmp);
+      filter_set.clear();
+      tmp.clear();
+      ranges_.clear();
       // Merge CoreRanges, where possible
-      for (auto it1 = vcr.begin(); it1 != vcr.end(); it1++){
-        for (auto it2 = vcr.begin(); it2 != vcr.end(); ){
+      for (auto it1 = scr.begin(); it1 != scr.end(); it1++){
+        for (auto it2 = scr.begin(); it2 != scr.end(); it2++ ){
           if ( it1 == it2 ){
-            ++it2;
             continue;
           }
           if ( auto merged = it1->merge(*it2) ){
             // std::cout << "merging " << it1->str() << " and " << it2->str() << std::endl;
-            *it1 = merged.value();
-            it2 = vcr.erase(it2);
-          }
-          else{
-            ++it2;
+            ranges_.insert ( merged.value());
+            filter_set.insert(*it1);
+            filter_set.insert(*it2);
           }
         }
       }
+      std::set_difference( std::make_move_iterator( scr.begin() ),
+                           std::make_move_iterator( scr.end() ),
+                           filter_set.begin(), filter_set.end(),
+                           std::inserter(tmp, tmp.end()));
+
+      scr.swap(tmp);
+
+      ranges_.insert(scr.begin(), scr.end());
 
       //TODO: Diff CoreRanges
       // for ( unsigned i = 0; i < vcr.size(); i++){
@@ -286,8 +292,6 @@ class CoreRangeSet {
       //     }
       //   }
       // }
-
-      ranges_ = {vcr.begin(), vcr.end()};
       return *this;
     }
 
