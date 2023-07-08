@@ -51,7 +51,6 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
 
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
@@ -89,7 +88,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
 
     tt_metal::DataMovementKernel *writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_8bank_start_id.cpp",
+        "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
         writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_0,
@@ -155,8 +154,6 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
             core,
             {
                 dst_dram_buffer->address(),
-                (std::uint32_t)dram_dst_noc_xy.x,
-                (std::uint32_t)dram_dst_noc_xy.y,
                 num_tiles_per_core,
                 num_tiles_read
             }
@@ -180,7 +177,6 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
         auto src_dram_noc_xy = src_dram_buffer->noc_coordinates();
 
         auto dst_dram_buffer = output_buffers.at(0);
-        auto dst_dram_noc_xy = dst_dram_buffer->noc_coordinates();
 
         for(uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -196,8 +192,6 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
             {
                 auto runtime_args = GetRuntimeArgs(writer_kernel, core);
                 runtime_args[0] = dst_dram_buffer->address();
-                runtime_args[1] = uint32_t(dst_dram_noc_xy.x);
-                runtime_args[2] = uint32_t(dst_dram_noc_xy.y);
                 SetRuntimeArgs(writer_kernel, core, runtime_args);
             }
         }

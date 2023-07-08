@@ -124,7 +124,7 @@ operation::ProgramWithCallbacks matmul_multi_core_(const Tensor &a, const Tensor
 
     auto writer = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_8bank_start_id.cpp",
+        "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores, writer_compile_time_args, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
 
     vector<uint32_t> compute_args_group_1 = {
@@ -196,8 +196,6 @@ operation::ProgramWithCallbacks matmul_multi_core_(const Tensor &a, const Tensor
             writer,
             core,
             {dst_addr,
-            0,
-            0,
             num_output_tiles_per_core,
             num_tiles_written }
         );

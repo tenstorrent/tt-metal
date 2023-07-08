@@ -88,7 +88,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
 
     tt_metal::DataMovementKernel *writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_8bank_start_id.cpp",
+        "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
         writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_0,
@@ -163,8 +163,6 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
             writer_kernel, core,
             {
                 output.buffer()->address(),
-                0, // unused by multibank writer
-                0, // unused by multibank writer
                 num_tensor_tiles_per_core / out_dim_divider, // number of tiles to write
                 num_tiles_read / out_dim_divider // output tile start index
             }
@@ -187,7 +185,6 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
         auto src_dram_noc_xy = src_dram_buffer->noc_coordinates();
 
         auto dst_dram_buffer = output_buffers.at(0);
-        auto dst_dram_noc_xy = dst_dram_buffer->noc_coordinates();
 
         for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++){
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -203,8 +200,6 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
             {
                 auto runtime_args = GetRuntimeArgs(writer_kernel, core);
                 runtime_args[0] = dst_dram_buffer->address();
-                runtime_args[1] = uint32_t(dst_dram_noc_xy.x);
-                runtime_args[2] = uint32_t(dst_dram_noc_xy.y);
                 SetRuntimeArgs(writer_kernel, core, runtime_args);
             }
         }

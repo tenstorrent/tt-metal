@@ -76,19 +76,22 @@ operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &a, Tensor& out
     );
 
     // Op not uplifted for L1 yet, but need to provide arg to kernel
+    bool src_is_dram = true;
+    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(DataFormat::Float16_b), (uint32_t)src_is_dram};
     bool dst_is_dram = true;
     std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(DataFormat::Float16_b), (uint32_t)dst_is_dram};
 
     tt_metal::DataMovementKernel *reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_unary_8bank_start_id.cpp",
+        "tt_metal/kernels/dataflow/reader_unary_interleaved_start_id_reduce.cpp",
         all_cores,
+        reader_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
     tt_metal::DataMovementKernel *writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_8bank_start_id.cpp",
+        "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
         writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_0,
@@ -150,8 +153,6 @@ operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &a, Tensor& out
             reader_kernel, core,
             {
                 a.buffer()->address(),
-                0, // unused by multibank reader
-                0, // unused by multibank reader
                 num_tensor_tiles_per_core,
                 num_tiles_read, // tile index of row to start reading from
                 uint32_t(*reinterpret_cast<uint32_t*>(&scaler)), // scaler
@@ -162,8 +163,6 @@ operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &a, Tensor& out
             writer_kernel, core,
             {
                 output.buffer()->address(),
-                0, // unused by multibank writer
-                0, // unused by multibank writer
                 num_tensor_tiles_per_core / out_dim_divider, // number of tiles to write
                 num_tiles_read / out_dim_divider // output tile start index
             }
@@ -183,10 +182,8 @@ operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &a, Tensor& out
     ) {
 
         auto src_dram_buffer = input_buffers.at(0);
-        auto src_dram_noc_xy = src_dram_buffer->noc_coordinates();
 
         auto dst_dram_buffer = output_buffers.at(0);
-        auto dst_dram_noc_xy = dst_dram_buffer->noc_coordinates();
 
         for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++){
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -194,16 +191,12 @@ operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &a, Tensor& out
             {
                 auto runtime_args = GetRuntimeArgs(reader_kernel, core);
                 runtime_args[0] = src_dram_buffer->address();
-                runtime_args[1] = uint32_t(src_dram_noc_xy.x);
-                runtime_args[2] = uint32_t(src_dram_noc_xy.y);
                 SetRuntimeArgs(reader_kernel, core, runtime_args);
             }
 
             {
                 auto runtime_args = GetRuntimeArgs(writer_kernel, core);
                 runtime_args[0] = dst_dram_buffer->address();
-                runtime_args[1] = uint32_t(dst_dram_noc_xy.x);
-                runtime_args[2] = uint32_t(dst_dram_noc_xy.y);
                 SetRuntimeArgs(writer_kernel, core, runtime_args);
             }
         }

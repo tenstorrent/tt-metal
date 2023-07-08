@@ -111,7 +111,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
 
 	tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
 		program,
-		"tt_metal/kernels/dataflow/writer_unary_8bank_start_id.cpp",
+		"tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
 		all_cores,
 		writer_compile_time_args,
 		tt_metal::DataMovementProcessor::RISCV_0,
@@ -194,8 +194,6 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
 			unary_writer_kernel, core,
 			{
 				output.buffer()->address(),
-				0,
-				0,
 				num_tensor_tiles_per_core,
 				num_tiles_read,
 			}

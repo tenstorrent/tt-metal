@@ -64,19 +64,22 @@ operation::ProgramWithCallbacks eltwise_unary_multi_core(const Tensor &a, Tensor
     );
 
     // Op not uplifted for L1 yet, but need to provide arg to kernel
+    bool src_is_dram = true;
+    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(DataFormat::Float16_b), (uint32_t)src_is_dram};
     bool dst_is_dram = true;
     std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(DataFormat::Float16_b), (uint32_t)dst_is_dram};
 
     tt_metal::DataMovementKernel *unary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_unary_8bank_start_id.cpp",
+        "tt_metal/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         all_cores,
+        reader_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
     tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_8bank_start_id.cpp",
+        "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
         writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_0,
@@ -120,10 +123,8 @@ operation::ProgramWithCallbacks eltwise_unary_multi_core(const Tensor &a, Tensor
     }
 
     auto src_dram_buffer = a.buffer();
-    auto src_dram_noc_xy = src_dram_buffer->noc_coordinates();
 
     auto dst_dram_buffer = output.buffer();
-    auto dst_dram_noc_xy = dst_dram_buffer->noc_coordinates();
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -141,11 +142,8 @@ operation::ProgramWithCallbacks eltwise_unary_multi_core(const Tensor &a, Tensor
             core,
             {
                 src_dram_buffer->address(),
-                uint32_t(src_dram_noc_xy.x),
-                uint32_t(src_dram_noc_xy.y),
                 num_tiles_per_core,
-                num_tiles_written,
-                0 /*disable scaler*/
+                num_tiles_written
             }
         );
 
@@ -154,8 +152,6 @@ operation::ProgramWithCallbacks eltwise_unary_multi_core(const Tensor &a, Tensor
             core,
             {
                 dst_dram_buffer->address(),
-                uint32_t(dst_dram_noc_xy.x),
-                uint32_t(dst_dram_noc_xy.y),
                 num_tiles_per_core,
                 num_tiles_written
             }
@@ -175,10 +171,8 @@ operation::ProgramWithCallbacks eltwise_unary_multi_core(const Tensor &a, Tensor
     ) {
 
         auto src_dram_buffer = input_buffers.at(0);
-        auto src_dram_noc_xy = src_dram_buffer->noc_coordinates();
 
         auto dst_dram_buffer = output_buffers.at(0);
-        auto dst_dram_noc_xy = dst_dram_buffer->noc_coordinates();
 
         for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -186,16 +180,12 @@ operation::ProgramWithCallbacks eltwise_unary_multi_core(const Tensor &a, Tensor
             {
                 auto runtime_args = GetRuntimeArgs(unary_reader_kernel, core);
                 runtime_args[0] = src_dram_buffer->address();
-                runtime_args[1] = uint32_t(src_dram_noc_xy.x);
-                runtime_args[2] = uint32_t(src_dram_noc_xy.y);
                 SetRuntimeArgs(unary_reader_kernel, core, runtime_args);
             }
 
             {
                 auto runtime_args = GetRuntimeArgs(unary_writer_kernel, core);
                 runtime_args[0] = dst_dram_buffer->address();
-                runtime_args[1] = uint32_t(dst_dram_noc_xy.x);
-                runtime_args[2] = uint32_t(dst_dram_noc_xy.y);
                 SetRuntimeArgs(unary_writer_kernel, core, runtime_args);
             }
         }

@@ -1,6 +1,5 @@
 #include "dataflow_api.h"
 
-#include "debug_print.h"
 
 void kernel_main() {
     uint32_t dst_addr  = get_arg_val<uint32_t>(0);
@@ -16,32 +15,18 @@ void kernel_main() {
     constexpr bool write_to_dram = true;
     #endif
 
-    #ifdef OUTPUT_DRAM
-    const InterleavedPow2AddrGen<OUTPUT_DRAM> s = { dst_addr, 11 };
-    #else
     const InterleavedPow2AddrGen<write_to_dram> s = { dst_addr, 11 };
-    #endif
 
-    #if GENERATE_BCAST_SCALER
-    constexpr uint32_t blk = BLOCK_SIZE; // needed for correctness of softmax/LN kernels
-    #else
-    constexpr uint32_t blk = 1; // needed for correctness of kernels processing single tiles
-    #endif
-    #ifdef TILE_OFFSET
-    uint32_t tile_offset = TILE_OFFSET;
-    #else
-    constexpr uint32_t tile_offset = 0;
-    #endif
+    for (uint32_t i = 0; i<num_tiles; i ++) {
+        uint64_t dst_noc_addr = get_noc_addr(i, s);
 
-    for (uint32_t i = 0; i<num_tiles; i += blk) {
-        cb_wait_front(cb_id_out0, blk);
+        cb_wait_front(cb_id_out0, onetile);
+        uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
 
-        for (uint32_t j = 0; j<blk; j++) {
-            uint64_t dst_noc_addr = get_noc_addr(i+j+tile_offset, s);
-            uint32_t l1_read_addr = get_read_ptr(cb_id_out0) + (j<<11);
-            noc_async_write(l1_read_addr, dst_noc_addr, tile_bytes);
-        }
+        noc_async_write(l1_read_addr, dst_noc_addr, tile_bytes);
+
         noc_async_write_barrier();
-        cb_pop_front(cb_id_out0, blk);
-    }
+
+        cb_pop_front(cb_id_out0, onetile);
+     }
 }

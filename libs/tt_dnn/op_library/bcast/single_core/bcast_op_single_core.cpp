@@ -102,7 +102,7 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
 
     tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_8bank_start_id.cpp",
+        "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
         writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_0,
@@ -149,7 +149,7 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
         core,
         {
             output.buffer()->address(),
-            0, 0, num_tensor_tiles, 0
+            num_tensor_tiles, 0
         }
     );
 
