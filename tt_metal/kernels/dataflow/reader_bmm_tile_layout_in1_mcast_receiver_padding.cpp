@@ -53,8 +53,8 @@ void kernel_main() {
     uint32_t last_block_w                       = get_arg_val<uint32_t>(31); // not used
 
     constexpr DataFormat data_format                      = static_cast<DataFormat>(get_compile_time_arg_val(0));
-    constexpr uint32_t in0_is_dram                        = get_compile_time_arg_val(1) == 1;
-    constexpr uint32_t in1_is_dram                        = get_compile_time_arg_val(2) == 1; // not used
+    constexpr bool in0_is_dram                        = get_compile_time_arg_val(1) == 1;
+    constexpr bool in1_is_dram                        = get_compile_time_arg_val(2) == 1; // not used
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
