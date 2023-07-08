@@ -26,9 +26,19 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
-    uint32_t single_tile_size = TILE_HW * a.element_size();
+    tt_metal::Buffer *src0_buffer = a.buffer();
 
-    tt_metal::Buffer *src0_dram_buffer = a.buffer();
+    // This should allocate a DRAM buffer on the device
+    tt_metal::Device *device = a.device();
+    auto output_shape = output.shape();
+
+    tt_metal::Buffer *dst_buffer = output.buffer();
+    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+
+    // Only supports bfloat16 for now
+    tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
+
+    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
 
     int32_t num_tiles = a.volume() / TILE_HW;
     uint32_t stick_s =  a.layout() == Layout::ROW_MAJOR ? a.shape()[3] : a.shape()[1];
@@ -55,17 +65,6 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
     uint32_t num_leftover_tiles = num_tiles_in_row % num_tiles_per_block;
     uint32_t leftover_width_in_row = num_leftover_tiles * a.element_size();
 
-
-    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-
-    // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
-    auto output_shape = output.shape();
-
-    tt_metal::Buffer *dst_dram_buffer = output.buffer();
-    TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
-
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = num_tiles_per_block;
 
@@ -75,7 +74,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
         core,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
 
     uint32_t output_cb_index = 16; // output operands start at index 16
@@ -87,13 +86,11 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
         core,
         num_output_tiles,
         num_output_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
 
-    // Reader compile-time args
-    bool stick_size_is_power_of_two = (ceil(log2(stick_size)) == floor(log2(stick_size)));
     vector<uint32_t> reader_kernel_args = {
-        src0_dram_buffer->address(),
+        src0_buffer->address(),
         num_sticks,
         stick_size,
         num_tiles_per_block,
@@ -103,30 +100,38 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
         leftover_width_in_row,
     };
 
-    std::vector<uint32_t> compile_time_args;
-    if (stick_size_is_power_of_two) {
-        reader_kernel_args.push_back(log2(stick_size));
+    // Reader compile-time args
+    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool stick_size_is_power_of_two = is_power_of_two(stick_size);;
+    uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)log2(stick_size) : 0;
+    std::vector<uint32_t> reader_compile_time_args = {
+        (std::uint32_t) src0_is_dram,
+        (std::uint32_t) stick_size_is_power_of_two,
+        (std::uint32_t) log2_stick_size,
+    };
 
-        // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-        compile_time_args = {1};
-    } else {
-        compile_time_args = {0};
-    }
+    bool out_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> writer_compile_time_args = {
+        // interleaved accessor args
+        (std::uint32_t) static_cast<uint32_t>(cb_data_format),
+        (std::uint32_t) out_is_dram
+    };
 
     // Tilized reader
     tt_metal::DataMovementKernel *unary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_unary_stick_layout_split_rows_8bank.cpp",
+        "tt_metal/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp",
         core,
-        compile_time_args,
+        reader_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
     // Tilized writer
     tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_8bank.cpp",
+        "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
+        writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 
@@ -156,10 +161,9 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
     tt_metal::SetRuntimeArgs(
         unary_writer_kernel,
         core,
-        {dst_dram_buffer->address(),
-        (uint32_t) dram_dst_noc_xy.x,
-        (uint32_t) dram_dst_noc_xy.y,
-        (uint32_t) num_tiles}
+        {dst_buffer->address(),
+        (uint32_t) num_tiles,
+        (uint32_t) 0}
     );
 
     auto override_runtime_args_callback = [
@@ -170,24 +174,21 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
         const std::vector<Buffer*>& output_buffers
     ) {
 
-        auto src_dram_buffer = input_buffers.at(0);
+        auto src_buffer = input_buffers.at(0);
 
-        auto dst_dram_buffer = output_buffers.at(0);
-        auto dst_dram_noc_xy = dst_dram_buffer->noc_coordinates();
+        auto dst_buffer = output_buffers.at(0);
 
         CoreCoord core = {0, 0};
 
         {
             auto runtime_args = GetRuntimeArgs(reader_kernel, core);
-            runtime_args[0] = src_dram_buffer->address();
+            runtime_args[0] = src_buffer->address();
             SetRuntimeArgs(reader_kernel, core, runtime_args);
         }
 
         {
             auto runtime_args = GetRuntimeArgs(writer_kernel, core);
-            runtime_args[0] = dst_dram_buffer->address();
-            runtime_args[1] = uint32_t(dst_dram_noc_xy.x);
-            runtime_args[2] = uint32_t(dst_dram_noc_xy.y);
+            runtime_args[0] = dst_buffer->address();
             SetRuntimeArgs(writer_kernel, core, runtime_args);
         }
     };
@@ -203,6 +204,8 @@ void Tilize::validate(const std::vector<Tensor> &input_tensors) const {
 
     uint32_t stick_s =  input_tensor_a.layout() == Layout::ROW_MAJOR ? input_tensor_a.shape()[3] : input_tensor_a.shape()[1];
     uint32_t num_sticks = input_tensor_a.layout() == Layout::ROW_MAJOR ? input_tensor_a.volume() / input_tensor_a.shape()[3] : input_tensor_a.volume() / input_tensor_a.shape()[1];
+    TT_ASSERT(input_tensor_a.dtype() == DataType::BFLOAT16);
+
     uint32_t stick_size = stick_s * input_tensor_a.element_size(); // Assuming bfloat16 dataformat
 
     TT_ASSERT((stick_size % 2) == 0, "Stick size must be divisible by 2");
@@ -220,7 +223,7 @@ std::vector<Shape> Tilize::compute_output_shapes(const std::vector<Tensor> &inpu
 
 std::vector<Tensor> Tilize::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE);
+    return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks Tilize::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -241,20 +244,22 @@ operation::Hash Tilize::compute_program_hash(const std::vector<Tensor> &input_te
 
 std::ostream& operator<<(std::ostream& os, const Tilize& op) {
     os << boost::core::demangle(typeid(op).name());
-    os << "{}";
+    os << "{";
+    os << fmt::format("output_mem_config={}", operation::hash_memory_config(op.output_mem_config));
+    os << "}";
     return os;
 }
 
-Tensor tilize(const Tensor &input_tensor_a) {
+Tensor tilize(const Tensor &input_tensor_a, const MemoryConfig& mem_config) {
     // No-op (Will do a tensor copy)
     if (input_tensor_a.layout() == Layout::TILE) {
         log_warning("Perf warning: tilize called on already tilized tensor.");
         return input_tensor_a;
     }
-    return operation::run_without_autoformat(Tilize(), input_tensor_a);
+    return operation::run_without_autoformat(Tilize{mem_config}, input_tensor_a);
 }
 
-operation::ProgramWithCallbacks tilize_with_val_padding(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
+operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, const float pad_value) {
 
     // TODO: Build some sort of dispatcher based on location of op operands
     TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to tilize needs to be on device!");
@@ -271,7 +276,10 @@ operation::ProgramWithCallbacks tilize_with_val_padding(const Tensor &a, Tensor&
 
     uint32_t single_tile_size = a.element_size() * TILE_HW;
 
-    tt_metal::Buffer *src0_dram_buffer = a.buffer();
+    tt_metal::Buffer *src0_buffer = a.buffer();
+
+    // Only supports bfloat16 for now
+    tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
 
     int32_t num_tiles = output.volume() / TILE_HW;
 
@@ -293,7 +301,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding(const Tensor &a, Tensor&
     uint32_t unpadded_row_size_bytes = unpadded_row_size_datum * a.element_size(); // Assuming bfloat16 dataformat
     uint32_t padded_row_size_bytes = padded_row_size_datum * a.element_size(); // Assuming bfloat16 dataformat
 
-    const uint32_t alignment = 32;
+    constexpr uint32_t alignment = 32;
 
     uint32_t num_tiles_in_row = true_output_shape[3] / TILE_WIDTH;
     uint32_t max_l1_size = a.device()->l1_size() - UNRESERVED_BASE;
@@ -329,11 +337,9 @@ operation::ProgramWithCallbacks tilize_with_val_padding(const Tensor &a, Tensor&
     const uint32_t padded_W_diff_blocks = (true_output_shape[0] - true_input_shape[0]) * true_output_shape[1] * true_output_shape[2] / TILE_HEIGHT * num_blocks_w_output;
     const uint32_t num_leftover_Y = true_input_shape[2] - true_input_shape[2] / TILE_HEIGHT * TILE_HEIGHT;
 
-    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
 
-    tt_metal::Buffer *dst_dram_buffer = output.buffer();
-    TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
+    tt_metal::Buffer *dst_buffer = output.buffer();
+    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = num_tiles_per_block;
@@ -344,7 +350,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding(const Tensor &a, Tensor&
         core,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
 
     uint32_t ouput_cb_index = 16; // output operands start at index 16
@@ -356,7 +362,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding(const Tensor &a, Tensor&
         core,
         num_output_tiles,
         num_output_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
 
 
@@ -367,7 +373,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding(const Tensor &a, Tensor&
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
 
     vector<uint32_t> reader_kernel_args = {
-        src0_dram_buffer->address(),
+        src0_buffer->address(),
         true_input_shape[0],
         padded_W_diff_blocks,
         true_input_shape[1],
@@ -386,33 +392,40 @@ operation::ProgramWithCallbacks tilize_with_val_padding(const Tensor &a, Tensor&
         block_row_size,
         block_row_leftover_size
     };
-    std::vector<uint32_t> compile_time_args;
+
     // Reader compile-time args
-    // Data is 32 byte aligned
+    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     uint32_t stick_size = unpadded_row_size_bytes;
-    bool stick_size_is_power_of_two = (ceil(log2(stick_size)) == floor(log2(stick_size)));
-    if (stick_size_is_power_of_two) {
-        // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-        compile_time_args = {1};
-        reader_kernel_args.push_back((std::uint32_t)log2(stick_size));
-    } else {
-        compile_time_args = {0};
-    }
+    bool stick_size_is_power_of_two = is_power_of_two(stick_size);
+    uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)log2(stick_size) : 0;
+    std::vector<uint32_t> reader_compile_time_args = {
+        (std::uint32_t) src0_is_dram,
+        (std::uint32_t) stick_size_is_power_of_two,
+        (std::uint32_t) log2_stick_size,
+    };
+
+    bool out_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> writer_compile_time_args = {
+        // interleaved accessor args
+        (std::uint32_t) static_cast<uint32_t>(cb_data_format),
+        (std::uint32_t) out_is_dram
+    };
 
     // Tilized reader
     tt_metal::DataMovementKernel *unary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_unary_pad_dims_split_rows.cpp",
         core,
-        compile_time_args,
+        reader_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
     // Tilized writer
     tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_8bank.cpp",
+        "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
+        writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 
@@ -442,10 +455,8 @@ operation::ProgramWithCallbacks tilize_with_val_padding(const Tensor &a, Tensor&
     tt_metal::SetRuntimeArgs(
         unary_writer_kernel,
         core,
-        {dst_dram_buffer->address(),
-        (uint32_t) dram_dst_noc_xy.x,
-        (uint32_t) dram_dst_noc_xy.y,
-        (uint32_t) num_tiles}
+        {dst_buffer->address(),
+        (uint32_t) num_tiles, 0}
     );
 
     auto override_runtime_args_callback = [
@@ -456,24 +467,21 @@ operation::ProgramWithCallbacks tilize_with_val_padding(const Tensor &a, Tensor&
         const std::vector<Buffer*>& output_buffers
     ) {
 
-        auto src_dram_buffer = input_buffers.at(0);
+        auto src_buffer = input_buffers.at(0);
 
-        auto dst_dram_buffer = output_buffers.at(0);
-        auto dst_dram_noc_xy = dst_dram_buffer->noc_coordinates();
+        auto dst_buffer = output_buffers.at(0);
 
         CoreCoord core = {0, 0};
 
         {
             auto runtime_args = GetRuntimeArgs(reader_kernel, core);
-            runtime_args[0] = src_dram_buffer->address();
+            runtime_args[0] = src_buffer->address();
             SetRuntimeArgs(reader_kernel, core, runtime_args);
         }
 
         {
             auto runtime_args = GetRuntimeArgs(writer_kernel, core);
-            runtime_args[0] = dst_dram_buffer->address();
-            runtime_args[1] = uint32_t(dst_dram_noc_xy.x);
-            runtime_args[2] = uint32_t(dst_dram_noc_xy.y);
+            runtime_args[0] = dst_buffer->address();
             SetRuntimeArgs(writer_kernel, core, runtime_args);
         }
     };
@@ -484,6 +492,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding(const Tensor &a, Tensor&
 void TilizeWithValPadding::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     TT_ASSERT(input_tensor_a.layout() == Layout::ROW_MAJOR or input_tensor_a.layout() == Layout::CHANNELS_LAST, "Can only tilize row major or channels last data");
+    TT_ASSERT(input_tensor_a.dtype() == DataType::BFLOAT16);
 
     TT_ASSERT(input_tensor_a.shape()[0] + this->input_tensor_start[0] <= this->output_tensor_shape[0]);
     TT_ASSERT(input_tensor_a.shape()[1] + this->input_tensor_start[1] <= this->output_tensor_shape[1]);
@@ -510,7 +519,7 @@ std::vector<Shape> TilizeWithValPadding::compute_output_shapes(const std::vector
 }
 std::vector<Tensor> TilizeWithValPadding::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE);
+    return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE, this->output_mem_config);
 }
 
 // TODO: If pad is called on a tile and output is not tile, we could untilize then pad, and output is RM
@@ -518,7 +527,7 @@ std::vector<Tensor> TilizeWithValPadding::create_output_tensors(const std::vecto
 operation::ProgramWithCallbacks TilizeWithValPadding::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    return tilize_with_val_padding(input_tensor_a, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
+    return tilize_with_val_padding_single_core(input_tensor_a, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
 }
 
 operation::Hash TilizeWithValPadding::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
@@ -537,11 +546,12 @@ std::ostream& operator<<(std::ostream& os, const TilizeWithValPadding& op) {
     os << fmt::format("output_tensor_shape={}", op.output_tensor_shape);
     os << fmt::format(",input_tensor_start={}", op.input_tensor_start);
     os << fmt::format(",pad_value={}", op.pad_value);
+    os << fmt::format(",output_mem_config={}", operation::hash_memory_config(op.output_mem_config));
     os << "}";
     return os;
 }
 
-Tensor tilize_with_val_padding(const Tensor &input_tensor_a, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
+Tensor tilize_with_val_padding(const Tensor &input_tensor_a, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, const float pad_value, const MemoryConfig& mem_config) {
     // No-op (Will do a tensor copy)
     // TODO: We need to run asserts before this
     if (input_tensor_a.layout() == Layout::TILE) {
@@ -552,11 +562,11 @@ Tensor tilize_with_val_padding(const Tensor &input_tensor_a, const std::array<ui
             TT_ASSERT(false, "Cannot tilize and pad tensor that is already tilized");
         }
     }
-    return operation::run_without_autoformat(TilizeWithValPadding{output_tensor_shape, input_tensor_start, pad_value}, input_tensor_a);
+    return operation::run_without_autoformat(TilizeWithValPadding{output_tensor_shape, input_tensor_start, pad_value, mem_config}, input_tensor_a);
 
 }
 
-Tensor tilize_with_zero_padding(const Tensor &input_tensor_a) {
+Tensor tilize_with_zero_padding(const Tensor &input_tensor_a, const MemoryConfig& mem_config) {
     // No-op (Will do a tensor copy)
     if (input_tensor_a.layout() == Layout::TILE) {
         log_warning("Perf warning: tilize called on already tilized tensor.");
@@ -571,7 +581,7 @@ Tensor tilize_with_zero_padding(const Tensor &input_tensor_a) {
         shape[2] = roundup(shape[2], TILE_HEIGHT);
         shape[3] = roundup(shape[3], TILE_WIDTH);
     }
-    return tilize_with_val_padding(input_tensor_a, shape, {0, 0, 0, 0}, 0);
+    return tilize_with_val_padding(input_tensor_a, shape, {0, 0, 0, 0}, 0, mem_config);
 }
 
 }  // namespace tt_metal

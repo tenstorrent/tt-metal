@@ -10,7 +10,8 @@ namespace tt_metal {
 struct Pad {
     const std::array<uint32_t, 4> output_tensor_shape;
     const std::array<uint32_t, 4> input_tensor_start;
-    float pad_value;
+    const float pad_value;
+    const MemoryConfig& output_mem_config;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -19,7 +20,7 @@ struct Pad {
     operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
 };
 
-Tensor pad(const Tensor &input_tensor_a, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value);
+Tensor pad(const Tensor &input_tensor_a, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, const float pad_value, const MemoryConfig& mem_config = MemoryConfig{.interleaved = true});
 
 struct PadOnHost {
     const std::array<uint32_t, 4> output_tensor_shape;

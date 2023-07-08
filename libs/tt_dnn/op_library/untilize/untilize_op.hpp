@@ -10,6 +10,8 @@ namespace tt_metal {
 // TODO: Accept parallelization
 
 struct Untilize {
+    const MemoryConfig& output_mem_config;
+
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
@@ -20,17 +22,7 @@ struct Untilize {
 struct UntilizeWithUnpadding {
     const std::array<uint32_t, 4> output_tensor_start;
     const std::array<uint32_t, 4> output_tensor_end;
-    const std::array<uint32_t, 4> output_tensor_shape;
-
-    UntilizeWithUnpadding(const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end)
-        : output_tensor_start(output_tensor_start), output_tensor_end(output_tensor_end),
-        output_tensor_shape{
-        output_tensor_end[0] - output_tensor_start[0] + 1,
-        output_tensor_end[1] - output_tensor_start[1] + 1,
-        output_tensor_end[2] - output_tensor_start[2] + 1,
-        output_tensor_end[3] - output_tensor_start[3] + 1,
-        } {
-    }
+    const MemoryConfig& output_mem_config;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -40,8 +32,8 @@ struct UntilizeWithUnpadding {
 };
 
 
-Tensor untilize (const Tensor &a);
-Tensor untilize_with_unpadding(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end);
+Tensor untilize (const Tensor &a, const MemoryConfig& mem_config = MemoryConfig{.interleaved = true});
+Tensor untilize_with_unpadding(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end, const MemoryConfig& mem_config = MemoryConfig{.interleaved = true});
 
 }  // namespace tt_metal
 

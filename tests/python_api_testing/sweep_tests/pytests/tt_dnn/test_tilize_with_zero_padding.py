@@ -39,7 +39,7 @@ def test_tilize_with_zero_padding_test(
             partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16
         )
     ]
-    comparison_func = partial(comparison_funcs.comp_equal)
+    comparison_func = comparison_funcs.comp_equal
     run_single_pytorch_test(
         "tilize_with_zero_padding",
         input_shapes,

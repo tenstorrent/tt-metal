@@ -37,7 +37,7 @@ def test_untilize_test(input_shapes, untilize_args, pcie_slot, function_level_de
             partial(generation_funcs.gen_arange), torch.bfloat16, True
         )
     ]
-    comparison_func = partial(comparison_funcs.comp_equal)
+    comparison_func = comparison_funcs.comp_equal
     run_single_pytorch_test(
         "untilize",
         input_shapes,

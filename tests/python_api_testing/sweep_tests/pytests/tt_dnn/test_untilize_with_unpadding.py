@@ -54,7 +54,7 @@ def test_run_untilize_with_unpadding_test(
             partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16, True
         )
     ]
-    comparison_func = partial(comparison_funcs.comp_equal)
+    comparison_func = comparison_funcs.comp_equal
     run_single_pytorch_test(
         "untilize_with_unpadding",
         input_shapes,

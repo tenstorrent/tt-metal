@@ -11,7 +11,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
+operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, const float pad_value) {
 
     TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to pad needs to be on device!");
     TT_ASSERT(a.buffer() != nullptr, "Operand to pad needs to be allocated in a buffer on device!");
@@ -25,20 +25,21 @@ operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const st
 
     auto output_shape = output_tensor_shape;
 
-    tt_metal::Buffer *src0_dram_buffer = a.buffer();
+    tt_metal::Buffer *src0_buffer = a.buffer();
 
     uint32_t unpadded_row_size_bytes = a.shape()[3] * a.element_size();
     uint32_t padded_row_size_bytes = output_shape[3] * a.element_size();
 
-    tt_metal::Buffer *dst_dram_buffer = output.buffer();
-    TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
+    tt_metal::Buffer *dst_buffer = output.buffer();
+    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    uint32_t alignment = 32;
+    constexpr uint32_t alignment = 32;
 
     uint32_t src_stick_size = unpadded_row_size_bytes;
     uint32_t dst_stick_size = padded_row_size_bytes;
 
-    uint32_t cache_buffer_size = alignment * a.device()->num_dram_channels();
+    uint32_t num_output_banks = output.device()->num_banks(dst_buffer->buffer_type());
+    uint32_t cache_buffer_size = alignment * num_output_banks;
     uint32_t src_buffer_size = alignment + src_stick_size;
     uint32_t dst_buffer_size = alignment + dst_stick_size;
 
@@ -50,8 +51,8 @@ operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const st
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
 
     vector<uint32_t> reader_kernel_args = {
-        src0_dram_buffer->address(),
-        dst_dram_buffer->address(),
+        src0_buffer->address(),
+        dst_buffer->address(),
         a.shape()[0],
         output_shape[0],
         a.shape()[1],
@@ -66,36 +67,29 @@ operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const st
         packed_pad_value,
         cache_buffer_l1.address(),
         src_buffer_l1.address(),
-        dst_buffer_l1.address()
+        dst_buffer_l1.address(),
+        num_output_banks
     };
+    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src_stick_size_is_power_of_two = is_power_of_two(src_stick_size);
+    uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)log2(src_stick_size) : 0;
+    bool dst_stick_size_is_power_of_two = is_power_of_two(dst_stick_size);
+    uint32_t dst_log2_stick_size = dst_stick_size_is_power_of_two ? (std::uint32_t)log2(dst_stick_size) : 0;
+    std::vector<uint32_t> compile_time_args_vec = {
+        (std::uint32_t) src0_is_dram,
+        (std::uint32_t) dst_is_dram,
+        (std::uint32_t) src_stick_size_is_power_of_two,
+        (std::uint32_t) src_log2_stick_size,
+        (std::uint32_t) dst_stick_size_is_power_of_two,
+        (std::uint32_t) dst_log2_stick_size,
 
-    std::vector<uint32_t> compile_time_args_vec;
-    // Reader compile-time args
-    // Data is 32 byte aligned
-    bool src_stick_size_is_power_of_two = (ceil(log2(src_stick_size)) == floor(log2(src_stick_size)));
-    if (src_stick_size_is_power_of_two) {
-        // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-        compile_time_args_vec.push_back(1);
-        reader_kernel_args.push_back((std::uint32_t)log2(src_stick_size));
-    } else {
-        compile_time_args_vec.push_back(0);
-        reader_kernel_args.push_back(0);
-    }
-
-    bool dst_stick_size_is_power_of_two = (ceil(log2(dst_stick_size)) == floor(log2(dst_stick_size)));
-    if (dst_stick_size_is_power_of_two) {
-        // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-        compile_time_args_vec.push_back(1);
-        reader_kernel_args.push_back((std::uint32_t)log2(dst_stick_size));
-    } else {
-        compile_time_args_vec.push_back(0);
-        reader_kernel_args.push_back(0);
-    }
+    };
 
     // Tilized reader
     tt_metal::DataMovementKernel *unary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/pad_dims_rm_8bank.cpp",
+        "tt_metal/kernels/dataflow/pad_dims_rm_interleaved.cpp",
         core,
         compile_time_args_vec,
         tt_metal::DataMovementProcessor::RISCV_1,
@@ -127,15 +121,15 @@ operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const st
         const std::vector<Buffer*>& output_buffers
     ) {
 
-        auto src_dram_buffer = input_buffers.at(0);
-        auto dst_dram_buffer = output_buffers.at(0);
+        auto src_buffer = input_buffers.at(0);
+        auto dst_buffer = output_buffers.at(0);
 
         CoreCoord core = {0, 0};
 
         {
             auto runtime_args = GetRuntimeArgs(kernel, core);
-            runtime_args[0] = src_dram_buffer->address();
-            runtime_args[1] = dst_dram_buffer->address();
+            runtime_args[0] = src_buffer->address();
+            runtime_args[1] = dst_buffer->address();
             SetRuntimeArgs(kernel, core, runtime_args);
         }
     };
@@ -143,7 +137,7 @@ operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const st
     return {std::move(program), override_runtime_args_callback};
 }
 
-operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
+operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, const float pad_value) {
 
     TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to pad needs to be on device!");
     TT_ASSERT(a.buffer() != nullptr, "Operand to pad needs to be allocated in a buffer on device!");
@@ -157,12 +151,16 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
 
     auto output_shape = output_tensor_shape;
 
-    uint32_t single_tile_size = a.element_size() * TILE_HW;
+    tt_metal::Buffer *src0_buffer = a.buffer();
 
-    tt_metal::Buffer *src0_dram_buffer = a.buffer();
+    tt_metal::Buffer *dst_buffer = output.buffer();
+    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    tt_metal::Buffer *dst_dram_buffer = output.buffer();
-    TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
+    tt::DataFormat cb_data_format = tt::DataFormat::Bfp8_b;
+    if (a.dtype() == tt::tt_metal::DataType::BFLOAT16) {
+        cb_data_format = tt::DataFormat::Float16_b;
+    }
+    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 1;
@@ -173,7 +171,7 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
         core,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
 
     uint32_t src1_cb_index = 1; // For pad buffer
@@ -184,7 +182,7 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
         core,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
 
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
@@ -204,8 +202,8 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
     uint32_t num_padded_Wt = (num_total_W - num_unpadded_W) * num_total_Z * num_total_Yt * num_total_Xt;
 
     vector<uint32_t> reader_kernel_args = {
-        src0_dram_buffer->address(),
-        dst_dram_buffer->address(),
+        src0_buffer->address(),
+        dst_buffer->address(),
         num_unpadded_W,
         num_padded_Wt,
         num_unpadded_Z,
@@ -217,23 +215,20 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
         packed_pad_value,
     };
 
-    std::vector<uint32_t> compile_time_args_vec;
     // Reader compile-time args
     // Data is 32 byte aligned
-    bool tile_size_is_power_of_two = is_power_of_two(single_tile_size);
-    if (tile_size_is_power_of_two) {
-        // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-        compile_time_args_vec.push_back(1);
-        reader_kernel_args.push_back((std::uint32_t)log2(single_tile_size));
-    } else {
-        compile_time_args_vec.push_back(0);
-        reader_kernel_args.push_back(0);
-    }
-
+    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> compile_time_args_vec = {
+        // interleaved accessor args
+        (std::uint32_t) static_cast<uint32_t>(cb_data_format),
+        (std::uint32_t) src0_is_dram,
+        (std::uint32_t) dst_is_dram
+    };
     // Tilized reader
     tt_metal::DataMovementKernel *unary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/pad_dims_8bank.cpp",
+        "tt_metal/kernels/dataflow/pad_dims_interleaved.cpp",
         core,
         compile_time_args_vec,
         tt_metal::DataMovementProcessor::RISCV_1,
@@ -266,15 +261,15 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
         const std::vector<Buffer*>& output_buffers
     ) {
 
-        auto src_dram_buffer = input_buffers.at(0);
-        auto dst_dram_buffer = output_buffers.at(0);
+        auto src_buffer = input_buffers.at(0);
+        auto dst_buffer = output_buffers.at(0);
 
         CoreCoord core = {0, 0};
 
         {
             auto runtime_args = GetRuntimeArgs(kernel, core);
-            runtime_args[0] = src_dram_buffer->address();
-            runtime_args[1] = dst_dram_buffer->address();
+            runtime_args[0] = src_buffer->address();
+            runtime_args[1] = dst_buffer->address();
             SetRuntimeArgs(kernel, core, runtime_args);
         }
     };
@@ -298,8 +293,10 @@ void Pad::validate(const std::vector<Tensor> &input_tensors) const {
     if (input_tensor.layout() == Layout::TILE) {
         TT_ASSERT((this->output_tensor_shape[2] % TILE_HEIGHT == 0), "Can only pad tilized tensor with full tiles");
         TT_ASSERT((this->output_tensor_shape[3] % TILE_WIDTH == 0), "Can only pad tilized tensor with full tiles");
+        TT_ASSERT(input_tensor.dtype() == DataType::BFLOAT16, "Cannot pad tilized tensor with specified format");
     } else if (input_tensor.layout() == Layout::ROW_MAJOR) {
         TT_ASSERT(this->output_tensor_shape[3] % 2 == 0, "RM padding requires output X dim to be a multiple of 2");
+        TT_ASSERT(input_tensor.dtype() == DataType::BFLOAT16, "Cannot pad RM tensor with specified format");
     }
 }
 std::vector<Shape> Pad::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
@@ -307,7 +304,7 @@ std::vector<Shape> Pad::compute_output_shapes(const std::vector<Tensor> &input_t
 }
 std::vector<Tensor> Pad::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.layout());
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.layout(), this->output_mem_config);
 }
 
 // TODO: If pad is called on a tile and output is not tile, we could untilize then pad, and output is RM
@@ -329,48 +326,46 @@ operation::Hash Pad::compute_program_hash(const std::vector<Tensor> &input_tenso
     const auto& input_tensor = input_tensors.at(0);
 
     return fmt::format(
-        "Pad_{}_{}_{}_{}",
-         this->output_tensor_shape,
-         this->input_tensor_start,
-         this->pad_value,
+        "{}_{}",
+         *this,
          operation::hash_tensor(input_tensor)
     );
 }
 
-Tensor pad(const Tensor &input_tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
+std::ostream& operator<<(std::ostream& os, const Pad& op) {
+    os << boost::core::demangle(typeid(op).name());
+    os << "{";
+    os << fmt::format("output_tensor_shape={}", op.output_tensor_shape);
+    os << fmt::format(",input_tensor_start={}", op.input_tensor_start);
+    os << fmt::format(",pad_value={}", op.pad_value);
+    os << fmt::format(",output_mem_config={}", operation::hash_memory_config(op.output_mem_config));
+    os << "}";
+    return os;
+}
+
+Tensor pad(const Tensor &input_tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value, const MemoryConfig& mem_config) {
     if (input_tensor.shape() == output_tensor_shape) {
         return input_tensor;
     }
-    return operation::run_without_autoformat(Pad{output_tensor_shape, input_tensor_start, pad_value}, input_tensor);
+    return operation::run_without_autoformat(Pad{output_tensor_shape, input_tensor_start, pad_value, mem_config}, input_tensor);
 
 }
 
 void PadOnHost::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     TT_ASSERT(input_tensor.storage_type() == StorageType::HOST);
-    TT_ASSERT(input_tensor.layout() == Layout::TILE || input_tensor.layout() == Layout::ROW_MAJOR);
-    TT_ASSERT(
-        (this->input_tensor_start[0] == 0 && this->input_tensor_start[1] == 0 && this->input_tensor_start[2] == 0 && this->input_tensor_start[3] == 0),
-        "On device padding only supports padding at end of dims"
-    );
+    TT_ASSERT(input_tensor.layout() == Layout::ROW_MAJOR);
     TT_ASSERT(input_tensor.shape()[0] + this->input_tensor_start[0] <= this->output_tensor_shape[0], "Output size cannot fit input with offset");
     TT_ASSERT(input_tensor.shape()[1] + this->input_tensor_start[1] <= this->output_tensor_shape[1], "Output size cannot fit input with offset");
     TT_ASSERT(input_tensor.shape()[2] + this->input_tensor_start[2] <= this->output_tensor_shape[2], "Output size cannot fit input with offset");
     TT_ASSERT(input_tensor.shape()[3] + this->input_tensor_start[3] <= this->output_tensor_shape[3], "Output size cannot fit input with offset");
-
-    if (input_tensor.layout() == Layout::TILE) {
-        TT_ASSERT((this->output_tensor_shape[2] % TILE_HEIGHT == 0), "Can only pad tilized tensor with full tiles");
-        TT_ASSERT((this->output_tensor_shape[3] % TILE_WIDTH == 0), "Can only pad tilized tensor with full tiles");
-    } else if (input_tensor.layout() == Layout::ROW_MAJOR) {
-        TT_ASSERT(this->output_tensor_shape[3] % 2 == 0, "RM padding requires output X dim to be a multiple of 2");
-    }
 }
 std::vector<Shape> PadOnHost::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     return {this->output_tensor_shape};
 }
 std::vector<Tensor> PadOnHost::compute_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor};
+    return {input_tensor.pad(this->output_tensor_shape, this->input_tensor_start, this->pad_value)};
 }
 
 Tensor pad_on_host(const Tensor &input_tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
@@ -378,9 +373,7 @@ Tensor pad_on_host(const Tensor &input_tensor, const std::array<uint32_t, 4> &ou
         return input_tensor;
     }
     return operation::run(PadOnHost{output_tensor_shape, input_tensor_start, pad_value}, {input_tensor}).at(0);
-
 }
-
 
 }  // namespace tt_metal
 

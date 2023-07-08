@@ -5,6 +5,7 @@ void kernel_main() {
 
     // Constexpr
     constexpr uint32_t cb_id_in0                       = 0;
+    constexpr uint32_t tile_height = 32;
 
     const uint32_t src_addr                   = get_arg_val<uint32_t>(0);
     const uint32_t num_sticks                 = get_arg_val<uint32_t>(1);
@@ -15,46 +16,29 @@ void kernel_main() {
     // const uint32_t num_leftover_tiles_in_row  = get_arg_val<uint32_t>(6);
     // const uint32_t leftover_width_in_row      = get_arg_val<uint32_t>(7);
 
-
-    // TODO(agrebenisan): This isn't good... here we are assuming
-    // that the stick size dictates tiles c, but stick size
-    // doesn't necessarily need to be divisible by tiles c...
-    // this is only the case really for tilize
     uint32_t stick_id          = 0;
 
-    #define stick_size_is_power_of_two get_compile_time_arg_val(0) == 1
+    constexpr bool src0_is_dram          = get_compile_time_arg_val(0) == 1;
+    #define stick_size_is_power_of_two get_compile_time_arg_val(1) == 1
     #if (stick_size_is_power_of_two)
-    const uint32_t log_base_2_of_page_size = get_arg_val<uint32_t>(8);
-    const InterleavedPow2AddrGen<true> s = {
+    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(2);
+    const InterleavedPow2AddrGen<src0_is_dram> s = {
         .bank_base_address = src_addr,
-
-
         .log_base_2_of_page_size = log_base_2_of_page_size // TODO(AP): refactor
     };
     #else
-    const InterleavedAddrGen<true> s = {
+    const InterleavedAddrGen<src0_is_dram> s = {
         .bank_base_address = src_addr,
-
-
         .page_size = stick_size
     };
     #endif
 
-    uint64_t base_src_noc_addr[32];
+    uint64_t base_src_noc_addr[tile_height];
 
     auto read_tiles = [&] (const uint32_t& num_tiles, const uint32_t& width_size) {
         cb_reserve_back(cb_id_in0, num_tiles);
         uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-        // for (uint32_t i = 0; i < num_tiles; i++) {
-        //     for (uint32_t k = 0; k < 32; k++) {
-        //         uint64_t src_noc_addr = base_src_noc_addr[k];
-
-        //         noc_async_read(src_noc_addr, l1_write_addr, 64);
-        //         l1_write_addr += 64;
-        //         base_src_noc_addr[k] += 64;
-        //     }
-        // }
-        for (uint32_t k = 0; k < 32; k++) {
+        for (uint32_t k = 0; k < tile_height; k++) {
             uint64_t src_noc_addr = base_src_noc_addr[k];
 
             noc_async_read(src_noc_addr, l1_write_addr, width_size);
@@ -66,9 +50,9 @@ void kernel_main() {
     };
 
 
-    for (uint32_t i = 0; i < num_sticks / 32; i++) {
+    for (uint32_t i = 0; i < num_sticks / tile_height; i++) {
         // Get Base Addresses
-        for (uint32_t j = 0; j < 32; j++) {
+        for (uint32_t j = 0; j < tile_height; j++) {
             base_src_noc_addr[j] = get_noc_addr(stick_id, s);
             stick_id++;
         }

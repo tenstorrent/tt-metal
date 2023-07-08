@@ -20,28 +20,21 @@ void kernel_main() {
 
     uint32_t tile_size = get_tile_size(cb_id_in0);
 
-    #define tile_size_is_pow2 get_compile_time_arg_val(0) == 1
-    #if (tile_size_is_pow2)
-    const uint32_t log_base_2_of_page_size = get_arg_val<uint32_t>(11);
-    const InterleavedPow2AddrGen<true> s0 = {
+    constexpr DataFormat data_format                      = static_cast<DataFormat>(get_compile_time_arg_val(0));
+    constexpr bool src0_is_dram                           = get_compile_time_arg_val(1) == 1;
+    constexpr bool dst_is_dram                            = get_compile_time_arg_val(2) == 1;
+    // In and out are assumed to be same dataformat
+    const InterleavedAddrGenFast<src0_is_dram> s0 = {
         .bank_base_address = src_addr,
-        .log_base_2_of_page_size = log_base_2_of_page_size // TODO(AP): refactor
-    };
-    const InterleavedPow2AddrGen<true> s1 = {
-        .bank_base_address = dst_addr,
-        .log_base_2_of_page_size = log_base_2_of_page_size // TODO(AP): refactor
-    };
-    #else
-    const InterleavedAddrGen<true> s0 = {
-        .bank_base_address = src_addr,
-        .page_size = tile_size
+        .page_size = tile_size,
+        .data_format = data_format
     };
 
-    const InterleavedAddrGen<true> s1 = {
+    const InterleavedAddrGenFast<dst_is_dram> s1 = {
         .bank_base_address = dst_addr,
-        .page_size = tile_size
+        .page_size = tile_size,
+        .data_format = data_format
     };
-    #endif
 
     cb_reserve_back(cb_id_in0, 1); // in this kernel we are not pushing anything into CBs, just using the space
     cb_reserve_back(cb_id_in1, 1); // in this kernel we are not pushing anything into CBs, just using the space
@@ -61,8 +54,7 @@ void kernel_main() {
 
     auto pad_tiles = [&] (uint32_t num_tiles) {
         for(uint32_t pad_tile = 0; pad_tile < num_tiles; pad_tile++) {
-            uint64_t dst_noc_addr = get_noc_addr(dst_tile_id, s1);
-            noc_async_write(pad_buffer_l1_addr, dst_noc_addr, tile_size);
+            noc_async_write_tile(dst_tile_id, s1, pad_buffer_l1_addr);
             noc_async_write_barrier();
             dst_tile_id++;
         }
@@ -72,12 +64,10 @@ void kernel_main() {
         for (uint32_t z = 0; z < num_unpadded_Z; z++) {
             for (uint32_t yt = 0; yt < num_unpadded_Yt; yt++) {
                 for (uint32_t xt = 0; xt < num_unpadded_Xt; xt++) {
-                    uint64_t src_noc_addr = get_noc_addr(src_tile_id, s0);
-                    noc_async_read(src_noc_addr, src_buffer_l1_addr, tile_size);
+                    noc_async_read_tile(src_tile_id, s0, src_buffer_l1_addr);
                     noc_async_read_barrier();
                     src_tile_id++;
-                    uint64_t dst_noc_addr = get_noc_addr(dst_tile_id, s1);
-                    noc_async_write(src_buffer_l1_addr, dst_noc_addr, tile_size);
+                    noc_async_write_tile(dst_tile_id, s1, src_buffer_l1_addr);
                     noc_async_write_barrier();
                     dst_tile_id++;
                 }

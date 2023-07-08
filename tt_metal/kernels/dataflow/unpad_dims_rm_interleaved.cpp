@@ -25,36 +25,39 @@ void kernel_main() {
     const uint32_t cache_buffer_l1_addr     = get_arg_val<uint32_t>(13);
     const uint32_t src_buffer_l1_addr       = get_arg_val<uint32_t>(14);
     const uint32_t dst_buffer_l1_addr       = get_arg_val<uint32_t>(15);
+    const uint32_t num_output_banks         = get_arg_val<uint32_t>(16);
 
+    const uint32_t num_output_banks_min_1 = num_output_banks - 1;
 
     std::uint32_t* cache_buffer = (uint32_t*)(cache_buffer_l1_addr);
     std::uint32_t* src_buffer = (uint32_t*)(src_buffer_l1_addr);
     std::uint32_t* dst_buffer = (uint32_t*)(dst_buffer_l1_addr);
 
-
-    #define src_stick_size_is_pow2 get_compile_time_arg_val(0) == 1
+    constexpr bool src0_is_dram          = get_compile_time_arg_val(0) == 1;
+    constexpr bool dst_is_dram          = get_compile_time_arg_val(1) == 1;
+    #define src_stick_size_is_pow2 get_compile_time_arg_val(2) == 1
     #if (src_stick_size_is_pow2)
-    const uint32_t src_log_base_2_of_page_size = get_arg_val<uint32_t>(16);
-    const InterleavedPow2AddrGen<true> s0 = {
+    constexpr uint32_t src_log_base_2_of_page_size = get_compile_time_arg_val(3);
+    const InterleavedPow2AddrGen<src0_is_dram> s0 = {
         .bank_base_address = src_addr,
         .log_base_2_of_page_size = src_log_base_2_of_page_size // TODO(AP): refactor
     };
     #else
-    const InterleavedAddrGen<true> s0 = {
+    const InterleavedAddrGen<src0_is_dram> s0 = {
         .bank_base_address = src_addr,
         .page_size = padded_X_size
     };
     #endif
 
-    #define dst_stick_size_is_pow2 get_compile_time_arg_val(1) == 1
+    #define dst_stick_size_is_pow2 get_compile_time_arg_val(4) == 1
     #if (dst_stick_size_is_pow2)
-    const uint32_t dst_log_base_2_of_page_size = get_arg_val<uint32_t>(17);
-    const InterleavedPow2AddrGen<true> s1 = {
+    constexpr uint32_t dst_log_base_2_of_page_size = get_compile_time_arg_val(5);
+    const InterleavedPow2AddrGen<dst_is_dram> s1 = {
         .bank_base_address = dst_addr,
         .log_base_2_of_page_size = dst_log_base_2_of_page_size // TODO(AP): refactor
     };
     #else
-    const InterleavedAddrGen<true> s1 = {
+    const InterleavedAddrGen<dst_is_dram> s1 = {
         .bank_base_address = dst_addr,
         .page_size = unpadded_X_size
     };
@@ -110,7 +113,7 @@ void kernel_main() {
                     cache[z] = dst[z];
                 }
                 dst_stick_id++;
-                if (dst_stick_id & 7) {
+                if (dst_stick_id & num_output_banks_min_1) {
                     l1_cache_addr += alignment;
                 } else {
                     l1_cache_addr = cache_buffer_l1_addr;

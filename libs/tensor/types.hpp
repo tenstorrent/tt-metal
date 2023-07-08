@@ -4,10 +4,13 @@
 
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "common/bfloat16.hpp"
+#include "third_party/magic_enum/magic_enum.hpp"
 
 #include <memory>
 #include <variant>
 #include <vector>
+#include <fmt/ranges.h>
+
 
 namespace tt {
 
@@ -18,6 +21,14 @@ using Shape = std::array<uint32_t, 4>;
 struct MemoryConfig {
     bool interleaved = true;    // Interleave the data across multiple DRAM banks
     BufferType buffer_type = BufferType::DRAM; // Can be either DRAM or L1
+
+    std::string str() const {
+            return fmt::format(
+            "MemoryConfig(interleaved={},buffer_type={})",
+            this->interleaved,
+            magic_enum::enum_name(this->buffer_type)
+        );
+    }
 };
 
 using HostBuffer = std::variant<

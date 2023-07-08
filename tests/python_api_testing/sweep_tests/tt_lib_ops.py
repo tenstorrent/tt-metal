@@ -2404,11 +2404,6 @@ def reshape(x, *args, host, device, dtype, layout, on_device, reshape_dims, **kw
 
 @setup_host_and_device
 def tilize(x, *args, host, device, dtype, layout, on_device, **kwargs):
-    assert dtype == ttl.tensor.DataType.BFLOAT16
-    assert (
-        layout == ttl.tensor.Layout.ROW_MAJOR
-        or layout == ttl.tensor.Layout.CHANNELS_LAST
-    )
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -2431,11 +2426,6 @@ def tilize(x, *args, host, device, dtype, layout, on_device, **kwargs):
 def tilize_with_zero_padding(
     x, *args, host, device, dtype, layout, on_device, **kwargs
 ):
-    assert dtype == ttl.tensor.DataType.BFLOAT16
-    assert (
-        layout == ttl.tensor.Layout.ROW_MAJOR
-        or layout == ttl.tensor.Layout.CHANNELS_LAST
-    )
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -2456,8 +2446,6 @@ def tilize_with_zero_padding(
 
 @setup_host_and_device
 def untilize(x, *args, host, device, dtype, layout, on_device, **kwargs):
-    assert dtype == ttl.tensor.DataType.BFLOAT16
-    assert layout == ttl.tensor.Layout.TILE
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -2489,8 +2477,6 @@ def tilize_with_val_padding(
     pad_value,
     **kwargs,
 ):
-    assert dtype == ttl.tensor.DataType.BFLOAT16
-    assert layout == ttl.tensor.Layout.ROW_MAJOR
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -2524,8 +2510,6 @@ def untilize_with_unpadding(
     output_tensor_end,
     **kwargs,
 ):
-    assert dtype == ttl.tensor.DataType.BFLOAT16
-    assert layout == ttl.tensor.Layout.TILE
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -2559,8 +2543,6 @@ def pad(
     pad_value,
     **kwargs,
 ):
-    assert dtype == ttl.tensor.DataType.BFLOAT16
-    assert layout in [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.TILE]
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -2594,8 +2576,6 @@ def unpad(
     output_tensor_end,
     **kwargs,
 ):
-    assert dtype == ttl.tensor.DataType.BFLOAT16
-    assert layout in [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.TILE]
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,

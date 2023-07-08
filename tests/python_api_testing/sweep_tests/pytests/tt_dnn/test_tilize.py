@@ -37,7 +37,7 @@ def test_tilize_test(input_shapes, tilize_args, pcie_slot, function_level_defaul
             partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16
         )
     ]
-    comparison_func = partial(comparison_funcs.comp_equal)
+    comparison_func = comparison_funcs.comp_equal
     run_single_pytorch_test(
         "tilize", input_shapes, datagen_func, comparison_func, pcie_slot, tilize_args
     )

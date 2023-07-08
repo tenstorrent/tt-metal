@@ -162,6 +162,10 @@ void TensorModule(py::module &m_tensor) {
                     mem_config = tt_lib.tensor.MemoryConfig(False)
             )doc"
         )
+        .def("__repr__", [](const MemoryConfig &mem_config) {
+            return mem_config.str();
+        }
+        )
         .def_readonly("interleaved", &MemoryConfig::interleaved, "Whether tensor data is interleaved across mulitple DRAM channels")
         .def_readonly("buffer_type", &MemoryConfig::buffer_type, "Buffer type to store tensor data. Can be DRAM or L1");
 
@@ -2038,13 +2042,16 @@ void TensorModule(py::module &m_tensor) {
 
         Output tensor will have BFLOAT16 data type.
 
-        +----------+---------------------------+-----------+------------------------------+----------+
-        | Argument | Description               | Data type | Valid range                  | Required |
-        +==========+===========================+===========+==============================+==========+
-        | arg0     | First tensor to multiply  | Tensor    | Tensor of shape [1, 1, Y, S] | Yes      |
-        +----------+---------------------------+-----------+------------------------------+----------+
-        | arg1     | Second tensor to multiply | Tensor    | Tensor of shape [1, 1, S, X] | Yes      |
-        +----------+---------------------------+-----------+------------------------------+----------+
+        +------------+------------------------------------+--------------+--------------------------------+----------+
+        | Argument   | Description                        | Data type    | Valid range                    | Required |
+        +============+====================================+==============+================================+==========+
+        | arg0       | First tensor to multiply           | Tensor       | Tensor of shape [1, 1, Y, S]   | Yes      |
+        +------------+------------------------------------+--------------+--------------------------------+----------+
+        | arg1       | Second tensor to multiply          | Tensor       | Tensor of shape [1, 1, S, X]   | Yes      |
+        +------------+------------------------------------+--------------+--------------------------------+----------+
+        | mem_config | Layout of tensor in TT Accelerator | MemoryConfig | Default is interleaved in DRAM | No       |
+        |            | device memory banks                |              |                                |          |
+        +------------+------------------------------------+--------------+--------------------------------+----------+
     )doc");
 
     m_tensor.def("outer", &outer, R"doc(
@@ -2165,6 +2172,146 @@ void TensorModule(py::module &m_tensor) {
         +----------+----------------------+-----------+------------------------------------+----------+
     )doc");
 
+    m_tensor.def("tilize", &tilize,
+        py::arg("input").noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        Changes data layout of input tensor to TILE.
+
+        Input tensor must be on TT accelerator device, in ROW_MAJOR or CHANNELS_LAST layout, and have BFLOAT16 data type.
+
+        Output tensor will be on TT accelerator device, in TILE layout, and have BFLOAT16 data type.
+
+        +------------+------------------------------------+--------------+-----------------------------------------------------------------+----------+
+        | Argument   | Description                        | Data type    | Valid range                                                     | Required |
+        +============+====================================+==============+=================================================================+==========+
+        | input      | Input tensor                       | Tensor       | Tensor of shape [W, Z, Y, X], where Y%32=0 and X%32=0           | Yes      |
+        +------------+------------------------------------+--------------+-----------------------------------------------------------------+----------+
+        | mem_config | Layout of tensor in TT Accelerator | MemoryConfig | Default is interleaved in DRAM                                  | No       |
+        |            | device memory banks                |              |                                                                 |          |
+        +------------+------------------------------------+--------------+-----------------------------------------------------------------+----------+
+    )doc");
+
+    m_tensor.def("tilize_with_zero_padding", &tilize_with_zero_padding,
+        py::arg("input").noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        Tilizes a given tensor across memory on device. Pads zeroes height-wise and width-wise if required.
+
+        +------------+------------------------------------+--------------+--------------------------------+----------+
+        | Argument   | Description                        | Data type    | Valid range                    | Required |
+        +============+====================================+==============+================================+==========+
+        | input      | Input tensor                       | Tensor       |                                | Yes      |
+        +------------+------------------------------------+--------------+--------------------------------+----------+
+        | mem_config | Layout of tensor in TT Accelerator | MemoryConfig | Default is interleaved in DRAM | No       |
+        |            | device memory banks                |              |                                |          |
+        +------------+------------------------------------+--------------+--------------------------------+----------+
+    )doc");
+
+    m_tensor.def("tilize_with_val_padding", &tilize_with_val_padding,
+        py::arg("input").noconvert(), py::arg("output_tensor_shape").noconvert(), py::arg("input_tensor_start"), py::arg("pad_value"), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        Tilizes a given tensor across memory on device. Pads to specified shape before tilizing.
+
+        +---------------------+------------------------------------------------------+--------------+--------------------------------+----------+
+        | Argument            | Description                                          | Data type    | Valid range                    | Required |
+        +=====================+======================================================+==============+================================+==========+
+        | input               | Input tensor                                         | Tensor       |                                | Yes      |
+        +---------------------+------------------------------------------------------+--------------+--------------------------------+----------+
+        | output_tensor_shape | Shape of output tensor                               | List[int[4]] |                                | Yes      |
+        +---------------------+------------------------------------------------------+--------------+--------------------------------+----------+
+        | input_tensor_start  | Start indices to place input tensor in output tensor | List[int[4]] | Must be all 0s                 | Yes      |
+        +---------------------+------------------------------------------------------+--------------+--------------------------------+----------+
+        | pad_value           | Value to pad input tensor                            | float        |                                | Yes      |
+        +---------------------+------------------------------------------------------+--------------+--------------------------------+----------+
+        | mem_config          | Layout of tensor in TT Accelerator                   | MemoryConfig | Default is interleaved in DRAM | No       |
+        |                     | device memory banks                                  |              |                                |          |
+        +---------------------+------------------------------------------------------+--------------+--------------------------------+----------+
+    )doc");
+
+    m_tensor.def("untilize", &untilize,
+        py::arg("input").noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        Changes data layout of input tensor to ROW_MAJOR.
+
+        Input tensor must be on TT accelerator device, in TILE, and have BFLOAT16 data type.
+
+        Output tensor will be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type.
+
+        +------------+------------------------------------+--------------+-----------------------------------------------------------------+----------+
+        | Argument   | Description                        | Data type    | Valid range                                                     | Required |
+        +============+====================================+==============+=================================================================+==========+
+        | input      | Input tensor                       | Tensor       | Tensor of shape [W, Z, Y, X], where Y%32=0 and X%32=0           | Yes      |
+        +------------+------------------------------------+--------------+-----------------------------------------------------------------+----------+
+        | mem_config | Layout of tensor in TT Accelerator | MemoryConfig | Default is interleaved in DRAM                                  | No       |
+        |            | device memory banks                |              |                                                                 |          |
+        +------------+------------------------------------+--------------+-----------------------------------------------------------------+----------+
+    )doc");
+
+    m_tensor.def("untilize_with_unpadding", &untilize_with_unpadding,
+        py::arg("input").noconvert(), py::arg("output_tensor_start").noconvert(), py::arg("output_tensor_end"), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        Changes data layout of input tensor to ROW_MAJOR and unpads/removes elements from the tensor.
+
+        Input tensor must be on TT accelerator device, in TILE, and have BFLOAT16 data type.
+
+        Output tensor will be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type.
+
+        +---------------------+----------------------------------------------+--------------+--------------------------------+----------+
+        | Argument            | Description                                  | Data type    | Valid range                    | Required |
+        +=====================+==============================================+==============+================================+==========+
+        | input               | Input tensor                                 | Tensor       |                                | Yes      |
+        +---------------------+----------------------------------------------+--------------+--------------------------------+----------+
+        | output_tensor_start | Start indices of input tensor                | List[int[4]] | Must be all 0s                 | Yes      |
+        +---------------------+----------------------------------------------+--------------+--------------------------------+----------+
+        | output_tensor_end   | End indices of input tensor in output tensor | List[int[4]] | Values along each dim must be  | Yes      |
+        |                     |                                              |              |                                |          |
+        |                     |                                              |              | < input_tensor_shape[i]        |          |
+        +---------------------+----------------------------------------------+--------------+--------------------------------+----------+
+        | mem_config          | Layout of tensor in TT Accelerator           | MemoryConfig | Default is interleaved in DRAM | No       |
+        |                     | device memory banks                          |              |                                |          |
+        +---------------------+----------------------------------------------+--------------+--------------------------------+----------+
+    )doc");
+
+    m_tensor.def("pad", &pad,
+        py::arg("input").noconvert(), py::arg("output_tensor_shape").noconvert(), py::arg("input_tensor_start"), py::arg("pad_value"), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        Pad TT Tensor with given pad value ``arg2``.
+
+        The input tensor must be in ROW_MAJOR or TILE layout.
+
+        Returns an output tensor that contains the input tensor at the given input tensor start indices ``arg3`` and the padded value everywhere else.
+
+        +---------------------+------------------------------------------------------+--------------+--------------------------------+----------+
+        | Argument            | Description                                          | Data type    | Valid range                    | Required |
+        +=====================+======================================================+==============+================================+==========+
+        | input               | Input tensor                                         | Tensor       |                                | Yes      |
+        +---------------------+------------------------------------------------------+--------------+--------------------------------+----------+
+        | output_tensor_shape | Shape of output tensor                               | List[int[4]] |                                | Yes      |
+        +---------------------+------------------------------------------------------+--------------+--------------------------------+----------+
+        | input_tensor_start  | Start indices to place input tensor in output tensor | List[int[4]] | Must be all 0s                 | Yes      |
+        +---------------------+------------------------------------------------------+--------------+--------------------------------+----------+
+        | pad_value           | Value to pad input tensor                            | float        |                                | Yes      |
+        +---------------------+------------------------------------------------------+--------------+--------------------------------+----------+
+        | mem_config          | Layout of tensor in TT Accelerator                   | MemoryConfig | Default is interleaved in DRAM | No       |
+        |                     | device memory banks                                  |              |                                |          |
+        +---------------------+------------------------------------------------------+--------------+--------------------------------+----------+
+    )doc");
+
+    m_tensor.def("unpad", &unpad,
+        py::arg("input").noconvert(), py::arg("output_tensor_start").noconvert(), py::arg("output_tensor_end"), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        Unpad TT Tensor.
+
+        Returns an output tensor from output tensor start indices ``arg1`` to output tensor end indices ``arg2`` (inclusive) of the input tensor.
+
+        +---------------------+----------------------------------------------+--------------+--------------------------------+----------+
+        | Argument            | Description                                  | Data type    | Valid range                    | Required |
+        +=====================+==============================================+==============+================================+==========+
+        | input               | Input tensor                                 | Tensor       |                                | Yes      |
+        +---------------------+----------------------------------------------+--------------+--------------------------------+----------+
+        | output_tensor_start | Start indices of input tensor                | List[int[4]] | Must be all 0s                 | Yes      |
+        +---------------------+----------------------------------------------+--------------+--------------------------------+----------+
+        | output_tensor_end   | End indices of input tensor in output tensor | List[int[4]] | Values along each dim must be  | Yes      |
+        |                     |                                              |              |                                |          |
+        |                     |                                              |              | < input_tensor_shape[i]        |          |
+        +---------------------+----------------------------------------------+--------------+--------------------------------+----------+
+        | mem_config          | Layout of tensor in TT Accelerator           | MemoryConfig | Default is interleaved in DRAM | No       |
+        |                     | device memory banks                          |              |                                |          |
+        +---------------------+----------------------------------------------+--------------+--------------------------------+----------+
+    )doc");
+
     // *** broadcast and reduce ***
     m_tensor.def("bcast", &bcast,
         py::arg().noconvert(), py::arg().noconvert(), py::arg("math_op"), py::arg("dim"), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
@@ -2182,17 +2329,20 @@ void TensorModule(py::module &m_tensor) {
 
         Output tensor will have BFLOAT16 data type.
 
-        +-----------+---------------------------------+--------------+-------------------------------------------------------------+----------+
-        | Argument  | Description                     | Data type    | Valid range                                                 | Required |
-        +===========+=================================+==============+=============================================================+==========+
-        | arg0      | Input tensor                    | Tensor       | Tensor of shape [W0, Z0, Y0, X0], where Y0%32=0 and X0%32=0 | Yes      |
-        +-----------+---------------------------------+--------------+-------------------------------------------------------------+----------+
-        | arg1      | Input tensor                    | Tensor       | Tensor of shape [W1, Z1, Y1, X1], where Y1%32=0 and X1%32=0 | Yes      |
-        +-----------+---------------------------------+--------------+-------------------------------------------------------------+----------+
-        | arg2      | Math operation to perform       | BcastOpMath  | ADD, SUB, MUL                                               | Yes      |
-        +-----------+---------------------------------+--------------+-------------------------------------------------------------+----------+
-        | arg3      | Dimension on which to broadcast | BcastOpDim   | W, H, HW                                                    | Yes      |
-        +-----------+---------------------------------+--------------+-------------------------------------------------------------+----------+
+        +------------+------------------------------------+--------------+-------------------------------------------------------------+----------+
+        | Argument   | Description                        | Data type    | Valid range                                                 | Required |
+        +============+====================================+==============+=============================================================+==========+
+        | arg0       | Input tensor                       | Tensor       | Tensor of shape [W0, Z0, Y0, X0], where Y0%32=0 and X0%32=0 | Yes      |
+        +------------+------------------------------------+--------------+-------------------------------------------------------------+----------+
+        | arg1       | Input tensor                       | Tensor       | Tensor of shape [W1, Z1, Y1, X1], where Y1%32=0 and X1%32=0 | Yes      |
+        +------------+------------------------------------+--------------+-------------------------------------------------------------+----------+
+        | arg2       | Math operation to perform          | BcastOpMath  | ADD, SUB, MUL                                               | Yes      |
+        +------------+------------------------------------+--------------+-------------------------------------------------------------+----------+
+        | arg3       | Dimension on which to broadcast    | BcastOpDim   | W, H, HW                                                    | Yes      |
+        +------------+------------------------------------+--------------+-------------------------------------------------------------+----------+
+        | mem_config | Layout of tensor in TT Accelerator | MemoryConfig | Default is interleaved in DRAM                              | No       |
+        |            | device memory banks                |              |                                                             |          |
+        +------------+------------------------------------+--------------+-------------------------------------------------------------+----------+
     )doc");
 
     m_tensor.def("reduce", &reduce, R"doc(
@@ -2222,51 +2372,6 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     // *** experimental operations ***
-    m_tensor.def("tilize", &tilize, R"doc(
-        Changes data layout of input tensor to TILE.
-
-        Input tensor must be on TT accelerator device, in ROW_MAJOR or CHANNELS_LAST layout, and have BFLOAT16 data type.
-
-        Output tensor will be on TT accelerator device, in TILE layout, and have BFLOAT16 data type.
-
-        +----------+--------------------------------+------------+---------------------------------------------------------+----------+
-        | Argument | Description                    | Data type  | Valid range                                             | Required |
-        +==========+================================+============+=========================================================+==========+
-        | arg0     | Input tensor                   | Tensor     | Tensor of shape [W, Z, Y, X], where Y%32=0 and X%32=0   | Yes      |
-        +----------+--------------------------------+------------+---------------------------------------------------------+----------+
-    )doc");
-    m_tensor.def("untilize", &untilize, R"doc(
-        Changes data layout of input tensor to ROW_MAJOR.
-
-        Input tensor must be on TT accelerator device, in TILE, and have BFLOAT16 data type.
-
-        Output tensor will be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type.
-
-        +----------+--------------------------------+------------+-----------------------------------------------------------------+----------+
-        | Argument | Description                    | Data type  | Valid range                                                     | Required |
-        +==========+================================+============+=================================================================+==========+
-        | arg0     | Input tensor                   | Tensor     | Tensor of shape [W, Z, Y, X], where Y%32=0 and X%32=0           | Yes      |
-        +----------+--------------------------------+------------+-----------------------------------------------------------------+----------+
-    )doc");
-    m_tensor.def("untilize_with_unpadding", &untilize_with_unpadding, R"doc(
-        Changes data layout of input tensor to ROW_MAJOR and unpads/removes elements from the tensor.
-
-        Input tensor must be on TT accelerator device, in TILE, and have BFLOAT16 data type.
-
-        Output tensor will be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type.
-
-        +----------+--------------------------------+--------------+-----------------------------------------------------------------+----------+
-        | Argument | Description                    | Data type    | Valid range                                                     | Required |
-        +==========+================================+==============+=================================================================+==========+
-        | arg0     | Input tensor                   | Tensor       | Tensor of shape [W, Z, Y, X], where Y%32=0 and X%32=0           | Yes      |
-        +----------+--------------------------------+--------------+-----------------------------------------------------------------+----------+
-        | arg1     | Start indices of input tensor  | List[int[4]] | Must be all 0s                                                  | Yes      |
-        +----------+--------------------------------+--------------+-----------------------------------------------------------------+----------+
-        | arg2     | End indices of input tensor    | List[int[4]] | Values along each dim must be                                   | Yes      |
-        |          |                                |              |                                                                 |          |
-        |          | in output tensor               |              | < input_tensor_shape[i]                                         |          |
-        +----------+--------------------------------+--------------+-----------------------------------------------------------------+----------+
-    )doc");
     m_tensor.def("fill_rm", &fill_rm, R"doc(
         Generates an NCHW row-major tensor and fill it with high values up to
         hOnes, wOnes in each HW tile with the rest padded with high values. So
@@ -2331,44 +2436,6 @@ void TensorModule(py::module &m_tensor) {
         | any      | Any input tensor with desired device and data types for output tensor | tt_lib.tensor.Tensor  |                        | Yes      |
         +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
     )doc");
-    m_tensor.def("pad", &pad, R"doc(
-        Pad TT Tensor with given pad value ``arg2``.
-
-        The input tensor must be in ROW_MAJOR or TILE layout.
-
-        Returns an output tensor that contains the input tensor at the given input tensor start indices ``arg3`` and the padded value everywhere else.
-
-        +---------------------+------------------------------------------------------+--------------+-----------------------------------------------------+----------+
-        | Argument            | Description                                          | Data type    | Valid range                                         | Required |
-        +=====================+======================================================+==============+=====================================================+==========+
-        | arg0                | Input tensor                                         | Tensor       |                                                     | Yes      |
-        +---------------------+------------------------------------------------------+--------------+-----------------------------------------------------+----------+
-        | arg1                | Shape of output tensor                               | List[int[4]] |                                                     | Yes      |
-        +---------------------+------------------------------------------------------+--------------+-----------------------------------------------------+----------+
-        | arg2                | Start indices to place input tensor in output tensor | List[int[4]] | Must be all 0s                                      | Yes      |
-        |                     |                                                      |              |                                                     |          |
-        |                     |                                                      |              |                                                     |          |
-        +---------------------+------------------------------------------------------+--------------+-----------------------------------------------------+----------+
-        | arg3                | Value to pad input tensor                            | float        |                                                     | Yes      |
-        +---------------------+------------------------------------------------------+--------------+-----------------------------------------------------+----------+
-    )doc");
-    m_tensor.def("unpad", &unpad, R"doc(
-            Unpad TT Tensor.
-
-            Returns an output tensor from output tensor start indices ``arg1`` to output tensor end indices ``arg2`` (inclusive) of the input tensor.
-
-            +---------------------+----------------------------------------------+--------------+-----------------------------------------------------+----------+
-            | Argument            | Description                                  | Data type    | Valid range                                         | Required |
-            +=====================+==============================================+==============+=====================================================+==========+
-            | arg0                | Input tensor                                 | Tensor       |                                                     | Yes      |
-            +---------------------+----------------------------------------------+--------------+-----------------------------------------------------+----------+
-            | arg1                | Start indices of input tensor                | List[int[4]] | Must be all 0s                                      | Yes      |
-            +---------------------+----------------------------------------------+--------------+-----------------------------------------------------+----------+
-            | arg2                | End indices of input tensor in output tensor | List[int[4]] | Values along each dim must be                       | Yes      |
-            |                     |                                              |              |                                                     |          |
-            |                     |                                              |              | < input_tensor_shape[i]                             |          |
-            +---------------------+----------------------------------------------+--------------+-----------------------------------------------------+----------+
-        )doc");
 
     // matrix multiplication
 
@@ -2545,30 +2612,6 @@ void TensorModule(py::module &m_tensor) {
         | arg0     | Input tensor                   | Tensor     | Tensor of shape [W, Z, Y, X]  | Yes      |
         +----------+--------------------------------+------------+-------------------------------+----------+
 
-    )doc");
-    m_tensor.def("tilize_with_zero_padding", &tilize_with_zero_padding, R"doc(
-        Tilizes a given tensor across memory on device. Pads zeroes height-wise if required.
-
-        +----------+----------------------+-----------+-------------+----------+
-        | Argument | Description          | Data type | Valid range | Required |
-        +==========+======================+===========+=============+==========+
-        | a        | Input tensor         | Tensor    |             | Yes      |
-        +----------+----------------------+-----------+-------------+----------+
-    )doc");
-    m_tensor.def("tilize_with_val_padding", &tilize_with_val_padding, R"doc(
-        Tilizes a given tensor across memory on device. Pads to specified shape before tilizing.
-
-        +---------------------+------------------------------------------------------+--------------+-----------------------------------------------------+----------+
-        | Argument            | Description                                          | Data type    | Valid range                                         | Required |
-        +=====================+======================================================+==============+=====================================================+==========+
-        | arg0                | Input tensor                                         | Tensor       |                                                     | Yes      |
-        +---------------------+------------------------------------------------------+--------------+-----------------------------------------------------+----------+
-        | arg1                | Shape of output tensor                               | List[int[4]] | shape [W, Z, Y, X], where Y%32=0 and X%32=0         | Yes      |
-        +---------------------+------------------------------------------------------+--------------+-----------------------------------------------------+----------+
-        | arg2                | Start indices to place input tensor in output tensor | List[int[4]] | Must be all 0s                                      | Yes      |
-        +---------------------+------------------------------------------------------+--------------+-----------------------------------------------------+----------+
-        | arg3                | Value to pad input tensor                            | float        |                                                     | Yes      |
-        +---------------------+------------------------------------------------------+--------------+-----------------------------------------------------+----------+
     )doc");
     m_tensor.def("convert_conv_weight_tensor_to_tiled_layout", &convert_conv_weight_tensor_to_tiled_layout, R"doc(
        Converts convolution weights to 2d matrix tiled layout on host

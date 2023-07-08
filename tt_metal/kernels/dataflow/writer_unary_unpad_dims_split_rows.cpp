@@ -10,6 +10,7 @@ void kernel_main() {
     // Constexpr
     constexpr uint32_t cb_id_out0                      = 16;
     constexpr uint32_t alignment                       = 32;
+    constexpr uint32_t tile_height                     = 32;
 
     const uint32_t dst_addr                 = get_arg_val<uint32_t>(0);
     const uint32_t num_unpadded_W           = get_arg_val<uint32_t>(1);
@@ -31,24 +32,20 @@ void kernel_main() {
 
     std::uint32_t* temp_buffer = (uint32_t*)(temp_buffer_l1_addr);
 
-
-    // TODO(agrebenisan): This isn't good... here we are assuming
-    // that the stick size dictates tiles c, but stick size
-    // doesn't necessarily need to be divisible by tiles c...
-    // this is only the case really for tilize
     const uint32_t num_tiles_block_c = block_row_size / 64; // Assuming 2 bytes per datum, there are 64 bytes per tile row
 
     uint32_t stick_id          = 0;
 
-    #define stick_size_is_pow2 get_compile_time_arg_val(0) == 1
+    constexpr bool dst_is_dram          = get_compile_time_arg_val(0) == 1;
+    #define stick_size_is_pow2 get_compile_time_arg_val(1) == 1
     #if (stick_size_is_pow2)
-    const uint32_t log_base_2_of_page_size = get_arg_val<uint32_t>(17);
-    const InterleavedPow2AddrGen<true> s = {
+    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(2);
+    const InterleavedPow2AddrGen<dst_is_dram> s = {
         .bank_base_address = dst_addr,
-        .log_base_2_of_page_size = log_base_2_of_page_size // TODO(AP): refactor
+        .log_base_2_of_page_size = log_base_2_of_page_size
     };
     #else
-    const InterleavedAddrGen<true> s = {
+    const InterleavedAddrGen<dst_is_dram> s = {
         .bank_base_address = dst_addr,
         .page_size = unpadded_X_size
     };
@@ -109,10 +106,10 @@ void kernel_main() {
 
     for (uint32_t w = 0; w < num_unpadded_W; w++) {
         for (uint32_t z = 0; z < num_unpadded_Z; z++) {
-            for (uint32_t y_t = 0; y_t < num_unpadded_Y / 32; y_t++) {
-                write_block_rows(32, stick_id);
+            for (uint32_t y_t = 0; y_t < num_unpadded_Y / tile_height; y_t++) {
+                write_block_rows(tile_height, stick_id);
                 pop_blocks(num_blocks_w_diff);
-                stick_id += 32;
+                stick_id += tile_height;
             }
 
             // Change to define

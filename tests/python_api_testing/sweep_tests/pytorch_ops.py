@@ -399,7 +399,15 @@ def untilize(x, *args, **kwargs):
 
 def tilize_with_zero_padding(x, *args, **kwargs):
     return tilize_util(
-        torch.nn.functional.pad(x, (0, 0, 0, nearest_32(x.shape[-2]) - x.shape[-2]))
+        torch.nn.functional.pad(
+            x,
+            (
+                0,
+                nearest_32(x.shape[-1]) - x.shape[-1],
+                0,
+                nearest_32(x.shape[-2]) - x.shape[-2],
+            ),
+        )
     )
 
 

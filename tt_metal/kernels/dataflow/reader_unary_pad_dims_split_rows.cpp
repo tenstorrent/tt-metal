@@ -9,6 +9,7 @@ void kernel_main() {
 
     // Constexpr
     constexpr uint32_t cb_id_in0                       = 0;
+    constexpr uint32_t tile_height = 32;
 
     const uint32_t src_addr                 = get_arg_val<uint32_t>(0);
     const uint32_t num_unpadded_W           = get_arg_val<uint32_t>(1);
@@ -37,15 +38,16 @@ void kernel_main() {
     // this is only the case really for tilize
     const uint32_t num_tiles_block_c = block_row_size / 64; // Assuming 2 bytes per datum, there are 64 bytes per tile row
 
-    #define stick_size_is_pow2 get_compile_time_arg_val(0) == 1
+    constexpr bool src0_is_dram          = get_compile_time_arg_val(0) == 1;
+    #define stick_size_is_pow2 get_compile_time_arg_val(1) == 1
     #if (stick_size_is_pow2)
-    const uint32_t log_base_2_of_page_size = get_arg_val<uint32_t>(18);
-    const InterleavedPow2AddrGen<true> s = {
+    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(2);
+    const InterleavedPow2AddrGen<src0_is_dram> s = {
         .bank_base_address = src_addr,
         .log_base_2_of_page_size = log_base_2_of_page_size // TODO(AP): refactor
     };
     #else
-    const InterleavedAddrGen<true> s = {
+    const InterleavedAddrGen<src0_is_dram> s = {
         .bank_base_address = src_addr,
         .page_size = unpadded_X_size
     };
@@ -60,7 +62,7 @@ void kernel_main() {
             uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
             // pad the tile by reading values from zero buffer in L1
             volatile std::uint32_t* dst = (volatile uint32_t*)(l1_write_addr);
-            // 8 = 32 / 4
+            // 8 = tile_height / 4
             for(uint32_t z = 0; z < block_row_size * 8; z++) {
                 dst[z] = pad_value;
             }
@@ -98,10 +100,10 @@ void kernel_main() {
 
             l1_write_addr += block_row_size;
         }
-        if (num_rows < 32) {
+        if (num_rows < tile_height) {
             volatile std::uint32_t* dst = (volatile uint32_t*)(l1_write_addr);
 
-            for(uint32_t z = 0; z < (block_row_size) / 4 * (32 - num_rows); z++) {
+            for(uint32_t z = 0; z < (block_row_size) / 4 * (tile_height - num_rows); z++) {
                 dst[z] = pad_value;
             }
         }
@@ -124,11 +126,11 @@ void kernel_main() {
 
     for (uint32_t w = 0; w < num_unpadded_W; w++) {
         for (uint32_t z = 0; z < num_unpadded_Z; z++) {
-            for (uint32_t y_t = 0; y_t < num_unpadded_Y / 32; y_t++) {
-                read_block_rows(stick_id, 32);
+            for (uint32_t y_t = 0; y_t < num_unpadded_Y / tile_height; y_t++) {
+                read_block_rows(stick_id, tile_height);
                 // Read fully padded blocks
                 pad_blocks(num_blocks_w_diff);
-                stick_id += 32;
+                stick_id += tile_height;
             }
 
             if (num_leftover_Y > 0) {
