@@ -885,8 +885,6 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
     {
         tf::Taskflow tf;
 
-        tf.emplace ( [&program]{ program.construct_core_range_set_for_worker_cores(); });
-
         // This can be removed when we load BRISC FW separately from kernel
         tf.emplace ( [device, profile_kernel] { CompileBlankKernel(device, profile_kernel); } );
 
@@ -910,6 +908,7 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
         }
         GetExecutor().run(tf).wait();
     }
+    program.construct_core_range_set_for_worker_cores();
 
     if (enable_compilation_reports) {
         compilation_reporter.flush_program_entry(program, enable_compile_cache);
