@@ -148,7 +148,7 @@ class BUDAEagerBuild(build_ext):
         return not os.path.exists(self.build_lib)
 
 # Include tt_metal_C for kernels and src/ and tools
-packages = ["tt_lib", "tt_lib.buda_m_C"]
+packages = ["tt_lib", "tt_lib.tt_metal", "tt_lib.models"]
 
 # Empty sources in order to force a BUDAEagerBuild execution
 buda_eager_lib_C = Extension("tt_lib._C", sources=[])
@@ -163,7 +163,8 @@ setup(
         # Seems like we can only find package srcs directly if they're at the
         # first level only, damn
         "": "libs",
-        "tt_lib.buda_m_C": "tt_metal",
+        "tt_lib.tt_metal": "tt_metal",
+        "tt_lib.models": "tests/python_api_testing/models",
     },
     include_package_data=True,
     long_description_content_type="text/markdown",
