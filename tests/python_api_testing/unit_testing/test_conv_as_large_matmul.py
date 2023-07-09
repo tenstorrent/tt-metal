@@ -91,11 +91,11 @@ def test_run_conv_as_large_matmul(K, C, H, W, R, S, stride_h, stride_w, pad_h, p
 
     # Prepare activations
     A_cl_host = create_conv_act_tensor(A_pyt, 1, C, H, W)
-    A = A_cl_host.to(device, ttl.tensor.MemoryConfig(False))
+    A = A_cl_host.to(device)
 
     # Prepare weights
     B_tiled_host = create_conv_weight_tensor(B_pyt, K, C, R, S, weight_block_h, weight_block_w)
-    B_tiled = B_tiled_host.to(device, ttl.tensor.MemoryConfig(False))
+    B_tiled = B_tiled_host.to(device)
     # Calculate conv result with golden result. Run Pytorch conv
     out_golden = torch.nn.functional.conv2d(A_pyt, B_pyt, stride=(stride_h, stride_w), padding=(pad_h, pad_w))
 

@@ -2,11 +2,6 @@
 #include "dataflow_api.h"
 #include "debug_print.h"
 
-inline void noc_async_read_from_dram_to_l1(uint32_t dram_addr, uint32_t dram_noc_x, uint32_t dram_noc_y, uint32_t l1_dest_addr, uint32_t read_size) {
-    uint64_t src_noc_addr = get_noc_addr(dram_noc_x, dram_noc_y, dram_addr);
-    noc_async_read(src_noc_addr, l1_dest_addr, read_size);
-}
-
 inline void pad_l1_buffer_with_zeroes(uint32_t l1_addr, uint32_t pad_size_bytes) {
     volatile std::uint8_t* start_dst= (volatile uint8_t*)(l1_addr);
     for (uint32_t offset = 0; offset < pad_size_bytes; offset++) {
@@ -66,7 +61,18 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_act = 0;
     constexpr uint32_t cb_id_weight = 1;
+    constexpr uint32_t tile_size_pow2_exponent = 11;
     uint32_t channel_stick_size = conv_act_size_c;
+    uint32_t channel_stick_size_bytes = channel_stick_size << 1;
+    const InterleavedAddrGen<true> s_act = {
+        .bank_base_address = act_addr_dram_base,
+        .page_size = channel_stick_size_bytes
+    };
+
+    const InterleavedPow2AddrGen<true> s_weight = {
+        .bank_base_address = weight_addr_dram_base,
+        .log_base_2_of_page_size = tile_size_pow2_exponent
+    };
     uint32_t num_blocks_weight_h = num_blocks_act_w;
     uint32_t single_tile_size_bytes = 2048;
     for(uint32_t group_idx = 0; group_idx < num_groups; group_idx++) {
@@ -168,7 +174,8 @@ void kernel_main() {
                                 }
                                 uint32_t src_addr = act_addr_dram_base + src_address_offset_dram;
                                 uint32_t dst_addr = l1_write_addr_act + dst_address_offset_l1;
-                                noc_async_read_from_dram_to_l1(src_addr, act_dram_noc_x, act_dram_noc_y, dst_addr, read_size_bytes);
+                                uint64_t act_noc_addr = get_noc_addr(act_tensor_channel_id, s_act, (channel_stick_offset<<1));
+                                noc_async_read(act_noc_addr, dst_addr, read_size_bytes);
                             }
                         }
                         dst_address_offset_l1 += read_size_bytes;
@@ -217,7 +224,8 @@ void kernel_main() {
                     }
                     uint32_t src_addr = weight_addr_dram_base + src_address_offset_dram;
                     uint32_t dst_addr = l1_write_addr_weight + dst_address_offset_l1;
-                    noc_async_read_from_dram_to_l1(src_addr, weight_dram_noc_x, weight_dram_noc_y, dst_addr, read_size_bytes);
+                    uint64_t weight_tile_noc_addr = get_noc_addr(tile_index_in_matrix, s_weight);
+                    noc_async_read(weight_tile_noc_addr, dst_addr, read_size_bytes);
                 }
             }
         }

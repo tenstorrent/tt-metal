@@ -64,11 +64,11 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
     # Prepare activations
     A_cl_host = create_conv_act_tensor(A_pyt, 1, C, H, W)
     A_cl_data = A_cl_host.data()
-    A = A_cl_host.to(device, ttl.tensor.MemoryConfig(False))
+    A = A_cl_host.to(device)
 
     # Prepare weights
     B_tiled_host = create_conv_weight_tensor(B_pyt, K, C, R, S, weight_block_h, weight_block_w)
-    B_tiled = B_tiled_host.to(device, ttl.tensor.MemoryConfig(False))
+    B_tiled = B_tiled_host.to(device)
 
     if conv_op_test_params.test_level == TestLevel.INPUT_TENSOR_CREATE:
         print("Ran test till tensor creation only. Did not run full op compute.")
