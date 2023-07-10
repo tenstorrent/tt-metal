@@ -21,7 +21,7 @@ jobs:
       arch: ${{ matrix.arch }}
     secrets:
       CHECKOUT_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
-  test-eager-package:
+  test-eager-package-host:
     needs: build-eager-package
     strategy:
       matrix:
@@ -37,33 +37,58 @@ jobs:
         with:
           submodules: recursive
           token: ${{ secrets.CHECKOUT_TOKEN }}
-          lfs: true
+          lfs: false
       - uses: ./.github/actions/install-metal-deps
-        with:
-          os: ${{ matrix.os }}
-      - uses: ./.github/actions/install-metal-dev-deps
         with:
           os: ${{ matrix.os }}
       - uses: actions/download-artifact@v3
         with:
           name: eager-dist-${{ matrix.os }}-${{ matrix.arch }}
-      - name: Create environment with new wheel
-        shell: bash
+      - name: Set up end-to-end tests environment
+        run: ./tests/scripts/set_up_end_to_end_tests_env.sh
+      - name: Set up dynamic env vars
         run: |
-          python3 -m venv env
-          source env/bin/activate
-          python -m pip install -r tt_metal/python_env/requirements.txt
-          python -m pip install ./metal_libs-*.whl
-      - name: Install test requirements
-        shell: bash
-        run: |
-          source env/bin/activate
-          python -m pip install -r tests/python_api_testing/requirements.txt
-      - name: Set up dyanmic env vars for test
-        run: |
+          source tests/end_to_end_tests/env/bin/activate
           echo "TT_METAL_HOME=$(python -m tt_lib.scripts.get_home_dir --short)" >> $GITHUB_ENV
-      - name: Run release tests
+      - name: Activate env and run release tests - host
         shell: bash
         run: |
-          source env/bin/activate
+          export PYTHONPATH=$(pwd)
+          source tests/end_to_end_tests/env/bin/activate
           ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.arch }} --pipeline-type eager_host_side
+  test-eager-package-silicon:
+    needs: build-eager-package
+    strategy:
+      matrix:
+        os: [ubuntu-20.04]
+        arch: [grayskull, wormhole_b0]
+    runs-on: ["Linux", "${{ matrix.arch }}"]
+    environment: production
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+          token: ${{ secrets.CHECKOUT_TOKEN }}
+          lfs: false
+      - uses: actions/download-artifact@v3
+        with:
+          name: eager-dist-${{ matrix.os }}-${{ matrix.arch }}
+      - name: Set up end-to-end tests environment
+        run: ./tests/scripts/set_up_end_to_end_tests_env.sh
+      - name: Set up dynamic env vars
+        run: |
+          source tests/end_to_end_tests/env/bin/activate
+          echo "TT_METAL_HOME=$(python -m tt_lib.scripts.get_home_dir --short)" >> $GITHUB_ENV
+      - name: Set up kernel builds
+        run: |
+          source tests/end_to_end_tests/env/bin/activate
+          python -m tt_lib.scripts.set_up_kernels --short prepare
+      - name: Activate env and run release tests - silicon
+        shell: bash
+        run: |
+          export PYTHONPATH=$(pwd)
+          source tests/end_to_end_tests/env/bin/activate
+          ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.arch }} --pipeline-type eager_package_silicon

@@ -64,11 +64,11 @@ run_post_commit_pipeline_tests() {
     ./tests/scripts/run_pre_post_commit_regressions.sh
 }
 
-run_eager_host_side_api_pipeline_tests() {
+run_eager_package_end_to_end_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
 
-    env pytest tests/python_api_testing/release_tests --tt-arch $tt_arch -m $pipeline_type
+    env pytest tests/end_to_end_tests --tt-arch $tt_arch -m $pipeline_type
 }
 
 run_frequent_pipeline_tests() {
@@ -151,7 +151,9 @@ run_pipeline_tests() {
     elif [[ $pipeline_type == "frequently_hangs" ]]; then
         run_frequently_hangs_pipeline_tests "$tt_arch" "$pipeline_type"
     elif [[ $pipeline_type == "eager_host_side" ]]; then
-        run_eager_host_side_api_pipeline_tests "$tt_arch" "$pipeline_type"
+        run_eager_package_end_to_end_pipeline_tests "$tt_arch" "$pipeline_type"
+    elif [[ $pipeline_type == "eager_package_silicon" ]]; then
+        run_eager_package_end_to_end_pipeline_tests "$tt_arch" "$pipeline_type"
     else
         echo "Unknown pipeline: $pipeline_type"
         exit 1
@@ -173,11 +175,13 @@ validate_and_set_env_vars() {
 
     export ARCH_NAME=$tt_arch
 
-    export PYTHONPATH=$TT_METAL_HOME
+    if [[ -z "$PYTHONPATH" ]]; then
+        export PYTHONPATH=$TT_METAL_HOME
+    fi
 }
 
 set_up_chdir() {
-    cd $TT_METAL_HOME
+    cd $PYTHONPATH
 
 }
 
