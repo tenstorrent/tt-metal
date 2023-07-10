@@ -79,6 +79,7 @@ union llk_relu_config_u {
 struct llk_pack_params_t {
     std::uint32_t pack_output;
     llk_relu_config_u relu_config;
+    const std::uint32_t out_tile_dims[2];
 };
 
 // TODO: nsmith move this to a common place where the hlk can include it
