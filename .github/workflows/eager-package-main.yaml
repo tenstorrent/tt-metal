@@ -61,7 +61,7 @@ jobs:
           python -m pip install -r tests/python_api_testing/requirements.txt
       - name: Set up dyanmic env vars for test
         run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+          echo "TT_METAL_HOME=$(python -m tt_lib.scripts.get_home_dir --short)" >> $GITHUB_ENV
       - name: Run release tests
         shell: bash
         run: |

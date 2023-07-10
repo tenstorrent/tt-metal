@@ -96,11 +96,16 @@ ifneq (,$(filter "$(ARCH_NAME)","wormhole" "wormhole_b0"))
 	ISSUE_3487_FIX = 1
 endif
 
+set_up_kernels:
+	python3 $(TT_METAL_HOME)/scripts/set_up_kernels.py --short prepare
+
+set_up_kernels/clean:
+	python3 $(TT_METAL_HOME)/scripts/set_up_kernels.py --short clean
+
 LIBS_TO_BUILD = \
 	common \
-	src/ckernels \
-	src/firmware \
 	build_kernels_for_riscv \
+	set_up_kernels \
 	device \
 	llrt \
 	tools \
@@ -127,6 +132,6 @@ endif
 
 build: $(LIBS_TO_BUILD)
 
-clean: src/ckernels/clean eager_package/clean
+clean: set_up_kernels/clean eager_package/clean
 	rm -rf $(OUT)
 	rm -rf dist/

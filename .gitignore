@@ -86,3 +86,7 @@ tt_metal/third_party/lfs/dtx_transform_outputs
 
 #exclude reports dir
 .reports/*
+
+# for end-to-end tests
+tests/python_api_testing/env
+tests/end_to_end_tests/env

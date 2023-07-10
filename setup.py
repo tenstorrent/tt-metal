@@ -148,7 +148,7 @@ class BUDAEagerBuild(build_ext):
         return not os.path.exists(self.build_lib)
 
 # Include tt_metal_C for kernels and src/ and tools
-packages = ["tt_lib", "tt_lib.tt_metal", "tt_lib.models"]
+packages = ["tt_lib", "tt_lib.tt_metal", "tt_lib.models", "tt_lib.scripts"]
 
 # Empty sources in order to force a BUDAEagerBuild execution
 buda_eager_lib_C = Extension("tt_lib._C", sources=[])
@@ -160,11 +160,10 @@ setup(
     use_scm_version=get_version(buda_eager_build_config),
     packages=packages,
     package_dir={
-        # Seems like we can only find package srcs directly if they're at the
-        # first level only, damn
         "": "libs",
         "tt_lib.tt_metal": "tt_metal",
         "tt_lib.models": "tests/python_api_testing/models",
+        "tt_lib.scripts": "scripts",
     },
     include_package_data=True,
     long_description_content_type="text/markdown",
