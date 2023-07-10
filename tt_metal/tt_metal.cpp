@@ -30,10 +30,6 @@ bool enable_compile_cache = false;
 void EnableCompileCache() { enable_compile_cache = true; }
 void DisableCompileCache() { enable_compile_cache = false; }
 bool GetCompileCacheEnabled() { return enable_compile_cache; }
-void GenerateBankToNocCoordHeaders(
-    Device *device,
-    build_kernel_for_riscv_options_t *build_options,
-    const std::string &op_path);
 
 bool enable_compilation_reports = false;
 void EnableCompilationReports() { enable_compilation_reports = true; }
@@ -115,7 +111,7 @@ bool InitializeDevice(Device *device, const MemoryAllocator &memory_allocator) {
         if (!globally_initialized) {
             // Thread safety: ok if we build twice
             build_kernel_for_riscv_options_t build_options;
-            GenerateBankToNocCoordHeaders(device, &build_options, "");
+            detail::GenerateBankToNocCoordHeaders(device, &build_options, "");
             std::string arch_name = tt::get_string_lowercase(device->arch());
             generate_binaries_params_t default_params;
             generate_binaries_all_riscs(&build_options,
@@ -392,12 +388,7 @@ uint32_t get_semaphore_address(const Program &program, const CoreRange &core_ran
 }
 
 uint32_t CreateSemaphore(Program &program, const CoreRange &core_range, uint32_t initial_value) {
-    auto start_core = core_range.start;
-    auto end_core = core_range.end;
-    TT_ASSERT(start_core == end_core or start_core < end_core && "Invalid core range!");
-    uint32_t address = get_semaphore_address(program, core_range);
-    detail::AddSemaphore(program, CoreRangeSet({core_range}), address, initial_value);
-    return address;
+    return CreateSemaphore ( program, {core_range}, initial_value );
 }
 
 uint32_t CreateSemaphore(Program &program, const CoreRangeSet &core_range_set, uint32_t initial_value) {
@@ -410,7 +401,7 @@ uint32_t CreateSemaphore(Program &program, const CoreRangeSet &core_range_set, u
             TT_ASSERT(addr == address);
         }
     }
-    detail::AddSemaphore(program, core_range_set, address, initial_value);
+    program.add_semaphore(core_range_set, address, initial_value);
     return address;
 }
 
@@ -638,7 +629,7 @@ void CompileBlankKernel(Device *device, bool profile_kernel) {
     std::string arch_name = tt::get_string_lowercase(device->arch());
 
     generate_binaries_params_t default_params;
-    GenerateBankToNocCoordHeaders(device, &blank_build_options, blank_build_options.name);
+    detail::GenerateBankToNocCoordHeaders(device, &blank_build_options, blank_build_options.name);
     generate_binaries_all_riscs(&blank_build_options, blank_build_options.name, arch_name, default_params, profile_kernel);
 
     compiled = true;

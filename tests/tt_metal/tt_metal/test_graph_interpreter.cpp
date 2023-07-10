@@ -9,6 +9,7 @@
 #include "tt_metal/llrt/test_libs/debug_mailbox.hpp"
 #include "build_kernels_for_riscv/build_kernels_for_riscv.hpp"
 #include "common/utils.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -37,7 +38,7 @@ void run_compile_blank(tt_metal::Device *device) {
     build_kernel_for_riscv_options.brisc_kernel_file_name = "tt_metal/kernels/dataflow/blank.cpp";
 
     generate_binaries_params_t params;
-    GenerateBankToNocCoordHeaders(device, &build_kernel_for_riscv_options, build_kernel_for_riscv_options.name);
+    tt_metal::detail::GenerateBankToNocCoordHeaders(device, &build_kernel_for_riscv_options, build_kernel_for_riscv_options.name);
     generate_binaries_all_riscs(&build_kernel_for_riscv_options, build_kernel_for_riscv_options.name, "grayskull", params);
 }
 

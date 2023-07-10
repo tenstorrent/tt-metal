@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bitset>
+#include <optional>
 
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
@@ -18,8 +19,6 @@ namespace tt_metal {
 namespace detail{
     void ValidateCircularBufferRegion(const Program &program, const Device *device, std::optional<CoreCoord> logical_core);
     void AddKernel ( Program & program, Kernel * kernel);
-    void AddSemaphore ( Program & program, const CoreRangeSet & crs, uint32_t address, uint32_t init_value);
-    void AddCircularBuffer ( Program & program, CircularBuffer *circular_buffer);
 }
 
 struct KernelGroup {
@@ -107,9 +106,16 @@ class Program {
 
     friend void detail::AddKernel ( Program & program, Kernel *kernel);
 
-    friend void detail::AddSemaphore ( Program & program, const CoreRangeSet & crs, uint32_t address, uint32_t init_value);
+    friend uint32_t CreateSemaphore(Program &program, const CoreRangeSet &core_range_set, uint32_t initial_value);
 
-    friend void detail::AddCircularBuffer ( Program & program, CircularBuffer *circular_buffer);
+    friend const CircularBuffer &CreateCircularBuffers(
+                                                    Program &program,
+                                                    const std::set<uint32_t> &buffer_indices,
+                                                    const CoreRangeSet &core_range_set,
+                                                    uint32_t num_tiles,
+                                                    uint32_t size_in_bytes,
+                                                    DataFormat data_format,
+                                                    std::optional<uint32_t> l1_address);
 
     void add_kernel(Kernel *kernel) { kernels_.push_back(kernel); }
 
