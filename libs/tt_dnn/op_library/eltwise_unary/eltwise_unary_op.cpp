@@ -15,51 +15,10 @@ using namespace tt::tt_metal;
 
 template <typename T>
 bool is_parameterized_type(T val) {
-  return val == UnaryOpType::RELU_MAX || val == UnaryOpType::RELU_MIN || val == UnaryOpType::POWER || val == UnaryOpType::LEAKY_RELU;
+  return val == UnaryOpType::RELU_MAX || val == UnaryOpType::RELU_MIN || val == UnaryOpType::POWER || val == UnaryOpType::LEAKY_RELU || val == UnaryOpType::ELU;
 }
 
 
-/**
-SFPU ops in BRISC
-
-IMPL DONE
-  tanh,
-  gelu,
-  exponential,
-  sigmoid,
-  reciprocal,
-  sqrt,
-  log,
-  log_with_base,
-  sine,
-  cosine,
-  relu_min,
-  relu_max,
-
-  abs,
-  sign,
-  square,
-
-  equal_zero,
-  not_equal_zero,
-  less_than_zero,
-  greater_than_equal_zero,
-  less_than_equal_zero,
-  greater_than_zero,
-  power,
-
-WIP
-  hardtanh,
-  exp_with_base,
-  lrelu,
-  tanh_derivative,
-
-  clamp,
-  gelu_derivative,
-
-  dropout,
-  max,
-*/
 union Converter {
 public:
   float f;
@@ -86,6 +45,7 @@ string get_op_name_parameterized(UnaryOpType::Enum op_type,float param0) {
     case UnaryOpType::RELU_MIN: op_name = "relu_min_tile_init(); relu_min_tile(0,"+Converter::to_hex(param0)+"u ); pack_tile(0, tt::CB::c_out0);"; break;
     case UnaryOpType::POWER: op_name = "power_tile_init(); power_tile(0," + std::to_string( (uint32_t) param0) + " ); pack_tile(0, tt::CB::c_out0);"; break;
     case UnaryOpType::LEAKY_RELU: op_name = "leaky_relu_tile_init(); leaky_relu_tile(0,"+Converter::to_hex(param0)+"u); pack_tile(0, tt::CB::c_out0);"; break;
+    case UnaryOpType::ELU: op_name = "elu_tile_init(); elu_tile(0,"+Converter::to_hex(param0)+"u); pack_tile(0, tt::CB::c_out0);"; break;
     default:
 	  TT_ASSERT( false && "unexpected parameterized type");
     };

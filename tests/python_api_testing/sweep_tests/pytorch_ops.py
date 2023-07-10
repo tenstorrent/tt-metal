@@ -226,6 +226,10 @@ def sin(x, *args, **kwargs):
 def cos(x, *args, **kwargs):
     return torch.cos(x)
 
+def elu(x, *args, **kwargs):
+    alpha = kwargs.pop("alpha")
+    return torch.nn.functional.elu(x,alpha)
+
 
 def swish(x, *args, **kwargs):
     return torch.nn.functional.silu(x)

@@ -120,6 +120,7 @@ enum SfpuType
   cosine,
   relu_min,
   relu_max,
+  elu,
   unused
 };
 

@@ -381,3 +381,14 @@ template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_leaky_relu_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::lrelu, APPROXIMATE>();
 }
+
+//ELU
+template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
+inline void llk_math_eltwise_unary_sfpu_elu(uint dst_index,uint param0, int vector_mode = Dim::RC) {
+    llk_math_eltwise_unary_sfpu<SfpuType::elu, APPROXIMATE, dst_sync>(dst_index,vector_mode,param0);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_elu_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::elu, APPROXIMATE>();
+}

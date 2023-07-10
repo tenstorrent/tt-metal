@@ -1668,6 +1668,24 @@ void TensorModule(py::module &m_tensor) {
         +----------+-------------------------------+-----------+------------------------------+----------+
     )doc");
 
+    m_tensor.def("elu", &elu, R"doc(
+        Returns tensor with the elu activation of all of elements of the input tensor ``arg0`` and scale
+        factor alpha as ``arg1``. ELU(x) = alpha*(exp(x) - 1) if x < 0 else x.
+
+        Input tensor and scale factor alpha must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+---------------------------+-----------+------------------------------+----------+
+        | Argument | Description               | Data type | Valid range                  | Required |
+        +==========+===========================+===========+==============================+==========+
+        | arg0     |  elu computed for tensor  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+---------------------------+-----------+------------------------------+----------+
+        | arg1     |  alpha value              | float     | scalar                       | Yes      |
+        +----------+---------------------------+-----------+------------------------------+----------+
+    )doc");
+
+
     m_tensor.def("relu_min", &relu_min, R"doc(
         Returns tensor with the relu min of all of elements of the input tensor ``arg0``. This is equivalent
         to relu_min[x] = max(x,minvalue). It moves relu function down to carry out operation at minvalue

@@ -103,6 +103,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_silu,
         "pytorch_op": pytorch_ops.silu,
     },
+    "eltwise-elu": {
+        "tt_lib_op": tt_lib_ops.eltwise_elu,
+        "pytorch_op": pytorch_ops.elu,
+    },
     "eltwise-square": {
         "tt_lib_op": tt_lib_ops.eltwise_square,
         "pytorch_op": pytorch_ops.square,

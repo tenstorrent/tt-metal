@@ -166,6 +166,7 @@ inline void sfpu_init(SfpuType operation, uint param0 = 0)
         break;
     case SfpuType::sigmoid:
         break;
+    case SfpuType::elu:
     case SfpuType::exponential:
         if constexpr(APPROXIMATION_MODE) {
             TTI_SFPLOADI(p_sfpu::LREG0, 0, p_exp::C23_73);
@@ -771,6 +772,31 @@ inline void calculate_lrelu(uint slope)
 
         v_if (v < 0.0f) {
             v *= s;
+        }
+        v_endif;
+
+        dst_reg[0] = v;
+
+        dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_elu(uint slope)
+{
+    // SFPU microcode
+    constexpr bool zero_negative = true;
+    Converter c_slope;
+    c_slope.u = slope;
+    vFloat s = c_slope.f;
+
+    #pragma GCC unroll 0
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat v = dst_reg[0];
+
+        v_if (v < 0.0f) {
+	  vFloat v_exp = calculate_exponential_body<true,zero_negative>(v);
+	  v = s*(v_exp - 1.0f);
         }
         v_endif;
 
@@ -1398,9 +1424,12 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
     }
     else if constexpr (operation == SfpuType::relu_min) {
         relu_min<APPROXIMATION_MODE, ITERATIONS>(param0);
-      }
+    }
     else if constexpr (operation == SfpuType::relu_max) {
         relu_max<APPROXIMATION_MODE, ITERATIONS>(param0);
+    }
+    else if constexpr (operation == SfpuType::elu) {
+        calculate_elu<APPROXIMATION_MODE, ITERATIONS>(param0);
     }
 }
 
