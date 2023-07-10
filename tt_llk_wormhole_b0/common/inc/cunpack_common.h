@@ -200,19 +200,16 @@ namespace ckernel::unpacker
 
       uint unpA_ch1_x_stride = (uint) (unpack_dst_format[unpA_operand]&0x3) == (uint) DataFormat::Float32 ? 4 : (uint) (unpack_dst_format[unpA_operand]&0x3) == (uint) DataFormat::Float16 ? 2 : 1;
       uint unpB_ch1_x_stride = (uint) (unpack_dst_format[unpB_operand]&0x3) == (uint) DataFormat::Float32 ? 4 : (uint) (unpack_dst_format[unpB_operand]&0x3) == (uint) DataFormat::Float16 ? 2 : 1;
-      uint unpA_ch1_y_stride = 16*srca_face_height*unpA_ch1_x_stride;
-      uint unpB_ch1_y_stride = 16*srcb_face_height*unpB_ch1_x_stride;
+      uint unpA_ch1_z_stride = 16*srca_face_height*unpA_ch1_x_stride;
       uint unpB_ch1_z_stride = 16*srcb_face_height*unpB_ch1_x_stride;
       uint exp_width = ((uint)unpack_dst_format[unpA_operand]>>2)&0x1; //0=5-bit, 1=8-bit
    
-      // Strides
-      cfg[UNP0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32] = (unpA_ch1_y_stride << UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT) |
-                                                    (            0 << UNP0_ADDR_CTRL_XY_REG_0_Xstride_SHAMT);  // X and Y stride for dest address (ch1)
-      //cfg[UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] =  // Z and W stride for dest address (ch1)
-      cfg[UNP1_ADDR_CTRL_XY_REG_1_Xstride_ADDR32] = (unpB_ch1_y_stride << UNP1_ADDR_CTRL_XY_REG_0_Ystride_SHAMT) |
-                                                    (            0 << UNP1_ADDR_CTRL_XY_REG_0_Xstride_SHAMT);  // X and Y stride for dest address (ch1)
-      cfg[UNP1_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] = (0                 << UNP1_ADDR_CTRL_ZW_REG_0_Wstride_SHAMT) | 
-                                                    (unpB_ch1_z_stride << UNP1_ADDR_CTRL_ZW_REG_0_Zstride_SHAMT);  // Z and W stride for dest address (ch1)
+      // Strides for incrementing ch1 address to srcA and srcB
+      cfg[UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] = (0                 << UNP0_ADDR_CTRL_ZW_REG_1_Wstride_SHAMT) | 
+                                                    (unpA_ch1_z_stride << UNP0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT);  // Z and W(not used) stride for dest address (ch1)
+
+      cfg[UNP1_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] = (0                 << UNP1_ADDR_CTRL_ZW_REG_1_Wstride_SHAMT) | 
+                                                    (unpB_ch1_z_stride << UNP1_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT);  // Z and W(not used) stride for dest address (ch1)
 
       // Math ALU_FORMAT_REG
       t6_mutex_acquire(mutex::REG_RMW);
@@ -252,7 +249,7 @@ namespace ckernel::unpacker
       }
       tile_descriptor.f.in_data_format  = (uint) unpack_src_format[unpA_operand];
       tile_descriptor.f.uncompressed = 1; // Input tile is uncompressed
-      tile_descriptor.f.x_dim        = 256; 
+      tile_descriptor.f.x_dim        = 256; // Not used as value is overriden by per context x_dim set below  
       tile_descriptor.f.y_dim        = 1; 
       tile_descriptor.f.z_dim        = 4; 
       //tile_descriptor.f.blobs_per_xy_plane = 0;
@@ -284,6 +281,7 @@ namespace ckernel::unpacker
 
       for (uint i=0; i<CONFIG_SIZE; i++) cfg[THCON_SEC1_REG2_Out_data_format_ADDR32+i]=config.val[i];
       
+      // TODO: Scale based on the tile size
       uint unp0_x_end = (srca_face_height == 0) ? 1 : (srca_face_height << 4) - 1;
       TTI_SETADCXX(p_setadc::UNP0, unp0_x_end, 0x0);
       TTI_SETADCXX(p_setadc::UNP1, (srcb_face_height << 4)-1, 0x0);
@@ -294,10 +292,13 @@ namespace ckernel::unpacker
       const uint Dest_cntx1_address = srca_face_height == 0 ? 22*16 : 4 * 16; 
       cfg[THCON_SEC0_REG5_Dest_cntx0_address_ADDR32] = Dest_cntx0_address | (Dest_cntx1_address << 16);
    
-      // Program unpacker0 per context x_dim
+      // Program unpacker0 per context x_dim (face size in l1)
+      // Overrides value set by tile descriptor when thread override bit is set in unpack instruction
+      // TODO: Scale based on the tile size
       const uint Tile_x_dim = 256;
       cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32] = Tile_x_dim | (Tile_x_dim << 16);
 
+      // TODO: Scale based on the tile size
       regfile[p_gpr_unpack::TILE_SIZE_A]   = GET_L1_TILE_SIZE((uint)unpack_src_format[unpA_operand]);
       regfile[p_gpr_unpack::TILE_SIZE_B]   = GET_L1_TILE_SIZE((uint)unpack_src_format[unpB_operand]);
       sync_regfile_write(p_gpr_unpack::TILE_SIZE_B);
@@ -321,23 +322,21 @@ namespace ckernel::unpacker
 
      TTI_SETADCXX(0b11, TILE_WIDTH*TILE_HEIGHT-1, 0x0);
 
-     /*
-     if ((in0_tile_dims[TileDim::R_IDX] <= FACE_HEIGHT) && (in0_tile_dims[TileDim::C_IDX] <= FACE_WIDTH)) {
-       TTI_SETADCXX(0b10, FACE_HEIGHT*FACE_WIDTH-1, 0x0); //16x16
-     } else if (in0_tile_dims[TileDim::R_IDX] <= FACE_HEIGHT) { 
-       TTI_SETADCXX(0b10, FACE_HEIGHT*TILE_WIDTH-1, 0x0); //16x32
-     } else if (in0_tile_dims[TileDim::C_IDX] <= FACE_WIDTH) { 
-       TTI_SETADCXX(0b10, FACE_HEIGHT*FACE_WIDTH-1, 0x0); //16x16+16x16
-     }
+      const bool is_in0_16x32 = (in0_tile_dims[TileDim::R_IDX]<=FACE_R_DIM) && (in0_tile_dims[TileDim::C_IDX]> FACE_C_DIM);
+      const bool is_in1_32x16 = (in1_tile_dims[TileDim::R_IDX]> FACE_R_DIM) && (in1_tile_dims[TileDim::C_IDX]<=FACE_C_DIM);
+      const bool is_in0_16x16 = (in0_tile_dims[TileDim::R_IDX]<=FACE_R_DIM) && (in0_tile_dims[TileDim::C_IDX]<=FACE_C_DIM);
+      const bool is_in1_16x16 = (in1_tile_dims[TileDim::R_IDX]<=FACE_R_DIM) && (in1_tile_dims[TileDim::C_IDX]<=FACE_C_DIM);
 
-     if ((in1_tile_dims[TileDim::R_IDX] <= FACE_HEIGHT) && (in1_tile_dims[TileDim::C_IDX] <= FACE_WIDTH)) {
-       TTI_SETADCXX(0b01, FACE_HEIGHT*FACE_WIDTH-1, 0x0); //16x16
-     } else if (in1_tile_dims[TileDim::R_IDX] <= FACE_HEIGHT) { 
-       TTI_SETADCXX(0b01, FACE_HEIGHT*TILE_WIDTH-1, 0x0); //16x32
-     } else if (in1_tile_dims[TileDim::C_IDX] <= FACE_WIDTH) { 
-       TTI_SETADCXX(0b01, FACE_HEIGHT*FACE_WIDTH-1, 0x0); //16x16+16x16
-     }
-     */
+      if (is_in0_16x16) {
+        TTI_SETADCXX(0b10, FACE_HEIGHT*FACE_WIDTH-1, 0x0); //16x16
+      } else if (is_in0_16x32) {
+        TTI_SETADCXX(0b10, FACE_HEIGHT*TILE_WIDTH-1, 0x0); //16x32
+      } 
+
+      if (is_in1_16x16) {
+        TTI_SETADCXX(0b01, FACE_HEIGHT*FACE_WIDTH-1, 0x0); //16x16
+      } 
+      // TODO: Add support for loading 32x16 tiles
 
    }
 
