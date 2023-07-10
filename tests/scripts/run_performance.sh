@@ -30,7 +30,7 @@ env pytest tests/python_api_testing/models/resnet/tests/perf_resnet.py
 
 env pytest tests/python_api_testing/models/bloom/perf_bloom.py
 
-env pytest tests/python_api_testing/models/metal_BERT_large_15/perf_bert15.py
+env TT_PCI_DMA_BUF_SIZE=1048576 TT_METAL_DEVICE_DISPATCH_MODE=1 pytest tests/python_api_testing/models/metal_BERT_large_15/perf_bert15.py
 
 env pytest tests/python_api_testing/models/deit/tests/perf_deit.py
 

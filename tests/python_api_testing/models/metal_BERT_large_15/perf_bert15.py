@@ -17,9 +17,11 @@ from transformers import AutoImageProcessor
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 from tests.python_api_testing.models.conftest import model_location_generator_
 
-import tt_lib as tt_lib
+import tt_lib as ttl
 from utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 from test_bert_batch_dram import TtBertBatchDram
+
+from python_api_testing.models.metal_BERT_large_15.model_config import get_model_config
 
 from utility_functions import (
     enable_compile_cache,
@@ -37,33 +39,39 @@ from loguru import logger
 
 BATCH_SIZE = 9
 model_name = "phiyodr/bert-large-finetuned-squad2"
-tokenizer_name  = "phiyodr/bert-large-finetuned-squad2"
+tokenizer_name = "phiyodr/bert-large-finetuned-squad2"
 comments = "Large"
 seq_len = 384
 real_input = True
 attention_mask = True
 token_type_ids = True
-dram = True
+dtype = ttl.tensor.DataType.BFLOAT16
+mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
 model_location_generator = model_location_generator_
 
 
-def test_perf():
+def test_perf(use_program_cache):
+    model_config = get_model_config(dtype, mem_config)
+
     disable_compile_cache()
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_key"
 
     # Initialize the device
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
-    tt_lib.device.InitializeDevice(device, tt_lib.device.MemoryAllocator.BASIC if dram else tt_lib.device.MemoryAllocator.L1_BANKING)
-    tt_lib.device.SetDefaultDevice(device)
-    host = tt_lib.device.GetHost()
-
-    mem_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.DRAM if dram else tt_lib.tensor.BufferType.L1)
+    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    ttl.device.InitializeDevice(
+        device,
+        ttl.device.MemoryAllocator.BASIC
+        if not model_config["L1_BANKING"]
+        else ttl.device.MemoryAllocator.L1_BANKING,
+    )
+    ttl.device.SetDefaultDevice(device)
+    host = ttl.device.GetHost()
 
     HF_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
     HF_model.eval()
-    tt_model = TtBertBatchDram(HF_model.config, HF_model, device, mem_config)
+    tt_model = TtBertBatchDram(HF_model.config, HF_model, device, model_config)
 
     tokenizer = BertTokenizer.from_pretrained(tokenizer_name)
     context = BATCH_SIZE * [
@@ -77,7 +85,7 @@ def test_perf():
         truncation=True,
         return_attention_mask=attention_mask,
         return_token_type_ids=token_type_ids,
-        return_tensors="pt"
+        return_tensors="pt",
     )
     tt_input = tt_model.model_preprocessing(**inputs)
 
@@ -88,7 +96,7 @@ def test_perf():
 
         profiler.start(first_key)
         tt_output = tt_model(1, *tt_input)
-        tt_lib.device.Synchronize()
+        ttl.device.Synchronize()
         profiler.end(first_key, force_enable=True)
         del tt_output
         tt_input = tt_model.model_preprocessing(**inputs)
@@ -97,12 +105,13 @@ def test_perf():
 
         profiler.start(second_key)
         tt_output = tt_model(1, *tt_input)
-        tt_lib.device.Synchronize()
+        ttl.device.Synchronize()
         profiler.end(second_key, force_enable=True)
-
 
     first_iter_time = profiler.get(first_key)
     second_iter_time = profiler.get(second_key)
     cpu_time = profiler.get(cpu_key)
 
-    prep_report("bert15", BATCH_SIZE, first_iter_time, second_iter_time, comments, cpu_time)
+    prep_report(
+        "bert15", BATCH_SIZE, first_iter_time, second_iter_time, comments, cpu_time
+    )
