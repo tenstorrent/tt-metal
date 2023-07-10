@@ -27,6 +27,7 @@ Welcome to TT-Metal documentation!
    :caption: TT-Metal Models
 
    tt_metal_models/get_started
+   tt_metal_models/get_performance
 
 .. toctree::
    :caption: Developer Notes
