@@ -62,6 +62,9 @@ def custom_compare(*args, **kwargs):
                 "zeros",
                 "full",
                 "arange",
+                "leaky_relu",
+                "hardshrink",
+                "softshrink"
             ),
             ([[1, 1, 32, 32]], [[1, 3, 320, 64]]),
             (0,),
@@ -84,6 +87,10 @@ def test_run_eltwise_composite_test(
     options["relu6"] = (-100, 100)
     options["hardsigmoid"] = (-100, 100)
     options["hardswish"] = (-100, 100)
+    options["hardshrink"] = (-100, 100)
+    options["softshrink"] = (-100, 100)
+    options["leaky_shrink"] = (-100, 100)
+    options["softsign"] = (1,100)
 
     generator = generation_funcs.gen_rand
 
@@ -108,6 +115,10 @@ def test_run_eltwise_composite_test(
         test_args.update({"coeffs": [1.0, 2.0, 1.0, 2.0]})
     elif fn == "threshold":
         test_args.update({"threshold": 5.0, "value": 1.0})
+    elif fn in ["leaky_relu"]:
+        test_args.update({"slope":np.random.randint(10,100)})
+    elif fn in ["softshrink","hardshrink"]:
+        test_args.update({"lambda":np.random.randint(1,100)})
     run_single_pytorch_test(
         "eltwise-%s" % (fn),
         input_shapes,

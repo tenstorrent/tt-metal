@@ -747,14 +747,26 @@ inline void calculate_dropout(uint prob, uint scale)
     l_reg[LRegs::LReg3] = rand;
 }
 
+union Converter {
+  float f;
+  uint32_t u;
+  static float to_float(uint32_t _v) {
+    Converter c{};
+    c.u = _v;
+    return c.f;
+  }
+};
+
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_lrelu(uint slope)
 {
     // SFPU microcode
-    vFloat s = s2vFloat16b(slope);
+    Converter c_slope;
+    c_slope.u = slope;
+    vFloat s = c_slope.f;
 
     #pragma GCC unroll 0
-    for (int d=0; d<4; d++) {
+    for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
 
         v_if (v < 0.0f) {
@@ -771,7 +783,7 @@ inline void calculate_lrelu(uint slope)
 template <bool APPROXIMATION_MODE,int ITERATIONS>
 inline void calculate_power_iterative(uint exponent)
 {
-    for (int d = 0; d < 8; d++)
+    for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat in = dst_reg[0];
         vFloat result = in * in;
@@ -793,7 +805,7 @@ inline void calculate_power(uint exponent)
     {
         vFloat in = dst_reg[0];
         vFloat result = 1.0f;
-	constexpr uint SIZE = 4*sizeof(uint);//till power of 64
+	    constexpr uint SIZE = 4*sizeof(uint);//till power of 64
         vFloat b[SIZE] = {1.0f,};
         // kind of a LUT
         b[0] = in;
@@ -1212,16 +1224,6 @@ inline void calculate_cosine()
         dst_reg++;
     }
 }
-
-union Converter {
-  float f;
-  uint32_t u;
-  static float to_float(uint32_t _v) {
-    Converter c{};
-    c.u = _v;
-    return c.f;
-  }
-};
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void relu_max(uint uint_threshold)

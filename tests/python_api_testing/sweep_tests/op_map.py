@@ -155,6 +155,22 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_gelu,
         "pytorch_op": pytorch_ops.gelu,
     },
+    "eltwise-leaky_relu": {
+        "tt_lib_op": tt_lib_ops.eltwise_leaky_relu,
+        "pytorch_op": pytorch_ops.leaky_relu,
+    },
+    "eltwise-hardshrink": {
+        "tt_lib_op": tt_lib_ops.eltwise_hardshrink,
+        "pytorch_op": pytorch_ops.hardshrink,
+    },
+    "eltwise-softshrink": {
+        "tt_lib_op": tt_lib_ops.eltwise_softshrink,
+        "pytorch_op": pytorch_ops.softshrink,
+    },
+    "eltwise-softsign": {
+        "tt_lib_op": tt_lib_ops.eltwise_softsign,
+        "pytorch_op": pytorch_ops.softsign,
+    },
     "eltwise-relu": {
         "tt_lib_op": tt_lib_ops.eltwise_relu,
         "pytorch_op": pytorch_ops.relu,

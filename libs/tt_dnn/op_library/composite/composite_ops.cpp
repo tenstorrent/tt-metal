@@ -20,6 +20,30 @@ Tensor mk_filled_tensor_like(const Tensor& reference_tensor, T val) {
   return result;
 }
 
+// Function: softshrink
+// Ref: https://pytorch.org/docs/stable/generated/torch.nn.Softshrink.html
+Tensor softshrink(const Tensor& a,float param) {
+    Tensor t_a_minus_param = sub_unary(a, param);
+    Tensor t_a_plus_param = add_unary(a,param);
+    Tensor t1 = mul( ltz(t_a_plus_param), t_a_plus_param );
+    Tensor t2 = mul( gtz(t_a_minus_param), t_a_minus_param );
+    return add( t1 , t2 );
+}
+
+// Function: hardshrink
+// Ref: https://pytorch.org/docs/stable/generated/torch.nn.Hardshrink.html
+Tensor hardshrink(const Tensor& a,float param) {
+    Tensor t1 = mul( ltz(add_unary(a,+param)), a );
+    Tensor t2 = mul( gtz(sub_unary(a,param)), a );
+    return add( t1 , t2 );
+}
+
+// Function: softsign
+// Ref: https://pytorch.org/docs/stable/generated/torch.nn.Softsign.html
+Tensor softsign(const Tensor& a) {
+    return mul(a,recip(add1(abs(a))));
+}
+
 // Function SILU (same as Swish)
 // use activation Silu[x] = x*Sigmoid[x]
 // Ref: https://pytorch.org/docs/stable/generated/torch.nn.SiLU.html?highlight=silu#torch.nn.SiLU

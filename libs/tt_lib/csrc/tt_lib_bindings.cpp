@@ -1072,6 +1072,54 @@ void TensorModule(py::module &m_tensor) {
         +----------+-------------------------------+-----------+------------------------------+----------+
     )doc");
 
+    m_tensor.def("softshrink", &softshrink, R"doc(
+        Applies the softshrink function to the elements of the input tensor ``arg0`` between limits ``-arg1`` low and
+        the ``+arg1`` high limits.
+
+        Input tensor must have BFLOAT16 data type. Input arg1 is parameter BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+-------------------------------+-----------+------------------------------+----------+
+        | Argument | Description                   | Data type | Valid range                  | Required |
+        +==========+===============================+===========+==============================+==========+
+        | arg0     | Apply softshrink to           | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+-------------------------------+-----------+------------------------------+----------+
+        | arg1     | value limits (-arg1 to +arg1) | float     | float value                  | Yes      |
+        +----------+-------------------------------+-----------+------------------------------+----------+
+    )doc");
+
+    m_tensor.def("hardshrink", &hardshrink, R"doc(
+        Applies the hardshrink function to the elements of the input tensor ``arg0`` between limits ``-arg1`` low and
+        the ``+arg1`` high limits.
+
+        Input tensor must have BFLOAT16 data type. Input arg1 is parameter BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+-------------------------------+-----------+------------------------------+----------+
+        | Argument | Description                   | Data type | Valid range                  | Required |
+        +==========+===============================+===========+==============================+==========+
+        | arg0     | Apply hardshrinhrink to       | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+-------------------------------+-----------+------------------------------+----------+
+        | arg1     | value limits (-arg1 to +arg1) | float     | float value                  | Yes      |
+        +----------+-------------------------------+-----------+------------------------------+----------+
+    )doc");
+
+    m_tensor.def("softsign", &softsign, R"doc(
+        Applies the softsign function to the elements of the input tensor ``arg0``.
+
+        Input tensor must have BFLOAT16 data type. Input arg1 is parameter BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+-------------------------------+-----------+------------------------------+----------+
+        | Argument | Description                   | Data type | Valid range                  | Required |
+        +==========+===============================+===========+==============================+==========+
+        | arg0     | Tensor softsign is applied to | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+-------------------------------+-----------+------------------------------+----------+
+    )doc");
+
     m_tensor.def("hardsigmoid", &hardsigmoid,
 		 py::arg().noconvert(), py::arg("scale") = 1.0f/6.0f, py::arg("shift") = 0.5f, R"doc(
         Applies the hardsigmoid function to the elements of the input tensor ``arg0``.
@@ -1606,6 +1654,22 @@ void TensorModule(py::module &m_tensor) {
         | Argument | Description               | Data type | Valid range                  | Required |
         +==========+===========================+===========+==============================+==========+
         | arg0     | Tensor gez is applied to  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+---------------------------+-----------+------------------------------+----------+
+    )doc");
+
+    m_tensor.def("leaky_relu", &leaky_relu, R"doc(
+        Returns tensor with the leaky relu of all of elements of the input tensor ``arg0`` with negative slope as ``arg1``.
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+---------------------------+-----------+------------------------------+----------+
+        | Argument | Description               | Data type | Valid range                  | Required |
+        +==========+===========================+===========+==============================+==========+
+        | arg0     | leaky relu operation input| Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+---------------------------+-----------+------------------------------+----------+
+        | arg1     |  slope value              | float     | scalar                       | Yes      |
         +----------+---------------------------+-----------+------------------------------+----------+
     )doc");
 

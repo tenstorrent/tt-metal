@@ -93,6 +93,88 @@ def eltwise_threshold(
 
     return output
 
+@setup_host_and_device
+def eltwise_leaky_relu(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    slope = kwargs.pop("slope")
+    t1 = ttl.tensor.leaky_relu(t0,slope)
+
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
+    return output
+
+@setup_host_and_device
+def eltwise_hardshrink(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    _lambda = kwargs.pop("lambda")
+    t1 = ttl.tensor.hardshrink(t0,_lambda)
+
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
+    return output
+
+@setup_host_and_device
+def eltwise_softshrink(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    _lambda = kwargs.pop("lambda")
+    t1 = ttl.tensor.softshrink(t0,_lambda)
+
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
+    return output
+
+@setup_host_and_device
+def eltwise_softsign(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    t1 = ttl.tensor.softsign(t0)
+
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
+    return output
 
 @setup_host_and_device
 def eltwise_relu6(x, *args, host, device, dtype, layout, on_device, **kwargs):

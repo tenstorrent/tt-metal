@@ -1057,4 +1057,13 @@ ALWI void graph_interpreter_init() // TODO(AP): probably duplicated, remove
     UNPACK(( llk_unpack_AB_hw_configure_disaggregated(0,1) ));
 }
 
+//Leaky Relu : y = relu(x) + slope*-relu(-x)
+ALWI void leaky_relu_tile(uint32_t idst,uint32_t param0) {
+    MATH(( llk_math_eltwise_unary_sfpu_leaky_relu<APPROX, SyncHalf>(idst,param0) ));
+}
+
+ALWI void leaky_relu_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_leaky_relu_init<APPROX>() ));
+}
+
 } // namespace ckernel

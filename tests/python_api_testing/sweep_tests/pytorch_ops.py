@@ -62,6 +62,24 @@ def relu6(x, *args, **kwargs):
     result = torch.nn.functional.relu6(x)
     return result
 
+def softsign(x, *args, **kwargs):
+    result = torch.nn.functional.softsign(x)
+    return result
+
+def leaky_relu(x, *args, **kwargs):
+    slope = kwargs.pop("slope")
+    result = torch.nn.functional.leaky_relu(x,slope)
+    return result
+
+def softshrink(x, *args, **kwargs):
+    param = kwargs.pop("lambda")
+    result = torch.nn.functional.softshrink(x,param)
+    return result
+
+def hardshrink(x, *args, **kwargs):
+    param = kwargs.pop("lambda")
+    result = torch.nn.functional.hardshrink(x,param)
+    return result
 
 def hardtanh(x, *args, **kwargs):
     result = torch.nn.functional.hardtanh(x)

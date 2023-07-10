@@ -6,7 +6,7 @@
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
 
-#include "third_party/magic_enum/magic_enum.hpp"
+//#include "third_party/magic_enum/magic_enum.hpp"
 
 using namespace tt::constants;
 
@@ -15,7 +15,7 @@ using namespace tt::tt_metal;
 
 template <typename T>
 bool is_parameterized_type(T val) {
-  return val == UnaryOpType::RELU_MAX || val == UnaryOpType::RELU_MIN || val == UnaryOpType::POWER;
+  return val == UnaryOpType::RELU_MAX || val == UnaryOpType::RELU_MIN || val == UnaryOpType::POWER || val == UnaryOpType::LEAKY_RELU;
 }
 
 
@@ -85,8 +85,9 @@ string get_op_name_parameterized(UnaryOpType::Enum op_type,float param0) {
     case UnaryOpType::RELU_MAX: op_name = "relu_max_tile_init(); relu_max_tile(0,"+Converter::to_hex(param0)+"u ); pack_tile(0, tt::CB::c_out0);"; break;
     case UnaryOpType::RELU_MIN: op_name = "relu_min_tile_init(); relu_min_tile(0,"+Converter::to_hex(param0)+"u ); pack_tile(0, tt::CB::c_out0);"; break;
     case UnaryOpType::POWER: op_name = "power_tile_init(); power_tile(0," + std::to_string( (uint32_t) param0) + " ); pack_tile(0, tt::CB::c_out0);"; break;
+    case UnaryOpType::LEAKY_RELU: op_name = "leaky_relu_tile_init(); leaky_relu_tile(0,"+Converter::to_hex(param0)+"u); pack_tile(0, tt::CB::c_out0);"; break;
     default:
-      TT_ASSERT( false && "unexpected parameterized type");
+	  TT_ASSERT( false && "unexpected parameterized type");
     };
     return op_name;
 }

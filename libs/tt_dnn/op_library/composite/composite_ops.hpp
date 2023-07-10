@@ -30,6 +30,18 @@ Tensor mk_scalar(T value) {
     return scalar;
 }
 
+// Function: softshrink
+// Ref: https://pytorch.org/docs/stable/generated/torch.nn.Softshrink.html
+Tensor softshrink(const Tensor& a,float param);
+
+// Function: hardshrink
+// Ref: https://pytorch.org/docs/stable/generated/torch.nn.Hardshrink.html
+Tensor hardshrink(const Tensor& a,float param);
+
+// Function: softsign
+// Ref: https://pytorch.org/docs/stable/generated/torch.nn.Softsign.html
+Tensor softsign(const Tensor& a);
+
 // Function: MAC
 // compute multiply-accumulate: y = a * b + c,  over various 8 combinations of a, b, c
 // being a scalar or tensor

@@ -12,9 +12,9 @@ namespace tt_metal {
 
 struct UnaryOpType {
     enum Enum { EXP = 0, RECIP = 1, GELU = 2, RELU = 3, SQRT = 4, SIGMOID = 5, LOG = 6, TANH = 7, LOG2 = 8, LOG10 = 9, SIN = 10, COS = 11,
-                ABS=12, SIGN=13, SQUARE=14, EQZ = 15, NEZ = 16, GTZ = 17, LTZ = 18, GEZ = 19, LEZ = 20, RELU_MAX = 21, RELU_MIN = 22, POWER = 23};
+                ABS=12, SIGN=13, SQUARE=14, EQZ = 15, NEZ = 16, GTZ = 17, LTZ = 18, GEZ = 19, LEZ = 20, RELU_MAX = 21, RELU_MIN = 22, POWER = 23, LEAKY_RELU = 24};
     static const vector<Enum> all() { return { EXP, RECIP, GELU, RELU, SQRT, SIGMOID, LOG, TANH, LOG2, LOG10, SIN, COS, ABS, SIGN, SQUARE,
-                EQZ , NEZ , GTZ , LTZ , GEZ , LEZ , RELU_MAX , RELU_MIN, POWER}; }
+                EQZ , NEZ , GTZ , LTZ , GEZ , LEZ , RELU_MAX , RELU_MIN, POWER, LEAKY_RELU}; }
 };
 
 struct UnaryOpParallelizationStrategy {
@@ -69,6 +69,7 @@ inline Tensor ltz(const Tensor &input_tensor) { return operation::run_with_autof
 inline Tensor relu_max(const Tensor& input_tensor, float upper_limit) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::RELU_MAX, upper_limit}, input_tensor); }
 inline Tensor relu_min(const Tensor& input_tensor, float lower_limit) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::RELU_MIN, lower_limit}, input_tensor); }
 inline Tensor power(const Tensor& input_tensor, uint32_t exponent) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::POWER, exponent}, input_tensor); }
+inline Tensor leaky_relu(const Tensor& input_tensor, float slope) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::LEAKY_RELU, slope}, input_tensor); }
 
 // binop with tied inputs.
 Tensor sub_unary(const Tensor& input_tensor, float value);
