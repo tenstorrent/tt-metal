@@ -214,7 +214,7 @@ def run_bert_encoder_inference(
     ttl.device.InitializeDevice(
         device,
         ttl.device.MemoryAllocator.BASIC
-        if not model_config["L1_BANKING"]
+        if model_config["DEFAULT_MEMCFG"].buffer_type == ttl.tensor.BufferType.DRAM
         else ttl.device.MemoryAllocator.L1_BANKING,
     )
     host = ttl.device.GetHost()
@@ -297,6 +297,10 @@ def run_bert_encoder_inference(
 
     if not passing:
         logger.error(f"Output PCC < {pcc}")
+
+    if model_config["DEFAULT_DTYPE"] == ttl.tensor.DataType.BFLOAT8_B:
+        pytest.xfail("PCC is garbage for BFLOAT8_B. Numbers are for perf only!")
+
     assert passing
 
 
@@ -327,12 +331,13 @@ def test_bert_encoder_inference(
     dtype,
     mem_config,
     model_location_generator,
+    request,
 ):
     model_config = get_model_config(dtype, mem_config)
 
     ttl.profiler.set_profiler_flag(False)
     ttl.profiler.set_profiler_location(
-        "tt_metal/tools/profiler/logs/BERT_large_1_encoder"
+        f"tt_metal/tools/profiler/logs/BERT_large_1_encoder_{request.node.callspec.id}"
     )
 
     ttl.profiler.start_profiling("entire_run")

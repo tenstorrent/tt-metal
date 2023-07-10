@@ -63,7 +63,7 @@ def test_perf(use_program_cache):
     ttl.device.InitializeDevice(
         device,
         ttl.device.MemoryAllocator.BASIC
-        if not model_config["L1_BANKING"]
+        if model_config["DEFAULT_MEMCFG"].buffer_type == ttl.tensor.BufferType.DRAM
         else ttl.device.MemoryAllocator.L1_BANKING,
     )
     ttl.device.SetDefaultDevice(device)

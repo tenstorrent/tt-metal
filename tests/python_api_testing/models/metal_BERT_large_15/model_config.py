@@ -69,7 +69,7 @@ def get_model_config(dtype, mem_config):
     # This will give us more options for experimentation with different configs.
 
     # Set defaults for dtype and mem_config for all ops
-    model_config = {"L1_BANKING": mem_config.buffer_type == ttl.tensor.BufferType.L1}
+    model_config = {"DEFAULT_DTYPE": dtype, "DEFAULT_MEMCFG": mem_config}
     model_config.update(dict(zip(OP_MEMCFG_KEYS, [mem_config] * len(OP_MEMCFG_KEYS))))
     model_config.update(dict(zip(OP_DTYPE_KEYS, [dtype] * len(OP_DTYPE_KEYS))))
 

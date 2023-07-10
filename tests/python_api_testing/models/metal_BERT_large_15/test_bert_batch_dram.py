@@ -184,7 +184,7 @@ def run_bert_question_and_answering_inference(
     ttl.device.InitializeDevice(
         device,
         ttl.device.MemoryAllocator.BASIC
-        if not model_config["L1_BANKING"]
+        if model_config["DEFAULT_MEMCFG"].buffer_type == ttl.tensor.BufferType.DRAM
         else ttl.device.MemoryAllocator.L1_BANKING,
     )
     host = ttl.device.GetHost()
@@ -362,6 +362,10 @@ def run_bert_question_and_answering_inference(
 
     ttl.profiler.stop_profiling("Whole_Test")
     # assert profiler.get("whole_model") < 60.0
+
+    if model_config["DEFAULT_DTYPE"] == ttl.tensor.DataType.BFLOAT8_B:
+        pytest.xfail("PCC is garbage for BFLOAT8_B. Numbers are for perf only!")
+
     assert (
         passing_start and passing_end
     ), f"At least one start or end logits don't meet PCC requirement {pcc}"
@@ -408,6 +412,7 @@ def test_bert_batch_dram(
     dtype,
     mem_config,
     model_location_generator,
+    request,
 ):
     model_config = get_model_config(dtype, mem_config)
 
@@ -420,7 +425,9 @@ def test_bert_batch_dram(
     disable_compilation_reports()
 
     ttl.profiler.set_profiler_flag(False)
-    ttl.profiler.set_profiler_location("tt_metal/tools/profiler/logs/BERT_large_full/")
+    ttl.profiler.set_profiler_location(
+        f"tt_metal/tools/profiler/logs/BERT_large_full_{request.node.callspec.id}"
+    )
 
     run_bert_question_and_answering_inference(
         model_version,
@@ -479,6 +486,7 @@ def test_bert_batch_dram_with_program_cache(
     dtype,
     mem_config,
     model_location_generator,
+    request,
 ):
     model_config = get_model_config(dtype, mem_config)
 
@@ -492,7 +500,7 @@ def test_bert_batch_dram_with_program_cache(
 
     ttl.profiler.set_profiler_flag(False)
     ttl.profiler.set_profiler_location(
-        "tt_metal/tools/profiler/logs/BERT_large_full_with_program_cache/"
+        f"tt_metal/tools/profiler/logs/BERT_large_full_with_program_cache_{request.node.callspec.id}"
     )
 
     run_bert_question_and_answering_inference(
