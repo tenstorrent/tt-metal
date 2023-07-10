@@ -24,16 +24,5 @@ namespace utils
         seed ^= value + 0x9e3779b9 + (seed << 6) + (seed >> 2);
     }
 
-    template <class T>
-    struct vector_hash {
-    inline std::size_t operator()(const std::vector<T> &vec) const
-    {
-        size_t seed = vec.size();
-        for(auto& i : vec) {
-            hash_combine(seed, static_cast<std::size_t>(i));
-        }
-        return seed;
-    }
-};
 }
 }

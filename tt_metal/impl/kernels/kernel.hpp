@@ -59,7 +59,7 @@ class Kernel {
 
     std::vector<uint32_t> compile_time_args() const { return compile_time_args_; }
 
-    size_t compile_time_args_hash() const;
+    std::string compile_time_args_hash() const;
 
     std::map<CoreCoord, std::vector<uint32_t>> const &runtime_args() const { return core_to_runtime_args_; }
 

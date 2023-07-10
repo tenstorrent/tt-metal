@@ -698,7 +698,7 @@ void SetCircularBufferDataFormat(Device *device, const Program &program, Kernel 
 
 size_t KernelCompileHash(Kernel *kernel, build_kernel_for_riscv_options_t &build_options, const int &pcie_slot, bool profile_kernel) {
     string compile_hash_str = std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc));
-    compile_hash_str += std::to_string(kernel->compile_time_args_hash());
+    compile_hash_str += kernel->compile_time_args_hash();
     compile_hash_str += std::to_string(kernel->define_args_hash());
     compile_hash_str += std::to_string(std::hash<std::string>{}(kernel->name()));
     compile_hash_str += std::to_string(size_t(profile_kernel));

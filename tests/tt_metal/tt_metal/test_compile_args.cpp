@@ -2,6 +2,8 @@
 #include <functional>
 #include <random>
 
+#include <filesystem>
+
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
 #include "llrt/tt_debug_print_server.hpp"
@@ -22,11 +24,6 @@ bool test_compile_args(std::vector<uint32_t> compile_args_vec) {
         tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
 
     pass &= tt_metal::InitializeDevice(device);
-    tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}});
-    std::cout<<"Host Compile Time Args:"<<std::endl;
-    for(uint32_t i = 0; i < compile_args_vec.size(); i++) {
-        std::cout<<compile_args_vec[i]<<std::endl;
-    }
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -34,7 +31,6 @@ bool test_compile_args(std::vector<uint32_t> compile_args_vec) {
     tt_metal::Program program = tt_metal::Program();
 
     CoreCoord core = {0, 0};
-
 
     tt_metal::DataMovementKernel *unary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
@@ -64,18 +60,6 @@ bool test_compile_args(std::vector<uint32_t> compile_args_vec) {
     ////////////////////////////////////////////////////////////////////////////
     pass &= tt_metal::CompileProgram(device, program);
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
-    ////////////////////////////////////////////////////////////////////////////
-
-    pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
-
-    pass &= tt_metal::LaunchKernels(device, program);
-
-    tt_stop_debug_print_server(device->cluster());
-
-    pass &= tt_metal::CloseDevice(device);
-
     return pass;
 }
 
@@ -83,8 +67,18 @@ int main(int argc, char **argv) {
     bool pass = true;
 
     try {
+        static const std::string kernel_name = "test_compile_args";
+        auto binary_path_str = get_kernel_compile_outpath() + kernel_name;
+        std::filesystem::remove_all(binary_path_str);
+
         pass &= test_compile_args({0, 68, 0, 124});
         pass &= test_compile_args({1, 5, 0, 124});
+
+        log_assert(std::filesystem::exists(binary_path_str), "Expected kernel to be compiled!");
+
+        std::filesystem::path binary_path{binary_path_str};
+        auto num_built_kernels = std::distance(std::filesystem::directory_iterator(binary_path), std::filesystem::directory_iterator{});
+        log_assert(num_built_kernels == 2, "Expected compute kernel test_compile_args to be compiled twice!");
 
     } catch (const std::exception &e) {
         pass = false;

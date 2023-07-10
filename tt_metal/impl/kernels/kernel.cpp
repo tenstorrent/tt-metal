@@ -1,5 +1,6 @@
 #include "tt_metal/impl/kernels/kernel.hpp"
 
+#include <fmt/ranges.h>
 #include <set>
 #include <unordered_set>
 
@@ -51,8 +52,8 @@ std::vector<ll_api::memory> const &Kernel::binaries() const {
     return this->binaries_;
 }
 
-size_t Kernel::compile_time_args_hash() const {
-    return tt::utils::vector_hash<uint32_t>{}(this->compile_time_args_);
+std::string Kernel::compile_time_args_hash() const {
+    return fmt::format("{}", fmt::join(this->compile_time_args_, "_"));
 }
 
 size_t Kernel::define_args_hash() const {
