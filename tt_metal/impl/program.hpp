@@ -14,6 +14,11 @@ namespace tt {
 
 namespace tt_metal {
 
+// Fwd declares
+namespace detail{
+    void ValidateCircularBufferRegion(const Program &program, const Device *device, std::optional<CoreCoord> logical_core);
+}
+
 struct KernelGroup {
     ComputeKernel *compute = nullptr;
     DataMovementKernel *riscv_0 = nullptr;
@@ -63,10 +68,6 @@ class Program {
     CoreRangeSet get_worker_core_range_set() const { return worker_crs_; };
 
     std::vector<std::string> cores_to_ops() const;
-
-    void validate_circular_buffer_region(const Device *device, const CoreCoord &logical_core) const;
-
-    void validate_circular_buffer_region(const Device *device) const;
 
    private:
     struct CircularBufferConfig {
@@ -180,6 +181,8 @@ class Program {
         DataFormat data_format,
         std::optional<uint32_t> l1_address);
 
+    friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device, std::optional<CoreCoord> logical_core);
+
     friend uint32_t CreateSemaphore(Program &program, const CoreRange &core_range, uint32_t initial_value);
 
     friend uint32_t CreateSemaphore(Program &program, const CoreRangeSet &core_range_set, uint32_t initial_value);
@@ -189,6 +192,8 @@ class Program {
     const CircularBuffer &add_circular_buffer(const CoreRangeSet &core_range_set, const std::set<u32> &indices, u32 num_tiles, u32 size_bytes, const DataFormat &data_format, std::optional<u32> address);
 
     void add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t init_value);
+
+    void validate_circular_buffer_region(const Device *device, std::optional<CoreCoord> logical_core) const;
 };
 
 }  // namespace tt_metal

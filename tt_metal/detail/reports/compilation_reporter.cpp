@@ -85,6 +85,6 @@ void CompilationReporter::init_reports() {
     this->summary_report_ << "Program, Number of CreateComputeKernel API calls, Number of CreateDataMovementKernel API calls, Persistent Kernel Compile Cache Enabled, Total Number of Kernel Cache Misses, Total Number of Kernel Cache Hits\n";
 }
 
-}   // namespace util
+}   // namespace detail
 
 }   // namespace tt::tt_metal

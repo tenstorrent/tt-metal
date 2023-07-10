@@ -13,6 +13,7 @@
 
 #include "tt_metal/detail/reports/compilation_reporter.hpp"
 #include "tt_metal/detail/reports/memory_reporter.hpp"
+#include "tt_metal/detail/program.hpp"
 
 //TODO(MO): hack until ticket #1184 is in
 bool enable_fw_profile_hack = false;
@@ -957,7 +958,7 @@ bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
         auto worker_core = device->worker_core_from_logical_core(logical_core);
         worker_cores.push_back(worker_core);
 
-        program.validate_circular_buffer_region(device, logical_core);
+        detail::ValidateCircularBufferRegion(program, device, logical_core);
         // CircularBufferConfigVec -- common across all kernels, so written once to the core
         llrt::CircularBufferConfigVec circular_buffer_config_vec = llrt::create_circular_buffer_config_vector();
 

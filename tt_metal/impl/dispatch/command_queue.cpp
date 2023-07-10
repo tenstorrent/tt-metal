@@ -1,5 +1,6 @@
 #include "debug_tools.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/program.hpp"
 #include "tt_metal/llrt/tt_debug_print_server.hpp"
 #include "tt_metal/impl/buffers/semaphore.hpp"
 #include "debug_tools.hpp"
@@ -773,7 +774,7 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
         tt_start_debug_print_server(cq.device->cluster(), {0}, {{1, 11}}, hart_mask, device_dispatch_dump_file.c_str());
     }
 
-    program.validate_circular_buffer_region(cq.device);
+    detail::ValidateCircularBufferRegion(program, cq.device);
     cq.enqueue_program(program, blocking);
 
     if (COMPARE_DISPATCH_DEVICE_TO_HOST != nullptr) {

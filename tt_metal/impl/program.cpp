@@ -90,7 +90,8 @@ std::vector<std::string> Program::cores_to_ops() const {
 }
 
 void Program::CircularBufferConfig::add_index(u32 index) {
-    log_assert(not this->indices[index], "Cannot add circular buffer at index {}, another circular buffer already exists", index);
+    log_assert(0 <= index < NUM_CIRCULAR_BUFFERS, "Invalid circular buffer index: {} should be between 0 and {}", 0, NUM_CIRCULAR_BUFFERS);
+    log_assert(not this->indices[index], "Invalid circular buffer index: Cannot add circular buffer at index {}, another circular buffer already exists", index);
     this->indices[index] = 1;
 }
 
@@ -110,6 +111,10 @@ void Program::CircularBufferConfig::mark_address(u64 address, u64 size) {
 }
 
 const CircularBuffer &Program::add_circular_buffer(const CoreRangeSet &core_range_set, const std::set<u32> &indices, u32 num_tiles, u32 size_bytes, const DataFormat &data_format, std::optional<u32> address) {
+    log_assert(
+        indices.size() <= NUM_CIRCULAR_BUFFERS,
+        "Invalid number of circular buffers: Requested number of circular buffers ({}) exceeds max number of circular buffers per core ({})", indices.size(), NUM_CIRCULAR_BUFFERS
+    );
     std::optional<u64> computed_addr = std::nullopt;
     std::vector<std::reference_wrapper<CircularBufferConfig>> cb_configs;
     for (const auto &core_range : core_range_set.ranges()) {
@@ -157,33 +162,40 @@ const std::vector<CircularBuffer> Program::circular_buffers_on_core(const CoreCo
     return cbs_on_core;
 }
 
-void Program::validate_circular_buffer_region(const Device *device, const CoreCoord &logical_core) const {
-    auto highest_cb_l1_region = [&]() {
-        if (this->per_core_cb_config_.find(logical_core) == this->per_core_cb_config_.end()) {
+void Program::validate_circular_buffer_region(const Device *device, std::optional<CoreCoord> logical_core) const {
+    auto highest_cb_l1_region = [&](const CoreCoord &core) {
+        if (this->per_core_cb_config_.find(core) == this->per_core_cb_config_.end()) {
             return std::make_pair((u64)UNRESERVED_BASE, (u64)UNRESERVED_BASE);
         }
-        return this->per_core_cb_config_.at(logical_core).l1_regions.back();
+        return this->per_core_cb_config_.at(core).l1_regions.back();
     };
 
-    const auto &cb_space = highest_cb_l1_region();
+    auto validate_cb_space_and_l1_buffer_space_disjoint = [&](const CoreCoord &core, const std::pair<u64, u64> &cb_space) {
+        if (cb_space.second > device->l1_size()) {
+            log_assert(false, "Local buffers on core {} grow to {} KB which is beyond max L1 size of {} KB", core.str(), cb_space.second/1024, device->l1_size()/1024);
+        }
 
-    log_assert(cb_space.second <= device->l1_size(), "Local buffers on core {} grow to {} KB which is beyond max L1 size of {} KB", logical_core.str(), cb_space.second/1024, device->l1_size()/1024);
+        auto bank_ids = device->bank_ids_from_logical_core(core);
+        if (bank_ids.size() != 1) {
+            log_assert(false, "Expected one bank on core that holds local and L1 buffers");
+        }
 
-    auto bank_ids = device->bank_ids_from_logical_core(logical_core);
-    log_assert(bank_ids.size() == 1, "Expected one bank on core that holds local and L1 buffers");
+        auto lowest_address = allocator::lowest_occupied_l1_address(*device->allocator_, bank_ids.at(0));
+        if (lowest_address.has_value()) {
+            if (lowest_address.value() < cb_space.second) {
+                log_assert(false, "Circular buffers in program {} clash with L1 buffers on core {}. L1 buffer allocated at {} and local buffers end at {}", this->id, core.str(), lowest_address.value(), cb_space.second);
+            }
+        }
+    };
 
-    auto lowest_address = allocator::lowest_occupied_l1_address(*device->allocator_, bank_ids.at(0));
-    if (lowest_address.has_value()) {
-        log_assert(
-            lowest_address.value() >= cb_space.second,
-            "Circular buffers in program {} clash with L1 buffers on core {}. L1 buffer allocated at {} and local buffers end at {}", this->id, logical_core.str(), lowest_address.value(), cb_space.second
-        );
-    }
-}
-
-void Program::validate_circular_buffer_region(const Device *device) const {
-    for (const auto &[logical_core, cb_config] : this->per_core_cb_config_) {
-        this->validate_circular_buffer_region(device, logical_core);
+    if (logical_core.has_value()) {
+        const auto &cb_space = highest_cb_l1_region(logical_core.value());
+        validate_cb_space_and_l1_buffer_space_disjoint(logical_core.value(), cb_space);
+    } else {
+        for (const auto &[core, cb_config] : this->per_core_cb_config_) {
+            const auto &cb_space = highest_cb_l1_region(core);
+            validate_cb_space_and_l1_buffer_space_disjoint(core, cb_space);
+        }
     }
 }
 
