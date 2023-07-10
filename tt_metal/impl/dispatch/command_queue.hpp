@@ -88,7 +88,7 @@ struct ProgramSrcToDstAddrMap {
 ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Program& program);
 
 // Only contains the types of commands which are enqueued onto the device
-enum class EnqueueCommandType { ENQUEUE_READ_BUFFER, ENQUEUE_WRITE_BUFFER, ENQUEUE_PROGRAM, FINISH, INVALID };
+enum class EnqueueCommandType { ENQUEUE_READ_BUFFER, ENQUEUE_WRITE_BUFFER, ENQUEUE_PROGRAM, FINISH, WRAP, INVALID };
 
 string EnqueueCommandTypeToString(EnqueueCommandType ctype);
 
@@ -189,6 +189,22 @@ class FinishCommand : public Command {
     EnqueueCommandType type();
 };
 
+class EnqueueWrapCommand : public Command {
+   private:
+    Device* device;
+    SystemMemoryWriter& writer;
+    static constexpr EnqueueCommandType type_ = EnqueueCommandType::WRAP;
+
+   public:
+    EnqueueWrapCommand(Device* device, SystemMemoryWriter& writer);
+
+    const DeviceCommand assemble_device_command(u32);
+
+    void process();
+
+    EnqueueCommandType type();
+};
+
 void send_dispatch_kernel_to_device(Device* device);
 
 class CommandQueue {
@@ -204,10 +220,7 @@ class CommandQueue {
         processing_thread_queue;  // These are commands that have not been placed in system memory
     // thread processing_thread;
     map<u64, unique_ptr<Buffer>>
-        program_to_buffer;  // HACK FOR TIME BEING!
-    // map<const Program*, unique_ptr<Buffer>>
-    //     program_to_buffer;  // Using raw pointer since I want to be able to hash program inexpensively. This implies
-                            // program object cannot be destroyed during the lifetime of the user's program
+        program_to_buffer;
 
     map<u64, ProgramSrcToDstAddrMap> program_to_dev_map;
 
@@ -220,6 +233,8 @@ class CommandQueue {
     void enqueue_program(Program& program, bool blocking);
 
     void finish();
+
+    void wrap();
 
     friend void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& dst, bool blocking);
     friend void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& src, bool blocking);

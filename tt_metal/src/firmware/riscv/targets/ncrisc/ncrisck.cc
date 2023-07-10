@@ -14,7 +14,7 @@
 
 CBWriteInterface cb_write_interface[NUM_CIRCULAR_BUFFERS];
 CBReadInterface cb_read_interface[NUM_CIRCULAR_BUFFERS];
-CBReadInterface cq_read_interface;
+CQReadInterface cq_read_interface;
 
 #ifdef NOC_INDEX
 uint8_t loading_noc = NOC_INDEX;

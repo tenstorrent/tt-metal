@@ -35,7 +35,7 @@ extern uint8_t loading_noc;
 
 extern CBWriteInterface cb_write_interface[NUM_CIRCULAR_BUFFERS];
 extern CBReadInterface cb_read_interface[NUM_CIRCULAR_BUFFERS];
-extern CBReadInterface cq_read_interface;
+extern CQReadInterface cq_read_interface;
 
 /**
  * \private

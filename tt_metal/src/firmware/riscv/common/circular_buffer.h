@@ -11,6 +11,13 @@ struct CBReadInterface {
    uint16_t tiles_acked;
 };
 
+struct CQReadInterface {
+    uint32_t fifo_size;
+    uint32_t fifo_limit;
+    uint32_t fifo_rd_ptr;
+    uint32_t fifo_rd_toggle;
+};
+
 struct CBWriteInterface {
    uint32_t fifo_size;
    uint32_t fifo_limit;

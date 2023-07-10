@@ -23,8 +23,8 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
     for (const CoreRange& core_range : program.get_worker_core_range_set().ranges()) {
         CoreCoord physical_start = device->worker_core_from_logical_core(core_range.start);
         CoreCoord physical_end = device->worker_core_from_logical_core(core_range.end);
-        program_to_device_map.multicast_message_noc_coords.push_back(std::make_pair(
-            get_noc_multicast_encoding(physical_start, physical_end), core_range.size()));
+        program_to_device_map.multicast_message_noc_coords.push_back(
+            std::make_pair(get_noc_multicast_encoding(physical_start, physical_end), core_range.size()));
     }
     program_to_device_map.num_workers = program.logical_cores().size();
 
@@ -34,7 +34,6 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
     auto initialize_section = [&sections]() {
         // The purpose of this function is to create a new 'section'
         // as described in the above comment.
-
         vector<transfer_info> init_vec;
         map<TransferType, vector<transfer_info>> init_map;
         init_map.emplace(TransferType::B, init_vec);
@@ -285,6 +284,7 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(u32 dst) {
     u32 num_pages_per_remainder_burst = remainder_burst_size / this->buffer.page_size();
 
     // Need to make a PCIE coordinate variable
+
     command.add_read_buffer_instruction(
         dst,
         NOC_XY_ENCODING(NOC_X(0), NOC_Y(4)),
@@ -311,7 +311,6 @@ void EnqueueReadBufferCommand::process() {
 
     this->writer.cq_reserve_back(this->device, cmd_size);
     this->writer.cq_write(this->device, command_vector, write_ptr);
-    this->writer.cq_write(this->device, this->dst, system_memory_temporary_storage_address);
     this->writer.cq_push_back(this->device, cmd_size);
 }
 
@@ -364,8 +363,8 @@ void EnqueueWriteBufferCommand::process() {
 
     const auto command_desc = this->assemble_device_command(system_memory_temporary_storage_address).get_desc();
     vector<u32> command_vector(command_desc.begin(), command_desc.end());
-    u32 cmd_size = DeviceCommand::size_in_bytes() + this->buffer.size();
 
+    u32 cmd_size = DeviceCommand::size_in_bytes() + this->buffer.size();
     this->writer.cq_reserve_back(this->device, cmd_size);
     this->writer.cq_write(this->device, command_vector, write_ptr);
     this->writer.cq_write(this->device, this->src, system_memory_temporary_storage_address);
@@ -390,7 +389,8 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(u32 runtime_a
     command.set_num_multicast_messages(this->program_to_dev_map.multicast_message_noc_coords.size());
 
     // Set the noc coords for all the worker cores
-    for (const auto& [multicast_message_noc_coord, num_messages] : this->program_to_dev_map.multicast_message_noc_coords) {
+    for (const auto& [multicast_message_noc_coord, num_messages] :
+         this->program_to_dev_map.multicast_message_noc_coords) {
         command.set_multicast_message_noc_coord(multicast_message_noc_coord, num_messages);
     }
 
@@ -474,12 +474,6 @@ void EnqueueProgramCommand::process() {
     for (const auto& [core_coord, rt_arg_map] : this->runtime_args) {
         for (const auto& [riscv, rt_args_for_core] : rt_arg_map) {
             rt_args_vector.insert(rt_args_vector.end(), rt_args_for_core.begin(), rt_args_for_core.end());
-
-            // Need 32B alignment
-            u32 padding = (align(rt_args_for_core.size() * sizeof(u32), 32) / sizeof(u32)) - rt_args_for_core.size();
-            for (u32 i = 0; i < padding; i++) {
-                rt_args_vector.push_back(0);
-            }
         }
     }
 
@@ -515,6 +509,34 @@ void FinishCommand::process() {
 }
 
 EnqueueCommandType FinishCommand::type() { return this->type_; }
+
+// EnqueueWrapCommand section
+EnqueueWrapCommand::EnqueueWrapCommand(Device* device, SystemMemoryWriter& writer) : writer(writer) {
+    this->device = device;
+}
+
+const DeviceCommand EnqueueWrapCommand::assemble_device_command(u32) {
+    DeviceCommand command;
+    return command;
+}
+
+void EnqueueWrapCommand::process() {
+    u32 write_ptr = this->writer.cq_write_interface.fifo_wr_ptr << 4;
+
+    // Need to remove hardcoding
+    u32 space_left = 1024 * 1024 * 1024 - write_ptr;
+
+    // Since all of the values will be 0, this will be equivalent to
+    // a bunch of NOPs
+    vector<u32> command_vector(space_left / sizeof(u32), 0);
+    command_vector.at(0) = 1; // wrap
+
+    this->writer.cq_reserve_back(this->device, space_left);
+    this->writer.cq_write(this->device, command_vector, write_ptr);
+    this->writer.cq_push_back(this->device, space_left);
+}
+
+EnqueueCommandType EnqueueWrapCommand::type() { return this->type_; }
 
 // Sending dispatch kernel. TODO(agrebenisan): Needs a refactor
 void send_dispatch_kernel_to_device(Device* device) {
@@ -552,6 +574,11 @@ void send_dispatch_kernel_to_device(Device* device) {
     tt::llrt::write_hex_vec_to_core(device->cluster(), 0, {1, 11}, fifo_addr_vector, CQ_READ_PTR);
     tt::llrt::write_hex_vec_to_core(device->cluster(), 0, {1, 11}, fifo_addr_vector, CQ_WRITE_PTR);
 
+    // Initialize wr toggle
+    vector<u32> toggle_start_vector = {0};
+    tt::llrt::write_hex_vec_to_core(device->cluster(), 0, {1, 11}, toggle_start_vector, CQ_READ_TOGGLE);
+    tt::llrt::write_hex_vec_to_core(device->cluster(), 0, {1, 11}, toggle_start_vector, CQ_WRITE_TOGGLE);
+
     // Deassert reset of dispatch core BRISC. TODO(agrebenisan): Refactor once Paul's changes in
     tt::llrt::internal_::setup_riscs_on_specified_core(
         device->cluster(), 0, tt::llrt::TensixRiscsOptions::BRISC_ONLY, {dispatch_core});
@@ -563,15 +590,13 @@ void send_dispatch_kernel_to_device(Device* device) {
 
 // CommandQueue section
 CommandQueue::CommandQueue(Device* device) {
-    // Zeroing out the read/write pointers
-    vector<u32> zeros(96 / sizeof(u32), 0);
-    device->cluster()->write_sysmem_vec(zeros, 0, 0);
+    // Setting read/write pointers to 6, zeroing out finish
+    vector<u32> pointers(96 / sizeof(u32), 0);
+    pointers[0] = 6; // rd ptr
+    device->cluster()->write_sysmem_vec(pointers, 0, 0);
 
-    // BUG: Potential race since I don't initialize the device's write pointer copy, it does it
-    // in its own deassert. Easy fix, just need to do it.
     send_dispatch_kernel_to_device(device);
     this->device = device;
-
 }
 
 CommandQueue::~CommandQueue() {
@@ -592,6 +617,13 @@ void CommandQueue::enqueue_command(shared_ptr<Command> command, bool blocking) {
 }
 
 void CommandQueue::enqueue_read_buffer(Buffer& buffer, vector<u32>& dst, bool blocking) {
+    u32 read_buffer_command_size = DeviceCommand::size_in_bytes() + buffer.size();
+    if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + read_buffer_command_size >= 1024 * 1024 * 1024) {
+        tt::log_assert(read_buffer_command_size <= 1024*1024*1024 - 96, "EnqueueReadBuffer command is too large");
+        this->wrap();
+    }
+    tt::log_debug(tt::LogDispatch, "EnqueueReadBuffer");
+
     shared_ptr<EnqueueReadBufferCommand> command =
         std::make_shared<EnqueueReadBufferCommand>(this->device, buffer, dst, this->sysmem_writer);
 
@@ -612,6 +644,13 @@ void CommandQueue::enqueue_write_buffer(Buffer& buffer, vector<u32>& src, bool b
         buffer.page_size() < 1024 * 1024 - DEVICE_COMMAND_DATA_ADDR,
         "Buffer pages must fit within the command queue data section");
 
+    u32 write_buffer_command_size = DeviceCommand::size_in_bytes() + buffer.size();
+    if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + write_buffer_command_size >= 1024 * 1024 * 1024) {
+        tt::log_assert(write_buffer_command_size <= 1024*1024*1024 - 96, "EnqueueWriteBuffer command is too large: {}", write_buffer_command_size);
+        this->wrap();
+    }
+    tt::log_debug(tt::LogDispatch, "EnqueueWriteBuffer");
+
     shared_ptr<EnqueueWriteBufferCommand> command =
         std::make_shared<EnqueueWriteBufferCommand>(this->device, buffer, src, this->sysmem_writer);
     this->enqueue_command(command, blocking);
@@ -630,6 +669,8 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
         vector<u32>& program_vector = program_to_device_map.program_vector;
         u32 program_data_size_in_bytes = program_vector.size() * sizeof(u32);
 
+        u32 write_buffer_command_size = DeviceCommand::size_in_bytes() + program_data_size_in_bytes;
+
         this->program_to_buffer.emplace(
             program_id,
             std::make_unique<Buffer>(
@@ -637,39 +678,51 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
 
         this->enqueue_write_buffer(*this->program_to_buffer.at(program_id), program_vector, blocking);
 
-        // TODO(agrebenisan): Right now, write/read buffer device APIs assume we start at bank 0,
-        // need to add support to start at a non-0-starting buffer
-        // channel_id =
-        //     (channel_id + 1) % this->device->cluster()
-        //                            ->get_soc_desc(0)
-        //                            .dram_cores.size();  // TODO(agrebenisan): Pull in num DRAM banks from SOC
-        //                            descriptor
-
         this->program_to_dev_map.emplace(program_id, std::move(program_to_device_map));
     }
+    tt::log_debug(tt::LogDispatch, "EnqueueProgram");
 
     auto get_current_runtime_args = [&program]() {
         RuntimeArgs runtime_args;
         for (const auto kernel : program.kernels()) {
             tt::RISCV processor = kernel->processor();
             for (const auto& [logical_core, rt_args] : kernel->runtime_args()) {
+                u32 padding = (align(rt_args.size() * sizeof(u32), 32) / sizeof(u32)) - rt_args.size();
+
                 runtime_args[logical_core][processor] = rt_args;
+                for (u32 i = 0; i < padding; i++) {
+                    runtime_args[logical_core][processor].push_back(0);
+                }
             }
         }
         return runtime_args;
     };
+
+    auto rt_args = get_current_runtime_args();
+
+    u32 runtime_args_and_device_command_size = DeviceCommand::size_in_bytes() + (rt_args.size() * sizeof(u32));
+    if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + runtime_args_and_device_command_size >= 1024 * 1024 * 1024) {
+        tt::log_assert(runtime_args_and_device_command_size <= 1024*1024*1024 - 96, "EnqueueProgram command size too large");
+        this->wrap();
+    }
 
     shared_ptr<EnqueueProgramCommand> command = std::make_shared<EnqueueProgramCommand>(
         this->device,
         *this->program_to_buffer.at(program_id),
         this->program_to_dev_map.at(program_id),
         this->sysmem_writer,
-        get_current_runtime_args());
+        rt_args);
 
     this->enqueue_command(command, blocking);
 }
 
 void CommandQueue::finish() {
+    if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + DeviceCommand::size_in_bytes() >=
+        1024 * 1024 * 1024) {
+        this->wrap();
+    }
+    tt::log_debug(tt::LogDispatch, "Finish");
+
     FinishCommand command(this->device, this->sysmem_writer);
     shared_ptr<FinishCommand> p = std::make_shared<FinishCommand>(std::move(command));
     this->enqueue_command(p, false);
@@ -685,22 +738,27 @@ void CommandQueue::finish() {
     this->device->cluster()->write_sysmem_vec(finish_vec, HOST_CQ_FINISH_PTR, 0);
 }
 
+void CommandQueue::wrap() {
+    tt::log_debug(tt::LogDispatch, "EnqueueWrap");
+    // tt::log_assert(false, "Should not be wrapping");
+    EnqueueWrapCommand command(this->device, this->sysmem_writer);
+    shared_ptr<EnqueueWrapCommand> p = std::make_shared<EnqueueWrapCommand>(std::move(command));
+    this->enqueue_command(p, false);
+}
+
 // OpenCL-like APIs
 void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& dst, bool blocking) {
-    tt::log_debug(tt::LogDispatch, "EnqueueReadBuffer");
 
     TT_ASSERT(blocking, "Non-blocking EnqueueReadBuffer not yet supported");
     cq.enqueue_read_buffer(buffer, dst, blocking);
 }
 
 void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& src, bool blocking) {
-    tt::log_debug(tt::LogDispatch, "EnqueueWriteBuffer");
 
     cq.enqueue_write_buffer(buffer, src, blocking);
 }
 
 void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
-    tt::log_debug(tt::LogDispatch, "EnqueueProgram");
     const char* COMPARE_DISPATCH_DEVICE_TO_HOST = std::getenv("TT_METAL_COMPARE_DISPATCH_DEVICE_TO_HOST");
     const char* DISPATCH_MAP_DUMP = std::getenv("TT_METAL_DISPATCH_MAP_DUMP");
 
@@ -724,7 +782,5 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
 }
 
 void Finish(CommandQueue& cq) {
-    tt::log_debug(tt::LogDispatch, "Finish");
-
     cq.finish();
 }

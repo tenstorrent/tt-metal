@@ -19,29 +19,36 @@ void kernel_main() {
     // they will know how to let me know they have finished
     *reinterpret_cast<volatile uint64_t*>(DISPATCH_MESSAGE_REMOTE_SENDER_ADDR) = dataflow::get_noc_addr(DISPATCH_MESSAGE_ADDR);
 
-    // For time being, while true is here until Paul's changes,
-    // in which while true loop will be in the firmware
-
     while (true) {
         volatile u32* command_ptr = reinterpret_cast<volatile u32*>(command_start_addr);
 
         dataflow::cq_wait_front();
         // Hardcoded for time being, need to clean this up
-        uint64_t src_noc_addr = dataflow::get_noc_addr(NOC_X(0), NOC_Y(4), cq_read_interface.fifo_rd_ptr << 4);
+        u64 src_noc_addr = dataflow::get_noc_addr(0, 4, cq_read_interface.fifo_rd_ptr << 4);
 
-        dataflow::noc_async_read(src_noc_addr, u32(command_start_addr), NUM_16B_WORDS_IN_DEVICE_COMMAND << 4);
+        dataflow::noc_async_read(src_noc_addr, u32(command_start_addr), DeviceCommand::size_in_bytes());
         dataflow::noc_async_read_barrier();
 
         // Control data
-        u32 finish = command_ptr[0];              // Whether to notify the host that we have finished
-        u32 num_workers = command_ptr[1];         // If num_workers > 0, it means we are launching a program
-        u32 num_multicast_messages = command_ptr[2];
-        u32 data_size_in_bytes = command_ptr[3];  // The amount of trailing data after the device command rounded to the
+        u32 wrap = command_ptr[0];
+
+        if (wrap) {
+            // Basically popfront without the extra conditional
+            cq_read_interface.fifo_rd_ptr = 6; // Head to beginning of command queue
+            dataflow::notify_host_of_cq_read_toggle();
+            dataflow::notify_host_of_cq_read_pointer();
+            continue;
+        }
+
+        u32 finish = command_ptr[1];              // Whether to notify the host that we have finished
+        u32 num_workers = command_ptr[2];         // If num_workers > 0, it means we are launching a program
+        u32 num_multicast_messages = command_ptr[3];
+        u32 data_size_in_bytes = command_ptr[4];  // The amount of trailing data after the device command rounded to the
                                                   // nearest multiple of 32
-        u32 num_buffer_reads = command_ptr[4];    // How many ReadBuffer commands we are running
-        u32 num_buffer_writes = command_ptr[5];   // How many WriteBuffer commands we are running
+        u32 num_buffer_reads = command_ptr[5];    // How many ReadBuffer commands we are running
+        u32 num_buffer_writes = command_ptr[6];   // How many WriteBuffer commands we are running
         u32 num_program_writes =
-            command_ptr[6];  // How many relays we need to make for program data (this needs more in depth explanation)
+            command_ptr[7];  // How many relays we need to make for program data (this needs more in depth explanation)
 
         // Will explain these magic numbers here, but soon will refactor these
         // We allocate 16 words for control information (finish, num_workers, num_buffer_reads/writes, etc)

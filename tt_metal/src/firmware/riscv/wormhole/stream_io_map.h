@@ -39,6 +39,14 @@ inline __attribute__((always_inline)) volatile uint32_t* get_cq_write_ptr() {
     return reinterpret_cast<volatile uint32_t*>(CQ_WRITE_PTR);
 }
 
+inline __attribute__((always_inline)) volatile u32* get_cq_read_toggle() {
+    return reinterpret_cast<volatile u32*>(CQ_READ_TOGGLE);
+}
+
+inline __attribute__((always_inline)) volatile u32* get_cq_write_toggle() {
+    return reinterpret_cast<volatile u32*>(CQ_WRITE_TOGGLE);
+}
+
 inline __attribute__((always_inline)) volatile uint32_t* get_cq_finish_ptr() {
     return (volatile uint32_t*)(uintptr_t)(STREAM_REG_ADDR(
         get_operand_stream_id(0), STREAM_REMOTE_DEST_BUF_START_REG_INDEX));

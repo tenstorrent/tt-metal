@@ -18,12 +18,6 @@ struct CBConfig {
     tt::DataFormat data_format;
 };
 
-struct ProgramConfig {
-    CoreRangeSet cr_set;
-    BufferConfig buf_config;
-    CBConfig cb_config;
-};
-
 struct DummyProgramConfig {
     CoreRangeSet cr_set;
     CBConfig cb_config;
@@ -152,16 +146,70 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, const
 
     return pass;
 }
+
+pair<Buffer, vector<u32>> EnqueueWriteBuffer_prior_to_wrap(Device* device, CommandQueue& cq, const BufferConfig& config) {
+    // This function just enqueues a buffer (which should be large in the config)
+    // write as a precursor to testing the wrap mechanism
+    size_t buf_size = config.num_pages * config.page_size;
+    Buffer buffer(device, buf_size, config.bank_start, config.page_size, config.buftype);
+
+    vector<u32> src = create_random_vector_of_bfloat16(
+      buf_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
+
+    EnqueueWriteBuffer(cq, buffer, src, false);
+    return std::make_pair(std::move(buffer), src);
+}
+
+bool test_EnqueueWrap_on_EnqueueReadBuffer(Device* device, CommandQueue& cq, const BufferConfig& config) {
+    auto [buffer, src] = EnqueueWriteBuffer_prior_to_wrap(device, cq, config);
+
+    vector<u32> dst;
+    EnqueueReadBuffer(cq, buffer, dst, true);
+
+    return src == dst;
+}
+
+bool test_EnqueueWrap_on_EnqueueWriteBuffer(Device* device, CommandQueue& cq, const BufferConfig& config) {
+    EnqueueWriteBuffer_prior_to_wrap(device, cq, config);
+
+
+    /*
+    This just ensures we don't hang on the subsequent EnqueueWriteBuffer
+    */
+    size_t buf_size = config.num_pages * config.page_size;
+    Buffer buffer(device, buf_size, config.bank_start, config.page_size, config.buftype);
+
+    vector<u32> src(buf_size / sizeof(u32), 0);
+
+    for (u32 i = 0; i < src.size(); i++) {
+        src.at(i) = i;
+    }
+    EnqueueWriteBuffer(cq, buffer, src, false);
+    Finish(cq);
+
+    return true;
+}
+
+bool test_EnqueueWrap_on_Finish(Device* device, CommandQueue& cq, const BufferConfig& config) {
+    bool pass = true;
+    EnqueueWriteBuffer_prior_to_wrap(device, cq, config);
+
+    return pass;
+}
+
+bool test_EnqueueWrap_on_EnqueueProgram(Device* device, CommandQueue& cq, const BufferConfig& config) {
+    bool pass = true;
+    EnqueueWriteBuffer_prior_to_wrap(device, cq, config);
+
+    return pass;
+}
+
 }  // namespace local_test_functions
 
 namespace basic_tests {
 namespace single_core_tests {
 
 TEST_F(CommandQueueHarness, TestSingleCbConfigCorrectlySentSingleCore) {
-    if (this->arch != tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
-
     CoreRange cr = {.start = {0, 0}, .end = {0, 0}};
     CoreRangeSet cr_set({cr});
 
@@ -173,10 +221,6 @@ TEST_F(CommandQueueHarness, TestSingleCbConfigCorrectlySentSingleCore) {
 }
 
 TEST_F(CommandQueueHarness, TestSingleSemaphoreConfigCorrectlySentSingleCore) {
-    if (this->arch != tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
-
     CoreRange cr = {.start = {0, 0}, .end = {0, 0}};
     CoreRangeSet cr_set({cr});
 
@@ -189,10 +233,6 @@ TEST_F(CommandQueueHarness, TestSingleSemaphoreConfigCorrectlySentSingleCore) {
 
 namespace multicore_tests {
 TEST_F(CommandQueueHarness, TestAllCbConfigsCorrectlySentMultiCore) {
-    if (this->arch != tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
-
     CoreCoord worker_grid_size = this->device->cluster()->get_soc_desc(0).worker_grid_size;
 
     CoreRange cr = {.start = {0, 0}, .end = {worker_grid_size.x - 1, worker_grid_size.y - 2}};
@@ -200,16 +240,13 @@ TEST_F(CommandQueueHarness, TestAllCbConfigsCorrectlySentMultiCore) {
 
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
-    DummyProgramConfig config = {.cr_set = cr_set, .cb_config = cb_config, .num_cbs = NUM_CIRCULAR_BUFFERS, .first_cb_start = 500 * 1024};
+    DummyProgramConfig config = {
+        .cr_set = cr_set, .cb_config = cb_config, .num_cbs = NUM_CIRCULAR_BUFFERS, .first_cb_start = 500 * 1024};
 
     EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(this->device, *this->cq, config));
 }
 
 TEST_F(CommandQueueHarness, TestAllSemConfigsCorrectlySentMultiCore) {
-    if (this->arch != tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
-
     CoreCoord worker_grid_size = this->device->cluster()->get_soc_desc(0).worker_grid_size;
 
     CoreRange cr = {.start = {0, 0}, .end = {worker_grid_size.x - 1, worker_grid_size.y - 2}};
@@ -223,22 +260,42 @@ TEST_F(CommandQueueHarness, TestAllSemConfigsCorrectlySentMultiCore) {
 }  // end namespace multicore_tests
 
 namespace dram_cache_tests {
-TEST_F(CommandQueueHarness, DISABLED_TestDramCacheHit) {
+TEST_F(CommandQueueHarness, DISABLED_TestDramCacheHit) {}
 
-}
+TEST_F(CommandQueueHarness, DISABLED_TestDramCacheMatch) {}
 
-TEST_F(CommandQueueHarness, DISABLED_TestDramCacheMatch) {
-
-}
-
-TEST_F(CommandQueueHarness, DISABLED_TestProgramVectorSizeMatch) {
-
-}
+TEST_F(CommandQueueHarness, DISABLED_TestProgramVectorSizeMatch) {}
 
 }  // end namespace dram_cache_tests
 }  // end namespace basic_tests
 
 namespace stress_tests {
-TEST_F(CommandQueueHarness, DISABLED_TestSendMaxNumberOfRuntimeArgs) {}
+TEST_F(CommandQueueHarness, DISABLED_TestSendMaxNumberOfRuntimeArgs) {
+
+}
+
+TEST_F(CommandQueueHarness, TestWrapHostHugepageOnEnqueueReadBuffer) {
+    BufferConfig buf_config = {.num_pages = 524270, .page_size = 2048, .buftype = BufferType::DRAM, .bank_start = 0};
+
+    EXPECT_TRUE(local_test_functions::test_EnqueueWrap_on_EnqueueReadBuffer(this->device, *this->cq, buf_config));
+}
+
+TEST_F(CommandQueueHarness, DISABLED_TestWrapHostHugepageOnEnqueueWriteBuffer) {
+    BufferConfig buf_config = {.num_pages = 524270, .page_size = 2048, .buftype = BufferType::DRAM, .bank_start = 0};
+
+    EXPECT_TRUE(local_test_functions::test_EnqueueWrap_on_EnqueueWriteBuffer(this->device, *this->cq, buf_config));
+}
+
+TEST_F(CommandQueueHarness, DISABLED_TestWrapHostHugepageOnFinish) {
+    BufferConfig buf_config = {.num_pages = 524285, .page_size = 2048, .buftype = BufferType::DRAM, .bank_start = 0};
+
+    EXPECT_TRUE(local_test_functions::test_EnqueueWrap_on_Finish(this->device, *this->cq, buf_config));
+}
+
+TEST_F(CommandQueueHarness, DISABLED_TestWrapHostHugepageOnEnqueueProgram) {
+    BufferConfig buf_config = {.num_pages = 524285, .page_size = 2048, .buftype = BufferType::DRAM, .bank_start = 0};
+
+    EXPECT_TRUE(local_test_functions::test_EnqueueWrap_on_EnqueueProgram(this->device, *this->cq, buf_config));
+}
 
 }  // namespace stress_tests

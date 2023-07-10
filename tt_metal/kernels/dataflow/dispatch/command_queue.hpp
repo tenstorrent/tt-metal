@@ -280,7 +280,6 @@ FORCE_INLINE void launch_program(u32 num_workers, u32 num_multicast_messages, vo
     return;
     #endif
 
-    // DPRINT << "NUMW: " << num_workers << ", NUMMM: " << num_multicast_messages << ENDL();
     if (not num_workers)
         return;
 

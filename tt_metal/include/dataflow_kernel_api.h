@@ -30,7 +30,7 @@
  * |-----------------------|------------------------------------|-----------------------|-------------|----------|
  * | arg_idx               | The index of the argument          | uint32_t              | 0 to 31     | True     |
  */
-#define get_compile_time_arg_val(arg_idx) KERNEL_COMPILE_TIME_ARG_ ## arg_idx
+#define get_compile_time_arg_val(arg_idx) KERNEL_COMPILE_TIME_ARG_##arg_idx
 
 int __multiply(int n, int m) {
     int res = 0, count = 0;
@@ -94,12 +94,10 @@ inline __attribute__((always_inline)) constexpr static std::int32_t GET_L1_TILE_
 inline __attribute__((always_inline)) constexpr static std::uint32_t MUL_WITH_TILE_SIZE(uint format, uint index) {
     switch (format & 0x1F) {
         case ((uint8_t)DataFormat::Float16):
-        case ((uint8_t)DataFormat::Float16_b):
-            return (index << 11);
+        case ((uint8_t)DataFormat::Float16_b): return (index << 11);
         case ((uint8_t)DataFormat::Bfp8_b):
         // Keep default as Bfp8?
-        default:
-            return ((index << 10) + (index << 6));
+        default: return ((index << 10) + (index << 6));
     };
 }
 
@@ -117,7 +115,7 @@ inline std::int32_t get_tile_size(const std::int32_t operand) {
     // return bytes
     return num_words << 4;
 }
-#endif // DATA_FORMATS_DEFINED
+#endif  // DATA_FORMATS_DEFINED
 
 namespace dataflow {
 
@@ -619,17 +617,17 @@ std::uint64_t get_noc_addr(std::uint32_t addr) {
 }
 
 FORCE_INLINE
-std::uint64_t get_noc_addr_rm(uint32_t row, uint32_t col, uint32_t bank_base_address, uint32_t num_used_banks, uint32_t W) {
+std::uint64_t get_noc_addr_rm(
+    uint32_t row, uint32_t col, uint32_t bank_base_address, uint32_t num_used_banks, uint32_t W) {
     uint32_t bank_id = row & (num_used_banks - 1);
     uint32_t dram_x = dram_bank_to_noc_x[bank_id];
     uint32_t dram_y = dram_bank_to_noc_y[bank_id];
     // >>3 is because of 8 banks
     // TODO(AP): replace multiply with increments
-    uint32_t dram_addr = bank_base_address + (__multiply(row>>3, (W<<1))) + (col<<1);
+    uint32_t dram_addr = bank_base_address + (__multiply(row >> 3, (W << 1))) + (col << 1);
     std::uint64_t noc_addr = get_noc_addr(dram_x, dram_y, dram_addr);
     return noc_addr;
 }
-
 
 /**
  * Initiates an asynchronous read from a specified source node located at NOC
@@ -789,10 +787,33 @@ void noc_async_write_barrier() {
 // Command queue APIs
 FORCE_INLINE
 void cq_wait_front() {
-    u32 fifo_wr_ptr;
-    do {
-        fifo_wr_ptr = get_cq_write_ptr()[0];
-    } while (cq_read_interface.fifo_rd_ptr == fifo_wr_ptr);
+    while (cq_read_interface.fifo_rd_ptr == get_cq_write_ptr()[0] and
+           cq_read_interface.fifo_rd_toggle == get_cq_write_toggle()[0])
+        ;
+}
+
+FORCE_INLINE
+void notify_host_of_cq_read_pointer() {
+    // These are the PCIE core coordinates
+    u64 pcie_address = get_noc_addr(0, 4, HOST_CQ_READ_PTR);  // For now, we are writing to host hugepages at offset
+                                                              // 0 (nothing else currently writing to it)
+    u32 rd_ptr = cq_read_interface.fifo_rd_ptr;
+    volatile u32* rd_ptr_addr = get_cq_read_ptr();
+    rd_ptr_addr[0] = rd_ptr;
+    noc_async_write(CQ_READ_PTR, pcie_address, 4);
+    noc_async_write_barrier();
+}
+
+FORCE_INLINE
+void notify_host_of_cq_read_toggle() {
+    u64 pcie_address = get_noc_addr(0, 4, HOST_CQ_READ_TOGGLE_PTR);  // For now, we are writing to host hugepages at
+                                                                     // offset 0 (nothing else currently writing to it)
+    cq_read_interface.fifo_rd_toggle = not cq_read_interface.fifo_rd_toggle;
+    volatile u32* rd_toggle_ptr = get_cq_read_toggle();
+    rd_toggle_ptr[0] = cq_read_interface.fifo_rd_toggle;
+
+    noc_async_write(CQ_READ_TOGGLE, pcie_address, 4);
+    noc_async_write_barrier();
 }
 
 FORCE_INLINE
@@ -803,22 +824,7 @@ void cq_pop_front(u32 cmd_size_B) {
     u32 cmd_size_16B = (((cmd_size_B - 1) | 31) + 1) >> 4;
     cq_read_interface.fifo_rd_ptr += cmd_size_16B;
 
-    if (cq_read_interface.fifo_rd_ptr > cq_read_interface.fifo_limit) {
-        cq_read_interface.fifo_rd_ptr -= cq_read_interface.fifo_size;
-    }
-
-    uint32_t pcie_noc_x = NOC_X(0);
-    uint32_t pcie_noc_y = NOC_Y(4);                              // These are the PCIE core coordinates
-    uint64_t pcie_address =
-        get_noc_addr(pcie_noc_x, pcie_noc_y, HOST_CQ_READ_PTR);  // For now, we are writing to host hugepages at offset
-                                                                 // 0 (nothing else currently writing to it)
-
-    u32 rd_ptr = cq_read_interface.fifo_rd_ptr;
-    volatile u32* rd_ptr_ptr = get_cq_read_ptr();
-
-    rd_ptr_ptr[0] = rd_ptr;
-    noc_async_write(u32(rd_ptr_ptr), pcie_address, 4);
-    noc_async_write_barrier();
+    notify_host_of_cq_read_pointer();
 }
 
-} // namespace dataflow
+}  // namespace dataflow

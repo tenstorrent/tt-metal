@@ -3,6 +3,7 @@
 #include "tt_metal/common/logger.hpp"
 
 DeviceCommand::DeviceCommand() {
+    this->desc.at(this->wrap_idx) = 0;
     this->desc.at(this->finish_idx) = 0;
     this->desc.at(this->num_workers_idx) = 0;
     this->desc.at(this->num_multicast_messages_idx) = 0;

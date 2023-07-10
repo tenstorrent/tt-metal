@@ -48,13 +48,14 @@ class DeviceCommand {
     static constexpr u32 num_possible_relay_buffer_instructions = 4;
 
     // Command header
-    static constexpr u32 finish_idx = 0;
-    static constexpr u32 num_workers_idx = 1;
-    static constexpr u32 num_multicast_messages_idx = 2;
-    static constexpr u32 data_size_in_bytes_idx = 3;
-    static constexpr u32 num_relay_buffer_reads_idx = 4;
-    static constexpr u32 num_relay_buffer_writes_idx = 5;
-    static constexpr u32 num_relay_program_writes_idx = 6;
+    static constexpr u32 wrap_idx = 0;
+    static constexpr u32 finish_idx = 1;
+    static constexpr u32 num_workers_idx = 2;
+    static constexpr u32 num_multicast_messages_idx = 3;
+    static constexpr u32 data_size_in_bytes_idx = 4;
+    static constexpr u32 num_relay_buffer_reads_idx = 5;
+    static constexpr u32 num_relay_buffer_writes_idx = 6;
+    static constexpr u32 num_relay_program_writes_idx = 7;
 
     static_assert(CONTROL_SECTION_NUM_ENTRIES == 16);
     u32 worker_launch_idx = CONTROL_SECTION_NUM_ENTRIES;  // So far, we unicast the de-assert until Almeet provides
