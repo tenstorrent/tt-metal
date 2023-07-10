@@ -13,6 +13,8 @@ namespace tt_metal {
 class AutoFormat {
     private:
         inline static Device* device = nullptr;
+        constexpr static MemoryConfig default_mem_config = {.interleaved = true};
+
         AutoFormat() {}
     public:
         static void SetDefaultDevice(Device * dev) { device = dev; }

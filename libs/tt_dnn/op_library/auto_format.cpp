@@ -18,6 +18,11 @@ Tensor AutoFormat::format_input_tensor(const Tensor &a, Device * device, const s
     bool pad_input = a.shape() != padded_shape;
     bool convert_layout = a.layout() != target_layout;
 
+    MemoryConfig mem_config = default_mem_config;
+    if (a.storage_type() == StorageType::DEVICE) {
+        mem_config = a.memory_config();
+    }
+
     Tensor formatted_input = a;
 
     // TODO: Profile if it is faster to put host tensor to device and then pad/convert if possible
@@ -25,20 +30,20 @@ Tensor AutoFormat::format_input_tensor(const Tensor &a, Device * device, const s
     if (formatted_input.storage_type() == StorageType::DEVICE) {
         if (convert_layout && !pad_input) {
             if (target_layout == Layout::TILE) {
-                return tilize(formatted_input);
+                return tilize(formatted_input, mem_config);
             } else if (target_layout == Layout::ROW_MAJOR && formatted_input.layout() == Layout::TILE) {
-                return untilize(formatted_input);
+                return untilize(formatted_input, mem_config);
             }
         } else if (!convert_layout && pad_input) {
             if (formatted_input.layout() == Layout::ROW_MAJOR || formatted_input.layout() == Layout::TILE) {
-                return pad(formatted_input, padded_shape, {0, 0, 0, 0}, pad_value);
+                return pad(formatted_input, padded_shape, {0, 0, 0, 0}, pad_value, mem_config);
             }
         } else if (convert_layout && pad_input) {
             if (target_layout == Layout::TILE) {
-                return tilize_with_val_padding(formatted_input, padded_shape, {0, 0, 0, 0}, pad_value);
+                return tilize_with_val_padding(formatted_input, padded_shape, {0, 0, 0, 0}, pad_value, mem_config);
             }  else if (formatted_input.layout() == Layout::TILE && target_layout == Layout::ROW_MAJOR) {
-                formatted_input = untilize(formatted_input);
-                return pad(formatted_input, padded_shape, {0, 0, 0, 0}, pad_value);
+                formatted_input = untilize(formatted_input, mem_config);
+                return pad(formatted_input, padded_shape, {0, 0, 0, 0}, pad_value, mem_config);
             }
         }
         // Fall back to host conversions
@@ -61,7 +66,7 @@ Tensor AutoFormat::format_input_tensor(const Tensor &a, Device * device, const s
     }
 
     if (formatted_input.storage_type() == StorageType::HOST) {
-        formatted_input = formatted_input.to(device);
+        formatted_input = formatted_input.to(device, mem_config);
     }
 
     return formatted_input;
@@ -72,6 +77,11 @@ Tensor AutoFormat::format_output_tensor(const Tensor &output, const std::array<u
     bool unpad_output = output.shape() != shape;
     bool convert_layout = output.layout() != target_layout;
 
+    MemoryConfig mem_config = default_mem_config;
+    if (output.storage_type() == StorageType::DEVICE) {
+        mem_config = output.memory_config();
+    }
+
     Tensor formatted_output = output;
 
     // Device side conversions
@@ -80,31 +90,31 @@ Tensor AutoFormat::format_output_tensor(const Tensor &output, const std::array<u
             // If target layout is tile but shape does not support tile, we don't do any conversions
             if (target_layout == Layout::TILE) {
                 if (formatted_output.shape()[2] % TILE_HEIGHT == 0 && formatted_output.shape()[3] % TILE_WIDTH == 0) {
-                    formatted_output = tilize(formatted_output);
+                    formatted_output = tilize(formatted_output, mem_config);
                 }
                 return formatted_output;
             } else if (target_layout == Layout::ROW_MAJOR && formatted_output.layout() == Layout::TILE) {
-                formatted_output = untilize(formatted_output);
+                formatted_output = untilize(formatted_output, mem_config);
                 return formatted_output;
             }
         } else if (unpad_output && !convert_layout) {
             // Output can be unpadded and layout supports the shape
             if ((formatted_output.layout() == Layout::TILE && shape[2] % TILE_HEIGHT == 0 && shape[3] % TILE_WIDTH == 0) ||
                 (formatted_output.layout() == Layout::ROW_MAJOR && shape[3] % 2 == 0)) {
-                formatted_output = unpad(formatted_output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1});
+                formatted_output = unpad(formatted_output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}, mem_config);
                 return formatted_output;
             // Output is tile but shape cannot be tile. We leave in RM
             } else if (formatted_output.layout() == Layout::TILE && shape[3] % 2 == 0) {
-                formatted_output = untilize_with_unpadding(formatted_output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1});
+                formatted_output = untilize_with_unpadding(formatted_output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}, mem_config);
                 return formatted_output;
             }
         } else if (unpad_output && convert_layout) {
             if (formatted_output.layout() == Layout::TILE && target_layout == Layout::ROW_MAJOR && shape[3] % 2 == 0) {
-                formatted_output = untilize_with_unpadding(formatted_output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1});
+                formatted_output = untilize_with_unpadding(formatted_output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}, mem_config);
                 return formatted_output;
             } else if (formatted_output.layout() == Layout::ROW_MAJOR && target_layout == Layout::TILE && shape[2] % TILE_HEIGHT == 0 && shape[3] % TILE_WIDTH == 0) {
-                formatted_output = unpad(formatted_output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1});
-                formatted_output = tilize(formatted_output);
+                formatted_output = unpad(formatted_output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}, mem_config);
+                formatted_output = tilize(formatted_output, mem_config);
                 return formatted_output;
             }
         }
@@ -145,7 +155,7 @@ Tensor AutoFormat::format_output_tensor(const Tensor &output, const std::array<u
         if ((formatted_output.layout() == Layout::ROW_MAJOR && formatted_output.shape()[3] % 2 == 0) ||
             (formatted_output.layout() == Layout::CHANNELS_LAST && formatted_output.shape()[1] % 2 == 0) ||
             (formatted_output.layout() == Layout::TILE)) {
-            formatted_output = formatted_output.to(device);
+            formatted_output = formatted_output.to(device, mem_config);
         }
     }
 

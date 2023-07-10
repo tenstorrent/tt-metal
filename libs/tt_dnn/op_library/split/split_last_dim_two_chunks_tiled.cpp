@@ -299,8 +299,6 @@ std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor &input_tensor, 
     if (AutoFormat::check_input_tensor_format(input_tensor, padded_input_shape)) {
         return operation::run(op, {input_tensor});
     } else {
-        TT_ASSERT(input_tensor.memory_config().buffer_type == tt_metal::BufferType::DRAM, "Untiled splits should be in DRAM");
-        TT_ASSERT(mem_config.buffer_type == tt_metal::BufferType::DRAM, "Untiled splits should be in DRAM");
         auto device = input_tensor.device();
         auto output_shape = op.compute_output_shapes({input_tensor}).at(0);
         const auto padded_tensor = AutoFormat::format_input_tensor(input_tensor, device, padded_input_shape);

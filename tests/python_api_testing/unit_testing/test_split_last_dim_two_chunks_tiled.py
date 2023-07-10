@@ -89,11 +89,7 @@ def test_split_tiled_w(
 
     assert shape[0] == 1
     untiled_shape = [1, 2, 16, 10240]
-    if shape == untiled_shape and (
-        out_mem_config.buffer_type == ttl.tensor.BufferType.L1
-        or in_mem_config.buffer_type == ttl.tensor.BufferType.L1
-    ):
-        pytest.skip("No Autoformat support for L1 buffers")
+
     if shape == untiled_shape and (dtype == ttl.tensor.DataType.BFLOAT8_B):
         pytest.skip("BFLOAT8_B only supported with tile")
 
