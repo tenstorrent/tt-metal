@@ -15,7 +15,6 @@ using namespace ckernel::unpacker;
 inline void llk_unpack_AB_matmul_mop_config(const bool transpose, const std::uint32_t ct_dim, const std::uint32_t rt_dim, const std::uint32_t kt_dim) {
     // in0 - loaded to SrcB
     // in1 - loaded to SrcA
-
     const bool reuse_a = ct_dim >= rt_dim;
     constexpr uint replay_buf_prog_len = 10;
     if (reuse_a) {
