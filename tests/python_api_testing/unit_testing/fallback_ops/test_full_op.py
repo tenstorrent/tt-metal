@@ -17,7 +17,7 @@ def test_full_fallback(input_shape, fill_value):
     host = ttl.device.GetHost()
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-    ttl.device.SetDefaultDevice(device)
+
     fill_value = torch.Tensor([fill_value]).bfloat16().float().item()
     pt_out = torch.full(input_shape, fill_value)
 

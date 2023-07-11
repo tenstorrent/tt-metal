@@ -31,7 +31,6 @@ def test_pad_fallback(
     host = ttl.device.GetHost()
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-    ttl.device.SetDefaultDevice(device)
 
     x = torch.randn(input_shape).bfloat16().float()
     pt_out = torch.nn.functional.interpolate(
