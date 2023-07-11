@@ -91,7 +91,7 @@ std::vector<std::string> Program::cores_to_ops() const {
 
 void Program::CircularBufferConfig::add_index(u32 index) {
     log_assert(0 <= index < NUM_CIRCULAR_BUFFERS, "Invalid circular buffer index: {} should be between 0 and {}", 0, NUM_CIRCULAR_BUFFERS);
-    log_assert(not this->indices[index], "Invalid circular buffer index: Cannot add circular buffer at index {}, another circular buffer already exists", index);
+    log_assert(not (this->indices.to_ulong() & (1 << index)), "Invalid circular buffer index: Cannot add circular buffer at index {}, another circular buffer already exists", index);
     this->indices[index] = 1;
 }
 
@@ -172,18 +172,18 @@ void Program::validate_circular_buffer_region(const Device *device, std::optiona
 
     auto validate_cb_space_and_l1_buffer_space_disjoint = [&](const CoreCoord &core, const std::pair<u64, u64> &cb_space) {
         if (cb_space.second > device->l1_size()) {
-            log_assert(false, "Local buffers on core {} grow to {} KB which is beyond max L1 size of {} KB", core.str(), cb_space.second/1024, device->l1_size()/1024);
+            log_assert(cb_space.second <= device->l1_size(), "Local buffers on core {} grow to {} KB which is beyond max L1 size of {} KB", core.str(), cb_space.second/1024, device->l1_size()/1024);
         }
 
         auto bank_ids = device->bank_ids_from_logical_core(core);
         if (bank_ids.size() != 1) {
-            log_assert(false, "Expected one bank on core that holds local and L1 buffers");
+            log_assert(bank_ids.size() == 1, "Expected one bank on core that holds local and L1 buffers");
         }
 
         auto lowest_address = allocator::lowest_occupied_l1_address(*device->allocator_, bank_ids.at(0));
         if (lowest_address.has_value()) {
             if (lowest_address.value() < cb_space.second) {
-                log_assert(false, "Circular buffers in program {} clash with L1 buffers on core {}. L1 buffer allocated at {} and local buffers end at {}", this->id, core.str(), lowest_address.value(), cb_space.second);
+                log_assert(lowest_address.value() >= cb_space.second, "Circular buffers in program {} clash with L1 buffers on core {}. L1 buffer allocated at {} and local buffers end at {}", this->id, core.str(), lowest_address.value(), cb_space.second);
             }
         }
     };

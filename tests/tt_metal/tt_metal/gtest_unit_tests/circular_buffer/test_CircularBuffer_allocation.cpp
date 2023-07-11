@@ -97,7 +97,7 @@ TEST_F(DeviceHarness, TestCircularBuffersAndL1BuffersCollision) {
     initialize_program(program, cr_set);
 
     auto cb_buffer_size = cb_config.page_size * cb_config.num_pages;
-    auto cb_addr = this->device->l1_size() / 2;
+    auto cb_addr = l1_buffer.address() - (cb_buffer_size * (NUM_CIRCULAR_BUFFERS - 1));
     for (u32 buffer_id = 0; buffer_id < NUM_CIRCULAR_BUFFERS; buffer_id++) {
         auto cb = CreateCircularBuffer(program, buffer_id, core, cb_config.num_pages, cb_buffer_size, cb_config.data_format, cb_addr);
         EXPECT_EQ(cb.address(), cb_addr);
