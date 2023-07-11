@@ -248,6 +248,8 @@ inline void record_dummy_math_event() {
       if (perf_index + 3 <= perf_end-reserve_space_for_trisc_end_signal) { // Last event is always set to a default.
          perf_buf_base[perf_buf_base_id][perf_index] = 0;
          perf_buf_base[perf_buf_base_id][perf_index+1] = 0;
+         perf_buf_base[perf_buf_base_id][perf_index+2] = 0;
+         perf_buf_base[perf_buf_base_id][perf_index+3] = 0;
          perf_index += (PERF_CNT_DUMP_ENTRY_SIZE/sizeof(uint32_t));
       }
    }
