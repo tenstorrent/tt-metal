@@ -4,8 +4,12 @@ from python_api_testing.models.llama.llama_decoder import TtLlamaDecoderLayer
 from python_api_testing.models.llama.llama_utils import *
 from typing import List, Optional, Tuple, Union
 from loguru import logger
-from python_api_testing.models.llama_split.tt.llama_first_half import TtLlamaModelFirstHFModel
-from python_api_testing.models.llama_split.tt.llama_second_half import TtLlamaModelSecondHFModel
+from python_api_testing.models.llama_split.tt.llama_first_half import (
+    TtLlamaModelFirstHFModel,
+)
+from python_api_testing.models.llama_split.tt.llama_second_half import (
+    TtLlamaModelSecondHFModel,
+)
 
 
 def _llama_first_half(

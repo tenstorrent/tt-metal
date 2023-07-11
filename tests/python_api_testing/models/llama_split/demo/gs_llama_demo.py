@@ -50,7 +50,7 @@ def run_llama_split_inference(
     half=1,
 ):
     if half == 1:
-        logger.debug("First pass throught TT model")
+        logger.debug("First pass through TT model")
         tt_llama_model = llama_first_half(
             device,
             state_dict,
@@ -64,7 +64,7 @@ def run_llama_split_inference(
             input_ids=x_inputs, attention_mask=att_mask, position_ids=position_ids
         )
     else:
-        logger.debug("Second pass throught TT model")
+        logger.debug("Second pass through TT model")
         tt_llama_model = llama_second_half(
             device,
             state_dict,

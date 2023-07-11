@@ -5,7 +5,7 @@ from python_api_testing.models.llama.llama_utils import *
 from python_api_testing.models.llama_split.llama_split_utils import (
     _make_causal_mask,
     _expand_mask,
-    build_decoders
+    build_decoders,
 )
 from typing import List, Optional, Tuple, Union
 from loguru import logger
