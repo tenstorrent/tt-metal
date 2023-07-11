@@ -85,10 +85,9 @@ inline void llk_unpack_reduce_init(const std::uint32_t within_face_16x16_transpo
 
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG1_SrcB_RMW>(unpack_dst_df);
 
-    //Need to enable transpose src A for reduce
-    if (ReduceDim::REDUCE_ROW == dim) {
-        cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
-    }
+    // REDUCE_ROW requires transpose itself; additionaly, within_face_16x16_transpose flag could require transpose;
+    // if we have the flag set with REDUCE_ROW, we don't need to do anything
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(ReduceDim::REDUCE_ROW == dim ? !within_face_16x16_transpose : within_face_16x16_transpose);
 
     TTI_SETADCXX(0b11, FACE_WIDTH*FACE_HEIGHT-1, 0x0);
 
