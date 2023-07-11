@@ -22,8 +22,9 @@ from python_api_testing.models.yolov5.tt.yolov5_bottleneck import TtYolov5Bottle
 from python_api_testing.models.utility_functions_new import (
     torch2tt_tensor,
     tt2torch_tensor,
+    comp_allclose,
+    comp_pcc,
 )
-from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 
 def test_Yolov5_bottleneck():

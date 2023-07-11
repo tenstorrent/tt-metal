@@ -34,7 +34,6 @@ import pkg_resources as pkg
 import torch
 import torchvision
 import yaml
-from ultralytics.yolo.utils.checks import check_requirements
 
 from python_api_testing.models.yolov5.reference.utils.downloads import (
     curl_download,
@@ -391,7 +390,6 @@ def check_git_status(repo="ultralytics/yolov5", branch="master"):
 @WorkingDirectory(ROOT)
 def check_git_info(path="."):
     # YOLOv5 git info check, return {remote, branch, commit}
-    check_requirements("gitpython")
     import git
 
     try:

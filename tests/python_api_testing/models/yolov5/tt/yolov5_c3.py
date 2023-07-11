@@ -28,7 +28,6 @@ class TtYolov5C3(torch.nn.Module):
         super().__init__()
         c_ = int(c2 * e)  # hidden channels
 
-        # self.cv1 = Conv(c1, c_, 1, 1)
         self.cv1 = TtYolov5Conv(
             state_dict=state_dict,
             base_address=f"{base_address}.cv1",
@@ -39,7 +38,6 @@ class TtYolov5C3(torch.nn.Module):
             s=1,
         )
 
-        # self.cv2 = Conv(c1, c_, 1, 1)
         self.cv2 = TtYolov5Conv(
             state_dict=state_dict,
             base_address=f"{base_address}.cv2",
@@ -50,7 +48,6 @@ class TtYolov5C3(torch.nn.Module):
             s=1,
         )
 
-        # self.cv3 = Conv(2 * c_, c2, 1)  # optional act=FReLU(c2)
         self.cv3 = TtYolov5Conv(
             state_dict=state_dict,
             base_address=f"{base_address}.cv3",
@@ -60,7 +57,6 @@ class TtYolov5C3(torch.nn.Module):
             k=1,
         )
 
-        # self.m = nn.Sequential(*(Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)))
         self.m = torch.nn.Sequential(
             *(
                 TtYolov5Bottleneck(

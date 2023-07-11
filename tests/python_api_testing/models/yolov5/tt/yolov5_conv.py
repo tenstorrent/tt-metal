@@ -77,7 +77,6 @@ class TtYolov5Conv2D(torch.nn.Module):
             self.conv_on_device = False
             logger.debug(f"Using fallback_ops.Conv2d for params {self.conv_params}")
 
-            # self.conv = nn.Conv2d(c1, c2, k, s, padding, groups=g, dilation=d, bias=False)
             self.conv = fallback_ops.Conv2d(
                 weights=self.conv_weight,
                 biases=self.conv_bias,
@@ -129,7 +128,6 @@ class TtYolov5Conv(torch.nn.Module):
             state_dict, f"{base_address}.conv", device, c1, c2, k, s, p, g, d
         )
 
-        # self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
         self.act = act
 
     def forward(self, x):
@@ -137,8 +135,5 @@ class TtYolov5Conv(torch.nn.Module):
 
         if self.act is True:
             x = fallback_ops.silu(x)
-        else:
-            # self.act if isinstance(self.act, nn.Module) else nn.Identity()
-            assert False  # Not implemented
 
         return x

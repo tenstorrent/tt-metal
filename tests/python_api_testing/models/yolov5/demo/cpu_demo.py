@@ -32,7 +32,6 @@ from python_api_testing.models.yolov5.reference.utils.general import (
     check_file,
     check_img_size,
     check_imshow,
-    check_requirements,
     colorstr,
     cv2,
     non_max_suppression,

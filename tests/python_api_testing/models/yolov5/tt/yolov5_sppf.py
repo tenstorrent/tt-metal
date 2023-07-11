@@ -16,7 +16,6 @@ class TtYolov5SPPF(torch.nn.Module):
         super().__init__()
         c_ = c1 // 2  # hidden channels
 
-        # self.cv1 = Conv(c1, c_, 1, 1)
         self.cv1 = TtYolov5Conv(
             state_dict=state_dict,
             base_address=f"{base_address}.cv1",
@@ -27,7 +26,6 @@ class TtYolov5SPPF(torch.nn.Module):
             s=1,
         )
 
-        # self.cv2 = Conv(c_ * 4, c2, 1, 1)
         self.cv2 = TtYolov5Conv(
             state_dict=state_dict,
             base_address=f"{base_address}.cv2",
@@ -38,14 +36,12 @@ class TtYolov5SPPF(torch.nn.Module):
             s=1,
         )
 
-        # self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
         self.m = fallback_ops.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
 
     def forward(self, x):
         x = self.cv1(x)
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")  # suppress torch 1.9.0 max_pool2d() warning
-            y1 = self.m(x)
-            y2 = self.m(y1)
-            return self.cv2(fallback_ops.concat((x, y1, y2, self.m(y2)), 1))
+        y1 = self.m(x)
+        y2 = self.m(y1)
+
+        return self.cv2(fallback_ops.concat((x, y1, y2, self.m(y2)), 1))

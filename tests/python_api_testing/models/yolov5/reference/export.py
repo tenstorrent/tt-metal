@@ -81,7 +81,6 @@ from python_api_testing.models.yolov5.reference.utils.general import (
     Profile,
     check_dataset,
     check_img_size,
-    check_requirements,
     check_version,
     check_yaml,
     colorstr,
@@ -177,7 +176,6 @@ def export_torchscript(model, im, file, optimize, prefix=colorstr("TorchScript:"
 @try_export
 def export_onnx(model, im, file, opset, dynamic, simplify, prefix=colorstr("ONNX:")):
     # YOLOv5 ONNX export
-    check_requirements("onnx>=1.12.0")
     import onnx
 
     logger.info(f"\n{prefix} starting export with onnx {onnx.__version__}...")
@@ -227,9 +225,6 @@ def export_onnx(model, im, file, opset, dynamic, simplify, prefix=colorstr("ONNX
     if simplify:
         try:
             cuda = torch.cuda.is_available()
-            check_requirements(
-                ("onnxruntime-gpu" if cuda else "onnxruntime", "onnx-simplifier>=0.4.1")
-            )
             import onnxsim
 
             logger.info(
@@ -246,9 +241,6 @@ def export_onnx(model, im, file, opset, dynamic, simplify, prefix=colorstr("ONNX
 @try_export
 def export_openvino(file, metadata, half, int8, data, prefix=colorstr("OpenVINO:")):
     # YOLOv5 OpenVINO export
-    check_requirements(
-        "openvino-dev>=2022.3"
-    )  # requires openvino-dev: https://pypi.org/project/openvino-dev/
     import openvino.runtime as ov  # noqa
     from openvino.tools import mo  # noqa
 
@@ -257,7 +249,6 @@ def export_openvino(file, metadata, half, int8, data, prefix=colorstr("OpenVINO:
     f_onnx = file.with_suffix(".onnx")
     f_ov = str(Path(f) / file.with_suffix(".xml").name)
     if int8:
-        check_requirements("nncf")
         import nncf
         import numpy as np
         from openvino.runtime import Core
@@ -322,7 +313,6 @@ def export_openvino(file, metadata, half, int8, data, prefix=colorstr("OpenVINO:
 @try_export
 def export_paddle(model, im, file, metadata, prefix=colorstr("PaddlePaddle:")):
     # YOLOv5 Paddle export
-    check_requirements(("paddlepaddle", "x2paddle"))
     import x2paddle
     from x2paddle.convert import pytorch2paddle
 
@@ -339,7 +329,6 @@ def export_paddle(model, im, file, metadata, prefix=colorstr("PaddlePaddle:")):
 @try_export
 def export_coreml(model, im, file, int8, half, nms, prefix=colorstr("CoreML:")):
     # YOLOv5 CoreML export
-    check_requirements("coremltools")
     import coremltools as ct
 
     logger.info(f"\n{prefix} starting export with coremltools {ct.__version__}...")
@@ -387,10 +376,6 @@ def export_engine(
     try:
         import tensorrt as trt
     except Exception:
-        if platform.system() == "Linux":
-            check_requirements(
-                "nvidia-tensorrt", cmds="-U --index-url https://pypi.ngc.nvidia.com"
-            )
         import tensorrt as trt
 
     if (
@@ -470,13 +455,7 @@ def export_saved_model(
     prefix=colorstr("TensorFlow SavedModel:"),
 ):
     # YOLOv5 TensorFlow SavedModel export
-    try:
-        import tensorflow as tf
-    except Exception:
-        check_requirements(
-            f"tensorflow{'' if torch.cuda.is_available() else '-macos' if MACOS else '-cpu'}"
-        )
-        import tensorflow as tf
+    import tensorflow as tf
     from tensorflow.python.framework.convert_to_constants import (
         convert_variables_to_constants_v2,
     )
@@ -647,7 +626,6 @@ def export_edgetpu(file, prefix=colorstr("Edge TPU:")):
 @try_export
 def export_tfjs(file, int8, prefix=colorstr("TensorFlow.js:")):
     # YOLOv5 TensorFlow.js export
-    check_requirements("tensorflowjs")
     import tensorflowjs as tfjs
 
     logger.info(f"\n{prefix} starting export with tensorflowjs {tfjs.__version__}...")
@@ -685,7 +663,6 @@ def export_tfjs(file, int8, prefix=colorstr("TensorFlow.js:")):
 def add_tflite_metadata(file, metadata, num_outputs):
     # Add metadata to *.tflite models per https://www.tensorflow.org/lite/models/convert/metadata
     with contextlib.suppress(ImportError):
-        # check_requirements('tflite_support')
         from tflite_support import flatbuffers
         from tflite_support import metadata as _metadata
         from tflite_support import metadata_schema_py_generated as _metadata_fb

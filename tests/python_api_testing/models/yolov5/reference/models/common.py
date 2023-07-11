@@ -28,7 +28,6 @@ from loguru import logger
 from python_api_testing.models.yolov5.reference.utils.general import (
     ROOT,
     Profile,
-    check_requirements,
     check_suffix,
     check_version,
     colorstr,
@@ -469,11 +468,9 @@ class DetectMultiBackend(nn.Module):
                 stride, names = int(d["stride"]), d["names"]
         elif dnn:  # ONNX OpenCV DNN
             logger.info(f"Loading {w} for ONNX OpenCV DNN inference...")
-            check_requirements("opencv-python>=4.5.4")
             net = cv2.dnn.readNetFromONNX(w)
         elif onnx:  # ONNX Runtime
             logger.info(f"Loading {w} for ONNX Runtime inference...")
-            check_requirements(("onnx", "onnxruntime-gpu" if cuda else "onnxruntime"))
             import onnxruntime
 
             providers = (
@@ -488,9 +485,6 @@ class DetectMultiBackend(nn.Module):
                 stride, names = int(meta["stride"]), eval(meta["names"])
         elif xml:  # OpenVINO
             logger.info(f"Loading {w} for OpenVINO inference...")
-            check_requirements(
-                "openvino"
-            )  # requires openvino-dev: https://pypi.org/project/openvino-dev/
             from openvino.runtime import Core, Layout, get_batch
 
             ie = Core()
@@ -628,7 +622,6 @@ class DetectMultiBackend(nn.Module):
             raise NotImplementedError("ERROR: YOLOv5 TF.js inference is not supported")
         elif paddle:  # PaddlePaddle
             logger.info(f"Loading {w} for PaddlePaddle inference...")
-            check_requirements("paddlepaddle-gpu" if cuda else "paddlepaddle")
             import paddle.inference as pdi
 
             if not Path(w).is_file():  # if not *.pdmodel
@@ -644,7 +637,6 @@ class DetectMultiBackend(nn.Module):
             output_names = predictor.get_output_names()
         elif triton:  # NVIDIA Triton Inference Server
             logger.info(f"Using {w} as Triton Inference Server...")
-            check_requirements("tritonclient[all]")
             from utils.triton import TritonRemoteModel
 
             model = TritonRemoteModel(url=w)

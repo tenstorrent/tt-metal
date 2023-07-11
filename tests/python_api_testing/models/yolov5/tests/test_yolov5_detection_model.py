@@ -29,8 +29,9 @@ from python_api_testing.models.yolov5.tt.yolov5_detection_model import (
 from python_api_testing.models.utility_functions_new import (
     torch2tt_tensor,
     tt2torch_tensor,
+    comp_allclose,
+    comp_pcc,
 )
-from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 
 def download_images(path, imgsz):

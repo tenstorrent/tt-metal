@@ -73,8 +73,6 @@ def parse_model(
     for i, (f, n, m, args) in enumerate(
         d["backbone"] + d["head"]
     ):  # from, number, module, args
-        # m = eval(m) if isinstance(m, str) else m  # eval strings
-
         for j, a in enumerate(args):
             with contextlib.suppress(NameError):
                 args[j] = eval(a) if isinstance(a, str) else a  # eval strings
@@ -141,10 +139,6 @@ def parse_model(
             np,
         )  # attach index, 'from' index, type, number params
 
-        # logger.info(
-        #     f"{i:>3}{str(f):>18}{n_:>3}{np:10.0f}  {t:<40}{str(args):<30}"
-        # )  # print
-
         save.extend(
             x % i for x in ([f] if isinstance(f, int) else f) if x != -1
         )  # append to savelist
@@ -179,12 +173,9 @@ class BaseModel(nn.Module):
             if profile:
                 self._profile_one_layer(m, x, dt)
 
-            # logger.debug(f"Input device {x.device()}")
             x = m(x)  # run
-
-            # logger.debug(f"Result device {x.device()}")
-
             y.append(x if m.i in self.save else None)  # save output
+
             if visualize:
                 feature_visualization(x, m.type, m.i, save_dir=visualize)
         return x
@@ -209,11 +200,8 @@ class BaseModel(nn.Module):
     def fuse(self):  # fuse model Conv2d() + BatchNorm2d() layers
         logger.info("Fusing layers... ")
         for m in self.model.modules():
-            # logger.info(f'Module type  {type(m)}')
-            # if isinstance(m, (Conv, DWConv)) and hasattr(m, 'bn'):
             if hasattr(m, "bn") and hasattr(m, "conv") and hasattr(m, "forward_fuse"):
                 m.conv = fuse_conv_and_bn(m.conv, m.bn)  # update conv
-                # logger.info('fuse_conv_and_bn... ')
                 delattr(m, "bn")  # remove batchnorm
                 m.forward = m.forward_fuse  # update forward
         self.info()
@@ -296,10 +284,7 @@ class TtYolov5DetectionModel(BaseModel):
             check_anchor_order(m)
             m.anchors /= m.stride.view(-1, 1, 1)
             self.stride = m.stride
-            # self._initialize_biases()  # only run once
 
-        # Init weights, biases
-        # initialize_weights(self)
         self.info()
 
     def forward(self, x, augment=False, profile=False, visualize=False):
@@ -318,7 +303,6 @@ class TtYolov5DetectionModel(BaseModel):
         for si, fi in zip(s, f):
             xi = scale_img(x.flip(fi) if fi else x, si, gs=int(self.stride.max()))
             yi = self._forward_once(xi)[0]  # forward
-            # cv2.imwrite(f'img_{si}.jpg', 255 * xi[0].cpu().numpy().transpose((1, 2, 0))[:, :, ::-1])  # save
             yi = self._descale_pred(yi, fi, si, img_size)
             y.append(yi)
         y = self._clip_augmented(y)  # clip augmented tails

@@ -27,8 +27,9 @@ from python_api_testing.models.yolov5.tt.yolov5_conv import TtYolov5Conv, TtYolo
 from python_api_testing.models.utility_functions_new import (
     torch2tt_tensor,
     tt2torch_tensor,
+    comp_allclose,
+    comp_pcc,
 )
-from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 
 def download_images(path, imgsz):
@@ -269,8 +270,6 @@ def test_Yolov5_Conv2D_real():
 
     torch.manual_seed(0)
     test_input = torch.rand(1, 3, 480, 640)
-    # test_input = get_test_input(refence_module)
-
     pt_out = refence_module(test_input)
 
     tt_module = TtYolov5Conv2D(

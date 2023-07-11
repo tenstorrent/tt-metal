@@ -20,7 +20,6 @@ class TtYolov5Bottleneck(torch.nn.Module):
         self.device = device
         c_ = int(c2 * e)  # hidden channels
 
-        # self.cv1 = Conv(c1, c_, 1, 1)
         self.cv1 = TtYolov5Conv(
             state_dict=state_dict,
             base_address=f"{base_address}.cv1",
@@ -31,7 +30,6 @@ class TtYolov5Bottleneck(torch.nn.Module):
             s=1,
         )
 
-        # self.cv2 = Conv(c_, c2, 3, 1, g=g)
         self.cv2 = TtYolov5Conv(
             state_dict=state_dict,
             base_address=f"{base_address}.cv2",

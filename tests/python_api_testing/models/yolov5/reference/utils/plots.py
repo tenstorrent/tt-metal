@@ -25,7 +25,6 @@ from python_api_testing.models.yolov5.reference.utils.general import (
     CONFIG_DIR,
     FONT,
     check_font,
-    check_requirements,
     clip_boxes,
     increment_path,
     is_ascii,
@@ -92,10 +91,6 @@ def check_pil_font(font=FONT, size=10):
         try:
             check_font(font)
             return ImageFont.truetype(str(font), size)
-        except TypeError:
-            check_requirements(
-                "Pillow>=8.4.0"
-            )  # known issue https://github.com/ultralytics/yolov5/issues/5374
         except URLError:  # not online
             return ImageFont.load_default()
 
