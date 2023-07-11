@@ -31,7 +31,21 @@ from utility_functions_new import (
     torch_to_tt_tensor_rm,
 )
 
-def run_nanogpt_model_real_test(device, pcc, prompt):
+@pytest.mark.parametrize(
+    "pcc, prompt",
+    (
+        (
+            0.99,
+            "How are you?"
+        ),
+    ),
+)
+def test_nanogpt_model_real(pcc, prompt):
+    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    tt_lib.device.InitializeDevice(device)
+    tt_lib.device.SetDefaultDevice(device)
+
+
     # Prepare input
 
     model_hf = GPT2LMHeadModel.from_pretrained('gpt2')
@@ -69,6 +83,7 @@ def run_nanogpt_model_real_test(device, pcc, prompt):
     tt_test_in = torch2tt_tensor(x, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
 
     tt_model = nanogpt_model.TtGPT(config, sd, device)
+    #tt_model = nanogpt_model.nanogpt(device)
 
     tt_out = tt_model.forward(
         x
@@ -79,27 +94,11 @@ def run_nanogpt_model_real_test(device, pcc, prompt):
     does_pass, pcc_message = comp_pcc(pt_out[0], tt_out_converted, 0.99)
     logger.info(pcc_message)
 
+    tt_lib.device.CloseDevice(device)
+
     if does_pass:
         logger.info("nanogpt_model_real: Passed!")
     else:
         logger.warning("nanogpt_model_real: Failed!")
 
     assert does_pass
-
-
-@pytest.mark.parametrize(
-    "pcc, prompt",
-    (
-        (
-            0.99,
-            "How are you?"
-        ),
-    ),
-)
-def test_nanogpt_model_real(pcc, prompt):
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
-    tt_lib.device.InitializeDevice(device)
-    tt_lib.device.SetDefaultDevice(device)
-
-    run_nanogpt_model_real_test(device, pcc, prompt)
-    tt_lib.device.CloseDevice(device)

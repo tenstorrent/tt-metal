@@ -45,8 +45,21 @@ dtype = 'bfloat16' # 'float32' or 'bfloat16' or 'float16'
 compile = False # use PyTorch 2.0 to compile the model to be faster
 # -----------------------------------------------------------------------------
 
+@pytest.mark.parametrize(
+    "prompt, max_new_tokens, temperature",
+    (
+        (
+            "Where do you go?",
+            25,
+            0.8,
+        ),
+    ),
+)
+def test_nanogpt_end_to_end(prompt, max_new_tokens, temperature):
+    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    tt_lib.device.InitializeDevice(device)
+    tt_lib.device.SetDefaultDevice(device)
 
-def run_nanogpt_model_test(device, prompt, temperature, max_new_tokens):
     # Prepare input
 
     model_hf = GPT2LMHeadModel.from_pretrained('gpt2')
@@ -80,20 +93,4 @@ def run_nanogpt_model_test(device, prompt, temperature, max_new_tokens):
     y = tt_model.generate(x, max_new_tokens, temperature, top_k=top_k)
     logger.info(decode(y[0].tolist()))
 
-@pytest.mark.parametrize(
-    "prompt, max_new_tokens, temperature",
-    (
-        (
-            "Where do you go?",
-            25,
-            0.8,
-        ),
-    ),
-)
-def test_nanogpt_model(prompt, max_new_tokens, temperature):
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
-    tt_lib.device.InitializeDevice(device)
-    tt_lib.device.SetDefaultDevice(device)
-
-    run_nanogpt_model_test(device, prompt, temperature, max_new_tokens)
     tt_lib.device.CloseDevice(device)

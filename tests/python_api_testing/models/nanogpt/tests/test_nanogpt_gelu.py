@@ -24,27 +24,6 @@ from utility_functions_new import (
     torch_to_tt_tensor_rm,
 )
 
-def run_nanogpt_gelu_test(device, pcc):
-
-    torch.manual_seed(0)
-    test_in = torch.rand(1, 43, 768)
-
-    pt_out = nanogpt_gelu.new_gelu(test_in)
-
-    tt_test_in = torch2tt_tensor(test_in, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
-    tt_out = nanogpt_gelu.tt_nanogpt_gelu(tt_test_in, device)
-    tt_out_converted = tt2torch_tensor(tt_out)
-
-    does_pass, pcc_message = comp_pcc(pt_out, tt_out_converted, pcc)
-    logger.info(pcc_message)
-
-    if does_pass:
-        logger.info("nanogpt_gelu: Passed!")
-    else:
-        logger.warning("nanogpt_gelu: Failed!")
-
-    assert does_pass
-
 @pytest.mark.parametrize(
     "pcc",
     (
@@ -58,5 +37,23 @@ def test_nanogpt_gelu_inference(pcc):
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
 
-    run_nanogpt_gelu_test(device, pcc)
+    torch.manual_seed(0)
+    test_in = torch.rand(1, 43, 768)
+
+    pt_out = nanogpt_gelu.new_gelu(test_in)
+
+    tt_test_in = torch2tt_tensor(test_in, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+    tt_out = nanogpt_gelu.tt_nanogpt_gelu(tt_test_in, device)
+    tt_out_converted = tt2torch_tensor(tt_out)
+
+    does_pass, pcc_message = comp_pcc(pt_out, tt_out_converted, pcc)
+    logger.info(pcc_message)
+
     tt_lib.device.CloseDevice(device)
+
+    if does_pass:
+        logger.info("nanogpt_gelu: Passed!")
+    else:
+        logger.warning("nanogpt_gelu: Failed!")
+
+    assert does_pass

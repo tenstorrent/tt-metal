@@ -25,7 +25,19 @@ from utility_functions_new import (
     torch_to_tt_tensor_rm,
 )
 
-def run_nanogpt_mlp_test(device, pcc):
+@pytest.mark.parametrize(
+    "pcc",
+    (
+        (
+            0.99,
+        ),
+    ),
+)
+def test_nanogpt_mlp(pcc):
+    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    tt_lib.device.InitializeDevice(device)
+
+
 
     model_hf = GPT2LMHeadModel.from_pretrained('gpt2')
     sd = model_hf.state_dict()
@@ -69,23 +81,11 @@ def run_nanogpt_mlp_test(device, pcc):
     does_pass, pcc_message = comp_pcc(pt_out, tt_out_converted, 0.99)
     logger.info(pcc_message)
 
+    tt_lib.device.CloseDevice(device)
+
     if does_pass:
         logger.info("nanogpt_mlp: Passed!")
     else:
         logger.warning("nanogpt_mlp: Failed!")
 
     assert does_pass
-
-@pytest.mark.parametrize(
-    "pcc",
-    (
-        (
-            0.99,
-        ),
-    ),
-)
-def test_nanogpt_mlp(pcc):
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
-    tt_lib.device.InitializeDevice(device)
-    run_nanogpt_mlp_test(device, pcc)
-    tt_lib.device.CloseDevice(device)

@@ -166,3 +166,31 @@ class TtGPT(nn.Module):
                 idx = torch.cat((idx, idx_next), dim=1)
 
             return idx
+
+def _nanogpt(
+    config, state_dict, device
+) -> TtGPT:
+    tt_model = TtGPT(
+        config, state_dict=state_dict, device=device
+    )
+    return tt_model
+
+
+def nanogpt(device) -> TtGPT:
+    HF_model =  GPT2LMHeadModel.from_pretrained('gpt2')
+    model_type = 'gpt2'
+    config_args = {
+        'gpt2':         dict(n_layer=12, n_head=12, n_embd=768),  # 124M params
+    }[model_type]
+
+    config_args['vocab_size'] = 50257 # always 50257 for GPT model checkpoints
+    config_args['block_size'] = 1024 # always 1024 for GPT model checkpoints
+    config_args['bias'] = True # always True for GPT model checkpoints
+
+    config = GPTConfig(**config_args)
+
+    state_dict = HF_model.state_dict()
+    tt_model = _nanogpt(
+        config=config, state_dict=state_dict, device=device
+    )
+    return tt_model
