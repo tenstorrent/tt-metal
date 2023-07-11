@@ -13,11 +13,6 @@ using namespace tt::constants;
 namespace eltwise_unary_op_utils {
 using namespace tt::tt_metal;
 
-template <typename T>
-bool is_parameterized_type(T val) {
-  return val == UnaryOpType::RELU_MAX || val == UnaryOpType::RELU_MIN || val == UnaryOpType::POWER || val == UnaryOpType::LEAKY_RELU || val == UnaryOpType::ELU;
-}
-
 
 union Converter {
 public:
@@ -38,7 +33,7 @@ public:
 inline
 string get_op_name_parameterized(UnaryOpType::Enum op_type,float param0) {
     string op_name;
-    TT_ASSERT( is_parameterized_type(op_type) && "operator should support one parameter" );
+    TT_ASSERT( is_parametrized_type(op_type) && "operator should support one parameter" );
 
     switch (op_type) {
     case UnaryOpType::RELU_MAX: op_name = "relu_max_tile_init(); relu_max_tile(0,"+Converter::to_hex(param0)+"u ); pack_tile(0, tt::CB::c_out0);"; break;
@@ -46,6 +41,7 @@ string get_op_name_parameterized(UnaryOpType::Enum op_type,float param0) {
     case UnaryOpType::POWER: op_name = "power_tile_init(); power_tile(0," + std::to_string( (uint32_t) param0) + " ); pack_tile(0, tt::CB::c_out0);"; break;
     case UnaryOpType::LEAKY_RELU: op_name = "leaky_relu_tile_init(); leaky_relu_tile(0,"+Converter::to_hex(param0)+"u); pack_tile(0, tt::CB::c_out0);"; break;
     case UnaryOpType::ELU: op_name = "elu_tile_init(); elu_tile(0,"+Converter::to_hex(param0)+"u); pack_tile(0, tt::CB::c_out0);"; break;
+    case UnaryOpType::GELU: op_name = "gelu_tile_init(); gelu_tile(0,"+std::to_string((uint32_t)param0)+"u); pack_tile(0, tt::CB::c_out0);"; break;
     default:
 	  TT_ASSERT( false && "unexpected parameterized type");
     };
@@ -58,7 +54,6 @@ string get_op_name_default(UnaryOpType::Enum op_type) {
     switch (op_type) {
         case UnaryOpType::EXP: op_name = "exp_tile_init(); exp_tile(0); pack_tile(0, tt::CB::c_out0);"; break;
         case UnaryOpType::RECIP: op_name = "recip_tile_init(); recip_tile(0); pack_tile(0, tt::CB::c_out0);"; break;
-        case UnaryOpType::GELU: op_name = "gelu_tile_init(); gelu_tile(0); pack_tile(0, tt::CB::c_out0);"; break;
         case UnaryOpType::RELU: op_name = "relu_min_tile_init(); relu_min_tile(0,0x0); pack_tile(0, tt::CB::c_out0);"; break;
         case UnaryOpType::SQRT: op_name = "sqrt_tile_init(); sqrt_tile(0); pack_tile(0, tt::CB::c_out0);"; break;
         case UnaryOpType::SIGMOID: op_name = "sigmoid_tile_init(); sigmoid_tile(0); pack_tile(0, tt::CB::c_out0);"; break;
@@ -91,7 +86,6 @@ string get_op_name_default(UnaryOpType::Enum op_type) {
             op_name = "lez_tile_init(); lez_tile(0); pack_tile(0,tt::CB::c_out0);"; break;
         case UnaryOpType::GEZ:
             op_name = "gez_tile_init(); gez_tile(0); pack_tile(0,tt::CB::c_out0);"; break;
-
         default: TT_ASSERT(false && "Undefined op type");
     }
     return op_name;
@@ -111,7 +105,7 @@ void add_defines_impl(ComputeKernel * eltwise_unary_kernel, UnaryOpType::Enum op
 }
 
 string get_op_name(UnaryOpType::Enum op_type,std::optional<float> param0) {
-    return param0.has_value() ? get_op_name_parameterized(op_type, param0.value()) : get_op_name_default(op_type);
+   return is_parametrized_type(op_type) ? get_op_name_parameterized(op_type, param0.value()) : get_op_name_default(op_type);
 }
 
 void add_defines(ComputeKernel * eltwise_unary_kernel, UnaryOpType::Enum op_type,std::optional<float> param0) {

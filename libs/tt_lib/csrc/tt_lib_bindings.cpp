@@ -992,7 +992,8 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     // *** eltwise unary ***
-    m_tensor.def("gelu", &gelu, R"doc(
+    m_tensor.def("gelu", &gelu,
+		 py::arg().noconvert(), py::arg("fast_and_appx") = true, R"doc(
         Applies the Gaussian Error Linear Units (GELU) function to the elements of the input tensor ``arg0``.
 
         Input tensor must have BFLOAT16 data type.
@@ -1003,6 +1004,10 @@ void TensorModule(py::module &m_tensor) {
         | Argument | Description                | Data type | Valid range                  | Required |
         +==========+============================+===========+==============================+==========+
         | arg0     | Tensor GELU is applied to  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+----------------------------+-----------+------------------------------+----------+
+        | arg1     | Indicate true for approx   | boolean   | Boolean value                | No       |
+        |          | and fast mode; false for   |           | true* | false                |          |
+        |          | accurate and slow mode     |           |                              |          |
         +----------+----------------------------+-----------+------------------------------+----------+
     )doc");
 

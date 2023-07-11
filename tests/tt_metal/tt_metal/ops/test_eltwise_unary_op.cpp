@@ -28,6 +28,14 @@ float log(float x) { return std::log(x); }
 float tanh(float x) { return std::tanh(x); }
 }  // namespace detail
 
+Tensor gelu_fast(const Tensor& t) {
+  return tt::tt_metal::gelu(t,true);
+}
+
+Tensor gelu_slow(const Tensor& t) {
+  return tt::tt_metal::gelu(t,false);
+}
+
 template <auto UnaryFunction>
 Tensor host_function(const Tensor& input_tensor) {
     auto input_buffer_view = host_buffer::view_as<bfloat16>(input_tensor);
@@ -113,10 +121,16 @@ void test_numerically() {
         TT_ASSERT(allclose);
     }
     {
-        auto allclose = run_test<host_function<::detail::gelu>, device_function<tt::tt_metal::gelu>>(
+        auto allclose = run_test<host_function<::detail::gelu>, device_function<gelu_fast>>(
             host, device, shape, 1.0f, 10.0f, 1e-1f, 1e-3f);
         TT_ASSERT(allclose);
     }
+    {
+        auto allclose = run_test<host_function<::detail::gelu>, device_function<gelu_slow>>(
+            host, device, shape, 1.0f, 10.0f, 1e-1f, 1e-3f);
+        TT_ASSERT(allclose);
+    }
+
     {
         auto allclose = run_test<host_function<::detail::relu>, device_function<tt::tt_metal::relu>>(
             host, device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
@@ -183,7 +197,10 @@ void test_program_cache() {
             host, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
 
         // Program Cache Miss
-        run_test<host_function<::detail::gelu>, device_function<tt::tt_metal::gelu>>(
+        run_test<host_function<::detail::gelu>, device_function<gelu_fast>>(
+            host, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 1.0f, 10.0f, 1e-1f, 1e-3f);
+
+        run_test<host_function<::detail::gelu>, device_function<gelu_slow>>(
             host, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 1.0f, 10.0f, 1e-1f, 1e-3f);
 
         // Program Cache Hit
@@ -200,7 +217,7 @@ void test_program_cache() {
 
     TT_ASSERT(tt::tt_metal::CloseDevice(device));
 
-    TT_ASSERT(tt::tt_metal::program_cache::num_entries() == 4);
+    TT_ASSERT(tt::tt_metal::program_cache::num_entries() == 5);
 
     tt::tt_metal::program_cache::disable_and_clear();
 

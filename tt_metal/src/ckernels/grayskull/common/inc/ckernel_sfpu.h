@@ -407,21 +407,6 @@ vFloat calculate_cdf_appx(vFloat val,bool scaled = false) {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_gelu()
-{
-    constexpr bool scaled = true;
-    // SFPU microcode
-    for (int d = 0; d < ITERATIONS; d++)
-    {
-        vFloat val = dst_reg[0];
-        vFloat result = calculate_cdf_appx(val,scaled);
-        dst_reg[0] = result;
-        dst_reg++;
-    }
-}
-
-
-template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_gelu_appx()
 {
     constexpr uint imm1 = (APPROXIMATION_MODE)? 0x212C : 0x2010;
@@ -478,6 +463,25 @@ inline void calculate_negative()
         vFloat val = dst_reg[0];
         dst_reg[0] = -val;
         dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_gelu()
+{
+
+    if constexpr (APPROXIMATION_MODE) {
+	calculate_gelu_appx<APPROXIMATION_MODE,ITERATIONS>();
+    } else {
+      constexpr bool scaled = true;
+      // SFPU microcode
+      for (int d = 0; d < ITERATIONS; d++)
+	{
+	  vFloat val = dst_reg[0];
+	  vFloat result = calculate_cdf_appx(val,scaled);
+	  dst_reg[0] = result;
+	  dst_reg++;
+	}
     }
 }
 
@@ -1351,7 +1355,13 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
         calculate_hardtanh<APPROXIMATION_MODE, ITERATIONS>(param0, param1, param2);
     }
     else if constexpr (operation == SfpuType::gelu) {
-        calculate_gelu<APPROXIMATION_MODE, ITERATIONS>();
+	//param0 = true -> approximate fast mode
+	//         false -> high precision mode
+	if ( param0 ) {
+	  calculate_gelu<true, ITERATIONS>();
+	} else {
+	  calculate_gelu<false, ITERATIONS>();
+	}
     }
     else if constexpr (operation == SfpuType::reciprocal) {
         calculate_reciprocal<APPROXIMATION_MODE, ITERATIONS>();

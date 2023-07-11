@@ -29,7 +29,11 @@ void update_sfpu_op_to_hlk_op()
         unary_op_name = "RECIP";
     }
     auto unary_op_type = magic_enum::enum_cast<tt::tt_metal::UnaryOpType::Enum>(unary_op_name).value();
-    sfpu_op_to_hlk_op_name[sfpu_op_name]  = eltwise_unary_op_utils::get_op_name(unary_op_type);
+    if ( tt::tt_metal::is_parametrized_type(unary_op_type) ) {
+      sfpu_op_to_hlk_op_name[sfpu_op_name]  = eltwise_unary_op_utils::get_op_name(unary_op_type,0.5);
+    } else {
+      sfpu_op_to_hlk_op_name[sfpu_op_name]  = eltwise_unary_op_utils::get_op_name(unary_op_type);
+    }
   }
 }
 

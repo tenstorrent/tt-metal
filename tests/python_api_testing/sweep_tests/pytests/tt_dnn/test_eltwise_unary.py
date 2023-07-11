@@ -28,7 +28,7 @@ from python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytor
 )
 @pytest.mark.parametrize("pcie_slot", [0])
 class TestEltwiseUnary:
-    @pytest.mark.parametrize("fn_kind", ["gelu", "relu", "sigmoid", "square", "tanh", "elu"])
+    @pytest.mark.parametrize("fn_kind", ["relu", "sigmoid", "square", "tanh", "elu"])
     def test_run_eltwise_unary_ops(
         self, input_shapes, fn_kind, pcie_slot, function_level_defaults
     ):
@@ -39,7 +39,7 @@ class TestEltwiseUnary:
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         if fn_kind == "elu":
-            test_args.update({"alpha":torch.rand(1).tolist()[0]})
+            test_args.update({"alpha": torch.rand(1).tolist()[0]})
         comparison_func = comparison_funcs.comp_pcc
         run_single_pytorch_test(
             f"eltwise-{fn_kind}",
@@ -47,7 +47,28 @@ class TestEltwiseUnary:
             datagen_func,
             comparison_func,
             pcie_slot,
-            test_args
+            test_args,
+        )
+
+    @pytest.mark.parametrize("appx", [True, False])
+    def test_run_eltwise_gelu_fast_n_slow_ops(
+        self, input_shapes, appx, pcie_slot, function_level_defaults
+    ):
+        datagen_func = [
+            generation_funcs.gen_func_with_cast(
+                partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32
+            )
+        ]
+        test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
+        test_args["fast_and_appx"] = appx
+        comparison_func = comparison_funcs.comp_pcc
+        run_single_pytorch_test(
+            f"eltwise-gelu",
+            input_shapes,
+            datagen_func,
+            comparison_func,
+            pcie_slot,
+            test_args,
         )
 
     @pytest.mark.parametrize(

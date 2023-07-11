@@ -17,6 +17,22 @@ struct UnaryOpType {
 					       EQZ , NEZ , GTZ , LTZ , GEZ , LEZ , RELU_MAX , RELU_MIN, POWER, LEAKY_RELU, ELU}; }
 };
 
+template <typename T>
+bool is_parametrized_type(T val) {
+  switch ( val ) {
+  case UnaryOpType::RELU_MAX:
+  case UnaryOpType::RELU_MIN:
+  case UnaryOpType::POWER:
+  case UnaryOpType::LEAKY_RELU:
+  case UnaryOpType::ELU:
+  case UnaryOpType::GELU:
+    return true;
+  default:
+    return false;
+  }
+  return false;
+}
+
 struct UnaryOpParallelizationStrategy {
     enum Enum { MULTI_CORE = 0, SINGLE_CORE = 1 };
     static const vector<Enum> all() { return { MULTI_CORE, SINGLE_CORE }; }
@@ -44,7 +60,6 @@ operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tenso
 inline Tensor sqrt(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::SQRT}, input_tensor); }
 inline Tensor exp(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::EXP}, input_tensor); }
 inline Tensor recip(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::RECIP}, input_tensor); }
-inline Tensor gelu(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::GELU}, input_tensor); }
 inline Tensor relu(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::RELU}, input_tensor); }
 inline Tensor sigmoid(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::SIGMOID}, input_tensor); }
 inline Tensor log(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::LOG}, input_tensor); }
@@ -71,6 +86,7 @@ inline Tensor relu_min(const Tensor& input_tensor, float lower_limit) { return o
 inline Tensor power(const Tensor& input_tensor, uint32_t exponent) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::POWER, exponent}, input_tensor); }
 inline Tensor leaky_relu(const Tensor& input_tensor, float slope) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::LEAKY_RELU, slope}, input_tensor); }
 inline Tensor elu(const Tensor& input_tensor, float slope) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::ELU, slope}, input_tensor); }
+inline Tensor gelu(const Tensor &input_tensor,bool fast_and_approx=true) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::GELU,static_cast<float>(fast_and_approx)}, input_tensor); }
 
 // binop with tied inputs.
 Tensor sub_unary(const Tensor& input_tensor, float value);

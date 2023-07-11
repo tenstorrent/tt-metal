@@ -93,6 +93,7 @@ def eltwise_threshold(
 
     return output
 
+
 @setup_host_and_device
 def eltwise_leaky_relu(x, *args, host, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
@@ -107,12 +108,13 @@ def eltwise_leaky_relu(x, *args, host, device, dtype, layout, on_device, **kwarg
         t0 = t0.to(device)
 
     slope = kwargs.pop("slope")
-    t1 = ttl.tensor.leaky_relu(t0,slope)
+    t1 = ttl.tensor.leaky_relu(t0, slope)
 
     output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t1.shape()
     )
     return output
+
 
 @setup_host_and_device
 def eltwise_hardshrink(x, *args, host, device, dtype, layout, on_device, **kwargs):
@@ -128,12 +130,13 @@ def eltwise_hardshrink(x, *args, host, device, dtype, layout, on_device, **kwarg
         t0 = t0.to(device)
 
     _lambda = kwargs.pop("lambda")
-    t1 = ttl.tensor.hardshrink(t0,_lambda)
+    t1 = ttl.tensor.hardshrink(t0, _lambda)
 
     output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t1.shape()
     )
     return output
+
 
 @setup_host_and_device
 def eltwise_softshrink(x, *args, host, device, dtype, layout, on_device, **kwargs):
@@ -149,12 +152,13 @@ def eltwise_softshrink(x, *args, host, device, dtype, layout, on_device, **kwarg
         t0 = t0.to(device)
 
     _lambda = kwargs.pop("lambda")
-    t1 = ttl.tensor.softshrink(t0,_lambda)
+    t1 = ttl.tensor.softshrink(t0, _lambda)
 
     output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t1.shape()
     )
     return output
+
 
 @setup_host_and_device
 def eltwise_softsign(x, *args, host, device, dtype, layout, on_device, **kwargs):
@@ -176,6 +180,7 @@ def eltwise_softsign(x, *args, host, device, dtype, layout, on_device, **kwargs)
     )
     return output
 
+
 @setup_host_and_device
 def eltwise_relu6(x, *args, host, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
@@ -196,6 +201,7 @@ def eltwise_relu6(x, *args, host, device, dtype, layout, on_device, **kwargs):
     )
     return output
 
+
 @setup_host_and_device
 def eltwise_elu(x, *args, host, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
@@ -210,7 +216,7 @@ def eltwise_elu(x, *args, host, device, dtype, layout, on_device, **kwargs):
         t0 = t0.to(device)
 
     alpha = kwargs.pop("alpha")
-    t1 = ttl.tensor.elu(t0,alpha)
+    t1 = ttl.tensor.elu(t0, alpha)
 
     output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t1.shape()
@@ -460,7 +466,8 @@ def eltwise_gelu(x, *args, host, device, dtype, layout, on_device, **kwargs):
     if on_device:
         t0 = t0.to(device)
 
-    t1 = ttl.tensor.gelu(t0)
+    fast_and_appx = kwargs["fast_and_appx"]
+    t1 = ttl.tensor.gelu(t0, fast_and_appx)
 
     output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t1.shape()
