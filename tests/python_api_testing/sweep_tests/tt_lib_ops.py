@@ -25,8 +25,9 @@ def setup_host_and_device(func):
 ################## Helper-Funcs ################
 ################################################
 @setup_host_and_device
-def linear(x, weight, *args, host, device, dtype, layout, on_device, **kwargs):
-    bias = None if len(args) == 0 else args[0]
+def linear(
+    x, weight, bias=None, *args, host, device, dtype, layout, on_device, **kwargs
+):
     tt_bias = None
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
@@ -161,50 +162,6 @@ def eltwise_sinh(x, *args, host, device, dtype, layout, on_device, **kwargs):
 
 
 @setup_host_and_device
-def eltwise_cosh(x, *args, host, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.cosh(t0)
-
-    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
-        t1.shape()
-    )
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_sinh(x, *args, host, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.sinh(t0)
-
-    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
-        t1.shape()
-    )
-
-    return output
-
-
-@setup_host_and_device
 def eltwise_threshold(
     x, *args, threshold, value, host, device, dtype, layout, on_device, **kwargs
 ):
@@ -229,7 +186,9 @@ def eltwise_threshold(
 
 
 @setup_host_and_device
-def eltwise_leaky_relu(x, *args, host, device, dtype, layout, on_device, **kwargs):
+def eltwise_leaky_relu(
+    x, *args, negative_slope, host, device, dtype, layout, on_device, **kwargs
+):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -241,8 +200,7 @@ def eltwise_leaky_relu(x, *args, host, device, dtype, layout, on_device, **kwarg
     if on_device:
         t0 = t0.to(device)
 
-    slope = kwargs.pop("slope")
-    t1 = ttl.tensor.leaky_relu(t0, slope)
+    t1 = ttl.tensor.leaky_relu(t0, negative_slope)
 
     output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t1.shape()
@@ -251,7 +209,9 @@ def eltwise_leaky_relu(x, *args, host, device, dtype, layout, on_device, **kwarg
 
 
 @setup_host_and_device
-def eltwise_hardshrink(x, *args, host, device, dtype, layout, on_device, **kwargs):
+def eltwise_hardshrink(
+    x, *args, _lambda, host, device, dtype, layout, on_device, **kwargs
+):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -263,7 +223,6 @@ def eltwise_hardshrink(x, *args, host, device, dtype, layout, on_device, **kwarg
     if on_device:
         t0 = t0.to(device)
 
-    _lambda = kwargs.pop("lambda")
     t1 = ttl.tensor.hardshrink(t0, _lambda)
 
     output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
@@ -273,7 +232,9 @@ def eltwise_hardshrink(x, *args, host, device, dtype, layout, on_device, **kwarg
 
 
 @setup_host_and_device
-def eltwise_softshrink(x, *args, host, device, dtype, layout, on_device, **kwargs):
+def eltwise_softshrink(
+    x, *args, _lambda, host, device, dtype, layout, on_device, **kwargs
+):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -285,7 +246,6 @@ def eltwise_softshrink(x, *args, host, device, dtype, layout, on_device, **kwarg
     if on_device:
         t0 = t0.to(device)
 
-    _lambda = kwargs.pop("lambda")
     t1 = ttl.tensor.softshrink(t0, _lambda)
 
     output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
@@ -337,7 +297,7 @@ def eltwise_relu6(x, *args, host, device, dtype, layout, on_device, **kwargs):
 
 
 @setup_host_and_device
-def eltwise_elu(x, *args, host, device, dtype, layout, on_device, **kwargs):
+def eltwise_elu(x, *args, alpha, host, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -349,7 +309,6 @@ def eltwise_elu(x, *args, host, device, dtype, layout, on_device, **kwargs):
     if on_device:
         t0 = t0.to(device)
 
-    alpha = kwargs.pop("alpha")
     t1 = ttl.tensor.elu(t0, alpha)
 
     output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
@@ -588,7 +547,9 @@ def eltwise_sqrt(x, *args, host, device, dtype, layout, on_device, **kwargs):
 
 
 @setup_host_and_device
-def eltwise_gelu(x, *args, host, device, dtype, layout, on_device, **kwargs):
+def eltwise_gelu(
+    x, *args, fast_and_appx, host, device, dtype, layout, on_device, **kwargs
+):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -600,7 +561,6 @@ def eltwise_gelu(x, *args, host, device, dtype, layout, on_device, **kwargs):
     if on_device:
         t0 = t0.to(device)
 
-    fast_and_appx = kwargs["fast_and_appx"]
     t1 = ttl.tensor.gelu(t0, fast_and_appx)
 
     output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
@@ -1680,7 +1640,7 @@ def eltwise_max(x, y, *args, host, device, dtype, layout, on_device, **kwargs):
 
 
 @setup_host_and_device
-def eltwise_square_difference(
+def eltwise_squared_difference(
     x, y, *args, host, device, dtype, layout, on_device, **kwargs
 ):
     t0 = ttl.tensor.Tensor(
@@ -1704,7 +1664,7 @@ def eltwise_square_difference(
     if on_device:
         t1 = t1.to(device)
 
-    t2 = ttl.tensor.square_difference(t0, t1)
+    t2 = ttl.tensor.squared_difference(t0, t1)
 
     output = torch.Tensor(t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t2.shape()
@@ -2402,6 +2362,7 @@ def transpose_cn(x, *args, host, device, dtype, layout, on_device, **kwargs):
 
     return output
 
+
 @setup_host_and_device
 def transpose_nh(x, *args, host, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
@@ -2415,13 +2376,14 @@ def transpose_nh(x, *args, host, device, dtype, layout, on_device, **kwargs):
     if on_device:
         t0 = t0.to(device)
 
-    t1 = ttl.tensor.transpose(t0,0,2)
+    t1 = ttl.tensor.transpose(t0, 0, 2)
 
     output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t1.shape()
     )
 
     return output
+
 
 @setup_host_and_device
 def transpose_nw(x, *args, host, device, dtype, layout, on_device, **kwargs):
@@ -2436,13 +2398,14 @@ def transpose_nw(x, *args, host, device, dtype, layout, on_device, **kwargs):
     if on_device:
         t0 = t0.to(device)
 
-    t1 = ttl.tensor.transpose(t0,0,3)
+    t1 = ttl.tensor.transpose(t0, 0, 3)
 
     output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t1.shape()
     )
 
     return output
+
 
 @setup_host_and_device
 def transpose_cw(x, *args, host, device, dtype, layout, on_device, **kwargs):
@@ -2457,7 +2420,7 @@ def transpose_cw(x, *args, host, device, dtype, layout, on_device, **kwargs):
     if on_device:
         t0 = t0.to(device)
 
-    t1 = ttl.tensor.transpose(t0,1,3)
+    t1 = ttl.tensor.transpose(t0, 1, 3)
 
     output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t1.shape()
@@ -2465,9 +2428,9 @@ def transpose_cw(x, *args, host, device, dtype, layout, on_device, **kwargs):
 
     return output
 
+
 @setup_host_and_device
-def sum(x, *args, host, device, dtype, layout, on_device, **kwargs):
-    dim = kwargs.pop('dim')
+def sum(x, *args, dim, host, device, dtype, layout, on_device, **kwargs):
     assert dim >= 0 and dim <= 3
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
@@ -2480,20 +2443,20 @@ def sum(x, *args, host, device, dtype, layout, on_device, **kwargs):
     if on_device:
         t0 = t0.to(device)
 
-    t1 = ttl.tensor.sum(t0,dim)
+    t1 = ttl.tensor.sum(t0, dim)
 
     output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t1.shape()
     )
 
     if dim == 0:
-        return output[0,:,:,:]
+        return output[0, :, :, :]
     if dim == 1:
-        return output[:,0,:,:]
+        return output[:, 0, :, :]
     if dim == 2:
-        return output[:,:,0,:]
+        return output[:, :, 0, :]
     assert dim == 3
-    return output[:,:,:,0]
+    return output[:, :, :, 0]
 
 
 @setup_host_and_device
@@ -2734,6 +2697,28 @@ def unpad(
     return output
 
 
+@setup_host_and_device
+def eltwise_power(x, *args, exponent, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    t1 = ttl.tensor.power(t0, exponent)
+
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
+
+    return output
+
+
 def make_eltwise_binary_op(ttl_tensor_binop):
     @setup_host_and_device
     def eltwise_binary_op(
@@ -2873,27 +2858,5 @@ def unpad_from_tile(x, pcie_slot, *args, output_tensor_shape, **kwargs):
     t1 = t0.unpad_from_tile(output_tensor_shape)
 
     output = torch.Tensor(t1.data()).reshape(t1.shape())
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_power(x, *args, exponent, host, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.power(t0, exponent)
-
-    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
-        t1.shape()
-    )
 
     return output

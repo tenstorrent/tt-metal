@@ -289,9 +289,9 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_max,
         "pytorch_op": pytorch_ops.max,
     },
-    "eltwise-square_difference": {
-        "tt_lib_op": tt_lib_ops.eltwise_square_difference,
-        "pytorch_op": pytorch_ops.square_difference,
+    "eltwise-squared_difference": {
+        "tt_lib_op": tt_lib_ops.eltwise_squared_difference,
+        "pytorch_op": pytorch_ops.squared_difference,
     },
     "eltwise-deg2rad": {
         "tt_lib_op": tt_lib_ops.eltwise_deg2rad,
@@ -427,19 +427,19 @@ op_map = {
         "pytorch_op": partial(pytorch_ops.transpose, dim0=1, dim1=-1),
     },
     "sum-0": {
-        "tt_lib_op": partial(tt_lib_ops.sum,dim=0),
+        "tt_lib_op": partial(tt_lib_ops.sum, dim=0),
         "pytorch_op": partial(pytorch_ops.sum, dim=0),
     },
     "sum-1": {
-        "tt_lib_op": partial(tt_lib_ops.sum,dim=1),
+        "tt_lib_op": partial(tt_lib_ops.sum, dim=1),
         "pytorch_op": partial(pytorch_ops.sum, dim=1),
     },
     "sum-2": {
-        "tt_lib_op": partial(tt_lib_ops.sum,dim=2),
+        "tt_lib_op": partial(tt_lib_ops.sum, dim=2),
         "pytorch_op": partial(pytorch_ops.sum, dim=2),
     },
     "sum-3": {
-        "tt_lib_op": partial(tt_lib_ops.sum,dim=3),
+        "tt_lib_op": partial(tt_lib_ops.sum, dim=3),
         "pytorch_op": partial(pytorch_ops.sum, dim=3),
     },
     "permute": {

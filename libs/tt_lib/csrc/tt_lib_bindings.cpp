@@ -1110,20 +1110,20 @@ void TensorModule(py::module &m_tensor) {
         +----------+----------------------+-----------+------------------------------+----------+
     )doc");
 
-    m_tensor.def("square_difference", &tt::tt_metal::square_difference, R"doc(
-        Perform an eltwise-binary square_difference on two tensors.
+    m_tensor.def("squared_difference", &squared_difference, R"doc(
+        Perform an eltwise-binary squared_difference on two tensors.
 
         Both input tensors must have BFLOAT16 data type, and be of equal shape.
 
         Output tensor will have BFLOAT16 data type.
 
-        +----------+------------------------------------+-----------+------------------------------+----------+
-        | Argument | Description                        | Data type | Valid range                  | Required |
-        +==========+====================================+===========+==============================+==========+
-        | arg0     | First tensor to square_difference  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
-        +----------+------------------------------------+-----------+------------------------------+----------+
-        | arg1     | Second tensor to square_difference | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
-        +----------+------------------------------------+-----------+------------------------------+----------+
+        +----------+-------------------------------------+-----------+------------------------------+----------+
+        | Argument | Description                         | Data type | Valid range                  | Required |
+        +==========+=====================================+===========+==============================+==========+
+        | arg0     | First tensor to squared_difference  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+-------------------------------------+-----------+------------------------------+----------+
+        | arg1     | Second tensor to squared_difference | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+-------------------------------------+-----------+------------------------------+----------+
     )doc");
 
     // *** eltwise unary ***
@@ -1140,8 +1140,8 @@ void TensorModule(py::module &m_tensor) {
         +==========+============================+===========+==============================+==========+
         | arg0     | Tensor GELU is applied to  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
         +----------+----------------------------+-----------+------------------------------+----------+
-        | arg1     | Indicate true for approx   | boolean   | Boolean value                | No       |
-        |          | and fast mode; false for   |           | true* | false                |          |
+        | arg1     | Indicate true for approx   | bool      | default of true              | No       |
+        |          | and fast mode; false for   |           |                              |          |
         |          | accurate and slow mode     |           |                              |          |
         +----------+----------------------------+-----------+------------------------------+----------+
     )doc");
@@ -1220,13 +1220,13 @@ void TensorModule(py::module &m_tensor) {
 
         Output tensor will have BFLOAT16 data type.
 
-        +----------+-------------------------------+-----------+------------------------------+----------+
-        | Argument | Description                   | Data type | Valid range                  | Required |
-        +==========+===============================+===========+==============================+==========+
-        | arg0     | Apply softshrink to           | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
-        +----------+-------------------------------+-----------+------------------------------+----------+
-        | arg1     | value limits (-arg1 to +arg1) | float     | float value                  | Yes      |
-        +----------+-------------------------------+-----------+------------------------------+----------+
+        +----------+---------------------------------+-----------+------------------------------+----------+
+        | Argument | Description                     | Data type | Valid range                  | Required |
+        +==========+=================================+===========+==============================+==========+
+        | arg0     | Tensor softshrink is applied to | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+---------------------------------+-----------+------------------------------+----------+
+        | arg1     | value limits (-arg1 to +arg1)   | float     | >= 0                         | Yes      |
+        +----------+---------------------------------+-----------+------------------------------+----------+
     )doc");
 
     m_tensor.def("hardshrink", &hardshrink, R"doc(
@@ -1237,13 +1237,13 @@ void TensorModule(py::module &m_tensor) {
 
         Output tensor will have BFLOAT16 data type.
 
-        +----------+-------------------------------+-----------+------------------------------+----------+
-        | Argument | Description                   | Data type | Valid range                  | Required |
-        +==========+===============================+===========+==============================+==========+
-        | arg0     | Apply hardshrinhrink to       | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
-        +----------+-------------------------------+-----------+------------------------------+----------+
-        | arg1     | value limits (-arg1 to +arg1) | float     | float value                  | Yes      |
-        +----------+-------------------------------+-----------+------------------------------+----------+
+        +----------+---------------------------------+-----------+------------------------------+----------+
+        | Argument | Description                     | Data type | Valid range                  | Required |
+        +==========+=================================+===========+==============================+==========+
+        | arg0     | Tensor hardshrink is applied to | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+---------------------------------+-----------+------------------------------+----------+
+        | arg1     | value limits (-arg1 to +arg1)   | float     | >= 0                         | Yes      |
+        +----------+---------------------------------+-----------+------------------------------+----------+
     )doc");
 
     m_tensor.def("softsign", &softsign, R"doc(

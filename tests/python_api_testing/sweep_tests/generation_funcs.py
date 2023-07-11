@@ -580,6 +580,20 @@ def gen_relu_max_args(input_shapes, low=-100, high=100, dtype=torch.bfloat16):
         yield input_info
 
 
+def gen_shrink_args(input_shapes, low=0, high=100, dtype=torch.bfloat16):
+    for input_info in gen_scalar_args(input_shapes, "lambd", low, high, dtype):
+        yield input_info
+
+
+def gen_leaky_relu_args(input_shapes, low=0, high=100, dtype=torch.bfloat16):
+    for input_info in gen_scalar_args(input_shapes, "negative_slope", low, high, dtype):
+        yield input_info
+
+def gen_elu_args(input_shapes, low=-10, high=10, dtype=torch.bfloat16):
+    for input_info in gen_scalar_args(input_shapes, "alpha", low, high, dtype):
+        yield input_info
+
+
 def gen_two_scalar_args(
     input_shapes,
     arg0_name="scalar0",

@@ -25,10 +25,8 @@ def linear(x, weight, bias=None, *args, **kwargs):
 
 
 # Ternary Ops
-def sum(x,*args,**kwargs):
-    dim = kwargs['dim']
-    return torch.sum(x,dim=dim)
-
+def sum(x, *args, dim, **kwargs):
+    return torch.sum(x, dim=dim)
 
 
 def where(x, y, z, *args, **kwargs):
@@ -74,21 +72,18 @@ def softsign(x, *args, **kwargs):
     return result
 
 
-def leaky_relu(x, *args, **kwargs):
-    slope = kwargs.pop("slope")
-    result = torch.nn.functional.leaky_relu(x, slope)
+def leaky_relu(x, *args, negative_slope, **kwargs):
+    result = torch.nn.functional.leaky_relu(x, negative_slope)
     return result
 
 
-def softshrink(x, *args, **kwargs):
-    param = kwargs.pop("lambda")
-    result = torch.nn.functional.softshrink(x, param)
+def softshrink(x, *args, _lambda, **kwargs):
+    result = torch.nn.functional.softshrink(x, _lambda)
     return result
 
 
-def hardshrink(x, *args, **kwargs):
-    param = kwargs.pop("lambda")
-    result = torch.nn.functional.hardshrink(x, param)
+def hardshrink(x, *args, _lambda, **kwargs):
+    result = torch.nn.functional.hardshrink(x, _lambda)
     return result
 
 
@@ -259,8 +254,7 @@ def cos(x, *args, **kwargs):
     return torch.cos(x)
 
 
-def elu(x, *args, **kwargs):
-    alpha = kwargs.pop("alpha")
+def elu(x, *args, alpha, **kwargs):
     return torch.nn.functional.elu(x, alpha)
 
 
@@ -362,7 +356,7 @@ def min(x, y, *args, **kwargs):
     return torch.min(x, y)
 
 
-def square_difference(x, y, *args, **kwargs):
+def squared_difference(x, y, *args, **kwargs):
     t_diff = torch.sub(x, y)
     return torch.square(t_diff)
 

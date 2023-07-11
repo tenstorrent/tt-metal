@@ -39,7 +39,7 @@ def custom_compare(*args, **kwargs):
     list(
         product(
             (
-                "square_difference",
+                "squared_difference",
                 "swish",
                 "log1p",
                 "add1",
@@ -110,7 +110,7 @@ def test_run_eltwise_composite_test(
     num_inputs = 1
     if fn == "mac":
         num_inputs = 3
-    elif fn in ["hypot", "square_difference"]:
+    elif fn in ["hypot", "squared_difference"]:
         num_inputs = 2
 
     input_shapes = input_shapes * num_inputs
@@ -124,9 +124,9 @@ def test_run_eltwise_composite_test(
     elif fn == "threshold":
         test_args.update({"threshold": 5.0, "value": 1.0})
     elif fn in ["leaky_relu"]:
-        test_args.update({"slope": np.random.randint(10, 100)})
+        test_args.update({"negative_slope": np.random.randint(10, 100)})
     elif fn in ["softshrink", "hardshrink"]:
-        test_args.update({"lambda": np.random.randint(1, 100)})
+        test_args.update({"_lambda": np.random.randint(1, 100)})
     run_single_pytorch_test(
         "eltwise-%s" % (fn),
         input_shapes,

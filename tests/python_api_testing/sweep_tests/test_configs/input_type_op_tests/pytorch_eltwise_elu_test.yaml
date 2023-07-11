@@ -1,6 +1,6 @@
 ---
 test-list:
-  eltwise-exp:
+  eltwise-elu:
     shape:
       start-shape: [1, 1, 1, 2]
       end-shape: [2, 2, 2048, 2048]
@@ -10,9 +10,9 @@ test-list:
     datagen:
       function: gen_rand
       args:
-        low: -10
-        high: 10
+        low: -100
+        high: 100
     comparison:
       function: comp_pcc
-    args-gen: gen_dtype_layout_device
-    output-file: eltwise_exp_sweep.csv
+    args-gen: gen_elu_args
+    output-file: eltwise_elu_sweep.csv

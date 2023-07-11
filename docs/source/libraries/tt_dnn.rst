@@ -249,19 +249,47 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.hardswish
 
-Tensor unary relational operations
+.. autofunction:: tt_lib.tensor.leaky_relu
+
+.. autofunction:: tt_lib.tensor.softsign
+
+.. autofunction:: tt_lib.tensor.softshrink
+
+.. autofunction:: tt_lib.tensor.hardshrink
+
+.. autofunction:: tt_lib.tensor.cos
+
+.. autofunction:: tt_lib.tensor.sin
+
+.. autofunction:: tt_lib.tensor.squared_difference
+
+.. autofunction:: tt_lib.tensor.elu
+
+Tensor relational operations
 ----------------------------------
+.. autofunction:: tt_lib.tensor.gtz
+
+.. autofunction:: tt_lib.tensor.gez
+
 .. autofunction:: tt_lib.tensor.ltz
+
+.. autofunction:: tt_lib.tensor.lez
 
 .. autofunction:: tt_lib.tensor.eqz
 
 .. autofunction:: tt_lib.tensor.nez
 
-.. autofunction:: tt_lib.tensor.lez
+.. autofunction:: tt_lib.tensor.gt
 
-.. autofunction:: tt_lib.tensor.gtz
+.. autofunction:: tt_lib.tensor.gte
 
-.. autofunction:: tt_lib.tensor.gez
+.. autofunction:: tt_lib.tensor.lt
+
+.. autofunction:: tt_lib.tensor.lte
+
+.. autofunction:: tt_lib.tensor.eq
+
+.. autofunction:: tt_lib.tensor.ne
 
 Tensor ternary operations
 -------------------------
@@ -298,6 +326,8 @@ but in general retaining the data.
 .. autofunction:: tt_lib.tensor.tilize_with_val_padding
 
 .. autofunction:: tt_lib.tensor.untilize_with_unpadding
+
+.. autofunction:: tt_lib.tensor.tilize_with_zero_padding
 
 .. autofunction:: tt_lib.tensor.pad
 
@@ -381,18 +411,6 @@ Experimental Operations
 
 Operations in this section are experimental, don't have full support, and may behave in unexpected ways.
 
-Tensor elementwise operations
------------------------------
-.. autofunction:: tt_lib.tensor.cos
-
-.. autofunction:: tt_lib.tensor.sin
-
-.. autofunction:: tt_lib.tensor.square_difference
-
-Tensor  operations
-------------------
-.. autofunction:: tt_lib.tensor.sum
-		  
 Fused Operations from ``tt_lib`` Mini-Graph Library
 ---------------------------------------------------
 
@@ -409,6 +427,8 @@ base operations together.
 
 Other Operations
 ----------------
+
+.. autofunction:: tt_lib.tensor.sum
 
 .. autofunction:: tt_lib.tensor.fill_rm
 
@@ -443,7 +463,5 @@ Other Operations
 .. autofunction:: tt_lib.tensor.layernorm
 
 .. autofunction:: tt_lib.tensor.add_layernorm
-
-.. autofunction:: tt_lib.tensor.tilize_with_zero_padding
 
 .. autofunction:: tt_lib.tensor.convert_conv_weight_tensor_to_tiled_layout

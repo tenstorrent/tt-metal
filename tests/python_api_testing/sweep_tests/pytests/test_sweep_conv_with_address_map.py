@@ -23,6 +23,7 @@ from tests.python_api_testing.conv.conv_utils import (
 import torch
 from time import sleep
 
+
 def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
     print("Testing convolution with following parameters - ")
     conv_op_test_params.print("   ")
@@ -40,7 +41,6 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
     pad_h = ctp.pad_h
     pad_w = ctp.pad_w
 
-
     # torch.manual_seed(0)
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
@@ -57,9 +57,14 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
     out_subblock_h = 4
     out_subblock_w = 2
 
-    OH = ((int) ((H - R + 2 * pad_h) / stride_h)) + 1
-    OW = ((int) ((W - S + 2 * pad_w) / stride_w)) + 1
-    mm_output_shape = [1,1,_nearest_y(OH*OW, 32*act_block_h),_nearest_y(K, 32*weight_block_w)]
+    OH = ((int)((H - R + 2 * pad_h) / stride_h)) + 1
+    OW = ((int)((W - S + 2 * pad_w) / stride_w)) + 1
+    mm_output_shape = [
+        1,
+        1,
+        _nearest_y(OH * OW, 32 * act_block_h),
+        _nearest_y(K, 32 * weight_block_w),
+    ]
 
     # Prepare activations
     A_cl_host = create_conv_act_tensor(A_pyt, 1, C, H, W)
@@ -67,7 +72,9 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
     A = A_cl_host.to(device, ttl.tensor.MemoryConfig(False))
 
     # Prepare weights
-    B_tiled_host = create_conv_weight_tensor(B_pyt, K, C, R, S, weight_block_h, weight_block_w)
+    B_tiled_host = create_conv_weight_tensor(
+        B_pyt, K, C, R, S, weight_block_h, weight_block_w
+    )
     B_tiled = B_tiled_host.to(device, ttl.tensor.MemoryConfig(False))
 
     if conv_op_test_params.test_level == TestLevel.INPUT_TENSOR_CREATE:
@@ -77,16 +84,25 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
 
     untilize_out = True
     # Run TT metal OP
-    out = ttl.tensor.conv_with_address_map(A, B_tiled, [R,S,stride_h,stride_w,pad_h,pad_w], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w)
+    out = ttl.tensor.conv_with_address_map(
+        A,
+        B_tiled,
+        [R, S, stride_h, stride_w, pad_h, pad_w],
+        act_block_h,
+        act_block_w,
+        weight_block_w,
+        out_subblock_h,
+        out_subblock_w,
+    )
     out = out.to(host)
-    assert(out.shape() == mm_output_shape)
+    assert out.shape() == mm_output_shape
     if not untilize_out:
         # untilize
         out = out.to(ttl.tensor.Layout.ROW_MAJOR)
     # Copy output to host and convert tt tensor to pytorch tensor
     out_pytorch_padded = torch.tensor(out.data()).reshape(mm_output_shape)
     # remove padding
-    out_pytorch = out_pytorch_padded[:, :, 0 : (OH * OW), 0 : K]
+    out_pytorch = out_pytorch_padded[:, :, 0 : (OH * OW), 0:K]
 
     # Convert matmul output layout to conv output layout
     out_tr = torch.transpose(out_pytorch, 2, 3)

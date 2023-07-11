@@ -47,15 +47,22 @@ def run_conv_as_large_matmul_dtx_cpu(conv_op_test_params, pytorch_inputs_and_gol
     act_block_w = 4
     weight_block_h = act_block_w
     weight_block_w = 4
-    OH = ((int) ((H - R + 2 * pad_h) / stride_h)) + 1
-    OW = ((int) ((W - S + 2 * pad_w) / stride_w)) + 1
-    mm_output_shape = [1,1,_nearest_y(OH*OW, 32*act_block_h),_nearest_y(K, 32*weight_block_w)]
+    OH = ((int)((H - R + 2 * pad_h) / stride_h)) + 1
+    OW = ((int)((W - S + 2 * pad_w) / stride_w)) + 1
+    mm_output_shape = [
+        1,
+        1,
+        _nearest_y(OH * OW, 32 * act_block_h),
+        _nearest_y(K, 32 * weight_block_w),
+    ]
 
     # Prepare activations
     A_cl = create_conv_act_tensor(A_pyt, 1, C, H, W)
     A_cl_data = A_cl.data()
     # Prepare weights
-    B_tiled_ = create_conv_weight_tensor(B_pyt, K, C, R, S, weight_block_h, weight_block_w)
+    B_tiled_ = create_conv_weight_tensor(
+        B_pyt, K, C, R, S, weight_block_h, weight_block_w
+    )
     B_tiled_data = B_tiled_.data()
 
     if conv_op_test_params.test_level == TestLevel.INPUT_TENSOR_CREATE:
@@ -66,34 +73,48 @@ def run_conv_as_large_matmul_dtx_cpu(conv_op_test_params, pytorch_inputs_and_gol
     act_block_width_datums = act_block_w * 32
     act_block_height_datums = act_block_h * 32
     weight_block_width_datums = weight_block_w * 32
-    matrix_activation_h_tiles = (int) (_nearest_y(OH*OW, act_block_height_datums) / 32)
-    matrix_weight_w_tiles = (int) (_nearest_y(K, weight_block_width_datums) / 32)
-    matrix_activation_w_tiles = (int) (_nearest_y(_nearest_32(C)*R*S,act_block_width_datums)/32)
+    matrix_activation_h_tiles = (int)(_nearest_y(OH * OW, act_block_height_datums) / 32)
+    matrix_weight_w_tiles = (int)(_nearest_y(K, weight_block_width_datums) / 32)
+    matrix_activation_w_tiles = (int)(
+        _nearest_y(_nearest_32(C) * R * S, act_block_width_datums) / 32
+    )
 
-    num_blocks_act_w = (int) (matrix_activation_w_tiles / act_block_w)
-    num_blocks_act_h = (int) (matrix_activation_h_tiles / act_block_h)
-    num_blocks_weight_w = (int) (matrix_weight_w_tiles / weight_block_w)
-    (act_address_map,weight_address_map) = ttl.dtx.conv_transform([_nearest_32(C),H,W],
-                            [_nearest_y(K, weight_block_width_datums), _nearest_32(C),R,S],
-                            [R,S,stride_h,stride_w,pad_h,pad_w],
-                            act_block_height_datums,
-                            act_block_width_datums,
-                            weight_block_width_datums,
-                            num_blocks_act_h,
-                            num_blocks_weight_w,
-                            1,
-                            False)
+    num_blocks_act_w = (int)(matrix_activation_w_tiles / act_block_w)
+    num_blocks_act_h = (int)(matrix_activation_h_tiles / act_block_h)
+    num_blocks_weight_w = (int)(matrix_weight_w_tiles / weight_block_w)
+    (act_address_map, weight_address_map) = ttl.dtx.conv_transform(
+        [_nearest_32(C), H, W],
+        [_nearest_y(K, weight_block_width_datums), _nearest_32(C), R, S],
+        [R, S, stride_h, stride_w, pad_h, pad_w],
+        act_block_height_datums,
+        act_block_width_datums,
+        weight_block_width_datums,
+        num_blocks_act_h,
+        num_blocks_weight_w,
+        1,
+        False,
+    )
 
     # Run host side CPU function
-    out_pytorch = blocked_mm_with_conv_act(A_cl_data, B_tiled_data, act_address_map, weight_address_map, num_blocks_act_h, num_blocks_act_w,
-                                    num_blocks_weight_w, act_block_h, act_block_w, weight_block_w)
-    assert(list(out_pytorch.shape) == mm_output_shape)
-    out_pytorch = out_pytorch[:, :, 0 : (OH * OW), 0 : K]
+    out_pytorch = blocked_mm_with_conv_act(
+        A_cl_data,
+        B_tiled_data,
+        act_address_map,
+        weight_address_map,
+        num_blocks_act_h,
+        num_blocks_act_w,
+        num_blocks_weight_w,
+        act_block_h,
+        act_block_w,
+        weight_block_w,
+    )
+    assert list(out_pytorch.shape) == mm_output_shape
+    out_pytorch = out_pytorch[:, :, 0 : (OH * OW), 0:K]
 
     # Convert matmul output layout to conv output layout
     out_tr = torch.transpose(out_pytorch, 2, 3)
-    assert(list(out_tr.shape) == [1,1,K,(OH*OW)])
-    out_result = out_tr.reshape([1,K,OH,OW])
+    assert list(out_tr.shape) == [1, 1, K, (OH * OW)]
+    out_result = out_tr.reshape([1, K, OH, OW])
 
     # Compare against pytorch golden result
     out_golden = pytorch_inputs_and_golden[2]

@@ -96,7 +96,7 @@ Tensor min(const Tensor &input_a,const Tensor &input_b);
 Tensor max(const Tensor &input_a,const Tensor &input_b);
 
 //square difference(x, y) = (x - y) * (x - y)
-Tensor square_difference(const Tensor &input_a,const Tensor &input_b);
+Tensor squared_difference(const Tensor &input_a,const Tensor &input_b);
 
 //deg2rad(a) using scale pi/180.
 Tensor deg2rad(const Tensor &input_a);
@@ -164,8 +164,6 @@ Tensor sinh(const Tensor& input_a);
 
 //cosh(x) = (exp(x) + exp(-x))/2
 Tensor cosh(const Tensor& input_a);
-
-//tanh(x) implemented as unary op by approximation
 
 /**
  * outer product = matrix multiply when a = [1,1,N,1] and b = [1,1,1,M]

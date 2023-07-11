@@ -106,6 +106,7 @@ def test_run_transpose_nh_test(input_shapes, pcie_slot, function_level_defaults)
         pcie_slot,
     )
 
+
 @pytest.mark.parametrize(
     "input_shapes, pcie_slot",
     (
@@ -127,6 +128,7 @@ def test_run_transpose_nw_test(input_shapes, pcie_slot, function_level_defaults)
         comparison_func,
         pcie_slot,
     )
+
 
 @pytest.mark.parametrize(
     "input_shapes, pcie_slot",

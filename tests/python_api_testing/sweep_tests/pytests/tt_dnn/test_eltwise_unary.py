@@ -3,9 +3,7 @@ import sys
 import torch
 from pathlib import Path
 from functools import partial
-from itertools import product
 from math import pi
-import random
 
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
@@ -28,7 +26,7 @@ from python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytor
 )
 @pytest.mark.parametrize("pcie_slot", [0])
 class TestEltwiseUnary:
-    @pytest.mark.parametrize("fn_kind", ["relu", "sigmoid", "square", "tanh", "elu"])
+    @pytest.mark.parametrize("fn_kind", ["relu", "sigmoid", "square", "tanh"])
     def test_run_eltwise_unary_ops(
         self, input_shapes, fn_kind, pcie_slot, function_level_defaults
     ):
@@ -38,8 +36,6 @@ class TestEltwiseUnary:
             )
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
-        if fn_kind == "elu":
-            test_args.update({"alpha": torch.rand(1).tolist()[0]})
         comparison_func = comparison_funcs.comp_pcc
         run_single_pytorch_test(
             f"eltwise-{fn_kind}",
@@ -50,9 +46,9 @@ class TestEltwiseUnary:
             test_args,
         )
 
-    @pytest.mark.parametrize("appx", [True, False])
-    def test_run_eltwise_gelu_fast_n_slow_ops(
-        self, input_shapes, appx, pcie_slot, function_level_defaults
+    @pytest.mark.parametrize("fast_and_appx", [True, False])
+    def test_run_eltwise_gelu_op(
+        self, input_shapes, fast_and_appx, pcie_slot, function_level_defaults
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
@@ -60,7 +56,7 @@ class TestEltwiseUnary:
             )
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
-        test_args["fast_and_appx"] = appx
+        test_args["fast_and_appx"] = fast_and_appx
         comparison_func = comparison_funcs.comp_pcc
         run_single_pytorch_test(
             f"eltwise-gelu",
@@ -95,11 +91,7 @@ class TestEltwiseUnary:
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
-                partial(
-                    generation_funcs.gen_rand,
-                    low=input_range["low"],
-                    high=input_range["high"],
-                ),
+                partial(generation_funcs.gen_rand, **input_range),
                 torch.float32,
             )
         ]
@@ -146,10 +138,20 @@ class TestEltwiseUnary:
             pcie_slot,
         )
 
+    @pytest.mark.parametrize(
+        "relu_type, limit_type", [["min", "lower"], ["max", "upper"]]
+    )
     @pytest.mark.parametrize("input_value", [-2.0, -1.0, 0.0, 1.0, 2.0])
-    @pytest.mark.parametrize("lower_limit", [-2.0, -1.0, 0.0, 1.0, 2.0])
-    def test_run_eltwise_relu_min_op(
-        self, input_shapes, input_value, lower_limit, pcie_slot, function_level_defaults
+    @pytest.mark.parametrize("limit", [-2.0, -1.0, 0.0, 1.0, 2.0])
+    def test_run_eltwise_relu_limit_ops(
+        self,
+        input_shapes,
+        relu_type,
+        limit_type,
+        input_value,
+        limit,
+        pcie_slot,
+        function_level_defaults,
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
@@ -159,32 +161,9 @@ class TestEltwiseUnary:
         ]
         comparison_func = comparison_funcs.comp_equal
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
-        test_args.update({"lower_limit": lower_limit})
+        test_args.update({f"{limit_type}_limit": limit})
         run_single_pytorch_test(
-            "eltwise-relu_min",
-            input_shapes,
-            datagen_func,
-            comparison_func,
-            pcie_slot,
-            test_args,
-        )
-
-    @pytest.mark.parametrize("input_value", [-2.0, -1.0, 0.0, 1.0, 2.0])
-    @pytest.mark.parametrize("upper_limit", [-2.0, -1.0, 0.0, 1.0, 2.0])
-    def test_run_eltwise_relu_max_op(
-        self, input_shapes, input_value, upper_limit, pcie_slot, function_level_defaults
-    ):
-        datagen_func = [
-            generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_constant, constant=input_value),
-                torch.bfloat16,
-            )
-        ]
-        comparison_func = comparison_funcs.comp_equal
-        test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
-        test_args.update({"upper_limit": upper_limit})
-        run_single_pytorch_test(
-            "eltwise-relu_max",
+            f"eltwise-relu_{relu_type}",
             input_shapes,
             datagen_func,
             comparison_func,
@@ -312,7 +291,7 @@ class TestEltwiseUnary:
                 partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32
             )
         ]
-        comparison_func = partial(comparison_funcs.comp_pcc)
+        comparison_func = comparison_funcs.comp_pcc
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args.update({"scalar": scalar})
         run_single_pytorch_test(
@@ -325,8 +304,11 @@ class TestEltwiseUnary:
         )
 
     @pytest.mark.parametrize("clip_kind", ["clip", "hardtanh"])
+    @pytest.mark.parametrize(
+        "clip_range", ({"low": -2.0, "high": 2.0}, {"low": -5.5, "high": 27.5})
+    )
     def test_run_eltwise_clip_ops(
-        self, clip_kind, input_shapes, pcie_slot, function_level_defaults
+        self, clip_kind, clip_range, input_shapes, pcie_slot, function_level_defaults
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
@@ -335,9 +317,30 @@ class TestEltwiseUnary:
         ]
         comparison_func = comparison_funcs.comp_pcc
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
-        test_args.update({"low": -2.0, "high": +2.0})
+        test_args.update(clip_range)
         run_single_pytorch_test(
             f"eltwise-{clip_kind}",
+            input_shapes,
+            datagen_func,
+            comparison_func,
+            pcie_slot,
+            test_args,
+        )
+
+    @pytest.mark.parametrize("alpha", [-0.5, 0, 0.5])
+    def test_run_eltwise_elu_op(
+        self, input_shapes, alpha, pcie_slot, function_level_defaults
+    ):
+        datagen_func = [
+            generation_funcs.gen_func_with_cast(
+                partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32
+            )
+        ]
+        test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
+        test_args.update({"alpha": alpha})
+        comparison_func = comparison_funcs.comp_pcc
+        run_single_pytorch_test(
+            "eltwise-elu",
             input_shapes,
             datagen_func,
             comparison_func,

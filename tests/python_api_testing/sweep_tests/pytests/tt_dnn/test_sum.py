@@ -25,9 +25,9 @@ import tt_lib as ttl
     ],
 )
 @pytest.mark.parametrize("pcie_slot", [0])
-class TestEltwiseUnary:
-    @pytest.mark.parametrize("fn_kind", ["sum-3","sum-2","sum-1","sum-0"])
-    def test_run_eltwise_unary_ops(
+class TestSum:
+    @pytest.mark.parametrize("fn_kind", ["sum-3", "sum-2", "sum-1", "sum-0"])
+    def test_run_sum_ops(
         self, input_shapes, fn_kind, pcie_slot, function_level_defaults
     ):
         datagen_func = [
@@ -36,7 +36,7 @@ class TestEltwiseUnary:
             )
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
-        test_args.update({"fn_kind":fn_kind,"input_shapes":input_shapes})
+        test_args.update({"input_shapes": input_shapes})
         comparison_func = comparison_funcs.comp_pcc
         run_single_pytorch_test(
             f"{fn_kind}",
