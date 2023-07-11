@@ -1,48 +1,39 @@
 #include "constants.hpp"
 #include "tensor/host_buffer.hpp"
+#include "tensor/host_buffer_functions.hpp"
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
 #include "tt_dnn/op_library/program_cache.hpp"
 #include "tt_numpy/functions.hpp"
 
+using tt::tt_metal::Host;
 using tt::tt_metal::DataType;
 using tt::tt_metal::Device;
-using tt::tt_metal::Host;
 using tt::tt_metal::Layout;
 using tt::tt_metal::Tensor;
 
 template <typename BinaryFunction>
 Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
-    auto input_a_view = host_buffer::view_as<bfloat16>(input_tensor_a);
-    auto input_b_view = host_buffer::view_as<bfloat16>(input_tensor_b);
+    auto input_a_buffer = host_buffer::get_as<bfloat16>(input_tensor_a);
+    auto input_b_buffer = host_buffer::get_as<bfloat16>(input_tensor_b);
 
     auto output_buffer = host_buffer::create<bfloat16>(input_tensor_a.volume());
-    auto output_view = host_buffer::view_as<bfloat16>(output_buffer);
 
-    for (auto index = 0; index < output_view.size(); index++) {
-        auto value = BinaryFunction{}(input_a_view[index].to_float(), input_b_view[index].to_float());
-        output_view[index] = bfloat16(value);
+    for (auto index = 0; index < output_buffer.size(); index++) {
+        auto value = BinaryFunction{}(input_a_buffer[index].to_float(), input_b_buffer[index].to_float());
+        output_buffer[index] = bfloat16(value);
     }
     return Tensor(HostStorage{output_buffer}, input_tensor_a.shape(), input_tensor_a.dtype(), input_tensor_a.layout());
 }
 
-struct device_function_t {
-    eltwise_binop_t op;
-    device_function_t(eltwise_binop_t _op) : op(_op){};
-
-    Tensor operator()(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Host* host, Device* device) {
-        return op(input_tensor_a.to(device), input_tensor_b.to(device)).to(host);
-    }
-};
-
-template <auto HostFunction, typename... Args>
-bool run_test(eltwise_binop_t op, Host* host, Device* device, Args... args) {
+template <auto HostFunction, typename DeviceFunction, typename... Args>
+bool run_test(const DeviceFunction& device_function, Host* host, Device* device, Args... args) {
     std::array<uint32_t, 4> shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
     auto input_tensor_a = tt::numpy::random::random(shape, DataType::BFLOAT16).to(Layout::TILE);
     auto input_tensor_b = tt::numpy::random::random(shape, DataType::BFLOAT16).to(Layout::TILE);
 
     auto host_output = HostFunction(input_tensor_a, input_tensor_b);
-    auto device_output = device_function_t{op}(input_tensor_a, input_tensor_b, host, device);
+    auto device_output = device_function(input_tensor_a.to(device), input_tensor_b.to(device)).to(host);
 
     return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
 }

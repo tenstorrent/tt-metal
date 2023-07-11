@@ -377,7 +377,7 @@ Tensor pad_on_host(const Tensor &input_tensor, const std::array<uint32_t, 4> &ou
     if (input_tensor.shape() == output_tensor_shape) {
         return input_tensor;
     }
-    return operation::run(Pad{output_tensor_shape, input_tensor_start, pad_value}, {input_tensor}).at(0);
+    return operation::run(PadOnHost{output_tensor_shape, input_tensor_start, pad_value}, {input_tensor}).at(0);
 
 }
 

@@ -122,19 +122,6 @@ std::ostream& operator<<(std::ostream& os, const EltwiseBinary& op) {
     return os;
 }
 
-// eltwise binary arith ops
-eltwise_binop_t add = MakeEltwiseBinary<BinaryOpType::ADD>::call;
-eltwise_binop_t sub = MakeEltwiseBinary<BinaryOpType::SUB>::call;
-eltwise_binop_t mul = MakeEltwiseBinary<BinaryOpType::MUL>::call;
-
-// eltwise comparative binary ops
-eltwise_binop_t lt = MakeEltwiseBinary<BinaryOpType::LT>::call;
-eltwise_binop_t gt = MakeEltwiseBinary<BinaryOpType::GT>::call;
-eltwise_binop_t lte = MakeEltwiseBinary<BinaryOpType::LTE>::call;
-eltwise_binop_t gte = MakeEltwiseBinary<BinaryOpType::GTE>::call;
-eltwise_binop_t eq = MakeEltwiseBinary<BinaryOpType::EQ>::call;
-eltwise_binop_t ne = MakeEltwiseBinary<BinaryOpType::NE>::call;
-
 }  // namespace tt_metal
 
 }  // namespace tt

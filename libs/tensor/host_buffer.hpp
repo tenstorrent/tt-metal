@@ -1,7 +1,7 @@
 #pragma once
 
-#include "tensor/tensor.hpp"
-#include "tensor/span.hpp"
+#include <memory>
+#include <vector>
 
 namespace tt {
 
@@ -10,45 +10,53 @@ namespace tt_metal {
 namespace host_buffer {
 
 template<typename T>
-HostBuffer create(std::size_t size) {
-    auto host_buffer = std::make_shared<HostBufferContainer>(sizeof(T) * size, 0);
-    return host_buffer;
-}
+struct HostBufferForDataType {
+
+    explicit HostBufferForDataType(std::shared_ptr<std::vector<T>>&& shared_vector) :
+        shared_vector_(shared_vector),
+        pointer_for_faster_access_(shared_vector->data()),
+        size_(shared_vector->size()) {}
+
+    const std::size_t size() const { return this->size_; }
+
+    inline T& operator[](std::size_t index) noexcept { return this->pointer_for_faster_access_[index]; }
+    inline const T& operator[](std::size_t index) const noexcept { return this->pointer_for_faster_access_[index]; }
+
+    inline T* begin() noexcept { return this->pointer_for_faster_access_; }
+    inline T* end() noexcept { return this->pointer_for_faster_access_ + this->size(); }
+
+    inline const T* begin() const noexcept { return this->pointer_for_faster_access_; }
+    inline const T* end() const noexcept { return this->pointer_for_faster_access_ + this->size(); }
+
+    inline bool is_allocated() const{ return bool(this->shared_vector_); }
+    inline const std::vector<T>& get() const { return *this->shared_vector_; }
+    inline void reset() { this->shared_vector_.reset(); }
+
+  private:
+    std::shared_ptr<std::vector<T>> shared_vector_;
+    T* pointer_for_faster_access_;
+    std::size_t size_;
+};
+
 
 template<typename T>
-void validate_datatype(const Tensor& tensor) {
-    if constexpr (std::is_same_v<T, uint32_t>) {
-        TT_ASSERT(tensor.dtype() == DataType::UINT32);
-    } else if constexpr (std::is_same_v<T, float>) {
-        TT_ASSERT(tensor.dtype() == DataType::FLOAT32 or tensor.dtype() == DataType::BFLOAT8_B);
-    } else if constexpr (std::is_same_v<T, bfloat16>) {
-        TT_ASSERT(tensor.dtype() == DataType::BFLOAT16);
+bool operator==(const HostBufferForDataType<T>& host_buffer_a, const HostBufferForDataType<T>& host_buffer_b) noexcept {
+    if (host_buffer_a.size() != host_buffer_b.size()) {
+        return false;
     }
+    for (auto index = 0; index < host_buffer_a.size(); index++) {
+        if (host_buffer_a[index] != host_buffer_b[index]) {
+            return false;
+        }
+    }
+    return true;
 }
 
-template<typename T>
-span_t<T> view_as(HostBuffer& host_buffer) {
-    auto address = reinterpret_cast<T*>(host_buffer->data());
-    auto size = host_buffer->size() / sizeof(T);
-    return span_t(address, size);
-}
 
 template<typename T>
-const span_t<T> view_as(const HostBuffer& host_buffer) {
-    auto address = reinterpret_cast<T*>(host_buffer->data());
-    auto size = host_buffer->size() / sizeof(T);
-    return span_t(address, size);
+bool operator!=(const HostBufferForDataType<T>& host_buffer_a, const HostBufferForDataType<T>& host_buffer_b) noexcept {
+    return not (host_buffer_a == host_buffer_b);
 }
-
-template<typename T>
-const span_t<T> view_as(const Tensor& tensor) {
-    validate_datatype<T>(tensor);
-    auto buffer = tensor.host_storage().value().buffer;
-    return host_buffer::view_as<T>(buffer);
-}
-
-template<typename T>
-const span_t<T> view_as(Tensor&& tensor) = delete;
 
 }  // namespace host_buffer
 

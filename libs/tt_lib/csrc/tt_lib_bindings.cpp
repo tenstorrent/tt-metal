@@ -39,23 +39,17 @@ namespace tt_metal {
 namespace detail {
 
 
-HostBuffer create_host_buffer_from_list_of_floats(const std::vector<float>& data, DataType data_type) {
-    HostBuffer host_buffer;
+HostBuffer create_host_buffer_from_list_of_floats(std::vector<float>&& data, DataType data_type) {
     switch (data_type) {
         case DataType::BFLOAT8_B:
         case DataType::FLOAT32: {
-            auto host_buffer = host_buffer::create<float>(data.size());
-            auto host_buffer_view = host_buffer::view_as<float>(host_buffer);
-            for (auto index = 0; index < data.size(); index++) {
-                host_buffer_view[index] = data[index];
-            }
+            auto host_buffer = host_buffer::create<float>(std::move(data));
             return host_buffer;
         }
         case DataType::BFLOAT16: {
             auto host_buffer = host_buffer::create<bfloat16>(data.size());
-            auto host_buffer_view = host_buffer::view_as<bfloat16>(host_buffer);
             for (auto index = 0; index < data.size(); index++) {
-                host_buffer_view[index] = bfloat16(data[index]);
+                host_buffer[index] = bfloat16(data[index]);
             }
             return host_buffer;
         }
@@ -65,24 +59,29 @@ HostBuffer create_host_buffer_from_list_of_floats(const std::vector<float>& data
     }
 }
 
-DeviceBuffer create_device_buffer_from_host_buffer(const HostBuffer& host_buffer, const Shape& shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& memory_config) {
-    switch (data_type) {
-        case DataType::BFLOAT8_B:
-        case DataType::FLOAT32: {
-            return tensor_impl::device_buffer_from_host_buffer<float>(
-                host_buffer, device, shape, data_type, layout, memory_config
-            );
-        }
-        case DataType::BFLOAT16: {
-            return tensor_impl::device_buffer_from_host_buffer<bfloat16>(
-                host_buffer, device, shape, data_type, layout, memory_config
-            );
-        }
-        default: {
-            TT_THROW("Cannot create a host buffer!");
-        }
-    }
-}
+template<typename CppType, typename PyType>
+void implement_sequence_protocol(PyType& py_host_buffer_for_data_type) {
+    py_host_buffer_for_data_type
+        .def(
+            "__getitem__",
+            [](CppType& self, std::size_t index) {
+                return self[index];
+            }
+        )
+        .def(
+            "__len__",
+            [](CppType& self) {
+                return self.size();
+            }
+        )
+        .def(
+            "__iter__",
+            [](CppType& self) {
+                return py::make_iterator(self.begin(), self.end());
+            },
+            py::keep_alive<0, 1>()
+        );
+};
 
 }
 
@@ -166,6 +165,15 @@ void TensorModule(py::module &m_tensor) {
         .def_readonly("interleaved", &MemoryConfig::interleaved, "Whether tensor data is interleaved across mulitple DRAM channels")
         .def_readonly("buffer_type", &MemoryConfig::buffer_type, "Buffer type to store tensor data. Can be DRAM or L1");
 
+    auto py_host_buffer_for_uint32_t = py::class_<host_buffer::HostBufferForDataType<uint32_t>>(m_tensor, "host_buffer_for_uint32_t");
+    detail::implement_sequence_protocol<host_buffer::HostBufferForDataType<uint32_t>>(py_host_buffer_for_uint32_t);
+
+    auto py_host_buffer_for_float32_t = py::class_<host_buffer::HostBufferForDataType<float>>(m_tensor, "host_buffer_for_float32_t");
+    detail::implement_sequence_protocol<host_buffer::HostBufferForDataType<float>>(py_host_buffer_for_float32_t);
+
+    auto py_host_buffer_for_bfloat16_t = py::class_<host_buffer::HostBufferForDataType<bfloat16>>(m_tensor, "host_buffer_for_bfloat16_t");
+    detail::implement_sequence_protocol<host_buffer::HostBufferForDataType<bfloat16>>(py_host_buffer_for_bfloat16_t);
+
     // Tensor constructors that accept device and .to(device) function use keep alive call policy to communicate that Device needs to outlive Tensor.
     // This is because when tensors on device are destroyed they need to deallocate their buffers via device.
     // keep_alive increases the ref count of the Device object being passed into the constructor and .to() function.
@@ -207,11 +215,13 @@ void TensorModule(py::module &m_tensor) {
     pyTensor
         .def(
             py::init<>(
-                [](const std::vector<float>& data, const Shape& shape, DataType data_type, Layout layout) {
-                    auto host_buffer = detail::create_host_buffer_from_list_of_floats(data, data_type);
+                [](std::vector<float>&& data, const Shape& shape, DataType data_type, Layout layout) {
+                    auto host_buffer = detail::create_host_buffer_from_list_of_floats(std::move(data), data_type);
                     return Tensor(HostStorage{host_buffer}, shape, data_type, layout);
                 }
-            ), R"doc(
+            ),
+            py::return_value_policy::move,
+            R"doc(
                 +---------------+---------------+
                 | Argument      | Name          |
                 +===============+===============+
@@ -239,13 +249,15 @@ void TensorModule(py::module &m_tensor) {
         )
         .def(
             py::init<>(
-                [](std::vector<float>& data, const Shape& shape, DataType data_type, Layout layout, Device *device) {
-                    auto host_buffer = detail::create_host_buffer_from_list_of_floats(data, data_type);
-                    auto memory_config = MemoryConfig{};
-                    auto device_buffer = detail::create_device_buffer_from_host_buffer(host_buffer, shape, data_type, layout, device, memory_config);
-                    return Tensor(DeviceStorage{device_buffer, device, memory_config}, shape, data_type, layout);
+                [](std::vector<float>&& data, const Shape& shape, DataType data_type, Layout layout, Device *device) {
+                    auto host_buffer = detail::create_host_buffer_from_list_of_floats(std::move(data), data_type);
+                    auto tensor = Tensor(HostStorage{host_buffer}, shape, data_type, layout);
+                    return tensor.to(device, MemoryConfig{});
                 }
-            ), py::keep_alive<1, 6>(), R"doc(
+            ),
+            py::keep_alive<1, 6>(),
+            py::return_value_policy::move,
+            R"doc(
                 +---------------+---------------+
                 | Argument      | Name          |
                 +===============+===============+
@@ -282,12 +294,15 @@ void TensorModule(py::module &m_tensor) {
         )
         .def(
             py::init<>(
-                [](const std::vector<float>& data, const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config) {
-                    auto host_buffer = detail::create_host_buffer_from_list_of_floats(data, data_type);
-                    auto device_buffer = detail::create_device_buffer_from_host_buffer(host_buffer, shape, data_type, layout, device, memory_config);
-                    return Tensor(DeviceStorage{device_buffer, device, memory_config}, shape, data_type, layout);
+                [](std::vector<float>&& data, const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config) {
+                    auto host_buffer = detail::create_host_buffer_from_list_of_floats(std::move(data), data_type);
+                    auto tensor = Tensor(HostStorage{host_buffer}, shape, data_type, layout);
+                    return tensor.to(device, memory_config);
                 }
-            ), py::keep_alive<1, 6>(), R"doc(
+            ),
+            py::keep_alive<1, 6>(),
+            py::return_value_policy::move,
+            R"doc(
                 +---------------+---------------+
                 | Argument      | Name          |
                 +===============+===============+
@@ -696,38 +711,9 @@ void TensorModule(py::module &m_tensor) {
                 device = tt_tensor.device()
 
         )doc")
-        .def("data", [](const Tensor &self) -> std::optional<std::variant<const vector<uint32_t>, const vector<float>, const vector<bfloat16>>> {
+        .def("data", [](const Tensor &self) -> HostBuffer {
             TT_ASSERT(self.storage_type() == StorageType::HOST and self.is_allocated(), "Host buffer must be allocated!");
-            switch (self.dtype()) {
-                case DataType::UINT32:
-                {
-                    auto view = host_buffer::view_as<uint32_t>(self);
-                    return std::vector(view.begin(), view.end());
-                }
-                break;
-                case DataType::FLOAT32:
-                {
-                    auto view = host_buffer::view_as<float>(self);
-                    return std::vector(view.begin(), view.end());
-                }
-                break;
-                case DataType::BFLOAT16:
-                {
-                    auto view = host_buffer::view_as<bfloat16>(self);
-                    return std::vector(view.begin(), view.end());
-                }
-                break;
-                case DataType::BFLOAT8_B:
-                {
-                    auto view = host_buffer::view_as<float>(self);
-                    return std::vector(view.begin(), view.end());
-                }
-                break;
-                default:
-                    TT_ASSERT(false && "Unsupported data type!");
-                break;
-            }
-            return std::nullopt;
+            return self.host_storage().value().buffer;
         }, R"doc(
             Get data in the tensor as a list of numbers.
 

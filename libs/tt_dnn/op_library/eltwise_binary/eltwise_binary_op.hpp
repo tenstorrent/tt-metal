@@ -45,27 +45,26 @@ std::ostream& operator<<(std::ostream& os, const EltwiseBinary& op);
 
 using eltwise_binop_t = std::function<Tensor(const Tensor &input_tensor_a, const Tensor &input_tensor_b)>;
 
-template <BinaryOpType::Enum binopkind>
-struct MakeEltwiseBinary {
-    static const BinaryOpType::Enum opkind = binopkind;
-    static Tensor call(const Tensor &input_tensor_a, const Tensor &input_tensor_b) {
+template <BinaryOpType::Enum binary_op_type>
+struct make_eltwise_binary {
+    Tensor operator()(const Tensor& input_tensor_a, const Tensor& input_tensor_b) const {
         TT_ASSERT(input_tensor_a.shape() == input_tensor_b.shape(), "Input shapes must be the same!");
-        return operation::run_with_autoformat(EltwiseBinary{opkind}, input_tensor_a, input_tensor_b);
+        return operation::run_with_autoformat(EltwiseBinary{binary_op_type}, input_tensor_a, input_tensor_b);
     }
 };
 
 // arithmetic binary ops
-extern eltwise_binop_t add;
-extern eltwise_binop_t sub;
-extern eltwise_binop_t mul;
+constexpr auto add = make_eltwise_binary<BinaryOpType::ADD>{};
+constexpr auto sub = make_eltwise_binary<BinaryOpType::SUB>{};
+constexpr auto mul = make_eltwise_binary<BinaryOpType::MUL>{};
 
 // comparative binary ops
-extern eltwise_binop_t lt;
-extern eltwise_binop_t gt;
-extern eltwise_binop_t lte;
-extern eltwise_binop_t gte;
-extern eltwise_binop_t eq;
-extern eltwise_binop_t ne;
+constexpr auto lt = make_eltwise_binary<BinaryOpType::LT>{};
+constexpr auto gt = make_eltwise_binary<BinaryOpType::GT>{};
+constexpr auto lte = make_eltwise_binary<BinaryOpType::LTE>{};
+constexpr auto gte = make_eltwise_binary<BinaryOpType::GTE>{};
+constexpr auto eq = make_eltwise_binary<BinaryOpType::EQ>{};
+constexpr auto ne = make_eltwise_binary<BinaryOpType::NE>{};
 
 }  // namespace tt_metal
 
