@@ -117,6 +117,9 @@ class BUDAEagerBuild(build_ext):
             **os.environ.copy(),
             "TT_METAL_HOME": Path(__file__).parent,
             "TT_METAL_ENV": "production",
+            # Need to create static lib for tt_metal runtime because currently
+            # we package it with the wheel at the moment
+            "TT_METAL_CREATE_STATIC_LIB": "1",
         }
 
     def run(self):

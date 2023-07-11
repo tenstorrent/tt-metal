@@ -12,6 +12,9 @@ DISABLE_VERSIM_BUILD ?= 1
 CONFIG_CFLAGS =
 CONFIG_LDFLAGS =
 
+# For production builds so the final pybinded so has all binaries + symbols
+TT_METAL_CREATE_STATIC_LIB ?= 0
+
 ifeq ($(CONFIG), release)
 CONFIG_CFLAGS += -O3 -fno-lto
 else ifeq ($(CONFIG), ci)  # significantly smaller artifacts
