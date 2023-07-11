@@ -6,7 +6,7 @@
 
 template <typename T>
 void write_buffer(
-    T addr_gen,
+    T& addr_gen,
     u32 src_addr,
     u32 src_noc,
     u32 dst_addr,
@@ -61,8 +61,8 @@ void write_buffer(
 FORCE_INLINE void write_buffers(
     u32 num_buffer_writes,
     volatile u32*& command_ptr,
-    const dataflow::InterleavedAddrGen<true>& dram_addr_gen,
-    const dataflow::InterleavedAddrGen<false>& l1_addr_gen) {
+    dataflow::InterleavedAddrGen<true>& dram_addr_gen,
+    dataflow::InterleavedAddrGen<false>& l1_addr_gen) {
     for (u32 i = 0; i < num_buffer_writes; i++) {
         u32 src_addr = command_ptr[0];
         u32 src_noc = command_ptr[1];
@@ -97,7 +97,7 @@ FORCE_INLINE void write_buffers(
 
 template <typename T>
 FORCE_INLINE void read_buffer(
-    T addr_gen,
+    T& addr_gen,
     u32 dst_addr,
     u32 dst_noc,
     u32 src_addr,
@@ -152,8 +152,8 @@ FORCE_INLINE void read_buffer(
 FORCE_INLINE void read_buffers(
     u32 num_buffer_reads,
     volatile u32*& command_ptr,
-    const dataflow::InterleavedAddrGen<true>& dram_addr_gen,
-    const dataflow::InterleavedAddrGen<false>& l1_addr_gen) {
+    dataflow::InterleavedAddrGen<true>& dram_addr_gen,
+    dataflow::InterleavedAddrGen<false>& l1_addr_gen) {
     for (u32 i = 0; i < num_buffer_reads; i++) {
         u32 dst_addr = command_ptr[0];
         u32 dst_noc = command_ptr[1];
@@ -177,12 +177,12 @@ FORCE_INLINE void read_buffers(
                 read_buffer(
                     dram_addr_gen,
                     read_buffer_args);
-                break;
+                    break;
             case 1:  // L1
                 read_buffer(
                     l1_addr_gen,
                     read_buffer_args);
-                break;
+                    break;
         }
 
         command_ptr += 12;

@@ -110,6 +110,20 @@ TEST_F(CommandQueueHarness, WriteOneTileAcrossAllDramBanksTwiceRoundRobin) {
 
     EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device, *this->cq, config));
 }
+
+TEST_F(CommandQueueHarness, FusedWriteDramBuffersInWhichRemainderBurstSizeDoesNotFitInLocalL1) {
+    if (this->arch != tt::ARCH::GRAYSKULL) {
+        GTEST_SKIP();
+    }
+
+    BufferConfig config = {
+        .num_pages = 4096,
+        .page_size = 22016,
+        .buftype = BufferType::DRAM};
+
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device, *this->cq, config));
+}
+
 }  // end namespace dram_tests
 
 namespace l1_tests {

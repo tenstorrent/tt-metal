@@ -51,6 +51,8 @@ void DeviceCommand::add_buffer_relay(
     this->desc.at(this->relay_buffer_entry_idx + 10) = banking_enum;
     this->desc.at(this->relay_buffer_entry_idx + 11) = starting_bank_id;
     this->relay_buffer_entry_idx += this->num_4B_words_in_relay_buffer_instruction;
+
+    tt::log_assert(this->relay_buffer_entry_idx < CONTROL_SECTION_NUM_ENTRIES + NUM_DISPATCH_CORES + RELAY_BUFFER_NUM_ENTRIES, "relay_buffer_entry_idx out of bounds");
 }
 
 void DeviceCommand::add_read_buffer_instruction(
@@ -96,6 +98,7 @@ void DeviceCommand::add_write_buffer_instruction(
     u32 banking_enum,
     u32 starting_bank_id) {
     this->desc.at(this->num_relay_buffer_writes_idx)++;
+
     this->add_buffer_relay(
         src,
         src_noc,

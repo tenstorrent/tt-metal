@@ -67,8 +67,8 @@ class DeviceCommand {
 
     // This magic 16 coming from the fact that we needed to over-allocate the control bit
     // section in order to have the command size be nicely divisble by 32
-    static_assert(CONTROL_SECTION_NUM_ENTRIES + RELAY_BUFFER_NUM_ENTRIES + NUM_DISPATCH_CORES == 172);
-    u32 relay_program_entry_idx = CONTROL_SECTION_NUM_ENTRIES + RELAY_BUFFER_NUM_ENTRIES + NUM_DISPATCH_CORES;
+    static_assert(CONTROL_SECTION_NUM_ENTRIES + NUM_DISPATCH_CORES + RELAY_BUFFER_NUM_ENTRIES == 172);
+    u32 relay_program_entry_idx = CONTROL_SECTION_NUM_ENTRIES + NUM_DISPATCH_CORES + RELAY_BUFFER_NUM_ENTRIES;
 
     array<u32, DEVICE_COMMAND_NUM_ENTRIES> desc;
 
