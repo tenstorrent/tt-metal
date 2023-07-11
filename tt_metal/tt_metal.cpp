@@ -75,6 +75,7 @@ static Profiler tt_metal_profiler = Profiler();
 bool enable_compile_cache = false;
 void EnableCompileCache() { enable_compile_cache = true; }
 void DisableCompileCache() { enable_compile_cache = false; }
+void ClearCompileCache() { detail::HashLookup::inst().clear(); }
 bool GetCompileCacheEnabled() { return enable_compile_cache; }
 
 bool enable_compilation_reports = false;

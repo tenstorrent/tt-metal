@@ -3012,6 +3012,9 @@ void DeviceModule(py::module &m_device) {
     m_device.def("DisableCompileCache", &DisableCompileCache, R"doc(
         Disables kernel compilation cache from being persistent across runs
     )doc");
+    m_device.def("ClearCompileCache", &ClearCompileCache, R"doc(
+        Clears the current kernel compilation cache
+    )doc");
     m_device.def("GetCompileCacheEnabled", &GetCompileCacheEnabled, R"doc(
         Returns bool indicating whether persistent kernel compilation cache is enabled
     )doc");

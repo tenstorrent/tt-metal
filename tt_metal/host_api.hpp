@@ -680,6 +680,13 @@ void EnableCompileCache();
 void DisableCompileCache();
 
 /**
+ * Clear the current kernel compilation cache.
+ *
+ * Return value: void
+ */
+void ClearCompileCache();
+
+/**
  * Returns bool indicating whether persistent caching is enabled.
  *
  * Return value: bool

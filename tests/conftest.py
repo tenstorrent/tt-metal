@@ -208,9 +208,35 @@ def reset_tensix(request, silicon_arch_name):
         assert result.returncode == 0, "Tensix reset script raised error"
 
 
-@pytest.fixture(scope="function")
-def use_program_cache():
+@pytest.fixture(autouse=True)
+def clear_program_cache():
+    yield
     import tt_lib as ttl
+
+    ttl.program_cache.disable_and_clear()
+
+
+@pytest.fixture(autouse=True)
+def clear_compile_cache():
+    yield
+    import tt_lib as ttl
+
+    ttl.device.DisableCompileCache()
+    ttl.device.ClearCompileCache()
+
+
+@pytest.fixture(autouse=True)
+def reset_default_device():
+    import tt_lib as ttl
+
+    device = ttl.device.GetDefaultDevice()
+    yield
+    ttl.device.SetDefaultDevice(device)
+
+
+@pytest.fixture(scope="function")
+def use_program_cache(clear_program_cache):
+    import tt_lib as ttl
+
     ttl.program_cache.enable()
     yield
-    ttl.program_cache.disable_and_clear()
