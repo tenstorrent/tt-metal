@@ -4,11 +4,14 @@ import tt_lib
 import warnings
 from copy import deepcopy
 from tt_lib.fallback_ops import fallback_ops
+
 from python_api_testing.models.utility_functions_new import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
+
 from loguru import logger
+from python_api_testing.models.yolov5.reference.models.common import DetectMultiBackend
 from python_api_testing.models.yolov5.tt.yolov5_conv import TtYolov5Conv
 from python_api_testing.models.yolov5.tt.yolov5_c3 import TtYolov5C3
 from python_api_testing.models.yolov5.tt.yolov5_bottleneck import TtYolov5Bottleneck
@@ -28,11 +31,9 @@ from python_api_testing.models.yolov5.reference.utils.autoanchor import (
 
 from python_api_testing.models.yolov5.reference.utils.torch_utils import (
     fuse_conv_and_bn,
-    initialize_weights,
     model_info,
     profile,
     scale_img,
-    select_device,
     time_sync,
 )
 
@@ -358,3 +359,36 @@ class TtYolov5DetectionModel(BaseModel):
                 else torch.log(cf / cf.sum())
             )  # cls
             mi.bias = torch.nn.Parameter(b.view(-1), requires_grad=True)
+
+
+def _yolov5_detection_model(
+    cfg_path, state_dict, base_address, device
+) -> TtYolov5DetectionModel:
+    tt_model = TtYolov5DetectionModel(
+        cfg=cfg_path,
+        state_dict=state_dict,
+        base_address=base_address,
+        device=device,
+    )
+    return tt_model
+
+
+def yolov5s_detection_model(device) -> TtYolov5DetectionModel:
+    cfg_path = "tests/python_api_testing/models/yolov5/reference/yolov5s.yaml"
+    weights = "tests/python_api_testing/models/yolov5/reference/yolov5s.pt"
+    dnn = False
+    data = None
+    half = False
+
+    refence_model = DetectMultiBackend(
+        weights, device=torch.device("cpu"), dnn=dnn, data=data, fp16=half
+    )
+
+    tt_model = TtYolov5DetectionModel(
+        cfg=cfg_path,
+        state_dict=refence_model.state_dict(),
+        base_address="model.model",
+        device=device,
+    )
+
+    return tt_model

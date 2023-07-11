@@ -24,7 +24,7 @@ from python_api_testing.models.yolov5.reference.models.common import DetectMulti
 from python_api_testing.models.yolov5.reference.utils.dataloaders import LoadImages
 from python_api_testing.models.yolov5.reference.utils.general import check_img_size
 from python_api_testing.models.yolov5.tt.yolov5_detection_model import (
-    TtYolov5DetectionModel,
+    yolov5s_detection_model,
 )
 from python_api_testing.models.utility_functions_new import (
     torch2tt_tensor,
@@ -45,7 +45,6 @@ def test_Yolov5_detection_model():
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
 
-    cfg_path = "tests/python_api_testing/models/yolov5/reference/yolov5s.yaml"
     weights = "tests/python_api_testing/models/yolov5/reference/yolov5s.pt"
     dnn = False
     data = None
@@ -80,13 +79,7 @@ def test_Yolov5_detection_model():
         pt_out = refence_module(test_input)
 
     test_input = torch2tt_tensor(test_input, device)
-
-    tt_module = TtYolov5DetectionModel(
-        cfg=cfg_path,
-        state_dict=refence_model.state_dict(),
-        base_address="model.model",
-        device=device,
-    )
+    tt_module = yolov5s_detection_model(device)
 
     with torch.no_grad():
         tt_module.eval()
