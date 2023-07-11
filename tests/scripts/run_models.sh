@@ -29,7 +29,8 @@ env pytest tests/python_api_testing/models/bert_large_performant/unit_tests -k b
 env pytest tests/python_api_testing/models/metal_BERT_large_15/mha.py
 env pytest tests/python_api_testing/models/metal_BERT_large_15/ffn.py
 env pytest tests/python_api_testing/models/metal_BERT_large_15/bert_encoder.py
-env pytest tests/python_api_testing/models/metal_BERT_large_15/test_bert_batch_dram.py
+env pytest tests/python_api_testing/models/metal_BERT_large_15/test_bert_batch_dram.py::test_bert_batch_dram
+env pytest tests/python_api_testing/models/metal_BERT_large_15/test_bert_batch_dram.py::test_bert_batch_dram_with_program_cache
 
 env pytest tests/python_api_testing/models/t5 -k t5_dense_act_dense
 env pytest tests/python_api_testing/models/t5 -k t5_layer_norm
