@@ -59,9 +59,8 @@ void kernel_main() {
         read_buffers(num_buffer_reads, command_ptr, dram_addr_gen, l1_addr_gen);
         write_buffers(num_buffer_writes, command_ptr, dram_addr_gen, l1_addr_gen);
 
-        command_ptr = reinterpret_cast<volatile u32*>(command_start_addr + (16 + 108 + 4 * 11) * sizeof(u32));
+        command_ptr = reinterpret_cast<volatile u32*>(command_start_addr + (16 + 108 + 4 * 12) * sizeof(u32));
         write_program(num_program_writes, command_ptr);
-
 
         command_ptr = reinterpret_cast<volatile u32*>(command_start_addr + (16) * sizeof(u32));
         launch_program(num_workers, num_multicast_messages, command_ptr);

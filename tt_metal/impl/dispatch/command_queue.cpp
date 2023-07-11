@@ -276,6 +276,7 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(u32 dst) {
     DeviceCommand command;
     command.set_data_size_in_bytes(this->buffer.size());
 
+    u32 starting_bank_id = 0;
     u32 available_l1 = 1024 * 1024 - DEVICE_COMMAND_DATA_ADDR;
     u32 potential_burst_size = available_l1;
     u32 num_bursts = this->buffer.size() / (available_l1);
@@ -285,7 +286,6 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(u32 dst) {
     u32 num_pages_per_remainder_burst = remainder_burst_size / this->buffer.page_size();
 
     // Need to make a PCIE coordinate variable
-
     command.add_read_buffer_instruction(
         dst,
         NOC_XY_ENCODING(NOC_X(0), NOC_Y(4)),
@@ -297,7 +297,8 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(u32 dst) {
         this->buffer.page_size(),
         remainder_burst_size,
         num_pages_per_remainder_burst,
-        (u32)(this->buffer.buffer_type()));
+        (u32)(this->buffer.buffer_type()),
+        starting_bank_id);
 
     return command;
 }
@@ -333,27 +334,42 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(u32 src_a
 
     command.set_data_size_in_bytes(this->buffer.size());
 
+    u32 starting_bank_id = 0;
+
+    u32 remainder_burst_size;
     u32 available_l1 = 1024 * 1024 - DEVICE_COMMAND_DATA_ADDR;
     u32 potential_burst_size = available_l1;
-    u32 num_bursts = this->buffer.size() / (available_l1);
-    u32 num_pages_per_burst = potential_burst_size / this->buffer.page_size();
-    u32 burst_size = num_pages_per_burst * this->buffer.page_size();
-    u32 remainder_burst_size = this->buffer.size() - (num_bursts * burst_size);
-    u32 num_pages_per_remainder_burst = remainder_burst_size / this->buffer.page_size();
+    u32 remaining_buffer_size = this->buffer.size();
+    do {
+        u32 num_bursts = remaining_buffer_size / available_l1;
+        u32 num_pages_per_burst = potential_burst_size / this->buffer.page_size();
+        u32 burst_size = num_pages_per_burst * this->buffer.page_size();
+        remainder_burst_size = remaining_buffer_size - (num_bursts * burst_size);
 
-    // Need to make a PCIE coordinate variable
-    command.add_write_buffer_instruction(
-        src_address,
-        NOC_XY_ENCODING(NOC_X(0), NOC_Y(4)),
-        this->buffer.address(),
-        noc_coord_to_u32(this->buffer.noc_coordinates()),
-        num_bursts,
-        burst_size,
-        num_pages_per_burst,
-        this->buffer.page_size(),
-        remainder_burst_size,
-        num_pages_per_remainder_burst,
-        (u32)(this->buffer.buffer_type()));
+        u32 num_pages_per_remainder_burst = 0;
+        remaining_buffer_size = remainder_burst_size;
+        if (remainder_burst_size <= available_l1) {
+            num_pages_per_remainder_burst = remainder_burst_size / this->buffer.page_size();
+        } else {
+            remainder_burst_size = 0;
+        }
+
+        command.add_write_buffer_instruction(
+            src_address,
+            NOC_XY_ENCODING(0, 4),
+            this->buffer.address(),
+            noc_coord_to_u32(this->buffer.noc_coordinates()),
+            num_bursts,
+            burst_size,
+            num_pages_per_burst,
+            this->buffer.page_size(),
+            remainder_burst_size,
+            num_pages_per_remainder_burst,
+            (u32)(this->buffer.buffer_type()),
+            starting_bank_id);
+
+        starting_bank_id += num_pages_per_burst * num_bursts;
+    } while (remaining_buffer_size > available_l1);
 
     return command;
 }

@@ -36,7 +36,8 @@ void DeviceCommand::add_buffer_relay(
     u32 page_size,
     u32 remainder_burst_size,
     u32 num_pages_per_remainder_burst,
-    u32 banking_enum) {
+    u32 banking_enum,
+    u32 starting_bank_id) {
     this->desc.at(this->relay_buffer_entry_idx) = addr0;
     this->desc.at(this->relay_buffer_entry_idx + 1) = addr0_noc;
     this->desc.at(this->relay_buffer_entry_idx + 2) = addr1;
@@ -48,6 +49,7 @@ void DeviceCommand::add_buffer_relay(
     this->desc.at(this->relay_buffer_entry_idx + 8) = remainder_burst_size;
     this->desc.at(this->relay_buffer_entry_idx + 9) = num_pages_per_remainder_burst;
     this->desc.at(this->relay_buffer_entry_idx + 10) = banking_enum;
+    this->desc.at(this->relay_buffer_entry_idx + 11) = starting_bank_id;
     this->relay_buffer_entry_idx += this->num_4B_words_in_relay_buffer_instruction;
 }
 
@@ -62,7 +64,8 @@ void DeviceCommand::add_read_buffer_instruction(
     u32 page_size,
     u32 remainder_burst_size,
     u32 num_pages_per_remainder_burst,
-    u32 banking_enum) {
+    u32 banking_enum,
+    u32 starting_bank_id) {
     this->desc.at(this->num_relay_buffer_reads_idx)++;
     this->add_buffer_relay(
         dst,
@@ -75,7 +78,8 @@ void DeviceCommand::add_read_buffer_instruction(
         page_size,
         remainder_burst_size,
         num_pages_per_remainder_burst,
-        banking_enum);
+        banking_enum,
+        starting_bank_id);
 }
 
 void DeviceCommand::add_write_buffer_instruction(
@@ -89,7 +93,8 @@ void DeviceCommand::add_write_buffer_instruction(
     u32 page_size,
     u32 remainder_burst_size,
     u32 num_pages_per_remainder_burst,
-    u32 banking_enum) {
+    u32 banking_enum,
+    u32 starting_bank_id) {
     this->desc.at(this->num_relay_buffer_writes_idx)++;
     this->add_buffer_relay(
         src,
@@ -102,7 +107,8 @@ void DeviceCommand::add_write_buffer_instruction(
         page_size,
         remainder_burst_size,
         num_pages_per_remainder_burst,
-        banking_enum);
+        banking_enum,
+        starting_bank_id);
 }
 
 void DeviceCommand::add_read_multi_write_instruction(

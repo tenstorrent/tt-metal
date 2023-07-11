@@ -17,14 +17,15 @@ void write_buffer(
     u32 page_size,
     u32 remainder_burst_size,
     u32 num_pages_per_remainder_burst,
-    u32 banking_enum) {
+    u32 banking_enum,
+    u32 starting_bank_id) {
     // Base address of where we are writing to
     addr_gen.bank_base_address = dst_addr;
     addr_gen.page_size = page_size;
 
-    u32 id = 0;                                    // TODO(agrebenisan): FIXME, what if buffer doesn't start at bank 0?
+    u32 bank_id = starting_bank_id;
     for (u32 j = 0; j < num_bursts; j++) {
-        u32 data_addr = DEVICE_COMMAND_DATA_ADDR;  // UNRESERVED_BASE;
+        u32 data_addr = DEVICE_COMMAND_DATA_ADDR;
         u64 src_noc_addr = (u64(src_noc) << 32) | src_addr;
 
         dataflow::noc_async_read(src_noc_addr, data_addr, burst_size);
@@ -33,22 +34,22 @@ void write_buffer(
         dataflow::noc_async_read_barrier();
 
         for (u32 k = 0; k < num_pages_per_burst; k++) {
-            u64 addr = addr_gen.get_noc_addr(id++);
+            u64 addr = addr_gen.get_noc_addr(bank_id++);
 
             dataflow::noc_async_write(data_addr, addr, page_size);
             data_addr += page_size;
         }
         dataflow::noc_async_write_barrier();
     }
-    // In case where the final burst a different size than the others
+    // In case where the final burst size is a different size than the others
     if (remainder_burst_size) {
-        u32 data_addr = DEVICE_COMMAND_DATA_ADDR;  // UNRESERVED_BASE;
+        u32 data_addr = DEVICE_COMMAND_DATA_ADDR;
         u64 src_noc_addr = (u64(src_noc) << 32) | src_addr;
         dataflow::noc_async_read(src_noc_addr, data_addr, remainder_burst_size);
         dataflow::noc_async_read_barrier();
 
         for (u32 k = 0; k < num_pages_per_remainder_burst; k++) {
-            u64 addr = addr_gen.get_noc_addr(id++);
+            u64 addr = addr_gen.get_noc_addr(bank_id++);
 
             dataflow::noc_async_write(data_addr, addr, page_size);
             data_addr += page_size;
@@ -74,42 +75,23 @@ FORCE_INLINE void write_buffers(
         u32 remainder_burst_size = command_ptr[8];
         u32 num_pages_per_remainder_burst = command_ptr[9];
         u32 banking_enum = command_ptr[10];
+        u32 starting_bank_id = command_ptr[11];
+
+#define write_buffer_args                                                                                      \
+    src_addr, src_noc, dst_addr, num_bursts, burst_size, num_pages_per_burst, page_size, remainder_burst_size, \
+        num_pages_per_remainder_burst, banking_enum, starting_bank_id
 
         u64 src_noc_addr = (u64(src_noc) << 32) | src_addr;
         switch (banking_enum) {
             case 0:  // DRAM
-                write_buffer(
-                    dram_addr_gen,
-                    src_addr,
-                    src_noc,
-                    dst_addr,
-
-                    num_bursts,
-                    burst_size,
-                    num_pages_per_burst,
-                    page_size,
-                    remainder_burst_size,
-                    num_pages_per_remainder_burst,
-                    banking_enum);
+                write_buffer(dram_addr_gen, write_buffer_args);
                 break;
             case 1:  // L1
-                write_buffer(
-                    l1_addr_gen,
-                    src_addr,
-                    src_noc,
-                    dst_addr,
-
-                    num_bursts,
-                    burst_size,
-                    num_pages_per_burst,
-                    page_size,
-                    remainder_burst_size,
-                    num_pages_per_remainder_burst,
-                    banking_enum);
+                write_buffer(l1_addr_gen, write_buffer_args);
                 break;
         }
 
-        command_ptr += 11;
+        command_ptr += 12;
     }
 }
 
@@ -126,18 +108,19 @@ FORCE_INLINE void read_buffer(
     u32 page_size,
     u32 remainder_burst_size,
     u32 num_pages_per_remainder_burst,
-    u32 banking_enum) {
+    u32 banking_enum,
+    u32 starting_bank_id) {
     // Base address of where we are reading from
     addr_gen.bank_base_address = src_addr;
     addr_gen.page_size = page_size;
 
-    u32 id = 0;                                    // TODO(agrebenisan): FIXME, what if buffer doesn't start at bank 0?
+    u32 bank_id = starting_bank_id;
     for (u32 j = 0; j < num_bursts; j++) {
-        u32 data_addr = DEVICE_COMMAND_DATA_ADDR;  // UNRESERVED_BASE;
+        u32 data_addr = DEVICE_COMMAND_DATA_ADDR;
         u64 dst_noc_addr = (u64(dst_noc) << 32) | dst_addr;
 
         for (u32 k = 0; k < num_pages_per_burst; k++) {
-            u64 addr = addr_gen.get_noc_addr(id++);
+            u64 addr = addr_gen.get_noc_addr(bank_id++);
 
             dataflow::noc_async_read(addr, data_addr, page_size);
             data_addr += page_size;
@@ -150,11 +133,11 @@ FORCE_INLINE void read_buffer(
     }
 
     if (remainder_burst_size) {
-        u32 data_addr = DEVICE_COMMAND_DATA_ADDR;  // UNRESERVED_BASE;
+        u32 data_addr = DEVICE_COMMAND_DATA_ADDR;
         u64 dst_noc_addr = (u64(dst_noc) << 32) | dst_addr;
 
         for (u32 k = 0; k < num_pages_per_remainder_burst; k++) {
-            u64 addr = addr_gen.get_noc_addr(id++);
+            u64 addr = addr_gen.get_noc_addr(bank_id++);
 
             dataflow::noc_async_read(addr, data_addr, page_size);
             data_addr += page_size;
@@ -183,41 +166,26 @@ FORCE_INLINE void read_buffers(
         u32 remainder_burst_size = command_ptr[8];
         u32 num_pages_per_remainder_burst = command_ptr[9];
         u32 banking_enum = command_ptr[10];
+        u32 starting_bank_id = command_ptr[11];
+
+#define read_buffer_args                                                                                       \
+    dst_addr, dst_noc, src_addr, num_bursts, burst_size, num_pages_per_burst, page_size, remainder_burst_size, \
+        num_pages_per_remainder_burst, banking_enum, starting_bank_id
 
         switch (banking_enum) {
             case 0:  // DRAM
                 read_buffer(
                     dram_addr_gen,
-                    dst_addr,
-                    dst_noc,
-                    src_addr,
-
-                    num_bursts,
-                    burst_size,
-                    num_pages_per_burst,
-                    page_size,
-                    remainder_burst_size,
-                    num_pages_per_remainder_burst,
-                    banking_enum);
+                    read_buffer_args);
                 break;
             case 1:  // L1
                 read_buffer(
                     l1_addr_gen,
-                    dst_addr,
-                    dst_noc,
-                    src_addr,
-
-                    num_bursts,
-                    burst_size,
-                    num_pages_per_burst,
-                    page_size,
-                    remainder_burst_size,
-                    num_pages_per_remainder_burst,
-                    banking_enum);
+                    read_buffer_args);
                 break;
         }
 
-        command_ptr += 11;
+        command_ptr += 12;
     }
 }
 
@@ -227,8 +195,6 @@ FORCE_INLINE void write_program_section(
 
     dataflow::noc_async_read(((u64(src_noc) << 32) | src), DEVICE_COMMAND_DATA_ADDR, transfer_size);
     dataflow::noc_async_read_barrier();
-
-
 
     // Write different parts of that program section to different worker cores
     for (u32 write = 0; write < num_writes; write++) {
@@ -241,18 +207,18 @@ FORCE_INLINE void write_program_section(
 
         command_ptr += 5;
 
-        #ifdef TT_METAL_DISPATCH_MAP_DUMP
+#ifdef TT_METAL_DISPATCH_MAP_DUMP
         DPRINT << "CHUNK" << ENDL();
         for (u32 i = 0; i < transfer_size; i += sizeof(u32)) {
             DPRINT << *reinterpret_cast<volatile u32*>(src + i) << ENDL();
         }
-        #else
+#else
         dataflow::noc_async_write_multicast(src, u64(dst_noc) << 32 | dst, transfer_size, num_receivers);
-        #endif
+#endif
     }
-    #ifndef TT_METAL_DISPATCH_MAP_DUMP
+#ifndef TT_METAL_DISPATCH_MAP_DUMP
     dataflow::noc_async_write_barrier();
-    #endif
+#endif
 }
 
 FORCE_INLINE void write_program(u32 num_program_relays, volatile u32*& command_ptr) {
@@ -266,19 +232,18 @@ FORCE_INLINE void write_program(u32 num_program_relays, volatile u32*& command_p
         write_program_section(src, src_noc, transfer_size, num_writes, command_ptr);
     }
 
-    #ifdef TT_METAL_DISPATCH_MAP_DUMP
+#ifdef TT_METAL_DISPATCH_MAP_DUMP
     if (num_program_relays != 0) {
         DPRINT << "EXIT_CONDITION" << ENDL();
     }
-    #endif
+#endif
 }
 
 FORCE_INLINE void launch_program(u32 num_workers, u32 num_multicast_messages, volatile u32*& command_ptr) {
-
-    // Never launch a program when this tool is used.
-    #ifdef TT_METAL_DISPATCH_MAP_DUMP
+// Never launch a program when this tool is used.
+#ifdef TT_METAL_DISPATCH_MAP_DUMP
     return;
-    #endif
+#endif
 
     if (not num_workers)
         return;
@@ -294,7 +259,8 @@ FORCE_INLINE void launch_program(u32 num_workers, u32 num_multicast_messages, vo
     dataflow::noc_async_write_barrier();
 
     // Wait on worker cores to notify me that they have completed
-    while (reinterpret_cast<volatile u32*>(DISPATCH_MESSAGE_ADDR)[0] != num_workers);
+    while (reinterpret_cast<volatile u32*>(DISPATCH_MESSAGE_ADDR)[0] != num_workers)
+        ;
     for (u32 i = 0; i < num_multicast_messages * 2; i += 2) {
         u64 worker_core_noc_coord = u64(command_ptr[i]) << 32;
         u32 num_messages = command_ptr[i + 1];

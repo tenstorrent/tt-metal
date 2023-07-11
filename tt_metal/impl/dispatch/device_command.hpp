@@ -22,7 +22,7 @@ static constexpr u32 NUM_DISPATCH_CORES = 108;  // TODO(agrebenisan): Need to fi
 static constexpr u32 DEVICE_COMMAND_DATA_ADDR = 150 * 1024;
 
 static constexpr u32 DEVICE_COMMAND_NUM_ENTRIES = 5632; // 22KB device command
-static constexpr u32 NUM_ENTRIES_PER_BUFFER_RELAY = 11;
+static constexpr u32 NUM_ENTRIES_PER_BUFFER_RELAY = 12;
 static constexpr u32 CONTROL_SECTION_NUM_ENTRIES = 16;
 static constexpr u32 RELAY_BUFFER_NUM_ENTRIES = 4 * NUM_ENTRIES_PER_BUFFER_RELAY;
 static constexpr u32
@@ -44,7 +44,7 @@ static_assert(DEVICE_COMMAND_NUM_ENTRIES * sizeof(u32) % 32 == 0);
 static constexpr u32 NUM_16B_WORDS_IN_DEVICE_COMMAND = (DEVICE_COMMAND_NUM_ENTRIES * sizeof(u32)) / 16;
 class DeviceCommand {
    private:
-    static constexpr u32 num_4B_words_in_relay_buffer_instruction = 11;
+    static constexpr u32 num_4B_words_in_relay_buffer_instruction = 12;
     static constexpr u32 num_possible_relay_buffer_instructions = 4;
 
     // Command header
@@ -67,7 +67,7 @@ class DeviceCommand {
 
     // This magic 16 coming from the fact that we needed to over-allocate the control bit
     // section in order to have the command size be nicely divisble by 32
-    static_assert(CONTROL_SECTION_NUM_ENTRIES + RELAY_BUFFER_NUM_ENTRIES + NUM_DISPATCH_CORES == 168);
+    static_assert(CONTROL_SECTION_NUM_ENTRIES + RELAY_BUFFER_NUM_ENTRIES + NUM_DISPATCH_CORES == 172);
     u32 relay_program_entry_idx = CONTROL_SECTION_NUM_ENTRIES + RELAY_BUFFER_NUM_ENTRIES + NUM_DISPATCH_CORES;
 
     array<u32, DEVICE_COMMAND_NUM_ENTRIES> desc;
@@ -87,7 +87,8 @@ class DeviceCommand {
         u32 page_size,
         u32 remainder_burst_size,
         u32 num_pages_per_remainder_burst,
-        u32 banking_enum);
+        u32 banking_enum,
+        u32 starting_bank_id);
 
    public:
     DeviceCommand();
@@ -114,7 +115,8 @@ class DeviceCommand {
         u32 page_size,
         u32 remainder_burst_size,
         u32 num_pages_per_remainder_burst,
-        u32 banking_enum);
+        u32 banking_enum,
+        u32 starting_bank_id);
 
     // 'src' must be a single bank
     void add_write_buffer_instruction(
@@ -128,7 +130,8 @@ class DeviceCommand {
         u32 page_size,
         u32 remainder_burst_size,
         u32 num_pages_per_remainder_burst,
-        u32 banking_enum);
+        u32 banking_enum,
+        u32 starting_bank_id);
 
     // The data transfer pattern that this instruction
     // attempts to resolve is when we need to read data
