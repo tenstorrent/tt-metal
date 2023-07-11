@@ -33,3 +33,6 @@ pytest $TT_METAL_HOME/tests/python_api_testing/models/bert_large_performant/unit
 
 # Resnet18 tests with conv on cpu and with conv on device
 pytest $TT_METAL_HOME/tests/python_api_testing/models/resnet/test_resnet18.py
+
+# Conv unit test with fast dispatch
+env TT_METAL_DEVICE_DISPATCH_MODE=1 pytest -svv tests/python_api_testing/unit_testing/test_conv_as_large_matmul.py::test_run_conv_as_large_matmul[32-3-5-5-1-1-1-1-0-0-False]
