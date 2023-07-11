@@ -139,12 +139,17 @@ std::vector<Tensor> run(
     const std::vector<Tensor> &input_tensors,
     const std::vector<std::optional<const Tensor>> &optional_input_tensors
 ) {
+#ifdef DEBUG
+    tt::log_debug(tt::LogOp, "Running {} with input tensors {}", op.get_type_name(), input_tensors);
+#endif
     if (program_cache::is_enabled() and op.supports_program_caching()) {
         return detail::run_with_program_cache(op, input_tensors, optional_input_tensors);
     } else {
+#ifdef DEBUG
         if (program_cache::is_enabled()) {
             tt::log_info(tt::LogOp, "Running {} op without program cache", op.get_type_name());
         }
+#endif
         return detail::run_without_program_cache(op, input_tensors, optional_input_tensors);
     }
 }

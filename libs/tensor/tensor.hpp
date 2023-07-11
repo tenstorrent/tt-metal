@@ -117,6 +117,8 @@ class Tensor {
 
 Tensor create_device_tensor(const Shape& shape, DataType dtype, Layout layout, Device *device, const MemoryConfig& memory_config = {.interleaved=true});
 
+std::ostream& operator<<(std::ostream& os, const Tensor& tensor);
+
 }  // namespace tt_metal
 
 }  // namespace tt

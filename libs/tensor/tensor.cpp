@@ -7,6 +7,10 @@
 #include "llrt/llrt.hpp"
 #include "tt_metal/common/constants.hpp"
 
+#include "third_party/magic_enum/magic_enum.hpp"
+
+#include <fmt/ranges.h>
+
 using namespace tt::constants;
 
 namespace tt {
@@ -194,6 +198,17 @@ Tensor create_device_tensor(const Shape& shape, DataType data_type, Layout layou
     uint32_t packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, volume(shape));
     auto device_buffer = tensor_impl::allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config);
     return Tensor(DeviceStorage{device_buffer, device, memory_config}, shape, data_type, layout);
+}
+
+std::ostream& operator<<(std::ostream& os, const Tensor& tensor) {
+    os << "Tensor";
+    os << "{";
+    os << ".storage_type=" << magic_enum::enum_name(tensor.storage_type());
+    os << ".,shape=" << fmt::format("{}", tensor.shape());
+    os << ",.dtype=" << magic_enum::enum_name(tensor.dtype());
+    os << ",.layout=" << magic_enum::enum_name(tensor.layout());
+    os << "}";
+    return os;
 }
 
 }  // namespace tt_metal
