@@ -133,31 +133,35 @@ bool InitializeDevice(Device *device, const MemoryAllocator &memory_allocator) {
 
     bool init;
     if (device->initialize(memory_allocator)) {
-        static bool globally_initialized = false;
-        if (!globally_initialized) {
-            // Thread safety: ok if we build twice
-            build_kernel_for_riscv_options_t build_options;
-            detail::GenerateBankToNocCoordHeaders(device, &build_options, "");
-            std::string arch_name = tt::get_string_lowercase(device->arch());
-            generate_binaries_params_t default_params;
-            generate_binaries_all_riscs(&build_options,
-                                        "",
-                                        arch_name,
-                                        default_params,
-                                        enable_fw_profile_hack);
+        static std::mutex build_mutex;
+        static bool global_init_complete = false;
 
-            // Thread safety: this may cause grief if done twice
-            char *dbg_print = std::getenv("TT_KERNEL_DEBUG_PRINT");
-            if (dbg_print != nullptr) {
-                uint32_t x, y;
-                sscanf(dbg_print, "%d,%d", &x, &y);
-                auto hart_mask = DPRINT_HART_BR;
-                CoreCoord coord = {x, y};
-                tt_start_debug_print_server(device->cluster(), {0}, {coord}, hart_mask);
-                log_debug(tt::LogMetal, "Started debug print server on core {}", coord.str());
+        {
+            // Need a lock here to prevent the race of building mulitple times
+            const std::lock_guard<std::mutex> lock(build_mutex);
+            if (!global_init_complete) {
+                build_kernel_for_riscv_options_t build_options;
+                detail::GenerateBankToNocCoordHeaders(device, &build_options, "");
+                std::string arch_name = tt::get_string_lowercase(device->arch());
+                generate_binaries_params_t default_params;
+                generate_binaries_all_riscs(&build_options,
+                                            "",
+                                            arch_name,
+                                            default_params,
+                                            enable_fw_profile_hack);
+
+                char *dbg_print = std::getenv("TT_KERNEL_DEBUG_PRINT");
+                if (dbg_print != nullptr) {
+                    uint32_t x, y;
+                    sscanf(dbg_print, "%d,%d", &x, &y);
+                    auto hart_mask = DPRINT_HART_BR;
+                    CoreCoord coord = {x, y};
+                    tt_start_debug_print_server(device->cluster(), {0}, {coord}, hart_mask);
+                    log_debug(tt::LogMetal, "Started debug print server on core {}", coord.str());
+                }
+
+                global_init_complete = true;
             }
-
-            globally_initialized = true;
         }
 
         // Download to worker cores
