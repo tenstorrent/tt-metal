@@ -12,7 +12,6 @@ import torch
 from torch import nn
 from transformers import AutoImageProcessor, DeiTForImageClassificationWithTeacher
 from loguru import logger
-from datasets import load_dataset
 
 import tt_lib
 from utility_functions_new import torch_to_tt_tensor_rm, tt_to_torch_tensor , comp_pcc, comp_allclose_and_pcc
@@ -21,11 +20,10 @@ from deit_config import DeiTConfig
 from deit_for_image_classification_with_teacher import TtDeiTForImageClassificationWithTeacher
 
 
-def test_deit_for_image_classification_with_teacher_inference(pcc=0.95):
+def test_deit_for_image_classification_with_teacher_inference(hf_cat_image_sample_input, pcc=0.95):
 
     with torch.no_grad():
-        dataset = load_dataset("huggingface/cats-image")
-        image = dataset["test"]["image"][0]
+        image = hf_cat_image_sample_input
 
         #real input
         image_processor = AutoImageProcessor.from_pretrained("facebook/deit-base-distilled-patch16-224")

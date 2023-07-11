@@ -2,7 +2,6 @@ from transformers import ViTForImageClassification as HF_ViTForImageClassication
 from transformers import AutoImageProcessor as HF_AutoImageProcessor
 from loguru import logger
 import torch
-from datasets import load_dataset
 
 from models.vit.tt.modeling_vit import TtViTEncoder
 import tt_lib
@@ -15,9 +14,8 @@ from models.utility_functions import (
 from tests.python_api_testing.models.utility_functions_new import comp_pcc, comp_allclose_and_pcc
 
 
-def test_vit_encoder(pcc=0.92):
-    dataset = load_dataset("huggingface/cats-image")
-    image = dataset["test"]["image"][0]
+def test_vit_encoder(hf_cat_image_sample_input, pcc=0.92):
+    image = hf_cat_image_sample_input
 
     head_mask = 12 * [None]
     output_attentions = False

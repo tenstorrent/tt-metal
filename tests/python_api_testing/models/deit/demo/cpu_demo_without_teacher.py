@@ -1,12 +1,10 @@
 from transformers import AutoImageProcessor, DeiTForImageClassification
 import torch
-from datasets import load_dataset
 from loguru import logger
 
 
-def test_cpu_demo():
-    dataset = load_dataset("huggingface/cats-image")
-    image = dataset["test"]["image"][0]
+def test_cpu_demo(hf_cat_image_sample_input):
+    image = hf_cat_image_sample_input
 
     image_processor = AutoImageProcessor.from_pretrained("facebook/deit-base-distilled-patch16-224")
     model = DeiTForImageClassification.from_pretrained("facebook/deit-base-distilled-patch16-224")

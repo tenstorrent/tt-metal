@@ -11,7 +11,6 @@ sys.path.append(f"{f}/../../../../..")
 import torch
 from torch import nn
 from transformers import DeiTForImageClassification, AutoImageProcessor, DeiTModel
-from datasets import load_dataset
 from loguru import logger
 
 import tt_lib
@@ -21,7 +20,7 @@ from deit_config import DeiTConfig
 from deit_model import TtDeiTModel
 
 
-def test_deit_model_inference(pcc = 0.95):
+def test_deit_model_inference(hf_cat_image_sample_input, pcc = 0.95):
 
     head_mask = None
     output_attentions = None
@@ -38,8 +37,7 @@ def test_deit_model_inference(pcc = 0.95):
         base_address = 'deit'
 
         # synthesize the input
-        dataset = load_dataset("huggingface/cats-image")
-        image = dataset["test"]["image"][0]
+        image = hf_cat_image_sample_input
         image_processor = AutoImageProcessor.from_pretrained("facebook/deit-base-distilled-patch16-224")
         input_image = image_processor(images=image, return_tensors="pt")
         input_image = input_image['pixel_values']

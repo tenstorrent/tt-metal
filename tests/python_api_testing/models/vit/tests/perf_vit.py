@@ -10,7 +10,6 @@ sys.path.append(f"{f}/../../../..")
 
 from transformers import AutoImageProcessor, ViTForImageClassification
 import torch
-from datasets import load_dataset
 from loguru import logger
 import pytest
 
@@ -23,6 +22,7 @@ from models.vit.tt.modeling_vit import vit_for_image_classification
 
 BATCH_SIZE = 1
 
+
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
@@ -31,15 +31,14 @@ BATCH_SIZE = 1
         ),
     ),
 )
-def test_perf(use_program_cache, expected_inference_time, expected_compile_time):
+def test_perf(use_program_cache, expected_inference_time, expected_compile_time, hf_cat_image_sample_input):
     profiler = Profiler()
     disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_key"
 
-    dataset = load_dataset("huggingface/cats-image")
-    image = dataset["test"]["image"][0]
+    image = hf_cat_image_sample_input
 
     # Initialize the device
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)

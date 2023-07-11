@@ -52,3 +52,11 @@ def iam_ocr_sample_input(model_location_generator):
     path = model_location_generator(sample_path)
     im = Image.open(path)
     return im
+
+
+@pytest.fixture
+def hf_cat_image_sample_input(model_location_generator):
+    sample_path = "tt_dnn-models/samples/huggingface_cat_image.jpg"
+    path = model_location_generator(sample_path)
+    im = Image.open(path)
+    return im

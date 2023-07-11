@@ -9,7 +9,6 @@ sys.path.append(f"{f}/../../..")
 
 from transformers import AutoImageProcessor, DeiTForImageClassificationWithTeacher
 import torch
-from datasets import load_dataset
 
 from loguru import logger
 
@@ -17,10 +16,8 @@ import tt_lib
 from utility_functions_new import torch_to_tt_tensor_rm, tt_to_torch_tensor
 from deit_for_image_classification_with_teacher import deit_for_image_classification_with_teacher
 
-def test_gs_demo():
-
-    dataset = load_dataset("huggingface/cats-image")
-    image = dataset["test"]["image"][0]
+def test_gs_demo(hf_cat_image_sample_input):
+    image = hf_cat_image_sample_input
 
     image_processor = AutoImageProcessor.from_pretrained("facebook/deit-base-distilled-patch16-224")
     inputs = image_processor(images=image, return_tensors="pt")

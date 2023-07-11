@@ -1,6 +1,5 @@
 from transformers import AutoImageProcessor, ViTForImageClassification
 import torch
-from datasets import load_dataset
 from loguru import logger
 
 import tt_lib
@@ -8,9 +7,8 @@ from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 from models.vit.tt.modeling_vit import vit_for_image_classification
 
 
-def test_gs_demo():
-    dataset = load_dataset("huggingface/cats-image")
-    image = dataset["test"]["image"][0]
+def test_gs_demo(hf_cat_image_sample_input):
+    image = hf_cat_image_sample_input
 
     # Initialize the device
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)

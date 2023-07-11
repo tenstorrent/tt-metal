@@ -10,7 +10,6 @@ sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
 import torch
-from datasets import load_dataset
 from loguru import logger
 from torchvision import models
 from transformers import AutoImageProcessor
@@ -26,6 +25,7 @@ from resnetBlock import ResNet, Bottleneck
 
 BATCH_SIZE = 1
 
+
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
@@ -34,7 +34,8 @@ BATCH_SIZE = 1
         ),
     ),
 )
-def test_perf(use_program_cache, expected_inference_time, expected_compile_time):
+
+def test_perf(use_program_cache, expected_inference_time, expected_compile_time, hf_cat_image_sample_input):
     disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"
@@ -47,9 +48,7 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time)
     tt_lib.device.SetDefaultDevice(device)
 
 
-
-    dataset = load_dataset("huggingface/cats-image")
-    image = dataset["test"]["image"][0]
+    image = hf_cat_image_sample_input
     image_processor = AutoImageProcessor.from_pretrained(model_name)
     inputs = image_processor(image, return_tensors="pt")
 
