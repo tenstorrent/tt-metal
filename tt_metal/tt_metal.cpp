@@ -365,8 +365,8 @@ const CircularBuffer &CreateCircularBuffers(
     return program.add_circular_buffer(core_range_set, buffer_indices, num_tiles, size_in_bytes, data_format, l1_address);
 }
 
-uint32_t get_semaphore_address(const Program &program, const CoreRange &core_range) {
-    uint32_t address = -1;
+static std::optional<uint32_t> get_semaphore_address(const Program &program, const CoreRange &core_range) {
+    std::optional<uint32_t> address;
     auto start_core = core_range.start;
     auto end_core = core_range.end;
     for (auto x = start_core.x; x <= end_core.x; x++) {
@@ -377,10 +377,10 @@ uint32_t get_semaphore_address(const Program &program, const CoreRange &core_ran
                 TT_THROW("Cannot add semaphore on core " + logical_core.str() + ". Max number of semaphores (" + std::to_string(NUM_SEMAPHORES) + ") reached!");
             }
             uint32_t addr = num_semaphores == 0 ? SEMAPHORE_BASE : program.semaphore_address(num_semaphores-1) + ALIGNED_SIZE_PER_SEMAPHORE;
-            if (address == -1) {
+            if (!address.has_value()) {
                 address = addr;
             } else if (addr != address) {
-                TT_THROW("Expected semaphore on logical core " + logical_core.str() + " to be initialized at L1 address " + std::to_string(address) + " but it is at " + std::to_string(addr));
+                TT_THROW("Expected semaphore on logical core " + logical_core.str() + " to be initialized at L1 address " + std::to_string(address.value()) + " but it is at " + std::to_string(addr));
             }
         }
     }
@@ -388,21 +388,28 @@ uint32_t get_semaphore_address(const Program &program, const CoreRange &core_ran
 }
 
 uint32_t CreateSemaphore(Program &program, const CoreRange &core_range, uint32_t initial_value) {
-    return CreateSemaphore ( program, {core_range}, initial_value );
+    return CreateSemaphore ( program, CoreRangeSet({core_range}), initial_value );
 }
 
 uint32_t CreateSemaphore(Program &program, const CoreRangeSet &core_range_set, uint32_t initial_value) {
-    uint32_t address = -1;
+    std::optional<uint32_t> address;
+    TT_ASSERT( core_range_set.ranges().size() > 0, "Expecting a non-empty CoreRangeSet!");
     for (auto core_range : core_range_set.ranges()) {
+        auto start_core = core_range.start;
+        auto end_core = core_range.end;
+        TT_ASSERT(start_core == end_core or start_core < end_core && "Invalid core range!");
         auto addr = get_semaphore_address(program, core_range);
-        if (address == -1) {
+        if (!address.has_value()) {
             address = addr;
         } else {
             TT_ASSERT(addr == address);
         }
     }
-    program.add_semaphore(core_range_set, address, initial_value);
-    return address;
+    TT_ASSERT( address.has_value(), "Expecting a valid Semaphore address!");
+
+    program.add_semaphore(core_range_set, address.value(), initial_value);
+
+    return address.value();
 }
 
 void WriteToDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
