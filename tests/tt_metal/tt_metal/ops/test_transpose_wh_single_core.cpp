@@ -1,7 +1,6 @@
 #include "tt_metal/host_api.hpp"
 #include "tensor/tensor.hpp"
 #include "tensor/host_buffer.hpp"
-#include "tensor/host_buffer_functions.hpp"
 #include "tt_dnn/op_library/transpose/transpose_op.hpp"
 #include <tt_numpy/functions.hpp>
 
@@ -25,8 +24,9 @@ Tensor perform_transpose_wh(Tensor& input_tensor) {
     bshape[2] = ashape[3];
     bshape[3] = ashape[2];
     TT_ASSERT(input_tensor.layout() == tt::tt_metal::Layout::TILE, "This transpose assumes that the data layout is tiled!");
-    auto input_buffer = host_buffer::get_as<bfloat16>(input_tensor);
-    auto output_buffer = host_buffer::create<bfloat16>(input_buffer.size());
+    auto input_view = host_buffer::view_as<bfloat16>(input_tensor);
+    auto output_buffer = host_buffer::create<bfloat16>(input_view.size());
+    auto output_view = host_buffer::view_as<bfloat16>(output_buffer);
     auto N = ashape[0];
     auto C = ashape[1];
     auto H = ashape[2];
@@ -45,7 +45,7 @@ Tensor perform_transpose_wh(Tensor& input_tensor) {
                                 for(auto stw = 0; stw < 16; stw++) {
                                     auto input_index = n*C*H*W + c*H*W + ht*Wt*TILE_HEIGHT*TILE_WIDTH + wt*TILE_HEIGHT*TILE_WIDTH + fh*32*16 + fw*16*16 + sth*16 + stw;
                                     auto output_index = n*C*H*W + c*H*W + wt*Ht*TILE_HEIGHT*TILE_WIDTH + ht*TILE_HEIGHT*TILE_WIDTH + fw*16*32 + fh*16*16 + stw*16 + sth;
-                                    output_buffer[output_index] = input_buffer[input_index];
+                                    output_view[output_index] = input_view[input_index];
                                 }
                             }
                         }
@@ -98,10 +98,10 @@ int main(int argc, char **argv) {
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::Tensor host_a = a.to(host); // Move tensor a to host to validate
-        auto host_vec = host_buffer::get_as<bfloat16>(host_a);
+        auto host_vec = host_buffer::view_as<bfloat16>(host_a);
         auto transposed_host_a = perform_transpose_wh(host_a);
-        auto golden_vec = host_buffer::get_as<bfloat16>(transposed_host_a);
-        auto result_vec = host_buffer::get_as<bfloat16>(d);
+        auto golden_vec = host_buffer::view_as<bfloat16>(transposed_host_a);
+        auto result_vec = host_buffer::view_as<bfloat16>(d);
         if(golden_vec != result_vec) {
             assert(golden_vec.size() == result_vec.size());
             for(uint32_t i = 0; i < golden_vec.size(); i++) {

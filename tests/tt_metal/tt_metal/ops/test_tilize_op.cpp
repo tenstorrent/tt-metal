@@ -1,7 +1,6 @@
 #include "tt_metal/host_api.hpp"
 #include "tensor/tensor.hpp"
 #include "tensor/host_buffer.hpp"
-#include "tensor/host_buffer_functions.hpp"
 #include "tt_dnn/op_library/tilize/tilize_op.hpp"
 #include "constants.hpp"
 #include <tt_numpy/functions.hpp>
@@ -60,8 +59,8 @@ int main(int argc, char **argv) {
         std::cout << "Moving src data to host to validate" << std::endl;
         Tensor host_a = a.to(host); // Move tensor a to host to validate
         Tensor golden = host_a.to(Layout::TILE);
-        auto golden_vec = host_buffer::get_as<bfloat16>(golden);
-        auto result_vec = host_buffer::get_as<bfloat16>(c);
+        auto golden_vec = host_buffer::view_as<bfloat16>(golden);
+        auto result_vec = host_buffer::view_as<bfloat16>(c);
         pass &= (result_vec == golden_vec);
         pass &= tt_metal::CloseDevice(device);
 

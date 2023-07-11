@@ -3,7 +3,6 @@
 #include "constants.hpp"
 #include "tensor/tensor.hpp"
 #include "tensor/host_buffer.hpp"
-#include "tensor/host_buffer_functions.hpp"
 #include "tt_metal/host_api.hpp"
 
 #include "tt_numpy/functions.hpp"
@@ -31,13 +30,14 @@ float tanh(float x) { return std::tanh(x); }
 
 template <auto UnaryFunction>
 Tensor host_function(const Tensor& input_tensor) {
-    auto input_buffer = host_buffer::get_as<bfloat16>(input_tensor);
+    auto input_buffer_view = host_buffer::view_as<bfloat16>(input_tensor);
 
     auto output_buffer = host_buffer::create<bfloat16>(input_tensor.volume());
+    auto output_view = host_buffer::view_as<bfloat16>(output_buffer);
 
-    for (auto index = 0; index < output_buffer.size(); index++) {
-        auto value = UnaryFunction(input_buffer[index].to_float());
-        output_buffer[index] = bfloat16(value);
+    for (auto index = 0; index < output_view.size(); index++) {
+        auto value = UnaryFunction(input_buffer_view[index].to_float());
+        output_view[index] = bfloat16(value);
     }
 
     return Tensor(HostStorage{output_buffer}, input_tensor.shape(), input_tensor.dtype(), input_tensor.layout());
