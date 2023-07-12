@@ -7,7 +7,7 @@ from loguru import logger
 from pathlib import Path
 import contextlib
 import math
-
+from python_api_testing.models.yolov3.reference.models.common import DetectMultiBackend
 from python_api_testing.models.yolov3.tt.yolov3_conv import TtConv
 from python_api_testing.models.yolov3.tt.yolov3_bottleneck import TtBottleneck
 from python_api_testing.models.yolov3.tt.yolov3_upsample import TtUpsample
@@ -365,3 +365,35 @@ class TtDetectionModel(BaseModel):
                 else torch.log(cf / cf.sum())
             )  # cls
             mi.bias = torch.nn.Parameter(b.view(-1), requires_grad=True)
+
+
+def _yolov3_fused_model(cfg_path, state_dict, base_address, device) -> TtDetectionModel:
+    tt_model = TtDetectionModel(
+        cfg=cfg_path,
+        state_dict=state_dict,
+        base_address=base_address,
+        device=device,
+    )
+    return tt_model
+
+
+def yolov3_fused_model(device, model_location_generator) -> TtDetectionModel:
+    # Load yolo
+    model_path = model_location_generator("tt_dnn-models/Yolo/models/")
+    data_path = model_location_generator("tt_dnn-models/Yolo/data/")
+    cfg_path = str(data_path / "yolov3.yaml")
+    data_coco = str(data_path / "coco128.yaml")
+    weights_loc = str(model_path / "yolov3.pt")
+
+    reference_model = DetectMultiBackend(
+        weights_loc, device=torch.device("cpu"), dnn=False, data=data_coco, fp16=False
+    )
+
+    tt_model = _yolov3_fused_model(
+        cfg_path=cfg_path,
+        state_dict=reference_model.state_dict(),
+        base_address="model.model",
+        device=device,
+    )
+
+    return tt_model

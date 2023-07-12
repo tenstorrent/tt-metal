@@ -56,9 +56,6 @@ class TtConv2D(torch.nn.Module):
 
         if self.conv_on_device and is_conv_supported_on_device(self.conv_params):
             self.conv_bias = self.conv_bias.unsqueeze(-1).unsqueeze(-1)
-            logger.debug(f"Using TtConv for params {self.conv_params}")
-            logger.debug(f"conv_weight shape {self.conv_weight.shape}")
-            logger.debug(f"conv_bias shape {self.conv_bias.shape}")
 
             self.conv = run_conv_on_device_wrapper(
                 self.conv_weight.reshape(-1).tolist(),
@@ -70,8 +67,6 @@ class TtConv2D(torch.nn.Module):
 
         else:
             self.conv_on_device = False
-
-            logger.debug(f"Using fallback_ops.Conv2d for params {self.conv_params}")
 
             self.conv_weight = torch_to_tt_tensor_rm(
                 self.conv_weight, self.device, put_on_device=False
