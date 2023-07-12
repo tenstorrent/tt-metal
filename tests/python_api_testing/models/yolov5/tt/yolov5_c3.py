@@ -1,12 +1,6 @@
 import torch
 import tt_lib
 
-from loguru import logger
-from tt_lib.fallback_ops import fallback_ops
-from python_api_testing.models.utility_functions_new import (
-    torch2tt_tensor,
-    tt2torch_tensor,
-)
 from python_api_testing.models.yolov5.tt.yolov5_conv import TtYolov5Conv
 from python_api_testing.models.yolov5.tt.yolov5_bottleneck import TtYolov5Bottleneck
 
@@ -74,4 +68,8 @@ class TtYolov5C3(torch.nn.Module):
         )
 
     def forward(self, x):
-        return self.cv3(fallback_ops.concat((self.m(self.cv1(x)), self.cv2(x)), 1))
+        return self.cv3(
+            tt_lib.fallback_ops.fallback_ops.concat(
+                (self.m(self.cv1(x)), self.cv2(x)), 1
+            )
+        )

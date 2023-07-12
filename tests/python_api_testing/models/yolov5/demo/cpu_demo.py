@@ -1,6 +1,4 @@
-import argparse
 import os
-import platform
 import sys
 from pathlib import Path
 
@@ -12,6 +10,7 @@ sys.path.append(f"{f}/../../../..")
 
 import torch
 from loguru import logger
+from datasets import load_dataset
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv5 root directory
@@ -24,30 +23,23 @@ from python_api_testing.models.yolov5.reference.utils.dataloaders import (
     IMG_FORMATS,
     VID_FORMATS,
     LoadImages,
-    LoadScreenshots,
-    LoadStreams,
 )
+
 from python_api_testing.models.yolov5.reference.utils.general import (
     Profile,
     check_file,
     check_img_size,
-    check_imshow,
     colorstr,
     cv2,
     non_max_suppression,
-    print_args,
     scale_boxes,
     xyxy2xywh,
 )
+
 from python_api_testing.models.yolov5.reference.utils.plots import (
     Annotator,
     colors,
-    save_one_box,
 )
-from python_api_testing.models.yolov5.reference.utils.torch_utils import (
-    smart_inference_mode,
-)
-from datasets import load_dataset
 
 
 def download_images(path):

@@ -1,4 +1,3 @@
-import os
 import sys
 from pathlib import Path
 
@@ -8,57 +7,18 @@ sys.path.append(f"{f}/../..")
 sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
-FILE = Path(__file__).resolve()
-ROOT = FILE.parents[0]  # YOLOv5 root directory
-if str(ROOT) not in sys.path:
-    sys.path.append(str(ROOT))  # add ROOT to PATH
-ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
-
 import tt_lib
 import torch
 from loguru import logger
-from datasets import load_dataset
 
 from tt_lib.fallback_ops import fallback_ops
 from python_api_testing.models.yolov5.reference.models.common import DetectMultiBackend
-from python_api_testing.models.yolov5.reference.utils.general import check_img_size
-from python_api_testing.models.yolov5.reference.utils.dataloaders import LoadImages
 from python_api_testing.models.yolov5.tt.yolov5_conv import TtYolov5Conv, TtYolov5Conv2D
 from python_api_testing.models.utility_functions_new import (
     torch2tt_tensor,
     tt2torch_tensor,
-    comp_allclose,
     comp_pcc,
 )
-
-
-def download_images(path, imgsz):
-    dataset = load_dataset("huggingface/cats-image")
-    image = dataset["test"]["image"][0]
-
-    if imgsz is not None:
-        image = image.resize(imgsz)
-
-    image.save(path / "input_image.jpg")
-
-
-def get_test_input(refence_module):
-    stride = max(int(max(refence_module.stride)), 32)  # model stride
-    imgsz = check_img_size((640, 640), s=stride)  # check image size
-
-    download_images(Path(ROOT), None)  # imgsz)
-    dataset = LoadImages(ROOT, img_size=imgsz, stride=stride, auto=True)
-
-    for path, test_input, im0s, _, s in dataset:
-        test_input = torch.from_numpy(test_input)
-        test_input = test_input.float()
-        test_input /= 255  # 0 - 255 to 0.0 - 1.0
-
-        if len(test_input.shape) == 3:
-            test_input = test_input[None]  # expand for batch dim
-
-    logger.debug(f"Running inference on {path}")
-    return test_input
 
 
 def test_Yolov5_Conv2D():

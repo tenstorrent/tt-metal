@@ -1,16 +1,10 @@
 import torch
 from torch import nn
-import tt_lib
-import warnings
 from copy import deepcopy
-from tt_lib.fallback_ops import fallback_ops
-
-from python_api_testing.models.utility_functions_new import (
-    torch2tt_tensor,
-    tt2torch_tensor,
-)
-
 from loguru import logger
+
+from python_api_testing.models.utility_functions_new import torch2tt_tensor
+
 from python_api_testing.models.yolov5.reference.models.common import DetectMultiBackend
 from python_api_testing.models.yolov5.tt.yolov5_conv import TtYolov5Conv
 from python_api_testing.models.yolov5.tt.yolov5_c3 import TtYolov5C3

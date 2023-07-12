@@ -16,7 +16,6 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 import tt_lib
 import torch
-from torch import nn
 from loguru import logger
 from datasets import load_dataset
 
@@ -26,10 +25,9 @@ from python_api_testing.models.yolov5.reference.utils.general import check_img_s
 from python_api_testing.models.yolov5.tt.yolov5_detection_model import (
     yolov5s_detection_model,
 )
+
 from python_api_testing.models.utility_functions_new import (
     torch2tt_tensor,
-    tt2torch_tensor,
-    comp_allclose,
     comp_pcc,
 )
 

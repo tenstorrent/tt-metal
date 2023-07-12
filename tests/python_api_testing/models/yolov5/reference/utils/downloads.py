@@ -4,7 +4,6 @@ Download utils
 """
 
 from loguru import logger
-import os
 import subprocess
 import urllib
 from pathlib import Path

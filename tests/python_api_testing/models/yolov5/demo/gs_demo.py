@@ -16,16 +16,14 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 import tt_lib
 import torch
-from torch import nn
 import cv2
 from loguru import logger
 from datasets import load_dataset
 
 from python_api_testing.models.yolov5.reference.models.common import DetectMultiBackend
 from python_api_testing.models.yolov5.tt.yolov5_detection_model import (
-    TtYolov5DetectionModel,
+    yolov5s_detection_model,
 )
-from python_api_testing.models.yolov5.reference.models.common import autopad
 from python_api_testing.models.yolov5.reference.utils.dataloaders import LoadImages
 from python_api_testing.models.yolov5.reference.utils.general import check_img_size
 from python_api_testing.models.yolov5.reference.utils.general import (
@@ -36,10 +34,9 @@ from python_api_testing.models.yolov5.reference.utils.general import (
 from python_api_testing.models.yolov5.reference.utils.plots import (
     Annotator,
     colors,
-    save_one_box,
 )
 
-from utility_functions_new import torch2tt_tensor, tt2torch_tensor
+from utility_functions_new import torch2tt_tensor
 
 
 def download_images(path, imgsz):
@@ -56,20 +53,16 @@ def test_detection_model():
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
 
-    weights = ROOT / "yolov5s.pt"
-    cfg_path = ROOT / "yolov5s.yaml"
-
     refence_model = DetectMultiBackend(
-        weights, device=torch.device("cpu"), dnn=False, data=None, fp16=False
+        ROOT / "yolov5s.pt",
+        device=torch.device("cpu"),
+        dnn=False,
+        data=None,
+        fp16=False,
     )
-    refence_module = refence_model.model
 
-    tt_module = TtYolov5DetectionModel(
-        cfg=cfg_path,
-        state_dict=refence_model.state_dict(),
-        base_address="model.model",
-        device=device,
-    )
+    refence_module = refence_model.model
+    tt_module = yolov5s_detection_model(device)
 
     with torch.no_grad():
         tt_module.eval()

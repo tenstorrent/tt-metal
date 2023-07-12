@@ -18,24 +18,18 @@ from urllib.parse import urlparse
 import cv2
 import numpy as np
 import pandas as pd
-import requests
 import torch
 import torch.nn as nn
 from PIL import Image
-from torch.cuda import amp
 from loguru import logger
 
 from python_api_testing.models.yolov5.reference.utils.general import (
     ROOT,
-    Profile,
     check_suffix,
     check_version,
     colorstr,
     increment_path,
     is_jupyter,
-    make_divisible,
-    non_max_suppression,
-    scale_boxes,
     xywh2xyxy,
     xyxy2xywh,
     yaml_load,
@@ -44,10 +38,6 @@ from python_api_testing.models.yolov5.reference.utils.plots import (
     Annotator,
     colors,
     save_one_box,
-)
-from python_api_testing.models.yolov5.reference.utils.torch_utils import (
-    copy_attr,
-    smart_inference_mode,
 )
 
 

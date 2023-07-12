@@ -9,7 +9,6 @@ sys.path.append(f"{f}/../../../..")
 
 import torch
 import tt_lib
-from loguru import logger
 
 from python_api_testing.models.yolov5.reference.models.common import DetectMultiBackend
 from python_api_testing.models.yolov5.tt.yolov5_detection_model import (

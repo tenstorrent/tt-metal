@@ -1,11 +1,4 @@
 import torch
-import tt_lib
-
-from python_api_testing.models.utility_functions_new import (
-    torch2tt_tensor,
-    tt2torch_tensor,
-)
-
 from tt_lib.fallback_ops import fallback_ops
 
 

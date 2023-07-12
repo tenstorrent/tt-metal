@@ -1,4 +1,3 @@
-import os
 import sys
 from pathlib import Path
 
@@ -8,21 +7,15 @@ sys.path.append(f"{f}/../..")
 sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
-FILE = Path(__file__).resolve()
-ROOT = FILE.parents[0]  # YOLOv5 root directory
-if str(ROOT) not in sys.path:
-    sys.path.append(str(ROOT))  # add ROOT to PATH
-ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
-
 import tt_lib
 import torch
 from loguru import logger
+
 from python_api_testing.models.yolov5.reference.models.common import DetectMultiBackend
 from python_api_testing.models.yolov5.tt.yolov5_sppf import TtYolov5SPPF
 from python_api_testing.models.utility_functions_new import (
     torch2tt_tensor,
     tt2torch_tensor,
-    comp_allclose,
     comp_pcc,
 )
 
@@ -68,8 +61,6 @@ def test_Yolov5_sppf():
     tt_lib.device.CloseDevice(device)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)
-
-    logger.info(comp_allclose(pt_out, tt_out))
     logger.info(pcc_message)
 
     if does_pass:

@@ -17,12 +17,12 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 import tt_lib
 import torch
 from loguru import logger
+
 from python_api_testing.models.yolov5.reference.models.common import DetectMultiBackend
 from python_api_testing.models.yolov5.tt.yolov5_concat import TtYolov5Concat
 from python_api_testing.models.utility_functions_new import (
     torch2tt_tensor,
     tt2torch_tensor,
-    comp_allclose,
     comp_pcc,
 )
 
