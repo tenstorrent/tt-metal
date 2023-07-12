@@ -22,13 +22,13 @@ However, you can supply these type of tensors to OPs from TT-DNN library as they
 to TT Accelerator device. To use this functionality, you must call `tt_lib.device.SetDefaultDevice(tt_device)` to set your TT Accelerator device
 as the default device that will be used to execute operations on tensors that are on host machine.
 
-Operation Infra
+Operation Infrastructure
 ----------------------------
 
 TT-DNN has operation infrastructure which is used to launch, profile and cache operations generically.
 
 To add a new operation that can plug in to the infrastructure, all that's needed is a struct that implements methods needed by operation inferface.
-Below, is an example of how to declare a new operation with all of the methods requred by the interface.
+Below, is an example of how to declare a new on-device operation with all of the methods requred by the interface.
 
 .. code-block::
 
@@ -37,6 +37,16 @@ Below, is an example of how to declare a new operation with all of the methods r
         std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
         std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
         operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
+    };
+
+And below, is an example of how to declare a new on-host operation with all of the methods requred by the interface.
+
+.. code-block::
+
+    struct <NewOperation> {
+        void validate(const std::vector<Tensor> &input_tensors) const;
+        std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+        std::vector<Tensor> compute_output_tensors(const std::vector<Tensor> &input_tensors) const;
     };
 
 Profiler
@@ -48,7 +58,7 @@ And there are 2 special methods that can be optionally implemented to set the pr
 
 .. code-block::
 
-    // Implement `get_parallelization_strategy`` to set the parallelization strategy on the profiler
+    // Implement `get_parallelization_strategy` to set the parallelization strategy on the profiler
     struct <NewOperation> {
         <ParallelizationStrategyEnum> get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
     };
@@ -88,10 +98,10 @@ In order for an op to be cachable, it needs to implement the following:
     struct <NewOperation> {
        // Mandatory methods
 
-        // Implement `compute_program_hash`` method
+        // Implement `compute_program_hash` method
         operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
 
-        // Return type of `create_program`` needs to implement override_runtime_args_callback
+        // Return type of `create_program` needs to implement override_runtime_args_callback
         // i.e.:
         operation::ProgramWithCallbacks create_program(const std::vector<Tensor> &input_tensors) const {
 
@@ -125,6 +135,15 @@ In order for an op to be cachable, it needs to implement the following:
             return {std::move(program), override_runtime_args_callback};
         }
     };
+
+Logs
+----------------------------
+To see logs related to operation infastructure, use the following environment variables:
+
+.. code-block::
+
+    export LOGGER_TYPES=Op
+    export LOGGER_LEVEL=Debug
 
 
 tt-DNN API through ``tt_lib``

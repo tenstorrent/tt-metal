@@ -12,7 +12,7 @@ namespace detail {
 
 struct ProgramCache {
     operation::ProgramWithCallbacks& get_or_create(
-        const operation::Operation& op,
+        const operation::DeviceOperation& op,
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>> &optional_input_tensors,
         std::vector<Tensor> &output_tensors,

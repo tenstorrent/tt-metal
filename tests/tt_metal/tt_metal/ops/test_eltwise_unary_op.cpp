@@ -73,7 +73,7 @@ void test_operation_infrastructure() {
     auto shape = std::array<uint32_t, 4>{1, 1, TILE_HEIGHT, TILE_WIDTH};
     auto input_tensor = tt::numpy::random::uniform(bfloat16(0), bfloat16(1), shape).to(Layout::TILE);
 
-    auto op = operation::Operation(EltwiseUnary{UnaryOpType::SQRT});
+    auto op = operation::DeviceOperation(EltwiseUnary{UnaryOpType::SQRT});
 
     auto program_hash = op.compute_program_hash({input_tensor});
     TT_ASSERT(
@@ -83,7 +83,7 @@ void test_operation_infrastructure() {
 
     auto profiler_info = op.create_profiler_info({input_tensor});
     TT_ASSERT(
-        profiler_info.preferred_name.value() == "tt::tt_metal::EltwiseUnary{.op_type=SQRT,.param=std::nullopt}",
+        profiler_info.preferred_name.value() == "tt::tt_metal::EltwiseUnary",
         fmt::format("Actual value is {}", profiler_info.preferred_name.value())
     );
     TT_ASSERT(
