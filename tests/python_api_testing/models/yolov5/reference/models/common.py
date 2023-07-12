@@ -375,6 +375,25 @@ class Concat(nn.Module):
         return torch.cat(x, self.d)
 
 
+def export_formats():
+    # YOLOv5 export formats
+    x = [
+        ["PyTorch", "-", ".pt", True, True],
+        ["TorchScript", "torchscript", ".torchscript", True, True],
+        ["ONNX", "onnx", ".onnx", True, True],
+        ["OpenVINO", "openvino", "_openvino_model", True, False],
+        ["TensorRT", "engine", ".engine", False, True],
+        ["CoreML", "coreml", ".mlmodel", True, False],
+        ["TensorFlow SavedModel", "saved_model", "_saved_model", True, True],
+        ["TensorFlow GraphDef", "pb", ".pb", True, True],
+        ["TensorFlow Lite", "tflite", ".tflite", True, False],
+        ["TensorFlow Edge TPU", "edgetpu", "_edgetpu.tflite", False, False],
+        ["TensorFlow.js", "tfjs", "_web_model", False, False],
+        ["PaddlePaddle", "paddle", "_paddle_model", True, True],
+    ]
+    return pd.DataFrame(x, columns=["Format", "Argument", "Suffix", "CPU", "GPU"])
+
+
 class DetectMultiBackend(nn.Module):
     # YOLOv5 MultiBackend class for python inference on various backends
     def __init__(
@@ -780,7 +799,6 @@ class DetectMultiBackend(nn.Module):
     def _model_type(p="path/to/model.pt"):
         # Return model type from model path, i.e. path='path/to/model.onnx' -> type=onnx
         # types = [pt, jit, onnx, xml, engine, coreml, saved_model, pb, tflite, edgetpu, tfjs, paddle]
-        from python_api_testing.models.yolov5.reference.export import export_formats
         from python_api_testing.models.yolov5.reference.utils.downloads import is_url
 
         sf = list(export_formats().Suffix)  # export suffixes

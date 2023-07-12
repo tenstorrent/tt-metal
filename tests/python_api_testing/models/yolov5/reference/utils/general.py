@@ -35,10 +35,7 @@ import torch
 import torchvision
 import yaml
 
-from python_api_testing.models.yolov5.reference.utils.downloads import (
-    curl_download,
-    gsutil_getsize,
-)
+from python_api_testing.models.yolov5.reference.utils.downloads import curl_download
 from python_api_testing.models.yolov5.reference.utils.metrics import box_iou, fitness
 
 
@@ -195,30 +192,6 @@ class Profile(contextlib.ContextDecorator):
         if self.cuda:
             torch.cuda.synchronize()
         return time.time()
-
-
-class Timeout(contextlib.ContextDecorator):
-    # YOLOv5 Timeout class. Usage: @Timeout(seconds) decorator or 'with Timeout(seconds):' context manager
-    def __init__(self, seconds, *, timeout_msg="", suppress_timeout_errors=True):
-        self.seconds = int(seconds)
-        self.timeout_message = timeout_msg
-        self.suppress = bool(suppress_timeout_errors)
-
-    def _timeout_handler(self, signum, frame):
-        raise TimeoutError(self.timeout_message)
-
-    def __enter__(self):
-        if platform.system() != "Windows":  # not supported on Windows
-            signal.signal(
-                signal.SIGALRM, self._timeout_handler
-            )  # Set handler for SIGALRM
-            signal.alarm(self.seconds)  # start countdown for SIGALRM to be raised
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if platform.system() != "Windows":
-            signal.alarm(0)  # Cancel SIGALRM if it's scheduled
-            if self.suppress and exc_type is TimeoutError:  # Suppress TimeoutError
-                return True
 
 
 class WorkingDirectory(contextlib.ContextDecorator):
@@ -817,96 +790,6 @@ def labels_to_image_weights(labels, nc=80, class_weights=np.ones(80)):
     return (class_weights.reshape(1, nc) * class_counts).sum(1)
 
 
-def coco80_to_coco91_class():  # converts 80-index (val2014) to 91-index (paper)
-    # https://tech.amikelive.com/node-718/what-object-categories-labels-are-in-coco-dataset/
-    # a = np.loadtxt('data/coco.names', dtype='str', delimiter='\n')
-    # b = np.loadtxt('data/coco_paper.names', dtype='str', delimiter='\n')
-    # x1 = [list(a[i] == b).index(True) + 1 for i in range(80)]  # darknet to coco
-    # x2 = [list(b[i] == a).index(True) if any(b[i] == a) else None for i in range(91)]  # coco to darknet
-    return [
-        1,
-        2,
-        3,
-        4,
-        5,
-        6,
-        7,
-        8,
-        9,
-        10,
-        11,
-        13,
-        14,
-        15,
-        16,
-        17,
-        18,
-        19,
-        20,
-        21,
-        22,
-        23,
-        24,
-        25,
-        27,
-        28,
-        31,
-        32,
-        33,
-        34,
-        35,
-        36,
-        37,
-        38,
-        39,
-        40,
-        41,
-        42,
-        43,
-        44,
-        46,
-        47,
-        48,
-        49,
-        50,
-        51,
-        52,
-        53,
-        54,
-        55,
-        56,
-        57,
-        58,
-        59,
-        60,
-        61,
-        62,
-        63,
-        64,
-        65,
-        67,
-        70,
-        72,
-        73,
-        74,
-        75,
-        76,
-        77,
-        78,
-        79,
-        80,
-        81,
-        82,
-        84,
-        85,
-        86,
-        87,
-        88,
-        89,
-        90,
-    ]
-
-
 def xyxy2xywh(x):
     # Convert nx4 boxes from [x1, y1, x2, y2] to [x, y, w, h] where xy1=top-left, xy2=bottom-right
     y = x.clone() if isinstance(x, torch.Tensor) else np.copy(x)
@@ -1204,68 +1087,6 @@ def strip_optimizer(
     logger.info(
         f"Optimizer stripped from {f},{f' saved as {s},' if s else ''} {mb:.1f}MB"
     )
-
-
-def print_mutation(keys, results, hyp, save_dir, bucket, prefix=colorstr("evolve: ")):
-    evolve_csv = save_dir / "evolve.csv"
-    evolve_yaml = save_dir / "hyp_evolve.yaml"
-    keys = tuple(keys) + tuple(hyp.keys())  # [results + hyps]
-    keys = tuple(x.strip() for x in keys)
-    vals = results + tuple(hyp.values())
-    n = len(keys)
-
-    # Download (optional)
-    if bucket:
-        url = f"gs://{bucket}/evolve.csv"
-        if gsutil_getsize(url) > (
-            evolve_csv.stat().st_size if evolve_csv.exists() else 0
-        ):
-            subprocess.run(
-                ["gsutil", "cp", f"{url}", f"{save_dir}"]
-            )  # download evolve.csv if larger than local
-
-    # Log to evolve.csv
-    s = (
-        "" if evolve_csv.exists() else (("%20s," * n % keys).rstrip(",") + "\n")
-    )  # add header
-    with open(evolve_csv, "a") as f:
-        f.write(s + ("%20.5g," * n % vals).rstrip(",") + "\n")
-
-    # Save yaml
-    with open(evolve_yaml, "w") as f:
-        data = pd.read_csv(evolve_csv, skipinitialspace=True)
-        data = data.rename(columns=lambda x: x.strip())  # strip keys
-        i = np.argmax(fitness(data.values[:, :4]))  #
-        generations = len(data)
-        f.write(
-            "# YOLOv5 Hyperparameter Evolution Results\n"
-            + f"# Best generation: {i}\n"
-            + f"# Last generation: {generations - 1}\n"
-            + "# "
-            + ", ".join(f"{x.strip():>20s}" for x in keys[:7])
-            + "\n"
-            + "# "
-            + ", ".join(f"{x:>20.5g}" for x in data.values[i, :7])
-            + "\n\n"
-        )
-        yaml.safe_dump(data.loc[i][7:].to_dict(), f, sort_keys=False)
-
-    # Print to screen
-    logger.info(
-        prefix
-        + f"{generations} generations finished, current result:\n"
-        + prefix
-        + ", ".join(f"{x.strip():>20s}" for x in keys)
-        + "\n"
-        + prefix
-        + ", ".join(f"{x:20.5g}" for x in vals)
-        + "\n\n"
-    )
-
-    if bucket:
-        subprocess.run(
-            ["gsutil", "cp", f"{evolve_csv}", f"{evolve_yaml}", f"gs://{bucket}"]
-        )  # upload
 
 
 def apply_classifier(x, model, img, im0):

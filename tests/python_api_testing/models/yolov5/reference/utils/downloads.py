@@ -25,22 +25,6 @@ def is_url(url, check=True):
         return False
 
 
-def gsutil_getsize(url=""):
-    # gs://bucket/file size https://cloud.google.com/storage/docs/gsutil/commands/du
-    output = subprocess.check_output(
-        ["gsutil", "du", url], shell=True, encoding="utf-8"
-    )
-    if output:
-        return int(output.split()[0])
-    return 0
-
-
-def url_getsize(url="https://ultralytics.com/images/bus.jpg"):
-    # Return downloadable file size in bytes
-    response = requests.head(url, allow_redirects=True)
-    return int(response.headers.get("content-length", -1))
-
-
 def curl_download(url, filename, *, silent: bool = False) -> bool:
     """
     Download a file from a url to a filename using curl.
