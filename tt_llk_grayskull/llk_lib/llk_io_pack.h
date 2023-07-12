@@ -80,22 +80,6 @@ inline void llk_setup_outputs() {
             outputs[output].f.fork = 0;
         }
         outputs[output].f.dram_output_no_push = dram_output_no_push;
-
-#if defined(PERF_DUMP)
-    #if OVERLAY_OUTPUT_DECOUPLE == 1
-        if (is_output_operand_decoupled(operand)) {
-            // Init output buffer with dummy tiles
-            uint32_t stream_buf_size_bytes = l1_outputs->buf_full_size_bytes;
-            uint32_t stream_buf_addr = l1_outputs->buf_base_addr;
-            uint32_t stream_msg_info_buf_ptr = (l1_outputs->msg_info_buf_start)*MEM_WORD_WIDTH;
-            uint32_t tile_size_words = *(volatile uint32_t tt_l1_ptr *)(stream_msg_info_buf_ptr);
-            uint32_t tile_size_bytes = tile_size_words*MEM_WORD_WIDTH;
-            for (uint32_t tile_header_ptr = stream_buf_addr; tile_header_ptr < stream_buf_addr + stream_buf_size_bytes; tile_header_ptr += tile_size_bytes) {
-                *((uint32_t *)(tile_header_ptr)) = tile_size_words;
-            }
-        }
-    #endif
-#endif
     }
 }
 
