@@ -177,7 +177,6 @@ def run_bert_question_and_answering_inference(
     model_location_generator,
     PERF_CNT,
 ):
-    ttl.profiler.start_profiling("Whole_Test")
     torch.manual_seed(1234)
 
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
@@ -360,7 +359,6 @@ def run_bert_question_and_answering_inference(
     ttl.device.CloseDevice(device)
     profiler.print()
 
-    ttl.profiler.stop_profiling("Whole_Test")
     # assert profiler.get("whole_model") < 60.0
 
     if model_config["DEFAULT_DTYPE"] == ttl.tensor.DataType.BFLOAT8_B:
