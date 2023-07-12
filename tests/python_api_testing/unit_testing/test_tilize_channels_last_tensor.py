@@ -30,7 +30,7 @@ def test_tilize_channels_last_tensor():
         device,
     )
     tt_res = ttl.tensor.tilize(tt_tensor)
-    tt_res_array = np.array(tt_res.to(host).data(), dtype=float).reshape(cl_shape)
+    tt_res_array = torch.frombuffer(tt_res.to(host).data(), dtype=torch.bfloat16).to(torch.float32).reshape(cl_shape)
 
     golden_pt_tensor = tilize(cl_pt_tensor)
     assert (

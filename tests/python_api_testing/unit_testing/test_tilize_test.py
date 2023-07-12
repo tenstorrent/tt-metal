@@ -1,6 +1,7 @@
 import pytest
 from pathlib import Path
 import sys
+import torch
 
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/../..")
@@ -36,7 +37,7 @@ def test_run_tilize_test(nb, nc, nh, nw):
         device,
     )
     b = ttl.tensor.tilize(a)
-    c = np.array(b.to(host).data(), dtype=float).reshape(*shape)
+    c = torch.frombuffer(b.to(host).data(), dtype=torch.bfloat16).to(torch.float32).reshape(shape).numpy()
 
     tilized_inp = tilize(inp.reshape(*shape))
 

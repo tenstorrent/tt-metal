@@ -58,6 +58,16 @@ A TT Tensor of shape ``[W, Z, Y, X]`` can have TILE layout only if both ``X`` an
     ...
     6176, ..., 8191 ]                                                          # fourth (last) tile of batch=0
 
+Tensor Storage
+==============
+
+Tensor class has 2 types of storages: `HostStorage` and `DeviceStorage`. And it has a constructor for each type.
+
+`HostStorage` is used to store the data in host DRAM. Every data type is stored in the vector corresponding to that data type.
+And the vector itself is stored in the shared pointer. That is done so that if the Tensor object is copied, the underlying storage is simply reference counted and not copied as well.
+
+`DeviceStorage` is used to store the data in device DRAM or device L1. It also uses a shared pointer to store the underlying buffer. And the reason is also to allow for copying Tensor objects without having to copy the underlying storage.
+
 Tensor API
 ==========
 
@@ -104,4 +114,9 @@ This example shows how to move a TT Tensor ``output`` from device to host and ho
 
     # create a 1D PyTorch tensor from values in TT Tensor obtained with data() member function
     # and then reshape PyTorch tensor to shape of TT Tensor
+    # This will copy the buffer of tt_lib.tensor.Tensor to create the buffer of torch.Tensor
     py_output = torch.Tensor(tt_output.data()).reshape(tt_output.shape())
+
+    # Alternatively, torch tensor can be created using `torch.frombuffer` function
+    # This won't make a copy. Instead, both torch.Tensor and tt_lib.tensor.Tensor will share the same buffer
+    py_output = torch.frombuffer(tt_output.data(), dtype).reshape(tt_output.shape())

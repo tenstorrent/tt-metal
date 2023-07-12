@@ -43,9 +43,7 @@ def test_tilize_hpadding_cl():
     ]
     cl_shape_padded = [cl_shape[0], cl_shape[1], _nearest_32(cl_shape[2]), cl_shape[3]]
     assert tt_res.shape() == cl_shape_padded
-    tt_res_array = np.array(tt_res.to(host).data(), dtype=float).reshape(
-        cl_shape_padded
-    )
+    tt_res_array = torch.frombuffer(tt_res.to(host).data(), dtype=torch.bfloat16).to(torch.float32).reshape(cl_shape_padded)
     print("Shape of cl pt tensor - " + str(cl_pt_tensor.shape))
     cl_pt_tensor_padded = pad_activation(cl_pt_tensor)
     print("Shape of cl pt tensor padded - " + str(cl_pt_tensor_padded.shape))

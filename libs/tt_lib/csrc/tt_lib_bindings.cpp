@@ -59,27 +59,50 @@ HostBuffer create_host_buffer_from_list_of_floats(std::vector<float>&& data, Dat
     }
 }
 
-template<typename CppType, typename PyType>
-void implement_sequence_protocol(PyType& py_host_buffer_for_data_type) {
+template<class T>
+struct DataTypeToFormatType {
+    using type = T;
+};
+
+template<>
+struct DataTypeToFormatType<bfloat16> {
+    using type = uint16_t;
+};
+
+template<class CppType, class DataType, class PyType>
+void implement_buffer_protocol(PyType& py_host_buffer_for_data_type) {
     py_host_buffer_for_data_type
         .def(
             "__getitem__",
-            [](CppType& self, std::size_t index) {
+            [](const CppType& self, std::size_t index) {
                 return self[index];
             }
         )
         .def(
             "__len__",
-            [](CppType& self) {
+            [](const CppType& self) {
                 return self.size();
             }
         )
         .def(
             "__iter__",
-            [](CppType& self) {
+            [](const CppType& self) {
                 return py::make_iterator(self.begin(), self.end());
             },
             py::keep_alive<0, 1>()
+        )
+        .def_buffer(
+            [](CppType& self) -> py::buffer_info {
+                using FormatType = typename DataTypeToFormatType<DataType>::type;
+                return py::buffer_info(
+                    self.begin(),                                /* Pointer to buffer */
+                    sizeof(DataType),                            /* Size of one scalar */
+                    py::format_descriptor<FormatType>::format(), /* Python struct-style format descriptor */
+                    1,                                           /* Number of dimensions */
+                    { self.size() },                             /* Buffer dimensions */
+                    { sizeof(DataType) }                         /* Strides (in bytes) for each index */
+                );
+            }
         );
 };
 
@@ -169,14 +192,14 @@ void TensorModule(py::module &m_tensor) {
         .def_readonly("interleaved", &MemoryConfig::interleaved, "Whether tensor data is interleaved across mulitple DRAM channels")
         .def_readonly("buffer_type", &MemoryConfig::buffer_type, "Buffer type to store tensor data. Can be DRAM or L1");
 
-    auto py_host_buffer_for_uint32_t = py::class_<host_buffer::HostBufferForDataType<uint32_t>>(m_tensor, "host_buffer_for_uint32_t");
-    detail::implement_sequence_protocol<host_buffer::HostBufferForDataType<uint32_t>>(py_host_buffer_for_uint32_t);
+    auto py_host_buffer_for_uint32_t = py::class_<host_buffer::HostBufferForDataType<uint32_t>>(m_tensor, "host_buffer_for_uint32_t", py::buffer_protocol());
+    detail::implement_buffer_protocol<host_buffer::HostBufferForDataType<uint32_t>, uint32_t>(py_host_buffer_for_uint32_t);
 
-    auto py_host_buffer_for_float32_t = py::class_<host_buffer::HostBufferForDataType<float>>(m_tensor, "host_buffer_for_float32_t");
-    detail::implement_sequence_protocol<host_buffer::HostBufferForDataType<float>>(py_host_buffer_for_float32_t);
+    auto py_host_buffer_for_float32_t = py::class_<host_buffer::HostBufferForDataType<float>>(m_tensor, "host_buffer_for_float32_t", py::buffer_protocol());
+    detail::implement_buffer_protocol<host_buffer::HostBufferForDataType<float>, float>(py_host_buffer_for_float32_t);
 
-    auto py_host_buffer_for_bfloat16_t = py::class_<host_buffer::HostBufferForDataType<bfloat16>>(m_tensor, "host_buffer_for_bfloat16_t");
-    detail::implement_sequence_protocol<host_buffer::HostBufferForDataType<bfloat16>>(py_host_buffer_for_bfloat16_t);
+    auto py_host_buffer_for_bfloat16_t = py::class_<host_buffer::HostBufferForDataType<bfloat16>>(m_tensor, "host_buffer_for_bfloat16_t", py::buffer_protocol());
+    detail::implement_buffer_protocol<host_buffer::HostBufferForDataType<bfloat16>, bfloat16>(py_host_buffer_for_bfloat16_t);
 
     // Tensor constructors that accept device and .to(device) function use keep alive call policy to communicate that Device needs to outlive Tensor.
     // This is because when tensors on device are destroyed they need to deallocate their buffers via device.
