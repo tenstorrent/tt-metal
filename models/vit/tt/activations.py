@@ -13,15 +13,6 @@
 # limitations under the License.
 
 from collections import OrderedDict
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-sys.path.append(f"{f}/../../../../..")
 
 import tt_lib
 from torch import nn

@@ -1,13 +1,5 @@
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-
-from helper_funcs import Linear as linear
-from utility_functions_new import torch_to_tt_tensor_rm
+from models.helper_funcs import Linear as linear
+from models.utility_functions_new import torch_to_tt_tensor_rm
 
 
 def make_address(base_address, op_name):

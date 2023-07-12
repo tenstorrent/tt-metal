@@ -1,23 +1,12 @@
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}")
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../tt")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
 from transformers import ViTForImageClassification as HF_ViTForImageClassication
 from transformers import AutoImageProcessor as HF_AutoImageProcessor
 from loguru import logger
 import torch
 from datasets import load_dataset
 
-from tt.modeling_vit import TtViTEncoder
+from models.vit.tt.modeling_vit import TtViTEncoder
 import tt_lib
-from utility_functions_new import (
+from models.utility_functions_new import (
     comp_allclose_and_pcc,
     comp_pcc,
     torch_to_tt_tensor_rm,

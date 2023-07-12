@@ -14,19 +14,8 @@
 # limitations under the License.
 """ PyTorch ViT model."""
 
-from pathlib import Path
-import sys
 
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../tt")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-sys.path.append(f"{f}/../../../../..")
-sys.path.append(f"{f}/../../../../../..")
-
-from typing import Union, Optional, Tuple, Dict, Set, List
+from typing import Union, Optional, Tuple, Dict
 import math
 import collections
 
@@ -38,14 +27,14 @@ from tt_lib import tensor
 import tt_lib.fallback_ops as fallback_ops
 from transformers import ViTForImageClassification
 
-from utility_functions_new import (
+from models.utility_functions_new import (
     torch_to_tt_tensor,
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
 )
-from configuration_vit import ViTConfig
-from activations import ACT2FN
-from vit_utils import make_address, make_linear
+from models.vit.tt.configuration_vit import ViTConfig
+from models.vit.tt.activations import ACT2FN
+from models.vit.vit_utils import make_address, make_linear
 
 tt_tensor = tt_lib.tensor.Tensor
 

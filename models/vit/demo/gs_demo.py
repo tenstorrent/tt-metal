@@ -1,22 +1,11 @@
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}")
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../tt")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
 from transformers import AutoImageProcessor, ViTForImageClassification
 import torch
 from datasets import load_dataset
 from loguru import logger
 
 import tt_lib
-from utility_functions_new import torch_to_tt_tensor_rm, tt_to_torch_tensor
-from tt.modeling_vit import vit_for_image_classification
+from models.utility_functions_new import torch_to_tt_tensor_rm, tt_to_torch_tensor
+from models.vit.tt.modeling_vit import vit_for_image_classification
 
 
 def test_gs_demo():
