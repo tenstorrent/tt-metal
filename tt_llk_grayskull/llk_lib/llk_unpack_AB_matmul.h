@@ -43,9 +43,9 @@ inline void llk_unpack_AB_matmul_mop_config(const bool transpose) {
     static constexpr uint unpack_srca1_transpose = TT_OP_UNPACR(SrcA, 0b10, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 
     static constexpr uint unpack_srcb_top =
-        TT_OP_UNPACR(SrcB, 0b01000010, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        TT_OP_UNPACR(SrcB, 0b010010, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr uint unpack_srcb_bot =
-        TT_OP_UNPACR(SrcB, 0b01000010, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        TT_OP_UNPACR(SrcB, 0b010010, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 #endif
     ckernel_unpack_template tmp = ckernel_unpack_template(
         true,  // src B

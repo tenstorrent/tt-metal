@@ -65,15 +65,15 @@ namespace ckernel::unpacker
    } unpack_config_u;
 
    typedef struct {
-     uint32_t x: 12;
-     uint32_t y: 12;
+     uint32_t z: 12;
+     uint32_t w: 12;
      uint32_t reserved : 8;
-   } unpack_xy_stride_t; 
+   } unpack_zw_stride_t; 
 
    typedef union {
      uint32_t val;
-     unpack_xy_stride_t f;
-   } unpack_xy_stride_u;
+     unpack_zw_stride_t f;
+   } unpack_zw_stride_u;
 
    // Set unpacker offsets to 0, except for unpacker 0, channel 1, X, which is the tile X dimension
    inline void unpacker_addr_counter_init()
@@ -173,8 +173,8 @@ namespace ckernel::unpacker
 
       uint unpA_ch1_x_stride = (uint) (unpack_dst_format[unpA_operand]&0x3) == (uint) DataFormat::Float32 ? 4 : (uint) (unpack_dst_format[unpA_operand]&0x3) == (uint) DataFormat::Float16 ? 2 : 1;
       uint unpB_ch1_x_stride = (uint) (unpack_dst_format[unpB_operand]&0x3) == (uint) DataFormat::Float32 ? 4 : (uint) (unpack_dst_format[unpB_operand]&0x3) == (uint) DataFormat::Float16 ? 2 : 1;
-      uint unpA_ch1_y_stride = 16*srca_face_height*unpA_ch1_x_stride;
-      uint unpB_ch1_y_stride = 16*srcb_face_height*unpB_ch1_x_stride;
+      uint unpA_ch1_z_stride = 16*srca_face_height*unpA_ch1_x_stride;
+      uint unpB_ch1_z_stride = 16*srcb_face_height*unpB_ch1_x_stride;
       uint exp_width = ((uint)unpack_dst_format[unpA_operand]>>2)&0x1; //0=5-bit, 1=8-bit
    
       // Math ALU_FORMAT_REG
@@ -189,12 +189,10 @@ namespace ckernel::unpacker
       }
 
       // Strides
-      cfg[UNP0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32] = (unpA_ch1_y_stride << UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT) |
-                                                    (            0 << UNP0_ADDR_CTRL_XY_REG_0_Xstride_SHAMT);  // X and Y stride for dest address (ch1)
-      //cfg[UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] =  // Z and W stride for dest address (ch1)
-      cfg[UNP1_ADDR_CTRL_XY_REG_1_Xstride_ADDR32] = (unpB_ch1_y_stride << UNP1_ADDR_CTRL_XY_REG_0_Ystride_SHAMT) |
-                                                    (            0 << UNP1_ADDR_CTRL_XY_REG_0_Xstride_SHAMT);  // X and Y stride for dest address (ch1)
-      //cfg[UNP1_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] =  // Z and W stride for dest address (ch1)
+      cfg[UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] = (unpA_ch1_z_stride << UNP0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT) |
+                                                    (                0 << UNP0_ADDR_CTRL_ZW_REG_1_Wstride_SHAMT);  // Z and W stride for dest address (ch1)
+      cfg[UNP1_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] = (unpB_ch1_z_stride << UNP1_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT) |
+                                                    (                0 << UNP1_ADDR_CTRL_ZW_REG_1_Wstride_SHAMT);  // Z and W stride for dest address (ch1)
 
       // Set tile descriptor
       unpack_tile_descriptor_u tile_descriptor;
@@ -300,13 +298,13 @@ namespace ckernel::unpacker
       TT_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, out_df_addr);
       TTI_NOP;TTI_NOP;
 
-      // Set ch1/dst address stride 
+      // Set ch1/dst address stride (needed for matmul)
       uint x_stride = (uint) (unpack_dst_format[src_operand_id]&0x3) == (uint) DataFormat::Float32 ? 4 : (uint) (unpack_dst_format[src_operand_id]&0x3) == (uint)DataFormat::Float16 ? 2 : 1;
-      uint y_stride = 16*16*x_stride;
-      unpack_xy_stride_u xy_stride = {0};
-      xy_stride.f.y = y_stride;
-      TT_SETDMAREG(0, LOWER_HALFWORD(xy_stride.val), 0, LO_16(p_gpr_unpack::TMP1));
-      TT_SETDMAREG(0, UPPER_HALFWORD(xy_stride.val), 0, HI_16(p_gpr_unpack::TMP1));
+      uint z_stride = 16*16*x_stride;
+      unpack_zw_stride_u zw_stride = {0};
+      zw_stride.f.z = z_stride;
+      TT_SETDMAREG(0, LOWER_HALFWORD(zw_stride.val), 0, LO_16(p_gpr_unpack::TMP1));
+      TT_SETDMAREG(0, UPPER_HALFWORD(zw_stride.val), 0, HI_16(p_gpr_unpack::TMP1));
 
       TT_WRCFG(p_gpr_unpack::TMP1, p_cfg::WRCFG_32b, out_df_stride);
       TTI_NOP;TTI_NOP;
