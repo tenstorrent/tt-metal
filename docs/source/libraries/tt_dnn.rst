@@ -387,6 +387,8 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.sin
 
+.. autofunction:: tt_lib.tensor.square_difference
+
 Fused Operations from ``tt_lib`` Mini-Graph Library
 ---------------------------------------------------
 

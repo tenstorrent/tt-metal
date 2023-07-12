@@ -120,6 +120,32 @@ def test_run_eltwise_max_test(input_shapes, pcie_slot, function_level_defaults):
         ([[1, 3, 320, 384], [1, 3, 320, 384]], 0),  # Multi core
     ),
 )
+def test_run_eltwise_square_difference_test(
+    input_shapes, pcie_slot, function_level_defaults
+):
+    datagen_func = [
+        generation_funcs.gen_func_with_cast(
+            partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16
+        )
+    ] * 2
+    comparison_func = partial(comparison_funcs.comp_pcc)
+    run_single_pytorch_test(
+        "eltwise-square_difference",
+        input_shapes,
+        datagen_func,
+        comparison_func,
+        pcie_slot,
+    )
+
+
+@pytest.mark.parametrize(
+    "input_shapes, pcie_slot",
+    (
+        ([[1, 1, 32, 32], [1, 1, 32, 32]], 0),  # Single core
+        ([[1, 1, 320, 384], [1, 1, 320, 384]], 0),  # Multi core
+        ([[1, 3, 320, 384], [1, 3, 320, 384]], 0),  # Multi core
+    ),
+)
 def test_run_eltwise_mul_test(input_shapes, pcie_slot, function_level_defaults):
     datagen_func = [
         generation_funcs.gen_func_with_cast(
@@ -145,7 +171,7 @@ def test_run_eltwise_mul_test(input_shapes, pcie_slot, function_level_defaults):
                 (
                     [[1, 1, 32, 32], [1, 1, 32, 32]],
                     [[1, 1, 64, 32], [1, 1, 64, 32]],
-                    [[1, 1, 320, 384],[1, 1, 320, 384]],
+                    [[1, 1, 320, 384], [1, 1, 320, 384]],
                 ),  # single, multi core sizes
                 (0,),
             )
@@ -161,7 +187,7 @@ def test_run_eltwise_cmp_test(
         )
     ] * 2
     comparison_func = partial(comparison_funcs.comp_pcc)
-    #if cmp_kind == 'eq':
+    # if cmp_kind == 'eq':
     #    comparison_func = partial(comparison_funcs.comp_allclose_nortol)
     run_single_pytorch_test(
         f"eltwise-{cmp_kind}",

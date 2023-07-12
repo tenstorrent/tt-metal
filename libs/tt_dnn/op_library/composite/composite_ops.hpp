@@ -95,6 +95,8 @@ Tensor min(const Tensor &input_a,const Tensor &input_b);
 //max(a,b)
 Tensor max(const Tensor &input_a,const Tensor &input_b);
 
+//square difference(x, y) = (x - y) * (x - y)
+Tensor square_difference(const Tensor &input_a,const Tensor &input_b);
 
 //deg2rad(a) using scale pi/180.
 Tensor deg2rad(const Tensor &input_a);

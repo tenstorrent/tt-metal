@@ -62,24 +62,29 @@ def relu6(x, *args, **kwargs):
     result = torch.nn.functional.relu6(x)
     return result
 
+
 def softsign(x, *args, **kwargs):
     result = torch.nn.functional.softsign(x)
     return result
 
+
 def leaky_relu(x, *args, **kwargs):
     slope = kwargs.pop("slope")
-    result = torch.nn.functional.leaky_relu(x,slope)
+    result = torch.nn.functional.leaky_relu(x, slope)
     return result
+
 
 def softshrink(x, *args, **kwargs):
     param = kwargs.pop("lambda")
-    result = torch.nn.functional.softshrink(x,param)
+    result = torch.nn.functional.softshrink(x, param)
     return result
+
 
 def hardshrink(x, *args, **kwargs):
     param = kwargs.pop("lambda")
-    result = torch.nn.functional.hardshrink(x,param)
+    result = torch.nn.functional.hardshrink(x, param)
     return result
+
 
 def hardtanh(x, *args, **kwargs):
     result = torch.nn.functional.hardtanh(x)
@@ -90,22 +95,27 @@ def clip(x, *args, low, high, **kwargs):
     result = torch.clip(x, low, high)
     return result
 
+
 # Unary Ops and Composite Unary
 def bitwise_complement(x, *args, **kwargs):
     result = torch.bitwise_not(x)
     return result
 
+
 def logical_not(x, *args, **kwargs):
     result = torch.logical_not(x).to(torch.int32)
     return result
+
 
 def cosh(x, *args, **kwargs):
     result = torch.cosh(x)
     return result
 
+
 def sinh(x, *args, **kwargs):
     result = torch.sinh(x)
     return result
+
 
 def power(x, *args, exponent, **kwargs):
     result = x**exponent
@@ -242,9 +252,10 @@ def sin(x, *args, **kwargs):
 def cos(x, *args, **kwargs):
     return torch.cos(x)
 
+
 def elu(x, *args, **kwargs):
     alpha = kwargs.pop("alpha")
-    return torch.nn.functional.elu(x,alpha)
+    return torch.nn.functional.elu(x, alpha)
 
 
 def swish(x, *args, **kwargs):
@@ -343,6 +354,11 @@ def max(x, y, *args, **kwargs):
 
 def min(x, y, *args, **kwargs):
     return torch.min(x, y)
+
+
+def square_difference(x, y, *args, **kwargs):
+    t_diff = torch.sub(x, y)
+    return torch.square(t_diff)
 
 
 def add(x, y, *args, **kwargs):

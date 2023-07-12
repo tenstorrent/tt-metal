@@ -289,6 +289,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_max,
         "pytorch_op": pytorch_ops.max,
     },
+    "eltwise-square_difference": {
+        "tt_lib_op": tt_lib_ops.eltwise_square_difference,
+        "pytorch_op": pytorch_ops.square_difference,
+    },
     "eltwise-deg2rad": {
         "tt_lib_op": tt_lib_ops.eltwise_deg2rad,
         "pytorch_op": pytorch_ops.deg2rad,

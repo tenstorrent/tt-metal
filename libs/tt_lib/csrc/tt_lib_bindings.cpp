@@ -1110,6 +1110,22 @@ void TensorModule(py::module &m_tensor) {
         +----------+----------------------+-----------+------------------------------+----------+
     )doc");
 
+    m_tensor.def("square_difference", &tt::tt_metal::square_difference, R"doc(
+        Perform an eltwise-binary square_difference on two tensors.
+
+        Both input tensors must have BFLOAT16 data type, and be of equal shape.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+------------------------------------+-----------+------------------------------+----------+
+        | Argument | Description                        | Data type | Valid range                  | Required |
+        +==========+====================================+===========+==============================+==========+
+        | arg0     | First tensor to square_difference  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+------------------------------------+-----------+------------------------------+----------+
+        | arg1     | Second tensor to square_difference | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+------------------------------------+-----------+------------------------------+----------+
+    )doc");
+
     // *** eltwise unary ***
     m_tensor.def("gelu", &gelu,
 		 py::arg().noconvert(), py::arg("fast_and_appx") = true, R"doc(

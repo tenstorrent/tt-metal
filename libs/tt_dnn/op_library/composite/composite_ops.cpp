@@ -179,7 +179,6 @@ Tensor hardswish(const Tensor& a,float scale,float shift) {
     return result_sq;
 }
 
-
 //use transformation min = - max( -a, -b)
 //Tensor min(const Tensor &a, const Tensor &b) {
 //    Tensor aneg( neg(a) );
@@ -271,6 +270,7 @@ Tensor max(const Tensor &input_a, const Tensor &input_b)
   return result;
 }
 
+
 //sinh[x] = (exp[x] - exp[-x])/2
 Tensor sinh(const Tensor& input_a) {
   Tensor e_pos_x = exp(input_a);
@@ -286,6 +286,14 @@ Tensor cosh(const Tensor& input_a) {
   Tensor nr_term = add(e_pos_x,e_neg_x);
   return std::move( bcast(nr_term ,mk_scalar(0.5f),BcastOpMath::MUL, BcastOpDim::HW) );
 }
+
+//square difference(x, y) = (x - y) * (x - y)
+Tensor square_difference(const Tensor& input_a, const Tensor& input_b) {
+    Tensor t_diff = sub(input_b, input_a);
+    Tensor result = square(t_diff);
+    return result;
+}
+
 
 //these ops need more polish - TBD
 #if 0

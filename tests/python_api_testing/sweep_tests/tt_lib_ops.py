@@ -20,6 +20,7 @@ def setup_host_and_device(func):
 
     return wrap
 
+
 ################################################
 ################## Helper-Funcs ################
 ################################################
@@ -48,7 +49,6 @@ def linear(x, weight, *args, host, device, dtype, layout, on_device, **kwargs):
             ttl.tensor.Layout.ROW_MAJOR,
         )
 
-
     t0 = t0.to(layout)
     tt_weight = tt_weight.to(layout)
 
@@ -61,7 +61,9 @@ def linear(x, weight, *args, host, device, dtype, layout, on_device, **kwargs):
     tt_linear = tt_Linear(in_features, out_features, tt_weight, tt_bias)
 
     t1 = tt_linear(t0)
-    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(t1.shape())
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
     return output
 
 
@@ -69,7 +71,9 @@ def linear(x, weight, *args, host, device, dtype, layout, on_device, **kwargs):
 #################### TT-DNN ####################
 ################################################
 @setup_host_and_device
-def eltwise_bitwise_complement(x, *args, host, device, dtype, layout, on_device, **kwargs):
+def eltwise_bitwise_complement(
+    x, *args, host, device, dtype, layout, on_device, **kwargs
+):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -88,6 +92,7 @@ def eltwise_bitwise_complement(x, *args, host, device, dtype, layout, on_device,
     )
 
     return output
+
 
 @setup_host_and_device
 def eltwise_logical_not(x, *args, host, device, dtype, layout, on_device, **kwargs):
@@ -110,47 +115,6 @@ def eltwise_logical_not(x, *args, host, device, dtype, layout, on_device, **kwar
 
     return output
 
-@setup_host_and_device
-def eltwise_cosh(x, *args, host, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.cosh(t0)
-
-    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
-        t1.shape()
-    )
-
-    return output
-
-@setup_host_and_device
-def eltwise_sinh(x, *args, host, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.sinh(t0)
-
-    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
-        t1.shape()
-    )
-
-    return output
 
 @setup_host_and_device
 def eltwise_cosh(x, *args, host, device, dtype, layout, on_device, **kwargs):
@@ -173,6 +137,7 @@ def eltwise_cosh(x, *args, host, device, dtype, layout, on_device, **kwargs):
 
     return output
 
+
 @setup_host_and_device
 def eltwise_sinh(x, *args, host, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
@@ -193,6 +158,51 @@ def eltwise_sinh(x, *args, host, device, dtype, layout, on_device, **kwargs):
     )
 
     return output
+
+
+@setup_host_and_device
+def eltwise_cosh(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    t1 = ttl.tensor.cosh(t0)
+
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
+
+    return output
+
+
+@setup_host_and_device
+def eltwise_sinh(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    t1 = ttl.tensor.sinh(t0)
+
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
+
+    return output
+
 
 @setup_host_and_device
 def eltwise_threshold(
@@ -444,6 +454,7 @@ def eltwise_deg2rad(x, *args, host, device, dtype, layout, on_device, **kwargs):
     )
 
     return output
+
 
 @setup_host_and_device
 def eltwise_sign(x, *args, host, device, dtype, layout, on_device, **kwargs):
@@ -1660,6 +1671,40 @@ def eltwise_max(x, y, *args, host, device, dtype, layout, on_device, **kwargs):
         t1 = t1.to(device)
 
     t2 = ttl.tensor.max(t0, t1)
+
+    output = torch.Tensor(t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t2.shape()
+    )
+
+    return output
+
+
+@setup_host_and_device
+def eltwise_square_difference(
+    x, y, *args, host, device, dtype, layout, on_device, **kwargs
+):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+    t1 = ttl.tensor.Tensor(
+        y.reshape(-1).tolist(),
+        y.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t1 = t1.to(layout)
+    if on_device:
+        t1 = t1.to(device)
+
+    t2 = ttl.tensor.square_difference(t0, t1)
 
     output = torch.Tensor(t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t2.shape()
