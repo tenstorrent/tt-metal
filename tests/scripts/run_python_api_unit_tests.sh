@@ -13,6 +13,7 @@ export PYTHONPATH=$TT_METAL_HOME
 python -m pip install -r tests/python_api_testing/requirements.txt
 
 pytest $TT_METAL_HOME/tests/python_api_testing/unit_testing/ -vvv
+pytest $TT_METAL_HOME/tests/python_api_testing/sweep_tests/pytests/ -vvv -k 'not test_sweep'
 
 # Tests for tensors in L1
 pytest $TT_METAL_HOME/tests/python_api_testing/models/bert_large_performant/unit_tests/test_bert_large*matmul* -k in0_L1-in1_L1-bias_L1-out_L1

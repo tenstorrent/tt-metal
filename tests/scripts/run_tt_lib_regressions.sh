@@ -17,4 +17,4 @@ cd $TT_METAL_HOME
 source build/python_env/bin/activate
 export PYTHONPATH=$TT_METAL_HOME
 
-pytest $TT_METAL_HOME/tests/python_api_testing/sweep_tests/pytests/ -vvv
+pytest $TT_METAL_HOME/tests/python_api_testing/sweep_tests/pytests/ -vvv -k 'test_sweep'
