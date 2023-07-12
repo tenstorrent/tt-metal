@@ -104,17 +104,17 @@ def test_split_tiled_w(
     ttl.device.SetDefaultDevice(device)
     host = ttl.device.GetHost()
     tile_size = 32
-    n = 1
-    c = shape[1]
-    h = shape[2]
-    w = shape[3]
+    W = 1
+    Z = shape[1]
+    Y = shape[2]
+    X = shape[3]
 
-    a_shape = [n, c, h, w]
+    a_shape = [W, Z, Y, X]
     logger.info(f"Split tensor of size: {str(a_shape)}")
 
     dtype_torch = torch.bfloat16
 
-    A = torch.arange(n * c * h * w, dtype=dtype_torch).reshape(a_shape)
+    A = torch.arange(W * Z * Y * X, dtype=dtype_torch).reshape(a_shape)
     assert list(A.size()) == a_shape
 
     tiled = (shape[2] % tile_size == 0) and (shape[3] % tile_size == 0)
@@ -150,7 +150,7 @@ def test_split_tiled_w(
     assert len(dev_buffers) == num_splits
     for index, buff in enumerate(dev_buffers):
         logger.debug(f"buff{index} is on: {buff.memory_config().buffer_type}")
-        assert buff.shape() == [n, c, h, int(w / num_splits)]
+        assert buff.shape() == [W, Z, Y, int(X / num_splits)]
         tt_host_rm_buff = buff.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
         pyt_got_back_rm_buff = torch.Tensor(tt_host_rm_buff.data()).reshape(
             tt_host_rm_buff.shape()
@@ -162,9 +162,9 @@ def test_split_tiled_w(
 
     for index, pyt_buff in enumerate(pyt_buff_list):
         golden_buff = golden_buffers[index]
-        passing_pcc_q, output_pcc_q = comp_pcc(pyt_buff, golden_buff, 1.0)
-        logger.info(f"Q passing={passing_pcc_q}")
-        logger.info(f"Q output pcc={output_pcc_q}")
-        assert passing_pcc_q
+        passing_pcc, output_pcc = comp_pcc(pyt_buff, golden_buff, 1.0)
+        logger.info(f"Out passing={passing_pcc}")
+        logger.info(f"Output pcc={output_pcc}")
+        assert passing_pcc
 
     ttl.device.CloseDevice(device)

@@ -25,8 +25,8 @@ void setup_runtime(
     const uint32_t &per_core_tiles_x,
     const uint32_t &num_tiles_per_z,
     tt_metal::Buffer *in0_buffer,
-    tt_metal::Buffer *q_buffer,
-    tt_metal::Buffer *k_buffer,
+    tt_metal::Buffer *out0_buffer,
+    tt_metal::Buffer *out1_buffer,
     tt_metal::DataMovementKernel *reader_kernel,
     tt_metal::DataMovementKernel *writer_kernel) {
     uint32_t start_core_x = 0;
@@ -63,21 +63,21 @@ void setup_runtime(
                         (std::uint32_t)(in0_buffer->address()),  // in0_tensor_addr
                         (std::uint32_t) 0 //split on last dim
                     };
-                    bool q_only = false;
-                    bool k_only = false;
+                    bool out0_only = false;
+                    bool out1_only = false;
                     if(num_cores_c > 1){
-                        q_only = (id_c_outer == 0);
-                        k_only = (id_c_outer == 1);
+                        out0_only = (id_c_outer == 0);
+                        out1_only = (id_c_outer == 1);
                     }
 
                     uint32_t writer_core_id = id_c_inner*per_core_tiles_y + (id_r_writer);
 
                     std::vector<uint32_t> writer_runtime_args = {
                         writer_core_id,
-                        (std::uint32_t)q_buffer->address(),  // first base addr
-                        (std::uint32_t)k_buffer->address(),  // second base addr
-                        (std::uint32_t) q_only,
-                        (std::uint32_t) k_only
+                        (std::uint32_t)out0_buffer->address(),  // first base addr
+                        (std::uint32_t)out1_buffer->address(),  // second base addr
+                        (std::uint32_t) out0_only,
+                        (std::uint32_t) out1_only
                     };
                     tt_metal::SetRuntimeArgs(reader_kernel, core, reader_runtime_args);
                     tt_metal::SetRuntimeArgs(writer_kernel, core, writer_runtime_args);
@@ -115,13 +115,13 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
 
     // Output buffers
     TT_ASSERT(output_tensors.size() == num_chunks);
-    tt_metal::Tensor &q = output_tensors[0];
-    tt_metal::Tensor &k = output_tensors[1];
+    tt_metal::Tensor &out0 = output_tensors[0];
+    tt_metal::Tensor &out1 = output_tensors[1];
 
-    tt_metal::Buffer *q_buffer = q.buffer();
-    TT_ASSERT(q_buffer != nullptr, "Output q buffer should be allocated on device!");
-    tt_metal::Buffer *k_buffer = k.buffer();
-    TT_ASSERT(k_buffer != nullptr, "Output k buffer should be allocated on device!");
+    tt_metal::Buffer *out0_buffer = out0.buffer();
+    TT_ASSERT(out0_buffer != nullptr, "Output 0 buffer should be allocated on device!");
+    tt_metal::Buffer *out1_buffer = out1.buffer();
+    TT_ASSERT(out1_buffer != nullptr, "Output 1 buffer should be allocated on device!");
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -160,16 +160,12 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
 
     bool tile_dtype_is_bfloat16 = input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16;
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool out_is_dram = q_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    TT_ASSERT(q_buffer->buffer_type() == k_buffer->buffer_type(), "Output buffers should be the same type");
+    bool out_is_dram = out0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    TT_ASSERT(out0_buffer->buffer_type() == out1_buffer->buffer_type(), "Output buffers should be the same type");
 
     uint32_t num_tiles_per_z = (per_core_tiles_x * num_cores_x) * (per_core_tiles_y * num_cores_y);
     uint32_t z_stride_read = num_tiles_per_z;
     uint32_t y_stride_read = per_core_tiles_y * num_cores_y;
-
-    //if(num_cores_c > 1){
-    //    y_stride_read = per_core_tiles_y * num_cores_y;
-    //}
 
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
@@ -202,7 +198,7 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
 
     auto reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_tm_tile_layout_split_qk.cpp",
+        "tt_metal/kernels/dataflow/reader_tm_tile_layout_split_two_chunks.cpp",
         all_cores,
         reader_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
@@ -210,7 +206,7 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
 
     auto writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_tm_tile_layout_split_qk.cpp",
+        "tt_metal/kernels/dataflow/writer_tm_tile_layout_split_two_chunks.cpp",
         all_cores,
         writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_0,
@@ -244,8 +240,8 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
         per_core_tiles_x,
         num_tiles_per_z,
         in0_buffer,
-        q_buffer,
-        k_buffer,
+        out0_buffer,
+        out1_buffer,
         reader_kernel,
         writer_kernel);
 

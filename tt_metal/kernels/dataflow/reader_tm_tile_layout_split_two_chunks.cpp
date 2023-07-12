@@ -17,8 +17,8 @@ void kernel_main() {
     // dataflow::Interleaved accessor args
     constexpr uint32_t in0_is_dram = get_compile_time_arg_val(1);
     constexpr uint32_t z = get_compile_time_arg_val(2);
-    constexpr uint32_t out_num_tiles_per_tensor_x = get_compile_time_arg_val(3);
-    constexpr uint32_t out_num_tiles_per_tensor_y = get_compile_time_arg_val(4);
+    constexpr uint32_t out_num_tiles_per_tensor_y = get_compile_time_arg_val(3);
+    constexpr uint32_t out_num_tiles_per_tensor_x = get_compile_time_arg_val(4);
     constexpr uint32_t z_stride = get_compile_time_arg_val(5);
     constexpr uint32_t y_stride = get_compile_time_arg_val(6);
 
@@ -38,7 +38,7 @@ void kernel_main() {
         .bank_base_address = in0_tensor_addr, .page_size = single_tile_size_bytes, .data_format = DataFormat::Bfp8_b};
 #endif
 
-    uint32_t tensor_stride = out_num_tiles_per_tensor_y;
+    uint32_t tensor_stride = out_num_tiles_per_tensor_x;
     uint32_t tensor_stride_cum = 0;
 #ifdef DEBUG
     DPRINT << "Reader Tile ID Offset: " << in0_tensor_tile_id << ENDL() << ENDL();
@@ -49,8 +49,8 @@ void kernel_main() {
         uint32_t z_stride_cum = 0;
         for (uint32_t k = 0; k < z; k++) {
             uint32_t y_stride_cum = 0;
-            for (uint32_t j = 0; j < out_num_tiles_per_tensor_x; j++) {
-                for (uint32_t i = 0; i < out_num_tiles_per_tensor_y; i++) {
+            for (uint32_t j = 0; j < out_num_tiles_per_tensor_y; j++) {
+                for (uint32_t i = 0; i < out_num_tiles_per_tensor_x; i++) {
                     uint32_t tile_id = y_stride_cum + tensor_stride_cum + z_stride_cum + i;
                     dataflow::cb_reserve_back(cb_id_in0, onetile);
                     uint32_t l1_write_addr_in0 = dataflow::get_write_ptr(cb_id_in0);

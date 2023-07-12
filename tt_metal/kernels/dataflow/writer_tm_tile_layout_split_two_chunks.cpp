@@ -9,18 +9,18 @@
 void kernel_main() {
     // WRITER RUNTIME ARGS
     uint32_t out_tensor_tile_id = get_arg_val<uint32_t>(0);
-    uint32_t q_tensor_addr = get_arg_val<uint32_t>(1);
-    uint32_t k_tensor_addr = get_arg_val<uint32_t>(2);
-    bool q_only = (bool)get_arg_val<uint32_t>(3);
-    bool k_only = (bool)get_arg_val<uint32_t>(4);
+    uint32_t out0_tensor_addr = get_arg_val<uint32_t>(1);
+    uint32_t out1_tensor_addr = get_arg_val<uint32_t>(2);
+    bool out0_only = (bool)get_arg_val<uint32_t>(3);
+    bool out1_only = (bool)get_arg_val<uint32_t>(4);
 
     // COMPILE TIME ARGS
     // dataflow::Interleaved accessor args
     constexpr uint32_t out_is_dram = get_compile_time_arg_val(1);
     // WRITER COMPILE TIME ARGS
     //constexpr uint32_t out_num_tiles_per_tensor = get_compile_time_arg_val(2);
-    constexpr uint32_t out_num_tiles_per_tensor_x = get_compile_time_arg_val(2);
-    constexpr uint32_t out_num_tiles_per_tensor_y = get_compile_time_arg_val(3);
+    constexpr uint32_t out_num_tiles_per_tensor_y = get_compile_time_arg_val(2);
+    constexpr uint32_t out_num_tiles_per_tensor_x = get_compile_time_arg_val(3);
     constexpr uint32_t z = get_compile_time_arg_val(4);
     constexpr uint32_t z_stride = get_compile_time_arg_val(5);
     constexpr uint32_t y_stride = get_compile_time_arg_val(6);
@@ -33,18 +33,18 @@ void kernel_main() {
 
 #define tile_dtype_is_bfloat16 get_compile_time_arg_val(0) == 1
 #if (tile_dtype_is_bfloat16)
-    const dataflow::InterleavedAddrGenFast<out_is_dram_bool> sq = {
-        .bank_base_address = q_tensor_addr, .page_size = single_tile_size_bytes, .data_format = DataFormat::Float16};
-    const dataflow::InterleavedAddrGenFast<out_is_dram_bool> sk = {
-        .bank_base_address = k_tensor_addr, .page_size = single_tile_size_bytes, .data_format = DataFormat::Float16};
+    const dataflow::InterleavedAddrGenFast<out_is_dram_bool> s0 = {
+        .bank_base_address = out0_tensor_addr, .page_size = single_tile_size_bytes, .data_format = DataFormat::Float16};
+    const dataflow::InterleavedAddrGenFast<out_is_dram_bool> s1 = {
+        .bank_base_address = out1_tensor_addr, .page_size = single_tile_size_bytes, .data_format = DataFormat::Float16};
 #else
-    const dataflow::InterleavedAddrGenFast<out_is_dram_bool> sq = {
-        .bank_base_address = q_tensor_addr, .page_size = single_tile_size_bytes, .data_format = DataFormat::Bfp8_b};
-    const dataflow::InterleavedAddrGenFast<out_is_dram_bool> sk = {
-        .bank_base_address = k_tensor_addr, .page_size = single_tile_size_bytes, .data_format = DataFormat::Bfp8_b};
+    const dataflow::InterleavedAddrGenFast<out_is_dram_bool> s0 = {
+        .bank_base_address = out0_tensor_addr, .page_size = single_tile_size_bytes, .data_format = DataFormat::Bfp8_b};
+    const dataflow::InterleavedAddrGenFast<out_is_dram_bool> s1 = {
+        .bank_base_address = out1_tensor_addr, .page_size = single_tile_size_bytes, .data_format = DataFormat::Bfp8_b};
 #endif
 
-    std::array<dataflow::InterleavedAddrGenFast<out_is_dram_bool>, 2> qk_output_banks{sq, sk};
+    std::array<dataflow::InterleavedAddrGenFast<out_is_dram_bool>, 2> output_banks{s0, s1};
     uint32_t out_split_tensor_tile_id;
 //    uint32_t out_num_tiles_read = out_num_tiles_per_tensor;
 
@@ -53,8 +53,8 @@ void kernel_main() {
 #ifdef DEBUG
     DPRINT << "Writer Tile ID Offset: " << out_tensor_tile_id << ENDL() << ENDL();
 #endif
-    for (const auto& s : qk_output_banks) {
-        if(k_only && (bank_id == 0)){
+    for (const auto& s : output_banks) {
+        if(out1_only && (bank_id == 0)){
             #ifdef DEBUG
                 DPRINT << "Writer is K Only " << ENDL();
             #endif
@@ -64,8 +64,8 @@ void kernel_main() {
         uint32_t z_stride_cum = 0;
         for (uint32_t k = 0; k < z; k++) {
             uint32_t y_stride_cum = 0;
-            for (uint32_t j = 0; j < out_num_tiles_per_tensor_x; j++) {
-                for (uint32_t i = 0; i < out_num_tiles_per_tensor_y; i++) {
+            for (uint32_t j = 0; j < out_num_tiles_per_tensor_y; j++) {
+                for (uint32_t i = 0; i < out_num_tiles_per_tensor_x; i++) {
                     uint32_t tile_id = y_stride_cum + z_stride_cum + i;
                     dataflow::cb_wait_front(cb_id_out0, onetile);
                     uint32_t l1_read_addr = dataflow::get_read_ptr(cb_id_out0);
@@ -82,7 +82,7 @@ void kernel_main() {
             z_stride_cum += z_stride;
         }
         bank_id++;
-        if(q_only){
+        if(out0_only){
             #ifdef DEBUG
                 DPRINT << "Writer is Q Only " << ENDL();
             #endif
