@@ -57,36 +57,36 @@ Tensor eltwise_unary(const EltwiseUnary& op, const Tensor &input_tensor);
 operation::ProgramWithCallbacks eltwise_unary_multi_core(const Tensor &a, Tensor &output, UnaryOpType::Enum op_type,std::optional<float> param = {});
 operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tensor &output, UnaryOpType::Enum op_type,std::optional<float> param = {});
 
-inline Tensor sqrt(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::SQRT}, input_tensor); }
-inline Tensor exp(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::EXP}, input_tensor); }
-inline Tensor recip(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::RECIP}, input_tensor); }
-inline Tensor relu(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::RELU}, input_tensor); }
-inline Tensor sigmoid(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::SIGMOID}, input_tensor); }
-inline Tensor log(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::LOG}, input_tensor); }
-inline Tensor tanh(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::TANH}, input_tensor); }
-inline Tensor log2(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::LOG2}, input_tensor); }
-inline Tensor log10(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::LOG10}, input_tensor); }
+inline Tensor sqrt(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::SQRT}, {input_tensor}).at(0); }
+inline Tensor exp(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::EXP}, {input_tensor}).at(0); }
+inline Tensor recip(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::RECIP}, {input_tensor}).at(0); }
+inline Tensor relu(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::RELU}, {input_tensor}).at(0); }
+inline Tensor sigmoid(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::SIGMOID}, {input_tensor}).at(0); }
+inline Tensor log(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::LOG}, {input_tensor}).at(0); }
+inline Tensor tanh(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::TANH}, {input_tensor}).at(0); }
+inline Tensor log2(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::LOG2}, {input_tensor}).at(0); }
+inline Tensor log10(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::LOG10}, {input_tensor}).at(0); }
 
 
-inline Tensor sin(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::SIN}, input_tensor); }
-inline Tensor cos(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::COS}, input_tensor); }
-inline Tensor abs(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::ABS}, input_tensor); }
-inline Tensor sign(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::SIGN}, input_tensor); }
-inline Tensor square(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::SQUARE}, input_tensor); }
+inline Tensor sin(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::SIN}, {input_tensor}).at(0); }
+inline Tensor cos(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::COS}, {input_tensor}).at(0); }
+inline Tensor abs(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::ABS}, {input_tensor}).at(0); }
+inline Tensor sign(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::SIGN}, {input_tensor}).at(0); }
+inline Tensor square(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::SQUARE}, {input_tensor}).at(0); }
 
-inline Tensor eqz(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::EQZ}, input_tensor); }
-inline Tensor nez(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::NEZ}, input_tensor); }
-inline Tensor gez(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::GEZ}, input_tensor); }
-inline Tensor lez(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::LEZ}, input_tensor); }
-inline Tensor gtz(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::GTZ}, input_tensor); }
-inline Tensor ltz(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::LTZ}, input_tensor); }
+inline Tensor eqz(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::EQZ}, {input_tensor}).at(0); }
+inline Tensor nez(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::NEZ}, {input_tensor}).at(0); }
+inline Tensor gez(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::GEZ}, {input_tensor}).at(0); }
+inline Tensor lez(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::LEZ}, {input_tensor}).at(0); }
+inline Tensor gtz(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::GTZ}, {input_tensor}).at(0); }
+inline Tensor ltz(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::LTZ}, {input_tensor}).at(0); }
 
-inline Tensor relu_max(const Tensor& input_tensor, float upper_limit) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::RELU_MAX, upper_limit}, input_tensor); }
-inline Tensor relu_min(const Tensor& input_tensor, float lower_limit) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::RELU_MIN, lower_limit}, input_tensor); }
-inline Tensor power(const Tensor& input_tensor, uint32_t exponent) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::POWER, exponent}, input_tensor); }
-inline Tensor leaky_relu(const Tensor& input_tensor, float slope) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::LEAKY_RELU, slope}, input_tensor); }
-inline Tensor elu(const Tensor& input_tensor, float slope) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::ELU, slope}, input_tensor); }
-inline Tensor gelu(const Tensor &input_tensor,bool fast_and_approx=true) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::GELU,static_cast<float>(fast_and_approx)}, input_tensor); }
+inline Tensor relu_max(const Tensor& input_tensor, float upper_limit) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::RELU_MAX, upper_limit}, {input_tensor}).at(0); }
+inline Tensor relu_min(const Tensor& input_tensor, float lower_limit) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::RELU_MIN, lower_limit}, {input_tensor}).at(0); }
+inline Tensor power(const Tensor& input_tensor, uint32_t exponent) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::POWER, exponent}, {input_tensor}).at(0); }
+inline Tensor leaky_relu(const Tensor& input_tensor, float slope) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::LEAKY_RELU, slope}, {input_tensor}).at(0); }
+inline Tensor elu(const Tensor& input_tensor, float slope) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::ELU, slope}, {input_tensor}).at(0); }
+inline Tensor gelu(const Tensor &input_tensor,bool fast_and_approx=true) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::GELU,static_cast<float>(fast_and_approx)}, {input_tensor}).at(0); }
 
 // binop with tied inputs.
 Tensor sub_unary(const Tensor& input_tensor, float value);

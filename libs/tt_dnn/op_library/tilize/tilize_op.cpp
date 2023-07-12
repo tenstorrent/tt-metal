@@ -256,7 +256,7 @@ Tensor tilize(const Tensor &input_tensor_a, const MemoryConfig& mem_config) {
         log_warning("Perf warning: tilize called on already tilized tensor.");
         return input_tensor_a;
     }
-    return operation::run_without_autoformat(Tilize{mem_config}, input_tensor_a);
+    return operation::run_without_autoformat(Tilize{mem_config}, {input_tensor_a}).at(0);
 }
 
 operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, const float pad_value) {
@@ -562,7 +562,7 @@ Tensor tilize_with_val_padding(const Tensor &input_tensor_a, const std::array<ui
             TT_ASSERT(false, "Cannot tilize and pad tensor that is already tilized");
         }
     }
-    return operation::run_without_autoformat(TilizeWithValPadding{output_tensor_shape, input_tensor_start, pad_value, mem_config}, input_tensor_a);
+    return operation::run_without_autoformat(TilizeWithValPadding{output_tensor_shape, input_tensor_start, pad_value, mem_config}, {input_tensor_a}).at(0);
 
 }
 

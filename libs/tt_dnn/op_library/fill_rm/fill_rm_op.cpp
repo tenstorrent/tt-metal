@@ -119,7 +119,7 @@ operation::Hash FillRM::compute_program_hash(const std::vector<Tensor> &input_te
 }
 
 tt_metal::Tensor fill_rm(uint32_t N, uint32_t C, uint32_t H, uint32_t W, uint32_t hFill, uint32_t wFill, const tt_metal::Tensor& any, float val_hi, float val_lo) {
-    return operation::run_without_autoformat(FillRM{N, C, H, W, hFill, wFill, val_hi, val_lo}, any);
+    return operation::run_without_autoformat(FillRM{N, C, H, W, hFill, wFill, val_hi, val_lo}, {any}).at(0);
 }
 
 }  // namespace tt_metal

@@ -347,7 +347,7 @@ Tensor pad(const Tensor &input_tensor, const std::array<uint32_t, 4> &output_ten
     if (input_tensor.shape() == output_tensor_shape) {
         return input_tensor;
     }
-    return operation::run_without_autoformat(Pad{output_tensor_shape, input_tensor_start, pad_value, mem_config}, input_tensor);
+    return operation::run_without_autoformat(Pad{output_tensor_shape, input_tensor_start, pad_value, mem_config}, {input_tensor}).at(0);
 
 }
 

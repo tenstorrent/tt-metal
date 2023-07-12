@@ -85,13 +85,12 @@ Tensor permute(const Tensor &a, uint32_t N, uint32_t C, uint32_t H, uint32_t W) 
     auto out_shape = a.shape();
     out_shape = {out_shape[N], out_shape[C], out_shape[H], out_shape[W]};
 
+    auto formatted_input_tensor = a;
     if (AutoFormat::check_input_tensor_format(a, a_pad_shape)) {
-        return permute_(a, N, C, H, W);
-    } else {
-        auto output = permute_(AutoFormat::format_input_tensor(a, device, a_pad_shape, 0), N, C, H, W);
-        return AutoFormat::format_output_tensor(output, out_shape, device);
-
+        formatted_input_tensor = AutoFormat::format_input_tensor(a, device, a_pad_shape, 0);
     }
+    auto output = permute_(formatted_input_tensor, N, C, H, W);
+    return AutoFormat::format_output_tensor(output, out_shape, device);
 }
 
 }  // namespace tt_metal

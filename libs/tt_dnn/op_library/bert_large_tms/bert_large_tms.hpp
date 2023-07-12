@@ -37,7 +37,7 @@ std::ostream& operator<<(std::ostream& os, const BertLargeTM& op);
 
 // TODO: Remove redundant TMs (split and create individual q, k, v heads)?
 inline std::vector<Tensor> bert_large_create_qkv_heads(const Tensor &input_tensor_a, const MemoryConfig& mem_config) {
-    return operation::run(BertLargeTM{BertLargeTMOpType::CREATE_QKV_HEADS, mem_config}, {std::cref(input_tensor_a)});
+    return operation::run(BertLargeTM{BertLargeTMOpType::CREATE_QKV_HEADS, mem_config}, {input_tensor_a});
 }
 inline std::vector<Tensor> bert_large_split_fused_qkv(const Tensor &input_tensor_a, const MemoryConfig& mem_config) {
     return operation::run(BertLargeTM{BertLargeTMOpType::SPLIT_FUSED_QKV, mem_config}, {input_tensor_a});

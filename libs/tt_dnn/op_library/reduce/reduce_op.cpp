@@ -134,17 +134,14 @@ Tensor reduce(const Tensor &input_tensor, ReduceOpMath::Enum reduce_math, Reduce
             device = input_tensor.device();
         }
         auto input_tensor_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.shape());
-
+        auto formatted_input_tensor = input_tensor;
         if (AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
-            const Tensor output_tensor = operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::W, scaler}, input_tensor);
-            return operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::H, scaler}, output_tensor);
-        } else {
-            // We only need to format the input tensor in this case, no need to format the output tensor
-            const Tensor output_tensor = operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::W, scaler}, AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, pad_value));
-            return operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::H, scaler}, output_tensor);
+            formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, pad_value);
         }
+        const Tensor output_tensor = operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::W, scaler}, {formatted_input_tensor}).at(0);
+        return operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::H, scaler}, {output_tensor}).at(0);
     } else {
-        return operation::run_with_autoformat(Reduce{reduce_math, reduce_dim, scaler}, input_tensor, pad_value);
+        return operation::run_with_autoformat(Reduce{reduce_math, reduce_dim, scaler}, {input_tensor}, {}, pad_value).at(0);
     }
 }
 

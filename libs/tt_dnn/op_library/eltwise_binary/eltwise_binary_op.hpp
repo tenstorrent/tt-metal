@@ -49,7 +49,7 @@ template <BinaryOpType::Enum binary_op_type>
 struct make_eltwise_binary {
     Tensor operator()(const Tensor& input_tensor_a, const Tensor& input_tensor_b) const {
         TT_ASSERT(input_tensor_a.shape() == input_tensor_b.shape(), "Input shapes must be the same!");
-        return operation::run_with_autoformat(EltwiseBinary{binary_op_type}, input_tensor_a, input_tensor_b);
+        return operation::run_with_autoformat(EltwiseBinary{binary_op_type}, {input_tensor_a, input_tensor_b}).at(0);
     }
 };
 

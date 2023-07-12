@@ -119,7 +119,7 @@ Tensor transpose_(const Tensor &a, TransposeOpDim::Enum transpose_dim) {
             }
     }
 
-    return operation::run_with_autoformat(Transpose{transpose_dim}, a, 0, transpose_dim == TransposeOpDim::HC);
+    return operation::run_with_autoformat(Transpose{transpose_dim}, {a}, {}, 0, transpose_dim == TransposeOpDim::HC).at(0);
 }
 
 }  // namespace tt_metal

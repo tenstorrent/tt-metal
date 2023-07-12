@@ -59,26 +59,40 @@ inline std::vector<Tensor> run(
     }
 }
 
-Tensor run_without_autoformat(const DeviceOperation& op, const Tensor &input_tensor);
+std::vector<Tensor> run_without_autoformat(
+    const DeviceOperation& op,
+    const std::vector<Tensor> &input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {}
+);
 template<typename ConcreteOperation>
-inline Tensor run_without_autoformat(ConcreteOperation&& concrete_op, const Tensor &input_tensor) {
+inline std::vector<Tensor> run_without_autoformat(
+    ConcreteOperation&& concrete_op,
+    const std::vector<Tensor> &input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {}
+) {
     const auto op = DeviceOperation(concrete_op);
-    return run_without_autoformat(op, input_tensor);
+    return run_without_autoformat(op, input_tensors, optional_input_tensors);
 }
 
-Tensor run_with_autoformat(const DeviceOperation& op, const Tensor &input_tensor, float pad_value = 0, bool pad_c=false);
+std::vector<Tensor> run_with_autoformat(
+    const DeviceOperation& op,
+    const std::vector<Tensor> &input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
+    const float pad_value = 0,
+    const bool pad_c = false
+);
 template<typename ConcreteOperation>
-inline Tensor run_with_autoformat(ConcreteOperation&& concrete_op, const Tensor &input_tensor, float pad_value = 0, bool pad_c=false) {
+inline std::vector<Tensor> run_with_autoformat(
+    ConcreteOperation&& concrete_op,
+    const std::vector<Tensor> &input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
+    const float pad_value = 0,
+    const bool pad_c = false
+) {
     const auto op = DeviceOperation(concrete_op);
-    return run_with_autoformat(op, input_tensor, pad_value, pad_c);
+    return run_with_autoformat(op, input_tensors, optional_input_tensors, pad_value, pad_c);
 }
 
-Tensor run_with_autoformat(const DeviceOperation& op, const Tensor &input_tensor_a, const Tensor &input_tensor_b, float pad_value = 0);
-template<typename ConcreteOperation>
-inline Tensor run_with_autoformat(ConcreteOperation&& concrete_op, const Tensor &input_tensor_a, const Tensor &input_tensor_b, float pad_value = 0) {
-    const auto op = DeviceOperation(concrete_op);
-    return run_with_autoformat(op, input_tensor_a, input_tensor_b, pad_value);
-}
 
 Hash hash_tensor(const Tensor& tensor);
 Hash hash_memory_config(const MemoryConfig& memory_config);

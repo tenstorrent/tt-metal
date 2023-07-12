@@ -76,7 +76,7 @@ inline Tensor bcast(const Tensor &input_tensor_a, const Tensor &input_tensor_b, 
             TT_ASSERT((input_tensor_b.shape()[2] == 1 && input_tensor_b.shape()[3] == 1) || (input_tensor_b.shape()[2] == TILE_HEIGHT && input_tensor_b.shape()[3] == TILE_WIDTH));
         }
     }
-    return operation::run_with_autoformat(EltwiseBinaryBroadcast{bcast_op, bcast_dim, mem_config}, input_tensor_a, input_tensor_b);
+    return operation::run_with_autoformat(EltwiseBinaryBroadcast{bcast_op, bcast_dim, mem_config}, {input_tensor_a, input_tensor_b}).at(0);
 }
 
 

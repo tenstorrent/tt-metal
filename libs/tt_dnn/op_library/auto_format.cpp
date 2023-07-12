@@ -23,6 +23,14 @@ Tensor AutoFormat::format_input_tensor(const Tensor &a, Device * device, const s
         mem_config = a.memory_config();
     }
 
+    if (!pad_input && !convert_layout) {
+        if (a.storage_type() == StorageType::HOST) {
+            return a.to(device, mem_config);
+        } else {
+            return a;
+        }
+    }
+
     Tensor formatted_input = a;
 
     // TODO: Profile if it is faster to put host tensor to device and then pad/convert if possible
@@ -77,6 +85,9 @@ Tensor AutoFormat::format_output_tensor(const Tensor &output, const std::array<u
     bool unpad_output = output.shape() != shape;
     bool convert_layout = output.layout() != target_layout;
 
+    if (!unpad_output && !convert_layout) {
+        return output;
+    }
     MemoryConfig mem_config = default_mem_config;
     if (output.storage_type() == StorageType::DEVICE) {
         mem_config = output.memory_config();
