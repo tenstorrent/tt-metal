@@ -25,10 +25,15 @@ void MAIN {
     constexpr uint32_t do_gamma = get_compile_time_arg_val(2);
     constexpr uint32_t do_beta = get_compile_time_arg_val(3);
 
-    //UNPACK(( DPRINT << "NC=" << NC << " Ht=" << Ht << " Wt=" << Wt << ENDL() ));
-    binary_op_init_common(tt::CB::c_in0, tt::CB::c_in1);
-        //UNPACK(( { DPRINT << "CB addr=" << HEX() << uint32_t(&cb_read_interface[0]) << ENDL(); } ));
+    #ifdef FUSE_PRE_ADD
+        binary_op_init_common(tt::CB::c_in0, tt::CB::c_in1);
+    #else
+        binary_op_init_common(tt::CB::c_in0, tt::CB::c_in0);
+    #endif
+
     constexpr uint32_t onetile = 1;
+    //UNPACK(( DPRINT << "NC=" << NC << " Ht=" << Ht << " Wt=" << Wt << ENDL() ));
+        //UNPACK(( { DPRINT << "CB addr=" << HEX() << uint32_t(&cb_read_interface[0]) << ENDL(); } ));
     // reserve one tile for zeros on cb_in2
     // TODO(AP): check that if DST is indeed zeroed by release_dst (and initially), we can use it as zeroes
 
