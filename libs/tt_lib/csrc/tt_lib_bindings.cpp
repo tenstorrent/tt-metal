@@ -978,9 +978,9 @@ void TensorModule(py::module &m_tensor) {
         +----------+----------------------+-----------+------------------------------+----------+
         | Argument | Description          | Data type | Valid range                  | Required |
         +==========+======================+===========+==============================+==========+
-        | arg0     | First tensor to add  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        | arg0     | First tensor to gt   | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
         +----------+----------------------+-----------+------------------------------+----------+
-        | arg1     | Second tensor to add | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        | arg1     | Second tensor to gt  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
         +----------+----------------------+-----------+------------------------------+----------+
     )doc");
 
@@ -994,9 +994,9 @@ void TensorModule(py::module &m_tensor) {
         +----------+----------------------+-----------+------------------------------+----------+
         | Argument | Description          | Data type | Valid range                  | Required |
         +==========+======================+===========+==============================+==========+
-        | arg0     | First tensor to add  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        | arg0     | First tensor to lt   | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
         +----------+----------------------+-----------+------------------------------+----------+
-        | arg1     | Second tensor to add | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        | arg1     | Second tensor to lt  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
         +----------+----------------------+-----------+------------------------------+----------+
     )doc");
 
@@ -1010,9 +1010,9 @@ void TensorModule(py::module &m_tensor) {
         +----------+----------------------+-----------+------------------------------+----------+
         | Argument | Description          | Data type | Valid range                  | Required |
         +==========+======================+===========+==============================+==========+
-        | arg0     | First tensor to add  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        | arg0     | First tensor to lte  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
         +----------+----------------------+-----------+------------------------------+----------+
-        | arg1     | Second tensor to add | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        | arg1     | Second tensor to lte | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
         +----------+----------------------+-----------+------------------------------+----------+
     )doc");
 
@@ -1026,9 +1026,9 @@ void TensorModule(py::module &m_tensor) {
         +----------+----------------------+-----------+------------------------------+----------+
         | Argument | Description          | Data type | Valid range                  | Required |
         +==========+======================+===========+==============================+==========+
-        | arg0     | First tensor to add  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        | arg0     | First tensor to gte  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
         +----------+----------------------+-----------+------------------------------+----------+
-        | arg1     | Second tensor to add | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        | arg1     | Second tensor to gte | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
         +----------+----------------------+-----------+------------------------------+----------+
     )doc");
 
@@ -1042,9 +1042,9 @@ void TensorModule(py::module &m_tensor) {
         +----------+----------------------+-----------+------------------------------+----------+
         | Argument | Description          | Data type | Valid range                  | Required |
         +==========+======================+===========+==============================+==========+
-        | arg0     | First tensor to add  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        | arg0     | First tensor to eq   | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
         +----------+----------------------+-----------+------------------------------+----------+
-        | arg1     | Second tensor to add | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        | arg1     | Second tensor to eq  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
         +----------+----------------------+-----------+------------------------------+----------+
     )doc");
 
@@ -1058,9 +1058,9 @@ void TensorModule(py::module &m_tensor) {
         +----------+----------------------+-----------+------------------------------+----------+
         | Argument | Description          | Data type | Valid range                  | Required |
         +==========+======================+===========+==============================+==========+
-        | arg0     | First tensor to add  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        | arg0     | First tensor to ne   | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
         +----------+----------------------+-----------+------------------------------+----------+
-        | arg1     | Second tensor to add | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        | arg1     | Second tensor to ne  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
         +----------+----------------------+-----------+------------------------------+----------+
     )doc");
 
