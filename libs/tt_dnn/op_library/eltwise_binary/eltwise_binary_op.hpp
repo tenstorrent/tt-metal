@@ -46,25 +46,23 @@ std::ostream& operator<<(std::ostream& os, const EltwiseBinary& op);
 using eltwise_binop_t = std::function<Tensor(const Tensor &input_tensor_a, const Tensor &input_tensor_b)>;
 
 template <BinaryOpType::Enum binary_op_type>
-struct make_eltwise_binary {
-    Tensor operator()(const Tensor& input_tensor_a, const Tensor& input_tensor_b) const {
-        TT_ASSERT(input_tensor_a.shape() == input_tensor_b.shape(), "Input shapes must be the same!");
-        return operation::run_with_autoformat(EltwiseBinary{binary_op_type}, {input_tensor_a, input_tensor_b}).at(0);
-    }
+Tensor run_eltwise_binary(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
+    TT_ASSERT(input_tensor_a.shape() == input_tensor_b.shape(), "Input shapes must be the same!");
+    return operation::run_with_autoformat(EltwiseBinary{binary_op_type}, {input_tensor_a, input_tensor_b}).at(0);
 };
 
 // arithmetic binary ops
-constexpr auto add = make_eltwise_binary<BinaryOpType::ADD>{};
-constexpr auto sub = make_eltwise_binary<BinaryOpType::SUB>{};
-constexpr auto mul = make_eltwise_binary<BinaryOpType::MUL>{};
+constexpr auto add = run_eltwise_binary<BinaryOpType::ADD>;
+constexpr auto sub = run_eltwise_binary<BinaryOpType::SUB>;
+constexpr auto mul = run_eltwise_binary<BinaryOpType::MUL>;
 
 // comparative binary ops
-constexpr auto lt = make_eltwise_binary<BinaryOpType::LT>{};
-constexpr auto gt = make_eltwise_binary<BinaryOpType::GT>{};
-constexpr auto lte = make_eltwise_binary<BinaryOpType::LTE>{};
-constexpr auto gte = make_eltwise_binary<BinaryOpType::GTE>{};
-constexpr auto eq = make_eltwise_binary<BinaryOpType::EQ>{};
-constexpr auto ne = make_eltwise_binary<BinaryOpType::NE>{};
+constexpr auto lt = run_eltwise_binary<BinaryOpType::LT>;
+constexpr auto gt = run_eltwise_binary<BinaryOpType::GT>;
+constexpr auto lte = run_eltwise_binary<BinaryOpType::LTE>;
+constexpr auto gte = run_eltwise_binary<BinaryOpType::GTE>;
+constexpr auto eq = run_eltwise_binary<BinaryOpType::EQ>;
+constexpr auto ne = run_eltwise_binary<BinaryOpType::NE>;
 
 }  // namespace tt_metal
 
