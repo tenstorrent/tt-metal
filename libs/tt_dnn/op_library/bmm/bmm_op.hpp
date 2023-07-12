@@ -152,12 +152,12 @@ inline Tensor bert_large_post_softmax_bmm(const Tensor &input_tensor_a, const Te
 // TODO: Refactor and uplift these bmms
 Tensor large_bmm(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool tilize_act, bool untilize_out); // Tilizes, untilizes b
 Tensor large_bmm_single_block(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool tilize_a, bool untilize_out); // Allows support for tilizing a, untilize b
-Tensor bmm_tilize_untilize(const Tensor& a, const Tensor& b,
+Tensor bmm_tilize_untilize(const Tensor& a, const Tensor& b, DataType out_dt,
                            uint32_t a_height_nblocks, uint32_t a_width_nblocks, uint32_t b_width_nblocks,
                            uint32_t a_block_height_ntiles, uint32_t a_block_width_ntiles, uint32_t b_block_width_ntiles,
                            uint32_t out_subblock_height_ntiles, uint32_t out_subblock_width_ntiles,
                            bool tilize_b, bool untilize_out);
-Tensor bmm_single_core_tilize_untilize(const Tensor &input_tensor_a, const Tensor &input_tensor_b,
+Tensor bmm_single_core_tilize_untilize(const Tensor &input_tensor_a, const Tensor &input_tensor_b, DataType out_dt,
                                        uint32_t a_height_nblocks, uint32_t a_width_nblocks, uint32_t b_width_nblocks,
                                        uint32_t a_block_height_ntiles, uint32_t a_block_width_ntiles, uint32_t b_block_width_ntiles,
                                        uint32_t out_subblock_height_ntiles, uint32_t out_subblock_width_ntiles,

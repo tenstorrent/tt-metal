@@ -25,36 +25,54 @@ void kernel_main() {
     uint32_t in1_start_tile_id     = get_arg_val<uint32_t>(11);
     uint32_t in1_stride_w          = get_arg_val<uint32_t>(12);
     uint32_t in1_stride_h          = get_arg_val<uint32_t>(13);
-    // uint32_t in1_next_block_stride = get_arg_val<uint32_t>(14);
 
     // in1 block args
     uint32_t in1_block_w         = get_arg_val<uint32_t>(15);
     uint32_t in1_block_h         = get_arg_val<uint32_t>(16);
     uint32_t in1_block_num_tiles = get_arg_val<uint32_t>(17);
 
+    // in0 and in1 strides as number of tiles
     uint32_t in0_next_block_stride_h = get_arg_val<uint32_t>(18);
     uint32_t in0_next_block_stride_w = get_arg_val<uint32_t>(19);
     uint32_t in1_next_block_stride_h = get_arg_val<uint32_t>(20);
     uint32_t in1_next_block_stride_w = get_arg_val<uint32_t>(21);
 
-    // const args for tile-based bank-swizzled layout
-    // could be added to the arg list in the future to test different
-    // bank-swizzling configurations
+    DataFormat in0_df = static_cast<DataFormat>(get_arg_val<uint32_t>(22));
+    DataFormat in1_df = static_cast<DataFormat>(get_arg_val<uint32_t>(23));
 
     constexpr uint32_t in0_cb_id = tt::CB::c_in0;
     constexpr uint32_t in1_cb_id = tt::CB::c_in1;
 
-    uint32_t tile_size_bytes = get_tile_size(in0_cb_id);
+    uint32_t in0_tile_nbytes = get_tile_size(in0_cb_id);
+    uint32_t in1_tile_nbytes = get_tile_size(in1_cb_id);
 
+    // const InterleavedAddrGenFast<true> s0 = {
+    //     .bank_base_address = in0_addr,
+    //     .page_size = in0_tile_nbytes,
+    //     .data_format = in0_df
+    // };
+    // const InterleavedAddrGenFast<true> s1 = {
+    //     .bank_base_address = in1_addr,
+    //     .page_size = in1_tile_nbytes,
+    //     .data_format = in1_df
+    // };
 
-    constexpr uint32_t tile_size_pow2_exponent = 11;
-    const InterleavedPow2AddrGen<true> s0 = {
+    // constexpr uint32_t tile_size_pow2_exponent = 11;
+    // const InterleavedPow2AddrGen<true> s0 = {
+    //     .bank_base_address = in0_addr,
+    //     .log_base_2_of_page_size = tile_size_pow2_exponent
+    // };
+    // const InterleavedPow2AddrGen<true> s1 = {
+    //     .bank_base_address = in1_addr,
+    //     .log_base_2_of_page_size = tile_size_pow2_exponent
+    // };
+    const InterleavedAddrGen<true> s0 = {
         .bank_base_address = in0_addr,
-        .log_base_2_of_page_size = tile_size_pow2_exponent
+        .page_size = in0_tile_nbytes
     };
-    const InterleavedPow2AddrGen<true> s1 = {
+    const InterleavedAddrGen<true> s1 = {
         .bank_base_address = in1_addr,
-        .log_base_2_of_page_size = tile_size_pow2_exponent
+        .page_size = in1_tile_nbytes
     };
 
     // DPRINT << FIXP() << SETW(32) << SETP(2);
@@ -83,8 +101,8 @@ void kernel_main() {
                     // loop over in0 block tiles along w
                     for(uint32_t in0_tile_w_i = 0; in0_tile_w_i < in0_block_w; ++in0_tile_w_i) {
                         uint64_t in0_tile_noc_addr = get_noc_addr(in0_tile_id, s0);
-                        noc_async_read(in0_tile_noc_addr, in0_write_l1_addr, tile_size_bytes);
-                        in0_write_l1_addr += tile_size_bytes;
+                        noc_async_read(in0_tile_noc_addr, in0_write_l1_addr, in0_tile_nbytes);
+                        in0_write_l1_addr += in0_tile_nbytes;
                         in0_tile_id += in0_stride_w;
                     }
                     in0_row_start_tile_id += in0_stride_h;
@@ -104,9 +122,9 @@ void kernel_main() {
                     // loop over in1 block tiles along w
                     for(uint32_t in1_tile_w_i = 0; in1_tile_w_i < in1_block_w; ++in1_tile_w_i) {
                         uint64_t in1_tile_noc_addr = get_noc_addr(in1_tile_id, s1);
-                        noc_async_read(in1_tile_noc_addr, in1_write_l1_addr, tile_size_bytes);
-                        in1_write_l1_addr += tile_size_bytes;
-                        in1_tile_id += 1;
+                        noc_async_read(in1_tile_noc_addr, in1_write_l1_addr, in1_tile_nbytes);
+                        in1_write_l1_addr += in1_tile_nbytes;
+                        in1_tile_id += in1_stride_w;
                     } // for in1_block_w
                     in1_row_start_tile_id += in1_stride_h;
                 } // for in1_block_h

@@ -2,6 +2,7 @@
 #include "dataflow_api.h"
 #include "debug_print.h"
 
+
 void kernel_main() {
 
     uint32_t dst_addr = get_arg_val<uint32_t>(0);           // out_dram_addr
@@ -11,11 +12,14 @@ void kernel_main() {
     uint32_t num_blocks_h = get_arg_val<uint32_t>(4);
     uint32_t num_blocks_w = get_arg_val<uint32_t>(5);
     uint32_t output_row_size = get_arg_val<uint32_t>(6);    // in1_width * dtype_nbytes
+    DataFormat out_df = static_cast<DataFormat>(get_arg_val<uint32_t>(7));
+
+    // NOTE: Row major layout only supports bfp16
+    // TT_ASSERT(out_df != DataFormat::Bfp8_b);
 
     constexpr uint32_t cb_id_out0 = tt::CB::c_out0;
 
     constexpr uint32_t TILE_HEIGHT = 32;                    // TODO: use common source of truth
-    constexpr uint32_t dtype_nbytes = 2;                    // TODO: obtain from data type
 
     // TODO(agrebenisan): This isn't good... here we are assuming
     // that the stick size dictates tiles c, but stick size
@@ -25,6 +29,11 @@ void kernel_main() {
     const uint32_t block_ntiles_h = num_rows_block / TILE_HEIGHT;
     uint32_t start_block_row_id = 0;
 
+    // const InterleavedAddrGenFast<true> s = {
+    //     .bank_base_address = dst_addr,
+    //     .page_size = output_row_size,
+    //     .data_format = out_df
+    // };
     const InterleavedAddrGen<true> s = {
         .bank_base_address = dst_addr,
         .page_size = output_row_size

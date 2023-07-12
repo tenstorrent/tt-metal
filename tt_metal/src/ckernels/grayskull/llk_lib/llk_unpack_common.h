@@ -73,7 +73,6 @@ inline void llk_unpack_reconfig_data_format(const std::uint32_t srca_old_operand
     std::uint32_t old_srcb_operand_id = get_operand_id(srcb_old_operand);
     std::uint32_t new_srcb_operand_id = get_operand_id(srcb_new_operand);
 
-
     if((unpack_src_format[old_srca_operand_id] != unpack_src_format[new_srca_operand_id]) && (unpack_src_format[old_srcb_operand_id] != unpack_src_format[new_srcb_operand_id])) {
 
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);

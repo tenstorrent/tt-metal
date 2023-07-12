@@ -53,16 +53,16 @@
 
 namespace ckernel {
 
-ALWI void mm_init() { // TODO(AP): pass cb operands
+ALWI void mm_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t out_cb_id = 16) {
     UNPACK(( llk_setup_operands() ));
     UNPACK(( llk_unpack_AB_matmul_init() ));
-    UNPACK(( llk_unpack_AB_matmul_hw_configure_disaggregated(0,1,0) ));
+    UNPACK(( llk_unpack_AB_matmul_hw_configure_disaggregated(in0_cb_id, in1_cb_id) ));
 
-    MATH(( llk_math_matmul_init<MATH_FIDELITY>(0) ));
+    MATH(( llk_math_matmul_init<MATH_FIDELITY>() ));
     MATH(( llk_math_pack_sync_init<SYNC>()  ));
 
     PACK(( llk_pack_init()  ));
-    PACK(( llk_pack_hw_configure_disaggregated<false>(16)  ));
+    PACK(( llk_pack_hw_configure_disaggregated<false>(out_cb_id) ));
     PACK(( llk_setup_outputs()  ));
     PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::RowMajor, false>()  ));
     // TODO(AP): ZM-only kernel
@@ -105,6 +105,12 @@ ALWI void binary_op_init_common(uint32_t icb0, uint32_t icb1)
     PACK(( llk_pack_hw_configure_disaggregated<false>(16) ));
     PACK(( llk_setup_outputs() ));
     PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::RowMajor, false>() ));
+}
+
+ALWI void mm_init_short_with_dt(uint32_t cbid) {
+    UNPACK(( llk_unpack_AB_matmul_init() ));
+    UNPACK(( llk_unpack_reconfig_data_format(cbid, 1, 0, 0) ));
+    MATH(( llk_math_matmul_init<MATH_FIDELITY>() ));
 }
 
 ALWI void mm_init_short() {
@@ -231,6 +237,12 @@ ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb)
 ALWI void cb_push_back(uint32_t cbid, uint32_t ntiles)
 {
     PACK(( llk_push_tiles<false,false>(cbid, ntiles)  ));
+}
+
+ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t cbid) {
+    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, false>() ));
+    UNPACK(( llk_unpack_reconfig_data_format(1, cbid, 0, 0) ));
+    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, false>() ));
 }
 
 ALWI void copy_tile_to_dst_init_short()
