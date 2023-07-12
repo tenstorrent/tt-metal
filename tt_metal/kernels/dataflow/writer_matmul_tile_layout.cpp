@@ -1,4 +1,4 @@
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 
 void kernel_main() {
 
@@ -30,7 +30,7 @@ void kernel_main() {
     // single-tile
     uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0);
 
-    const dataflow::InterleavedPow2AddrGen<true> s = {
+    const InterleavedPow2AddrGen<true> s = {
         .bank_base_address = out_tensor_addr,
 
 
@@ -45,16 +45,16 @@ void kernel_main() {
         for(uint32_t sbw = 0; sbw < out_num_subblocks_w; sbw++) {
             uint32_t out_tensor_sb_row_start_tile_id = out_tensor_sbw_start_tile_id;
 
-            dataflow::cb_wait_front(cb_id_out0, out_subblock_tile_count);
-            uint32_t l1_read_addr = dataflow::get_read_ptr(cb_id_out0);
+            cb_wait_front(cb_id_out0, out_subblock_tile_count);
+            uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
 
             for(uint32_t h = 0; h < out_subblock_h; h++) {
                 uint32_t out_tensor_tile_id = out_tensor_sb_row_start_tile_id;
                 for(uint32_t w = 0; w < out_subblock_w; w++) {
-                    uint64_t out_tensor_tile_noc_addr = dataflow::get_noc_addr(out_tensor_tile_id, s);
+                    uint64_t out_tensor_tile_noc_addr = get_noc_addr(out_tensor_tile_id, s);
 
                     kernel_profiler::mark_time(9);
-                    dataflow::noc_async_write(l1_read_addr, out_tensor_tile_noc_addr, single_tile_size_bytes);
+                    noc_async_write(l1_read_addr, out_tensor_tile_noc_addr, single_tile_size_bytes);
                     l1_read_addr+=single_tile_size_bytes;
 
                     out_tensor_tile_id += out_tensor_stride_w;
@@ -62,8 +62,8 @@ void kernel_main() {
                 out_tensor_sb_row_start_tile_id += out_tensor_stride_h;
             }
 
-            dataflow::noc_async_write_barrier();
-            dataflow::cb_pop_front(cb_id_out0, out_subblock_tile_count);
+            noc_async_write_barrier();
+            cb_pop_front(cb_id_out0, out_subblock_tile_count);
             out_tensor_sbw_start_tile_id += out_tensor_next_subblock_stride_w;
         }
         out_tensor_sbh_start_tile_id += out_tensor_next_subblock_stride_h;

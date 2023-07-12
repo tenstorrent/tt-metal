@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 
 void kernel_main() {
     uint32_t src_addr_base  = get_arg_val<uint32_t>(0);
@@ -19,13 +19,13 @@ void kernel_main() {
     for (uint32_t zero_base_offset = 0; zero_base_offset < num_elements_in_zeros_buffer; zero_base_offset++) {
         *(zero_base_ptr + zero_base_offset) = 0;
     }
-    uint64_t zeros_base_noc_addr = dataflow::get_noc_addr(MEM_ZEROS_BASE);
+    uint64_t zeros_base_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
 
     uint32_t index = 0;
     // Read from DRAM into L1 using DTX address map and push one block at a time to CB
     for (uint32_t b = 0; b < num_blocks; b += 1) {
-        dataflow::cb_reserve_back(cb_id_in0, block_size_tiles);
-        uint32_t l1_write_addr = dataflow::get_write_ptr(cb_id_in0);
+        cb_reserve_back(cb_id_in0, block_size_tiles);
+        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
         uint32_t bytes_read = 0;
         while(bytes_read != block_size_bytes) {
             // There are 3 entries in the address map per read
@@ -40,7 +40,7 @@ void kernel_main() {
                 uint32_t dst_addr = l1_write_addr + dst_address;
                 uint32_t pad_size = read_size;
                 if (pad_size <= MEM_ZEROS_SIZE) {
-                    dataflow::noc_async_read(src_noc_addr, dst_addr, pad_size);
+                    noc_async_read(src_noc_addr, dst_addr, pad_size);
                 }
                 else {
                     // padding size is bigger than the zero buffer size
@@ -48,7 +48,7 @@ void kernel_main() {
                     uint32_t zeros_to_read = pad_size;
                     uint32_t zeros_read_size = MEM_ZEROS_SIZE;
                     while(zeros_to_read != 0) {
-                        dataflow::noc_async_read(src_noc_addr, dst_addr, zeros_read_size);
+                        noc_async_read(src_noc_addr, dst_addr, zeros_read_size);
                         zeros_to_read -= zeros_read_size;
                         if (zeros_to_read < zeros_read_size) {
                             zeros_read_size = zeros_to_read;
@@ -58,14 +58,14 @@ void kernel_main() {
             }
             else {
                 uint32_t src_addr = src_addr_base + src_address;
-                uint64_t src_noc_addr = dataflow::get_noc_addr(src_noc_x, src_noc_y, src_addr);
+                uint64_t src_noc_addr = get_noc_addr(src_noc_x, src_noc_y, src_addr);
                 uint32_t dst_addr = l1_write_addr + dst_address;
-                dataflow::noc_async_read(src_noc_addr, dst_addr, read_size);
+                noc_async_read(src_noc_addr, dst_addr, read_size);
             }
             bytes_read += read_size;
             index += 4;
         }
-        dataflow::noc_async_read_barrier();
-        dataflow::cb_push_back(cb_id_in0, block_size_tiles);
+        noc_async_read_barrier();
+        cb_push_back(cb_id_in0, block_size_tiles);
     }
 }

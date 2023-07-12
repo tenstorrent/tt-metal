@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 
 void kernel_main() {
     uint32_t src_addr  = get_arg_val<uint32_t>(0);
@@ -25,13 +25,13 @@ void kernel_main() {
         src_addr = src_addrN;
         for (uint32_t w = 0; w<Wt; w++) {
             for (uint32_t h = 0; h<Ht; h++) {
-                uint64_t src_noc_addr = dataflow::get_noc_addr(src_noc_x, src_noc_y, src_addr);
-                dataflow::cb_reserve_back(cb_id_in0, onetile);
-                uint32_t l1_write_addr = dataflow::get_write_ptr(cb_id_in0);
-                dataflow::noc_async_read(src_noc_addr, l1_write_addr, tile_bytes);
-                dataflow::noc_async_read_barrier();
+                uint64_t src_noc_addr = get_noc_addr(src_noc_x, src_noc_y, src_addr);
+                cb_reserve_back(cb_id_in0, onetile);
+                uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+                noc_async_read(src_noc_addr, l1_write_addr, tile_bytes);
+                noc_async_read_barrier();
 
-                dataflow::cb_push_back(cb_id_in0, onetile);
+                cb_push_back(cb_id_in0, onetile);
                 src_addr += WtTileBytes; // stride in H
             } // Ht
             src_addr -= HtWtTileBytes; // go back to H=0

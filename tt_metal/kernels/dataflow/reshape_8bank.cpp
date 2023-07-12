@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 
 #include "debug_print.h"
 
@@ -26,7 +26,7 @@ void kernel_main() {
     constexpr u32 operand0 = 0;
 
 
-    const dataflow::InterleavedPow2AddrGen<true> s0 = {
+    const InterleavedPow2AddrGen<true> s0 = {
         .bank_base_address = src0_addr,
 
 
@@ -43,7 +43,7 @@ void kernel_main() {
                 uint32_t base_tile_stick_id = base_tile_row_stick_id;
                 for (uint32_t w = 0; w < output_Wt; w++) {
                     uint32_t output_stick_id = base_tile_stick_id; // Offset tile id of the current sub tile row
-                    dataflow::cb_reserve_back(operand0, onetile);
+                    cb_reserve_back(operand0, onetile);
                     for (uint32_t tile_h = 0; tile_h < 32; tile_h++) {
 
                         uint32_t input_tile_row_to_read = output_stick_id / num_sticks_per_input_tile_row;
@@ -51,26 +51,26 @@ void kernel_main() {
                         uint32_t input_tile_to_read = input_tile_row_to_read * input_Wt + input_tile_col_to_read;
                         uint32_t input_tile_sub_row_to_read = output_stick_id % num_sticks_per_input_tile_row / input_Wt;
 
-                        uint64_t banked_addr = dataflow::get_noc_addr(input_tile_to_read, s0);
+                        uint64_t banked_addr = get_noc_addr(input_tile_to_read, s0);
                         banked_addr += (((input_tile_sub_row_to_read >> 4) << 1) << 9); // if intra-tile source h is > 16, add 2*512 to subtile offset
                         banked_addr += ((input_tile_sub_row_to_read & 15) << 5); // 16 * 2 bytes per face row
 
-                        uint32_t dest_tr0_l1 = dataflow::get_write_ptr(operand0);
+                        uint32_t dest_tr0_l1 = get_write_ptr(operand0);
                         dest_tr0_l1 += (((tile_h >> 4) << 1) << 9); // if intra-tile source h is > 16, add 2*512 to subtile offset
                         dest_tr0_l1 += ((tile_h & 15) << 5); // 16 * 2 bytes per face row
 
-                        dataflow::noc_async_read(banked_addr, dest_tr0_l1, SUBTILE_LINE_BYTES);
+                        noc_async_read(banked_addr, dest_tr0_l1, SUBTILE_LINE_BYTES);
                         // Read the 16 elements for the row of the face directly adjacent since this comes from the same input tile
                         dest_tr0_l1 += 512; // 16 subtile rows of 16 elements of 2 bytes for bfloat16 (16 * 16 * 2)
                         banked_addr += 512;
-                        dataflow::noc_async_read(banked_addr, dest_tr0_l1, SUBTILE_LINE_BYTES);
+                        noc_async_read(banked_addr, dest_tr0_l1, SUBTILE_LINE_BYTES);
 
                         output_stick_id += output_Wt;
 
                     }
-                    dataflow::noc_async_read_barrier();
+                    noc_async_read_barrier();
                     // notifies the unpacker that the buffer is populated
-                    dataflow::cb_push_back(operand0, onetile);
+                    cb_push_back(operand0, onetile);
 
                     base_tile_stick_id += 1;
                 }

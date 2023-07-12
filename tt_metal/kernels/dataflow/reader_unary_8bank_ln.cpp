@@ -5,7 +5,7 @@
 #endif
 
 #include <stdint.h>
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 
 //#include "debug_print.h"
 //#include "tt_metal/tools/profiler/kernel_profiler.hpp"
@@ -15,30 +15,30 @@ void generate_bcast_scaler() {
     constexpr uint32_t cb_in_2 = 2;
     union { float f; uint32_t u; } u; u.u = get_arg_val<uint32_t>(5);
     //DPRINT << "basic Scaler = " << u.u << ENDL();
-    dataflow::cb_reserve_back(cb_in_2, 1);
-    auto ptr = reinterpret_cast<uint16_t*>(dataflow::get_write_ptr(cb_in_2));
+    cb_reserve_back(cb_in_2, 1);
+    auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_in_2));
     for (int j = 0; j < 1024; j++)
         ptr[j] = uint16_t(0);
 
     for (int k = 0; k < 4; k++)
     for (int j = 0; j < 16; j++)
         ptr[k*256 + j] = uint16_t(u.u>>16);
-    dataflow::cb_push_back(cb_in_2, 1);
+    cb_push_back(cb_in_2, 1);
 }
 
 void generate_epsilon() {
     constexpr uint32_t eps_cb_id = 3;
     union { float f; uint32_t u; } u; u.u = get_arg_val<uint32_t>(6);
     //DPRINT << "epsilon = " << F32(u.f) << ENDL();
-    dataflow::cb_reserve_back(eps_cb_id, 1);
-    auto ptr = reinterpret_cast<uint16_t*>(dataflow::get_write_ptr(eps_cb_id));
+    cb_reserve_back(eps_cb_id, 1);
+    auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(eps_cb_id));
     for (int j = 0; j < 1024; j++)
         ptr[j] = uint16_t(0);
 
     for (int k = 0; k < 4; k+=2)
     for (int j = 0; j < 16; j++)
         ptr[k*256 + j*16] = uint16_t(u.u>>16);
-    dataflow::cb_push_back(eps_cb_id, 1);
+    cb_push_back(eps_cb_id, 1);
 }
 
 /* Don't need the ones column mask
@@ -46,15 +46,15 @@ void generate_col_ones() {
     constexpr uint32_t cb_in_4 = 4;
     union { float f; uint32_t u; } u; u.u = 0x3f800000;
     //DPRINT << "one = " << F32(u.f) << ENDL();
-    dataflow::cb_reserve_back(cb_in_4, 1);
-    auto ptr = reinterpret_cast<uint16_t*>(dataflow::get_write_ptr(cb_in_4));
+    cb_reserve_back(cb_in_4, 1);
+    auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_in_4));
     for (int j = 0; j < 1024; j++)
         ptr[j] = uint16_t(0);
 
     for (int k = 0; k < 4; k+=2)
     for (int j = 0; j < 16; j++)
         ptr[k*256 + j*16] = uint16_t(u.u>>16);
-    dataflow::cb_push_back(cb_in_4, 1);
+    cb_push_back(cb_in_4, 1);
 }
 */
 
@@ -84,23 +84,23 @@ void kernel_main() {
     DataFormat accessor_data_format = DataFormat::Bfp8_b;
     #endif
 
-    const dataflow::InterleavedAddrGenFast<GAMMA_DRAM> addrg = {
+    const InterleavedAddrGenFast<GAMMA_DRAM> addrg = {
         .bank_base_address = gamma_addr,
         .page_size = tile_bytes,
         .data_format = accessor_data_format
     };
-    const dataflow::InterleavedAddrGenFast<BETA_DRAM> addrb = {
+    const InterleavedAddrGenFast<BETA_DRAM> addrb = {
         .bank_base_address = beta_addr,
         .page_size = tile_bytes,
         .data_format = accessor_data_format
     };
-    const dataflow::InterleavedAddrGenFast<A_DRAM> src_a = {
+    const InterleavedAddrGenFast<A_DRAM> src_a = {
         .bank_base_address = src_addr,
         .page_size = tile_bytes,
         .data_format = accessor_data_format
     };
     #ifdef FUSE_PRE_ADD
-    const dataflow::InterleavedAddrGenFast<B_DRAM> src_b = {
+    const InterleavedAddrGenFast<B_DRAM> src_b = {
         .bank_base_address = b_addr,
         .page_size = tile_bytes,
         .data_format = accessor_data_format
@@ -125,58 +125,58 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         //DPRINT << "ncht= " << ncht << ENDL();
         for (uint32_t wt = 0; wt<Wt; wt += blk) {
-            dataflow::cb_reserve_back(cb_id_in0, blk);
-            uint32_t l1_write_addr = dataflow::get_write_ptr(cb_id_in0);
+            cb_reserve_back(cb_id_in0, blk);
+            uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
 
             for (uint32_t r = 0; r<blk; r++) {
-                dataflow::noc_async_read_tile(offs+wt+r+tile_offset, src_a, l1_write_addr);
+                noc_async_read_tile(offs+wt+r+tile_offset, src_a, l1_write_addr);
                 l1_write_addr += tile_bytes;
             }
-            dataflow::noc_async_read_barrier();
+            noc_async_read_barrier();
             //if (core_x() == 2 && core_y() == 1 && ncht == 0 && wt == 0) DPRINT << "TILE_OFFSET: " << TILE_OFFSET << ENDL();
             //if (core_x() == 2 && core_y() == 1 && ncht == 0 && wt == 0) DPRINT << "READER A: " << TSLICE(cb_id_in0, 0, SliceRange::hw0_32_16());
-            dataflow::cb_push_back(cb_id_in0, blk);
+            cb_push_back(cb_id_in0, blk);
             //DPRINT << "LN Reader A pushed " << blk << " wt=" << wt << ENDL();
 
             #ifdef FUSE_PRE_ADD
             // TODO(AP): refactor the ifdefs
-            dataflow::cb_reserve_back(cb_id_in1, blk);
-            l1_write_addr = dataflow::get_write_ptr(cb_id_in1);
+            cb_reserve_back(cb_id_in1, blk);
+            l1_write_addr = get_write_ptr(cb_id_in1);
             for (uint32_t r = 0; r<blk; r++) {
-                dataflow::noc_async_read_tile(offs+wt+r+tile_offset, src_b, l1_write_addr);
+                noc_async_read_tile(offs+wt+r+tile_offset, src_b, l1_write_addr);
                 l1_write_addr += tile_bytes;
             }
-            dataflow::noc_async_read_barrier();
+            noc_async_read_barrier();
             //DPRINT << "NC in1 pushing tiles " << blk << ENDL();
             //if (core_x() == 2 && core_y() == 1 && ncht == 0 && wt == 0) DPRINT << "TILE_OFFSET: " << TILE_OFFSET << ENDL();
             //if (core_x() == 2 && core_y() == 1 && ncht == 0 && wt == 0) DPRINT << "READER B: " << TSLICE(cb_id_in1, 0, SliceRange::hw0_32_16());
-            dataflow::cb_push_back(cb_id_in1, blk);
+            cb_push_back(cb_id_in1, blk);
             #endif
         } // wt loop
 
         for (uint32_t wt = 0; wt<Wt; wt += blk) {
             if (num_gamma_written < num_gamma_tiles) {
-                dataflow::cb_reserve_back(cb_id_gamma, blk);
-                uint32_t l1_write_addr = dataflow::get_write_ptr(cb_id_gamma);
+                cb_reserve_back(cb_id_gamma, blk);
+                uint32_t l1_write_addr = get_write_ptr(cb_id_gamma);
                 for (uint32_t r = 0; r<blk; r++) {
-                    dataflow::noc_async_read_tile(num_gamma_written+r, addrg, l1_write_addr);
+                    noc_async_read_tile(num_gamma_written+r, addrg, l1_write_addr);
                     l1_write_addr += tile_bytes;
                 }
-                dataflow::noc_async_read_barrier();
-                dataflow::cb_push_back(cb_id_gamma, blk);
+                noc_async_read_barrier();
+                cb_push_back(cb_id_gamma, blk);
                 num_gamma_written += blk;
                 //DPRINT << "  NGW= " << num_gamma_written << ENDL();
             }
 
             if (num_beta_written < num_beta_tiles) {
-                dataflow::cb_reserve_back(cb_id_beta, blk);
-                uint32_t l1_write_addr = dataflow::get_write_ptr(cb_id_beta);
+                cb_reserve_back(cb_id_beta, blk);
+                uint32_t l1_write_addr = get_write_ptr(cb_id_beta);
                 for (uint32_t r = 0; r<blk; r++) {
-                    dataflow::noc_async_read_tile(num_beta_written+r, addrb, l1_write_addr);
+                    noc_async_read_tile(num_beta_written+r, addrb, l1_write_addr);
                     l1_write_addr += tile_bytes;
                 }
-                dataflow::noc_async_read_barrier();
-                dataflow::cb_push_back(cb_id_beta, blk);
+                noc_async_read_barrier();
+                cb_push_back(cb_id_beta, blk);
                 num_beta_written += blk;
                 //DPRINT << "  NBW= " << num_beta_written << ENDL();
             }

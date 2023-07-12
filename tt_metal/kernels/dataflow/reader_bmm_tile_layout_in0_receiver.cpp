@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 
 void kernel_main() {
@@ -26,19 +26,19 @@ void kernel_main() {
     for (uint32_t b = 0; b < batch; b++) {
         for(uint32_t block = 0; block < num_blocks; block++) {
             // Operand 0
-            dataflow::cb_reserve_back(cb_id_in0, in0_block_num_tiles);
+            cb_reserve_back(cb_id_in0, in0_block_num_tiles);
 
             // Set in0 semaphore value to INVALID
-            dataflow_internal::noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, INVALID);
+            noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, INVALID);
 
             // Atomic increment source core counter
-            uint64_t in0_mcast_sender_semaphore_noc_addr = dataflow::get_noc_addr(in0_mcast_sender_noc_x, in0_mcast_sender_noc_y, in0_mcast_sender_semaphore_addr);
-            dataflow_internal::noc_semaphore_inc(in0_mcast_sender_semaphore_noc_addr, 1);
+            uint64_t in0_mcast_sender_semaphore_noc_addr = get_noc_addr(in0_mcast_sender_noc_x, in0_mcast_sender_noc_y, in0_mcast_sender_semaphore_addr);
+            noc_semaphore_inc(in0_mcast_sender_semaphore_noc_addr, 1);
 
             // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
-            dataflow_internal::noc_semaphore_wait(in0_mcast_receiver_semaphore_addr_ptr, VALID);
+            noc_semaphore_wait(in0_mcast_receiver_semaphore_addr_ptr, VALID);
 
-            dataflow::cb_push_back(cb_id_in0, in0_block_num_tiles);
+            cb_push_back(cb_id_in0, in0_block_num_tiles);
         }
     }
 }

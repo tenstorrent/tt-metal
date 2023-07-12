@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 
 void kernel_main() {
@@ -67,14 +67,14 @@ void kernel_main() {
     // to receive the mcast
     volatile uint32_t* in0_mcast_sender_semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(in0_mcast_sender_semaphore_addr);
 
-    const dataflow::InterleavedPow2AddrGen<true> s0 = {
+    const InterleavedPow2AddrGen<true> s0 = {
         .bank_base_address = in0_tensor_addr,
 
 
         .log_base_2_of_page_size = tile_size_pow2_exponent
     };
 
-    const dataflow::InterleavedPow2AddrGen<true> s1 = {
+    const InterleavedPow2AddrGen<true> s1 = {
         .bank_base_address = in1_tensor_addr,
 
 
@@ -84,8 +84,8 @@ void kernel_main() {
     bool one_time_multicast = true;
     bool one_time_cb_push = true;
     for(uint32_t b = 0; b < num_blocks; b++) {
-        dataflow::cb_reserve_back(cb_id_in0, in0_block_num_tiles);
-        l1_write_addr_in0 = dataflow::get_write_ptr(cb_id_in0);
+        cb_reserve_back(cb_id_in0, in0_block_num_tiles);
+        l1_write_addr_in0 = get_write_ptr(cb_id_in0);
 
         uint32_t in0_start_address = l1_write_addr_in0; // copy start address of block, to be used for mcasting
         uint32_t in0_block_size_bytes = 0; // can be optimized later, pass it to kernel
@@ -95,8 +95,8 @@ void kernel_main() {
         for(uint32_t h = 0; h < in0_block_h; h++) {
             uint32_t in0_tensor_tile_id = in0_tensor_row_start_tile_id;
             for(uint32_t w = 0; w < in0_block_w; w++) {
-                uint64_t in0_tile_noc_address = dataflow::get_noc_addr(in0_tensor_tile_id, s0);
-                dataflow::noc_async_read(in0_tile_noc_address, l1_write_addr_in0, single_tile_size_bytes);
+                uint64_t in0_tile_noc_address = get_noc_addr(in0_tensor_tile_id, s0);
+                noc_async_read(in0_tile_noc_address, l1_write_addr_in0, single_tile_size_bytes);
                 l1_write_addr_in0 += single_tile_size_bytes;
                 in0_tensor_tile_id += in0_tensor_stride_w;
                 in0_block_size_bytes += single_tile_size_bytes;
@@ -106,45 +106,45 @@ void kernel_main() {
         in0_tensor_current_block_start_tile_id += in0_tensor_next_block_stride;
 
         // Barrier! make sure the reads are done
-        dataflow::noc_async_read_barrier();
+        noc_async_read_barrier();
 
         // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr (i.e. its value should be in0_mcast_num_dests), then reset
         // the semaphore_addr value back to zero for the next block
-        dataflow_internal::noc_semaphore_wait(in0_mcast_sender_semaphore_addr_ptr, in0_mcast_num_dests);
-        dataflow_internal::noc_semaphore_set(in0_mcast_sender_semaphore_addr_ptr, 0);
+        noc_semaphore_wait(in0_mcast_sender_semaphore_addr_ptr, in0_mcast_num_dests);
+        noc_semaphore_set(in0_mcast_sender_semaphore_addr_ptr, 0);
 
         kernel_profiler::mark_time_once(11, &one_time_multicast);
 
         // Now we have the block in the CB address, we can mcast to dests!
-        uint64_t in0_multicast_data_addr = dataflow_internal::get_noc_multicast_addr(
+        uint64_t in0_multicast_data_addr = get_noc_multicast_addr(
         in0_mcast_dest_noc_start_x,
         in0_mcast_dest_noc_start_y,
         in0_mcast_dest_noc_end_x,
         in0_mcast_dest_noc_end_y,
         in0_start_address);
         // num_dests must not include source, since we are NOT really doing a local copy!
-        dataflow::noc_async_write_multicast(in0_start_address, in0_multicast_data_addr, in0_block_size_bytes, in0_mcast_num_dests);
-        dataflow::noc_async_write_barrier();
+        noc_async_write_multicast(in0_start_address, in0_multicast_data_addr, in0_block_size_bytes, in0_mcast_num_dests);
+        noc_async_write_barrier();
         // We should also multicast the flag to destinations
-        uint64_t in0_mcast_receiver_semaphore_noc_addr = dataflow_internal::get_noc_multicast_addr(
+        uint64_t in0_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(
         in0_mcast_dest_noc_start_x,
         in0_mcast_dest_noc_start_y,
         in0_mcast_dest_noc_end_x,
         in0_mcast_dest_noc_end_y,
         in0_mcast_receiver_semaphore_addr);
         // num_dests must not include source, since we are NOT really doing a local copy!
-        dataflow_internal::noc_semaphore_set_multicast(in0_mcast_receiver_semaphore_addr, in0_mcast_receiver_semaphore_noc_addr, in0_mcast_num_dests);
+        noc_semaphore_set_multicast(in0_mcast_receiver_semaphore_addr, in0_mcast_receiver_semaphore_noc_addr, in0_mcast_num_dests);
 
         // Copy in1 block into CB, as the default kernel
-        dataflow::cb_reserve_back(cb_id_in1, in1_block_num_tiles);
-        l1_write_addr_in1 = dataflow::get_write_ptr(cb_id_in1);
+        cb_reserve_back(cb_id_in1, in1_block_num_tiles);
+        l1_write_addr_in1 = get_write_ptr(cb_id_in1);
 
         uint32_t in1_tensor_row_start_tile_id = in1_tensor_current_block_start_tile_id;
         for(uint32_t h = 0; h < in1_block_h; h++) {
             uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
             for(uint32_t w = 0; w < in1_block_w; w++) {
-                uint64_t in1_tile_noc_addr = dataflow::get_noc_addr(in1_tensor_tile_id, s1);
-                dataflow::noc_async_read(in1_tile_noc_addr, l1_write_addr_in1, single_tile_size_bytes);
+                uint64_t in1_tile_noc_addr = get_noc_addr(in1_tensor_tile_id, s1);
+                noc_async_read(in1_tile_noc_addr, l1_write_addr_in1, single_tile_size_bytes);
                 l1_write_addr_in1 += single_tile_size_bytes;
                 in1_tensor_tile_id += in1_tensor_stride_w;
             }
@@ -152,10 +152,10 @@ void kernel_main() {
         }
         in1_tensor_current_block_start_tile_id += in1_tensor_next_block_stride;
 
-        dataflow::noc_async_read_barrier();
+        noc_async_read_barrier();
 
-        dataflow::cb_push_back(cb_id_in0, in0_block_num_tiles);
-        dataflow::cb_push_back(cb_id_in1, in1_block_num_tiles);
+        cb_push_back(cb_id_in0, in0_block_num_tiles);
+        cb_push_back(cb_id_in1, in1_block_num_tiles);
         kernel_profiler::mark_time_once(12, &one_time_cb_push);
     }
 }

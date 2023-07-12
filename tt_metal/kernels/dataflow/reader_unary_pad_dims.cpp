@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 
 uint64_t round_down_32(uint64_t a){
     return (a >> 5) << 5;
@@ -35,12 +35,12 @@ void kernel_main() {
     #define stick_size_is_pow2 get_compile_time_arg_val(0) == 1
     #if (stick_size_is_pow2)
     const uint32_t log_base_2_of_page_size = get_arg_val<uint32_t>(13);
-    const dataflow::InterleavedPow2AddrGen<true> s = {
+    const InterleavedPow2AddrGen<true> s = {
         .bank_base_address = src_addr,
         .log_base_2_of_page_size = log_base_2_of_page_size // TODO(AP): refactor
     };
     #else
-    const dataflow::InterleavedAddrGen<true> s = {
+    const InterleavedAddrGen<true> s = {
         .bank_base_address = src_addr,
         .page_size = unpadded_X_size
     };
@@ -53,8 +53,8 @@ void kernel_main() {
         for (uint32_t z = 0; z < num_unpadded_Z; z++) {
             uint32_t row_id_in_face = 0;
             for (uint32_t y_t = 0; y_t < num_total_Y / 32; y_t++) {
-                dataflow::cb_reserve_back(cb_id_in0, num_tiles_c);
-                uint32_t l1_write_addr = dataflow::get_write_ptr(cb_id_in0);
+                cb_reserve_back(cb_id_in0, num_tiles_c);
+                uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
                 for (uint32_t k = 0; k < 32; k++) {
                     if (row_id_in_face >= num_unpadded_Y) {
                         // pad the tile by reading values from zero buffer in L1
@@ -64,13 +64,13 @@ void kernel_main() {
                         }
                     }
                     else {
-                        uint64_t src_noc_addr = dataflow::get_noc_addr(
+                        uint64_t src_noc_addr = get_noc_addr(
                             row_id, s);
 
                         // Read from DRAM to tmp buffer
                         uint64_t round_down_addr = round_down_32(src_noc_addr);
                         uint64_t diff_addr = src_noc_addr - round_down_addr;
-                        dataflow::noc_async_read(round_down_addr, temp_buffer_l1_addr, unpadded_X_size + diff_addr);
+                        noc_async_read(round_down_addr, temp_buffer_l1_addr, unpadded_X_size + diff_addr);
 
                         volatile std::uint32_t* dst = (volatile uint32_t*)(l1_write_addr + unpadded_X_size);
                         volatile std::uint32_t* temp = (volatile uint32_t*)(temp_buffer_l1_addr + diff_addr);
@@ -81,7 +81,7 @@ void kernel_main() {
                         }
 
                         // Block before copying data from tmp to cb buffer
-                        dataflow::noc_async_read_barrier();
+                        noc_async_read_barrier();
                         dst = (volatile uint32_t*)(l1_write_addr);
                         for(uint32_t z = 0; z < (unpadded_X_size) / 4; z++) {
                             dst[z] = temp[z];
@@ -93,12 +93,12 @@ void kernel_main() {
                     row_id_in_face++;
                 }
 
-                dataflow::cb_push_back(cb_id_in0, num_tiles_c);
+                cb_push_back(cb_id_in0, num_tiles_c);
             }
         }
         for (uint32_t i = 0; i < padded_Z_diff_tile_rows; i++) {
-            dataflow::cb_reserve_back(cb_id_in0, num_tiles_c);
-            uint32_t l1_write_addr = dataflow::get_write_ptr(cb_id_in0);
+            cb_reserve_back(cb_id_in0, num_tiles_c);
+            uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
             // pad the tile by reading values from zero buffer in L1
             volatile std::uint32_t* dst = (volatile uint32_t*)(l1_write_addr);
             // * 32 / 4
@@ -106,12 +106,12 @@ void kernel_main() {
                 dst[z] = pad_value;
             }
             l1_write_addr += padded_X_size;
-            dataflow::cb_push_back(cb_id_in0, num_tiles_c);
+            cb_push_back(cb_id_in0, num_tiles_c);
         }
     }
     for (uint32_t i = 0; i < padded_W_diff_tile_rows; i++) {
-        dataflow::cb_reserve_back(cb_id_in0, num_tiles_c);
-        uint32_t l1_write_addr = dataflow::get_write_ptr(cb_id_in0);
+        cb_reserve_back(cb_id_in0, num_tiles_c);
+        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
         // pad the tile by reading values from zero buffer in L1
         volatile std::uint32_t* dst = (volatile uint32_t*)(l1_write_addr);
         // * 32 / 4
@@ -119,6 +119,6 @@ void kernel_main() {
             dst[z] = pad_value;
         }
         l1_write_addr += padded_X_size;
-        dataflow::cb_push_back(cb_id_in0, num_tiles_c);
+        cb_push_back(cb_id_in0, num_tiles_c);
     }
 }

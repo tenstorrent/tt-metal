@@ -24,31 +24,31 @@ void kernel_main() {
     volatile uint32_t* constant_ptr = reinterpret_cast<volatile uint32_t*>(CONSTANT_REGISTER_VALUE);
     *(constant_ptr) = VALID_VAL;
     // Local and remote register addresses (used for sync)
-    std::uint64_t local = dataflow::get_noc_addr(stream_register_address);
-    std::uint64_t remote = dataflow::get_noc_addr(consumer_core_noc_x, consumer_core_noc_y, stream_register_address);
+    std::uint64_t local = get_noc_addr(stream_register_address);
+    std::uint64_t remote = get_noc_addr(consumer_core_noc_x, consumer_core_noc_y, stream_register_address);
 
     // keeps track of how many tiles we moved so far
     std::uint32_t counter = 0;
     std::uint32_t dram_buffer_src_addr = dram_buffer_src_addr_base;
     while(counter < num_tiles) {
         // DRAM NOC src address
-        std::uint64_t dram_buffer_src_noc_addr = dataflow::get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr);
+        std::uint64_t dram_buffer_src_noc_addr = get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr);
         // Wait until sync register is INVALID_VAL (means its safe to corrupt destination buffer)
         wait_for_sync_register_value(stream_register_address, INVALID_VAL);
         // Copy data from dram into destination buffer
-        dataflow::noc_async_read(dram_buffer_src_noc_addr, local_buffer_addr, transient_buffer_size_bytes);
+        noc_async_read(dram_buffer_src_noc_addr, local_buffer_addr, transient_buffer_size_bytes);
         dram_buffer_src_addr += transient_buffer_size_bytes;
         // wait all reads flushed (ie received)
-        dataflow::noc_async_read_barrier();
+        noc_async_read_barrier();
 
         // Write VALID_VAL into local register
-        dataflow::noc_async_write(CONSTANT_REGISTER_VALUE, local, 4);
-        dataflow::noc_async_write_barrier();
+        noc_async_write(CONSTANT_REGISTER_VALUE, local, 4);
+        noc_async_write_barrier();
 
 
         // Write VALID_VAL into remote register
-        dataflow::noc_async_write(CONSTANT_REGISTER_VALUE, remote, 4);
-        dataflow::noc_async_write_barrier();
+        noc_async_write(CONSTANT_REGISTER_VALUE, remote, 4);
+        noc_async_write_barrier();
 
         counter += transient_buffer_size_tiles;
     }

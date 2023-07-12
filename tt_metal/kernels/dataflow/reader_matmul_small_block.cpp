@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 
 void kernel_main() {
     std::uint32_t dram_buffer_src0_addr  = get_arg_val<uint32_t>(0);
@@ -23,21 +23,21 @@ void kernel_main() {
     // read a chunk of tiles at the time from DRAM to L1 buffer, and push a chunk at the time to unpacker
     for (uint32_t i=0; i<num_tiles; i += chunk_size_tiles) {
         // DRAM NOC src address
-        std::uint64_t dram_buffer_src0_noc_addr = dataflow::get_noc_addr(dram_src0_noc_x, dram_src0_noc_y, dram_buffer_src0_addr);
-        std::uint64_t dram_buffer_src1_noc_addr = dataflow::get_noc_addr(dram_src1_noc_x, dram_src1_noc_y, dram_buffer_src1_addr);
+        std::uint64_t dram_buffer_src0_noc_addr = get_noc_addr(dram_src0_noc_x, dram_src0_noc_y, dram_buffer_src0_addr);
+        std::uint64_t dram_buffer_src1_noc_addr = get_noc_addr(dram_src1_noc_x, dram_src1_noc_y, dram_buffer_src1_addr);
 
-        dataflow::cb_reserve_back(0, chunk_size_tiles);
-        dataflow::cb_reserve_back(1, chunk_size_tiles);
-        l1_write_addr_in0 = dataflow::get_write_ptr(0);
-        l1_write_addr_in1 = dataflow::get_write_ptr(1);
+        cb_reserve_back(0, chunk_size_tiles);
+        cb_reserve_back(1, chunk_size_tiles);
+        l1_write_addr_in0 = get_write_ptr(0);
+        l1_write_addr_in1 = get_write_ptr(1);
 
-        dataflow::noc_async_read(dram_buffer_src0_noc_addr, l1_write_addr_in0, chunk_size_bytes_0);
-        dataflow::noc_async_read(dram_buffer_src1_noc_addr, l1_write_addr_in1, chunk_size_bytes_1);
+        noc_async_read(dram_buffer_src0_noc_addr, l1_write_addr_in0, chunk_size_bytes_0);
+        noc_async_read(dram_buffer_src1_noc_addr, l1_write_addr_in1, chunk_size_bytes_1);
 
-        dataflow::noc_async_read_barrier();
+        noc_async_read_barrier();
 
-        dataflow::cb_push_back(0, chunk_size_tiles);
-        dataflow::cb_push_back(1, chunk_size_tiles);
+        cb_push_back(0, chunk_size_tiles);
+        cb_push_back(1, chunk_size_tiles);
 
         dram_buffer_src0_addr += chunk_size_bytes_0;
         dram_buffer_src1_addr += chunk_size_bytes_1;

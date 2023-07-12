@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
 
@@ -19,22 +19,22 @@ void kernel_main() {
 
     uint32_t block_size_bytes = get_tile_size(cb_id) * block_size_tiles;
 
-    uint64_t sender_semaphore_noc_addr = dataflow::get_noc_addr(sender_noc_x, sender_noc_y, sender_semaphore_addr);
+    uint64_t sender_semaphore_noc_addr = get_noc_addr(sender_noc_x, sender_noc_y, sender_semaphore_addr);
 
     for (uint32_t j = 0; j < num_repetitions; j++) {
         for (uint32_t i = 0; i<num_tiles ; i += block_size_tiles) {
-            dataflow::cb_reserve_back(cb_id, block_size_tiles);
+            cb_reserve_back(cb_id, block_size_tiles);
 
             // Reset receiver's own semaphore value to INVALID
-            dataflow_internal::noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
+            noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
 
             // Tell sender we're ready -- atomic increment sender's semaphore
-            dataflow_internal::noc_semaphore_inc(sender_semaphore_noc_addr, 1);
+            noc_semaphore_inc(sender_semaphore_noc_addr, 1);
 
             // Wait on receiver's own semaphore value to become VALID (set by sender after it sends the data)
-            dataflow_internal::noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
+            noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
 
-            dataflow::cb_push_back(cb_id, block_size_tiles);
+            cb_push_back(cb_id, block_size_tiles);
         }
     }
 

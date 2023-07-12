@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 
 void kernel_main() {
 
@@ -25,14 +25,14 @@ void kernel_main() {
     #define stick_size_is_power_of_two get_compile_time_arg_val(0) == 1
     #if (stick_size_is_power_of_two)
     const uint32_t log_base_2_of_page_size = get_arg_val<uint32_t>(8);
-    const dataflow::InterleavedPow2AddrGen<true> s = {
+    const InterleavedPow2AddrGen<true> s = {
         .bank_base_address = dst_addr,
 
 
         .log_base_2_of_page_size = log_base_2_of_page_size // TODO(AP): refactor
     };
     #else
-    const dataflow::InterleavedAddrGen<true> s = {
+    const InterleavedAddrGen<true> s = {
         .bank_base_address = dst_addr,
 
 
@@ -43,13 +43,13 @@ void kernel_main() {
     uint64_t base_dst_noc_addr[32];
 
     auto write_tiles = [&] (const uint32_t& num_tiles, const uint32_t& width_size) {
-        dataflow::cb_wait_front(cb_id_out0, num_tiles);
-        uint32_t l1_read_addr = dataflow::get_read_ptr(cb_id_out0);
+        cb_wait_front(cb_id_out0, num_tiles);
+        uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
         // for (uint32_t i = 0; i < num_tiles; i++) {
         //     for (uint32_t k = 0; k < 32; k++) {
         //         uint64_t dst_noc_addr = base_dst_noc_addr[k];
 
-        //         dataflow::noc_async_write(l1_read_addr, dst_noc_addr, 64);
+        //         noc_async_write(l1_read_addr, dst_noc_addr, 64);
         //         l1_read_addr += 64;
         //         base_dst_noc_addr[k] += 64;
         //     }
@@ -57,19 +57,19 @@ void kernel_main() {
         for (uint32_t k = 0; k < 32; k++) {
             uint64_t dst_noc_addr = base_dst_noc_addr[k];
 
-            dataflow::noc_async_write(l1_read_addr, dst_noc_addr, width_size);
+            noc_async_write(l1_read_addr, dst_noc_addr, width_size);
             l1_read_addr += width_size;
             base_dst_noc_addr[k] += width_size;
         }
-        dataflow::noc_async_write_barrier();
-        dataflow::cb_pop_front(cb_id_out0, num_tiles);
+        noc_async_write_barrier();
+        cb_pop_front(cb_id_out0, num_tiles);
     };
 
 
     for (uint32_t i = 0; i < num_sticks / 32; i++) {
         // Get Base Addresses
         for (uint32_t j = 0; j < 32; j++) {
-            base_dst_noc_addr[j] = dataflow::get_noc_addr(stick_id, s);
+            base_dst_noc_addr[j] = get_noc_addr(stick_id, s);
             stick_id++;
         }
 

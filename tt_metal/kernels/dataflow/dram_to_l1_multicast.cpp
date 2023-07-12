@@ -1,4 +1,4 @@
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 
 void kernel_main() {
     uint32_t src_addr           = get_arg_val<uint32_t>(0);
@@ -17,17 +17,17 @@ void kernel_main() {
 
 
     // Read src buffer into local L1 buffer
-    uint64_t src_buffer_noc_addr = dataflow::get_noc_addr(src_noc_x, src_noc_y, src_addr);
-    dataflow::noc_async_read(src_buffer_noc_addr, local_addr, src_buffer_size);
-    dataflow::noc_async_read_barrier();
+    uint64_t src_buffer_noc_addr = get_noc_addr(src_noc_x, src_noc_y, src_addr);
+    noc_async_read(src_buffer_noc_addr, local_addr, src_buffer_size);
+    noc_async_read_barrier();
 
     // multicast local L1 buffer to all destination cores
-    uint64_t dst_noc_multicast_addr = dataflow_internal::get_noc_multicast_addr(
+    uint64_t dst_noc_multicast_addr = get_noc_multicast_addr(
         dst_noc_x_start,
         dst_noc_y_start,
         dst_noc_x_end,
         dst_noc_y_end,
         dst_addr);
-    dataflow::noc_async_write_multicast(local_addr, dst_noc_multicast_addr, src_buffer_size, num_dests);
-    dataflow::noc_async_write_barrier();
+    noc_async_write_multicast(local_addr, dst_noc_multicast_addr, src_buffer_size, num_dests);
+    noc_async_write_barrier();
 }

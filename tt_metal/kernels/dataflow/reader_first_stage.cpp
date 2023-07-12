@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
@@ -18,16 +18,16 @@ void kernel_main() {
         uint32_t src_addr = buffer_src_addr;
         for (uint32_t i = 0; i<num_tiles ; i += block_size_tiles) {
 
-            std::uint64_t buffer_src_noc_addr = dataflow::get_noc_addr(src_noc_x, src_noc_y, src_addr);
-            dataflow::cb_reserve_back(cb_id, block_size_tiles);
+            std::uint64_t buffer_src_noc_addr = get_noc_addr(src_noc_x, src_noc_y, src_addr);
+            cb_reserve_back(cb_id, block_size_tiles);
 
             if (j == 0) {
-                uint32_t l1_write_addr = dataflow::get_write_ptr(cb_id);
-                dataflow::noc_async_read(buffer_src_noc_addr, l1_write_addr, block_size_bytes);
-                dataflow::noc_async_read_barrier();
+                uint32_t l1_write_addr = get_write_ptr(cb_id);
+                noc_async_read(buffer_src_noc_addr, l1_write_addr, block_size_bytes);
+                noc_async_read_barrier();
             }
 
-            dataflow::cb_push_back(cb_id, block_size_tiles);
+            cb_push_back(cb_id, block_size_tiles);
             src_addr += block_size_bytes;
 
         }

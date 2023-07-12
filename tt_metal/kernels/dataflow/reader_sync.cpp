@@ -18,7 +18,7 @@ void kernel_main() {
     std::uint32_t transient_buffer_size_bytes= get_arg_val<uint32_t>(6);
 
     // L1 address of the operand buffer
-    std::uint32_t l1_address = dataflow::get_write_ptr(0);
+    std::uint32_t l1_address = get_write_ptr(0);
 
     // Scratch address in L1, two write register value before we copy it to into local/remote registers
     volatile uint32_t* constant_ptr = reinterpret_cast<volatile uint32_t*>(CONSTANT_REGISTER_VALUE);
@@ -26,27 +26,27 @@ void kernel_main() {
 
     std::uint32_t counter = 0;
     // src noc address
-    std::uint64_t src_noc_addr = dataflow::get_noc_addr(src_noc_x, src_noc_y, buffer_src_addr);
+    std::uint64_t src_noc_addr = get_noc_addr(src_noc_x, src_noc_y, buffer_src_addr);
     // Local and remote register addresses (used for sync)
-    std::uint64_t local = dataflow::get_noc_addr(stream_register_address);
-    std::uint64_t remote = dataflow::get_noc_addr(src_noc_x, src_noc_y, stream_register_address);
+    std::uint64_t local = get_noc_addr(stream_register_address);
+    std::uint64_t remote = get_noc_addr(src_noc_x, src_noc_y, stream_register_address);
     while(counter < num_tiles) {
         // Wait until sync register is VALID_VAL (means its safe to read data from source buffer into operand buffer)
         wait_for_sync_register_value(stream_register_address, VALID_VAL);
-        dataflow::cb_reserve_back(0, transient_buffer_size_tiles);
+        cb_reserve_back(0, transient_buffer_size_tiles);
 
-        dataflow::noc_async_read(src_noc_addr, l1_address, transient_buffer_size_bytes);
-        dataflow::noc_async_read_barrier();
+        noc_async_read(src_noc_addr, l1_address, transient_buffer_size_bytes);
+        noc_async_read_barrier();
 
         // push single tile
-        dataflow::cb_push_back(0, transient_buffer_size_tiles);
+        cb_push_back(0, transient_buffer_size_tiles);
         // Write INVALID_VAL into local register
-        dataflow::noc_async_write(CONSTANT_REGISTER_VALUE, local, 4);
-        dataflow::noc_async_write_barrier();
+        noc_async_write(CONSTANT_REGISTER_VALUE, local, 4);
+        noc_async_write_barrier();
 
         // Write INVALID_VAL into remote register
-        dataflow::noc_async_write(CONSTANT_REGISTER_VALUE, remote, 4);
-        dataflow::noc_async_write_barrier();
+        noc_async_write(CONSTANT_REGISTER_VALUE, remote, 4);
+        noc_async_write_barrier();
 
         counter += transient_buffer_size_tiles;
     }

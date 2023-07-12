@@ -25,14 +25,14 @@ void kernel_main() {
     for (std::uint32_t offset = 0; offset < dram_buffer_size; offset += chunk_size) {
         std::uint32_t dram_buffer_src_addr = dram_buffer_src_addr_base + offset;
         // DRAM NOC src address
-        std::uint64_t dram_buffer_src_noc_addr = dataflow::get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr);
-        dataflow::noc_async_read(dram_buffer_src_noc_addr, l1_buffer_addr, chunk_size);
-        dataflow::noc_async_read_barrier();
+        std::uint64_t dram_buffer_src_noc_addr = get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr);
+        noc_async_read(dram_buffer_src_noc_addr, l1_buffer_addr, chunk_size);
+        noc_async_read_barrier();
 
         // DRAM NOC dst address
         std::uint32_t dram_buffer_dst_addr = dram_buffer_dst_addr_base + offset;
-        std::uint64_t dram_buffer_dst_noc_addr = dataflow::get_noc_addr(dram_dst_noc_x, dram_dst_noc_y, dram_buffer_dst_addr);
-        dataflow::noc_async_write(l1_buffer_addr, dram_buffer_dst_noc_addr, chunk_size);
-        dataflow::noc_async_write_barrier();
+        std::uint64_t dram_buffer_dst_noc_addr = get_noc_addr(dram_dst_noc_x, dram_dst_noc_y, dram_buffer_dst_addr);
+        noc_async_write(l1_buffer_addr, dram_buffer_dst_noc_addr, chunk_size);
+        noc_async_write_barrier();
     }
 }

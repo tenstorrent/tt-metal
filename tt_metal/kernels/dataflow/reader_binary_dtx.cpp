@@ -1,9 +1,9 @@
 #include <stdint.h>
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 #include "debug_print.h"
 inline void noc_async_read_from_dram_to_l1(uint32_t dram_addr, uint32_t dram_noc_x, uint32_t dram_noc_y, uint32_t l1_dest_addr, uint32_t read_size) {
-    uint64_t src_noc_addr = dataflow::get_noc_addr(dram_noc_x, dram_noc_y, dram_addr);
-    dataflow::noc_async_read(src_noc_addr, l1_dest_addr, read_size);
+    uint64_t src_noc_addr = get_noc_addr(dram_noc_x, dram_noc_y, dram_addr);
+    noc_async_read(src_noc_addr, l1_dest_addr, read_size);
 }
 inline void async_read_from_dram_using_address_map(uint32_t dram_start_addr,
                                             uint32_t dram_noc_x,
@@ -30,7 +30,7 @@ inline void async_read_from_dram_using_address_map(uint32_t dram_start_addr,
             noc_async_read_from_dram_to_l1(address_map_group_dram_addr,
             address_map_dram_noc_x, address_map_dram_noc_y,
             address_map_scratch_pad_l1_addr, address_map_scratch_pad_buffer_size_bytes);
-            dataflow::noc_async_read_barrier();
+            noc_async_read_barrier();
             address_map_group_dram_addr += address_map_scratch_pad_buffer_size_bytes;
         }
         // There are 4 entries in the address map vector for one transfer
@@ -57,7 +57,7 @@ inline void async_read_from_dram_using_address_map(uint32_t dram_start_addr,
             // uint32_t dst_addr = l1_write_addr + dst_address_offset;
             // uint32_t pad_size = read_size;
             // if (pad_size <= MEM_ZEROS_SIZE) {
-            //     dataflow::noc_async_read(zeros_base_noc_addr, dst_addr, pad_size);
+            //     noc_async_read(zeros_base_noc_addr, dst_addr, pad_size);
             // }
             // else {
             //     // padding size is bigger than the zero buffer size
@@ -65,7 +65,7 @@ inline void async_read_from_dram_using_address_map(uint32_t dram_start_addr,
             //     uint32_t zeros_to_read = pad_size;
             //     uint32_t zeros_read_size = MEM_ZEROS_SIZE;
             //     while(zeros_to_read != 0) {
-            //         dataflow::noc_async_read(zeros_base_noc_addr, dst_addr, zeros_read_size);
+            //         noc_async_read(zeros_base_noc_addr, dst_addr, zeros_read_size);
             //         zeros_to_read -= zeros_read_size;
             //         if (zeros_to_read < zeros_read_size) {
             //             zeros_read_size = zeros_to_read;
@@ -124,7 +124,7 @@ void kernel_main() {
     // for (uint32_t zero_base_offset = 0; zero_base_offset < num_elements_in_zeros_buffer; zero_base_offset++) {
     //     *(zero_base_ptr + zero_base_offset) = 0;
     // }
-    // uint64_t zeros_base_noc_addr = dataflow::get_noc_addr(MEM_ZEROS_BASE);
+    // uint64_t zeros_base_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
 
     uint32_t in0_address_map_metadata_index = 0;
     // address map metdata buffer contains number of groups in the first element
@@ -140,8 +140,8 @@ void kernel_main() {
         // Read in0 block from DRAM
 
         // Read in0 block
-        dataflow::cb_reserve_back(cb_id_in0, in0_block_num_tiles);
-        uint32_t l1_write_addr_in0 = dataflow::get_write_ptr(cb_id_in0);
+        cb_reserve_back(cb_id_in0, in0_block_num_tiles);
+        uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
         uint32_t in0_address_map_current_group_dram_addr_offset = in0_address_map_metdata_l1_buffer[in0_address_map_metadata_index];
         uint32_t in0_address_map_current_group_dram_addr = in0_address_map_dram_addr + in0_address_map_current_group_dram_addr_offset;
         in0_address_map_metadata_index += 1;
@@ -151,13 +151,13 @@ void kernel_main() {
         async_read_from_dram_using_address_map(in0_addr_base, in0_noc_x, in0_noc_y,
             l1_write_addr_in0, scratch_pad_for_address_map_in_l1_addr, in0_address_map_current_group_size,
             in0_address_map_current_group_dram_addr, in0_address_map_dram_noc_x, in0_address_map_dram_noc_y);
-        dataflow::noc_async_read_barrier();
+        noc_async_read_barrier();
 
 
         // Read in1 block from DRAM
         // Read in1 block
-        dataflow::cb_reserve_back(cb_id_in1, in1_block_num_tiles);
-        uint32_t l1_write_addr_in1 = dataflow::get_write_ptr(cb_id_in1);
+        cb_reserve_back(cb_id_in1, in1_block_num_tiles);
+        uint32_t l1_write_addr_in1 = get_write_ptr(cb_id_in1);
         uint32_t in1_address_map_current_group_dram_addr_offset = in1_address_map_metdata_l1_buffer[in1_address_map_metadata_index];
         uint32_t in1_address_map_current_group_dram_addr = in1_address_map_dram_addr + in1_address_map_current_group_dram_addr_offset;
         in1_address_map_metadata_index += 1;
@@ -166,8 +166,8 @@ void kernel_main() {
         async_read_from_dram_using_address_map(in1_addr_base, in1_noc_x, in1_noc_y,
             l1_write_addr_in1, scratch_pad_for_address_map_in_l1_addr, in1_address_map_current_group_size,
             in1_address_map_current_group_dram_addr, in1_address_map_dram_noc_x, in1_address_map_dram_noc_y);
-        dataflow::noc_async_read_barrier();
-        dataflow::cb_push_back(cb_id_in0, in0_block_num_tiles);
-        dataflow::cb_push_back(cb_id_in1, in1_block_num_tiles);
+        noc_async_read_barrier();
+        cb_push_back(cb_id_in0, in0_block_num_tiles);
+        cb_push_back(cb_id_in1, in1_block_num_tiles);
     }
 }

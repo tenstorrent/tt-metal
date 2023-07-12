@@ -19,9 +19,9 @@ void kernel_main() {
         // loading_noc variable is defined by either NCRISC or BRISC to be 0 or 1, depending on which RISC the kernel is running
         for(uint32_t stick_id = 0; stick_id < num_sticks; stick_id++) {
             // DRAM NOC src address
-            std::uint64_t dram_buffer_src_noc_addr = dataflow::get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr);
-            dataflow::noc_async_read(dram_buffer_src_noc_addr, l1_buffer_addr, stick_size);
-            dataflow::noc_async_read_barrier();
+            std::uint64_t dram_buffer_src_noc_addr = get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr);
+            noc_async_read(dram_buffer_src_noc_addr, l1_buffer_addr, stick_size);
+            noc_async_read_barrier();
             l1_buffer_addr += stick_size;
         }
     }

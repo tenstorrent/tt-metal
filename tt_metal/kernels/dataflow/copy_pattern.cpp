@@ -52,9 +52,9 @@ void kernel_main() {
                         // shift (idx+s) by (log2_of_C + 2) means multiply by (C * 4B)
                         dram_buffer_src_addr = dram_buffer_src_addr_base + ((idx + s) << (log2_of_C + log2_of_bytes_per_datum));
                         // DRAM NOC src address
-                        dram_buffer_src_noc_addr = dataflow::get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr);
+                        dram_buffer_src_noc_addr = get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr);
 
-                        dataflow::noc_async_read(dram_buffer_src_noc_addr, l1_address, chunk_size);
+                        noc_async_read(dram_buffer_src_noc_addr, l1_address, chunk_size);
                         l1_address = l1_address + chunk_size;
                         } // s
                         idx = idx + W;
@@ -65,13 +65,13 @@ void kernel_main() {
         } // n
 
         // wait all reads flushed (ie received)
-        dataflow::noc_async_read_barrier();
+        noc_async_read_barrier();
     #else
         // TODO: fix hardcoding. << 2 because each value is 4Bytes
         std::uint32_t chunk_size = C << log2_of_bytes_per_datum; // z * 4B
         noc_fast_read_set_len(chunk_size);
         // DRAM NOC src address
-        std::uint64_t dram_buffer_src_noc_addr = dataflow::get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr_base);
+        std::uint64_t dram_buffer_src_noc_addr = get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr_base);
         noc_fast_read_set_src_xy(dram_buffer_src_noc_addr);
 
         // the cordinate of the beginning of the current row
@@ -107,7 +107,7 @@ void kernel_main() {
 
         noc_fast_read_inc_num_issued(num_issued);
         // wait all reads from all transactions to be flushed (ie received)
-        dataflow::noc_async_read_barrier();
+        noc_async_read_barrier();
 
     #endif
     }

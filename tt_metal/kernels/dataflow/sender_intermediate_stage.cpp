@@ -1,4 +1,4 @@
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
 
@@ -23,39 +23,39 @@ void kernel_main() {
 
     uint32_t block_size_bytes = get_tile_size(cb_id) * block_size_tiles;
 
-    uint64_t receiver_semaphore_noc_addr = dataflow::get_noc_addr(receiver_noc_x, receiver_noc_y, receiver_semaphore_addr);
+    uint64_t receiver_semaphore_noc_addr = get_noc_addr(receiver_noc_x, receiver_noc_y, receiver_semaphore_addr);
 
     for (uint32_t j = 0; j < num_repetitions; j++) {
         for (uint32_t i = 0; i < num_tiles; i += block_size_tiles) {
 
             // wait until receiver has set the sender's semaphore_addr value to 1, which means receiver has reserved space in the CB
-            dataflow_internal::noc_semaphore_wait(sender_semaphore_addr_ptr, 1);
+            noc_semaphore_wait(sender_semaphore_addr_ptr, 1);
 
             if (i > 0) {
-                dataflow::cb_pop_front(cb_id, block_size_tiles);
+                cb_pop_front(cb_id, block_size_tiles);
             }
-            dataflow::cb_wait_front(cb_id, block_size_tiles);
-            uint32_t l1_addr = dataflow::get_read_ptr(cb_id);
+            cb_wait_front(cb_id, block_size_tiles);
+            uint32_t l1_addr = get_read_ptr(cb_id);
 
             // now we have the block in the CB (at l1_addr), we can send to receiver
-            uint64_t receiver_data_noc_addr      = dataflow::get_noc_addr(receiver_noc_x, receiver_noc_y, l1_addr);
-            dataflow::noc_async_write(l1_addr, receiver_data_noc_addr, block_size_bytes);
+            uint64_t receiver_data_noc_addr      = get_noc_addr(receiver_noc_x, receiver_noc_y, l1_addr);
+            noc_async_write(l1_addr, receiver_data_noc_addr, block_size_bytes);
 
             // set the sender's semaphore value back to zero for the next block
             // we need to reset before we set the receiver's semaphore
-            dataflow_internal::noc_semaphore_set(sender_semaphore_addr_ptr, 0);
+            noc_semaphore_set(sender_semaphore_addr_ptr, 0);
 
             // we now set the receiver's semaphore, so that it knows that the data has been written to the CB
-            // must use dataflow_internal::noc_semaphore_set_remote and not dataflow_internal::noc_semaphore_inc in the sender
+            // must use noc_semaphore_set_remote and not noc_semaphore_inc in the sender
             // because we need to ensure that data is written to the remote CB before we set the semaphore
-            // dataflow::noc_async_write and dataflow_internal::noc_semaphore_set_remote are ordered
-            dataflow_internal::noc_semaphore_set_remote(l1_valid_value_addr, receiver_semaphore_noc_addr);
+            // noc_async_write and noc_semaphore_set_remote are ordered
+            noc_semaphore_set_remote(l1_valid_value_addr, receiver_semaphore_noc_addr);
 
             // this barrier is not needed, sempahore inter-lock already guarantees that we won't overwrite local CB with new data
             // ie, it is safe to pop here, because the data in the CB won't actually be overwritten until the receiver has set the semaphore (which means it was received)
             // this barrier would hurt performance for smaller transfers (<16KB), but for larger transfers it wouldn't make a difference
-            // dataflow::noc_async_write_barrier();
+            // noc_async_write_barrier();
         }
-        dataflow::cb_pop_front(cb_id, block_size_tiles);
+        cb_pop_front(cb_id, block_size_tiles);
     }
 }

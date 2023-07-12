@@ -40,25 +40,25 @@ void kernel_main() {
     std::uint64_t dram_buffer_src_noc_addr;
     while(counter < num_tiles) {
         std::uint32_t reg_addr = ping_pong_address(stream_register_address1, stream_register_address2, counter);
-        std::uint64_t local = dataflow::get_noc_addr(reg_addr);
-        std::uint64_t remote = dataflow::get_noc_addr(consumer_core_noc_x, consumer_core_noc_y, reg_addr);
+        std::uint64_t local = get_noc_addr(reg_addr);
+        std::uint64_t remote = get_noc_addr(consumer_core_noc_x, consumer_core_noc_y, reg_addr);
         std::uint32_t local_buffer_address = ping_pong_address(local_buffer_addr1, local_buffer_addr2, counter);
 
         // DRAM NOC src address
-        dram_buffer_src_noc_addr = dataflow::get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr);
+        dram_buffer_src_noc_addr = get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr);
         // Wait until sync register is INVALID_VAL (means its safe to corrupt destination buffer)
         wait_for_sync_register_value(reg_addr, INVALID_VAL);
         // Copy data from dram into destination buffer
-        dataflow::noc_async_read(dram_buffer_src_noc_addr, local_buffer_address, transient_buffer_size_bytes);
+        noc_async_read(dram_buffer_src_noc_addr, local_buffer_address, transient_buffer_size_bytes);
         dram_buffer_src_addr += transient_buffer_size_bytes;
         // wait all reads flushed (ie received)
-        dataflow::noc_async_read_barrier();
+        noc_async_read_barrier();
 
-        dataflow::noc_async_write(CONSTANT_REGISTER_VALUE, local, 4);
-        dataflow::noc_async_write_barrier();
+        noc_async_write(CONSTANT_REGISTER_VALUE, local, 4);
+        noc_async_write_barrier();
         // Write VALID_VAL into remote register
-        dataflow::noc_async_write(CONSTANT_REGISTER_VALUE, remote, 4);
-        dataflow::noc_async_write_barrier();
+        noc_async_write(CONSTANT_REGISTER_VALUE, remote, 4);
+        noc_async_write_barrier();
 
         counter += transient_buffer_size_tiles;
     }

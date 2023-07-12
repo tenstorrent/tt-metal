@@ -1,5 +1,5 @@
 #include <cstdlib>
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 
 void kernel_main() {
     // Kernel args
@@ -33,17 +33,17 @@ void kernel_main() {
         *(zero_base_ptr + zero_base_offset) = 0;
     }
 
-    uint64_t zeros_base_noc_addr = dataflow::get_noc_addr(MEM_ZEROS_BASE);
+    uint64_t zeros_base_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
     for (uint32_t i = 0; i < num_tiles_r; i++) {
         for (uint32_t j = 0; j < 32; j++) {
             uint32_t src_addr_ = src_addr + start_dram_addr_offset_for_tensor_row;
             for (uint32_t k = 0; k < num_tiles_c; k++) {
-                dataflow::cb_reserve_back(cb_id_in0, 1);
-                uint64_t src_noc_addr = dataflow::get_noc_addr(src_noc_x, src_noc_y, src_addr_);
+                cb_reserve_back(cb_id_in0, 1);
+                uint64_t src_noc_addr = get_noc_addr(src_noc_x, src_noc_y, src_addr_);
 
                 // Read one row of data
-                uint32_t l1_write_addr = dataflow::get_write_ptr(cb_id_in0);
-                dataflow::noc_async_read(src_noc_addr, l1_write_addr, num_bytes_per_tile_row);
+                uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+                noc_async_read(src_noc_addr, l1_write_addr, num_bytes_per_tile_row);
 
                 // We move one row down
                 l1_write_addr += num_bytes_per_tile_row;
@@ -53,15 +53,15 @@ void kernel_main() {
                     8 rows three times, then we send 7 rows
                 */
                 for (uint32_t z = 0; z < 3; z++) {
-                    dataflow::noc_async_read(zeros_base_noc_addr, l1_write_addr, num_bytes_for_sending_eight_tile_rows);
+                    noc_async_read(zeros_base_noc_addr, l1_write_addr, num_bytes_for_sending_eight_tile_rows);
                     l1_write_addr += num_bytes_for_sending_eight_tile_rows;
                 }
 
-                dataflow::noc_async_read(zeros_base_noc_addr, l1_write_addr, num_bytes_for_sending_seven_tile_rows);
+                noc_async_read(zeros_base_noc_addr, l1_write_addr, num_bytes_for_sending_seven_tile_rows);
 
                 src_addr_ += num_bytes_per_tile;
-                dataflow::noc_async_read_barrier();
-                dataflow::cb_push_back(cb_id_in0, 1);
+                noc_async_read_barrier();
+                cb_push_back(cb_id_in0, 1);
 
             } // End num_tiles_c loop
             start_dram_addr_offset_for_tensor_row += num_bytes_per_tile_row;

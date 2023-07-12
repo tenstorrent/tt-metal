@@ -1,4 +1,4 @@
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 
 void kernel_main() {
     uint32_t dst_addr           = get_arg_val<uint32_t>(0);
@@ -26,16 +26,16 @@ void kernel_main() {
             for(uint32_t r = 0; r < inner_r; r++) {
                 uint32_t dram_address_c = dram_address_r;
                 for(uint32_t c = 0; c < inner_c; c++) {
-                    uint64_t dst_noc_addr = dataflow::get_noc_addr(dst_noc_x, dst_noc_y, dram_address_c);
+                    uint64_t dst_noc_addr = get_noc_addr(dst_noc_x, dst_noc_y, dram_address_c);
 
-                    dataflow::cb_wait_front(cb_id_out0, ublock_size_tiles);
-                    uint32_t l1_read_addr = dataflow::get_read_ptr(cb_id_out0);
+                    cb_wait_front(cb_id_out0, ublock_size_tiles);
+                    uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
 
-                    dataflow::noc_async_write(l1_read_addr, dst_noc_addr, ublock_size_bytes);
+                    noc_async_write(l1_read_addr, dst_noc_addr, ublock_size_bytes);
 
-                    dataflow::noc_async_write_barrier();
+                    noc_async_write_barrier();
 
-                    dataflow::cb_pop_front(cb_id_out0, ublock_size_tiles);
+                    cb_pop_front(cb_id_out0, ublock_size_tiles);
                     dram_address_c += ublock_size_bytes;
                 }
                 dram_address_r += stride_r; // goto next row within sub-block

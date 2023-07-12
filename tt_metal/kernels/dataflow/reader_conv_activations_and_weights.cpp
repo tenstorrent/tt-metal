@@ -1,10 +1,10 @@
 #include <stdint.h>
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 #include "debug_print.h"
 
 inline void noc_async_read_from_dram_to_l1(uint32_t dram_addr, uint32_t dram_noc_x, uint32_t dram_noc_y, uint32_t l1_dest_addr, uint32_t read_size) {
-    uint64_t src_noc_addr = dataflow::get_noc_addr(dram_noc_x, dram_noc_y, dram_addr);
-    dataflow::noc_async_read(src_noc_addr, l1_dest_addr, read_size);
+    uint64_t src_noc_addr = get_noc_addr(dram_noc_x, dram_noc_y, dram_addr);
+    noc_async_read(src_noc_addr, l1_dest_addr, read_size);
 }
 
 inline void pad_l1_buffer_with_zeroes(uint32_t l1_addr, uint32_t pad_size_bytes) {
@@ -74,14 +74,14 @@ void kernel_main() {
         // Read activations for this group
         // Activations are in channels last layout in dram
         {
-            dataflow::cb_reserve_back(cb_id_act, act_block_num_tiles);
+            cb_reserve_back(cb_id_act, act_block_num_tiles);
             uint32_t block_idx_h = (uint32_t) (group_idx / num_blocks_act_w) / (num_blocks_weight_w);
             uint32_t block_idx_w = (uint32_t) (group_idx % num_blocks_act_w);
             uint32_t block_idx = (block_idx_h * num_blocks_act_w) + block_idx_w;
             uint32_t start_block_2d_index_h = block_idx_h * act_block_h_datums;
             uint32_t start_block_2d_index_w = block_idx_w * act_block_w_datums;
             uint32_t start_block_2d_index = (start_block_2d_index_h * act_block_w_datums * num_blocks_act_w) + start_block_2d_index_w;
-            uint32_t l1_write_addr_act = dataflow::get_write_ptr(cb_id_act);
+            uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
             if(start_block_2d_index_w >= act_matrix_width_unpadded) {
                 DPRINT << "Problem" << ENDL();
             }
@@ -184,8 +184,8 @@ void kernel_main() {
         // Read weights for this group
         // Weights are in tiled layout in dram
         {
-            dataflow::cb_reserve_back(cb_id_weight, weight_block_num_tiles);
-            uint32_t l1_write_addr_weight = dataflow::get_write_ptr(cb_id_weight);
+            cb_reserve_back(cb_id_weight, weight_block_num_tiles);
+            uint32_t l1_write_addr_weight = get_write_ptr(cb_id_weight);
             // Weight blocks are col major
             uint32_t block_idx_h = (uint32_t) (group_idx % num_blocks_weight_h);
             uint32_t block_idx_w = (uint32_t) (group_idx / num_blocks_weight_h) % (num_blocks_weight_w);
@@ -221,9 +221,9 @@ void kernel_main() {
                 }
             }
         }
-        dataflow::noc_async_read_barrier();
-        dataflow::cb_push_back(cb_id_act, act_block_num_tiles);
-        dataflow::cb_push_back(cb_id_weight, weight_block_num_tiles);
+        noc_async_read_barrier();
+        cb_push_back(cb_id_act, act_block_num_tiles);
+        cb_push_back(cb_id_weight, weight_block_num_tiles);
     }
 
 }

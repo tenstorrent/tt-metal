@@ -1,5 +1,5 @@
 #include <cstdlib>
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 
 /**
  * NOC APIs are prefixed w/ "ncrisc" (legacy name) but there's nothing NCRISC specific, they can be used on BRISC or other RISCs
@@ -38,10 +38,10 @@ void kernel_main() {
     std::uint32_t l1_addr2 = l1_buffer_addr + rd_wr_l1_buffer_size_bytes;
 
     // DRAM NOC src address
-    dram_buffer_src_noc_addr = dataflow::get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr);
+    dram_buffer_src_noc_addr = get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr);
 
     // Copy data from DRAM into destination L1 buffer
-    dataflow::noc_async_read(
+    noc_async_read(
         dram_buffer_src_noc_addr,
         l1_addr1,
         rd_wr_l1_buffer_size_bytes
@@ -51,11 +51,11 @@ void kernel_main() {
 
     while (num_tiles_read < num_tiles) {
         // DRAM NOC src address
-        dram_buffer_src_noc_addr = dataflow::get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr);
+        dram_buffer_src_noc_addr = get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr);
         // DRAM NOC dst address
-        dram_buffer_dst_noc_addr = dataflow::get_noc_addr(dram_dst_noc_x, dram_dst_noc_y, dram_buffer_dst_addr);
+        dram_buffer_dst_noc_addr = get_noc_addr(dram_dst_noc_x, dram_dst_noc_y, dram_buffer_dst_addr);
 
-        dataflow::noc_async_read(
+        noc_async_read(
             dram_buffer_src_noc_addr,
             l1_addr2,
             rd_wr_l1_buffer_size_bytes
@@ -64,9 +64,9 @@ void kernel_main() {
         num_tiles_read += rd_wr_l1_buffer_size_tiles;
 
         // Wait all reads flushed (ie received)
-        dataflow::noc_async_read_barrier();
+        noc_async_read_barrier();
 
-        dataflow::noc_async_write(
+        noc_async_write(
             l1_addr1,
             dram_buffer_dst_noc_addr,
             rd_wr_l1_buffer_size_bytes
@@ -75,7 +75,7 @@ void kernel_main() {
         dram_buffer_dst_addr += rd_wr_l1_buffer_size_bytes;
 
         // Wait for all the writes to complete (ie acked)
-        dataflow::noc_async_write_barrier();
+        noc_async_write_barrier();
 
         // Swap L1 addr locations
         if (num_tiles_read < num_tiles) {
@@ -86,12 +86,12 @@ void kernel_main() {
     }
 
     // DRAM NOC dst address
-    dram_buffer_dst_noc_addr = dataflow::get_noc_addr(dram_dst_noc_x, dram_dst_noc_y, dram_buffer_dst_addr);
-    dataflow::noc_async_write(
+    dram_buffer_dst_noc_addr = get_noc_addr(dram_dst_noc_x, dram_dst_noc_y, dram_buffer_dst_addr);
+    noc_async_write(
         l1_addr2,
         dram_buffer_dst_noc_addr,
         rd_wr_l1_buffer_size_bytes
     );
     // Wait for all the writes to complete (ie acked)
-    dataflow::noc_async_write_barrier();
+    noc_async_write_barrier();
 }

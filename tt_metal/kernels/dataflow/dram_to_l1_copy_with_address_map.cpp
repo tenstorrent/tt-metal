@@ -22,9 +22,9 @@ void kernel_main() {
         std::uint32_t l1_buffer_dst_addr = l1_buffer_dst_addr_base + address_map[i+1];
         std::uint32_t dram_buffer_size = address_map[i+2];
         // DRAM NOC src address
-        std::uint64_t dram_buffer_src_noc_addr = dataflow::get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr);
-        dataflow::noc_async_read(dram_buffer_src_noc_addr, l1_buffer_dst_addr, dram_buffer_size);
-        dataflow::noc_async_read_barrier();
+        std::uint64_t dram_buffer_src_noc_addr = get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr);
+        noc_async_read(dram_buffer_src_noc_addr, l1_buffer_dst_addr, dram_buffer_size);
+        noc_async_read_barrier();
 
     }
 

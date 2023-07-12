@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 
 void kernel_main() {
 
@@ -19,7 +19,7 @@ void kernel_main() {
     const uint32_t num_tiles_c = stick_size / 64; // Assuming 2 bytes per datum, there are 64 bytes per tile row
     uint32_t stick_id          = 0;
 
-    const dataflow::InterleavedAddrGen<true> s = {
+    const InterleavedAddrGen<true> s = {
         .bank_base_address = dst_addr,
 
 
@@ -28,19 +28,19 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < num_sticks / 32; i++) {
         // We reserve back an entire tile row and issue a bunch of reads
-        dataflow::cb_wait_front(cb_id_out0, num_tiles_c);
-        uint32_t l1_read_addr = dataflow::get_read_ptr(cb_id_out0);
+        cb_wait_front(cb_id_out0, num_tiles_c);
+        uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
         for (uint32_t j = 0; j < 32; j++) {
-            uint64_t dst_noc_addr = dataflow::get_noc_addr(
+            uint64_t dst_noc_addr = get_noc_addr(
                 stick_id, s);
 
             uint32_t bank_id = stick_id & (num_dram_channels - 1);
-            dataflow::noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
+            noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
             l1_read_addr += stick_size;
             stick_id++;
         }
-        dataflow::noc_async_write_barrier();
-        dataflow::cb_pop_front(cb_id_out0, num_tiles_c);
+        noc_async_write_barrier();
+        cb_pop_front(cb_id_out0, num_tiles_c);
     }
 
 }

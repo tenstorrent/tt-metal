@@ -42,7 +42,7 @@ please create an issue under the [debugger board](https://yyz-gitlab.local.tenst
 For example, below is a dummy brisc kernel running on core 1-1:
 
 ```cpp
-#include "dataflow_internals.h"
+#include "dataflow_api.h"
 
 void kernel_main() {
     volatile uint32_t dst_addr  = get_arg_val<uint32_t>(0);

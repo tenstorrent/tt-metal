@@ -1,5 +1,3 @@
-#include "dataflow_kernel_api.h"
-
 #define GENERATE_BCAST_SCALER 1
 #define TILE_OFFSET get_arg_val<uint32_t>(4)
 
@@ -22,7 +20,7 @@ void kernel_main() {
     DataFormat accessor_data_format = DataFormat::Bfp8_b;
     #endif
 
-    const dataflow::InterleavedAddrGenFast<OUTPUT_DRAM> s = {
+    const InterleavedAddrGenFast<OUTPUT_DRAM> s = {
         .bank_base_address = dst_addr,
         .page_size = tile_bytes,
         .data_format = accessor_data_format
@@ -40,14 +38,14 @@ void kernel_main() {
     #endif
 
     for (uint32_t i = 0; i<num_tiles; i += blk) {
-        dataflow::cb_wait_front(cb_id_out0, blk);
+        cb_wait_front(cb_id_out0, blk);
 
-        uint32_t l1_read_addr = dataflow::get_read_ptr(cb_id_out0);
+        uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
         for (uint32_t j = 0; j<blk; j++) {
-            dataflow::noc_async_write_tile(i+j+tile_offset, s, l1_read_addr);
+            noc_async_write_tile(i+j+tile_offset, s, l1_read_addr);
             l1_read_addr+=tile_bytes;
         }
-        dataflow::noc_async_write_barrier();
-        dataflow::cb_pop_front(cb_id_out0, blk);
+        noc_async_write_barrier();
+        cb_pop_front(cb_id_out0, blk);
     }
 }

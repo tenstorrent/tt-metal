@@ -1,38 +1,38 @@
 #include <cstdlib>
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 //#include "debug_print.h"
 
-// int __multiply(int n, int m) {
-//     int res = 0, count = 0;
-//     while (m) {
-//         if ((m & 1) == 1)
-//             res += (n << count);
-//         count++;
-//         m >>= 1;
-//     }
-//     return res;
-// }
+int __multiply(int n, int m) {
+    int res = 0, count = 0;
+    while (m) {
+        if ((m & 1) == 1)
+            res += (n << count);
+        count++;
+        m >>= 1;
+    }
+    return res;
+}
 
-// int __min(int a, int b) {
-//     if (a < b)
-//         return a;
-//     else
-//         return b;
-// }
+int __min(int a, int b) {
+    if (a < b)
+        return a;
+    else
+        return b;
+}
 
-// inline __attribute__((always_inline))
-// std::uint64_t dataflow::get_noc_addr_rm(
-//     uint32_t row, uint32_t col, uint32_t bank_base_address, uint32_t num_used_banks, uint32_t W)
-// {
-//     uint32_t bank_id = row & (num_used_banks - 1);
-//     uint32_t dram_x = dram_bank_to_noc_x[bank_id];
-//     uint32_t dram_y = dram_bank_to_noc_y[bank_id];
-//     // >>3 is because of 8 banks
-//     // TODO(AP): replace multiply with increments
-//     uint32_t dram_addr = bank_base_address + (__multiply(row>>3, (W<<1))) + (col<<1);
-//     std::uint64_t noc_addr = dataflow::get_noc_addr(dram_x, dram_y, dram_addr);
-//     return noc_addr;
-// }
+inline __attribute__((always_inline))
+std::uint64_t get_noc_addr_rm(
+    uint32_t row, uint32_t col, uint32_t bank_base_address, uint32_t num_used_banks, uint32_t W)
+{
+    uint32_t bank_id = row & (num_used_banks - 1);
+    uint32_t dram_x = dram_bank_to_noc_x[bank_id];
+    uint32_t dram_y = dram_bank_to_noc_y[bank_id];
+    // >>3 is because of 8 banks
+    // TODO(AP): replace multiply with increments
+    uint32_t dram_addr = bank_base_address + (__multiply(row>>3, (W<<1))) + (col<<1);
+    std::uint64_t noc_addr = get_noc_addr(dram_x, dram_y, dram_addr);
+    return noc_addr;
+}
 
 void kernel_main() {
     // Kernel args
@@ -61,8 +61,8 @@ void kernel_main() {
     uint64_t replicate_dest_addr;
     uint32_t start_dram_addr_offset_for_tensor_row = 0;
 
-    dataflow::cb_reserve_back(cb_id_in0, 16); // in this kernel we are not pushing anything into CBs, just using the space
-    uint32_t l1_tmp_addr = dataflow::get_write_ptr(cb_id_in0);
+    cb_reserve_back(cb_id_in0, 16); // in this kernel we are not pushing anything into CBs, just using the space
+    uint32_t l1_tmp_addr = get_write_ptr(cb_id_in0);
 
     //DPRINT << "----- N=" << N << " C=" << C << " H=" << H << " W=" << W << ENDL();
 
@@ -72,18 +72,18 @@ void kernel_main() {
     for (uint32_t n = 0; n < N; n++) {
         for (uint32_t h = 0; h < H; h++) {
             for (uint32_t c = 0; c < C; c++) {
-                uint64_t src_noc_addr = dataflow::get_noc_addr_rm(nch_src, 0, src_addr, 8, W);
+                uint64_t src_noc_addr = get_noc_addr_rm(nch_src, 0, src_addr, 8, W);
                 //DPRINT << "nch_dst=" << nch_dst << ENDL();
                 //DPRINT << "nch_src=" << nch_src << ENDL();
                 //DPRINT << "src_addr=" << uint32_t(src_noc_addr>>32) << "," << uint32_t(src_noc_addr&0xffffFFFF) << ENDL();
-                dataflow::noc_async_read(src_noc_addr, l1_tmp_addr, (W<<1)); // TODO(AP): segment this read
-                dataflow::noc_async_read_barrier();
+                noc_async_read(src_noc_addr, l1_tmp_addr, (W<<1)); // TODO(AP): segment this read
+                noc_async_read_barrier();
 
-                uint64_t dst_noc_addr = dataflow::get_noc_addr_rm(nch_dst, 0, dst_addr, 8, W);
+                uint64_t dst_noc_addr = get_noc_addr_rm(nch_dst, 0, dst_addr, 8, W);
 
                 //DPRINT << "  dst_addr=" << uint32_t(dst_noc_addr>>32) << "," << uint32_t(dst_noc_addr&0xffffFFFF) << ENDL();
-                dataflow::noc_async_write(l1_tmp_addr, dst_noc_addr, (W<<1)); // TODO(AP): segment this write
-                dataflow::noc_async_write_barrier();
+                noc_async_write(l1_tmp_addr, dst_noc_addr, (W<<1)); // TODO(AP): segment this write
+                noc_async_write_barrier();
                 nch_dst ++;
                 nch_src += H;
             } // c loop

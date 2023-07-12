@@ -2,7 +2,7 @@
 
 #include <array>
 
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 
 //#define DEBUG
 
@@ -15,7 +15,7 @@ void kernel_main() {
     bool out1_only = (bool)get_arg_val<uint32_t>(4);
 
     // COMPILE TIME ARGS
-    // dataflow::Interleaved accessor args
+    // interleaved accessor args
     constexpr uint32_t out_is_dram = get_compile_time_arg_val(1);
     // WRITER COMPILE TIME ARGS
     //constexpr uint32_t out_num_tiles_per_tensor = get_compile_time_arg_val(2);
@@ -33,18 +33,18 @@ void kernel_main() {
 
 #define tile_dtype_is_bfloat16 get_compile_time_arg_val(0) == 1
 #if (tile_dtype_is_bfloat16)
-    const dataflow::InterleavedAddrGenFast<out_is_dram_bool> s0 = {
+    const InterleavedAddrGenFast<out_is_dram_bool> s0 = {
         .bank_base_address = out0_tensor_addr, .page_size = single_tile_size_bytes, .data_format = DataFormat::Float16};
-    const dataflow::InterleavedAddrGenFast<out_is_dram_bool> s1 = {
+    const InterleavedAddrGenFast<out_is_dram_bool> s1 = {
         .bank_base_address = out1_tensor_addr, .page_size = single_tile_size_bytes, .data_format = DataFormat::Float16};
 #else
-    const dataflow::InterleavedAddrGenFast<out_is_dram_bool> s0 = {
+    const InterleavedAddrGenFast<out_is_dram_bool> s0 = {
         .bank_base_address = out0_tensor_addr, .page_size = single_tile_size_bytes, .data_format = DataFormat::Bfp8_b};
-    const dataflow::InterleavedAddrGenFast<out_is_dram_bool> s1 = {
+    const InterleavedAddrGenFast<out_is_dram_bool> s1 = {
         .bank_base_address = out1_tensor_addr, .page_size = single_tile_size_bytes, .data_format = DataFormat::Bfp8_b};
 #endif
 
-    std::array<dataflow::InterleavedAddrGenFast<out_is_dram_bool>, 2> output_banks{s0, s1};
+    std::array<InterleavedAddrGenFast<out_is_dram_bool>, 2> output_banks{s0, s1};
     uint32_t out_split_tensor_tile_id;
 //    uint32_t out_num_tiles_read = out_num_tiles_per_tensor;
 
@@ -67,11 +67,11 @@ void kernel_main() {
             for (uint32_t j = 0; j < out_num_tiles_per_tensor_y; j++) {
                 for (uint32_t i = 0; i < out_num_tiles_per_tensor_x; i++) {
                     uint32_t tile_id = y_stride_cum + z_stride_cum + i;
-                    dataflow::cb_wait_front(cb_id_out0, onetile);
-                    uint32_t l1_read_addr = dataflow::get_read_ptr(cb_id_out0);
-                    dataflow::noc_async_write_tile(tile_id + out_tensor_tile_id, s, l1_read_addr);
-                    dataflow::noc_async_write_barrier();
-                    dataflow::cb_pop_front(cb_id_out0, onetile);
+                    cb_wait_front(cb_id_out0, onetile);
+                    uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
+                    noc_async_write_tile(tile_id + out_tensor_tile_id, s, l1_read_addr);
+                    noc_async_write_barrier();
+                    cb_pop_front(cb_id_out0, onetile);
 #ifdef DEBUG
             DPRINT << "Writer for Bank: " << bank_id << " has Tile ID: " << tile_id + out_tensor_tile_id << ENDL();
             DPRINT << "Writer Address: " << l1_read_addr << ENDL() << ENDL();

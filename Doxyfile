@@ -917,9 +917,8 @@ WARN_LOGFILE           =
 # spaces. See also FILE_PATTERNS and EXTENSION_MAPPING
 # Note: If this tag is empty the current directory is searched.
 
-INPUT                  = tt_metal/src/firmware/riscv/common/dataflow_internals.h \
+INPUT                  = tt_metal/src/firmware/riscv/common/dataflow_api.h \
                          tt_metal/host_api.hpp \
-                         tt_metal/include/dataflow_kernel_api.h \
                          tt_metal/include/compute_kernel_api.h \
                          tt_metal/impl/kernels/kernel_args.hpp
 

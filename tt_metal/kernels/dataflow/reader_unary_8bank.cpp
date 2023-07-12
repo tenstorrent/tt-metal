@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 
 //#include "debug_print.h"
 
@@ -8,15 +8,15 @@ void generate_bcast_scaler() {
     uint32_t scaler = get_arg_val<uint32_t>(8);
     union { float f; uint32_t u; } u; u.u = scaler;
     //DPRINT << "basic Scaler = " << F32(u.f) << ENDL();
-    dataflow::cb_reserve_back(cb_in_2, 1);
-    auto ptr = reinterpret_cast<uint16_t*>(dataflow::get_write_ptr(cb_in_2));
+    cb_reserve_back(cb_in_2, 1);
+    auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_in_2));
     for (int j = 0; j < 1024; j++)
         ptr[j] = uint16_t(0);
 
     for (int k = 0; k < 4; k++)
     for (int j = 0; j < 16; j++)
         ptr[k*256 + j] = uint16_t(u.u>>16);
-    dataflow::cb_push_back(cb_in_2, 1);
+    cb_push_back(cb_in_2, 1);
 }
 
 void kernel_main() {
@@ -35,7 +35,7 @@ void kernel_main() {
     constexpr bool read_from_dram = true;
     #endif
 
-    const dataflow::InterleavedPow2AddrGen<read_from_dram> src_a = { src_addr, 11 };
+    const InterleavedPow2AddrGen<read_from_dram> src_a = { src_addr, 11 };
 
     #if GENERATE_BCAST_SCALER
     // TODO(AP): cleanup, probably with named args/param pack/reflection.
@@ -56,16 +56,16 @@ void kernel_main() {
     uint32_t i_tile = 0;
     for (uint32_t i = 0; i<num_tiles; i += blk) {
         uint32_t rem = blk; // (i + blk > num_tiles) ? num_tiles - i : blk;
-        dataflow::cb_reserve_back(cb_id_in0, rem);
-        uint32_t l1_write_addr = dataflow::get_write_ptr(cb_id_in0);
+        cb_reserve_back(cb_id_in0, rem);
+        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
 
         for (uint32_t r = 0; r<rem; r++) {
-            uint64_t src_noc_addr = dataflow::get_noc_addr(i+r+tile_offset, src_a); // not contiguous for sequential r, can be banked
+            uint64_t src_noc_addr = get_noc_addr(i+r+tile_offset, src_a); // not contiguous for sequential r, can be banked
             auto addr = l1_write_addr + (r<<11);
-            dataflow::noc_async_read(src_noc_addr, addr, tile_bytes); // TODO(AP): data type size
+            noc_async_read(src_noc_addr, addr, tile_bytes); // TODO(AP): data type size
         }
         // DPRINT << uint(my_x[loading_noc]) << ", " << uint(my_y[loading_noc]) << ENDL();
-        dataflow::noc_async_read_barrier();
-        dataflow::cb_push_back(cb_id_in0, rem);
+        noc_async_read_barrier();
+        cb_push_back(cb_id_in0, rem);
     }
 }

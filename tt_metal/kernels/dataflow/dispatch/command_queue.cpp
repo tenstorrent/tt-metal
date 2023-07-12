@@ -3,8 +3,8 @@
 #include "debug_print.h"
 
 void kernel_main() {
-    dataflow::InterleavedAddrGen<true> dram_addr_gen;
-    dataflow::InterleavedAddrGen<false> l1_addr_gen;
+    InterleavedAddrGen<true> dram_addr_gen;
+    InterleavedAddrGen<false> l1_addr_gen;
     // Read command from host command queue... l1 read addr since
     // pulling in the actual command into l1
     static constexpr u32 command_start_addr = UNRESERVED_BASE; // Space between UNRESERVED_BASE -> data_start is for commands
@@ -12,22 +12,21 @@ void kernel_main() {
 
     // These are totally temporary until PK checks in his changes for
     // separating kernels from firmware
-    dataflow_internal::noc_prepare_deassert_reset_flag(DEASSERT_RESET_SRC_L1_ADDR);
-    dataflow_internal::noc_prepare_assert_reset_flag(ASSERT_RESET_SRC_L1_ADDR);
+    noc_prepare_deassert_reset_flag(DEASSERT_RESET_SRC_L1_ADDR);
+    noc_prepare_assert_reset_flag(ASSERT_RESET_SRC_L1_ADDR);
 
     // Write my own NOC address to local L1 so that when I dispatch kernels,
     // they will know how to let me know they have finished
-    *reinterpret_cast<volatile uint64_t*>(DISPATCH_MESSAGE_REMOTE_SENDER_ADDR) = dataflow::get_noc_addr(DISPATCH_MESSAGE_ADDR);
+    *reinterpret_cast<volatile uint64_t*>(DISPATCH_MESSAGE_REMOTE_SENDER_ADDR) = get_noc_addr(DISPATCH_MESSAGE_ADDR);
 
     while (true) {
         volatile u32* command_ptr = reinterpret_cast<volatile u32*>(command_start_addr);
 
-        dataflow::cq_wait_front();
+        cq_wait_front();
         // Hardcoded for time being, need to clean this up
-        u64 src_noc_addr = dataflow::get_noc_addr(0, 4, cq_read_interface.fifo_rd_ptr << 4);
-
-        dataflow::noc_async_read(src_noc_addr, u32(command_start_addr), DeviceCommand::size_in_bytes());
-        dataflow::noc_async_read_barrier();
+        u64 src_noc_addr = get_noc_addr(0, 4, cq_read_interface.fifo_rd_ptr << 4);
+        noc_async_read(src_noc_addr, u32(command_start_addr), NUM_16B_WORDS_IN_DEVICE_COMMAND << 4);
+        noc_async_read_barrier();
 
         // Control data
         u32 wrap = command_ptr[0];
@@ -35,8 +34,8 @@ void kernel_main() {
         if (wrap) {
             // Basically popfront without the extra conditional
             cq_read_interface.fifo_rd_ptr = 6; // Head to beginning of command queue
-            dataflow::notify_host_of_cq_read_toggle();
-            dataflow::notify_host_of_cq_read_pointer();
+            notify_host_of_cq_read_toggle();
+            notify_host_of_cq_read_pointer();
             continue;
         }
 
@@ -68,6 +67,6 @@ void kernel_main() {
         finish_program(finish);
 
         // This tells the dispatch core how to update its read pointer
-        dataflow::cq_pop_front(data_size_in_bytes + DeviceCommand::size_in_bytes());
+        cq_pop_front(data_size_in_bytes + DeviceCommand::size_in_bytes());
     }
 }

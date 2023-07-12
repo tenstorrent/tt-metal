@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 
 void kernel_main() {
@@ -64,14 +64,14 @@ void kernel_main() {
 
     uint32_t l1_write_addr_in0;
 
-    uint32_t l1_zeros_addr_in2 = dataflow::get_write_ptr(cb_id_in2);
+    uint32_t l1_zeros_addr_in2 = get_write_ptr(cb_id_in2);
 
     volatile uint32_t* in1_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(in1_mcast_receiver_semaphore_addr);
 
     bool one_time_noc_wait = true;
     bool one_time_cb_push = true;
 
-    const dataflow::InterleavedAddrGenFast<in0_is_dram> s0 = {
+    const InterleavedAddrGenFast<in0_is_dram> s0 = {
         .bank_base_address = in0_tensor_addr,
         .page_size = single_tile_size_bytes,
         .data_format = data_format
@@ -81,18 +81,18 @@ void kernel_main() {
         uint32_t in0_tensor_current_block_start_tile_id = in0_tensor_start_tile_id;
         for(uint32_t block = 0; block < num_blocks; block++) {
             // Operand 0
-            dataflow::cb_reserve_back(cb_id_in0, in0_block_num_tiles);
-            l1_write_addr_in0 = dataflow::get_write_ptr(cb_id_in0);
+            cb_reserve_back(cb_id_in0, in0_block_num_tiles);
+            l1_write_addr_in0 = get_write_ptr(cb_id_in0);
 
             uint32_t in0_tensor_row_start_tile_id = in0_tensor_current_block_start_tile_id;
             for(uint32_t h = 0; h < in0_block_h; h++) {
                 uint32_t in0_tensor_tile_id = in0_tensor_row_start_tile_id;
                 for(uint32_t w = 0; w < in0_block_w; w++) {
                     if (h < last_block_h) {
-                        dataflow::noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_in0);
+                        noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_in0);
                     }
                     else
-                        dataflow::noc_async_read(l1_zeros_addr_in2, l1_write_addr_in0, single_tile_size_bytes);
+                        noc_async_read(l1_zeros_addr_in2, l1_write_addr_in0, single_tile_size_bytes);
                     l1_write_addr_in0 += single_tile_size_bytes;
                     in0_tensor_tile_id += in0_tensor_stride_w;
                 }
@@ -100,23 +100,23 @@ void kernel_main() {
             }
             in0_tensor_current_block_start_tile_id += in0_tensor_next_block_stride;
 
-            dataflow::noc_async_read_barrier();
+            noc_async_read_barrier();
 
             // Operand 1
-            dataflow::cb_reserve_back(cb_id_in1, in1_block_num_tiles);
+            cb_reserve_back(cb_id_in1, in1_block_num_tiles);
 
             // Set in0 semaphore value to INVALID
-            dataflow_internal::noc_semaphore_set(in1_mcast_receiver_semaphore_addr_ptr, INVALID);
+            noc_semaphore_set(in1_mcast_receiver_semaphore_addr_ptr, INVALID);
 
-            uint64_t in1_mcast_sender_semaphore_noc_addr = dataflow::get_noc_addr(in1_mcast_sender_noc_x, in1_mcast_sender_noc_y, in1_mcast_sender_semaphore_addr);
-            dataflow_internal::noc_semaphore_inc(in1_mcast_sender_semaphore_noc_addr, 1);
+            uint64_t in1_mcast_sender_semaphore_noc_addr = get_noc_addr(in1_mcast_sender_noc_x, in1_mcast_sender_noc_y, in1_mcast_sender_semaphore_addr);
+            noc_semaphore_inc(in1_mcast_sender_semaphore_noc_addr, 1);
 
             // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
-            dataflow_internal::noc_semaphore_wait(in1_mcast_receiver_semaphore_addr_ptr, VALID);
+            noc_semaphore_wait(in1_mcast_receiver_semaphore_addr_ptr, VALID);
             kernel_profiler::mark_time_once(17, &one_time_noc_wait);
 
-            dataflow::cb_push_back(cb_id_in0, in0_block_num_tiles);
-            dataflow::cb_push_back(cb_id_in1, in1_block_num_tiles);
+            cb_push_back(cb_id_in0, in0_block_num_tiles);
+            cb_push_back(cb_id_in1, in1_block_num_tiles);
             kernel_profiler::mark_time_once(18, &one_time_cb_push);
         }
         in0_tensor_start_tile_id += MtKt;

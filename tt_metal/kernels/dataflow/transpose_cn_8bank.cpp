@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 
 void kernel_main() {
     uint32_t src_addr  = get_arg_val<uint32_t>(0);
@@ -17,7 +17,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
-    const dataflow::InterleavedPow2AddrGen<true> s = {
+    const InterleavedPow2AddrGen<true> s = {
         .bank_base_address = src_addr,
 
 
@@ -30,12 +30,12 @@ void kernel_main() {
         for (uint32_t n = 0; n < N; n++) {
             for (uint32_t h = 0; h < Ht; h++) {
                 for (uint32_t w = 0; w < Wt; w++) {
-                    uint64_t src_noc_addr = dataflow::get_noc_addr(i, s);
-                    dataflow::cb_reserve_back(cb_id_in0, onetile);
-                    uint32_t l1_write_addr = dataflow::get_write_ptr(cb_id_in0);
-                    dataflow::noc_async_read(src_noc_addr, l1_write_addr, tile_bytes);
-                    dataflow::noc_async_read_barrier();
-                    dataflow::cb_push_back(cb_id_in0, onetile);
+                    uint64_t src_noc_addr = get_noc_addr(i, s);
+                    cb_reserve_back(cb_id_in0, onetile);
+                    uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+                    noc_async_read(src_noc_addr, l1_write_addr, tile_bytes);
+                    noc_async_read_barrier();
+                    cb_push_back(cb_id_in0, onetile);
                     i++;
                 }
             }

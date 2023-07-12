@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 
 #include "debug_print.h"
 
@@ -36,7 +36,7 @@ void kernel_main() {
     // this will generate a linearly incremented output address in the inner loop
     // we then reverse map this linear dest address to src address
 
-    const dataflow::InterleavedPow2AddrGen<true> s0 = {
+    const InterleavedPow2AddrGen<true> s0 = {
         .bank_base_address = src0_addr,
 
 
@@ -55,9 +55,9 @@ void kernel_main() {
                     // every 32 C's acquire a new output tile address
                     //    DPRINT << "8B h=" << h << " ct=" << ct << " wt=" << wt << " W=" << W << " HW2=" << HW2 << ENDL();
 
-                    dataflow::cb_reserve_back(operand0, onetile);
+                    cb_reserve_back(operand0, onetile);
 
-                    u32 dest_tr0_l1 = dataflow::get_write_ptr(operand0);
+                    u32 dest_tr0_l1 = get_write_ptr(operand0);
                     u32 save_dest = dest_tr0_l1;
                     u32 cSubtileOffs = 0;
                     for (u32 sub = 0; sub < 4; sub++) {
@@ -90,11 +90,11 @@ void kernel_main() {
                             //    DPRINT << "    Writing to   dst_offs=" << dest_tr0_l1-save_dest << ENDL();
                             //}
 
-                            uint64_t banked_addr = dataflow::get_noc_addr(batch_itile, s0);
+                            uint64_t banked_addr = get_noc_addr(batch_itile, s0);
                             banked_addr += rem;
 
                             // this starts async NOC dma from DRAM to TR0_L1 buffer
-                            dataflow::noc_async_read(banked_addr, dest_tr0_l1, SUBTILE_LINE_BYTES);
+                            noc_async_read(banked_addr, dest_tr0_l1, SUBTILE_LINE_BYTES);
 
                             //if (h == 0 && ct == 0 && wt == 0)
                             //    DPRINT << U32( reinterpret_cast<uint16_t*>( dest_tr0_l1 )[0] ) << ENDL();
@@ -112,10 +112,10 @@ void kernel_main() {
                     } // sub<4
 
                     // block on all outstanding noc DMA requests to complete
-                    dataflow::noc_async_read_barrier();
+                    noc_async_read_barrier();
 
                     // notifies the unpacker that the buffer is populated
-                    dataflow::cb_push_back(operand0, onetile);
+                    cb_push_back(operand0, onetile);
                 }
                 ctoffs += (HW2<<5); // since we increment ct, we need to mlutiply by 32
             } // ct loop

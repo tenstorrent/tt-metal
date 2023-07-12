@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 #include "debug_print.h"
 
 /**
@@ -37,13 +37,13 @@ void kernel_main() {
     constexpr uint32_t TILE_WIDTH = 32;                             // TODO: use a common source of truth
     const uint32_t tile_size_bytes = get_tile_size(in0_cb_id);      // == get_tile_size(in1_cb_id)
 
-    const dataflow::InterleavedAddrGen<true> s0 = {
+    const InterleavedAddrGen<true> s0 = {
         .bank_base_address = in0_addr,
         .page_size = in0_row_size_bytes
     };
 
     constexpr uint32_t tile_size_pow2_exponent = 11;    // 2^11 = 2048 = 32 * 32 * 2 bytes, tile size for 2 byte data types
-    const dataflow::InterleavedPow2AddrGen<true> s1 = {
+    const InterleavedPow2AddrGen<true> s1 = {
         .bank_base_address = in1_addr,
         .log_base_2_of_page_size = tile_size_pow2_exponent
     };
@@ -66,46 +66,46 @@ void kernel_main() {
 
                 // in0 DRAM -> L1 (activations in row major form)
                 // partial rows are read since multiple blocks can span along the rows
-                dataflow::cb_reserve_back(in0_cb_id, in0_block_num_tiles);
-                uint32_t in0_write_l1_addr = dataflow::get_write_ptr(in0_cb_id);
+                cb_reserve_back(in0_cb_id, in0_block_num_tiles);
+                uint32_t in0_write_l1_addr = get_write_ptr(in0_cb_id);
                 uint32_t in0_curr_block_row_id = in0_curr_block_start_row_id;
                 // loop over in0 block tiles along h
                 for (uint32_t in0_tile_h_i = 0; in0_tile_h_i < in0_block_h; ++in0_tile_h_i) {
                     uint32_t in0_curr_row_bank_id = in0_curr_block_row_id;
                     // loop over each row of the tile
                     for (uint32_t in0_row_h_i = 0; in0_row_h_i < TILE_HEIGHT; ++in0_row_h_i) {
-                        uint64_t in0_row_noc_addr = dataflow::get_noc_addr(in0_curr_row_bank_id, s0, in0_row_offset_bytes);
-                        dataflow::noc_async_read(in0_row_noc_addr, in0_write_l1_addr, in0_read_row_size_bytes);
+                        uint64_t in0_row_noc_addr = get_noc_addr(in0_curr_row_bank_id, s0, in0_row_offset_bytes);
+                        noc_async_read(in0_row_noc_addr, in0_write_l1_addr, in0_read_row_size_bytes);
                         in0_write_l1_addr += in0_read_row_size_bytes;
                         ++in0_curr_row_bank_id;
                     }
                     in0_curr_block_row_id += TILE_HEIGHT;
                 } // for in0_block_h
-                dataflow::noc_async_read_barrier();
+                noc_async_read_barrier();
 
                 in0_row_offset_bytes += in0_read_row_size_bytes;
-                dataflow::cb_push_back(in0_cb_id, in0_block_num_tiles);
+                cb_push_back(in0_cb_id, in0_block_num_tiles);
 
                 // in1 DRAM -> L1 (weights in tiled form)
-                dataflow::cb_reserve_back(in1_cb_id, in1_block_num_tiles);
-                uint32_t in1_write_l1_addr = dataflow::get_write_ptr(in1_cb_id);
+                cb_reserve_back(in1_cb_id, in1_block_num_tiles);
+                uint32_t in1_write_l1_addr = get_write_ptr(in1_cb_id);
                 uint32_t in1_row_start_tile_id = in1_current_block_start_tile_id;
                 // loop over in1 block tiles along h
                 for(uint32_t in1_tile_h_i = 0; in1_tile_h_i < in1_block_h; ++in1_tile_h_i) {
                     uint32_t in1_tile_id = in1_row_start_tile_id;
                     // loop over in1 block tiles along w
                     for(uint32_t in1_tile_w_i = 0; in1_tile_w_i < in1_block_w; ++in1_tile_w_i) {
-                        uint64_t in1_tile_noc_addr = dataflow::get_noc_addr(in1_tile_id, s1);
-                        dataflow::noc_async_read(in1_tile_noc_addr, in1_write_l1_addr, tile_size_bytes);
+                        uint64_t in1_tile_noc_addr = get_noc_addr(in1_tile_id, s1);
+                        noc_async_read(in1_tile_noc_addr, in1_write_l1_addr, tile_size_bytes);
                         in1_write_l1_addr += tile_size_bytes;
                         in1_tile_id += 1;
                     } // for in1_block_w
                     in1_row_start_tile_id += in1_stride_h;
                 } // for in1_block_h
-                dataflow::noc_async_read_barrier();
+                noc_async_read_barrier();
 
                 in1_current_block_start_tile_id += in1_next_block_stride_h;
-                dataflow::cb_push_back(in1_cb_id, in1_block_num_tiles);
+                cb_push_back(in1_cb_id, in1_block_num_tiles);
             } // for in0_num_blocks_w
             in1_start_tile_id += in1_next_block_stride_w;
         } // for in1_num_blocks_w

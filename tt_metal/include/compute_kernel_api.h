@@ -50,18 +50,6 @@
 #define UNPACK(x)
 #endif
 
-/**
- * Returns the value of a constexpr argument from kernel_compile_time_args array provided during kernel creation using
- * CreateDataMovementKernel, CreateComputeKernel calls.
- *
- * Return value: constexpr uint32_t
- *
- * | Argument              | Description                        | Type                  | Valid Range | Required |
- * |-----------------------|------------------------------------|-----------------------|-------------|----------|
- * | arg_idx               | The index of the argument          | uint32_t              | 0 to 31     | True     |
- */
-#define get_compile_time_arg_val(arg_idx) KERNEL_COMPILE_TIME_ARG_##arg_idx
-
 namespace ckernel {
 
 ALWI void mm_init() { // TODO(AP): pass cb operands

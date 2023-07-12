@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 
 void kernel_main() {
@@ -75,7 +75,7 @@ void kernel_main() {
 
     uint32_t l1_write_addr_in1;
 
-    uint32_t l1_zeros_addr_in2 = dataflow::get_write_ptr(cb_id_in2);
+    uint32_t l1_zeros_addr_in2 = get_write_ptr(cb_id_in2);
 
     volatile uint32_t* in0_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(in0_mcast_receiver_semaphore_addr);
 
@@ -90,7 +90,7 @@ void kernel_main() {
     bool one_time_noc_wait_1 = true;
     bool one_time_cb_push = true;
 
-    const dataflow::InterleavedAddrGenFast<in1_is_dram> s1 = {
+    const InterleavedAddrGenFast<in1_is_dram> s1 = {
         .bank_base_address = in1_tensor_addr,
         .page_size = single_tile_size_bytes,
         .data_format = data_format
@@ -100,24 +100,24 @@ void kernel_main() {
         uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id;
         for(uint32_t block = 0; block < num_blocks; block++) {
             // Operand 0
-            dataflow::cb_reserve_back(cb_id_in0, in0_block_num_tiles);
+            cb_reserve_back(cb_id_in0, in0_block_num_tiles);
 
             // Set in0 semaphore value to INVALID
-            dataflow_internal::noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, INVALID);
+            noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, INVALID);
 
             // Atomic increment source core counter
-            uint64_t in0_mcast_sender_semaphore_noc_addr = dataflow::get_noc_addr(in0_mcast_sender_noc_x, in0_mcast_sender_noc_y, in0_mcast_sender_semaphore_addr);
-            dataflow_internal::noc_semaphore_inc(in0_mcast_sender_semaphore_noc_addr, 1);
+            uint64_t in0_mcast_sender_semaphore_noc_addr = get_noc_addr(in0_mcast_sender_noc_x, in0_mcast_sender_noc_y, in0_mcast_sender_semaphore_addr);
+            noc_semaphore_inc(in0_mcast_sender_semaphore_noc_addr, 1);
 
             // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
-            dataflow_internal::noc_semaphore_wait(in0_mcast_receiver_semaphore_addr_ptr, VALID);
+            noc_semaphore_wait(in0_mcast_receiver_semaphore_addr_ptr, VALID);
             kernel_profiler::mark_time_once(25, &one_time_noc_wait_0);
 
-            dataflow::cb_push_back(cb_id_in0, in0_block_num_tiles);
+            cb_push_back(cb_id_in0, in0_block_num_tiles);
 
             // Operand 1
-            dataflow::cb_reserve_back(cb_id_in1, in1_block_num_tiles);
-            l1_write_addr_in1 = dataflow::get_write_ptr(cb_id_in1);
+            cb_reserve_back(cb_id_in1, in1_block_num_tiles);
+            l1_write_addr_in1 = get_write_ptr(cb_id_in1);
 
             uint32_t in1_start_address = l1_write_addr_in1; // copy start address of block, to be used for mcasting
             uint32_t in1_block_size_bytes = 0; // can be optimized later, pass it to kernel
@@ -128,10 +128,10 @@ void kernel_main() {
                 uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
                 for(uint32_t w = 0; w < in1_block_w; w++) {
                     if (w < last_block_w) {
-                        dataflow::noc_async_read_tile(in1_tensor_tile_id, s1, l1_write_addr_in1);
+                        noc_async_read_tile(in1_tensor_tile_id, s1, l1_write_addr_in1);
                     }
                     else
-                        dataflow::noc_async_read(l1_zeros_addr_in2, l1_write_addr_in1, single_tile_size_bytes);
+                        noc_async_read(l1_zeros_addr_in2, l1_write_addr_in1, single_tile_size_bytes);
                     l1_write_addr_in1 += single_tile_size_bytes;
                     in1_tensor_tile_id += in1_tensor_stride_w;
                     in1_block_size_bytes += single_tile_size_bytes;
@@ -141,38 +141,38 @@ void kernel_main() {
             in1_tensor_current_block_start_tile_id += in1_tensor_next_block_stride;
 
             // Barrier! make sure the reads are done
-            dataflow::noc_async_read_barrier();
+            noc_async_read_barrier();
 
             // wait until all in1 mcast destinations have atomically incremented the in1 semaphore_addr (i.e. its value should be in0_mcast_num_dests), then reset
             // the semaphore_addr value back to zero for the next block
-            dataflow_internal::noc_semaphore_wait(in1_mcast_sender_semaphore_addr_ptr, in1_mcast_num_dests);
-            dataflow_internal::noc_semaphore_set(in1_mcast_sender_semaphore_addr_ptr, 0);
+            noc_semaphore_wait(in1_mcast_sender_semaphore_addr_ptr, in1_mcast_num_dests);
+            noc_semaphore_set(in1_mcast_sender_semaphore_addr_ptr, 0);
             kernel_profiler::mark_time_once(26, &one_time_noc_wait_1);
 
             // Now we have the block in the CB address, we can mcast to dests!
-            uint64_t in1_multicast_data_addr = dataflow_internal::get_noc_multicast_addr(
+            uint64_t in1_multicast_data_addr = get_noc_multicast_addr(
             in1_mcast_dest_noc_start_x,
             in1_mcast_dest_noc_start_y,
             in1_mcast_dest_noc_end_x,
             in1_mcast_dest_noc_end_y,
             in1_start_address);
             // num_dests must not include source, since we are NOT really doing a local copy!
-            dataflow::noc_async_write_multicast(in1_start_address, in1_multicast_data_addr, in1_block_size_bytes, in1_mcast_num_dests);
+            noc_async_write_multicast(in1_start_address, in1_multicast_data_addr, in1_block_size_bytes, in1_mcast_num_dests);
 
             // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same cmd_buf
             // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
 
             // We should also multicast the flag to destinations
-            uint64_t in1_mcast_receiver_semaphore_noc_addr = dataflow_internal::get_noc_multicast_addr(
+            uint64_t in1_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(
             in1_mcast_dest_noc_start_x,
             in1_mcast_dest_noc_start_y,
             in1_mcast_dest_noc_end_x,
             in1_mcast_dest_noc_end_y,
             in1_mcast_receiver_semaphore_addr);
             // num_dests must not include source, since we are NOT really doing a local copy!
-            dataflow_internal::noc_semaphore_set_multicast(in1_mcast_receiver_semaphore_addr, in1_mcast_receiver_semaphore_noc_addr, in1_mcast_num_dests);
+            noc_semaphore_set_multicast(in1_mcast_receiver_semaphore_addr, in1_mcast_receiver_semaphore_noc_addr, in1_mcast_num_dests);
 
-            dataflow::cb_push_back(cb_id_in1, in1_block_num_tiles);
+            cb_push_back(cb_id_in1, in1_block_num_tiles);
             kernel_profiler::mark_time_once(27, &one_time_cb_push);
         }
         if (bcast_B == 0) {

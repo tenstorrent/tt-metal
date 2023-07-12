@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 
 uint64_t round_down_32(uint64_t a){
     return (a >> 5) << 5;
@@ -35,12 +35,12 @@ void kernel_main() {
     #define src_stick_size_is_pow2 get_compile_time_arg_val(0) == 1
     #if (src_stick_size_is_pow2)
     const uint32_t src_log_base_2_of_page_size = get_arg_val<uint32_t>(16);
-    const dataflow::InterleavedPow2AddrGen<true> s0 = {
+    const InterleavedPow2AddrGen<true> s0 = {
         .bank_base_address = src_addr,
         .log_base_2_of_page_size = src_log_base_2_of_page_size // TODO(AP): refactor
     };
     #else
-    const dataflow::InterleavedAddrGen<true> s0 = {
+    const InterleavedAddrGen<true> s0 = {
         .bank_base_address = src_addr,
         .page_size = padded_X_size
     };
@@ -49,12 +49,12 @@ void kernel_main() {
     #define dst_stick_size_is_pow2 get_compile_time_arg_val(1) == 1
     #if (dst_stick_size_is_pow2)
     const uint32_t dst_log_base_2_of_page_size = get_arg_val<uint32_t>(17);
-    const dataflow::InterleavedPow2AddrGen<true> s1 = {
+    const InterleavedPow2AddrGen<true> s1 = {
         .bank_base_address = dst_addr,
         .log_base_2_of_page_size = dst_log_base_2_of_page_size // TODO(AP): refactor
     };
     #else
-    const dataflow::InterleavedAddrGen<true> s1 = {
+    const InterleavedAddrGen<true> s1 = {
         .bank_base_address = dst_addr,
         .page_size = unpadded_X_size
     };
@@ -71,19 +71,19 @@ void kernel_main() {
     for (uint32_t w = 0; w < num_unpadded_W; w++) {
         for (uint32_t z = 0; z < num_unpadded_Z; z++) {
             for (uint32_t y = 0; y < num_unpadded_Y; y++) {
-                uint64_t dst_noc_addr = dataflow::get_noc_addr(dst_stick_id, s1);
+                uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, s1);
                 uint64_t dst_round_down_addr = round_down_32(dst_noc_addr);
                 uint32_t dst_diff_bytes = dst_noc_addr - dst_round_down_addr;
                 uint32_t dst_buffer_l1_addr_real = dst_buffer_l1_addr + dst_diff_bytes;
                 volatile std::uint32_t* dst = (volatile uint32_t*)(dst_buffer_l1_addr);
 
-                uint64_t src_noc_addr = dataflow::get_noc_addr(
+                uint64_t src_noc_addr = get_noc_addr(
                     src_stick_id, s0);
 
                 // Read from DRAM to src buffer
                 uint64_t src_round_down_addr = round_down_32(src_noc_addr);
                 uint64_t src_diff_bytes = src_noc_addr - src_round_down_addr;
-                dataflow::noc_async_read(src_round_down_addr, src_buffer_l1_addr, unpadded_X_size + src_diff_bytes);
+                noc_async_read(src_round_down_addr, src_buffer_l1_addr, unpadded_X_size + src_diff_bytes);
 
                 // Copy from cache to dst buffer
                 volatile std::uint32_t* cache = (volatile uint32_t*)(l1_cache_addr);
@@ -94,13 +94,13 @@ void kernel_main() {
                 dst = (volatile uint32_t*)(dst_buffer_l1_addr_real);
 
                 // Block before copying data from src to dst buffer
-                dataflow::noc_async_read_barrier();
+                noc_async_read_barrier();
                 volatile std::uint32_t* data_buffer = (volatile uint32_t*)(src_buffer_l1_addr + src_diff_bytes);
                 for(uint32_t z = 0; z < unpadded_X_size / 4; z++) {
                     dst[z] = data_buffer[z];
                 }
                 src_stick_id++;
-                dataflow::noc_async_write(dst_buffer_l1_addr, dst_round_down_addr, unpadded_X_size + dst_diff_bytes);
+                noc_async_write(dst_buffer_l1_addr, dst_round_down_addr, unpadded_X_size + dst_diff_bytes);
                 // Copy from tmp to cache
                 uint64_t end_noc_addr = dst_noc_addr + unpadded_X_size;
                 uint64_t end_round_down_addr = round_down_32(end_noc_addr);
@@ -115,7 +115,7 @@ void kernel_main() {
                 } else {
                     l1_cache_addr = cache_buffer_l1_addr;
                 }
-                dataflow::noc_async_write_barrier();
+                noc_async_write_barrier();
             }
             src_stick_id += padded_Y_diff_rows;
         }

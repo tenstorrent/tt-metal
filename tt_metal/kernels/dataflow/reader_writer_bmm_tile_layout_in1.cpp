@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 
 void kernel_main() {
 
@@ -60,7 +60,7 @@ void kernel_main() {
     // Don't need batch; same as batch from READER args
 
     // COMPILE TIME ARGS
-    // dataflow::Interleaved accessor args
+    // interleaved accessor args
     constexpr DataFormat data_format                      = static_cast<DataFormat>(get_compile_time_arg_val(0));
     constexpr uint32_t in0_is_dram                        = get_compile_time_arg_val(1) == 1; // not used
     constexpr uint32_t in1_is_dram                        = get_compile_time_arg_val(2) == 1;
@@ -76,12 +76,12 @@ void kernel_main() {
 
     uint32_t l1_write_addr_in1;
 
-    const dataflow::InterleavedAddrGenFast<in1_is_dram> s1 = {
+    const InterleavedAddrGenFast<in1_is_dram> s1 = {
         .bank_base_address = in1_tensor_addr,
         .page_size = single_tile_size_bytes,
         .data_format = data_format
     };
-    const dataflow::InterleavedAddrGenFast<out_is_dram> s = {
+    const InterleavedAddrGenFast<out_is_dram> s = {
         .bank_base_address = out_tensor_addr,
         .page_size = single_tile_size_bytes,
         .data_format = data_format
@@ -91,17 +91,17 @@ void kernel_main() {
     for (uint32_t b = 0; b < batch; b++) {
         uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id;
         for(uint32_t block = 0; block < num_blocks; block++) {
-            dataflow::cb_reserve_back(cb_id_in1, in1_block_num_tiles);
+            cb_reserve_back(cb_id_in1, in1_block_num_tiles);
 
-            l1_write_addr_in1 = dataflow::get_write_ptr(cb_id_in1);
+            l1_write_addr_in1 = get_write_ptr(cb_id_in1);
 
             uint32_t in1_tensor_row_start_tile_id = in1_tensor_current_block_start_tile_id;
             for(uint32_t h = 0; h < in1_block_h; h++) {
                 uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
                 for(uint32_t w = 0; w < in1_block_w; w++) {
-                    //uint64_t in1_tile_noc_address = dataflow::get_noc_addr(in1_tensor_tile_id, s1);
+                    //uint64_t in1_tile_noc_address = get_noc_addr(in1_tensor_tile_id, s1);
                     //noc_async_read(in1_tile_noc_address, l1_write_addr_in1, single_tile_size_bytes);
-                    dataflow::noc_async_read_tile(in1_tensor_tile_id, s1, l1_write_addr_in1);
+                    noc_async_read_tile(in1_tensor_tile_id, s1, l1_write_addr_in1);
 
                     l1_write_addr_in1 += single_tile_size_bytes;
                     in1_tensor_tile_id += in1_tensor_stride_w;
@@ -110,9 +110,9 @@ void kernel_main() {
             }
             in1_tensor_current_block_start_tile_id += in1_tensor_next_block_stride;
 
-            dataflow::noc_async_read_barrier();
+            noc_async_read_barrier();
 
-            dataflow::cb_push_back(cb_id_in1, in1_block_num_tiles);
+            cb_push_back(cb_id_in1, in1_block_num_tiles);
 
         }
         if (bcast_B == 0) {
@@ -126,15 +126,15 @@ void kernel_main() {
             for(uint32_t sbw = 0; sbw < out_num_subblocks_w; sbw++) {
                 uint32_t out_tensor_sb_row_start_tile_id = out_tensor_sbw_start_tile_id;
 
-                dataflow::cb_wait_front(cb_id_out0, out_subblock_tile_count);
-                uint32_t l1_read_addr = dataflow::get_read_ptr(cb_id_out0);
+                cb_wait_front(cb_id_out0, out_subblock_tile_count);
+                uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
 
                 for(uint32_t h = 0; h < out_subblock_h; h++) {
                     uint32_t out_tensor_tile_id = out_tensor_sb_row_start_tile_id;
                     for(uint32_t w = 0; w < out_subblock_w; w++) {
-                        //uint64_t out_tensor_tile_noc_addr = dataflow::get_noc_addr(out_tensor_tile_id, s);
+                        //uint64_t out_tensor_tile_noc_addr = get_noc_addr(out_tensor_tile_id, s);
                         //noc_async_write(l1_read_addr, out_tensor_tile_noc_addr, single_tile_size_bytes);
-                        dataflow::noc_async_write_tile(out_tensor_tile_id, s, l1_read_addr);
+                        noc_async_write_tile(out_tensor_tile_id, s, l1_read_addr);
 
                         l1_read_addr+=single_tile_size_bytes;
 
@@ -143,8 +143,8 @@ void kernel_main() {
                     out_tensor_sb_row_start_tile_id += out_tensor_stride_h;
                 }
 
-                dataflow::noc_async_write_barrier();
-                dataflow::cb_pop_front(cb_id_out0, out_subblock_tile_count);
+                noc_async_write_barrier();
+                cb_pop_front(cb_id_out0, out_subblock_tile_count);
                 out_tensor_sbw_start_tile_id += out_tensor_next_subblock_stride_w;
             }
             out_tensor_sbh_start_tile_id += out_tensor_next_subblock_stride_h;

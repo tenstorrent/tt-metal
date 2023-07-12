@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 
 void kernel_main() {
     // READER RUNTIME ARGS
@@ -20,7 +20,7 @@ void kernel_main() {
     uint32_t single_tile_size_bytes = get_tile_size(cb_id_in0);
 
     constexpr bool in0_is_dram_bool = in0_is_dram == 1;
-    const dataflow::InterleavedAddrGenFast<in0_is_dram_bool> s0 = {
+    const InterleavedAddrGenFast<in0_is_dram_bool> s0 = {
         .bank_base_address = in0_tensor_addr,
         .page_size = single_tile_size_bytes,
         .data_format = data_format,
@@ -39,16 +39,16 @@ void kernel_main() {
             cb_id = cb_id_in0;
         }
 
-        l1_write_addr = dataflow::get_write_ptr(cb_id);
+        l1_write_addr = get_write_ptr(cb_id);
         for (uint32_t block_idx = 0; block_idx < out_num_blocks_per_tensor; block_idx++) {
-            dataflow::cb_reserve_back(cb_id, block_size);
+            cb_reserve_back(cb_id, block_size);
             for (uint32_t i = 0; i < block_size; i++) {
-                dataflow::noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr);
+                noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr);
                 l1_write_addr += single_tile_size_bytes;
                 in0_tensor_tile_id++;
             }
-            dataflow::noc_async_read_barrier();
-            dataflow::cb_push_back(cb_id, block_size);
+            noc_async_read_barrier();
+            cb_push_back(cb_id, block_size);
         }
     }
 }

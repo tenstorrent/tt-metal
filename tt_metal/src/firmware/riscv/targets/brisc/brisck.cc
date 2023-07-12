@@ -10,7 +10,7 @@
 #include "noc_nonblocking_api.h"
 #include "ckernel_globals.h"
 #include "tools/profiler/kernel_profiler.hpp"
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 #include "debug_print.h"
 
 #include <kernel.cpp>
@@ -51,14 +51,14 @@ inline void notify_host_kernel_finished() {
     uint32_t pcie_noc_x = NOC_X(0);
     uint32_t pcie_noc_y = NOC_Y(4); // These are the PCIE core coordinates
     uint64_t pcie_address =
-        dataflow::get_noc_addr(pcie_noc_x, pcie_noc_y, 0);  // For now, we are writing to host hugepages at offset 0 (nothing else currently writing to it)
+        get_noc_addr(pcie_noc_x, pcie_noc_y, 0);  // For now, we are writing to host hugepages at offset 0 (nothing else currently writing to it)
 
     volatile uint32_t* done = reinterpret_cast<volatile uint32_t*>(NOTIFY_HOST_KERNEL_COMPLETE_ADDR);
     done[0] = NOTIFY_HOST_KERNEL_COMPLETE_VALUE; // 512 was chosen arbitrarily, but it's less common than 1 so easier to check validity
 
     // Write to host hugepages to notify of completion
-    dataflow::noc_async_write(NOTIFY_HOST_KERNEL_COMPLETE_ADDR, pcie_address, 4);
-    dataflow::noc_async_write_barrier();
+    noc_async_write(NOTIFY_HOST_KERNEL_COMPLETE_ADDR, pcie_address, 4);
+    noc_async_write_barrier();
 }
 
 void kernel_launch() {
@@ -66,13 +66,13 @@ void kernel_launch() {
     firmware_kernel_common_init((void *)MEM_BRISC_INIT_LOCAL_L1_BASE);
 
 #if defined(IS_DISPATCH_KERNEL)
-    dataflow_internal::setup_cq_read_write_interface();
+    setup_cq_read_write_interface();
 #else
-    dataflow_internal::setup_cb_read_write_interfaces();                // done by both BRISC / NCRISC
+    setup_cb_read_write_interfaces();                // done by both BRISC / NCRISC
 #endif
 
-    dataflow_internal::init_dram_bank_to_noc_coord_lookup_tables();  // done by both BRISC / NCRISC
-    dataflow_internal::init_l1_bank_to_noc_coord_lookup_tables();  // done by both BRISC / NCRISC
+    init_dram_bank_to_noc_coord_lookup_tables();  // done by both BRISC / NCRISC
+    init_l1_bank_to_noc_coord_lookup_tables();  // done by both BRISC / NCRISC
 
     noc_init(loading_noc);
 
@@ -84,7 +84,7 @@ void kernel_launch() {
 #if defined(TT_METAL_DEVICE_DISPATCH_MODE)
     dispatch_addr = (my_x[loading_noc] == NOC_X(1) && my_y[loading_noc] == NOC_Y(11)) ?
         0 :
-        dataflow::get_noc_addr(1, 11, DISPATCH_MESSAGE_ADDR);
+        get_noc_addr(1, 11, DISPATCH_MESSAGE_ADDR);
 #else
     dispatch_addr = 0;
 #endif

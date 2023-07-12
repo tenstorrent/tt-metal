@@ -1,4 +1,4 @@
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
@@ -17,14 +17,14 @@ void kernel_main() {
     for (uint32_t j = 0; j < num_repetitions; j++) {
         uint32_t dst_addr = buffer_dst_addr;
         for (uint32_t i = 0; i < num_tiles; i += block_size_tiles) {
-            std::uint64_t buffer_dst_noc_addr = dataflow::get_noc_addr(dst_noc_x, dst_noc_y, dst_addr);
+            std::uint64_t buffer_dst_noc_addr = get_noc_addr(dst_noc_x, dst_noc_y, dst_addr);
 
-            dataflow::cb_wait_front(cb_id, block_size_tiles);
+            cb_wait_front(cb_id, block_size_tiles);
 
             if (j == 0) {
-                uint32_t l1_read_addr = dataflow::get_read_ptr(cb_id);
-                dataflow::noc_async_write(l1_read_addr, buffer_dst_noc_addr, block_size_bytes);
-                dataflow::noc_async_write_barrier();
+                uint32_t l1_read_addr = get_read_ptr(cb_id);
+                noc_async_write(l1_read_addr, buffer_dst_noc_addr, block_size_bytes);
+                noc_async_write_barrier();
 
                 // some delay to test backpressure
                 // volatile uint32_t *l1_read_addr_ptr = reinterpret_cast<volatile uint32_t*>(BRISC_BREAKPOINT);
@@ -33,7 +33,7 @@ void kernel_main() {
                 // }
             }
 
-            dataflow::cb_pop_front(cb_id, block_size_tiles);
+            cb_pop_front(cb_id, block_size_tiles);
             dst_addr += block_size_bytes;
         }
     }

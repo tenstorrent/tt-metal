@@ -1,5 +1,5 @@
 #include <cstdint>
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 #include "debug_print.h"
 
 using u32 = std::uint32_t;

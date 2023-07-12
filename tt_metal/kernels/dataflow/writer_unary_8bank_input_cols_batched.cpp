@@ -1,4 +1,4 @@
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 
 void kernel_main() {
 
@@ -19,7 +19,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     uint32_t tile_bytes = get_tile_size(cb_id_out0);
 
-    const dataflow::InterleavedAddrGenFast<dst_is_dram> s = {
+    const InterleavedAddrGenFast<dst_is_dram> s = {
         .bank_base_address = dst_addr,
         .page_size = tile_bytes,
         .data_format = data_format
@@ -31,14 +31,14 @@ void kernel_main() {
         tile_id = i_nc + Wt_read;
         for (uint32_t i = 0; i < Ht; i++) {
             for (uint32_t j = 0; j < Wt; j++) {
-                dataflow::cb_wait_front(cb_id_out0, onetile);
-                uint32_t l1_read_addr = dataflow::get_read_ptr(cb_id_out0);
+                cb_wait_front(cb_id_out0, onetile);
+                uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
 
-                dataflow::noc_async_write_tile(tile_id, s, l1_read_addr);
+                noc_async_write_tile(tile_id, s, l1_read_addr);
 
-                dataflow::noc_async_write_barrier();
+                noc_async_write_barrier();
 
-                dataflow::cb_pop_front(cb_id_out0, onetile);
+                cb_pop_front(cb_id_out0, onetile);
 
                 tile_id++;
             }

@@ -10,7 +10,7 @@ inline std::uint64_t get_dst_dram_addr_from_txn_index(
     std::uint32_t num_bits_of_num_channels) {
     std::uint32_t channel_remainder_mask = ~(~0x0 << num_bits_of_num_channels);
     std::uint32_t dram_channel_id = (transaction_index + 1) & channel_remainder_mask;
-    return dataflow::get_noc_addr(dram_channels_noc_x[dram_channel_id], dram_channels_noc_y[dram_channel_id], dst_addr);
+    return get_noc_addr(dram_channels_noc_x[dram_channel_id], dram_channels_noc_y[dram_channel_id], dst_addr);
 }
 
 void kernel_main() {
@@ -60,7 +60,7 @@ void kernel_main() {
             buffer_src_addr += transaction_size_const;
         }
         noc_fast_write_inc_num_dests(num_transactions);
-        dataflow::noc_async_write_barrier();
+        noc_async_write_barrier();
 
         // reset these to the original value for each repetition
         buffer_src_addr  = orig_buffer_src_addr;

@@ -13,14 +13,14 @@ void kernel_main() {
     std::uint32_t total_tiles_size_bytes     = get_arg_val<uint32_t>(9);
 
      // DRAM NOC src address
-    std::uint64_t dram_buffer_src_noc_addr = dataflow::get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr);
-    dataflow::noc_async_read(dram_buffer_src_noc_addr, l1_buffer_src_addr_base, total_tiles_size_bytes);
-    dataflow::noc_async_read_barrier();
+    std::uint64_t dram_buffer_src_noc_addr = get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr);
+    noc_async_read(dram_buffer_src_noc_addr, l1_buffer_src_addr_base, total_tiles_size_bytes);
+    noc_async_read_barrier();
 
     for(uint32_t i = 0; i < 1000; i++) {
         // L1 NOC dst address
-        std::uint64_t l1_buffer_dst_noc_addr = dataflow::get_noc_addr(l1_dst_noc_x, l1_dst_noc_y, l1_buffer_dst_addr_base);
-        dataflow::noc_async_write(l1_buffer_src_addr_base, l1_buffer_dst_noc_addr, total_tiles_size_bytes);
-        dataflow::noc_async_write_barrier();
+        std::uint64_t l1_buffer_dst_noc_addr = get_noc_addr(l1_dst_noc_x, l1_dst_noc_y, l1_buffer_dst_addr_base);
+        noc_async_write(l1_buffer_src_addr_base, l1_buffer_dst_noc_addr, total_tiles_size_bytes);
+        noc_async_write_barrier();
     }
 }

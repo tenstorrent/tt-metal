@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 
 inline uint64_t round_down_32(uint64_t a){
     return (a >> 5) << 5;
@@ -43,12 +43,12 @@ void kernel_main() {
     #define stick_size_is_pow2 get_compile_time_arg_val(0) == 1
     #if (stick_size_is_pow2)
     const uint32_t log_base_2_of_page_size = get_arg_val<uint32_t>(17);
-    const dataflow::InterleavedPow2AddrGen<true> s = {
+    const InterleavedPow2AddrGen<true> s = {
         .bank_base_address = dst_addr,
         .log_base_2_of_page_size = log_base_2_of_page_size // TODO(AP): refactor
     };
     #else
-    const dataflow::InterleavedAddrGen<true> s = {
+    const InterleavedAddrGen<true> s = {
         .bank_base_address = dst_addr,
         .page_size = unpadded_X_size
     };
@@ -56,21 +56,21 @@ void kernel_main() {
 
     auto pop_blocks = [&] (uint32_t num_blocks) {
         for (uint32_t i = 0; i < num_blocks; i++) {
-            dataflow::cb_wait_front(cb_id_out0, num_tiles_block_c);
-            dataflow::cb_pop_front(cb_id_out0, num_tiles_block_c);
+            cb_wait_front(cb_id_out0, num_tiles_block_c);
+            cb_pop_front(cb_id_out0, num_tiles_block_c);
         }
     };
 
     auto write_block = [&] (uint32_t base_stick_id, uint32_t num_rows, uint32_t offset, uint32_t block_size) {
-        dataflow::cb_wait_front(cb_id_out0, num_tiles_block_c);
-        uint32_t l1_read_addr = dataflow::get_read_ptr(cb_id_out0);
+        cb_wait_front(cb_id_out0, num_tiles_block_c);
+        uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
         uint32_t curr_stick_id = base_stick_id;
         for (uint32_t k = 0; k < num_rows; k++) {
-            uint64_t dst_noc_addr = dataflow::get_noc_addr(curr_stick_id, s) + offset;
+            uint64_t dst_noc_addr = get_noc_addr(curr_stick_id, s) + offset;
             uint64_t round_down_addr = round_down_32(dst_noc_addr);
             uint64_t diff_addr = dst_noc_addr - round_down_addr;
 
-            dataflow::noc_async_read(round_down_addr, temp_buffer_l1_addr, diff_addr);
+            noc_async_read(round_down_addr, temp_buffer_l1_addr, diff_addr);
 
             // Copy from CB to tmp buffer
             volatile std::uint32_t* src = (volatile uint32_t*)(l1_read_addr);
@@ -79,18 +79,18 @@ void kernel_main() {
                 temp[z] = src[z];
             }
 
-            dataflow::noc_async_read_barrier();
+            noc_async_read_barrier();
 
             // Write out tmp buffer
-            dataflow::noc_async_write(temp_buffer_l1_addr, round_down_addr, block_size + diff_addr);
+            noc_async_write(temp_buffer_l1_addr, round_down_addr, block_size + diff_addr);
 
             l1_read_addr += block_row_size;
             curr_stick_id++;
 
             // Block write
-            dataflow::noc_async_write_barrier();
+            noc_async_write_barrier();
         }
-        dataflow::cb_pop_front(cb_id_out0, num_tiles_block_c);
+        cb_pop_front(cb_id_out0, num_tiles_block_c);
     };
 
     auto write_block_rows = [&] (uint32_t num_rows_block, uint32_t base_stick_id) {

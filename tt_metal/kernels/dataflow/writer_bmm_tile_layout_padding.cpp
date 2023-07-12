@@ -1,4 +1,4 @@
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 
 void kernel_main() {
 
@@ -39,7 +39,7 @@ void kernel_main() {
     // single-tile
     uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0);
 
-    const dataflow::InterleavedAddrGenFast<out_is_dram> s = {
+    const InterleavedAddrGenFast<out_is_dram> s = {
         .bank_base_address = out_tensor_addr,
         .page_size = single_tile_size_bytes,
         .data_format = data_format
@@ -65,14 +65,14 @@ void kernel_main() {
                     subblock_tiles_addr_skip = padded_subblock_tiles_addr_skip;
                 }
 
-                dataflow::cb_wait_front(cb_id_out0, out_subblock_tile_count);
+                cb_wait_front(cb_id_out0, out_subblock_tile_count);
                 kernel_profiler::mark_time_once(5, &one_time_profile);
-                uint32_t l1_read_addr = dataflow::get_read_ptr(cb_id_out0);
+                uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
 
                 for(uint32_t h = 0; h < out_subblock_h_; h++) {
                     uint32_t out_tensor_tile_id = out_tensor_sb_row_start_tile_id;
                     for(uint32_t w = 0; w < out_subblock_w_; w++) {
-                        dataflow::noc_async_write_tile(out_tensor_tile_id, s, l1_read_addr);
+                        noc_async_write_tile(out_tensor_tile_id, s, l1_read_addr);
                         l1_read_addr+=single_tile_size_bytes;
 
                         out_tensor_tile_id += out_tensor_stride_w;
@@ -82,18 +82,18 @@ void kernel_main() {
                     out_tensor_sb_row_start_tile_id += out_tensor_stride_h;
                 }
 
-                dataflow::noc_async_write_barrier();
-                dataflow::cb_pop_front(cb_id_out0, out_subblock_tile_count);
+                noc_async_write_barrier();
+                cb_pop_front(cb_id_out0, out_subblock_tile_count);
                 out_tensor_sbw_start_tile_id += out_tensor_next_subblock_stride_w;
             }
             // Pop fully padded subblocks along the row
-            dataflow::cb_wait_front(cb_id_out0, padded_block_tiles_w_skip);
-            dataflow::cb_pop_front(cb_id_out0, padded_block_tiles_w_skip);
+            cb_wait_front(cb_id_out0, padded_block_tiles_w_skip);
+            cb_pop_front(cb_id_out0, padded_block_tiles_w_skip);
             out_tensor_sbh_start_tile_id += out_tensor_next_subblock_stride_h;
         }
         // Pop row(s) of fully padded subblocks
-        dataflow::cb_wait_front(cb_id_out0, padded_block_tiles_h_skip);
-        dataflow::cb_pop_front(cb_id_out0, padded_block_tiles_h_skip);
+        cb_wait_front(cb_id_out0, padded_block_tiles_h_skip);
+        cb_pop_front(cb_id_out0, padded_block_tiles_h_skip);
         out_tensor_start_tile_id += MtNt;
     }
 }

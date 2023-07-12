@@ -1,4 +1,4 @@
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 
 void kernel_main() {
 
@@ -14,7 +14,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     uint32_t tile_bytes = get_tile_size(cb_id_out0);
 
-    const dataflow::InterleavedPow2AddrGen<true> s = {
+    const InterleavedPow2AddrGen<true> s = {
         .bank_base_address = dst_addr,
 
 
@@ -25,16 +25,16 @@ void kernel_main() {
     for(uint32_t i = 0; i < num_batch_tiles; i++) {
         start_tile = i * batch_offset + start_id;
         for(uint32_t j = start_tile; j < start_tile + num_contiguous_tiles; j++) {
-            uint64_t dst_noc_addr = dataflow::get_noc_addr(j, s);
+            uint64_t dst_noc_addr = get_noc_addr(j, s);
 
-            dataflow::cb_wait_front(cb_id_out0, onetile);
-            uint32_t l1_read_addr = dataflow::get_read_ptr(cb_id_out0);
+            cb_wait_front(cb_id_out0, onetile);
+            uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
 
-            dataflow::noc_async_write(l1_read_addr, dst_noc_addr, tile_bytes);
+            noc_async_write(l1_read_addr, dst_noc_addr, tile_bytes);
 
-            dataflow::noc_async_write_barrier();
+            noc_async_write_barrier();
 
-            dataflow::cb_pop_front(cb_id_out0, onetile);
+            cb_pop_front(cb_id_out0, onetile);
 
         }
     }

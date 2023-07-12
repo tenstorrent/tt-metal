@@ -27,12 +27,12 @@ void kernel_main() {
 
     for(std::uint32_t i = 0; i < num_repetitions; i++) {
         // l1 address to write to
-        std::uint32_t l1_address = dataflow::get_write_ptr(0);
+        std::uint32_t l1_address = get_write_ptr(0);
 
         std::uint32_t stick_size_bytes = C << 1; // C * 2B
         noc_fast_read_set_len(stick_size_bytes);
         // DRAM NOC src address
-        std::uint64_t dram_buffer_src_noc_addr = dataflow::get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr_base);
+        std::uint64_t dram_buffer_src_noc_addr = get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr_base);
         noc_fast_read_set_src_xy(dram_buffer_src_noc_addr);
 
         std::uint32_t num_reads_issued = 0; // number of noc reads issued
@@ -86,11 +86,11 @@ void kernel_main() {
                             }
                             // Once done copying a row of tiles, now wait for reads to get flushed then push tiles into stream
                             else {
-                                dataflow::cb_reserve_back(0, num_tiles_c);
+                                cb_reserve_back(0, num_tiles_c);
                                 noc_fast_read_inc_num_issued(num_reads_issued);
-                                dataflow::noc_async_read_barrier();
-                                dataflow::cb_push_back(0, num_tiles_c);
-                                l1_address = dataflow::get_write_ptr(0);
+                                noc_async_read_barrier();
+                                cb_push_back(0, num_tiles_c);
+                                l1_address = get_write_ptr(0);
                                 first_tile_write_address = l1_address;
 
                                 num_reads_issued = 0;

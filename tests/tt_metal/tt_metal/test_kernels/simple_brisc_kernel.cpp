@@ -1,4 +1,4 @@
-#include "dataflow_internals.h"
+#include "dataflow_api.h"
 #include "debug_print.h"
 
 void kernel_main() {

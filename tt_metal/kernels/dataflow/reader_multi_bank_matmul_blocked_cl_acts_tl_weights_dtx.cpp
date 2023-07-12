@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 void kernel_main() {
     uint32_t num_blocks = get_arg_val<uint32_t>(0);
 
@@ -36,7 +36,7 @@ void kernel_main() {
     for (uint32_t zero_base_offset = 0; zero_base_offset < num_elements_in_zeros_buffer; zero_base_offset++) {
         *(zero_base_ptr + zero_base_offset) = 0;
     }
-    uint64_t zeros_base_noc_addr = dataflow::get_noc_addr(MEM_ZEROS_BASE);
+    uint64_t zeros_base_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
 
     // const args for tile-based bank-swizzled layout
     // could be added to the arg list in the future to test different
@@ -45,14 +45,14 @@ void kernel_main() {
     constexpr uint32_t num_used_dram_ch_pow2_exponent = 3;
     constexpr uint32_t tile_size_pow2_exponent = 11;
 
-    const dataflow::InterleavedAddrGen<true> s0 = {
+    const InterleavedAddrGen<true> s0 = {
         .bank_base_address = src0_addr,
 
 
         .page_size = in0_channel_stick_size // size of 1 stick = transfer size in address map = number of conv activation channels
     };
 
-    const dataflow::InterleavedPow2AddrGen<true> s1 = {
+    const InterleavedPow2AddrGen<true> s1 = {
         .bank_base_address = src1_addr,
 
 
@@ -69,25 +69,25 @@ void kernel_main() {
     uint32_t in0_num_blocks_per_channel_stick = in0_channel_stick_size / in0_partial_channel_stick_size;
     for(uint32_t b = 0; b < num_blocks; b++) {
         channels_address_map_index = (b / in0_num_blocks_per_channel_stick) << 2; // 4 entries per channel stick in the address map
-        dataflow::cb_reserve_back(cb_id_in0, in0_block_num_tiles);
-        dataflow::cb_reserve_back(cb_id_in1, in1_block_num_tiles);
+        cb_reserve_back(cb_id_in0, in0_block_num_tiles);
+        cb_reserve_back(cb_id_in1, in1_block_num_tiles);
 
-        l1_write_addr_in0 = dataflow::get_write_ptr(cb_id_in0);
-        l1_write_addr_in1 = dataflow::get_write_ptr(cb_id_in1);
+        l1_write_addr_in0 = get_write_ptr(cb_id_in0);
+        l1_write_addr_in1 = get_write_ptr(cb_id_in1);
 
         // Read weights
         uint32_t in1_tensor_row_start_tile_id = in1_tensor_current_block_start_tile_id;
         for(uint32_t h = 0; h < in1_block_h; h++) {
             uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
             for(uint32_t w = 0; w < in1_block_w; w++) {
-                uint64_t in1_tile_noc_addr = dataflow::get_noc_addr(in1_tensor_tile_id, s1);
-                dataflow::noc_async_read(in1_tile_noc_addr, l1_write_addr_in1, single_tile_size_bytes);
+                uint64_t in1_tile_noc_addr = get_noc_addr(in1_tensor_tile_id, s1);
+                noc_async_read(in1_tile_noc_addr, l1_write_addr_in1, single_tile_size_bytes);
                 l1_write_addr_in1 += single_tile_size_bytes;
                 in1_tensor_tile_id += in1_tensor_stride_w;
             }
             in1_tensor_row_start_tile_id += in1_tensor_stride_h;
         }
-        dataflow::noc_async_read_barrier();
+        noc_async_read_barrier();
         in1_tensor_current_block_start_tile_id += in1_tensor_next_block_stride;
         // Read activations using address map
         // Read in0 channels last... will have to read partial sticks
@@ -101,8 +101,8 @@ void kernel_main() {
                 // Transfer size at address_map[am_index+2] unused.
                 // Need to do partial transfer because channel stick can be divided between blocks
                 uint32_t channel_stick_bank_id = channels_address_map[channels_address_map_index+3];
-                uint64_t in0_row_noc_addr = dataflow::get_noc_addr(channel_stick_bank_id, s0, channel_stick_offset);
-                dataflow::noc_async_read(in0_row_noc_addr, l1_write_addr_in0, in0_partial_channel_stick_size);
+                uint64_t in0_row_noc_addr = get_noc_addr(channel_stick_bank_id, s0, channel_stick_offset);
+                noc_async_read(in0_row_noc_addr, l1_write_addr_in0, in0_partial_channel_stick_size);
                 l1_write_addr_in0 += in0_partial_channel_stick_size;
                 channels_address_map_index += 4;
             }
@@ -110,18 +110,18 @@ void kernel_main() {
         }
         // Height padding
         for (uint32_t z = 0; z < num_reads_of_zeroes; z++) {
-            dataflow::noc_async_read(zeros_base_noc_addr, l1_write_addr_in0, num_bytes_of_zeroes_per_read);
+            noc_async_read(zeros_base_noc_addr, l1_write_addr_in0, num_bytes_of_zeroes_per_read);
             l1_write_addr_in0 += num_bytes_of_zeroes_per_read;
         }
         if(num_bytes_of_zeroes_remainder > 0) {
-            dataflow::noc_async_read(zeros_base_noc_addr, l1_write_addr_in0, num_bytes_of_zeroes_remainder);
+            noc_async_read(zeros_base_noc_addr, l1_write_addr_in0, num_bytes_of_zeroes_remainder);
             l1_write_addr_in0 += num_bytes_of_zeroes_remainder;
         }
 
         channel_stick_offset = (channel_stick_offset + in0_partial_channel_stick_size) % in0_channel_stick_size;
-        dataflow::noc_async_read_barrier();
+        noc_async_read_barrier();
 
-        dataflow::cb_push_back(cb_id_in0, in0_block_num_tiles);
-        dataflow::cb_push_back(cb_id_in1, in1_block_num_tiles);
+        cb_push_back(cb_id_in0, in0_block_num_tiles);
+        cb_push_back(cb_id_in1, in1_block_num_tiles);
     }
 }

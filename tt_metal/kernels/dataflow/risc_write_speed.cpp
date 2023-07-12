@@ -27,7 +27,7 @@ void kernel_main() {
 
         #ifdef OPT_WRITE
             // reset these to the original value for each repetition
-            std::uint64_t buffer_dst_noc_addr = dataflow::get_noc_addr(dst_noc_x, dst_noc_y, buffer_dst_addr);
+            std::uint64_t buffer_dst_noc_addr = get_noc_addr(dst_noc_x, dst_noc_y, buffer_dst_addr);
 
 
             noc_fast_write_set_len(transaction_size_const);
@@ -44,15 +44,15 @@ void kernel_main() {
         #else
 
             for (std::uint32_t j=0; j<num_transactions; j++) {
-                std::uint64_t buffer_dst_noc_addr = dataflow::get_noc_addr(dst_noc_x, dst_noc_y, buffer_dst_addr_);
-                dataflow::noc_async_write(buffer_src_addr_, buffer_dst_noc_addr, transaction_size_const);
+                std::uint64_t buffer_dst_noc_addr = get_noc_addr(dst_noc_x, dst_noc_y, buffer_dst_addr_);
+                noc_async_write(buffer_src_addr_, buffer_dst_noc_addr, transaction_size_const);
                 buffer_src_addr_ += transaction_size_const;
                 buffer_dst_addr_ += transaction_size_const;
             }
 
         #endif
 
-        dataflow::noc_async_write_barrier();
+        noc_async_write_barrier();
     }
 
 }

@@ -1,4 +1,4 @@
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 
 void kernel_main() {
     const uint32_t out_cb = get_compile_time_arg_val(0);
@@ -12,15 +12,15 @@ void kernel_main() {
     uint32_t ublock_size_tiles = 1;
 
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
-        uint64_t dst_noc_addr = dataflow::get_noc_addr(dst_noc_x, dst_noc_y, dst_addr);
+        uint64_t dst_noc_addr = get_noc_addr(dst_noc_x, dst_noc_y, dst_addr);
 
-        dataflow::cb_wait_front(out_cb, ublock_size_tiles);
-        uint32_t l1_read_addr = dataflow::get_read_ptr(out_cb);
-        dataflow::noc_async_write(l1_read_addr, dst_noc_addr, ublock_size_bytes);
+        cb_wait_front(out_cb, ublock_size_tiles);
+        uint32_t l1_read_addr = get_read_ptr(out_cb);
+        noc_async_write(l1_read_addr, dst_noc_addr, ublock_size_bytes);
 
-        dataflow::noc_async_write_barrier();
+        noc_async_write_barrier();
 
-        dataflow::cb_pop_front(out_cb, ublock_size_tiles);
+        cb_pop_front(out_cb, ublock_size_tiles);
         dst_addr += ublock_size_bytes;
     }
 }

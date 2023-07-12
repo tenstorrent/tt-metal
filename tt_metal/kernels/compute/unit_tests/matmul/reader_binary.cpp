@@ -1,6 +1,6 @@
 #include <stdint.h>
 
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 
 void kernel_main() {
     const uint32_t in0_cb = get_compile_time_arg_val(0);
@@ -23,22 +23,22 @@ void kernel_main() {
 
     // read ublocks from src0/src1 to CB0/CB1, then push ublocks to compute (unpacker)
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
-        uint64_t src0_noc_addr = dataflow::get_noc_addr(src0_noc_x, src0_noc_y, src0_addr);
-        uint64_t src1_noc_addr = dataflow::get_noc_addr(src1_noc_x, src1_noc_y, src1_addr);
+        uint64_t src0_noc_addr = get_noc_addr(src0_noc_x, src0_noc_y, src0_addr);
+        uint64_t src1_noc_addr = get_noc_addr(src1_noc_x, src1_noc_y, src1_addr);
 
-        dataflow::cb_reserve_back(in0_cb, ublock_size_tiles);
-        dataflow::cb_reserve_back(in1_cb, ublock_size_tiles);
+        cb_reserve_back(in0_cb, ublock_size_tiles);
+        cb_reserve_back(in1_cb, ublock_size_tiles);
 
-        l1_write_addr_in0 = dataflow::get_write_ptr(in0_cb);
-        l1_write_addr_in1 = dataflow::get_write_ptr(in1_cb);
+        l1_write_addr_in0 = get_write_ptr(in0_cb);
+        l1_write_addr_in1 = get_write_ptr(in1_cb);
 
-        dataflow::noc_async_read(src0_noc_addr, l1_write_addr_in0, ublock_size_bytes_0);
-        dataflow::noc_async_read(src1_noc_addr, l1_write_addr_in1, ublock_size_bytes_1);
+        noc_async_read(src0_noc_addr, l1_write_addr_in0, ublock_size_bytes_0);
+        noc_async_read(src1_noc_addr, l1_write_addr_in1, ublock_size_bytes_1);
 
-        dataflow::noc_async_read_barrier();
+        noc_async_read_barrier();
 
-        dataflow::cb_push_back(in0_cb, ublock_size_tiles);
-        dataflow::cb_push_back(in1_cb, ublock_size_tiles);
+        cb_push_back(in0_cb, ublock_size_tiles);
+        cb_push_back(in1_cb, ublock_size_tiles);
 
         src0_addr += ublock_size_bytes_0;
         src1_addr += ublock_size_bytes_1;

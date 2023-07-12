@@ -1,18 +1,18 @@
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 
 inline __attribute__((always_inline))
 void pop_from_cb_and_write(const uint32_t cb_id, uint32_t num_tiles_per_cb, uint32_t ublock_size_tiles, uint32_t ublock_size_bytes,
                                uint32_t dram_dst_noc_x, uint32_t dram_dst_noc_y, uint32_t& dram_buffer_dst_addr) {
     for (uint32_t i = 0; i < num_tiles_per_cb; i += ublock_size_tiles) {
         // DRAM NOC dst address
-        std::uint64_t dram_buffer_dst_noc_addr = dataflow::get_noc_addr(dram_dst_noc_x, dram_dst_noc_y, dram_buffer_dst_addr);
+        std::uint64_t dram_buffer_dst_noc_addr = get_noc_addr(dram_dst_noc_x, dram_dst_noc_y, dram_buffer_dst_addr);
 
-        dataflow::cb_wait_front(cb_id, ublock_size_tiles);
-        uint32_t l1_read_addr = dataflow::get_read_ptr(cb_id);
+        cb_wait_front(cb_id, ublock_size_tiles);
+        uint32_t l1_read_addr = get_read_ptr(cb_id);
 
-        dataflow::noc_async_write(l1_read_addr, dram_buffer_dst_noc_addr, ublock_size_bytes);
-        dataflow::noc_async_write_barrier();
-        dataflow::cb_pop_front(cb_id, ublock_size_tiles);
+        noc_async_write(l1_read_addr, dram_buffer_dst_noc_addr, ublock_size_bytes);
+        noc_async_write_barrier();
+        cb_pop_front(cb_id, ublock_size_tiles);
         dram_buffer_dst_addr += ublock_size_bytes;
     }
 }

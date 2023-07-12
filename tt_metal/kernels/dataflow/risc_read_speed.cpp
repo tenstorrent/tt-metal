@@ -19,29 +19,29 @@ void kernel_main() {
         // reset these to the original value for each repetition
         buffer_dst_addr  = get_arg_val<uint32_t>(0);
         buffer_src_addr  = get_arg_val<uint32_t>(1);
-        std::uint64_t buffer_src_noc_addr = dataflow::get_noc_addr(src_noc_x, src_noc_y, buffer_src_addr);
+        std::uint64_t buffer_src_noc_addr = get_noc_addr(src_noc_x, src_noc_y, buffer_src_addr);
 
         #ifndef OPT_READ
 
         for (std::uint32_t j=0; j<num_transactions; j++) {
 
 
-            buffer_src_noc_addr = dataflow::get_noc_addr(src_noc_x, src_noc_y, buffer_src_addr);
+            buffer_src_noc_addr = get_noc_addr(src_noc_x, src_noc_y, buffer_src_addr);
 
-            dataflow::noc_async_read(buffer_src_noc_addr, buffer_dst_addr, transaction_size);
+            noc_async_read(buffer_src_noc_addr, buffer_dst_addr, transaction_size);
 
             buffer_src_addr += transaction_size;
             buffer_dst_addr += transaction_size;
         }
         // wait all reads from all transactions to be flushed (ie received)
-        dataflow::noc_async_read_barrier();
+        noc_async_read_barrier();
 
         #else
 
         std::uint32_t transaction_size_const = transaction_size;
 
         noc_fast_read_set_len(transaction_size_const);
-        buffer_src_noc_addr = dataflow::get_noc_addr(src_noc_x, src_noc_y, buffer_src_addr);
+        buffer_src_noc_addr = get_noc_addr(src_noc_x, src_noc_y, buffer_src_addr);
         noc_fast_read_set_src_xy(buffer_src_noc_addr);
 
         for (std::uint32_t j=0; j<num_transactions; j++) {
@@ -52,7 +52,7 @@ void kernel_main() {
         }
         noc_fast_read_inc_num_issued(num_transactions);
         // wait all reads from all transactions to be flushed (ie received)
-        dataflow::noc_async_read_barrier();
+        noc_async_read_barrier();
 
         #endif
 

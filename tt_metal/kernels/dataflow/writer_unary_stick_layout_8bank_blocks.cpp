@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 #include "debug_print.h"
 
 void kernel_main() {
@@ -25,7 +25,7 @@ void kernel_main() {
     const uint32_t block_ntiles_h = num_rows_block / TILE_HEIGHT;
     uint32_t start_block_row_id = 0;
 
-    const dataflow::InterleavedAddrGen<true> s = {
+    const InterleavedAddrGen<true> s = {
         .bank_base_address = dst_addr,
         .page_size = output_row_size
     };
@@ -36,16 +36,16 @@ void kernel_main() {
                 uint32_t block_row_id = start_block_row_id;
                 for (uint32_t tile_row_id = 0; tile_row_id < block_ntiles_h; tile_row_id++) {
                     // We reserve back an entire row of tiles in a block and issue a bunch of reads
-                    dataflow::cb_wait_front(cb_id_out0, block_ntiles_w);
-                    uint32_t l1_read_addr = dataflow::get_read_ptr(cb_id_out0);
+                    cb_wait_front(cb_id_out0, block_ntiles_w);
+                    uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
                     for (uint32_t j = 0; j < TILE_HEIGHT; j++) {
-                        uint64_t dst_noc_addr = dataflow::get_noc_addr(block_row_id, s, block_row_offset);
-                        dataflow::noc_async_write(l1_read_addr, dst_noc_addr, block_row_size);
+                        uint64_t dst_noc_addr = get_noc_addr(block_row_id, s, block_row_offset);
+                        noc_async_write(l1_read_addr, dst_noc_addr, block_row_size);
                         l1_read_addr += block_row_size;
                         block_row_id++;
                     } // for tile_nrows
-                    dataflow::noc_async_write_barrier();
-                    dataflow::cb_pop_front(cb_id_out0, block_ntiles_w);
+                    noc_async_write_barrier();
+                    cb_pop_front(cb_id_out0, block_ntiles_w);
                 } // for block_ntiles_h
                 block_row_offset += block_row_size;
             } // for num_blocks_w

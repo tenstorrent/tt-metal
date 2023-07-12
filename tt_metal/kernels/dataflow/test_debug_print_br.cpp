@@ -1,4 +1,4 @@
-#include "dataflow_kernel_api.h"
+#include "dataflow_api.h"
 #include "debug_print.h"
 
 using u32 = std::uint32_t;
@@ -36,8 +36,8 @@ void kernel_main() {
         // DRAM NOC dst address
         std::uint64_t dram_buffer_dst_noc_addr = NOC_XY_ADDR(NOC_X(dram_dst_noc_x), NOC_Y(dram_dst_noc_y), dram_buffer_dst_addr);
 
-        dataflow::cb_wait_front(operand, chunk_size_tiles);
-        uint32_t l1_read_addr = dataflow::get_read_ptr(operand);
+        cb_wait_front(operand, chunk_size_tiles);
+        uint32_t l1_read_addr = get_read_ptr(operand);
 
         ncrisc_noc_fast_write_any_len(loading_noc, NCRISC_WR_REG_CMD_BUF, l1_read_addr, dram_buffer_dst_noc_addr, chunk_size_bytes,
                             NOC_UNICAST_WRITE_VC, false, false, 1);
@@ -45,7 +45,7 @@ void kernel_main() {
         // wait for all the writes to complete (ie acked)
         while (!ncrisc_noc_nonposted_writes_flushed(loading_noc));
 
-        dataflow::cb_pop_front(operand, chunk_size_tiles);
+        cb_pop_front(operand, chunk_size_tiles);
         dram_buffer_dst_addr += chunk_size_bytes;
     }
 }
