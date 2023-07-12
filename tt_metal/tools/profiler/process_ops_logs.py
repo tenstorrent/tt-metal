@@ -184,9 +184,7 @@ def parse_ops_logs(opsFolder):
                         metadata = row[13].strip()
 
                         if preferredName:
-                            if op_type == "Yes":
-                                op_name = preferredName
-                            else:
+                            if op_type != "tt_dnn_device":
                                 op_name += "_" + preferredName
 
                         op_to_folder[op_name] = op_folder_name
