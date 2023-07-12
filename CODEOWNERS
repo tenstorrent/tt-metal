@@ -85,11 +85,10 @@ tests/scripts/run_performance.sh @ashayestehmanesh @farbabi
 **/tt_lib/fallback_ops @tt-aho
 
 # models
-models/ @boris-drazic @ashayestehmanesh @farbabi # for future
-tests/python_api_testing/models/ @boris-drazic @ashayestehmanesh @farbabi
-tests/python_api_testing/models/conv_on_device_utils*.py @tt-nshanker
-tests/python_api_testing/models/bert_large_performant/ @tt-aho @TT-BrianLiu
-tests/python_api_testing/models/metal_BERT_large_15/ @tt-aho @TT-BrianLiu
+models/ @boris-drazic @ashayestehmanesh @farbabi
+models/conv_on_device_utils*.py @tt-nshanker
+models/bert_large_performant/ @tt-aho @TT-BrianLiu
+models/metal_BERT_large_15/ @tt-aho @TT-BrianLiu
 
 # docs
 # docs/source/apis/host_apis/ @abhullar-tt @TT-billteng @davorchap @tt-rkim
