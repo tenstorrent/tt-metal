@@ -61,8 +61,8 @@ void write_buffer(
 FORCE_INLINE void write_buffers(
     u32 num_buffer_writes,
     volatile u32*& command_ptr,
-    const InterleavedAddrGen<true>& dram_addr_gen,
-    const InterleavedAddrGen<false>& l1_addr_gen) {
+    InterleavedAddrGen<true>& dram_addr_gen,
+    InterleavedAddrGen<false>& l1_addr_gen) {
     for (u32 i = 0; i < num_buffer_writes; i++) {
         u32 src_addr = command_ptr[0];
         u32 src_noc = command_ptr[1];
@@ -152,8 +152,8 @@ FORCE_INLINE void read_buffer(
 FORCE_INLINE void read_buffers(
     u32 num_buffer_reads,
     volatile u32*& command_ptr,
-    const InterleavedAddrGen<true>& dram_addr_gen,
-    const InterleavedAddrGen<false>& l1_addr_gen) {
+    InterleavedAddrGen<true>& dram_addr_gen,
+    InterleavedAddrGen<false>& l1_addr_gen) {
     for (u32 i = 0; i < num_buffer_reads; i++) {
         u32 dst_addr = command_ptr[0];
         u32 dst_noc = command_ptr[1];
