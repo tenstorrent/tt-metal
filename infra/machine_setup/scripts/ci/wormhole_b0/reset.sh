@@ -17,3 +17,5 @@ else
   echo "Hugepages check did not pass - error"
   exit 1
 fi
+
+echo Current date / time is $(date)
