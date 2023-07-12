@@ -24,6 +24,52 @@ namespace tt {
 
 namespace tt_metal {
 
+namespace {
+
+    detail::CompilationReporter compilation_reporter = detail::CompilationReporter();
+    detail::MemoryReporter memory_reporter = detail::MemoryReporter();
+
+    void DownloadFirmware(Device *device, CoreCoord phys_core) {
+        for (int riscv_id = 0; riscv_id < 5; riscv_id++)  {
+            string fname;
+            switch (riscv_id) {
+            case 0:
+                fname = "brisc/brisc.hex";
+                tt::llrt::program_brisc_startup_addr(device->cluster(), device->pcie_slot(), phys_core);
+                break;
+            case 1: fname = "ncrisc/ncrisc.hex"; break;
+            case 2: fname = "tensix_thread0/tensix_thread0.hex"; break;
+            case 3: fname = "tensix_thread1/tensix_thread1.hex"; break;
+            case 4: fname = "tensix_thread2/tensix_thread2.hex"; break;
+            }
+            tt::llrt::test_load_write_read_risc_binary(device->cluster(), fname, device->pcie_slot(),
+                                                    phys_core, riscv_id, true);
+        }
+    }
+
+    std::optional<uint32_t> get_semaphore_address(const Program &program, const CoreRange &core_range) {
+        std::optional<uint32_t> address;
+        auto start_core = core_range.start;
+        auto end_core = core_range.end;
+        for (auto x = start_core.x; x <= end_core.x; x++) {
+            for (auto y = start_core.y; y <= end_core.y; y++) {
+                auto logical_core = CoreCoord{x, y};
+                auto num_semaphores = program.num_semaphores(logical_core);
+                if (num_semaphores == NUM_SEMAPHORES) {
+                    TT_THROW("Cannot add semaphore on core " + logical_core.str() + ". Max number of semaphores (" + std::to_string(NUM_SEMAPHORES) + ") reached!");
+                }
+                uint32_t addr = num_semaphores == 0 ? SEMAPHORE_BASE : program.semaphore_address(num_semaphores-1) + ALIGNED_SIZE_PER_SEMAPHORE;
+                if (!address.has_value()) {
+                    address = addr;
+                } else if (addr != address) {
+                    TT_THROW("Expected semaphore on logical core " + logical_core.str() + " to be initialized at L1 address " + std::to_string(address.value()) + " but it is at " + std::to_string(addr));
+                }
+            }
+        }
+        return address;
+    }
+}
+
 static Profiler tt_metal_profiler = Profiler();
 
 bool enable_compile_cache = false;
@@ -34,12 +80,10 @@ bool GetCompileCacheEnabled() { return enable_compile_cache; }
 bool enable_compilation_reports = false;
 void EnableCompilationReports() { enable_compilation_reports = true; }
 void DisableCompilationReports() { enable_compilation_reports = false; }
-static detail::CompilationReporter compilation_reporter = detail::CompilationReporter();
 
 bool enable_memory_reports = false;
 void EnableMemoryReports() { enable_memory_reports = true; }
 void DisableMemoryReports() { enable_memory_reports = false; }
-static detail::MemoryReporter memory_reporter = detail::MemoryReporter();
 
 void DumpDeviceMemoryState(const Device *device) {
     memory_reporter.dump_memory_usage_state(device);
@@ -83,24 +127,6 @@ Host *GetHost() {
 
 Device *CreateDevice(tt::ARCH arch, int pcie_slot) {
     return new Device(arch, pcie_slot);
-}
-
-static void DownloadFirmware(Device *device, CoreCoord phys_core) {
-    for (int riscv_id = 0; riscv_id < 5; riscv_id++)  {
-        string fname;
-        switch (riscv_id) {
-        case 0:
-            fname = "brisc/brisc.hex";
-            tt::llrt::program_brisc_startup_addr(device->cluster(), device->pcie_slot(), phys_core);
-            break;
-        case 1: fname = "ncrisc/ncrisc.hex"; break;
-        case 2: fname = "tensix_thread0/tensix_thread0.hex"; break;
-        case 3: fname = "tensix_thread1/tensix_thread1.hex"; break;
-        case 4: fname = "tensix_thread2/tensix_thread2.hex"; break;
-        }
-        tt::llrt::test_load_write_read_risc_binary(device->cluster(), fname, device->pcie_slot(),
-                                                   phys_core, riscv_id, true);
-    }
 }
 
 bool InitializeDevice(Device *device, const MemoryAllocator &memory_allocator) {
@@ -365,27 +391,6 @@ const CircularBuffer &CreateCircularBuffers(
     return program.add_circular_buffer(core_range_set, buffer_indices, num_tiles, size_in_bytes, data_format, l1_address);
 }
 
-static std::optional<uint32_t> get_semaphore_address(const Program &program, const CoreRange &core_range) {
-    std::optional<uint32_t> address;
-    auto start_core = core_range.start;
-    auto end_core = core_range.end;
-    for (auto x = start_core.x; x <= end_core.x; x++) {
-        for (auto y = start_core.y; y <= end_core.y; y++) {
-            auto logical_core = CoreCoord{x, y};
-            auto num_semaphores = program.num_semaphores(logical_core);
-            if (num_semaphores == NUM_SEMAPHORES) {
-                TT_THROW("Cannot add semaphore on core " + logical_core.str() + ". Max number of semaphores (" + std::to_string(NUM_SEMAPHORES) + ") reached!");
-            }
-            uint32_t addr = num_semaphores == 0 ? SEMAPHORE_BASE : program.semaphore_address(num_semaphores-1) + ALIGNED_SIZE_PER_SEMAPHORE;
-            if (!address.has_value()) {
-                address = addr;
-            } else if (addr != address) {
-                TT_THROW("Expected semaphore on logical core " + logical_core.str() + " to be initialized at L1 address " + std::to_string(address.value()) + " but it is at " + std::to_string(addr));
-            }
-        }
-    }
-    return address;
-}
 
 uint32_t CreateSemaphore(Program &program, const CoreRange &core_range, uint32_t initial_value) {
     return CreateSemaphore ( program, CoreRangeSet({core_range}), initial_value );
