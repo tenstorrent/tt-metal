@@ -16,12 +16,6 @@ be working in ready.
 
     source build/python_env/bin/activate
 
-Next, install ``pip`` requirements needed by models.
-
-::
-
-    python -m pip install -r tests/python_api_testing/requirements.txt
-
 Set ``PYTHONPATH`` to the root for running models. This is a common practice.
 
 ::

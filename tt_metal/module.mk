@@ -7,7 +7,6 @@ include $(TT_METAL_HOME)/tt_metal/device/module.mk
 include $(TT_METAL_HOME)/tt_metal/build_kernels_for_riscv/module.mk
 include $(TT_METAL_HOME)/tt_metal/llrt/module.mk
 include $(TT_METAL_HOME)/tt_metal/tools/module.mk
-include $(TT_METAL_HOME)/tt_metal/python_env/module.mk
 
 # Programming examples for external users
 include $(TT_METAL_HOME)/tt_metal/programming_examples/module.mk

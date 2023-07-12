@@ -60,7 +60,7 @@ cd tt-metal
 export ARCH_NAME=<arch name>
 export TT_METAL_HOME=<this repo dir>
 export PYTHONPATH=<this repo dir>
-export TT_METAL_ENV=<dev/production>
+export TT_METAL_ENV=dev
 ```
 
 5. Build the project.
@@ -80,7 +80,36 @@ this project.
 
 ### From a release wheel (BUDA-Eager only)
 
-Coming soon!
+This section is under construction.
+
+0. Install the system-level dependencies of this project. Under construction.
+
+1. You must add an extra index URL to download the necessary dependencies
+during wheel installation. Do so:
+
+```
+python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu
+```
+
+2. Install the wheel into your environment and then activate your environment.
+
+3. Set up the necessary environment for a user environment.
+
+```
+export ARCH_NAME=<arch name>
+export TT_METAL_HOME=$(python -m tt_lib.scripts.get_home_dir --short)
+```
+
+4. Set up the kernels build environment.
+
+```
+python -m tt_lib.scripts.set_up_kernels --short prepare
+```
+
+5. Now you're ready!
+
+You should look ahead to [Getting started](#getting-started) to further use
+this project.
 
 ## Getting started
 
@@ -94,7 +123,7 @@ project every time:
 
 ```
 export ARCH_NAME=<arch name>
-export TT_METAL_ENV=<dev/production>
+export TT_METAL_HOME=<appropriate value based on installation method above>
 ```
 
 where ``<arch name>`` is your target, which could be:
@@ -104,12 +133,12 @@ where ``<arch name>`` is your target, which could be:
 
 etc...
 
-If you're setting up an environment from source, you must further set up the
-environment with:
+If you're setting up an environment from source, you must further set up and
+activate the environment with:
 
 ```
-export TT_METAL_HOME=<this repo dir>
 export PYTHONPATH=<this repo dir>
+export TT_METAL_ENV=dev
 source build/python_env/bin/activate
 ```
 

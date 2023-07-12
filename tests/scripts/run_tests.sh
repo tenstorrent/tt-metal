@@ -87,7 +87,6 @@ run_frequent_pipeline_tests() {
 
     source build/python_env/bin/activate
     export PYTHONPATH=$TT_METAL_HOME
-    python -m pip install -r tests/python_api_testing/requirements.txt
 
     run_post_commit_pipeline_tests "$tt_arch" "$pipeline_type"
 

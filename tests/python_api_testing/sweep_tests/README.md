@@ -10,7 +10,6 @@ Sweep tests are used to compare and validate `tt_lib` ops against a PyTorch gold
 Follow the `Getting Started` page to setup the `python_env`. Then, run:
 ```
 source build/python_env/bin/activate
-pip install -r python_api_testing/requirements.txt
 ```
 
 ## Running tests

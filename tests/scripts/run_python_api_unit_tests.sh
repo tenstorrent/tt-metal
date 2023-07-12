@@ -10,7 +10,6 @@ fi
 source build/python_env/bin/activate
 export PYTHONPATH=$TT_METAL_HOME
 # Needed for tests in models
-python -m pip install -r tests/python_api_testing/requirements.txt
 
 pytest $TT_METAL_HOME/tests/python_api_testing/unit_testing/ -vvv
 pytest $TT_METAL_HOME/tests/python_api_testing/sweep_tests/pytests/ -vvv

@@ -13,13 +13,6 @@ pass &= run_data_copy_multi_tile(cluster, chip_id, core, 2048);
 ```
 where cluster was defined earlier in the file.
 
-## Installing python packages
-
-Within the ``tools/tt_gdb`` directory,
-```bash
-pip3 install -r requirements.txt
-```
-
 ## Compiling under debug mode
 To get the most out of `tt_gdb`, you must compile under debug mode. This will use different debug ld files for the riscs, and will enable debug symbols. To enable under debug mode, use
 `DEBUG_MODE=1` when compiling a test.
