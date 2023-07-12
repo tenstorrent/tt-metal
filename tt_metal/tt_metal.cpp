@@ -140,7 +140,7 @@ bool InitializeDevice(Device *device, const MemoryAllocator &memory_allocator) {
             // Need a lock here to prevent the race of building mulitple times
             const std::lock_guard<std::mutex> lock(build_mutex);
             if (!global_init_complete) {
-                build_kernel_for_riscv_options_t build_options;
+                build_kernel_for_riscv_options_t build_options(device->pcie_slot());
                 detail::GenerateBankToNocCoordHeaders(device, &build_options, "");
                 std::string arch_name = tt::get_string_lowercase(device->arch());
                 generate_binaries_params_t default_params;
@@ -631,7 +631,7 @@ void CompileBlankKernel(Device *device, bool profile_kernel) {
         return;
     }
 
-    build_kernel_for_riscv_options_t blank_build_options("blank_op", "blank_op");
+    build_kernel_for_riscv_options_t blank_build_options(device->pcie_slot(), "blank_op");
     struct hlk_args_t {
         std::int32_t dummy;
     };
@@ -684,8 +684,6 @@ size_t KernelCompileHash(Kernel *kernel, build_kernel_for_riscv_options_t &build
         compile_hash_str += std::to_string(size_t(compute_kernel->fp32_dest_acc_en()));
         compile_hash_str += std::to_string(size_t(compute_kernel->math_approx_mode()));
     }
-    // Add the device id into the compile hash to prevent clashes from simultaneous builds during multi-process runs
-    compile_hash_str += std::to_string(std::hash<int>{}(pcie_slot));
 
     size_t compile_hash = std::hash<std::string>{}(compile_hash_str);
 
@@ -745,7 +743,7 @@ void SetBuildKernelOptions(Kernel *kernel, build_kernel_for_riscv_options_t &bui
 }
 
 void CompileKernel(Device *device, Program &program, Kernel *kernel, bool profile_kernel) {
-    build_kernel_for_riscv_options_t build_options("kernel_options", kernel->name());
+    build_kernel_for_riscv_options_t build_options(device->pcie_slot(), kernel->name());
 
     SetBuildKernelOptions(kernel, build_options);
     SetCircularBufferDataFormat(device, program, kernel, build_options);
@@ -789,7 +787,7 @@ void AddBlankKernels(Device *device, Program &program, bool profile_kernel) {
         auto blank_kernel = CreateDataMovementKernel(
             program, "tt_metal/kernels/dataflow/blank.cpp", core_range_set, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
         CompileKernel(device, program, blank_kernel, profile_kernel);
-        blank_kernel->read_binaries();
+        blank_kernel->read_binaries(device->pcie_slot());
     }
 
     if (not unique_core_ranges_without_ncrisc_kernel.empty()) {
@@ -797,14 +795,14 @@ void AddBlankKernels(Device *device, Program &program, bool profile_kernel) {
         auto blank_kernel = CreateDataMovementKernel(
             program, "tt_metal/kernels/dataflow/blank.cpp", core_range_set, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
         CompileKernel(device, program, blank_kernel, profile_kernel);
-        blank_kernel->read_binaries();
+        blank_kernel->read_binaries(device->pcie_slot());
     }
     if (not unique_core_ranges_without_compute_kernel.empty()) {
         CoreRangeSet core_range_set = CoreRangeSet(unique_core_ranges_without_compute_kernel);
         auto blank_kernel = CreateComputeKernel(
             program, "tt_metal/kernels/compute/blank.cpp", core_range_set, {0}, MathFidelity::HiFi4, false, false);
         CompileKernel(device, program, blank_kernel, profile_kernel);
-        blank_kernel->read_binaries();
+        blank_kernel->read_binaries(device->pcie_slot());
 
     }
 
@@ -879,7 +877,7 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
         tf::Taskflow tf;
 
         for (auto kernel : program.kernels()) {
-            tf.emplace ( [kernel] { kernel->read_binaries(); });
+            tf.emplace ( [kernel, device] { kernel->read_binaries(device->pcie_slot()); });
         }
         GetExecutor().run(tf).wait();
     }

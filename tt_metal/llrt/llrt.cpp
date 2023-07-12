@@ -51,9 +51,9 @@ struct HexNameToMemVectorCache {
 
 // made these free functions -- they're copy/paste of the member functions
 // TODO: clean-up epoch_loader / epoch_binary -- a bunch of functions there should not be member functions
-ll_api::memory get_risc_binary(string path, bool fw_build) {
+ll_api::memory get_risc_binary(string path, int chip_id, bool fw_build) {
 
-    string path_to_bin = (fw_build ? get_firmware_compile_outpath() : get_kernel_compile_outpath()) + path;
+    string path_to_bin = (fw_build ? get_firmware_compile_outpath(chip_id) : get_kernel_compile_outpath(chip_id)) + path;
     if (HexNameToMemVectorCache::inst().exists(path)) {
         // std::cout << "-- HEX2MEM CACHE HIT FOR " << path << std::endl;
         return HexNameToMemVectorCache::inst().get(path);
@@ -249,8 +249,8 @@ bool test_load_write_read_risc_binary(
 bool test_load_write_read_risc_binary(
     tt_cluster *cluster, std::string hex_file_name, int chip_id, const CoreCoord &core, int riscv_id, bool fw_build) {
 
-    log_debug(tt::LogLLRuntime, "hex_file_path = {}", (fw_build ? get_firmware_compile_outpath() : get_kernel_compile_outpath()) + hex_file_name);
-    ll_api::memory mem = get_risc_binary(hex_file_name, fw_build);
+    log_debug(tt::LogLLRuntime, "hex_file_path = {}", (fw_build ? get_firmware_compile_outpath(chip_id) : get_kernel_compile_outpath(chip_id)) + hex_file_name);
+    ll_api::memory mem = get_risc_binary(hex_file_name, chip_id, fw_build);
     test_load_write_read_risc_binary_imp(cluster, mem, chip_id, core, riscv_id);
 
     return true;

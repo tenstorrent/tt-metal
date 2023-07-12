@@ -12,8 +12,8 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-std::string get_latest_kernel_binary_path(const tt_metal::Kernel *kernel) {
-    auto root_dir = get_kernel_compile_outpath();
+std::string get_latest_kernel_binary_path(int pcie_slot, const tt_metal::Kernel *kernel) {
+    auto root_dir = get_kernel_compile_outpath(pcie_slot);
     TT_ASSERT(kernel != nullptr);
     TT_ASSERT(std::filesystem::exists(root_dir + kernel->name()));
 
@@ -140,7 +140,7 @@ int main(int argc, char **argv) {
         // Check that binary memory objects in the kernel match the ones obtained from the persistent cache
         auto kernel_group = program.kernels_on_core(core);
         for (auto kernel : program.kernels()) {
-            std::filesystem::remove_all(get_kernel_compile_outpath() + kernel->name());
+            std::filesystem::remove_all(get_kernel_compile_outpath(device->pcie_slot()) + kernel->name());
         }
 
         int num_compiles = 3;
@@ -162,16 +162,16 @@ int main(int argc, char **argv) {
                 TT_ASSERT(kernel_group.riscv_0->binaries() == brisc_binaries);
                 TT_ASSERT(kernel_group.riscv_1->binaries() == ncrisc_binaries);
             }
-            std::string brisc_hex_path = get_latest_kernel_binary_path(kernel_group.riscv_0) + "/brisc/brisc.hex";
-            ll_api::memory brisc_binary = llrt::get_risc_binary(brisc_hex_path, false);
+            std::string brisc_hex_path = get_latest_kernel_binary_path(device->pcie_slot(), kernel_group.riscv_0) + "/brisc/brisc.hex";
+            ll_api::memory brisc_binary = llrt::get_risc_binary(brisc_hex_path, device->pcie_slot(), false);
             TT_ASSERT(brisc_binary == brisc_binaries.at(0), "Expected saved BRISC binary to be the same as binary in persistent cache");
-            std::string ncrisc_hex_path = get_latest_kernel_binary_path(kernel_group.riscv_1) + "/ncrisc/ncrisc.hex";
-            ll_api::memory ncrisc_binary = llrt::get_risc_binary(ncrisc_hex_path, false);
+            std::string ncrisc_hex_path = get_latest_kernel_binary_path(device->pcie_slot(), kernel_group.riscv_1) + "/ncrisc/ncrisc.hex";
+            ll_api::memory ncrisc_binary = llrt::get_risc_binary(ncrisc_hex_path, device->pcie_slot(), false);
             TT_ASSERT(ncrisc_binary == ncrisc_binaries.at(0), "Expected saved NCRISC binary to be the same as binary in persistent cache");
             for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
                 std::string trisc_id_str = std::to_string(trisc_id);
-                std::string trisc_hex_path = get_latest_kernel_binary_path(kernel_group.compute) + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex";
-                ll_api::memory trisc_binary = llrt::get_risc_binary(trisc_hex_path, false);
+                std::string trisc_hex_path = get_latest_kernel_binary_path(device->pcie_slot(), kernel_group.compute) + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex";
+                ll_api::memory trisc_binary = llrt::get_risc_binary(trisc_hex_path, device->pcie_slot(), false);
                 TT_ASSERT(trisc_binary == compute_binaries.at(trisc_id), "Expected saved TRISC binary for " + trisc_id_str + " to be the same as binary in persistent cache");
             }
         }

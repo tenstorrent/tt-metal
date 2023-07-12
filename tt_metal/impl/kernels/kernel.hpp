@@ -78,7 +78,7 @@ class Kernel {
     void add_define(const std::string& name, int value) { defines_[name] = std::to_string(value); }
     size_t define_args_hash() const;
     void set_binary_path ( const std::string & binary_path) { binary_path_ = binary_path; }
-    void read_binaries();
+    void read_binaries(int pcie_slot);
 
    protected:
     std::string kernel_path_file_name_;                 // Full kernel path and file name

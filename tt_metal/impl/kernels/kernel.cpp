@@ -96,7 +96,7 @@ void Kernel::set_runtime_args(const CoreCoord &logical_core, const std::vector<u
     set_rt_args = runtime_args;
 }
 
-void Kernel::read_binaries() {
+void Kernel::read_binaries(int pcie_slot) {
     std::vector<ll_api::memory> binaries;
     TT_ASSERT ( !binary_path_.empty(), "Path to Kernel binaries not set!" );
     switch (this->kernel_type_) {
@@ -104,7 +104,7 @@ void Kernel::read_binaries() {
             for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
                 std::string trisc_id_str = std::to_string(trisc_id);
                 std::string hex_path = binary_path_ + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex";
-                ll_api::memory binary_mem = llrt::get_risc_binary(hex_path, false);
+                ll_api::memory binary_mem = llrt::get_risc_binary(hex_path, pcie_slot, false);
                 binaries.push_back(binary_mem);
             }
         }
@@ -128,7 +128,7 @@ void Kernel::read_binaries() {
                 default:
                     TT_ASSERT(false, "Unsupported data movement processor!");
             }
-            ll_api::memory binary_mem = llrt::get_risc_binary(binary_path_ + binary_path_suffix, false);
+            ll_api::memory binary_mem = llrt::get_risc_binary(binary_path_ + binary_path_suffix, pcie_slot, false);
             binaries.push_back(binary_mem);
         }
         break;

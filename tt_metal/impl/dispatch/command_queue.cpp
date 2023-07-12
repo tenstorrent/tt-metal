@@ -575,7 +575,7 @@ void send_dispatch_kernel_to_device(Device* device) {
     // Ideally, this should be some separate API easily accessible in
     // TT-metal, don't like the fact that I'm writing this from scratch
     std::string arch_name = tt::get_string_lowercase(device->arch());
-    tt::build_kernel_for_riscv_options_t build_kernel_for_riscv_options("unary", "command_queue");
+    tt::build_kernel_for_riscv_options_t build_kernel_for_riscv_options(device->pcie_slot(), "command_queue");
 
     build_kernel_for_riscv_options.fp32_dest_acc_en = false;
 

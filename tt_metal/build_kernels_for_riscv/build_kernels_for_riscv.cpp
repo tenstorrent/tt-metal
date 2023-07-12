@@ -69,6 +69,7 @@ struct CompileState {
     string gpp_           { "/tt_metal/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-g++ " };
     string gcc_           { "/tt_metal/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-gcc " }; // TODO(AP): this wasn't really necessary for assembler
     string objcopy_       { "/tt_metal/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-objcopy " };
+    int pcie_slot;
     string kernel_subdir_;
     string thread_bin_subdir;
     string log_file;
@@ -83,6 +84,7 @@ struct CompileState {
         if (home_.back() != '/')
             home_.push_back('/');
         kernel_subdir_ = build_opts->outpath + in_kernel_subdir;
+        pcie_slot = build_opts->pcie_slot;
         gpp_ = home_ + gpp_;
         gcc_ = home_ + gcc_;
         objcopy_ = home_ + objcopy_;
@@ -357,7 +359,7 @@ struct CompileState {
             linkopts += " -fno-tree-loop-distribute-patterns";
         }
         if (!is_fw_build_) {
-            string weakened_elf_name = tt::get_firmware_compile_outpath() + elfname + "/" + elfname + "_weakened.elf";
+            string weakened_elf_name = tt::get_firmware_compile_outpath(pcie_slot) + elfname + "/" + elfname + "_weakened.elf";
             if (!fs::exists(weakened_elf_name)) {
                 log_fatal(tt::LogBuildKernels, "File {} does not exist, link failed\n", weakened_elf_name);
             }
@@ -1049,7 +1051,7 @@ void generate_bank_to_noc_coord_descriptor(
 ) {
     string output_string = generate_bank_to_noc_coord_descriptor_string(dram_bank_map, dram_bank_offset_map, l1_bank_map, l1_bank_offset_map);
 
-    string full_path = build_kernel_for_riscv_options->fw_build_ ? get_firmware_compile_outpath() : get_kernel_compile_outpath();
+    string full_path = build_kernel_for_riscv_options->outpath;
     full_path += out_dir_path;
     fs::create_directories(full_path + "/brisc");
     ofstream file_stream_br(full_path + "/brisc/generated_bank_to_noc_coord_mapping.h");

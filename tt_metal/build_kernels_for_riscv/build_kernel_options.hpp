@@ -13,8 +13,9 @@ class build_kernel_for_riscv_options_t
     public:
 
     // general config
+    int pcie_slot;
     std::string name;
-    const std::string& outpath;
+    const std::string outpath;
 
     // HLK config
     tt::tt_hlk_desc hlk_desc;
@@ -34,8 +35,8 @@ class build_kernel_for_riscv_options_t
     std::map<std::string, std::string> ncrisc_defines;
     std::map<std::string, std::string> brisc_defines;
 
-    build_kernel_for_riscv_options_t();
-    build_kernel_for_riscv_options_t(std::string type, std::string name);
+    build_kernel_for_riscv_options_t(int pcie_slot);
+    build_kernel_for_riscv_options_t(int pcie_slot, std::string name);
 
     void set_hlk_file_name_all_cores(std::string file_name) ;
     void set_hlk_math_fidelity_all_cores(MathFidelity math_fidelity) ;
@@ -48,14 +49,12 @@ class build_kernel_for_riscv_options_t
 };
 
 // TODO: llrt needs these but doesn't link against build_kernels_for_riscv.cpp
-inline const std::string& get_firmware_compile_outpath() {
-    static const std::string outpath = tt::utils::get_root_dir() + "/built/firmware/";
-    return outpath;
+inline const std::string get_firmware_compile_outpath(int pcie_slot) {
+    return tt::utils::get_root_dir() + "/built/" + std::to_string(pcie_slot) + "/firmware/";
 }
 
-inline const std::string& get_kernel_compile_outpath() {
-    static const std::string outpath = tt::utils::get_root_dir() + "/built/kernels/";
-    return outpath;
+inline const std::string get_kernel_compile_outpath(int pcie_slot) {
+    return tt::utils::get_root_dir() + "/built/" + std::to_string(pcie_slot) + "/kernels/";
 }
 
 } // end namespace tt

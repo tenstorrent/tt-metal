@@ -25,7 +25,7 @@ struct hlk_args_t {
 void run_compile_blank(tt_metal::Device *device) {
 
     // Create and config an OP
-    tt::build_kernel_for_riscv_options_t build_kernel_for_riscv_options("dummy_type","blank_op");
+    tt::build_kernel_for_riscv_options_t build_kernel_for_riscv_options(device->pcie_slot(), "blank_op");
 
     log_info(tt::LogBuildKernels, "Compiling OP: {}", build_kernel_for_riscv_options.name);
 
