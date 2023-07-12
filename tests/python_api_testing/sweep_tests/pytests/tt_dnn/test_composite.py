@@ -64,7 +64,7 @@ def custom_compare(*args, **kwargs):
                 "arange",
                 "leaky_relu",
                 "hardshrink",
-                "softshrink"
+                "softshrink",
                 "sinh",
                 "cosh"
             ),

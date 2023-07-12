@@ -61,7 +61,7 @@ def linear(x, weight, *args, host, device, dtype, layout, on_device, **kwargs):
     tt_linear = tt_Linear(in_features, out_features, tt_weight, tt_bias)
 
     t1 = tt_linear(t0)
-    output = torch.Tensor(t1.to(host).to(tt_lib.tensor.Layout.ROW_MAJOR).data()).reshape(t1.shape())
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(t1.shape())
     return output
 
 

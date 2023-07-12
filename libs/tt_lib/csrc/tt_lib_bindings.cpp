@@ -1578,6 +1578,34 @@ void TensorModule(py::module &m_tensor) {
         +----------+-----------------------------+-----------+------------------------------+----------+
     )doc");
 
+    m_tensor.def("sinh", &tt::tt_metal::sinh, R"doc(
+        Returns tensor with the hyperbolic sine of elements of the input tensor ``arg0`` in range [-9,9] with high accuracy.
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+---------------------------+-----------+------------------------------+----------+
+        | Argument | Description               | Data type | Valid range                  | Required |
+        +==========+===========================+===========+==============================+==========+
+        | arg0     | Tensor sinh is applied to | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+---------------------------+-----------+------------------------------+----------+
+    )doc");
+
+    m_tensor.def("cosh", &tt::tt_metal::cosh, R"doc(
+        Returns tensor with the hyperbolic cosine of elements of the input tensor ``arg0``.
+
+        Input tensor must have BFLOAT16 data type in range [-9,9] for high accuracy.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+-----------------------------+-----------+------------------------------+----------+
+        | Argument | Description                 | Data type | Valid range                  | Required |
+        +==========+=============================+===========+==============================+==========+
+        | arg0     | Tensor cosh is applied to   | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+-----------------------------+-----------+------------------------------+----------+
+    )doc");
+
     m_tensor.def("square", &square, R"doc(
         Returns tensor with the square of elements of the input tensor ``arg0``.
 
