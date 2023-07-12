@@ -221,7 +221,7 @@ CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) c
     if (not cluster_is_initialized()) {
         TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
     }
-    log_assert(
+    TT_ASSERT(
         (logical_core.x < this->post_harvested_worker_grid_size_.x) and
         (logical_core.y < this->post_harvested_worker_grid_size_.y),
         "Bounds-Error -- Logical_core={} is outside of logical_grid_size={}",

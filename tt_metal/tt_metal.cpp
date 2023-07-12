@@ -975,7 +975,7 @@ bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
 }
 
 void SetRuntimeArgs(Kernel *kernel, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args) {
-    log_assert(kernel->kernel_type() != KernelType::Compute, "Compute kernels do not support runtime args");
+    TT_ASSERT(kernel->kernel_type() != KernelType::Compute, "Compute kernels do not support runtime args");
     kernel->set_runtime_args(logical_core, runtime_args);
 }
 

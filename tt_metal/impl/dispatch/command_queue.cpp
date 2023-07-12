@@ -795,7 +795,7 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
     const char* DISPATCH_MAP_DUMP = std::getenv("TT_METAL_DISPATCH_MAP_DUMP");
 
     if (COMPARE_DISPATCH_DEVICE_TO_HOST != nullptr) {
-        tt::log_assert(
+        TT_ASSERT(
             DISPATCH_MAP_DUMP != nullptr,
             "Cannot compare dispatch device output to host when dispatch map dump not enabled");
 

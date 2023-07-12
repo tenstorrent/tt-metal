@@ -61,7 +61,8 @@ size_t Kernel::define_args_hash() const {
 }
 
 std::vector<uint32_t> const &Kernel::runtime_args(const CoreCoord &logical_core) {
-    log_assert(this->is_on_logical_core(logical_core), "Cannot get runtime args for kernel {} that is not placed on core {}", this->name(), logical_core.str());
+    // TODO (abhullar): Should this check only be enabled in debug mode?
+    // log_assert(this->is_on_logical_core(logical_core), "Cannot get runtime args for kernel {} that is not placed on core {}", this->name(), logical_core.str());
     return this->core_to_runtime_args_[logical_core];
 }
 
@@ -78,18 +79,20 @@ void Kernel::set_runtime_args(const CoreCoord &logical_core, const std::vector<u
             default:
                 log_assert(false, "Only data movement kernels have runtime arg support");
         }
-        std::stringstream identifier;
-        identifier << this->kernel_type_;
         if (l1_arg_base + runtime_args_size >= result_base) {
+            std::stringstream identifier;
+            identifier << this->kernel_type_;
             TT_THROW(std::to_string(runtime_args_size / 1024) + "KB " + identifier.str()  + " runtime args targeting " + logical_core.str() + " are too large.\
                 Cannot be written as they will run into memory region reserved for result. Max allowable size is " + std::to_string((result_base - l1_arg_base)/1024) + " KB.");
         }
     };
 
-    log_assert(this->is_on_logical_core(logical_core), "Cannot set runtime args for core {} since kernel {} is not placed on it!", logical_core.str(), this->name());
+    // TODO (abhullar): If we don't include this check then user can write runtime args to a core that the kernel is not placed on.
+    //                  Should this check only be enabled in debug mode?
+    // log_assert(this->is_on_logical_core(logical_core), "Cannot set runtime args for core {} since kernel {} is not placed on it!", logical_core.str(), this->name());
     validate_runtime_args_size();
     auto &set_rt_args = this->core_to_runtime_args_[logical_core];
-    log_assert(set_rt_args.empty() or set_rt_args.size() == runtime_args.size(), "Illegal Runtime Args: Number of runtime args cannot be modified!");
+    TT_ASSERT(set_rt_args.empty() or set_rt_args.size() == runtime_args.size(), "Illegal Runtime Args: Number of runtime args cannot be modified!");
     set_rt_args = runtime_args;
 }
 
