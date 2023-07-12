@@ -1081,7 +1081,7 @@ ALWI void graph_interpreter_init() // TODO(AP): probably duplicated, remove
     PACK(( llk_pack_dest_init<SyncHalf, DstTileFaceLayout::RowMajor, false>() ));
     PACK(( llk_pack_hw_configure_disaggregated<false>(16) ));
     UNPACK(( llk_setup_operands() ));
-    UNPACK(( llk_unpack_AB_hw_configure_disaggregated(0,1) ));
+    UNPACK(( llk_unpack_AB_hw_configure_disaggregated(0,0) ));
 }
 
 //Leaky Relu : y = relu(x) + slope*-relu(-x)
