@@ -297,6 +297,8 @@ namespace ckernel::unpacker
       //cfg[out_df_addr]=config.val[0];
       TT_SETDMAREG(0, LOWER_HALFWORD(config.val[0]), 0, LO_16(p_gpr_unpack::TMP0));
       TT_SETDMAREG(0, UPPER_HALFWORD(config.val[0]), 0, HI_16(p_gpr_unpack::TMP0));
+      TT_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, out_df_addr);
+      TTI_NOP;TTI_NOP;
 
       // Set ch1/dst address stride 
       uint x_stride = (uint) (unpack_dst_format[src_operand_id]&0x3) == (uint) DataFormat::Float32 ? 4 : (uint) (unpack_dst_format[src_operand_id]&0x3) == (uint)DataFormat::Float16 ? 2 : 1;
@@ -306,10 +308,9 @@ namespace ckernel::unpacker
       TT_SETDMAREG(0, LOWER_HALFWORD(xy_stride.val), 0, LO_16(p_gpr_unpack::TMP1));
       TT_SETDMAREG(0, UPPER_HALFWORD(xy_stride.val), 0, HI_16(p_gpr_unpack::TMP1));
 
-      TT_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, out_df_addr);
       TT_WRCFG(p_gpr_unpack::TMP1, p_cfg::WRCFG_32b, out_df_stride);
-
       TTI_NOP;TTI_NOP;
+
    
       // Clear context ID
       //reset_config_context();
