@@ -17,27 +17,84 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 import tt_lib
 import torch
 from loguru import logger
-from datasets import load_dataset
 import torchvision
 
 from tt_lib.fallback_ops import fallback_ops
-from python_api_testing.models.utility_functions_new import torch2tt_tensor, tt2torch_tensor
-from python_api_testing.models.EfficientNet.tt.efficientnet_conv import TtEfficientnetConv2dNormActivation
-from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from python_api_testing.models.utility_functions_new import (
+    torch2tt_tensor,
+    tt2torch_tensor,
+    comp_allclose,
+    comp_pcc,
+)
+from python_api_testing.models.EfficientNet.tt.efficientnet_conv import (
+    TtEfficientnetConv2d,
+    TtEfficientnetConv2dNormActivation,
+)
 
 
+def test_efficientnet_conv2d():
+    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    tt_lib.device.InitializeDevice(device)
 
-def download_images(path, imgsz):
-    dataset = load_dataset("huggingface/cats-image")
-    image = dataset["test"]["image"][0]
+    refence_model = torchvision.models.efficientnet_b0(pretrained=True)
+    refence_model.eval()
 
-    if imgsz is not None:
-        image = image.resize(imgsz)
+    block = 0
+    refence_module = refence_model.features[block][0]
 
-    image.save(path / "input_image.jpg")
+    in_channels = refence_module.in_channels
+    out_channels = refence_module.out_channels
+    kernel_size = refence_module.kernel_size
+    stride = refence_module.stride
+    padding = refence_module.padding
+    groups = refence_module.groups
+    dilation = refence_module.dilation
+
+    logger.debug(f"in_channels {in_channels}")
+    logger.debug(f"out_channels {out_channels}")
+    logger.debug(f"kernel_size {kernel_size}")
+    logger.debug(f"stride {stride}")
+    logger.debug(f"padding {padding}")
+    logger.debug(f"groups {groups}")
+    logger.debug(f"dilation {dilation}")
+
+    torch.manual_seed(0)
+    test_input = torch.rand(1, 3, 224, 224)
+    pt_out = refence_module(test_input)
+
+    tt_module = TtEfficientnetConv2d(
+        state_dict=refence_model.state_dict(),
+        base_address=f"features.{block}.0",
+        device=device,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        groups=groups,
+        dilation=dilation,
+        conv_on_device=False,
+    )
+
+    test_input = torch2tt_tensor(
+        test_input, tt_device=device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
+    )
+    tt_out = tt_module(test_input)
+    tt_out = tt2torch_tensor(tt_out)
+    tt_lib.device.CloseDevice(device)
+
+    does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)
+    logger.info(pcc_message)
+
+    if does_pass:
+        logger.info("test_efficientnet_conv2d Passed!")
+    else:
+        logger.warning("test_efficientnet_conv2d Failed!")
+
+    assert does_pass
 
 
-def test_efficientnet_conv():
+def test_efficientnet_conv_norm_activation():
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
 
@@ -49,12 +106,12 @@ def test_efficientnet_conv():
 
     in_channels = refence_module[0].in_channels
     out_channels = refence_module[0].out_channels
-    kernel_size = refence_module[0].kernel_size[0]
-    stride = refence_module[0].stride[0]
-    padding = refence_module[0].padding[0]
+    kernel_size = refence_module[0].kernel_size
+    stride = refence_module[0].stride
+    padding = refence_module[0].padding
     groups = refence_module[0].groups
     dilation = refence_module[0].dilation
-    #activation_layer = refence_module.activation_layer
+    # activation_layer = refence_module.activation_layer
 
     logger.debug(f"in_channels {in_channels}")
     logger.debug(f"out_channels {out_channels}")
@@ -63,7 +120,7 @@ def test_efficientnet_conv():
     logger.debug(f"padding {padding}")
     logger.debug(f"groups {groups}")
     logger.debug(f"dilation {dilation}")
-    #logger.debug(f"act {activation_layer}")
+    # logger.debug(f"act {activation_layer}")
 
     torch.manual_seed(0)
     test_input = torch.rand(1, 3, 224, 224)
@@ -84,7 +141,9 @@ def test_efficientnet_conv():
         conv_on_device=False,
     )
 
-    test_input = torch2tt_tensor(test_input, tt_device=device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+    test_input = torch2tt_tensor(
+        test_input, tt_device=device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
+    )
     tt_out = tt_module(test_input)
     tt_out = tt2torch_tensor(tt_out)
     tt_lib.device.CloseDevice(device)
@@ -93,8 +152,8 @@ def test_efficientnet_conv():
     logger.info(pcc_message)
 
     if does_pass:
-        logger.info("test_Yolov5_conv Passed!")
+        logger.info("test_efficientnet_conv_norm_activation Passed!")
     else:
-        logger.warning("test_Yolov5_conv Failed!")
+        logger.warning("test_efficientnet_conv_norm_activation Failed!")
 
     assert does_pass

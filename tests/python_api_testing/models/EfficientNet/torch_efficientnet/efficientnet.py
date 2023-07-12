@@ -18,7 +18,7 @@ class EfficientNet(nn.Module):
         norm_layer: Optional[Callable[..., nn.Module]] = None,
         last_channel: Optional[int] = None,
         state_dict=None,
-        base_address=""
+        base_address="",
     ) -> None:
         super().__init__()
         self.base_address_with_dot = "" if base_address == "" else f"{base_address}."
@@ -29,7 +29,9 @@ class EfficientNet(nn.Module):
             isinstance(inverted_residual_setting, Sequence)
             and all([isinstance(s, _MBConvConfig) for s in inverted_residual_setting])
         ):
-            raise TypeError("The inverted_residual_setting should be List[MBConvConfig]")
+            raise TypeError(
+                "The inverted_residual_setting should be List[MBConvConfig]"
+            )
 
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
@@ -47,7 +49,7 @@ class EfficientNet(nn.Module):
                 norm_layer=norm_layer,
                 activation_layer=nn.SiLU,
                 state_dict=state_dict,
-                base_address=f"{self.base_address_with_dot}features.0"
+                base_address=f"{self.base_address_with_dot}features.0",
             )
         )
 
@@ -66,13 +68,19 @@ class EfficientNet(nn.Module):
                     block_cnf.stride = 1
 
                 # adjust stochastic depth probability based on the depth of the stage block
-                sd_prob = stochastic_depth_prob * float(stage_block_id) / total_stage_blocks
+                sd_prob = (
+                    stochastic_depth_prob * float(stage_block_id) / total_stage_blocks
+                )
 
-                stage.append(block_cnf.block(block_cnf,
-                            sd_prob,
-                            norm_layer,
-                            state_dict=state_dict,
-                            base_address=f"{self.base_address_with_dot}features.{len(layers)}.{len(stage)}"))
+                stage.append(
+                    block_cnf.block(
+                        block_cnf,
+                        sd_prob,
+                        norm_layer,
+                        state_dict=state_dict,
+                        base_address=f"{self.base_address_with_dot}features.{len(layers)}.{len(stage)}",
+                    )
+                )
 
                 stage_block_id += 1
 
@@ -80,7 +88,9 @@ class EfficientNet(nn.Module):
 
         # building last several layers
         lastconv_input_channels = inverted_residual_setting[-1].out_channels
-        lastconv_output_channels = last_channel if last_channel is not None else 4 * lastconv_input_channels
+        lastconv_output_channels = (
+            last_channel if last_channel is not None else 4 * lastconv_input_channels
+        )
         layers.append(
             Conv2dNormActivation(
                 lastconv_input_channels,
@@ -89,7 +99,7 @@ class EfficientNet(nn.Module):
                 norm_layer=norm_layer,
                 activation_layer=nn.SiLU,
                 state_dict=state_dict,
-                base_address=f"{self.base_address_with_dot}features.{len(layers)}"
+                base_address=f"{self.base_address_with_dot}features.{len(layers)}",
             )
         )
 
@@ -97,17 +107,28 @@ class EfficientNet(nn.Module):
 
         for index, item in enumerate(self.features):
             if isinstance(item, nn.Conv2d):
-                assign_conv_weight(item, state_dict=state_dict, key_w=f"{self.base_address_with_dot}features.{index}")
+                assign_conv_weight(
+                    item,
+                    state_dict=state_dict,
+                    key_w=f"{self.base_address_with_dot}features.{index}",
+                )
             elif isinstance(item, nn.BatchNorm2d):
-                assign_batchnorm_weight(item, state_dict=state_dict, key_w=f"{self.base_address_with_dot}features.{index}")
+                assign_batchnorm_weight(
+                    item,
+                    state_dict=state_dict,
+                    key_w=f"{self.base_address_with_dot}features.{index}",
+                )
 
         self.avgpool = nn.AdaptiveAvgPool2d(1)
         self.classifier = nn.Sequential(
             nn.Dropout(p=dropout, inplace=True),
             nn.Linear(lastconv_output_channels, num_classes),
         )
-        assign_linear_weights(self.classifier[1], state_dict=state_dict, key_w=f"{self.base_address_with_dot}classifier.1")
-
+        assign_linear_weights(
+            self.classifier[1],
+            state_dict=state_dict,
+            key_w=f"{self.base_address_with_dot}classifier.1",
+        )
 
     def _forward_impl(self, x: Tensor) -> Tensor:
         x = self.features(x)
@@ -129,7 +150,11 @@ def _efficientnet_conf(
 ) -> Tuple[Sequence[Union[MBConvConfig, FusedMBConvConfig]], Optional[int]]:
     inverted_residual_setting: Sequence[Union[MBConvConfig, FusedMBConvConfig]]
     if arch.startswith("efficientnet_b"):
-        bneck_conf = partial(MBConvConfig, width_mult=kwargs.pop("width_mult"), depth_mult=kwargs.pop("depth_mult"))
+        bneck_conf = partial(
+            MBConvConfig,
+            width_mult=kwargs.pop("width_mult"),
+            depth_mult=kwargs.pop("depth_mult"),
+        )
         inverted_residual_setting = [
             bneck_conf(1, 3, 1, 32, 16, 1),
             bneck_conf(6, 3, 2, 16, 24, 2),
@@ -178,8 +203,6 @@ def _efficientnet_conf(
     return inverted_residual_setting, last_channel
 
 
-
-
 def _efficientnet(
     inverted_residual_setting: Sequence[Union[MBConvConfig, FusedMBConvConfig]],
     dropout: float,
@@ -187,8 +210,13 @@ def _efficientnet(
     state_dict,
     **kwargs: Any,
 ) -> EfficientNet:
-
-    model = EfficientNet(inverted_residual_setting, dropout, last_channel=last_channel, state_dict=state_dict, **kwargs)
+    model = EfficientNet(
+        inverted_residual_setting,
+        dropout,
+        last_channel=last_channel,
+        state_dict=state_dict,
+        **kwargs,
+    )
     return model
 
 

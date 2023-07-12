@@ -35,12 +35,17 @@ def preprocess():
     Define the transform for the input image/frames.
     Resize, crop, convert to tensor, and apply ImageNet normalization stats.
     """
-    transform = torchvision.transforms.Compose([
-        torchvision.transforms.ToPILImage(),
-        torchvision.transforms.Resize(256),
-        torchvision.transforms.CenterCrop(224),
-        torchvision.transforms.ToTensor(),
-        torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),])
+    transform = torchvision.transforms.Compose(
+        [
+            torchvision.transforms.ToPILImage(),
+            torchvision.transforms.Resize(256),
+            torchvision.transforms.CenterCrop(224),
+            torchvision.transforms.ToTensor(),
+            torchvision.transforms.Normalize(
+                mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+            ),
+        ]
+    )
 
     return transform
 
@@ -82,12 +87,26 @@ def test_cpu_demo():
     top5_prob, top5_catid = torch.topk(probabilities, 3)
 
     for i in range(top5_prob.size(0)):
-        cv2.putText(image, f"{top5_prob[i].item()*100:.3f}%", (15, (i+1)*30),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1, (0, 0, 255), 2, cv2.LINE_AA)
-        cv2.putText(image, f"{categories[top5_catid[i]]}", (160, (i+1)*30),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1, (0, 0, 255), 2, cv2.LINE_AA)
+        cv2.putText(
+            image,
+            f"{top5_prob[i].item()*100:.3f}%",
+            (15, (i + 1) * 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1,
+            (0, 0, 255),
+            2,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            image,
+            f"{categories[top5_catid[i]]}",
+            (160, (i + 1) * 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1,
+            (0, 0, 255),
+            2,
+            cv2.LINE_AA,
+        )
         print(categories[top5_catid[i]], top5_prob[i].item())
 
     cv2.imwrite(str(ROOT / "out_image.jpg"), image)

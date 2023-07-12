@@ -38,15 +38,20 @@ class Conv2dNormActivation(torch.nn.Sequential):
         inplace: Optional[bool] = True,
         bias: Optional[bool] = None,
     ) -> None:
-
         if padding is None:
             if isinstance(kernel_size, int) and isinstance(dilation, int):
                 padding = (kernel_size - 1) // 2 * dilation
             else:
-                _conv_dim = len(kernel_size) if isinstance(kernel_size, Sequence) else len(dilation)
+                _conv_dim = (
+                    len(kernel_size)
+                    if isinstance(kernel_size, Sequence)
+                    else len(dilation)
+                )
                 kernel_size = _make_ntuple(kernel_size, _conv_dim)
                 dilation = _make_ntuple(dilation, _conv_dim)
-                padding = tuple((kernel_size[i] - 1) // 2 * dilation[i] for i in range(_conv_dim))
+                padding = tuple(
+                    (kernel_size[i] - 1) // 2 * dilation[i] for i in range(_conv_dim)
+                )
         if bias is None:
             bias = norm_layer is None
 

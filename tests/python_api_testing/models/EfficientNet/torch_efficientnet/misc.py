@@ -9,7 +9,9 @@ from torch import nn, Tensor
 
 
 ######## stochastic depth
-def stochastic_depth(input: Tensor, p: float, mode: str, training: bool = True) -> Tensor:
+def stochastic_depth(
+    input: Tensor, p: float, mode: str, training: bool = True
+) -> Tensor:
     """
     Implements the Stochastic Depth from `"Deep Networks with Stochastic Depth"
     <https://arxiv.org/abs/1603.09382>`_ used for randomly dropping residual
@@ -70,8 +72,7 @@ class StochasticDepth(nn.Module):
 ######### stochastic depth
 
 
-
-def assign_conv_weight(conv, state_dict, key_w:str):
+def assign_conv_weight(conv, state_dict, key_w: str):
     conv.weight = nn.Parameter(state_dict[f"{key_w}.weight"])
     if conv.bias is not None:
         conv.bias = nn.Parameter(state_dict[f"{key_w}.bias"])
@@ -82,7 +83,9 @@ def assign_batchnorm_weight(norm, state_dict, key_w: str):
     norm.bias = nn.Parameter(state_dict[f"{key_w}.bias"])
     norm.running_mean = nn.Parameter(state_dict[f"{key_w}.running_mean"])
     norm.running_var = nn.Parameter(state_dict[f"{key_w}.running_var"])
-    norm.num_batches_tracked = nn.Parameter(state_dict[f"{key_w}.num_batches_tracked"], requires_grad=False)
+    norm.num_batches_tracked = nn.Parameter(
+        state_dict[f"{key_w}.num_batches_tracked"], requires_grad=False
+    )
     norm.eval()
 
 
@@ -140,15 +143,20 @@ class ConvNormActivation(torch.nn.Sequential):
         state_dict=None,
         base_address="",
     ) -> None:
-
         if padding is None:
             if isinstance(kernel_size, int) and isinstance(dilation, int):
                 padding = (kernel_size - 1) // 2 * dilation
             else:
-                _conv_dim = len(kernel_size) if isinstance(kernel_size, Sequence) else len(dilation)
+                _conv_dim = (
+                    len(kernel_size)
+                    if isinstance(kernel_size, Sequence)
+                    else len(dilation)
+                )
                 kernel_size = _make_ntuple(kernel_size, _conv_dim)
                 dilation = _make_ntuple(dilation, _conv_dim)
-                padding = tuple((kernel_size[i] - 1) // 2 * dilation[i] for i in range(_conv_dim))
+                padding = tuple(
+                    (kernel_size[i] - 1) // 2 * dilation[i] for i in range(_conv_dim)
+                )
         if bias is None:
             bias = norm_layer is None
 
@@ -167,7 +175,9 @@ class ConvNormActivation(torch.nn.Sequential):
         assign_conv_weight(layers[-1], state_dict, f"{base_address}.0")
         if norm_layer is not None:
             layers.append(norm_layer(out_channels))
-            assign_batchnorm_weight(layers[-1], state_dict, f"{base_address}.{len(layers) - 1}")
+            assign_batchnorm_weight(
+                layers[-1], state_dict, f"{base_address}.{len(layers) - 1}"
+            )
 
         if activation_layer is not None:
             params = {} if inplace is None else {"inplace": inplace}
@@ -181,7 +191,6 @@ class ConvNormActivation(torch.nn.Sequential):
             warnings.warn(
                 "Don't use ConvNormActivation directly, please use Conv2dNormActivation and Conv3dNormActivation instead."
             )
-
 
 
 class Conv2dNormActivation(ConvNormActivation):
@@ -215,9 +224,8 @@ class Conv2dNormActivation(ConvNormActivation):
         inplace: Optional[bool] = True,
         bias: Optional[bool] = None,
         state_dict=None,
-        base_address=""
+        base_address="",
     ) -> None:
-
         super().__init__(
             in_channels,
             out_channels,
@@ -270,7 +278,7 @@ class SqueezeExcitation(torch.nn.Module):
         activation: Callable[..., torch.nn.Module] = torch.nn.ReLU,
         scale_activation: Callable[..., torch.nn.Module] = torch.nn.Sigmoid,
         state_dict=None,
-        base_address=""
+        base_address="",
     ) -> None:
         super().__init__()
         self.avgpool = torch.nn.AdaptiveAvgPool2d(1)
@@ -278,7 +286,6 @@ class SqueezeExcitation(torch.nn.Module):
         assign_conv_weight(self.fc1, state_dict=state_dict, key_w=f"{base_address}.fc1")
         self.fc2 = torch.nn.Conv2d(squeeze_channels, input_channels, 1)
         assign_conv_weight(self.fc2, state_dict=state_dict, key_w=f"{base_address}.fc2")
-
 
         self.activation = activation()
         self.scale_activation = scale_activation()
@@ -294,6 +301,7 @@ class SqueezeExcitation(torch.nn.Module):
         scale = self._scale(input)
         return scale * input
 
+
 @dataclass
 class _MBConvConfig:
     expand_ratio: float
@@ -305,7 +313,9 @@ class _MBConvConfig:
     block: Callable[..., nn.Module]
 
     @staticmethod
-    def adjust_channels(channels: int, width_mult: float, min_value: Optional[int] = None) -> int:
+    def adjust_channels(
+        channels: int, width_mult: float, min_value: Optional[int] = None
+    ) -> int:
         return _make_divisible(channels * width_mult, 8, min_value)
 
 
@@ -328,7 +338,15 @@ class MBConvConfig(_MBConvConfig):
         num_layers = self.adjust_depth(num_layers, depth_mult)
         if block is None:
             block = MBConv
-        super().__init__(expand_ratio, kernel, stride, input_channels, out_channels, num_layers, block)
+        super().__init__(
+            expand_ratio,
+            kernel,
+            stride,
+            input_channels,
+            out_channels,
+            num_layers,
+            block,
+        )
 
     @staticmethod
     def adjust_depth(num_layers: int, depth_mult: float):
@@ -349,7 +367,15 @@ class FusedMBConvConfig(_MBConvConfig):
     ) -> None:
         if block is None:
             block = FusedMBConv
-        super().__init__(expand_ratio, kernel, stride, input_channels, out_channels, num_layers, block)
+        super().__init__(
+            expand_ratio,
+            kernel,
+            stride,
+            input_channels,
+            out_channels,
+            num_layers,
+            block,
+        )
 
 
 class MBConv(nn.Module):
@@ -360,14 +386,16 @@ class MBConv(nn.Module):
         norm_layer: Callable[..., nn.Module],
         se_layer: Callable[..., nn.Module] = SqueezeExcitation,
         state_dict=None,
-        base_address=""
+        base_address="",
     ) -> None:
         super().__init__()
 
         if not (1 <= cnf.stride <= 2):
             raise ValueError("illegal stride value")
 
-        self.use_res_connect = cnf.stride == 1 and cnf.input_channels == cnf.out_channels
+        self.use_res_connect = (
+            cnf.stride == 1 and cnf.input_channels == cnf.out_channels
+        )
 
         layers: List[nn.Module] = []
         activation_layer = nn.SiLU
@@ -383,7 +411,7 @@ class MBConv(nn.Module):
                     norm_layer=norm_layer,
                     activation_layer=activation_layer,
                     state_dict=state_dict,
-                    base_address=f"{base_address}.block.{len(layers)}"
+                    base_address=f"{base_address}.block.{len(layers)}",
                 )
             )
 
@@ -398,17 +426,21 @@ class MBConv(nn.Module):
                 norm_layer=norm_layer,
                 activation_layer=activation_layer,
                 state_dict=state_dict,
-                base_address=f"{base_address}.block.{len(layers)}"
+                base_address=f"{base_address}.block.{len(layers)}",
             )
         )
 
         # squeeze and excitation
         squeeze_channels = max(1, cnf.input_channels // 4)
-        layers.append(se_layer(expanded_channels,
-                            squeeze_channels,
-                            activation=partial(nn.SiLU, inplace=True),
-                            state_dict=state_dict,
-                            base_address=f"{base_address}.block.{len(layers)}"))
+        layers.append(
+            se_layer(
+                expanded_channels,
+                squeeze_channels,
+                activation=partial(nn.SiLU, inplace=True),
+                state_dict=state_dict,
+                base_address=f"{base_address}.block.{len(layers)}",
+            )
+        )
 
         # project
         layers.append(
@@ -419,7 +451,7 @@ class MBConv(nn.Module):
                 norm_layer=norm_layer,
                 activation_layer=None,
                 state_dict=state_dict,
-                base_address=f"{base_address}.block.{len(layers)}"
+                base_address=f"{base_address}.block.{len(layers)}",
             )
         )
 
@@ -443,14 +475,16 @@ class FusedMBConv(nn.Module):
         stochastic_depth_prob: float,
         norm_layer: Callable[..., nn.Module],
         state_dict=None,
-        base_address=""
+        base_address="",
     ) -> None:
         super().__init__()
 
         if not (1 <= cnf.stride <= 2):
             raise ValueError("illegal stride value")
 
-        self.use_res_connect = cnf.stride == 1 and cnf.input_channels == cnf.out_channels
+        self.use_res_connect = (
+            cnf.stride == 1 and cnf.input_channels == cnf.out_channels
+        )
 
         layers: List[nn.Module] = []
         activation_layer = nn.SiLU
@@ -467,7 +501,7 @@ class FusedMBConv(nn.Module):
                     norm_layer=norm_layer,
                     activation_layer=activation_layer,
                     state_dict=state_dict,
-                    base_address=f"{base_address}.block.{len(layers)}"
+                    base_address=f"{base_address}.block.{len(layers)}",
                 )
             )
 
@@ -480,7 +514,7 @@ class FusedMBConv(nn.Module):
                     norm_layer=norm_layer,
                     activation_layer=None,
                     state_dict=state_dict,
-                    base_address=f"{base_address}.block.{len(layers)}"
+                    base_address=f"{base_address}.block.{len(layers)}",
                 )
             )
         else:
@@ -493,7 +527,7 @@ class FusedMBConv(nn.Module):
                     norm_layer=norm_layer,
                     activation_layer=activation_layer,
                     state_dict=state_dict,
-                    base_address=f"{base_address}.block.{len(layers)}"
+                    base_address=f"{base_address}.block.{len(layers)}",
                 )
             )
 
