@@ -17,9 +17,6 @@ void MAIN {
     uint32_t out_subblock_num_tiles = get_compile_time_arg_val(10); // out_subblock_h * out_subblock_w;
     uint32_t batch = get_compile_time_arg_val(11); // batch dim
 
-    #ifdef FUSE_BIAS
-        init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(tt::CB::c_intermed1, tt::CB::c_in3);
-    #endif
     mm_init();
 
     for (uint32_t b = 0; b < batch; b++){
