@@ -26,29 +26,56 @@ OUT_FOLDER = "output/ops"
 OUT_NAME = "profile_log_ops"
 
 OPS_CSV_HEADER = [
-    "NAME",
-    "IS OP",
-    "CALL COUNT",
+    "OP CODE",
+    "OP TYPE",
     "GLOBAL CALL COUNT",
+    "ATTRIBUTES",
+    "MATH FIDELITY",
+    "CORE COUNT",
+    "PARALLELIZATION STRATEGY",
     "HOST START TS",
     "HOST END TS",
     "HOST DURATION [ns]",
     "DEVICE START CYCLE",
     "DEVICE END CYCLE",
     "DEVICE DURATION [ns]",
-    "CORE COUNT",
-    "CALL DEPTH",
+    # "CALL COUNT",
     "INPUTS",
     "OUTPUTS",
-    "MATH FIDEL.",
-    "PARAL. STRAT.",
-    "META DATA",
+    "CALL DEPTH",
 ]
+
+SORT_KEY = OPS_CSV_HEADER[2]
 
 HOST_SIDE_STATS = ["Count", "Average"]
 HOST_FUNCSTION_HEADER_FORMAT = "{} {}"
 
+IO_FIELDS = ["W", "Z", "Y", "X", "LAYOUT", "DATA TYPE", "MEMORY"]
+
 ttMetalFunctionsSet = set()
+
+
+def parse_io_data(ioString, ioType):
+    ret = {}
+
+    IOs = ioString.split("-")
+    IODict = {}
+    for count, IO in enumerate(IOs):
+        if IO:
+            IOList = IO.split("|")
+            shapeList = IOList[0].split("_")
+            IODict = {
+                IO_FIELDS[0]: shapeList[0],
+                IO_FIELDS[1]: shapeList[1],
+                IO_FIELDS[2]: shapeList[2],
+                IO_FIELDS[3]: shapeList[3],
+                IO_FIELDS[4]: IOList[1],
+                IO_FIELDS[5]: IOList[2],
+                IO_FIELDS[6]: IOList[3],
+            }
+            ret[f"{ioType}_{count}"] = IODict
+
+    return ret
 
 
 def append_detail_host_time_data(opCandidatePath, call_count, timeDataDict):
@@ -97,13 +124,15 @@ def append_device_time_data(opCandidatePath, call_count, timeDataDict):
 minTime = 0
 maxDiff = 0
 maxStackSize = 0
+maxInputCount = 0
+maxOutputCount = 0
 
 op_to_folder = {}
 op_flavour_to_count = {}
 
 
 def parse_ops_logs(opsFolder):
-    global minTime, maxDiff, maxStackSize
+    global minTime, maxDiff, maxStackSize, maxInputCount, maxOutputCount
     ops = {}
 
     assert os.path.isdir(opsFolder), f"{opsFolder} does no exists. Use -i option to choose the correct logs dir"
@@ -125,11 +154,13 @@ def parse_ops_logs(opsFolder):
                     if lineCount > 0:
                         op_folder_name = row[1].strip()
                         op_name = op_folder_name
-                        is_op = "No"
+                        op_type = "custom_zone"
                         extractName = re.findall(r".*tt.*tt_metal:*\d*(.*)E*", op_name)
                         if extractName:
                             op_name = extractName.pop()
-                            is_op = "Yes"
+                            op_type = "tt_dnn_device"
+                        elif "fallback_op" in op_name:
+                            op_type = "python_fallback"
 
                         start_ts = int(row[2].strip())
                         end_ts = int(row[3].strip())
@@ -139,15 +170,21 @@ def parse_ops_logs(opsFolder):
                         call_count = int(row[6].strip())
                         stack_size = int(row[7].strip())
 
-                        inputs = row[8].strip()
-                        outputs = row[9].strip()
+                        inputs = parse_io_data(row[8].strip(), "INPUT")
+                        if len(inputs.keys()) > maxInputCount:
+                            maxInputCount = len(inputs.keys())
+
+                        outputs = parse_io_data(row[9].strip(), "OUTPUT")
+                        if len(outputs.keys()) > maxOutputCount:
+                            maxOutputCount = len(outputs.keys())
+
                         mathFidelity = row[10].strip()
                         parallelizationStrategy = row[11].strip()
                         preferredName = row[12].strip().split("tt::tt_metal::")[-1]
                         metadata = row[13].strip()
 
                         if preferredName:
-                            if is_op == "Yes":
+                            if op_type == "Yes":
                                 op_name = preferredName
                             else:
                                 op_name += "_" + preferredName
@@ -172,17 +209,17 @@ def parse_ops_logs(opsFolder):
                         timeDataDict = {
                             "CALL COUNT": op_flavour_to_count[op_name],
                             "_OP CALL COUNT": call_count,
-                            "IS OP": is_op,
+                            "OP TYPE": op_type,
                             "GLOBAL CALL COUNT": global_call_count,
                             "HOST START TS": start_ts,
                             "HOST END TS": end_ts,
                             "CALL DEPTH": stack_size,
                             "INPUTS": inputs,
                             "OUTPUTS": outputs,
-                            "MATH FIDEL.": mathFidelity,
-                            "PARAL. STRAT.": parallelizationStrategy,
+                            "MATH FIDELITY": mathFidelity,
+                            "PARALLELIZATION STRATEGY": parallelizationStrategy,
                             "HOST DURATION [ns]": delta_time,
-                            "META DATA": metadata,
+                            "ATTRIBUTES": metadata,
                         }
 
                         append_device_time_data(opCandidatePath, call_count, timeDataDict)
@@ -221,7 +258,7 @@ def run_dashbaord_webapp(ops, opsFolder, port=None):
             callDepth = opCall["CALL DEPTH"]
             y = 1 + (0.2 / maxStackSize) * (maxStackSize - callDepth + 1)
             diff = opCall["HOST DURATION [ns]"]
-            ps = opCall["META DATA"]
+            ps = opCall["ATTRIBUTES"]
             m = (s + e) // 2
             xVals += [None, s, e, e, s, s]
             yVals += [None, 0, 0, y, y, 0]
@@ -336,31 +373,67 @@ def print_ops_csv(ops, opsFolder, outputFolder, date, nameAppend):
 
     with open(opsCSVPath, "w") as opsCSV:
         opsWriter = csv.writer(opsCSV, delimiter=",")
-        hostFunctions = []
+        hostFunctionsHeaders = []
         for functionName in sorted(ttMetalFunctionsSet):
             for stat in HOST_SIDE_STATS:
                 functionKey = HOST_FUNCSTION_HEADER_FORMAT.format(functionName, stat)
                 if "Count" not in functionKey:
-                    hostFunctions.append(f"{functionKey} [ns]")
+                    hostFunctionsHeaders.append(f"{functionKey} [ns]")
                 else:
-                    hostFunctions.append(functionKey)
-        opsWriter.writerow(OPS_CSV_HEADER + hostFunctions)
+                    hostFunctionsHeaders.append(functionKey)
 
+        dynamicHeader = []
+        for headerItem in OPS_CSV_HEADER:
+            if headerItem == "INPUTS":
+                for count in range(maxInputCount):
+                    for ioField in IO_FIELDS:
+                        dynamicHeader.append(f"INPUT_{count}_{ioField}")
+            elif headerItem == "OUTPUTS":
+                for count in range(maxOutputCount):
+                    for ioField in IO_FIELDS:
+                        dynamicHeader.append(f"OUTPUT_{count}_{ioField}")
+            else:
+                dynamicHeader.append(headerItem)
+
+        opsWriter.writerow(dynamicHeader + hostFunctionsHeaders)
+
+        opsList = []
         for op, opCalls in ops.items():
             for opCall in opCalls:
-                opsROW = [op]
-                for item in OPS_CSV_HEADER:
-                    if item != "NAME":
-                        assert item in opCall.keys(), item
-                        opsROW.append(opCall[item])
-                for functionName in sorted(ttMetalFunctionsSet):
-                    for stat in HOST_SIDE_STATS:
-                        functionKey = HOST_FUNCSTION_HEADER_FORMAT.format(functionName, stat)
-                        if functionKey in opCall.keys():
-                            opsROW.append(opCall[functionKey])
-                        else:
-                            opsROW.append("0")
-                opsWriter.writerow(opsROW)
+                opCall["OP CODE"] = op
+                opsList.append(opCall)
+
+        opsList.sort(key=lambda item: item[SORT_KEY])
+        for op in opsList:
+            opRow = []
+            for headerItem in dynamicHeader:
+                if "INPUT" in headerItem:
+                    element = "-"
+                    if op["INPUTS"]:
+                        io, ioField = headerItem.rsplit("_", 1)
+                        if io in op["INPUTS"].keys():
+                            assert ioField in op["INPUTS"][io].keys(), (headerItem, io, ioField)
+                            element = op["INPUTS"][io][ioField]
+                    opRow.append(element)
+                elif "OUTPUT" in headerItem:
+                    element = "-"
+                    if op["OUTPUTS"]:
+                        io, ioField = headerItem.rsplit("_", 1)
+                        if io in op["OUTPUTS"].keys():
+                            assert ioField in op["OUTPUTS"][io].keys(), (headerItem, io, ioField)
+                            element = op["OUTPUTS"][io][ioField]
+                    opRow.append(element)
+                else:
+                    assert headerItem in op.keys(), headerItem
+                    opRow.append(op[headerItem])
+            for functionName in sorted(ttMetalFunctionsSet):
+                for stat in HOST_SIDE_STATS:
+                    functionKey = HOST_FUNCSTION_HEADER_FORMAT.format(functionName, stat)
+                    if functionKey in op.keys():
+                        opRow.append(op[functionKey])
+                    else:
+                        opRow.append("0")
+            opsWriter.writerow(opRow)
 
 
 @click.command()
