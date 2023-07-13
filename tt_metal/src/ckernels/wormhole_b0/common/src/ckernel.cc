@@ -33,40 +33,15 @@ uint32_t op_info_offset __attribute__((used)) = 0;
 volatile uint8_t *debug_buffer = nullptr;
 
 
-uint8_t thread_id;
+const uint8_t thread_id = COMPILE_FOR_TRISC;
 
 volatile uint local_mem_barrier __attribute__((used));
 
-volatile uint * const trisc_l1_mailbox = reinterpret_cast<volatile uint *>(MAILBOX_ADDR);
-
-inline bool ready_for_next_epoch() {         // place this through compiler into a section that is not going to overwritten
-    return true;
-    // mailbox_write(ttRiscCores::Nrisc);              // signal done epoch to NCRisc
-    // mailbox_read(ttRiscCores::Nrisc);               // This is blocking read, until NCrisc signals epoch is ready
-}
-
-inline void set_thread_id_parameter() {
-    if ((uint)__firmware_start == (uint)MEM_TRISC0_BASE) {
-        thread_id = 0;
-    } else if ((uint) __firmware_start == (uint)MEM_TRISC1_BASE) {
-        thread_id = 1;
-    } else {
-        thread_id = 2;
-    }
-}
+volatile uint * const trisc_l1_mailbox = reinterpret_cast<volatile uint *>(MEM_TEST_MAILBOX_ADDRESS + PREPROCESSOR_EXPAND(MEM_MAILBOX_TRISC, COMPILE_FOR_TRISC, _OFFSET));
 
 inline void allocate_debug_mailbox_buffer() {
-   std::int32_t debug_mailbox_addr;
-   if ((uint32_t)__firmware_start == (uint32_t)MEM_TRISC0_BASE) {
-      debug_mailbox_addr = MEM_DEBUG_MAILBOX_ADDRESS + 0*MEM_DEBUG_MAILBOX_SIZE;
-   } else if ((uint32_t) __firmware_start == (uint32_t)MEM_TRISC1_BASE) {
-      debug_mailbox_addr = MEM_DEBUG_MAILBOX_ADDRESS + 1*MEM_DEBUG_MAILBOX_SIZE;
-   } else {
-      debug_mailbox_addr = MEM_DEBUG_MAILBOX_ADDRESS + 2*MEM_DEBUG_MAILBOX_SIZE;
-   }
-   debug_mailbox_base = reinterpret_cast<volatile uint16_t *>(debug_mailbox_addr);
+   debug_mailbox_base = reinterpret_cast<volatile uint16_t *>(MEM_DEBUG_MAILBOX_ADDRESS + COMPILE_FOR_TRISC * MEM_DEBUG_MAILBOX_SIZE);
    clear_mailbox_values();
-
 }
 
 inline void allocate_debug_buffer() {
@@ -81,14 +56,7 @@ using namespace ckernel;
 
 int main(int argc, char *argv[])
 {
-    uint *local_l1_start_addr;
-    if ((uint)__firmware_start == (uint)MEM_TRISC0_BASE) {
-        local_l1_start_addr = (uint *)MEM_TRISC0_INIT_LOCAL_L1_BASE;
-    } else if ((uint) __firmware_start == (uint)MEM_TRISC1_BASE) {
-        local_l1_start_addr = (uint *)MEM_TRISC1_INIT_LOCAL_L1_BASE;
-    } else {
-        local_l1_start_addr = (uint *)MEM_TRISC2_INIT_LOCAL_L1_BASE;
-    }
+    uint *local_l1_start_addr = (uint *)PREPROCESSOR_EXPAND(MEM_TRISC, COMPILE_FOR_TRISC, _INIT_LOCAL_L1_BASE);
     int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
     l1_to_local_mem_copy((uint*)__ldm_data_start, local_l1_start_addr, num_words);
 

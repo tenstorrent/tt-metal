@@ -26,37 +26,8 @@ std::string RISCID_to_string(RISCID id) {
     return string();
 }
 
-struct TriscParams {
-    // TODO: commonize this with runtime_common.hpp?
-    uint32_t TRISC_BASE { MEM_TRISC0_BASE };
-    uint32_t trisc_sizes[3] = { MEM_TRISC0_SIZE, MEM_TRISC1_SIZE, MEM_TRISC2_SIZE };
-    uint32_t trisc_mailbox_addresses[3] = {
-        MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_TRISC0_OFFSET,
-        MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_TRISC1_OFFSET,
-        MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_TRISC2_OFFSET};
-    int32_t get_trisc_size(RISCID id) const {
-        switch (id) {
-            case RISCID::TR0:
-            case RISCID::TR1:
-            case RISCID::TR2: return trisc_sizes[id-RISCID::TR0];
-            default:;
-        }
-        return 0;
-    }
-    int32_t get_mailbox_addr(RISCID id) const {
-        switch (id) {
-            case RISCID::TR0:
-            case RISCID::TR1:
-            case RISCID::TR2: return trisc_mailbox_addresses[id-RISCID::TR0];
-            default:;
-        }
-        return 0;
-    }
-};
-
 struct CompileState {
     RISCID           hwthread               { RISCID::NC }; // 0=NC, 1=UNPACK, BR=4
-    uint32_t         mailbox_addr           { 0 };
     uint32_t         perf_dump_level        { 0 };
     uint32_t         noc_index              { 0 };
     bool             firmware               { false };
@@ -246,16 +217,19 @@ struct CompileState {
             case RISCID::TR0:
                 result += " -DUCK_CHLKC_UNPACK ";
                 result += " -DNAMESPACE=chlkc_unpack ";
+                result += " -DCOMPILE_FOR_TRISC=0 ";
                 result += arch_define;
             break;
             case RISCID::TR1:
                 result += " -DUCK_CHLKC_MATH ";
                 result += " -DNAMESPACE=chlkc_math ";
+                result += " -DCOMPILE_FOR_TRISC=1 ";
                 result += arch_define;
             break;
             case RISCID::TR2:
                 result += " -DUCK_CHLKC_PACK ";
                 result += " -DNAMESPACE=chlkc_pack ";
+                result += " -DCOMPILE_FOR_TRISC=2 ";
                 result += arch_define;
             break;
             case RISCID::BR:
@@ -269,8 +243,6 @@ struct CompileState {
                 result += " -D" + def + "=" + val + " ";
         }
 
-        if (mailbox_addr != 0)
-            result += " -DMAILBOX_ADDR=" + to_string(mailbox_addr);
         if (perf_dump_level != 0 || is_trisc()) // TODO(AP): double check
             result += " -DPERF_DUMP_LEVEL=" + to_string(perf_dump_level);
         result += " -DTENSIX_FIRMWARE"; // TODO(AP): verify where firmware flag comes from
@@ -436,7 +408,6 @@ static CompileState pre_compile_for_risc(
     ctx.profile_kernel = profile_kernel;
     ctx.compile_time_args = kernel_compile_time_args;
     ctx.kernel_inc = fs::absolute(kernel_dir).string();
-    ctx.mailbox_addr = TriscParams().get_mailbox_addr(risc_id);
 
     // copy the NCRISC/BRISC kernel to that directory, w/a generic filename kernel.cpp (this is what ncrisc.cc includes)
     // Note that for TRISCS this is not needed because they are currently generated in a previous pass and included

@@ -12,6 +12,9 @@
 typedef std::uint32_t uint;
 typedef std::uint8_t byte;
 
+#define PREPROCESSOR_EVAL(x, y, z) x##y##z
+#define PREPROCESSOR_EXPAND(x, y, z)  PREPROCESSOR_EVAL(x, y, z)
+
 #define MAX_THREADS 3 // max number of threads supported by single core
 
 #define MAX_PACKERS 4 // number of packers in the design
