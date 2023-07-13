@@ -277,7 +277,6 @@ namespace ckernel::unpacker
       return rmw_val;
    }
 
-   // inline void reconfig_unpacker_data_format(const uint src_operand_id, const uint32_t tile_addr, const uint32_t out_df_addr) {
    inline void reconfig_unpacker_data_format(const uint src_operand_id, const uint32_t tile_addr, const uint32_t out_df_addr, const uint32_t out_df_stride) {
 
       //volatile uint *cfg = get_cfg_pointer();
