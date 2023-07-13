@@ -7,6 +7,11 @@ if [[ -z "$TT_METAL_HOME" ]]; then
   exit 1
 fi
 
+if [ "$TT_METAL_ENV" != "dev" ]; then
+  echo "Must set TT_METAL_ENV as dev" 1>&2
+  exit 1
+fi
+
 cd $TT_METAL_HOME
 
 source build/python_env/bin/activate
