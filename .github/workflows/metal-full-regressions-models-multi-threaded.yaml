@@ -3,7 +3,7 @@ name: (multi-threaded) Scheduled build and run all regressions and models
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */3 * * *"
+    - cron: "0 1,6,15,20 * * *"
 
 jobs:
   build-and-test-all:
