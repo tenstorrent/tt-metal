@@ -358,8 +358,6 @@ def torch_to_tt_tensor(py_tensor, device):
     return tt_tensor
 
 def prep_report(model_name: str, batch_size: int, inference_and_compile_time: float, inference_time: float, comments: str, inference_time_cpu: float=None):
-    environ['TZ'] = 'America/Toronto'
-    time.tzset()
     today = time.strftime("%Y_%m_%d")
 
     def write_dict_to_file(csv_path, dict_res):
