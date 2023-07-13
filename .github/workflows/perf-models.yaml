@@ -19,7 +19,7 @@ jobs:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.arch }}
     environment: dev
-    runs-on: model-runner-${{ matrix.arch }}
+    runs-on: perf-${{ matrix.arch }}
     steps:
       - uses: actions/checkout@v3
         with:
