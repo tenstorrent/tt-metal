@@ -6,6 +6,8 @@
 #include "tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "tt_dnn/op_library/pad/pad_op.hpp"
 #include "tt_dnn/op_library/unpad/unpad_op.hpp"
+#include "tt_dnn/op_library/layout_conversion/layout_conversion_op.hpp"
+#include "tt_dnn/op_library/data_transfer/data_transfer_op.hpp"
 
 using namespace tt::constants;
 
@@ -25,7 +27,7 @@ Tensor AutoFormat::format_input_tensor(const Tensor &a, Device * device, const s
 
     if (!pad_input && !convert_layout) {
         if (a.storage_type() == StorageType::HOST) {
-            return a.to(device, mem_config);
+            return data_transfer_to_device(a, device, mem_config);
         } else {
             return a;
         }
@@ -56,25 +58,25 @@ Tensor AutoFormat::format_input_tensor(const Tensor &a, Device * device, const s
         }
         // Fall back to host conversions
         auto host = GetHost();
-        formatted_input = formatted_input.to(host);
+        formatted_input = data_transfer_to_host(formatted_input, host);
         delete host;
     }
 
     // Host side conversions
     if (pad_input) {
         if (formatted_input.layout() != Layout::ROW_MAJOR) {
-            formatted_input = formatted_input.to(Layout::ROW_MAJOR);
+            formatted_input = layout_conversion_on_host(formatted_input, Layout::ROW_MAJOR);
             convert_layout = formatted_input.layout() != target_layout;
         }
-        formatted_input = formatted_input.pad(padded_shape, {0, 0, 0, 0}, pad_value);
+        formatted_input = pad_on_host(formatted_input, padded_shape, {0, 0, 0, 0}, pad_value);
     }
 
     if(convert_layout) {
-        formatted_input = formatted_input.to(target_layout);
+        formatted_input = layout_conversion_on_host(formatted_input, target_layout);
     }
 
     if (formatted_input.storage_type() == StorageType::HOST) {
-        formatted_input = formatted_input.to(device, mem_config);
+        formatted_input = data_transfer_to_device(formatted_input, device, mem_config);
     }
 
     return formatted_input;
@@ -131,7 +133,7 @@ Tensor AutoFormat::format_output_tensor(const Tensor &output, const std::array<u
         }
         // Fall back to host conversions
         auto host = GetHost();
-        formatted_output = formatted_output.to(host);
+        formatted_output = data_transfer_to_host(formatted_output, host);
         delete host;
     }
 
@@ -139,24 +141,24 @@ Tensor AutoFormat::format_output_tensor(const Tensor &output, const std::array<u
     if (unpad_output) {
         // Requires RM for unpad
         if (formatted_output.layout() != Layout::ROW_MAJOR) {
-            formatted_output = formatted_output.to(Layout::ROW_MAJOR);
+            formatted_output = layout_conversion_on_host(formatted_output, Layout::ROW_MAJOR);
             convert_layout = formatted_output.layout() != target_layout;
         }
-        formatted_output = formatted_output.unpad({0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1});
+        formatted_output = unpad_on_host(formatted_output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1});
     }
 
     if (convert_layout) {
         // Default to RM layout if we can't match the formatted_input layout
         if (target_layout == Layout::TILE && (formatted_output.shape()[2] % TILE_HEIGHT != 0 || formatted_output.shape()[3] % TILE_WIDTH != 0)) {
             if (formatted_output.layout() != Layout::ROW_MAJOR) {
-                formatted_output = formatted_output.to(Layout::ROW_MAJOR);
+                formatted_output = layout_conversion_on_host(formatted_output, Layout::ROW_MAJOR);
             }
         // We do not support CL <-> TILE conversions
         } else if (target_layout == Layout::CHANNELS_LAST && formatted_output.layout() == Layout::TILE ||
                    target_layout == Layout::TILE && formatted_output.layout() == Layout::CHANNELS_LAST) {
             // No-Op, leave formatted_output in CL
         } else {
-            formatted_output = formatted_output.to(target_layout);
+            formatted_output = layout_conversion_on_host(formatted_output, target_layout);
         }
     }
 
@@ -166,7 +168,7 @@ Tensor AutoFormat::format_output_tensor(const Tensor &output, const std::array<u
         if ((formatted_output.layout() == Layout::ROW_MAJOR && formatted_output.shape()[3] % 2 == 0) ||
             (formatted_output.layout() == Layout::CHANNELS_LAST && formatted_output.shape()[1] % 2 == 0) ||
             (formatted_output.layout() == Layout::TILE)) {
-            formatted_output = formatted_output.to(device, mem_config);
+            formatted_output = data_transfer_to_device(formatted_output, device, mem_config);
         }
     }
 

@@ -1,5 +1,7 @@
 TT_DNN_SRCS = \
 	libs/tt_dnn/op_library/auto_format.cpp \
+	libs/tt_dnn/op_library/data_transfer/data_transfer_op.cpp \
+	libs/tt_dnn/op_library/layout_conversion/layout_conversion_op.cpp \
 	libs/tt_dnn/op_library/eltwise_binary/eltwise_binary_op.cpp \
 	libs/tt_dnn/op_library/eltwise_binary/single_core/eltwise_binary_op_single_core.cpp \
 	libs/tt_dnn/op_library/eltwise_binary/multi_core/eltwise_binary_op_multi_core.cpp \

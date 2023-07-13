@@ -360,6 +360,43 @@ Tensor unpad(const Tensor &input_tensor_a, const std::array<uint32_t, 4> &output
 
 }
 
+void UnpadOnHost::validate(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
+    TT_ASSERT(input_tensor_a.layout() == Layout::ROW_MAJOR);
+
+    TT_ASSERT(this->output_tensor_start[0] < input_tensor_a.shape()[0]);
+    TT_ASSERT(this->output_tensor_end[0] < input_tensor_a.shape()[0]);
+    TT_ASSERT(this->output_tensor_start[1] < input_tensor_a.shape()[1]);
+    TT_ASSERT(this->output_tensor_end[1] < input_tensor_a.shape()[1]);
+    TT_ASSERT(this->output_tensor_start[2] < input_tensor_a.shape()[2]);
+    TT_ASSERT(this->output_tensor_end[2] < input_tensor_a.shape()[2]);
+    TT_ASSERT(this->output_tensor_start[3] < input_tensor_a.shape()[3]);
+    TT_ASSERT(this->output_tensor_end[3] < input_tensor_a.shape()[3]);
+
+    // Check if start shape is <= end shape
+    TT_ASSERT(this->output_tensor_start[0] <= this->output_tensor_end[0]);
+    TT_ASSERT(this->output_tensor_start[1] <= this->output_tensor_end[1]);
+    TT_ASSERT(this->output_tensor_start[2] <= this->output_tensor_end[2]);
+    TT_ASSERT(this->output_tensor_start[3] <= this->output_tensor_end[3]);
+}
+std::vector<Shape> UnpadOnHost::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    Shape output_tensor_shape = {
+        this->output_tensor_end[0] - this->output_tensor_start[0] + 1,
+        this->output_tensor_end[1] - this->output_tensor_start[1] + 1,
+        this->output_tensor_end[2] - this->output_tensor_start[2] + 1,
+        this->output_tensor_end[3] - this->output_tensor_start[3] + 1,
+    };
+    return {output_tensor_shape};
+}
+std::vector<Tensor> UnpadOnHost::compute_output_tensors(const std::vector<Tensor>& input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    return {input_tensor.unpad(this->output_tensor_start, this->output_tensor_end)};
+}
+
+Tensor unpad_on_host(const Tensor &input_tensor_a, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end, const MemoryConfig& mem_config) {
+    return operation::run(UnpadOnHost{output_tensor_start, output_tensor_end}, {input_tensor_a}).at(0);
+}
+
 }  // namespace tt_metal
 
 }  // namespace tt
