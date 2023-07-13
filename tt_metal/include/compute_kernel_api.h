@@ -20,7 +20,6 @@
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_math_eltwise_binary.h"
 #include "llk_math_eltwise_unary_sfpu.h"
-#include "llk_math_eltwise_unary_sfpi.h"
 #include "llk_math_reduce.h"
 #define MATH(x) x
 #define MAIN math_main()
@@ -511,28 +510,6 @@ ALWI void sin_tile(uint32_t idst) {
 
 ALWI void cos_tile(uint32_t idst) {
     MATH(( llk_math_eltwise_unary_sfpu_cos<APPROX, SyncHalf>(idst) ));
-}
-
-ALWI void bitwise_complement_tile_init() {
-    MATH(( llk_math_eltwise_unary_sfpi_bitwise_complement_init() )); // TODO(AP): move out init
-}
-
-/**
- *  Please refer to documentation for log_tile.
- */
-ALWI void bitwise_complement_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpi_bitwise_complement<SyncHalf>(idst) ));
-}
-
-ALWI void logical_not_tile_init() {
-    MATH(( llk_math_eltwise_unary_sfpi_logical_not_init() )); // TODO(AP): move out init
-}
-
-/**
- *  Please refer to documentation for log_tile.
- */
-ALWI void logical_not_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpi_logical_not<SyncHalf>(idst) ));
 }
 
 // relu is implemented via unpack with llk_pack_relu_config(0) enabled
