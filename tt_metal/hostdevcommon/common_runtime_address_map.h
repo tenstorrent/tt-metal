@@ -8,7 +8,6 @@
 */
 
 // TODO: these could be moved to even lower addresses -- 5 RISC-V hexes combined don't need 100 KB
-constexpr static std::uint32_t RUNTIME_CONFIG_BASE = 100 * 1024;
 constexpr static std::uint32_t BRISC_L1_ARG_BASE = 101 * 1024;
 constexpr static std::uint32_t BRISC_L1_RESULT_BASE = 102 * 1024;
 constexpr static std::uint32_t NCRISC_L1_ARG_BASE = 103 * 1024;

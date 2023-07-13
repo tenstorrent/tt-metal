@@ -196,7 +196,7 @@ void device_setup() {
 
     wzeromem(MEM_ZEROS_BASE, MEM_ZEROS_SIZE);
 
-    volatile uint32_t* use_ncrisc = (volatile uint32_t*)(RUNTIME_CONFIG_BASE);
+    volatile uint32_t* use_ncrisc = (volatile uint32_t*)(MEM_ENABLE_NCRISC_MAILBOX_ADDRESS);
     if (*use_ncrisc) {
         l1_to_ncrisc_iram_copy();
 
@@ -278,7 +278,7 @@ int main() {
     init_sync_registers();  // this init needs to be done before NCRISC / TRISCs are launched, only done by BRISC
     device_setup();  // NCRISC is disabled/enabled here
 
-    volatile uint32_t* use_triscs = (volatile uint32_t*)(RUNTIME_CONFIG_BASE + 4);
+    volatile uint32_t* use_triscs = (volatile uint32_t*)(MEM_ENABLE_TRISC_MAILBOX_ADDRESS);
     if (*use_triscs) {
         // FIXME: this is not sufficient to bring Trisc / Tensix out of a bad state
         // do we need do more than just assert_trisc_reset() ?
@@ -313,7 +313,7 @@ int main() {
         assert_trisc_reset();
     }
 
-    volatile uint32_t* use_ncrisc = (volatile uint32_t*)(RUNTIME_CONFIG_BASE);
+    volatile uint32_t* use_ncrisc = (volatile uint32_t*)(MEM_ENABLE_NCRISC_MAILBOX_ADDRESS);
     if (*use_ncrisc) {
         while (*ncrisc_run_mailbox_address != 1);
     }

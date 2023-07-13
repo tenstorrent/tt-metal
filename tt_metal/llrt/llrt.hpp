@@ -184,8 +184,6 @@ void load_blank_kernel_to_all_worker_cores_with_exceptions(
 
 void assert_enable_core_mailbox_is_valid_for_core(tt_cluster *cluster, int chip_id, const CoreCoord &core);
 
-// In old dispatch, there is no concept of the dispatch core. When brisc (RUNTIME_CONFIG_BASE + 8) = true,
-// we assume we don't need to send dispatch info to a remote core, and behaviour matches the old dispatch
 void setup_riscs_on_specified_core(
     tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const CoreCoord &core);
 

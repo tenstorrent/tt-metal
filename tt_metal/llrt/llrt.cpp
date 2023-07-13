@@ -273,28 +273,25 @@ bool test_load_write_read_trisc_binary(
 
 void disable_ncrisc(tt_cluster *cluster, int chip_id, const CoreCoord &core) {
     // disable NCRISC
-    uint64_t use_ncrisc_addr = RUNTIME_CONFIG_BASE;
+    uint64_t use_ncrisc_addr = MEM_ENABLE_NCRISC_MAILBOX_ADDRESS;
     write_hex_vec_to_core(cluster, chip_id, core, {0}, use_ncrisc_addr);
     log_debug(tt::LogLLRuntime, "disabled ncrisc");
 }
 
 void enable_ncrisc(tt_cluster *cluster, int chip_id, const CoreCoord &core) {
-    // enable NCRISC
-    uint64_t use_ncrisc_addr = RUNTIME_CONFIG_BASE;
+    uint64_t use_ncrisc_addr = MEM_ENABLE_NCRISC_MAILBOX_ADDRESS;
     write_hex_vec_to_core(cluster, chip_id, core, {1}, use_ncrisc_addr);
     log_debug(tt::LogLLRuntime, "enabled ncrisc");
 }
 
 void enable_triscs(tt_cluster *cluster, int chip_id, const CoreCoord &core) {
-    // enable TRISCs
-    uint64_t use_triscs_addr = RUNTIME_CONFIG_BASE + 4;  // TODO: need this as a dedicted const
+    uint64_t use_triscs_addr = MEM_ENABLE_TRISC_MAILBOX_ADDRESS;
     write_hex_vec_to_core(cluster, chip_id, core, {1}, use_triscs_addr);
     log_debug(tt::LogLLRuntime, "enabled triscs");
 }
 
 void disable_triscs(tt_cluster *cluster, int chip_id, const CoreCoord &core) {
-    // disable TRISCs
-    uint64_t use_triscs_addr = RUNTIME_CONFIG_BASE + 4;  // TODO: need this as a dedicted const
+    uint64_t use_triscs_addr = MEM_ENABLE_TRISC_MAILBOX_ADDRESS;
     write_hex_vec_to_core(cluster, chip_id, core, {0}, use_triscs_addr);
     log_debug(tt::LogLLRuntime, "disabled triscs");
 }
