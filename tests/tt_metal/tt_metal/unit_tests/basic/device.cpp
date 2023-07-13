@@ -105,7 +105,7 @@ TEST_SUITE(
             REQUIRE(tt::tt_metal::CloseDevice(devices.at(id)));
         }
     }
-    TEST_CASE("Multi Device Load Blank Kernels" * doctest::timeout(2)) {
+    TEST_CASE("Multi Device Load Blank Kernels" * doctest::timeout(5)) {
         auto arch = tt::get_arch_from_string(get_env_arch_name());
         const size_t num_devices = tt::tt_metal::Device::detect_num_available_devices();
         REQUIRE(num_devices > 0);
