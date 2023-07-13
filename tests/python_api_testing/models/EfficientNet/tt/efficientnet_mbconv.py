@@ -1,11 +1,16 @@
 import torch
+import tt_lib
 import math
 
 from dataclasses import dataclass
 from typing import List, Callable, Optional
 
-from python_api_testing.models.EfficientNet.tt.efficientnet_conv import TtEfficientnetConv2dNormActivation
-from python_api_testing.models.EfficientNet.tt.efficientnet_squeeze_excitation import TtEfficientnetSqueezeExcitation
+from python_api_testing.models.EfficientNet.tt.efficientnet_conv import (
+    TtEfficientnetConv2dNormActivation,
+)
+from python_api_testing.models.EfficientNet.tt.efficientnet_squeeze_excitation import (
+    TtEfficientnetSqueezeExcitation,
+)
 
 
 def _make_divisible(v: float, divisor: int, min_value=None) -> int:
@@ -35,6 +40,7 @@ class _MBConvConfig:
     input_channels: int
     out_channels: int
     num_layers: int
+    block: Callable[..., torch.nn.Module]
 
     @staticmethod
     def adjust_channels(
@@ -55,10 +61,14 @@ class MBConvConfig(_MBConvConfig):
         num_layers: int,
         width_mult: float = 1.0,
         depth_mult: float = 1.0,
+        block: Optional[Callable[..., torch.nn.Module]] = None,
     ):
         input_channels = self.adjust_channels(input_channels, width_mult)
         out_channels = self.adjust_channels(out_channels, width_mult)
         num_layers = self.adjust_depth(num_layers, depth_mult)
+
+        if block is None:
+            block = TtEfficientnetMbConv
 
         super().__init__(
             expand_ratio,
@@ -67,6 +77,7 @@ class MBConvConfig(_MBConvConfig):
             input_channels,
             out_channels,
             num_layers,
+            block,
         )
 
     @staticmethod
@@ -174,6 +185,6 @@ class TtEfficientnetMbConv(torch.nn.Module):
 
         if self.use_res_connect:
             # result = self.stochastic_depth(result)
-            result += x
+            result = tt_lib.tensor.add(result, x)
 
         return result

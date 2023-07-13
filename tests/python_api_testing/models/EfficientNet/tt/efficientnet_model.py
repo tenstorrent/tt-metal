@@ -1,27 +1,39 @@
 import torch
-from typing import List
+import copy
+import tt_lib
+from typing import List, Sequence, Union, Tuple, Optional, Any
+from tt_lib.fallback_ops import fallback_ops
+import torchvision
+from functools import partial
 
+from python_api_testing.models.utility_functions_new import (
+    torch2tt_tensor,
+    tt2torch_tensor,
+)
+from python_api_testing.models.EfficientNet.tt.efficientnet_conv import (
+    TtEfficientnetConv2dNormActivation,
+)
 from python_api_testing.models.EfficientNet.tt.efficientnet_mbconv import (
     TtEfficientnetMbConv,
+    _MBConvConfig,
     MBConvConfig,
 )
-
 from python_api_testing.models.EfficientNet.tt.efficientnet_fused_mbconv import (
     TtEfficientnetFusedMBConv,
     FusedMBConvConfig,
 )
 
 
-class TtEfficientNet(nn.Module):
+class TtEfficientNet(torch.nn.Module):
     def __init__(
         self,
+        state_dict,
+        device,
         inverted_residual_setting: Sequence[Union[MBConvConfig, FusedMBConvConfig]],
         dropout: float,
         stochastic_depth_prob: float = 0.2,
-        num_classes: int = 1000,
-        norm_layer: Optional[Callable[..., nn.Module]] = None,
         last_channel: Optional[int] = None,
-    ) -> None:
+    ):
         """
         EfficientNet V1 and V2 main class
 
@@ -29,12 +41,11 @@ class TtEfficientNet(nn.Module):
             inverted_residual_setting (Sequence[Union[MBConvConfig, FusedMBConvConfig]]): Network structure
             dropout (float): The droupout probability
             stochastic_depth_prob (float): The stochastic depth probability
-            num_classes (int): Number of classes
-            norm_layer (Optional[Callable[..., nn.Module]]): Module specifying the normalization layer to use
             last_channel (int): The number of channels on the penultimate layer
         """
         super().__init__()
-        _log_api_usage_once(self)
+
+        self.device = device
 
         if not inverted_residual_setting:
             raise ValueError("The inverted_residual_setting should not be empty")
@@ -46,29 +57,31 @@ class TtEfficientNet(nn.Module):
                 "The inverted_residual_setting should be List[MBConvConfig]"
             )
 
-        if norm_layer is None:
-            norm_layer = nn.BatchNorm2d
-
-        layers: List[nn.Module] = []
+        layers: List[torch.nn.Module] = []
 
         # building first layer
         firstconv_output_channels = inverted_residual_setting[0].input_channels
+
         layers.append(
-            Conv2dNormActivation(
-                3,
-                firstconv_output_channels,
+            TtEfficientnetConv2dNormActivation(
+                state_dict=state_dict,
+                base_address=f"features.{len(layers)}",
+                device=device,
+                in_channels=3,
+                out_channels=firstconv_output_channels,
                 kernel_size=3,
                 stride=2,
-                norm_layer=norm_layer,
-                activation_layer=nn.SiLU,
+                activation_layer=True,
             )
         )
 
         # building inverted residual blocks
         total_stage_blocks = sum(cnf.num_layers for cnf in inverted_residual_setting)
         stage_block_id = 0
+
         for cnf in inverted_residual_setting:
-            stage: List[nn.Module] = []
+            stage: List[torch.nn.Module] = []
+
             for _ in range(cnf.num_layers):
                 # copy to avoid modifications. shallow copy is enough
                 block_cnf = copy.copy(cnf)
@@ -83,79 +96,94 @@ class TtEfficientNet(nn.Module):
                     stochastic_depth_prob * float(stage_block_id) / total_stage_blocks
                 )
 
-                stage.append(block_cnf.block(block_cnf, sd_prob, norm_layer))
+                stage.append(
+                    block_cnf.block(
+                        state_dict=state_dict,
+                        base_address=f"features.{len(layers)}.{len(stage)}",
+                        device=device,
+                        cnf=block_cnf,
+                        stochastic_depth_prob=sd_prob,
+                    )
+                )
+
                 stage_block_id += 1
 
-            layers.append(nn.Sequential(*stage))
+            layers.append(torch.nn.Sequential(*stage))
 
         # building last several layers
         lastconv_input_channels = inverted_residual_setting[-1].out_channels
         lastconv_output_channels = (
             last_channel if last_channel is not None else 4 * lastconv_input_channels
         )
+
         layers.append(
-            Conv2dNormActivation(
-                lastconv_input_channels,
-                lastconv_output_channels,
+            TtEfficientnetConv2dNormActivation(
+                state_dict=state_dict,
+                base_address=f"features.{len(layers)}",
+                device=device,
+                in_channels=lastconv_input_channels,
+                out_channels=lastconv_output_channels,
                 kernel_size=1,
-                norm_layer=norm_layer,
-                activation_layer=nn.SiLU,
+                activation_layer=True,
             )
         )
 
-        self.features = nn.Sequential(*layers)
-        self.avgpool = nn.AdaptiveAvgPool2d(1)
-        self.classifier = nn.Sequential(
-            nn.Dropout(p=dropout, inplace=True),
-            nn.Linear(lastconv_output_channels, num_classes),
+        self.features = torch.nn.Sequential(*layers)
+        self.avgpool = fallback_ops.AdaptiveAvgPool2d(1)
+
+        # self.classifier = nn.Sequential(
+        #     nn.Dropout(p=dropout, inplace=True),
+        #     nn.Linear(lastconv_output_channels, num_classes),
+        # )
+
+        self.classifier_weight = torch2tt_tensor(
+            state_dict[f"classifier.1.weight"],
+            device,
+            tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
         )
 
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode="fan_out")
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-            elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
-                nn.init.ones_(m.weight)
-                nn.init.zeros_(m.bias)
-            elif isinstance(m, nn.Linear):
-                init_range = 1.0 / math.sqrt(m.out_features)
-                nn.init.uniform_(m.weight, -init_range, init_range)
-                nn.init.zeros_(m.bias)
+        if "classifier.1.bias" in state_dict:
+            self.classifier_bias = torch2tt_tensor(
+                state_dict[f"classifier.1.bias"],
+                device,
+                tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
+            )
+        else:
+            self.classifier_bias = None
 
-    def _forward_impl(self, x: Tensor) -> Tensor:
+        self.classifier_weight = tt_lib.tensor.transpose(self.classifier_weight)
+
+    def forward(self, x):
         x = self.features(x)
 
         x = self.avgpool(x)
-        x = torch.flatten(x, 1)
 
-        x = self.classifier(x)
+        x = tt2torch_tensor(x)
+        x = torch.flatten(x, 1)
+        x = torch2tt_tensor(x, self.device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+
+        x = tt_lib.tensor.matmul(x, self.classifier_weight)
+
+        if self.classifier_bias is not None:
+            x = tt_lib.tensor.add(x, self.classifier_bias)
 
         return x
 
-    def forward(self, x: Tensor) -> Tensor:
-        return self._forward_impl(x)
-
 
 def _efficientnet(
+    state_dict,
+    device,
     inverted_residual_setting: Sequence[Union[MBConvConfig, FusedMBConvConfig]],
     dropout: float,
     last_channel: Optional[int],
-    weights: Optional[WeightsEnum],
-    progress: bool,
-    **kwargs: Any,
-) -> EfficientNet:
-    if weights is not None:
-        _ovewrite_named_param(kwargs, "num_classes", len(weights.meta["categories"]))
-
-    model = EfficientNet(
-        inverted_residual_setting, dropout, last_channel=last_channel, **kwargs
+) -> TtEfficientNet:
+    model = TtEfficientNet(
+        state_dict=state_dict,
+        device=device,
+        inverted_residual_setting=inverted_residual_setting,
+        dropout=dropout,
+        last_channel=last_channel,
     )
-
-    if weights is not None:
-        model.load_state_dict(
-            weights.get_state_dict(progress=progress, check_hash=True)
-        )
 
     return model
 
@@ -165,6 +193,7 @@ def _efficientnet_conf(
     **kwargs: Any,
 ) -> Tuple[Sequence[Union[MBConvConfig, FusedMBConvConfig]], Optional[int]]:
     inverted_residual_setting: Sequence[Union[MBConvConfig, FusedMBConvConfig]]
+
     if arch.startswith("efficientnet_b"):
         bneck_conf = partial(
             MBConvConfig,
@@ -217,3 +246,171 @@ def _efficientnet_conf(
         raise ValueError(f"Unsupported model type {arch}")
 
     return inverted_residual_setting, last_channel
+
+
+def efficientnet_b0(device) -> TtEfficientNet:
+    """EfficientNet B0 model architecture from the `EfficientNet: Rethinking Model Scaling for Convolutional
+    Neural Networks <https://arxiv.org/abs/1905.11946>`_ paper.
+    """
+
+    refence_model = torchvision.models.efficientnet_b0(pretrained=True)
+    refence_model.eval()
+
+    inverted_residual_setting, last_channel = _efficientnet_conf(
+        "efficientnet_b0", width_mult=1.0, depth_mult=1.0
+    )
+
+    return _efficientnet(
+        state_dict=refence_model.state_dict(),
+        device=device,
+        inverted_residual_setting=inverted_residual_setting,
+        dropout=0.2,
+        last_channel=last_channel,
+    )
+
+
+def efficientnet_b1(device) -> TtEfficientNet:
+    """EfficientNet B1 model architecture from the `EfficientNet: Rethinking Model Scaling for Convolutional
+    Neural Networks <https://arxiv.org/abs/1905.11946>`_ paper.
+    """
+
+    refence_model = torchvision.models.efficientnet_b1(pretrained=True)
+    refence_model.eval()
+
+    inverted_residual_setting, last_channel = _efficientnet_conf(
+        "efficientnet_b1", width_mult=1.0, depth_mult=1.1
+    )
+
+    return _efficientnet(
+        state_dict=refence_model.state_dict(),
+        device=device,
+        inverted_residual_setting=inverted_residual_setting,
+        dropout=0.2,
+        last_channel=last_channel,
+    )
+
+
+def efficientnet_b2(device) -> TtEfficientNet:
+    """EfficientNet B2 model architecture from the `EfficientNet: Rethinking Model Scaling for Convolutional
+    Neural Networks <https://arxiv.org/abs/1905.11946>`_ paper.
+    """
+
+    refence_model = torchvision.models.efficientnet_b2(pretrained=True)
+    refence_model.eval()
+
+    inverted_residual_setting, last_channel = _efficientnet_conf(
+        "efficientnet_b2", width_mult=1.1, depth_mult=1.2
+    )
+
+    return _efficientnet(
+        state_dict=refence_model.state_dict(),
+        device=device,
+        inverted_residual_setting=inverted_residual_setting,
+        dropout=0.3,
+        last_channel=last_channel,
+    )
+
+
+def efficientnet_b3(device) -> TtEfficientNet:
+    """EfficientNet B3 model architecture from the `EfficientNet: Rethinking Model Scaling for Convolutional
+    Neural Networks <https://arxiv.org/abs/1905.11946>`_ paper.
+    """
+
+    refence_model = torchvision.models.efficientnet_b3(pretrained=True)
+    refence_model.eval()
+
+    inverted_residual_setting, last_channel = _efficientnet_conf(
+        "efficientnet_b3", width_mult=1.2, depth_mult=1.4
+    )
+
+    return _efficientnet(
+        state_dict=refence_model.state_dict(),
+        device=device,
+        inverted_residual_setting=inverted_residual_setting,
+        dropout=0.3,
+        last_channel=last_channel,
+    )
+
+
+def efficientnet_b4(device) -> TtEfficientNet:
+    """EfficientNet B4 model architecture from the `EfficientNet: Rethinking Model Scaling for Convolutional
+    Neural Networks <https://arxiv.org/abs/1905.11946>`_ paper.
+    """
+
+    refence_model = torchvision.models.efficientnet_b4(pretrained=True)
+    refence_model.eval()
+
+    inverted_residual_setting, last_channel = _efficientnet_conf(
+        "efficientnet_b4", width_mult=1.4, depth_mult=1.8
+    )
+
+    return _efficientnet(
+        state_dict=refence_model.state_dict(),
+        device=device,
+        inverted_residual_setting=inverted_residual_setting,
+        dropout=0.4,
+        last_channel=last_channel,
+    )
+
+
+def efficientnet_b5(device) -> TtEfficientNet:
+    """EfficientNet B5 model architecture from the `EfficientNet: Rethinking Model Scaling for Convolutional
+    Neural Networks <https://arxiv.org/abs/1905.11946>`_ paper.
+    """
+
+    refence_model = torchvision.models.efficientnet_b5(pretrained=True)
+    refence_model.eval()
+
+    inverted_residual_setting, last_channel = _efficientnet_conf(
+        "efficientnet_b5", width_mult=1.6, depth_mult=2.2
+    )
+
+    return _efficientnet(
+        state_dict=refence_model.state_dict(),
+        device=device,
+        inverted_residual_setting=inverted_residual_setting,
+        dropout=0.4,
+        last_channel=last_channel,
+    )
+
+
+def efficientnet_b6(device) -> TtEfficientNet:
+    """EfficientNet B6 model architecture from the `EfficientNet: Rethinking Model Scaling for Convolutional
+    Neural Networks <https://arxiv.org/abs/1905.11946>`_ paper.
+    """
+
+    refence_model = torchvision.models.efficientnet_b6(pretrained=True)
+    refence_model.eval()
+
+    inverted_residual_setting, last_channel = _efficientnet_conf(
+        "efficientnet_b6", width_mult=1.8, depth_mult=2.6
+    )
+
+    return _efficientnet(
+        state_dict=refence_model.state_dict(),
+        device=device,
+        inverted_residual_setting=inverted_residual_setting,
+        dropout=0.5,
+        last_channel=last_channel,
+    )
+
+
+def efficientnet_b7(device) -> TtEfficientNet:
+    """EfficientNet B7 model architecture from the `EfficientNet: Rethinking Model Scaling for Convolutional
+    Neural Networks <https://arxiv.org/abs/1905.11946>`_ paper.
+    """
+
+    refence_model = torchvision.models.efficientnet_b7(pretrained=True)
+    refence_model.eval()
+
+    inverted_residual_setting, last_channel = _efficientnet_conf(
+        "efficientnet_b7", width_mult=2.0, depth_mult=3.1
+    )
+
+    return _efficientnet(
+        state_dict=refence_model.state_dict(),
+        device=device,
+        inverted_residual_setting=inverted_residual_setting,
+        dropout=0.5,
+        last_channel=last_channel,
+    )

@@ -1,7 +1,10 @@
 import torch
-from typing import List
+import tt_lib
+from typing import List, Optional, Callable
 
-from python_api_testing.models.EfficientNet.tt.efficientnet_conv import TtEfficientnetConv2dNormActivation
+from python_api_testing.models.EfficientNet.tt.efficientnet_conv import (
+    TtEfficientnetConv2dNormActivation,
+)
 from python_api_testing.models.EfficientNet.tt.efficientnet_mbconv import _MBConvConfig
 
 
@@ -15,7 +18,11 @@ class FusedMBConvConfig(_MBConvConfig):
         input_channels: int,
         out_channels: int,
         num_layers: int,
-    ) -> None:
+        block: Optional[Callable[..., torch.nn.Module]] = None,
+    ):
+        if block is None:
+            block = TtEfficientnetFusedMBConv
+
         super().__init__(
             expand_ratio,
             kernel,
@@ -23,6 +30,7 @@ class FusedMBConvConfig(_MBConvConfig):
             input_channels,
             out_channels,
             num_layers,
+            block,
         )
 
 
@@ -96,6 +104,6 @@ class TtEfficientnetFusedMBConv(torch.nn.Module):
 
         if self.use_res_connect:
             # result = self.stochastic_depth(result)
-            result += x
+            result = tt_lib.tensor.add(result, x)
 
         return result

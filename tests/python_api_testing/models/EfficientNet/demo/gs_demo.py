@@ -16,18 +16,16 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 import cv2
 import torch
+import tt_lib
 import torchvision
 from loguru import logger
 from datasets import load_dataset
 
-
-def load_efficientnet_model():
-    """
-    Load the pre-trained EfficientNetB0 model.
-    """
-    model = torchvision.models.efficientnet_b0(pretrained=True)
-    model.eval()
-    return model
+from python_api_testing.models.EfficientNet.tt.efficientnet_model import efficientnet_b0
+from python_api_testing.models.utility_functions_new import (
+    torch2tt_tensor,
+    tt2torch_tensor,
+)
 
 
 def preprocess():
@@ -66,10 +64,14 @@ def download_images(img_path):
 
 
 def test_cpu_demo():
+    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    tt_lib.device.InitializeDevice(device)
+    tt_lib.device.SetDefaultDevice(device)
+
     img_path = ROOT / "input_image.jpg"
     download_images(img_path)
 
-    model = load_efficientnet_model()
+    model = efficientnet_b0(device)
     categories = read_classes()
     transform = preprocess()
 
@@ -79,8 +81,14 @@ def test_cpu_demo():
     input_batch = input_tensor.unsqueeze(0)
 
     with torch.no_grad():
+        input_batch = torch2tt_tensor(
+            input_batch, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
+        )
         output = model(input_batch)
+        output = tt2torch_tensor(output)
+        output = output.squeeze(0).squeeze(0)
 
+    tt_lib.device.CloseDevice(device)
     probabilities = torch.nn.functional.softmax(output[0], dim=0)
 
     # Check the top 5 categories that are predicted.
