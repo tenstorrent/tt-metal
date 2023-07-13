@@ -91,9 +91,6 @@ run_frequent_pipeline_tests() {
 
     run_post_commit_pipeline_tests "$tt_arch" "$pipeline_type"
 
-    # Tests tensor and tt_dnn op APIs
-    ./tests/scripts/run_tt_lib_regressions.sh
-
     # Tests profiler module
     ./tests/scripts/run_profiler_regressions.sh
 

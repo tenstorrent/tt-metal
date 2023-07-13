@@ -77,8 +77,9 @@ These regressions will also run after every pushed commit to the GitHub repo.
     source build/python_env/bin/activate
     ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit
 
-If changes affect `tensor` or `tt_dnn` libraries, run this suite of pytests which tests `tensor` APIs and `tt_dnn` ops. For `tt_dnn` ops, the tests aim to hit all different parallelizations of ops currently available.
+If changes affect `tensor` or `tt_dnn` libraries, run this suite of pytests which tests `tensor` APIs and `tt_dnn` ops. These are also tested in post commit.
 
 ::
 
-    ./tests/scripts/run_tt_lib_regressions.sh
+    pytest tests/python_api_testing/unit_testing/ -vvv
+    pytest tests/python_api_testing/sweep_tests/pytests/ -vvv
