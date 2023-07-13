@@ -7,7 +7,7 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/dtx/tensor \
 		 tests/tt_metal/dtx/overlap \
 		 tests/tt_metal/dtx/collapse_transformations \
-		 tests/tt_metal/test_compile_args \
+		 tests/tt_metal/integration_tests/test_bert \
 		 tests/tt_metal/ops/test_eltwise_binary_op \
 		 tests/tt_metal/ops/test_eltwise_unary_op \
 		 tests/tt_metal/ops/test_softmax_op \
@@ -29,6 +29,7 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/allocator/test_free_list_allocator_algo \
 		 tests/tt_metal/allocator/test_l1_banking_allocator \
 		 tests/tt_metal/test_add_two_ints \
+		 tests/tt_metal/test_compile_args \
 		 tests/tt_metal/test_dram_to_l1_multicast \
 		 tests/tt_metal/test_dram_to_l1_multicast_loopback_src \
 		 tests/tt_metal/test_dram_loopback_single_core \
