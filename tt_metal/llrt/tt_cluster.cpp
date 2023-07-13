@@ -319,43 +319,6 @@ void tt_cluster::close_device() {
     ndesc.reset();
 }
 
-void tt_cluster::wait_for_completion(std::string output_dir) {
-    vector<uint32_t> mem_vector;
-    std::map<int, std::unordered_set<CoreCoord>> device_idle_cores;
-    bool all_worker_cores_done;
-
-    // initially assume no cores are idle
-    for (const int device_id : target_device_ids) {
-        device_idle_cores.insert({device_id, {}});
-    }
-    do {
-        all_worker_cores_done = true;
-        for (const int device_id : target_device_ids) {
-            for (const CoreCoord &core : get_soc_desc(device_id).workers) {
-                // check for core busy
-                bool is_core_busy = device_idle_cores.at(device_id).find(core) == device_idle_cores.at(device_id).end();
-                if (is_core_busy) {
-                    // check for core done
-                    read_dram_vec(mem_vector, tt_cxy_pair(device_id, core), MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_NCRISC_OFFSET, 4);
-                    bool is_core_done = (mem_vector.at(0) == 1) or (mem_vector.at(0) == 0xabcd1234);
-                    if (is_core_done) {
-                        device_idle_cores.at(device_id).insert(core);
-                        // check for stream assertions
-                        read_dram_vec(mem_vector, tt_cxy_pair(device_id, core), MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_BRISC_OFFSET, 4);
-                        if (mem_vector.at(0) == 0xdeeeaaad) {
-                            log_fatal(tt::LogDevice, "Device {} stream assertions detected from core {}-{}", device_id, core.x, core.y);
-                        }
-                    } else {
-                        log_trace(tt::LogDevice, "Device {} completion signal not received from core {}-{}", device_id, core.x, core.y);
-                        all_worker_cores_done = false;
-                    }
-                }
-            }
-        }
-        check_timeout(output_dir);
-    } while (!all_worker_cores_done);
-}
-
 // Returns 0 if everything was OK
 int tt_cluster::remote_arc_msg(const chip_id_t &chip, uint32_t msg_code, bool wait_for_done, uint32_t arg0, uint32_t arg1, int timeout, uint32_t *return_3, uint32_t *return_4) {
     constexpr uint64_t ARC_RESET_SCRATCH_ADDR = 0x880030060;

@@ -187,8 +187,6 @@ class tt_device
     virtual void read_vector(
         std::vector<std::uint32_t> &mem_vector, tt_cxy_pair target, std::uint32_t address, std::uint32_t size_in_bytes, bool host_resident = false, bool small_access = false, chip_id_t src_device_id = -1);
 
-    virtual bool wait_for_completion();
-
     //! return the size of host allocated dma buffers
     virtual uint32_t dma_allocation_size(chip_id_t src_device_id = -1);
 
@@ -360,8 +358,6 @@ class tt_SiliconDevice: public tt_device
         chip_id_t src_device_id = -1);
 
 
-
-    virtual bool wait_for_completion();
 
     virtual void set_power_state(tt_DevicePowerState state);
     virtual std::pair<float, float> get_clock_range();

@@ -100,11 +100,6 @@ uint32_t * tt_device::get_usr_ptr(uint32_t d_addr, chip_id_t src_device_id) {
   return nullptr;
 }
 
-bool tt_device::wait_for_completion() {
-    // To be redefined with each derived device type
-    return true;
-}
-
 const tt_SocDescriptor *tt_device::get_soc_descriptor() const { return &soc_descriptor; }
 
 void tt_device::dump_debug_mailbox(std::string output_path, int device_id) {

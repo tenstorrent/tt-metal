@@ -82,7 +82,6 @@ struct tt_cluster
     void deassert_risc_reset_remote_chip(const chip_id_t &chip_id, bool start_stagger = false);
     void reset_remote_chip(const chip_id_t &chip_id);
     void stop_remote_chip(const chip_id_t &chip);
-    void wait_for_completion(std::string output_dir);
     void check_timeout(std::string output_dir);
     void dump_debug_mailbox(std::string output_dir);
     void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions);
