@@ -37,7 +37,7 @@ void Device::initialize_allocator(const MemoryAllocator &memory_allocator, const
         .dram_bank_offsets = {},
         .worker_grid_size = this->post_harvested_worker_grid_size_,
         .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
-        .storage_core_l1_bank_size = static_cast<size_t>(soc_desc.storage_core_l1_bank_size),
+        .l1_bank_size = static_cast<size_t>(soc_desc.l1_bank_size),
         .core_type_from_noc_coord_table = {}, // Populated later
         .logical_to_routing_coord_lookup_table=this->logical_to_routing_coord_lookup_table_,
         .l1_bank_remap = l1_bank_remap,
@@ -83,8 +83,9 @@ void Device::initialize_harvesting_information() {
     if (not cluster_is_initialized()) {
         tt::log_fatal("Device has not been initialized, did you forget to call InitializeDevice?");
     }
-    auto soc_desc = this->cluster_->get_soc_desc(this->pcie_slot_);
+    auto &soc_desc = this->cluster_->get_soc_desc(this->pcie_slot_);
     auto harvested_noc_rows = this->cluster_->get_harvested_rows(this->pcie_slot_);
+
     // Determine which noc-coords are harvested
     std::vector<unsigned int> noc_row_harvested(soc_desc.grid_size.y, 0);
     this->num_harvested_rows_ = 0;
@@ -93,6 +94,9 @@ void Device::initialize_harvesting_information() {
         this->num_harvested_rows_ += row_harvested;
         noc_row_harvested[r] = row_harvested;
     }
+
+    load_dispatch_and_banking_config(soc_desc, this->num_harvested_rows_);
+
     tt::log_assert(
         this->num_harvested_rows_ < 2,
         tt::LogDevice,

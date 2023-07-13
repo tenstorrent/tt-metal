@@ -97,10 +97,8 @@ inline std::string& trim(std::string& s, const char* t = ws)
     return ltrim(rtrim(s, t), t);
 }
 
-void load_core_descriptors_from_device_descriptor(
-    YAML::Node device_descriptor_yaml, tt_SocDescriptor &soc_descriptor) {
+void load_core_descriptors_from_device_descriptor(YAML::Node device_descriptor_yaml, tt_SocDescriptor &soc_descriptor) {
   auto worker_l1_size = device_descriptor_yaml["worker_l1_size"].as<int>();
-  auto storage_core_l1_bank_size = device_descriptor_yaml["storage_core_l1_bank_size"].as<int>();
   auto eth_l1_size = device_descriptor_yaml["eth_l1_size"].as<int>();
 
   for (const auto &core_node : device_descriptor_yaml["arc"]) {
@@ -176,7 +174,6 @@ void load_core_descriptors_from_device_descriptor(
     }
     core_descriptor.type = CoreType::ETH;
     core_descriptor.l1_size = eth_l1_size;
-    core_descriptor.l1_bank_size = eth_l1_size;
     soc_descriptor.cores.insert({core_descriptor.coord, core_descriptor});
     soc_descriptor.ethernet_cores.push_back(core_descriptor.coord);
 
@@ -197,7 +194,6 @@ void load_core_descriptors_from_device_descriptor(
     }
     core_descriptor.type = CoreType::WORKER;
     core_descriptor.l1_size = worker_l1_size;
-    core_descriptor.l1_bank_size = worker_l1_size;
     core_descriptor.dram_size_per_core = DEFAULT_DRAM_SIZE_PER_CORE;
     soc_descriptor.cores.insert({core_descriptor.coord, core_descriptor});
     soc_descriptor.workers.push_back(core_descriptor.coord);
@@ -232,56 +228,6 @@ void load_core_descriptors_from_device_descriptor(
     soc_descriptor.cores.insert({core_descriptor.coord, core_descriptor});
   }
 
-  std::set<int> compute_and_storage_coords_x;
-  std::set<int> compute_and_storage_coords_y;
-  // compute_and_storage_cores are a subset of worker cores
-  // they have already been parsed as CoreType::WORKER and saved into `cores` map when parsing `functional_workers`
-  for (const auto &core_node : device_descriptor_yaml["compute_and_storage_cores"]) {
-    CoreCoord coord = {};
-    if (core_node.IsScalar()) {
-      coord = format_node(core_node.as<std::string>());
-    } else {
-      tt::log_fatal ("Only noc coords supported for compute_and_storage_cores cores");
-    }
-    compute_and_storage_coords_x.insert(coord.x);
-    compute_and_storage_coords_y.insert(coord.y);
-    soc_descriptor.compute_and_storage_cores.push_back(coord);
-  }
-
-  soc_descriptor.compute_and_storage_grid_size = CoreCoord(compute_and_storage_coords_x.size(), compute_and_storage_coords_y.size());
-
-  // storage_cores are a subset of worker cores
-  // they have already been parsed as CoreType::WORKER and saved into `cores` map when parsing `functional_workers`
-  for (const auto &core_node : device_descriptor_yaml["storage_cores"]) {
-    RelativeCoreCoord coord = {};
-    if (core_node.IsSequence()) {
-      // Logical coord
-      coord = RelativeCoreCoord({
-        .x = core_node[0].as<int>(),
-        .y = core_node[1].as<int>(),
-      });
-    } else {
-      tt::log_fatal ("Only logical relative coords supported for storage_cores cores");
-    }
-    soc_descriptor.storage_cores.push_back(coord);
-  }
-
-  // dispatch_cores are a subset of worker cores
-  // they have already been parsed as CoreType::WORKER and saved into `cores` map when parsing `functional_workers`
-  for (const auto &core_node : device_descriptor_yaml["dispatch_cores"]) {
-    RelativeCoreCoord coord = {};
-    if (core_node.IsSequence()) {
-      // Logical coord
-      coord = RelativeCoreCoord({
-        .x = core_node[0].as<int>(),
-        .y = core_node[1].as<int>(),
-      });
-    } else {
-      tt::log_fatal ("Only logical relative coords supported for dispatch_cores cores");
-    }
-    soc_descriptor.dispatch_cores.push_back(coord);
-  }
-
   for (const auto &core_node :  device_descriptor_yaml["router_only"]) {
     CoreDescriptor core_descriptor;
     if (core_node.IsScalar()) {
@@ -300,7 +246,6 @@ void load_soc_features_from_device_descriptor(YAML::Node &device_descriptor_yaml
   soc_descriptor->unpacker_version = device_descriptor_yaml["features"]["unpacker"]["version"].as<int>();
   soc_descriptor->dst_size_alignment = device_descriptor_yaml["features"]["math"]["dst_size_alignment"].as<int>();
   soc_descriptor->worker_l1_size = device_descriptor_yaml["worker_l1_size"].as<int>();
-  soc_descriptor->storage_core_l1_bank_size = device_descriptor_yaml["storage_core_l1_bank_size"].as<int>();
   soc_descriptor->eth_l1_size = device_descriptor_yaml["eth_l1_size"].as<int>();
   soc_descriptor->dram_bank_size = device_descriptor_yaml["dram_bank_size"].as<uint32_t>();
 }
@@ -375,4 +320,71 @@ std::unique_ptr<tt_SocDescriptor> load_soc_descriptor_from_yaml(std::string devi
 
   map_workers_to_dram_banks(soc_descriptor.get());
   return soc_descriptor;
+}
+
+const std::string get_product_name(tt::ARCH arch, uint32_t num_harvested_noc_rows) {
+  const static std::map<tt::ARCH, std::map<uint32_t, std::string> > product_name = {
+      {tt::ARCH::GRAYSKULL, { {0, "E150"} } },
+      {tt::ARCH::WORMHOLE_B0, { {0, "galaxy"}, {1, "nebula_x1"}, {2, "nebula_x2"} } }
+  };
+
+  return product_name.at(arch).at(num_harvested_noc_rows);
+}
+
+void load_dispatch_and_banking_config(tt_SocDescriptor &soc_descriptor, uint32_t num_harvested_noc_rows) {
+  YAML::Node device_descriptor_yaml = YAML::LoadFile(soc_descriptor.device_descriptor_file_path);
+
+  auto product_to_config  = device_descriptor_yaml["dispatch_and_banking"];
+  auto product_name = get_product_name(soc_descriptor.arch, num_harvested_noc_rows);
+  auto config = product_to_config[product_name];
+
+  soc_descriptor.l1_bank_size = config["l1_bank_size"].as<int>();
+
+  std::set<int> compute_and_storage_coords_x;
+  std::set<int> compute_and_storage_coords_y;
+  for (const auto &core_node : config["compute_and_storage_cores"]) {
+    CoreCoord coord = {};
+    if (core_node.IsScalar()) {
+      coord = format_node(core_node.as<std::string>());
+    } else {
+      tt::log_fatal ("Only noc coords supported for compute_and_storage_cores cores");
+    }
+    compute_and_storage_coords_x.insert(coord.x);
+    compute_and_storage_coords_y.insert(coord.y);
+    soc_descriptor.compute_and_storage_cores.push_back(coord);
+  }
+
+  soc_descriptor.compute_and_storage_grid_size = CoreCoord(compute_and_storage_coords_x.size(), compute_and_storage_coords_y.size());
+
+  // storage_cores are a subset of worker cores
+  // they have already been parsed as CoreType::WORKER and saved into `cores` map when parsing `functional_workers`
+  for (const auto &core_node : config["storage_cores"]) {
+    RelativeCoreCoord coord = {};
+    if (core_node.IsSequence()) {
+      // Logical coord
+      coord = RelativeCoreCoord({
+        .x = core_node[0].as<int>(),
+        .y = core_node[1].as<int>(),
+      });
+    } else {
+      tt::log_fatal ("Only logical relative coords supported for storage_cores cores");
+    }
+    soc_descriptor.storage_cores.push_back(coord);
+  }
+
+  // dispatch_cores are a subset of worker cores
+  // they have already been parsed as CoreType::WORKER and saved into `cores` map when parsing `functional_workers`
+  for (const auto &core_node : config["dispatch_cores"]) {
+    RelativeCoreCoord coord = {};
+    if (core_node.IsSequence()) {
+      // Logical coord
+      coord = RelativeCoreCoord({
+        .x = core_node[0].as<int>(),
+        .y = core_node[1].as<int>(),
+      });
+    } else {
+      tt::log_fatal ("Only logical relative coords supported for dispatch_cores cores");
+    }
+    soc_descriptor.dispatch_cores.push_back(coord);
+  }
 }

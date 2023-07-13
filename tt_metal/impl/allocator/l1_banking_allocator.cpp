@@ -24,9 +24,9 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
     };
     std::unordered_map<u32, i64> bank_id_to_bank_offset;
 
-    TT_ASSERT(alloc_config.worker_l1_size % alloc_config.storage_core_l1_bank_size == 0);
+    TT_ASSERT(alloc_config.worker_l1_size % alloc_config.l1_bank_size == 0);
 
-    u32 num_banks_per_storage_core = alloc_config.worker_l1_size / alloc_config.storage_core_l1_bank_size;
+    u32 num_banks_per_storage_core = alloc_config.worker_l1_size / alloc_config.l1_bank_size;
     int expected_num_l1_banks =
         num_in_category(alloc_config.core_type_from_noc_coord_table, AllocCoreType::ComputeAndStore) +
         (num_banks_per_storage_core * num_in_category(alloc_config.core_type_from_noc_coord_table, AllocCoreType::StorageOnly));
@@ -77,8 +77,8 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
                     u32 remapped_bank_id = shuffled_bank_id[bank_id];
                     bank_ids.push_back(remapped_bank_id);
                     allocator.bank_id_to_logical_core.insert({remapped_bank_id, logical_core});
-                    u64 storage_core_offset = storage_bank_index * alloc_config.storage_core_l1_bank_size;
-                    i64 bank_offset_bytes = static_cast<i64>(storage_core_offset) - alloc_config.storage_core_l1_bank_size; // Assuming top-down here --  Not sure if this is hacky... need to specialize based off top-down cofnig flag or not?
+                    u64 storage_core_offset = storage_bank_index * alloc_config.l1_bank_size;
+                    i64 bank_offset_bytes = static_cast<i64>(storage_core_offset) - alloc_config.l1_bank_size; // Assuming top-down here --  Not sure if this is hacky... need to specialize based off top-down cofnig flag or not?
                     bank_id_to_bank_offset.insert({remapped_bank_id, bank_offset_bytes});
                     bank_id++;
                 }
@@ -94,16 +94,16 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
         expected_num_l1_banks
     );
 
-    // There is only alloc_config.storage_core_l1_bank_size bytes available for L1 buffers to be allocated in
-    u64 allocatable_l1_size = static_cast<u64>(alloc_config.storage_core_l1_bank_size);
-    // Assuming top down allocation for L1 buffers so the allocatable memory space is the top alloc_config.storage_core_l1_bank_size bytes of L1
+    // There is only alloc_config.l1_bank_size bytes available for L1 buffers to be allocated in
+    u64 allocatable_l1_size = static_cast<u64>(alloc_config.l1_bank_size);
+    // Assuming top down allocation for L1 buffers so the allocatable memory space is the top alloc_config.l1_bank_size bytes of L1
     u64 alloc_offset = static_cast<u64>(alloc_config.worker_l1_size) - allocatable_l1_size;
     allocator.l1_manager = BankManager(bank_id_to_bank_offset, allocatable_l1_size, alloc_offset);
 }
 
 u64 alloc_at_addr_in_compute_and_storage(const AllocatorConfig &config, BankManager &bank_manager, u64 size, u64 page_size, u64 relative_address) {
-    u64 allocatable_l1_size = static_cast<u64>(config.storage_core_l1_bank_size);
-    u64 alloc_offset = static_cast<u64>(config.worker_l1_size - config.storage_core_l1_bank_size);
+    u64 allocatable_l1_size = static_cast<u64>(config.l1_bank_size);
+    u64 alloc_offset = static_cast<u64>(config.worker_l1_size - config.l1_bank_size);
 
     auto adjust_address = [&](u32 rel_addr){
         auto starting_bank_offset = bank_manager.bank_offset(0);

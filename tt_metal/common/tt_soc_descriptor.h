@@ -41,7 +41,6 @@ struct CoreDescriptor {
   CoreType type;
 
   std::size_t l1_size = 0;
-  std::size_t l1_bank_size = 0;
   std::size_t dram_size_per_core = 0;
 };
 
@@ -81,7 +80,7 @@ struct tt_SocDescriptor {
   int dst_size_alignment;
   int packer_version;
   int worker_l1_size;
-  int storage_core_l1_bank_size;
+  int l1_bank_size;
   int eth_l1_size;
   uint32_t dram_bank_size;
   std::unordered_map<CoreCoord, std::vector<CoreCoord>> perf_dram_bank_to_workers;
@@ -103,3 +102,5 @@ struct tt_SocDescriptor {
 
 // Allocates a new soc descriptor on the heap. Returns an owning pointer.
 std::unique_ptr<tt_SocDescriptor> load_soc_descriptor_from_yaml(std::string device_descriptor_file_path);
+
+void load_dispatch_and_banking_config(tt_SocDescriptor &soc_descriptor, uint32_t num_harvested_noc_rows);
