@@ -3,7 +3,7 @@ name: Run perf regressions on models and output report
 on:
   workflow_dispatch:
   push:
-    branches: ["main", "rkim/perf-model-regs"]
+    branches: ["main"]
   schedule:
     - cron: "0 2 * * *"
 
