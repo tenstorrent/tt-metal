@@ -4,7 +4,6 @@ import sys
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}")
 sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../tt")
 sys.path.append(f"{f}/../..")
 sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
@@ -18,7 +17,7 @@ import tt_lib
 from utility_functions_new import torch_to_tt_tensor_rm, tt_to_torch_tensor, Profiler
 from utility_functions_new import disable_compile_cache, enable_compile_cache
 from utility_functions_new import prep_report
-from tt.modeling_vit import vit_for_image_classification
+from models.vit.tt.modeling_vit import vit_for_image_classification
 
 BATCH_SIZE = 1
 
