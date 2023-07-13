@@ -77,7 +77,7 @@ class TtBertEncoder(torch.nn.Module):
         beta0 = state_dict[
             f"bert.encoder.layer.{encoder_idx}.attention.output.LayerNorm.bias"
         ]
-        mha_gamma = pad_weight(gamma0)
+        mha_gamma = gamma0.reshape(1, 1, -1, 32)
         self.mha_gamma = (
             ttl.tensor.Tensor(
                 mha_gamma.reshape(-1).tolist(),
@@ -85,10 +85,9 @@ class TtBertEncoder(torch.nn.Module):
                 model_config["OP12_LAYERNORM_GAMMA_DTYPE"],
                 ttl.tensor.Layout.ROW_MAJOR,
             )
-            .to(ttl.tensor.Layout.TILE)
             .to(device, model_config["OP12_LAYERNORM_GAMMA_MEMCFG"])
         )
-        mha_beta = pad_weight(beta0)
+        mha_beta = beta0.reshape(1, 1, -1, 32)
         self.mha_beta = (
             ttl.tensor.Tensor(
                 mha_beta.reshape(-1).tolist(),
@@ -96,7 +95,6 @@ class TtBertEncoder(torch.nn.Module):
                 model_config["OP12_LAYERNORM_BETA_DTYPE"],
                 ttl.tensor.Layout.ROW_MAJOR,
             )
-            .to(ttl.tensor.Layout.TILE)
             .to(device, model_config["OP12_LAYERNORM_BETA_MEMCFG"])
         )
 
@@ -106,7 +104,7 @@ class TtBertEncoder(torch.nn.Module):
         # FFN layernorm
         gamma1 = state_dict[f"bert.encoder.layer.{encoder_idx}.output.LayerNorm.weight"]
         beta1 = state_dict[f"bert.encoder.layer.{encoder_idx}.output.LayerNorm.bias"]
-        ffn_gamma = pad_weight(gamma1)
+        ffn_gamma = gamma1.reshape(1, 1, -1, 32)
         self.ffn_gamma = (
             ttl.tensor.Tensor(
                 ffn_gamma.reshape(-1).tolist(),
@@ -114,10 +112,9 @@ class TtBertEncoder(torch.nn.Module):
                 model_config["OP15_LAYERNORM_GAMMA_DTYPE"],
                 ttl.tensor.Layout.ROW_MAJOR,
             )
-            .to(ttl.tensor.Layout.TILE)
             .to(device, model_config["OP15_LAYERNORM_GAMMA_MEMCFG"])
         )
-        ffn_beta = pad_weight(beta1)
+        ffn_beta = beta1.reshape(1, 1, -1, 32)
         self.ffn_beta = (
             ttl.tensor.Tensor(
                 ffn_beta.reshape(-1).tolist(),
@@ -125,7 +122,6 @@ class TtBertEncoder(torch.nn.Module):
                 model_config["OP15_LAYERNORM_BETA_DTYPE"],
                 ttl.tensor.Layout.ROW_MAJOR,
             )
-            .to(ttl.tensor.Layout.TILE)
             .to(device, model_config["OP15_LAYERNORM_BETA_MEMCFG"])
         )
 
@@ -147,7 +143,7 @@ class TtBertEncoder(torch.nn.Module):
 
     def op12_add_layernorm(self, activation, mha_out):
         # profiler.start("__op12_add_layernorm")
-        mha_out_add_and_norm = ttl.tensor.add_layernorm_gamma_beta(
+        mha_out_add_and_norm = ttl.tensor.bert_large_add_layernorm(
             activation,
             mha_out,
             self.layer_norm_eps,
@@ -161,7 +157,7 @@ class TtBertEncoder(torch.nn.Module):
 
     def op15_add_layernorm(self, mha_out_add_and_norm, ffn_out):
         # profiler.start("__op15_add_layernorm")
-        ffn_out_add_and_norm = ttl.tensor.add_layernorm_gamma_beta(
+        ffn_out_add_and_norm = ttl.tensor.bert_large_add_layernorm(
             mha_out_add_and_norm,
             ffn_out,
             self.layer_norm_eps,

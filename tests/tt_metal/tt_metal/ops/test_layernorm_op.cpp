@@ -6,8 +6,7 @@
 #include <algorithm>
 #include <functional>
 #include <random>
-
-#include "tt_metal/llrt/tt_debug_print_server.hpp"
+#include <optional>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -40,11 +39,9 @@ int main(int argc, char **argv) {
             tt_metal::CreateDevice(arch, pci_express_slot);
         Host *host = GetHost();
         pass &= InitializeDevice(device);
-        tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}});
         std::array<uint32_t, 4> shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
         Tensor a = tt::numpy::random::random(shape).to(Layout::TILE).to(device);;
-        MemoryConfig mem_config{.interleaved=true};
-        Tensor c = layernorm(a, 1e-4f, mem_config);
+        Tensor c = layernorm(a, 1e-4f);
         Tensor d = c.to(host);
         Tensor host_a = a.to(host); // Move tensor a to host to validate
         pass &= CloseDevice(device);

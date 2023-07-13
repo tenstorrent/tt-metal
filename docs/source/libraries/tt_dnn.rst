@@ -426,17 +426,17 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.bert_large_post_softmax_bmm
 
+.. autofunction:: tt_lib.tensor.bert_large_layernorm
+
+.. autofunction:: tt_lib.tensor.bert_large_add_layernorm
+
 .. autofunction:: tt_lib.tensor.softmax_in_place
 
 .. autofunction:: tt_lib.tensor.scale_mask_softmax_in_place
 
 .. autofunction:: tt_lib.tensor.layernorm
 
-.. autofunction:: tt_lib.tensor.layernorm_gamma
-
-.. autofunction:: tt_lib.tensor.layernorm_gamma_beta
-
-.. autofunction:: tt_lib.tensor.add_layernorm_gamma_beta
+.. autofunction:: tt_lib.tensor.add_layernorm
 
 .. autofunction:: tt_lib.tensor.tilize_with_zero_padding
 

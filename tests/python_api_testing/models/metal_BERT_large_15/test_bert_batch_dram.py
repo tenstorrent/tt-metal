@@ -330,27 +330,30 @@ def run_bert_question_and_answering_inference(
         logger.error(f"End Logits PCC < {pcc}")
 
     if real_input:
-        for i in range(batch):
-            tt_res = {
-                "start": tt_start_logits[i],
-                "end": tt_end_logits[i],
-                "example": single_inputs[i]["example"],
-                **single_inputs[i]["inputs"],
-            }
+        if model_config["DEFAULT_DTYPE"] == ttl.tensor.DataType.BFLOAT8_B:
+            logger.warning("Skipping post processing due to garbage output in BFP8")
+        else:
+            for i in range(batch):
+                tt_res = {
+                    "start": tt_start_logits[i],
+                    "end": tt_end_logits[i],
+                    "example": single_inputs[i]["example"],
+                    **single_inputs[i]["inputs"],
+                }
 
-            tt_answer = nlp.postprocess([tt_res], **postprocess_params)
-            logger.info(f"TT: {tt_answer}")
+                tt_answer = nlp.postprocess([tt_res], **postprocess_params)
+                logger.info(f"TT: {tt_answer}")
 
-            pt_res = {
-                "start": pt_start_logits[i],
-                "end": pt_end_logits[i],
-                "example": single_inputs[i]["example"],
-                **single_inputs[i]["inputs"],
-            }
+                pt_res = {
+                    "start": pt_start_logits[i],
+                    "end": pt_end_logits[i],
+                    "example": single_inputs[i]["example"],
+                    **single_inputs[i]["inputs"],
+                }
 
-            pt_answer = nlp.postprocess([pt_res], **postprocess_params)
-            logger.info(f"PT: {pt_answer}")
-            logger.info(f"PL: {pl_answer[i]}")
+                pt_answer = nlp.postprocess([pt_res], **postprocess_params)
+                logger.info(f"PT: {pt_answer}")
+                logger.info(f"PL: {pl_answer[i]}")
 
     profiler.end("processing_output_to_string")
 

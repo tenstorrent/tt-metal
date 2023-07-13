@@ -99,23 +99,23 @@ def run_layernorm_tests(test_id, dtype, in0_mem_config, out_mem_config):
                 beta = torch.zeros(1, 1, 1, W)
             if test_id >= 1:
                 gamma = torch.rand(1, 1, 1, W) * 2 - 1
-                gammah32 = gamma.reshape([1, 1, -1, 32])
+                gammah32 = tilize_to_list(pad_weight(gamma))
                 ttgamma = tensor.Tensor(
-                    gammah32.reshape(-1).tolist(),
-                    gammah32.shape,
+                    gammah32,
+                    [1, 1, 32, W],
                     dtype,
-                    tensor.Layout.ROW_MAJOR,
+                    tensor.Layout.TILE,
                     dev,
                     in0_mem_config,
                 )
             if test_id >= 2:
                 beta = torch.rand(1, 1, 1, W) * 2.0 - 1.1
-                betah32 = beta.reshape([1, 1, -1, 32])
+                betah32 = tilize_to_list(pad_weight(beta))
                 ttbeta = tensor.Tensor(
-                    betah32.reshape(-1).tolist(),
-                    betah32.shape,
+                    betah32,
+                    [1, 1, 32, W],
                     dtype,
-                    tensor.Layout.ROW_MAJOR,
+                    tensor.Layout.TILE,
                     dev,
                     in0_mem_config,
                 )
@@ -145,18 +145,18 @@ def run_layernorm_tests(test_id, dtype, in0_mem_config, out_mem_config):
 
             if test_id == 0:
                 logger.info("Running LN_NOGB")
-                ttz = tensor.bert_large_layernorm(ttx, epsf, mem_config=out_mem_config)
+                ttz = tensor.layernorm(ttx, epsf, mem_config=out_mem_config)
             elif test_id == 1:
                 logger.info("Running LN_G")
-                ttz = tensor.bert_large_layernorm(ttx, epsf, ttgamma, mem_config=out_mem_config)
+                ttz = tensor.layernorm(ttx, epsf, ttgamma, mem_config=out_mem_config)
             elif test_id == 2:
                 logger.info("Running LN_GB")
-                ttz = tensor.bert_large_layernorm(
+                ttz = tensor.layernorm(
                     ttx, epsf, ttgamma, ttbeta, out_mem_config
                 )
             elif test_id == 3:
                 logger.info("Running add_LN_GB")
-                ttz = tensor.bert_large_add_layernorm(
+                ttz = tensor.add_layernorm(
                     ttx, tty, epsf, ttgamma, ttbeta, out_mem_config
                 )
             else:
@@ -215,11 +215,8 @@ import pytest
     (0, 1, 2, 3),
     ids=["LN", "LN_G", "LN_GB", "add_LN_GB"],
 )
-def test_bert_large_layernorm_test(
+def test_layernorm_test(
     test_id, dtype, in0_mem_config, out_mem_config, request
 ):
-    ttl.profiler.set_profiler_flag(False)
-    ttl.profiler.set_profiler_location(
-        f"tt_metal/tools/profiler/logs/BERT_large_fused_layernorm_{request.node.callspec.id}"
-    )
+
     run_layernorm_tests(test_id, dtype, in0_mem_config, out_mem_config)

@@ -75,11 +75,20 @@ def get_model_config(dtype, mem_config):
 
     # Override defaults for certain configs
     DRAM_MEMCFG = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
+
+    # Layernorm Gamma Beta must always be BFLOAT16
+    model_config.update(
+        {
+            "OP12_LAYERNORM_GAMMA_DTYPE": ttl.tensor.DataType.BFLOAT16,
+            "OP12_LAYERNORM_BETA_DTYPE": ttl.tensor.DataType.BFLOAT16,
+            "OP15_LAYERNORM_GAMMA_DTYPE": ttl.tensor.DataType.BFLOAT16,
+            "OP15_LAYERNORM_BETA_DTYPE": ttl.tensor.DataType.BFLOAT16,
+        }
+    )
     if (
         dtype == ttl.tensor.DataType.BFLOAT16
         and mem_config.buffer_type == ttl.tensor.BufferType.L1
     ):
-        # TODO: Bias, gamma, and beta don't all fit in L1 persistently.
         new_config_values = {
             # MHA
             "OP1_FUSED_QKV_MM_WEIGHTS_MEMCFG": DRAM_MEMCFG,
@@ -88,18 +97,12 @@ def get_model_config(dtype, mem_config):
             # MHA SELFOUT ATTENTION
             "OP11_SELFOUT_WEIGHTS_MEMCFG": DRAM_MEMCFG,
             "OP11_SELFOUT_BIAS_MEMCFG": DRAM_MEMCFG,
-            # MHA LAYERNORM
-            "OP12_LAYERNORM_GAMMA_MEMCFG": DRAM_MEMCFG,
-            "OP12_LAYERNORM_BETA_MEMCFG": DRAM_MEMCFG,
             # FFN
             "OP13_FF1_MM_WEIGHTS_MEMCFG": DRAM_MEMCFG,
             "OP13_FF1_MM_BIAS_MEMCFG": DRAM_MEMCFG,
             "OP13_FF1_MM_OUTPUT_MEMCFG": DRAM_MEMCFG,
             "OP14_FF2_MM_WEIGHTS_MEMCFG": DRAM_MEMCFG,
             "OP14_FF2_MM_BIAS_MEMCFG": DRAM_MEMCFG,
-            # FFN LAYERNORM
-            "OP15_LAYERNORM_GAMMA_MEMCFG": DRAM_MEMCFG,
-            "OP15_LAYERNORM_BETA_MEMCFG": DRAM_MEMCFG,
             # After all encoders
             "QA_LINEAR_WEIGHTS_MEMCFG": DRAM_MEMCFG,
             "QA_LINEAR_BIAS_MEMCFG": DRAM_MEMCFG,
@@ -109,7 +112,6 @@ def get_model_config(dtype, mem_config):
         dtype == ttl.tensor.DataType.BFLOAT8_B
         and mem_config.buffer_type == ttl.tensor.BufferType.L1
     ):
-        # TODO: Bias, gamma, and beta don't all fit in L1 persistently.
         new_config_values = {
             # MHA
             "OP1_FUSED_QKV_MM_WEIGHTS_MEMCFG": DRAM_MEMCFG,
@@ -117,17 +119,11 @@ def get_model_config(dtype, mem_config):
             # MHA SELFOUT ATTENTION
             "OP11_SELFOUT_WEIGHTS_MEMCFG": DRAM_MEMCFG,
             "OP11_SELFOUT_BIAS_MEMCFG": DRAM_MEMCFG,
-            # MHA LAYERNORM
-            "OP12_LAYERNORM_GAMMA_MEMCFG": DRAM_MEMCFG,
-            "OP12_LAYERNORM_BETA_MEMCFG": DRAM_MEMCFG,
             # FFN
             "OP13_FF1_MM_WEIGHTS_MEMCFG": DRAM_MEMCFG,
             "OP13_FF1_MM_BIAS_MEMCFG": DRAM_MEMCFG,
             "OP14_FF2_MM_WEIGHTS_MEMCFG": DRAM_MEMCFG,
             "OP14_FF2_MM_BIAS_MEMCFG": DRAM_MEMCFG,
-            # FFN LAYERNORM
-            "OP15_LAYERNORM_GAMMA_MEMCFG": DRAM_MEMCFG,
-            "OP15_LAYERNORM_BETA_MEMCFG": DRAM_MEMCFG,
             # After all encoders
             "QA_LINEAR_WEIGHTS_MEMCFG": DRAM_MEMCFG,
             "QA_LINEAR_BIAS_MEMCFG": DRAM_MEMCFG,

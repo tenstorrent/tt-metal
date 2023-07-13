@@ -2578,6 +2578,16 @@ void TensorModule(py::module &m_tensor) {
         Perform a bert_large_post_softmax_bmm batched matmul by reshaping tensor A to [9, 16, 384, 384] first, then returning ``[9, 16, 384, 384] x [9, 16, 384, 64]``.
     )doc");
 
+    // Custom BERT Layernorm
+    m_tensor.def("bert_large_layernorm", &bert_large_layernorm,
+        py::arg("input").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        "Performs a bert_large_layernorm operation on the last tensor dimension with optional fused with post-multiplication and addition via W-bcast.
+    )doc");
+    m_tensor.def("bert_large_add_layernorm", &bert_large_add_layernorm,
+        py::arg("a").noconvert(), py::arg("b").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        "Performs a bert_large_layernorm(a+b)*gamma + beta operation."
+    )doc");
+
     // softmax
     m_tensor.def("softmax_in_place", &softmax_in_place,
         "Performs a softmax operation on the last tensor dimension. Returns a reference to the input tensor modified in place.");
@@ -2586,19 +2596,11 @@ void TensorModule(py::module &m_tensor) {
 
     // layernorm
     m_tensor.def("layernorm", &layernorm,
-        py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
-        Performs a layernorm operation on the last tensor dimension.
+        py::arg("input").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        "Performs a layernorm operation on the last tensor dimension with optional fused with post-multiplication and addition via W-bcast.
     )doc");
-    m_tensor.def("layernorm_gamma", &layernorm_gamma,
-        py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
-        Performs a layernorm operation on the last tensor dimension fused with post-multiplication via W-bcast.
-    )doc");
-    m_tensor.def("layernorm_gamma_beta", &layernorm_gamma_beta,
-        py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
-        "Performs a layernorm operation on the last tensor dimension fused with post-multiplication and addition via W-bcast.
-    )doc");
-    m_tensor.def("add_layernorm_gamma_beta", &add_layernorm_gamma_beta,
-        py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+    m_tensor.def("add_layernorm", &add_layernorm,
+        py::arg("a").noconvert(), py::arg("b").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         "Performs a layernorm(a+b)*gamma + beta operation."
     )doc");
 

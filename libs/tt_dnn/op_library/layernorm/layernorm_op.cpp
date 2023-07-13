@@ -7,6 +7,8 @@
 
 #include "third_party/magic_enum/magic_enum.hpp"
 
+#include <fmt/ranges.h>
+
 #include <optional>
 
 using u32 = std::uint32_t;
@@ -32,27 +34,23 @@ operation::ProgramWithCallbacks layernorm_(
     const std::optional<const Tensor> gamma,
     const std::optional<const Tensor> beta,
     Tensor& output,
-    float eps
+    float eps,
+    bool rm_gb = false
 ) {
 
     const auto shape = a.shape();
     u32 W = shape[3], H = shape[2], NC = shape[1]*shape[0];
     u32 HW = H*W;
-    TT_ASSERT(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
-    TT_ASSERT(H > 0 && W > 0 && NC > 0);
 
     // Kernels are configured to support BFLOAT8_B, but bad pcc so we need mixed precision support in compute
-    TT_ASSERT(a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B);
     const auto& a_dtype = a.dtype();
-    TT_ASSERT(not b.has_value() || b.value().dtype() == a_dtype);
-    TT_ASSERT(not gamma.has_value() || gamma.value().dtype() == a_dtype);
-    TT_ASSERT(not beta.has_value() || beta.value().dtype() == a_dtype);
+
     u32 Wt = W/TILE_WIDTH;
     u32 Ht = H/TILE_HEIGHT;
 
     uint32_t num_tensor_tiles = NC*H*W / TILE_HW;
 
-    TT_ASSERT(a.device() != nullptr, "Operand to transpose_wh op needs to be on device!");
+    TT_ASSERT(a.device() != nullptr, "Operand to layernorm op needs to be on device!");
     uint32_t block_size = find_max_divisor(Wt, 8);
 
     // TODO: CHANGE TO FUNCTION CONVERSION
@@ -62,19 +60,22 @@ operation::ProgramWithCallbacks layernorm_(
     }
 
     uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
+    uint32_t bfloat16_tile_size = tt_metal::TileSize(tt::DataFormat::Float16_b);
 
     auto a_addr = a.buffer()->address();
     auto b_dram_addr = b ? b.value().buffer()->address() : 0;
     auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
 
-    TT_ASSERT(not b.has_value() || a.shape() == b.value().shape());
-    TT_ASSERT(a.volume() % TILE_HW == 0);
     uint32_t num_tiles = a.volume()/TILE_HW;
     uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().volume()/TILE_HW : 0;
     uint32_t num_beta_tiles = beta.has_value() ? beta.value().volume()/TILE_HW : 0;
-    TT_ASSERT(num_gamma_tiles == Wt || num_gamma_tiles == 0);
-    TT_ASSERT(num_beta_tiles == Wt || num_beta_tiles == 0);
+
+    // For bert, tensor is packed as RM with width 32
+    if (rm_gb) {
+        num_gamma_tiles = gamma.has_value() ? gamma.value().volume()/TILE_WIDTH : 0;
+        num_beta_tiles = beta.has_value() ? beta.value().volume()/TILE_WIDTH : 0;
+    }
 
 
     ////////////////////////////////////////////////////////////////////////////
@@ -107,7 +108,6 @@ operation::ProgramWithCallbacks layernorm_(
     }
     uint32_t im5_t  =  2*block_size; // for buffering to/from *gamma/+beta
     uint32_t im4_t  =  8; // 8 just in case, 4 would prob suffice
-    uint32_t in4_t  =  2; // ones column mask
     uint32_t im1_t  =  2;
     uint32_t in2_t  =  2; // scaler for reduce coming from reader
     uint32_t in3_t  =  2; // epsilon coming from reader
@@ -136,9 +136,6 @@ operation::ProgramWithCallbacks layernorm_(
     auto wtpc = ts.get_tpc(); // Wt*tpc per core
     TT_ASSERT(NCHt % wtpc == 0);
 
-    //cout << "block_size=" << block_size << endl;
-    //cout << "WTPC=" << wtpc << "Wt=" << Wt << " num_cores=" << num_cores << endl;
-
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -161,28 +158,73 @@ operation::ProgramWithCallbacks layernorm_(
             .start={0, num_full_rows}, .end={last_row_cores - 1, num_full_rows}
         });
     }
+
+    std::vector<uint32_t> reader_compile_time_args = {
+        // interleaved accessor args
+        (std::uint32_t) static_cast<uint32_t>(cb_data_format),
+        (std::uint32_t) is_dram(a),
+        (std::uint32_t) is_dram(b),
+        (std::uint32_t) is_dram(gamma),
+        (std::uint32_t) is_dram(beta),
+        (std::uint32_t) block_size
+    };
+    if (rm_gb) {
+        if (gamma.has_value()) {
+            auto gamma_stick_size = gamma.value().shape()[3] * gamma.value().element_size();
+            bool gamma_stick_size_is_power_of_two = is_power_of_two(gamma_stick_size);
+            reader_compile_time_args.push_back((std::uint32_t) gamma_stick_size_is_power_of_two);
+            if (gamma_stick_size_is_power_of_two) {
+                uint32_t gamma_log2_stick_size = gamma_stick_size_is_power_of_two ? (std::uint32_t)log2(gamma_stick_size) : 0;
+                reader_compile_time_args.push_back((std::uint32_t) gamma_log2_stick_size);
+            } else {
+                reader_compile_time_args.push_back(gamma_stick_size);
+            }
+        } else if (beta.has_value()) {
+            auto beta_stick_size = beta.value().shape()[3] * beta.value().element_size();
+            bool beta_stick_size_is_power_of_two = is_power_of_two(beta_stick_size);
+            reader_compile_time_args.push_back((std::uint32_t) beta_stick_size_is_power_of_two);
+            if (beta_stick_size_is_power_of_two) {
+                uint32_t beta_log2_stick_size = beta_stick_size_is_power_of_two ? (std::uint32_t)log2(beta_stick_size) : 0;
+                reader_compile_time_args.push_back((std::uint32_t) beta_log2_stick_size);
+            } else {
+                reader_compile_time_args.push_back(beta_stick_size);
+            }
+        } else {
+            reader_compile_time_args.push_back(0);
+            reader_compile_time_args.push_back(0);
+        }
+    }
+
+    std::vector<uint32_t> writer_compile_time_args = {
+        // interleaved accessor args
+        (std::uint32_t) static_cast<uint32_t>(cb_data_format),
+        (std::uint32_t) is_dram(output),
+        (std::uint32_t) block_size
+    };
+
+
     CoreRangeSet all_cores(all_cores_set);
 
     bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
     auto reader_kernels = CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_unary_8bank_ln.cpp",
+        rm_gb ? "tt_metal/kernels/dataflow/reader_unary_interleaved_ln_rm_gb.cpp" : "tt_metal/kernels/dataflow/reader_unary_interleaved_ln.cpp",
         all_cores,
-        {tile_dtype_is_bfloat16},
+        reader_compile_time_args,
         DataMovementProcessor::RISCV_1,
         NOC::RISCV_1_default
     );
 
     auto writer_kernels = CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_8bank_ln.cpp",
+        "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id_blocked.cpp",
         all_cores,
-        {tile_dtype_is_bfloat16},
+        writer_compile_time_args,
         DataMovementProcessor::RISCV_0,
         NOC::RISCV_0_default
     );
 
-    vector<uint32_t> compute_args = { wtpc, Wt, num_gamma_tiles>0, num_beta_tiles>0 };
+    vector<uint32_t> compute_args = { wtpc, Wt, block_size, gamma.has_value(), beta.has_value() };
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = true;
@@ -196,36 +238,29 @@ operation::ProgramWithCallbacks layernorm_(
         math_approx_mode
     );
 
-    // Add defines
-    eltwise_binary_kernels->add_define("BLOCK_SIZE", block_size);
-    reader_kernels->add_define("BLOCK_SIZE", block_size);
-    reader_kernels->add_define("A_DRAM", is_dram(a) ? "true" : "false");
-
-    reader_kernels->add_define("B_DRAM", is_dram(b) ? "true" : "false");
-    reader_kernels->add_define("GAMMA_DRAM", is_dram(gamma) ? "true" : "false");
-    reader_kernels->add_define("BETA_DRAM", is_dram(beta) ? "true" : "false");
-
-    writer_kernels->add_define("BLOCK_SIZE", block_size);
-    writer_kernels->add_define("OUTPUT_DRAM", is_dram(output) ? "true" : "false");
     if (b) {
         reader_kernels->add_define("FUSE_PRE_ADD", "1");
         eltwise_binary_kernels->add_define("FUSE_PRE_ADD", "1");
     }
-
+    if (gamma.has_value()) {
+        reader_kernels->add_define("FUSE_GAMMA", "1");
+    }
+    if (beta.has_value()) {
+        reader_kernels->add_define("FUSE_BETA", "1");
+    }
     // Create circular buffers
     CreateCircularBuffers( program, CB::c_in0,       all_cores, in0_t,  in0_t*single_tile_size,  cb_data_format );
     CreateCircularBuffers( program, CB::c_out0,      all_cores, out0_t, out0_t*single_tile_size, cb_data_format );
     CreateCircularBuffers( program, CB::c_intermed1, all_cores, im1_t,  im1_t*single_tile_size,  cb_data_format );
-    CreateCircularBuffers( program, CB::c_in2,       all_cores, in2_t,  in2_t*single_tile_size,  cb_data_format );
-    CreateCircularBuffers( program, CB::c_in3,       all_cores, in3_t,  in3_t*single_tile_size,  cb_data_format );
-    CreateCircularBuffers( program, CB::c_in4,       all_cores, in4_t,  in4_t*single_tile_size,  cb_data_format );
+    CreateCircularBuffers( program, CB::c_in2,       all_cores, in2_t,  in2_t*bfloat16_tile_size,  DataFormat::Float16_b );
+    CreateCircularBuffers( program, CB::c_in3,       all_cores, in3_t,  in3_t*bfloat16_tile_size,  DataFormat::Float16_b );
     CreateCircularBuffers( program, CB::c_intermed2, all_cores, im2_t,  im2_t*single_tile_size,  cb_data_format );
     CreateCircularBuffers( program, CB::c_intermed0, all_cores, im0_t,  im0_t*single_tile_size,  cb_data_format );
     CreateCircularBuffers( program, CB::c_intermed3, all_cores, im3_t,  im3_t*single_tile_size,  cb_data_format );
     CreateCircularBuffers( program, CB::c_intermed4, all_cores, im4_t,  im4_t*single_tile_size,  cb_data_format );
     CreateCircularBuffers( program, CB::c_intermed5, all_cores, im5_t,  im5_t*single_tile_size,  cb_data_format );
-    CreateCircularBuffers( program, CB::c_in5,       all_cores, in5_t,  in5_t*single_tile_size,  cb_data_format );
-    CreateCircularBuffers( program, CB::c_in6,       all_cores, in6_t,  in6_t*single_tile_size,  cb_data_format );
+    CreateCircularBuffers( program, CB::c_in5,       all_cores, in5_t,  in5_t*(rm_gb ? bfloat16_tile_size : single_tile_size),  rm_gb ? DataFormat::Float16_b : cb_data_format );
+    CreateCircularBuffers( program, CB::c_in6,       all_cores, in6_t,  in6_t*(rm_gb ? bfloat16_tile_size : single_tile_size),  rm_gb ? DataFormat::Float16_b : cb_data_format );
     if (b) {
         // x = a+b in this notation
         // result = ln(x)*gamma + beta
@@ -241,14 +276,12 @@ operation::ProgramWithCallbacks layernorm_(
     for (uint32_t icore = 0; icore < num_cores; icore++) {
         auto core = grid.wrap_core(icore);
 
-        uint32_t gamma_tiles = gamma ? gamma.value().volume() / TILE_HW : 0;
-        uint32_t beta_tiles = beta ? beta.value().volume() / TILE_HW : 0;
         uint32_t tile_offset = wtpc*Wt*icore;
         SetRuntimeArgs(reader_kernels, core,
-            { a_addr, wtpc, Wt, wtpc*Wt, tile_offset, winv.u, e.u, // 0-6
-            num_gamma_tiles, gamma_dram_addr, num_beta_tiles, beta_dram_addr, b_dram_addr } // 7-11
+            { a_addr, wtpc, Wt, tile_offset, winv.u, e.u, // 0-5
+            gamma_dram_addr, beta_dram_addr, b_dram_addr } // 6-8
         );
-        SetRuntimeArgs(writer_kernels, core, { dst_addr, 0, 0, wtpc*Wt, tile_offset } );
+        SetRuntimeArgs(writer_kernels, core, { dst_addr, wtpc*Wt, tile_offset } );
     }
 
     auto override_runtime_args_callback = [
@@ -276,13 +309,13 @@ operation::ProgramWithCallbacks layernorm_(
                 auto runtime_args = GetRuntimeArgs(reader_kernel, core);
                 runtime_args[0] = src_a_dram_buffer->address();
                 if (src_b_dram_buffer != nullptr) {
-                    runtime_args[11] = src_b_dram_buffer->address();
+                    runtime_args[8] = src_b_dram_buffer->address();
                 }
                 if (gamma_dram_buffer != nullptr) {
-                    runtime_args[8] = gamma_dram_buffer->address();
+                    runtime_args[6] = gamma_dram_buffer->address();
                 }
                 if (beta_dram_buffer != nullptr) {
-                    runtime_args[10] = beta_dram_buffer->address();
+                    runtime_args[7] = beta_dram_buffer->address();
                 }
                 SetRuntimeArgs(reader_kernel, core, runtime_args);
             }
@@ -298,24 +331,51 @@ operation::ProgramWithCallbacks layernorm_(
     return {std::move(program), override_runtime_args_callback};
 }
 
-void ResidualLayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
+void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     TT_ASSERT(input_tensors.size() == 1 and optional_input_tensors.size() <= 3, "Must have between 1 to 4 input tensors");
+    auto& a = input_tensors.at(0);
+    const auto& b = optional_input_tensors.at(0);
+    const auto& gamma = optional_input_tensors.at(1);
+    const auto& beta = optional_input_tensors.at(2);
+    TT_ASSERT(a.layout() == Layout::TILE);
+    TT_ASSERT(a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B);
+
+    if (b.has_value()) {
+        TT_ASSERT(b.value().layout() == Layout::TILE);
+        TT_ASSERT(a.shape() == b.value().shape());
+        TT_ASSERT(b.value().dtype() == a.dtype());
+    }
+    if (gamma.has_value()) {
+        TT_ASSERT(gamma.value().layout() == Layout::TILE);
+        TT_ASSERT(a.shape()[3] == gamma.value().shape()[3]);
+        TT_ASSERT(gamma.value().shape()[2] == TILE_HEIGHT);
+        TT_ASSERT(gamma.value().dtype() == a.dtype());
+    }
+    if (beta.has_value()) {
+        TT_ASSERT(beta.value().layout() == Layout::TILE);
+        TT_ASSERT(a.shape()[3] == beta.value().shape()[3]);
+        TT_ASSERT(beta.value().shape()[2] == TILE_HEIGHT);
+        TT_ASSERT(beta.value().dtype() == a.dtype());
+    }
+
 }
 
-std::vector<Shape> ResidualLayerNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);    return {input_tensor.shape()};
+std::vector<Shape> LayerNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    return {input_tensor.shape()};
 }
 
-std::vector<Tensor> ResidualLayerNorm::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
+std::vector<Tensor> LayerNorm::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE, this->output_mem_config);
 }
 
-operation::ProgramWithCallbacks ResidualLayerNorm::create_program(
+operation::ProgramWithCallbacks LayerNorm::create_program(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor> &output_tensors
 ) const {
-    auto& a = input_tensors.at(0);    const auto& b = optional_input_tensors.at(0);
+    const auto& a = input_tensors.at(0);
+    const auto& b = optional_input_tensors.at(0);
     const auto& gamma = optional_input_tensors.at(1);
     const auto& beta = optional_input_tensors.at(2);
     auto& output_tensor = output_tensors.at(0);
@@ -323,23 +383,107 @@ operation::ProgramWithCallbacks ResidualLayerNorm::create_program(
 
 }
 
-operation::Hash ResidualLayerNorm::compute_program_hash(
+operation::Hash LayerNorm::compute_program_hash(
     const std::vector<Tensor> &input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors
 ) const {
-    const auto& input_tensor = input_tensors.at(0);    const auto& b = optional_input_tensors.at(0);
+    const auto& input_tensor = input_tensors.at(0);
+    const auto& b = optional_input_tensors.at(0);
     const auto& gamma = optional_input_tensors.at(1);
     const auto& beta = optional_input_tensors.at(2);
 
     return fmt::format(
-        "residual_layer_norm_{}_{}_{}_{}_{}_{}",
-        this->eps,
-        operation::hash_memory_config(this->output_mem_config),
+        "{}_{}_{}_{}_{}",
+        *this,
         operation::hash_tensor(input_tensor),
         b.has_value() ? operation::hash_tensor(b.value()) : "nullopt",
         gamma.has_value() ? operation::hash_tensor(gamma.value()) : "nullopt",
         beta.has_value() ? operation::hash_tensor(beta.value()) : "nullopt"
     );
+}
+
+std::ostream& operator<<(std::ostream& os, const LayerNorm& op) {
+    os << boost::core::demangle(typeid(op).name());
+    os << "{";
+    os << fmt::format("eps={}", op.eps);
+    os << fmt::format(",output_mem_config={}", operation::hash_memory_config(op.output_mem_config));
+    os << "}";
+    return os;
+}
+
+
+void BertLargeLayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
+    TT_ASSERT(input_tensors.size() == 1 and optional_input_tensors.size() <= 3, "Must have between 1 to 4 input tensors");
+    auto& a = input_tensors.at(0);
+    const auto& b = optional_input_tensors.at(0);
+    const auto& gamma = optional_input_tensors.at(1);
+    const auto& beta = optional_input_tensors.at(2);
+    TT_ASSERT(a.layout() == Layout::TILE);
+    if (b.has_value()) {
+        TT_ASSERT(b.value().layout() == Layout::TILE);
+        TT_ASSERT(a.shape() == b.value().shape());
+    }
+    if (gamma.has_value()) {
+        TT_ASSERT(gamma.value().layout() == Layout::ROW_MAJOR);
+        TT_ASSERT((gamma.value().shape()[3] == TILE_WIDTH && gamma.value().volume() / TILE_WIDTH == a.shape()[3] / TILE_WIDTH));
+    }
+    if (beta.has_value()) {
+        TT_ASSERT(beta.value().layout() == Layout::ROW_MAJOR);
+        TT_ASSERT((beta.value().shape()[3] == TILE_WIDTH && beta.value().volume() / TILE_WIDTH == a.shape()[3] / TILE_WIDTH));
+    }
+
+}
+
+std::vector<Shape> BertLargeLayerNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    return {input_tensor.shape()};
+}
+
+std::vector<Tensor> BertLargeLayerNorm::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
+    return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE, this->output_mem_config);
+}
+
+
+operation::ProgramWithCallbacks BertLargeLayerNorm::create_program(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor> &output_tensors
+) const {
+    const auto& a = input_tensors.at(0);
+    const auto& b = optional_input_tensors.at(0);
+    const auto& gamma = optional_input_tensors.at(1);
+    const auto& beta = optional_input_tensors.at(2);
+    auto& output_tensor = output_tensors.at(0);
+    return layernorm_(a, b, gamma, beta, output_tensor, this->eps, true);
+
+}
+
+operation::Hash BertLargeLayerNorm::compute_program_hash(
+    const std::vector<Tensor> &input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors
+) const {
+    const auto& input_tensor = input_tensors.at(0);
+    const auto& b = optional_input_tensors.at(0);
+    const auto& gamma = optional_input_tensors.at(1);
+    const auto& beta = optional_input_tensors.at(2);
+
+    return fmt::format(
+        "{}_{}_{}_{}_{}",
+        *this,
+        operation::hash_tensor(input_tensor),
+        b.has_value() ? operation::hash_tensor(b.value()) : "nullopt",
+        gamma.has_value() ? operation::hash_tensor(gamma.value()) : "nullopt",
+        beta.has_value() ? operation::hash_tensor(beta.value()) : "nullopt"
+    );
+}
+
+std::ostream& operator<<(std::ostream& os, const BertLargeLayerNorm& op) {
+    os << boost::core::demangle(typeid(op).name());
+    os << "{";
+    os << fmt::format("eps={}", op.eps);
+    os << fmt::format(",output_mem_config={}", operation::hash_memory_config(op.output_mem_config));
+    os << "}";
+    return os;
 }
 
 }  // namespace ll_buda

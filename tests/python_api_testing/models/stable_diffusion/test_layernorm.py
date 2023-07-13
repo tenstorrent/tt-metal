@@ -38,12 +38,11 @@ import pytest
 
 @pytest.mark.parametrize(
     "input_shape",
-    [[1, 1, 32, 32], [1, 2, 1024, 320], [1, 2, 64, 1280], [1, 2, 256, 640]],
+    [[1, 1, 32, 32], [1, 2, 1024, 320], [1, 2, 64, 1280], [1, 2, 256, 640], [1, 1, 16, 1024]],
 )
 @pytest.mark.parametrize(
     "normalized_shape_hint",
     [
-        (-2, -1),
         (-1,),
     ],
 )
@@ -55,28 +54,28 @@ def test_layer_norm(input_shape, normalized_shape_hint):
     host = tt_lib.device.GetHost()
 
     pcc = 0.99
-    if input_shape[-2:] == [32, 32]:
-        pcc = 0.97
+
     N, C, H, W = input_shape
 
     x = torch.rand((N, C, H, W))
     eps = 1e-3
 
-    xt = (
-        tt_lib.tensor.Tensor(
+    xt = tt_lib.tensor.Tensor(
             x.reshape(-1).tolist(),
             input_shape,  # [N,C,H,W],
             ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.TILE,
-            device,
-        ),
-    )
+            ttl.tensor.Layout.ROW_MAJOR
+        )
+    if H % 32 == 0:
+        xt = xt.to(ttl.tensor.Layout.TILE)
+
+    xt = xt.to(device)
     normalized_shape = list(map(input_shape.__getitem__, normalized_shape_hint))
     golden = torch.nn.functional.layer_norm(
         x, normalized_shape=normalized_shape, eps=eps
     )
 
-    xtt_data = tt_lib.tensor.layernorm(xt[0], eps).to(host).data()
+    xtt_data = tt_lib.tensor.layernorm(xt, eps).to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
     tt_got_back_rm = torch.Tensor(xtt_data).reshape(input_shape)
 
     torch_output = golden

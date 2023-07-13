@@ -140,12 +140,12 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
         block_size
     };
     auto reader_kernels = CreateDataMovementKernel(
-        program, "tt_metal/kernels/dataflow/reader_unary_8bank_sm.cpp", all_cores, reader_compile_time_args,
+        program, "tt_metal/kernels/dataflow/reader_unary_interleaved_sm.cpp", all_cores, reader_compile_time_args,
         DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
         //DataMovementProcessor::RISCV_1, core.x < 6 ? NOC::RISCV_1_default : NOC::RISCV_0_default);
 
     auto writer_kernels = CreateDataMovementKernel(
-        program, "tt_metal/kernels/dataflow/writer_unary_8bank_sm.cpp", all_cores, writer_compile_time_args,
+        program, "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id_blocked.cpp", all_cores, writer_compile_time_args,
         DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
         //DataMovementProcessor::RISCV_0, core.x < 6 ? NOC::RISCV_0_default : NOC::RISCV_1_default);
 
@@ -184,9 +184,6 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
         auto core = grid.wrap_core(icore);
 
         uint32_t tile_offset = wtpc*Wt*icore;
-        //cout << "WTPC=" << wtpc << endl;
-        //cout << "Wt=" << Wt << endl;
-        //cout << "tile_offset=" << tile_offset << endl;
         union { float f; uint32_t u; } s; s.f = scale; // scale for fused scale-mask-softmax
         // always in-place
         //                                                              0  1    2       3            4   5       6          7           8
