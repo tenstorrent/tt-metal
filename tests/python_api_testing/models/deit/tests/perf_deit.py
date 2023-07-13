@@ -13,7 +13,7 @@ from transformers import AutoImageProcessor, DeiTForImageClassificationWithTeach
 import torch
 from datasets import load_dataset
 from loguru import logger
-
+import pytest
 import tt_lib
 from utility_functions_new import torch_to_tt_tensor_rm, tt_to_torch_tensor, profiler
 from utility_functions_new import disable_compile_cache, enable_compile_cache
@@ -22,7 +22,15 @@ from tt.deit_for_image_classification_with_teacher import deit_for_image_classif
 
 BATCH_SIZE = 1
 
-def test_perf(use_program_cache):
+@pytest.mark.parametrize(
+    "expected_inference_time, expected_compile_time",
+    (
+        (0.24,
+            9,
+        ),
+    ),
+)
+def test_perf(use_program_cache, expected_inference_time, expected_compile_time):
     disable_compile_cache()
     first_key = "first_iter"
     second_key = "second_iter"
@@ -54,16 +62,26 @@ def test_perf(use_program_cache):
 
         profiler.start(first_key)
         tt_output = tt_model(tt_inputs)[0]
+        tt_lib.device.Synchronize()
         profiler.end(first_key)
 
         enable_compile_cache()
 
         profiler.start(second_key)
         tt_output = tt_model(tt_inputs)[0]
+        tt_lib.device.Synchronize()
         profiler.end(second_key)
 
     first_iter_time = profiler.get(first_key)
     second_iter_time = profiler.get(second_key)
+    tt_lib.device.CloseDevice(device)
+
     cpu_time = profiler.get(cpu_key)
+    compile_time = first_iter_time - second_iter_time
 
     prep_report("deit", BATCH_SIZE, first_iter_time, second_iter_time, comments, cpu_time)
+    logger.info(f"deit {comments} inference time: {second_iter_time}")
+    logger.info(f"deit {comments} compile time: {compile_time}")
+
+    assert second_iter_time < expected_inference_time, f"deit {comments} is too slow"
+    assert compile_time < expected_compile_time, "deit compile time is too slow"

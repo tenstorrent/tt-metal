@@ -12,6 +12,7 @@ from transformers import AutoImageProcessor, ViTForImageClassification
 import torch
 from datasets import load_dataset
 from loguru import logger
+import pytest
 
 import tt_lib
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
@@ -22,8 +23,15 @@ from models.vit.tt.modeling_vit import vit_for_image_classification
 
 BATCH_SIZE = 1
 
-
-def test_perf(use_program_cache):
+@pytest.mark.parametrize(
+    "expected_inference_time, expected_compile_time",
+    (
+        (11,
+        14,
+        ),
+    ),
+)
+def test_perf(use_program_cache, expected_inference_time, expected_compile_time):
     profiler = Profiler()
     disable_compile_cache()
     first_key = "first_iter"
@@ -53,6 +61,7 @@ def test_perf(use_program_cache):
     with torch.no_grad():
         profiler.start(cpu_key)
         logits = HF_model(**inputs).logits
+        tt_lib.device.Synchronize()
         profiler.end(cpu_key)
 
         profiler.start(first_key)
@@ -63,12 +72,18 @@ def test_perf(use_program_cache):
 
         profiler.start(second_key)
         tt_output = tt_model(tt_inputs)[0]
+        tt_lib.device.Synchronize()
         profiler.end(second_key)
 
     first_iter_time = profiler.get(first_key)
     second_iter_time = profiler.get(second_key)
     cpu_time = profiler.get(cpu_key)
-
+    tt_lib.device.CloseDevice(device)
     prep_report(
         "vit", BATCH_SIZE, first_iter_time, second_iter_time, "base-patch16", cpu_time
     )
+    compile_time = first_iter_time - second_iter_time
+    logger.info(f"vit inference time: {second_iter_time}")
+    logger.info(f"vit compile time: {compile_time}")
+    assert second_iter_time < expected_inference_time, "vit is too slow"
+    assert compile_time < expected_compile_time, "vit compile time is too slow"

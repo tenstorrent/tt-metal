@@ -16,7 +16,7 @@ from torchvision import models
 from transformers import AutoImageProcessor
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 from tests.python_api_testing.models.conftest import model_location_generator_
-
+import pytest
 import tt_lib as ttl
 from utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 from test_bert_batch_dram import TtBertBatchDram
@@ -50,11 +50,15 @@ model_location_generator = model_location_generator_
 
 
 @pytest.mark.parametrize(
-    "expected_inference_time",
-    ([0.13]),
+    "expected_inference_time, expected_compile_time",
+    (
+        (0.21,
+            9,
+        ),
+    ),
 )
-def test_perf(use_program_cache, expected_inference_time):
-    model_config = get_model_config(model_config_str)
+def test_perf(use_program_cache, expected_inference_time, expected_compile_time):
+    model_config = get_model_config(dtype, mem_config)
 
     disable_compile_cache()
     first_key = "first_iter"
@@ -115,9 +119,13 @@ def test_perf(use_program_cache, expected_inference_time):
     first_iter_time = profiler.get(first_key)
     second_iter_time = profiler.get(second_key)
     cpu_time = profiler.get(cpu_key)
+    ttl.device.CloseDevice(device)
 
     prep_report(
         "bert15", BATCH_SIZE, first_iter_time, second_iter_time, comments, cpu_time
     )
+    compile_time = first_iter_time - second_iter_time
     logger.info(f"bert15 inference time: {second_iter_time}")
+    logger.info(f"bert15 compile time: {compile_time}")
     assert second_iter_time < expected_inference_time, "bert15 is too slow"
+    assert compile_time < expected_compile_time, "bert15 compile time is too slow"
