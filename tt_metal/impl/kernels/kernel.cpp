@@ -161,15 +161,15 @@ RISCV Kernel::processor() const {
     return RISCV::BRISC;
 }
 
-void init_test_mailbox(Device *device, const CoreCoord &core, uint64_t test_mailbox_addr) {
-    std::vector<uint32_t> test_mailbox_init_val = {INIT_VALUE};
+void init_run_mailbox(Device *device, const CoreCoord &core, uint64_t run_mailbox_addr) {
+    std::vector<uint32_t> run_mailbox_init_val = {INIT_VALUE};
     tt::llrt::write_hex_vec_to_core(
-        device->cluster(), device->pcie_slot(), core, test_mailbox_init_val, test_mailbox_addr);
+        device->cluster(), device->pcie_slot(), core, run_mailbox_init_val, run_mailbox_addr);
 
-    std::vector<uint32_t> test_mailbox_init_val_check;
-    test_mailbox_init_val_check = tt::llrt::read_hex_vec_from_core(
-        device->cluster(), device->pcie_slot(), core, test_mailbox_addr, sizeof(uint32_t));  // read a single uint32_t
-    TT_ASSERT(test_mailbox_init_val_check[0] == INIT_VALUE);
+    std::vector<uint32_t> run_mailbox_init_val_check;
+    run_mailbox_init_val_check = tt::llrt::read_hex_vec_from_core(
+        device->cluster(), device->pcie_slot(), core, run_mailbox_addr, sizeof(uint32_t));  // read a single uint32_t
+    TT_ASSERT(run_mailbox_init_val_check[0] == INIT_VALUE);
 }
 
 bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core) const {
@@ -183,16 +183,15 @@ bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core
     ll_api::memory binary_mem = this->binaries().at(0);
 
     int riscv_id;
-    uint64_t test_mailbox_addr;
     switch (processor_) {
         case (DataMovementProcessor::RISCV_0): {
             riscv_id = 0;
-            test_mailbox_addr = TEST_MAILBOX_ADDR;
+            init_run_mailbox(device, worker_core, RUN_MAILBOX_ADDR);
         }
         break;
         case (DataMovementProcessor::RISCV_1): {
             riscv_id = 1;
-            test_mailbox_addr = TEST_MAILBOX_ADDR_NCRISC;
+            tt::llrt::enable_ncrisc(cluster, pcie_slot, worker_core);
         }
         break;
         default:
@@ -200,10 +199,6 @@ bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core
     }
 
     pass &= tt::llrt::test_load_write_read_risc_binary(cluster, binary_mem, pcie_slot, worker_core, riscv_id);
-    init_test_mailbox(device, worker_core, test_mailbox_addr);
-    if (processor_ == DataMovementProcessor::RISCV_1) {
-        tt::llrt::enable_ncrisc(cluster, pcie_slot, worker_core);
-    }
     return pass;
 }
 
@@ -224,7 +219,6 @@ bool ComputeKernel::configure(Device *device, const CoreCoord &logical_core) con
             pcie_slot,
             worker_core,
             trisc_id);
-        init_test_mailbox(device, worker_core, trisc_mailbox_addresses[trisc_id]);
     }
     tt::llrt::enable_triscs(cluster, pcie_slot, worker_core);
 

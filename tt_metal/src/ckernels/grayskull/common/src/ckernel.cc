@@ -41,7 +41,7 @@ const uint8_t thread_id = COMPILE_FOR_TRISC;
 
 volatile uint local_mem_barrier __attribute__((used));
 
-volatile uint * const trisc_l1_mailbox = reinterpret_cast<volatile uint *>(MEM_TEST_MAILBOX_ADDRESS + PREPROCESSOR_EXPAND(MEM_MAILBOX_TRISC, COMPILE_FOR_TRISC, _OFFSET));
+volatile uint * const trisc_run_mailbox = reinterpret_cast<volatile uint *>(MEM_RUN_MAILBOX_ADDRESS + PREPROCESSOR_EXPAND(MEM_MAILBOX_TRISC, COMPILE_FOR_TRISC, _OFFSET));
 
 inline void allocate_debug_mailbox_buffer() {
    debug_mailbox_base = reinterpret_cast<volatile uint16_t *>(MEM_DEBUG_MAILBOX_ADDRESS + COMPILE_FOR_TRISC * MEM_DEBUG_MAILBOX_SIZE);
@@ -85,7 +85,7 @@ int main(int argc, char *argv[])
 
     reset_cfg_state_id();
 
-    trisc_l1_mailbox_write(RESET_VAL);
+    trisc_run_mailbox_write(RESET_VAL);
 
     allocate_debug_mailbox_buffer();
     allocate_debug_buffer();
@@ -103,7 +103,7 @@ int main(int argc, char *argv[])
 
     // Signal completion
     tensix_sync();
-    trisc_l1_mailbox_write(KERNEL_COMPLETE);
+    trisc_run_mailbox_write(KERNEL_COMPLETE);
 
 #if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
     kernel_profiler::mark_time(CC_MAIN_END);

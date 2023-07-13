@@ -56,7 +56,7 @@ extern uint *regmem;
 extern volatile uint * const instrn_buffer;
 extern volatile uint *mailbox_base[4];
 extern volatile uint *dbg_event_scratch;
-extern volatile uint * const trisc_l1_mailbox;
+extern volatile uint * const trisc_run_mailbox;
 extern volatile uint local_mem_barrier;
 extern volatile uint8_t *debug_buffer;
 
@@ -345,14 +345,14 @@ inline bool mailbox_not_empty_full(const uint8_t thread)
     return mailbox_base[thread][1] > 0;
 }
 
-inline void trisc_l1_mailbox_write(const uint data)
+inline void trisc_run_mailbox_write(const uint data)
 {
-    trisc_l1_mailbox[0] = data;
+    trisc_run_mailbox[0] = data;
 }
 
-inline uint trisc_l1_mailbox_read()
+inline uint trisc_run_mailbox_read()
 {
-    return trisc_l1_mailbox[0];
+    return trisc_run_mailbox[0];
 }
 
 template <class T>

@@ -9,7 +9,7 @@
 #include "tools/profiler/kernel_profiler.hpp"
 
 volatile uint32_t local_mem_barrier __attribute__((used));
-volatile uint32_t* test_mailbox_ptr = (volatile uint32_t*)(MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_NCRISC_OFFSET);
+volatile uint32_t* const run_mailbox_address = (volatile uint32_t*)(MEM_RUN_MAILBOX_ADDRESS + MEM_MAILBOX_NCRISC_OFFSET);
 
 volatile uint16_t *debug_mailbox_base = nullptr;
 uint8_t mailbox_index = 0;
@@ -76,7 +76,7 @@ int main(int argc, char *argv[]) {
   kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
 #endif
 
-  test_mailbox_ptr[0] = 0x1;
+  *run_mailbox_address = 0x1;
 
 #if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
   kernel_profiler::mark_time(CC_MAIN_END);

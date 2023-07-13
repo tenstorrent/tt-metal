@@ -386,38 +386,33 @@ void setup_riscs_on_specified_core(
     bool involves_triscs = deduce_if_involves_triscs(riscs_options);
     bool involves_ncrisc = deduce_if_involves_ncrisc(riscs_options);
 
-    std::vector<uint32_t> test_mailbox_init_val = {INIT_VALUE};
+    std::vector<uint32_t> run_mailbox_init_val = {INIT_VALUE};
 
-    std::function<void(uint64_t)> initialize_and_check_test_mailbox = [&](uint64_t test_mailbox_address_) {
-        write_hex_vec_to_core(cluster, chip_id, core, test_mailbox_init_val, test_mailbox_address_);
-        std::vector<uint32_t> test_mailbox_init_val_check;
-        test_mailbox_init_val_check = read_hex_vec_from_core(
-            cluster, chip_id, core, test_mailbox_address_, sizeof(uint32_t));  // read a single uint32_t
-        TT_ASSERT(test_mailbox_init_val_check[0] == INIT_VALUE);
+    std::function<void(uint64_t)> initialize_and_check_run_mailbox = [&](uint64_t run_mailbox_address_) {
+        write_hex_vec_to_core(cluster, chip_id, core, run_mailbox_init_val, run_mailbox_address_);
+        std::vector<uint32_t> run_mailbox_init_val_check;
+        run_mailbox_init_val_check = read_hex_vec_from_core(
+            cluster, chip_id, core, run_mailbox_address_, sizeof(uint32_t));  // read a single uint32_t
+        TT_ASSERT(run_mailbox_init_val_check[0] == INIT_VALUE);
         log_debug(
             tt::LogLLRuntime,
             "checked test_mailbox is correctly initialized to value = {} for core {}",
-            test_mailbox_init_val_check[0],
+            run_mailbox_init_val_check[0],
             core.str());
     };
 
-    initialize_and_check_test_mailbox(MEM_TEST_MAILBOX_ADDRESS);
+    initialize_and_check_run_mailbox(MEM_RUN_MAILBOX_ADDRESS);
 
     if (!involves_ncrisc) {
         disable_ncrisc(cluster, chip_id, core);
     } else {
         enable_ncrisc(cluster, chip_id, core);
-        initialize_and_check_test_mailbox(TEST_MAILBOX_ADDR_NCRISC);
     }
 
     if (!involves_triscs) {
         disable_triscs(cluster, chip_id, core);
     } else {
         enable_triscs(cluster, chip_id, core);
-        // I wonder if I can loop through the addresses like this...
-        for (uint32_t trisc_mailbox_address : trisc_mailbox_addresses) {
-            initialize_and_check_test_mailbox(trisc_mailbox_address);
-        }
     }
 }
 
@@ -430,52 +425,22 @@ void setup_riscs_on_specified_cores(
 
 bool check_if_riscs_on_specified_core_done(
     tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const CoreCoord &core) {
-    bool core_is_done = true;
 
-    std::function<bool(uint64_t)> get_mailbox_is_done = [&](uint64_t test_mailbox_address_) {
-        std::vector<uint32_t> test_mailbox_read_val = {0};
-        test_mailbox_read_val = read_hex_vec_from_core(
-            cluster, chip_id, core, test_mailbox_address_, sizeof(uint32_t));  // read a single uint32_t
+    std::function<bool(uint64_t)> get_mailbox_is_done = [&](uint64_t run_mailbox_address_) {
+        std::vector<uint32_t> run_mailbox_read_val = {0};
+        run_mailbox_read_val = read_hex_vec_from_core(
+            cluster, chip_id, core, run_mailbox_address_, sizeof(uint32_t));  // read a single uint32_t
 
-        if (test_mailbox_read_val[0] != INIT_VALUE && test_mailbox_read_val[0] != DONE_VALUE) {
-            fprintf(stderr, "Read unexpected test_mailbox value: %x (expected %x or %x)\n", test_mailbox_read_val[0], INIT_VALUE, DONE_VALUE);
+        if (run_mailbox_read_val[0] != INIT_VALUE && run_mailbox_read_val[0] != DONE_VALUE) {
+            fprintf(stderr, "Read unexpected run_mailbox value: %x (expected %x or %x)\n", run_mailbox_read_val[0], INIT_VALUE, DONE_VALUE);
             TT_ASSERT(
-                test_mailbox_read_val[0] == INIT_VALUE || test_mailbox_read_val[0] == DONE_VALUE);
+                run_mailbox_read_val[0] == INIT_VALUE || run_mailbox_read_val[0] == DONE_VALUE);
         }
 
-        return test_mailbox_read_val[0] == DONE_VALUE;
+        return run_mailbox_read_val[0] == DONE_VALUE;
     };
 
-    // brisc
-    core_is_done &= get_mailbox_is_done(TEST_MAILBOX_ADDR);
-
-    if (!core_is_done) {
-        return core_is_done;
-    }
-
-    // ncrisc
-    bool involves_ncrisc = deduce_if_involves_ncrisc(riscs_options);
-    if (involves_ncrisc) {
-        core_is_done &= get_mailbox_is_done(TEST_MAILBOX_ADDR_NCRISC);
-    }
-
-    if (!core_is_done) {
-        return core_is_done;
-    }
-
-    // triscs
-    bool involves_triscs = deduce_if_involves_triscs(riscs_options);
-    if (involves_triscs) {
-        int trisc_id = 0;
-        for (trisc_id = 0; trisc_id <= 2; trisc_id++) {
-            core_is_done &= get_mailbox_is_done(trisc_mailbox_addresses[trisc_id]);
-            if (!core_is_done) {
-                return core_is_done;
-            }
-        }
-    }
-
-    return core_is_done;
+    return get_mailbox_is_done(RUN_MAILBOX_ADDR);
 }
 
 void cleanup_risc_on_specified_core(

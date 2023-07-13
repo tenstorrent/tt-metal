@@ -17,14 +17,17 @@
 
 // TODO: commonize this w/ the runtime -- it's the same configs
 // these consts must be constexprs
-constexpr uint32_t TRISC_L1_MAILBOX_OFFSET = MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_BRISC_OFFSET;
+constexpr uint32_t TRISC_RUN_MAILBOX_OFFSET = MEM_RUN_MAILBOX_ADDRESS + MEM_MAILBOX_BRISC_OFFSET;
 
-constexpr uint32_t trisc_sizes[3] = {MEM_TRISC0_SIZE, MEM_TRISC1_SIZE, MEM_TRISC2_SIZE};
-
-constexpr uint32_t trisc_mailbox_addresses[3] = {
-    MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_TRISC0_OFFSET,
-    MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_TRISC1_OFFSET,
-    MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_TRISC2_OFFSET};
+volatile uint32_t * const brisc_run_mailbox_address =
+    ( volatile uint32_t *)(MEM_RUN_MAILBOX_ADDRESS + MEM_MAILBOX_BRISC_OFFSET);
+volatile uint32_t * const ncrisc_run_mailbox_address =
+    (volatile uint32_t *)(MEM_RUN_MAILBOX_ADDRESS + MEM_MAILBOX_NCRISC_OFFSET);
+volatile uint32_t * const trisc_run_mailbox_addresses[3] = {
+    (volatile uint32_t *)(MEM_RUN_MAILBOX_ADDRESS + MEM_MAILBOX_TRISC0_OFFSET),
+    (volatile uint32_t *)(MEM_RUN_MAILBOX_ADDRESS + MEM_MAILBOX_TRISC1_OFFSET),
+    (volatile uint32_t *)(MEM_RUN_MAILBOX_ADDRESS + MEM_MAILBOX_TRISC2_OFFSET)
+};
 
 c_tensix_core core;
 
@@ -196,6 +199,9 @@ void device_setup() {
     volatile uint32_t* use_ncrisc = (volatile uint32_t*)(RUNTIME_CONFIG_BASE);
     if (*use_ncrisc) {
         l1_to_ncrisc_iram_copy();
+
+        *ncrisc_run_mailbox_address = 42;
+
         // Bring NCRISC out of reset, keep TRISCs under reset
         WRITE_REG(RISCV_DEBUG_REG_SOFT_RESET_0, 0x7000);
     }
@@ -273,12 +279,15 @@ int main() {
     device_setup();  // NCRISC is disabled/enabled here
 
     volatile uint32_t* use_triscs = (volatile uint32_t*)(RUNTIME_CONFIG_BASE + 4);
-
     if (*use_triscs) {
         // FIXME: this is not sufficient to bring Trisc / Tensix out of a bad state
         // do we need do more than just assert_trisc_reset() ?
         // for now need to call /device/bin/silicon/tensix-reset from host when TRISCs/Tensix get into a bad state
         assert_trisc_reset();
+
+        *trisc_run_mailbox_addresses[0] = 42;
+        *trisc_run_mailbox_addresses[1] = 42;
+        *trisc_run_mailbox_addresses[2] = 42;
 
         // Bring TRISCs out of reset
         deassert_trisc_reset();
@@ -293,23 +302,23 @@ int main() {
 #if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & KERNEL_FUNCT_MARKER)
     kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
 #endif
-
     if (*use_triscs) {
-        // Wait for all the TRISCs to finish (it assumes all 3 TRISCs have been launched and will finish)
         while (
-            !(*((volatile uint32_t*)trisc_mailbox_addresses[0]) == 1 &&
-              *((volatile uint32_t*)trisc_mailbox_addresses[1]) == 1 &&
-              *((volatile uint32_t*)trisc_mailbox_addresses[2]) == 1)) {
+            !(*trisc_run_mailbox_addresses[0] == 1 &&
+              *trisc_run_mailbox_addresses[1] == 1 &&
+              *trisc_run_mailbox_addresses[2] == 1)) {
         }
 
         // Once all 3 have finished, assert reset on all of them
         assert_trisc_reset();
     }
 
-    volatile uint32_t* test_mailbox_ptr =
-        (volatile uint32_t*)(MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_BRISC_OFFSET);
-    if (test_mailbox_ptr[0] != RISC_DETECTED_STREAM_ASSERT)
-        test_mailbox_ptr[0] = 0x1;
+    volatile uint32_t* use_ncrisc = (volatile uint32_t*)(RUNTIME_CONFIG_BASE);
+    if (*use_ncrisc) {
+        while (*ncrisc_run_mailbox_address != 1);
+    }
+
+    *brisc_run_mailbox_address = 0x1;
 
 #if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
     kernel_profiler::mark_time(CC_MAIN_END);

@@ -13,19 +13,13 @@
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "build_kernels_for_riscv/build_kernels_for_riscv.hpp"
 
-constexpr static uint64_t TEST_MAILBOX_ADDR = MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_BRISC_OFFSET;
-constexpr static uint64_t TEST_MAILBOX_ADDR_NCRISC = MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_NCRISC_OFFSET;
+constexpr static uint64_t RUN_MAILBOX_ADDR = MEM_RUN_MAILBOX_ADDRESS + MEM_MAILBOX_BRISC_OFFSET;
 constexpr static int INIT_VALUE = 42;
 constexpr static int DONE_VALUE = 1;
 
 constexpr static uint32_t TRISC_BASE = MEM_TRISC0_BASE;
 
 constexpr static uint32_t trisc_sizes[3] = {MEM_TRISC0_SIZE, MEM_TRISC1_SIZE, MEM_TRISC2_SIZE};
-
-constexpr static uint32_t trisc_mailbox_addresses[3] = {
-    MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_TRISC0_OFFSET,
-    MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_TRISC1_OFFSET,
-    MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_TRISC2_OFFSET};
 
 namespace tt {
 

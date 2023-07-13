@@ -22,8 +22,6 @@
 #define TILE_WORD_16_BIT ((32*32*2 + 32) >> 4)
 #define TILE_WORD_32_BIT ((32*32*4 + 32) >> 4)
 
-#define RISC_DETECTED_STREAM_ASSERT 0xdeeeaaad
-
 #ifdef COMPILE_FOR_BRISC
 constexpr std::uint32_t L1_ARG_BASE = BRISC_L1_ARG_BASE;
 constexpr std::uint32_t L1_RESULT_BASE = BRISC_L1_RESULT_BASE;
