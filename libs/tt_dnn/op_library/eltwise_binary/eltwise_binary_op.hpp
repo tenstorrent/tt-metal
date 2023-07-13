@@ -39,9 +39,8 @@ struct EltwiseBinary {
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors,
         std::vector<Tensor> &output_tensors) const;
+    tt::stl::reflection::Attributes attributes() const;
 };
-
-std::ostream& operator<<(std::ostream& os, const EltwiseBinary& op);
 
 using eltwise_binop_t = std::function<Tensor(const Tensor &input_tensor_a, const Tensor &input_tensor_b)>;
 

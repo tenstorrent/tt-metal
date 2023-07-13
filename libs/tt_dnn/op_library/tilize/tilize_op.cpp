@@ -7,7 +7,7 @@
 #include "dtx/dtx.hpp"
 #include "dtx/dtx_passes.hpp"
 
-#include <fmt/ranges.h>
+#include "tt_stl/reflection.hpp"
 
 using namespace tt::constants;
 
@@ -234,20 +234,13 @@ operation::ProgramWithCallbacks Tilize::create_program(const std::vector<Tensor>
 
 operation::Hash Tilize::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-
-    return fmt::format(
-        "{}_{}",
-         *this,
-         operation::hash_tensor(input_tensor)
-    );
+    return fmt::format("{}_{}", *this, input_tensor);
 }
 
-std::ostream& operator<<(std::ostream& os, const Tilize& op) {
-    os << boost::core::demangle(typeid(op).name());
-    os << "{";
-    os << fmt::format("output_mem_config={}", operation::hash_memory_config(op.output_mem_config));
-    os << "}";
-    return os;
+tt::stl::reflection::Attributes Tilize::attributes() const {
+    return {
+        {"output_mem_config", fmt::format("{}", this->output_mem_config)},
+    };
 }
 
 Tensor tilize(const Tensor &input_tensor_a, const MemoryConfig& mem_config) {
@@ -532,23 +525,16 @@ operation::ProgramWithCallbacks TilizeWithValPadding::create_program(const std::
 
 operation::Hash TilizeWithValPadding::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-
-    return fmt::format(
-        "{}_{}",
-         *this,
-         operation::hash_tensor(input_tensor)
-    );
+    return fmt::format("{}_{}", *this, input_tensor);
 }
 
-std::ostream& operator<<(std::ostream& os, const TilizeWithValPadding& op) {
-    os << boost::core::demangle(typeid(op).name());
-    os << "{";
-    os << fmt::format("output_tensor_shape={}", op.output_tensor_shape);
-    os << fmt::format(",input_tensor_start={}", op.input_tensor_start);
-    os << fmt::format(",pad_value={}", op.pad_value);
-    os << fmt::format(",output_mem_config={}", operation::hash_memory_config(op.output_mem_config));
-    os << "}";
-    return os;
+tt::stl::reflection::Attributes TilizeWithValPadding::attributes() const {
+    return {
+        {"output_tensor_shape", fmt::format("{}", this->output_tensor_shape)},
+        {"input_tensor_start", fmt::format("{}", this->input_tensor_start)},
+        {"pad_value", fmt::format("{}", this->pad_value)},
+        {"output_mem_config", fmt::format("{}", this->output_mem_config)},
+    };
 }
 
 Tensor tilize_with_val_padding(const Tensor &input_tensor_a, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, const float pad_value, const MemoryConfig& mem_config) {

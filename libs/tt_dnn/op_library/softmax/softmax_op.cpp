@@ -259,14 +259,15 @@ operation::Hash AttentionSoftmaxInPlace::compute_program_hash(
     const std::vector<Tensor> &input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors
 ) const {
-    const auto& input_tensor = input_tensors.at(0);    const auto& mask = optional_input_tensors.at(0);
+    const auto& input_tensor = input_tensors.at(0);
+    const auto& mask = optional_input_tensors.at(0);
+    return fmt::format("{}_{}", *this, input_tensor, mask);
+}
 
-    return fmt::format(
-        "attention_softmax_in_place_{}_{}_{}",
-        this->scale,
-        operation::hash_tensor(input_tensor),
-        mask.has_value() ? operation::hash_tensor(mask.value()) : "nullopt"
-    );
+tt::stl::reflection::Attributes AttentionSoftmaxInPlace::attributes() const {
+    return {
+        {"scale", fmt::format("{}", this->scale)},
+    };
 }
 
 Tensor scale_mask_softmax_in_place(float scale, std::optional<const Tensor> mask, Tensor& input_tensor) {

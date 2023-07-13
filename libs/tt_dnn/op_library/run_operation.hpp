@@ -93,10 +93,6 @@ inline std::vector<Tensor> run_with_autoformat(
     return run_with_autoformat(op, input_tensors, optional_input_tensors, pad_value, pad_c);
 }
 
-
-Hash hash_tensor(const Tensor& tensor);
-Hash hash_memory_config(const MemoryConfig& memory_config);
-
 }
 
 }

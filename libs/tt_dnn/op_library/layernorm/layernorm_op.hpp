@@ -27,8 +27,8 @@ struct LayerNorm {
     operation::Hash compute_program_hash(
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
+    tt::stl::reflection::Attributes attributes() const;
 };
-
 
 struct BertLargeLayerNorm {
     float eps;
@@ -45,6 +45,7 @@ struct BertLargeLayerNorm {
     operation::Hash compute_program_hash(
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
+    tt::stl::reflection::Attributes attributes() const;
 };
 
 inline Tensor layernorm(const Tensor &a, float eps, std::optional<const Tensor> gamma = std::nullopt, std::optional<const Tensor> beta = std::nullopt, const MemoryConfig& mem_config = MemoryConfig{.interleaved = true}) {

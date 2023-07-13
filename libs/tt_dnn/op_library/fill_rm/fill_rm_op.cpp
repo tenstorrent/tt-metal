@@ -99,23 +99,23 @@ operation::ProgramWithCallbacks FillRM::create_program(const std::vector<Tensor>
     return fill_rm_single_core(input_tensor, output_tensor, this->N, this->C, this->H, this->W, this->hFill, this-> wFill, this->val_hi, this->val_lo);
 
 }
+
 operation::Hash FillRM::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
+    return fmt::format("{}_{}", *this, input_tensor);
+}
 
-    uint32_t N, C, H, W, hFill, wFill;
-    float val_hi, val_lo;
-    return fmt::format(
-        "FillRM_{}_{}_{}_{}_{}_{}_{}_{}_{}",
-         this->N,
-         this->C,
-         this->H,
-         this->W,
-         this->hFill,
-         this->wFill,
-         this->val_hi,
-         this->val_lo,
-         operation::hash_tensor(input_tensor)
-    );
+tt::stl::reflection::Attributes FillRM::attributes() const {
+    return {
+        {"N", fmt::format("{}", this->N)},
+        {"C", fmt::format("{}", this->C)},
+        {"H", fmt::format("{}", this->H)},
+        {"W", fmt::format("{}", this->W)},
+        {"hFill", fmt::format("{}", this->hFill)},
+        {"wFill", fmt::format("{}", this->wFill)},
+        {"val_hi", fmt::format("{}", this->val_hi)},
+        {"val_lo", fmt::format("{}", this->val_lo)},
+    };
 }
 
 tt_metal::Tensor fill_rm(uint32_t N, uint32_t C, uint32_t H, uint32_t W, uint32_t hFill, uint32_t wFill, const tt_metal::Tensor& any, float val_hi, float val_lo) {

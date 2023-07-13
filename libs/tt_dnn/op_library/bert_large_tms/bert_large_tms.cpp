@@ -89,22 +89,14 @@ operation::ProgramWithCallbacks BertLargeTM::create_program(const std::vector<Te
 
 operation::Hash BertLargeTM::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-
-    return fmt::format(
-        "bert_large_tm_{}_{}_{}",
-         magic_enum::enum_name(this->bert_large_tm_op_type),
-         operation::hash_memory_config(this->output_mem_config),
-         operation::hash_tensor(input_tensor)
-    );
+    return fmt::format("{}_{}", *this, input_tensor);
 }
 
-std::ostream& operator<<(std::ostream& os, const BertLargeTM& op) {
-    os << boost::core::demangle(typeid(op).name());
-    os << "{";
-    os << ".bert_large_tm_op_type=" << magic_enum::enum_name(op.bert_large_tm_op_type);
-    // TODO(arakhmati): add output_mem_config
-    os << "}";
-    return os;
+tt::stl::reflection::Attributes BertLargeTM::attributes() const {
+    return {
+        {"bert_large_tm_op_type", fmt::format("{}", this->bert_large_tm_op_type)},
+        {"output_mem_config", fmt::format("{}", this->output_mem_config)},
+    };
 }
 
 } // namespace tt_metal

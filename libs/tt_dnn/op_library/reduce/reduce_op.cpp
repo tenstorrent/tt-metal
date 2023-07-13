@@ -91,14 +91,15 @@ operation::ProgramWithCallbacks Reduce::create_program(const std::vector<Tensor>
 
 operation::Hash Reduce::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
+    return fmt::format("{}_{}", *this, input_tensor);
+}
 
-    return fmt::format(
-        "reduce_{}_{}_{}_{}",
-         magic_enum::enum_name(this->math_op),
-         magic_enum::enum_name(this->dim),
-         this->scaler,
-         operation::hash_tensor(input_tensor)
-    );
+tt::stl::reflection::Attributes Reduce::attributes() const {
+    return {
+        {"math_op", fmt::format("{}", this->math_op)},
+        {"dim", fmt::format("{}", this->dim)},
+        {"scaler", fmt::format("{}", this->scaler)},
+    };
 }
 
 ReduceOpParallelizationStrategy::Enum Reduce::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {

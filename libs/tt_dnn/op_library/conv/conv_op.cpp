@@ -5,6 +5,8 @@
 // #include "test/tt_metal/llrt/test_libs/debug_mailbox.hpp"
 #include "llrt/tt_debug_print_server.hpp"
 
+#include "tt_stl/reflection.hpp"
+
 using namespace tt::constants;
 namespace tt {
 
@@ -513,6 +515,18 @@ operation::ProgramWithCallbacks Conv::create_program(const std::vector<Tensor>& 
     auto& output_tensor = output_tensors.at(0);
 
     return {conv_single_core(input_tensor_a, input_tensor_b, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, untilize_out, output_tensor)};
+}
+
+tt::stl::reflection::Attributes Conv::attributes() const {
+    return {
+        {"conv_params", fmt::format("{}", this->conv_params)},
+        {"act_block_h_ntiles", fmt::format("{}", this->act_block_h_ntiles)},
+        {"act_block_w_ntiles", fmt::format("{}", this->act_block_w_ntiles)},
+        {"weight_block_w_ntiles", fmt::format("{}", this->weight_block_w_ntiles)},
+        {"out_subblock_h_ntiles", fmt::format("{}", this->out_subblock_h_ntiles)},
+        {"out_subblock_w_ntiles", fmt::format("{}", this->out_subblock_w_ntiles)},
+        {"untilize_out", fmt::format("{}", this->untilize_out)},
+    };
 }
 
 // generates address map for reader kernel which reads from dram buffer (tiled layout) into l1 buffer
@@ -1191,6 +1205,18 @@ operation::ProgramWithCallbacks ConvWithAddressMap::create_program(const std::ve
     auto& output_tensor = output_tensors.at(0);
 
     return {conv_with_address_map_single_core(input_tensor_a, input_tensor_b, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, untilize_out, output_tensor)};
+}
+
+tt::stl::reflection::Attributes ConvWithAddressMap::attributes() const {
+    return {
+        {"conv_params", fmt::format("{}", this->conv_params)},
+        {"act_block_h_ntiles", fmt::format("{}", this->act_block_h_ntiles)},
+        {"act_block_w_ntiles", fmt::format("{}", this->act_block_w_ntiles)},
+        {"weight_block_w_ntiles", fmt::format("{}", this->weight_block_w_ntiles)},
+        {"out_subblock_h_ntiles", fmt::format("{}", this->out_subblock_h_ntiles)},
+        {"out_subblock_w_ntiles", fmt::format("{}", this->out_subblock_w_ntiles)},
+        {"untilize_out", fmt::format("{}", this->untilize_out)},
+    };
 }
 
 }  // namespace tt_metal

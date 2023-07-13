@@ -3,8 +3,6 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 
-#include <fmt/ranges.h>
-
 using namespace tt::constants;
 
 namespace tt {
@@ -299,9 +297,11 @@ void Pad::validate(const std::vector<Tensor> &input_tensors) const {
         TT_ASSERT(input_tensor.dtype() == DataType::BFLOAT16, "Cannot pad RM tensor with specified format");
     }
 }
+
 std::vector<Shape> Pad::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     return {this->output_tensor_shape};
 }
+
 std::vector<Tensor> Pad::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.layout(), this->output_mem_config);
@@ -324,23 +324,16 @@ operation::ProgramWithCallbacks Pad::create_program(const std::vector<Tensor>& i
 
 operation::Hash Pad::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-
-    return fmt::format(
-        "{}_{}",
-         *this,
-         operation::hash_tensor(input_tensor)
-    );
+    return fmt::format("{}_{}", *this, input_tensor);
 }
 
-std::ostream& operator<<(std::ostream& os, const Pad& op) {
-    os << boost::core::demangle(typeid(op).name());
-    os << "{";
-    os << fmt::format("output_tensor_shape={}", op.output_tensor_shape);
-    os << fmt::format(",input_tensor_start={}", op.input_tensor_start);
-    os << fmt::format(",pad_value={}", op.pad_value);
-    os << fmt::format(",output_mem_config={}", operation::hash_memory_config(op.output_mem_config));
-    os << "}";
-    return os;
+tt::stl::reflection::Attributes Pad::attributes() const {
+    return {
+        {"output_tensor_shape", fmt::format("{}", this->output_tensor_shape)},
+        {"input_tensor_start", fmt::format("{}", this->input_tensor_start)},
+        {"pad_value", fmt::format("{}", this->pad_value)},
+        {"output_mem_config", fmt::format("{}", this->output_mem_config)},
+    };
 }
 
 Tensor pad(const Tensor &input_tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value, const MemoryConfig& mem_config) {
@@ -360,12 +353,22 @@ void PadOnHost::validate(const std::vector<Tensor> &input_tensors) const {
     TT_ASSERT(input_tensor.shape()[2] + this->input_tensor_start[2] <= this->output_tensor_shape[2], "Output size cannot fit input with offset");
     TT_ASSERT(input_tensor.shape()[3] + this->input_tensor_start[3] <= this->output_tensor_shape[3], "Output size cannot fit input with offset");
 }
+
 std::vector<Shape> PadOnHost::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     return {this->output_tensor_shape};
 }
+
 std::vector<Tensor> PadOnHost::compute_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     return {input_tensor.pad(this->output_tensor_shape, this->input_tensor_start, this->pad_value)};
+}
+
+tt::stl::reflection::Attributes PadOnHost::attributes() const {
+    return {
+        {"output_tensor_shape", fmt::format("{}", this->output_tensor_shape)},
+        {"input_tensor_start", fmt::format("{}", this->input_tensor_start)},
+        {"pad_value", fmt::format("{}", this->pad_value)},
+    };
 }
 
 Tensor pad_on_host(const Tensor &input_tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {

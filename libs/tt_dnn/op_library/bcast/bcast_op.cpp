@@ -138,15 +138,15 @@ operation::ProgramWithCallbacks EltwiseBinaryBroadcast::create_program(const std
 operation::Hash EltwiseBinaryBroadcast::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
+    return fmt::format("{}_{}_{}", *this, input_tensor_a, input_tensor_b);
+}
 
-    return fmt::format(
-        "eltwise_binary_broadcast_{}_{}_{}_{}_{}",
-        magic_enum::enum_name(this->math_op),
-        magic_enum::enum_name(this->dim),
-        operation::hash_memory_config(this->output_mem_config),
-        operation::hash_tensor(input_tensor_a),
-        operation::hash_tensor(input_tensor_b)
-    );
+tt::stl::reflection::Attributes EltwiseBinaryBroadcast::attributes() const {
+    return {
+        {"math_op", fmt::format("{}", this->math_op)},
+        {"dim", fmt::format("{}", this->dim)},
+        {"output_mem_config", fmt::format("{}", this->output_mem_config)},
+    };
 }
 
 BcastOpParallelizationStrategy::Enum EltwiseBinaryBroadcast::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {

@@ -17,7 +17,7 @@ Tensor softmax_in_place(Tensor& input_tensor);
 Tensor scale_mask_softmax_in_place(float scale, std::optional<const Tensor> mask, Tensor& input_tensor);
 
 struct AttentionSoftmaxInPlace {
-    float scale;
+    const float scale;
 
     void validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -30,6 +30,7 @@ struct AttentionSoftmaxInPlace {
     operation::Hash compute_program_hash(
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
+    tt::stl::reflection::Attributes attributes() const;
 };
 
 } }  // namespace tt::tt_metal

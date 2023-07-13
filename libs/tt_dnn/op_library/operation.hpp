@@ -1,9 +1,9 @@
 #pragma once
 
 #include "tt_metal/host_api.hpp"
-#include <experimental/type_traits>
 
-#include <libs/tensor/tensor.hpp>
+#include <tensor/tensor.hpp>
+#include "tt_stl/reflection.hpp"
 
 #include "third_party/magic_enum/magic_enum.hpp"
 
@@ -15,7 +15,7 @@ namespace tt::tt_metal {
 
 template <typename T>
 bool is_power_of_two(T val) {
-    return (val & (val-1))==T(0); 
+    return (val & (val-1))==T(0);
 }
 
 namespace operation {
@@ -146,18 +146,6 @@ constexpr bool implements_get_parallelization_strategy() {
     >{};
 }
 
-template<class... Args>
-using has_to_string_t = decltype(operator<<(std::declval<Args>()...));
-
-template<class T>
-constexpr bool implements_to_string() {
-    return std::experimental::is_detected<
-        has_to_string_t,
-        std::ostream&,
-        const T&
-    >{};
-}
-
 }
 
 
@@ -174,6 +162,10 @@ class HostOperation {
         virtual std::string get_type_name() const = 0 ;
 
         virtual ProfilerInfo create_profiler_info(const std::vector<Tensor> &input_tensors) const = 0;
+
+        virtual std::string to_string() const = 0;
+
+        virtual tt::stl::reflection::Attributes attributes() const = 0;
     };
 
     template< typename T >
@@ -210,6 +202,14 @@ class HostOperation {
             };
         }
 
+        std::string to_string() const override {
+            return fmt::format("{}", this->object);
+        }
+
+        tt::stl::reflection::Attributes attributes() const {
+            return this->object.attributes();
+        }
+
       private:
         const T object;
     };
@@ -241,7 +241,20 @@ class HostOperation {
         return this->implementation_->create_profiler_info(input_tensors);
     }
 
+    std::string to_string() const {
+        return this->implementation_->to_string();
+    }
+
+    tt::stl::reflection::Attributes attributes() const {
+        return this->implementation_->attributes();
+    }
+
 };
+
+static std::ostream& operator<<(std::ostream& os, const HostOperation& op) {
+    os << op.to_string();
+    return os;
+}
 
 class DeviceOperation {
     struct Interface {
@@ -271,6 +284,10 @@ class DeviceOperation {
         virtual std::string get_type_name() const = 0 ;
 
         virtual ProfilerInfo create_profiler_info(const std::vector<Tensor> &input_tensors) const = 0;
+
+        virtual std::string to_string() const = 0;
+
+        virtual tt::stl::reflection::Attributes attributes() const = 0;
     };
 
     template< typename T >
@@ -365,6 +382,14 @@ class DeviceOperation {
             };
         }
 
+        std::string to_string() const override {
+            return fmt::format("{}", this->object);
+        }
+
+        tt::stl::reflection::Attributes attributes() const {
+            return this->object.attributes();
+        }
+
       private:
         const T object;
     };
@@ -418,7 +443,20 @@ class DeviceOperation {
         return this->implementation_->create_profiler_info(input_tensors);
     }
 
+    std::string to_string() const {
+        return this->implementation_->to_string();
+    }
+
+    tt::stl::reflection::Attributes attributes() const {
+        return this->implementation_->attributes();
+    }
+
 };
+
+static std::ostream& operator<<(std::ostream& os, const DeviceOperation& op) {
+    os << op.to_string();
+    return os;
+}
 
 }
 }

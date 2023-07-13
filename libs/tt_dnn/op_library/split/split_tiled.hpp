@@ -25,6 +25,7 @@ struct SplitTiled {
         const std::vector<Tensor> &input_tensors,
         std::vector<Tensor> &output_tensors) const;
     operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
+    tt::stl::reflection::Attributes attributes() const;
 };
 
 }  // namespace tt_metal

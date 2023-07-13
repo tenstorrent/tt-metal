@@ -7,8 +7,6 @@
 
 #include "third_party/magic_enum/magic_enum.hpp"
 
-#include <fmt/ranges.h>
-
 #include <optional>
 
 using u32 = std::uint32_t;
@@ -391,24 +389,14 @@ operation::Hash LayerNorm::compute_program_hash(
     const auto& b = optional_input_tensors.at(0);
     const auto& gamma = optional_input_tensors.at(1);
     const auto& beta = optional_input_tensors.at(2);
-
-    return fmt::format(
-        "{}_{}_{}_{}_{}",
-        *this,
-        operation::hash_tensor(input_tensor),
-        b.has_value() ? operation::hash_tensor(b.value()) : "nullopt",
-        gamma.has_value() ? operation::hash_tensor(gamma.value()) : "nullopt",
-        beta.has_value() ? operation::hash_tensor(beta.value()) : "nullopt"
-    );
+    return fmt::format("{}_{}_{}_{}_{}", *this, input_tensor, b, gamma, beta);
 }
 
-std::ostream& operator<<(std::ostream& os, const LayerNorm& op) {
-    os << boost::core::demangle(typeid(op).name());
-    os << "{";
-    os << fmt::format("eps={}", op.eps);
-    os << fmt::format(",output_mem_config={}", operation::hash_memory_config(op.output_mem_config));
-    os << "}";
-    return os;
+tt::stl::reflection::Attributes LayerNorm::attributes() const {
+    return {
+        {"eps", fmt::format("{}", this->eps)},
+        {"output_mem_config", fmt::format("{}", this->output_mem_config)},
+    };
 }
 
 
@@ -466,24 +454,14 @@ operation::Hash BertLargeLayerNorm::compute_program_hash(
     const auto& b = optional_input_tensors.at(0);
     const auto& gamma = optional_input_tensors.at(1);
     const auto& beta = optional_input_tensors.at(2);
-
-    return fmt::format(
-        "{}_{}_{}_{}_{}",
-        *this,
-        operation::hash_tensor(input_tensor),
-        b.has_value() ? operation::hash_tensor(b.value()) : "nullopt",
-        gamma.has_value() ? operation::hash_tensor(gamma.value()) : "nullopt",
-        beta.has_value() ? operation::hash_tensor(beta.value()) : "nullopt"
-    );
+    return fmt::format("{}_{}_{}_{}_{}", *this, input_tensor, b, gamma, beta);
 }
 
-std::ostream& operator<<(std::ostream& os, const BertLargeLayerNorm& op) {
-    os << boost::core::demangle(typeid(op).name());
-    os << "{";
-    os << fmt::format("eps={}", op.eps);
-    os << fmt::format(",output_mem_config={}", operation::hash_memory_config(op.output_mem_config));
-    os << "}";
-    return os;
+tt::stl::reflection::Attributes BertLargeLayerNorm::attributes() const {
+    return {
+        {"eps", fmt::format("{}", this->eps)},
+        {"output_mem_config", fmt::format("{}", this->output_mem_config)},
+    };
 }
 
 }  // namespace ll_buda

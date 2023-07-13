@@ -31,9 +31,8 @@ struct BertLargeTM {
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
     operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
+    tt::stl::reflection::Attributes attributes() const;
 };
-
-std::ostream& operator<<(std::ostream& os, const BertLargeTM& op);
 
 // TODO: Remove redundant TMs (split and create individual q, k, v heads)?
 inline std::vector<Tensor> bert_large_create_qkv_heads(const Tensor &input_tensor_a, const MemoryConfig& mem_config) {

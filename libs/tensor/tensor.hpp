@@ -14,6 +14,8 @@
 #include "common/bfloat16.hpp"
 #include "common/bfloat8.hpp"
 
+#include "tt_stl/reflection.hpp"
+
 namespace tt {
 
 namespace tt_metal {
@@ -98,6 +100,7 @@ class Tensor {
         // TODO(arakhmati): clean up the methods below
         StorageType storage_type() const;
 
+        const Storage& storage() const;
         const std::optional<HostStorage> host_storage() const;
         const std::optional<DeviceStorage> device_storage() const;
 
@@ -108,6 +111,9 @@ class Tensor {
         // Size in bytes of a single element held in tensor
         uint32_t element_size() const;
 
+        tt::stl::reflection::Attributes attributes() const;
+
+
     private:
         Storage storage_;
         Shape shape_;      // Outer-most dimension first
@@ -116,8 +122,6 @@ class Tensor {
 };
 
 Tensor create_device_tensor(const Shape& shape, DataType dtype, Layout layout, Device *device, const MemoryConfig& memory_config = {.interleaved=true});
-
-std::ostream& operator<<(std::ostream& os, const Tensor& tensor);
 
 }  // namespace tt_metal
 

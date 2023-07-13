@@ -64,6 +64,7 @@ struct Matmul {
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
     operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
     BmmOpParallelizationStrategy::Enum get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
+    tt::stl::reflection::Attributes attributes() const;
 };
 
 
@@ -75,6 +76,7 @@ struct BatchedMatmul {
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
     operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
     BmmOpParallelizationStrategy::Enum get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
+    tt::stl::reflection::Attributes attributes() const;
 };
 
 
@@ -124,9 +126,8 @@ struct BertLargeMatmul {
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors
     ) const;
+    tt::stl::reflection::Attributes attributes() const;
 };
-
-std::ostream& operator<<(std::ostream& os, const BertLargeMatmul& op);
 
 
 inline Tensor bert_large_fused_qkv_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config) {

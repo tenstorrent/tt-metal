@@ -93,13 +93,7 @@ operation::ProgramWithCallbacks EltwiseBinary::create_program(const std::vector<
 operation::Hash EltwiseBinary::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
-
-    return fmt::format(
-        "eltwise_binary_{}_{}_{}",
-         magic_enum::enum_name(this->op_type),
-         operation::hash_tensor(input_tensor_a),
-         operation::hash_tensor(input_tensor_b)
-    );
+    return fmt::format("{}_{}", *this, input_tensor_a, input_tensor_b);
 }
 
 
@@ -114,12 +108,10 @@ BinaryOpParallelizationStrategy::Enum EltwiseBinary::get_parallelization_strateg
     }
 }
 
-std::ostream& operator<<(std::ostream& os, const EltwiseBinary& op) {
-    os << boost::core::demangle(typeid(op).name());
-    os << "{";
-    os << ".op_type=" << magic_enum::enum_name(op.op_type);
-    os << "}";
-    return os;
+tt::stl::reflection::Attributes EltwiseBinary::attributes() const {
+    return {
+        {"op_type", fmt::format("{}", this->op_type)},
+    };
 }
 
 }  // namespace tt_metal

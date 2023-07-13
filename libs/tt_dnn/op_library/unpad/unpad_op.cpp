@@ -3,8 +3,6 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 
-#include <fmt/ranges.h>
-
 using namespace tt::constants;
 
 namespace tt {
@@ -334,22 +332,15 @@ operation::ProgramWithCallbacks Unpad::create_program(const std::vector<Tensor>&
 
 operation::Hash Unpad::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-
-    return fmt::format(
-        "{}_{}",
-         *this,
-         operation::hash_tensor(input_tensor)
-    );
+    return fmt::format("{}_{}", *this, input_tensor);
 }
 
-std::ostream& operator<<(std::ostream& os, const Unpad& op) {
-    os << boost::core::demangle(typeid(op).name());
-    os << "{";
-    os << fmt::format("output_tensor_start={}", op.output_tensor_start);
-    os << fmt::format(",output_tensor_end={}", op.output_tensor_end);
-    os << fmt::format(",output_mem_config={}", operation::hash_memory_config(op.output_mem_config));
-    os << "}";
-    return os;
+tt::stl::reflection::Attributes Unpad::attributes() const {
+    return {
+        {"output_tensor_start", fmt::format("{}", this->output_tensor_start)},
+        {"output_tensor_end", fmt::format("{}", this->output_tensor_end)},
+        {"output_mem_config", fmt::format("{}", this->output_mem_config)},
+    };
 }
 
 Tensor unpad(const Tensor &input_tensor_a, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end, const MemoryConfig& mem_config) {

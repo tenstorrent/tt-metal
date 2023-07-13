@@ -81,12 +81,7 @@ operation::ProgramWithCallbacks Transpose::create_program(const std::vector<Tens
 
 operation::Hash Transpose::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-
-    return fmt::format(
-        "{}_{}",
-         *this,
-         operation::hash_tensor(input_tensor)
-    );
+    return fmt::format("{}_{}", *this, input_tensor);
 }
 
 TransposeOpParallelizationStrategy::Enum Transpose::get_parallelization_strategy(const std::vector<Tensor>& input_tensors) const {
@@ -102,12 +97,10 @@ TransposeOpParallelizationStrategy::Enum Transpose::get_parallelization_strategy
     }
 }
 
-std::ostream& operator<<(std::ostream& os, const Transpose& op) {
-    os << boost::core::demangle(typeid(op).name());
-    os << "{";
-    os << ".dim=" << magic_enum::enum_name(op.dim);
-    os << "}";
-    return os;
+tt::stl::reflection::Attributes Transpose::attributes() const {
+    return {
+        {"dim", fmt::format("{}", this->dim)},
+    };
 }
 
 inline Tensor transpose_(const Tensor &a, TransposeOpDim::Enum transpose_dim) {

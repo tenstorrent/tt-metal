@@ -81,14 +81,15 @@ operation::ProgramWithCallbacks SplitTiled::create_program(
 
 operation::Hash SplitTiled::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
+    return fmt::format("{}_{}", *this, input_tensor);
+}
 
-    return fmt::format(
-        "SplitTiled_{}_{}_{}_{}",
-         this->dim,
-         this->num_chunks,
-         operation::hash_memory_config(this->output_mem_config),
-         operation::hash_tensor(input_tensor)
-    );
+tt::stl::reflection::Attributes SplitTiled::attributes() const {
+    return {
+        {"dim", fmt::format("{}", this->dim)},
+        {"num_chunks", fmt::format("{}", this->num_chunks)},
+        {"output_mem_config", fmt::format("{}", this->output_mem_config)},
+    };
 }
 
 }  // namespace tt_metal

@@ -178,7 +178,8 @@ CoreCoord get_core_range(uint32_t num_blocks_rows, uint32_t num_blocks_cols, uin
 }
 
 BmmOpParallelizationStrategy::Enum get_parallelization_strategy(const std::vector<Tensor> &input_tensors) {
-    const auto& input_tensor_a = input_tensors.at(0);    const auto& input_tensor_b = input_tensors.at(1);
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);
     const auto& ashape = input_tensor_a.shape(), bshape = input_tensor_b.shape();
     uint32_t num_output_tiles = ashape[0] * ashape[1] * ashape[2] * bshape[3] / TILE_HW; // Output M x N
 
@@ -288,12 +289,14 @@ Tensor large_bmm_single_block(const Tensor& a, const Tensor& b, bool tilize_a, b
 }
 
 void Matmul::validate(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);    const auto& input_tensor_b = input_tensors.at(1);    TT_ASSERT(input_tensor_a.shape()[3] == input_tensor_b.shape()[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);    TT_ASSERT(input_tensor_a.shape()[3] == input_tensor_b.shape()[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
     TT_ASSERT(input_tensor_b.shape()[0] * input_tensor_b.shape()[1] == 1 && "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN");
 }
 
 std::vector<Shape> Matmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);    const auto& input_tensor_b = input_tensors.at(1);    auto output_shape = input_tensor_a.shape();
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);    auto output_shape = input_tensor_a.shape();
     output_shape.back() = input_tensor_b.shape().back();
     return {output_shape};
 }
@@ -303,7 +306,8 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
 }
 
 operation::ProgramWithCallbacks Matmul::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);    const auto& input_tensor_b = input_tensors.at(1);    auto& output_tensor = output_tensors.at(0);
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);    auto& output_tensor = output_tensors.at(0);
 
     auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
 
@@ -330,12 +334,13 @@ operation::ProgramWithCallbacks Matmul::create_program(const std::vector<Tensor>
 }
 
 operation::Hash Matmul::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);    const auto& input_tensor_b = input_tensors.at(1);
-    return fmt::format(
-        "matmul_{}_{}",
-         operation::hash_tensor(input_tensor_a),
-         operation::hash_tensor(input_tensor_b)
-    );
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);
+    return fmt::format("{}_{}", *this, input_tensor_a, input_tensor_b);
+}
+
+tt::stl::reflection::Attributes Matmul::attributes() const {
+    return {};
 }
 
 BmmOpParallelizationStrategy::Enum Matmul::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
@@ -344,13 +349,15 @@ BmmOpParallelizationStrategy::Enum Matmul::get_parallelization_strategy(const st
 
 
 void BatchedMatmul::validate(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);    const auto& input_tensor_b = input_tensors.at(1);    TT_ASSERT(input_tensor_a.shape()[3] == input_tensor_b.shape()[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);    TT_ASSERT(input_tensor_a.shape()[3] == input_tensor_b.shape()[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
     TT_ASSERT(input_tensor_a.shape()[1] == input_tensor_b.shape()[1] && input_tensor_a.shape()[0] == input_tensor_b.shape()[0]
         && "bmm (non-bcast matmul) expects input tensors of shapes BCMK*BCKN=BCMN");
 }
 
 std::vector<Shape> BatchedMatmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);    const auto& input_tensor_b = input_tensors.at(1);    auto output_shape = input_tensor_a.shape();
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);    auto output_shape = input_tensor_a.shape();
     output_shape.back() = input_tensor_b.shape().back();
     return {output_shape};
 }
@@ -360,7 +367,8 @@ std::vector<Tensor> BatchedMatmul::create_output_tensors(const std::vector<Tenso
 }
 
 operation::ProgramWithCallbacks BatchedMatmul::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);    const auto& input_tensor_b = input_tensors.at(1);    auto& output_tensor = output_tensors.at(0);
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);    auto& output_tensor = output_tensors.at(0);
 
     auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
 
@@ -394,12 +402,13 @@ operation::ProgramWithCallbacks BatchedMatmul::create_program(const std::vector<
 }
 
 operation::Hash BatchedMatmul::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);    const auto& input_tensor_b = input_tensors.at(1);
-    return fmt::format(
-        "batched_matmul_{}_{}",
-         operation::hash_tensor(input_tensor_a),
-         operation::hash_tensor(input_tensor_b)
-    );
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);
+    return fmt::format("{}_{}", *this, input_tensor_a, input_tensor_b);
+}
+
+tt::stl::reflection::Attributes BatchedMatmul::attributes() const {
+    return {};
 }
 
 BmmOpParallelizationStrategy::Enum BatchedMatmul::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
@@ -415,7 +424,8 @@ void BertLargeMatmul::validate(
 ) const {
 
     TT_ASSERT(input_tensors.size() == 2);
-    const auto& input_tensor_a = input_tensors.at(0);    const auto& input_tensor_b = input_tensors.at(1);
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);
     TT_ASSERT(input_tensor_a.layout() == Layout::TILE, "Unsupported input layout");
     TT_ASSERT(input_tensor_b.layout() == Layout::TILE, "Unsupported input layout");
 
@@ -467,7 +477,8 @@ void BertLargeMatmul::validate(
 
 std::vector<Shape> BertLargeMatmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     Shape output_shape;
-    const auto& input_tensor_a = input_tensors.at(0);    const auto& input_tensor_b = input_tensors.at(1);    auto ashape = input_tensor_a.shape();
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);    auto ashape = input_tensor_a.shape();
     const auto& bshape = input_tensor_b.shape();
     switch (this->bert_large_matmul_op_type) {
         case BertLargeMatmulOpType::FUSED_QKV:
@@ -500,7 +511,9 @@ operation::ProgramWithCallbacks BertLargeMatmul::create_program(
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor> &output_tensors
 ) const {
-    const auto& input_tensor_a = input_tensors.at(0);    const auto& input_tensor_b = input_tensors.at(1);    const auto bias = optional_input_tensors.empty() ? std::nullopt : optional_input_tensors.at(0);
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);
+    const auto bias = optional_input_tensors.empty() ? std::nullopt : optional_input_tensors.at(0);
     auto ashape = input_tensor_a.shape();
     const auto& bshape = input_tensor_b.shape();
     auto& output_tensor = output_tensors.at(0);
@@ -578,27 +591,18 @@ operation::Hash BertLargeMatmul::compute_program_hash(
     const std::vector<Tensor> &input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors
 ) const {
-    const auto& input_tensor_a = input_tensors.at(0);    const auto& input_tensor_b = input_tensors.at(1);    const auto& bias_tensor = optional_input_tensors.at(0);
-
-    return fmt::format(
-        "bert_large_matmul_{}_{}_{}_{}_{}_{}",
-         magic_enum::enum_name(this->bert_large_matmul_op_type),
-         operation::hash_memory_config(this->output_mem_config),
-         this->fuse_gelu_activation,
-         operation::hash_tensor(input_tensor_a),
-         operation::hash_tensor(input_tensor_b),
-         bias_tensor.has_value() ? operation::hash_tensor(bias_tensor.value()) : "nullopt"
-    );
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);
+    const auto& bias_tensor = optional_input_tensors.at(0);
+    return fmt::format("{}_{}", *this, input_tensor_a, input_tensor_b, bias_tensor);
 }
 
-std::ostream& operator<<(std::ostream& os, const BertLargeMatmul& op) {
-    os << boost::core::demangle(typeid(op).name());
-    os << "{";
-    os << ".bert_large_matmul_op_type=" << magic_enum::enum_name(op.bert_large_matmul_op_type);
-    // TODO(arakhmati): add output_mem_config
-    os << ", .fuse_gelu_activation=" << op.fuse_gelu_activation;
-    os << "}";
-    return os;
+tt::stl::reflection::Attributes BertLargeMatmul::attributes() const {
+    return {
+        {"bert_large_matmul_op_type", fmt::format("{}", this->bert_large_matmul_op_type)},
+        {"output_mem_config", fmt::format("{}", this->output_mem_config)},
+        {"fuse_gelu_activation", fmt::format("{}", this->fuse_gelu_activation)},
+    };
 }
 
 }  // namespace tt_metal

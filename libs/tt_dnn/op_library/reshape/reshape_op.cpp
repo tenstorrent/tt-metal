@@ -354,15 +354,16 @@ operation::ProgramWithCallbacks Reshape::create_program(const std::vector<Tensor
 
 operation::Hash Reshape::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
+    return fmt::format("{}_{}", *this, input_tensor);
+}
 
-    return fmt::format(
-        "Reshape_{}_{}_{}_{}_{}",
-         this->N,
-         this->C,
-         this->H,
-         this->W,
-         operation::hash_tensor(input_tensor)
-    );
+tt::stl::reflection::Attributes Reshape::attributes() const {
+    return {
+        {"N", fmt::format("{}", this->N)},
+        {"C", fmt::format("{}", this->C)},
+        {"H", fmt::format("{}", this->H)},
+        {"W", fmt::format("{}", this->W)},
+    };
 }
 
 Tensor reshape (Tensor &input_tensor_a, int N, int C, int H, int W) {

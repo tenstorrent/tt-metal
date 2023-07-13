@@ -149,12 +149,7 @@ operation::ProgramWithCallbacks EltwiseUnary::create_program(const std::vector<T
 
 operation::Hash EltwiseUnary::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-
-    return fmt::format(
-        "{}_{}",
-         *this,
-         operation::hash_tensor(input_tensor)
-    );
+    return fmt::format("{}_{}", *this, input_tensor);
 }
 
 
@@ -169,18 +164,11 @@ UnaryOpParallelizationStrategy::Enum EltwiseUnary::get_parallelization_strategy(
     }
 }
 
-std::ostream& operator<<(std::ostream& os, const EltwiseUnary& op) {
-    os << boost::core::demangle(typeid(op).name());
-    os << "{";
-    os << ".op_type=" << magic_enum::enum_name(op.op_type);
-    os << ",.param=";
-    if (op.param.has_value()) {
-        os << op.param.value();
-    } else {
-        os << "std::nullopt";
-    }
-    os << "}";
-    return os;
+tt::stl::reflection::Attributes EltwiseUnary::attributes() const {
+    return {
+        {"op_type", fmt::format("{}", this->op_type)},
+        {"param", fmt::format("{}", this->param)},
+    };
 }
 
 //unary op version tie

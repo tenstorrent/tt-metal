@@ -7,9 +7,10 @@
 #include "llrt/llrt.hpp"
 #include "tt_metal/common/constants.hpp"
 
+#include "tt_stl/reflection.hpp"
+
 #include "third_party/magic_enum/magic_enum.hpp"
 
-#include <fmt/ranges.h>
 
 using namespace tt::constants;
 
@@ -175,6 +176,10 @@ StorageType Tensor::storage_type() const {
     );
 }
 
+const Storage& Tensor::storage() const {
+    return this->storage_;
+}
+
 const std::optional<HostStorage> Tensor::host_storage() const {
     if (std::holds_alternative<HostStorage>(this->storage_)) {
         return std::get<HostStorage>(this->storage_);
@@ -203,21 +208,19 @@ uint32_t Tensor::volume() const {
     return tt::tt_metal::volume(this->shape_);
 }
 
+tt::stl::reflection::Attributes Tensor::attributes() const {
+    return {
+        {"storage", fmt::format("{}", this->storage_)},
+        {"shape", fmt::format("{}", this->shape_)},
+        {"dtype", fmt::format("{}", this->dtype_)},
+        {"layout", fmt::format("{}", this->layout_)},
+    };
+}
+
 Tensor create_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config) {
     uint32_t packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, volume(shape));
     auto device_buffer = tensor_impl::allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config);
     return Tensor(DeviceStorage{device_buffer, device, memory_config}, shape, data_type, layout);
-}
-
-std::ostream& operator<<(std::ostream& os, const Tensor& tensor) {
-    os << "Tensor";
-    os << "{";
-    os << ".storage_type=" << magic_enum::enum_name(tensor.storage_type());
-    os << ".,shape=" << fmt::format("{}", tensor.shape());
-    os << ",.dtype=" << magic_enum::enum_name(tensor.dtype());
-    os << ",.layout=" << magic_enum::enum_name(tensor.layout());
-    os << "}";
-    return os;
 }
 
 }  // namespace tt_metal

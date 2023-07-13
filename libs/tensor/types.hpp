@@ -6,10 +6,11 @@
 #include "common/bfloat16.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
 
+#include "tt_stl/reflection.hpp"
+
 #include <memory>
 #include <variant>
 #include <vector>
-#include <fmt/ranges.h>
 
 
 namespace tt {
@@ -21,14 +22,7 @@ using Shape = std::array<uint32_t, 4>;
 struct MemoryConfig {
     bool interleaved = true;    // Interleave the data across multiple DRAM banks
     BufferType buffer_type = BufferType::DRAM; // Can be either DRAM or L1
-
-    std::string str() const {
-            return fmt::format(
-            "MemoryConfig(interleaved={},buffer_type={})",
-            this->interleaved,
-            magic_enum::enum_name(this->buffer_type)
-        );
-    }
+    tt::stl::reflection::Attributes attributes() const;
 };
 
 using HostBuffer = std::variant<
@@ -38,6 +32,7 @@ using HostBuffer = std::variant<
 >;
 struct HostStorage {
     HostBuffer buffer;
+    tt::stl::reflection::Attributes attributes() const;
 };
 
 using DeviceBuffer = std::shared_ptr<Buffer>;
@@ -45,6 +40,7 @@ struct DeviceStorage {
     std::shared_ptr<Buffer> buffer;
     Device* device;
     MemoryConfig memory_config;
+    tt::stl::reflection::Attributes attributes() const;
 };
 
 using Storage = std::variant<

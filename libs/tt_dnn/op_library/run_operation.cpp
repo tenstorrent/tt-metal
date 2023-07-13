@@ -7,9 +7,9 @@
 
 #include "tt_numpy/functions.hpp"
 
-#include "third_party/magic_enum/magic_enum.hpp"
+#include "tt_stl/reflection.hpp"
 
-#include <fmt/ranges.h>
+#include "third_party/magic_enum/magic_enum.hpp"
 
 namespace tt::tt_metal::operation {
 
@@ -163,9 +163,16 @@ std::vector<Tensor> generic_create_output_tensors(
 }
 
 template<typename Operation>
-void log_running_operation(const Operation& op, const std::vector<Tensor> &input_tensors) {
+void log_running_operation(
+    const Operation& op,
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {}) {
 #ifdef DEBUG
-    tt::log_debug(tt::LogOp, "Running {} with input tensors {}", op.get_type_name(), input_tensors);
+    tt::log_debug(tt::LogOp, "Operation: {}", op);
+    tt::log_debug(tt::LogOp, "Input Tensors: {}", input_tensors);
+    if (not optional_input_tensors.empty()) {
+        tt::log_debug(tt::LogOp, "Optional Input Tensors: {}", optional_input_tensors);
+    }
 #endif
 }
 
@@ -200,7 +207,7 @@ std::vector<Tensor> run(
     const std::vector<Tensor> &input_tensors,
     const std::vector<std::optional<const Tensor>> &optional_input_tensors
 ) {
-    log_running_operation(op, input_tensors);
+    log_running_operation(op, input_tensors, optional_input_tensors);
     if (program_cache::is_enabled() and op.supports_program_caching()) {
         return detail::run_with_program_cache(op, input_tensors, optional_input_tensors);
     } else {
@@ -312,26 +319,6 @@ std::vector<Tensor> run_with_autoformat(
         formatted_output_tensors.push_back(AutoFormat::format_output_tensor(output_tensors[i], output_shapes[i], device));
     }
     return formatted_output_tensors;
-}
-
-
-Hash hash_tensor(const Tensor& tensor) {
-    const auto shape = tensor.shape();
-    return fmt::format(
-        "{}_{}_{}_{}",
-        shape,
-        magic_enum::enum_name(tensor.dtype()),
-        magic_enum::enum_name(tensor.layout()),
-        tensor.storage_type() == StorageType::HOST ? "nullopt" : hash_memory_config(tensor.memory_config())
-    );
-}
-
-Hash hash_memory_config(const MemoryConfig& memory_config) {
-    return fmt::format(
-        "{}_{}",
-        memory_config.interleaved,
-        magic_enum::enum_name(memory_config.buffer_type)
-    );
 }
 
 }

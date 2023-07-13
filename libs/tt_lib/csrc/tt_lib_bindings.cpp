@@ -185,8 +185,8 @@ void TensorModule(py::module &m_tensor) {
                     mem_config = tt_lib.tensor.MemoryConfig(False)
             )doc"
         )
-        .def("__repr__", [](const MemoryConfig &mem_config) {
-            return mem_config.str();
+        .def("__repr__", [](const MemoryConfig &memory_config) -> std::string {
+            return fmt::format("{}", memory_config);
         }
         )
         .def_readonly("interleaved", &MemoryConfig::interleaved, "Whether tensor data is interleaved across mulitple DRAM channels")
