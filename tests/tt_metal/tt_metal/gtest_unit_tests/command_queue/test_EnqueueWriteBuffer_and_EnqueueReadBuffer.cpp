@@ -1,28 +1,28 @@
 #include <memory>
 
+#include "../basic_harness.hpp"
+#include "command_queue_test_utils.hpp"
 #include "gtest/gtest.h"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "../basic_harness.hpp"
-
 
 using namespace tt::tt_metal;
-struct BufferConfig {
-    u32 num_pages;
-    u32 page_size;
-    BufferType buftype;
-};
 
 struct BufferStressTestConfig {
+    // Used for normal write/read tests
     u32 seed;
     u32 num_pages_total;
+
     u32 page_size;
     u32 max_num_pages_per_buffer;
+
+    // Used for wrap test
+    u32 num_iterations;
+    u32 num_unique_vectors;
 };
 
 namespace local_test_functions {
-bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
-    Device* device, CommandQueue& cq, const BufferConfig& config) {
+bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer(Device* device, CommandQueue& cq, const BufferConfig& config) {
     size_t buf_size = config.num_pages * config.page_size;
     Buffer bufa(device, buf_size, config.page_size, config.buftype);
     vector<u32> src(buf_size / sizeof(u32), 0);
@@ -39,7 +39,8 @@ bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
     return src == result;
 }
 
-bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(Device* device, CommandQueue& cq, const BufferStressTestConfig& config) {
+bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
+    Device* device, CommandQueue& cq, const BufferStressTestConfig& config) {
     srand(config.seed);
     bool pass = true;
     u32 num_pages_left = config.num_pages_total;
@@ -66,6 +67,56 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(Device* device, Comman
         EnqueueReadBuffer(cq, buf, res, true);
         pass &= src == res;
     }
+    return pass;
+}
+
+bool test_EnqueueWrap_on_EnqueueReadBuffer(Device* device, CommandQueue& cq, const BufferConfig& config) {
+    auto [buffer, src] = EnqueueWriteBuffer_prior_to_wrap(device, cq, config);
+
+    vector<u32> dst;
+    EnqueueReadBuffer(cq, buffer, dst, true);
+
+    return src == dst;
+}
+
+bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
+    Device* device, CommandQueue& cq, const BufferStressTestConfig& config) {
+
+    srand(config.seed);
+
+    vector<vector<u32>> unique_vectors;
+    for (u32 i = 0; i < config.num_unique_vectors; i++) {
+        u32 num_pages = rand() % (config.max_num_pages_per_buffer) + 1;
+        size_t buf_size = num_pages * config.page_size;
+        unique_vectors.push_back(create_random_vector_of_bfloat16(
+            buf_size, 100, std::chrono::system_clock::now().time_since_epoch().count()));
+    }
+
+    vector<Buffer> bufs;
+    u32 start = 0;
+    for (u32 i = 0; i < config.num_iterations; i++) {
+        size_t buf_size = unique_vectors[i % unique_vectors.size()].size() * sizeof(u32);
+        try {
+            bufs.push_back(Buffer(device, buf_size, config.page_size, BufferType::DRAM));
+        } catch (const std::exception& e) {
+            tt::log_info("Deallocating on iteration {}", i);
+            start = i;
+            bufs = {Buffer(device, buf_size, config.page_size, BufferType::DRAM)};
+        }
+
+        EnqueueWriteBuffer(cq, bufs[bufs.size() - 1], unique_vectors[i % unique_vectors.size()], false);
+    }
+
+    tt::log_info("Comparing {} buffers", bufs.size());
+    bool pass = true;
+    vector<u32> dst;
+    u32 idx = start;
+    for (Buffer& buffer : bufs) {
+        EnqueueReadBuffer(cq, buffer, dst, true);
+        pass &= dst == unique_vectors[idx % unique_vectors.size()];
+        idx++;
+    }
+
     return pass;
 }
 
@@ -116,12 +167,15 @@ TEST_F(CommandQueueHarness, FusedWriteDramBuffersInWhichRemainderBurstSizeDoesNo
         GTEST_SKIP();
     }
 
-    BufferConfig config = {
-        .num_pages = 4096,
-        .page_size = 22016,
-        .buftype = BufferType::DRAM};
+    BufferConfig config = {.num_pages = 4096, .page_size = 22016, .buftype = BufferType::DRAM};
 
     EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device, *this->cq, config));
+}
+
+TEST_F(CommandQueueHarness, TestWrapHostHugepageOnEnqueueReadBuffer) {
+    BufferConfig buf_config = {.num_pages = 524270, .page_size = 2048, .buftype = BufferType::DRAM};
+
+    EXPECT_TRUE(local_test_functions::test_EnqueueWrap_on_EnqueueReadBuffer(this->device, *this->cq, buf_config));
 }
 
 }  // end namespace dram_tests
@@ -170,17 +224,17 @@ TEST_F(CommandQueueHarness, WriteOneTileToAllL1BanksTwiceRoundRobin) {
 namespace stress_tests {
 
 TEST_F(CommandQueueHarness, WritesToRandomBufferTypeAndThenReads) {
-    if (this->arch != tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
-
     BufferStressTestConfig config = {
-        .seed = 0,
-        .num_pages_total = 50000,
-        .page_size = 2048,
-        .max_num_pages_per_buffer = 16
-    };
-    EXPECT_TRUE(local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device, *this->cq, config));
+        .seed = 0, .num_pages_total = 50000, .page_size = 2048, .max_num_pages_per_buffer = 16};
+    EXPECT_TRUE(
+        local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device, *this->cq, config));
 }
 
-} // end namespace stress_tests
+TEST_F(CommandQueueHarness, StressWrapTest) {
+    BufferStressTestConfig config = {
+        .page_size = 4096, .max_num_pages_per_buffer = 2000, .num_iterations = 10000, .num_unique_vectors = 20};
+    EXPECT_TRUE(
+        local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(this->device, *this->cq, config));
+}
+
+}  // end namespace stress_tests

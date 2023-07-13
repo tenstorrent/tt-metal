@@ -2,15 +2,9 @@
 #include "gtest/gtest.h"
 #include "tt_metal/common/bfloat16.hpp"
 #include "tt_metal/host_api.hpp"
+#include "command_queue_test_utils.hpp"
 
 using namespace tt::tt_metal;
-
-struct BufferConfig {
-    u32 num_pages;
-    u32 page_size;
-    BufferType buftype;
-    u32 bank_start;
-};
 
 struct CBConfig {
     u32 num_pages;
@@ -147,28 +141,6 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, const
     return pass;
 }
 
-pair<Buffer, vector<u32>> EnqueueWriteBuffer_prior_to_wrap(Device* device, CommandQueue& cq, const BufferConfig& config) {
-    // This function just enqueues a buffer (which should be large in the config)
-    // write as a precursor to testing the wrap mechanism
-    size_t buf_size = config.num_pages * config.page_size;
-    Buffer buffer(device, buf_size, config.bank_start, config.page_size, config.buftype);
-
-    vector<u32> src = create_random_vector_of_bfloat16(
-      buf_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-
-    EnqueueWriteBuffer(cq, buffer, src, false);
-    return std::make_pair(std::move(buffer), src);
-}
-
-bool test_EnqueueWrap_on_EnqueueReadBuffer(Device* device, CommandQueue& cq, const BufferConfig& config) {
-    auto [buffer, src] = EnqueueWriteBuffer_prior_to_wrap(device, cq, config);
-
-    vector<u32> dst;
-    EnqueueReadBuffer(cq, buffer, dst, true);
-
-    return src == dst;
-}
-
 bool test_EnqueueWrap_on_EnqueueWriteBuffer(Device* device, CommandQueue& cq, const BufferConfig& config) {
     EnqueueWriteBuffer_prior_to_wrap(device, cq, config);
 
@@ -177,7 +149,7 @@ bool test_EnqueueWrap_on_EnqueueWriteBuffer(Device* device, CommandQueue& cq, co
     This just ensures we don't hang on the subsequent EnqueueWriteBuffer
     */
     size_t buf_size = config.num_pages * config.page_size;
-    Buffer buffer(device, buf_size, config.bank_start, config.page_size, config.buftype);
+    Buffer buffer(device, buf_size, config.page_size, config.buftype);
 
     vector<u32> src(buf_size / sizeof(u32), 0);
 
@@ -274,28 +246,5 @@ TEST_F(CommandQueueHarness, DISABLED_TestSendMaxNumberOfRuntimeArgs) {
 
 }
 
-TEST_F(CommandQueueHarness, TestWrapHostHugepageOnEnqueueReadBuffer) {
-    BufferConfig buf_config = {.num_pages = 524270, .page_size = 2048, .buftype = BufferType::DRAM, .bank_start = 0};
-
-    EXPECT_TRUE(local_test_functions::test_EnqueueWrap_on_EnqueueReadBuffer(this->device, *this->cq, buf_config));
-}
-
-TEST_F(CommandQueueHarness, DISABLED_TestWrapHostHugepageOnEnqueueWriteBuffer) {
-    BufferConfig buf_config = {.num_pages = 524270, .page_size = 2048, .buftype = BufferType::DRAM, .bank_start = 0};
-
-    EXPECT_TRUE(local_test_functions::test_EnqueueWrap_on_EnqueueWriteBuffer(this->device, *this->cq, buf_config));
-}
-
-TEST_F(CommandQueueHarness, DISABLED_TestWrapHostHugepageOnFinish) {
-    BufferConfig buf_config = {.num_pages = 524285, .page_size = 2048, .buftype = BufferType::DRAM, .bank_start = 0};
-
-    EXPECT_TRUE(local_test_functions::test_EnqueueWrap_on_Finish(this->device, *this->cq, buf_config));
-}
-
-TEST_F(CommandQueueHarness, DISABLED_TestWrapHostHugepageOnEnqueueProgram) {
-    BufferConfig buf_config = {.num_pages = 524285, .page_size = 2048, .buftype = BufferType::DRAM, .bank_start = 0};
-
-    EXPECT_TRUE(local_test_functions::test_EnqueueWrap_on_EnqueueProgram(this->device, *this->cq, buf_config));
-}
 
 }  // namespace stress_tests
