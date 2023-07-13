@@ -61,11 +61,10 @@
 #define MEM_TEST_MAILBOX_ADDRESS       (MEM_MAILBOX_BASE +   4) // 4 bytes * 5 cores
 #define MEM_FWLOG_MAILBOX_ADDRESS      (MEM_MAILBOX_BASE +  24) // 4 * 5 bytes * 5 cores
 #define MEM_FWEVENT_MAILBOX_ADDRESS    (MEM_MAILBOX_BASE + 124) // 4 bytes * 5 cores
-#define MEM_ENABLE_CORE_MAILBOX        (MEM_MAILBOX_BASE + 144) // 4 bytes * 1 core (brisc)
-#define MEM_WALL_CLOCK_MAILBOX_ADDRESS (MEM_MAILBOX_BASE + 148) // 4 bytes * 1 core (brisc)
-#define MEM_DEBUG_MAILBOX_ADDRESS      (MEM_MAILBOX_BASE + 152) // 16 bytes * 4 cores (not brisc)
+#define MEM_WALL_CLOCK_MAILBOX_ADDRESS (MEM_MAILBOX_BASE + 144) // 4 bytes * 1 core (brisc)
+#define MEM_DEBUG_MAILBOX_ADDRESS      (MEM_MAILBOX_BASE + 148) // 16 bytes * 4 cores (not brisc)
 #define MEM_DEBUG_MAILBOX_SIZE         64
-#define MEM_MAILBOX_END                (MEM_MAILBOX_BASE + 216)
+#define MEM_MAILBOX_END                (MEM_MAILBOX_BASE + 212)
 
 /////////////
 // Initialization relocation L1 memory

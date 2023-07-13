@@ -14,11 +14,8 @@
 #include "build_kernels_for_riscv/build_kernels_for_riscv.hpp"
 
 constexpr static uint64_t TEST_MAILBOX_ADDR = MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_BRISC_OFFSET;
-constexpr static uint64_t ENABLE_CORE_MAILBOX_ADDR = MEM_ENABLE_CORE_MAILBOX;
 constexpr static uint64_t TEST_MAILBOX_ADDR_NCRISC = MEM_TEST_MAILBOX_ADDRESS + MEM_MAILBOX_NCRISC_OFFSET;
 constexpr static int INIT_VALUE = 42;
-constexpr static uint32_t ENABLE_CORE_ENABLE_VALUE = 1;
-constexpr static uint32_t ENABLE_CORE_DONE_VALUE = 0;
 constexpr static int DONE_VALUE = 1;
 
 constexpr static uint32_t TRISC_BASE = MEM_TRISC0_BASE;
@@ -190,10 +187,6 @@ void load_blank_kernel_to_cores(
 
 void load_blank_kernel_to_all_worker_cores_with_exceptions(
     tt_cluster *cluster, int chip_id, const TensixRiscsOptions &riscs_to_load, std::vector<CoreCoord> exceptions);
-
-void enable_core(tt_cluster *cluster, int chip_id, const CoreCoord &core);
-
-void enable_cores(tt_cluster *cluster, int chip_id, const std::vector<CoreCoord> &cores);
 
 void assert_enable_core_mailbox_is_valid_for_core(tt_cluster *cluster, int chip_id, const CoreCoord &core);
 

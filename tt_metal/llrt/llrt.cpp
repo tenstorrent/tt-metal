@@ -377,32 +377,6 @@ void load_blank_kernel_to_all_worker_cores_with_exceptions(
     load_blank_kernel_to_cores(cluster, chip_id, riscs_to_load, cores_to_load_with_blanks);
 }
 
-void enable_core(tt_cluster *cluster, int chip_id, const CoreCoord &core) {
-    std::vector<uint32_t> enable_core_enable_val = {ENABLE_CORE_ENABLE_VALUE};
-    write_hex_vec_to_core(cluster, chip_id, core, enable_core_enable_val, ENABLE_CORE_MAILBOX_ADDR);
-    std::vector<uint32_t> enable_core_mailbox_init_val_check;
-    enable_core_mailbox_init_val_check = read_hex_vec_from_core(
-        cluster, chip_id, core, ENABLE_CORE_MAILBOX_ADDR, sizeof(uint32_t));  // read a single uint32_t
-    TT_ASSERT(
-        enable_core_mailbox_init_val_check[0] == ENABLE_CORE_ENABLE_VALUE,
-        "val: " + std::to_string(enable_core_mailbox_init_val_check[0]));
-}
-
-void enable_cores(tt_cluster *cluster, int chip_id, const std::vector<CoreCoord> &cores) {
-    for (const CoreCoord &core : cores) {
-        enable_core(cluster, chip_id, core);
-    }
-}
-
-void assert_enable_core_mailbox_is_valid_for_core(tt_cluster *cluster, int chip_id, const CoreCoord &core) {
-    std::vector<uint32_t> enable_core_mailbox_init_val_check = {0};
-    enable_core_mailbox_init_val_check = read_hex_vec_from_core(
-        cluster, chip_id, core, ENABLE_CORE_MAILBOX_ADDR, sizeof(uint32_t));  // read a single uint32_t
-    TT_ASSERT(
-        enable_core_mailbox_init_val_check[0] == ENABLE_CORE_ENABLE_VALUE ||
-        enable_core_mailbox_init_val_check[0] == ENABLE_CORE_DONE_VALUE);
-}
-
 void setup_riscs_on_specified_core(
     tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const CoreCoord &core) {
     if (riscs_options == TensixRiscsOptions::NONE) {
@@ -445,8 +419,6 @@ void setup_riscs_on_specified_core(
             initialize_and_check_test_mailbox(trisc_mailbox_address);
         }
     }
-
-    enable_core(cluster, chip_id, core);
 }
 
 void setup_riscs_on_specified_cores(
@@ -476,7 +448,6 @@ bool check_if_riscs_on_specified_core_done(
 
     // brisc
     core_is_done &= get_mailbox_is_done(TEST_MAILBOX_ADDR);
-    assert_enable_core_mailbox_is_valid_for_core(cluster, chip_id, core);
 
     if (!core_is_done) {
         return core_is_done;
