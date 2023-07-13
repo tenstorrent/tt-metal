@@ -305,6 +305,11 @@ namespace ckernel::unpacker
 
       TTI_SETC16(SRCA_SET_Base_ADDR32, 0x4);
 
+      // Enable address counter for unpacker ch1/dst address 
+      // final address is calculated as: Dest_cntx0/1_address + address_counter_ch1
+      // used for face by face unpacking
+      // cfg[UNP0_ADD_DEST_ADDR_CNTR_add_dest_addr_cntr_ADDR32] = 0x1<<UNP0_ADD_DEST_ADDR_CNTR_add_dest_addr_cntr_SHAMT;
+
       /*
       // Workaround for HW bug (fp32 dest and movd2a/b is used with srcA/B configured with 5-bit exponent)
       if (is_fp32_dest_acc_en && (exp_width == 0)) {
