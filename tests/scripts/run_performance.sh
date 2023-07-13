@@ -7,11 +7,6 @@ if [[ -z "$TT_METAL_HOME" ]]; then
   exit 1
 fi
 
-cd $TT_METAL_HOME
-
-export PYTHONPATH=$TT_METAL_HOME
-export ARCH_NAME=grayskull
-
 env pytest tests/python_api_testing/models/stable_diffusion/perf_unbatched_stable.py
 
 env pytest tests/python_api_testing/models/vit/tests/perf_vit.py

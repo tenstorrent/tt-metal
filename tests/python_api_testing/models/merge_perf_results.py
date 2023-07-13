@@ -1,6 +1,7 @@
 from os import listdir, environ
 from os.path import isfile, join
 import time
+
 environ['TZ'] = 'America/Toronto'
 time.tzset()
 today = time.strftime("%Y_%m_%d")
