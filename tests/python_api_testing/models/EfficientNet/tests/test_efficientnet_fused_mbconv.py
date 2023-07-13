@@ -17,41 +17,48 @@ from python_api_testing.models.utility_functions_new import (
     tt2torch_tensor,
     comp_pcc,
 )
-from python_api_testing.models.EfficientNet.tt.efficientnet_squeeze_excitation import TtEfficientnetSqueezeExcitation
+from python_api_testing.models.EfficientNet.tt.efficientnet_fused_mbconv import (
+    TtEfficientnetFusedMBConv,
+    FusedMBConvConfig,
+)
 
 
-def test_efficientnet_squeeze_excitation():
+def test_efficientnet_fused_mbconv():
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
 
-    refence_model = torchvision.models.efficientnet_b0(pretrained=True)
+    refence_model = torchvision.models.efficientnet_v2_s(pretrained=True)
     refence_model.eval()
-
-    block = 1
-    refence_module = refence_model.features[block][0].block[1]
-
-    input_channels = refence_module.fc1.in_channels
-    squeeze_channels = refence_module.fc1.out_channels
-
-    logger.debug(f"input_channels {input_channels}")
-    logger.debug(f"squeeze_channels {squeeze_channels}")
+    refence_module = refence_model.features[2][0]
 
     torch.manual_seed(0)
-    test_input = torch.rand(1, 32, 64, 64)
+    test_input = torch.rand(1, 24, 64, 64)
     pt_out = refence_module(test_input)
 
-    tt_module = TtEfficientnetSqueezeExcitation(
+    # 4, 3, 2, 24, 48, 4),
+
+    mb_conv_config = FusedMBConvConfig(
+        expand_ratio=4,
+        kernel=3,
+        stride=2,
+        input_channels=24,
+        out_channels=48,
+        num_layers=4,
+    )
+
+    tt_module = TtEfficientnetFusedMBConv(
         state_dict=refence_model.state_dict(),
-        base_address=f"features.{block}.0.block.1",
+        base_address=f"features.2.0",
         device=device,
-        input_channels=input_channels,
-        squeeze_channels=squeeze_channels,
+        cnf=mb_conv_config,
+        stochastic_depth_prob=0.0,
     )
 
     test_input = torch2tt_tensor(
         test_input, tt_device=device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
     )
+
     tt_out = tt_module(test_input)
     tt_out = tt2torch_tensor(tt_out)
     tt_lib.device.CloseDevice(device)
@@ -60,8 +67,8 @@ def test_efficientnet_squeeze_excitation():
     logger.info(pcc_message)
 
     if does_pass:
-        logger.info("test_efficientnet_squeeze_excitation Passed!")
+        logger.info("test_efficientnet_fused_mbconv Passed!")
     else:
-        logger.warning("test_efficientnet_squeeze_excitation Failed!")
+        logger.warning("test_efficientnet_fused_mbconv Failed!")
 
     assert does_pass

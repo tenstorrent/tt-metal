@@ -5,12 +5,8 @@ from loguru import logger
 from tt_lib.fallback_ops import fallback_ops
 from typing import Optional, Sequence, Tuple, Union
 
-from python_api_testing.models.utility_functions_new import (
-    torch2tt_tensor,
-    tt2torch_tensor,
-)
+from python_api_testing.models.utility_functions_new import torch2tt_tensor
 from python_api_testing.models.conv_on_device_utils_new import (
-    run_conv_on_tt_device,
     run_conv_on_device_wrapper,
     is_conv_supported_on_device,
 )
@@ -209,6 +205,7 @@ class TtEfficientnetConv2dNormActivation(torch.nn.Module):
             num_features=out_channels,
         )
 
+        self.bnorm.eval()
         self.activation_layer = activation_layer
 
     def forward(self, x):

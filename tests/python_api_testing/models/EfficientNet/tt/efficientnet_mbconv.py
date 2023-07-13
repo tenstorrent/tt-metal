@@ -1,17 +1,11 @@
 import torch
-import tt_lib
 import math
 
-from loguru import logger
 from dataclasses import dataclass
 from typing import List, Callable, Optional
 
-from python_api_testing.models.EfficientNet.tt.efficientnet_conv import (
-    TtEfficientnetConv2dNormActivation,
-)
-from python_api_testing.models.EfficientNet.tt.efficientnet_squeeze_excitation import (
-    TtEfficientnetSqueezeExcitation,
-)
+from python_api_testing.models.EfficientNet.tt.efficientnet_conv import TtEfficientnetConv2dNormActivation
+from python_api_testing.models.EfficientNet.tt.efficientnet_squeeze_excitation import TtEfficientnetSqueezeExcitation
 
 
 def _make_divisible(v: float, divisor: int, min_value=None) -> int:
