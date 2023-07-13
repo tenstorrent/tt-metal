@@ -20,7 +20,7 @@ bash profile_scripts/Tensix2Tensix.sh
 
 ## Tensix to Tensix Read/Write issue and barrier waiting latency
 
-Measuring read and write requires 2 separate tests. The following explanations are for read. The profile markers are inserted into the kernel `tt_metal/kernels/dataflow/risc_read_speed.cpp`. Add profile option to the kernel building src file `tests/tt_metal/build_kernel_for_riscv/test_build_kernel_risc_read_speed.cpp` and corresponding compilation flags. Add profile option to the test src file `tests/tt_metal/llrt/test_run_risc_read_speed.cpp` and dump profiling results to the host machine. Because of the on-chip memory limits to store the profile results, the experiments repeat 4 times rather than 10000 in the non-profile experiments. But repeat the entire running 250 times, totally 4 * 250 = 1000 times. THe profiles cycles could be visualized by executing `tt_metal/tools/profiler/process_device_log.py`. Download and execute the script `profile_website.sh` on the local machine and open http://localhost:8888 to visualize the profiling results. Cycles between time marker 5 and 6 are corresponding to noc_async_read issue, while that between 6 and 7 are corresponding to noc_async_read_barrier.
+Measuring read and write requires 2 separate tests. The following explanations are for read. The profile markers `5, 6, 7` are inserted into the kernel `tt_metal/kernels/dataflow/risc_read_speed.cpp`. Add profile option to the kernel building src file `tests/tt_metal/build_kernel_for_riscv/test_build_kernel_risc_read_speed.cpp` and corresponding compilation flags. Add profile option to the test src file `tests/tt_metal/llrt/test_run_risc_read_speed.cpp` and dump profiling results to the host machine. Because of the on-chip memory limits to store the profile results, the experiments repeat 4 times rather than 10000 in the non-profile experiments. But repeat the entire running 250 times, totally 4 * 250 = 1000 times. THe profiles cycles could be visualized by executing `tt_metal/tools/profiler/process_device_log.py`. Download and execute the script `profile_website.sh` on the local machine and open http://localhost:8888 to visualize the profiling results. Cycles between time marker 5 and 6 are corresponding to noc_async_read issue, while that between 6 and 7 are corresponding to noc_async_read_barrier.
 
 ```
 bash profile_scripts/Tensix2Tensix_issue_barrier.sh
@@ -28,7 +28,7 @@ bash profile_scripts/Tensix2Tensix_issue_barrier.sh
 
 ## Tensix to Tensix Read/Write fine grain profile
 
-Similar to previous issue and barrier profiling, but add more profiler markers in `tt_metal/src/firmwareriscv/grayskull/noc_nonblocking_api.h`.
+Similar to previous issue and barrier profiling, but add more profiler markers `11~18` in `tt_metal/src/firmwareriscv/grayskull/noc_nonblocking_api.h`. Because of the on-chip memory limits to store the profile results, the experiments repeat 1 times rather than 10000 in the non-profile experiments. But repeat the entire running 1000 times, totally 1 * 1000 = 1000 times.
 
 ```
 bash profile_scripts/Tensix2Tensix_fine_grain.sh

@@ -18,7 +18,7 @@ mkdir -p log
 rm log/profile_overhead_read.log
 rm log/profile_overhead_write.log
 
-for i in {1..100}
+for i in {1..10}
 do
 ./build/test/llrt/test_run_risc_read_speed --buffer-size 64 --transaction-size 64 --num-repetitions 1 --profile 1
 python3 profile_scripts/custom_profile.py --file-name tt_metal/tools/profiler/logs/profile_log_device.csv --profile-target profile_overhead --read-or-write read >> log/profile_overhead_read.log

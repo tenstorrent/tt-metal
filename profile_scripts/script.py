@@ -1,6 +1,15 @@
 import sys
 import argparse
 import copy
+import math
+
+def calculate_standard_deviation(numbers):
+    n = len(numbers)
+    mean = sum(numbers) / n
+    squared_differences = [(x - mean) ** 2 for x in numbers]
+    mean_of_squared_diff = sum(squared_differences) / n
+    standard_deviation = math.sqrt(mean_of_squared_diff)
+    return standard_deviation
 
 def profile_issue_barrier(file_name):
     f = open(file_name, "r")
@@ -167,12 +176,35 @@ def print_tensix_issue_barrier(file_name):
     print("barrier")
     print_tensix_bandwidth(dic_barrier)
 
+def profile_tensix_constant_flit(file_name):
+    dic = {}
+    f = open(file_name, "r")
+    lines = f.readlines()
+    for line in lines:
+        lst = line.split()
+        if "Buffer" in line:
+            buffer = int(lst[1])
+            transaction = int(lst[3])
+            issue = float(lst[5])
+            barrier = float(lst[-1])
+            if transaction not in dic.keys():
+                dic[transaction] = []
+            dic[transaction].append(barrier)
+        elif "write" in line:
+            print("Read")
+            for transaction in dic.keys():
+                print("Transaction:", transaction, calculate_standard_deviation(dic[transaction]))
+            dic = {}
+    print("Write")
+    for transaction in dic.keys():
+        print("Transaction:", transaction, calculate_standard_deviation(dic[transaction]))
+
 
 
 def get_args():
     parser = argparse.ArgumentParser('Profile raw results.')
     parser.add_argument("--file-name", help="file to profile")
-    parser.add_argument("--profile-target", choices=["Tensix2Tensix", "DRAM2Tensix", "Tensix2Tensix_Issue_Barrier", "Tensix2Tensix_Fine_Grain", "Print_Tensix2Tensix_Issue_Barrier"], help="profile target choice")
+    parser.add_argument("--profile-target", choices=["Tensix2Tensix", "DRAM2Tensix", "Tensix2Tensix_Issue_Barrier", "Tensix2Tensix_Fine_Grain", "Print_Tensix2Tensix_Issue_Barrier", "Profile_Tensix2Tensix_Constant_Flit"], help="profile target choice")
     parser.add_argument("--read-or-write", choices=["read", "write"], help="read or write choice")
     args = parser.parse_args()
     return args
@@ -192,3 +224,5 @@ elif args.profile_target == "Tensix2Tensix_Fine_Grain":
     profile_fine_grain(file_name)
 elif args.profile_target == "Print_Tensix2Tensix_Issue_Barrier":
     print_tensix_issue_barrier(file_name)
+elif args.profile_target == "Profile_Tensix2Tensix_Constant_Flit":
+    profile_tensix_constant_flit(file_name)

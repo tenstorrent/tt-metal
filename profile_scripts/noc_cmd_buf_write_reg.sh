@@ -26,35 +26,35 @@ rm ./build/test/llrt/test_run_risc_write_speed
 make tests/llrt/test_run_risc_read_speed
 make tests/llrt/test_run_risc_write_speed
 mkdir -p log
-rm log/Tensix2Tensix_read_speed_fine_grain.log
-rm log/Tensix2Tensix_write_speed_fine_grain.log
-rm log/Tensix2Tensix_fine_grain.log
+rm log/noc_cmd_buf_write_reg_read.log
+rm log/noc_cmd_buf_write_reg_write.log
+rm log/noc_cmd_buf_write_reg.log
 
-for buffer_pow in {6..13}
+for buffer_pow in 6
 do
-for transaction_pow in {6..13}
+for transaction_pow in 6
 do
 if (($buffer_pow == $transaction_pow))
 then
 
 buffer=$(power_of_2 $buffer_pow)
 transaction=$(power_of_2 $transaction_pow)
-echo "Buffer: "$buffer" Transaction: "$transaction >> log/Tensix2Tensix_read_speed_fine_grain.log
-echo "Buffer: "$buffer" Transaction: "$transaction >> log/Tensix2Tensix_write_speed_fine_grain.log
+echo "Buffer: "$buffer" Transaction: "$transaction >> log/noc_cmd_buf_write_reg_read.log
+echo "Buffer: "$buffer" Transaction: "$transaction >> log/noc_cmd_buf_write_reg_write.log
 
-for i in {1..1000}
+for i in {1..10}
 do
 ./build/test/llrt/test_run_risc_read_speed --buffer-size $buffer --transaction-size $transaction --num-repetitions 1 --profile 1
-python3 profile_scripts/custom_profile.py --file-name tt_metal/tools/profiler/logs/profile_log_device.csv --profile-target profile_Tensix2Tensix_fine_grain --read-or-write read >> log/Tensix2Tensix_read_speed_fine_grain.log
+python3 profile_scripts/custom_profile.py --file-name tt_metal/tools/profiler/logs/profile_log_device.csv --profile-target profile_noc_cmd_buf_write_reg --read-or-write read >> log/noc_cmd_buf_write_reg_read.log
 ./build/test/llrt/test_run_risc_write_speed --buffer-size $buffer --transaction-size $transaction --num-repetitions 1 --profile 1
-python3 profile_scripts/custom_profile.py --file-name tt_metal/tools/profiler/logs/profile_log_device.csv --profile-target profile_Tensix2Tensix_fine_grain --read-or-write write >> log/Tensix2Tensix_write_speed_fine_grain.log
+python3 profile_scripts/custom_profile.py --file-name tt_metal/tools/profiler/logs/profile_log_device.csv --profile-target profile_noc_cmd_buf_write_reg --read-or-write write >> log/noc_cmd_buf_write_reg_write.log
 done
 
 fi
 done
 done
 
-echo "read" >> log/Tensix2Tensix_fine_grain.log
-python3 profile_scripts/script.py --file-name log/Tensix2Tensix_read_speed_fine_grain.log --profile-target Tensix2Tensix_Fine_Grain >> log/Tensix2Tensix_fine_grain.log
-echo "write" >> log/Tensix2Tensix_fine_grain.log
-python3 profile_scripts/script.py --file-name log/Tensix2Tensix_write_speed_fine_grain.log --profile-target Tensix2Tensix_Fine_Grain >> log/Tensix2Tensix_fine_grain.log
+# echo "read" >> log/noc_cmd_buf_write_reg.log
+# python3 profile_scripts/script.py --file-name log/noc_cmd_buf_write_reg_read.log --profile-target Tensix2Tensix_Fine_Grain >> log/noc_cmd_buf_write_reg.log
+# echo "write" >> log/noc_cmd_buf_write_reg.log
+# python3 profile_scripts/script.py --file-name log/noc_cmd_buf_write_reg_write.log --profile-target Tensix2Tensix_Fine_Grain >> log/noc_cmd_buf_write_reg.log

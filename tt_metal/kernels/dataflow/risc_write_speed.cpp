@@ -16,19 +16,6 @@ void kernel_main() {
     // Use this reg for cmd buf
     std::uint32_t cmd_buf = NCRISC_WR_REG_CMD_BUF;
 
-        // kernel_profiler::mark_time(5);
-        // kernel_profiler::mark_time(6);
-        // kernel_profiler::mark_time(7);
-        // kernel_profiler::mark_time(8);
-        // kernel_profiler::mark_time(9);
-        // kernel_profiler::mark_time(10);
-        // kernel_profiler::mark_time(11);
-        // kernel_profiler::mark_time(12);
-        // kernel_profiler::mark_time(13);
-        // kernel_profiler::mark_time(14);
-        // kernel_profiler::mark_time(15);
-        // kernel_profiler::mark_time(16);
-
 
     // DRAM NOC src address
 
@@ -58,6 +45,10 @@ void kernel_main() {
         #else
 
         kernel_profiler::mark_time(5);
+
+        // kernel_profiler::mark_time(5);
+        // kernel_profiler::mark_time(6);
+
             for (std::uint32_t j=0; j<num_transactions; j++) {
                 std::uint64_t buffer_dst_noc_addr = get_noc_addr(dst_noc_x, dst_noc_y, buffer_dst_addr_);
                 noc_async_write(buffer_src_addr_, buffer_dst_noc_addr, transaction_size_const);
@@ -66,9 +57,29 @@ void kernel_main() {
             }
         kernel_profiler::mark_time(6);
 
+        // kernel_profiler::mark_time(7);
+        // kernel_profiler::mark_time(8);
+
         #endif
 
         noc_async_write_barrier();
+
+        // kernel_profiler::mark_time(9);
+        // kernel_profiler::mark_time(10);
+
+        // kernel_profiler::mark_time(5);
+        // kernel_profiler::mark_time(6);
+        // kernel_profiler::mark_time(7);
+        // kernel_profiler::mark_time(8);
+        // kernel_profiler::mark_time(9);
+        // kernel_profiler::mark_time(10);
+        // kernel_profiler::mark_time(11);
+        // kernel_profiler::mark_time(12);
+        // kernel_profiler::mark_time(13);
+        // kernel_profiler::mark_time(14);
+        // kernel_profiler::mark_time(15);
+        // kernel_profiler::mark_time(16);
+
         kernel_profiler::mark_time(7);
     }
 

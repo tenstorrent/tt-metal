@@ -79,22 +79,42 @@ def profile_noc_async_read_and_barrier_time_NCRISC(file_name):
 def profile_Tensix2Tensix_issue_barrier(file_name, read_or_write):
     f = open(file_name, "r")
     lines = f.readlines()
+    dic_cycle = {5:[], 6:[], 7:[]}
+    if read_or_write == "read":
+        prefix = "0, 1, 0, BRISC"
+        overhead = 35
+    elif read_or_write == "write":
+        prefix = "0, 0, 0, NCRISC"
+        overhead = 27
+    for line in lines:
+        if prefix + ", 5, " in line:
+            dic_cycle[5].append(int(line.split(",")[-1]))
+        elif prefix + ", 6, " in line:
+            dic_cycle[6].append(int(line.split(",")[-1]))
+        elif prefix + ", 7, " in line:
+            dic_cycle[7].append(int(line.split(",")[-1]))
+
+    for i in range(4):
+        print("issue:", dic_cycle[6][i]-dic_cycle[5][i]-overhead, "barrier:", dic_cycle[7][i]-dic_cycle[6][i]-overhead)
+
+def profile_noc_cmd_buf_write_reg(file_name, read_or_write):
+    f = open(file_name, "r")
+    lines = f.readlines()
     dic_cycle = {}
     if read_or_write == "read":
         prefix = "0, 1, 0, BRISC"
-        overhead = 37
+        overhead = 35
     elif read_or_write == "write":
         prefix = "0, 0, 0, NCRISC"
-        overhead = 31
+        overhead = 27
     for line in lines:
-        if prefix + ", 5, " in line:
-            dic_cycle[5] = int(line.split(",")[-1])
-        elif prefix + ", 6, " in line:
-            dic_cycle[6] = int(line.split(",")[-1])
-        elif prefix + ", 7, " in line:
-            dic_cycle[7] = int(line.split(",")[-1])
-    print(dic_cycle)
-    print("issue:", dic_cycle[6]-dic_cycle[5]-overhead*9, "barrier:", dic_cycle[7]-dic_cycle[6]-overhead)
+        lst = line.split()
+        marker = lst[-2][:-1]
+        if prefix in line:
+            dic_cycle[int(marker)] = int(line.split(",")[-1])
+
+    print("8:", dic_cycle[9]-dic_cycle[8]-overhead, end=" ")
+    print()
 
 def profile_Tensix2Tensix_fine_grain(file_name, read_or_write):
     f = open(file_name, "r")
@@ -102,10 +122,10 @@ def profile_Tensix2Tensix_fine_grain(file_name, read_or_write):
     dic_cycle = {}
     if read_or_write == "read":
         prefix = "0, 1, 0, BRISC"
-        overhead = 37
+        overhead = 35
     elif read_or_write == "write":
         prefix = "0, 0, 0, NCRISC"
-        overhead = 31
+        overhead = 27
     for line in lines:
         lst = line.split()
         marker = lst[-2][:-1]
@@ -115,7 +135,7 @@ def profile_Tensix2Tensix_fine_grain(file_name, read_or_write):
     print("5:", dic_cycle[11]-dic_cycle[5]-overhead, end=" ")
     for i in range(11, 18):
         print("{}:".format(i), dic_cycle[i+1]-dic_cycle[i]-overhead, end=" ")
-    print("6:", dic_cycle[6]-dic_cycle[18]-overhead, end=" ")
+    print("18:", dic_cycle[6]-dic_cycle[18]-overhead, end=" ")
     print()
 
 def profile_overhead(file_name, read_or_write):
@@ -139,7 +159,7 @@ def profile_overhead(file_name, read_or_write):
 def get_args():
     parser = argparse.ArgumentParser('Profile raw results.')
     parser.add_argument("--file-name", help="file to profile")
-    parser.add_argument("--profile-target", choices=["profile_Tensix2Tensix_issue_barrier", "profile_Tensix2Tensix_fine_grain", "profile_overhead"], help="profile target choice")
+    parser.add_argument("--profile-target", choices=["profile_Tensix2Tensix_issue_barrier", "profile_Tensix2Tensix_fine_grain", "profile_overhead", "profile_noc_cmd_buf_write_reg"], help="profile target choice")
     parser.add_argument("--read-or-write", choices=["read", "write"], help="read or write choice")
     args = parser.parse_args()
     return args
@@ -150,6 +170,8 @@ if args.profile_target == "profile_Tensix2Tensix_issue_barrier":
     profile_Tensix2Tensix_issue_barrier(file_name, args.read_or_write)
 if args.profile_target == "profile_Tensix2Tensix_fine_grain":
     profile_Tensix2Tensix_fine_grain(file_name, args.read_or_write)
+if args.profile_target == "profile_noc_cmd_buf_write_reg":
+    profile_noc_cmd_buf_write_reg(file_name, args.read_or_write)
 if args.profile_target == "profile_overhead":
     profile_overhead(file_name, args.read_or_write)
 
