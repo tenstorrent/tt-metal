@@ -202,16 +202,18 @@ inline void llk_unpack_A_hw_configure(const llk_unpack_A_params_t *unpack_A_para
 }
 
 template <bool is_fp32_dest_acc_en = false, bool srnd_fpu_en = false>
-inline void llk_unpack_A_hw_configure_disaggregated(const std::uint32_t unpA_operand, const int within_face_16x16_transpose = 0) {
+inline void llk_unpack_A_hw_configure_disaggregated(const std::uint32_t unpA_operand, const int within_face_16x16_transpose = 0, const std::uint32_t in_tile_dims[2] = default_tile_dims) {
 
     const llk_unpack_A_params_t unpack_A_params = {
         .unpA_operand = unpA_operand,
+        .in_tile_dims = {in_tile_dims[0], in_tile_dims[1]}
     };
     llk_unpack_A_hw_configure<is_fp32_dest_acc_en, srnd_fpu_en>(&unpack_A_params, within_face_16x16_transpose);
 }
 
 template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void llk_unpack_A_init(const std::uint32_t transpose_of_faces=0, const std::uint32_t within_face_16x16_transpose=0) {
+inline void llk_unpack_A_init(const std::uint32_t transpose_of_faces=0, const std::uint32_t within_face_16x16_transpose=0, const std::uint32_t in_tile_dims[2] = default_tile_dims) {
+    // Todo: do something with in_tile_dims
     llk_unpack_A_mop_config<BType, acc_to_dest, binary_reuse_dest>(transpose_of_faces);
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
     TTI_SETADCXX(0b11, FACE_WIDTH*FACE_HEIGHT-1, 0x0);

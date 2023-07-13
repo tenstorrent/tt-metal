@@ -157,7 +157,9 @@ inline void eltwise_unary_configure_mop(uint rows_per_inst, uint total_rows) {
 
 template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NONE>
 // within_face_16x16_transpose is used by unpacker, math does not transpose
-inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t transpose_of_faces=0 /* unused */, const std::uint32_t within_face_16x16_transpose=0 /* unused */) {
+inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t transpose_of_faces=0 /* unused */, const std::uint32_t within_face_16x16_transpose=0 /* unused */, const std::uint32_t in_tile_dims[2] = default_tile_dims) {
+    // Todo: do something with in_tile_dims
+    
     eltwise_unary_configure_addrmod<type, src_b_bcast_type>();
 
     if constexpr (type == A2D) {
