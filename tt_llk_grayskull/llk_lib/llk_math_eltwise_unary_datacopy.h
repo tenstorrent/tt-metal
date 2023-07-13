@@ -165,9 +165,11 @@ inline void eltwise_unary_configure_mop(uint rows_per_inst, uint total_rows, boo
 template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NONE>
 // On GS, transpose_of_faces is not used, within_face_16x16_transpose is used
 // On WH, transpose_of_faces is used in unpacker (not math)
-inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t transpose_of_faces=0 /* unused */, const std::uint32_t within_face_16x16_transpose=0) {
+inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t transpose_of_faces=0 /* unused */, const std::uint32_t within_face_16x16_transpose=0, const std::uint32_t in_tile_dims[2] = default_tile_dims) {
+    // Todo: do something about tile_dims
+    
     eltwise_unary_configure_addrmod<type, src_b_bcast_type>();
-
+    
     if constexpr (type == A2D) {
         eltwise_unary_configure_mop<type, src_b_bcast_type>(p_mova2d::MOV_8_ROWS, 16, within_face_16x16_transpose);
     } else if constexpr (type == B2D) {

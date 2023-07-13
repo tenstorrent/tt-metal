@@ -162,16 +162,19 @@ inline void llk_unpack_A_hw_configure(const llk_unpack_A_params_t *unpack_A_para
         get_operand_id(unpack_A_params->unpA_operand), get_operand_id(unpack_A_params->unpA_operand));
 }
 
-inline void llk_unpack_A_hw_configure_disaggregated(const std::uint32_t unpA_operand, const int within_face_16x16_transpose) {
+inline void llk_unpack_A_hw_configure_disaggregated(const std::uint32_t unpA_operand, const int within_face_16x16_transpose, const std::uint32_t in_tile_dims[2] = default_tile_dims) {
+    
     const llk_unpack_A_params_t unpack_A_params = {
         .unpA_operand = unpA_operand,
+        .in_tile_dims = {in_tile_dims[0], in_tile_dims[1]}
     };
     llk_unpack_A_hw_configure(&unpack_A_params, within_face_16x16_transpose);
 }
 
 template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 // within_face_16x16_transpose is used on WH but not used for GS, this transpose is done in math on GS
-inline void llk_unpack_A_init(const std::uint32_t transpose_of_faces=0, const std::uint32_t within_face_16x16_transpose=0) {
+inline void llk_unpack_A_init(const std::uint32_t transpose_of_faces=0, const std::uint32_t within_face_16x16_transpose=0, const std::uint32_t in_tile_dims[2] = default_tile_dims) {
+    // Todo: do something with default_tile_dims
     llk_unpack_A_mop_config<BType, acc_to_dest>(transpose_of_faces);
 }
 

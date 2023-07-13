@@ -7,11 +7,13 @@
 //  Unpack LLK param structs
 //***
 
+constexpr std::uint32_t default_tile_dims[2] = {32, 32};
+
 struct llk_unpack_A_params_t {
     std::uint32_t unpA_operand;
+    const std::uint32_t in_tile_dims[2];
 };
 
-constexpr std::uint32_t default_tile_dims[2] = {32, 32};
 
 struct llk_unpack_AB_matmul_params_t {
     std::uint32_t unpA_operand;
