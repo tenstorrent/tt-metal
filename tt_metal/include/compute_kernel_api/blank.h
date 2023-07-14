@@ -1,3 +1,5 @@
+ #pragma once
+
  #ifdef TRISC_MATH
  #define MAIN math_main()
  #endif
