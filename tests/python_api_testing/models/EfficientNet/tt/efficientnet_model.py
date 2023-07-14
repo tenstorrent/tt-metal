@@ -32,6 +32,8 @@ class TtEfficientNet(torch.nn.Module):
         inverted_residual_setting: Sequence[Union[MBConvConfig, FusedMBConvConfig]],
         dropout: float,
         stochastic_depth_prob: float = 0.2,
+        norm_layer_eps: float = 1e-05,
+        norm_layer_momentum: float = 0.1,
         last_channel: Optional[int] = None,
     ):
         """
@@ -71,6 +73,8 @@ class TtEfficientNet(torch.nn.Module):
                 out_channels=firstconv_output_channels,
                 kernel_size=3,
                 stride=2,
+                norm_layer_eps=norm_layer_eps,
+                norm_layer_momentum=norm_layer_momentum,
                 activation_layer=True,
             )
         )
@@ -103,6 +107,8 @@ class TtEfficientNet(torch.nn.Module):
                         device=device,
                         cnf=block_cnf,
                         stochastic_depth_prob=sd_prob,
+                        norm_layer_eps=norm_layer_eps,
+                        norm_layer_momentum=norm_layer_momentum,
                     )
                 )
 
@@ -124,6 +130,8 @@ class TtEfficientNet(torch.nn.Module):
                 in_channels=lastconv_input_channels,
                 out_channels=lastconv_output_channels,
                 kernel_size=1,
+                norm_layer_eps=norm_layer_eps,
+                norm_layer_momentum=norm_layer_momentum,
                 activation_layer=True,
             )
         )
@@ -176,12 +184,16 @@ def _efficientnet(
     inverted_residual_setting: Sequence[Union[MBConvConfig, FusedMBConvConfig]],
     dropout: float,
     last_channel: Optional[int],
+    norm_layer_eps: float = 1e-05,
+    norm_layer_momentum: float = 0.1,
 ) -> TtEfficientNet:
     model = TtEfficientNet(
         state_dict=state_dict,
         device=device,
         inverted_residual_setting=inverted_residual_setting,
         dropout=dropout,
+        norm_layer_eps=norm_layer_eps,
+        norm_layer_momentum=norm_layer_momentum,
         last_channel=last_channel,
     )
 
@@ -371,6 +383,8 @@ def efficientnet_b5(device) -> TtEfficientNet:
         inverted_residual_setting=inverted_residual_setting,
         dropout=0.4,
         last_channel=last_channel,
+        norm_layer_eps=0.001,
+        norm_layer_momentum=0.01,
     )
 
 
@@ -392,6 +406,8 @@ def efficientnet_b6(device) -> TtEfficientNet:
         inverted_residual_setting=inverted_residual_setting,
         dropout=0.5,
         last_channel=last_channel,
+        norm_layer_eps=0.001,
+        norm_layer_momentum=0.01,
     )
 
 
@@ -413,4 +429,69 @@ def efficientnet_b7(device) -> TtEfficientNet:
         inverted_residual_setting=inverted_residual_setting,
         dropout=0.5,
         last_channel=last_channel,
+        norm_layer_eps=0.001,
+        norm_layer_momentum=0.01,
+    )
+
+
+def efficientnet_v2_s(device) -> TtEfficientNet:
+    """
+    Constructs an EfficientNetV2-S architecture from
+    `EfficientNetV2: Smaller Models and Faster Training <https://arxiv.org/abs/2104.00298>`_.
+    """
+
+    refence_model = torchvision.models.efficientnet_v2_s(pretrained=True)
+    refence_model.eval()
+
+    inverted_residual_setting, last_channel = _efficientnet_conf("efficientnet_v2_s")
+
+    return _efficientnet(
+        state_dict=refence_model.state_dict(),
+        device=device,
+        inverted_residual_setting=inverted_residual_setting,
+        dropout=0.2,
+        last_channel=last_channel,
+        norm_layer_eps=1e-03,
+    )
+
+
+def efficientnet_v2_m(device) -> TtEfficientNet:
+    """
+    Constructs an EfficientNetV2-M architecture from
+    `EfficientNetV2: Smaller Models and Faster Training <https://arxiv.org/abs/2104.00298>`_.
+    """
+
+    refence_model = torchvision.models.efficientnet_v2_m(pretrained=True)
+    refence_model.eval()
+
+    inverted_residual_setting, last_channel = _efficientnet_conf("efficientnet_v2_m")
+
+    return _efficientnet(
+        state_dict=refence_model.state_dict(),
+        device=device,
+        inverted_residual_setting=inverted_residual_setting,
+        dropout=0.3,
+        last_channel=last_channel,
+        norm_layer_eps=1e-03,
+    )
+
+
+def efficientnet_v2_l(device) -> TtEfficientNet:
+    """
+    Constructs an EfficientNetV2-L architecture from
+    `EfficientNetV2: Smaller Models and Faster Training <https://arxiv.org/abs/2104.00298>`_.
+    """
+
+    refence_model = torchvision.models.efficientnet_v2_l(pretrained=True)
+    refence_model.eval()
+
+    inverted_residual_setting, last_channel = _efficientnet_conf("efficientnet_v2_l")
+
+    return _efficientnet(
+        state_dict=refence_model.state_dict(),
+        device=device,
+        inverted_residual_setting=inverted_residual_setting,
+        dropout=0.4,
+        last_channel=last_channel,
+        norm_layer_eps=1e-03,
     )

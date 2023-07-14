@@ -36,8 +36,6 @@ def test_efficientnet_fused_mbconv():
     test_input = torch.rand(1, 24, 64, 64)
     pt_out = refence_module(test_input)
 
-    # 4, 3, 2, 24, 48, 4),
-
     mb_conv_config = FusedMBConvConfig(
         expand_ratio=4,
         kernel=3,

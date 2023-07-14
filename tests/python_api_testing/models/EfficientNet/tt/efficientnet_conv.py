@@ -158,6 +158,8 @@ class TtEfficientnetConv2dNormActivation(torch.nn.Module):
         stride: Union[int, Tuple[int, ...]] = 1,
         padding: Optional[Union[int, Tuple[int, ...], str]] = None,
         groups: int = 1,
+        norm_layer_eps: float = 1e-05,
+        norm_layer_momentum: float = 0.1,
         activation_layer: bool = True,
         dilation: Union[int, Tuple[int, ...]] = 1,
         conv_on_device=False,
@@ -203,6 +205,8 @@ class TtEfficientnetConv2dNormActivation(torch.nn.Module):
             running_var=running_var,
             num_batches_tracked=state_dict[f"{base_address}.1.num_batches_tracked"],
             num_features=out_channels,
+            eps=norm_layer_eps,
+            momentum=norm_layer_momentum,
         )
 
         self.bnorm.eval()

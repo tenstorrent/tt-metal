@@ -63,7 +63,7 @@ def download_images(img_path):
     image.save(img_path)
 
 
-def test_cpu_demo():
+def run_gs_demo(efficientnet_model_constructor):
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
@@ -71,7 +71,7 @@ def test_cpu_demo():
     img_path = ROOT / "input_image.jpg"
     download_images(img_path)
 
-    model = efficientnet_b0(device)
+    model = efficientnet_model_constructor(device)
     categories = read_classes()
     transform = preprocess()
 
@@ -101,7 +101,7 @@ def test_cpu_demo():
             (15, (i + 1) * 30),
             cv2.FONT_HERSHEY_SIMPLEX,
             1,
-            (0, 0, 255),
+            (255, 255, 255),
             2,
             cv2.LINE_AA,
         )
@@ -111,10 +111,14 @@ def test_cpu_demo():
             (160, (i + 1) * 30),
             cv2.FONT_HERSHEY_SIMPLEX,
             1,
-            (0, 0, 255),
+            (255, 255, 255),
             2,
             cv2.LINE_AA,
         )
         logger.info(categories[top5_catid[i]], top5_prob[i].item())
 
     cv2.imwrite(str(ROOT / "out_image.jpg"), image)
+
+
+def test_gs_demo_b0():
+    run_gs_demo(efficientnet_b0)

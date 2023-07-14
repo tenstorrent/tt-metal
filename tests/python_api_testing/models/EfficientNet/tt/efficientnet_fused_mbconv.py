@@ -42,6 +42,8 @@ class TtEfficientnetFusedMBConv(torch.nn.Module):
         device,
         cnf: FusedMBConvConfig,
         stochastic_depth_prob: float,
+        norm_layer_eps: float = 1e-05,
+        norm_layer_momentum: float = 0.1,
     ) -> None:
         super().__init__()
 
@@ -66,6 +68,8 @@ class TtEfficientnetFusedMBConv(torch.nn.Module):
                     out_channels=expanded_channels,
                     kernel_size=cnf.kernel,
                     stride=cnf.stride,
+                    norm_layer_eps=norm_layer_eps,
+                    norm_layer_momentum=norm_layer_momentum,
                     activation_layer=True,
                 )
             )
@@ -79,6 +83,8 @@ class TtEfficientnetFusedMBConv(torch.nn.Module):
                     in_channels=expanded_channels,
                     out_channels=cnf.out_channels,
                     kernel_size=1,
+                    norm_layer_eps=norm_layer_eps,
+                    norm_layer_momentum=norm_layer_momentum,
                     activation_layer=False,
                 )
             )
@@ -91,6 +97,8 @@ class TtEfficientnetFusedMBConv(torch.nn.Module):
                     in_channels=cnf.input_channels,
                     out_channels=cnf.out_channels,
                     kernel_size=cnf.kernel,
+                    norm_layer_eps=norm_layer_eps,
+                    norm_layer_momentum=norm_layer_momentum,
                     activation_layer=True,
                 )
             )

@@ -25,7 +25,7 @@ def load_efficientnet_model():
     """
     Load the pre-trained EfficientNetB0 model.
     """
-    model = torchvision.models.efficientnet_b0(pretrained=True)
+    model = torchvision.models.efficientnet_v2_s(pretrained=True)
     model.eval()
     return model
 
@@ -93,7 +93,7 @@ def test_cpu_demo():
             (15, (i + 1) * 30),
             cv2.FONT_HERSHEY_SIMPLEX,
             1,
-            (0, 0, 255),
+            (255, 255, 255),
             2,
             cv2.LINE_AA,
         )
@@ -103,7 +103,7 @@ def test_cpu_demo():
             (160, (i + 1) * 30),
             cv2.FONT_HERSHEY_SIMPLEX,
             1,
-            (0, 0, 255),
+            (255, 255, 255),
             2,
             cv2.LINE_AA,
         )

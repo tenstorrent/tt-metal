@@ -49,12 +49,15 @@ class TtEfficientnetSqueezeExcitation(torch.nn.Module):
             kernel_size=1,
         )
 
+        self.activation = fallback_ops.silu
+        self.scale_activation = tt_lib.tensor.sigmoid
+
     def _scale(self, x):
         scale = self.avgpool(x)
         scale = self.fc1(scale)
-        scale = fallback_ops.silu(scale)
+        scale = self.activation(scale)
         scale = self.fc2(scale)
-        return tt_lib.tensor.sigmoid(scale)
+        return self.scale_activation(scale)
 
     def forward(self, x):
         scale = self._scale(x)
