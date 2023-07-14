@@ -17,6 +17,26 @@ namespace tt {
 
 namespace tt_metal {
 
+enum class Layout {
+    ROW_MAJOR = 0,
+    TILE = 1,
+    CHANNELS_LAST = 2
+};
+
+enum class DataType {
+    BFLOAT16 = 0,
+    FLOAT32 = 1,
+    UINT32 = 2,
+    BFLOAT8_B = 3
+};
+
+enum class StorageType {
+    HOST = 0,
+    DEVICE = 1,
+};
+
+tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
+
 using Shape = std::array<uint32_t, 4>;
 
 struct MemoryConfig {
