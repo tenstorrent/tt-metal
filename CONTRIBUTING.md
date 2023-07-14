@@ -129,7 +129,10 @@ If you forwarded your port, navigate to `http://localhost:8888`.
   bug fix.
 - The responsibility of identifying, announcing status-tracking, and escalating
   broken non-post-commit pipelines will be the responsibility of codeowners
-whose tests are in the said non-post-commit pipeline.
+  whose tests are in the said non-post-commit pipeline.
+  - In the case of the model performance test pipeline, there are codeowners
+    for such tests. However, it is the collective responsibility of all
+    developers to ensure that we do not regress this pipeline.
 
 ### Documentation
 
@@ -151,6 +154,7 @@ whose tests are in the said non-post-commit pipeline.
   - Be approved, by a maintaining team member and any codeowners whose modules
     are relevant for the PR.
   - Pass post-commit tests.
+  - Pass model performance tests.
   - Pass any acceptance criteria mandated in the original issue.
   - Pass any testing criteria mandated by codeowners whose modules are relevant
     for the PR.
