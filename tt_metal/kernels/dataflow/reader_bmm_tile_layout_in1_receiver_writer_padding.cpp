@@ -23,7 +23,7 @@ void kernel_main() {
 
     // COMPILE TIME ARGS
     // interleaved accessor args
-    constexpr DataFormat data_format                      = static_cast<DataFormat>(get_compile_time_arg_val(0));
+    constexpr DataFormat output_data_format               = static_cast<DataFormat>(get_compile_time_arg_val(0));
     constexpr bool out_is_dram                            = get_compile_time_arg_val(1) == 1;
 
     // READER
@@ -71,7 +71,6 @@ void kernel_main() {
 
     // WRITER
 
-    constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
 
     // WRITER
@@ -79,15 +78,15 @@ void kernel_main() {
 
     // WRITER
     // single-tile
-    uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0);
+    uint32_t output_single_tile_size_bytes = get_tile_size(cb_id_out0);
 
     volatile uint32_t* in1_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(in1_mcast_receiver_semaphore_addr);
 
     // WRITER
     const InterleavedAddrGenFast<out_is_dram> s = {
         .bank_base_address = out_tensor_addr,
-        .page_size = single_tile_size_bytes,
-        .data_format = data_format
+        .page_size = output_single_tile_size_bytes,
+        .data_format = output_data_format
     };
 
 
@@ -153,11 +152,9 @@ void kernel_main() {
                 for(uint32_t h = 0; h < out_subblock_h_; h++) {
                     uint32_t out_tensor_tile_id = out_tensor_sb_row_start_tile_id;
                     for(uint32_t w = 0; w < out_subblock_w_; w++) {
-                        //uint64_t out_tensor_tile_noc_addr = get_noc_addr(out_tensor_tile_id, s);
-                        //noc_async_write(l1_read_addr, out_tensor_tile_noc_addr, single_tile_size_bytes);
                         noc_async_write_tile(out_tensor_tile_id, s, l1_read_addr);
 
-                        l1_read_addr+=single_tile_size_bytes;
+                        l1_read_addr+=output_single_tile_size_bytes;
 
                         out_tensor_tile_id += out_tensor_stride_w;
                     }

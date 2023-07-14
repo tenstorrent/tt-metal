@@ -14,9 +14,7 @@ using namespace tt;
 
 operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt_metal::Device *device,
-    tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
-    uint32_t single_tile_size,
     CoreCoord core_range,
     uint32_t B, uint32_t M, uint32_t N, uint32_t K,
     bool bcast_batch,
@@ -24,32 +22,38 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t out_subblock_h, uint32_t out_subblock_w,
     uint32_t per_core_M, uint32_t per_core_N,
     bool fuse_gelu_activation,
-    tt_metal::Buffer* in0_buffer, tt_metal::Buffer* in1_buffer, tt_metal::Buffer* bias_buffer, tt_metal::Buffer* out_buffer
+    tt_metal::Buffer* in0_buffer, tt_metal::Buffer* in1_buffer, tt_metal::Buffer* bias_buffer, tt_metal::Buffer* out_buffer,
+    tt::DataFormat in0_data_format, tt::DataFormat in1_data_format, tt::DataFormat bias_data_format, tt::DataFormat output_data_format
 ) {
 
     tt_metal::Program program{};
 
+    uint32_t in0_single_tile_size = tt_metal::TileSize(in0_data_format);
+    uint32_t in1_single_tile_size = tt_metal::TileSize(in1_data_format);
+    uint32_t bias_single_tile_size = tt_metal::TileSize(bias_data_format);
+    uint32_t output_single_tile_size = tt_metal::TileSize(output_data_format);
+
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles * 2; // double buffer
-    uint32_t in0_CB_size = in0_CB_tiles * single_tile_size;
+    uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
     uint32_t in1_block_tiles = per_core_N * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles * 2; // double buffer
-    uint32_t in1_CB_size = in1_CB_tiles * single_tile_size;
+    uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
     uint32_t out_block_tiles = per_core_M * per_core_N;
     uint32_t out_CB_tiles = out_block_tiles; // No double buffer
-    uint32_t out_CB_size = out_CB_tiles * single_tile_size;
+    uint32_t out_CB_size = out_CB_tiles * output_single_tile_size;
 
     // Dummy cb to store one tile of zeros for padding
     uint32_t in2_CB_tiles = 1; // No double buffer
-    uint32_t in2_CB_size = in2_CB_tiles * single_tile_size;
+    uint32_t in2_CB_size = in2_CB_tiles * in0_single_tile_size;
 
     uint32_t in3_block_tiles = per_core_N;
     uint32_t in3_CB_tiles = in3_block_tiles; // No double buffer
-    uint32_t in3_CB_size = in3_CB_tiles * single_tile_size;
+    uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
 
     uint32_t interm1_block_tiles = out_subblock_h * out_subblock_w;
     uint32_t interm1_CB_tiles = interm1_block_tiles; // No double buffer
-    uint32_t interm1_CB_size = interm1_CB_tiles * single_tile_size;
+    uint32_t interm1_CB_size = interm1_CB_tiles * output_single_tile_size;
 
 
     uint32_t start_core_x = 0;
@@ -150,7 +154,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> in0_sender_compile_time_args = {
             // interleaved accessor args
-            (std::uint32_t) static_cast<uint32_t>(cb_data_format),
+            (std::uint32_t) static_cast<uint32_t>(in0_data_format),
             (std::uint32_t) in0_is_dram,
 
             // in0 tensor args
@@ -175,7 +179,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     };
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
             // interleaved accessor args
-            (std::uint32_t) static_cast<uint32_t>(cb_data_format),
+            (std::uint32_t) static_cast<uint32_t>(in1_data_format),
+            (std::uint32_t) static_cast<uint32_t>(output_data_format),
             (std::uint32_t) in1_is_dram,
             (std::uint32_t) out_is_dram,
 
@@ -216,6 +221,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     };
     if (bias_buffer != nullptr) {
         // in3 mcast args
+        in1_sender_writer_compile_time_args.push_back((std::uint32_t)  static_cast<uint32_t>(bias_data_format));
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)  in3_is_dram);
         // in1 tensor args
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)  1);
@@ -239,7 +245,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     };
     std::vector<uint32_t> in1_receiver_writer_compile_time_args = {
             // interleaved accessor args
-            (std::uint32_t) static_cast<uint32_t>(cb_data_format),
+            (std::uint32_t) static_cast<uint32_t>(output_data_format),
             (std::uint32_t) out_is_dram,
 
             // READER
@@ -439,7 +445,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         all_cores,
         in0_CB_tiles,
         in0_CB_size,
-        cb_data_format
+        in0_data_format
     );
 
     uint32_t src1_cb_index = 1;
@@ -449,7 +455,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         all_cores,
         in1_CB_tiles,
         in1_CB_size,
-        cb_data_format
+        in1_data_format
     );
 
     uint32_t src2_cb_index = 2;
@@ -459,7 +465,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         all_cores,
         in2_CB_tiles,
         in2_CB_size,
-        cb_data_format
+        in0_data_format // cb for padding; shouldn't matter?
     );
 
     uint32_t output_cb_index = 16; // output operands start at index 16
@@ -470,7 +476,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         CoreRangeSet({all_cores}),
         out_CB_tiles,
         out_CB_size,
-        cb_data_format
+        output_data_format
     );
 
     if (bias_buffer != nullptr) {
@@ -481,7 +487,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             all_cores,
             in3_CB_tiles,
             in3_CB_size,
-            cb_data_format
+            bias_data_format
         );
 
         uint32_t interm1_cb_index = 25;
@@ -491,7 +497,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             all_cores,
             interm1_CB_tiles,
             interm1_CB_size,
-            cb_data_format
+            output_data_format  // Should be same as output_cb
         );
     }
 
@@ -502,7 +508,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t last_block_num_nonzero_subblocks_w = (last_block_w  - 1) / out_subblock_w + 1;
     uint32_t last_subblock_of_last_block_h = last_block_h % out_subblock_h == 0 ? out_subblock_h : last_block_h % out_subblock_h;
     uint32_t last_subblock_of_last_block_w = last_block_w % out_subblock_w == 0 ? out_subblock_w : last_block_w % out_subblock_w;
-    uint32_t last_block_padded_subblock_tiles_addr_skip = single_tile_size * (out_subblock_w - last_subblock_of_last_block_w);
+    uint32_t last_block_padded_subblock_tiles_addr_skip = in0_single_tile_size * (out_subblock_w - last_subblock_of_last_block_w);
     uint32_t last_block_padded_block_tiles_w_skip =  (out_subblock_w * out_subblock_h) * (per_core_N / out_subblock_w - last_block_num_nonzero_subblocks_w);
     uint32_t last_block_padded_block_tiles_h_skip = (per_core_M / out_subblock_h - last_block_num_nonzero_subblocks_h) * (per_core_N * out_subblock_h);
 
@@ -886,36 +892,32 @@ namespace tt {
 namespace tt_metal {
 
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_optimized_bert_large_(const Tensor &a, const Tensor &b, const std::optional<const Tensor> bias, Tensor& output, bool bcast_batch, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool fuse_gelu_activation) {
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_optimized_bert_large_(const Tensor &a, const Tensor &b, const std::optional<const Tensor> bias, Tensor& output, bool bcast_batch, CoreCoord compute_and_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool fuse_gelu_activation) {
 
     const auto& ashape = a.shape(), bshape = b.shape();
 
-    // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(a.storage_type() == StorageType::DEVICE and b.storage_type() == StorageType::DEVICE, "Operands to matmul need to be on device!");
-    TT_ASSERT(a.device() == b.device(), "Operands to matmul need to be on the same device!");
-    TT_ASSERT(a.buffer() != nullptr and b.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
-
-    TT_ASSERT(a.dtype() == b.dtype());
+    // CB dataformats
+    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype()); // in0
+    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype()); // in1
+    tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output_dtype); // output
 
     tt_metal::Buffer* bias_buffer = nullptr;
+    tt::DataFormat bias_data_format = tt::DataFormat::Bfp8_b; // bias; doesn't matter if bias=nullptr
     if (bias.has_value()) {
         auto& c = bias.value();
         TT_ASSERT(c.storage_type() == StorageType::DEVICE);
         TT_ASSERT(a.device() == c.device(), "Operands to matmul need to be on the same device!");
         TT_ASSERT(c.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
 
-        TT_ASSERT(a.dtype() == c.dtype());
         bias_buffer = c.buffer();
+
+        bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
     tt_metal::Device *device = a.device();
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-
-    //if (cb_data_format != output_cb_data_format) {
-    //    log_warning("Input tensor datatype does not match target output dataformat. Defaulting to input dataformat.");
-    //}
-    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
+    uint32_t in0_single_tile_size = tt_metal::TileSize(in0_data_format);
+    uint32_t in1_single_tile_size = tt_metal::TileSize(in1_data_format);
     tt_metal::Buffer *in0_buffer = a.buffer();
     tt_metal::Buffer *in1_buffer = b.buffer();
     if (bcast_batch)
@@ -925,6 +927,14 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_optimized_bert_lar
         TT_ASSERT(ashape[1] == bshape[1] && ashape[0] == bshape[0]
             && "bmm (non-bcast matmul) expects input tensors of shapes BCMK*BCKN=BCMN");
     }
+    TT_ASSERT(in0_buffer->size() % in0_single_tile_size == 0);
+    TT_ASSERT(in1_buffer->size() % in1_single_tile_size == 0);
+
+    TT_ASSERT(ashape[3] == bshape[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
+    TT_ASSERT(ashape[2] % TILE_HEIGHT == 0);
+    TT_ASSERT(ashape[3] % TILE_WIDTH == 0);
+    TT_ASSERT(bshape[2] % TILE_HEIGHT == 0);
+    TT_ASSERT(bshape[3] % TILE_WIDTH == 0);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Matmul Parameters Setup
@@ -966,9 +976,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_optimized_bert_lar
     if (core_range.x > 1 && core_range.y > 1) {
         return reuse_mcast_optimized_bert_large_helpers::create_program_mcast_in0_in1(
             device,
-            cb_data_format,
             math_fidelity,
-            single_tile_size,
             core_range,
             B, Mt, Nt, Kt,
             bcast_batch,
@@ -976,7 +984,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_optimized_bert_lar
             out_subblock_h, out_subblock_w,
             per_core_M, per_core_N,
             fuse_gelu_activation,
-            in0_buffer, in1_buffer, bias_buffer, out_buffer
+            in0_buffer, in1_buffer, bias_buffer, out_buffer,
+            in0_data_format, in1_data_format, bias_data_format, output_data_format
         );
     } else if (core_range.x > 1) {
         // Refer to bmm_op_multi_core_reuse_mcast_padding_generalized.cpp
@@ -989,8 +998,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_optimized_bert_lar
     return {};
 }
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_optimized_bert_large(const Tensor& a, const Tensor& b, const std::optional<const Tensor> bias, Tensor& output_tensor, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool fuse_gelu_activation) {
-    return matmul_multi_core_reuse_mcast_optimized_bert_large_(a, b, bias, output_tensor, true, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch, fuse_gelu_activation);
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_optimized_bert_large(const Tensor& a, const Tensor& b, const std::optional<const Tensor> bias, Tensor& output_tensor, CoreCoord compute_and_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool fuse_gelu_activation) {
+    return matmul_multi_core_reuse_mcast_optimized_bert_large_(a, b, bias, output_tensor, true, compute_and_storage_grid_size, output_dtype, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch, fuse_gelu_activation);
 }
 
 }  // namespace tt_metal
