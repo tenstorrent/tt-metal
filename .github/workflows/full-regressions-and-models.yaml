@@ -28,4 +28,5 @@ jobs:
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Run clean + build + all reg tests scripts
+        timeout-minutes: 210
         run: ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.arch }} --pipeline-type frequent
