@@ -58,6 +58,13 @@ volatile uint32_t l1_buffer[16] __attribute__ ((section ("l1_data"))) __attribut
 
 using namespace ckernel;
 
+inline void profiler_mark_time(uint32_t timer_id)
+{
+#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
+    kernel_profiler::mark_time(timer_id);
+#endif
+}
+
 int main(int argc, char *argv[])
 {
     uint *local_l1_start_addr = (uint *)PREPROCESSOR_EXPAND(MEM_TRISC, COMPILE_FOR_TRISC, _INIT_LOCAL_L1_BASE);
@@ -66,9 +73,7 @@ int main(int argc, char *argv[])
 
     kernel_profiler::init_profiler();
 
-#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
-    kernel_profiler::mark_time(CC_MAIN_START);
-#endif
+    profiler_mark_time(CC_MAIN_START);
     FWEVENT("Launching production env kernels");
 
     // Initialize GPRs to all 0s
@@ -92,20 +97,14 @@ int main(int argc, char *argv[])
 
     //while (ready_for_next_epoch())
     {
-#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
-        kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
-#endif
+        profiler_mark_time(CC_KERNEL_MAIN_START);
         kernel_init();
-#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
-        kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
-#endif
+        profiler_mark_time(CC_KERNEL_MAIN_END);
     }
 
     // Signal completion
     tensix_sync();
     trisc_run_mailbox_write(KERNEL_COMPLETE);
 
-#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
-    kernel_profiler::mark_time(CC_MAIN_END);
-#endif
+    profiler_mark_time(CC_MAIN_END);
 }

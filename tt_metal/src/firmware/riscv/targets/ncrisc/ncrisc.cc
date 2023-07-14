@@ -57,32 +57,32 @@ inline void allocate_debug_mailbox_buffer() {
   debug_mailbox_base = reinterpret_cast<volatile tt_l1_ptr uint16_t *>(debug_mailbox_addr);
 }
 
+inline void profiler_mark_time(uint32_t timer_id)
+{
+#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
+    kernel_profiler::mark_time(timer_id);
+#endif
+}
+
 int main(int argc, char *argv[]) {
   int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
   l1_to_local_mem_copy((uint*)__ldm_data_start, (uint*)MEM_NCRISC_INIT_LOCAL_L1_BASE, num_words);
 
   kernel_profiler::init_profiler();
 
-#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
-  kernel_profiler::mark_time(CC_MAIN_START);
-#endif
+  profiler_mark_time(CC_MAIN_START);
   allocate_debug_mailbox_buffer();
 
   risc_init();
 
-#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & KERNEL_FUNCT_MARKER)
-  kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
-#endif
+  profiler_mark_time(CC_KERNEL_MAIN_START);
   kernel_init();
-#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & KERNEL_FUNCT_MARKER)
-  kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
-#endif
+  profiler_mark_time(CC_KERNEL_MAIN_END);
 
   *run_mailbox_address = 0x1;
 
-#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
-  kernel_profiler::mark_time(CC_MAIN_END);
-#endif
+  profiler_mark_time(CC_MAIN_END);
+
   while (true);
   return 0;
 }

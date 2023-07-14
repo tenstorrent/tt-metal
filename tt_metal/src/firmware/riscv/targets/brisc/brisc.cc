@@ -258,6 +258,13 @@ void init_sync_registers() {
     }
 }
 
+inline void profiler_mark_time(uint32_t timer_id)
+{
+#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
+    kernel_profiler::mark_time(timer_id);
+#endif
+}
+
 int main() {
 
     int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
@@ -265,9 +272,7 @@ int main() {
 
     kernel_profiler::init_BR_profiler();
 
-#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
-    kernel_profiler::mark_time(CC_MAIN_START);
-#endif
+    profiler_mark_time(CC_MAIN_START);
     RISC_POST_STATUS(0x10000000);
 
     // note: BRISC uses NOC0, NCRISC uses NOC1
@@ -294,15 +299,11 @@ int main() {
         deassert_trisc_reset();
     }
 
-#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & KERNEL_FUNCT_MARKER)
-    kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
-#endif
+    profiler_mark_time(CC_KERNEL_MAIN_START);
     // Run the BRISC kernel
     kernel_init();
 
-#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & KERNEL_FUNCT_MARKER)
-    kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
-#endif
+    profiler_mark_time(CC_KERNEL_MAIN_END);
     if (*use_triscs) {
         while (
             !(*trisc_run_mailbox_addresses[0] == 1 &&
@@ -321,9 +322,7 @@ int main() {
 
     *brisc_run_mailbox_address = 0x1;
 
-#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
-    kernel_profiler::mark_time(CC_MAIN_END);
-#endif
+    profiler_mark_time(CC_MAIN_END);
 
     // Notify dispatcher core that it has completed
     if (dispatch_addr != 0) {
