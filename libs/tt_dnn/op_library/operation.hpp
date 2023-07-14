@@ -186,11 +186,7 @@ class HostOperation {
 
         ProfilerInfo create_profiler_info(const std::vector<Tensor> &input_tensors) const override {
             std::optional<std::string> preferred_name = this->get_type_name();
-
             std::optional<std::string> parallelization_strategy = std::nullopt;
-            if constexpr (detail::implements_get_parallelization_strategy<T>()) {
-                parallelization_strategy = magic_enum::enum_name(this->object.get_parallelization_strategy(input_tensors));
-            }
             return {
                 .preferred_name = preferred_name,
                 .parallelization_strategy = parallelization_strategy
