@@ -41,7 +41,9 @@ jobs:
         with:
           os: ubuntu-20.04
       - name: Build tt-metal
-        run: make build
+        run: |
+          export TT_METAL_HOME=$(pwd)
+          make build
       - name: Activate and build docs
         run: |
           source build/python_env/bin/activate
