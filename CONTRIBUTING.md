@@ -148,6 +148,11 @@ If you forwarded your port, navigate to `http://localhost:8888`.
   #41: Fix data format error in Gelu op.
   ```
 
+- The following is not allowed in commit messages:
+  - Commit messages which state that a code review or comments are being
+    addressed. You must explicitly state what you are doing in each commit even
+    if it's just cosmetic.
+
 ### Code reviews
 
 - A PR must be opened for any code change with the following criteria:
