@@ -594,7 +594,7 @@ operation::Hash BertLargeMatmul::compute_program_hash(
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     const auto& bias_tensor = optional_input_tensors.at(0);
-    return fmt::format("{}_{}", *this, input_tensor_a, input_tensor_b, bias_tensor);
+    return fmt::format("{}_{}_{}_{}", *this, input_tensor_a, input_tensor_b, bias_tensor);
 }
 
 tt::stl::reflection::Attributes BertLargeMatmul::attributes() const {
