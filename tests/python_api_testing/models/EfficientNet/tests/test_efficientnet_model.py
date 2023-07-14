@@ -71,7 +71,9 @@ def make_input_tensor():
     return input_batch
 
 
-def run_efficientnet_model_test(reference_model_class, tt_model_class, pcc=0.99):
+def run_efficientnet_model_test(
+    reference_model_class, tt_model_class, pcc=0.99, real_input=False
+):
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
@@ -79,8 +81,11 @@ def run_efficientnet_model_test(reference_model_class, tt_model_class, pcc=0.99)
     refence_model = reference_model_class(pretrained=True)
 
     torch.manual_seed(0)
-    test_input = torch.rand(1, 3, 224, 224)
-    # test_input = make_input_tensor()
+
+    if real_input:
+        test_input = make_input_tensor()
+    else:
+        test_input = torch.rand(1, 3, 224, 224)
 
     with torch.no_grad():
         refence_model.eval()
@@ -154,3 +159,69 @@ def test_efficientnet_v2_m_model():
 
 def test_efficientnet_v2_l_model():
     run_efficientnet_model_test(torchvision.models.efficientnet_v2_l, efficientnet_v2_l)
+
+
+def test_efficientnet_b0_model_real():
+    run_efficientnet_model_test(
+        torchvision.models.efficientnet_b0, efficientnet_b0, 0.97, real_input=True
+    )
+
+
+def test_efficientnet_b1_model_real():
+    run_efficientnet_model_test(
+        torchvision.models.efficientnet_b1, efficientnet_b1, 0.97, real_input=True
+    )
+
+
+def test_efficientnet_b2_model_real():
+    run_efficientnet_model_test(
+        torchvision.models.efficientnet_b2, efficientnet_b2, 0.96, real_input=True
+    )
+
+
+def test_efficientnet_b3_model_real():
+    run_efficientnet_model_test(
+        torchvision.models.efficientnet_b3, efficientnet_b3, 0.96, real_input=True
+    )
+
+
+def test_efficientnet_b4_model_real():
+    run_efficientnet_model_test(
+        torchvision.models.efficientnet_b4, efficientnet_b4, 0.97, real_input=True
+    )
+
+
+def test_efficientnet_b5_model_real():
+    run_efficientnet_model_test(
+        torchvision.models.efficientnet_b5, efficientnet_b5, 0.97, real_input=True
+    )
+
+
+def test_efficientnet_b6_model_real():
+    run_efficientnet_model_test(
+        torchvision.models.efficientnet_b6, efficientnet_b6, 0.97, real_input=True
+    )
+
+
+def test_efficientnet_b7_model_real():
+    run_efficientnet_model_test(
+        torchvision.models.efficientnet_b7, efficientnet_b7, 0.97, real_input=True
+    )
+
+
+def test_efficientnet_v2_s_model_real():
+    run_efficientnet_model_test(
+        torchvision.models.efficientnet_v2_s, efficientnet_v2_s, 0.97, real_input=True
+    )
+
+
+def test_efficientnet_v2_m_model_real():
+    run_efficientnet_model_test(
+        torchvision.models.efficientnet_v2_m, efficientnet_v2_m, 0.97, real_input=True
+    )
+
+
+def test_efficientnet_v2_l_model_real():
+    run_efficientnet_model_test(
+        torchvision.models.efficientnet_v2_l, efficientnet_v2_l, 0.97, real_input=True
+    )
