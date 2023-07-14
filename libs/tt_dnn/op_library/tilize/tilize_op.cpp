@@ -112,8 +112,8 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
 
     bool out_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t) static_cast<uint32_t>(cb_data_format),
+        (std::uint32_t) output_cb_index,
+        static_cast<uint32_t>(DataFormat::Float16_b),
         (std::uint32_t) out_is_dram
     };
 
@@ -346,12 +346,12 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
         cb_data_format
     );
 
-    uint32_t ouput_cb_index = 16; // output operands start at index 16
+    uint32_t output_cb_index = 16; // output operands start at index 16
     uint32_t num_output_tiles = num_tiles_per_block;
 
     auto cb_output = tt_metal::CreateCircularBuffers(
         program,
-        ouput_cb_index,
+        output_cb_index,
         core,
         num_output_tiles,
         num_output_tiles * single_tile_size,
@@ -399,8 +399,8 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
 
     bool out_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t) static_cast<uint32_t>(cb_data_format),
+        (std::uint32_t) output_cb_index,
+        static_cast<uint32_t>(DataFormat::Float16_b),
         (std::uint32_t) out_is_dram
     };
 

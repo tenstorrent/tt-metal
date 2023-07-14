@@ -59,20 +59,13 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor 
         DataFormat::Float16_b
     );
 
-    uint32_t ouput_cb_index = 16; // output operands start at index 16
-    uint32_t num_output_tiles = 2;
-    auto cb_output = tt_metal::CreateCircularBuffers(
-        program,
-        ouput_cb_index,
-        all_cores,
-        num_output_tiles,
-        num_output_tiles * single_tile_size,
-        DataFormat::Float16_b
-    );
-
     // Op not uplifted for L1 yet, but need to provide arg to kernel
     bool dst_is_dram = true;
-    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(DataFormat::Float16_b), (uint32_t)dst_is_dram};
+    std::vector<uint32_t> writer_compile_time_args = {
+        (std::uint32_t) src0_cb_index,
+        static_cast<uint32_t>(DataFormat::Float16_b),
+        (std::uint32_t) dst_is_dram
+    };
 
     tt_metal::DataMovementKernel *reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
@@ -89,37 +82,6 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor 
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 
-    vector<uint32_t> compute_kernel_args_group_1 = {
-        num_tiles_per_core_group_1, // num_tensor_tiles
-    };
-
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
-    auto compute_kernel_group_1 = tt_metal::CreateComputeKernel(
-        program,
-        "tt_metal/kernels/compute/eltwise_copy.cpp",
-        core_group_1,
-        compute_kernel_args_group_1,
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode
-    );
-
-    if(!core_group_2.ranges().empty()){
-        vector<uint32_t> compute_kernel_args_group_2 = {
-            num_tiles_per_core_group_2, // num_tensor_tiles
-        };
-
-        auto compute_kernel_group_2 = tt_metal::CreateComputeKernel(
-            program,
-            "tt_metal/kernels/compute/eltwise_copy.cpp",
-            core_group_2,
-            compute_kernel_args_group_2,
-            MathFidelity::HiFi4,
-            fp32_dest_acc_en,
-            math_approx_mode
-        );
-    }
 
     for(uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

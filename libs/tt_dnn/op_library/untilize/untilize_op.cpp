@@ -71,11 +71,11 @@ operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& ou
         cb_data_format
     );
 
-    uint32_t ouput_cb_index = 16; // output operands start at index 16
+    uint32_t output_cb_index = 16; // output operands start at index 16
     uint32_t num_output_tiles = num_tiles_per_block;
     auto cb_output = tt_metal::CreateCircularBuffers(
         program,
-        ouput_cb_index,
+        output_cb_index,
         core,
         num_output_tiles,
         num_output_tiles * single_tile_size,
@@ -295,7 +295,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
     const uint32_t padded_Y_diff_blocks = (a.shape()[2] - output_shape[2]) / TILE_HEIGHT * num_blocks_w_input;
     const uint32_t padded_Z_diff_blocks = (a.shape()[1] - output_shape[1]) * a.shape()[2] / TILE_HEIGHT * num_blocks_w_input;
     const uint32_t padded_W_diff_blocks = (a.shape()[0] - output_shape[0]) * a.shape()[1] * a.shape()[2] / TILE_HEIGHT * num_blocks_w_input;
-    const uint32_t num_leftover_Y = output_shape[2] - output_shape[2] / 32 * 32;
+    const uint32_t num_leftover_Y = output_shape[2] - output_shape[2] / TILE_HEIGHT * TILE_HEIGHT;
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = num_tiles_per_block;
@@ -308,11 +308,11 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
         cb_data_format
     );
 
-    uint32_t ouput_cb_index = 16; // output operands start at index 16
+    uint32_t output_cb_index = 16; // output operands start at index 16
     uint32_t num_output_tiles = num_tiles_per_block;
     auto cb_output = tt_metal::CreateCircularBuffers(
         program,
-        ouput_cb_index,
+        output_cb_index,
         core,
         num_output_tiles,
         num_output_tiles * single_tile_size,

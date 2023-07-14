@@ -58,11 +58,11 @@ operation::ProgramWithCallbacks reduce_single_core(const Tensor &a, Tensor& outp
         DataFormat::Float16_b
     );
 
-    uint32_t ouput_cb_index = 16; // output operands start at index 16
+    uint32_t output_cb_index = 16; // output operands start at index 16
     uint32_t num_output_tiles = 2;
     auto cb_output = tt_metal::CreateCircularBuffers(
         program,
-        ouput_cb_index,
+        output_cb_index,
         core,
         num_output_tiles,
         num_output_tiles * single_tile_size,

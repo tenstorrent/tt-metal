@@ -82,11 +82,11 @@ operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &a, const Tensor
 		cb_data_format
 	);
 
-	uint32_t ouput_cb_index = 16; // output operands start at index 16
+	uint32_t output_cb_index = 16; // output operands start at index 16
 	uint32_t num_output_tiles = 2;
 	auto cb_output = tt_metal::CreateCircularBuffers(
 		program,
-		ouput_cb_index,
+		output_cb_index,
 		all_cores,
 		num_output_tiles,
 		num_output_tiles * single_tile_size,

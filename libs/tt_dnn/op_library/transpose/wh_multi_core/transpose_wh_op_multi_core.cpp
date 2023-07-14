@@ -64,11 +64,11 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
     );
     // no need to create a buffer at CB::c_in2 since we pass scaler=0
 
-    uint32_t ouput_cb_index = 16; // output operands start at index 16
+    uint32_t output_cb_index = 16; // output operands start at index 16
     uint32_t num_output_tiles = 2;
     auto cb_output = tt_metal::CreateCircularBuffers(
         program,
-        ouput_cb_index,
+        output_cb_index,
         all_cores,
         num_output_tiles,
         num_output_tiles * single_tile_size,
@@ -77,7 +77,11 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
 
     // Op not uplifted for L1 yet, but need to provide arg to kernel
     bool dst_is_dram = true;
-    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(DataFormat::Float16_b), (uint32_t)dst_is_dram};
+    std::vector<uint32_t> writer_compile_time_args = {
+        (std::uint32_t) output_cb_index,
+        static_cast<uint32_t>(DataFormat::Float16_b),
+        (std::uint32_t) dst_is_dram
+    };
 
     tt_metal::DataMovementKernel *reader_kernel = tt_metal::CreateDataMovementKernel(
         program,

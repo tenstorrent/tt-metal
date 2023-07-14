@@ -49,18 +49,13 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
         DataFormat::Float16_b
     );
 
-
-    uint32_t ouput_cb_index = 16; // output operands start at index 16
-    uint32_t num_output_tiles = 2;
-    auto cb_output = tt_metal::CreateCircularBuffers(
-        program,
-        ouput_cb_index,
-        core,
-        num_output_tiles,
-        num_output_tiles * single_tile_size,
-        DataFormat::Float16_b
-    );
-    // no need to create c_in2 buffer since we pass scaler=0 to reader
+    // Op not uplifted for L1 yet, but need to provide arg to kernel
+    bool dst_is_dram = true;
+    std::vector<uint32_t> writer_compile_time_args = {
+        (std::uint32_t) src0_cb_index,
+        static_cast<uint32_t>(DataFormat::Float16_b),
+        (std::uint32_t) dst_is_dram
+    };
 
     tt_metal::DataMovementKernel *unary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
@@ -71,28 +66,11 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
 
     tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_8bank.cpp",
+        "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
+        writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
-
-    vector<uint32_t> compute_kernel_args = {
-        num_tiles, // per_core_block_cnt
-        1 // per_core_block_size
-    };
-
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
-    auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
-        program,
-        "tt_metal/kernels/compute/eltwise_copy.cpp",
-        core,
-        compute_kernel_args,
-        MathFidelity::HiFi4,
-        fp32_dest_acc_en,
-        math_approx_mode
-    );
-
 
     tt_metal::SetRuntimeArgs(
         unary_reader_kernel,
@@ -109,9 +87,7 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
         unary_writer_kernel,
         core,
         {dst_dram_buffer->address(),
-        uint32_t(dram_dst_noc_xy.x),
-        uint32_t(dram_dst_noc_xy.y),
-        num_tiles }
+        num_tiles, 0 }
     );
 
     auto override_runtime_args_callback = [unary_reader_kernel, unary_writer_kernel](
@@ -122,7 +98,6 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
         auto src_dram_buffer = input_buffers.at(0);
 
         auto dst_dram_buffer = output_buffers.at(0);
-        auto dst_dram_noc_xy = dst_dram_buffer->noc_coordinates();
 
         CoreCoord core = {0, 0};
 
@@ -135,8 +110,6 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
         {
             auto runtime_args = GetRuntimeArgs(unary_writer_kernel, core);
             runtime_args[0] = dst_dram_buffer->address();
-            runtime_args[1] = uint32_t(dst_dram_noc_xy.x);
-            runtime_args[2] = uint32_t(dst_dram_noc_xy.y);
             SetRuntimeArgs(unary_writer_kernel, core, runtime_args);
         }
     };

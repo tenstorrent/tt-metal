@@ -100,11 +100,11 @@ operation::ProgramWithCallbacks matmul_multi_core_(const Tensor &a, const Tensor
         cb_data_format
     );
 
-    uint32_t ouput_cb_index = 16; // output operands start at index 16
+    uint32_t output_cb_index = 16; // output operands start at index 16
     uint32_t num_output_tiles = 2;
     auto cb_output = tt_metal::CreateCircularBuffers(
         program,
-        ouput_cb_index,
+        output_cb_index,
         all_cores,
         num_output_tiles,
         num_output_tiles * single_tile_size,
@@ -115,7 +115,11 @@ operation::ProgramWithCallbacks matmul_multi_core_(const Tensor &a, const Tensor
     std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(cb_data_format), (uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(cb_data_format), (uint32_t)dst_is_dram};
+    std::vector<uint32_t> writer_compile_time_args = {
+        (std::uint32_t) output_cb_index,
+        static_cast<uint32_t>(cb_data_format),
+        (std::uint32_t) dst_is_dram
+    };
 
     auto reader = tt_metal::CreateDataMovementKernel(
         program,
