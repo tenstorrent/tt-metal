@@ -223,7 +223,7 @@ template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, E
 inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index, const bool transpose_of_faces = 0) {
     std::uint32_t input = get_operand_id(operand);
     std::uint32_t base_address = operands[input].f.fifo_rd_ptr;
-    std::uint32_t offset_address = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[input], tile_index);
+    std::uint32_t offset_address = operands[input].f.tile_size_words * tile_index;
     std::uint32_t address = base_address + offset_address;
 
     // Clear z/w start counters

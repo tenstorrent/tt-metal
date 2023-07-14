@@ -30,6 +30,7 @@ inline void llk_setup_operands() {
         operands[input].f.curr_block = 0; // current number of ublocks written into interm buffer
         operands[input].f.num_iter = 0; // number of passes through interm buffer (aka k-1)
         operands[input].f.curr_iter = 0; // current number of passes through interm buffer
+        operands[input].f.tile_size_words =EPOCH_INFO_PTR->inputs[n]->tile_size_words;
 
         volatile std::uint32_t tt_reg_ptr * phase_changed_ptr = get_operand_phase_changed_ptr(stream_id_to_operand(stream_id));
         *phase_changed_ptr = 0;
@@ -125,7 +126,7 @@ inline void llk_pop_tiles(
     if constexpr (pop_blocks) {
         num_words = num_tiles * GET_L1_HEADERLESS_TILE_SIZE((uint)unpack_src_format[input]);
     } else {
-        num_words = num_tiles * GET_L1_TILE_SIZE((uint)unpack_src_format[input]);
+        num_words = num_tiles * operands[input].f.tile_size_words;
     }
 
 #if defined(PERF_DUMP)
@@ -172,7 +173,7 @@ inline void llk_pop_tiles(
 inline void llk_clear_tiles(std::uint32_t operand, std::uint32_t num_tiles) {
     std::uint32_t input = operand_to_input_index(operand);
     if (operands[input].f.accumulation_buffer) {
-        std::uint32_t num_words = num_tiles * GET_L1_TILE_SIZE((uint)unpack_src_format[input]);
+        std::uint32_t num_words = num_tiles * operands[input].f.tile_size_words;
 
         operands[input].f.fifo_rd_ptr += num_words;
 

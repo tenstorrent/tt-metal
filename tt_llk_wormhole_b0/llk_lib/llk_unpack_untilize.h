@@ -59,7 +59,7 @@ inline void llk_unpack_untilize_hw_configure(const llk_unpack_untilize_params_t 
         ((((int)unpack_dst_format[input] & 0x3) == 1) ? 0x80 : 0x40)
         << UNP0_ADDR_BASE_REG_1_Base_SHAMT;  // base address skips halo rows in srcA (ch1)
 
-    regfile[p_gpr_unpack::TILE_SIZE] = GET_L1_TILE_SIZE((uint)unpack_src_format[input]);
+    regfile[p_gpr_unpack::TILE_SIZE] = operands[input].f.tile_size_words;
     regfile[p_gpr_unpack::TILE_OFFSET] = 0;
     TTI_SETDMAREG(0, 0, 0, LO_16(p_gpr_unpack::TILE_OFFSET));
     TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG7_Offset_address_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);

@@ -93,6 +93,13 @@ inline void llk_unpack_AB_matmul_hw_configure(const llk_unpack_AB_matmul_params_
 
     // Configure tile size
     configure_unpack_AB_tile_size(unpack_AB_params->in0_tile_dims, unpack_AB_params->in1_tile_dims);
+
+    // TODO: Scale based on the tile size
+    std::uint32_t inputA = get_operand_id(unpack_AB_params->unpB_operand);
+    std::uint32_t inputB = get_operand_id(unpack_AB_params->unpA_operand);
+    regfile[p_gpr_unpack::TILE_SIZE_A] = operands[inputA].f.tile_size_words;
+    regfile[p_gpr_unpack::TILE_SIZE_B] = operands[inputB].f.tile_size_words;
+    sync_regfile_write(p_gpr_unpack::TILE_SIZE_B);
 }
 
 template<bool is_fp32_dest_acc_en = false, bool srnd_fpu_en = false>
@@ -114,6 +121,7 @@ inline void llk_unpack_AB_matmul_init(const std::uint32_t transpose=0, const std
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose);
 
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+
     configure_unpack_AB_tile_size(in0_tile_dims, in1_tile_dims);
 
     TT_SETDMAREG(0, LOWER_HALFWORD(kt_dim), 0, LO_16(p_gpr_unpack::KT_DIM)); // store kt_dim to gpr for scaling tile size
@@ -140,10 +148,10 @@ inline void llk_unpack_AB_matmul(
 
     for (uint t = 0; t < t_dim; t++) {
 
-        std::uint32_t offset_address_a = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[inputA], (tile_index_a + (reuse_a ? (t*kt_dim) : (0))));
-        std::uint32_t next_offset_address_a = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[inputA], (tile_index_a + (reuse_a ? ((t+1)*kt_dim) : (0))));
-        std::uint32_t offset_address_b = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[inputB], (tile_index_b + (reuse_a ? (0       ) : (t))));
-        std::uint32_t next_offset_address_b = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[inputB], (tile_index_b + (reuse_a ? (0       ) : (t+1))));
+        std::uint32_t offset_address_a = operands[inputA].f.tile_size_words*(tile_index_a + (reuse_a ? (t*kt_dim) : (0)));
+        std::uint32_t next_offset_address_a = operands[inputA].f.tile_size_words*(tile_index_a + (reuse_a ? ((t+1)*kt_dim) : (0)));
+        std::uint32_t offset_address_b = operands[inputB].f.tile_size_words*(tile_index_b + (reuse_a ? (0       ) : (t)));
+        std::uint32_t next_offset_address_b = operands[inputB].f.tile_size_words*(tile_index_b + (reuse_a ? (0       ) : (t+1)));
         std::uint32_t address_a = base_address_a + offset_address_a;
         std::uint32_t next_address_a = base_address_a + next_offset_address_a;
         std::uint32_t address_b = base_address_b + offset_address_b;

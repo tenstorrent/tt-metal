@@ -54,13 +54,14 @@ typedef struct {
    uint16_t num_iter;  // total number of passes through the interm buffer per input
    uint16_t curr_iter;  // current numer of passes through the interm buffer per input
    uint32_t fifo_rd_base_ptr;
+   uint32_t tile_size_words;
 } operand_t;
 
-static_assert(sizeof(operand_t) == (sizeof(uint32_t) * 8));
+static_assert(sizeof(operand_t) == (sizeof(uint32_t) * 9));
 
 typedef union {
    operand_t f;
-   uint32_t val[8];
+   uint32_t val[9];
 } operand_u;
 
 typedef struct {
@@ -72,14 +73,13 @@ typedef struct {
    uint16_t fifo_wr_tile_ptr;
    uint16_t tiles_received;
    uint32_t dram_output_no_push;
+   uint16_t tile_size_words;
    bool     legacy_pack;
-   uint8_t  reserved_0;
    uint8_t  fork;
    uint8_t  num_fork_streams;
    bool     shared_buffer;  // interm buffer is shared with output
    uint8_t  shared_buffer_operand; //shared buffer output operand 
    bool     accumulation_buffer;  // interm buffer used for accumulation
-   uint8_t  reserved_1[1];
    uint8_t  fork_stream_ids[16];
    union {
       uint16_t ublock_ct;       //ublock ct dim in tiles

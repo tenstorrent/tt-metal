@@ -332,7 +332,7 @@ namespace ckernel::packer
       // Set l1 address offset
       set_packer_l1_offset(operand_id);
 
-      TT_SETDMAREG(0, LOWER_HALFWORD(GET_L1_TILE_SIZE((uint)pack_dst_format[operand_id])), 0, LO_16(p_gpr_pack::TILE_HEADER));
+      TT_SETDMAREG(0, LOWER_HALFWORD((std::uint32_t)outputs[operand_id].f.tile_size_words), 0, LO_16(p_gpr_pack::TILE_HEADER));
 
       // Workaround for HW bug: tenstorrent/budabackend#1394
       if constexpr (is_fp32_dest_acc_en) {
@@ -397,7 +397,7 @@ namespace ckernel::packer
       cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32]=pck_edge_offset.val;
       cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32] = 0x0; // All packers use row set mapping 0, edge offset 0 mask 
 
-      regfile[p_gpr_pack::TILE_HEADER]   = GET_L1_TILE_SIZE((uint)pack_dst_format[pack_output]);
+      regfile[p_gpr_pack::TILE_HEADER]   = (std::uint32_t)outputs[pack_output].f.tile_size_words;
       regfile[p_gpr_pack::TILE_HEADER+1] = 0;
       regfile[p_gpr_pack::TILE_HEADER+2] = 0;
       regfile[p_gpr_pack::TILE_HEADER+3] = 0;

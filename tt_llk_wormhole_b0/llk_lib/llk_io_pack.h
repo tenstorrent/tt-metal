@@ -35,6 +35,7 @@ inline void llk_setup_outputs() {
         outputs[output].f.tiles_received = is_intermediate_operand ? reg_read((uint32_t)&tiles_received_ptr[0]) : 0;
         outputs[output].f.legacy_pack = legacy_pack;
         outputs[output].f.fifo_wr_base_ptr = fifo_addr;
+        outputs[output].f.tile_size_words = (std::uint16_t)EPOCH_INFO_PTR->outputs[n]->tile_size_words;
 
         stream_should_packer_reset_pointers(stream_id);
 
@@ -149,7 +150,7 @@ template <bool skip_sync = false, bool wait_for_blocks = false, bool brisc_pack 
 inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32_t num_tiles) {
 
     std::uint32_t output = operand_to_output_index(operand);
-    std::uint32_t num_words = num_tiles * GET_L1_TILE_SIZE((uint)pack_dst_format[output]);
+    std::uint32_t num_words = num_tiles * (std::uint32_t)outputs[output].f.tile_size_words;
     bool legacy_pack = false;
     std::uint32_t dram_output_no_push = outputs[output].f.dram_output_no_push;
     if constexpr (brisc_pack) {
@@ -157,7 +158,7 @@ inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32
     } 
 
     if constexpr (wait_for_blocks) {
-        num_words = num_tiles * GET_L1_HEADERLESS_TILE_SIZE((uint)pack_dst_format[output]);
+        num_words = num_tiles * (std::uint32_t)outputs[output].f.tile_size_words;
     }
 
     volatile std::uint32_t tt_reg_ptr * tiles_acked_ptr;
@@ -404,7 +405,7 @@ template <bool push_blocks = false, bool brisc_pack = false>
 inline void llk_push_tiles(const std::int32_t operand, const std::int32_t num_tiles) {
 
     std::uint32_t output = operand_to_output_index(operand);
-    std::uint32_t num_words = num_tiles * GET_L1_TILE_SIZE((uint)pack_dst_format[output]);
+    std::uint32_t num_words = num_tiles * (std::uint32_t)outputs[output].f.tile_size_words;
     std::uint32_t num_tiles_in_block = 0;
     bool legacy_pack = false;
     if constexpr (brisc_pack) {
@@ -426,7 +427,7 @@ inline void llk_push_tiles(const std::int32_t operand, const std::int32_t num_ti
         if (outputs[output].f.block_tile_cnt < outputs[output].f.block_tile_dim) {
           return; //row of ublocks not ready yet
         } else {
-           num_words = num_tiles_in_block * GET_L1_HEADERLESS_TILE_SIZE((uint)pack_dst_format[output]);
+           num_words = num_tiles_in_block * (std::uint32_t)outputs[output].f.tile_size_words;
            if (!brisc_auto_clearing_en) {
                stream_set_tiles_left_in_phase(stream_id, num_tiles_in_block);
            }

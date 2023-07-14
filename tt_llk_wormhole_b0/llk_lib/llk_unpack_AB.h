@@ -125,10 +125,10 @@ inline void llk_unpack_AB(
     std::uint32_t inputA = get_operand_id(operandA);
     std::uint32_t inputB = get_operand_id(operandB);
     std::uint32_t base_address_a = operands[inputA].f.fifo_rd_ptr;
-    std::uint32_t offset_address_a = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[inputA], tile_index_a);
+    std::uint32_t offset_address_a = operands[inputA].f.tile_size_words * tile_index_a;
     std::uint32_t address_a = base_address_a + offset_address_a;
     std::uint32_t base_address_b = operands[inputB].f.fifo_rd_ptr;
-    std::uint32_t offset_address_b = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[inputB], tile_index_b);
+    std::uint32_t offset_address_b = operands[inputB].f.tile_size_words * tile_index_b;
     std::uint32_t address_b = base_address_b + offset_address_b;
 
     // Clear z/w start counters

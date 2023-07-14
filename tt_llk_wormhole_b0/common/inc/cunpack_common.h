@@ -298,10 +298,6 @@ namespace ckernel::unpacker
       const uint Tile_x_dim = 256;
       cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32] = Tile_x_dim | (Tile_x_dim << 16);
 
-      // TODO: Scale based on the tile size
-      regfile[p_gpr_unpack::TILE_SIZE_A]   = GET_L1_TILE_SIZE((uint)unpack_src_format[unpA_operand]);
-      regfile[p_gpr_unpack::TILE_SIZE_B]   = GET_L1_TILE_SIZE((uint)unpack_src_format[unpB_operand]);
-      sync_regfile_write(p_gpr_unpack::TILE_SIZE_B);
 
       TTI_SETC16(SRCA_SET_Base_ADDR32, 0x4);
 

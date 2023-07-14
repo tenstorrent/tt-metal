@@ -84,6 +84,7 @@ static_assert((DEST_NUM_TILES_FP16 & (DEST_NUM_TILES_FP16 - 1)) == 0);
 
 #define SCALE_DATUM_SIZE(format,datum_count) (((format&0x3) == (uint8_t)DataFormat::Float32) ? (datum_count<<2) : (datum_count<<1))
 
+/*
 constexpr static std::int32_t MUL_TILE_SIZE_AND_INDEX(uint format, uint index) {
     switch (format&0x1F) {
         case ((uint8_t)DataFormat::Float32): return ((index<<8)+(index<<1));
@@ -136,7 +137,6 @@ constexpr static std::int32_t GET_L1_TILE_SIZE(uint format) {
     };
 }
 
-
 constexpr static std::int32_t GET_DEST_TILE_BYTE_SIZE(uint format) {
     switch (format&0x1F) {
         case ((uint8_t)DataFormat::Float32): return 4096;
@@ -153,6 +153,7 @@ constexpr static std::int32_t GET_DEST_TILE_BYTE_SIZE(uint format) {
         default: return 1024;
     };
 }
+*/
 
 constexpr static std::int32_t GET_L1_HEADERLESS_TILE_SIZE(uint format) {
     switch (format&0x1F) {

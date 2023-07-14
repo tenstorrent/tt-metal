@@ -39,7 +39,7 @@ template <bool mail2math=true, bool mail2pack=true>
 inline void llk_unpack_get_tile(std::uint32_t operand, std::uint32_t tile_index, std::uint32_t *p_tile) {
     std::uint32_t input = get_operand_id(operand);
     std::uint32_t base_address = operands[input].f.fifo_rd_ptr;
-    std::uint32_t offset_address = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[input], tile_index);
+    std::uint32_t offset_address = operands[input].f.tile_size_words * tile_index;
     std::uint32_t byte_address = (base_address + offset_address + TILE_HEADER_SIZE)<<4;
 
     if constexpr (mail2math) {
@@ -72,14 +72,14 @@ inline void llk_unpack_reconfig_data_format_srca_impl(std::uint32_t srca_operand
 {
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 0, 0x0f>(unpack_src_format[srca_operand_id]);
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Out_data_format_RMW>(unpack_dst_format[srca_operand_id]);
-    TT_SETDMAREG(0, LOWER_HALFWORD(GET_L1_TILE_SIZE((uint)unpack_src_format[srca_operand_id])), 0, LO_16(p_gpr_unpack::TILE_SIZE_A)); // update gpr which holds tile size A
+    TT_SETDMAREG(0, LOWER_HALFWORD(operands[srca_operand_id].f.tile_size_words), 0, LO_16(p_gpr_unpack::TILE_SIZE_A)); // update gpr which holds tile size A
 }
 
 inline void llk_unpack_reconfig_data_format_srcb_impl(std::uint32_t srcb_operand_id)
 {
     cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 0, 0x0f>(unpack_src_format[srcb_operand_id]);
     cfg_reg_rmw_tensix<THCON_SEC1_REG2_Out_data_format_RMW>(unpack_dst_format[srcb_operand_id]);
-    TT_SETDMAREG(0, LOWER_HALFWORD(GET_L1_TILE_SIZE((uint)unpack_src_format[srcb_operand_id])), 0, LO_16(p_gpr_unpack::TILE_SIZE_B)); // update gpr which holds tile size B
+    TT_SETDMAREG(0, LOWER_HALFWORD(operands[srcb_operand_id].f.tile_size_words), 0, LO_16(p_gpr_unpack::TILE_SIZE_B)); // update gpr which holds tile size B
 }
 
 inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_new_operand) {

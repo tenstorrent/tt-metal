@@ -141,25 +141,23 @@ inline std::uint32_t get_output_tile_address(std::uint8_t output_id, std::uint32
     std::uint32_t pack_tile_addr;
     if constexpr (out_of_order_output) {
         pack_tile_addr = outputs[output_id].f.fifo_wr_ptr +
-                         MUL_TILE_SIZE_AND_INDEX((std::uint8_t)pack_dst_format[output_id], (std::uint16_t)output_tile_index);
+                        (std::uint32_t)(outputs[output_id].f.tile_size_words)*output_tile_index;
     } else {
         if constexpr (untilize) {
             std::uint16_t out_tile_index = (outputs[output_id].f.ublock_tile_cnt/outputs[output_id].f.ublock_ct)*outputs[output_id].f.row_tile_dim +
                                             outputs[output_id].f.ublock_tile_cnt%outputs[output_id].f.ublock_ct; //FIXME: optimize perf
             pack_tile_addr = outputs[output_id].f.fifo_wr_ptr + outputs[output_id].f.fifo_wr_tile_ptr - 1;
-            pack_tile_addr += out_tile_index*GET_L1_HEADERLESS_TILE_SIZE((std::uint8_t)pack_dst_format[output_id]);
-
-            //outputs[output_id].f.fifo_wr_tile_ptr += GET_L1_HEADERLESS_TILE_SIZE((std::uint8_t)pack_dst_format[output_id]);
+            pack_tile_addr += out_tile_index*(std::uint32_t)(outputs[output_id].f.tile_size_words);
 
             outputs[output_id].f.ublock_tile_cnt++;
 
             if (outputs[output_id].f.ublock_tile_cnt == outputs[output_id].f.ublock_tile_dim) {
                outputs[output_id].f.ublock_tile_cnt=0;
-               outputs[output_id].f.fifo_wr_tile_ptr += GET_L1_HEADERLESS_TILE_SIZE((std::uint8_t)pack_dst_format[output_id])*outputs[output_id].f.ublock_ct; //FIXME: optimize perf
+               outputs[output_id].f.fifo_wr_tile_ptr += (std::uint32_t)(outputs[output_id].f.tile_size_words)*outputs[output_id].f.ublock_ct;
             }
         } else {
             pack_tile_addr = outputs[output_id].f.fifo_wr_ptr + outputs[output_id].f.fifo_wr_tile_ptr;
-            outputs[output_id].f.fifo_wr_tile_ptr += GET_L1_TILE_SIZE((std::uint8_t)pack_dst_format[output_id]);
+            outputs[output_id].f.fifo_wr_tile_ptr += outputs[output_id].f.tile_size_words;
         }
     }
     return pack_tile_addr;
