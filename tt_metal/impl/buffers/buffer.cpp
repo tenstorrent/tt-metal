@@ -1,5 +1,7 @@
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
+#include "tt_metal/hostdevcommon/common_values.hpp"
+#include "tt_metal/common/tile_math.hpp"
 
 #include "llrt/llrt.hpp"
 
@@ -113,7 +115,7 @@ u64 Buffer::page_address(u32 bank_id, u32 page_index) const {
         this->address_ + this->device_->l1_bank_offset_from_bank_id(bank_id);
 
     int pages_handled_in_bank = (int)page_index / num_banks;
-    auto offset = (this->page_size_ * pages_handled_in_bank);
+    auto offset = (roundup(this->page_size_, ADDRESS_ALIGNMENT) * pages_handled_in_bank);
     return base_page_address + offset;
 }
 

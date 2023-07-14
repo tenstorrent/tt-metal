@@ -51,6 +51,25 @@ class DeviceHarness : public ::testing::Test {
     }
 };
 
+class L1BankingDeviceHarness : public ::testing::Test {
+   protected:
+    tt::ARCH arch;
+    Device* device;
+    u32 pcie_id;
+
+    void SetUp() override {
+        this->arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        const int pci_express_slot = 0;
+        this->pcie_id = pci_express_slot;
+        this->device = tt::tt_metal::CreateDevice(arch, pci_express_slot);
+        tt::tt_metal::InitializeDevice(this->device, tt::tt_metal::MemoryAllocator::L1_BANKING);
+    }
+
+    void TearDown() override {
+        tt::tt_metal::CloseDevice(this->device);
+    }
+};
+
 class CoreCoordHarness : public ::testing::Test {
    protected:
     CoreRange cr1 = {.start={0, 0}, .end={1, 1}};

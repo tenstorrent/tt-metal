@@ -464,7 +464,8 @@ void WriteToDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
     uint32_t num_pages = buffer.size() / page_size;
 
     static constexpr uint32_t bytes_per_page_entry = sizeof(uint32_t);
-    uint32_t num_entries_per_page = buffer.size() / (num_pages * bytes_per_page_entry);
+    TT_ASSERT(page_size % bytes_per_page_entry == 0);
+    uint32_t num_entries_per_page = page_size / bytes_per_page_entry;
 
     auto device = buffer.device();
     auto num_banks = device->num_banks(buffer.buffer_type());
@@ -519,7 +520,6 @@ void ReadFromDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
     TT_ASSERT(buffer.size() % page_size == 0);
     uint32_t num_pages = buffer.size() / page_size;
 
-    static constexpr uint32_t bytes_per_page_entry = sizeof(uint32_t);
     auto device = buffer.device();
     auto num_banks = device->num_banks(buffer.buffer_type());
 
