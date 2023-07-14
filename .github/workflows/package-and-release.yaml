@@ -15,13 +15,34 @@ jobs:
       bump_each_commit: true
     secrets:
       CHECKOUT_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
+  build-eager-package:
+    needs: create-tag
+    strategy:
+      matrix:
+        os: [ubuntu-20.04]
+        arch: [grayskull, wormhole_b0]
+    uses: ./.github/workflows/eager-package.yaml
+    with:
+      environment: dev
+      os: ${{ matrix.os }}
+      arch: ${{ matrix.arch }}
+    secrets:
+      CHECKOUT_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
   # Candidate for breaking up
   create-and-upload-release:
-    needs: create-tag
+    needs: [create-tag, build-eager-package]
+    strategy:
+      matrix:
+        os: [ubuntu-20.04]
+        arch: [grayskull, wormhole_b0]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v3
+      - name: Download eager Python packages
+        uses: actions/download-artifact@v3
+        with:
+          name: eager-dist-${{ matrix.os }}-${{ matrix.arch }}
       - name: Create VERSION
         run: echo ${{ needs.create-tag.outputs.version }} > VERSION
       - name: Release
@@ -29,5 +50,7 @@ jobs:
         with:
           tag_name: ${{ needs.create-tag.outputs.version }}
           name: ${{ needs.create-tag.outputs.version }}
-          files: VERSION
-          lfs: true
+          files: |
+            metal_libs-*+*.whl
+            VERSION
+          fail_on_unmatched_files: true

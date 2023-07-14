@@ -66,7 +66,7 @@ def get_buda_eager_local_version_scheme(buda_eager_build_config, version):
 
 def get_buda_eager_main_version_scheme(buda_eager_build_config, version):
     from setuptools_scm.version import ScmVersion, guess_next_version
-    is_release_version = version.distance == 0
+    is_release_version = version.distance is None or version.distance == 0
     is_dirty = version.dirty
     is_clean_prod_build = (not is_dirty) and is_release_version
 

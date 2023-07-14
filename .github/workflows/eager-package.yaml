@@ -36,6 +36,8 @@ jobs:
       - uses: ./.github/actions/install-metal-dev-deps
         with:
           os: ${{ inputs.os }}
+      - name: Clean up dirty files
+        run: git clean -f -d
       - name: Set up dyanmic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
