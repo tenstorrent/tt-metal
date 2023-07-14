@@ -14,7 +14,7 @@
 
 ## Installing
 
-### From source on a Tenstorrent machine
+### From source - Tenstorrent machine
 
 Currently, the best way to use our software is through a
 Tenstorrent-provisioned cloud machine and building from source.
@@ -78,22 +78,63 @@ source build/python_env/bin/activate
 You should look ahead to [Getting started](#getting-started) to further use
 this project.
 
-### From a release wheel (BUDA-Eager only)
+### From a release wheel
 
 This section is under construction.
 
-0. Install the system-level dependencies of this project. Under construction.
+Wheel files are available through the
+[releases](https://github.com/tenstorrent-metal/tt-metal/releases) page.
+
+#### Install dependencies
+
+#### Common
+
+We assume that you have the following accelerator-level dependencies:
+
+For Grayskull:
+
+- TTKMD driver 1.20.1
+- ``tt-flash`` 2023-06-28
+- ``tt-smi`` tt-smi_2023-06-16-0283a02404487eea or above
+
+For Wormhole B0:
+
+- TTKMD driver 1.20.1
+- ``tt-flash`` 2023-03-29
+- ``tt-smi`` tt-smi-wh-8.4.0.0_2023-06-29-96bed10da092442c or above
+
+#### Ubuntu
+
+Install the host system-level dependencies through `apt`.
+
+```
+sudo apt install software-properties-common=0.99.9.11
+build-essential=12.8ubuntu1.1 python3.8-venv=3.8.10-0ubuntu1~20.04.8
+libgoogle-glog-dev=0.4.0-1build1 libyaml-cpp-dev=0.6.2-4ubuntu1
+libboost-all-dev=1.71.0.0ubuntu2 libsndfile1=1.0.28-7ubuntu0.1
+```
+
+#### Install wheel
 
 1. You must add an extra index URL to download the necessary dependencies
 during wheel installation. Do so:
 
 ```
-python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu
+pip config set global.extra-index-url https://download.pytorch.org/whl/cpu
 ```
 
-2. Install the wheel into your environment and then activate your environment.
+Note: Ensure that you're using the correct ``pip`` when adding the index.
 
-3. Set up the necessary environment for a user environment.
+2. Install the wheel into your environment and then activate your environment.
+For example, if you'd like to use a ``venv`` from Python 3.8, you can do:
+
+```
+python3 -m venv env
+source env/bin/activate
+python -m pip install <wheel_file_name>
+```
+
+3. Set up the necessary environment variables for a user environment.
 
 ```
 export ARCH_NAME=<arch name>
