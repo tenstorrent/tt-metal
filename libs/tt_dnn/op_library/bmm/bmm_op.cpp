@@ -261,7 +261,7 @@ namespace tt {
 namespace tt_metal {
 
 Tensor large_bmm(const Tensor& a, const Tensor& b, bool tilize_act, bool untilize_out) {
-    auto parallelization_strategy = BatchedMatmul{}.get_parallelization_strategy({a, b});
+    auto parallelization_strategy = Matmul{}.get_parallelization_strategy({a, b});
     if (parallelization_strategy != BmmOpParallelizationStrategy::SINGLE_CORE) {
         log_warning("WARNING: Only single core mode supported for large_bmm. Falling back to single core.");
     }
@@ -290,8 +290,20 @@ Tensor large_bmm_single_block(const Tensor& a, const Tensor& b, bool tilize_a, b
 
 void Matmul::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    const auto& input_tensor_b = input_tensors.at(1);    TT_ASSERT(input_tensor_a.shape()[3] == input_tensor_b.shape()[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
-    TT_ASSERT(input_tensor_b.shape()[0] * input_tensor_b.shape()[1] == 1 && "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN");
+    const auto& input_tensor_b = input_tensors.at(1);
+    TT_ASSERT((input_tensor_a.layout() == Layout::TILE && input_tensor_b.layout() == Layout::TILE), "Inputs to matmul must be tilized");
+    if (this->bcast_batch) {
+        TT_ASSERT(input_tensor_b.shape()[0] * input_tensor_b.shape()[1] == 1 && "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN");
+    } else {
+        TT_ASSERT(input_tensor_a.shape()[1] == input_tensor_b.shape()[1] && input_tensor_a.shape()[0] == input_tensor_b.shape()[0] && "bmm (non-bcast matmul) expects input tensors of shapes BCMK*BCKN=BCMN");
+    }
+    TT_ASSERT(input_tensor_a.shape()[3] == input_tensor_b.shape()[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
+
+    TT_ASSERT(input_tensor_a.dtype() == input_tensor_b.dtype());
+    TT_ASSERT(input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
+    TT_ASSERT(input_tensor_a.storage_type() == StorageType::DEVICE and input_tensor_b.storage_type() == StorageType::DEVICE, "Operands to matmul need to be on device!");
+    TT_ASSERT(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
+    TT_ASSERT(input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
 }
 
 std::vector<Shape> Matmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
@@ -307,28 +319,29 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
 
 operation::ProgramWithCallbacks Matmul::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    const auto& input_tensor_b = input_tensors.at(1);    auto& output_tensor = output_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);
+    auto& output_tensor = output_tensors.at(0);
 
     auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
 
     switch (parallelization_strategy){
         case BmmOpParallelizationStrategy::MULTI_CORE:
-            return matmul_multi_core(input_tensor_a, input_tensor_b, output_tensor);
+            return matmul_multi_core(input_tensor_a, input_tensor_b, output_tensor, this->bcast_batch);
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE:
-            return matmul_multi_core_reuse(input_tensor_a, input_tensor_b, output_tensor);
+            return matmul_multi_core_reuse(input_tensor_a, input_tensor_b, output_tensor, this->bcast_batch);
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST:
-            return matmul_multi_core_reuse_mcast(input_tensor_a, input_tensor_b, output_tensor);
+            return matmul_multi_core_reuse_mcast(input_tensor_a, input_tensor_b, output_tensor, this->bcast_batch);
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_GENERALIZED:
-            return matmul_multi_core_reuse_generalized(input_tensor_a, input_tensor_b, output_tensor);
+            return matmul_multi_core_reuse_generalized(input_tensor_a, input_tensor_b, output_tensor, this->bcast_batch);
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST_GENERALIZED:
-            return matmul_multi_core_reuse_mcast_generalized(input_tensor_a, input_tensor_b, output_tensor);
+            return matmul_multi_core_reuse_mcast_generalized(input_tensor_a, input_tensor_b, output_tensor, this->bcast_batch);
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_PADDING:
-            return matmul_multi_core_reuse_padding(input_tensor_a, input_tensor_b, output_tensor);
+            return matmul_multi_core_reuse_padding(input_tensor_a, input_tensor_b, output_tensor, this->bcast_batch);
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST_PADDING:
-            return matmul_multi_core_reuse_mcast_padding(input_tensor_a, input_tensor_b, output_tensor);
+            return matmul_multi_core_reuse_mcast_padding(input_tensor_a, input_tensor_b, output_tensor, this->bcast_batch);
         case BmmOpParallelizationStrategy::SINGLE_CORE:
         default:
-            return matmul_single_core(input_tensor_a, input_tensor_b, output_tensor);
+            return matmul_single_core(input_tensor_a, input_tensor_b, output_tensor, this->bcast_batch);
     }
 
 }
@@ -336,82 +349,17 @@ operation::ProgramWithCallbacks Matmul::create_program(const std::vector<Tensor>
 operation::Hash Matmul::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
-    return fmt::format("{}_{}", *this, input_tensor_a, input_tensor_b);
+    return fmt::format("{}_{}_{}", *this, input_tensor_a, input_tensor_b);
 }
 
 tt::stl::reflection::Attributes Matmul::attributes() const {
-    return {};
+    return {
+        {"bcast_batch", fmt::format("{}", this->bcast_batch)},
+        {"output_mem_config", fmt::format("{}", this->output_mem_config)},
+    };
 }
 
 BmmOpParallelizationStrategy::Enum Matmul::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
-    return bmm_op_utils::get_parallelization_strategy(input_tensors);
-}
-
-
-void BatchedMatmul::validate(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
-    const auto& input_tensor_b = input_tensors.at(1);    TT_ASSERT(input_tensor_a.shape()[3] == input_tensor_b.shape()[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
-    TT_ASSERT(input_tensor_a.shape()[1] == input_tensor_b.shape()[1] && input_tensor_a.shape()[0] == input_tensor_b.shape()[0]
-        && "bmm (non-bcast matmul) expects input tensors of shapes BCMK*BCKN=BCMN");
-}
-
-std::vector<Shape> BatchedMatmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
-    const auto& input_tensor_b = input_tensors.at(1);    auto output_shape = input_tensor_a.shape();
-    output_shape.back() = input_tensor_b.shape().back();
-    return {output_shape};
-}
-
-std::vector<Tensor> BatchedMatmul::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE, this->output_mem_config);
-}
-
-operation::ProgramWithCallbacks BatchedMatmul::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
-    const auto& input_tensor_b = input_tensors.at(1);    auto& output_tensor = output_tensors.at(0);
-
-    auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
-
-    switch (parallelization_strategy){
-        case BmmOpParallelizationStrategy::MULTI_CORE:
-            return bmm_multi_core(input_tensor_a, input_tensor_b, output_tensor);
-            break;
-        case BmmOpParallelizationStrategy::MULTI_CORE_REUSE:
-            return bmm_multi_core_reuse(input_tensor_a, input_tensor_b, output_tensor);
-            break;
-        case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST:
-            return bmm_multi_core_reuse_mcast(input_tensor_a, input_tensor_b, output_tensor);
-            break;
-        case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_GENERALIZED:
-            return bmm_multi_core_reuse_generalized(input_tensor_a, input_tensor_b, output_tensor);
-            break;
-        case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST_GENERALIZED:
-            return bmm_multi_core_reuse_mcast_generalized(input_tensor_a, input_tensor_b, output_tensor);
-            break;
-        case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_PADDING:
-            return bmm_multi_core_reuse_padding(input_tensor_a, input_tensor_b, output_tensor);
-            break;
-        case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST_PADDING:
-            return bmm_multi_core_reuse_mcast_padding(input_tensor_a, input_tensor_b, output_tensor);
-            break;
-        case BmmOpParallelizationStrategy::SINGLE_CORE:
-        default:
-            return bmm_single_core(input_tensor_a, input_tensor_b, output_tensor);
-    }
-
-}
-
-operation::Hash BatchedMatmul::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
-    const auto& input_tensor_b = input_tensors.at(1);
-    return fmt::format("{}_{}", *this, input_tensor_a, input_tensor_b);
-}
-
-tt::stl::reflection::Attributes BatchedMatmul::attributes() const {
-    return {};
-}
-
-BmmOpParallelizationStrategy::Enum BatchedMatmul::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
     return bmm_op_utils::get_parallelization_strategy(input_tensors);
 }
 
@@ -426,8 +374,14 @@ void BertLargeMatmul::validate(
     TT_ASSERT(input_tensors.size() == 2);
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
-    TT_ASSERT(input_tensor_a.layout() == Layout::TILE, "Unsupported input layout");
-    TT_ASSERT(input_tensor_b.layout() == Layout::TILE, "Unsupported input layout");
+    TT_ASSERT((input_tensor_a.layout() == Layout::TILE && input_tensor_b.layout() == Layout::TILE), "Inputs to matmul must be tilized");
+    TT_ASSERT(input_tensor_a.shape()[3] == input_tensor_b.shape()[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
+
+    TT_ASSERT(input_tensor_a.dtype() == input_tensor_b.dtype());
+    TT_ASSERT(input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
+    TT_ASSERT(input_tensor_a.storage_type() == StorageType::DEVICE and input_tensor_b.storage_type() == StorageType::DEVICE, "Operands to matmul need to be on device!");
+    TT_ASSERT(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
+    TT_ASSERT(input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
 
     switch (this->bert_large_matmul_op_type) {
         case BertLargeMatmulOpType::FUSED_QKV:

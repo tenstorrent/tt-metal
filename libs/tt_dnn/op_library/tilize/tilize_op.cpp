@@ -18,10 +18,6 @@ namespace tt_metal {
 
 operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& output) {
 
-    // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to tilize needs to be on device!");
-    TT_ASSERT(a.buffer() != nullptr, "Operand to tilize needs to be allocated in a buffer on device!");
-
     tt_metal::Program program = tt_metal::Program();
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
@@ -35,8 +31,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    // Only supports bfloat16 for now
-    tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 
     uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
 
@@ -102,7 +97,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
 
     // Reader compile-time args
     bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool stick_size_is_power_of_two = is_power_of_two(stick_size);;
+    bool stick_size_is_power_of_two = is_power_of_two(stick_size);
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)log2(stick_size) : 0;
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t) src0_is_dram,
@@ -198,6 +193,8 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
 
 void Tilize::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
+    TT_ASSERT(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to tilize need to be on device!");
+    TT_ASSERT(input_tensor_a.buffer() != nullptr , "Operands to tilize need to be allocated in buffers on device!");
     TT_ASSERT(input_tensor_a.layout() == Layout::ROW_MAJOR or input_tensor_a.layout() == Layout::CHANNELS_LAST, "Can only tilize row major or channels last data");
 
     TT_ASSERT(input_tensor_a.volume() % TILE_HW == 0);
@@ -254,9 +251,6 @@ Tensor tilize(const Tensor &input_tensor_a, const MemoryConfig& mem_config) {
 
 operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, const float pad_value) {
 
-    // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to tilize needs to be on device!");
-    TT_ASSERT(a.buffer() != nullptr, "Operand to tilize needs to be allocated in a buffer on device!");
 
     auto output_shape = output.shape();
 
@@ -267,12 +261,10 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
 
-    uint32_t single_tile_size = a.element_size() * TILE_HW;
-
     tt_metal::Buffer *src0_buffer = a.buffer();
 
-    // Only supports bfloat16 for now
-    tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
 
     int32_t num_tiles = output.volume() / TILE_HW;
 
@@ -484,6 +476,8 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
 
 void TilizeWithValPadding::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
+    TT_ASSERT(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
+    TT_ASSERT(input_tensor_a.buffer() != nullptr , "Operands need to be allocated in buffers on device!");
     TT_ASSERT(input_tensor_a.layout() == Layout::ROW_MAJOR or input_tensor_a.layout() == Layout::CHANNELS_LAST, "Can only tilize row major or channels last data");
     TT_ASSERT(input_tensor_a.dtype() == DataType::BFLOAT16);
 

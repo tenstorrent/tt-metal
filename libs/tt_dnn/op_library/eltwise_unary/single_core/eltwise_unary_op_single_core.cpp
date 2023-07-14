@@ -14,13 +14,9 @@ operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tenso
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
-    // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to eltwise unary needs to be on device!");
-    TT_ASSERT(a.buffer() != nullptr, "Operand to eltwise unary needs to be allocated in a buffer on device!");
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
 
-    uint32_t single_tile_size = 2 * TILE_HW;
-
-    TT_ASSERT(a.volume() % TILE_HW == 0);
     uint32_t num_tiles = a.volume() / TILE_HW;
 
     // This should allocate a DRAM buffer on the device
@@ -34,7 +30,7 @@ operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tenso
         core,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
 
     uint32_t src1_cb_index = 1;
@@ -44,7 +40,7 @@ operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tenso
         core,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
 
     uint32_t output_cb_index = 16; // output operands start at index 16
@@ -55,7 +51,7 @@ operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tenso
         core,
         num_output_tiles,
         num_output_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
     // no need to create c_in2 buffer since we pass scaler=0 to reader
 

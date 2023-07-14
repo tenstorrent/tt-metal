@@ -18,20 +18,15 @@ operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &a, Tensor& out
     const auto shape = a.shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1]*shape[0];
     uint32_t HW = H*W;
-    TT_ASSERT(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
-    TT_ASSERT(H > 0 && W > 0 && NC > 0);
+
     uint32_t Wt = W/TILE_WIDTH;
     uint32_t Ht = H/TILE_HEIGHT;
 
     tt_metal::Program program = tt_metal::Program();
 
-    // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to reduce op needs to be on device!");
-    TT_ASSERT(a.device() != nullptr, "Operand to reduce op needs to be on device!");
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
 
-    uint32_t single_tile_size = a.element_size() * TILE_HW;
-
-    TT_ASSERT(a.volume() % TILE_HW == 0);
     uint32_t num_tiles = a.volume()/TILE_HW;
 
     tt_metal::Device *device = a.device();
@@ -52,7 +47,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &a, Tensor& out
         all_cores,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
 
     auto cb_scaler = tt_metal::CreateCircularBuffers(
@@ -61,7 +56,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &a, Tensor& out
         all_cores,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
 
     uint32_t output_cb_index = 16; // output operands start at index 16
@@ -72,13 +67,14 @@ operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &a, Tensor& out
         all_cores,
         num_output_tiles,
         num_output_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
 
-    // Op not uplifted for L1 yet, but need to provide arg to kernel
-    bool src_is_dram = true;
+    tt_metal::Buffer *src_buffer = a.buffer();
+    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(DataFormat::Float16_b), (uint32_t)src_is_dram};
-    bool dst_is_dram = true;
+    tt_metal::Buffer *dst_buffer = output.buffer();
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) output_cb_index,
         static_cast<uint32_t>(DataFormat::Float16_b),

@@ -36,11 +36,7 @@ operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &a, const Tensor
 
     tt_metal::Device *device = a.device();
 
-	// TODO: CHANGE TO FUNCTION CONVERSION
-    tt::DataFormat cb_data_format = tt::DataFormat::Bfp8_b;
-    if (a.dtype() == tt::tt_metal::DataType::BFLOAT16) {
-        cb_data_format = tt::DataFormat::Float16_b;
-    }
+	tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 
     uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
 
@@ -49,14 +45,10 @@ operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &a, const Tensor
     uint32_t num_cores_y = compute_and_storage_grid_size.y;
     auto [num_cores, all_cores, core_group_1, core_group_2, Wt_per_core_group_1, Wt_per_core_group_2] = split_work_to_cores(compute_and_storage_grid_size, Wt);
 
-    // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(a.device() != nullptr and b.device() != nullptr, "Operands to bcast need to be on device!");
-    TT_ASSERT(a.device() == b.device(), "Operands to bcast need to be on the same device!");
-    TT_ASSERT(a.buffer() != nullptr and b.buffer() != nullptr, "Operands to bcast need to be allocated in buffers on device!");
-
 	auto src0_buffer = a.buffer();
 	auto src1_buffer = b.buffer();
 	auto dst_buffer = output.buffer();
+	TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     const char* reader_name = bcast_op_utils::get_reader_name(bcast_dim, BcastOpParallelizationStrategy::MULTI_CORE_W);
     const char* compute_name = bcast_op_utils::get_compute_name(bcast_dim);

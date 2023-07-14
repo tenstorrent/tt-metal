@@ -14,16 +14,11 @@ namespace tt_metal {
 
 operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& output) {
 
-    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to untilize needs to be on device!");
-    TT_ASSERT(a.buffer() != nullptr, "Operand to untilize needs to be allocated in a buffer on device!");
-
     tt_metal::Program program = tt_metal::Program();
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
-    // Only supports bfloat16 for now
-    tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
-
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
 
     tt_metal::Buffer *src0_buffer = a.buffer();
@@ -189,6 +184,8 @@ operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& ou
 
 void Untilize::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
+    TT_ASSERT(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to untilize need to be on device!");
+    TT_ASSERT(input_tensor_a.buffer() != nullptr , "Operands to untilize need to be allocated in buffers on device!");
     TT_ASSERT(input_tensor_a.dtype() == DataType::BFLOAT16, "Only bloat16 dataformat supported");
     TT_ASSERT(input_tensor_a.layout() == Layout::TILE, "Can only untilize tile major data");
 
@@ -234,18 +231,13 @@ Tensor untilize(const Tensor &input_tensor_a, const MemoryConfig& mem_config) {
 
 operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
 
-    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to untilize needs to be on device!");
-    TT_ASSERT(a.buffer() != nullptr, "Operand to untilize needs to be allocated in a buffer on device!");
-
     const std::array<uint32_t, 4> output_shape = output.shape();
 
     tt_metal::Program program = tt_metal::Program();
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
-    // Only supports bfloat16 for now
-    tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
-
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
 
     tt_metal::Buffer *src0_buffer = a.buffer();
@@ -439,6 +431,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
 
 void UntilizeWithUnpadding::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
+    TT_ASSERT(input_tensor_a.storage_type() == StorageType::DEVICE, "Operandsneed to be on device!");
+    TT_ASSERT(input_tensor_a.buffer() != nullptr , "Operands need to be allocated in buffers on device!");
     TT_ASSERT(input_tensor_a.dtype() == DataType::BFLOAT16, "Only bloat16 dataformat supported");
     TT_ASSERT(input_tensor_a.layout() == Layout::TILE, "Can only untilize tile major data");
 

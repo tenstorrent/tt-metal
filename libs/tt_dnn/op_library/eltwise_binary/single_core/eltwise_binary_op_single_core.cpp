@@ -13,19 +13,12 @@ operation::ProgramWithCallbacks eltwise_binary_single_core(const Tensor &a, cons
     Program program{};
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
-    // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(a.storage_type() == StorageType::DEVICE and b.storage_type() == StorageType::DEVICE, "Operands to eltwise binary need to be on device!");
-    TT_ASSERT(a.device() == b.device(), "Operands to eltwise binary need to be on the same device!");
-    TT_ASSERT(a.buffer() != nullptr and b.buffer() != nullptr, "Operands to eltwise binary need to be allocated in buffers on device!");
-
-    uint32_t single_tile_size = 2 * TILE_HW;
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
 
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
     tt_metal::Buffer *src1_dram_buffer = b.buffer();
 
-    TT_ASSERT(src0_dram_buffer->size() == src1_dram_buffer->size(), "Operand to eltwise binary need to be the same size!");
-
-    TT_ASSERT(a.volume() % TILE_HW == 0);
     uint32_t num_tiles = a.volume() / TILE_HW;
 
     auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
@@ -46,7 +39,7 @@ operation::ProgramWithCallbacks eltwise_binary_single_core(const Tensor &a, cons
         core,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
 
     uint32_t src1_cb_index = 1;
@@ -56,7 +49,7 @@ operation::ProgramWithCallbacks eltwise_binary_single_core(const Tensor &a, cons
         core,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
 
     uint32_t output_cb_index = 16; // output operands start at index 16
@@ -67,12 +60,11 @@ operation::ProgramWithCallbacks eltwise_binary_single_core(const Tensor &a, cons
         core,
         num_output_tiles,
         num_output_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
 
     tt_metal::DataMovementKernel *binary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        //"tt_metal/kernels/dataflow/reader_binary.cpp",
         "tt_metal/kernels/dataflow/reader_dual_8bank.cpp",
         core,
         tt_metal::DataMovementProcessor::RISCV_1,
@@ -80,7 +72,6 @@ operation::ProgramWithCallbacks eltwise_binary_single_core(const Tensor &a, cons
 
     tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        //"tt_metal/kernels/dataflow/writer_unary.cpp",
         "tt_metal/kernels/dataflow/writer_unary_8bank.cpp",
         core,
         tt_metal::DataMovementProcessor::RISCV_0,

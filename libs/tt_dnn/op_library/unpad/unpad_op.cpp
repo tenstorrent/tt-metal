@@ -11,9 +11,6 @@ namespace tt_metal {
 
 operation::ProgramWithCallbacks unpad_rm(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
 
-    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to unpad needs to be on device!");
-    TT_ASSERT(a.buffer() != nullptr, "Operand to unpad needs to be allocated in a buffer on device!");
-
     const std::array<uint32_t, 4> output_shape = output.shape();
 
     tt_metal::Program program = tt_metal::Program();
@@ -90,20 +87,6 @@ operation::ProgramWithCallbacks unpad_rm(const Tensor &a, Tensor& output, const 
         tt_metal::NOC::RISCV_1_default);
 
 
-    tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
-        program, "tt_metal/kernels/dataflow/blank.cpp",
-        core, tt_metal::DataMovementProcessor::RISCV_0, tt_metal::NOC::RISCV_0_default);
-
-    vector<uint32_t> compute_args = {
-        0 // dummy
-    };
-
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
-    auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
-        program, "tt_metal/kernels/compute/blank.cpp",
-        core, compute_args, MathFidelity::HiFi4, fp32_dest_acc_en, math_approx_mode);
-
     tt_metal::SetRuntimeArgs(
         unary_reader_kernel,
         core,
@@ -135,8 +118,6 @@ operation::ProgramWithCallbacks unpad_rm(const Tensor &a, Tensor& output, const 
 
 operation::ProgramWithCallbacks unpad_tile(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
 
-    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to unpad needs to be on device!");
-    TT_ASSERT(a.buffer() != nullptr, "Operand to unpad needs to be allocated in a buffer on device!");
 
     const std::array<uint32_t, 4> output_shape = output.shape();
 
@@ -152,10 +133,7 @@ operation::ProgramWithCallbacks unpad_tile(const Tensor &a, Tensor& output, cons
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    tt::DataFormat cb_data_format = tt::DataFormat::Bfp8_b;
-    if (a.dtype() == tt::tt_metal::DataType::BFLOAT16) {
-        cb_data_format = tt::DataFormat::Float16_b;
-    }
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
 
     uint32_t src0_cb_index = 0;
@@ -217,21 +195,6 @@ operation::ProgramWithCallbacks unpad_tile(const Tensor &a, Tensor& output, cons
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
-
-    tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
-        program, "tt_metal/kernels/dataflow/blank.cpp",
-        core, tt_metal::DataMovementProcessor::RISCV_0, tt_metal::NOC::RISCV_0_default);
-
-    vector<uint32_t> compute_args = {
-        0 // dummy
-    };
-
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
-    auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
-        program, "tt_metal/kernels/compute/blank.cpp",
-        core, compute_args, MathFidelity::HiFi4, fp32_dest_acc_en, math_approx_mode);
-
     tt_metal::SetRuntimeArgs(
         unary_reader_kernel,
         core,
@@ -264,6 +227,8 @@ operation::ProgramWithCallbacks unpad_tile(const Tensor &a, Tensor& output, cons
 
 void Unpad::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
+    TT_ASSERT(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
+    TT_ASSERT(input_tensor_a.buffer() != nullptr , "Operands to unpad need to be allocated in buffers on device!");
     TT_ASSERT(input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR);
 
     TT_ASSERT(

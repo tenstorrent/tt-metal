@@ -93,21 +93,6 @@ operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const st
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
-
-    tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
-        program, "tt_metal/kernels/dataflow/blank.cpp",
-        core, tt_metal::DataMovementProcessor::RISCV_0, tt_metal::NOC::RISCV_0_default);
-
-    vector<uint32_t> compute_args = {
-        0 // dummy
-    };
-
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
-    auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
-        program, "tt_metal/kernels/compute/blank.cpp",
-        core, compute_args, MathFidelity::HiFi4, fp32_dest_acc_en, math_approx_mode);
-
     tt_metal::SetRuntimeArgs(
         unary_reader_kernel,
         core,
@@ -154,10 +139,7 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    tt::DataFormat cb_data_format = tt::DataFormat::Bfp8_b;
-    if (a.dtype() == tt::tt_metal::DataType::BFLOAT16) {
-        cb_data_format = tt::DataFormat::Float16_b;
-    }
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
 
     uint32_t src0_cb_index = 0;
@@ -231,22 +213,6 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
         compile_time_args_vec,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
-
-
-    tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
-        program, "tt_metal/kernels/dataflow/blank.cpp",
-        core, tt_metal::DataMovementProcessor::RISCV_0, tt_metal::NOC::RISCV_0_default);
-
-    vector<uint32_t> compute_args = {
-        0 // dummy
-    };
-
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
-    auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
-        program, "tt_metal/kernels/compute/blank.cpp",
-        core, compute_args, MathFidelity::HiFi4, fp32_dest_acc_en, math_approx_mode);
-
 
     tt_metal::SetRuntimeArgs(
         unary_reader_kernel,

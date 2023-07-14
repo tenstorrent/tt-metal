@@ -28,12 +28,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
     const auto shape = input_tensor.shape();
     u32 W = shape[3], H = shape[2], NC = shape[1]*shape[0];
     u32 HW = H*W;
-    TT_ASSERT(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
-    TT_ASSERT(H > 0 && W > 0 && NC > 0);
-    TT_ASSERT(input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::BFLOAT8_B);
-    if (mask.has_value()) {
-        TT_ASSERT(mask.value().dtype() == input_tensor.dtype());
-    }
+
     u32 Wt = W/TILE_WIDTH;
     u32 Ht = H/TILE_HEIGHT;
 
@@ -41,22 +36,16 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
 
     Program program = Program();
 
-    TT_ASSERT(input_tensor.device() != nullptr, "Operand to softmax op needs to be on device!");
     uint32_t scalar_tile_size = tt_metal::TileSize(tt::DataFormat::Float16_b);
-    tt::DataFormat in0_cb_data_format = tt::DataFormat::Bfp8_b;
-    if (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16) {
-        in0_cb_data_format = tt::DataFormat::Float16_b;
-    }
+
+    tt::DataFormat in0_cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t in0_tile_size = tt_metal::TileSize(in0_cb_data_format);
-    tt::DataFormat mask_cb_data_format = tt::DataFormat::Bfp8_b;
-    if (mask.has_value() && mask.value().dtype() == tt::tt_metal::DataType::BFLOAT16) {
-        mask_cb_data_format = tt::DataFormat::Float16_b;
-    }
+
+    tt::DataFormat mask_cb_data_format = mask.has_value() ? tt_metal::datatype_to_dataformat_converter(mask.value().dtype()) : tt::DataFormat::Float16_b;
     uint32_t mask_tile_size = tt_metal::TileSize(mask_cb_data_format);
 
     auto src0_dram_buffer = input_tensor.buffer();
 
-    TT_ASSERT(input_tensor.volume() % TILE_HW == 0);
     int32_t num_tiles = input_tensor.volume()/TILE_HW;
 
     // This should allocate input_tensor DRAM buffer on the device
@@ -232,6 +221,20 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
 
 void AttentionSoftmaxInPlace::validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     TT_ASSERT(input_tensors.size() == 1 and optional_input_tensors.size() <= 1, "Must have 1 or 2 input tensors");
+    auto& input_tensor = input_tensors.at(0);
+    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
+    TT_ASSERT(input_tensor.buffer() != nullptr , "Operands to softmax need to be allocated in buffers on device!");
+    TT_ASSERT((input_tensor.layout() == Layout::TILE), "Inputs to softmax must be tilized");
+    TT_ASSERT(input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::BFLOAT8_B);
+    if (optional_input_tensors.size() == 1) {
+        if (optional_input_tensors.at(0).has_value()) {
+            auto& mask = optional_input_tensors.at(0).value();
+            TT_ASSERT(mask.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
+            TT_ASSERT(input_tensor.device() == mask.device());
+            TT_ASSERT(input_tensor.dtype() == mask.dtype());
+        }
+    }
+
 }
 
 std::vector<Shape> AttentionSoftmaxInPlace::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {

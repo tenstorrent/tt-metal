@@ -15,9 +15,6 @@ namespace tt_metal {
 
 operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor &output) {
 
-    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to transpose_wh needs to be on device!");
-    TT_ASSERT(a.buffer() != nullptr, "Operand to transpose_wh needs to be allocated in a buffer on device!");
-
     const auto shape = a.shape();
     u32 W = shape[3], H = shape[2], NC = shape[1]*shape[0];
     u32 HW = H*W;
@@ -29,14 +26,14 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
 
     tt_metal::Program program = tt_metal::Program();
 
-    uint32_t single_tile_size = a.element_size() * TILE_HW;
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
 
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
 
     int32_t num_tiles = a.volume()/TILE_HW;
 
     auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
@@ -60,7 +57,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
         all_cores,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
     // no need to create a buffer at CB::c_in2 since we pass scaler=0
 
@@ -72,11 +69,10 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
         all_cores,
         num_output_tiles,
         num_output_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
 
-    // Op not uplifted for L1 yet, but need to provide arg to kernel
-    bool dst_is_dram = true;
+    bool dst_is_dram = dst_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) output_cb_index,
         static_cast<uint32_t>(DataFormat::Float16_b),

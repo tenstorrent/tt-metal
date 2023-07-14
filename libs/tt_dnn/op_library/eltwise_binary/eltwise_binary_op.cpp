@@ -63,6 +63,13 @@ void EltwiseBinary::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     TT_ASSERT(input_tensor_a.shape() == input_tensor_b.shape(), "Input shapes must be the same!");
+    TT_ASSERT(input_tensor_a.storage_type() == StorageType::DEVICE and input_tensor_b.storage_type() == StorageType::DEVICE, "Operands to eltwise binary need to be on device!");
+    TT_ASSERT(input_tensor_a.device() == input_tensor_b.device(), "Operands to eltwise binary need to be on the same device!");
+    TT_ASSERT(input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr, "Operands to eltwise binary need to be allocated in buffers on device!");
+    TT_ASSERT((input_tensor_a.layout() == Layout::TILE && input_tensor_b.layout() == Layout::TILE), "Inputs to eltwise binary must be tilized");
+    TT_ASSERT(input_tensor_a.dtype() == input_tensor_b.dtype());
+    TT_ASSERT(input_tensor_a.dtype() == DataType::BFLOAT16);
+    TT_ASSERT((input_tensor_a.buffer()->buffer_type() == BufferType::DRAM && input_tensor_b.buffer()->buffer_type() == BufferType::DRAM));
 }
 
 std::vector<Shape> EltwiseBinary::compute_output_shapes(
@@ -93,7 +100,7 @@ operation::ProgramWithCallbacks EltwiseBinary::create_program(const std::vector<
 operation::Hash EltwiseBinary::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
-    return fmt::format("{}_{}", *this, input_tensor_a, input_tensor_b);
+    return fmt::format("{}_{}_{}", *this, input_tensor_a, input_tensor_b);
 }
 
 

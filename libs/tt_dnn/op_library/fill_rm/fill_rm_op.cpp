@@ -17,7 +17,8 @@ operation::ProgramWithCallbacks fill_rm_single_core(const Tensor& any, Tensor &o
     tt_metal::Program program = tt_metal::Program();
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
-    uint32_t single_tile_size = any.element_size() * TILE_HW;
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(any.dtype());
+    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
 
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -29,31 +30,17 @@ operation::ProgramWithCallbacks fill_rm_single_core(const Tensor& any, Tensor &o
         0, // cb index
         core,
         num_cb_tiles, num_cb_tiles * single_tile_size,
-        DataFormat::Float16_b);
+        cb_data_format);
     auto cb_src1 = tt_metal::CreateCircularBuffers(
         program,
         1, // cb index
         core,
         num_cb_tiles, num_cb_tiles * single_tile_size,
-        DataFormat::Float16_b);
+        cb_data_format);
 
     tt_metal::DataMovementKernel *binary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program, "tt_metal/kernels/dataflow/fill_rm_8bank.cpp",
         core, tt_metal::DataMovementProcessor::RISCV_1, tt_metal::NOC::RISCV_1_default);
-
-    tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
-        program, "tt_metal/kernels/dataflow/blank.cpp",
-        core, tt_metal::DataMovementProcessor::RISCV_0, tt_metal::NOC::RISCV_0_default);
-
-    vector<uint32_t> compute_args = {
-        0 // dummy
-    };
-
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
-    auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
-        program, "tt_metal/kernels/compute/blank.cpp",
-        core, compute_args, MathFidelity::HiFi4, fp32_dest_acc_en, math_approx_mode);
 
     tt_metal::SetRuntimeArgs(
         binary_reader_kernel, core,
@@ -80,8 +67,10 @@ operation::ProgramWithCallbacks fill_rm_single_core(const Tensor& any, Tensor &o
 }
 
 void FillRM::validate(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
     TT_ASSERT((this->N > 0 && this->C > 0 && this-> H > 0 && this-> W > 0));
     TT_ASSERT((this->hFill <= this->H && this->wFill <= this->W));
+    TT_ASSERT(input_tensor_a.dtype() == DataType::BFLOAT16);
 }
 
 std::vector<Shape> FillRM::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {

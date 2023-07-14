@@ -12,16 +12,12 @@ namespace tt_metal {
 
 operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor &output, int N, int C, int H, int W) {
 
-    // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to reshape needs to be on device!");
-    TT_ASSERT(a.buffer() != nullptr, "Operand to reshape needs to be allocated in a buffer on device!");
-
-
     tt_metal::Program program = tt_metal::Program();
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
-    uint32_t single_tile_size = 2 * TILE_HW;
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
 
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
 
@@ -46,11 +42,10 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
         core,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
 
-    // Op not uplifted for L1 yet, but need to provide arg to kernel
-    bool dst_is_dram = true;
+    bool dst_is_dram = dst_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) src0_cb_index,
         static_cast<uint32_t>(DataFormat::Float16_b),
@@ -119,10 +114,6 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
 
 operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& output, int N, int C, int H, int W) {
 
-    // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to reshape needs to be on device!");
-    TT_ASSERT(a.buffer() != nullptr, "Operand to reshape needs to be allocated in a buffer on device!");
-
     tt_metal::Program program = tt_metal::Program();
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
@@ -138,7 +129,8 @@ operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& 
     uint32_t old_stick_size = a.shape()[3] * 2; // Assuming bfloat16 data format
     uint32_t new_stick_size = output_shape[3] * 2; // Assuming bfloat16 data format
 
-    uint32_t single_tile_size = a.element_size() * TILE_HW; // Assuming bfloat16 dataformat
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = (a.shape()[1] * a.shape()[2] * a.shape()[3] / TILE_HW);
     uint32_t num_output_tiles = (output_shape[1] * output_shape[2] * output_shape[3] / TILE_HW);
@@ -176,7 +168,7 @@ operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& 
         core,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
 
     uint32_t output_cb_index = 16; // output operands start at index 16
@@ -186,7 +178,7 @@ operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& 
         core,
         num_output_tiles,
         num_output_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
 
     // Reader compile-time args
@@ -284,6 +276,11 @@ operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& 
 
 void Reshape::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
+    TT_ASSERT(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
+    TT_ASSERT(input_tensor_a.buffer() != nullptr , "Operands to reshape need to be allocated in buffers on device!");
+    TT_ASSERT(input_tensor_a.dtype() == DataType::BFLOAT16);
+    TT_ASSERT((input_tensor_a.buffer()->buffer_type() == BufferType::DRAM));
+
     TT_ASSERT(input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR, "Only tile and row major reshape supported!");
 
     auto output_shape = infer_dims_for_reshape(this->N, this->C, this->H, this->W, input_tensor_a.volume());

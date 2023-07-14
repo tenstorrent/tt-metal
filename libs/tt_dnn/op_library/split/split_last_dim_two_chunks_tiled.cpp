@@ -100,11 +100,7 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     op.boiler_plate_asserts(input_tensor);
     op.shape_asserts(input_tensor);
 
-    // TODO: CHANGE TO FUNCTION CONVERSION
-    tt::DataFormat cb_data_format = tt::DataFormat::Bfp8_b;
-    if (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16) {
-        cb_data_format = tt::DataFormat::Float16_b;
-    }
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     ////////////////////////////////////////////////////////////////////////////
     //                 Buffer Setup

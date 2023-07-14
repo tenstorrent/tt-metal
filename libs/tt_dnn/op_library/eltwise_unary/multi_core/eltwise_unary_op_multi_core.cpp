@@ -15,13 +15,9 @@ namespace tt_metal {
 operation::ProgramWithCallbacks eltwise_unary_multi_core(const Tensor &a, Tensor &output, UnaryOpType::Enum op_type,std::optional<float> param /* = {} */) {
     tt_metal::Program program{};
 
-    // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to eltwise unary needs to be on device!");
-    TT_ASSERT(a.buffer() != nullptr, "Operand to eltwise unary needs to be allocated in a buffer on device!");
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
 
-    uint32_t single_tile_size = 2 * TILE_HW;
-
-    TT_ASSERT(a.volume() % TILE_HW == 0);
     uint32_t num_tiles = a.volume() / TILE_HW;
 
     tt_metal::Device *device = a.device();
@@ -39,7 +35,7 @@ operation::ProgramWithCallbacks eltwise_unary_multi_core(const Tensor &a, Tensor
         all_cores,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
 
     uint32_t src1_cb_index = 1;
@@ -49,7 +45,7 @@ operation::ProgramWithCallbacks eltwise_unary_multi_core(const Tensor &a, Tensor
         all_cores,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
 
     uint32_t output_cb_index = 16; // output operands start at index 16
@@ -60,13 +56,16 @@ operation::ProgramWithCallbacks eltwise_unary_multi_core(const Tensor &a, Tensor
         all_cores,
         num_output_tiles,
         num_output_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
+    auto src_dram_buffer = a.buffer();
+
+    auto dst_dram_buffer = output.buffer();
 
     // Op not uplifted for L1 yet, but need to provide arg to kernel
-    bool src_is_dram = true;
+    bool src_is_dram = src_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(DataFormat::Float16_b), (uint32_t)src_is_dram};
-    bool dst_is_dram = true;
+    bool dst_is_dram = dst_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) output_cb_index,
         static_cast<uint32_t>(DataFormat::Float16_b),
@@ -126,9 +125,6 @@ operation::ProgramWithCallbacks eltwise_unary_multi_core(const Tensor &a, Tensor
         eltwise_unary_op_utils::add_defines(eltwise_unary_kernel_group_2, op_type, param);
     }
 
-    auto src_dram_buffer = a.buffer();
-
-    auto dst_dram_buffer = output.buffer();
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

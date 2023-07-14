@@ -48,15 +48,9 @@ operation::ProgramWithCallbacks layernorm_(
 
     uint32_t num_tensor_tiles = NC*H*W / TILE_HW;
 
-    TT_ASSERT(a.device() != nullptr, "Operand to layernorm op needs to be on device!");
     uint32_t block_size = find_max_divisor(Wt, 8);
 
-    // TODO: CHANGE TO FUNCTION CONVERSION
-    tt::DataFormat cb_data_format = tt::DataFormat::Bfp8_b;
-    if (a.dtype() == tt::tt_metal::DataType::BFLOAT16) {
-        cb_data_format = tt::DataFormat::Float16_b;
-    }
-
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
     uint32_t bfloat16_tile_size = tt_metal::TileSize(tt::DataFormat::Float16_b);
 
@@ -337,23 +331,27 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
     const auto& beta = optional_input_tensors.at(2);
     TT_ASSERT(a.layout() == Layout::TILE);
     TT_ASSERT(a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B);
-
+    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
+    TT_ASSERT(a.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
     if (b.has_value()) {
         TT_ASSERT(b.value().layout() == Layout::TILE);
         TT_ASSERT(a.shape() == b.value().shape());
-        TT_ASSERT(b.value().dtype() == a.dtype());
+        TT_ASSERT(a.device() == b.value().device());
+        TT_ASSERT(b.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
     }
     if (gamma.has_value()) {
         TT_ASSERT(gamma.value().layout() == Layout::TILE);
         TT_ASSERT(a.shape()[3] == gamma.value().shape()[3]);
+        TT_ASSERT(a.device() == gamma.value().device());
+        TT_ASSERT(gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
         TT_ASSERT(gamma.value().shape()[2] == TILE_HEIGHT);
-        TT_ASSERT(gamma.value().dtype() == a.dtype());
     }
     if (beta.has_value()) {
         TT_ASSERT(beta.value().layout() == Layout::TILE);
         TT_ASSERT(a.shape()[3] == beta.value().shape()[3]);
+        TT_ASSERT(a.device() == beta.value().device());
+        TT_ASSERT(beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
         TT_ASSERT(beta.value().shape()[2] == TILE_HEIGHT);
-        TT_ASSERT(beta.value().dtype() == a.dtype());
     }
 
 }
@@ -407,17 +405,28 @@ void BertLargeLayerNorm::validate(const std::vector<Tensor> &input_tensors, cons
     const auto& gamma = optional_input_tensors.at(1);
     const auto& beta = optional_input_tensors.at(2);
     TT_ASSERT(a.layout() == Layout::TILE);
+    TT_ASSERT(a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B);
+    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
+    TT_ASSERT(a.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
     if (b.has_value()) {
         TT_ASSERT(b.value().layout() == Layout::TILE);
         TT_ASSERT(a.shape() == b.value().shape());
+        TT_ASSERT(a.device() == b.value().device());
+        TT_ASSERT(b.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
     }
     if (gamma.has_value()) {
         TT_ASSERT(gamma.value().layout() == Layout::ROW_MAJOR);
         TT_ASSERT((gamma.value().shape()[3] == TILE_WIDTH && gamma.value().volume() / TILE_WIDTH == a.shape()[3] / TILE_WIDTH));
+        TT_ASSERT(a.device() == gamma.value().device());
+        TT_ASSERT(gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+        TT_ASSERT(gamma.value().dtype() == DataType::BFLOAT16);
     }
     if (beta.has_value()) {
         TT_ASSERT(beta.value().layout() == Layout::ROW_MAJOR);
         TT_ASSERT((beta.value().shape()[3] == TILE_WIDTH && beta.value().volume() / TILE_WIDTH == a.shape()[3] / TILE_WIDTH));
+        TT_ASSERT(a.device() == beta.value().device());
+        TT_ASSERT(beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+        TT_ASSERT(beta.value().dtype() == DataType::BFLOAT16);
     }
 
 }

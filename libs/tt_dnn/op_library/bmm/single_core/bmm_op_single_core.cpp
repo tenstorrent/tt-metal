@@ -10,42 +10,18 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks matmul_single_core_(const Tensor &a, const Tensor &b, Tensor& output, bool bcast_batch) {
+operation::ProgramWithCallbacks matmul_single_core(const Tensor &a, const Tensor &b, Tensor& output, bool bcast_batch) {
 
     tt_metal::Program program{};
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
     const auto& ashape = a.shape(), bshape = b.shape();
 
-    // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(a.storage_type() == StorageType::DEVICE and b.storage_type() == StorageType::DEVICE, "Operands to matmul need to be on device!");
-    TT_ASSERT(a.device() == b.device(), "Operands to matmul need to be on the same device!");
-    TT_ASSERT(a.buffer() != nullptr and b.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
-
-    TT_ASSERT(a.dtype() == b.dtype());
-    TT_ASSERT(a.dtype() == tt::tt_metal::DataType::BFLOAT16 || a.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
-    tt::DataFormat cb_data_format = tt::DataFormat::Bfp8_b;
-    if (a.dtype() == tt::tt_metal::DataType::BFLOAT16) {
-        cb_data_format = tt::DataFormat::Float16_b;
-    }
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     tt_metal::Buffer *src0_buffer = a.buffer();
     tt_metal::Buffer *src1_buffer = b.buffer();
-    if (bcast_batch)
-        TT_ASSERT(bshape[0]*bshape[1] == 1 && "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN");
-    else {
-        // same condition as above, different message
-        TT_ASSERT(ashape[1] == bshape[1] && ashape[0] == bshape[0]
-            && "bmm (non-bcast matmul) expects input tensors of shapes BCMK*BCKN=BCMN");
-    }
-    TT_ASSERT(ashape[3] == bshape[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
-    TT_ASSERT(ashape[2] % TILE_HEIGHT == 0);
-    TT_ASSERT(ashape[3] % TILE_WIDTH == 0);
-    TT_ASSERT(bshape[2] % TILE_HEIGHT == 0);
-    TT_ASSERT(bshape[3] % TILE_WIDTH == 0);
-    TT_ASSERT(src0_buffer->size() % single_tile_size == 0);
-    TT_ASSERT(src1_buffer->size() % single_tile_size == 0);
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
@@ -172,14 +148,6 @@ operation::ProgramWithCallbacks matmul_single_core_(const Tensor &a, const Tenso
     };
 
     return {std::move(program), override_runtime_args_callback};
-}
-
-operation::ProgramWithCallbacks matmul_single_core(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor) {
-    return matmul_single_core_(input_tensor_a, input_tensor_b, output_tensor, true);
-}
-
-operation::ProgramWithCallbacks bmm_single_core(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor) {
-    return matmul_single_core_(input_tensor_a, input_tensor_b, output_tensor, false);
 }
 
 void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program& program,

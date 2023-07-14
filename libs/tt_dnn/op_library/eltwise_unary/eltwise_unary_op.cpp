@@ -121,7 +121,14 @@ namespace tt {
 
 namespace tt_metal {
 
-void EltwiseUnary::validate(const std::vector<Tensor> &input_tensors) const {}
+void EltwiseUnary::validate(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
+    TT_ASSERT(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to eltwise unnary need to be on device!");
+    TT_ASSERT(input_tensor_a.buffer() != nullptr , "Operands to eltwise unary need to be allocated in buffers on device!");
+    TT_ASSERT((input_tensor_a.layout() == Layout::TILE), "Inputs to eltwise unary must be tilized");
+    TT_ASSERT(input_tensor_a.dtype() == DataType::BFLOAT16);
+    TT_ASSERT((input_tensor_a.buffer()->buffer_type() == BufferType::DRAM));
+}
 
 std::vector<Shape> EltwiseUnary::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);

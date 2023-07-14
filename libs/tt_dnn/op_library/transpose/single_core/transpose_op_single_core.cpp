@@ -12,9 +12,6 @@ namespace tt_metal {
 
 operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor& output) {
 
-    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to transpose_wh needs to be on device!");
-    TT_ASSERT(a.buffer() != nullptr, "Operand to transpose_wh needs to be allocated in a buffer on device!");
-
     const auto shape = a.shape();
     u32 W = shape[3], H = shape[2], NC = shape[1]*shape[0];
     u32 HW = H*W;
@@ -28,7 +25,8 @@ operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
-    uint32_t single_tile_size = a.element_size() * TILE_HW;
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
 
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
 
@@ -54,7 +52,7 @@ operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor
         core,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
 
     uint32_t output_cb_index = 16; // output operands start at index 16
@@ -65,7 +63,7 @@ operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor
         core,
         num_output_tiles,
         num_output_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
 
     tt_metal::DataMovementKernel *reader_kernel = tt_metal::CreateDataMovementKernel(

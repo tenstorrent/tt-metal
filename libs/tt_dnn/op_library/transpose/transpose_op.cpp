@@ -12,6 +12,8 @@ namespace tt_metal {
 
 void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
+    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operands to transpose need to be on device!");
+    TT_ASSERT(input_tensor.buffer() != nullptr , "Operands to transpose need to be allocated in buffers on device!");
     const auto shape = input_tensor.shape();
     u32 W = shape[3], H = shape[2], C = shape[3], NC = shape[1]*shape[0];
     u32 HW = H*W;

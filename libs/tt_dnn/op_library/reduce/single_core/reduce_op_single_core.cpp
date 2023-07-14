@@ -14,8 +14,7 @@ operation::ProgramWithCallbacks reduce_single_core(const Tensor &a, Tensor& outp
     const auto shape = a.shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1]*shape[0];
     uint32_t HW = H*W;
-    TT_ASSERT(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
-    TT_ASSERT(H > 0 && W > 0 && NC > 0);
+
     uint32_t Wt = W/TILE_WIDTH;
     uint32_t Ht = H/TILE_HEIGHT;
     if (reduce_dim == ReduceOpDim::HW)
@@ -27,12 +26,10 @@ operation::ProgramWithCallbacks reduce_single_core(const Tensor &a, Tensor& outp
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
-    // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(a.device() != nullptr, "Operand to reduce op needs to be on device!");
 
-    uint32_t single_tile_size = 2 * 1024;
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
 
-    TT_ASSERT(a.volume() % TILE_HW == 0);
     uint32_t num_tiles = a.volume()/TILE_HW;
 
     // This should allocate a DRAM buffer on the device
@@ -46,7 +43,7 @@ operation::ProgramWithCallbacks reduce_single_core(const Tensor &a, Tensor& outp
         core,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
 
     auto cb_src1 = tt_metal::CreateCircularBuffers(
@@ -55,7 +52,7 @@ operation::ProgramWithCallbacks reduce_single_core(const Tensor &a, Tensor& outp
         core,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
 
     uint32_t output_cb_index = 16; // output operands start at index 16
@@ -66,7 +63,7 @@ operation::ProgramWithCallbacks reduce_single_core(const Tensor &a, Tensor& outp
         core,
         num_output_tiles,
         num_output_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
     // no need to create c_in2 buffer since we pass scaler=0 to reader
 

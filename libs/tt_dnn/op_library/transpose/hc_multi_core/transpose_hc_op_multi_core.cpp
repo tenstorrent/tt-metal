@@ -13,9 +13,6 @@ namespace tt_metal {
 
 operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor &output) {
 
-    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
-    TT_ASSERT(a.buffer() != nullptr, "Operand to transpose_hc needs to be allocated in a buffer on device!");
-
     const auto shape = a.shape();
     u32 W = shape[3], H = shape[2], C = shape[1], N = shape[0];
     u32 HW = H*W;
@@ -29,7 +26,8 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor 
 
     tt_metal::Program program = tt_metal::Program();
 
-    uint32_t single_tile_size = a.element_size() * TILE_HW;
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
 
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
 
@@ -56,11 +54,11 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor 
         all_cores,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
 
     // Op not uplifted for L1 yet, but need to provide arg to kernel
-    bool dst_is_dram = true;
+    bool dst_is_dram = dst_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) src0_cb_index,
         static_cast<uint32_t>(DataFormat::Float16_b),

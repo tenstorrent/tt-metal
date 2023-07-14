@@ -72,7 +72,11 @@ void EltwiseBinaryBroadcast::validate(const std::vector<Tensor> &input_tensors) 
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
 
-    const auto input_shape_a = input_tensor_a.shape();;
+    TT_ASSERT(input_tensor_a.device() != nullptr and input_tensor_b.device() != nullptr, "Operands to bcast need to be on device!");
+    TT_ASSERT(input_tensor_a.device() == input_tensor_b.device(), "Operands to bcast need to be on the same device!");
+    TT_ASSERT(input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr, "Operands to bcast need to be allocated in buffers on device!");
+
+    const auto input_shape_a = input_tensor_a.shape();
     const auto input_shape_b = input_tensor_b.shape();
 
     TT_ASSERT(input_tensor_a.layout() == Layout::TILE);
@@ -90,10 +94,6 @@ void EltwiseBinaryBroadcast::validate(const std::vector<Tensor> &input_tensors) 
     auto width_b = input_shape_b[3];
 
     TT_ASSERT((batch_size_b * num_channels_b == 1 || (batch_size_b == batch_size_a && num_channels_b == num_channels_a)) && "Broadcast is currently only supported when bN*bC=1 or N & C match");
-
-    TT_ASSERT(width_a % TILE_WIDTH == 0 && height_a % TILE_HEIGHT == 0);
-    TT_ASSERT(height_a > 0 && width_a > 0 && batch_size_a * num_channels_a > 0);
-    TT_ASSERT(input_tensor_a.volume() % TILE_HW == 0);
 
     // validate input dimensions
     if (this->dim == BcastOpDim::W)

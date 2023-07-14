@@ -39,37 +39,19 @@ struct BmmOpParallelizationStrategy {
 /*
  * GENERAL MATMUL AND BMM
  */
-operation::ProgramWithCallbacks matmul_single_core  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // broadcasts batch, expects N=1 for now
-operation::ProgramWithCallbacks bmm_single_core     (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // doesn't broadcast batch, expects batch to match in A and B
-operation::ProgramWithCallbacks matmul_multi_core  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // broadcasts batch, expects N=1 for now
-operation::ProgramWithCallbacks bmm_multi_core     (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // doesn't broadcast batch, expects batch to match in A and B
-operation::ProgramWithCallbacks matmul_multi_core_reuse  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // Only supports 2D matmul expects N=1 for now
-operation::ProgramWithCallbacks bmm_multi_core_reuse  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // Only supports 2D matmul expects N=1 for now
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // Only supports 2D matmul expects N=1 for now
-operation::ProgramWithCallbacks bmm_multi_core_reuse_mcast  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // Only supports 2D matmul expects N=1 for now
-operation::ProgramWithCallbacks matmul_multi_core_reuse_generalized  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // Only supports 2D matmul expects N=1 for now
-operation::ProgramWithCallbacks bmm_multi_core_reuse_generalized  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // Only supports 2D matmul expects N=1 for now
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_generalized  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // Only supports 2D matmul expects N=1 for now
-operation::ProgramWithCallbacks bmm_multi_core_reuse_mcast_generalized  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // Only supports 2D matmul expects N=1 for now
-operation::ProgramWithCallbacks matmul_multi_core_reuse_padding (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // Only supports 2D matmul expects N=1 for now
-operation::ProgramWithCallbacks bmm_multi_core_reuse_padding  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // Only supports 2D matmul expects N=1 for now
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_padding (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // Only supports 2D matmul expects N=1 for now
-operation::ProgramWithCallbacks bmm_multi_core_reuse_mcast_padding  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor); // Only supports 2D matmul expects N=1 for now
+operation::ProgramWithCallbacks matmul_single_core  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
+operation::ProgramWithCallbacks matmul_multi_core  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
+operation::ProgramWithCallbacks matmul_multi_core_reuse  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
+operation::ProgramWithCallbacks matmul_multi_core_reuse_generalized  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_generalized  (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
+operation::ProgramWithCallbacks matmul_multi_core_reuse_padding (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_padding (const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, bool bcast_batch);
 
 struct Matmul {
+    bool bcast_batch;
     const MemoryConfig output_mem_config;
-    void validate(const std::vector<Tensor>& input_tensors) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-    operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
-    BmmOpParallelizationStrategy::Enum get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
-};
 
-
-struct BatchedMatmul {
-    const MemoryConfig output_mem_config;
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
@@ -83,13 +65,13 @@ struct BatchedMatmul {
 inline Tensor matmul (const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config = MemoryConfig{.interleaved = true}) {
     TT_ASSERT(input_tensor_a.shape()[3] == input_tensor_b.shape()[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
     TT_ASSERT(input_tensor_b.shape()[0]*input_tensor_b.shape()[1] == 1 && "matmul (batch bcast variant) expects input tensors of shapes BCMK*11KN=BCMN");
-    return operation::run_with_autoformat(Matmul{.output_mem_config=mem_config}, {input_tensor_a, input_tensor_b}).at(0);
+    return operation::run_with_autoformat(Matmul{.bcast_batch=true, .output_mem_config=mem_config}, {input_tensor_a, input_tensor_b}).at(0);
 }
 inline Tensor bmm    (const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config = MemoryConfig{.interleaved = true}) {
     TT_ASSERT(input_tensor_a.shape()[3] == input_tensor_b.shape()[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
     TT_ASSERT(input_tensor_a.shape()[1] == input_tensor_b.shape()[1] && input_tensor_a.shape()[0] == input_tensor_b.shape()[0]
         && "bmm (non-bcast matmul) expects input tensors of shapes BCMK*BCKN=BCMN");
-    return operation::run_with_autoformat(BatchedMatmul{.output_mem_config=mem_config}, {input_tensor_a, input_tensor_b}).at(0);
+    return operation::run_with_autoformat(Matmul{.bcast_batch=false, .output_mem_config=mem_config}, {input_tensor_a, input_tensor_b}).at(0);
 }
 
 

@@ -425,23 +425,11 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_bert_large_(co
     // Pass in a and b shapes instead
     // const auto& ashape = a.shape(), bshape = b.shape();
 
-    // TODO: Build some sort of dispatcher based on location of op operands
-    TT_ASSERT(a.storage_type() == StorageType::DEVICE and b.storage_type() == StorageType::DEVICE, "Operands to matmul need to be on device!");
-    TT_ASSERT(a.device() == b.device(), "Operands to matmul need to be on the same device!");
-    TT_ASSERT(a.buffer() != nullptr and b.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
-
     TT_ASSERT(bcast_batch == false, "Bcast batch not supported for this parallelization");
-
-    TT_ASSERT(a.dtype() == b.dtype());
-    TT_ASSERT(a.dtype() == tt::tt_metal::DataType::BFLOAT16 || a.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
 
     tt_metal::Device *device = a.device();
 
-    // TODO: CHANGE TO FUNCTION CONVERSION
-    tt::DataFormat cb_data_format = tt::DataFormat::Bfp8_b;
-    if (a.dtype() == tt::tt_metal::DataType::BFLOAT16) {
-        cb_data_format = tt::DataFormat::Float16_b;
-    }
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     //if (cb_data_format != output_cb_data_format) {
     //    log_warning("Input tensor datatype does not match target output dataformat. Defaulting to input dataformat.");
     //}
@@ -455,14 +443,6 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_bert_large_(co
         TT_ASSERT(ashape[1] == bshape[1] && ashape[0] == bshape[0]
             && "bmm (non-bcast matmul) expects input tensors of shapes BCMK*BCKN=BCMN");
     }
-    TT_ASSERT(in0_buffer->size() % single_tile_size == 0);
-    TT_ASSERT(in1_buffer->size() % single_tile_size == 0);
-
-    TT_ASSERT(ashape[3] == bshape[2], "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
-    TT_ASSERT(ashape[2] % TILE_HEIGHT == 0);
-    TT_ASSERT(ashape[3] % TILE_WIDTH == 0);
-    TT_ASSERT(bshape[2] % TILE_HEIGHT == 0);
-    TT_ASSERT(bshape[3] % TILE_WIDTH == 0);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Matmul Parameters Setup
