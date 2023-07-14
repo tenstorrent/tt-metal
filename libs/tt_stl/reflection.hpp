@@ -19,17 +19,8 @@ namespace reflection {
 
 using Attributes = std::vector<std::tuple<std::string, std::string>>;
 
-namespace detail {
-template<typename T>
-using has_attributes_t = decltype(std::declval<T>().attributes());
-}
-
-template<typename T>
-typename std::enable_if_t<std::experimental::is_detected<detail::has_attributes_t, T>::value, std::ostream>&
-operator<<(std::ostream& os, const T& object) {
-    os << boost::core::demangle(typeid(T).name());
+static std::ostream& operator<<(std::ostream& os, const Attributes& attributes) {
     os << "(";
-    const auto attributes = object.attributes();
     for (auto index = 0; index < attributes.size(); index++) {
         auto&& [key, value] = attributes[index];
         os << key << "=" << value;
@@ -38,6 +29,20 @@ operator<<(std::ostream& os, const T& object) {
         }
     }
     os << ")";
+    return os;
+}
+
+namespace detail {
+template<typename T>
+using has_attributes_t = decltype(std::declval<T>().attributes());
+}
+
+template<typename T>
+typename std::enable_if_t<std::experimental::is_detected<detail::has_attributes_t, T>::value, std::ostream>&
+operator<<(std::ostream& os, const T& object) {
+    static_assert(std::is_same_v<decltype(object.attributes()), Attributes>);
+    os << boost::core::demangle(typeid(T).name());
+    os << object.attributes();
     return os;
 }
 
@@ -102,13 +107,55 @@ std::ostream& operator<<(std::ostream& os, const std::vector<T>& vector) {
 }  // namespace tt
 
 
+template <>
+struct fmt::formatter<tt::stl::reflection::Attributes> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
+        return ctx.end();
+    }
+
+    auto format(const tt::stl::reflection::Attributes& attributes, format_context& ctx) const -> format_context::iterator {
+        using tt::stl::reflection::operator<<;
+        std::stringstream ss;
+        ss << attributes;
+        return fmt::format_to(ctx.out(), "{}", ss.str());
+    }
+};
+
+
+template <typename T>
+struct fmt::formatter<T, char, std::enable_if_t<std::experimental::is_detected<tt::stl::reflection::detail::has_attributes_t, T>::value>> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
+        return ctx.end();
+    }
+
+    auto format(const T& object, format_context& ctx) const -> format_context::iterator {
+        using tt::stl::reflection::operator<<;
+        std::stringstream ss;
+        ss << object;
+        return fmt::format_to(ctx.out(), "{}", ss.str());
+    }
+};
+
+
+template <typename T>
+struct fmt::formatter<T, char, std::enable_if_t<std::is_enum<T>::value>> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
+        return ctx.end();
+    }
+
+    auto format(const T& value, format_context& ctx) const -> format_context::iterator {
+        using tt::stl::reflection::operator<<;
+        std::stringstream ss;
+        ss << value;
+        return fmt::format_to(ctx.out(), "{}", ss.str());
+    }
+};
+
+
 template <typename T>
 struct fmt::formatter<std::optional<T>> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
-        auto it = ctx.begin();
-        auto end = ctx.end();
-        while (it != end) it++;
-        return it;
+        return ctx.end();
     }
 
     auto format(const std::optional<T>& optional, format_context& ctx) const -> format_context::iterator {
@@ -160,36 +207,6 @@ struct fmt::formatter<std::vector<T>> {
         using tt::stl::reflection::operator<<;
         std::stringstream ss;
         ss << vector;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-
-template <typename T>
-struct fmt::formatter<T, char, std::enable_if_t<std::experimental::is_detected<tt::stl::reflection::detail::has_attributes_t, T>::value>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
-        return ctx.end();
-    }
-
-    auto format(const T& object, format_context& ctx) const -> format_context::iterator {
-        using tt::stl::reflection::operator<<;
-        std::stringstream ss;
-        ss << object;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-
-template <typename T>
-struct fmt::formatter<T, char, std::enable_if_t<std::is_enum<T>::value>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
-        return ctx.end();
-    }
-
-    auto format(const T& value, format_context& ctx) const -> format_context::iterator {
-        using tt::stl::reflection::operator<<;
-        std::stringstream ss;
-        ss << value;
         return fmt::format_to(ctx.out(), "{}", ss.str());
     }
 };

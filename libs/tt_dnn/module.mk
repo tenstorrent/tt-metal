@@ -53,6 +53,7 @@ TT_DNN_SRCS = \
 	libs/tt_dnn/op_library/run_operation.cpp \
 	libs/tt_dnn/op_library/split/split_tiled.cpp \
 	libs/tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.cpp \
+	libs/tt_dnn/op_library/operation_history.cpp \
 
 TT_DNN_LIB = $(LIBDIR)/libtt_dnn.a
 TT_DNN_DEFINES =

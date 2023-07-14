@@ -458,5 +458,7 @@ static std::ostream& operator<<(std::ostream& os, const DeviceOperation& op) {
     return os;
 }
 
+using Operation = std::variant<HostOperation, DeviceOperation>;
+
 }
 }
