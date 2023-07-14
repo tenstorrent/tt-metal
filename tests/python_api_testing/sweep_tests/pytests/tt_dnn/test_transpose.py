@@ -87,8 +87,8 @@ def test_run_transpose_cn_test(input_shapes, pcie_slot, function_level_defaults)
 @pytest.mark.parametrize(
     "input_shapes, pcie_slot",
     (
-        ([[32, 64, 32, 32]], 0),  # Single core
-        ([[32, 64, 384, 96]], 0),  # Single core
+        ([[32, 1, 32, 32]], 0),  # Single core
+        ([[32, 3, 384, 96]], 0),  # Single core
     ),
 )
 def test_run_transpose_nh_test(input_shapes, pcie_slot, function_level_defaults):
@@ -109,8 +109,8 @@ def test_run_transpose_nh_test(input_shapes, pcie_slot, function_level_defaults)
 @pytest.mark.parametrize(
     "input_shapes, pcie_slot",
     (
-        ([[32, 64, 32, 32]], 0),  # Single core
-        ([[32, 64, 384, 96]], 0),  # Single core
+        ([[32, 1, 32, 32]], 0),  # Single core
+        ([[32, 3, 384, 96]], 0),  # Single core
     ),
 )
 def test_run_transpose_nw_test(input_shapes, pcie_slot, function_level_defaults):
@@ -131,8 +131,8 @@ def test_run_transpose_nw_test(input_shapes, pcie_slot, function_level_defaults)
 @pytest.mark.parametrize(
     "input_shapes, pcie_slot",
     (
-        ([[32, 64, 32, 32]], 0),  # Single core
-        ([[32, 64, 384, 96]], 0),  # Single core
+        ([[1, 64, 32, 32]], 0),  # Single core
+        ([[3, 64, 384, 96]], 0),  # Single core
     ),
 )
 def test_run_transpose_cw_test(input_shapes, pcie_slot, function_level_defaults):
