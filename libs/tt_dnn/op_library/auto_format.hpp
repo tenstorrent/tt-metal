@@ -3,13 +3,14 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 
+#include <optional>
+
 using namespace tt::constants;
 
 namespace tt {
 
 namespace tt_metal {
 
-// TODO: To be merged into Op Base Class
 class AutoFormat {
     private:
         inline static Device* device = nullptr;
@@ -37,7 +38,9 @@ class AutoFormat {
             return false;
         }
 
-        static Tensor format_input_tensor(const Tensor &a, Device * device, const std::array<uint32_t, 4>& padded_shape, float pad_value=0, Layout target_layout = Layout::TILE);
+        static Tensor move_tensor_to_device(const Tensor &input, Device * device, const std::optional<MemoryConfig>& mem_config = std::nullopt);
+
+        static Tensor format_input_tensor(const Tensor &input, Device * device, const std::array<uint32_t, 4>& padded_shape, float pad_value=0, Layout target_layout = Layout::TILE);
 
         static Tensor format_output_tensor(const Tensor &output, const std::array<uint32_t, 4>& shape, Device* device, Layout target_layout = Layout::TILE);
 };

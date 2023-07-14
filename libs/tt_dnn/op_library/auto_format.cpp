@@ -15,25 +15,28 @@ namespace tt {
 
 namespace tt_metal {
 
-// This function always returns a new tensor
-Tensor AutoFormat::format_input_tensor(const Tensor &a, Device * device, const std::array<uint32_t, 4>& padded_shape, float pad_value, Layout target_layout) {
-    bool pad_input = a.shape() != padded_shape;
-    bool convert_layout = a.layout() != target_layout;
-
-    MemoryConfig mem_config = default_mem_config;
-    if (a.storage_type() == StorageType::DEVICE) {
-        mem_config = a.memory_config();
+Tensor AutoFormat::move_tensor_to_device(const Tensor &input, Device * device, const std::optional<MemoryConfig>& mem_config) {
+    if (input.storage_type() == StorageType::HOST) {
+        return data_transfer_to_device(input, device, mem_config.has_value() ? mem_config.value() : default_mem_config);
+    } else {
+        return input;
     }
+}
+
+Tensor AutoFormat::format_input_tensor(const Tensor &input, Device * device, const std::array<uint32_t, 4>& padded_shape, float pad_value, Layout target_layout) {
+    bool pad_input = input.shape() != padded_shape;
+    bool convert_layout = input.layout() != target_layout;
 
     if (!pad_input && !convert_layout) {
-        if (a.storage_type() == StorageType::HOST) {
-            return data_transfer_to_device(a, device, mem_config);
-        } else {
-            return a;
-        }
+        return AutoFormat::move_tensor_to_device(input, device);
     }
 
-    Tensor formatted_input = a;
+    MemoryConfig mem_config = default_mem_config;
+    if (input.storage_type() == StorageType::DEVICE) {
+        mem_config = input.memory_config();
+    }
+
+    Tensor formatted_input = input;
 
     // TODO: Profile if it is faster to put host tensor to device and then pad/convert if possible
     // Device side conversions
@@ -75,11 +78,7 @@ Tensor AutoFormat::format_input_tensor(const Tensor &a, Device * device, const s
         formatted_input = layout_conversion_on_host(formatted_input, target_layout);
     }
 
-    if (formatted_input.storage_type() == StorageType::HOST) {
-        formatted_input = data_transfer_to_device(formatted_input, device, mem_config);
-    }
-
-    return formatted_input;
+    return AutoFormat::move_tensor_to_device(formatted_input, device, mem_config);
 }
 
 
@@ -168,7 +167,7 @@ Tensor AutoFormat::format_output_tensor(const Tensor &output, const std::array<u
         if ((formatted_output.layout() == Layout::ROW_MAJOR && formatted_output.shape()[3] % 2 == 0) ||
             (formatted_output.layout() == Layout::CHANNELS_LAST && formatted_output.shape()[1] % 2 == 0) ||
             (formatted_output.layout() == Layout::TILE)) {
-            formatted_output = data_transfer_to_device(formatted_output, device, mem_config);
+            formatted_output = AutoFormat::move_tensor_to_device(formatted_output, device, mem_config);
         }
     }
 

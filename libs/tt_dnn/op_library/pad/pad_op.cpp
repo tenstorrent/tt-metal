@@ -360,7 +360,11 @@ std::vector<Shape> PadOnHost::compute_output_shapes(const std::vector<Tensor> &i
 
 std::vector<Tensor> PadOnHost::compute_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor.pad(this->output_tensor_shape, this->input_tensor_start, this->pad_value)};
+    if (input_tensor.shape() == this->output_tensor_shape) {
+        return {input_tensor};
+    } else {
+        return {input_tensor.pad(this->output_tensor_shape, this->input_tensor_start, this->pad_value)};
+    }
 }
 
 tt::stl::reflection::Attributes PadOnHost::attributes() const {
@@ -372,9 +376,6 @@ tt::stl::reflection::Attributes PadOnHost::attributes() const {
 }
 
 Tensor pad_on_host(const Tensor &input_tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
-    if (input_tensor.shape() == output_tensor_shape) {
-        return input_tensor;
-    }
     return operation::run(PadOnHost{output_tensor_shape, input_tensor_start, pad_value}, {input_tensor}).at(0);
 }
 

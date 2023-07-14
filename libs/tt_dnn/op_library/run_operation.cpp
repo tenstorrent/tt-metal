@@ -15,10 +15,15 @@ namespace tt::tt_metal::operation {
 
 namespace detail {
 
-static Device* get_device(const std::vector<Tensor> &input_tensors) {
+static Device* get_device(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>> &optional_input_tensors = {}) {
     for (auto &input_tensor : input_tensors) {
         if (input_tensor.storage_type() == StorageType::DEVICE) {
             return input_tensor.device();
+        }
+    }
+    for (auto& optional_input_tensor : optional_input_tensors) {
+        if (optional_input_tensor.has_value() && optional_input_tensor.value().storage_type() == StorageType::DEVICE) {
+            return optional_input_tensor.value().device();
         }
     }
     auto device = AutoFormat::GetDefaultDevice();
@@ -77,7 +82,7 @@ std::vector<Tensor> run_without_program_cache(
 
     op.validate(input_tensors, optional_input_tensors);
 
-    auto device = detail::get_device(input_tensors);
+    auto device = detail::get_device(input_tensors, optional_input_tensors);
     auto output_tensors = op.create_output_tensors(input_tensors);
 
     auto program_with_callbacks = op.create_program(input_tensors, optional_input_tensors, output_tensors);
@@ -111,7 +116,7 @@ std::vector<Tensor> run_with_program_cache(
 
     op.validate(input_tensors, optional_input_tensors);
 
-    auto device = detail::get_device(input_tensors);
+    auto device = detail::get_device(input_tensors, optional_input_tensors);
     auto output_tensors = op.create_output_tensors(input_tensors);
 
     auto& program_with_callbacks = program_cache::get_or_create(
@@ -221,26 +226,13 @@ std::vector<Tensor> run_without_autoformat(
     const std::vector<Tensor> &input_tensors,
     const std::vector<std::optional<const Tensor>> &optional_input_tensors
 ) {
-    Device* device = AutoFormat::GetDefaultDevice();
-    for (auto& input_tensor : input_tensors) {
-        if (input_tensor.storage_type() == StorageType::DEVICE) {
-            device = input_tensor.device();
-            break;
-        }
-    }
-    for (auto& optional_input_tensor : optional_input_tensors) {
-        if (optional_input_tensor.has_value() && optional_input_tensor.value().storage_type() == StorageType::DEVICE) {
-            device = optional_input_tensor.value().device();
-            break;
-        }
-    }
-    TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
+    Device* device = detail::get_device(input_tensors, optional_input_tensors);
 
     std::vector<Tensor> input_tensors_on_dev;
     input_tensors_on_dev.reserve(input_tensors.size());
     for (auto& input_tensor : input_tensors) {
         if (input_tensor.storage_type() == StorageType::HOST) {
-            input_tensors_on_dev.push_back(input_tensor.to(device));
+            input_tensors_on_dev.push_back(AutoFormat::move_tensor_to_device(input_tensor, device));
         } else {
             input_tensors_on_dev.push_back(input_tensor);
         }
@@ -249,7 +241,7 @@ std::vector<Tensor> run_without_autoformat(
     optional_input_tensors_on_dev.reserve(optional_input_tensors.size());
     for (auto& optional_input_tensor : optional_input_tensors) {
         if (optional_input_tensor.has_value() && optional_input_tensor.value().storage_type() == StorageType::HOST) {
-            optional_input_tensors_on_dev.push_back(optional_input_tensor.value().to(device));
+            optional_input_tensors_on_dev.push_back(AutoFormat::move_tensor_to_device(optional_input_tensor.value(), device));
         } else {
             optional_input_tensors_on_dev.push_back(optional_input_tensor);
         }
@@ -265,20 +257,7 @@ std::vector<Tensor> run_with_autoformat(
     const float pad_value,
     const bool pad_c
 ) {
-    Device* device = AutoFormat::GetDefaultDevice();
-    for (auto& input_tensor : input_tensors) {
-        if (input_tensor.storage_type() == StorageType::DEVICE) {
-            device = input_tensor.device();
-            break;
-        }
-    }
-    for (auto& optional_input_tensor : optional_input_tensors) {
-        if (optional_input_tensor.has_value() && optional_input_tensor.value().storage_type() == StorageType::DEVICE) {
-            device = optional_input_tensor.value().device();
-            break;
-        }
-    }
-    TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
+    Device* device = detail::get_device(input_tensors, optional_input_tensors);
 
     auto output_shapes = op.compute_output_shapes(input_tensors);
 

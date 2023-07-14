@@ -13,6 +13,7 @@ struct DataTransferToHost {
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> compute_output_tensors(const std::vector<Tensor> &input_tensors) const;
+    tt::stl::reflection::Attributes attributes() const;
 };
 
 Tensor data_transfer_to_host (const Tensor &input_tensor, Host* host);
@@ -24,6 +25,7 @@ struct DataTransferToDevice {
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> compute_output_tensors(const std::vector<Tensor> &input_tensors) const;
+    tt::stl::reflection::Attributes attributes() const;
 };
 
 Tensor data_transfer_to_device (const Tensor &input_tensor, Device* device, const MemoryConfig mem_config);
