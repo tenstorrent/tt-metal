@@ -1,6 +1,7 @@
 import os
 from common import get_smi_log_lines, check_not_empty, get_tt_arch_from_cmd_line
 
+
 def is_eth_fw_version_line(tt_arch, line):
     matches = "ETH FW Version" in line
 
@@ -9,6 +10,7 @@ def is_eth_fw_version_line(tt_arch, line):
         assert tt_arch in ("wormhole_b0", "wormhole", "blackhole")
 
     return matches
+
 
 def get_fw_versions_and_dates(tt_arch):
     log_lines = get_smi_log_lines()
@@ -54,7 +56,11 @@ if __name__ == "__main__":
 
     expected_fw_values_by_arch = {
         "grayskull": (
-            ("2023-06-28",),
+            (
+                "2022-08-31",
+                "2022-09-06",
+                "2023-06-28",
+            ),
             ("1.0.0",),
         ),
         "wormhole_b0": (
