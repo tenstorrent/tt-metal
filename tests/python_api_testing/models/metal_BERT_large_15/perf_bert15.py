@@ -34,7 +34,7 @@ from utility_functions import (
     profiler,
 )
 from utility_functions_new import prep_report
-
+import pytest
 from loguru import logger
 
 BATCH_SIZE = 9
@@ -49,8 +49,10 @@ dtype = ttl.tensor.DataType.BFLOAT16
 mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
 model_location_generator = model_location_generator_
 
-
-def test_perf(use_program_cache):
+@pytest.mark.parametrize(
+    "expected_inference_time",
+    ([0.24]),)
+def test_perf(use_program_cache, expected_inference_time):
     model_config = get_model_config(dtype, mem_config)
 
     disable_compile_cache()
@@ -115,3 +117,5 @@ def test_perf(use_program_cache):
     prep_report(
         "bert15", BATCH_SIZE, first_iter_time, second_iter_time, comments, cpu_time
     )
+    logger.info(f"bert15 inference time: {second_iter_time}")
+    assert second_iter_time < expected_inference_time, "bert15 is too slow"
