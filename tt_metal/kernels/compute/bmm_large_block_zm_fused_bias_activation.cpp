@@ -92,7 +92,11 @@ void MAIN {
                             // Redundant wait since we know data was just pushed
                             cb_wait_front(mm_bias_intermediate_cb_id, out_subblock_num_tiles);
                             cb_wait_front(bias_cb_id, in1_per_core_w);
-                            add_bcast_rows_init_short_with_dt(mm_bias_intermediate_cb_id, bias_cb_id);
+                            add_bcast_rows_init_short();
+                            // reconfigure unpacker df for src B
+                            unpack_reconfig_data_format(mm_bias_intermediate_cb_id, bias_cb_id);
+                            // reconfigure packer df for out
+                            pack_reconfig_data_format(out_cb_id);
                             acquire_dst(tt::DstMode::Half);
                             for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
                                 uint32_t bcast_tile_idx = in1_index_subblock_offset;
@@ -102,7 +106,10 @@ void MAIN {
                                 }
                             }
                             cb_pop_front(mm_bias_intermediate_cb_id, out_subblock_num_tiles);
-                            // TODO: Need to reconfig for mm again if batch > 1
+                            // reconfigure init for matmul
+                            mm_init_short();
+                            // reconfigure unpacker df for src B
+                            unpack_reconfig_data_format(in1_cb_id, in0_cb_id);
                         #endif
                         // TODO: Can easily generalize for other sfpu activations
                         #ifdef FUSE_GELU_ACTIVATION

@@ -52,6 +52,21 @@
 
 namespace ckernel {
 
+/**
+ * Helper function to reconfigure unpacker srca and srcb input data formats.
+ */
+ALWI void unpack_reconfig_data_format(const uint32_t srca_new_operand, const uint32_t srcb_new_operand) {
+    UNPACK(( llk_unpack_reconfig_data_format(srca_new_operand, srcb_new_operand) ));
+}
+
+/**
+ * Helper function to reconfigure packer output data format.
+ */
+ALWI void pack_reconfig_data_format(const uint32_t new_operand) {
+    PACK(( llk_pack_reconfig_data_format(new_operand) ));
+}
+
+
 ALWI void mm_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t out_cb_id = 16) {
     UNPACK(( llk_setup_operands() ));
     UNPACK(( llk_unpack_AB_matmul_init() ));
@@ -766,13 +781,6 @@ ALWI void mul_tiles_bcast(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_
 /**
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for add_bcast_rows to be executed correctly.
  */
-ALWI void add_bcast_rows_init_short_with_dt(uint32_t icb0, uint32_t icb1)
-{
-    MATH(( llk_math_eltwise_binary_init<ELWADD, BroadcastType::ROW>() ));
-    UNPACK(( llk_unpack_reconfig_data_format(1, icb0, 0, icb1) ));
-    UNPACK(( llk_unpack_AB_init<BroadcastType::ROW>() ));
-}
-
 ALWI void add_bcast_rows_init_short()
 {
     MATH(( llk_math_eltwise_binary_init<ELWADD, BroadcastType::ROW>() ));

@@ -150,3 +150,7 @@ inline void llk_pack_relu_config(std::uint32_t config) {
     TTI_WRCFG(p_gpr_pack::TMP1,  p_cfg::WRCFG_32b, STACC_RELU_ReluThreshold_ADDR32);
     TTI_NOP; TTI_NOP;
 }
+
+inline void llk_pack_reconfig_data_format(std::uint32_t new_operand) {
+   reconfig_packer_data_format(new_operand);
+}
