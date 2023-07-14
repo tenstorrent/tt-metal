@@ -1,4 +1,4 @@
-
+#pragma once
 #include "llk_io_pack.h"
 #include "llk_defs.h"
 #include "llk_param_structs.h"
