@@ -9,8 +9,9 @@ endif
 src/firmware:
 	TT_METAL_HOME=$(TT_METAL_HOME) $(MAKE) -C $(TT_METAL_HOME)/tt_metal/src/firmware/riscv/targets/brisc linker_scripts
 	TT_METAL_HOME=$(TT_METAL_HOME) $(MAKE) -C $(TT_METAL_HOME)/tt_metal/src/firmware/riscv/targets/ncrisc linker_scripts
+	$(info firmware/module.mk: Erisc build is skipped for wormhole_b0 currently)
 
 src/firmware/clean:
 	TT_METAL_HOME=$(TT_METAL_HOME) $(MAKE) -C $(TT_METAL_HOME)/tt_metal/src/firmware/riscv/targets/brisc clean
 	TT_METAL_HOME=$(TT_METAL_HOME) $(MAKE) -C $(TT_METAL_HOME)/tt_metal/src/firmware/riscv/targets/ncrisc clean
-	$(ERISC_MAKE_CLEAN)
+	$(info firmware/module.mk: Erisc build is skipped for wormhole_b0 currently)
