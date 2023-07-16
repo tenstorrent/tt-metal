@@ -7,9 +7,9 @@
 #include "hostdevcommon/kernel_structs.h"
 
 
-#include "cb_api.h"
-#include "reg_api.h"
-#include "llk_includes.h"
+#include "compute_kernel_api/cb_api.h"
+#include "compute_kernel_api/common.h"
+#include "compute_kernel_api/llk_includes.h"
 
 
 namespace ckernel {

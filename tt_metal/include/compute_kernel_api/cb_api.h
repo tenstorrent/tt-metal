@@ -2,7 +2,7 @@
 
 #define SYNC SyncHalf
 
-#include "llk_includes.h"
+#include "compute_kernel_api/llk_includes.h"
 
 namespace ckernel {
 

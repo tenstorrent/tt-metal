@@ -6,7 +6,7 @@
 #include "ckernel_include.h"
 #include "hostdevcommon/kernel_structs.h"
 
-#include "llk_includes.h"
+#include "compute_kernel_api/llk_includes.h"
 
 namespace ckernel {
 
