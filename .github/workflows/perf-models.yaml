@@ -36,7 +36,6 @@ jobs:
         timeout-minutes: 60
         run: |
           source build/python_env/bin/activate
-          python -m pip install -r tests/python_api_testing/requirements.txt
           ./tests/scripts/run_performance.sh
       - name: Check perf report exists
         id: check-perf-report
