@@ -27,7 +27,7 @@ from tt_lib import tensor
 import tt_lib.fallback_ops as fallback_ops
 from transformers import ViTForImageClassification
 
-from models.utility_functions_new import (
+from models.utility_functions import (
     torch_to_tt_tensor,
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,

@@ -7,16 +7,10 @@ sys.path.append(f"{f}/../..")
 import numpy as np
 
 import tt_lib as ttl
-from models.utility_functions import tilize
+
 from python_api_testing.models.utility_functions import (
-    pad_activation,
-    pad_weight,
-    tilize,
     untilize,
     tilize_to_list,
-    print_diff_argmax,
-    pad_weight,
-    is_close,
     comp_pcc,
 )
 import torch

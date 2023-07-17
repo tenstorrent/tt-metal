@@ -3,12 +3,12 @@ from loguru import logger
 import torch
 
 import tt_lib
-from models.utility_functions_new import (
-    comp_allclose_and_pcc,
-    comp_pcc,
+from models.utility_functions import (
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
 )
+
+from tests.python_api_testing.models.utility_functions_new import comp_pcc, comp_allclose_and_pcc
 from models.vit.tt.modeling_vit import TtViTSelfOutput
 
 

@@ -2,7 +2,7 @@ from transformers import ViTForImageClassification as HF_ViTForImageClassication
 from loguru import logger
 import torch
 
-from models.utility_functions_new import comp_allclose_and_pcc, comp_pcc
+from tests.python_api_testing.models.utility_functions_new import comp_allclose_and_pcc, comp_pcc
 from models.vit.tt.modeling_vit import ViTEmbeddings
 
 
