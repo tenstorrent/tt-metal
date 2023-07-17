@@ -56,14 +56,20 @@ namespace ckernel {
  * Helper function to reconfigure unpacker srca and srcb input data formats.
  */
 ALWI void unpack_reconfig_data_format(const uint32_t srca_new_operand, const uint32_t srcb_new_operand) {
-    UNPACK(( llk_unpack_reconfig_data_format(srca_new_operand, srcb_new_operand) ));
+    #ifdef ARCH_GRAYSKULL
+        UNPACK(( llk_unpack_reconfig_data_format(srca_new_operand, srcb_new_operand) ));
+    #endif
+    // NOTE: For wormhole_b0, updated unpacker functions don't yet exist, so skip.
 }
 
 /**
  * Helper function to reconfigure packer output data format.
  */
 ALWI void pack_reconfig_data_format(const uint32_t new_operand) {
-    PACK(( llk_pack_reconfig_data_format(new_operand) ));
+    #ifdef ARCH_GRAYSKULL
+        PACK(( llk_pack_reconfig_data_format(new_operand) ));
+    #endif
+    // NOTE: For wormhole_b0, packer data format reconfig functions don;t yet exist. So skip.
 }
 
 
