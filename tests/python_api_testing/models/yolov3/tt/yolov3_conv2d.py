@@ -15,7 +15,6 @@ from utility_functions_new import (
     torch_to_tt_tensor_rm,
 )
 from python_api_testing.models.conv_on_device_utils_new import (
-    run_conv_on_tt_device,
     run_conv_on_device_wrapper,
     is_conv_supported_on_device,
 )

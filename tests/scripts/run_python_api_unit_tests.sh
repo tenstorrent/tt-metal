@@ -30,3 +30,6 @@ pytest $TT_METAL_HOME/tests/python_api_testing/models/bert_large_performant/unit
 # Fused ops unit tests
 pytest $TT_METAL_HOME/tests/python_api_testing/models/bert_large_performant/unit_tests/fused_ops/test_bert_large_fused_ln.py -k "in0_L1-out_L1 and batch_9"
 pytest $TT_METAL_HOME/tests/python_api_testing/models/bert_large_performant/unit_tests/fused_ops/test_bert_large_fused_softmax.py -k "in0_L1 and batch_9"
+
+# Resnet18 tests with conv on cpu and with conv on device
+pytest $TT_METAL_HOME/tests/python_api_testing/models/resnet/test_resnet18.py
