@@ -29,18 +29,10 @@ operation::ProgramWithCallbacks unpad_rm(const Tensor &a, Tensor& output, const 
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    constexpr uint32_t alignment = 32;
-
     uint32_t src_stick_size = padded_row_size_bytes;
     uint32_t dst_stick_size = unpadded_row_size_bytes;
 
-    uint32_t num_output_banks = output.device()->num_banks(dst_buffer->buffer_type());
-    uint32_t cache_buffer_size = alignment * num_output_banks;
-    uint32_t src_buffer_size = alignment + src_stick_size;
-    uint32_t dst_buffer_size = alignment + dst_stick_size;
-
-    auto cache_buffer_l1 = tt_metal::Buffer(device, cache_buffer_size, cache_buffer_size, tt_metal::BufferType::L1);
-    auto src_buffer_l1 = tt_metal::Buffer(device, src_buffer_size, src_buffer_size, tt_metal::BufferType::L1);
+    uint32_t dst_buffer_size = dst_stick_size;
     auto dst_buffer_l1 = tt_metal::Buffer(device, dst_buffer_size, dst_buffer_size, tt_metal::BufferType::L1);
 
     vector<uint32_t> reader_kernel_args = {
@@ -57,17 +49,14 @@ operation::ProgramWithCallbacks unpad_rm(const Tensor &a, Tensor& output, const 
         unpadded_row_size_bytes,
         padded_row_size_bytes,
         padded_row_size_bytes - unpadded_row_size_bytes,
-        cache_buffer_l1.address(),
-        src_buffer_l1.address(),
-        dst_buffer_l1.address(),
-        num_output_banks
+        dst_buffer_l1.address()
     };
 
     bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool src_stick_size_is_power_of_two = is_power_of_two(src_stick_size);
+    bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(src_stick_size);
     uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)log2(src_stick_size) : 0;
-    bool dst_stick_size_is_power_of_two = is_power_of_two(dst_stick_size);
+    bool dst_stick_size_is_power_of_two = is_power_of_two_at_least_32(dst_stick_size);
     uint32_t dst_log2_stick_size = dst_stick_size_is_power_of_two ? (std::uint32_t)log2(dst_stick_size) : 0;
     std::vector<uint32_t> compile_time_args_vec = {
         (std::uint32_t) src0_is_dram,

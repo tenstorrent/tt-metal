@@ -9,7 +9,6 @@ void kernel_main() {
 
     // Constexpr
     constexpr uint32_t cb_id_out0                      = 16;
-    constexpr uint32_t alignment                       = 32;
     constexpr uint32_t tile_height                     = 32;
 
     const uint32_t dst_addr                 = get_arg_val<uint32_t>(0);
@@ -23,14 +22,12 @@ void kernel_main() {
     const uint32_t num_unpadded_X           = get_arg_val<uint32_t>(8);
     const uint32_t unpadded_X_size          = get_arg_val<uint32_t>(9);
     const uint32_t padded_X_size            = get_arg_val<uint32_t>(10);
-    const uint32_t temp_buffer_l1_addr      = get_arg_val<uint32_t>(11);
-    const uint32_t num_blocks_w_input       = get_arg_val<uint32_t>(12);
-    const uint32_t num_blocks_w_output      = get_arg_val<uint32_t>(13);
-    const uint32_t num_blocks_w_diff        = get_arg_val<uint32_t>(14);
-    const uint32_t block_row_size           = get_arg_val<uint32_t>(15);
-    const uint32_t block_row_leftover_size  = get_arg_val<uint32_t>(16);
+    const uint32_t num_blocks_w_input       = get_arg_val<uint32_t>(11);
+    const uint32_t num_blocks_w_output      = get_arg_val<uint32_t>(12);
+    const uint32_t num_blocks_w_diff        = get_arg_val<uint32_t>(13);
+    const uint32_t block_row_size           = get_arg_val<uint32_t>(14);
+    const uint32_t block_row_leftover_size  = get_arg_val<uint32_t>(15);
 
-    std::uint32_t* temp_buffer = (uint32_t*)(temp_buffer_l1_addr);
 
     const uint32_t num_tiles_block_c = block_row_size / 64; // Assuming 2 bytes per datum, there are 64 bytes per tile row
 
@@ -64,22 +61,9 @@ void kernel_main() {
         uint32_t curr_stick_id = base_stick_id;
         for (uint32_t k = 0; k < num_rows; k++) {
             uint64_t dst_noc_addr = get_noc_addr(curr_stick_id, s) + offset;
-            uint64_t round_down_addr = round_down_32(dst_noc_addr);
-            uint64_t diff_addr = dst_noc_addr - round_down_addr;
-
-            noc_async_read(round_down_addr, temp_buffer_l1_addr, diff_addr);
-
-            // Copy from CB to tmp buffer
-            volatile std::uint32_t* src = (volatile uint32_t*)(l1_read_addr);
-            volatile std::uint32_t* temp = (volatile uint32_t*)(temp_buffer_l1_addr + diff_addr);
-            for(uint32_t z = 0; z < (block_size) / 4; z++) {
-                temp[z] = src[z];
-            }
-
-            noc_async_read_barrier();
 
             // Write out tmp buffer
-            noc_async_write(temp_buffer_l1_addr, round_down_addr, block_size + diff_addr);
+            noc_async_write(l1_read_addr, dst_noc_addr, block_size);
 
             l1_read_addr += block_row_size;
             curr_stick_id++;

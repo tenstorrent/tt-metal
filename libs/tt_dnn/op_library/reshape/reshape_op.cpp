@@ -184,7 +184,7 @@ operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& 
     );
 
     // Reader compile-time args
-    bool old_stick_size_is_power_of_two = (ceil(log2(old_stick_size)) == floor(log2(old_stick_size)));
+    bool old_stick_size_is_power_of_two = is_power_of_two_at_least_32(old_stick_size);
     vector<uint32_t> reader_kernel_args = {src0_dram_buffer->address(), num_old_sticks, old_stick_size};
     std::vector<uint32_t> reader_compile_time_args;
     if (old_stick_size_is_power_of_two) {
@@ -197,7 +197,7 @@ operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& 
     }
 
     // Writer compile-time args
-    bool new_stick_size_is_power_of_two = (ceil(log2(new_stick_size)) == floor(log2(new_stick_size)));
+    bool new_stick_size_is_power_of_two = is_power_of_two_at_least_32(new_stick_size);
     vector<uint32_t> writer_kernel_args = {dst_dram_buffer->address(), num_new_sticks, new_stick_size};
     std::vector<uint32_t> writer_compile_time_args;
     if (new_stick_size_is_power_of_two) {

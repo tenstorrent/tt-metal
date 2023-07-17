@@ -165,7 +165,7 @@ operation::ProgramWithCallbacks layernorm_(
     if (rm_gb) {
         if (gamma.has_value()) {
             auto gamma_stick_size = gamma.value().shape()[3] * gamma.value().element_size();
-            bool gamma_stick_size_is_power_of_two = is_power_of_two(gamma_stick_size);
+            bool gamma_stick_size_is_power_of_two = is_power_of_two_at_least_32(gamma_stick_size);
             reader_compile_time_args.push_back((std::uint32_t) gamma_stick_size_is_power_of_two);
             if (gamma_stick_size_is_power_of_two) {
                 uint32_t gamma_log2_stick_size = gamma_stick_size_is_power_of_two ? (std::uint32_t)log2(gamma_stick_size) : 0;
@@ -175,7 +175,7 @@ operation::ProgramWithCallbacks layernorm_(
             }
         } else if (beta.has_value()) {
             auto beta_stick_size = beta.value().shape()[3] * beta.value().element_size();
-            bool beta_stick_size_is_power_of_two = is_power_of_two(beta_stick_size);
+            bool beta_stick_size_is_power_of_two = is_power_of_two_at_least_32(beta_stick_size);
             reader_compile_time_args.push_back((std::uint32_t) beta_stick_size_is_power_of_two);
             if (beta_stick_size_is_power_of_two) {
                 uint32_t beta_log2_stick_size = beta_stick_size_is_power_of_two ? (std::uint32_t)log2(beta_stick_size) : 0;

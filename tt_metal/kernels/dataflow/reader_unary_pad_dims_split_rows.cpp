@@ -1,10 +1,6 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
-inline uint64_t round_down_32(uint64_t a){
-    return (a >> 5) << 5;
-}
-
 void kernel_main() {
 
     // Constexpr
@@ -23,14 +19,11 @@ void kernel_main() {
     const uint32_t unpadded_X_size          = get_arg_val<uint32_t>(9);
     const uint32_t padded_X_size            = get_arg_val<uint32_t>(10);
     const uint32_t pad_value                = get_arg_val<uint32_t>(11);
-    const uint32_t temp_buffer_l1_addr      = get_arg_val<uint32_t>(12);
-    const uint32_t num_blocks_w_input       = get_arg_val<uint32_t>(13);
-    const uint32_t num_blocks_w_output      = get_arg_val<uint32_t>(14);
-    const uint32_t num_blocks_w_diff        = get_arg_val<uint32_t>(15);
-    const uint32_t block_row_size           = get_arg_val<uint32_t>(16);
-    const uint32_t block_row_leftover_size  = get_arg_val<uint32_t>(17);
-
-    std::uint32_t* temp_buffer = (uint32_t*)(temp_buffer_l1_addr);
+    const uint32_t num_blocks_w_input       = get_arg_val<uint32_t>(12);
+    const uint32_t num_blocks_w_output      = get_arg_val<uint32_t>(13);
+    const uint32_t num_blocks_w_diff        = get_arg_val<uint32_t>(14);
+    const uint32_t block_row_size           = get_arg_val<uint32_t>(15);
+    const uint32_t block_row_leftover_size  = get_arg_val<uint32_t>(16);
 
     // TODO(agrebenisan): This isn't good... here we are assuming
     // that the stick size dictates tiles c, but stick size
@@ -75,13 +68,10 @@ void kernel_main() {
         uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
         uint32_t curr_stick_id = base_stick_id;
         for (uint32_t k = 0; k < num_rows; k++) {
-            uint64_t src_noc_addr = get_noc_addr(
-                curr_stick_id + k, s) + offset;
+            uint64_t src_noc_addr = get_noc_addr(curr_stick_id + k, s) + offset;
 
             // Read from DRAM to tmp buffer
-            uint64_t round_down_addr = round_down_32(src_noc_addr);
-            uint64_t diff_addr = src_noc_addr - round_down_addr;
-            noc_async_read(round_down_addr, temp_buffer_l1_addr, block_size + diff_addr);
+            noc_async_read(src_noc_addr, l1_write_addr, block_size);
 
             if (block_row_size > block_size) {
                 volatile std::uint32_t* dst = (volatile uint32_t*)(l1_write_addr + block_size);
@@ -92,12 +82,6 @@ void kernel_main() {
 
             // Block before copying data from tmp to cb buffer
             noc_async_read_barrier();
-            volatile std::uint32_t* dst = (volatile uint32_t*)(l1_write_addr);
-            volatile std::uint32_t* temp = (volatile uint32_t*)(temp_buffer_l1_addr + diff_addr);
-            for(uint32_t z = 0; z < (block_size) / 4; z++) {
-                dst[z] = temp[z];
-            }
-
             l1_write_addr += block_row_size;
         }
         if (num_rows < tile_height) {

@@ -98,7 +98,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
 
     // Reader compile-time args
     bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool stick_size_is_power_of_two = is_power_of_two(stick_size);
+    bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)log2(stick_size) : 0;
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t) src0_is_dram,
@@ -352,9 +352,6 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
     );
 
 
-    uint32_t temp_buffer_size = alignment + block_row_size;
-
-    auto temp_buffer_l1 = tt_metal::Buffer(device, temp_buffer_size, temp_buffer_size, tt_metal::BufferType::L1);
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
 
@@ -371,7 +368,6 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
         unpadded_row_size_bytes,
         padded_row_size_bytes,
         packed_pad_value,
-        temp_buffer_l1.address(),
         num_blocks_w_input,
         num_blocks_w_output,
         num_blocks_w_diff,
@@ -382,7 +378,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
     // Reader compile-time args
     bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     uint32_t stick_size = unpadded_row_size_bytes;
-    bool stick_size_is_power_of_two = is_power_of_two(stick_size);
+    bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)log2(stick_size) : 0;
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t) src0_is_dram,

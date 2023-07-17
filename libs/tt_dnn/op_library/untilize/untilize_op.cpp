@@ -97,7 +97,7 @@ operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& ou
     };
 
     bool out_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool stick_size_is_power_of_two = is_power_of_two(stick_size);
+    bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)log2(stick_size) : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) out_is_dram,
@@ -312,11 +312,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
         cb_data_format
     );
 
-    uint32_t temp_buffer_size = alignment + block_row_size;
-
-    // Cache buffer needs to hold 32B max per bank
-    auto temp_buffer_l1 = tt_metal::Buffer(device, temp_buffer_size, temp_buffer_size, tt_metal::BufferType::L1);
-
     vector<uint32_t> writer_kernel_args = {
         dst_buffer->address(),
         output_shape[0],
@@ -329,7 +324,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
         output_shape[3],
         unpadded_stick_size,
         padded_stick_size,
-        temp_buffer_l1.address(),
         num_blocks_w_input,
         num_blocks_w_output,
         num_blocks_w_diff,
@@ -345,7 +339,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
 
     bool out_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     uint32_t stick_size = unpadded_stick_size;
-    bool stick_size_is_power_of_two = is_power_of_two(stick_size);
+    bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)log2(stick_size) : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) out_is_dram,

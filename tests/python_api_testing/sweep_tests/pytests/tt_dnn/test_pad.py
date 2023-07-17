@@ -14,6 +14,12 @@ sys.path.append(f"{f}/../../../..")
 
 from python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
+import random
+
+# Seed here for fixed params
+# TODO @tt-aho: Move random param generation into the function so it's seeded by fixture
+random.seed(213919)
+torch.manual_seed(213919)
 
 params = [
     pytest.param([[5, 5, 50, 50]], pad_args, 0)
