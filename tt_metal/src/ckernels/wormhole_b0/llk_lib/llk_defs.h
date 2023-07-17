@@ -112,6 +112,7 @@ enum SfpuType
   relu_min,
   relu_max,
   elu,
+  exp2,
   unused
 };
 

@@ -1100,4 +1100,13 @@ ALWI void elu_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_elu_init<true>() ));
 }
 
+//exp2 : y = 2 ^ x  ==> [y = exp(x * log(2))]
+ALWI void exp2_tile(uint32_t idst) {
+    MATH(( llk_math_eltwise_unary_sfpu_exp2<true, SyncHalf>(idst) ));
+}
+
+ALWI void exp2_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_exp2_init<true>() ));
+}
+
 } // namespace ckernel

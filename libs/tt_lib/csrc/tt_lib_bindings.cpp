@@ -1764,6 +1764,20 @@ void TensorModule(py::module &m_tensor) {
         +----------+----------------------------+-----------+------------------------------+----------+
     )doc");
 
+    m_tensor.def("exp2", &exp2, R"doc(
+        Returns a new tensor with the exp2 (2 power) of the elements of the input tensor ``arg0``.
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+----------------------------+-----------+------------------------------+----------+
+        | Argument | Description                | Data type | Valid range                  | Required |
+        +==========+============================+===========+==============================+==========+
+        | arg0     | Tensor exp2 is applied to  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+----------------------------+-----------+------------------------------+----------+
+    )doc");
+
     m_tensor.def("add1", &add1, R"doc(
         Returns tensor with the addition of one with input tensor ``arg0``.
 

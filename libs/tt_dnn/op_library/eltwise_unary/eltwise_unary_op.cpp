@@ -86,6 +86,8 @@ string get_op_name_default(UnaryOpType::Enum op_type) {
             op_name = "lez_tile_init(); lez_tile(0); pack_tile(0,tt::CB::c_out0);"; break;
         case UnaryOpType::GEZ:
             op_name = "gez_tile_init(); gez_tile(0); pack_tile(0,tt::CB::c_out0);"; break;
+        case UnaryOpType::EXP2:
+            op_name = "exp2_tile_init(); exp2_tile(0); pack_tile(0,tt::CB::c_out0);"; break;
         default: TT_ASSERT(false && "Undefined op type");
     }
     return op_name;

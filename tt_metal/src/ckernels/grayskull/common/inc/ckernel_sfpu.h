@@ -173,6 +173,12 @@ inline void sfpu_init(SfpuType operation, uint param0 = 0)
             TTI_SFPLOADI(p_sfpu::LREG2, 0, p_exp::ADJ_EXP);
         }
         break;
+    case SfpuType::exp2:
+        if constexpr(APPROXIMATION_MODE) {
+            TTI_SFPLOADI(p_sfpu::LREG0, 0, p_exp::C23_73);
+            TTI_SFPLOADI(p_sfpu::LREG2, 0, p_exp::ADJ_EXP);
+        }
+        break;
     case SfpuType::dropout:
         init_dropout_seed(param0);
         break;
@@ -1082,6 +1088,66 @@ inline void calculate_abs()
     }
 }
 
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_exp2()
+{
+    constexpr bool zero_negative = true;
+    vFloat c23_73;
+    vInt adj_exp;
+    if constexpr (APPROXIMATION_MODE)
+    {
+        c23_73 = l_reg[LRegs::LReg0];
+        adj_exp = l_reg[LRegs::LReg2];
+    }
+    // SFPU microcode
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        vFloat v = dst_reg[0];
+        // y = exp(x * log(2))
+        // log(2) = 0.6931471805;
+        v = v * 0.6931471805f;
+        vFloat val = v;
+        if constexpr (APPROXIMATION_MODE)
+        {
+            val = val * vConst1p4424 + c23_73;
+            vInt val_short = adj_exp + reinterpret<vInt>(val);
+
+            val_short <<= 10 - p_exp::FRAC_BITS;
+            dst_reg[0] = reinterpret<vFloat>(val_short);
+
+            if constexpr (zero_negative)
+            {
+                v_if (val_short < 0) {
+                    dst_reg[0] = vConst0;
+                }
+                v_endif;
+            }
+        }
+        else
+        {
+           // Force sign to 0 (make number positive)
+            val = sfpu_exp(setsgn(val, 0));
+
+            vFloat orig = v;
+
+            // Loaded by reciprocal
+            dst_reg[0] = val;
+            v_if (orig < 0) {
+                dst_reg[0] = sfpu_reciprocal<false>(val);
+            }
+            v_endif;
+        }
+        dst_reg++;
+    }
+    if constexpr (APPROXIMATION_MODE)
+    {
+        l_reg[LRegs::LReg0] = c23_73;
+        l_reg[LRegs::LReg2] = adj_exp;
+    }
+}
+
+
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_sign()
 {
@@ -1440,6 +1506,9 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
     }
     else if constexpr (operation == SfpuType::elu) {
         calculate_elu<APPROXIMATION_MODE, ITERATIONS>(param0);
+    }
+    else if constexpr (operation == SfpuType::exp2) {
+        calculate_exp2<APPROXIMATION_MODE, ITERATIONS>();
     }
 }
 
