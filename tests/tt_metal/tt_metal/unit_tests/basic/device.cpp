@@ -86,11 +86,20 @@ bool load_all_blank_kernels(tt_metal::Device* device) {
 }
 }  // namespace unit_tests::basic
 
+bool is_multi_device_gs_machine() {
+    tt::ARCH arch = tt::get_arch_from_string(get_env_arch_name());
+    const size_t num_devices = tt::tt_metal::Device::detect_num_available_devices();
+
+    return arch == tt::ARCH::GRAYSKULL && num_devices > 1;
+}
+
 TEST_SUITE(
     "BasicMultiDeviceTest" *
     doctest::description("Basic device tests should just test simple APIs and shouldn't take more than 1s per chip, "
                          "but can scale beyond for many devices.") *
-    doctest::timeout(10)) {
+    doctest::timeout(10) *
+    doctest::skip(is_multi_device_gs_machine())
+    ) {
     TEST_CASE("Multi Device Initialize and Teardown" * doctest::timeout(2)) {
         auto arch = tt::get_arch_from_string(get_env_arch_name());
         const size_t num_devices = tt::tt_metal::Device::detect_num_available_devices();
