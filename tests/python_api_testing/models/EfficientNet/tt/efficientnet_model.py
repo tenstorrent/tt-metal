@@ -5,6 +5,7 @@ from typing import List, Sequence, Union, Tuple, Optional, Any
 from tt_lib.fallback_ops import fallback_ops
 import torchvision
 from functools import partial
+from loguru import logger
 
 from python_api_testing.models.utility_functions_new import (
     torch2tt_tensor,
@@ -22,6 +23,10 @@ from python_api_testing.models.EfficientNet.tt.efficientnet_fused_mbconv import 
     TtEfficientnetFusedMBConv,
     FusedMBConvConfig,
 )
+
+
+def flatten_via_reshape(x, start_dim):
+    shape = x.shape()
 
 
 class TtEfficientNet(torch.nn.Module):
@@ -139,11 +144,6 @@ class TtEfficientNet(torch.nn.Module):
         self.features = torch.nn.Sequential(*layers)
         self.avgpool = fallback_ops.AdaptiveAvgPool2d(1)
 
-        # self.classifier = nn.Sequential(
-        #     nn.Dropout(p=dropout, inplace=True),
-        #     nn.Linear(lastconv_output_channels, num_classes),
-        # )
-
         self.classifier_weight = torch2tt_tensor(
             state_dict[f"classifier.1.weight"],
             device,
@@ -163,12 +163,11 @@ class TtEfficientNet(torch.nn.Module):
 
     def forward(self, x):
         x = self.features(x)
-
         x = self.avgpool(x)
 
-        x = tt2torch_tensor(x)
-        x = torch.flatten(x, 1)
-        x = torch2tt_tensor(x, self.device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+        last_shape = x.shape()[-1] * x.shape()[-2] * x.shape()[-3]
+        # tt_lib.tensor.reshape won't work here since input tensor is of shape [1, n, 1, 1]
+        x = tt_lib.fallback_ops.reshape(x, x.shape()[0], 1, 1, last_shape)
 
         x = tt_lib.tensor.matmul(x, self.classifier_weight)
 
