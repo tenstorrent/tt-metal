@@ -1,5 +1,6 @@
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "tt_dnn/op_library/operation.hpp"
+#include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 
 #include <algorithm>
 #include "tt_metal/host_api.hpp"
@@ -290,7 +291,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         mm_kernel_in1_receiver_writer_other_noc_setup_defines["FUSE_BIAS"] = "1";
     }
     if (fuse_gelu_activation) {
-        mm_kernel_defines["FUSE_GELU_ACTIVATION"] = "1";
+        mm_kernel_defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GELU, 1, "0", "i"));
     }
 
     auto mm_kernel_in0_sender_id = tt_metal::CreateDataMovementKernel(

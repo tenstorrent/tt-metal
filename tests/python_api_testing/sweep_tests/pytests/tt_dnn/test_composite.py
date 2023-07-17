@@ -23,7 +23,6 @@ reference_pcc = defaultdict(lambda: 0.999)
 reference_pcc["silu"] = 0.9714
 reference_pcc["swish"] = reference_pcc["silu"]
 reference_pcc["softplus"] = 0.9984
-reference_pcc["relu_max"] = 0.9936789972261026
 
 
 def custom_compare(*args, **kwargs):
@@ -41,7 +40,6 @@ def custom_compare(*args, **kwargs):
             (
                 "lerp_binary",
                 "lerp_ternary",
-                "squared_difference",
                 "addcmul",
                 "addcdiv",
                 "min",
@@ -65,12 +63,10 @@ def custom_compare(*args, **kwargs):
                 "zeros",
                 "full",
                 "arange",
-                "leaky_relu",
                 "hardshrink",
                 "softshrink",
                 "sinh",
                 "cosh",
-                "log_sigmoid",
                 "tanhshrink",
             ),
             ([[1, 1, 32, 32]], [[1, 3, 320, 64]]),
@@ -83,16 +79,12 @@ def test_run_eltwise_composite_test(
 ):
     options = defaultdict(lambda: (-1.0, 1.0))
     options["log1"] = (0.0, 1.0)
-    options["square"] = (1.0, 1e2)
-    options["relu_max"] = (-100, +100)
-    options["relu_min"] = (-100, +100)
     options["polyval"] = (1, 100)
 
     options["deg2rad"] = (-180, 180)
     options["rad2deg"] = (0, 2 * pi)
     options["hypot"] = (1, 100)
     options["cbrt"] = (-1000, 1000)
-    options["relu6"] = (-100, 100)
     options["hardsigmoid"] = (-100, 100)
     options["hardswish"] = (-100, 100)
     options["hardshrink"] = (-100, 100)
@@ -128,8 +120,6 @@ def test_run_eltwise_composite_test(
         test_args.update({"coeffs": [1.0, 2.0, 1.0, 2.0]})
     elif fn == "threshold":
         test_args.update({"threshold": 5.0, "value": 1.0})
-    elif fn in ["leaky_relu"]:
-        test_args.update({"negative_slope": np.random.randint(10, 100)})
     elif fn in ["softshrink", "hardshrink"]:
         test_args.update({"_lambda": np.random.randint(1, 100)})
     elif fn in ["addcmul", "addcdiv"]:

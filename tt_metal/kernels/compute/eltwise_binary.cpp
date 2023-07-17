@@ -25,12 +25,17 @@ void MAIN {
             // ELTWISE_OP is passed in via add_define
             ELTWISE_OP(tt::CB::c_in0, tt::CB::c_in1, 0, 0, 0);
 
-#ifdef ELTWISE_COMPARE_BINARY_OP
-	    //compare binary ops using unary LTZ, GTZ, etc..
-	    SFPU_OP_AND_PACK
-#else
+            #ifdef SFPU_OP_INIT_0
+            SFPU_OP_INIT_0
+            SFPU_OP_FUNC_0
+            #endif
+
+            #ifdef SFPU_OP_BLOCK_0
+            SFPU_OP_BLOCK_0
+            #endif
+
+
             pack_tile(0, tt::CB::c_out0);
-#endif
 
             cb_pop_front(tt::CB::c_in0, 1);
             cb_pop_front(tt::CB::c_in1, 1);

@@ -1,6 +1,7 @@
 #include <algorithm>
 
 #include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
+#include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
 
 #include "tt_metal/host_api.hpp"
@@ -13,7 +14,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const Tensor &b, Tensor& output, BinaryOpType::Enum op_type) {
+operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const Tensor &b, Tensor& output, BinaryOpType::Enum op_type, const std::optional<std::vector<UnaryOpType::Enum>> fused_activations) {
 
     Program program{};
 
@@ -100,7 +101,7 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
         1 // per_core_block_size
     };
 
-    std::map<string, string> eltwise_defines = eltwise_binary_op_utils::get_defines(op_type);
+    std::map<string, string> eltwise_defines = eltwise_binary_op_utils::get_defines(op_type, fused_activations);
     auto eltwise_binary_kernel_group_1_id = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/eltwise_binary.cpp",

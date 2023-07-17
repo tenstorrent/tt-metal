@@ -1,4 +1,5 @@
 #include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
+#include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -9,7 +10,7 @@ using namespace tt::constants;
 namespace tt {
 
 namespace tt_metal {
-operation::ProgramWithCallbacks eltwise_binary_single_core(const Tensor &a, const Tensor &b, Tensor& output, BinaryOpType::Enum op_type) {
+operation::ProgramWithCallbacks eltwise_binary_single_core(const Tensor &a, const Tensor &b, Tensor& output, BinaryOpType::Enum op_type, const std::optional<std::vector<UnaryOpType::Enum>> fused_activations) {
 
     Program program{};
     CoreRange core = {.start={0, 0}, .end={0, 0}};
@@ -97,7 +98,7 @@ operation::ProgramWithCallbacks eltwise_binary_single_core(const Tensor &a, cons
         program,
         "tt_metal/kernels/compute/eltwise_binary.cpp",
         core,
-        tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = eltwise_binary_op_utils::get_defines(op_type)}
+        tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = eltwise_binary_op_utils::get_defines(op_type, fused_activations)}
     );
 
     tt_metal::SetRuntimeArgs(

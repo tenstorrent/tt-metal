@@ -13,7 +13,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks eltwise_unary_multi_core(const Tensor &a, Tensor &output, UnaryOpType::Enum op_type,std::optional<float> param /* = {} */) {
+operation::ProgramWithCallbacks eltwise_unary_multi_core(const Tensor &a, Tensor &output, const std::vector<UnaryOpType::Enum> op_types, const std::vector<std::optional<float>> params) {
     tt_metal::Program program{};
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
@@ -80,8 +80,8 @@ operation::ProgramWithCallbacks eltwise_unary_multi_core(const Tensor &a, Tensor
     };
 
     bool fp32_dest_acc_en = false;
-    bool math_approx_mode = eltwise_unary_op_utils::get_op_approx_mode(op_type);
-    std::map<string, string> unary_defines = eltwise_unary_op_utils::get_defines(op_type, param);
+    bool math_approx_mode = std::all_of(op_types.begin(), op_types.end(), eltwise_unary_op_utils::get_op_approx_mode);
+    std::map<string, string> unary_defines = eltwise_unary_op_utils::get_block_defines(op_types, params);
     auto eltwise_unary_kernel_group_1_id = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/eltwise_sfpu.cpp",

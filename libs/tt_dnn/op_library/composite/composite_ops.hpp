@@ -87,13 +87,8 @@ Tensor min(const Tensor &input_a,const Tensor &input_b);
 //max(a,b)
 Tensor max(const Tensor &input_a,const Tensor &input_b);
 
-//logsigmoid(x) = log(sigmoid(x))
-Tensor log_sigmoid(const Tensor &input_a);
 //tanhshrink = x - tanh(x)
 Tensor tanhshrink(const Tensor &input_a);
-
-//square difference(x, y) = (x - y) * (x - y)
-Tensor squared_difference(const Tensor &input_a,const Tensor &input_b);
 
 //addcmul(input,tensor1,tensor2,value)=input+value×tensor1×tensor2
 Tensor addcmul(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c, float value);

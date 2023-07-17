@@ -1922,7 +1922,9 @@ def bcast_add_w(x, y, *args, device, dtype, layout, on_device, **kwargs):
     t0 = t0.to(layout)
     if on_device:
         t0 = t0.to(device)
-    if layout == ttl.tensor.Layout.TILE or (on_device and layout == ttl.tensor.Layout.ROW_MAJOR):
+    if layout == ttl.tensor.Layout.TILE or (
+        on_device and layout == ttl.tensor.Layout.ROW_MAJOR
+    ):
         t1 = torch.nn.functional.pad(y, (0, 32 - y.shape[3]))
     t1 = ttl.tensor.Tensor(t1, dtype)
     t1 = t1.to(layout)
@@ -1988,7 +1990,9 @@ def bcast_sub_w(x, y, *args, device, dtype, layout, on_device, **kwargs):
     t0 = t0.to(layout)
     if on_device:
         t0 = t0.to(device)
-    if layout == ttl.tensor.Layout.TILE or (on_device and layout == ttl.tensor.Layout.ROW_MAJOR):
+    if layout == ttl.tensor.Layout.TILE or (
+        on_device and layout == ttl.tensor.Layout.ROW_MAJOR
+    ):
         t1 = torch.nn.functional.pad(y, (0, 32 - y.shape[3]))
     t1 = ttl.tensor.Tensor(t1, dtype)
     t1 = t1.to(layout)
@@ -2054,7 +2058,9 @@ def bcast_mul_w(x, y, *args, device, dtype, layout, on_device, **kwargs):
     if on_device:
         t0 = t0.to(device)
 
-    if layout == ttl.tensor.Layout.TILE or (on_device and layout == ttl.tensor.Layout.ROW_MAJOR):
+    if layout == ttl.tensor.Layout.TILE or (
+        on_device and layout == ttl.tensor.Layout.ROW_MAJOR
+    ):
         t1 = torch.nn.functional.pad(y, (0, 32 - y.shape[3]))
     t1 = ttl.tensor.Tensor(t1, dtype)
     t1 = t1.to(layout)
@@ -2652,7 +2658,7 @@ def make_eltwise_binary_op(ttl_tensor_binop):
 
         t0 = t0.to(layout)
         if on_device:
-            t0 = t0.to(device)
+            t0 = t0.to(device, input_mem_config)
 
         t1 = ttl.tensor.Tensor(
             y.reshape(-1).tolist(),
@@ -2663,9 +2669,9 @@ def make_eltwise_binary_op(ttl_tensor_binop):
 
         t1 = t1.to(layout)
         if on_device:
-            t1 = t1.to(device)
+            t1 = t1.to(device, input_mem_config)
 
-        t2 = ttl_tensor_binop(t0, t1)
+        t2 = ttl_tensor_binop(t0, t1, output_mem_config=output_mem_config)
 
         output = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 

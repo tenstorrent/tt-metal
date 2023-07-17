@@ -13,41 +13,37 @@ using namespace tt::constants;
 namespace eltwise_binary_op_utils {
 using namespace tt::tt_metal;
 
-std::map<string, string> get_defines(BinaryOpType::Enum op_type) {
+std::map<string, string> get_defines(BinaryOpType::Enum op_type, const std::optional<std::vector<UnaryOpType::Enum>> fused_activations) {
     std::map<string, string> defines;
     string op_name = "sub_tiles";
     string op_code = "1";
-    string compare = "1";
-    string compare_init = "";
     switch (op_type) {
         case BinaryOpType::ADD:
             op_name = "add_tiles";
             op_code = "0";
-            compare = "0";
             break;
         case BinaryOpType::SUB:
             op_name = "sub_tiles";
             op_code = "1";
-            compare = "0";
             break;
         case BinaryOpType::MUL:
             op_name = "mul_tiles";
             op_code = "2";
-            compare = "0";
             break;
-        case BinaryOpType::GT: compare_init = eltwise_unary_op_utils::get_op_name(UnaryOpType::GTZ); break;
-        case BinaryOpType::LT: compare_init = eltwise_unary_op_utils::get_op_name(UnaryOpType::LTZ); break;
-        case BinaryOpType::GTE: compare_init = eltwise_unary_op_utils::get_op_name(UnaryOpType::GEZ); break;
-        case BinaryOpType::LTE: compare_init = eltwise_unary_op_utils::get_op_name(UnaryOpType::LEZ); break;
-        case BinaryOpType::EQ: compare_init = eltwise_unary_op_utils::get_op_name(UnaryOpType::EQZ); break;
-        case BinaryOpType::NE: compare_init = eltwise_unary_op_utils::get_op_name(UnaryOpType::NEZ); break;
+        case BinaryOpType::GT: defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GTZ)); break;
+        case BinaryOpType::LT: defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::LTZ)); break;
+        case BinaryOpType::GTE: defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GEZ)); break;
+        case BinaryOpType::LTE: defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::LEZ)); break;
+        case BinaryOpType::EQ: defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EQZ)); break;
+        case BinaryOpType::NE: defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::NEZ)); break;
+        case BinaryOpType::SQUARED_DIFFERENCE: defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::SQUARE)); break;
         default: TT_ASSERT(false && "Undefined op type");
     }
     defines["ELTWISE_OP"] = op_name.c_str();
     defines["ELTWISE_OP_CODE"] = op_code.c_str();
-    if ( compare == "1" ) {
-        defines["ELTWISE_COMPARE_BINARY_OP"] = compare;
-        defines["SFPU_OP_AND_PACK"] = compare_init;
+    if (fused_activations.has_value()) {
+        const std::vector<std::optional<float>> params (fused_activations.value().size(), std::nullopt);
+        defines.merge(eltwise_unary_op_utils::get_block_defines(fused_activations.value(), params));
     }
     return defines;
 }
@@ -92,10 +88,10 @@ operation::ProgramWithCallbacks EltwiseBinary::create_program(const std::vector<
 
     switch (this->get_parallelization_strategy(input_tensors)) {
         case BinaryOpParallelizationStrategy::MULTI_CORE:
-            return eltwise_binary_multi_core(input_tensor_a, input_tensor_b, output_tensor, this->op_type);
+            return eltwise_binary_multi_core(input_tensor_a, input_tensor_b, output_tensor, this->op_type, this->fused_activations);
             break;
         case BinaryOpParallelizationStrategy::SINGLE_CORE:
-        default: return eltwise_binary_single_core(input_tensor_a, input_tensor_b, output_tensor, this->op_type);
+        default: return eltwise_binary_single_core(input_tensor_a, input_tensor_b, output_tensor, this->op_type, this->fused_activations);
     }
 }
 
@@ -114,6 +110,7 @@ BinaryOpParallelizationStrategy::Enum EltwiseBinary::get_parallelization_strateg
 tt::stl::reflection::Attributes EltwiseBinary::attributes() const {
     return {
         {"op_type", this->op_type},
+        {"fused_activations", this->fused_activations},
         {"output_mem_config", this->output_mem_config},
     };
 }

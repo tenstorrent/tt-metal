@@ -119,11 +119,12 @@ void MAIN {
                             // reconfigure unpacker df for src B
                             unpack_reconfig_data_format(in1_cb_id, in0_cb_id);
                         #endif
-                        // TODO: Can easily generalize for other sfpu activations
-                        #ifdef FUSE_GELU_ACTIVATION
-                            gelu_tile_init();
+
+                        // sfpu activation
+                        #ifdef SFPU_OP_INIT_0
+                            SFPU_OP_INIT_0
                             for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                                gelu_tile(i);
+                               SFPU_OP_FUNC_0
                             }
                         #endif
                         // Pack out to output buffer

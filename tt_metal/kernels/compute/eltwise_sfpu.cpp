@@ -18,12 +18,12 @@ void MAIN {
             cb_wait_front(tt::CB::c_in0, 1);
 
             copy_tile(tt::CB::c_in0, 0, 0);
-            // SFPU_OP expected to be defined via add_define as one of
-            // exp_tile, gelu_tile, recip_tile. etc followed by pack_tile
 
-            SFPU_OP_AND_PACK
-            // comes from add_define in kernel config
-            // Also is expected to include pack_tile(0, CB::c_out0);
+            #ifdef SFPU_OP_BLOCK_0
+            SFPU_OP_BLOCK_0
+            #endif
+
+            pack_tile(0, tt::CB::c_out0);
 
             cb_pop_front(tt::CB::c_in0, 1);
 

@@ -31,79 +31,80 @@ public:
 };
 
 inline
-string get_op_name_parameterized(UnaryOpType::Enum op_type,float param0) {
-    string op_name;
+std::pair<string, string> get_op_init_and_func_parameterized(UnaryOpType::Enum op_type, float param0, string idst) {
+    std::pair<string, string> op_init_and_name;
     TT_ASSERT( is_parametrized_type(op_type) && "operator should support one parameter" );
 
     switch (op_type) {
-    case UnaryOpType::RELU_MAX: op_name = "relu_max_tile_init(); relu_max_tile(0,"+Converter::to_hex(param0)+"u ); pack_tile(0, tt::CB::c_out0);"; break;
-    case UnaryOpType::RELU_MIN: op_name = "relu_min_tile_init(); relu_min_tile(0,"+Converter::to_hex(param0)+"u ); pack_tile(0, tt::CB::c_out0);"; break;
-    case UnaryOpType::POWER: op_name = "power_tile_init(); power_tile(0," + std::to_string( (uint32_t) param0) + " ); pack_tile(0, tt::CB::c_out0);"; break;
-    case UnaryOpType::LEAKY_RELU: op_name = "leaky_relu_tile_init(); leaky_relu_tile(0,"+Converter::to_hex(param0)+"u); pack_tile(0, tt::CB::c_out0);"; break;
-    case UnaryOpType::ELU: op_name = "elu_tile_init(); elu_tile(0,"+Converter::to_hex(param0)+"u); pack_tile(0, tt::CB::c_out0);"; break;
-    case UnaryOpType::GELU: op_name = "gelu_tile_init(); gelu_tile(0,"+std::to_string((uint32_t)param0)+"u); pack_tile(0, tt::CB::c_out0);"; break;
-    case UnaryOpType::RSQRT: op_name = "rsqrt_tile_init(); rsqrt_tile(0,"+std::to_string((uint32_t)param0)+"u);; pack_tile(0, tt::CB::c_out0);"; break;
-    case UnaryOpType::HEAVISIDE: op_name = "heaviside_tile_init(); heaviside_tile(0,"+Converter::to_hex(param0)+"u); pack_tile(0, tt::CB::c_out0);"; break;
-    default:
-	  TT_ASSERT( false && "unexpected parameterized type");
+        case UnaryOpType::RELU_MAX: op_init_and_name = {"relu_max_tile_init();", fmt::format("relu_max_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
+        case UnaryOpType::RELU_MIN: op_init_and_name = {"relu_min_tile_init();", fmt::format("relu_min_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
+        case UnaryOpType::POWER: op_init_and_name = {"power_tile_init();", fmt::format("power_tile({}, {}u);", idst, std::to_string((uint32_t)param0))}; break;
+        case UnaryOpType::LEAKY_RELU: op_init_and_name = {"leaky_relu_tile_init();", fmt::format("leaky_relu_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
+        case UnaryOpType::ELU: op_init_and_name = {"elu_tile_init();", fmt::format("elu_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
+        case UnaryOpType::GELU: op_init_and_name = {"gelu_tile_init();", fmt::format("gelu_tile({}, {}u);", idst, std::to_string((uint32_t)param0))}; break;
+        case UnaryOpType::RSQRT: op_init_and_name = {"rsqrt_tile_init();",  fmt::format("rsqrt_tile({}, {}u);", idst, std::to_string((uint32_t)param0))}; break;
+        case UnaryOpType::HEAVISIDE: op_init_and_name = {"heaviside_tile_init();", fmt::format("heaviside_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
+        default:
+        TT_ASSERT( false && "unexpected parameterized type");
     };
-    return op_name;
+    return op_init_and_name;
 }
 
 inline
-string get_op_name_default(UnaryOpType::Enum op_type) {
-    string op_name;
+std::pair<string, string> get_op_init_and_func_default(UnaryOpType::Enum op_type, string idst) {
+    std::pair<string, string> op_init_and_name;
     switch (op_type) {
-        case UnaryOpType::EXP: op_name = "exp_tile_init(); exp_tile(0); pack_tile(0, tt::CB::c_out0);"; break;
-        case UnaryOpType::RECIP: op_name = "recip_tile_init(); recip_tile(0); pack_tile(0, tt::CB::c_out0);"; break;
-        case UnaryOpType::RELU: op_name = "relu_min_tile_init(); relu_min_tile(0,0x0); pack_tile(0, tt::CB::c_out0);"; break;
-        case UnaryOpType::SQRT: op_name = "sqrt_tile_init(); sqrt_tile(0); pack_tile(0, tt::CB::c_out0);"; break;
-        case UnaryOpType::SIGMOID: op_name = "sigmoid_tile_init(); sigmoid_tile(0); pack_tile(0, tt::CB::c_out0);"; break;
-        case UnaryOpType::LOG: op_name = "log_tile_init(); log_tile(0); pack_tile(0, tt::CB::c_out0);"; break;
-        case UnaryOpType::TANH: op_name = "tanh_tile_init(); tanh_tile(0); pack_tile(0, tt::CB::c_out0);"; break;
-        case UnaryOpType::SIGNBIT: op_name = "signbit_tile_init(); signbit_tile(0); pack_tile(0, tt::CB::c_out0);"; break;
-        case UnaryOpType::SIN: op_name = "sin_tile_init(); sin_tile(0); pack_tile(0, tt::CB::c_out0);"; break;
-        case UnaryOpType::COS: op_name = "cos_tile_init(); cos_tile(0); pack_tile(0, tt::CB::c_out0);"; break;
+        case UnaryOpType::EXP: op_init_and_name = {"exp_tile_init();", fmt::format("exp_tile({});", idst)}; break;
+        case UnaryOpType::GELU: op_init_and_name = {"gelu_tile_init();", fmt::format("gelu_tile({});", idst)}; break;
+        case UnaryOpType::RECIP: op_init_and_name = {"recip_tile_init();", fmt::format("recip_tile({});", idst)}; break;
+        case UnaryOpType::RELU: op_init_and_name = {"relu_min_tile_init();", fmt::format("relu_min_tile({}, 0x0u);", idst)}; break;
+        case UnaryOpType::SQRT: op_init_and_name = {"sqrt_tile_init();", fmt::format("sqrt_tile({});", idst)}; break;
+        case UnaryOpType::SIGMOID: op_init_and_name = {"sigmoid_tile_init();", fmt::format("sigmoid_tile({});", idst)}; break;
+        case UnaryOpType::LOG: op_init_and_name = {"log_tile_init();", fmt::format("log_tile({});", idst)}; break;
+        case UnaryOpType::TANH: op_init_and_name = {"tanh_tile_init();", fmt::format("tanh_tile({});", idst)}; break;
+        case UnaryOpType::SIGNBIT: op_init_and_name = {"signbit_tile_init();", fmt::format("signbit_tile({});", idst)}; break;
+        case UnaryOpType::SIN: op_init_and_name = {"sin_tile_init();", fmt::format("sin_tile({});", idst)}; break;
+        case UnaryOpType::COS: op_init_and_name = {"cos_tile_init();", fmt::format("cos_tile({});", idst)}; break;
         case UnaryOpType::LOG10:
             // log10[x] = log[x]/log[10] = log[x]*0.4342944819032518; FP32@U32 0x3ede5bd9; FP16@U16 0x36f3;
-            op_name = "log_with_base_tile_init(); log_with_base_tile(0,0x36f3); pack_tile(0,tt::CB::c_out0);";
+            op_init_and_name = {"log_with_base_tile_init();", fmt::format("log_with_base_tile({}, 0x36f3u);", idst)}; break;
             break;
         case UnaryOpType::LOG2:  // log2[x] = log[x]*1.4426950408889634f; FP32@U32 0x3fb8aa3b; FP16@U16 0x3dc5;
-            op_name = "log_with_base_tile_init(); log_with_base_tile(0,0x3dc5); pack_tile(0,tt::CB::c_out0);";
+            op_init_and_name = {"log_with_base_tile_init();", fmt::format("log_with_base_tile({}, 0x3dc5u);", idst)}; break;
             break;
         case UnaryOpType::ABS:
-            op_name = "abs_tile_init(); abs_tile(0); pack_tile(0,tt::CB::c_out0);"; break;
+            op_init_and_name = {"abs_tile_init();", fmt::format("abs_tile({});", idst)}; break;
         case UnaryOpType::SIGN:
-            op_name = "sign_tile_init(); sign_tile(0); pack_tile(0,tt::CB::c_out0);"; break;
+            op_init_and_name = {"sign_tile_init();", fmt::format("sign_tile({});", idst)}; break;
         case UnaryOpType::SQUARE:
-            op_name = "square_tile_init(); square_tile(0); pack_tile(0,tt::CB::c_out0);"; break;
+            op_init_and_name = {"square_tile_init();", fmt::format("square_tile({});", idst)}; break;
         case UnaryOpType::EQZ:
-            op_name = "eqz_tile_init(); eqz_tile(0); pack_tile(0,tt::CB::c_out0);"; break;
+            op_init_and_name = {"eqz_tile_init();", fmt::format("eqz_tile({});", idst)}; break;
         case UnaryOpType::NEZ:
-            op_name = "nez_tile_init(); nez_tile(0); pack_tile(0,tt::CB::c_out0);"; break;
+            op_init_and_name = {"nez_tile_init();", fmt::format("nez_tile({});", idst)}; break;
         case UnaryOpType::LTZ:
-            op_name = "ltz_tile_init(); ltz_tile(0); pack_tile(0,tt::CB::c_out0);"; break;
+            op_init_and_name = {"ltz_tile_init();", fmt::format("ltz_tile({});", idst)}; break;
         case UnaryOpType::GTZ:
-            op_name = "gtz_tile_init(); gtz_tile(0); pack_tile(0,tt::CB::c_out0);"; break;
+            op_init_and_name = {"gtz_tile_init();", fmt::format("gtz_tile({});", idst)}; break;
         case UnaryOpType::LEZ:
-            op_name = "lez_tile_init(); lez_tile(0); pack_tile(0,tt::CB::c_out0);"; break;
+            op_init_and_name = {"lez_tile_init();", fmt::format("lez_tile({});", idst)}; break;
         case UnaryOpType::GEZ:
-            op_name = "gez_tile_init(); gez_tile(0); pack_tile(0,tt::CB::c_out0);"; break;
+            op_init_and_name = {"gez_tile_init();", fmt::format("gez_tile({});", idst)}; break;
         case UnaryOpType::EXP2:
-            op_name = "exp2_tile_init(); exp2_tile(0); pack_tile(0,tt::CB::c_out0);"; break;
+            op_init_and_name = {"exp2_tile_init();", fmt::format("exp2_tile({});", idst)}; break;
         case UnaryOpType::EXPM1:
-            op_name = "expm1_tile_init(); expm1_tile(0); pack_tile(0,tt::CB::c_out0);"; break;
+            op_init_and_name = {"expm1_tile_init();", fmt::format("expm1_tile({});", idst)}; break;
         case UnaryOpType::ASIN:
-            op_name = "asin_tile_init(); asin_tile(0); pack_tile(0,tt::CB::c_out0);"; break;
-        case UnaryOpType::ATAN:
-            op_name = "atan_tile_init(); atan_tile(0); pack_tile(0,tt::CB::c_out0);"; break;
+            op_init_and_name = {"asin_tile_init();", fmt::format("asin_tile({});", idst)}; break;
         case UnaryOpType::ACOS:
-            op_name = "acos_tile_init(); acos_tile(0); pack_tile(0,tt::CB::c_out0);"; break;
+            op_init_and_name = {"acos_tile_init();", fmt::format("acos_tile({});", idst)}; break;
+        case UnaryOpType::ATAN:
+            op_init_and_name = {"atan_tile_init();", fmt::format("atan_tile({});", idst)}; break;
         case UnaryOpType::RELU6:
-            op_name = "relu_max_tile_init(); relu_max_tile(0,0x40c00000); pack_tile(0, tt::CB::c_out0);"; break;
+            op_init_and_name = {"relu_max_tile_init();", fmt::format("relu_max_tile({}, 0x40c00000u);", idst)}; break;
         default: TT_ASSERT(false && "Undefined op type");
     }
-    return op_name;
+    return op_init_and_name;
 }
 
 bool get_op_approx_mode(UnaryOpType::Enum op_type) {
@@ -114,17 +115,35 @@ bool get_op_approx_mode(UnaryOpType::Enum op_type) {
 }
 
 static
-std::map<string, string> get_defines_impl(UnaryOpType::Enum op_type, std::string op_name){
-    return std::map<string, string>{{"SFPU_OP_AND_PACK", op_name}};
+std::map<string, string> get_defines_impl(UnaryOpType::Enum op_type, std::string op_init, std::string op_func, std::string id){
+    return std::map<string, string>{
+        {fmt::format("SFPU_OP_INIT_{}", id), op_init},
+        {fmt::format("SFPU_OP_FUNC_{}", id), op_func}
+    };
 }
 
-string get_op_name(UnaryOpType::Enum op_type,std::optional<float> param0) {
-   return is_parametrized_type(op_type) ? get_op_name_parameterized(op_type, param0.value()) : get_op_name_default(op_type);
+std::pair<string, string> get_op_init_and_func(UnaryOpType::Enum op_type, std::optional<float> param0, std::string idst) {
+   return param0.has_value() ? get_op_init_and_func_parameterized(op_type, param0.value(), idst) : get_op_init_and_func_default(op_type, idst);
 }
 
-std::map<string, string> get_defines(UnaryOpType::Enum op_type,std::optional<float> param0) {
-    std::string op_name = get_op_name(op_type, param0);
-    return get_defines_impl(op_type, op_name);
+std::map<string, string> get_defines(UnaryOpType::Enum op_type, std::optional<float> param0, std::string id, std::string idst) {
+    std::pair<string, string> op_init_and_name = get_op_init_and_func(op_type, param0, idst);
+    return get_defines_impl(op_type, op_init_and_name.first, op_init_and_name.second, id);
+}
+
+std::map<string, string> get_block_defines(const std::vector<UnaryOpType::Enum> op_types, const std::vector<std::optional<float>> params, std::string block_id, std::string idst) {
+    std::vector<std::pair<string, string>> op_init_and_name;
+    std::map<string, string> block_defines;
+    std::string block_define = "";
+    for (uint32_t i = 0; i<op_types.size(); i++) {
+        block_define += fmt::format(" SFPU_OP_BLOCK_{}_INIT_{}", block_id, i);
+        block_define += fmt::format(" SFPU_OP_BLOCK_{}_FUNC_{}", block_id, i);
+        auto op_init_and_name = get_op_init_and_func(op_types[i], params[i], idst);
+        block_defines[fmt::format("SFPU_OP_BLOCK_{}_INIT_{}", block_id, i)] = op_init_and_name.first;
+        block_defines[fmt::format("SFPU_OP_BLOCK_{}_FUNC_{}", block_id, i)] = op_init_and_name.second;
+    }
+    block_defines[fmt::format("SFPU_OP_BLOCK_{}", block_id)] = block_define;
+    return block_defines;
 }
 
 
@@ -159,11 +178,11 @@ operation::ProgramWithCallbacks EltwiseUnary::create_program(const std::vector<T
     auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
     switch (parallelization_strategy){
         case UnaryOpParallelizationStrategy::MULTI_CORE:
-            return eltwise_unary_multi_core(input_tensor, output_tensor, this->op_type, param);
+            return eltwise_unary_multi_core(input_tensor, output_tensor, this->op_types, this->params);
             break;
         case UnaryOpParallelizationStrategy::SINGLE_CORE:
         default:
-            return eltwise_unary_single_core(input_tensor, output_tensor, this->op_type, param);
+            return eltwise_unary_single_core(input_tensor, output_tensor, this->op_types, this->params);
     }
 }
 
@@ -181,8 +200,8 @@ UnaryOpParallelizationStrategy::Enum EltwiseUnary::get_parallelization_strategy(
 
 tt::stl::reflection::Attributes EltwiseUnary::attributes() const {
     return {
-        {"op_type", this->op_type},
-        {"param", this->param},
+        {"op_types", this->op_types},
+        {"params", this->params},
         {"output_mem_config", this->output_mem_config},
     };
 }

@@ -297,7 +297,7 @@ py::object convert_tt_tensor_to_torch_tensor(const Tensor& tt_tensor) {
 
 template <typename Func, typename... Extra>
 void bind_binary_op(py::module_ &module, std::string op_name, Func &&f, std::string op_desc, Extra&&... extra) {
-    std::vector<std::string> arg_name = {"input", "other", "output_mem_config"};
+    std::vector<std::string> arg_name = {"input", "other", "fused_activations", "output_mem_config"};
     op_desc = fmt::format(op_desc, arg_name[0], arg_name[1]);
 
     std::string docstring = fmt::format(R"doc(
@@ -312,11 +312,16 @@ void bind_binary_op(py::module_ &module, std::string op_name, Func &&f, std::str
 
             "{2}", "First tensor to {1}", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
             "{3}", "Second tensor to {1}", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-            "{4}", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-    )doc", op_desc, op_name, arg_name[0], arg_name[1], arg_name[2]);
+            "{4}", "Fused sfpu activations after binary computation", "Vector<FusibleActivation>", "Default is None", "No"
+            "{5}", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+    )doc", op_desc, op_name, arg_name[0], arg_name[1], arg_name[2], arg_name[3]);
 
     module.def(op_name.c_str(), f,
-        py::arg(arg_name[0].c_str()).noconvert(), py::arg(arg_name[1].c_str()).noconvert(), py::arg(arg_name[2].c_str()) = MemoryConfig{.interleaved = true}, docstring.c_str()
+        py::arg(arg_name[0].c_str()).noconvert(),
+        py::arg(arg_name[1].c_str()).noconvert(),
+        py::arg(arg_name[2].c_str()).noconvert() = std::nullopt,
+        py::arg(arg_name[3].c_str()) = MemoryConfig{.interleaved = true},
+        docstring.c_str()
     );
 
 }
@@ -374,7 +379,7 @@ void bind_unary_op_with_param(py::module_ &module, std::string op_name, Func &&f
 void TensorModule(py::module &m_tensor) {
     // ENUM SECTION
 
-    // bast enums
+    // bcast enums
     py::enum_<BcastOpMath::Enum>(m_tensor, "BcastOpMath")
         .value("ADD", BcastOpMath::Enum::ADD)
         .value("SUB", BcastOpMath::Enum::SUB)
@@ -402,6 +407,38 @@ void TensorModule(py::module &m_tensor) {
         .value("H", ReduceOpDim::Enum::H)
         .value("W", ReduceOpDim::Enum::W)
         .value("HW", ReduceOpDim::Enum::HW);
+
+    py::enum_<UnaryOpType::Enum>(m_tensor, "FusibleActivation")
+        .value("EXP", UnaryOpType::Enum::EXP)
+        .value("RECIP", UnaryOpType::Enum::RECIP)
+        .value("GELU", UnaryOpType::Enum::GELU)
+        .value("RELU", UnaryOpType::Enum::RELU)
+        .value("SQRT", UnaryOpType::Enum::SQRT)
+        .value("SIGMOID", UnaryOpType::Enum::SIGMOID)
+        .value("LOG", UnaryOpType::Enum::LOG)
+        .value("TANH", UnaryOpType::Enum::TANH)
+        .value("LOG2", UnaryOpType::Enum::LOG2)
+        .value("LOG10", UnaryOpType::Enum::LOG10)
+        .value("SIN", UnaryOpType::Enum::SIN)
+        .value("COS", UnaryOpType::Enum::COS)
+        .value("ABS", UnaryOpType::Enum::ABS)
+        .value("SIGN", UnaryOpType::Enum::SIGN)
+        .value("SQUARE", UnaryOpType::Enum::SQUARE)
+        .value("EQZ", UnaryOpType::Enum::EQZ)
+        .value("NEZ", UnaryOpType::Enum::NEZ)
+        .value("GTZ", UnaryOpType::Enum::GTZ)
+        .value("LTZ", UnaryOpType::Enum::LTZ)
+        .value("GEZ", UnaryOpType::Enum::GEZ)
+        .value("LEZ", UnaryOpType::Enum::LEZ)
+        .value("RELU6", UnaryOpType::Enum::RELU6);
+        // SFPU Ops with Param currently not supported
+        /*
+        .value("RELU_MAX", UnaryOpType::Enum::RELU_MAX)
+        .value("RELU_MIN", UnaryOpType::Enum::RELU_MIN)
+        .value("POWER", UnaryOpType::Enum::POWER)
+        .value("LEAKY_RELU", UnaryOpType::Enum::LAEKY_RELU)
+        .value("ELU", UnaryOpType::Enum::ELU)
+        */
 
     // layout enums
     py::enum_<Layout>(m_tensor, "Layout")
@@ -1273,6 +1310,7 @@ void TensorModule(py::module &m_tensor) {
     detail::bind_binary_op(m_tensor, "add", add, R"doc(Perform an eltwise-binary add (``{0} + {1}``) on two tensors.)doc");
     detail::bind_binary_op(m_tensor, "sub", sub, R"doc(Perform an eltwise-binary sub (``{0} - {1}``) on two tensors.)doc");
     detail::bind_binary_op(m_tensor, "mul", mul, R"doc(Perform an eltwise-binary mul (``{0} * {1}``) on two tensors.)doc");
+    detail::bind_binary_op(m_tensor, "squared_difference", squared_difference, R"doc(Perform an eltwise-binary squared_difference (``{0} - {1}``)^2 on two tensors.)doc");
     detail::bind_binary_op(m_tensor, "gt", gt, R"doc(Perform an eltwise-binary greater-than (``{0} > {1}``) on two tensors.)doc");
     detail::bind_binary_op(m_tensor, "lt", lt, R"doc(Perform an eltwise-binary less-than (``{0} < {1}``) on two tensors.)doc");
     detail::bind_binary_op(m_tensor, "lte", lte, R"doc(Perform an eltwise-binary less-than-or-equal (``{0} <= {1}``) on two tensors.)doc");
@@ -1317,22 +1355,6 @@ void TensorModule(py::module &m_tensor) {
         +----------+----------------------+-----------+------------------------------+----------+
         | arg1     | Second tensor to min | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
         +----------+----------------------+-----------+------------------------------+----------+
-    )doc");
-
-    m_tensor.def("squared_difference", &squared_difference, R"doc(
-        Perform an eltwise-binary squared_difference on two tensors.
-
-        Both input tensors must have BFLOAT16 data type, and be of equal shape.
-
-        Output tensor will have BFLOAT16 data type.
-
-        +----------+-------------------------------------+-----------+------------------------------+----------+
-        | Argument | Description                         | Data type | Valid range                  | Required |
-        +==========+=====================================+===========+==============================+==========+
-        | arg0     | First tensor to squared_difference  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
-        +----------+-------------------------------------+-----------+------------------------------+----------+
-        | arg1     | Second tensor to squared_difference | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
-        +----------+-------------------------------------+-----------+------------------------------+----------+
     )doc");
 
     // *** eltwise unary ***
@@ -1382,6 +1404,7 @@ void TensorModule(py::module &m_tensor) {
     detail::bind_unary_op(m_tensor, "atan", atan, R"doc(Returns a new tensor with the arctan of the elements of the input tensor ``{0}``.)doc");
     detail::bind_unary_op(m_tensor, "asin", asin, R"doc(Returns a new tensor with the arcsine of the elements of the input tensor ``{0}``.)doc");
     detail::bind_unary_op(m_tensor, "acos", acos, R"doc(Returns a new tensor with the arccosine of the elements of the input tensor ``{0}``.)doc");
+    detail::bind_unary_op(m_tensor, "log_sigmoid", &log_sigmoid, R"doc(Applies the logsigmoid function to the elements of the input tensor ``{0}``.)doc");
     detail::bind_unary_op_with_param(
         m_tensor, "gelu", &gelu,
         py::arg("fast_and_approx") = true,
@@ -1437,6 +1460,12 @@ void TensorModule(py::module &m_tensor) {
         py::arg("slope"),
         R"doc(Returns tensor with the leaky relu of all of elements of the input tensor ``{0}`` with negative slope as ``{1}``.)doc",
         R"doc("slope value", "float", "", "Yes")doc"
+    );
+    detail::bind_unary_op_with_param(
+        m_tensor, "unary_chain", &unary_chain,
+        py::arg("unary_chain"),
+        R"doc(Returns tensor with the unary op chain applied to all of elements of the input tensor ``{0}``.)doc",
+        R"doc("Unary op chain", "Vector<FusibleActivation>", "At least 1 activation", "Yes")doc"
     );
 
     detail::bind_unary_op(m_tensor, "relu_without_autoformat", &relu_without_autoformat,
@@ -1740,7 +1769,6 @@ void TensorModule(py::module &m_tensor) {
         +----------+----------------------------+-----------+------------------------------+----------+
     )doc");
 
-
     m_tensor.def("tanhshrink", &tanhshrink, R"doc(
         Applies tanh on the input tensor "arg0" and subtracted from the input tensor.
             tanhshrink(x) = x - tanh(x)
@@ -2013,20 +2041,6 @@ void TensorModule(py::module &m_tensor) {
         )doc"
     );
 
-
-    m_tensor.def("log_sigmoid", &log_sigmoid, R"doc(
-        Applies the logsigmoid function to the elements of the input tensor ``arg0``.
-
-        Input tensor must have BFLOAT16 data type.
-
-        Output tensor will have BFLOAT16 data type.
-
-        +----------+----------------------------------+-----------+------------------------------+--------------+
-        | Argument | Description                      | Data type | Valid range                  | Required     |
-        +==========+==================================+===========+==============================+==============+
-        | arg0     | Tensor logsigmoid is applied to  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes          |
-        +----------+----------------------------------+-----------+------------------------------+--------------+
-    )doc");
 
     m_tensor.def("mac", &mac, R"doc(
         Returns tensor with the multiply and accumulation of all of elements of the input tensors ``arg0, arg1, arg2``.

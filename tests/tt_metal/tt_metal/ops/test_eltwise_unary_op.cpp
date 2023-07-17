@@ -71,7 +71,7 @@ void test_operation_infrastructure() {
     auto shape = Shape{1, 1, TILE_HEIGHT, TILE_WIDTH};
     auto input_tensor = tt::numpy::random::uniform(bfloat16(0), bfloat16(1), shape).to(Layout::TILE);
 
-    auto op = operation::DeviceOperation(EltwiseUnary{UnaryOpType::SQRT, std::nullopt, MemoryConfig{.interleaved = true}});
+    auto op = operation::DeviceOperation(EltwiseUnary{{UnaryOpType::SQRT}, {std::nullopt}, MemoryConfig{.interleaved = true}});
 
     auto program_hash = op.compute_program_hash({input_tensor}, {});
     TT_ASSERT(
@@ -106,7 +106,7 @@ void test_shape_padding() {
     auto padded_input_tensor = tt::tt_metal::operation::run(tt::tt_metal::PadOnHost{padded_input_shape, {0, 0, 0, 0}, 0}, {input_tensor}).at(0);
     padded_input_tensor = padded_input_tensor.to(Layout::TILE);
     padded_input_tensor = padded_input_tensor.to(device);
-    auto output_tensor = tt::tt_metal::operation::run(tt::tt_metal::EltwiseUnary{tt::tt_metal::UnaryOpType::SQRT, std::nullopt, tt::tt_metal::MemoryConfig{.interleaved = true}}, {padded_input_tensor}).at(0);
+    auto output_tensor = tt::tt_metal::operation::run(tt::tt_metal::EltwiseUnary{{tt::tt_metal::UnaryOpType::SQRT}, {std::nullopt}, tt::tt_metal::MemoryConfig{.interleaved = true}}, {padded_input_tensor}).at(0);
 
     auto output_shape = output_tensor.shape();
     TT_ASSERT(output_shape == padded_input_shape);

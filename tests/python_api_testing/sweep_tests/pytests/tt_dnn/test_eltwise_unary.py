@@ -115,22 +115,27 @@ class TestEltwiseUnary:
         )
 
     @pytest.mark.parametrize(
-        "input_range, comparison_func",
+        "exp_type, input_range, comparison_func",
         (
-            ({"low": -5, "high": 5}, comparison_funcs.comp_pcc),
+            ("exp", {"low": -10, "high": 10}, comparison_funcs.comp_pcc),
             (
+                "exp",
                 {"low": -150, "high": -10},
                 partial(comparison_funcs.comp_allclose, atol=5e-6, rtol=0),
             ),
             (
+                "exp",
                 {"low": -5e6, "high": -0.85e6},
                 partial(comparison_funcs.comp_allclose, atol=5e-6, rtol=0),
             ),
+            ("exp2", {"low": -10, "high": 10}, comparison_funcs.comp_pcc),
+            ("expm1", {"low": -10, "high": 10}, comparison_funcs.comp_pcc),
         ),
     )
-    def test_run_eltwise_exp_op(
+    def test_run_eltwise_exp_ops(
         self,
         input_shapes,
+        exp_type,
         input_range,
         comparison_func,
         pcie_slot,
@@ -143,7 +148,7 @@ class TestEltwiseUnary:
             )
         ]
         run_single_pytorch_test(
-            "eltwise-exp",
+            f"eltwise-{exp_type}",
             input_shapes,
             datagen_func,
             comparison_func,
@@ -420,31 +425,38 @@ class TestEltwiseUnary:
             test_args,
         )
 
-    def test_run_eltwise_exp2(self, input_shapes, pcie_slot, function_level_defaults):
+    @pytest.mark.parametrize("negative_slope", [-0.5, 0, 0.5])
+    def test_run_eltwise_leaky_relu_op(
+        self, input_shapes, negative_slope, pcie_slot, function_level_defaults
+    ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=-10, high=10), torch.bfloat16
+                partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32
             )
         ]
+        test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
+        test_args.update({"negative_slope": negative_slope})
         comparison_func = comparison_funcs.comp_pcc
         run_single_pytorch_test(
-            f"eltwise-exp2",
+            "eltwise-leaky_relu",
             input_shapes,
             datagen_func,
             comparison_func,
             pcie_slot,
+            test_args,
         )
 
-    #@pytest.mark.skip("expm1 only returns -1.0")
-    def test_run_eltwise_expm1(self, input_shapes, pcie_slot, function_level_defaults):
+    def test_run_eltwise_log_sigmoid_op(
+        self, input_shapes, pcie_slot, function_level_defaults
+    ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=-10, high=10), torch.bfloat16
+                partial(generation_funcs.gen_rand, low=-4, high=10), torch.float32
             )
         ]
-        comparison_func = comparison_funcs.comp_pcc
+        comparison_func = partial(comparison_funcs.comp_pcc)
         run_single_pytorch_test(
-            f"eltwise-expm1",
+            "eltwise-log_sigmoid",
             input_shapes,
             datagen_func,
             comparison_func,

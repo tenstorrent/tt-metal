@@ -13,7 +13,7 @@
 
 
 // SFPU maps -> relevant kernels, golden functions, comparison functions
-std::map<std::string,std::string> sfpu_op_to_hlk_op_name={};
+std::map<std::string,std::map<std::string, std::string>> sfpu_op_to_hlk_op_name={};
 
 void update_sfpu_op_to_hlk_op()
 {
@@ -30,9 +30,9 @@ void update_sfpu_op_to_hlk_op()
     }
     auto unary_op_type = magic_enum::enum_cast<tt::tt_metal::UnaryOpType::Enum>(unary_op_name).value();
     if ( tt::tt_metal::is_parametrized_type(unary_op_type) ) {
-      sfpu_op_to_hlk_op_name[sfpu_op_name]  = eltwise_unary_op_utils::get_op_name(unary_op_type,0.5);
+      sfpu_op_to_hlk_op_name[sfpu_op_name]  = eltwise_unary_op_utils::get_block_defines({unary_op_type}, {0.5});
     } else {
-      sfpu_op_to_hlk_op_name[sfpu_op_name]  = eltwise_unary_op_utils::get_op_name(unary_op_type);
+      sfpu_op_to_hlk_op_name[sfpu_op_name]  = eltwise_unary_op_utils::get_block_defines({unary_op_type}, {std::nullopt});
     }
   }
 }
@@ -132,12 +132,12 @@ bool run_sfpu_test(const tt::ARCH& arch, string sfpu_name) {
         };
         string hlk_kernel_name = "tt_metal/kernels/compute/eltwise_sfpu.cpp";
         // defines macro expands per SFPU ops
-        const string hlk_op_name = sfpu_op_to_hlk_op_name.at(sfpu_name);
+        std::map<string, string> hlk_op_name = sfpu_op_to_hlk_op_name.at(sfpu_name);
         auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
             program,
             hlk_kernel_name,
             core,
-            tt_metal::ComputeConfig{.math_approx_mode = true, .compile_args = compute_kernel_args, .defines = {{"SFPU_OP_AND_PACK", hlk_op_name}}}
+            tt_metal::ComputeConfig{.math_approx_mode = true, .compile_args = compute_kernel_args, .defines = hlk_op_name}
         );
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
