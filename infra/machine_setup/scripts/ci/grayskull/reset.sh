@@ -1,6 +1,23 @@
 set -eo pipefail
 
-tt-smi -tr all
+reset_output=$(tt-smi -tr all)
+
+echo "${reset_output}"
+
+if [[ $reset_output == *"No chips detected"* ]]; then
+  echo "Error: Unsuccessful board reset"
+  exit 1
+fi
+
+tt-smi -s -f smi.log
+
+echo "Printing out SMI information..."
+
+cat smi.log
+
+echo "Printing out cpu information..."
+
+lscpu
 
 WEKA_CHECK_DIR="/mnt/MLPerf/bit_error_tests"
 
