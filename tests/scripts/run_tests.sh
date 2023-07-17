@@ -137,6 +137,7 @@ run_metal_bert_bm_pipeline_tests() {
     # is a safe place to put it for the time being. Need to run these as separate tests to avoid segfault (TODO(agrebenisan): Investigate why)
     env TT_METAL_DEVICE_DISPATCH_MODE=1 pytest -svv tests/python_api_testing/models/metal_BERT_large_15/test_bert_batch_dram.py::test_bert_batch_dram[BERT_LARGE-BFLOAT16-DRAM]
     env TT_METAL_DEVICE_DISPATCH_MODE=1 pytest -svv tests/python_api_testing/models/metal_BERT_large_15/test_bert_batch_dram.py::test_bert_batch_dram_with_program_cache[BERT_LARGE-BFLOAT16-DRAM]
+    env TT_PCI_DMA_BUF_SIZE=1048576 TT_METAL_DEVICE_DISPATCH_MODE=1 pytest tests/python_api_testing/models/metal_BERT_large_15/perf_bert15.py
 }
 
 run_pipeline_tests() {
