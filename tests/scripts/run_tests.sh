@@ -113,7 +113,6 @@ run_frequent_pipeline_tests_multi_threaded() {
     run_frequent_pipeline_tests "$tt_arch" "$pipeline_type"
 }
 
-
 run_frequently_hangs_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
@@ -128,6 +127,16 @@ run_frequently_hangs_pipeline_tests() {
     env python tests/scripts/run_build_kernels_for_riscv.py --tt-arch $ARCH_NAME
 
     env pytest tests/tt_metal/llrt --tt-arch $tt_arch -m $pipeline_type
+}
+
+run_metal_bert_bm_pipeline_tests() {
+    local tt_arch=$1
+    local pipeline_type=$2
+
+    # BERT large via new enqueue APIs. I know this is not a unit test, but I would like to avoid BERT large breaking, so this
+    # is a safe place to put it for the time being. Need to run these as separate tests to avoid segfault (TODO(agrebenisan): Investigate why)
+    env TT_METAL_DEVICE_DISPATCH_MODE=1 pytest -svv tests/python_api_testing/models/metal_BERT_large_15/test_bert_batch_dram.py::test_bert_batch_dram[BERT_LARGE-BFLOAT16-DRAM]
+    env TT_METAL_DEVICE_DISPATCH_MODE=1 pytest -svv tests/python_api_testing/models/metal_BERT_large_15/test_bert_batch_dram.py::test_bert_batch_dram_with_program_cache[BERT_LARGE-BFLOAT16-DRAM]
 }
 
 run_pipeline_tests() {
@@ -150,6 +159,8 @@ run_pipeline_tests() {
         run_eager_package_end_to_end_pipeline_tests "$tt_arch" "$pipeline_type"
     elif [[ $pipeline_type == "eager_package_silicon" ]]; then
         run_eager_package_end_to_end_pipeline_tests "$tt_arch" "$pipeline_type"
+    elif [[ $pipeline_type == "metal_bert_bm" ]]; then
+        run_metal_bert_bm_pipeline_tests "$tt_arch" "$pipeline_type"
     else
         echo "Unknown pipeline: $pipeline_type"
         exit 1
@@ -178,7 +189,6 @@ validate_and_set_env_vars() {
 
 set_up_chdir() {
     cd $PYTHONPATH
-
 }
 
 main() {

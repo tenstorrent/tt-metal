@@ -7,10 +7,6 @@ if [[ -z "$TT_METAL_HOME" ]]; then
   exit 1
 fi
 
-source build/python_env/bin/activate
-export PYTHONPATH=$TT_METAL_HOME
-# Needed for tests in models
-
 pytest $TT_METAL_HOME/tests/python_api_testing/unit_testing/ -vvv
 pytest $TT_METAL_HOME/tests/python_api_testing/sweep_tests/pytests/ -vvv
 
@@ -29,8 +25,3 @@ pytest $TT_METAL_HOME/tests/python_api_testing/models/bert_large_performant/unit
 # Fused ops unit tests
 pytest $TT_METAL_HOME/tests/python_api_testing/models/bert_large_performant/unit_tests/fused_ops/test_bert_large_fused_ln.py -k in0_L1-out_L1
 pytest $TT_METAL_HOME/tests/python_api_testing/models/bert_large_performant/unit_tests/fused_ops/test_bert_large_fused_softmax.py -k in0_L1
-
-# BERT large via new enqueue APIs. I know this is not a unit test, but I would like to avoid BERT large breaking, so this
-# is a safe place to put it for the time being. Need to run these as separate tests to avoid segfault (TODO(agrebenisan): Investigate why)
-env TT_METAL_DEVICE_DISPATCH_MODE=1 pytest -svv tests/python_api_testing/models/metal_BERT_large_15/test_bert_batch_dram.py::test_bert_batch_dram[BERT_LARGE-BFLOAT16-DRAM]
-env TT_METAL_DEVICE_DISPATCH_MODE=1 pytest -svv tests/python_api_testing/models/metal_BERT_large_15/test_bert_batch_dram.py::test_bert_batch_dram_with_program_cache[BERT_LARGE-BFLOAT16-DRAM]
