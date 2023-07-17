@@ -152,29 +152,39 @@ def profile_riscv_tensix(file_name, read_write_bar):
 def print_tensix_issue_barrier(file_name):
     dic_issue = {}
     dic_barrier = {}
+    dic_noc_util = {}
     f = open(file_name, "r")
     lines = f.readlines()
+    noc_util_flag = False
     for line in lines:
         lst = line.split()
         if "Buffer" in line:
+            if len(lst) > 8:
+                noc_util_flag = True
             transaction = int(lst[3])
             buffer = int(lst[1])
             issue = float(lst[5])
-            barrier = float(lst[-1])
+            barrier = float(lst[7])
+            noc_util = float(lst[9]) * 100
             dic_issue[(buffer, transaction)] = issue
             dic_barrier[(buffer, transaction)] = barrier
+            dic_noc_util[(buffer, transaction)] = noc_util
         elif "write" in line:
             print("read")
             print("issue")
             print_tensix_bandwidth(dic_issue)
             print("barrier")
             print_tensix_bandwidth(dic_barrier)
+            print("noc_util")
+            print_tensix_bandwidth(dic_noc_util)
             dic = {}
     print("write")
     print("issue")
     print_tensix_bandwidth(dic_issue)
     print("barrier")
     print_tensix_bandwidth(dic_barrier)
+    print("noc_util")
+    print_tensix_bandwidth(dic_noc_util)
 
 def profile_tensix_constant_flit(file_name):
     dic = {}
@@ -186,7 +196,7 @@ def profile_tensix_constant_flit(file_name):
             buffer = int(lst[1])
             transaction = int(lst[3])
             issue = float(lst[5])
-            barrier = float(lst[-1])
+            barrier = float(lst[7])
             if transaction not in dic.keys():
                 dic[transaction] = []
             dic[transaction].append(barrier)
