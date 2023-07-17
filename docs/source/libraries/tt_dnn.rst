@@ -281,6 +281,8 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.elu
 
+.. autofunction:: tt_lib.tensor.exp2
+
 Tensor relational operations
 ----------------------------------
 .. autofunction:: tt_lib.tensor.gtz
