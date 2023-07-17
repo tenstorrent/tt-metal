@@ -10,9 +10,10 @@ namespace tt {
 namespace tt_metal {
 
 void validate_buffer_size_and_page_size(u64 size, u64 page_size, const BufferType &buffer_type) {
-    log_assert(size != 0 and page_size != 0, "Buffer size and page size should be larger than 0 bytes!");
+    TT_ASSERT(size != 0 and page_size != 0, "Buffer size and page size should be larger than 0 bytes!");
     bool valid_page_size = (size % page_size == 0);
-    log_assert(valid_page_size, "For valid non-interleaved buffers page size {} must equal buffer size {}. For interleaved-buffers page size should be divisible by buffer size", page_size, size);
+    TT_ASSERT(valid_page_size, "For valid non-interleaved buffers page size {} must equal buffer size {}. For interleaved-buffers page size should be divisible by buffer size", page_size, size);
+    TT_ASSERT(page_size % sizeof(u32) == 0, "Page size must be divisible by sizeof(uint32_t) because buffers hold uint32_t values");
 }
 
 Buffer::Buffer(Device *device, u64 size, u64 address, u64 page_size, const BufferType buffer_type)
@@ -71,12 +72,12 @@ void Buffer::allocate() {
 }
 
 u32 Buffer::dram_channel_from_bank_id(u32 bank_id) const {
-    log_assert(this->buffer_type_ == BufferType::DRAM, "Expected DRAM buffer!");
+    TT_ASSERT(this->buffer_type_ == BufferType::DRAM, "Expected DRAM buffer!");
     return this->device_->dram_channel_from_bank_id(bank_id);
 }
 
 CoreCoord Buffer::logical_core_from_bank_id(u32 bank_id) const {
-    log_assert(this->buffer_type_ == BufferType::L1, "Expected L1 buffer!");
+    TT_ASSERT(this->buffer_type_ == BufferType::L1, "Expected L1 buffer!");
     return this->device_->logical_core_from_bank_id(bank_id);
 }
 
@@ -107,7 +108,7 @@ CoreCoord Buffer::noc_coordinates() const {
 
 u64 Buffer::page_address(u32 bank_id, u32 page_index) const {
     auto num_banks = this->device_->num_banks(this->buffer_type_);
-    log_assert(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
+    TT_ASSERT(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
 
     // DRAM readers and writers in tt_cluster add DRAM bank offset before doing a read but L1 readers and writers do not
     u64 base_page_address = this->buffer_type_ == BufferType::DRAM ?
@@ -123,7 +124,7 @@ void Buffer::deallocate() {
     if (this->device_ == nullptr or not this->device_->initialized_) {
         return;
     }
-    log_assert(this->device_->allocator_ != nullptr, "Expected allocator to be initialized!");
+    TT_ASSERT(this->device_->allocator_ != nullptr, "Expected allocator to be initialized!");
     allocator::deallocate_buffer(*this->device_->allocator_, this->address_, this->buffer_type_);
 }
 

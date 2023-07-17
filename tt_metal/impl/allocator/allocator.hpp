@@ -48,10 +48,6 @@ class BankManager {
 
    private:
     constexpr static u32 min_allocation_size_bytes_ = 32;
-    // DRAM -> L1 and L1 -> DRAM transfers need to have 32B alignment, which means:
-    // DRAM_buffer_addr % 32 == L1_buffer_addr % 32, or
-    // DRAM_buffer_addr % 32 == L1_buffer_addr % 32 == 0
-    constexpr static u32 alignment_ = 32;
 
     // This is to store offsets for any banks that share a core or node (dram in wh/storage core), so we can view all banks using only bank_id
     // Set to 0 for cores/nodes with only 1 bank
