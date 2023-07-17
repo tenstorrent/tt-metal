@@ -2,7 +2,6 @@
 #include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_dnn/op_library/operation.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
-#include "tt_dnn/op_library/operation_history.hpp"
 #include "tt_dnn/op_library/program_cache.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 
@@ -168,83 +167,11 @@ std::vector<Tensor> generic_create_output_tensors(
     return output_tensors;
 }
 
-namespace detail {
-
-#ifdef DEBUG
-
-template<typename OperationType>
-void print_operation(
-    const OperationType& operation,
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors) {
-    tt::log_debug(tt::LogOp, "Operation: {}", operation);
-    tt::log_debug(tt::LogOp, "Input Tensors: {}", input_tensors);
-    if (not optional_input_tensors.empty()) {
-        tt::log_debug(tt::LogOp, "Optional Input Tensors: {}", optional_input_tensors);
-    }
-}
-
-auto create_tensor_record(const Tensor& tensor) {
-    return std::visit(
-        [&] (const auto& storage) -> operation_history::TensorRecord {
-            using T = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<T, HostStorage>) {
-                return operation_history::TensorRecord{
-                    tensor.storage_type(), tensor.shape(), tensor.dtype(), tensor.layout(), std::nullopt
-                };
-            }
-            else if constexpr (std::is_same_v<T, DeviceStorage>) {
-                return operation_history::TensorRecord{
-                    tensor.storage_type(), tensor.shape(), tensor.dtype(), tensor.layout(), storage.memory_config
-                };
-            }
-        },
-        tensor.storage()
-    );
-}
-
-template<typename OperationType>
-void append_operation_to_operation_history(
-    const OperationType& operation,
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors) {
-
-    std::vector<operation_history::TensorRecord> input_tensor_records;
-    input_tensor_records.reserve(input_tensors.size() + optional_input_tensors.size());
-
-    for (const auto& tensor : input_tensors) {
-        input_tensor_records.push_back(create_tensor_record(tensor));
-    }
-    for (const auto& tensor : optional_input_tensors) {
-        if (tensor.has_value()) {
-            input_tensor_records.push_back(create_tensor_record(tensor.value()));
-        }
-    }
-    operation_history::append(operation_history::OperationRecord{operation.get_type_name(), operation.attributes(), input_tensor_records});
-}
-template<typename OperationType>
-inline void run_common(
-    const OperationType& operation,
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {}) {
-    print_operation(operation, input_tensors, optional_input_tensors);
-    append_operation_to_operation_history(operation, input_tensors, optional_input_tensors);
-}
-#else
-template<typename OperationType>
-inline void run_common(
-    const OperationType& operation,
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {}) {}
-#endif
-
-}  // namespace detail
-
 std::vector<Tensor> run(
     const HostOperation& operation,
     const std::vector<Tensor>& input_tensors
 ) {
-    detail::run_common(operation, input_tensors);
+    log_operation(operation, input_tensors);
 
     auto profile_scope = op_profiler::ProfileScope(operation.get_type_name(), op_profiler::OpType::tt_dnn_cpu);
     auto do_profile = op_profiler::get_profiler_flag();
@@ -273,7 +200,7 @@ std::vector<Tensor> run(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors
 ) {
-    detail::run_common(operation, input_tensors, optional_input_tensors);
+    log_operation(operation, input_tensors, optional_input_tensors);
     if (program_cache::is_enabled() and operation.supports_program_caching()) {
         return detail::run_with_program_cache(operation, input_tensors, optional_input_tensors);
     } else {

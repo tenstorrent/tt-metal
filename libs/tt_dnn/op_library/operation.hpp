@@ -5,8 +5,6 @@
 #include <tensor/tensor.hpp>
 #include "tt_stl/reflection.hpp"
 
-#include "third_party/magic_enum/magic_enum.hpp"
-
 #include <boost/core/demangle.hpp>
 
 #include <experimental/type_traits>
@@ -194,7 +192,7 @@ class HostOperation {
         }
 
         std::string to_string() const override {
-            return fmt::format("{}", this->object);
+            return fmt::format("HostOperation({})", this->object);
         }
 
         tt::stl::reflection::Attributes attributes() const {
@@ -365,7 +363,7 @@ class DeviceOperation {
 
             std::optional<std::string> parallelization_strategy = std::nullopt;
             if constexpr (detail::implements_get_parallelization_strategy<T>()) {
-                parallelization_strategy = magic_enum::enum_name(this->object.get_parallelization_strategy(input_tensors));
+                parallelization_strategy = fmt::format("{}", this->object.get_parallelization_strategy(input_tensors));
             }
             return {
                 .preferred_name = preferred_name,
@@ -374,7 +372,7 @@ class DeviceOperation {
         }
 
         std::string to_string() const override {
-            return fmt::format("{}", this->object);
+            return fmt::format("DeviceOperation({})", this->object);
         }
 
         tt::stl::reflection::Attributes attributes() const {

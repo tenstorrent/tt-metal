@@ -167,6 +167,8 @@ def convert_tt_tensors_wrapper(func):
 
     @wraps(func)
     def wrap(*args, **kwargs):
+        ttl_tensor.log_fallback_operation(func, *args, **kwargs)
+
         output_format = {"layout": ttl_tensor.Layout.TILE}
 
         if ttl_profiler.get_profiler_flag():

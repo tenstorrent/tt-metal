@@ -42,8 +42,6 @@ struct EltwiseBinary {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-using eltwise_binop_t = std::function<Tensor(const Tensor &input_tensor_a, const Tensor &input_tensor_b)>;
-
 template <BinaryOpType::Enum binary_op_type>
 Tensor run_eltwise_binary(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
     TT_ASSERT(input_tensor_a.shape() == input_tensor_b.shape(), "Input shapes must be the same!");

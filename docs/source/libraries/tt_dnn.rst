@@ -37,6 +37,7 @@ Below, is an example of how to declare a new on-device operation with all of the
         std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
         std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
         operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
+        tt::stl::reflection::Attributes attributes() const;
     };
 
 And below, is an example of how to declare a new on-host operation with all of the methods requred by the interface.
@@ -47,6 +48,7 @@ And below, is an example of how to declare a new on-host operation with all of t
         void validate(const std::vector<Tensor> &input_tensors) const;
         std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
         std::vector<Tensor> compute_output_tensors(const std::vector<Tensor> &input_tensors) const;
+        tt::stl::reflection::Attributes attributes() const;
     };
 
 Profiler
@@ -62,10 +64,6 @@ And there are 2 special methods that can be optionally implemented to set the pr
     struct <NewOperation> {
         <ParallelizationStrategyEnum> get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
     };
-
-
-    // Implement `std::ostream& operator<<` to set the preferred name on the profiler
-    std::ostream& operator<<(std::ostream& os, const <NewOperation>& op);
 
 
 Program Caching
@@ -144,6 +142,24 @@ To see logs related to operation infastructure, use the following environment va
 
     export LOGGER_TYPES=Op
     export LOGGER_LEVEL=Debug
+
+The logs will print currently running op and information related to program caching. i.e.:
+
+.. code-block::
+
+    Op | DEBUG    | Operation Type: silu (fallback operation)
+    Op | DEBUG    | Operation Attributes: ()
+    Op | DEBUG    | Input Tensors: {tt::tt_metal::Tensor(storage=tt::tt_metal::DeviceStorage(memory_config=tt::tt_metal::MemoryConfig(interleaved=true, buffer_type=tt::tt_metal::BufferType::DRAM)), shape={1, 1, 1, 1280}, dtype=tt::tt_metal::DataType::BFLOAT16, layout=tt::tt_metal::Layout::ROW_MAJOR)}
+    Op | DEBUG    | Operation Type: tt::tt_metal::LayoutConversionOnHost
+    Op | DEBUG    | Operation Attributes: (target_layout=tt::tt_metal::Layout::TILE)
+    Op | DEBUG    | Input Tensors: {tt::tt_metal::Tensor(storage=tt::tt_metal::HostStorage(), shape={1, 1, 320, 1280}, dtype=tt::tt_metal::DataType::BFLOAT16, layout=tt::tt_metal::Layout::ROW_MAJOR)}
+    ...
+    Op | DEBUG    | Program Cache: MISS - Compiling new program "tt::tt_metal::EltwiseUnary(op_type=tt::tt_metal::UnaryOpType::Enum::GELU, param=1)_tt::tt_metal::Tensor(storage=tt::tt_metal::DeviceStorage(memory_config=tt::tt_metal::MemoryConfig(interleaved=true, buffer_type=tt::tt_metal::BufferType::DRAM)), shape={1, 1, 32, 32}, dtype=tt::tt_metal::DataType::BFLOAT16, layout=tt::tt_metal::Layout::TILE)"
+    Op | DEBUG    | Operation Name: tt::tt_metal::EltwiseUnary
+    Op | DEBUG    | Operation Attributes: (op_type=tt::tt_metal::UnaryOpType::Enum::GELU, param=0)
+    Op | DEBUG    | Input Tensors: {tt::tt_metal::Tensor(storage=tt::tt_metal::DeviceStorage(memory_config=tt::tt_metal::MemoryConfig(interleaved=true, buffer_type=tt::tt_metal::BufferType::DRAM)), shape={1, 1, 32, 32}, dtype=tt::tt_metal::DataType::BFLOAT16, layout=tt::tt_metal::Layout::TILE)}
+
+In addition to logs, the history of all executed operations gets dumped into `build/operation_history.csv`
 
 
 tt-DNN API through ``tt_lib``

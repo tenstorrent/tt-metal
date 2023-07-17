@@ -87,7 +87,7 @@ void test_operation_infrastructure() {
         fmt::format("Actual value is {}", profiler_info.preferred_name.value())
     );
     TT_ASSERT(
-        profiler_info.parallelization_strategy.value() == "SINGLE_CORE",
+        profiler_info.parallelization_strategy.value() == "tt::tt_metal::UnaryOpParallelizationStrategy::Enum::SINGLE_CORE",
         fmt::format("Actual value is {}", profiler_info.parallelization_strategy.value())
     );
 }

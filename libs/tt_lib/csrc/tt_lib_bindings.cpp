@@ -35,6 +35,19 @@ namespace tt {
 
 namespace tt_metal {
 
+struct PythonFallbackOperation {
+    std::string function_name_;
+    tt::stl::reflection::Attributes attributes_;
+
+    std::string get_type_name() const {
+        return fmt::format("{} (fallback operation)", this->function_name_);
+    }
+
+    tt::stl::reflection::Attributes attributes() const {
+        return this->attributes_;
+    }
+};
+
 
 namespace detail {
 
@@ -2716,6 +2729,59 @@ void TensorModule(py::module &m_tensor) {
         | a        | Input tensor         | Tensor    |             | Yes      |
         +----------+----------------------+-----------+-------------+----------+
     )doc");
+
+    m_tensor.def(
+        "log_fallback_operation",
+        [] (const py::function& fallback_operation, const py::args& args, const py::kwargs& kwargs) -> void {
+
+            auto function_name = py::cast<std::string>(fallback_operation.attr("__qualname__"));
+
+            std::vector<Tensor> input_tensors;
+            tt::stl::reflection::Attributes attributes;
+
+            auto process_name_and_value = [&function_name, &input_tensors, &attributes] (const auto& name, const auto& value) {
+                py::object torch = py::module_::import("torch");
+                if (py::isinstance<Tensor>(value)) {
+                    auto tensor = py::cast<Tensor>(value);
+                    input_tensors.push_back(tensor);
+                }
+                else if (py::isinstance(value, torch.attr("nn").attr("Module"))) {
+                    function_name = fmt::format("{}", function_name);
+                }
+                else if (py::isinstance(value, torch.attr("Tensor"))) {
+                    attributes.push_back({fmt::format("{}", name), fmt::format("torch.Tensor")});
+                }
+                else {
+                    attributes.push_back({fmt::format("{}", name), fmt::format("{}", value)});
+                }
+            };
+
+            auto arg_index = 0;
+            for (const auto& value : args) {
+                auto name = fmt::format("arg_{}", arg_index++);
+                process_name_and_value(name, value);
+            }
+
+            for (const auto& [name, value] : kwargs) {
+                process_name_and_value(name, value);
+            }
+
+            auto operation = PythonFallbackOperation{function_name, attributes};
+            operation::log_operation(operation, input_tensors);
+        }, R"doc(
+        Log fallback operation using operation infrastructure.
+
+            +----------+----------------------+-----------+-------------+----------+
+            | Argument | Description          | Data type | Valid range | Required |
+            +==========+======================+===========+=============+==========+
+            | function | Fallback Function    | Function  |             | Yes      |
+            +----------+----------------------+-----------+-------------+----------+
+            | args     | Packed args          | tuple     |             | No       |
+            +----------+----------------------+-----------+-------------+----------+
+            | kwargs   | Packed kwargs        | dict      |             | No       |
+            +----------+----------------------+-----------+-------------+----------+
+        )doc"
+    );
 }
 
 void DeviceModule(py::module &m_device) {
