@@ -77,7 +77,7 @@ std::vector<Tensor> run_without_program_cache(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) {
 
-    auto profile_scope = op_profiler::ProfileScope(operation.get_type_name());
+    auto profile_scope = op_profiler::ProfileScope(operation.get_type_name(), op_profiler::OpType::tt_dnn_device);
     auto do_profile = op_profiler::get_profiler_flag();
     if (do_profile) { setup_profiler(operation, input_tensors); }
 
@@ -111,7 +111,7 @@ std::vector<Tensor> run_with_program_cache(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) {
 
-    auto profile_scope = op_profiler::ProfileScope(operation.get_type_name());
+    auto profile_scope = op_profiler::ProfileScope(operation.get_type_name(), op_profiler::OpType::tt_dnn_device);
     auto do_profile = op_profiler::get_profiler_flag();
     if (do_profile) { setup_profiler(operation, input_tensors); }
 
@@ -246,7 +246,7 @@ std::vector<Tensor> run(
 ) {
     detail::run_common(operation, input_tensors);
 
-    auto profile_scope = op_profiler::ProfileScope(operation.get_type_name());
+    auto profile_scope = op_profiler::ProfileScope(operation.get_type_name(), op_profiler::OpType::tt_dnn_cpu);
     auto do_profile = op_profiler::get_profiler_flag();
     if (do_profile) { detail::setup_profiler(operation, input_tensors); }
 

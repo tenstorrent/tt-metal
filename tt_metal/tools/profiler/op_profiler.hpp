@@ -17,6 +17,14 @@ namespace tt_metal {
 
 namespace op_profiler {
 
+    enum class OpType {
+        python_fallback,
+        tt_dnn_cpu,
+        tt_dnn_device,
+        custom_zone,
+        unknown
+    };
+
     namespace detail {
         static string replace_comma(const string& s)
         {
@@ -86,11 +94,14 @@ namespace op_profiler {
             string parlStrategy = "";
             string preferredName = "";
 
-            OpData (string opName, int opCount, int globalCount, int stackSizeArg) :
+            OpType type;
+
+            OpData (string opName, int opCount, int globalCount, int stackSizeArg, OpType typeArg):
                 name(opName),
                 opCallCount(opCount),
                 globalCallCount(globalCount),
-                stackSize(stackSizeArg)
+                stackSize(stackSizeArg),
+                type(typeArg)
             {}
         };
 
@@ -98,7 +109,7 @@ namespace op_profiler {
 
             private:
                 const string unknownOpName = "unknown_op";
-                OpData unknownOp = OpData (unknownOpName,0,0,0);
+                OpData unknownOp = OpData (unknownOpName,0,0,0,OpType::unknown);
 
                 bool profileOps = false;
                 string profileFolder = "tt_metal/tools/profiler/logs/ops/";
@@ -174,6 +185,7 @@ namespace op_profiler {
                     additionalFields.push_back({"Parallelization Strategy", opData.parlStrategy});
                     additionalFields.push_back({"Preferred Name", opData.preferredName});
                     additionalFields.push_back({"Meta Data", join_vector(opData.metaDataVector)});
+                    additionalFields.push_back({"Type", fmt::format("{}",magic_enum::enum_name(opData.type))});
 
                     return additionalFields;
                 }
@@ -202,20 +214,20 @@ namespace op_profiler {
                     }
                     else
                     {
-                        unknownOp = OpData(unknownOpName, unknownOp.opCallCount + 1, globalCallCount, 0);
+                        unknownOp = OpData(unknownOpName, unknownOp.opCallCount + 1, globalCallCount, 0, OpType::unknown);
                         setup_profiling_folders(unknownOpName, globalCallCount, unknownOp.profiler);
                     }
                 }
 
             public:
 
-                void start_profiling(const string& opName)
+                void start_profiling(const string& opName, OpType opType)
                 {
                     if (profileOps)
                     {
                         auto opNameNoComma = replace_comma(opName);
                         auto callCount = get_call_count_increment(opName);
-                        OpData opData = OpData(opNameNoComma, callCount, globalCallCount, opStack.size() + 1);
+                        OpData opData = OpData(opNameNoComma, callCount, globalCallCount, opStack.size() + 1, opType);
 
                         opData.profiler.setHostDoProfile(true);
                         opData.profiler.markStart(opNameNoComma);
@@ -306,9 +318,10 @@ namespace op_profiler {
         inline OpProfiler operationProfiler;
     }
 
-    static void start_profiling (const string& opName)
+
+    static void start_profiling (const string& opName, OpType opType)
     {
-        detail::operationProfiler.start_profiling(opName);
+        detail::operationProfiler.start_profiling(opName, opType);
     }
 
     static void stop_profiling (const string& opName)
@@ -429,9 +442,9 @@ namespace op_profiler {
         private:
             string scopeName = "";
         public:
-            ProfileScope (const string& scopeNameArg) : scopeName(scopeNameArg)
+            ProfileScope (const string& scopeNameArg, OpType opType) : scopeName(scopeNameArg)
             {
-                start_profiling (scopeName);
+                start_profiling (scopeName, opType);
             }
 
             ~ProfileScope ()

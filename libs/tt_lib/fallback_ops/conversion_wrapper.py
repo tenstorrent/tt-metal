@@ -170,7 +170,7 @@ def convert_tt_tensors_wrapper(func):
         output_format = {"layout": ttl_tensor.Layout.TILE}
 
         if ttl_profiler.get_profiler_flag():
-            ttl_profiler.start_profiling("fallback_op")
+            ttl_profiler.start_profiling("fallback_op",ttl_profiler.OpType.python_fallback)
             # This is to check if this is a function of a class. We add the object id if it is
             if '.' in func.__qualname__:
                 obj_id = id(args[0])

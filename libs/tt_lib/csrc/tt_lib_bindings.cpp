@@ -2829,6 +2829,10 @@ void DeviceModule(py::module &m_device) {
 }
 
 void ProfilerModule(py::module &m_profiler) {
+    py::enum_<op_profiler::OpType>(m_profiler, "OpType")
+        .value("python_fallback", op_profiler::OpType::python_fallback)
+        .value("custom_zone", op_profiler::OpType::custom_zone);
+
     m_profiler.def("set_profiler_flag", &op_profiler::set_profiler_flag, R"doc(
         Sets the profiling flag.
 
@@ -2894,12 +2898,24 @@ void ProfilerModule(py::module &m_profiler) {
         +------------------+------------------------+-----------------------+------------------+----------+
     )doc");
 
-    m_profiler.def("start_profiling", &op_profiler::start_profiling, R"doc(
+    m_profiler.def("start_profiling",
+		  &op_profiler::start_profiling,py::arg("opName"), py::arg("opType") = op_profiler::OpType::custom_zone, R"doc(
         Start profiling op.
+        +------------------+------------------------------------------------+-----------------------+-------------+----------+
+        | Argument         | Description                                    | Data type             | Valid range | Required |
+        +==================+================================================+=======================+=============+==========+
+        | Name             | Name of the op or zone to be profiled          | string                |             | Yes      |
+        | Type             | Fallback op or custom zone                     | string                |             | No       |
+        +------------------+------------------------------------------------+-----------------------+-------------+----------+
     )doc");
 
     m_profiler.def("stop_profiling", &op_profiler::stop_profiling, R"doc(
         Stop profiling op.
+        +------------------+------------------------------------------------+-----------------------+-------------+----------+
+        | Argument         | Description                                    | Data type             | Valid range | Required |
+        +==================+================================================+=======================+=============+==========+
+        | Name             | Name of the op or zone to stop profiling       | string                |             | Yes      |
+        +------------------+------------------------------------------------+-----------------------+-------------+----------+
     )doc");
 
 }

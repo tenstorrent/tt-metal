@@ -87,7 +87,7 @@ void Profiler::dumpHostResults(const std::vector<std::pair<std::string,std::stri
         std::filesystem::path log_path = output_dir / HOST_SIDE_LOG;
         std::ofstream log_file;
 
-        if (host_new_log)
+        if (host_new_log || !std::filesystem::exists(log_path))
         {
             log_file.open(log_path);
 
@@ -233,7 +233,7 @@ void Profiler::dumpDeviceResultToFile(
     std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
     std::ofstream log_file;
 
-    if (device_new_log)
+    if (device_new_log || !std::filesystem::exists(log_path))
     {
         log_file.open(log_path);
         log_file << "Chip clock is at 1.2 GHz" << std::endl;

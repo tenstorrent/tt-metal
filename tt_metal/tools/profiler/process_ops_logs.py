@@ -154,13 +154,9 @@ def parse_ops_logs(opsFolder):
                     if lineCount > 0:
                         op_folder_name = row[1].strip()
                         op_name = op_folder_name
-                        op_type = "custom_zone"
                         extractName = re.findall(r".*tt.*tt_metal:*\d*(.*)E*", op_name)
                         if extractName:
                             op_name = extractName.pop()
-                            op_type = "tt_dnn_device"
-                        elif "fallback_op" in op_name:
-                            op_type = "python_fallback"
 
                         start_ts = int(row[2].strip())
                         end_ts = int(row[3].strip())
@@ -182,6 +178,7 @@ def parse_ops_logs(opsFolder):
                         parallelizationStrategy = row[11].strip()
                         preferredName = row[12].strip().split("tt::tt_metal::")[-1]
                         metadata = row[13].strip()
+                        op_type = row[14].strip()
 
                         if preferredName:
                             if op_type != "tt_dnn_device":
@@ -398,7 +395,7 @@ def print_ops_csv(ops, opsFolder, outputFolder, date, nameAppend):
         opsList = []
         for op, opCalls in ops.items():
             for opCall in opCalls:
-                opCall["OP CODE"] = op
+                opCall["OP CODE"] = " "*opCall["CALL DEPTH"] + op
                 opsList.append(opCall)
 
         opsList.sort(key=lambda item: item[SORT_KEY])
