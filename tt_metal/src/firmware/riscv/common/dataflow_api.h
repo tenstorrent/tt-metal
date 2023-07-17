@@ -57,6 +57,10 @@ extern uint8_t l1_bank_to_noc_x[NUM_L1_BANKS];
 extern uint8_t l1_bank_to_noc_y[NUM_L1_BANKS];
 extern uint32_t l1_bank_to_noc_xy[NUM_L1_BANKS];
 
+inline u32 nearest_32(u32 x) {
+    return ((x - 1) | 31) + 1;
+}
+
 // GS RISC-V RTL bug workaround (l1 reads followed by local mem reads causes a hang)
 // in ncrisc.cc/brisc.cc: volatile uint32_t local_mem_barrier;
 void write_to_local_mem_barrier(uint32_t data) { local_mem_barrier = data; }
@@ -488,20 +492,21 @@ struct InterleavedAddrGen {
 #ifdef IS_NOT_POW2_NUM_DRAM_BANKS
             uint32_t bank_id = umodsi3_const_divisor<NUM_DRAM_BANKS>(id);
             addr =
-                mulsi3(udivsi3_const_divisor<NUM_DRAM_BANKS>(id), this->page_size) + this->bank_base_address + offset;
+                mulsi3(udivsi3_const_divisor<NUM_DRAM_BANKS>(id), nearest_32(this->page_size)) + this->bank_base_address + offset;
             addr += bank_to_dram_offset[bank_id];
             noc_x = dram_bank_to_noc_x[bank_id];
             noc_y = dram_bank_to_noc_y[bank_id];
 #else
             uint32_t bank_id = id & (NUM_DRAM_BANKS - 1);
-            addr = mulsi3(id >> LOG_BASE_2_OF_NUM_DRAM_BANKS, this->page_size) + this->bank_base_address + offset;
+            addr = mulsi3(id >> LOG_BASE_2_OF_NUM_DRAM_BANKS, nearest_32(this->page_size)) + this->bank_base_address + offset;
+
             addr += bank_to_dram_offset[bank_id];
             noc_x = dram_bank_to_noc_x[bank_id];
             noc_y = dram_bank_to_noc_y[bank_id];
 #endif
         } else {
             uint32_t bank_id = id & (NUM_L1_BANKS - 1);
-            addr = mulsi3(id >> LOG_BASE_2_OF_NUM_L1_BANKS, this->page_size) + this->bank_base_address + offset;
+            addr = mulsi3(id >> LOG_BASE_2_OF_NUM_L1_BANKS, nearest_32(this->page_size)) + this->bank_base_address + offset;
             addr += bank_to_l1_offset[bank_id];
             noc_x = l1_bank_to_noc_x[bank_id];
             noc_y = l1_bank_to_noc_y[bank_id];
@@ -1127,7 +1132,7 @@ void cq_pop_front(u32 cmd_size_B) {
     // First part of equation aligns to nearest multiple of 32, and then we shift to make it a 16B addr. Both
     // host and device are consistent in updating their pointers in this way, so they won't get out of sync. The
     // alignment is necessary because we can only read/write from/to 32B aligned addrs in host<->dev communication.
-    u32 cmd_size_16B = (((cmd_size_B - 1) | 31) + 1) >> 4;
+    u32 cmd_size_16B = nearest_32(cmd_size_B) >> 4;
     cq_read_interface.fifo_rd_ptr += cmd_size_16B;
 
     notify_host_of_cq_read_pointer();

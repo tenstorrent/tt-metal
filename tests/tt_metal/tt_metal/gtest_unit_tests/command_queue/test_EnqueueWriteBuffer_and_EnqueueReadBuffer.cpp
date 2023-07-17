@@ -126,20 +126,12 @@ namespace basic_tests {
 namespace dram_tests {
 
 TEST_F(CommandQueueHarness, WriteOneTileToDramBank0) {
-    if (this->arch != tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
-
     BufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::DRAM};
 
     EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device, *this->cq, config));
 }
 
 TEST_F(CommandQueueHarness, WriteOneTileToAllDramBanks) {
-    if (this->arch != tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
-
     BufferConfig config = {
         .num_pages = u32(this->device->cluster()->get_soc_desc(this->pcie_id).get_num_dram_channels()),
         .page_size = 2048,
@@ -149,10 +141,6 @@ TEST_F(CommandQueueHarness, WriteOneTileToAllDramBanks) {
 }
 
 TEST_F(CommandQueueHarness, WriteOneTileAcrossAllDramBanksTwiceRoundRobin) {
-    if (this->arch != tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
-
     constexpr u32 num_round_robins = 2;
     BufferConfig config = {
         .num_pages = num_round_robins * (this->device->cluster()->get_soc_desc(this->pcie_id).get_num_dram_channels()),
@@ -163,11 +151,13 @@ TEST_F(CommandQueueHarness, WriteOneTileAcrossAllDramBanksTwiceRoundRobin) {
 }
 
 TEST_F(CommandQueueHarness, FusedWriteDramBuffersInWhichRemainderBurstSizeDoesNotFitInLocalL1) {
-    if (this->arch != tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
-
     BufferConfig config = {.num_pages = 4096, .page_size = 22016, .buftype = BufferType::DRAM};
+
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device, *this->cq, config));
+}
+
+TEST_F(CommandQueueHarness, TestNon32BAlignedPageSizeForDram) {
+    BufferConfig config = {.num_pages = 1250, .page_size = 200, .buftype = BufferType::DRAM};
 
     EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device, *this->cq, config));
 }
@@ -183,20 +173,12 @@ TEST_F(CommandQueueHarness, TestWrapHostHugepageOnEnqueueReadBuffer) {
 namespace l1_tests {
 
 TEST_F(CommandQueueHarness, WriteOneTileToL1Bank0) {
-    if (this->arch != tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
-
     BufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::L1};
 
     EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device, *this->cq, config));
 }
 
 TEST_F(CommandQueueHarness, WriteOneTileToAllL1Banks) {
-    if (this->arch != tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
-
     BufferConfig config = {
         .num_pages = u32(this->device->cluster()->get_soc_desc(this->pcie_id).compute_and_storage_cores.size()),
         .page_size = 2048,
@@ -206,14 +188,16 @@ TEST_F(CommandQueueHarness, WriteOneTileToAllL1Banks) {
 }
 
 TEST_F(CommandQueueHarness, WriteOneTileToAllL1BanksTwiceRoundRobin) {
-    if (this->arch != tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
-
     BufferConfig config = {
         .num_pages = 2 * u32(this->device->cluster()->get_soc_desc(this->pcie_id).compute_and_storage_cores.size()),
         .page_size = 2048,
         .buftype = BufferType::L1};
+
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device, *this->cq, config));
+}
+
+TEST_F(CommandQueueHarness, TestNon32BAlignedPageSizeForL1) {
+    BufferConfig config = {.num_pages = 1250, .page_size = 200, .buftype = BufferType::L1};
 
     EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device, *this->cq, config));
 }

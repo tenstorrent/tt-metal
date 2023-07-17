@@ -1,10 +1,9 @@
 #include "debug_tools.hpp"
+#include "tt_metal/detail/program.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/program.hpp"
-#include "tt_metal/llrt/tt_debug_print_server.hpp"
 #include "tt_metal/impl/buffers/semaphore.hpp"
-#include "debug_tools.hpp"
+#include "tt_metal/llrt/tt_debug_print_server.hpp"
 
 u64 get_noc_multicast_encoding(const CoreCoord& top_left, const CoreCoord& bottom_right) {
     return NOC_MULTICAST_ENCODING(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
@@ -135,7 +134,7 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
         }
     };
 
-    auto write_cb_config_transfer = [&](const CircularBuffer &cb) {
+    auto write_cb_config_transfer = [&](const CircularBuffer& cb) {
         u32 num_bytes_so_far = program_vector.size() * sizeof(u32);
         u32 num_new_bytes = 16;
 
@@ -215,7 +214,6 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
                 .at(TransferType::SEM)
                 .push_back(
                     std::make_tuple(sem.address(), start_in_bytes, 4, noc_multicast_encoding, core_range.size()));
-
         }
         start_in_bytes += 16;
         sections.at(current_section_idx).size_in_bytes += 16;
@@ -243,11 +241,11 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
         write_program_kernel_transfer(kernel, riscv_type);
     }
 
-    for (const CircularBuffer &cb : program.circular_buffers()) {
+    for (const CircularBuffer& cb : program.circular_buffers()) {
         write_cb_config_transfer(cb);
     }
 
-    for (auto sem: program.semaphores()) {
+    for (auto sem : program.semaphores()) {
         write_sem_config_transfer(sem);
     }
 
@@ -275,15 +273,19 @@ EnqueueReadBufferCommand::EnqueueReadBufferCommand(
 
 const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(u32 dst_address) {
     DeviceCommand command;
-    command.set_data_size_in_bytes(this->buffer.size());
+
+    u32 num_pages = this->buffer.size() / this->buffer.page_size();
+    u32 padded_page_size = align(this->buffer.page_size(), 32);
+    u32 data_size_in_bytes = padded_page_size * num_pages;
+    command.set_data_size_in_bytes(data_size_in_bytes);
 
     u32 starting_bank_id = 0;
     u32 remainder_burst_size;
     u32 available_l1 = MEM_L1_SIZE - DEVICE_COMMAND_DATA_ADDR;
     u32 potential_burst_size = available_l1;
-    u32 remaining_buffer_size = this->buffer.size();
-    u32 num_pages_per_burst = potential_burst_size / this->buffer.page_size();
-    u32 burst_size = num_pages_per_burst * this->buffer.page_size();
+    u32 remaining_buffer_size = data_size_in_bytes;
+    u32 num_pages_per_burst = potential_burst_size / padded_page_size;
+    u32 burst_size = num_pages_per_burst * padded_page_size;
     do {
         u32 num_bursts = remaining_buffer_size / available_l1;
         remainder_burst_size = remaining_buffer_size - (num_bursts * burst_size);
@@ -309,7 +311,7 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(u32 dst_ad
             num_bursts,
             burst_size,
             num_pages_per_burst,
-            this->buffer.page_size(),
+            padded_page_size,
             remainder_burst_size,
             num_pages_per_remainder_burst,
             (u32)(this->buffer.buffer_type()),
@@ -329,7 +331,11 @@ void EnqueueReadBufferCommand::process() {
     this->read_buffer_addr = system_memory_temporary_storage_address;
     const auto command_desc = this->assemble_device_command(system_memory_temporary_storage_address).get_desc();
     vector<u32> command_vector(command_desc.begin(), command_desc.end());
-    u32 cmd_size = DeviceCommand::size_in_bytes() + this->buffer.size();
+
+    u32 num_pages = this->buffer.size() / this->buffer.page_size();
+    u32 padded_page_size = align(this->buffer.page_size(), 32);
+    u32 data_size_in_bytes = padded_page_size * num_pages;
+    u32 cmd_size = DeviceCommand::size_in_bytes() + data_size_in_bytes;
 
     this->writer.cq_reserve_back(this->device, cmd_size);
     this->writer.cq_write(this->device, command_vector, write_ptr);
@@ -351,24 +357,31 @@ EnqueueWriteBufferCommand::EnqueueWriteBufferCommand(
 
 const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(u32 src_address) {
     DeviceCommand command;
-    command.set_data_size_in_bytes(this->buffer.size());
+
+    u32 num_pages = this->buffer.size() / this->buffer.page_size();
+    u32 padded_page_size = this->buffer.page_size();
+    if (this->buffer.page_size() != this->buffer.size()) {
+        padded_page_size = align(this->buffer.page_size(), 32);
+    }
+    u32 data_size_in_bytes = padded_page_size * num_pages;
+    command.set_data_size_in_bytes(data_size_in_bytes);
 
     u32 starting_bank_id = 0;
     u32 remainder_burst_size;
     u32 available_l1 = MEM_L1_SIZE - DEVICE_COMMAND_DATA_ADDR;
     u32 potential_burst_size = available_l1;
-    u32 remaining_buffer_size = this->buffer.size();
+    u32 remaining_buffer_size = data_size_in_bytes;
 
     do {
         u32 num_bursts = remaining_buffer_size / available_l1;
-        u32 num_pages_per_burst = potential_burst_size / this->buffer.page_size();
-        u32 burst_size = num_pages_per_burst * this->buffer.page_size();
+        u32 num_pages_per_burst = potential_burst_size / padded_page_size;
+        u32 burst_size = num_pages_per_burst * padded_page_size;
         remainder_burst_size = remaining_buffer_size - (num_bursts * burst_size);
 
         u32 num_pages_per_remainder_burst = 0;
         remaining_buffer_size = remainder_burst_size;
         if (remainder_burst_size <= available_l1) {
-            num_pages_per_remainder_burst = remainder_burst_size / this->buffer.page_size();
+            num_pages_per_remainder_burst = remainder_burst_size / padded_page_size;
         } else {
             remainder_burst_size = 0;
         }
@@ -386,7 +399,7 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(u32 src_a
             num_bursts,
             burst_size,
             num_pages_per_burst,
-            this->buffer.page_size(),
+            padded_page_size,
             remainder_burst_size,
             num_pages_per_remainder_burst,
             (u32)(this->buffer.buffer_type()),
@@ -406,10 +419,36 @@ void EnqueueWriteBufferCommand::process() {
     const auto command_desc = this->assemble_device_command(system_memory_temporary_storage_address).get_desc();
     vector<u32> command_vector(command_desc.begin(), command_desc.end());
 
-    u32 cmd_size = DeviceCommand::size_in_bytes() + this->buffer.size();
+    u32 num_pages = this->buffer.size() / this->buffer.page_size();
+
+    u32 padded_page_size = this->buffer.page_size();
+    if (this->buffer.page_size() != this->buffer.size()) {
+        padded_page_size = align(this->buffer.page_size(), 32);
+    }
+
+    u32 data_size_in_bytes = padded_page_size * num_pages;
+
+    u32 cmd_size = DeviceCommand::size_in_bytes() + data_size_in_bytes;
     this->writer.cq_reserve_back(this->device, cmd_size);
     this->writer.cq_write(this->device, command_vector, write_ptr);
-    this->writer.cq_write(this->device, this->src, system_memory_temporary_storage_address);
+
+    // Need to deal with the edge case where our page
+    // size is not 32B aligned
+    if (this->buffer.page_size() % 32 != 0 and this->buffer.page_size() != this->buffer.size()) {
+        vector<u32>::const_iterator src_iterator = this->src.begin();
+        u32 num_u32s_in_page = this->buffer.page_size() / sizeof(u32);
+        u32 num_pages = this->buffer.size() / this->buffer.page_size();
+        u32 dst = system_memory_temporary_storage_address;
+        for (u32 i = 0; i < num_pages; i++) {
+            vector<u32> src_page(src_iterator, src_iterator + num_u32s_in_page);
+            this->writer.cq_write(this->device, src_page, dst);
+            src_iterator += num_u32s_in_page;
+            dst = align(dst + this->buffer.page_size(), 32);
+        }
+    } else {
+        this->writer.cq_write(this->device, this->src, system_memory_temporary_storage_address);
+    }
+
     this->writer.cq_push_back(this->device, cmd_size);
 }
 
@@ -576,7 +615,7 @@ void EnqueueWrapCommand::process() {
     // Since all of the values will be 0, this will be equivalent to
     // a bunch of NOPs
     vector<u32> command_vector(space_left / sizeof(u32), 0);
-    command_vector.at(0) = 1; // wrap
+    command_vector.at(0) = 1;  // wrap
 
     this->writer.cq_reserve_back(this->device, space_left);
     this->writer.cq_write(this->device, command_vector, write_ptr);
@@ -639,7 +678,7 @@ void send_dispatch_kernel_to_device(Device* device) {
 CommandQueue::CommandQueue(Device* device) {
     // Setting read/write pointers to 6, zeroing out finish
     vector<u32> pointers(96 / sizeof(u32), 0);
-    pointers[0] = 6; // rd ptr
+    pointers[0] = 6;  // rd ptr
     device->cluster()->write_sysmem_vec(pointers, 0, 0);
 
     send_dispatch_kernel_to_device(device);
@@ -682,7 +721,25 @@ void CommandQueue::enqueue_read_buffer(Buffer& buffer, vector<u32>& dst, bool bl
     TT_ASSERT(blocking, "EnqueueReadBuffer only has support for blocking mode currently");
     this->enqueue_command(command, blocking);
 
-    this->device->cluster()->read_sysmem_vec(dst, command->read_buffer_addr, command->buffer.size(), 0);
+    u32 num_pages = buffer.size() / buffer.page_size();
+    u32 padded_page_size = align(buffer.page_size(), 32);
+    u32 data_size_in_bytes = padded_page_size * num_pages;
+
+    this->device->cluster()->read_sysmem_vec(dst, command->read_buffer_addr, data_size_in_bytes, 0);
+
+    // This vector is potentially padded due to alignment constraints, so need to now remove the padding
+    if ((buffer.page_size() % 32) != 0) {
+        vector<u32> new_dst(buffer.size() / sizeof(u32), 0);
+        u32 padded_page_size_in_u32s = align(buffer.page_size(), 32) / sizeof(u32);
+        u32 new_dst_counter = 0;
+        for (u32 i = 0; i < dst.size(); i += padded_page_size_in_u32s) {
+            for (u32 j = 0; j < buffer.page_size() / sizeof(u32); j++) {
+                new_dst[new_dst_counter] = dst[i + j];
+                new_dst_counter++;
+            }
+        }
+        dst = new_dst;
+    }
 }
 
 void CommandQueue::enqueue_write_buffer(Buffer& buffer, vector<u32>& src, bool blocking) {
@@ -795,13 +852,11 @@ void CommandQueue::wrap() {
 
 // OpenCL-like APIs
 void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& dst, bool blocking) {
-
     TT_ASSERT(blocking, "Non-blocking EnqueueReadBuffer not yet supported");
     cq.enqueue_read_buffer(buffer, dst, blocking);
 }
 
 void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& src, bool blocking) {
-
     cq.enqueue_write_buffer(buffer, src, blocking);
 }
 
@@ -814,9 +869,9 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
             DISPATCH_MAP_DUMP != nullptr,
             "Cannot compare dispatch device output to host when dispatch map dump not enabled");
 
-        auto hart_mask = DPRINT_HART_BR;
 
         string device_dispatch_dump_file = "device_" + string(DISPATCH_MAP_DUMP);
+        auto hart_mask = DPRINT_HART_BR;
         tt_start_debug_print_server(cq.device->cluster(), {0}, {{1, 11}}, hart_mask, device_dispatch_dump_file.c_str());
     }
 
@@ -828,6 +883,4 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
     }
 }
 
-void Finish(CommandQueue& cq) {
-    cq.finish();
-}
+void Finish(CommandQueue& cq) { cq.finish(); }
