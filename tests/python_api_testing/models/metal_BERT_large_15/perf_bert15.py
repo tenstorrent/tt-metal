@@ -49,9 +49,11 @@ dtype = ttl.tensor.DataType.BFLOAT16
 mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
 model_location_generator = model_location_generator_
 
+
 @pytest.mark.parametrize(
     "expected_inference_time",
-    ([0.24]),)
+    ([0.24]),
+)
 def test_perf(use_program_cache, expected_inference_time):
     model_config = get_model_config(dtype, mem_config)
 
@@ -109,6 +111,7 @@ def test_perf(use_program_cache, expected_inference_time):
         tt_output = tt_model(1, *tt_input)
         ttl.device.Synchronize()
         profiler.end(second_key, force_enable=True)
+        del tt_output
 
     first_iter_time = profiler.get(first_key)
     second_iter_time = profiler.get(second_key)
