@@ -3,7 +3,7 @@ name: Run models on bare metal only for functionality check
 on:
   workflow_dispatch:
   push:
-    branches: ["main", "rkim/1695-bert-pipeline"]
+    branches: ["main"]
   schedule:
     - cron: "0 4 * * *"
 
