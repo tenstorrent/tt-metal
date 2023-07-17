@@ -3,7 +3,7 @@
 PROFILER_INCLUDES = $(BASE_INCLUDES)
 
 PROFILER_LIB = $(LIBDIR)/tools/libprofiler.a
-PROFILER_DEFINES = -DGIT_HASH=$(shell git rev-parse HEAD)
+PROFILER_DEFINES =
 PROFILER_INCLUDES += -Itools/profiler
 PROFILER_CFLAGS = $(CFLAGS) -Werror
 

@@ -18,7 +18,7 @@ ifeq ("$(ARCH_NAME)", "wormhole")
 endif
 
 COMMON_LIB = $(LIBDIR)/libcommon.a
-COMMON_DEFINES = -DGIT_HASH=$(shell git rev-parse HEAD)
+COMMON_DEFINES =
 COMMON_INCLUDES += -I$(TT_METAL_HOME)/tt_metal/common/.
 COMMON_LDFLAGS = -lyaml-cpp
 COMMON_CFLAGS = $(CFLAGS) -Werror

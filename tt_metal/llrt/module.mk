@@ -1,7 +1,7 @@
 # Every variable in subdir must be prefixed with subdir (emulating a namespace)
 
 LLRT_LIB = $(LIBDIR)/libllrt.a
-LLRT_DEFINES = -DGIT_HASH=$(shell git rev-parse HEAD)
+LLRT_DEFINES =
 LLRT_INCLUDES = $(COMMON_INCLUDES) -I$(TT_METAL_HOME)/tt_metal/llrt
 LLRT_LDFLAGS = -L$(TT_METAL_HOME) -ltt_gdb -ldevice -lcommon
 LLRT_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast

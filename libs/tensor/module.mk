@@ -6,7 +6,7 @@ TENSOR_SRCS = \
 	libs/tensor/tensor_utils.cpp \
 
 TENSOR_LIB = $(LIBDIR)/libtensor.a
-TENSOR_DEFINES = -DGIT_HASH=$(shell git rev-parse HEAD)
+TENSOR_DEFINES =
 TENSOR_INCLUDES = $(LIBS_INCLUDES)
 TENSOR_LDFLAGS = -lcommon -lllrt -ltt_metal
 TENSOR_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast

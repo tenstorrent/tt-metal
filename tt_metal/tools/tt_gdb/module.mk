@@ -1,7 +1,7 @@
 # Every variable in subdir must be prefixed with subdir (emulating a namespace)
 
 TT_GDB_LIB = $(LIBDIR)/libtt_gdb.a
-TT_GDB_DEFINES = -DGIT_HASH=$(shell git rev-parse HEAD)
+TT_GDB_DEFINES =
 TT_GDB_INCLUDES = $(COMMON_INCLUDES) -I$(TT_METAL_HOME)/tt_metal/tools/tt_gdb -I$(TT_METAL_HOME)/tt_metal/third_party/json
 TT_GDB_LDFLAGS = -L$(TT_METAL_HOME) -lcommon -lllrt -ltt_metal
 TT_GDB_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast

@@ -1,5 +1,5 @@
 TT_LIB_LIB = $(LIBDIR)/libtt_lib_csrc.so
-TT_LIB_DEFINES = -DGIT_HASH=$(shell git rev-parse HEAD)
+TT_LIB_DEFINES =
 TT_LIB_INCLUDES = $(LIBS_INCLUDES) $(shell python3-config --includes) -Itt_metal/third_party/pybind11/include
 TT_LIB_LDFLAGS = $(LDFLAGS) -ltt_dnn -ldtx -ltensor -ltt_metal -lyaml-cpp
 TT_LIB_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
