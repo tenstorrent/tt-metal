@@ -155,22 +155,58 @@ Tensor reduce(const Tensor &input_tensor, ReduceOpMath::Enum reduce_math, Reduce
 }
 
 Tensor sum(const Tensor &input_tensor, uint dim) {
-    TT_ASSERT( dim <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
+    TT_ASSERT( dim >= 0 && dim <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
     constexpr float scaler1 = 1.0;
 
     if ( dim == 3 ) {
         return reduce(input_tensor,ReduceOpMath::SUM,ReduceOpDim::W,scaler1);
     } else if ( dim == 2 ) {
         return reduce(input_tensor,ReduceOpMath::SUM,ReduceOpDim::H,scaler1);
-    } else if ( dim == 1 ) {
-        Tensor fw_transpose = transpose_cw(input_tensor);
-        Tensor result = sum(fw_transpose,3);
-        return transpose_cw(result);
+    }
+
+    // Other sum dims will autoformat first before doing composite operations
+    Device * device;
+
+    // Get the device
+    if (input_tensor.storage_type() == StorageType::HOST) {
+        device = AutoFormat::GetDefaultDevice();
+        TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
     } else {
-        TT_ASSERT( dim == 0 , "first dimension sum");
-        Tensor fw_transpose = transpose_nw(input_tensor);
-        Tensor result = sum(fw_transpose,3);
-        return transpose_nw(result);
+        device = input_tensor.device();
+    }
+
+    // @tt-aho TODO: Profile/determine which is more performant
+    // reduce sum on h
+    // 1 extra transpose wh and reduce sum on w
+    // Fused tranpose cw and reduce sum on w
+    if ( dim == 1 ) {
+        // Pad before running the op to only pay cost of formatting once
+        auto input_tensor_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.shape(), true);
+        auto out_shape = input_tensor.shape();
+        out_shape[1] = 1;
+
+        auto formatted_input_tensor = input_tensor;
+        if (AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
+            formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, 0);
+        }
+        Tensor output = transpose_hc(formatted_input_tensor);
+        output = sum(output, 2);
+        output = transpose_hc(output);
+        return AutoFormat::format_output_tensor(output, out_shape, device);
+    } else {
+        // Pad before running the op to only pay cost of formatting once
+        auto input_tensor_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.shape(), false, true);
+        auto out_shape = input_tensor.shape();
+        out_shape[0] = 1;
+
+        auto formatted_input_tensor = input_tensor;
+        if (AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
+            formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, 0);
+        }
+        Tensor output = transpose_nh(input_tensor);
+        output = sum(output, 2);
+        output = transpose_nh(output);
+        return AutoFormat::format_output_tensor(output, out_shape, device);
     }
 }
 

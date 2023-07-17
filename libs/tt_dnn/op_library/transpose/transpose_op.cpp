@@ -15,13 +15,18 @@ void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operands to transpose need to be on device!");
     TT_ASSERT(input_tensor.buffer() != nullptr , "Operands to transpose need to be allocated in buffers on device!");
     const auto shape = input_tensor.shape();
-    u32 W = shape[3], H = shape[2], C = shape[3], NC = shape[1]*shape[0];
+    u32 W = shape[3], H = shape[2], C = shape[1], N = shape[0];
     u32 HW = H*W;
     TT_ASSERT(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
-    TT_ASSERT(H > 0 && W > 0 && NC > 0);
     TT_ASSERT(input_tensor.volume() % TILE_HW == 0);
     if (this->dim == TransposeOpDim::HC) {
         TT_ASSERT(C % TILE_HEIGHT == 0);
+    } else if (this->dim == TransposeOpDim::CW) {
+        TT_ASSERT(C % TILE_WIDTH == 0);
+    } else if (this->dim == TransposeOpDim::NH) {
+        TT_ASSERT(N % TILE_HEIGHT == 0);
+    } else if (this->dim == TransposeOpDim::NW) {
+        TT_ASSERT(N % TILE_WIDTH == 0);
     }
 }
 
@@ -107,8 +112,8 @@ tt::stl::reflection::Attributes Transpose::attributes() const {
 
 inline Tensor transpose_(const Tensor &a, TransposeOpDim::Enum transpose_dim) {
 
-    // No-op (Will do a tensor copy)
-    // TODO: We need to run asserts before this
+    bool pad_c = false;
+    bool pad_n = false;
     switch (transpose_dim) {
         case TransposeOpDim::CN:
             if (a.shape()[0] == 1 && a.shape()[1] == 1) {
@@ -119,6 +124,7 @@ inline Tensor transpose_(const Tensor &a, TransposeOpDim::Enum transpose_dim) {
             if (a.shape()[1] == 1 && a.shape()[2] == 1) {
                 return a;
             }
+            pad_c = true;
             break;
         case TransposeOpDim::WH:
             if (a.shape()[2] == 1 && a.shape()[3] == 1) {
@@ -129,22 +135,29 @@ inline Tensor transpose_(const Tensor &a, TransposeOpDim::Enum transpose_dim) {
             if (a.shape()[0] == 1 && a.shape()[2] == 1) {
                 return a;
             }
+            return transpose_nh(a);
+            pad_n = true;
             break;
         case TransposeOpDim::NW:
             if (a.shape()[0] == 1 && a.shape()[3] == 1) {
                 return a;
             }
+            return transpose_nw(a);
+            pad_n = true;
             break;
         case TransposeOpDim::CW:
             if (a.shape()[1] == 1 && a.shape()[3] == 1) {
                 return a;
             }
+            return transpose_cw(a);
+            pad_c = true;
             break;
         default:
             TT_ASSERT( false && "unexpected operator mode for transpose ");
     }
 
-    return operation::run_with_autoformat(Transpose{transpose_dim}, {a}, {}, 0, transpose_dim != TransposeOpDim::WH).at(0);
+    // TODO: Add pad_n to run_with_autoformat when needed
+    return operation::run_with_autoformat(Transpose{transpose_dim}, {a}, {}, 0, pad_c /*, pad_n */).at(0);
 }
 
 // provide access to transposes on a [n,c,h,w] ranked tensor @a
@@ -194,7 +207,6 @@ Tensor transpose_wh(const Tensor &a) { return transpose_(a, TransposeOpDim::WH);
 Tensor transpose_hc(const Tensor &a) { return transpose_(a, TransposeOpDim::HC); }
 Tensor transpose_cn(const Tensor &a) { return transpose_(a, TransposeOpDim::CN); }
 
-  //Tensor permute(const Tensor &a, uint32_t N, uint32_t C, uint32_t H, uint32_t W);
 Tensor transpose_nh(const Tensor &a) { return permute(a,2,1,0,3); }
 Tensor transpose_nw(const Tensor &a) { return permute(a,3,1,2,0); }
 Tensor transpose_cw(const Tensor &a) { return permute(a,0,3,2,1); }

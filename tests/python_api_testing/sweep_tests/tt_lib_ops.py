@@ -2449,14 +2449,11 @@ def sum(x, *args, dim, host, device, dtype, layout, on_device, **kwargs):
         t1.shape()
     )
 
-    if dim == 0:
-        return output[0, :, :, :]
-    if dim == 1:
-        return output[:, 0, :, :]
     if dim == 2:
-        return output[:, :, 0, :]
-    assert dim == 3
-    return output[:, :, :, 0]
+        output = output[:, :, 0, :]
+    elif dim == 3:
+        output = output[:, :, :, 0]
+    return output
 
 
 @setup_host_and_device
