@@ -26,7 +26,7 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
 struct EltwiseBinary {
     const BinaryOpType::Enum op_type;
 
-  BinaryOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor& a, const Tensor& b ) const;
+    BinaryOpParallelizationStrategy::Enum get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<Shape> compute_output_shapes(

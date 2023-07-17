@@ -88,7 +88,7 @@ operation::ProgramWithCallbacks EltwiseBinary::create_program(const std::vector<
     const auto& input_tensor_b = input_tensors.at(1);
     auto& output_tensor = output_tensors.at(0);
 
-    switch (get_parallelization_strategy(input_tensor_a, input_tensor_b)) {
+    switch (this->get_parallelization_strategy(input_tensors)) {
         case BinaryOpParallelizationStrategy::MULTI_CORE:
             return eltwise_binary_multi_core(input_tensor_a, input_tensor_b, output_tensor, this->op_type);
             break;
@@ -104,8 +104,8 @@ operation::Hash EltwiseBinary::compute_program_hash(const std::vector<Tensor> &i
 }
 
 
-BinaryOpParallelizationStrategy::Enum EltwiseBinary::get_parallelization_strategy(const Tensor& input_tensor_a,const Tensor& input_tensor_b) const {
-
+BinaryOpParallelizationStrategy::Enum EltwiseBinary::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
     uint32_t num_tiles = input_tensor_a.volume() / TILE_HW;
     if(num_tiles > 1){
            return BinaryOpParallelizationStrategy::MULTI_CORE;
