@@ -14,29 +14,32 @@ using namespace tt;
 
 operation::ProgramWithCallbacks create_program(
     tt_metal::Device *device,
-    tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
-    uint32_t single_tile_size,
     CoreCoord core_range,
     uint32_t B, uint32_t M, uint32_t N, uint32_t K,
     bool bcast_batch,
     uint32_t in0_block_w,
     uint32_t out_subblock_h, uint32_t out_subblock_w,
     uint32_t per_core_M, uint32_t per_core_N,
-    tt_metal::Buffer* in0_buffer, tt_metal::Buffer* in1_buffer, tt_metal::Buffer* out_buffer
+    tt_metal::Buffer* in0_buffer, tt_metal::Buffer* in1_buffer, tt_metal::Buffer* out_buffer,
+    tt::DataFormat in0_data_format, tt::DataFormat in1_data_format, tt::DataFormat output_data_format
 ) {
 
     tt_metal::Program program{};
 
+    uint32_t in0_single_tile_size = tt_metal::TileSize(in0_data_format);
+    uint32_t in1_single_tile_size = tt_metal::TileSize(in1_data_format);
+    uint32_t output_single_tile_size = tt_metal::TileSize(output_data_format);
+
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles * 2; // double buffer
-    uint32_t in0_CB_size = in0_CB_tiles * single_tile_size;
+    uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
     uint32_t in1_block_tiles = per_core_N * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles * 2; // double buffer
-    uint32_t in1_CB_size = in1_CB_tiles * single_tile_size;
+    uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
     uint32_t out_block_tiles = per_core_M * per_core_N;
     uint32_t out_CB_tiles = out_block_tiles; // No double buffer
-    uint32_t out_CB_size = out_CB_tiles * single_tile_size;
+    uint32_t out_CB_size = out_CB_tiles * output_single_tile_size;
 
 
     // Compute kernel compile time args
@@ -84,10 +87,15 @@ operation::ProgramWithCallbacks create_program(
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> reader_compile_time_args = {
+        // interleaved accessor args
+        (std::uint32_t) static_cast<uint32_t>(in0_data_format),
+        (std::uint32_t) in0_is_dram,
+    };
     std::vector<uint32_t> reader_writer_compile_time_args = {
         // interleaved accessor args
-        (std::uint32_t) static_cast<uint32_t>(cb_data_format),
-        (std::uint32_t) in0_is_dram,
+        (std::uint32_t) static_cast<uint32_t>(in1_data_format),
+        (std::uint32_t) static_cast<uint32_t>(output_data_format),
         (std::uint32_t) in1_is_dram,
         (std::uint32_t) out_is_dram
     };
@@ -97,7 +105,7 @@ operation::ProgramWithCallbacks create_program(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0.cpp",
         left_half,
-        reader_writer_compile_time_args,
+        reader_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_0_default
     );
@@ -116,7 +124,7 @@ operation::ProgramWithCallbacks create_program(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0.cpp",
         right_half,
-        reader_writer_compile_time_args,
+        reader_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default
     );
@@ -171,7 +179,7 @@ operation::ProgramWithCallbacks create_program(
     bool math_approx_mode = false;
     auto mm_kernel_group_1 = tt_metal::CreateComputeKernel(
         program,
-        "tt_metal/kernels/compute/bmm_large_block_zm.cpp",
+        "tt_metal/kernels/compute/bmm_large_block_zm_mixed_precision.cpp",
         core_group_1,
         compute_kernel_args_group_1,
         math_fidelity,
@@ -180,7 +188,7 @@ operation::ProgramWithCallbacks create_program(
     );
     auto mm_kernel_group_2 = tt_metal::CreateComputeKernel(
         program,
-        "tt_metal/kernels/compute/bmm_large_block_zm.cpp",
+        "tt_metal/kernels/compute/bmm_large_block_zm_mixed_precision.cpp",
         core_group_2,
         compute_kernel_args_group_2,
         math_fidelity,
@@ -196,7 +204,7 @@ operation::ProgramWithCallbacks create_program(
         all_cores,
         in0_CB_tiles,
         in0_CB_size,
-        cb_data_format
+        in0_data_format
     );
 
     uint32_t src1_cb_index = 1;
@@ -206,7 +214,7 @@ operation::ProgramWithCallbacks create_program(
         all_cores,
         in1_CB_tiles,
         in1_CB_size,
-        cb_data_format
+        in1_data_format
     );
 
     uint32_t output_cb_index = 16; // output operands start at index 16
@@ -217,7 +225,7 @@ operation::ProgramWithCallbacks create_program(
         all_cores,
         out_CB_tiles,
         out_CB_size,
-        cb_data_format
+        output_data_format
     );
 
     std::vector<DataMovementKernel*> reader_kernels;
@@ -300,7 +308,7 @@ operation::ProgramWithCallbacks create_program(
                 program,
                 "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0.cpp",
                 core,
-                reader_writer_compile_time_args,
+                reader_compile_time_args,
                 tt_metal::DataMovementProcessor::RISCV_1,
                 tt_metal::NOC::RISCV_1_default
             );
@@ -324,7 +332,7 @@ operation::ProgramWithCallbacks create_program(
                 program,
                 "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0.cpp",
                 core,
-                reader_writer_compile_time_args,
+                reader_compile_time_args,
                 tt_metal::DataMovementProcessor::RISCV_1,
                 tt_metal::NOC::RISCV_0_default
             );
@@ -349,7 +357,7 @@ operation::ProgramWithCallbacks create_program(
             program,
             "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0.cpp",
             core,
-            reader_writer_compile_time_args,
+            reader_compile_time_args,
             tt_metal::DataMovementProcessor::RISCV_1,
             num_output_blocks_per_core[i] > num_evenly_divided_output_blocks ? tt_metal::NOC::RISCV_1_default : tt_metal::NOC::RISCV_0_default);
 
@@ -420,20 +428,21 @@ namespace tt {
 namespace tt_metal {
 
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_bert_large_(const Tensor &a, const Tensor &b, const Shape &ashape, const Shape &bshape, Tensor& output, bool bcast_batch, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
+operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_bert_large_(const Tensor &a, const Tensor &b, const Shape &ashape, const Shape &bshape, Tensor& output, bool bcast_batch, CoreCoord compute_and_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
 
     // Pass in a and b shapes instead
-    // const auto& ashape = a.shape(), bshape = b.shape();
 
     TT_ASSERT(bcast_batch == false, "Bcast batch not supported for this parallelization");
 
+    // CB dataformats
+    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype()); // in0
+    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype()); // in1
+    tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output_dtype); // output
+
     tt_metal::Device *device = a.device();
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    //if (cb_data_format != output_cb_data_format) {
-    //    log_warning("Input tensor datatype does not match target output dataformat. Defaulting to input dataformat.");
-    //}
-    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
+    uint32_t in0_single_tile_size = tt_metal::TileSize(in0_data_format);
+    uint32_t in1_single_tile_size = tt_metal::TileSize(in1_data_format);
     tt_metal::Buffer *in0_buffer = a.buffer();
     tt_metal::Buffer *in1_buffer = b.buffer();
     if (bcast_batch)
@@ -443,6 +452,14 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_bert_large_(co
         TT_ASSERT(ashape[1] == bshape[1] && ashape[0] == bshape[0]
             && "bmm (non-bcast matmul) expects input tensors of shapes BCMK*BCKN=BCMN");
     }
+    TT_ASSERT(in0_buffer->size() % in0_single_tile_size == 0);
+    TT_ASSERT(in1_buffer->size() % in1_single_tile_size == 0);
+
+    TT_ASSERT(ashape[3] == bshape[2], "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
+    TT_ASSERT(ashape[2] % TILE_HEIGHT == 0);
+    TT_ASSERT(ashape[3] % TILE_WIDTH == 0);
+    TT_ASSERT(bshape[2] % TILE_HEIGHT == 0);
+    TT_ASSERT(bshape[3] % TILE_WIDTH == 0);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Matmul Parameters Setup
@@ -481,21 +498,20 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_bert_large_(co
     ////////////////////////////////////////////////////////////////////////////
     return reuse_optimized_bert_large_helpers::create_program(
         device,
-        cb_data_format,
         math_fidelity,
-        single_tile_size,
         core_range,
         B, Mt, Nt, Kt,
         bcast_batch,
         in0_block_w,
         out_subblock_h, out_subblock_w,
         per_core_M, per_core_N,
-        in0_buffer, in1_buffer, out_buffer
+        in0_buffer, in1_buffer, out_buffer,
+        in0_data_format, in1_data_format, output_data_format
     );
 }
 
 // matmul_multi_core_reuse_optimized_bert_large not used
-operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized_bert_large(const Tensor& a, const Tensor& b, const Shape& ashape, const Shape& bshape, Tensor& output, CoreCoord compute_and_storage_grid_size, tt::DataFormat output_cb_data_format, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
+operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized_bert_large(const Tensor& a, const Tensor& b, const Shape& ashape, const Shape& bshape, Tensor& output, CoreCoord compute_and_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
     /*
      * For pre-softmax and post-softmax bmm, do an additional no-op reshape by changing cshape and ashape
      * - pre-softmax: [9, 16, 384, 64] x [9, 16, 64, 384] = ([9, 16, 384, 384] -> [9, 1, 6144, 384])
@@ -503,7 +519,7 @@ operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized_bert_large(const 
      * NOTE: Only need to pass in the right cshape and ashape for these no-op reshapes.
      * The actual bmm op works on [9, 16, 384, 64] x [9, 16, 64, 384] and [9, 16, 384, 384] x [9, 16, 384, 64].
     */
-    return matmul_multi_core_reuse_optimized_bert_large_(a, b, ashape, bshape, output, false, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
+    return matmul_multi_core_reuse_optimized_bert_large_(a, b, ashape, bshape, output, false, compute_and_storage_grid_size, output_dtype, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
 }
 
 }  // namespace tt_metal

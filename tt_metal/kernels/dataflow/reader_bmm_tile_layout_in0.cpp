@@ -41,21 +41,19 @@ void kernel_main() {
 
     // COMPILE TIME ARGS
     // interleaved accessor args
-    constexpr DataFormat data_format                      = static_cast<DataFormat>(get_compile_time_arg_val(0));
-    constexpr bool in0_is_dram                        = get_compile_time_arg_val(1) == 1;
-    constexpr bool in1_is_dram                        = get_compile_time_arg_val(2) == 1; // not used
-    constexpr bool out_is_dram                        = get_compile_time_arg_val(3) == 1; // not used
+    constexpr DataFormat in0_data_format        = static_cast<DataFormat>(get_compile_time_arg_val(0));
+    constexpr bool in0_is_dram                  = get_compile_time_arg_val(1) == 1;
 
     constexpr uint32_t cb_id_in0 = 0;
 
-    uint32_t single_tile_size_bytes = get_tile_size(cb_id_in0);
+    uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
 
     uint32_t l1_write_addr_in0;
 
     const InterleavedAddrGenFast<in0_is_dram> s0 = {
         .bank_base_address = in0_tensor_addr,
-        .page_size = single_tile_size_bytes,
-        .data_format = data_format
+        .page_size = in0_single_tile_size_bytes,
+        .data_format = in0_data_format
     };
 
     for (uint32_t b = 0; b < batch; b++) {
@@ -69,11 +67,9 @@ void kernel_main() {
             for(uint32_t h = 0; h < in0_block_h; h++) {
                 uint32_t in0_tensor_tile_id = in0_tensor_row_start_tile_id;
                 for(uint32_t w = 0; w < in0_block_w; w++) {
-                    //uint64_t in0_tile_noc_address = get_noc_addr(in0_tensor_tile_id, s0);
-                    //noc_async_read(in0_tile_noc_address, l1_write_addr_in0, single_tile_size_bytes);
                     noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_in0);
 
-                    l1_write_addr_in0 += single_tile_size_bytes;
+                    l1_write_addr_in0 += in0_single_tile_size_bytes;
                     in0_tensor_tile_id += in0_tensor_stride_w;
                 }
                 in0_tensor_row_start_tile_id += in0_tensor_stride_h;

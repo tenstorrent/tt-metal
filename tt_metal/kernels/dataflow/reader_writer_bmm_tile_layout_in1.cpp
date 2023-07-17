@@ -61,30 +61,30 @@ void kernel_main() {
 
     // COMPILE TIME ARGS
     // interleaved accessor args
-    constexpr DataFormat data_format                      = static_cast<DataFormat>(get_compile_time_arg_val(0));
-    constexpr bool in0_is_dram                        = get_compile_time_arg_val(1) == 1; // not used
-    constexpr bool in1_is_dram                        = get_compile_time_arg_val(2) == 1;
-    constexpr bool out_is_dram                        = get_compile_time_arg_val(3) == 1;
+    constexpr DataFormat in1_data_format        = static_cast<DataFormat>(get_compile_time_arg_val(0));
+    constexpr DataFormat output_data_format     = static_cast<DataFormat>(get_compile_time_arg_val(1));
+    constexpr bool in1_is_dram                  = get_compile_time_arg_val(2) == 1;
+    constexpr bool out_is_dram                  = get_compile_time_arg_val(3) == 1;
 
     constexpr uint32_t cb_id_in1 = 1;
 
     // WRITER
     constexpr uint32_t cb_id_out0 = 16;
 
-    uint32_t single_tile_size_bytes = get_tile_size(cb_id_in1);
-    // uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0); // Should be same
+    uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
+    uint32_t output_single_tile_size_bytes = get_tile_size(cb_id_out0);
 
     uint32_t l1_write_addr_in1;
 
     const InterleavedAddrGenFast<in1_is_dram> s1 = {
         .bank_base_address = in1_tensor_addr,
-        .page_size = single_tile_size_bytes,
-        .data_format = data_format
+        .page_size = in1_single_tile_size_bytes,
+        .data_format = in1_data_format
     };
     const InterleavedAddrGenFast<out_is_dram> s = {
         .bank_base_address = out_tensor_addr,
-        .page_size = single_tile_size_bytes,
-        .data_format = data_format
+        .page_size = output_single_tile_size_bytes,
+        .data_format = output_data_format
     };
 
 
@@ -99,11 +99,9 @@ void kernel_main() {
             for(uint32_t h = 0; h < in1_block_h; h++) {
                 uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
                 for(uint32_t w = 0; w < in1_block_w; w++) {
-                    //uint64_t in1_tile_noc_address = get_noc_addr(in1_tensor_tile_id, s1);
-                    //noc_async_read(in1_tile_noc_address, l1_write_addr_in1, single_tile_size_bytes);
                     noc_async_read_tile(in1_tensor_tile_id, s1, l1_write_addr_in1);
 
-                    l1_write_addr_in1 += single_tile_size_bytes;
+                    l1_write_addr_in1 += in1_single_tile_size_bytes;
                     in1_tensor_tile_id += in1_tensor_stride_w;
                 }
                 in1_tensor_row_start_tile_id += in1_tensor_stride_h;
@@ -132,11 +130,9 @@ void kernel_main() {
                 for(uint32_t h = 0; h < out_subblock_h; h++) {
                     uint32_t out_tensor_tile_id = out_tensor_sb_row_start_tile_id;
                     for(uint32_t w = 0; w < out_subblock_w; w++) {
-                        //uint64_t out_tensor_tile_noc_addr = get_noc_addr(out_tensor_tile_id, s);
-                        //noc_async_write(l1_read_addr, out_tensor_tile_noc_addr, single_tile_size_bytes);
                         noc_async_write_tile(out_tensor_tile_id, s, l1_read_addr);
 
-                        l1_read_addr+=single_tile_size_bytes;
+                        l1_read_addr+=output_single_tile_size_bytes;
 
                         out_tensor_tile_id += out_tensor_stride_w;
                     }

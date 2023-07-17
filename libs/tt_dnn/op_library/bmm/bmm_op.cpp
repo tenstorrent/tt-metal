@@ -485,7 +485,6 @@ operation::ProgramWithCallbacks BertLargeMatmul::create_program(
     auto device_compute_and_storage_grid_size = input_tensor_a.device()->compute_and_storage_grid_size();
     CoreCoord compute_and_storage_grid_size;
     tt::tt_metal::DataType output_dtype = this->output_dtype;
-    tt::DataFormat output_cb_data_format = tt::DataFormat::Bfp8_b; // TODO: Keep bmm the same; get rid of this
     MathFidelity math_fidelity = MathFidelity::LoFi;
     uint32_t in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N;
     bool fuse_batch = true;
@@ -535,7 +534,7 @@ operation::ProgramWithCallbacks BertLargeMatmul::create_program(
             out_subblock_w = 2;
             per_core_M = 12;
             per_core_N = 12;
-            return bmm_multi_core_reuse_optimized_bert_large(input_tensor_a, input_tensor_b, ashape, bshape, output_tensor, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
+            return bmm_multi_core_reuse_optimized_bert_large(input_tensor_a, input_tensor_b, ashape, bshape, output_tensor, compute_and_storage_grid_size, output_dtype, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
         case BertLargeMatmulOpType::POST_SOFTMAX_BMM:
             compute_and_storage_grid_size = {12, 9};
             TT_ASSERT((compute_and_storage_grid_size.x <= device_compute_and_storage_grid_size.x && compute_and_storage_grid_size.y <= device_compute_and_storage_grid_size.y), "Unsupported grid shape");
@@ -545,7 +544,7 @@ operation::ProgramWithCallbacks BertLargeMatmul::create_program(
             out_subblock_w = 2;
             per_core_M = 12;
             per_core_N = 2;
-            return bmm_multi_core_reuse_optimized_bert_large(input_tensor_a, input_tensor_b, ashape, bshape, output_tensor, compute_and_storage_grid_size, output_cb_data_format, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
+            return bmm_multi_core_reuse_optimized_bert_large(input_tensor_a, input_tensor_b, ashape, bshape, output_tensor, compute_and_storage_grid_size, output_dtype, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
         default:
             TT_ASSERT(false, "Unknown bert large matmul op in create_program!");
     }

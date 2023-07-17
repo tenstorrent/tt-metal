@@ -1,6 +1,7 @@
 #include <cstdint>
 
 #include "compute_kernel_api.h"
+
 namespace NAMESPACE {
 void MAIN {
 
@@ -21,12 +22,6 @@ void MAIN {
     uint32_t in1_cb_id = tt::CB::c_in1;
     uint32_t out_cb_id = tt::CB::c_out0;
     uint32_t mm_partials_cb_id = tt::CB::c_intermed0;
-    uint32_t mm_bias_intermediate_cb_id = tt::CB::c_intermed1;
-    uint32_t bias_cb_id = tt::CB::c_in3;
-
-    #ifdef FUSE_BIAS
-        init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(mm_bias_intermediate_cb_id, bias_cb_id);
-    #endif
 
     mm_init(in0_cb_id, in1_cb_id, out_cb_id);
 
@@ -78,45 +73,6 @@ void MAIN {
                     }
 
                     if (last_out) {
-
-                        #ifdef FUSE_BIAS
-                            // Move matmul result to interm buffer
-                            cb_reserve_back(mm_bias_intermediate_cb_id, out_subblock_num_tiles);
-                            for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                                pack_tile(i, mm_bias_intermediate_cb_id);
-                            }
-                            cb_push_back(mm_bias_intermediate_cb_id, out_subblock_num_tiles);
-                            release_dst(tt::DstMode::Half);
-
-                            // Redundant wait since we know data was just pushed
-                            cb_wait_front(mm_bias_intermediate_cb_id, out_subblock_num_tiles);
-                            cb_wait_front(bias_cb_id, in1_per_core_w);
-                            add_bcast_rows_init_short();
-                            // reconfigure unpacker df for src B
-                            unpack_reconfig_data_format(mm_bias_intermediate_cb_id, bias_cb_id);
-                            // reconfigure packer df for out
-                            pack_reconfig_data_format(out_cb_id);
-                            acquire_dst(tt::DstMode::Half);
-                            for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
-                                uint32_t bcast_tile_idx = in1_index_subblock_offset;
-                                for (uint32_t k = 0; k < out_subblock_w; k++, i++) {
-                                    add_tiles_bcast_rows(mm_bias_intermediate_cb_id, bias_cb_id, i, bcast_tile_idx, i);
-                                    bcast_tile_idx++;
-                                }
-                            }
-                            cb_pop_front(mm_bias_intermediate_cb_id, out_subblock_num_tiles);
-                            // reconfigure init for matmul
-                            mm_init_short();
-                            // reconfigure unpacker df for src B
-                            unpack_reconfig_data_format(in1_cb_id, in0_cb_id);
-                        #endif
-                        // TODO: Can easily generalize for other sfpu activations
-                        #ifdef FUSE_GELU_ACTIVATION
-                            gelu_tile_init();
-                            for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                                gelu_tile(i);
-                            }
-                        #endif
                         // Pack out to output buffer
                         cb_reserve_back(out_cb_id, out_subblock_num_tiles);
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {

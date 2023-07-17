@@ -94,7 +94,6 @@ void kernel_main() {
         volatile uint32_t* in3_mcast_sender_semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(in3_mcast_sender_semaphore_addr);
     #endif
 
-    constexpr uint32_t cb_id_in0 = 0; // ????
     constexpr uint32_t cb_id_in1 = 1;
     constexpr uint32_t cb_id_in2 = 2; // Dummy cb containing one tile of zeros for padding
 
