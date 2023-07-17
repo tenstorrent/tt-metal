@@ -50,27 +50,18 @@ def preprocess():
     return transform
 
 
-def read_classes():
-    """
-    Load the ImageNet class names.
-    """
-    with open(ROOT / "imagenet_classes.txt", "r") as f:
-        categories = [s.strip() for s in f.readlines()]
-    return categories
-
-
 def download_images(img_path):
     dataset = load_dataset("huggingface/cats-image")
     image = dataset["test"]["image"][0]
     image.save(img_path)
 
 
-def test_cpu_demo():
+def test_cpu_demo(imagenet_label_dict):
     img_path = ROOT / "input_image.jpg"
     download_images(img_path)
 
     model = load_efficientnet_model()
-    categories = read_classes()
+    categories = [imagenet_label_dict[key] for key in sorted(imagenet_label_dict.keys(), reverse=False)]
     transform = preprocess()
 
     image = cv2.imread(str(img_path))

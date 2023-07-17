@@ -48,22 +48,13 @@ def preprocess():
     return transform
 
 
-def read_classes():
-    """
-    Load the ImageNet class names.
-    """
-    with open(ROOT / "imagenet_classes.txt", "r") as f:
-        categories = [s.strip() for s in f.readlines()]
-    return categories
-
-
 def download_images(img_path):
     dataset = load_dataset("huggingface/cats-image")
     image = dataset["test"]["image"][0]
     image.save(img_path)
 
 
-def run_gs_demo(efficientnet_model_constructor):
+def run_gs_demo(efficientnet_model_constructor, imagenet_label_dict):
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
@@ -72,7 +63,7 @@ def run_gs_demo(efficientnet_model_constructor):
     download_images(img_path)
 
     model = efficientnet_model_constructor(device)
-    categories = read_classes()
+    categories = [imagenet_label_dict[key] for key in sorted(imagenet_label_dict.keys(), reverse=False)]
     transform = preprocess()
 
     image = cv2.imread(str(img_path))
@@ -120,5 +111,5 @@ def run_gs_demo(efficientnet_model_constructor):
     cv2.imwrite(str(ROOT / "out_image.jpg"), image)
 
 
-def test_gs_demo_b0():
-    run_gs_demo(efficientnet_b0)
+def test_gs_demo_b0(imagenet_label_dict):
+    run_gs_demo(efficientnet_b0, imagenet_label_dict)
