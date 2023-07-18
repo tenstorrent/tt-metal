@@ -11,15 +11,12 @@ constexpr std::uint32_t default_tile_dims[2] = {32, 32};
 
 struct llk_unpack_A_params_t {
     std::uint32_t unpA_operand;
-    const std::uint32_t in_tile_dims[2];
 };
 
 struct llk_unpack_AB_matmul_params_t {
     std::uint32_t unpA_operand;
     std::uint32_t unpB_operand;
     std::uint32_t transpose_xy_srca;
-    const std::uint32_t in0_tile_dims[2];
-    const std::uint32_t in1_tile_dims[2];
 };
 
 struct llk_unpack_AB_params_t {

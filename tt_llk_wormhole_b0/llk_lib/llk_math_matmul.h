@@ -330,12 +330,10 @@ inline void llk_math_matmul_init(std::uint32_t transpose=0, const std::uint32_t 
 }
 
 template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
-inline void llk_math_matmul(uint dst_index, const bool transpose=false, const std::uint32_t in0_tile_dims[2] = default_tile_dims, const std::uint32_t in1_tile_dims[2] = default_tile_dims, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
+inline void llk_math_matmul(uint dst_index, const bool transpose=false, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
     const bool reuse_a = ct_dim>=rt_dim;
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
     const std::uint32_t rut_dim = reuse_a ? ct_dim : rt_dim; //reuse-dim
-
-    //Todo: do something with input tile dims
 
     for (uint t = 0; t < t_dim; t++) {
         for (uint rut=0; rut<rut_dim; rut++) {

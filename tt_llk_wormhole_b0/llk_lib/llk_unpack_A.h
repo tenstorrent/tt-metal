@@ -197,11 +197,10 @@ inline void llk_unpack_A_hw_configure(const llk_unpack_A_params_t *unpack_A_para
 }
 
 template <bool is_fp32_dest_acc_en = false, bool srnd_fpu_en = false>
-inline void llk_unpack_A_hw_configure_disaggregated(const std::uint32_t unpA_operand, const int within_face_16x16_transpose = 0, const std::uint32_t in_tile_dims[2] = default_tile_dims) {
+inline void llk_unpack_A_hw_configure_disaggregated(const std::uint32_t unpA_operand, const int within_face_16x16_transpose = 0) {
 
     const llk_unpack_A_params_t unpack_A_params = {
-        .unpA_operand = unpA_operand,
-        .in_tile_dims = {in_tile_dims[0], in_tile_dims[1]}
+        .unpA_operand = unpA_operand
     };
     llk_unpack_A_hw_configure<is_fp32_dest_acc_en, srnd_fpu_en>(&unpack_A_params, within_face_16x16_transpose);
 }
