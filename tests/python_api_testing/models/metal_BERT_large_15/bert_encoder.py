@@ -78,25 +78,19 @@ class TtBertEncoder(torch.nn.Module):
             f"bert.encoder.layer.{encoder_idx}.attention.output.LayerNorm.bias"
         ]
         mha_gamma = gamma0.reshape(1, 1, -1, 32)
-        self.mha_gamma = (
-            ttl.tensor.Tensor(
-                mha_gamma.reshape(-1).tolist(),
-                mha_gamma.shape,
-                model_config["OP12_LAYERNORM_GAMMA_DTYPE"],
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(device, model_config["OP12_LAYERNORM_GAMMA_MEMCFG"])
-        )
+        self.mha_gamma = ttl.tensor.Tensor(
+            mha_gamma.reshape(-1).tolist(),
+            mha_gamma.shape,
+            model_config["OP12_LAYERNORM_GAMMA_DTYPE"],
+            ttl.tensor.Layout.ROW_MAJOR,
+        ).to(device, model_config["OP12_LAYERNORM_GAMMA_MEMCFG"])
         mha_beta = beta0.reshape(1, 1, -1, 32)
-        self.mha_beta = (
-            ttl.tensor.Tensor(
-                mha_beta.reshape(-1).tolist(),
-                mha_beta.shape,
-                model_config["OP12_LAYERNORM_BETA_DTYPE"],
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(device, model_config["OP12_LAYERNORM_BETA_MEMCFG"])
-        )
+        self.mha_beta = ttl.tensor.Tensor(
+            mha_beta.reshape(-1).tolist(),
+            mha_beta.shape,
+            model_config["OP12_LAYERNORM_BETA_DTYPE"],
+            ttl.tensor.Layout.ROW_MAJOR,
+        ).to(device, model_config["OP12_LAYERNORM_BETA_MEMCFG"])
 
         # FFN sub-graph
         self.ffn = TtFeedForwardModel(encoder_idx, state_dict, device, model_config)
@@ -105,25 +99,19 @@ class TtBertEncoder(torch.nn.Module):
         gamma1 = state_dict[f"bert.encoder.layer.{encoder_idx}.output.LayerNorm.weight"]
         beta1 = state_dict[f"bert.encoder.layer.{encoder_idx}.output.LayerNorm.bias"]
         ffn_gamma = gamma1.reshape(1, 1, -1, 32)
-        self.ffn_gamma = (
-            ttl.tensor.Tensor(
-                ffn_gamma.reshape(-1).tolist(),
-                ffn_gamma.shape,
-                model_config["OP15_LAYERNORM_GAMMA_DTYPE"],
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(device, model_config["OP15_LAYERNORM_GAMMA_MEMCFG"])
-        )
+        self.ffn_gamma = ttl.tensor.Tensor(
+            ffn_gamma.reshape(-1).tolist(),
+            ffn_gamma.shape,
+            model_config["OP15_LAYERNORM_GAMMA_DTYPE"],
+            ttl.tensor.Layout.ROW_MAJOR,
+        ).to(device, model_config["OP15_LAYERNORM_GAMMA_MEMCFG"])
         ffn_beta = beta1.reshape(1, 1, -1, 32)
-        self.ffn_beta = (
-            ttl.tensor.Tensor(
-                ffn_beta.reshape(-1).tolist(),
-                ffn_beta.shape,
-                model_config["OP15_LAYERNORM_BETA_DTYPE"],
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(device, model_config["OP15_LAYERNORM_BETA_MEMCFG"])
-        )
+        self.ffn_beta = ttl.tensor.Tensor(
+            ffn_beta.reshape(-1).tolist(),
+            ffn_beta.shape,
+            model_config["OP15_LAYERNORM_BETA_DTYPE"],
+            ttl.tensor.Layout.ROW_MAJOR,
+        ).to(device, model_config["OP15_LAYERNORM_BETA_MEMCFG"])
 
         self.layer_norm_eps = config.layer_norm_eps
 
@@ -136,6 +124,7 @@ class TtBertEncoder(torch.nn.Module):
             attention_output_weight,
             attention_output_bias,
             mem_config=self.model_config["OP11_SELFOUT_OUTPUT_MEMCFG"],
+            out_dtype=self.model_config["OP11_SELFOUT_OUTPUT_DTYPE"],
         )
         # profiler.end("__op11_mm_plus_bias")
 
@@ -294,24 +283,28 @@ def run_bert_encoder_inference(
     if not passing:
         logger.error(f"Output PCC < {pcc}")
 
-    if model_config["DEFAULT_DTYPE"] == ttl.tensor.DataType.BFLOAT8_B:
+    if model_config["DEFAULT_DTYPE"] == ttl.tensor.DataType.BFLOAT8_B and not passing:
         pytest.xfail("PCC is garbage for BFLOAT8_B. Numbers are for perf only!")
 
     assert passing
 
 
 @pytest.mark.parametrize(
-    "mem_config",
+    "model_config_str",
     (
-        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
+        "BFLOAT8_B-DRAM",
+        "BFLOAT16-DRAM",
+        "BFLOAT8_B-L1",
+        "BFLOAT16-L1",
+        "MIXED_PRECISION",
     ),
-    ids=["DRAM", "L1"],
-)
-@pytest.mark.parametrize(
-    "dtype",
-    (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),
-    ids=["BFLOAT8_B", "BFLOAT16"],
+    ids=[
+        "BFLOAT8_B-DRAM",
+        "BFLOAT16-DRAM",
+        "BFLOAT8_B-L1",
+        "BFLOAT16-L1",
+        "MIXED_PRECISION",
+    ],
 )
 @pytest.mark.parametrize(
     "model_version, batch, seq_len, on_weka, pcc",
@@ -324,12 +317,11 @@ def test_bert_encoder_inference(
     seq_len,
     on_weka,
     pcc,
-    dtype,
-    mem_config,
+    model_config_str,
     model_location_generator,
     request,
 ):
-    model_config = get_model_config(dtype, mem_config)
+    model_config = get_model_config(model_config_str)
 
     ttl.profiler.set_profiler_flag(False)
     ttl.profiler.set_profiler_location(

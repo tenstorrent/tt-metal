@@ -43,6 +43,7 @@ def feed_forward(
             ff1_biasa,
             True,
             mem_config=model_config["OP13_FF1_MM_OUTPUT_MEMCFG"],
+            out_dtype=model_config["OP13_FF1_MM_OUTPUT_DTYPE"],
         )
         # profiler.end("___op13_MM_bias_gelu")
 
@@ -58,6 +59,7 @@ def feed_forward(
             ff2_weighta,
             ff2_biasa,
             mem_config=model_config["OP14_FF2_MM_OUTPUT_MEMCFG"],
+            out_dtype=model_config["OP14_FF2_MM_OUTPUT_DTYPE"],
         )
         # profiler.end("___op14_MM_bias")
 
@@ -267,17 +269,21 @@ def run_ffn_inference(
 
 
 @pytest.mark.parametrize(
-    "mem_config",
+    "model_config_str",
     (
-        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
+        "BFLOAT8_B-DRAM",
+        "BFLOAT16-DRAM",
+        "BFLOAT8_B-L1",
+        "BFLOAT16-L1",
+        "MIXED_PRECISION",
     ),
-    ids=["DRAM", "L1"],
-)
-@pytest.mark.parametrize(
-    "dtype",
-    (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),
-    ids=["BFLOAT8_B", "BFLOAT16"],
+    ids=[
+        "BFLOAT8_B-DRAM",
+        "BFLOAT16-DRAM",
+        "BFLOAT8_B-L1",
+        "BFLOAT16-L1",
+        "MIXED_PRECISION",
+    ],
 )
 @pytest.mark.parametrize(
     "model_version, batch, seq_len, on_weka, pcc",
@@ -290,12 +296,11 @@ def test_ffn_inference(
     seq_len,
     on_weka,
     pcc,
-    dtype,
-    mem_config,
+    model_config_str,
     model_location_generator,
     request,
 ):
-    model_config = get_model_config(dtype, mem_config)
+    model_config = get_model_config(model_config_str)
 
     ttl.profiler.set_profiler_flag(False)
     ttl.profiler.set_profiler_location(

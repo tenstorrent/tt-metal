@@ -1,4 +1,5 @@
 import tt_lib as ttl
+from loguru import logger
 
 
 OP_MEMCFG_KEYS = (
@@ -41,11 +42,14 @@ OP_DTYPE_KEYS = (
     "OP1_FUSED_QKV_MM_INPUT_DTYPE",
     "OP1_FUSED_QKV_MM_WEIGHTS_DTYPE",
     "OP1_FUSED_QKV_MM_BIAS_DTYPE",
-    "OP8_SOFTMAX_SCALE_DTYPE",  # Used if attention_mask is None
+    "OP1_FUSED_QKV_MM_OUTPUT_DTYPE",
+    "OP7_PRE_SOFTMAX_BMM_OUTPUT_DTYPE",
     "OP8_SOFTMAX_ATTENTION_MASK_DTYPE",
+    "OP9_POST_SOFTMAX_BMM_OUTPUT_DTYPE",
     # MHA SELFOUT ATTENTION
     "OP11_SELFOUT_WEIGHTS_DTYPE",
     "OP11_SELFOUT_BIAS_DTYPE",
+    "OP11_SELFOUT_OUTPUT_DTYPE",
     # MHA LAYERNORM
     "OP12_LAYERNORM_GAMMA_DTYPE",
     "OP12_LAYERNORM_BETA_DTYPE",
@@ -53,8 +57,10 @@ OP_DTYPE_KEYS = (
     # FFN
     "OP13_FF1_MM_WEIGHTS_DTYPE",
     "OP13_FF1_MM_BIAS_DTYPE",
+    "OP13_FF1_MM_OUTPUT_DTYPE",
     "OP14_FF2_MM_WEIGHTS_DTYPE",
     "OP14_FF2_MM_BIAS_DTYPE",
+    "OP14_FF2_MM_OUTPUT_DTYPE",
     # FFN LAYERNORM
     "OP15_LAYERNORM_GAMMA_DTYPE",
     "OP15_LAYERNORM_BETA_DTYPE",
@@ -63,18 +69,64 @@ OP_DTYPE_KEYS = (
     "QA_LINEAR_BIAS_DTYPE",
 )
 
+ACCEPTABLE_MODEL_CONFIG_STRS = (
+    "BFLOAT8_B-DRAM",
+    "BFLOAT16-DRAM",
+    "BFLOAT8_B-L1",
+    "BFLOAT16-L1",
+    "MIXED_PRECISION",
+)
 
-def get_model_config(dtype, mem_config):
-    # TODO: We can also couple dtype-mem_config as one input.
-    # This will give us more options for experimentation with different configs.
+
+def pretty_print_model_config(model_config):
+    print_str = []
+    for key, val in model_config.items():
+        if key.endswith("MEMCFG"):
+            print_str.append(f"{key}: {val.buffer_type}")
+
+        elif key.endswith("DTYPE"):
+            print_str.append(f"{key}: {val}")
+
+        else:
+            raise NotImplementedError("Unknown key: {key}!")
+
+    return "\n".join(print_str)
+
+
+def get_model_config(model_config_str):
+    assert model_config_str in ACCEPTABLE_MODEL_CONFIG_STRS
+    DRAM_MEMCFG = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
+    L1_MEMCFG = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
+
+    # Set default dtype and mem_config based on model_config_str
+    if model_config_str in (
+        "BFLOAT8_B-DRAM",
+        "BFLOAT16-DRAM",
+        "BFLOAT8_B-L1",
+        "BFLOAT16-L1",
+    ):
+        dtype_str, mem_config_str = model_config_str.split("-")
+        mem_config = DRAM_MEMCFG if mem_config_str == "DRAM" else L1_MEMCFG
+        dtype = (
+            ttl.tensor.DataType.BFLOAT16
+            if dtype_str == "BFLOAT16"
+            else ttl.tensor.DataType.BFLOAT8_B
+        )
+
+    elif model_config_str == "MIXED_PRECISION":
+        dtype = ttl.tensor.DataType.BFLOAT8_B
+        mem_config = L1_MEMCFG
+
+    else:
+        raise NotImplementedError(f"Model config {model_config_str} is not supported!")
 
     # Set defaults for dtype and mem_config for all ops
-    model_config = {"DEFAULT_DTYPE": dtype, "DEFAULT_MEMCFG": mem_config}
+    model_config = {
+        "DEFAULT_DTYPE": dtype,
+        "DEFAULT_MEMCFG": mem_config,
+    }  # DEFAULT_MEMCFG also used to determine banking for ttl.device.InitializeDevice
     model_config.update(dict(zip(OP_MEMCFG_KEYS, [mem_config] * len(OP_MEMCFG_KEYS))))
     model_config.update(dict(zip(OP_DTYPE_KEYS, [dtype] * len(OP_DTYPE_KEYS))))
-
-    # Override defaults for certain configs
-    DRAM_MEMCFG = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
 
     # Layernorm Gamma Beta must always be BFLOAT16
     model_config.update(
@@ -85,10 +137,9 @@ def get_model_config(dtype, mem_config):
             "OP15_LAYERNORM_BETA_DTYPE": ttl.tensor.DataType.BFLOAT16,
         }
     )
-    if (
-        dtype == ttl.tensor.DataType.BFLOAT16
-        and mem_config.buffer_type == ttl.tensor.BufferType.L1
-    ):
+
+    # Override defaults for certain configs
+    if model_config_str == "BFLOAT16-L1":
         new_config_values = {
             # MHA
             "OP1_FUSED_QKV_MM_WEIGHTS_MEMCFG": DRAM_MEMCFG,
@@ -108,10 +159,8 @@ def get_model_config(dtype, mem_config):
             "QA_LINEAR_BIAS_MEMCFG": DRAM_MEMCFG,
         }
         model_config.update(new_config_values)
-    elif (
-        dtype == ttl.tensor.DataType.BFLOAT8_B
-        and mem_config.buffer_type == ttl.tensor.BufferType.L1
-    ):
+
+    elif model_config_str == "BFLOAT8_B-L1":
         new_config_values = {
             # MHA
             "OP1_FUSED_QKV_MM_WEIGHTS_MEMCFG": DRAM_MEMCFG,
@@ -129,5 +178,40 @@ def get_model_config(dtype, mem_config):
             "QA_LINEAR_BIAS_MEMCFG": DRAM_MEMCFG,
         }
         model_config.update(new_config_values)
+
+    elif model_config_str == "MIXED_PRECISION":
+        new_config_values = {
+            # MHA
+            "OP1_FUSED_QKV_MM_WEIGHTS_MEMCFG": DRAM_MEMCFG,
+            "OP1_FUSED_QKV_MM_BIAS_MEMCFG": DRAM_MEMCFG,
+            "OP7_PRE_SOFTMAX_BMM_OUTPUT_MEMCFG": DRAM_MEMCFG,
+            # MHA SELFOUT ATTENTION
+            "OP11_SELFOUT_WEIGHTS_MEMCFG": DRAM_MEMCFG,
+            "OP11_SELFOUT_BIAS_MEMCFG": DRAM_MEMCFG,
+            # FFN
+            "OP13_FF1_MM_WEIGHTS_MEMCFG": DRAM_MEMCFG,
+            "OP13_FF1_MM_BIAS_MEMCFG": DRAM_MEMCFG,
+            "OP14_FF2_MM_WEIGHTS_MEMCFG": DRAM_MEMCFG,
+            "OP14_FF2_MM_BIAS_MEMCFG": DRAM_MEMCFG,
+            # After all encoders
+            "QA_LINEAR_WEIGHTS_MEMCFG": DRAM_MEMCFG,
+            "QA_LINEAR_BIAS_MEMCFG": DRAM_MEMCFG,
+            # MHA
+            "OP1_FUSED_QKV_MM_INPUT_DTYPE": ttl.tensor.DataType.BFLOAT16,
+            "OP7_PRE_SOFTMAX_BMM_OUTPUT_DTYPE": ttl.tensor.DataType.BFLOAT16,
+            "OP8_SOFTMAX_ATTENTION_MASK_DTYPE": ttl.tensor.DataType.BFLOAT16,
+            # MHA SELFOUT ATTENTION
+            "OP11_SELFOUT_OUTPUT_DTYPE": ttl.tensor.DataType.BFLOAT16,
+            # MHA LAYERNORM
+            "OP12_LAYERNORM_OUTPUT_DTYPE": ttl.tensor.DataType.BFLOAT16,  # Used for ffn sub-graph test, might need in the future with mixed precision
+            # FFN
+            "OP14_FF2_MM_OUTPUT_DTYPE": ttl.tensor.DataType.BFLOAT16,
+            # After all encoders
+            "QA_LINEAR_WEIGHTS_DTYPE": ttl.tensor.DataType.BFLOAT16,
+            "QA_LINEAR_BIAS_DTYPE": ttl.tensor.DataType.BFLOAT16,
+        }
+        model_config.update(new_config_values)
+
+    logger.debug(f"BERT model config: \n{pretty_print_model_config(model_config)}")
 
     return model_config

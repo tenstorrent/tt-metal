@@ -329,9 +329,14 @@ def run_bert_question_and_answering_inference(
     if not passing_end:
         logger.error(f"End Logits PCC < {pcc}")
 
+    passing = passing_start and passing_end
+
     if real_input:
-        if model_config["DEFAULT_DTYPE"] == ttl.tensor.DataType.BFLOAT8_B:
-            logger.warning("Skipping post processing due to garbage output in BFP8")
+        if (
+            model_config["DEFAULT_DTYPE"] == ttl.tensor.DataType.BFLOAT8_B
+            and not passing
+        ):
+            logger.warning("Skipping post processing due to garbage output in BFP8!")
         else:
             for i in range(batch):
                 tt_res = {
@@ -364,26 +369,28 @@ def run_bert_question_and_answering_inference(
 
     # assert profiler.get("whole_model") < 60.0
 
-    if model_config["DEFAULT_DTYPE"] == ttl.tensor.DataType.BFLOAT8_B:
+    if model_config["DEFAULT_DTYPE"] == ttl.tensor.DataType.BFLOAT8_B and not passing:
         pytest.xfail("PCC is garbage for BFLOAT8_B. Numbers are for perf only!")
 
-    assert (
-        passing_start and passing_end
-    ), f"At least one start or end logits don't meet PCC requirement {pcc}"
+    assert passing, f"At least one start or end logits don't meet PCC requirement {pcc}"
 
 
 @pytest.mark.parametrize(
-    "mem_config",
+    "model_config_str",
     (
-        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
+        "BFLOAT8_B-DRAM",
+        "BFLOAT16-DRAM",
+        "BFLOAT8_B-L1",
+        "BFLOAT16-L1",
+        "MIXED_PRECISION",
     ),
-    ids=["DRAM", "L1"],
-)
-@pytest.mark.parametrize(
-    "dtype",
-    (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),
-    ids=["BFLOAT8_B", "BFLOAT16"],
+    ids=[
+        "BFLOAT8_B-DRAM",
+        "BFLOAT16-DRAM",
+        "BFLOAT8_B-L1",
+        "BFLOAT16-L1",
+        "MIXED_PRECISION",
+    ],
 )
 @pytest.mark.parametrize(
     "model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc",
@@ -410,12 +417,11 @@ def test_bert_batch_dram(
     attention_mask,
     token_type_ids,
     pcc,
-    dtype,
-    mem_config,
+    model_config_str,
     model_location_generator,
     request,
 ):
-    model_config = get_model_config(dtype, mem_config)
+    model_config = get_model_config(model_config_str)
 
     # This test will run BERT-Large once with cache disabled.
     # Then it will enable cache and run BERT-Large PERF_CNT number of times.
@@ -446,17 +452,21 @@ def test_bert_batch_dram(
 
 
 @pytest.mark.parametrize(
-    "mem_config",
+    "model_config_str",
     (
-        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
+        "BFLOAT8_B-DRAM",
+        "BFLOAT16-DRAM",
+        "BFLOAT8_B-L1",
+        "BFLOAT16-L1",
+        "MIXED_PRECISION",
     ),
-    ids=["DRAM", "L1"],
-)
-@pytest.mark.parametrize(
-    "dtype",
-    (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),
-    ids=["BFLOAT8_B", "BFLOAT16"],
+    ids=[
+        "BFLOAT8_B-DRAM",
+        "BFLOAT16-DRAM",
+        "BFLOAT8_B-L1",
+        "BFLOAT16-L1",
+        "MIXED_PRECISION",
+    ],
 )
 @pytest.mark.parametrize(
     "model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc",
@@ -484,12 +494,11 @@ def test_bert_batch_dram_with_program_cache(
     attention_mask,
     token_type_ids,
     pcc,
-    dtype,
-    mem_config,
+    model_config_str,
     model_location_generator,
     request,
 ):
-    model_config = get_model_config(dtype, mem_config)
+    model_config = get_model_config(model_config_str)
 
     # This test will run BERT-Large once with cache disabled.
     # Then it will enable cache and run BERT-Large PERF_CNT number of times.

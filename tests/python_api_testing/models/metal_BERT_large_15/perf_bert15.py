@@ -45,8 +45,7 @@ seq_len = 384
 real_input = True
 attention_mask = True
 token_type_ids = True
-dtype = ttl.tensor.DataType.BFLOAT16
-mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
+model_config_str="BFLOAT16-L1"
 model_location_generator = model_location_generator_
 
 
@@ -55,7 +54,7 @@ model_location_generator = model_location_generator_
     ([0.24]),
 )
 def test_perf(use_program_cache, expected_inference_time):
-    model_config = get_model_config(dtype, mem_config)
+    model_config = get_model_config(model_config_str)
 
     disable_compile_cache()
     first_key = "first_iter"

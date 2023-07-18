@@ -84,6 +84,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, model_config):
             qkv_weight,
             qkv_bias,
             mem_config=model_config["OP1_FUSED_QKV_MM_OUTPUT_MEMCFG"],
+            out_dtype=model_config["OP1_FUSED_QKV_MM_OUTPUT_DTYPE"],
         )
         # profiler.end("___op1_qkv_fused")
 
@@ -104,6 +105,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, model_config):
             Q_heads,
             K_T_heads,
             mem_config=model_config["OP7_PRE_SOFTMAX_BMM_OUTPUT_MEMCFG"],
+            out_dtype=model_config["OP7_PRE_SOFTMAX_BMM_OUTPUT_DTYPE"],
         )
         # profiler.end("___op7_bmm")
 
@@ -134,6 +136,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, model_config):
             attention_scores,
             V_heads,
             mem_config=model_config["OP9_POST_SOFTMAX_BMM_OUTPUT_MEMCFG"],
+            out_dtype=model_config["OP9_POST_SOFTMAX_BMM_OUTPUT_DTYPE"],
         )
         # profiler.end("___op9_bmm")
 
@@ -324,7 +327,7 @@ def run_mha_inference(
     if not passing:
         logger.error(f"Output PCC < {pcc}")
 
-    if model_config["DEFAULT_DTYPE"] == ttl.tensor.DataType.BFLOAT8_B:
+    if model_config["DEFAULT_DTYPE"] == ttl.tensor.DataType.BFLOAT8_B and not passing:
         pytest.xfail("PCC is garbage for BFLOAT8_B. Numbers are for perf only!")
 
     assert passing
@@ -333,17 +336,21 @@ def run_mha_inference(
 
 
 @pytest.mark.parametrize(
-    "mem_config",
+    "model_config_str",
     (
-        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
+        "BFLOAT8_B-DRAM",
+        "BFLOAT16-DRAM",
+        "BFLOAT8_B-L1",
+        "BFLOAT16-L1",
+        "MIXED_PRECISION",
     ),
-    ids=["DRAM", "L1"],
-)
-@pytest.mark.parametrize(
-    "dtype",
-    (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),
-    ids=["BFLOAT8_B", "BFLOAT16"],
+    ids=[
+        "BFLOAT8_B-DRAM",
+        "BFLOAT16-DRAM",
+        "BFLOAT8_B-L1",
+        "BFLOAT16-L1",
+        "MIXED_PRECISION",
+    ],
 )
 @pytest.mark.parametrize(
     "model_version, batch, seq_len, on_weka, pcc",
@@ -356,12 +363,11 @@ def test_mha_inference(
     seq_len,
     on_weka,
     pcc,
-    dtype,
-    mem_config,
+    model_config_str,
     model_location_generator,
     request,
 ):
-    model_config = get_model_config(dtype, mem_config)
+    model_config = get_model_config(model_config_str)
 
     ttl.profiler.set_profiler_flag(False)
     ttl.profiler.set_profiler_location(
