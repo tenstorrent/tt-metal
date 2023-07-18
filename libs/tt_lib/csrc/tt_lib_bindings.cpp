@@ -1358,65 +1358,83 @@ void TensorModule(py::module &m_tensor) {
         +----------+--------------------------+-----------+------------------------------+----------+
     )doc");
 
-    m_tensor.def("zeros", &zeros, R"doc(
-        Returns a new tensor filled with zeros in shape specified by input ``arg0``.
+    m_tensor.def("zeros", &zeros,
+        py::arg("shape"), py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device") = nullptr, R"doc(
+        Returns a new tensor filled with zeros in shape specified by input ``shape``.
 
         Input shape is specified as a list of 4 integer elements
 
         Output tensor will have BFLOAT16 data type.
 
-        +----------+--------------------------+-----------+------------------------------+----------+
-        | Argument | Description              | Data type | Valid range                  | Required |
-        +==========+==========================+===========+==============================+==========+
-        | arg0     | Shape vector             | Vector    | [W, Z, Y, X]                 | Yes      |
-        +----------+--------------------------+-----------+------------------------------+----------+
+        +----------+----------------------------+-----------+------------------------------+----------+
+        | Argument | Description                | Data type | Valid range                  | Required |
+        +==========+============================+===========+==============================+==========+
+        | shape    | Shape vector               | Vector    | [W, Z, Y, X]                 | Yes      |
+        +----------+----------------------------+-----------+------------------------------+----------+
+        | layout   | Tensor layout              | Layout    | default is ROW_MAJOR         | No       |
+        +----------+----------------------------+-----------+------------------------------+----------+
+        | device   | Device tensor is placed on | Device    | default is None (on host)    | No       |
+        +----------+----------------------------+-----------+------------------------------+----------+
     )doc");
 
-    m_tensor.def("ones", &ones, R"doc(
-        Returns a new tensor filled with ones in shape specified by input ``arg0``.
+    m_tensor.def("ones", &ones,
+        py::arg("shape"), py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device") = nullptr, R"doc(
+        Returns a new tensor filled with ones in shape specified by input ``shape``.
 
         Input shape is specified as a list of 4 integer elements
 
         Output tensor will have BFLOAT16 data type.
 
-        +----------+--------------------------+-----------+------------------------------+----------+
-        | Argument | Description              | Data type | Valid range                  | Required |
-        +==========+==========================+===========+==============================+==========+
-        | arg0     | Shape vector             | Vector    | [W, Z, Y, X]                 | Yes      |
-        +----------+--------------------------+-----------+------------------------------+----------+
+        +----------+----------------------------+-----------+------------------------------+----------+
+        | Argument | Description                | Data type | Valid range                  | Required |
+        +==========+============================+===========+==============================+==========+
+        | shape    | Shape vector               | Vector    | [W, Z, Y, X]                 | Yes      |
+        +----------+----------------------------+-----------+------------------------------+----------+
+        | layout   | Tensor layout              | Layout    | default is ROW_MAJOR         | No       |
+        +----------+----------------------------+-----------+------------------------------+----------+
+        | device   | Device tensor is placed on | Device    | default is None (on host)    | No       |
+        +----------+----------------------------+-----------+------------------------------+----------+
     )doc");
 
-    m_tensor.def("full", &full, R"doc(
-        Returns a new tensor filled with the scalar value in shape specified by input ``arg0``.
+    m_tensor.def("full", &full,
+        py::arg("shape"), py::arg("fill_value"), py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device") = nullptr, R"doc(
+        Returns a new tensor filled with the scalar value in shape specified by input ``shape``.
 
         Input shape is specified as a list of 4 integer elements
 
         Output tensor will have BFLOAT16 data type.
 
-        +----------+--------------------------+-----------+------------------------------+----------+
-        | Argument | Description              | Data type | Valid range                  | Required |
-        +==========+==========================+===========+==============================+==========+
-        | arg0     | Shape vector             | Vector    | [W, Z, Y, X]                 | Yes      |
-        +----------+--------------------------+-----------+------------------------------+----------+
-        | arg1     | Fill value               | float     |                              | Yes      |
-        +----------+--------------------------+-----------+------------------------------+----------+
+        +------------+----------------------------+-----------+------------------------------+----------+
+        | Argument   | Description                | Data type | Valid range                  | Required |
+        +============+============================+===========+==============================+==========+
+        | shape      | Shape vector               | Vector    | [W, Z, Y, X]                 | Yes      |
+        +------------+----------------------------+-----------+------------------------------+----------+
+        | fill_value | Fill value                 | float     |                              | Yes      |
+        +------------+----------------------------+-----------+------------------------------+----------+
+        | layout     | Tensor layout              | Layout    | default is ROW_MAJOR         | No       |
+        +------------+----------------------------+-----------+------------------------------+----------+
+        | device     | Device tensor is placed on | Device    | default is None (on host)    | No       |
+        +------------+----------------------------+-----------+------------------------------+----------+
     )doc");
 
-    m_tensor.def("arange", &arange, R"doc(
-        Returns a new 1D tensor with the incremented values in size specified by inputs start, end and step ``arg0``, ``arg1``, and ``arg2``.
+    m_tensor.def("arange", &arange,
+        py::arg("start"), py::arg("end"), py::arg("step"), py::arg("device") = nullptr, R"doc(
+        Returns a new 1D tensor with the incremented values in size specified by inputs ``start``, ``end`` and ``step``.
 
         Inpute scalars are integers specifying start, end, and step sizes.
         Output tensor will have BFLOAT16 data type.
 
-        +----------+--------------------------+-----------+------------------------------+----------+
-        | Argument | Description              | Data type | Valid range                  | Required |
-        +==========+==========================+===========+==============================+==========+
-        | arg0     | Start                    | int       |                              | yes      |
-        +----------+--------------------------+-----------+------------------------------+----------+
-        | arg1     | End                      | int       | > Start                      | yes      |
-        +----------+--------------------------+-----------+------------------------------+----------+
-        | arg2     | Step                     | int       | > 0                          | yes      |
-        +----------+--------------------------+-----------+------------------------------+----------+
+        +----------+----------------------------+-----------+------------------------------+----------+
+        | Argument | Description                | Data type | Valid range                  | Required |
+        +==========+============================+===========+==============================+==========+
+        | start    | Start                      | int       |                              | yes      |
+        +----------+----------------------------+-----------+------------------------------+----------+
+        | end      | End                        | int       | > Start                      | yes      |
+        +----------+----------------------------+-----------+------------------------------+----------+
+        | step     | Step                       | int       | > 0                          | yes      |
+        +----------+----------------------------+-----------+------------------------------+----------+
+        | device   | Device tensor is placed on | Device    | default is None (on host)    | No       |
+        +----------+----------------------------+-----------+------------------------------+----------+
     )doc");
 
 

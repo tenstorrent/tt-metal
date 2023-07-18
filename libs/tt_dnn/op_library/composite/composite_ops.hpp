@@ -138,15 +138,15 @@ Tensor ones_like(const Tensor& reference_tensor);
 Tensor full_like(const Tensor& reference_tensor,float value);
 
 //on-device tensor creation 0s with shape
-Tensor zeros(const Shape shape);
+Tensor zeros(const Shape shape, Layout layout = Layout::ROW_MAJOR, Device * device = nullptr);
 
 //on-device tensor creation 1s with shape
-Tensor ones(const Shape shape);
+Tensor ones(const Shape shape, Layout layout = Layout::ROW_MAJOR, Device * device = nullptr);
 
-Tensor arange(int32_t start, int32_t end, int32_t step = 1);
+Tensor arange(int32_t start, int32_t end, int32_t step = 1, Device * device = nullptr);
 
 //on-device tensor creation with shape and filled with value
-Tensor full(const Shape shape,float value);
+Tensor full(const Shape shape, float value, Layout layout = Layout::ROW_MAJOR, Device * device = nullptr);
 
 
 //clip

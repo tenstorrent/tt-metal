@@ -36,37 +36,41 @@ constexpr static DataType get_data_type() {
 }
 
 template<typename T>
-static Tensor full(const Shape& shape, T value, const Layout layout = Layout::ROW_MAJOR) {
+static Tensor full(const Shape& shape, T value, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr) {
     constexpr DataType data_type = detail::get_data_type<T>();
     auto host_buffer = host_buffer::create<T>(tt_metal::volume(shape));
     std::fill(std::begin(host_buffer), std::end(host_buffer), value);
-    return Tensor(HostStorage{host_buffer}, shape, data_type, layout);
+    auto output = Tensor(HostStorage{host_buffer}, shape, data_type, layout);
+    if (device != nullptr) {
+        output = output.to(device);
+    }
+    return output;
 }
 
 } // namespace detail
 
 template<typename T>
-static Tensor full(const Shape& shape, const T value, const DataType data_type, const Layout layout = Layout::ROW_MAJOR) {
+static Tensor full(const Shape& shape, const T value, const DataType data_type, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr) {
     switch (data_type) {
         case DataType::UINT32: {
-            return detail::full<uint32_t>(shape, value, layout);
+            return detail::full<uint32_t>(shape, value, layout, device);
         }
         case DataType::FLOAT32: {
-            return detail::full<float>(shape, value, layout);
+            return detail::full<float>(shape, value, layout, device);
         }
         case DataType::BFLOAT16: {
-            return detail::full<bfloat16>(shape, bfloat16(value), layout);
+            return detail::full<bfloat16>(shape, bfloat16(value), layout, device);
         }
         default:
             TT_THROW("Unsupported DataType!");
     }
 }
 
-static Tensor zeros(const Shape& shape, const DataType data_type = DataType::BFLOAT16, const Layout layout = Layout::ROW_MAJOR) {
+static Tensor zeros(const Shape& shape, const DataType data_type = DataType::BFLOAT16, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr) {
     return full(shape, 0, data_type, layout);
 }
 
-static Tensor ones(const Shape& shape, const DataType data_type = DataType::BFLOAT16, const Layout layout = Layout::ROW_MAJOR) {
+static Tensor ones(const Shape& shape, const DataType data_type = DataType::BFLOAT16, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr) {
     return full(shape, 1, data_type, layout);
 }
 
@@ -75,16 +79,12 @@ static Tensor zeros_like(const Tensor& input_tensor, std::optional<DataType> dat
     if (data_type.has_value()) {
         data_type_to_use = data_type.value();
     }
-    auto output_tensor = zeros(input_tensor.shape(), data_type_to_use, layout);
-    output_tensor = output_tensor.to(input_tensor.layout());
-    if (input_tensor.device() != nullptr) {
-        output_tensor = output_tensor.to(input_tensor.device());
-    }
+    auto output_tensor = zeros(input_tensor.shape(), data_type_to_use, layout, input_tensor.device());
     return output_tensor;
 }
 
 template<typename T>
-static Tensor arange(int64_t start, int64_t stop, int64_t step, const Layout layout = Layout::ROW_MAJOR) {
+static Tensor arange(int64_t start, int64_t stop, int64_t step, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr) {
     constexpr DataType data_type = detail::get_data_type<T>();
     // Current implementation restrictions
     TT_ASSERT(step > 0, "Step must be greater than 0");
@@ -100,7 +100,11 @@ static Tensor arange(int64_t start, int64_t stop, int64_t step, const Layout lay
          host_buffer[index++] = static_cast<T>(value);
         }
     }
-    return Tensor(HostStorage{host_buffer}, {1, 1, 1, static_cast<uint32_t>(size)}, data_type, layout);
+    auto output = Tensor(HostStorage{host_buffer}, {1, 1, 1, static_cast<uint32_t>(size)}, data_type, layout);
+    if (device != nullptr) {
+        output = output.to(device);
+    }
+    return output;
 }
 
 namespace random {

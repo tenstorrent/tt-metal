@@ -441,23 +441,23 @@ Tensor hardtanh(const Tensor& a,float low /* = -1.0f */, float high /* = +1.0f *
 std::function<Tensor(const Tensor& a,float low, float high)> clamp = clip;
 
 //on-device tensor creation 0s with shape
-Tensor zeros(const Shape shape) {
-    return tt::numpy::zeros(shape, DataType::BFLOAT16);
+Tensor zeros(const Shape shape, Layout layout, Device * device) {
+    return tt::numpy::zeros(shape, DataType::BFLOAT16, layout, device);
 }
 
 //on-device tensor creation 1s with shape
-Tensor ones(const Shape shape) {
-    return tt::numpy::ones(shape, DataType::BFLOAT16);
+Tensor ones(const Shape shape, Layout layout, Device * device) {
+    return tt::numpy::ones(shape, DataType::BFLOAT16, layout, device);
 }
 
 //on-device tensor creation with shape and filled with value
-Tensor full(const Shape shape, float value) {
-    return tt::numpy::full(shape, value, DataType::BFLOAT16);
+Tensor full(const Shape shape, float value, Layout layout, Device * device) {
+    return tt::numpy::full(shape, value, DataType::BFLOAT16, layout, device);
 }
 
 //on-device with increment
-Tensor arange(int32_t start, int32_t end, int32_t step /*= 1*/) {
-    return tt::numpy::arange<bfloat16>(start, end, step);
+Tensor arange(int32_t start, int32_t end, int32_t step, Device * device) {
+    return tt::numpy::arange<bfloat16>(start, end, step, Layout::ROW_MAJOR, device);
 }
 
 /**
