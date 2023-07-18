@@ -7,6 +7,7 @@
 #include <tensix_types.h>
 #include "cfg_defines.h"
 #include "dev_mem_map.h"
+#include "dev_mem_map_versim.h"
 
 // Convenience and type defines
 typedef std::uint32_t uint;

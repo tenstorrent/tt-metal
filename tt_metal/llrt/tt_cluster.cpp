@@ -96,11 +96,13 @@ std::vector<tt::ARCH> tt_cluster::detect_available_devices(const TargetDevice &t
                 tt::log_info(tt::LogDevice, "No silicon devices detected");
             }
         }
-    }else{
-        throw std::runtime_error(
-            "We must be using a silicon device");
+    } else {
+        if (available_devices.size() == 0){
+            log_trace(tt::LogDevice, "Going to query versim device for detect_available_devices()");
+            int num_devices = tt_VersimDevice::detect_number_of_chips();
+            available_devices.insert(available_devices.end(), num_devices, tt::ARCH::Invalid); // Name is not important.
+        }
     }
-
     return available_devices;
 }
 
@@ -196,6 +198,8 @@ void tt_cluster::open_device(
                 }
             }
         }
+    } else if (target_type == TargetDevice::Versim) {
+        device = std::make_unique<tt_VersimDevice>(this->sdesc_per_chip.at(0));
     }
 
     type = target_type;
@@ -435,10 +439,16 @@ void tt_cluster::enable_ethernet_queue(const chip_id_t &chip, int timeout) {
 }
 
 void tt_cluster::broadcast_remote_tensix_risc_reset(const chip_id_t &chip, const TensixSoftResetOptions &soft_resets) {
-    auto valid = soft_resets & ALL_TENSIX_SOFT_RESET;
 
-    for (const CoreCoord &worker_core : sdesc_per_chip.at(chip).workers) {
-        set_remote_tensix_risc_reset(tt_cxy_pair(chip, worker_core), valid);
+    if (type == TargetDevice::Silicon) {
+        auto valid = soft_resets & ALL_TENSIX_SOFT_RESET;
+
+        for (const CoreCoord &worker_core : sdesc_per_chip.at(chip).workers) {
+            set_remote_tensix_risc_reset(tt_cxy_pair(chip, worker_core), valid);
+        }
+    } else {
+        // Not running silicon multichip test
+        device->assert_risc_reset();
     }
 }
 
@@ -453,7 +463,7 @@ void tt_cluster::set_remote_tensix_risc_reset(const tt_cxy_pair &core, const Ten
 void tt_cluster::deassert_risc_reset(bool start_stagger) {
     if (type == TargetDevice::Versim) {
         // Not running silicon multichip test
-         device->deassert_risc_reset();
+        device->deassert_risc_reset();
     } else if (type == TargetDevice::Silicon) {
         // On silicon, we might have num_mmio_chips < total_chips, in this case we manually write data to all the worker
         // cores on remote chips

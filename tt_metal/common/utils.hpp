@@ -24,5 +24,16 @@ namespace utils
         seed ^= value + 0x9e3779b9 + (seed << 6) + (seed >> 2);
     }
 
+    inline std::vector<std::string> strsplit(std::string input, char delimiter) {
+        std::vector<std::string> result = {};
+        std::stringstream ss(input);
+
+        while (ss.good()) {
+            std::string substr;
+            getline(ss, substr, delimiter);
+            result.push_back(substr);
+        }
+        return result;
+    }
 }
 }

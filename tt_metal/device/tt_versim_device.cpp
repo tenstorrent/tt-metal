@@ -84,13 +84,13 @@ void tt_VersimDevice::start(
      // TODO: End
 
      std::cout << "Versim Device: turn_on_device ";
-     std::vector<std::uint32_t> trisc_sizes = {l1_mem::address_map::TRISC0_SIZE, l1_mem::address_map::TRISC1_SIZE, l1_mem::address_map::TRISC2_SIZE};
+     std::vector<std::uint32_t> trisc_sizes = {MEM_TRISC0_SIZE, MEM_TRISC1_SIZE, MEM_TRISC2_SIZE};
      std::unique_ptr<versim::VersimSimulator> versim_unique = versim::turn_on_device(CA_grid_size, *p_ca_soc_manager_unique, plusargs, vcd_suffix, dump_cores, no_checkers,
-        l1_mem::address_map::TRISC_BASE, trisc_sizes);
+        MEM_TRISC0_BASE, trisc_sizes);
      versim = versim_unique.release();
 
      std::cout << "Versim Device: write info to tvm db " << std::endl;
-     versim::write_info_to_tvm_db(l1_mem::address_map::TRISC_BASE, trisc_sizes);
+     versim::write_info_to_tvm_db(MEM_TRISC0_BASE, trisc_sizes);
      versim::build_and_connect_tvm_phase();
 
      versim->spin_threads(*p_ca_soc_manager_unique, false);
@@ -130,6 +130,11 @@ void tt_VersimDevice::assert_risc_reset() {
   versim::assert_riscv_reset(*versim);
 }
 // TODO(pgk): move these to ptrs instead of vectors
+void tt_VersimDevice::write_vector(const std::uint32_t *mem_ptr, uint32_t len, tt_cxy_pair target, std::uint32_t address, bool host_resident, bool small_access, chip_id_t src_device_id) {
+  std::vector<std::uint32_t> mem_vector(mem_ptr, mem_ptr + len);
+  write_vector(mem_vector, target, address, host_resident, small_access, src_device_id);
+}
+
 void tt_VersimDevice::write_vector(std::vector<uint32_t> &mem_vector, tt_cxy_pair target, std::uint32_t address, bool host_resident, bool small_access, chip_id_t src_device_id) {
   // std::cout << "Versim Device: Write vector at target core " << target.str() << ", address: " << std::hex << address << std::dec << std::endl;
   DEBUG_LOG("Versim Device (" << get_sim_time(*versim) << "): Write vector at target core " << target.str() << ", address: " << std::hex << address << std::dec);
@@ -140,6 +145,18 @@ void tt_VersimDevice::write_vector(std::vector<uint32_t> &mem_vector, tt_cxy_pai
   CommandAssembler::memory CA_tensor_memory(address, mem_vector);
 
   nuapi::device::write_memory_to_core(*versim, CA_target, CA_tensor_memory);
+}
+
+void tt_VersimDevice::read_vector(
+         std::uint32_t *mem_ptr, tt_cxy_pair target, std::uint32_t address, std::uint32_t size_in_bytes, bool host_resident, bool small_access, chip_id_t src_device_id) {
+  // std::cout << "Versim Device: Read vector from target address: 0x" << std::hex << address << std::dec << ", with size: " << size_in_bytes << " Bytes" << std::endl;
+  DEBUG_LOG("Versim Device (" << get_sim_time(*versim) << "): Read vector from target address: 0x" << std::hex << address << std::dec << ", with size: " << size_in_bytes << " Bytes");
+
+  CommandAssembler::xy_pair CA_target(target.x, target.y);
+
+  size_t size_in_words = size_in_bytes / 4;
+  auto result = nuapi::device::read_memory_from_core(*versim, CA_target, address, size_in_words);
+  memcpy(mem_ptr, result.data(), result.size()*sizeof(uint32_t));
 }
 
 void tt_VersimDevice::read_vector(
@@ -160,8 +177,8 @@ void tt_VersimDevice::dump_debug_mailbox(std::string output_path, int device_id)
 
   std::vector<std::string> debug_mailboxes = {"T0", "T1", "T2", "FW"};
 
-  const int mailbox_base_addr = l1_mem::address_map::DEBUG_MAILBOX_BUF_BASE;
-  const int mailbox_size = l1_mem::address_map::DEBUG_MAILBOX_BUF_SIZE;
+  const int mailbox_base_addr = MEM_DEBUG_MAILBOX_ADDRESS;
+  const int mailbox_size = MEM_DEBUG_MAILBOX_SIZE;
   for (auto &worker_core: soc_descriptor.workers) {
     int core_x = worker_core.x;
     int core_y = worker_core.y;
@@ -188,7 +205,7 @@ void tt_VersimDevice::dump_debug_mailbox(std::string output_path, int device_id)
 void tt_VersimDevice::dump_wall_clock_mailbox(std::string output_path, int device_id) {
 
   std::ofstream output_file(output_path);
-  const int mailbox_base_addr = l1_mem::address_map::WALL_CLOCK_MAILBOX_BASE;
+  const int mailbox_base_addr = MEM_WALL_CLOCK_MAILBOX_ADDRESS;
   const int num_mailbox_32_regs = 4;
   const int mailbox_size = num_mailbox_32_regs * 4;
   for (auto &worker_core: soc_descriptor.workers) {
@@ -240,4 +257,8 @@ bool tt_VersimDevice::stop() {
   std::cout << "Versim Device: Stop completed " << std::endl;
   delete versim;
   return true;
+}
+
+std::map<int,int> tt_VersimDevice::get_clocks() {
+  return std::map<int,int>();
 }

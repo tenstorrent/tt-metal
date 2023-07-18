@@ -258,12 +258,12 @@ class tt_device
 };
 
 class c_versim_core;
-#ifndef DISABLE_VERSIM_BUILD
+#ifndef TT_METAL_VERSIM_DISABLED
 namespace nuapi {namespace device {template <typename, typename>class Simulator;}}
 #endif
 namespace versim {
   struct VersimSimulatorState;
-  #ifndef DISABLE_VERSIM_BUILD
+  #ifndef TT_METAL_VERSIM_DISABLED
   using VersimSimulator = nuapi::device::Simulator<c_versim_core *, VersimSimulatorState>;
   #endif
 }
@@ -278,8 +278,31 @@ class tt_VersimDevice: public tt_device
      virtual void deassert_risc_reset(bool start_stagger = false);
      virtual void assert_risc_reset();
      virtual bool stop();
-     virtual void write_vector(std::vector<std::uint32_t> &mem_vector, tt_cxy_pair target, std::uint32_t address, bool host_resident = false, bool small_access = false, chip_id_t src_device_id = -1);
+     virtual void write_vector(
+        const std::uint32_t *mem_ptr,
+        uint32_t len,
+        tt_cxy_pair target,
+        std::uint32_t address,
+        bool host_resident = false,
+        bool small_access = false,
+        chip_id_t src_device_id = -1);
 
+     virtual void write_vector(
+        std::vector<std::uint32_t> &mem_vector,
+        tt_cxy_pair target,
+        std::uint32_t address,
+        bool host_resident = false,
+        bool small_access = false,
+        chip_id_t src_device_id = -1);
+
+     virtual void read_vector(
+         std::uint32_t *mem_ptr,
+         tt_cxy_pair target,
+         std::uint32_t address,
+         std::uint32_t size_in_bytes,
+         bool host_resident = false,
+         bool small_access = false,
+         chip_id_t src_device_id = -1);
      virtual void read_vector(
          std::vector<std::uint32_t> &mem_vector,
          tt_cxy_pair target,
@@ -294,9 +317,10 @@ class tt_VersimDevice: public tt_device
      virtual void dump_wall_clock_mailbox(std::string output_path, int device_id);
      virtual int get_number_of_chips();
      static int detect_number_of_chips();
+     virtual std::map<int,int> get_clocks();
     private:
 
-    #ifndef DISABLE_VERSIM_BUILD
+    #ifndef TT_METAL_VERSIM_DISABLED
     versim::VersimSimulator* versim;
     #endif
     void* p_ca_soc_manager;

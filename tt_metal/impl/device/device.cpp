@@ -1,6 +1,7 @@
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 
+#include "common/utils.hpp"
 #include "llrt/llrt.hpp"
 
 namespace tt {
@@ -13,6 +14,10 @@ size_t Device::detect_num_available_devices(const TargetDevice target_type) {
 void Device::initialize_cluster() {
     std::set<chip_id_t> target_device_ids = {pcie_slot_};
     tt_device_params default_params;
+    if (getenv("TT_METAL_VERSIM_DUMP_CORES")) {
+        std::string dump_cores_string = getenv("TT_METAL_VERSIM_DUMP_CORES");
+        default_params.vcd_dump_cores = tt::utils::strsplit(dump_cores_string, ',');
+    }
     const std::string sdesc_file = get_soc_description_file(arch_, target_type_);
 
     this->cluster_ = new tt_cluster();
@@ -84,7 +89,10 @@ void Device::initialize_harvesting_information() {
         tt::log_fatal("Device has not been initialized, did you forget to call InitializeDevice?");
     }
     auto &soc_desc = this->cluster_->get_soc_desc(this->pcie_slot_);
-    auto harvested_noc_rows = this->cluster_->get_harvested_rows(this->pcie_slot_);
+    uint32_t harvested_noc_rows = 0;
+    if (this->target_type_ == tt::TargetDevice::Silicon) {
+        harvested_noc_rows = this->cluster_->get_harvested_rows(this->pcie_slot_);
+    }
 
     // Determine which noc-coords are harvested
     std::vector<unsigned int> noc_row_harvested(soc_desc.grid_size.y, 0);

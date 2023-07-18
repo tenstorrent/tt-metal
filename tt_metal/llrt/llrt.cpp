@@ -91,11 +91,13 @@ void deassert_brisc_reset_for_all_chips_all_cores(tt_cluster *cluster, bool stag
 
 // TODO: try using "stop" method from device instead, it's the proper way of asserting reset
 void assert_reset_for_all_chips(tt_cluster *cluster) {
-    TT_ASSERT(cluster->type == tt::TargetDevice::Silicon);
+    TT_ASSERT((cluster->type == tt::TargetDevice::Silicon) or (cluster->type == tt::TargetDevice::Versim));
 
-    log_debug(tt::LogLLRuntime, "Starting resets for {} chips", cluster->get_num_chips());
-    for (const chip_id_t &chip_id : cluster->get_all_chips()) {
-        cluster->broadcast_remote_tensix_risc_reset(chip_id, TENSIX_ASSERT_SOFT_RESET);
+    if (cluster->type == tt::TargetDevice::Silicon) {
+        log_debug(tt::LogLLRuntime, "Starting resets for {} chips", cluster->get_num_chips());
+        for (const chip_id_t &chip_id : cluster->get_all_chips()) {
+            cluster->broadcast_remote_tensix_risc_reset(chip_id, TENSIX_ASSERT_SOFT_RESET);
+        }
     }
 }
 
@@ -311,9 +313,11 @@ CoreCoord get_core_for_dram_channel(tt_cluster *cluster, int dram_channel_id, ch
 
 namespace utils {
 void log_current_ai_clk(tt_cluster *cluster) {
-    for (const chip_id_t &chip_id : cluster->get_all_chips()) {
-        int ai_clk = cluster->get_device_aiclk(chip_id);
-        log_info(tt::LogLLRuntime, "AI CLK for device {} is:   {} MHz", chip_id, ai_clk);
+    if (cluster->type == tt::TargetDevice::Silicon) {
+        for (const chip_id_t &chip_id : cluster->get_all_chips()) {
+            int ai_clk = cluster->get_device_aiclk(chip_id);
+            log_info(tt::LogLLRuntime, "AI CLK for device {} is:   {} MHz", chip_id, ai_clk);
+        }
     }
 }
 }  // namespace utils

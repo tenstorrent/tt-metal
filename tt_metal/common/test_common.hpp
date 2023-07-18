@@ -20,7 +20,7 @@
 inline std::string get_soc_description_file(const tt::ARCH &arch, tt::TargetDevice target_device, string output_dir = "") {
 
     // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
-    bool use_full_soc_desc = getenv("FORCE_FULL_SOC_DESC");
+    bool use_full_soc_desc = getenv("TT_METAL_VERSIM_FORCE_FULL_SOC_DESC");
     string tt_metal_home;
     if (getenv("TT_METAL_HOME")) {
         tt_metal_home = getenv("TT_METAL_HOME");
@@ -31,8 +31,14 @@ inline std::string get_soc_description_file(const tt::ARCH &arch, tt::TargetDevi
         tt_metal_home += "/";
     }
     if (target_device == tt::TargetDevice::Versim && !use_full_soc_desc) {
-        TT_ASSERT(output_dir != "", "Output directory path is not set. In versim, soc-descriptor must get generated and copied to output-dir.");
-        return output_dir + "/device_desc.yaml";
+        switch (arch) {
+            case tt::ARCH::Invalid: throw std::runtime_error("Invalid arch not supported"); // will be overwritten in tt_global_state constructor
+            case tt::ARCH::JAWBRIDGE: throw std::runtime_error("JAWBRIDGE arch not supported");
+            case tt::ARCH::GRAYSKULL: return tt_metal_home + "tt_metal/device/grayskull_versim_1x1_arch.yaml";
+            case tt::ARCH::WORMHOLE: throw std::runtime_error("WORMHOLE arch not supported");
+            case tt::ARCH::WORMHOLE_B0: return tt_metal_home + "tt_metal/device/wormhole_b0_versim_1x1_arch.yaml";
+            default: throw std::runtime_error("Unsupported device arch");
+        };
     } else {
         switch (arch) {
             case tt::ARCH::Invalid: throw std::runtime_error("Invalid arch not supported"); // will be overwritten in tt_global_state constructor

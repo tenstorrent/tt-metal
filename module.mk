@@ -7,7 +7,7 @@ OUT ?= $(TT_METAL_HOME)/build
 PREFIX ?= $(OUT)
 
 # Disable by default, use negative instead for consistency with BBE
-DISABLE_VERSIM_BUILD ?= 1
+TT_METAL_VERSIM_DISABLED ?= 1
 
 CONFIG_CFLAGS =
 CONFIG_LDFLAGS =

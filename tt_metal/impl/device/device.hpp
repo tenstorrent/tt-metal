@@ -96,7 +96,11 @@ class Device {
     friend class Buffer;
     friend class Program;
 
+#ifdef TT_METAL_VERSIM_DISABLED
     static constexpr TargetDevice target_type_ = TargetDevice::Silicon;
+#else
+    static constexpr TargetDevice target_type_ = TargetDevice::Versim;
+#endif
     tt::ARCH arch_;
     tt_cluster *cluster_ = nullptr;
     int pcie_slot_;
