@@ -1,18 +1,10 @@
-import math
-from pathlib import Path
-import sys
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
 import torch
 from torch import nn
 from torchvision import transforms, datasets
 
 import tt_lib as ttl
 
-from models.utility_functions import tilize_to_list, untilize, comp_allclose_and_pcc
+from tests.python_api_testing.models.utility_functions import tilize_to_list, untilize, comp_allclose_and_pcc
 
 epsilon = 1e-5
 
