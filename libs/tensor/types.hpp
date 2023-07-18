@@ -1,10 +1,10 @@
 #pragma once
 
+#include "tensor/external_buffer.hpp"
 #include "tensor/host_buffer.hpp"
 
-#include "tt_metal/impl/buffers/buffer.hpp"
 #include "common/bfloat16.hpp"
-#include "third_party/magic_enum/magic_enum.hpp"
+#include "tt_metal/impl/buffers/buffer.hpp"
 
 #include "tt_stl/reflection.hpp"
 
@@ -31,8 +31,9 @@ enum class DataType {
 };
 
 enum class StorageType {
-    HOST = 0,
-    DEVICE = 1,
+    HOST,
+    DEVICE,
+    EXTERNAL,  // for storing torch/numpy/etc tensors
 };
 
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
@@ -46,9 +47,9 @@ struct MemoryConfig {
 };
 
 using HostBuffer = std::variant<
-    host_buffer::HostBufferForDataType<uint32_t>,
-    host_buffer::HostBufferForDataType<float>,
-    host_buffer::HostBufferForDataType<bfloat16>
+    host_buffer::Buffer<uint32_t>,
+    host_buffer::Buffer<float>,
+    host_buffer::Buffer<bfloat16>
 >;
 struct HostStorage {
     HostBuffer buffer;
@@ -63,10 +64,31 @@ struct DeviceStorage {
     tt::stl::reflection::Attributes attributes() const;
 };
 
+using ExternalBuffer = std::variant<
+    external_buffer::Buffer<uint32_t>,
+    external_buffer::Buffer<float>,
+    external_buffer::Buffer<bfloat16>
+>;
+struct ExternalStorage {
+    ExternalBuffer buffer;
+    tt::stl::reflection::Attributes attributes() const;
+};
+
 using Storage = std::variant<
     HostStorage,
-    DeviceStorage
+    DeviceStorage,
+    ExternalStorage
 >;
+
+namespace detail {
+template<typename>
+inline constexpr bool unsupported_storage = false;
+}
+
+template<typename T>
+constexpr void raise_unsupported_storage() {
+    static_assert(detail::unsupported_storage<T>, "Unsupported Storage");
+}
 
 }  // namespace tt_metal
 

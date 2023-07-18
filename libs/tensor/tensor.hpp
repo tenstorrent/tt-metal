@@ -28,6 +28,7 @@ class Tensor {
         // ======================================================================================
         Tensor(const HostStorage& storage, const Shape& shape, DataType dtype, Layout layout);
         Tensor(const DeviceStorage& storage, const Shape& shape, DataType dtype, Layout layout);
+        Tensor(const ExternalStorage& storage, const std::vector<uint32_t>& shape, DataType dtype, Layout layout);
 
         Tensor(const Tensor &other) = default;
         Tensor& operator=(const Tensor &other) = default;
@@ -67,7 +68,11 @@ class Tensor {
         // ======================================================================================
         //                                      Getters
         // ======================================================================================
-        const Shape& shape() const { return this->shape_; }
+        const Shape shape() const {
+            std::array<uint32_t, 4> output{};
+            std::copy(std::begin(this->shape_), std::end(this->shape_), std::begin(output));
+            return output;
+        }
 
         const std::array<uint32_t, 4> strides() const;
 
@@ -98,7 +103,7 @@ class Tensor {
 
     private:
         Storage storage_;
-        Shape shape_;      // Outer-most dimension first
+        std::vector<uint32_t> shape_;      // Outer-most dimension first
         DataType dtype_;
         Layout layout_;
 };

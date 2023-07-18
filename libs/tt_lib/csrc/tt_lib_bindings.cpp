@@ -23,6 +23,7 @@
 #include "tt_dnn/op_library/program_cache.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "tensor/host_buffer.hpp"
+#include "tensor/external_buffer.hpp"
 #include "tensor/tensor_impl.hpp"
 #include "tensor/tensor_utils.hpp"
 
@@ -56,15 +57,16 @@ HostBuffer create_host_buffer_from_list_of_floats(std::vector<float>&& data, Dat
     switch (data_type) {
         case DataType::BFLOAT8_B:
         case DataType::FLOAT32: {
-            auto host_buffer = host_buffer::create<float>(std::move(data));
-            return host_buffer;
+            return host_buffer::create<float>(std::move(data));
         }
         case DataType::BFLOAT16: {
-            auto host_buffer = host_buffer::create<bfloat16>(data.size());
-            for (auto index = 0; index < data.size(); index++) {
-                host_buffer[index] = bfloat16(data[index]);
-            }
-            return host_buffer;
+            std::vector<bfloat16> bfloat16_data(data.size());
+            std::transform(
+                std::begin(data), std::end(data),
+                std::begin(bfloat16_data),
+                [](float value) { return bfloat16(value); }
+            );
+            return host_buffer::create<bfloat16>(std::move(bfloat16_data));
         }
         default: {
             TT_THROW("Cannot create a host buffer!");
@@ -118,6 +120,37 @@ void implement_buffer_protocol(PyType& py_host_buffer_for_data_type) {
             }
         );
 };
+
+Tensor convert_torch_tensor_to_tt_tensor(const py::handle& torch_tensor) {
+    py::object torch = py::module_::import("torch");
+    if (not py::isinstance(torch_tensor, torch.attr("Tensor"))) {
+        TT_THROW("The argument must be of type torch.Tensor!");
+    }
+
+    auto torch_dtype = torch_tensor.attr("dtype");
+    auto shape = py::cast<std::vector<uint32_t>>(torch_tensor.attr("shape"));
+
+    if (torch_dtype.equal(torch.attr("float32"))) {
+        auto data_ptr = reinterpret_cast<float*>(py::cast<std::size_t>(torch_tensor.attr("data_ptr")()));
+        auto storage = ExternalStorage{.buffer=external_buffer::Buffer(data_ptr, volume(shape))};
+        return Tensor(std::move(storage), shape, DataType::FLOAT32, Layout::ROW_MAJOR);
+    }
+    else if (torch_dtype.equal(torch.attr("bfloat16"))) {
+        auto data_ptr = reinterpret_cast<bfloat16*>(py::cast<std::size_t>(torch_tensor.attr("data_ptr")()));
+        auto storage = ExternalStorage{.buffer=external_buffer::Buffer(data_ptr, volume(shape))};
+        return Tensor(std::move(storage), shape, DataType::BFLOAT16, Layout::ROW_MAJOR);
+    }
+    else if (torch_dtype.equal(torch.attr("int64"))) {
+         // TODO(arakhmati): add DataType::INT64
+        auto data_ptr = reinterpret_cast<uint32_t*>(py::cast<std::size_t>(torch_tensor.attr("data_ptr")()));
+        auto storage = ExternalStorage{.buffer=external_buffer::Buffer(data_ptr, volume(shape) * 2)};
+        return Tensor(std::move(storage), shape, DataType::UINT32, Layout::ROW_MAJOR);
+    }
+    else {
+        TT_THROW(fmt::format("Unsupported DataType: {}", py::repr(torch_dtype)));
+    }
+
+}
 
 }
 
@@ -205,14 +238,20 @@ void TensorModule(py::module &m_tensor) {
         .def_readonly("interleaved", &MemoryConfig::interleaved, "Whether tensor data is interleaved across mulitple DRAM channels")
         .def_readonly("buffer_type", &MemoryConfig::buffer_type, "Buffer type to store tensor data. Can be DRAM or L1");
 
-    auto py_host_buffer_for_uint32_t = py::class_<host_buffer::HostBufferForDataType<uint32_t>>(m_tensor, "host_buffer_for_uint32_t", py::buffer_protocol());
-    detail::implement_buffer_protocol<host_buffer::HostBufferForDataType<uint32_t>, uint32_t>(py_host_buffer_for_uint32_t);
+    auto py_host_buffer_for_uint32_t = py::class_<host_buffer::Buffer<uint32_t>>(m_tensor, "host_buffer_for_uint32_t", py::buffer_protocol());
+    detail::implement_buffer_protocol<host_buffer::Buffer<uint32_t>, uint32_t>(py_host_buffer_for_uint32_t);
 
-    auto py_host_buffer_for_float32_t = py::class_<host_buffer::HostBufferForDataType<float>>(m_tensor, "host_buffer_for_float32_t", py::buffer_protocol());
-    detail::implement_buffer_protocol<host_buffer::HostBufferForDataType<float>, float>(py_host_buffer_for_float32_t);
+    auto py_host_buffer_for_float32_t = py::class_<host_buffer::Buffer<float>>(m_tensor, "host_buffer_for_float32_t", py::buffer_protocol());
+    detail::implement_buffer_protocol<host_buffer::Buffer<float>, float>(py_host_buffer_for_float32_t);
 
-    auto py_host_buffer_for_bfloat16_t = py::class_<host_buffer::HostBufferForDataType<bfloat16>>(m_tensor, "host_buffer_for_bfloat16_t", py::buffer_protocol());
-    detail::implement_buffer_protocol<host_buffer::HostBufferForDataType<bfloat16>, bfloat16>(py_host_buffer_for_bfloat16_t);
+    auto py_host_buffer_for_bfloat16_t = py::class_<host_buffer::Buffer<bfloat16>>(m_tensor, "host_buffer_for_bfloat16_t", py::buffer_protocol());
+    detail::implement_buffer_protocol<host_buffer::Buffer<bfloat16>, bfloat16>(py_host_buffer_for_bfloat16_t);
+
+    auto py_external_buffer_for_float32_t = py::class_<external_buffer::Buffer<float>>(m_tensor, "external_buffer_for_float32_t", py::buffer_protocol());
+    detail::implement_buffer_protocol<external_buffer::Buffer<float>, float>(py_external_buffer_for_float32_t);
+
+    auto py_external_buffer_for_bfloat16_t = py::class_<external_buffer::Buffer<bfloat16>>(m_tensor, "external_buffer_for_bfloat16_t", py::buffer_protocol());
+    detail::implement_buffer_protocol<external_buffer::Buffer<bfloat16>, bfloat16>(py_external_buffer_for_bfloat16_t);
 
     // Tensor constructors that accept device and .to(device) function use keep alive call policy to communicate that Device needs to outlive Tensor.
     // This is because when tensors on device are destroyed they need to deallocate their buffers via device.
@@ -379,6 +418,28 @@ void TensorModule(py::module &m_tensor) {
                         tt_device,
                         mem_config
                     )
+            )doc"
+        )
+        .def(
+            py::init<>(
+                [](const py::object& torch_tensor) {
+                    return detail::convert_torch_tensor_to_tt_tensor(torch_tensor);
+                }
+            ),
+            py::return_value_policy::move,
+            R"doc(
+                +---------------+---------------+
+                | Argument      | Name          |
+                +===============+===============+
+                | arg0          | torch_tensor  |
+                +---------------+---------------+
+
+                Example of creating a TT Tensor that uses torch.Tensor's storage as its own storage:
+
+                .. code-block:: python
+
+                    py_tensor = torch.randn((1, 1, 32, 32))
+                    tt_lib.tensor.Tensor(py_tensor)
             )doc"
         )
         .def("deallocate", [](Tensor &self) {
@@ -751,9 +812,25 @@ void TensorModule(py::module &m_tensor) {
                 device = tt_tensor.device()
 
         )doc")
-        .def("data", [](const Tensor &self) -> HostBuffer {
-            TT_ASSERT(self.storage_type() == StorageType::HOST and self.is_allocated(), "Host buffer must be allocated!");
-            return self.host_storage().value().buffer;
+        .def("data", [](const Tensor &self) -> std::variant<HostBuffer, ExternalBuffer> {
+            return std::visit(
+                [] (auto&& storage) -> std::variant<HostBuffer, ExternalBuffer> {
+                    using T = std::decay_t<decltype(storage)>;
+                    if constexpr (std::is_same_v<T, HostStorage>) {
+                        return storage.buffer;
+                    }
+                    else if constexpr (std::is_same_v<T, DeviceStorage>) {
+                        TT_THROW("Device storage doesn't support data method");
+                    }
+                    else if constexpr (std::is_same_v<T, ExternalStorage>) {
+                        return storage.buffer;
+                    }
+                    else {
+                        raise_unsupported_storage<T>();
+                    }
+                },
+                self.storage()
+            );
         }, R"doc(
             Get data in the tensor as a list of numbers.
 
@@ -2812,7 +2889,8 @@ void TensorModule(py::module &m_tensor) {
                     // do nothing
                 }
                 else if (py::isinstance(value, torch.attr("Tensor"))) {
-                    attributes.push_back({fmt::format("{}", name), "torch.Tensor"});
+                    auto tensor = detail::convert_torch_tensor_to_tt_tensor(value);
+                    input_tensors.push_back(tensor);
                 }
                 else {
                     attributes.push_back({fmt::format("{}", name), fmt::format("{}", value)});

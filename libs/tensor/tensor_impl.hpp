@@ -3,7 +3,7 @@
 #include "tensor/types.hpp"
 #include "tensor/tensor.hpp"
 #include "tensor/tensor_utils.hpp"
-#include "tensor/host_buffer.hpp"
+#include "tensor/external_buffer_functions.hpp"
 #include "tensor/host_buffer_functions.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -23,93 +23,77 @@ namespace tensor_impl {
 //                        Data type converters, packers, and unpackers
 // ======================================================================================
 // TODO(arakhmati): Should cast_vec be a generator?
-template <typename T1, typename T2>
-inline std::vector<T1> cast_vec(const host_buffer::HostBufferForDataType<T2>& data_to_convert) {
-    std::vector<T1> converted_data;
+
+template <typename OutputDataType, template<typename> typename BufferType, typename InputDataType>
+std::vector<OutputDataType> cast_vec(const BufferType<InputDataType>& data_to_convert) {
+    std::vector<OutputDataType> converted_data;
     for (auto datum : data_to_convert) {
-        converted_data.push_back(static_cast<T1>(datum));
+        if constexpr (std::is_same_v<OutputDataType, float> and std::is_same_v<InputDataType, bfloat16>) {
+            converted_data.push_back(datum.to_float());
+        }
+        else if constexpr (std::is_same_v<OutputDataType, uint32_t> and std::is_same_v<InputDataType, bfloat16>) {
+            converted_data.push_back((uint32_t)datum.to_uint16());
+        }
+        else {
+            converted_data.push_back(static_cast<OutputDataType>(datum));
+        }
     }
     return converted_data;
 }
 
-template <>
-inline std::vector<float> cast_vec(const host_buffer::HostBufferForDataType<bfloat16>& data_to_convert) {
-    std::vector<float> converted_data;
-    for (auto datum : data_to_convert) {
-        converted_data.push_back(datum.to_float());
-    }
-    return converted_data;
-}
-
-template <>
-inline std::vector<uint32_t> cast_vec(const host_buffer::HostBufferForDataType<bfloat16>& data_to_convert) {
-    std::vector<uint32_t> converted_data;
-    for (auto datum : data_to_convert) {
-        converted_data.push_back((uint32_t)datum.to_uint16());
-    }
-    return converted_data;
+namespace detail{
+template<class>
+inline constexpr bool always_false_v = false;
 }
 
 // TODO(arakhmati): Should pack_vec_into_uint32_vec be a generator?
-template <typename T>
-constexpr inline std::vector<uint32_t> pack_vec_into_uint32_vec(const host_buffer::HostBufferForDataType<T>& data_to_pack) {
-    TT_THROW("Don't know how to pack data into uint32 vector generically!");
-}
-
-template <>
-inline std::vector<uint32_t> pack_vec_into_uint32_vec(const host_buffer::HostBufferForDataType<uint32_t>& data_to_pack) {
-    return std::vector(std::begin(data_to_pack), std::end(data_to_pack));
-}
-
-template <>
-inline std::vector<uint32_t> pack_vec_into_uint32_vec(const host_buffer::HostBufferForDataType<bfloat16>& data_to_pack) {
-    auto bfloat16_vec = std::vector(std::begin(data_to_pack), std::end(data_to_pack));
-    return pack_bfloat16_vec_into_uint32_vec(bfloat16_vec);
-}
-
-template <>
-inline std::vector<uint32_t> pack_vec_into_uint32_vec(const host_buffer::HostBufferForDataType<float>& data_to_pack) {
-    std::vector<uint32_t> uint32_data;
-    assert(data_to_pack.size() % 2 == 0);
-    for (auto i = 0; i < data_to_pack.size(); i += 2) {
-        auto float_val1 = data_to_pack[i];
-        auto float_val2 = data_to_pack[i + 1];
-        auto bfloat_val1 = bfloat16(float_val1);
-        auto bfloat_val2 = bfloat16(float_val2);
-        auto uint32_val = pack_two_bfloat16_into_uint32({bfloat_val1, bfloat_val2});
-        uint32_data.push_back(uint32_val);
+template <typename DataType, template<typename> typename BufferType>
+constexpr inline std::vector<uint32_t> pack_vec_into_uint32_vec(const BufferType<DataType>& data_to_pack) {
+    if constexpr (std::is_same_v<DataType, uint32_t>) {
+        return std::vector(std::begin(data_to_pack), std::end(data_to_pack));
     }
-    return uint32_data;
-}
-
-template <typename T>
-constexpr inline std::vector<T> unpack_uint32_vec(std::vector<uint32_t> &data_to_unpack) {
-    std::vector<uint32_t> unpacked_data;
-    TT_ASSERT(false && "Don't know how to unpack uint32 data generically!");
-    return unpacked_data;
-}
-
-template <>
-inline std::vector<uint32_t> unpack_uint32_vec(std::vector<uint32_t> &data_to_unpack) {
-    return data_to_unpack;
-}
-
-template <>
-inline std::vector<bfloat16> unpack_uint32_vec(std::vector<uint32_t> &data_to_unpack) {
-    return unpack_uint32_vec_into_bfloat16_vec(data_to_unpack);
-}
-
-template <>
-inline std::vector<float> unpack_uint32_vec(std::vector<uint32_t> &data_to_unpack) {
-    std::vector<float> float_data;
-    for (auto i = 0; i < data_to_unpack.size(); i++) {
-        auto unpacked = unpack_two_bfloat16_from_uint32(data_to_unpack[i]);
-        auto float_val1 = unpacked.first.to_float();
-        auto float_val2 = unpacked.second.to_float();
-        float_data.push_back(float_val1);
-        float_data.push_back(float_val2);
+    else if constexpr (std::is_same_v<DataType, bfloat16>) {
+        auto bfloat16_vec = std::vector(std::begin(data_to_pack), std::end(data_to_pack));
+        return pack_bfloat16_vec_into_uint32_vec(bfloat16_vec);
     }
-    return float_data;
+    else if constexpr (std::is_same_v<DataType, float>) {
+        std::vector<uint32_t> uint32_data;
+        assert(data_to_pack.size() % 2 == 0);
+        for (auto i = 0; i < data_to_pack.size(); i += 2) {
+            auto float_val1 = data_to_pack[i];
+            auto float_val2 = data_to_pack[i + 1];
+            auto bfloat_val1 = bfloat16(float_val1);
+            auto bfloat_val2 = bfloat16(float_val2);
+            auto uint32_val = pack_two_bfloat16_into_uint32({bfloat_val1, bfloat_val2});
+            uint32_data.push_back(uint32_val);
+        }
+        return uint32_data;
+    } else {
+        static_assert(detail::always_false_v<DataType>, "Don't know how to unpack uint32 data generically!");
+    }
+}
+
+template <typename DataType>
+constexpr inline std::vector<DataType> unpack_uint32_vec(std::vector<uint32_t> &data_to_unpack) {
+    if constexpr (std::is_same_v<DataType, uint32_t>) {
+        return data_to_unpack;
+    }
+    else if constexpr (std::is_same_v<DataType, bfloat16>) {
+        return unpack_uint32_vec_into_bfloat16_vec(data_to_unpack);
+    }
+    else if constexpr (std::is_same_v<DataType, float>) {
+        std::vector<float> float_data;
+        for (auto i = 0; i < data_to_unpack.size(); i++) {
+            auto unpacked = unpack_two_bfloat16_from_uint32(data_to_unpack[i]);
+            auto float_val1 = unpacked.first.to_float();
+            auto float_val2 = unpacked.second.to_float();
+            float_data.push_back(float_val1);
+            float_data.push_back(float_val2);
+        }
+        return float_data;
+    } else {
+        static_assert(detail::always_false_v<DataType>, "Don't know how to unpack uint32 data generically!");
+    }
 }
 
 template <typename T>
@@ -289,8 +273,8 @@ std::vector<T> read_data_from_device(const Tensor &tensor, uint32_t size_in_byte
     return unpacked_data;
 }
 
-template <typename T>
-inline void write_data_to_device_buffer(const host_buffer::HostBufferForDataType<T>& data_to_write, DeviceBuffer buffer, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config) {
+template <typename T, template<typename> typename BufferType>
+inline void write_data_to_device_buffer(const BufferType<T>& data_to_write, DeviceBuffer buffer, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config) {
     // TODO(arakhmati): can we use generators in this function to go from `data_to_write` to `uint32_data`?
     // And effectively get rid of any additional allocation
 
@@ -321,8 +305,8 @@ inline void write_data_to_device_buffer(const host_buffer::HostBufferForDataType
     }
 }
 
-template <typename T>
-inline DeviceBuffer initialize_data_on_device(const host_buffer::HostBufferForDataType<T>& data_to_write, Device* device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config) {
+template <typename T, template<typename> typename BufferType>
+inline DeviceBuffer initialize_data_on_device(const BufferType<T>& data_to_write, Device* device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config) {
     TT_ASSERT(device != nullptr);
     uint32_t packed_size_in_bytes;
     if (data_type == DataType::BFLOAT8_B) {
@@ -336,13 +320,40 @@ inline DeviceBuffer initialize_data_on_device(const host_buffer::HostBufferForDa
 }
 
 template <typename T>
-inline DeviceBuffer device_buffer_from_host_buffer(const HostBuffer& host_buffer, Device* device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config) {
-    auto data_to_write = host_buffer::get_as<T>(host_buffer);
-    TT_ASSERT(volume(shape) == data_to_write.size(), "Tensor shape and number of data elements does not match");
-    if (layout == Layout::TILE) {
-        TT_ASSERT((shape[2] % tt::constants::TILE_HEIGHT == 0 && shape[3] % tt::constants::TILE_WIDTH == 0), "Tensor shape incompatible for specified layout");
-    }
-    return initialize_data_on_device<T>(data_to_write, device, shape, data_type, layout, memory_config);
+inline DeviceBuffer to_device_buffer(const Storage& storage, Device* device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config) {
+    return std::visit(
+        [&device, &shape, &data_type, &layout, memory_config] (auto&& storage) -> DeviceBuffer {
+            using StorageType = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<StorageType, HostStorage>) {
+                auto data_to_write = host_buffer::get_as<T>(storage.buffer);
+                TT_ASSERT(volume(shape) == data_to_write.size(), "Tensor shape and number of data elements does not match");
+                if (layout == Layout::TILE) {
+                    TT_ASSERT((shape[2] % tt::constants::TILE_HEIGHT == 0 && shape[3] % tt::constants::TILE_WIDTH == 0), "Tensor shape incompatible for specified layout");
+                }
+                return initialize_data_on_device<T>(data_to_write, device, shape, data_type, layout, memory_config);
+            }
+            else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
+                TT_THROW("Device storage doesn't support to_device_buffer");
+            }
+            else if constexpr (std::is_same_v<StorageType, ExternalStorage>) {
+                if constexpr (std::is_same_v<T, float> or std::is_same_v<T, bfloat16>) {
+                    auto data_to_write = external_buffer::get_as<T>(storage.buffer);
+                    TT_ASSERT(volume(shape) == data_to_write.size(), "Tensor shape and number of data elements does not match");
+                    if (layout == Layout::TILE) {
+                        TT_ASSERT((shape[2] % tt::constants::TILE_HEIGHT == 0 && shape[3] % tt::constants::TILE_WIDTH == 0), "Tensor shape incompatible for specified layout");
+                    }
+                    return initialize_data_on_device<T>(data_to_write, device, shape, data_type, layout, memory_config);
+                }
+                else {
+                    TT_THROW("External storage doesn't support this data type");
+                }
+            }
+            else {
+                raise_unsupported_storage<StorageType>();
+            }
+        },
+        storage
+    );
 }
 
 // ======================================================================================
@@ -353,7 +364,7 @@ inline Tensor to_host(const Tensor &tensor) {
     auto device_storage = tensor.device_storage().value();
     auto device_buffer = device_storage.buffer;
     auto device = device_storage.device;
-    TT_ASSERT(tensor.storage_type() == StorageType::DEVICE and tensor.is_allocated(), "Need DRAM buffers on device to exist to copy data to host!");
+    TT_ASSERT(tensor.storage_type() != StorageType::HOST and tensor.is_allocated(), "Need DRAM buffers on device to exist to copy data to host!");
     TT_ASSERT(device != nullptr && "Need device to be set copy data from device to host!");
     uint32_t size_in_bytes = device_buffer->size();
     auto data_vec = read_data_from_device<T>(tensor, size_in_bytes);
@@ -363,7 +374,10 @@ inline Tensor to_host(const Tensor &tensor) {
 
 template <typename T>
 inline Tensor to_device(const Tensor &tensor, Device *target_device, const MemoryConfig &memory_config) {
-    auto host_storage = tensor.host_storage().value();
+    TT_ASSERT(tensor.storage_type() != StorageType::DEVICE);
+    if (tensor.storage_type() ==  StorageType::HOST) {
+        TT_ASSERT(tensor.is_allocated(), "Need host buffer on device to exist to copy data to device!");
+    }
     TT_ASSERT(target_device != nullptr && "Need target device in order to move tensor to device!");
     TT_ASSERT(tensor.is_allocated() && "Need data to exist in order to move it to device");
 
@@ -371,8 +385,8 @@ inline Tensor to_device(const Tensor &tensor, Device *target_device, const Memor
     auto data_type = tensor.dtype();
     auto layout = tensor.layout();
 
-    auto device_buffer = tensor_impl::device_buffer_from_host_buffer<T>(
-        host_storage.buffer, target_device, shape, data_type, layout, memory_config
+    auto device_buffer = tensor_impl::to_device_buffer<T>(
+        tensor.storage(), target_device, shape, data_type, layout, memory_config
     );
     return Tensor(DeviceStorage{device_buffer, target_device, memory_config}, shape, data_type, layout);
 }

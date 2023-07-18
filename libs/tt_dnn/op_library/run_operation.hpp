@@ -63,6 +63,14 @@ static auto create_tensor_record(const Tensor& tensor) {
                     tensor.storage_type(), tensor.shape(), tensor.dtype(), tensor.layout(), storage.memory_config
                 };
             }
+            else if constexpr (std::is_same_v<T, ExternalStorage>) {
+                return operation_history::TensorRecord{
+                    tensor.storage_type(), tensor.shape(), tensor.dtype(), tensor.layout()
+                };
+            }
+            else {
+                raise_unsupported_storage<T>();
+            }
         },
         tensor.storage()
     );

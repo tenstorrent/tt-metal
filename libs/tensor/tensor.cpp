@@ -19,18 +19,25 @@ namespace tt {
 namespace tt_metal {
 
 namespace detail {
-template<class>
-inline constexpr bool always_false_v = false;
+
+// TODO(arakhmati): remove this function once Shape is changed to std::vector
+std::vector<uint32_t> convert_array_to_vector(const Shape& shape) {
+    return std::vector<uint32_t>(std::begin(shape), std::end(shape));
+}
+
 }
 
 Tensor::Tensor(const HostStorage& storage, const Shape& shape, DataType dtype, Layout layout)
-    : storage_(storage), shape_(shape), dtype_(dtype), layout_(layout) {}
+    : storage_(storage), shape_(detail::convert_array_to_vector(shape)), dtype_(dtype), layout_(layout) {}
 
 Tensor::Tensor(const DeviceStorage& storage, const Shape& shape, DataType dtype, Layout layout)
-    : storage_(storage), shape_(shape), dtype_(dtype), layout_(layout) {
+    : storage_(storage), shape_(detail::convert_array_to_vector(shape)), dtype_(dtype), layout_(layout) {
     TT_ASSERT(storage.device != nullptr);
     tensor_impl::validate_on_device_dtype_and_layout(storage.device, dtype, layout);
 }
+
+Tensor::Tensor(const ExternalStorage& storage, const std::vector<uint32_t>& shape, DataType dtype, Layout layout)
+    : storage_(storage), shape_(shape), dtype_(dtype), layout_(layout) {}
 
 Tensor::~Tensor() {
     this->deallocate();
@@ -50,8 +57,11 @@ void Tensor::deallocate() {
                 }
                 storage.buffer.reset();
             }
+            else if constexpr (std::is_same_v<T, ExternalStorage>) {
+                // do nothing
+            }
             else {
-                static_assert(detail::always_false_v<T>, "non-exhaustive visitor!");
+                raise_unsupported_storage<T>();
             }
         },
         this->storage_
@@ -133,7 +143,7 @@ Tensor Tensor::reshape(const Shape& new_shape) const {
     }
 
     auto new_tensor = *this;
-    new_tensor.shape_ = new_shape;
+    new_tensor.shape_ = detail::convert_array_to_vector(new_shape);
     return new_tensor;
 }
 
@@ -148,8 +158,11 @@ bool Tensor::is_allocated() const {
             else if constexpr (std::is_same_v<T, DeviceStorage>) {
                 return bool(storage.buffer);
             }
+            else if constexpr (std::is_same_v<T, ExternalStorage>) {
+                return true;
+            }
             else {
-                static_assert(detail::always_false_v<T>, "non-exhaustive visitor!");
+                raise_unsupported_storage<T>();
             }
         },
         this->storage_
@@ -168,8 +181,11 @@ StorageType Tensor::storage_type() const {
             else if constexpr (std::is_same_v<T, DeviceStorage>) {
                 return StorageType::DEVICE;
             }
+            else if constexpr (std::is_same_v<T, ExternalStorage>) {
+                return StorageType::EXTERNAL;
+            }
             else {
-                static_assert(detail::always_false_v<T>, "non-exhaustive visitor!");
+                raise_unsupported_storage<T>();
             }
         },
         this->storage_
@@ -201,7 +217,7 @@ const std::array<uint32_t, 4> compute_strides(const Shape& shape) {
 }
 
 const std::array<uint32_t, 4> Tensor::strides() const {
-    return detail::compute_strides(this->shape_);
+    return detail::compute_strides(this->shape());
 }
 
 uint32_t Tensor::volume() const {

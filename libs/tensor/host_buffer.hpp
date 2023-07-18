@@ -10,9 +10,9 @@ namespace tt_metal {
 namespace host_buffer {
 
 template<typename T>
-struct HostBufferForDataType {
+struct Buffer {
 
-    explicit HostBufferForDataType(std::shared_ptr<std::vector<T>>&& shared_vector) :
+    explicit Buffer(std::shared_ptr<std::vector<T>>&& shared_vector) :
         shared_vector_(shared_vector),
         pointer_for_faster_access_(shared_vector->data()),
         size_(shared_vector->size()) {}
@@ -40,12 +40,12 @@ struct HostBufferForDataType {
 
 
 template<typename T>
-bool operator==(const HostBufferForDataType<T>& host_buffer_a, const HostBufferForDataType<T>& host_buffer_b) noexcept {
-    if (host_buffer_a.size() != host_buffer_b.size()) {
+bool operator==(const Buffer<T>& buffer_a, const Buffer<T>& buffer_b) noexcept {
+    if (buffer_a.size() != buffer_b.size()) {
         return false;
     }
-    for (auto index = 0; index < host_buffer_a.size(); index++) {
-        if (host_buffer_a[index] != host_buffer_b[index]) {
+    for (auto index = 0; index < buffer_a.size(); index++) {
+        if (buffer_a[index] != buffer_b[index]) {
             return false;
         }
     }
@@ -54,8 +54,8 @@ bool operator==(const HostBufferForDataType<T>& host_buffer_a, const HostBufferF
 
 
 template<typename T>
-bool operator!=(const HostBufferForDataType<T>& host_buffer_a, const HostBufferForDataType<T>& host_buffer_b) noexcept {
-    return not (host_buffer_a == host_buffer_b);
+bool operator!=(const Buffer<T>& buffer_a, const Buffer<T>& buffer_b) noexcept {
+    return not (buffer_a == buffer_b);
 }
 
 }  // namespace host_buffer

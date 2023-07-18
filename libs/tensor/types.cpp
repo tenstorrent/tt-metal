@@ -8,6 +8,7 @@ namespace tt {
 
 namespace tt_metal {
 
+
 tt::DataFormat datatype_to_dataformat_converter(tt::tt_metal::DataType datatype) {
     switch (datatype) {
         case tt::tt_metal::DataType::BFLOAT16: return tt::DataFormat::Float16_b;
@@ -20,10 +21,11 @@ tt::DataFormat datatype_to_dataformat_converter(tt::tt_metal::DataType datatype)
     }
 }
 
+
 tt::stl::reflection::Attributes MemoryConfig::attributes() const {
     return {
         {"interleaved", this->interleaved},
-        {"buffer_type", this->buffer_type}
+        {"buffer_type", this->buffer_type},
     };
 }
 
@@ -35,8 +37,13 @@ tt::stl::reflection::Attributes HostStorage::attributes() const {
 
 tt::stl::reflection::Attributes DeviceStorage::attributes() const {
     return {
-        {"memory_config", this->memory_config}
+        {"memory_config", this->memory_config},
     };
+}
+
+
+tt::stl::reflection::Attributes ExternalStorage::attributes() const {
+    return {};
 }
 
 }  // namespace tt_metal
