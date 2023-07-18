@@ -28,7 +28,7 @@ struct Conv {
           out_subblock_w_ntiles(out_sw),
           untilize_out(unt_out),
           conv_params(c_params) {}
-
+    operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
@@ -38,7 +38,7 @@ struct Conv {
 
 Tensor conv(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
              uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles);
-Program conv_single_core(const Tensor& A, const Tensor& B, vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
+operation::ProgramWithCallbacks conv_single_core(const Tensor& A, const Tensor& B, vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
              uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, bool untilize_out, Tensor& output); // Tilizes a, untilizes b
 
 struct ConvWithAddressMap {
@@ -56,7 +56,7 @@ struct ConvWithAddressMap {
           out_subblock_w_ntiles(out_sw),
           untilize_out(unt_out),
           conv_params(c_params) {}
-
+    operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
@@ -66,7 +66,7 @@ struct ConvWithAddressMap {
 
 Tensor conv_with_address_map(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
              uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles);
-Program conv_with_address_map_single_core(const Tensor& A, const Tensor& B, vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
+operation::ProgramWithCallbacks conv_with_address_map_single_core(const Tensor& A, const Tensor& B, vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
              uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, bool untilize_out, Tensor& output); // Tilizes a, untilizes b
 
 

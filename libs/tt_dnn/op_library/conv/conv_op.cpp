@@ -164,7 +164,7 @@ Tensor create_output_dram_buffer_(Device * device, DataType data_type, std::arra
     return output;
 }
 
-Program conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<int> conv_params,
+operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<int> conv_params,
                                        uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
                                        uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, bool untilize_out, Tensor &output) {
     bool pass = true;
@@ -288,6 +288,10 @@ Program conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<
     uint32_t dst_l1_act_buffer_size_bytes = act_block_h_ntiles * act_block_w_ntiles * single_tile_size;
     uint32_t dst_l1_weight_buffer_size_bytes = weight_block_h_ntiles * weight_block_w_ntiles * single_tile_size;
 
+    // more args for writer
+    uint32_t out_block_row_size_bytes = weight_block_w_ntiles*TILE_WIDTH*num_bytes_of_df;
+    uint32_t out_row_size_bytes = weight_matrix_width*num_bytes_of_df;
+    uint32_t batch_size = 1;
 
     // For debug
     {
@@ -392,11 +396,11 @@ Program conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<
         writer_rt_args = {
             out_dram_addr,
             act_block_h_datums,
-            weight_block_w_ntiles*TILE_WIDTH*num_bytes_of_df,
+            out_block_row_size_bytes,
             1,
             num_blocks_act_h,
             num_blocks_weight_w,
-            weight_matrix_width*num_bytes_of_df
+            out_row_size_bytes
         };
     } else {
         assert(false && "Tiled output unsupported");
@@ -451,7 +455,7 @@ Program conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
-    auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
+    auto compute = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/bmm_tilize_untilize.cpp",
         core,
@@ -470,7 +474,39 @@ Program conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<
         writer, core,
         writer_rt_args
     );
-    return program;
+
+    auto override_runtime_args_callback = [
+        reader_kernel=reader,
+        writer_kernel=writer
+    ]
+    (
+        const std::vector<Buffer*>& input_buffers,
+        const std::vector<Buffer*>& output_buffers
+    ) {
+
+        auto src_dram_buffer_a = input_buffers.at(0);
+        auto src_dram_buffer_b = input_buffers.at(1);
+
+        auto dst_dram_buffer = output_buffers.at(0);
+
+        CoreCoord core = {0, 0};
+
+        {
+            auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+            runtime_args[0] = src_dram_buffer_a->address();
+            runtime_args[3] = src_dram_buffer_b->address();
+            SetRuntimeArgs(reader_kernel, core, runtime_args);
+        }
+
+        {
+            auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+            runtime_args[0] = dst_dram_buffer->address();
+            SetRuntimeArgs(writer_kernel, core, runtime_args);
+        }
+    };
+
+    return {std::move(program), override_runtime_args_callback};
+
 }
 
 Tensor conv(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
@@ -478,7 +514,7 @@ Tensor conv(const Tensor& a, const Tensor &b, const vector<int> conv_params, uin
     return operation::run(Conv(act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, conv_params, true), {a, b}).at(0);
 }
 
-Program conv_single_core(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
+operation::ProgramWithCallbacks conv_single_core(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
              uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, bool untilize_out, Tensor &output) {
     return conv_as_large_bmm_single_core_(a, b, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, untilize_out, output);
 }
@@ -507,6 +543,12 @@ std::vector<Tensor> Conv::create_output_tensors(const std::vector<Tensor>& input
     // TODO: check if anything else needs to be done here.
     output_tensors.emplace_back(output);
     return output_tensors;
+}
+
+operation::Hash Conv::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);
+    return fmt::format("{}_{}_{}", *this, input_tensor_a, input_tensor_b);
 }
 
 operation::ProgramWithCallbacks Conv::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
@@ -790,7 +832,7 @@ std::pair<vector<uint32_t>, vector<uint32_t>> populate_address_map_vectors_for_r
     return make_pair(std::move(address_map), std::move(address_map_metadata));
 }
 
-Program conv_as_large_bmm_with_address_map_single_core_(const Tensor& a, const Tensor &b, vector<int> conv_params,
+operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(const Tensor& a, const Tensor &b, vector<int> conv_params,
                                        uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
                                        uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, bool untilize_out, Tensor &output) {
     bool pass = true;
@@ -1160,7 +1202,41 @@ Program conv_as_large_bmm_with_address_map_single_core_(const Tensor& a, const T
     tt_metal::WriteToDeviceL1(device, core_coord, act_address_map_metadata_l1_address, act_address_map_metadata);
     tt_metal::WriteToDeviceL1(device, core_coord, weight_address_map_metadata_l1_address, weight_address_map_metadata);
 
-    return program;
+     auto override_runtime_args_callback = [
+        reader_kernel=reader,
+        writer_kernel=writer
+    ]
+    (
+        const std::vector<Buffer*>& input_buffers,
+        const std::vector<Buffer*>& output_buffers
+    ) {
+
+        auto src_dram_buffer_a = input_buffers.at(0);
+        auto src_dram_buffer_b = input_buffers.at(1);
+
+        auto dst_dram_buffer = output_buffers.at(0);
+
+        CoreCoord core = {0, 0};
+
+        {
+            auto runtime_args = GetRuntimeArgs(reader_kernel, core);
+            runtime_args[0] = src_dram_buffer_a->address();
+            runtime_args[1] = src_dram_buffer_a->noc_coordinates().x;
+            runtime_args[2] = src_dram_buffer_a->noc_coordinates().y;
+            runtime_args[8] = src_dram_buffer_b->address();
+            runtime_args[9] = src_dram_buffer_b->noc_coordinates().x;
+            runtime_args[10] = src_dram_buffer_b->noc_coordinates().y;
+            SetRuntimeArgs(reader_kernel, core, runtime_args);
+        }
+
+        {
+            auto runtime_args = GetRuntimeArgs(writer_kernel, core);
+            runtime_args[0] = dst_dram_buffer->address();
+            SetRuntimeArgs(writer_kernel, core, runtime_args);
+        }
+    };
+
+    return {std::move(program), override_runtime_args_callback};
 }
 
 Tensor conv_with_address_map(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
@@ -1168,7 +1244,7 @@ Tensor conv_with_address_map(const Tensor& a, const Tensor &b, const vector<int>
     return operation::run(ConvWithAddressMap(act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, conv_params, true), {a, b}).at(0);
 }
 
-Program conv_with_address_map_single_core(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
+operation::ProgramWithCallbacks conv_with_address_map_single_core(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
              uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, bool untilize_out, Tensor &output) {
     return conv_as_large_bmm_with_address_map_single_core_(a, b, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, untilize_out, output);
 }
@@ -1197,6 +1273,12 @@ std::vector<Tensor> ConvWithAddressMap::create_output_tensors(const std::vector<
     // TODO: check if anything else needs to be done here.
     output_tensors.emplace_back(output);
     return output_tensors;
+}
+
+operation::Hash ConvWithAddressMap::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);
+    return fmt::format("{}_{}_{}", *this, input_tensor_a, input_tensor_b);
 }
 
 operation::ProgramWithCallbacks ConvWithAddressMap::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {

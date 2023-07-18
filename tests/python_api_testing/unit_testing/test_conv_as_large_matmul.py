@@ -13,6 +13,7 @@ from python_api_testing.models.utility_functions import print_diff_argmax, is_cl
 from tests.python_api_testing.conv.conv_unit_test_utils import create_conv_act_tensor, create_conv_weight_tensor
 import torch
 
+@pytest.mark.parametrize("run_conv_with_address_map", (False, True))
 @pytest.mark.parametrize(
     "K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w",
     (
@@ -64,7 +65,7 @@ import torch
         (8*32, 8*32, 16, 16, 1, 1, 1, 1, 0, 0),
     ),
 )
-def test_run_conv_as_large_matmul(K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w):
+def test_run_conv_as_large_matmul(use_program_cache, run_conv_with_address_map, K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w):
 
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
@@ -91,17 +92,26 @@ def test_run_conv_as_large_matmul(K, C, H, W, R, S, stride_h, stride_w, pad_h, p
 
     # Prepare activations
     A_cl_host = create_conv_act_tensor(A_pyt, 1, C, H, W)
-    A = A_cl_host.to(device)
+    if run_conv_with_address_map:
+        A = A_cl_host.to(device, ttl.tensor.MemoryConfig(False))
+    else:
+        A = A_cl_host.to(device)
 
     # Prepare weights
     B_tiled_host = create_conv_weight_tensor(B_pyt, K, C, R, S, weight_block_h, weight_block_w)
-    B_tiled = B_tiled_host.to(device)
+    if run_conv_with_address_map:
+        B_tiled = B_tiled_host.to(device, ttl.tensor.MemoryConfig(False))
+    else:
+        B_tiled = B_tiled_host.to(device)
     # Calculate conv result with golden result. Run Pytorch conv
     out_golden = torch.nn.functional.conv2d(A_pyt, B_pyt, stride=(stride_h, stride_w), padding=(pad_h, pad_w))
 
     untilize_out = True
     # Run TT metal OP
-    out = ttl.tensor.conv(A, B_tiled, [R,S,stride_h,stride_w,pad_h,pad_w], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w)
+    if run_conv_with_address_map:
+        out = ttl.tensor.conv_with_address_map(A, B_tiled, [R,S,stride_h,stride_w,pad_h,pad_w], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w)
+    else:
+        out = ttl.tensor.conv(A, B_tiled, [R,S,stride_h,stride_w,pad_h,pad_w], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w)
     out = out.to(host)
     assert(out.shape() == mm_output_shape)
     if not untilize_out:
