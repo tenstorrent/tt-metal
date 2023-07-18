@@ -30,8 +30,6 @@ inline void llk_math_eltwise_unary_datacopy(uint dst_index) {
             TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
         } else if constexpr (src_b_bcast_type == BroadcastType::COL) {
             // Mop for col broadcast only does 2 outerloops.  Needs to clear B manually and call twice
-            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD);
-            TTI_ZEROSRC(0, 1, 0, 1);  // Zero out SrcA current read bank
             ckernel_template::run(instrn_buffer);
             TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
             ckernel_template::run(instrn_buffer);
@@ -100,13 +98,13 @@ inline void eltwise_unary_configure_addrmod() {
 }
 
 template <DataCopyType type, BroadcastType bcast_type = BroadcastType::NONE>
-inline void eltwise_unary_configure_mop(uint rows_per_inst, uint total_rows) {
+inline void eltwise_unary_configure_mop(uint rows_per_inst, uint total_rows, const uint num_faces) {
     // always move 32x32 tile, packed as 16x16x4
 
     if constexpr (type == A2D) {
         uint addr_mod = (rows_per_inst == p_mova2d::MOV_1_ROW) ? ADDR_MOD_0 : ADDR_MOD_2;
         uint innerloop = (rows_per_inst == p_mova2d::MOV_1_ROW) ? total_rows : (total_rows >> 3);
-        uint outerloop = 4;
+        uint outerloop = num_faces;
 
         //use elwadd to handle unpacking data into src A as fp16, but dest is in fp32 mode
         ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0));
@@ -157,15 +155,15 @@ inline void eltwise_unary_configure_mop(uint rows_per_inst, uint total_rows) {
 
 template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NONE>
 // within_face_16x16_transpose is used by unpacker, math does not transpose
-inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t transpose_of_faces=0 /* unused */, const std::uint32_t within_face_16x16_transpose=0 /* unused */, const std::uint32_t in_tile_dims[2] = default_tile_dims) {
-    // Todo: do something with in_tile_dims
-    
+inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t transpose_of_faces=0 /*unused*/, const std::uint32_t within_face_16x16_transpose=0 /* unused */, const std::uint32_t in_tile_dims[2] = default_tile_dims) {
+    constexpr uint32_t num_faces = 4; //get_tile_num_faces(in_tile_dims); FIXME
+ 
     eltwise_unary_configure_addrmod<type, src_b_bcast_type>();
 
     if constexpr (type == A2D) {
-        eltwise_unary_configure_mop<type, src_b_bcast_type>(p_mova2d::MOV_8_ROWS, 16);
+        eltwise_unary_configure_mop<type, src_b_bcast_type>(p_mova2d::MOV_8_ROWS, 16, num_faces);
     } else if constexpr (type == B2D) {
-        eltwise_unary_configure_mop<type, src_b_bcast_type>(p_movb2d::MOV_4_ROWS, 16);
+        eltwise_unary_configure_mop<type, src_b_bcast_type>(p_movb2d::MOV_4_ROWS, 16, num_faces);
     } else {
         FWASSERT("Unsupported op!", false);
     }

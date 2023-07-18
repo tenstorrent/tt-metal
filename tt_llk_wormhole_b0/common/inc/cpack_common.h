@@ -573,4 +573,16 @@ namespace ckernel::packer
    {
       return (OUTPUT_BASE_ID);
    }
+
+   inline uint32_t get_tile_num_faces(const std::uint32_t out_tile_dims[] = default_tile_dims)
+   {
+      if ((out_tile_dims[TileDim::R_IDX] <= FACE_R_DIM) && (out_tile_dims[TileDim::C_IDX] <= FACE_C_DIM)) {
+         return 1;
+      } else if ((out_tile_dims[TileDim::R_IDX] == TILE_R_DIM) && (out_tile_dims[TileDim::C_IDX] == TILE_C_DIM)) { 
+         return 4;
+      } else {
+         return 2;
+      }
+   }
+
 }

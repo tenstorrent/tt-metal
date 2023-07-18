@@ -12,7 +12,7 @@ using namespace ckernel;
 using namespace ckernel::packer;
 
 template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
-inline void llk_pack_mop_config() {
+inline void llk_pack_mop_config(const uint32_t num_faces = 4) {
     addr_mod_pack_t{
         .y_src = {.incr = untilize ? 0 : 1},
         .y_dst = {.incr = 1},
@@ -44,7 +44,7 @@ inline void llk_pack_mop_config() {
     const uint MOP_UNTILIZE_INNER_LOOP = FaceLayout == DstTileFaceLayout::ColMajor ? 8 : 4;
     const uint MOP_OUTER_LOOP = 1;
     const uint MOP_UNTILIZE_OUTER_LOOP = 8;
-    const uint PACKCNT = 4;
+    const uint PACKCNT = num_faces;
     const uint MEGAROW = 1;
     constexpr uint ZERO_OUTPUT_FLAG = zero_output ? p_pacr::P_ZERO_OUTPUT_ENABLED : p_pacr::P_ZERO_OUTPUT_DISABLED;
 
@@ -131,8 +131,8 @@ inline void llk_pack_reduce_hw_configure_disaggregated(std::uint32_t pack_output
 
 template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
 inline void llk_pack_init(const uint32_t out_tile_dims[2] = default_tile_dims) {
-    // To do: do something with tile dims
-    llk_pack_mop_config<untilize, zero_output, FaceLayout>();
+    constexpr uint num_faces = 4; //get_tile_num_faces(out_tile_dims); FIXME
+    llk_pack_mop_config<untilize, zero_output, FaceLayout>(num_faces);
 }
 
 template <bool out_of_order_output, bool untilize>
