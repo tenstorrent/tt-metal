@@ -10,8 +10,14 @@
 #define MATH(x)
 #endif
 #include "compute_kernel_api/llk_pack_includes.h"
-#include "compute_kernel_api/llk_unpack_includes.h"
 
+#ifdef TRISC_UNPACK
+#include "llk_unpack_AB.h"
+#define UNPACK(x) x
+#define MAIN unpack_main()
+#else
+#define UNPACK(x)
+#endif
 
 
 namespace ckernel {

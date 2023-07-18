@@ -3,10 +3,8 @@
 #define BCAST_LLKOP ELWADD
 #define BCAST_DIM   BroadcastType::ROW
 
-#include "compute_kernel_api/tilize_untilize.h"
-#include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
-
+#include "compute_kernel_api/bcast.h"
 namespace NAMESPACE {
 void MAIN {
 

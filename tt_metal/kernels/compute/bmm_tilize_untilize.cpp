@@ -1,7 +1,8 @@
 #include <cstdint>
 
-#include "compute_kernel_api.h"
-#include "debug_print.h"
+#include "compute_kernel_api/tilize_untilize.h"
+#include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api/matmul.h"
 
 
 SliceRange sr = SliceRange{ .h0 = 0, .h1 = 32, .hs = 8, .w0 = 0, .w1 = 32, .ws = 8 };
