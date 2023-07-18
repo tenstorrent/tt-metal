@@ -2,24 +2,28 @@ import torch
 import pytest
 from loguru import logger
 
-import tt_lib
+from torchvision.models.detection import (
+    SSDLite320_MobileNet_V3_Large_Weights,
+    ssdlite320_mobilenet_v3_large as pretrained,
+)
+
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 from tests.python_api_testing.models.utility_functions_new import (
     comp_allclose,
     comp_pcc,
 )
-from torchvision.models.detection import (
-    SSDLite320_MobileNet_V3_Large_Weights,
-    ssdlite320_mobilenet_v3_large as pretrained,
+from models.ssd.tt.ssd_mobilenetv3_features import (
+    TtMobileNetV3Features,
 )
-from models.ssd.tt.ssd_mobilenetv3_stemlayer import TtMobileNetV3Stem
+
+import tt_lib
 
 
 @pytest.mark.parametrize(
     "pcc",
     ((0.99),),
 )
-def test_ssd_stem_inference(pcc, reset_seeds):
+def test_ssd_mobilenetv3_features_inference(pcc, reset_seeds):
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
@@ -27,37 +31,27 @@ def test_ssd_stem_inference(pcc, reset_seeds):
     torch_model = pretrained(weights=SSDLite320_MobileNet_V3_Large_Weights.DEFAULT)
     torch_model.eval()
 
-    # torch stemlayer
-    model = torch_model.backbone.features[0][1]
+    FEATURE_INDEX = 0
+    pt_model = torch_model.backbone.features[FEATURE_INDEX]
 
-    # Tt ssd_stem
-    config = {"in_channels": 16}
-    tt_model = TtMobileNetV3Stem(
+    config = {}
+    tt_model = TtMobileNetV3Features(
         config,
-        in_channels=config["in_channels"],
-        expanded_channels=16,
-        out_channels=16,
-        kernel_size=1,
-        stride=1,
-        padding=1,
         state_dict=torch_model.state_dict(),
-        base_address=f"backbone.features.0.1",
+        base_address=f"backbone.features",
         device=device,
     )
 
-    tt_model.eval()
-
     # Run torch model
-    input_tensor = torch.randn(1, 16, 112, 112)
-    torch_output = model(input_tensor)
+    input_tensor = torch.rand(1, 3, 320, 320)
+    torch_output = pt_model(input_tensor)
 
     # Run tt model
-    tt_stem_input = torch_to_tt_tensor_rm(input_tensor, device)
-    tt_output = tt_model(tt_stem_input)
+    tt_mobilenet_input = torch_to_tt_tensor_rm(input_tensor, device)
+    tt_output = tt_model(tt_mobilenet_input)
 
     # Compare outputs
     tt_output_torch = tt_to_torch_tensor(tt_output)
-
     does_pass, pcc_message = comp_pcc(torch_output, tt_output_torch, pcc)
 
     logger.info(comp_allclose(torch_output, tt_output_torch))
@@ -66,6 +60,6 @@ def test_ssd_stem_inference(pcc, reset_seeds):
     tt_lib.device.CloseDevice(device)
 
     if does_pass:
-        logger.info("SSDStemlayer Passed!")
+        logger.info("SSDMobilenetV3Features Passed!")
 
-    assert does_pass, f"SSDStemlayer does not meet PCC requirement {pcc}."
+    assert does_pass, f"SSDMobilenetV3Features does not meet PCC requirement {pcc}."

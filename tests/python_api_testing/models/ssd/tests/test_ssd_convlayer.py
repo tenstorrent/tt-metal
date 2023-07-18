@@ -1,25 +1,18 @@
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}")
-sys.path.append(f"{f}/../../..")
-
-import torch
 import pytest
 from loguru import logger
-from torchvision.models import mobilenet_v3_large as pretrained
-from torchvision.models import MobileNet_V3_Large_Weights
 
 import tt_lib
-from models.utility_functions_new import (
-    torch_to_tt_tensor_rm,
-    tt_to_torch_tensor,
+from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
+from tests.python_api_testing.models.utility_functions_new import (
     comp_allclose,
     comp_pcc,
 )
 from models.ssd.tt.ssd_mobilenetv3_convlayer import (
     TtMobileNetV3ConvLayer,
+)
+from torchvision.models.detection import (
+    SSDLite320_MobileNet_V3_Large_Weights,
+    ssdlite320_mobilenet_v3_large as pretrained,
 )
 
 
@@ -27,16 +20,18 @@ from models.ssd.tt.ssd_mobilenetv3_convlayer import (
     "pcc",
     ((0.99),),
 )
-def test_ssd_convlayer_inference(pcc, reset_seeds):
+def test_ssd_convlayer_inference(pcc, imagenet_sample_input, reset_seeds):
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
 
+    TV_model = pretrained(weights=SSDLite320_MobileNet_V3_Large_Weights.DEFAULT)
+    TV_model.eval()
 
-    model = pretrained(weights=MobileNet_V3_Large_Weights.IMAGENET1K_V1)
-
+    FEATURE_INDEX = 0
+    LAYER_INDEX = 0
     # torch convlayer
-    torch_model = model.features[0]
+    torch_model = TV_model.backbone.features[FEATURE_INDEX][LAYER_INDEX]
 
     # Tt ssd_conv
     config = {"num_channels": 3}
@@ -49,19 +44,17 @@ def test_ssd_convlayer_inference(pcc, reset_seeds):
         padding=1,
         use_activation=True,
         activation="HS",
-        state_dict=model.state_dict(),
-        base_address=f"features.0",
+        state_dict=TV_model.state_dict(),
+        base_address=f"backbone.features.0.0",
         device=device,
-        host=host,
     )
 
     # Run torch model
-    input_tensor = torch.randn(1, 3, 224, 224)
-    torch_output = torch_model(input_tensor)
+    torch_output = torch_model(imagenet_sample_input)
 
     # Run tt model
-    tt_conv_input = torch_to_tt_tensor_rm(input_tensor, device)
-    tt_output = tt_model(tt_conv_input)
+    tt_input = torch_to_tt_tensor_rm(imagenet_sample_input, device, put_on_device=True)
+    tt_output = tt_model(tt_input)
 
     # Compare outputs
     tt_output_torch = tt_to_torch_tensor(tt_output)
@@ -76,4 +69,4 @@ def test_ssd_convlayer_inference(pcc, reset_seeds):
     if does_pass:
         logger.info("SSDConvlayer Passed!")
 
-    assert does_pass, "SSDConvlayer Failed!"
+    assert does_pass, f"SSDConvlayer does not meet PCC requirement {pcc}."

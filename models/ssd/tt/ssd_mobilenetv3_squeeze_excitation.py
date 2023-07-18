@@ -1,8 +1,7 @@
 import torch
-from torch import nn, Tensor
 import tt_lib
-from tt_lib.fallback_ops import fallback_ops
-from models.utility_functions_new import (
+import tt_lib.fallback_ops as fallback_ops
+from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
 
@@ -20,13 +19,12 @@ class TtSqueezeExcitation(torch.nn.Module):
         state_dict=None,
         base_address="",
         device=None,
-        host=None,
     ) -> None:
         super().__init__()
         self.device = device
-        self.host = host
 
         self.avgpool = fallback_ops.AdaptiveAvgPool2d(1)
+
         weight_fc1 = torch_to_tt_tensor_rm(
             state_dict[f"{base_address}.fc1.weight"], device, put_on_device=False
         )
@@ -43,6 +41,7 @@ class TtSqueezeExcitation(torch.nn.Module):
             padding=padding,
             dilation=dilation,
         )
+
         weight_fc2 = torch_to_tt_tensor_rm(
             state_dict[f"{base_address}.fc2.weight"], device, put_on_device=False
         )
@@ -59,8 +58,9 @@ class TtSqueezeExcitation(torch.nn.Module):
             padding=padding,
             dilation=dilation,
         )
+
         self.activation = tt_lib.tensor.relu
-        self.scale_activation = tt_lib.tensor.hard_sigmoid
+        self.scale_activation = tt_lib.tensor.hardsigmoid
 
     def forward(self, input: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         scale = self.avgpool(input)

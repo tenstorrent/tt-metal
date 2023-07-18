@@ -1,11 +1,3 @@
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../../..")
-
 from loguru import logger
 import torch
 import pytest
@@ -13,8 +5,10 @@ from torchvision.models.detection import (
     SSDLite320_MobileNet_V3_Large_Weights,
     ssdlite320_mobilenet_v3_large as pretrained,
 )
-from utility_functions_new import comp_pcc
-from reference.ssd_head import ssdlite320_mobilenet_v3_large
+from tests.python_api_testing.models.utility_functions_new import comp_pcc
+from tests.python_api_testing.models.ssd.reference.ssd_head import (
+    ssdlite320_mobilenet_v3_large,
+)
 
 
 @pytest.mark.parametrize(

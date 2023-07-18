@@ -1,5 +1,3 @@
-from typing import Union
-import torch
 import torch.nn as nn
 import tt_lib
 from models.ssd.tt.ssd_mobilenetv3_convlayer import (
@@ -15,15 +13,11 @@ class TtMobileNetV3Stem(nn.Module):
         expanded_channels: int,
         out_channels: int,
         kernel_size: int = 1,
-        padding: int = 1,
+        padding: int = 0,
         stride: int = 1,
-        dilation: int = 1,
-        use_activation: Union[bool, str] = False,
-        activation="",
         state_dict=None,
         base_address="",
         device=None,
-        host=None,
     ) -> None:
         super().__init__()
 
@@ -39,7 +33,6 @@ class TtMobileNetV3Stem(nn.Module):
             state_dict=state_dict,
             base_address=f"{base_address}.block.0",
             device=device,
-            host=host,
         )
 
         self.reduce_1x1 = TtMobileNetV3ConvLayer(
@@ -52,7 +45,6 @@ class TtMobileNetV3Stem(nn.Module):
             state_dict=state_dict,
             base_address=f"{base_address}.block.1",
             device=device,
-            host=host,
         )
 
     def forward(self, features: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:

@@ -24,11 +24,11 @@ class TtMobileNetV3InvertedResidual(nn.Module):
         state_dict=None,
         base_address="",
         device=None,
-        host=None,
+        extractor: bool = False,
     ) -> None:
         super().__init__()
         self.device = device
-        self.host = host
+        self.extractor = extractor
 
         self.expand_1x1 = TtMobileNetV3ConvLayer(
             config,
@@ -40,9 +40,10 @@ class TtMobileNetV3InvertedResidual(nn.Module):
             use_activation=use_activation,
             activation=activation,
             state_dict=state_dict,
-            base_address=f"{base_address}.block.0",
+            base_address=f"{base_address}.block.0"
+            if not self.extractor
+            else f"{base_address}.0",
             device=device,
-            host=host,
         )
 
         self.conv_3x3 = TtMobileNetV3ConvLayer(
@@ -57,9 +58,10 @@ class TtMobileNetV3InvertedResidual(nn.Module):
             use_activation=use_activation,
             activation=activation,
             state_dict=state_dict,
-            base_address=f"{base_address}.block.1",
+            base_address=f"{base_address}.block.1"
+            if not self.extractor
+            else f"{base_address}.1",
             device=device,
-            host=host,
         )
 
         self.reduce_1x1 = TtMobileNetV3ConvLayer(
@@ -69,11 +71,12 @@ class TtMobileNetV3InvertedResidual(nn.Module):
             kernel_size=1,
             stride=1,
             padding=0,
-            use_activation=False,
+            use_activation=False if not self.extractor else True,
             state_dict=state_dict,
-            base_address=f"{base_address}.block.2",
+            base_address=f"{base_address}.block.2"
+            if not self.extractor
+            else f"{base_address}.2",
             device=device,
-            host=host,
         )
 
     def forward(self, features: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:

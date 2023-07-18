@@ -28,24 +28,27 @@ class TtMobileNetV3InvertedSqueeze(nn.Module):
         state_dict=None,
         base_address="",
         device=None,
-        host=None,
+        prune_conv: bool = False,
     ) -> None:
         super().__init__()
+        self.prune_conv = prune_conv
 
-        self.expand_1x1 = TtMobileNetV3ConvLayer(
-            config,
-            in_channels=in_channels,
-            out_channels=expanded_channels,
-            kernel_size=1,
-            stride=1,
-            padding=0,
-            use_activation=use_activation,
-            activation=activation,
-            state_dict=state_dict,
-            base_address=f"{base_address}.block.0",
-            device=device,
-            host=host,
-        )
+        if not self.prune_conv:
+            self.expand_1x1 = TtMobileNetV3ConvLayer(
+                config,
+                in_channels=in_channels,
+                out_channels=expanded_channels,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                use_activation=use_activation,
+                activation=activation,
+                state_dict=state_dict,
+                base_address=f"{base_address}.block.0"
+                if not self.prune_conv
+                else f"{base_address}.1",
+                device=device,
+            )
 
         self.conv_3x3 = TtMobileNetV3ConvLayer(
             config,
@@ -59,9 +62,10 @@ class TtMobileNetV3InvertedSqueeze(nn.Module):
             use_activation=use_activation,
             activation=activation,
             state_dict=state_dict,
-            base_address=f"{base_address}.block.1",
+            base_address=f"{base_address}.block.1"
+            if not self.prune_conv
+            else f"{base_address}.1",
             device=device,
-            host=host,
         )
 
         self.squeeze = TtSqueezeExcitation(
@@ -72,9 +76,10 @@ class TtMobileNetV3InvertedSqueeze(nn.Module):
             stride=1,
             padding=0,
             state_dict=state_dict,
-            base_address=f"{base_address}.block.2",
+            base_address=f"{base_address}.block.2"
+            if not self.prune_conv
+            else f"{base_address}.2",
             device=device,
-            host=host,
         )
 
         self.reduce_1x1 = TtMobileNetV3ConvLayer(
@@ -86,13 +91,15 @@ class TtMobileNetV3InvertedSqueeze(nn.Module):
             padding=0,
             use_activation=False,
             state_dict=state_dict,
-            base_address=f"{base_address}.block.3",
+            base_address=f"{base_address}.block.3"
+            if not self.prune_conv
+            else f"{base_address}.3",
             device=device,
-            host=host,
         )
 
     def forward(self, features: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
-        features = self.expand_1x1(features)
+        if not self.prune_conv:
+            features = self.expand_1x1(features)
         features = self.conv_3x3(features)
         features = self.squeeze(features)
         features = self.reduce_1x1(features)

@@ -1,16 +1,15 @@
 from typing import Union
-import torch
 import torch.nn as nn
 
 import tt_lib
-from tt_lib.fallback_ops import fallback_ops
-from models.utility_functions_new import (
+import tt_lib.fallback_ops as fallback_ops
+from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
 from models.ssd.ssd_utils import create_batchnorm
 
 ACT_FN_1 = tt_lib.tensor.relu
-ACT_FN_2 = tt_lib.tensor.hard_swish
+ACT_FN_2 = tt_lib.tensor.hardswish
 
 
 class TtMobileNetV3ConvLayer(nn.Module):
@@ -20,7 +19,7 @@ class TtMobileNetV3ConvLayer(nn.Module):
         in_channels: int,
         out_channels: int,
         kernel_size: int,
-        padding: int = 1,
+        padding: int = 0,
         stride: int = 1,
         groups: int = 1,
         bias: bool = False,
@@ -30,11 +29,9 @@ class TtMobileNetV3ConvLayer(nn.Module):
         state_dict=None,
         base_address="",
         device=None,
-        host=None,
     ) -> None:
         super().__init__()
         self.device = device
-        self.host = host
         self.activation_str = activation
 
         weight = torch_to_tt_tensor_rm(
@@ -68,11 +65,7 @@ class TtMobileNetV3ConvLayer(nn.Module):
 
     def forward(self, features: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         features = self.convolution(features)
-        if self.activation is None:
-            features = self.normalization(features)
-            return features
-        else:
-            features = self.normalization(features)
+        features = self.normalization(features)
         if self.activation is not None:
             features = self.activation(features)
 
