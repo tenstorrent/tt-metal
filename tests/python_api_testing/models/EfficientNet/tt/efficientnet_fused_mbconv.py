@@ -2,10 +2,12 @@ import torch
 import tt_lib
 from typing import List, Optional, Callable
 
-from python_api_testing.models.EfficientNet.tt.efficientnet_conv import (
+from tests.python_api_testing.models.EfficientNet.tt.efficientnet_conv import (
     TtEfficientnetConv2dNormActivation,
 )
-from python_api_testing.models.EfficientNet.tt.efficientnet_mbconv import _MBConvConfig
+from tests.python_api_testing.models.EfficientNet.tt.efficientnet_mbconv import (
+    _MBConvConfig,
+)
 
 
 class FusedMBConvConfig(_MBConvConfig):

@@ -5,10 +5,10 @@ import math
 from dataclasses import dataclass
 from typing import List, Callable, Optional
 
-from python_api_testing.models.EfficientNet.tt.efficientnet_conv import (
+from tests.python_api_testing.models.EfficientNet.tt.efficientnet_conv import (
     TtEfficientnetConv2dNormActivation,
 )
-from python_api_testing.models.EfficientNet.tt.efficientnet_squeeze_excitation import (
+from tests.python_api_testing.models.EfficientNet.tt.efficientnet_squeeze_excitation import (
     TtEfficientnetSqueezeExcitation,
 )
 

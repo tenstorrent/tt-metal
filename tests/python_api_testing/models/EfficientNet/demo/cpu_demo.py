@@ -2,12 +2,6 @@ import os
 import sys
 from pathlib import Path
 
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv5 root directory
 if str(ROOT) not in sys.path:
@@ -61,7 +55,10 @@ def test_cpu_demo(imagenet_label_dict):
     download_images(img_path)
 
     model = load_efficientnet_model()
-    categories = [imagenet_label_dict[key] for key in sorted(imagenet_label_dict.keys(), reverse=False)]
+    categories = [
+        imagenet_label_dict[key]
+        for key in sorted(imagenet_label_dict.keys(), reverse=False)
+    ]
     transform = preprocess()
 
     image = cv2.imread(str(img_path))

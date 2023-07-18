@@ -2,12 +2,6 @@ import os
 import sys
 from pathlib import Path
 
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv5 root directory
 if str(ROOT) not in sys.path:
@@ -21,8 +15,10 @@ import torchvision
 from loguru import logger
 from datasets import load_dataset
 
-from python_api_testing.models.EfficientNet.tt.efficientnet_model import efficientnet_b0
-from python_api_testing.models.utility_functions_new import (
+from tests.python_api_testing.models.EfficientNet.tt.efficientnet_model import (
+    efficientnet_b0,
+)
+from tests.python_api_testing.models.utility_functions_new import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
@@ -63,7 +59,10 @@ def run_gs_demo(efficientnet_model_constructor, imagenet_label_dict):
     download_images(img_path)
 
     model = efficientnet_model_constructor(device)
-    categories = [imagenet_label_dict[key] for key in sorted(imagenet_label_dict.keys(), reverse=False)]
+    categories = [
+        imagenet_label_dict[key]
+        for key in sorted(imagenet_label_dict.keys(), reverse=False)
+    ]
     transform = preprocess()
 
     image = cv2.imread(str(img_path))

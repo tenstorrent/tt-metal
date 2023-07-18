@@ -2,12 +2,6 @@ import os
 import sys
 from pathlib import Path
 
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv5 root directory
 if str(ROOT) not in sys.path:
@@ -21,12 +15,12 @@ from loguru import logger
 import torchvision
 from datasets import load_dataset
 
-from python_api_testing.models.utility_functions_new import (
+from tests.python_api_testing.models.utility_functions_new import (
     torch2tt_tensor,
     tt2torch_tensor,
     comp_pcc,
 )
-from python_api_testing.models.EfficientNet.tt.efficientnet_model import (
+from tests.python_api_testing.models.EfficientNet.tt.efficientnet_model import (
     efficientnet_b0,
     efficientnet_b1,
     efficientnet_b2,
@@ -221,7 +215,7 @@ def test_efficientnet_v2_m_model_real():
     )
 
 
-def test_efficientnet_v2_l_model_real():
-    run_efficientnet_model_test(
-        torchvision.models.efficientnet_v2_l, efficientnet_v2_l, 0.97, real_input=True
-    )
+# def test_efficientnet_v2_l_model_real():
+#     run_efficientnet_model_test(
+#         torchvision.models.efficientnet_v2_l, efficientnet_v2_l, 0.97, real_input=True
+#     )

@@ -1,23 +1,14 @@
-import sys
-from pathlib import Path
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
 import tt_lib
 import torch
 from loguru import logger
 import torchvision
 
-from python_api_testing.models.utility_functions_new import (
+from tests.python_api_testing.models.utility_functions_new import (
     torch2tt_tensor,
     tt2torch_tensor,
     comp_pcc,
 )
-from python_api_testing.models.EfficientNet.tt.efficientnet_fused_mbconv import (
+from tests.python_api_testing.models.EfficientNet.tt.efficientnet_fused_mbconv import (
     TtEfficientnetFusedMBConv,
     FusedMBConvConfig,
 )

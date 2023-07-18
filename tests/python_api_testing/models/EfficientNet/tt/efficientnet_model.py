@@ -7,19 +7,19 @@ import torchvision
 from functools import partial
 from loguru import logger
 
-from python_api_testing.models.utility_functions_new import (
+from tests.python_api_testing.models.utility_functions_new import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
-from python_api_testing.models.EfficientNet.tt.efficientnet_conv import (
+from tests.python_api_testing.models.EfficientNet.tt.efficientnet_conv import (
     TtEfficientnetConv2dNormActivation,
 )
-from python_api_testing.models.EfficientNet.tt.efficientnet_mbconv import (
+from tests.python_api_testing.models.EfficientNet.tt.efficientnet_mbconv import (
     TtEfficientnetMbConv,
     _MBConvConfig,
     MBConvConfig,
 )
-from python_api_testing.models.EfficientNet.tt.efficientnet_fused_mbconv import (
+from tests.python_api_testing.models.EfficientNet.tt.efficientnet_fused_mbconv import (
     TtEfficientnetFusedMBConv,
     FusedMBConvConfig,
 )
