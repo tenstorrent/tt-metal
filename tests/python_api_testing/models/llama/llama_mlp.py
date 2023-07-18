@@ -23,7 +23,6 @@ class TtLlamaMLP(nn.Module):
         self.device = device
         self.hidden_size = hidden_size
         self.intermediate_size = intermediate_size
-        self.bias = None
 
         self.out_gate_proj = torch2tt_tensor(
             self.state_dict[f"{base_url}.{layer_num}.mlp.gate_proj.weight"], self.device
