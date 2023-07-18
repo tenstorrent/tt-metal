@@ -45,7 +45,7 @@ seq_len = 384
 real_input = True
 attention_mask = True
 token_type_ids = True
-model_config_str="BFLOAT16-L1"
+model_config_str="MIXED_PRECISION"
 model_location_generator = model_location_generator_
 
 
