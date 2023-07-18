@@ -24,7 +24,7 @@ void kernel_main() {
 
         cq_wait_front();
         // Hardcoded for time being, need to clean this up
-        u64 src_noc_addr = get_noc_addr(0, 4, cq_read_interface.fifo_rd_ptr << 4);
+        u64 src_noc_addr = get_noc_addr(PCIE_NOC_X, PCIE_NOC_Y, cq_read_interface.fifo_rd_ptr << 4);
         noc_async_read(src_noc_addr, u32(command_start_addr), NUM_16B_WORDS_IN_DEVICE_COMMAND << 4);
         noc_async_read_barrier();
 

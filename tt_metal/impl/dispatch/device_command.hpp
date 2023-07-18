@@ -29,6 +29,8 @@ static constexpr u32
     RELAY_PROGRAM_NUM_ENTRIES =  // Whatever is left of the available size, we allocate for relaying program data
     DEVICE_COMMAND_NUM_ENTRIES - CONTROL_SECTION_NUM_ENTRIES - RELAY_BUFFER_NUM_ENTRIES - NUM_DISPATCH_CORES;
 
+static constexpr u32 HUGE_PAGE_SIZE = 1024 * 1024 * 1024;
+
 
 // DeviceCommand.desc organized as follows
 // finish (whether we need to notify host when we finished)

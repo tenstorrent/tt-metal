@@ -278,7 +278,7 @@ FORCE_INLINE void finish_program(u32 finish) {
 
     volatile u32* finish_ptr = get_cq_finish_ptr();
     finish_ptr[0] = 1;
-    uint64_t finish_noc_addr = get_noc_addr(NOC_X(0), NOC_Y(4), HOST_CQ_FINISH_PTR);
+    uint64_t finish_noc_addr = get_noc_addr(PCIE_NOC_X, PCIE_NOC_Y, HOST_CQ_FINISH_PTR);
     noc_async_write(u32(finish_ptr), finish_noc_addr, 4);
     noc_async_write_barrier();
     finish_ptr[0] = 0;
