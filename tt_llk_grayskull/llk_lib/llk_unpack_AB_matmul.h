@@ -68,9 +68,9 @@ inline void llk_unpack_AB_matmul_hw_configure(const llk_unpack_AB_matmul_params_
 }
 
 inline void llk_unpack_AB_matmul_hw_configure_disaggregated(
-    const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const std::uint32_t transpose_xy_srca = 0, const std::uint32_t in0_tile_dims[2] = default_tile_dims, const std::uint32_t in1_tile_dims[2] = default_tile_dims) {
+    const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const std::uint32_t transpose_xy_srca = 0) {
     const llk_unpack_AB_matmul_params_t unpack_AB_matmul_params = {
-        .unpA_operand = unpA_operand, .unpB_operand = unpB_operand, .transpose_xy_srca = transpose_xy_srca, .in0_tile_dims = {in0_tile_dims[0], in0_tile_dims[1]}, .in1_tile_dims = {in1_tile_dims[0], in1_tile_dims[1]}};
+        .unpA_operand = unpA_operand, .unpB_operand = unpB_operand, .transpose_xy_srca = transpose_xy_srca};
     llk_unpack_AB_matmul_hw_configure(&unpack_AB_matmul_params);
 }
 
@@ -78,8 +78,7 @@ inline void llk_unpack_AB_matmul_init(const std::uint32_t transpose=0, const std
 
 inline void llk_unpack_AB_matmul(
     const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t tile_index_a,
-    const std::uint32_t tile_index_b, const std::uint32_t in0_tile_dims[2] = default_tile_dims, const std::uint32_t in1_tile_dims[2] = default_tile_dims,
-    const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
+    const std::uint32_t tile_index_b, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
 
 
     // Todo: do something with tile dim flags

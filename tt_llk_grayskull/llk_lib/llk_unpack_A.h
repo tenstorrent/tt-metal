@@ -162,11 +162,10 @@ inline void llk_unpack_A_hw_configure(const llk_unpack_A_params_t *unpack_A_para
         get_operand_id(unpack_A_params->unpA_operand), get_operand_id(unpack_A_params->unpA_operand));
 }
 
-inline void llk_unpack_A_hw_configure_disaggregated(const std::uint32_t unpA_operand, const int within_face_16x16_transpose, const std::uint32_t in_tile_dims[2] = default_tile_dims) {
+inline void llk_unpack_A_hw_configure_disaggregated(const std::uint32_t unpA_operand, const int within_face_16x16_transpose) {
     
     const llk_unpack_A_params_t unpack_A_params = {
         .unpA_operand = unpA_operand,
-        .in_tile_dims = {in_tile_dims[0], in_tile_dims[1]}
     };
     llk_unpack_A_hw_configure(&unpack_A_params, within_face_16x16_transpose);
 }
