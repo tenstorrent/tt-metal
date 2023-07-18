@@ -83,18 +83,25 @@ inline void llk_unpack_AB_matmul_mop_config(const bool transpose, const std::uin
 
 template<bool is_fp32_dest_acc_en = false, bool srnd_fpu_en = false>
 inline void llk_unpack_AB_matmul_hw_configure(const llk_unpack_AB_matmul_params_t *unpack_AB_params) {
-    constexpr uint32_t srca_height = 16;
-    constexpr uint32_t srcb_height = 16;
+    // In0 -> srcB
+    // In1 -> srcA
+    constexpr uint32_t unpA_face_height = 16;
+    constexpr uint32_t unpB_face_height = 16;
     constexpr bool is_row_pool = false;
     const bool transpose_xy_srca = unpack_AB_params->transpose_xy_srca;
 
+    const uint32_t unpA_num_faces = get_num_faces(get_operand_id(unpack_AB_params->unpB_operand));
+    const uint32_t unpB_num_faces = get_num_faces(get_operand_id(unpack_AB_params->unpA_operand));
+
     configure_unpack_AB(get_operand_id(unpack_AB_params->unpB_operand), get_operand_id(unpack_AB_params->unpA_operand), 
-                        srca_height, srcb_height, is_row_pool, transpose_xy_srca, is_fp32_dest_acc_en, srnd_fpu_en);
+                        unpB_face_height, unpA_face_height, is_row_pool, transpose_xy_srca, is_fp32_dest_acc_en, srnd_fpu_en, unpB_num_faces, unpA_num_faces);
 
-    // Configure tile size
-    configure_unpack_AB_tile_size(unpack_tile_dims[get_operand_id(unpack_AB_params->unpA_operand)], unpack_tile_dims[get_operand_id(unpack_AB_params->unpB_operand)]);
+    // Configure tile size in datums
+    const uint32_t unpA_x_end = unpA_num_faces*FACE_R_DIM*FACE_C_DIM-1;
+    const uint32_t unpB_x_end = unpB_num_faces*FACE_R_DIM*FACE_C_DIM-1;
+    TT_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0);
+    TT_SETADCXX(p_setadc::UNP_B, unpB_x_end, 0x0);
 
-    // TODO: Scale based on the tile size
     std::uint32_t inputA = get_operand_id(unpack_AB_params->unpB_operand);
     std::uint32_t inputB = get_operand_id(unpack_AB_params->unpA_operand);
     regfile[p_gpr_unpack::TILE_SIZE_A] = operands[inputA].f.tile_size_words;
@@ -111,9 +118,11 @@ inline void llk_unpack_AB_matmul_hw_configure_disaggregated(
 }
 
 inline void llk_unpack_AB_matmul_init(const std::uint32_t transpose=0, const std::uint32_t in0_tile_dims[2] = default_tile_dims, const std::uint32_t in1_tile_dims[2] = default_tile_dims, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
+    // In0 -> srcB
+    // In1 -> srcA
 
-    // Todo: do something with tile dims
     llk_unpack_AB_matmul_mop_config(transpose != 0, ct_dim, rt_dim, kt_dim);
+
     // also turn on within_face_16x16_transpose if it was turned off by datacopy at runtime
     // on WH, the unpacker performs both transpose of faces as well as transpose each face.
     // the former is configured in mop, the latter is configured in cfg register in hw_configure
@@ -122,7 +131,12 @@ inline void llk_unpack_AB_matmul_init(const std::uint32_t transpose=0, const std
 
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
 
-    configure_unpack_AB_tile_size(in0_tile_dims, in1_tile_dims);
+    const uint32_t unpA_num_faces = get_num_faces(in1_tile_dims);
+    const uint32_t unpB_num_faces = get_num_faces(in0_tile_dims);
+    const uint32_t unpA_x_end = unpA_num_faces*FACE_R_DIM*FACE_C_DIM-1;
+    const uint32_t unpB_x_end = unpB_num_faces*FACE_R_DIM*FACE_C_DIM-1;
+    TT_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0);
+    TT_SETADCXX(p_setadc::UNP_B, unpB_x_end, 0x0);
 
     TT_SETDMAREG(0, LOWER_HALFWORD(kt_dim), 0, LO_16(p_gpr_unpack::KT_DIM)); // store kt_dim to gpr for scaling tile size
 }

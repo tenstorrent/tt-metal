@@ -179,16 +179,54 @@ namespace ckernel::unpacker
        while (semaphore_read(semaphore::UNPACK_SYNC) > 0) {}
    }
 
+   /*
+   constexpr inline uint32_t get_tile_num_faces(const uint32_t operand) 
+   {
+      if ((operand_tile_dims[operand][TileDim::R_IDX] <= FACE_R_DIM) && (operand_tile_dims[operand][TileDim::C_IDX] <= FACE_C_DIM)) {
+         return 1;
+      } else if ((operand_tile_dims[operand][TileDim::R_IDX] == TILE_R_DIM) && (operand_tile_dims[operand][TileDim::C_IDX] == TILE_C_DIM)) { 
+         return 4;
+      } else {
+         return 2;
+      }   
+   }
+   */
+
+   inline const uint32_t get_num_faces(const std::uint32_t in_tile_dims[] = default_tile_dims)
+   {
+      if ((in_tile_dims[TileDim::R_IDX] <= FACE_R_DIM) && (in_tile_dims[TileDim::C_IDX] <= FACE_C_DIM)) {
+         return 1;
+      } else if ((in_tile_dims[TileDim::R_IDX] == TILE_R_DIM) && (in_tile_dims[TileDim::C_IDX] == TILE_C_DIM)) { 
+         return 4;
+      } else {
+         return 2;
+      }
+   }
+
+   inline const uint32_t get_num_faces(const std::uint32_t operand_id)
+   {
+      if ((unpack_tile_dims[operand_id][TileDim::R_IDX] <= FACE_R_DIM) && (unpack_tile_dims[operand_id][TileDim::C_IDX] <= FACE_C_DIM)) {
+         return 1;
+      } else if ((unpack_tile_dims[operand_id][TileDim::R_IDX] == TILE_R_DIM) && (unpack_tile_dims[operand_id][TileDim::C_IDX] == TILE_C_DIM)) { 
+         return 4;
+      } else {
+         return 2;
+      }
+   }
+
    inline void configure_unpack_AB(
      uint unpA_operand, 
      uint unpB_operand, 
-     uint srca_face_height=16,
-     uint srcb_face_height=16,
+     uint unpA_face_height=16,
+     uint unpB_face_height=16,
      bool row_pool=false,
      bool transpose_xy_srca_en=false,
      bool is_fp32_dest_acc_en=false,
-     bool srnd_fpu_en = false)
+     bool srnd_fpu_en = false,
+     const uint unpA_num_faces = 4,
+     const uint unpB_num_faces = 4)
    {
+
       // Check that unpacker is done (all contexts freed up) before starting hw configuration
       wait_for_idle();	     
 
@@ -200,8 +238,8 @@ namespace ckernel::unpacker
 
       uint unpA_ch1_x_stride = (uint) (unpack_dst_format[unpA_operand]&0x3) == (uint) DataFormat::Float32 ? 4 : (uint) (unpack_dst_format[unpA_operand]&0x3) == (uint) DataFormat::Float16 ? 2 : 1;
       uint unpB_ch1_x_stride = (uint) (unpack_dst_format[unpB_operand]&0x3) == (uint) DataFormat::Float32 ? 4 : (uint) (unpack_dst_format[unpB_operand]&0x3) == (uint) DataFormat::Float16 ? 2 : 1;
-      uint unpA_ch1_z_stride = 16*srca_face_height*unpA_ch1_x_stride;
-      uint unpB_ch1_z_stride = 16*srcb_face_height*unpB_ch1_x_stride;
+      uint unpA_ch1_z_stride = 16*unpA_face_height*unpA_ch1_x_stride;
+      uint unpB_ch1_z_stride = 16*unpB_face_height*unpB_ch1_x_stride;
       uint exp_width = ((uint)unpack_dst_format[unpA_operand]>>2)&0x1; //0=5-bit, 1=8-bit
    
       // Strides for incrementing ch1 address to srcA and srcB
@@ -249,13 +287,14 @@ namespace ckernel::unpacker
       }
       tile_descriptor.f.in_data_format  = (uint) unpack_src_format[unpA_operand];
       tile_descriptor.f.uncompressed = 1; // Input tile is uncompressed
-      tile_descriptor.f.x_dim        = 256; // Not used as value is overriden by per context x_dim set below  
+      tile_descriptor.f.x_dim        = 256; // Not used for unpA as value is overriden by per context x_dim set below. Used for unpB
       tile_descriptor.f.y_dim        = 1; 
-      tile_descriptor.f.z_dim        = 4; 
+      tile_descriptor.f.z_dim        = unpA_num_faces; 
       //tile_descriptor.f.blobs_per_xy_plane = 0;
       //tile_descriptor.f.blobs_y_start = 0;
       for (uint i=0; i<TILE_DESC_SIZE; i++) cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32+i]=tile_descriptor.val[i];
       tile_descriptor.f.in_data_format  = row_pool ? (uint) DataFormat::Float32 : unpack_src_format[unpB_operand];
+      tile_descriptor.f.z_dim        = unpB_num_faces; 
       for (uint i=0; i<TILE_DESC_SIZE; i++) cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32+i]=tile_descriptor.val[i];
    
       // Set unpacker config
@@ -282,14 +321,14 @@ namespace ckernel::unpacker
       for (uint i=0; i<CONFIG_SIZE; i++) cfg[THCON_SEC1_REG2_Out_data_format_ADDR32+i]=config.val[i];
       
       // TODO: Scale based on the tile size
-      uint unp0_x_end = (srca_face_height == 0) ? 1 : (srca_face_height << 4) - 1;
-      TTI_SETADCXX(p_setadc::UNP0, unp0_x_end, 0x0);
-      TTI_SETADCXX(p_setadc::UNP1, (srcb_face_height << 4)-1, 0x0);
+      uint unpA_x_end = (unpA_face_height == 0) ? 1 : (unpA_face_height << 4) - 1;
+      TTI_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0);
+      TTI_SETADCXX(p_setadc::UNP_B, (unpB_face_height << 4)-1, 0x0);
    
       // Program base address for all 2 sections (each section address is loaded to corresponding context)
       // Load dummy data to unused location if face height is 0
-      const uint Dest_cntx0_address = srca_face_height == 0 ? 22*16 : 4 * 16;
-      const uint Dest_cntx1_address = srca_face_height == 0 ? 22*16 : 4 * 16; 
+      const uint Dest_cntx0_address = unpA_face_height == 0 ? 22*16 : 4 * 16;
+      const uint Dest_cntx1_address = unpA_face_height == 0 ? 22*16 : 4 * 16; 
       cfg[THCON_SEC0_REG5_Dest_cntx0_address_ADDR32] = Dest_cntx0_address | (Dest_cntx1_address << 16);
    
       // Program unpacker0 per context x_dim (face size in l1)
@@ -346,28 +385,5 @@ namespace ckernel::unpacker
       return (operand>=INTERMEDIATE_BASE_ID) ? operand - 8 : operand - OPERAND_BASE_ID;
    }
 
-   /*
-   constexpr inline uint32_t get_tile_num_faces(const uint32_t operand) 
-   {
-      if ((operand_tile_dims[operand][TileDim::R_IDX] <= FACE_R_DIM) && (operand_tile_dims[operand][TileDim::C_IDX] <= FACE_C_DIM)) {
-         return 1;
-      } else if ((operand_tile_dims[operand][TileDim::R_IDX] == TILE_R_DIM) && (operand_tile_dims[operand][TileDim::C_IDX] == TILE_C_DIM)) { 
-         return 4;
-      } else {
-         return 2;
-      }   
-   }
-   */
-
-   inline uint32_t get_tile_num_faces(const std::uint32_t in_tile_dims[] = default_tile_dims)
-   {
-      if ((in_tile_dims[TileDim::R_IDX] <= FACE_R_DIM) && (in_tile_dims[TileDim::C_IDX] <= FACE_C_DIM)) {
-         return 1;
-      } else if ((in_tile_dims[TileDim::R_IDX] == TILE_R_DIM) && (in_tile_dims[TileDim::C_IDX] == TILE_C_DIM)) { 
-         return 4;
-      } else {
-         return 2;
-      }
-   }
 }
 

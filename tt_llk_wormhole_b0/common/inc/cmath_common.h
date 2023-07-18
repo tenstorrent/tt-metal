@@ -212,7 +212,7 @@ inline uint32_t get_operand_id(uint32_t operand)
 }
 
 
-inline uint32_t get_tile_num_faces(const std::uint32_t in_tile_dims[] = default_tile_dims)
+inline const uint32_t get_num_faces(const std::uint32_t in_tile_dims[] = default_tile_dims)
 {
    if ((in_tile_dims[TileDim::R_IDX] <= FACE_R_DIM) && (in_tile_dims[TileDim::C_IDX] <= FACE_C_DIM)) {
       return 1;

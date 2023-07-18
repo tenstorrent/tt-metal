@@ -71,20 +71,22 @@ inline void llk_pack_mop_config(const uint32_t num_faces = 4) {
 
 template <bool untilize = false, bool is_fp32_dest_acc_en = false>
 inline void llk_pack_hw_configure(const llk_pack_params_t *pack_params) {
-    configure_pack<is_fp32_dest_acc_en>(get_output_id(pack_params->pack_output), pack_params->relu_config.val);
+    const uint num_faces = get_num_faces(get_output_id(pack_params->pack_output));
+    configure_pack<is_fp32_dest_acc_en>(get_output_id(pack_params->pack_output), pack_params->relu_config.val, num_faces);
 }
 
 template <bool untilize = false, bool is_fp32_dest_acc_en = false, ReluType relu_type = ReluType::NO_RELU, std::uint32_t relu_threshold = 0>
-inline void llk_pack_hw_configure_disaggregated(std::uint32_t pack_output) {
+inline void llk_pack_hw_configure_disaggregated(std::uint32_t pack_output, const std::uint32_t out_tile_dims[2] = default_tile_dims) {
     llk_pack_params_t llk_pack_params = {
-        .pack_output = pack_output, .relu_config = {.f = {.ApplyRelu = (std::uint32_t)relu_type, .Threshold = relu_threshold,}}};
+        .pack_output = pack_output, .relu_config = {.f = {.ApplyRelu = (std::uint32_t)relu_type, .Threshold = relu_threshold,}}, .out_tile_dims = {out_tile_dims[0], out_tile_dims[1]}};
     llk_pack_hw_configure<untilize, is_fp32_dest_acc_en>(&llk_pack_params);
 }
 
 // FIXME: Remove once edge mask spec is defined
 template <bool untilize = false, PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en = false>
 inline void llk_pack_reduce_hw_configure(const llk_pack_params_t *pack_params) {
-    configure_pack<is_fp32_dest_acc_en>(get_output_id(pack_params->pack_output), pack_params->relu_config.val);
+    const uint num_faces = get_num_faces(get_output_id(pack_params->pack_output));
+    configure_pack<is_fp32_dest_acc_en>(get_output_id(pack_params->pack_output), pack_params->relu_config.val, num_faces);
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
 
     ckernel::packer::pck_edge_offset_u pack_edge_offset = {.val = 0};
@@ -131,7 +133,7 @@ inline void llk_pack_reduce_hw_configure_disaggregated(std::uint32_t pack_output
 
 template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
 inline void llk_pack_init(const uint32_t out_tile_dims[2] = default_tile_dims) {
-    constexpr uint num_faces = 4; //get_tile_num_faces(out_tile_dims); FIXME
+    const uint num_faces = get_num_faces(out_tile_dims);
     llk_pack_mop_config<untilize, zero_output, FaceLayout>(num_faces);
 }
 

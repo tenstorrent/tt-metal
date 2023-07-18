@@ -117,6 +117,29 @@ namespace ckernel::packer
       pck_edge_offset_t f;
    } pck_edge_offset_u;
 
+   inline const uint32_t get_num_faces(const std::uint32_t out_tile_dims[] = default_tile_dims)
+   {
+      if ((out_tile_dims[TileDim::R_IDX] <= FACE_R_DIM) && (out_tile_dims[TileDim::C_IDX] <= FACE_C_DIM)) {
+         return 1;
+      } else if ((out_tile_dims[TileDim::R_IDX] == TILE_R_DIM) && (out_tile_dims[TileDim::C_IDX] == TILE_C_DIM)) { 
+         return 4;
+      } else {
+         return 2;
+      }
+   }
+
+   inline const uint32_t get_num_faces(const std::uint32_t output_id)
+   {
+      if ((pack_tile_dims[output_id][TileDim::R_IDX] <= FACE_R_DIM) && (pack_tile_dims[output_id][TileDim::C_IDX] <= FACE_C_DIM)) {
+         return 1;
+      } else if ((pack_tile_dims[output_id][TileDim::R_IDX] == TILE_R_DIM) && (pack_tile_dims[output_id][TileDim::C_IDX] == TILE_C_DIM)) { 
+         return 4;
+      } else {
+         return 2;
+      }
+   }
+
+
    // Set unpacker offsets to 0, except for unpacker 0, channel 1, X, which is the tile X dimension
    inline void packer_addr_counter_init()
    {
@@ -145,7 +168,7 @@ namespace ckernel::packer
    }
 
    template <bool is_fp32_dest_acc_en>
-   inline void set_packer_config(const uint operand_id){
+   inline void set_packer_config(const uint operand_id, const uint num_faces){
 
       // Get pointer to registers for current state ID
       volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
@@ -157,7 +180,7 @@ namespace ckernel::packer
       }
 
       config.f.exp_section_size = (((uint)pack_dst_format[operand_id] == (uint)DataFormat::Lf8) || 
-                                   ((uint)pack_dst_format[operand_id] == (uint)DataFormat::Int8)) ? 0 : 4; // set to 4 as exp section size is not used for non-bfp formats except for lf8/int8
+                                   ((uint)pack_dst_format[operand_id] == (uint)DataFormat::Int8)) ? 0 : num_faces; // set to num_faces as exp section size is not used for non-bfp formats except for lf8/int8
 
       config.f.uncompress   = 1;
       config.f.out_data_format   = (uint)pack_dst_format[operand_id];
@@ -219,21 +242,21 @@ namespace ckernel::packer
          // Override exp section size for packers 1,2,3
          // Tile header + exp size + datum size 
          if ((uint)(pack_dst_format[operand_id]&0x1F) == (uint)DataFormat::Bfp8 || (uint)(pack_dst_format[operand_id]&0x1F) == (uint)DataFormat::Bfp8_b) {
-            config.f.exp_section_size = 1 + 2 + 16;
+            config.f.exp_section_size = 1 + ((num_faces>2) ? 2 : 0) + 16;
             cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32+0]=config.val[0];
             config.f.exp_section_size = 1 + 1 + 32;
             cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32+0]=config.val[0];
             config.f.exp_section_size = 1 + 0 + 48;
             cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32+0]=config.val[0];
          } else if ((uint)(pack_dst_format[operand_id]&0x1F) == (uint)DataFormat::Bfp4 || (uint)(pack_dst_format[operand_id]&0x1F) == (uint)DataFormat::Bfp4_b) {
-            config.f.exp_section_size = 1 + 2 + 8;
+            config.f.exp_section_size = 1 + ((num_faces>2) ? 2 : 0) + 8;
             cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32+0]=config.val[0];
             config.f.exp_section_size = 1 + 1 + 16;
             cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32+0]=config.val[0];
             config.f.exp_section_size = 1 + 0 + 24;
             cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32+0]=config.val[0];
          } else if ((uint)(pack_dst_format[operand_id]&0x1F) == (uint)DataFormat::Bfp2 || (uint)(pack_dst_format[operand_id]&0x1F) == (uint)DataFormat::Bfp2_b) {
-            config.f.exp_section_size = 1 + 2 + 4;
+            config.f.exp_section_size = 1 + ((num_faces>2) ? 2 : 0) + 4;
             cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32+0]=config.val[0];
             config.f.exp_section_size = 1 + 1 + 8;
             cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32+0]=config.val[0];
@@ -246,14 +269,14 @@ namespace ckernel::packer
       }
 
       // Save to GPR for quick data format reconfig 
-      regfile[p_gpr_pack::EXP0_SEC_SIZE_BFP]  = (         4) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
-      regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP8] = (1 + 2 + 16) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+      regfile[p_gpr_pack::EXP0_SEC_SIZE_BFP]  = (num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+      regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP8] = (1 + ((num_faces>2) ? 2 : 0) + 16) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
       regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP8] = (1 + 1 + 32) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
       regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP8] = (1 + 0 + 48) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
-      regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP4] = (1 + 2 + 8 ) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+      regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP4] = (1 + ((num_faces>2) ? 2 : 0) + 8 ) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
       regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP4] = (1 + 1 + 16) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
       regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP4] = (1 + 0 + 24) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
-      regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP2] = (1 + 2 + 4 ) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+      regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP2] = (1 + ((num_faces>2) ? 2 : 0) + 4 ) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
       regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP2] = (1 + 1 + 8 ) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
       regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP2] = (1 + 0 + 12) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
       sync_regfile_write(p_gpr_pack::EXP3_SEC_SIZE_BFP2);
@@ -360,7 +383,7 @@ namespace ckernel::packer
    }
 
    template <bool is_fp32_dest_acc_en>
-   inline void configure_pack(uint pack_output, uint relu_config = 0)
+   inline void configure_pack(uint pack_output, uint relu_config = 0, const uint num_faces = 4)
    {
       // Get pointer to registers for current state ID
       volatile uint *cfg = get_cfg_pointer();
@@ -380,7 +403,7 @@ namespace ckernel::packer
 
       t6_mutex_release(mutex::REG_RMW);
 
-      set_packer_config<is_fp32_dest_acc_en>(pack_output);
+      set_packer_config<is_fp32_dest_acc_en>(pack_output, num_faces);
 
       set_packer_l1_offset(pack_output);
 
@@ -572,17 +595,6 @@ namespace ckernel::packer
    inline constexpr uint32_t get_output_base_id() 
    {
       return (OUTPUT_BASE_ID);
-   }
-
-   inline uint32_t get_tile_num_faces(const std::uint32_t out_tile_dims[] = default_tile_dims)
-   {
-      if ((out_tile_dims[TileDim::R_IDX] <= FACE_R_DIM) && (out_tile_dims[TileDim::C_IDX] <= FACE_C_DIM)) {
-         return 1;
-      } else if ((out_tile_dims[TileDim::R_IDX] == TILE_R_DIM) && (out_tile_dims[TileDim::C_IDX] == TILE_C_DIM)) { 
-         return 4;
-      } else {
-         return 2;
-      }
    }
 
 }

@@ -189,11 +189,13 @@ inline void llk_unpack_A_mop_config(const bool transpose_of_faces, const std::ui
 template <bool is_fp32_dest_acc_en = false, bool srnd_fpu_en = false>
 inline void llk_unpack_A_hw_configure(const llk_unpack_A_params_t *unpack_A_params, const int transpose_xy = 0) {
     constexpr bool is_row_pool = false;
-    constexpr uint32_t srca_height = 16;
-    constexpr uint32_t srcb_height = 16;
+    constexpr uint32_t unpA_face_height = 16;
+    constexpr uint32_t unpB_face_height = 16;
+    const uint32_t unpA_num_faces = get_num_faces(get_operand_id(unpack_A_params->unpA_operand));
+    const uint32_t unpB_num_faces = get_num_faces(get_operand_id(unpack_A_params->unpA_operand));
 
     configure_unpack_AB(get_operand_id(unpack_A_params->unpA_operand), get_operand_id(unpack_A_params->unpA_operand),
-        srca_height, srcb_height, is_row_pool, transpose_xy, is_fp32_dest_acc_en, srnd_fpu_en);
+        unpA_face_height, unpB_face_height, is_row_pool, transpose_xy, is_fp32_dest_acc_en, srnd_fpu_en, unpA_num_faces, unpB_num_faces);
 }
 
 template <bool is_fp32_dest_acc_en = false, bool srnd_fpu_en = false>
@@ -207,7 +209,7 @@ inline void llk_unpack_A_hw_configure_disaggregated(const std::uint32_t unpA_ope
 
 template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void llk_unpack_A_init(const std::uint32_t transpose_of_faces=0, const std::uint32_t within_face_16x16_transpose=0, const std::uint32_t in_tile_dims[2] = default_tile_dims) {
-    constexpr std::uint32_t num_faces = 4; //get_tile_num_faces(in_tile_dims); FIXME: tile dim is not correct
+    const std::uint32_t num_faces = get_num_faces(in_tile_dims);
     llk_unpack_A_mop_config<BType, acc_to_dest, binary_reuse_dest>(transpose_of_faces>0, num_faces);
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
     TTI_SETADCXX(0b11, FACE_WIDTH*FACE_HEIGHT-1, 0x0);
@@ -253,9 +255,10 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
         }
     }
 
-    // Run MOP
-    constexpr std::uint32_t num_faces = 4; //get_tile_num_faces(operand); FIXME: tile dim is not correct
+    // Get num faces
+    const std::uint32_t num_faces = get_num_faces(input);
 
+    // Run MOP
     if constexpr ((BType == BroadcastType::ROW) || ((BType == BroadcastType::COL) && acc_to_dest)) {
         mop_run(0, (num_faces > 1) ? num_faces/2 : 1);
     } else if constexpr ((BType == BroadcastType::SCALAR) || (BType == BroadcastType::COL)) {

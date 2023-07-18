@@ -106,6 +106,8 @@ struct p_setadc
 {
     constexpr static uint UNP0  = 0b001;
     constexpr static uint UNP1  = 0b010;
+    constexpr static uint UNP_A = 0b001;
+    constexpr static uint UNP_B = 0b010;
     constexpr static uint PAC   = 0b100;
 
     constexpr static uint SET_X = 0;
