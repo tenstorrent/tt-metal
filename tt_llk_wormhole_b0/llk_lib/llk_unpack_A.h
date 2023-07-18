@@ -171,11 +171,11 @@ inline void llk_unpack_A_mop_config(const bool transpose_of_faces, const std::ui
 
                 ckernel_unpack_template tmp = ckernel_unpack_template(
                     false,  // src B
-                    false,  // halo - just used for 4 unpacks
+                    num_faces<2 ? false : true,  // halo - just used for 4 unpacks
                     TT_OP_REPLAY(0, replay_buf_len, 0, 0),
-                    0,
-                    0,
-                    0,
+                    num_faces<2 ? TT_OP_NOP : TT_OP_REPLAY(0, replay_buf_len, 0, 0), // Unpack face 1
+                    num_faces<4 ? TT_OP_NOP : TT_OP_REPLAY(0, replay_buf_len, 0, 0), // Unpack face 2
+                    num_faces<4 ? TT_OP_NOP : TT_OP_REPLAY(0, replay_buf_len, 0, 0), // Unpack face 3
                     0,
                     0,
                     0);
@@ -216,7 +216,7 @@ inline void llk_unpack_A_init(const std::uint32_t transpose_of_faces=0, const st
 }
 
 template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index, const bool transpose_of_faces = 0) {
+inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index, const bool transpose_of_faces = 0 /*not used*/) {
     std::uint32_t input = get_operand_id(operand);
     std::uint32_t base_address = operands[input].f.fifo_rd_ptr;
     std::uint32_t offset_address = operands[input].f.tile_size_words * tile_index;
@@ -261,13 +261,11 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
     // Run MOP
     if constexpr ((BType == BroadcastType::ROW) || ((BType == BroadcastType::COL) && acc_to_dest)) {
         mop_run(0, (num_faces > 1) ? num_faces/2 : 1);
-    } else if constexpr ((BType == BroadcastType::SCALAR) || (BType == BroadcastType::COL)) {
-        mop_run(0, 1);
-    } else if (transpose_of_faces) {
-        mop_run(0, 1);
-    } else {
+    } else if constexpr (acc_to_dest) {
         mop_run(0, num_faces);
-    }
+    } else {
+        mop_run(0, 1);
+    } 
 
     // T6::SEMGET for context release
     t6_semaphore_get(semaphore::UNPACK_SYNC);
