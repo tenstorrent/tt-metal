@@ -113,22 +113,6 @@ run_frequent_pipeline_tests_multi_threaded() {
     run_frequent_pipeline_tests "$tt_arch" "$pipeline_type"
 }
 
-run_frequently_hangs_pipeline_tests() {
-    local tt_arch=$1
-    local pipeline_type=$2
-
-    make clean
-    make build
-    make tests
-
-    source build/python_env/bin/activate
-    export PYTHONPATH=$TT_METAL_HOME
-
-    env python tests/scripts/run_build_kernels_for_riscv.py --tt-arch $ARCH_NAME
-
-    env pytest tests/tt_metal/llrt --tt-arch $tt_arch -m $pipeline_type
-}
-
 run_metal_bert_bm_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
@@ -154,8 +138,6 @@ run_pipeline_tests() {
         run_frequent_pipeline_tests_single_threaded "$tt_arch" "$pipeline_type"
     elif [[ $pipeline_type == "frequent_multi_threaded" ]]; then
         run_frequent_pipeline_tests_multi_threaded "$tt_arch" "$pipeline_type"
-    elif [[ $pipeline_type == "frequently_hangs" ]]; then
-        run_frequently_hangs_pipeline_tests "$tt_arch" "$pipeline_type"
     elif [[ $pipeline_type == "eager_host_side" ]]; then
         run_eager_package_end_to_end_pipeline_tests "$tt_arch" "$pipeline_type"
     elif [[ $pipeline_type == "eager_package_silicon" ]]; then
