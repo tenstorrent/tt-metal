@@ -1,10 +1,5 @@
-import math
+
 from pathlib import Path
-import sys
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
 
 import torch
 from torch import nn
@@ -12,7 +7,7 @@ from torch.utils.data import DataLoader
 from torchvision import transforms, datasets
 
 import tt_lib as ttl
-from models.utility_functions import pad_activation, pad_weight, tilize_to_list, get_oom_of_float, is_close
+from tests.python_api_testing.models.utility_functions import pad_activation, pad_weight, tilize_to_list, get_oom_of_float, is_close
 
 input_dim = 1024
 hidden_dim = 256
@@ -116,7 +111,7 @@ class TtMnistModel(nn.Module):
         self.batchnorm1d_2 = batchnorm1d_inference(gamma2, beta2, running_mean2, running_var2, eps, gamma2_shape, device)
         self.batchnorm1d_3 = batchnorm1d_inference(gamma3, beta3, running_mean3, running_var3, eps, gamma3_shape, device)
 
-        self.TtRelu = ttm.tensor.relu
+        self.TtRelu = ttl.tensor.relu
 
     # tt forwrd
     def forward(self, X):
@@ -131,7 +126,7 @@ class TtMnistModel(nn.Module):
         x_ = tilize_to_list(x)
 
         # x is a pytorch tensor,... need to convert to a buda tensor
-        inp = ttm.tensor.Tensor(x_, x.shape, ttm.tensor.DataType.BFLOAT16, ttm.tensor.Layout.TILE, device)
+        inp = ttl.tensor.Tensor(x_, x.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
         breakpoint()
         lin1_out = self.lin1(inp)
         bn1_out = self.batchnorm1d_1(lin1_out)
@@ -230,8 +225,8 @@ def run_mnist_inference():
 
 def test_run_mnist_inference():
     # Initialize the device
-    device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
-    ttm.device.InitializeDevice(device)
-    host = ttm.device.GetHost()
+    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    ttl.device.InitializeDevice(device)
+    host = ttl.device.GetHost()
     run_mnist_inference()
-    ttm.device.CloseDevice(device)
+    ttl.device.CloseDevice(device)
