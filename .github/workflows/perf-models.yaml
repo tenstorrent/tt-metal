@@ -1,4 +1,4 @@
-name: Run perf regressions on models and output report
+name: "[post-commit] models - Run perf regressions on models and output report"
 
 on:
   workflow_dispatch:

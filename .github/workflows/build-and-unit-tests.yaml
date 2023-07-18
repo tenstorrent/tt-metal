@@ -1,4 +1,4 @@
-name: Post-commit main build and unit tests
+name: "[post-commit] all - Post-commit main build and unit tests"
 
 on:
   workflow_dispatch:
