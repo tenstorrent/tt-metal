@@ -1,8 +1,10 @@
 #include "tt_dnn/op_library/reshape/reshape_op.hpp"
-#include <algorithm>
+#include "tt_dnn/op_library/math.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tensor/tensor_utils.hpp"
+
+#include <algorithm>
 
 using namespace tt::constants;
 

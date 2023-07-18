@@ -2,6 +2,7 @@
 
 
 #include "tt_dnn/op_library/untilize/untilize_op.hpp"
+#include "tt_dnn/op_library/math.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 
