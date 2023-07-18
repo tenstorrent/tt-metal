@@ -10,6 +10,7 @@
 #else
 #define MATH(x)
 #endif
+#include "compute_kernel_api/llk_pack_includes.h"
 #include "compute_kernel_api/llk_unpack_includes.h"
 
 namespace ckernel {
