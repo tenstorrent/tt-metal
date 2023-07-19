@@ -1,24 +1,10 @@
 #pragma once
 
 
-#include "compute_kernel_api/common.h"
-#ifdef TRISC_MATH
-#include "llk_math_common.h"
-#include "llk_math_eltwise_binary.h"
-#define MAIN math_main()
-#define MATH(x) x
-#else
-#define MATH(x)
-#endif
 
+#include "compute_kernel_api/llk_eltwise_binary_includes.h"
+#include "compute_kernel_api/llk_unpack_AB_includes.h"
 
-#ifdef TRISC_UNPACK
-#include "llk_unpack_AB.h"
-#define UNPACK(x) x
-#define MAIN unpack_main()
-#else
-#define UNPACK(x)
-#endif
 
 
 namespace ckernel {
