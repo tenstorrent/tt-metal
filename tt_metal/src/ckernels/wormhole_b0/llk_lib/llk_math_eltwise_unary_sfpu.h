@@ -347,8 +347,8 @@ inline void llk_math_eltwise_unary_sfpu_elu_init() {
 
 //EXP2
 template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_exp2(uint dst_index, int vector_mode = Dim::RC) {
-    llk_math_eltwise_unary_sfpu<SfpuType::exp2, APPROXIMATE, dst_sync>(dst_index,vector_mode);
+inline void llk_math_eltwise_unary_sfpu_exp2(uint dst_index) {
+    llk_math_eltwise_unary_sfpu<SfpuType::exp2, APPROXIMATE, dst_sync>(dst_index);
 }
 
 template <bool APPROXIMATE>
