@@ -257,7 +257,6 @@ BmmOpParallelizationStrategy::Enum get_parallelization_strategy(const std::vecto
 }
 
 namespace tt {
-
 namespace tt_metal {
 
 Tensor large_bmm(const Tensor& a, const Tensor& b, bool tilize_act, bool untilize_out) {
@@ -266,22 +265,6 @@ Tensor large_bmm(const Tensor& a, const Tensor& b, bool tilize_act, bool untiliz
         log_warning("WARNING: Only single core mode supported for large_bmm. Falling back to single core.");
     }
     return large_bmm_single_core(a, b, tilize_act, untilize_out);
-}
-
-/**
- * Blocked Matmul, with tilize a and untilize output.
- * NOTE: Takes blocks and subblock information as arguments.
- */
-Tensor bmm_tilize_untilize(const Tensor& a, const Tensor& b, DataType out_dt,
-                           uint32_t a_height_nblocks, uint32_t a_width_nblocks, uint32_t b_width_nblocks,
-                           uint32_t a_block_height_ntiles, uint32_t a_block_width_ntiles, uint32_t b_block_width_ntiles,
-                           uint32_t out_subblock_height_ntiles, uint32_t out_subblock_width_ntiles,
-                           bool tilize_a, bool untilize_out) {
-    return bmm_single_core_tilize_untilize(a, b, out_dt,
-                                           a_height_nblocks, a_width_nblocks, b_width_nblocks,
-                                           a_block_height_ntiles, a_block_width_ntiles, b_block_width_ntiles,
-                                           out_subblock_height_ntiles, out_subblock_width_ntiles,
-                                           tilize_a, untilize_out);
 }
 
 Tensor large_bmm_single_block(const Tensor& a, const Tensor& b, bool tilize_a, bool untilize_out) {
@@ -569,6 +552,6 @@ tt::stl::reflection::Attributes BertLargeMatmul::attributes() const {
     };
 }
 
-}  // namespace tt_metal
 
+}  // namespace tt_metal
 }  // namespace tt

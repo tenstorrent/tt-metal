@@ -136,18 +136,43 @@ inline Tensor bert_large_post_softmax_bmm(const Tensor &input_tensor_a, const Te
 // TODO: Refactor and uplift these bmms
 Tensor large_bmm(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool tilize_act, bool untilize_out); // Tilizes, untilizes b
 Tensor large_bmm_single_block(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool tilize_a, bool untilize_out); // Allows support for tilizing a, untilize b
+Tensor large_bmm_single_core(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool tilize_act, bool untilize_out); // Tilizes a, untilizes b
+Tensor large_bmm_single_core_single_block(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool tilize_a, bool untilize_out); // Allows support for tilizing a, untilize b
+
+
+/**
+ * Generalized blocked matmul with support for tilize and untilize and mixed-prec
+ */
+struct BMMTilizeUntilize {
+    const DataType out_dt_;
+    const uint32_t in0_nblocks_h_, in0_nblocks_w_, in1_nblocks_w_;
+    const uint32_t in0_block_ntiles_h_, in0_block_ntiles_w_, in1_block_ntiles_w_;
+    const uint32_t out_subblock_ntiles_h_, out_subblock_ntiles_w_;
+    const bool tilize_in0_, untilize_out_;
+
+    void validate(const std::vector<Tensor>& input_tensors) const;
+    std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
+    stl::reflection::Attributes attributes() const;
+};
+
+/**
+ * Blocked Matmul, with support for tilize a and untilize output.
+ * NOTE: Takes blocks and subblock information as arguments.
+ */
 Tensor bmm_tilize_untilize(const Tensor& a, const Tensor& b, DataType out_dt,
                            uint32_t a_height_nblocks, uint32_t a_width_nblocks, uint32_t b_width_nblocks,
                            uint32_t a_block_height_ntiles, uint32_t a_block_width_ntiles, uint32_t b_block_width_ntiles,
                            uint32_t out_subblock_height_ntiles, uint32_t out_subblock_width_ntiles,
-                           bool tilize_b, bool untilize_out);
-Tensor bmm_single_core_tilize_untilize(const Tensor &input_tensor_a, const Tensor &input_tensor_b, DataType out_dt,
-                                       uint32_t a_height_nblocks, uint32_t a_width_nblocks, uint32_t b_width_nblocks,
-                                       uint32_t a_block_height_ntiles, uint32_t a_block_width_ntiles, uint32_t b_block_width_ntiles,
-                                       uint32_t out_subblock_height_ntiles, uint32_t out_subblock_width_ntiles,
-                                       bool tilize_b, bool untilize_out);
-Tensor large_bmm_single_core(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool tilize_act, bool untilize_out); // Tilizes a, untilizes b
-Tensor large_bmm_single_core_single_block(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool tilize_a, bool untilize_out); // Allows support for tilizing a, untilize b
+                           bool tilize_in0, bool untilize_out);
+operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
+                                    const Tensor &in0, const Tensor &in1, DataType out_dt,
+                                    uint32_t in0_height_nblocks, uint32_t in0_width_nblocks, uint32_t in1_width_nblocks,
+                                    uint32_t in0_block_height_ntiles, uint32_t in0_block_width_ntiles, uint32_t in1_block_width_ntiles,
+                                    uint32_t out_subblock_height_ntiles, uint32_t out_subblock_width_ntiles,
+                                    bool tilize_in0, bool untilize_out,
+                                    Tensor &out);
 
 }  // namespace tt_metal
 

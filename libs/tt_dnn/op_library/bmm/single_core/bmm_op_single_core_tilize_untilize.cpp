@@ -9,20 +9,35 @@
 namespace tt {
 namespace tt_metal {
 
+Tensor bmm_tilize_untilize(const Tensor& a, const Tensor& b, DataType out_dt,
+                           uint32_t a_height_nblocks, uint32_t a_width_nblocks, uint32_t b_width_nblocks,
+                           uint32_t a_block_height_ntiles, uint32_t a_block_width_ntiles, uint32_t b_block_width_ntiles,
+                           uint32_t out_subblock_height_ntiles, uint32_t out_subblock_width_ntiles,
+                           bool tilize_in0, bool untilize_out) {
+    // NOTE: Currently only single core implementation exists.
+    return operation::run(BMMTilizeUntilize {
+                            out_dt,
+                            a_height_nblocks, a_width_nblocks, b_width_nblocks,
+                            a_block_height_ntiles, a_block_width_ntiles, b_block_width_ntiles,
+                            out_subblock_height_ntiles, out_subblock_width_ntiles,
+                            tilize_in0, untilize_out},
+                          {a, b},
+                          {}).at(0);
+}
+
 void create_cb_bmm_single_core_tilize_untilize(Program &program,
-                                                Device* device,
-                                                CoreCoord core,
-                                                DataFormat in0_df,
-                                                DataFormat in1_df,
-                                                DataFormat out_df,
-                                                uint32_t in0_block_w,
-                                                uint32_t in0_block_h,
-                                                uint32_t in1_block_w,
-                                                uint32_t in0_tile_nbytes,
-                                                uint32_t in1_tile_nbytes,
-                                                uint32_t out_tile_nbytes,
-                                                bool tilize_in0 = true,
-                                                bool untilize_out = true) {
+                                               CoreRange core,
+                                               DataFormat in0_df,
+                                               DataFormat in1_df,
+                                               DataFormat out_df,
+                                               uint32_t in0_block_w,
+                                               uint32_t in0_block_h,
+                                               uint32_t in1_block_w,
+                                               uint32_t in0_tile_nbytes,
+                                               uint32_t in1_tile_nbytes,
+                                               uint32_t out_tile_nbytes,
+                                               bool tilize_in0 = true,
+                                               bool untilize_out = true) {
     // buffer indices
     uint32_t in0_cb                                 = CB::c_in0;
     uint32_t in1_cb                                 = CB::c_in1;
@@ -36,10 +51,8 @@ void create_cb_bmm_single_core_tilize_untilize(Program &program,
     const uint32_t cb1_ntiles = in0_block_w * in1_block_w * 2;   // double buffer
     const uint32_t out_ntiles = in0_block_h * in1_block_w;
 
-    // inputs
-
-    // in0 (RM)
-    auto cb_in0 = CreateCircularBuffer(
+    // in0 (RM/TM)
+    auto cb_in0 = CreateCircularBuffers(
         program,
         in0_cb,
         core,
@@ -47,8 +60,8 @@ void create_cb_bmm_single_core_tilize_untilize(Program &program,
         cb0_ntiles * in0_tile_nbytes,
         in0_df
     );
-    // in1
-    auto cb_in1 = CreateCircularBuffer(
+    // in1 (TM)
+    auto cb_in1 = CreateCircularBuffers(
         program,
         in1_cb,
         core,
@@ -57,11 +70,9 @@ void create_cb_bmm_single_core_tilize_untilize(Program &program,
         in1_df
     );
 
-    // intermediates
-
     if (tilize_in0) {
-        // in0 (TM)
-        auto cb_src0_tilized = CreateCircularBuffer(
+        // in0 (RM -> TM)
+        auto cb_src0_tilized = CreateCircularBuffers(
             program,
             tilize_mode_tilized_in0_cb,
             core,
@@ -70,8 +81,10 @@ void create_cb_bmm_single_core_tilize_untilize(Program &program,
             in0_df
         );
     }
+
     if (untilize_out) {
-        auto cb_matmul_partials = CreateCircularBuffer(
+        // partial sums
+        auto cb_matmul_partials = CreateCircularBuffers(
             program,
             matmul_partials_cb,
             core,
@@ -79,8 +92,36 @@ void create_cb_bmm_single_core_tilize_untilize(Program &program,
             out_ntiles * out_tile_nbytes,
             out_df
         );
+        // final partial sums
+        auto cb_final_matmul_partials = CreateCircularBuffers(
+            program,
+            untilize_mode_final_matmul_partials_cb,
+            core,
+            out_ntiles,
+            out_ntiles * out_tile_nbytes,
+            out_df
+        );
+        // to reorganize output blocks to fill the whole "per core output block width"
+        auto cb_reblock = CreateCircularBuffers(
+            program,
+            untilize_mode_reblock_cb,
+            core,
+            in1_block_w,                    // a single row of tiles
+            in1_block_w * out_tile_nbytes,
+            out_df
+        );
+        // output
+        auto cb_output = CreateCircularBuffers(
+            program,
+            out_cb,
+            core,
+            out_ntiles,
+            out_ntiles * out_tile_nbytes,
+            out_df
+        );
     } else {
-        CoreRangeSet cores(std::set<CoreRange>{CoreRange{.start=core, .end=core}});
+        // partials and output share same memory
+        CoreRangeSet cores(std::set<CoreRange>{core});
         auto cb_matmul_partials = CreateCircularBuffers(
             program,
             {matmul_partials_cb, out_cb},
@@ -90,68 +131,23 @@ void create_cb_bmm_single_core_tilize_untilize(Program &program,
             out_df
         );
     }
-
-    if (untilize_out) {
-        auto cb_final_matmul_partials = CreateCircularBuffer(
-            program,
-            untilize_mode_final_matmul_partials_cb,
-            core,
-            out_ntiles,
-            out_ntiles * out_tile_nbytes,
-            out_df
-        );
-        // to reorganize output blocks to fill the whole "per core output block width"
-        auto cb_reblock = CreateCircularBuffer(
-            program,
-            untilize_mode_reblock_cb,
-            core,
-            in1_block_w,                    // a single row of tiles
-            in1_block_w * out_tile_nbytes,
-            out_df
-        );
-    }
-
-    // output
-
-    if (untilize_out) {
-        auto cb_output = CreateCircularBuffer(
-            program,
-            out_cb,
-            core,
-            out_ntiles,
-            out_ntiles * out_tile_nbytes,
-            out_df
-        );
-    }
 }
 
-// NOTE (AS): This is a temporary utility function for dtype -> dformat mapping.
-// TODO: Replace with a common utility.
-DataFormat get_tensor_df_from_dt(const DataType& dt) {
-    switch (dt) {
-        case DataType::BFLOAT16:
-            return DataFormat::Float16_b;
-        case DataType::BFLOAT8_B:
-            return DataFormat::Bfp8_b;
-        default:
-            TT_ASSERT(false, "Unsupported data type encountered!!");
-            return DataFormat::Invalid;
-    } // switch
-}
-
-Tensor bmm_single_core_tilize_untilize(const Tensor &in0,       // activations
-                                       const Tensor &in1,       // weights
-                                       DataType out_dt,
-                                       uint32_t in0_height_nblocks,
-                                       uint32_t in0_width_nblocks,
-                                       uint32_t in1_width_nblocks,
-                                       uint32_t in0_block_height_ntiles,
-                                       uint32_t in0_block_width_ntiles,
-                                       uint32_t in1_block_width_ntiles,
-                                       uint32_t out_subblock_height_ntiles,
-                                       uint32_t out_subblock_width_ntiles,
-                                       bool tilize_in0 = true,
-                                       bool untilize_out = true) {
+operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
+                                    const Tensor &in0,       // activations
+                                    const Tensor &in1,       // weights
+                                    DataType out_dt,
+                                    uint32_t in0_height_nblocks,
+                                    uint32_t in0_width_nblocks,
+                                    uint32_t in1_width_nblocks,
+                                    uint32_t in0_block_height_ntiles,
+                                    uint32_t in0_block_width_ntiles,
+                                    uint32_t in1_block_width_ntiles,
+                                    uint32_t out_subblock_height_ntiles,
+                                    uint32_t out_subblock_width_ntiles,
+                                    bool tilize_in0,
+                                    bool untilize_out,
+                                    Tensor &out) {
     const auto [in0_batch, in0_channel, in0_height, in0_width] = in0.shape();
     const auto [in1_batch, in1_channel, in1_height, in1_width] = in1.shape();
 
@@ -175,8 +171,8 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &in0,       // activations
     // input data type and formats
     const auto in0_dt = in0.dtype();
     const auto in1_dt = in1.dtype();
-    const auto in0_df = get_tensor_df_from_dt(in0_dt);
-    const auto in1_df = get_tensor_df_from_dt(in1_dt);
+    const auto in0_df = datatype_to_dataformat_converter(in0_dt);
+    const auto in1_df = datatype_to_dataformat_converter(in1_dt);
 
     // input data format checks
     TT_ASSERT(in0_dt == DataType::BFLOAT16 || (in0_dt == DataType::BFLOAT8_B && !tilize_in0),
@@ -184,7 +180,7 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &in0,       // activations
     TT_ASSERT(in1_dt == DataType::BFLOAT16 || in1_dt == DataType::BFLOAT8_B, "in1 only supports BFLOAT16 and BFLOAT8_B formats for now!");
 
     // output data format
-    const auto out_df = get_tensor_df_from_dt(out_dt);
+    const auto out_df = datatype_to_dataformat_converter(out_dt);
 
     // out dt checks
     TT_ASSERT(!untilize_out || (untilize_out && out_dt == DataType::BFLOAT16));
@@ -204,21 +200,19 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &in0,       // activations
     TT_ASSERT(src0_dram_buffer->size() % in0_tile_nbytes == 0, "Buffer size of tensor in0 must be multiple of tile size");
     TT_ASSERT(src1_dram_buffer->size() % in1_tile_nbytes == 0, "Buffer size of tensor in1 must be multiple of tile size");
 
+    Device *device = in0.device();
     CoreCoord core = {0, 0};
     CoreCoord debug_core = {1, 1};
-    Program program = Program();
-    Device *device = in0.device();
+
+    Program program{};
+
+    CoreRange core_range { .start = core, .end = core };
 
     // start debug server for kernel dprint
     // int hart_mask = DPRINT_HART_NC | DPRINT_HART_BR;
     tt_start_debug_print_server(device->cluster(), {0}, {debug_core});
 
-    const Shape out_shape{in0_batch, in0_channel, in0_height, in1_width};
-    Tensor output = create_device_tensor(out_shape,
-                           out_dt,
-                            untilize_out ? Layout::ROW_MAJOR : Layout::TILE,
-                            device);
-    Buffer *dst_dram_buffer = output.buffer();
+    Buffer *dst_dram_buffer = out.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
 
     // Convert tensor dims to tile dims
@@ -308,8 +302,7 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &in0,       // activations
 
     create_cb_bmm_single_core_tilize_untilize(
         program,
-        in0.device(),
-        core,
+        core_range,
         in0_df,
         in1_df,
         out_df,
@@ -387,7 +380,7 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &in0,       // activations
     auto reader = CreateDataMovementKernel(
         program,                            // program
         reader_kernel,                      // file name
-        core,                               // core
+        core_range,                         // core
         DataMovementProcessor::RISCV_1,     // processor type
         NOC::RISCV_1_default                // noc
     );
@@ -405,11 +398,11 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &in0,       // activations
         writer_rt_args = {
             out_dram_addr,
             in0_block_h_data,
-            in1_block_w * constants::TILE_WIDTH * output.element_size(), // block_row_size
+            in1_block_w * constants::TILE_WIDTH * out.element_size(), // block_row_size
             1,                                                  // batch
             in0_num_blocks_h,
             in1_num_blocks_w,
-            in1_width * output.element_size(),   // output_row_size
+            in1_width * out.element_size(),   // output_row_size
             static_cast<uint32_t>(out_df)
         };
     } else {
@@ -430,13 +423,10 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &in0,       // activations
             static_cast<uint32_t>(out_df)
         };
     }
-    // for (auto param_val : writer_rt_args) {
-    //     log_debug("==> {}", param_val);
-    // }
     auto writer = CreateDataMovementKernel(
         program,                        // program
         writer_kernel,                  // file name
-        core,                           // core
+        core_range,                     // core
         DataMovementProcessor::RISCV_0, // processor type
         NOC::RISCV_0_default);          // noc
 
@@ -463,7 +453,7 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &in0,       // activations
     auto bmm_compute = CreateComputeKernel(
         program,
         compute_kernel,
-        core,
+        core_range,
         compute_comptime_args,
         MathFidelity::HiFi4,
         false,  // fp32_dest_acc_en
@@ -471,9 +461,9 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &in0,       // activations
     );
 
     // Reader rt args
-    SetRuntimeArgs(reader, core, reader_rt_args);
+    SetRuntimeArgs(reader, core_range, reader_rt_args);
     // Writer rt args
-    SetRuntimeArgs(writer, core, writer_rt_args);
+    SetRuntimeArgs(writer, core_range, writer_rt_args);
 
     // Compile and launch
     bool pass = CompileProgram(device, program, false);
@@ -483,8 +473,84 @@ Tensor bmm_single_core_tilize_untilize(const Tensor &in0,       // activations
 
     TT_ASSERT(pass);
 
-    return output;
+    auto override_runtime_args_callback = [kernel_reader = reader, kernel_writer = writer](
+                                            const std::vector<Buffer*>& input_buffers,
+                                            const std::vector<Buffer*>& output_buffers) {
+        auto in0_dram_buffer = input_buffers.at(0);
+        auto in1_dram_buffer = input_buffers.at(1);
+        auto out_dram_buffer = output_buffers.at(0);
+        CoreCoord core = {0, 0};
+        {
+            auto runtime_args = GetRuntimeArgs(kernel_reader, core);
+            runtime_args[0] = in0_dram_buffer->address();
+            runtime_args[9] = in1_dram_buffer->address();
+            SetRuntimeArgs(kernel_reader, core, runtime_args);
+        }
+        {
+            auto runtime_args = GetRuntimeArgs(kernel_writer, core);
+            runtime_args[0] = out_dram_buffer->address();
+            SetRuntimeArgs(kernel_writer, core, runtime_args);
+        }
+    };
+
+    return {std::move(program), override_runtime_args_callback};
 } // bmm_single_core_tilize_untilize()
+
+
+void BMMTilizeUntilize::validate(const std::vector<Tensor>& inputs) const {
+    const auto& in0 = inputs.at(0);
+    const auto& in1 = inputs.at(1);
+    // TODO: Currently all validation is part of the primary function from create_program. Move them here.
+}
+
+std::vector<Shape> BMMTilizeUntilize::compute_output_shapes(const std::vector<Tensor>& inputs) const {
+    const auto& in0 = inputs.at(0);
+    const auto& in1 = inputs.at(1);
+    const auto [in0_batch, in0_channel, in0_height, in0_width] = in0.shape();
+    const auto [in1_batch, in1_channel, in1_height, in1_width] = in1.shape();
+    const Shape out_shape { in0_batch, in0_channel, in0_height, in1_width };
+    return {out_shape};
+}
+
+std::vector<Tensor> BMMTilizeUntilize::create_output_tensors(const std::vector<Tensor>& inputs) const {
+    const auto& output_shapes = this->compute_output_shapes(inputs);
+    auto output_layout = untilize_out_ ? Layout::ROW_MAJOR : Layout::TILE;
+    std::vector<Tensor> output_tensors;
+    // There is just one output tensor
+    output_tensors.reserve(1);
+    output_tensors.emplace_back(create_device_tensor(output_shapes.at(0), out_dt_, output_layout, inputs.at(0).device()));
+    return output_tensors;
+}
+
+operation::ProgramWithCallbacks BMMTilizeUntilize::create_program(const std::vector<Tensor>& inputs,
+                                                                  std::vector<Tensor>& outputs) const {
+    const auto& in0 = inputs.at(0);
+    const auto& in1 = inputs.at(1);
+    auto& out = outputs.at(0);
+    // NOTE: currently only single core version exists
+    return bmm_single_core_tilize_untilize(in0, in1, out_dt_,
+                                           in0_nblocks_h_, in0_nblocks_w_, in1_nblocks_w_,
+                                           in0_block_ntiles_h_, in0_block_ntiles_w_, in1_block_ntiles_w_,
+                                           out_subblock_ntiles_h_, out_subblock_ntiles_w_,
+                                           tilize_in0_, untilize_out_,
+                                           out);
+}
+
+stl::reflection::Attributes BMMTilizeUntilize::attributes() const {
+    return {
+        {"out_dt", fmt::format("{}", out_dt_)},
+        {"in0_nblocks_h", fmt::format("{}", in0_nblocks_h_)},
+        {"in0_nblocks_w", fmt::format("{}", in0_nblocks_w_)},
+        {"in1_nblocks_w", fmt::format("{}", in1_nblocks_w_)},
+        {"in0_block_ntiles_h", fmt::format("{}", in0_block_ntiles_h_)},
+        {"in0_block_ntiles_w", fmt::format("{}", in0_block_ntiles_w_)},
+        {"in1_block_ntiles_w", fmt::format("{}", in1_block_ntiles_w_)},
+        {"out_subblock_ntiles_h", fmt::format("{}", out_subblock_ntiles_h_)},
+        {"out_subblock_ntiles_w", fmt::format("{}", out_subblock_ntiles_w_)},
+        {"tilize_in0", fmt::format("{}", tilize_in0_)},
+        {"untilize_out", fmt::format("{}", untilize_out_)}
+    };
+}
 
 }  // namespace tt_metal
 }  // namespace tt
