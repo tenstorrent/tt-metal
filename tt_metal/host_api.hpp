@@ -2,11 +2,8 @@
 
 #include <optional>
 #include "tt_metal/impl/allocator/allocator.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
-#include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/device/host.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
-#include "tt_metal/impl/program.hpp"
 
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 
@@ -29,6 +26,11 @@ inline unique_ptr<CommandQueue> HACK_CQ;
 namespace tt {
 
 namespace tt_metal {
+
+class Host;
+class Device;
+class Program;
+class Buffer;
 
 // ==================================================
 //                  HOST API: reports
