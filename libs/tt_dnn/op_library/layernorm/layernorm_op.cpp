@@ -34,7 +34,8 @@ operation::ProgramWithCallbacks layernorm_(
     const std::optional<const Tensor> beta,
     Tensor& output,
     float eps,
-    bool rm_gb = false
+    bool rm_gb = false,
+    bool rms_norm = false
 ) {
 
     const auto shape = a.shape();
@@ -223,7 +224,7 @@ operation::ProgramWithCallbacks layernorm_(
     bool math_approx_mode = true;
     auto eltwise_binary_kernels = CreateComputeKernel(
         program,
-        "kernels/compute/layernorm.cpp",
+        rms_norm ? "kernels/compute/rmsnorm.cpp" : "kernels/compute/layernorm.cpp",
         all_cores,
         compute_args,
         MathFidelity::HiFi4,
@@ -248,12 +249,20 @@ operation::ProgramWithCallbacks layernorm_(
     CreateCircularBuffers( program, CB::c_in2,       all_cores, in2_t,  in2_t*bfloat16_tile_size,  DataFormat::Float16_b );
     CreateCircularBuffers( program, CB::c_in3,       all_cores, in3_t,  in3_t*bfloat16_tile_size,  DataFormat::Float16_b );
     CreateCircularBuffers( program, CB::c_intermed2, all_cores, im2_t,  im2_t*single_tile_size,  cb_data_format );
-    CreateCircularBuffers( program, CB::c_intermed0, all_cores, im0_t,  im0_t*single_tile_size,  cb_data_format );
+    if (!rms_norm) {
+        CreateCircularBuffers( program, CB::c_intermed0, all_cores, im0_t,  im0_t*single_tile_size,  cb_data_format );
+    }
     CreateCircularBuffers( program, CB::c_intermed3, all_cores, im3_t,  im3_t*single_tile_size,  cb_data_format );
     CreateCircularBuffers( program, CB::c_intermed4, all_cores, im4_t,  im4_t*single_tile_size,  cb_data_format );
-    CreateCircularBuffers( program, CB::c_intermed5, all_cores, im5_t,  im5_t*single_tile_size,  cb_data_format );
-    CreateCircularBuffers( program, CB::c_in5,       all_cores, in5_t,  in5_t*(rm_gb ? bfloat16_tile_size : single_tile_size),  rm_gb ? DataFormat::Float16_b : cb_data_format );
-    CreateCircularBuffers( program, CB::c_in6,       all_cores, in6_t,  in6_t*(rm_gb ? bfloat16_tile_size : single_tile_size),  rm_gb ? DataFormat::Float16_b : cb_data_format );
+    if (gamma.has_value() || beta.has_value()) {
+        CreateCircularBuffers( program, CB::c_intermed5, all_cores, im5_t,  im5_t*single_tile_size,  cb_data_format );
+    }
+    if (gamma.has_value()) {
+        CreateCircularBuffers( program, CB::c_in5,       all_cores, in5_t,  in5_t*(rm_gb ? bfloat16_tile_size : single_tile_size),  rm_gb ? DataFormat::Float16_b : cb_data_format );
+    }
+    if (beta.has_value()) {
+        CreateCircularBuffers( program, CB::c_in6,       all_cores, in6_t,  in6_t*(rm_gb ? bfloat16_tile_size : single_tile_size),  rm_gb ? DataFormat::Float16_b : cb_data_format );
+    }
     if (b) {
         // x = a+b in this notation
         // result = ln(x)*gamma + beta
@@ -471,6 +480,80 @@ tt::stl::reflection::Attributes BertLargeLayerNorm::attributes() const {
     return {
         {"eps", this->eps},
         {"output_mem_config", this->output_mem_config},
+    };
+}
+
+void RMSNorm::validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
+    TT_ASSERT(input_tensors.size() == 1 and optional_input_tensors.size() <= 3, "Must have between 1 to 4 input tensors");
+    auto& a = input_tensors.at(0);
+    const auto& b = optional_input_tensors.at(0);
+    const auto& gamma = optional_input_tensors.at(1);
+    const auto& beta = optional_input_tensors.at(2);
+    TT_ASSERT(a.layout() == Layout::TILE);
+    TT_ASSERT(a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B);
+    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
+    TT_ASSERT(a.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+    if (b.has_value()) {
+        TT_ASSERT(b.value().layout() == Layout::TILE);
+        TT_ASSERT(a.shape() == b.value().shape());
+        TT_ASSERT(a.device() == b.value().device());
+        TT_ASSERT(b.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+    }
+    if (gamma.has_value()) {
+        TT_ASSERT(gamma.value().layout() == Layout::TILE);
+        TT_ASSERT(a.shape()[3] == gamma.value().shape()[3]);
+        TT_ASSERT(a.device() == gamma.value().device());
+        TT_ASSERT(gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+        TT_ASSERT(gamma.value().shape()[2] == TILE_HEIGHT);
+    }
+    if (beta.has_value()) {
+        TT_ASSERT(beta.value().layout() == Layout::TILE);
+        TT_ASSERT(a.shape()[3] == beta.value().shape()[3]);
+        TT_ASSERT(a.device() == beta.value().device());
+        TT_ASSERT(beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+        TT_ASSERT(beta.value().shape()[2] == TILE_HEIGHT);
+    }
+
+}
+
+std::vector<Shape> RMSNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    return {input_tensor.shape()};
+}
+
+std::vector<Tensor> RMSNorm::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
+    return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE, this->output_mem_config);
+}
+
+operation::ProgramWithCallbacks RMSNorm::create_program(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor> &output_tensors
+) const {
+    const auto& a = input_tensors.at(0);
+    const auto& b = optional_input_tensors.at(0);
+    const auto& gamma = optional_input_tensors.at(1);
+    const auto& beta = optional_input_tensors.at(2);
+    auto& output_tensor = output_tensors.at(0);
+    return layernorm_(a, b, gamma, beta, output_tensor, this->eps, false, true);
+
+}
+
+operation::Hash RMSNorm::compute_program_hash(
+    const std::vector<Tensor> &input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors
+) const {
+    const auto& input_tensor = input_tensors.at(0);
+    const auto& b = optional_input_tensors.at(0);
+    const auto& gamma = optional_input_tensors.at(1);
+    const auto& beta = optional_input_tensors.at(2);
+    return fmt::format("{}_{}_{}_{}_{}", *this, input_tensor, b, gamma, beta);
+}
+
+tt::stl::reflection::Attributes RMSNorm::attributes() const {
+    return {
+        {"eps", fmt::format("{}", this->eps)},
+        {"output_mem_config", fmt::format("{}", this->output_mem_config)},
     };
 }
 
