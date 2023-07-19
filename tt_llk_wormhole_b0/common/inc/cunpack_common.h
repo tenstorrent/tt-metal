@@ -215,8 +215,8 @@ namespace ckernel::unpacker
    }
 
    inline void configure_unpack_AB(
-     uint unpA_operand, 
-     uint unpB_operand, 
+     uint unpA_operand_id, 
+     uint unpB_operand_id, 
      uint unpA_face_height=16,
      uint unpB_face_height=16,
      bool row_pool=false,
@@ -236,11 +236,11 @@ namespace ckernel::unpacker
       // Get pointer to registers for current state ID
       volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
 
-      uint unpA_ch1_x_stride = (uint) (unpack_dst_format[unpA_operand]&0x3) == (uint) DataFormat::Float32 ? 4 : (uint) (unpack_dst_format[unpA_operand]&0x3) == (uint) DataFormat::Float16 ? 2 : 1;
-      uint unpB_ch1_x_stride = (uint) (unpack_dst_format[unpB_operand]&0x3) == (uint) DataFormat::Float32 ? 4 : (uint) (unpack_dst_format[unpB_operand]&0x3) == (uint) DataFormat::Float16 ? 2 : 1;
+      uint unpA_ch1_x_stride = (uint) (unpack_dst_format[unpA_operand_id]&0x3) == (uint) DataFormat::Float32 ? 4 : (uint) (unpack_dst_format[unpA_operand_id]&0x3) == (uint) DataFormat::Float16 ? 2 : 1;
+      uint unpB_ch1_x_stride = (uint) (unpack_dst_format[unpB_operand_id]&0x3) == (uint) DataFormat::Float32 ? 4 : (uint) (unpack_dst_format[unpB_operand_id]&0x3) == (uint) DataFormat::Float16 ? 2 : 1;
       uint unpA_ch1_z_stride = 16*unpA_face_height*unpA_ch1_x_stride;
       uint unpB_ch1_z_stride = 16*unpB_face_height*unpB_ch1_x_stride;
-      uint exp_width = ((uint)unpack_dst_format[unpA_operand]>>2)&0x1; //0=5-bit, 1=8-bit
+      uint exp_width = ((uint)unpack_dst_format[unpA_operand_id]>>2)&0x1; //0=5-bit, 1=8-bit
    
       // Strides for incrementing ch1 address to srcA and srcB
       cfg[UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] = (0                 << UNP0_ADDR_CTRL_ZW_REG_1_Wstride_SHAMT) | 
@@ -260,16 +260,16 @@ namespace ckernel::unpacker
 
       uint32_t fp32_dest_acc_en = (is_fp32_dest_acc_en) ? (1) : (0);
 
-      alu_payload.f.ALU_FORMAT_SPEC_REG0_SrcA = unpack_dst_format[unpA_operand];
-      alu_payload.f.ALU_FORMAT_SPEC_REG1_SrcB = row_pool ? ((uint) DataFormat::Float16 | (exp_width<<2)) : unpack_dst_format[unpB_operand];
+      alu_payload.f.ALU_FORMAT_SPEC_REG0_SrcA = unpack_dst_format[unpA_operand_id];
+      alu_payload.f.ALU_FORMAT_SPEC_REG1_SrcB = row_pool ? ((uint) DataFormat::Float16 | (exp_width<<2)) : unpack_dst_format[unpB_operand_id];
       // FP32 accumulation and SFPU to read dest as FP32
       // NOTE: This assumes these config fields are adjacent and in same register!!
       static_assert(ALU_ACC_CTRL_Fp32_enabled_ADDR32 == ALU_FORMAT_SPEC_REG0_SrcA_ADDR32);
       static_assert(ALU_ACC_CTRL_Fp32_enabled_ADDR32 == ALU_ACC_CTRL_SFPU_Fp32_enabled_ADDR32);
       alu_payload.f.ALU_ACC_CTRL_Fp32_enabled = fp32_dest_acc_en;
       alu_payload.f.ALU_ACC_CTRL_SFPU_Fp32_enabled = fp32_dest_acc_en;
-      alu_payload.f.ALU_ACC_CTRL_INT8_math_enabled = ((uint)unpack_dst_format[unpA_operand] == (uint)DataFormat::Int8) || 
-                                                     ((uint)unpack_dst_format[unpB_operand] == (uint)DataFormat::Int8);
+      alu_payload.f.ALU_ACC_CTRL_INT8_math_enabled = ((uint)unpack_dst_format[unpA_operand_id] == (uint)DataFormat::Int8) || 
+                                                     ((uint)unpack_dst_format[unpB_operand_id] == (uint)DataFormat::Int8);
 
       constexpr uint mask1 = ALU_ACC_CTRL_INT8_math_enabled_MASK | ALU_ACC_CTRL_SFPU_Fp32_enabled_MASK | ALU_ACC_CTRL_Fp32_enabled_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK | ALU_FORMAT_SPEC_REG0_SrcA_MASK;
 
@@ -285,7 +285,7 @@ namespace ckernel::unpacker
       for (uint i=0; i<TILE_DESC_SIZE; i++) {
          tile_descriptor.val[i] = 0;
       }
-      tile_descriptor.f.in_data_format  = (uint) unpack_src_format[unpA_operand];
+      tile_descriptor.f.in_data_format  = (uint) unpack_src_format[unpA_operand_id];
       tile_descriptor.f.uncompressed = 1; // Input tile is uncompressed
       tile_descriptor.f.x_dim        = 256; // Not used for unpA as value is overriden by per context x_dim set below. Used for unpB
       tile_descriptor.f.y_dim        = 1; 
@@ -293,7 +293,7 @@ namespace ckernel::unpacker
       //tile_descriptor.f.blobs_per_xy_plane = 0;
       //tile_descriptor.f.blobs_y_start = 0;
       for (uint i=0; i<TILE_DESC_SIZE; i++) cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32+i]=tile_descriptor.val[i];
-      tile_descriptor.f.in_data_format  = row_pool ? (uint) DataFormat::Float32 : unpack_src_format[unpB_operand];
+      tile_descriptor.f.in_data_format  = row_pool ? (uint) DataFormat::Float32 : unpack_src_format[unpB_operand_id];
       tile_descriptor.f.z_dim        = unpB_num_faces; 
       for (uint i=0; i<TILE_DESC_SIZE; i++) cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32+i]=tile_descriptor.val[i];
    
@@ -302,7 +302,7 @@ namespace ckernel::unpacker
       for (uint i=0; i<CONFIG_SIZE; i++) {
          config.val[i] = 0;
       }
-      config.f.out_data_format = unpack_dst_format[unpA_operand];
+      config.f.out_data_format = unpack_dst_format[unpA_operand_id];
       config.f.throttle_mode   = 2;
       config.f.context_count   = 0;
       config.f.haloize_mode    = transpose_xy_srca_en ? 1 : 0;
@@ -315,7 +315,7 @@ namespace ckernel::unpacker
       //config.f.fifo_size = 0; // Set dynamically
       for (uint i=0; i<CONFIG_SIZE; i++) cfg[THCON_SEC0_REG2_Out_data_format_ADDR32+i]=config.val[i];
 
-      config.f.out_data_format = row_pool ? ((uint) DataFormat::Float16 | (exp_width<<2)) : unpack_dst_format[unpB_operand];
+      config.f.out_data_format = row_pool ? ((uint) DataFormat::Float16 | (exp_width<<2)) : unpack_dst_format[unpB_operand_id];
       config.f.haloize_mode    = 0;
 
       for (uint i=0; i<CONFIG_SIZE; i++) cfg[THCON_SEC1_REG2_Out_data_format_ADDR32+i]=config.val[i];

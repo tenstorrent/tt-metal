@@ -96,10 +96,21 @@ inline void llk_unpack_AB_mop_config(const bool transpose_of_faces=false) {
 template <bool is_fp32_dest_acc_en = false, bool srnd_fpu_en = false>
 inline void llk_unpack_AB_hw_configure(const llk_unpack_AB_params_t *unpack_AB_params, const int within_face_16x16_transpose = 0) {
     constexpr bool is_row_pool = false;
-    constexpr uint32_t srca_height = 16;
-    constexpr uint32_t srcb_height = 16;
-    configure_unpack_AB(get_operand_id(unpack_AB_params->unpA_operand), get_operand_id(unpack_AB_params->unpB_operand), 
-                            srca_height, srcb_height, is_row_pool, within_face_16x16_transpose, is_fp32_dest_acc_en, srnd_fpu_en);
+    // In0 -> unpA 
+    // In1 -> unpB 
+    const uint32_t unpA_operand_id = get_operand_id(unpack_AB_params->unpA_operand);
+    const uint32_t unpB_operand_id = get_operand_id(unpack_AB_params->unpB_operand);
+
+    // unpA -> srcA
+    // unpB -> srcB
+    const uint32_t unpA_num_faces = get_num_faces(unpA_operand_id); 
+    const uint32_t unpB_num_faces = unpA_num_faces; // num faces in unpA and unpB must be the same
+ 
+    constexpr uint32_t unpA_face_height = 16;
+    constexpr uint32_t unpB_face_height = 16;
+
+    configure_unpack_AB(unpA_operand_id, unpB_operand_id, 
+                        unpA_face_height, unpB_face_height, is_row_pool, within_face_16x16_transpose, is_fp32_dest_acc_en, srnd_fpu_en, unpA_num_faces, unpB_num_faces);
 }
 
 template <bool is_fp32_dest_acc_en = false, bool srnd_fpu_en = false>

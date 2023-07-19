@@ -79,21 +79,21 @@ inline void matmul_configure_addrmod(const bool transpose, const std::uint32_t c
         }        
     } else {
         if (is_in1_32x16) {
-            if (transpose) {
+            //if (transpose) {
                 addr_mod_t{
                     .srca = {.incr =  16, .clr = 0, .cr = 0},
                     .srcb = {.incr =  8, .clr = 0, .cr = 0},
                     .dest = {.incr =  0, .clr = 0, .cr = 1},
                 }
                     .set(ADDR_MOD_1);
-            } else {
-                addr_mod_t{
-                    .srca = {.incr = 32, .clr = 0, .cr = 0},
-                    .srcb = {.incr =  8, .clr = 0, .cr = 0},
-                    .dest = {.incr =  0, .clr = 0, .cr = 1},
-                }
-                    .set(ADDR_MOD_1);
-            }    
+            //} else {
+            //    addr_mod_t{
+            //        .srca = {.incr = 32, .clr = 0, .cr = 0},
+            //        .srcb = {.incr =  8, .clr = 0, .cr = 0},
+            //        .dest = {.incr =  0, .clr = 0, .cr = 1},
+            //    }
+            //        .set(ADDR_MOD_1);
+            //}    
         } else {
             if (transpose) {
                 addr_mod_t{
@@ -115,21 +115,21 @@ inline void matmul_configure_addrmod(const bool transpose, const std::uint32_t c
     }        
 
     if (is_in1_32x16) {
-        if (transpose) {
+        //if (transpose) {
             addr_mod_t{
                 .srca = {.incr = 16, .clr = 0, .cr = 0},
                 .srcb = {.incr = 8, .clr = 0, .cr = 0},
-                .dest = {.incr = 0, .clr = 0, .cr = 1}, // cr=32 before
+                .dest = {.incr = 0, .clr = 0, .cr = 1}, // cr=16  
             }
                 .set(ADDR_MOD_2);
-        } else {
-            addr_mod_t{
-                .srca = {.incr = 32, .clr = 0, .cr = 0},
-                .srcb = {.incr = 8,  .clr = 0, .cr = 0},
-                .dest = {.incr = 0,  .clr = 0, .cr = 1}, // cr=32 before
-            }
-                .set(ADDR_MOD_2);
-        }     
+        //} else {
+        //    addr_mod_t{
+        //        .srca = {.incr = 32, .clr = 0, .cr = 0},
+        //        .srcb = {.incr = 8,  .clr = 0, .cr = 0},
+        //        .dest = {.incr = 0,  .clr = 0, .cr = 1}, // cr=32 before
+        //    }
+        //        .set(ADDR_MOD_2);
+        //}     
     } else if (is_in0_16x32) {
         if (transpose) {
             addr_mod_t{
@@ -167,7 +167,7 @@ inline void matmul_configure_addrmod(const bool transpose, const std::uint32_t c
         addr_mod_t{
             .srca = {.incr = 0,  .clr = 0, .cr = 1},
             .srcb = {.incr = 8,  .clr = 0, .cr = 0},
-            .dest = {.incr = 32, .clr = 0, .cr = 1},
+            .dest = {.incr = 16, .clr = 0, .cr = 1},
             .bias = {.incr = 1},
         }
             .set(ADDR_MOD_4);
@@ -232,13 +232,13 @@ inline void matmul_configure_mop(bool transpose, const std::uint32_t ct_dim, con
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0); // B0A1 // srca=srca, srcb+=8,  dest+=8,  bias=1
     } else if (is_in1_32x16) {
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0 // srca=srca, srcb+=8,  dest+=8
-        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B0A0 // srca+=32/16,  srcb+=8,  dest=0  // srca+=16 if transposed
-        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0); // B1A2 // srca=srca, srcb+=8,  dest=+8, bias=1 
-        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A2 // srca=0,    srcb+=8,  dest=32 (addr_mod_4), bias=0
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B0A0 // srca+=16,  srcb+=8,  dest=0
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0); // B1A1 // srca=srca, srcb+=8,  dest=+8, bias=1 
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A1 // srca=0,    srcb+=8,  dest=16 (addr_mod_4), bias=0
 
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B2A0 // srca=srca, srcb+=8,  dest+=8
-        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B2A0 // srca+=32/16,  srcb+=8,  dest=32  //srca+=16 if transposed
-        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0); // B3A2 // srca=srca, srcb+=8,  dest+=8, bias=1
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B2A0 // srca+=16,  srcb+=8,  dest=16
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0); // B3A1 // srca=srca, srcb+=8,  dest+=8, bias=1
     } else if (is_in0_16x32) {
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0 // srca=srca, srcb+=8,  dest+=8
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B0A0 // srca+=16,  srcb=0,   dest+=8/24, // dest+=24 if transposed

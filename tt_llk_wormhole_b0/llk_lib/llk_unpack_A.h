@@ -187,15 +187,16 @@ inline void llk_unpack_A_mop_config(const bool transpose_of_faces, const std::ui
 }
 
 template <bool is_fp32_dest_acc_en = false, bool srnd_fpu_en = false>
-inline void llk_unpack_A_hw_configure(const llk_unpack_A_params_t *unpack_A_params, const int transpose_xy = 0) {
+inline void llk_unpack_A_hw_configure(const llk_unpack_A_params_t *unpack_A_params, const int within_face_16x16_transpose = 0) {
     constexpr bool is_row_pool = false;
-    constexpr uint32_t unpA_face_height = 16;
-    constexpr uint32_t unpB_face_height = 16;
-    const uint32_t unpA_num_faces = get_num_faces(get_operand_id(unpack_A_params->unpA_operand));
-    const uint32_t unpB_num_faces = get_num_faces(get_operand_id(unpack_A_params->unpA_operand));
+    const uint32_t unpA_operand_id = get_operand_id(unpack_A_params->unpA_operand);
 
-    configure_unpack_AB(get_operand_id(unpack_A_params->unpA_operand), get_operand_id(unpack_A_params->unpA_operand),
-        unpA_face_height, unpB_face_height, is_row_pool, transpose_xy, is_fp32_dest_acc_en, srnd_fpu_en, unpA_num_faces, unpB_num_faces);
+    const uint32_t unpA_num_faces = get_num_faces(unpA_operand_id);
+
+    constexpr uint32_t unpA_face_height = 16;
+
+    configure_unpack_AB(unpA_operand_id, unpA_operand_id,
+        unpA_face_height, unpA_face_height, is_row_pool, within_face_16x16_transpose, is_fp32_dest_acc_en, srnd_fpu_en, unpA_num_faces, unpA_num_faces);
 }
 
 template <bool is_fp32_dest_acc_en = false, bool srnd_fpu_en = false>

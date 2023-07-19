@@ -83,18 +83,24 @@ inline void llk_unpack_AB_matmul_mop_config(const bool transpose, const std::uin
 
 template<bool is_fp32_dest_acc_en = false, bool srnd_fpu_en = false>
 inline void llk_unpack_AB_matmul_hw_configure(const llk_unpack_AB_matmul_params_t *unpack_AB_params) {
-    // In0 -> srcB
-    // In1 -> srcA
-    constexpr uint32_t unpA_face_height = 16;
-    constexpr uint32_t unpB_face_height = 16;
     constexpr bool is_row_pool = false;
     const bool transpose_xy_srca = unpack_AB_params->transpose_xy_srca;
 
-    const uint32_t unpA_num_faces = get_num_faces(get_operand_id(unpack_AB_params->unpB_operand));
-    const uint32_t unpB_num_faces = get_num_faces(get_operand_id(unpack_AB_params->unpA_operand));
+    // In0 -> unpB 
+    // In1 -> unpA 
+    const uint32_t unpA_operand_id = get_operand_id(unpack_AB_params->unpB_operand);
+    const uint32_t unpB_operand_id = get_operand_id(unpack_AB_params->unpA_operand);
 
-    configure_unpack_AB(get_operand_id(unpack_AB_params->unpB_operand), get_operand_id(unpack_AB_params->unpA_operand), 
-                        unpB_face_height, unpA_face_height, is_row_pool, transpose_xy_srca, is_fp32_dest_acc_en, srnd_fpu_en, unpB_num_faces, unpA_num_faces);
+    // unpA -> srcA
+    // unpB -> srcB
+    const uint32_t unpA_num_faces = get_num_faces(unpA_operand_id);
+    const uint32_t unpB_num_faces = get_num_faces(unpB_operand_id);
+
+    constexpr uint32_t unpA_face_height = 16;
+    constexpr uint32_t unpB_face_height = 16;
+
+    configure_unpack_AB(unpA_operand_id, unpB_operand_id, 
+                        unpA_face_height, unpB_face_height, is_row_pool, transpose_xy_srca, is_fp32_dest_acc_en, srnd_fpu_en, unpA_num_faces, unpB_num_faces);
 
     // Configure tile size in datums
     const uint32_t unpA_x_end = unpA_num_faces*FACE_R_DIM*FACE_C_DIM-1;
