@@ -13,9 +13,7 @@ import torch
 import torchvision
 from loguru import logger
 from datasets import load_dataset
-from tests.python_api_testing.models.EfficientNet.tt.efficientnet_model import (
-    reference_efficientnet_lite0,
-)
+from models.EfficientNet.tt.efficientnet_model import reference_efficientnet_lite0
 
 
 def preprocess():

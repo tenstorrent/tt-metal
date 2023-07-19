@@ -8,13 +8,11 @@ from tests.python_api_testing.models.utility_functions_new import (
     tt2torch_tensor,
     comp_pcc,
 )
-from tests.python_api_testing.models.EfficientNet.tt.efficientnet_mbconv import (
+from models.EfficientNet.tt.efficientnet_mbconv import (
     TtEfficientnetMbConv,
     MBConvConfig,
 )
-from tests.python_api_testing.models.EfficientNet.tt.efficientnet_model import (
-    reference_efficientnet_lite0,
-)
+from models.EfficientNet.tt.efficientnet_model import reference_efficientnet_lite0
 
 
 def run_efficientnet_mbconv(

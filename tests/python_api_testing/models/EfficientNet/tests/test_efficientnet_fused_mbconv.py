@@ -8,7 +8,7 @@ from tests.python_api_testing.models.utility_functions_new import (
     tt2torch_tensor,
     comp_pcc,
 )
-from tests.python_api_testing.models.EfficientNet.tt.efficientnet_fused_mbconv import (
+from models.EfficientNet.tt.efficientnet_fused_mbconv import (
     TtEfficientnetFusedMBConv,
     FusedMBConvConfig,
 )

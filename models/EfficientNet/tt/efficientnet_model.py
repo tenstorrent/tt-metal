@@ -11,20 +11,16 @@ from tests.python_api_testing.models.utility_functions_new import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
-from tests.python_api_testing.models.EfficientNet.tt.efficientnet_conv import (
-    TtEfficientnetConv2dNormActivation,
-)
-from tests.python_api_testing.models.EfficientNet.tt.efficientnet_mbconv import (
+from models.EfficientNet.tt.efficientnet_conv import TtEfficientnetConv2dNormActivation
+from models.EfficientNet.reference.efficientnet_lite import build_efficientnet_lite
+from models.EfficientNet.tt.efficientnet_mbconv import (
     TtEfficientnetMbConv,
     _MBConvConfig,
     MBConvConfig,
 )
-from tests.python_api_testing.models.EfficientNet.tt.efficientnet_fused_mbconv import (
+from models.EfficientNet.tt.efficientnet_fused_mbconv import (
     TtEfficientnetFusedMBConv,
     FusedMBConvConfig,
-)
-from tests.python_api_testing.models.EfficientNet.reference.efficientnet_lite import (
-    build_efficientnet_lite,
 )
 
 

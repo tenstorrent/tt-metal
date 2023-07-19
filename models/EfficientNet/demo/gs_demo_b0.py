@@ -15,10 +15,8 @@ import torchvision
 from loguru import logger
 from datasets import load_dataset
 
-from tests.python_api_testing.models.EfficientNet.tt.efficientnet_model import (
-    efficientnet_b0,
-)
-from tests.python_api_testing.models.utility_functions_new import (
+from models.EfficientNet.tt.efficientnet_model import efficientnet_b0
+from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
 )

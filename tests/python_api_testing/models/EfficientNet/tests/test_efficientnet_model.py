@@ -20,7 +20,7 @@ from tests.python_api_testing.models.utility_functions_new import (
     tt2torch_tensor,
     comp_pcc,
 )
-from tests.python_api_testing.models.EfficientNet.tt.efficientnet_model import (
+from models.EfficientNet.tt.efficientnet_model import (
     efficientnet_b0,
     efficientnet_b1,
     efficientnet_b2,
