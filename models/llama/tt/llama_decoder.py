@@ -3,10 +3,9 @@ import torch
 from torch import nn
 import tt_lib
 from typing import List, Optional, Tuple, Union
-from python_api_testing.models.llama.llama_mlp import TtLlamaMLP
-from python_api_testing.models.llama.llama_attention import TtLlamaAttention
-from python_api_testing.models.llama.llama_layer_norm import TtLlamaRMSNorm
-from python_api_testing.models.llama.llama_utils import *
+from models.llama.tt.llama_mlp import TtLlamaMLP
+from models.llama.tt.llama_attention import TtLlamaAttention
+from models.llama.tt.llama_layer_norm import TtLlamaRMSNorm
 
 
 class TtLlamaDecoderLayer(nn.Module):

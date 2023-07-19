@@ -1,14 +1,43 @@
 import torch
-from python_api_testing.models.llama.llama_layer_norm import TtLlamaRMSNorm
-from python_api_testing.models.llama.llama_decoder import TtLlamaDecoderLayer
-from python_api_testing.models.llama.llama_utils import *
-from python_api_testing.models.llama_split.llama_split_utils import (
-    _make_causal_mask,
-    _expand_mask,
-    build_decoders,
-)
 from typing import List, Optional, Tuple, Union
 from loguru import logger
+
+from models.llama.llama_utils import _make_causal_mask, _expand_mask, linear
+
+from models.utility_functions import (
+    tt2torch_tensor,
+    torch2tt_tensor,
+)
+
+from models.llama.tt.llama_decoder import TtLlamaDecoderLayer
+from models.llama.tt.llama_layer_norm import TtLlamaRMSNorm
+
+
+def build_decoders(
+    device,
+    state_dict,
+    base_url,
+    max_position_embeddings,
+    config,
+    num_decoder_start,
+    num_decoders,
+):
+    decoder_list = torch.nn.Sequential(
+        *[
+            TtLlamaDecoderLayer(
+                device,
+                state_dict,
+                base_url,
+                decoder_idx,
+                max_position_embeddings,
+                config,
+            )
+            for decoder_idx in range(
+                num_decoder_start, num_decoder_start + num_decoders
+            )
+        ]
+    )
+    return decoder_list
 
 
 class TtLlamaModelSecondHFModel(torch.nn.Module):

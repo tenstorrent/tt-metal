@@ -1,39 +1,25 @@
-import math
-from pathlib import Path
 import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
-import math
-import time
 import torch
 import pytest
 from torch import nn
 import tt_lib
 from loguru import logger
-from python_api_testing.models.llama.llama_utils import (
+
+from models.utility_functions import (
     tt2torch_tensor,
-    gen_position_ids,
+    torch2tt_tensor,
 )
-from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedModel
-from typing import List, Optional, Tuple, Union
-from python_api_testing.models.llama.llama_layer_norm import TtLlamaRMSNorm
-from python_api_testing.models.llama.llama_decoder import TtLlamaDecoderLayer
-from python_api_testing.models.llama_split.llama_split_utils import (
+from transformers import AutoTokenizer, AutoModelForCausalLM
+
+from models.llama.llama_utils import (
     pad_input_32_left,
     prepare_llama_input,
     get_next_llama_output_token,
+    gen_position_ids,
+    get_logits_processor,
 )
-from python_api_testing.models.llama_split.tt.llama import (
-    llama_first_half,
-    llama_second_half,
-)
-from llama_split_utils import get_logits_processor
-from utility_functions_new import comp_pcc
+
+from models.llama.tt.llama import llama_first_half, llama_second_half
 
 
 def run_llama_split_inference(
@@ -48,7 +34,6 @@ def run_llama_split_inference(
     att_mask=None,
     position_ids=None,
     half=1,
-    is_causallm=False,
 ):
     if half == 1:
         logger.debug("First pass through TT model")
@@ -74,7 +59,6 @@ def run_llama_split_inference(
             configuration,
             num_decoders_start,
             num_decoders,
-            is_causallm,
         )
         tt_out = tt_llama_model(
             input_ids=x_inputs, attention_mask=att_mask, position_ids=position_ids
@@ -90,6 +74,7 @@ def call_tt_llama_forward_func(
     state_dict,
     base_url,
     max_position_embeddings,
+    initial_prompt,
     logits_processor,
     tokenizer,
     input_ids,
@@ -97,66 +82,86 @@ def call_tt_llama_forward_func(
     first_decoder_start,
     second_decoder_start,
     num_consecutive_decoders,
-    is_causallm,
+    num_words=2,
 ):
-    input_ids_padded = input_ids
-    attention_mask_padded = attention_mask
-    position_ids_padded = gen_position_ids(input_ids_padded)
+    text = initial_prompt
+    for i in range(num_words):
+        # pad input tensors
+        input_ids_padded = pad_input_32_left(input_ids, configuration.pad_token_id)
+        attention_mask_padded = pad_input_32_left(
+            attention_mask, configuration.pad_token_id
+        )
+        position_ids_padded = gen_position_ids(input_ids_padded)
 
-    logger.debug(f"The first call started")
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
-    tt_lib.device.InitializeDevice(device)
-    tt_lib.device.SetDefaultDevice(device)
-    host = tt_lib.device.GetHost()
+        logger.debug(f"The first call started: loop {i+1}")
+        device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+        tt_lib.device.InitializeDevice(device)
+        tt_lib.device.SetDefaultDevice(device)
+        host = tt_lib.device.GetHost()
 
-    first_out = run_llama_split_inference(
-        device,
-        state_dict,
-        base_url,
-        max_position_embeddings,
-        configuration,
-        num_decoders_start=first_decoder_start,
-        num_decoders=num_consecutive_decoders,
-        x_inputs=input_ids_padded,
-        att_mask=attention_mask_padded,
-        position_ids=position_ids_padded,
-        half=1,
-    )
-    tt_lib.device.CloseDevice(device)
-    logger.debug(f"The first call ended")
+        first_out = run_llama_split_inference(
+            device,
+            state_dict,
+            base_url,
+            max_position_embeddings,
+            configuration,
+            num_decoders_start=first_decoder_start,
+            num_decoders=num_consecutive_decoders,
+            x_inputs=input_ids_padded,
+            att_mask=attention_mask_padded,
+            position_ids=position_ids_padded,
+            half=1,
+        )
+        tt_lib.device.CloseDevice(device)
+        logger.debug(f"The first call ended: loop {i+1}")
 
-    # The second call -------------------------------------------------------
-    logger.debug(f"The second call started")
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
-    tt_lib.device.InitializeDevice(device)
-    tt_lib.device.SetDefaultDevice(device)
+        # The second call -------------------------------------------------------
+        logger.debug(f"The second call started: loop {i+1}")
+        device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+        tt_lib.device.InitializeDevice(device)
+        tt_lib.device.SetDefaultDevice(device)
 
-    # send input tensor from host to tt device
-    tt_input = first_out
+        # send input tensor from host to tt device
+        tt_input = first_out
 
-    tt_out = run_llama_split_inference(
-        device,
-        state_dict,
-        base_url,
-        max_position_embeddings,
-        configuration,
-        num_decoders_start=second_decoder_start,
-        num_decoders=num_consecutive_decoders,
-        x_inputs=tt_input,
-        att_mask=attention_mask_padded,
-        position_ids=position_ids_padded,
-        half=2,
-        is_causallm=is_causallm,
-    )
-    logger.debug(f"The second call ended")
+        tt_out = run_llama_split_inference(
+            device,
+            state_dict,
+            base_url,
+            max_position_embeddings,
+            configuration,
+            num_decoders_start=second_decoder_start,
+            num_decoders=num_consecutive_decoders,
+            x_inputs=tt_input,
+            att_mask=attention_mask_padded,
+            position_ids=position_ids_padded,
+            half=2,
+        )
+        logger.debug(f"The second call ended: loop {i+1}")
 
-    # squeeze output
-    tt_out = tt_out.squeeze(1)
+        # squeeze output
+        tt_out = tt_out.squeeze(1)
 
-    tt_lib.device.CloseDevice(device)
-    device = None
+        # Get next token
+        next_tokens = get_next_llama_output_token(
+            logits_processor, input_ids_padded, tt_out, i, "Tenstorrent"
+        )
 
-    return tt_out
+        # save output words
+        s = tokenizer.decode(next_tokens.item(), skip_special_tokens=True)
+        logger.debug(f"TT {i+1}-th generated word: {s}")
+        text = text + " " + s
+
+        # update input ids
+        input_ids = torch.cat([input_ids, next_tokens[:, None]], dim=-1)
+        attention_mask = torch.cat([attention_mask, torch.full((1, 1), 1)], dim=-1)
+        position_ids = gen_position_ids(input_ids)
+
+        tt_lib.device.CloseDevice(device)
+        device = None
+
+    logger.debug(f"All TT generated tokens: {text}")
+    return input_ids
 
 
 # parameters --------------------------------------------------
@@ -165,7 +170,6 @@ _llama_model_name = "huggyllama/llama-7b"
 # base url from the model state dictionary
 _base_url = "model.layers"
 _max_position_embeddings = 2048
-_is_causallm = False
 
 # how many decoders to use
 # number of decoders to be stacked started from the selected id in the original llama model
@@ -188,14 +192,14 @@ promp = "I believe the meaning of life is to"
 
 
 @pytest.mark.parametrize(
-    "prompt, pcc",
-    ((promp, 0.9),),
+    "prompt, num_words",
+    ((promp, 30),),
 )
-def test_llama_pcc(prompt, pcc):
+def test_gs_demo(prompt, num_words):
     # set parameters =================================================================
     tokenizer_name = _tokenizer_name
     llama_model_name = _llama_model_name
-    is_causallm = _is_causallm
+
     base_url = _base_url
     max_position_embeddings = _max_position_embeddings
 
@@ -220,47 +224,37 @@ def test_llama_pcc(prompt, pcc):
     input_ids = inputs.input_ids
     attention_mask = inputs.attention_mask
 
+    logger.info(f"Initial prompt: {prompt}")
+    logger.debug(f"Initial prompt ids: {input_ids}")
+
+    # get position_ids values
+    seq_length = input_ids.shape[1]
+    position_ids = gen_position_ids(input_ids)
+
     logits_processor = get_logits_processor(
         input_ids, hugging_face_reference_model.config
     )
 
-    is_input_padded = True
-    input_ids_padded, attention_mask_padded, position_ids_padded = prepare_llama_input(
-        prompt, tokenizer, configuration, is_input_padded
-    )
-
-    # PyTorch output ===========================================================
-    hugging_face_reference_model = hugging_face_reference_model.get_decoder()
-    pytorch_out = hugging_face_reference_model(
-        input_ids=input_ids_padded,
-        attention_mask=attention_mask_padded,
-        position_ids=position_ids_padded,
-    )
-
-    pytorch_out = pytorch_out.last_hidden_state
-
     # TT output: call forward() function several times ========================
-    tt_out = call_tt_llama_forward_func(
+    tt_generated_ids = call_tt_llama_forward_func(
         configuration,
         state_dict,
         base_url,
         max_position_embeddings,
+        prompt,
         logits_processor,
         tokenizer,
-        input_ids_padded,
-        attention_mask_padded,
+        input_ids,
+        attention_mask,
         first_decoder_start,
         second_decoder_start,
         num_consecutive_decoders,
-        is_causallm,
+        num_words,
     )
 
-    # check outputs ================================================================
-    does_pass, pcc_value = comp_pcc(pytorch_out, tt_out, pcc)
-    logger.info(f"{pcc_value}")
+    # decode output with tokenizer
+    tt_generated_text = tokenizer.batch_decode(
+        tt_generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
+    )[0]
 
-    if does_pass:
-        logger.info("Llama Model Passed!")
-    else:
-        logger.warning("Llama Model Failed!")
-        assert does_pass, f"PCC value ({pcc_value}) is lower than {pcc}."
+    logger.info(f"Tenstorrent generated text: {tt_generated_text}")

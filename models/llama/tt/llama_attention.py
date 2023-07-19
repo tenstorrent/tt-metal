@@ -4,8 +4,13 @@ import torch
 from torch import nn
 import tt_lib
 from typing import Optional, Tuple
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
+from tt_lib.fallback_ops import fallback_ops
+
 from models.helper_funcs import Linear as TTLinear
+from models.utility_functions import (
+    tt2torch_tensor,
+    torch2tt_tensor,
+)
 
 
 def shape_tt(states, batch_size, seq_len, n_heads, head_dim):
