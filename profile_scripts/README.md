@@ -34,6 +34,10 @@ Similar to previous issue and barrier profiling, but add more profiler markers `
 bash profile_scripts/Tensix2Tensix_fine_grain.sh
 ```
 
+## Analytical Model
+
+The analytical model is implemented in the `analytical_model.py`. The parameters in the analytical model refer to the `get_args()` function in the sourse code. The scripts in the `perf_model.sh` iterate different non NIU programming latency of both Tensix2Tensix read and write with transcation size < 8k. The scripts model the issue and barrier latency for both read and write under different buffer sizes and trasaction sizes, as well as the NOC utiilization in each case.
+
 ## DRAM to Tensix read/write speed
 
 Measuring read and write requires 1 test. The src code to measure read speed between DRAM and tensix cores is `tests/tt_metal/llrt/test_run_risc_rw_read_speed_banked_dram.cpp`. Compile all tests src codes by `make tests`. The compiled binary is `./build/test/llrt/test_run_risc_rw_speed_banked_dram`, which will be executed by host machine. But before executing this binary, we need to build the corresponding kernels (under `built_kernel` directory) by executing `./build/test/build_kernels_for_riscv/test_build_kernel_risc_rw_speed_banked_dram`. Kernel binaries will be sent to and executed by Tensix baby-riscv cores. In the script `profile_scripts/DRAM2Tensix.sh`, adjust DRAM channels by specify `DRAM_channel_pow_2`.
@@ -42,6 +46,6 @@ Measuring read and write requires 1 test. The src code to measure read speed bet
 bash profile_scripts/DRAM2Tensix.sh
 ```
 
-## Fine-grain profile of noc_async_read components
+## Fine-grain profile and visualization of noc_async_read components
 
 Measuring noc_async_read issues and noc_asycn_read barrier latency requires manual modifications in read kernel. The data movement kernel utilized in this measurement is `tt_metal/kernels/dataflow/reader_bmm_single_core_tilize_untilize.cpp`. In this kernel, `dim_x` defines the transfer size and `dim_y` defines the number of transfers. The tile size to transfer is 256x256 in Bfloat16 format. Change the transfer size and execute the script `profile_scripts/bmm_tilize_untilize.sh`. THe profiled cycle numbers are stored in `tt_metal/tools/profiler/logs/profile_log_device.csv`. Visualize the profiling results by executing `tt_metal/tools/profiler/process_device_log.py`. Download and execute the script `profile_website.sh` on the local machine and open http://localhost:8888 to visualize the profiling results. Cycles between time marker 5 and 6 are corresponding to noc_async_read issue, while that between 6 and 7 are corresponding to noc_async_read_barrier.

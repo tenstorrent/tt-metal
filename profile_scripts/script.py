@@ -165,26 +165,29 @@ def print_tensix_issue_barrier(file_name):
             buffer = int(lst[1])
             issue = float(lst[5])
             barrier = float(lst[7])
-            noc_util = float(lst[9]) * 100
             dic_issue[(buffer, transaction)] = issue
             dic_barrier[(buffer, transaction)] = barrier
-            dic_noc_util[(buffer, transaction)] = noc_util
+            if noc_util_flag:
+                noc_util = float(lst[9]) * 100
+                dic_noc_util[(buffer, transaction)] = noc_util
         elif "write" in line:
             print("read")
             print("issue")
             print_tensix_bandwidth(dic_issue)
             print("barrier")
             print_tensix_bandwidth(dic_barrier)
-            print("noc_util")
-            print_tensix_bandwidth(dic_noc_util)
+            if noc_util_flag:
+                print("noc_util")
+                print_tensix_bandwidth(dic_noc_util)
             dic = {}
     print("write")
     print("issue")
     print_tensix_bandwidth(dic_issue)
     print("barrier")
     print_tensix_bandwidth(dic_barrier)
-    print("noc_util")
-    print_tensix_bandwidth(dic_noc_util)
+    if noc_util_flag:
+        print("noc_util")
+        print_tensix_bandwidth(dic_noc_util)
 
 def profile_tensix_constant_flit(file_name):
     dic = {}
@@ -209,12 +212,48 @@ def profile_tensix_constant_flit(file_name):
     for transaction in dic.keys():
         print("Transaction:", transaction, calculate_standard_deviation(dic[transaction]))
 
+def profile_noc_utilization(file_name, read_or_write):
+    print(read_or_write)
+    read_write_flag = False
+    noc_util_flag = False
+    buffer_flag = False
+    f = open(file_name, "r")
+    lines = f.readlines()
+    for line in lines:
+        lst = line.split()
+
+        if "non_NIU_programming" in line:
+            non_NIU_programming = lst[-1]
+
+        if "read" in line:
+            if read_or_write == "read":
+                read_write_flag = True
+            else:
+                read_write_flag = False
+        elif "write" in line:
+            if read_or_write == "write":
+                read_write_flag = True
+            else:
+                read_write_flag = False
+
+        if "noc_util" in line:
+            noc_util_flag = True
+        elif "issue" in line or "barrier" in line:
+            noc_util_flag = False
+
+        if lst[0] == "131072":
+            buffer_flag = True
+        elif lst[0] != "131072":
+            buffer_flag = False
+
+        if read_write_flag and noc_util_flag and buffer_flag:
+            print(non_NIU_programming, line[:-1])
 
 
 def get_args():
     parser = argparse.ArgumentParser('Profile raw results.')
     parser.add_argument("--file-name", help="file to profile")
-    parser.add_argument("--profile-target", choices=["Tensix2Tensix", "DRAM2Tensix", "Tensix2Tensix_Issue_Barrier", "Tensix2Tensix_Fine_Grain", "Print_Tensix2Tensix_Issue_Barrier", "Profile_Tensix2Tensix_Constant_Flit"], help="profile target choice")
+    parser.add_argument("--profile-target", choices=["Tensix2Tensix", "DRAM2Tensix", "Tensix2Tensix_Issue_Barrier", "Tensix2Tensix_Fine_Grain", "Print_Tensix2Tensix_Issue_Barrier", "Profile_Tensix2Tensix_Constant_Flit", "Profile_NOC_Utilization"], help="profile target choice")
     parser.add_argument("--read-or-write", choices=["read", "write"], help="read or write choice")
     args = parser.parse_args()
     return args
@@ -236,3 +275,5 @@ elif args.profile_target == "Print_Tensix2Tensix_Issue_Barrier":
     print_tensix_issue_barrier(file_name)
 elif args.profile_target == "Profile_Tensix2Tensix_Constant_Flit":
     profile_tensix_constant_flit(file_name)
+elif args.profile_target == "Profile_NOC_Utilization":
+    profile_noc_utilization(file_name, args.read_or_write)

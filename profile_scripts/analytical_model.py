@@ -36,11 +36,15 @@ def write_analytical_model(args):
     num_transfer = args.buffer_size / args.transfer_size
 
     issue_latency = (args.NIU_programming + args.non_NIU_programming)
-    total_issue_latency = args.pre_issue_overhead + issue_latency * num_transfer
 
     if (num_flits_per_transfer >= issue_latency):
+        if num_transfer < 3:
+            total_issue_latency = args.pre_issue_overhead + issue_latency * num_transfer
+        else:
+            total_issue_latency = args.pre_issue_overhead + issue_latency + args.flit_latency * num_flits_per_transfer * (num_transfer - 2) + 15
         barrier_latency = args.pre_issue_overhead + issue_latency + args.round_trip_latency + args.flit_latency * num_flits_per_transfer * num_transfer - total_issue_latency
     else:
+        total_issue_latency = args.pre_issue_overhead + issue_latency * num_transfer
         barrier_latency = args.round_trip_latency + args.flit_latency * num_flits_per_transfer
 
     noc_utilization = args.buffer_size / (total_issue_latency + barrier_latency) / (args.transfer_rate)
