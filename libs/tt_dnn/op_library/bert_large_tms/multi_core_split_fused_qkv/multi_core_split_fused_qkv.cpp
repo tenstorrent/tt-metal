@@ -13,18 +13,9 @@ operation::ProgramWithCallbacks multi_core_split_fused_qkv(const Tensor &a, std:
 
     const auto& ashape = a.shape();
 
-    TT_ASSERT(ashape[0] == 9 and ashape[1] == 1 and ashape[2] == 384 and ashape[3] == 3072, "Input shape to this TM must be [9, 1, 384, 3072]!");
-    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
-    TT_ASSERT(a.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
-    TT_ASSERT(a.dtype() == tt::tt_metal::DataType::BFLOAT16 || a.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
-
     tt_metal::Device *device = a.device();
 
-    // TODO: CHANGE TO FUNCTION CONVERSION
-    tt::DataFormat cb_data_format = tt::DataFormat::Bfp8_b;
-    if (a.dtype() == tt::tt_metal::DataType::BFLOAT16) {
-        cb_data_format = tt::DataFormat::Float16_b;
-    }
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 
     uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
     tt_metal::Buffer *in0_buffer = a.buffer();
@@ -39,7 +30,7 @@ operation::ProgramWithCallbacks multi_core_split_fused_qkv(const Tensor &a, std:
     uint32_t num_tiles_per_tensor = per_core_tiles / num_tensors;
 
     // Parallelize ashape[2] (384 / 32 = 12 tiles) across columns
-    // Parallelize ashape[0] (9) across rows
+    // Parallelize ashape[0] (B) across rows
     uint32_t num_cores_x = ashape[2] / TILE_HEIGHT;
     uint32_t num_cores_y = ashape[0];
     TT_ASSERT(num_cores_x <= compute_and_storage_grid_size.x);

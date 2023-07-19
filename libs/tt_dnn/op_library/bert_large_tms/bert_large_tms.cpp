@@ -11,20 +11,28 @@ namespace tt_metal {
 
 void BertLargeTM::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
+    const auto B = input_tensor.shape()[0];
+    // TODO: See issue #1744
+    TT_ASSERT(B >= 7 && B <= 9, "Input batch size must be between 2 to 9 for bert large TM ops!");
+
+    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
+    TT_ASSERT(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
+    TT_ASSERT(input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
+
     switch (this->bert_large_tm_op_type) {
         case BertLargeTMOpType::CREATE_QKV_HEADS:
-            TT_ASSERT((input_tensor.shape() == Shape({9, 1, 384, 3072})), "Unsupported input shape");
+            TT_ASSERT((input_tensor.shape() == Shape({B, 1, 384, 3072})), "Unsupported input shape");
             break;
         case BertLargeTMOpType::SPLIT_FUSED_QKV:
-            TT_ASSERT((input_tensor.shape() == Shape({9, 1, 384, 3072})), "Unsupported input shape");
+            TT_ASSERT((input_tensor.shape() == Shape({B, 1, 384, 3072})), "Unsupported input shape");
             break;
         case BertLargeTMOpType::CREATE_Q_HEAD:
         case BertLargeTMOpType::CREATE_K_HEAD:
         case BertLargeTMOpType::CREATE_V_HEAD:
-            TT_ASSERT((input_tensor.shape() == Shape({9, 1, 384, 1024})), "Unsupported input shape");
+            TT_ASSERT((input_tensor.shape() == Shape({B, 1, 384, 1024})), "Unsupported input shape");
             break;
         case BertLargeTMOpType::CONCAT_HEADS:
-            TT_ASSERT((input_tensor.shape() == Shape({9, 16, 384, 64})), "Unsupported input shape");
+            TT_ASSERT((input_tensor.shape() == Shape({B, 16, 384, 64})), "Unsupported input shape");
             break;
         default:
             TT_ASSERT(false, "Unknown bert large tm op in validate!");
@@ -33,22 +41,24 @@ void BertLargeTM::validate(const std::vector<Tensor>& input_tensors) const {
 
 std::vector<Shape> BertLargeTM::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     std::vector<Shape> output_shape_vec;
+    const auto& input_tensor = input_tensors.at(0);
+    const auto B = input_tensor.shape()[0];
     switch (this->bert_large_tm_op_type) {
         case BertLargeTMOpType::CREATE_QKV_HEADS:
-            output_shape_vec = {(Shape) {9, 16, 384, 64}, (Shape) {9, 16, 64, 384}, (Shape) {9, 16, 384, 64}};
+            output_shape_vec = {(Shape) {B, 16, 384, 64}, (Shape) {B, 16, 64, 384}, (Shape) {B, 16, 384, 64}};
             break;
         case BertLargeTMOpType::SPLIT_FUSED_QKV:
-            output_shape_vec = {(Shape) {9, 1, 384, 1024}, (Shape) {9, 1, 384, 1024}, (Shape) {9, 1, 384, 1024}};
+            output_shape_vec = {(Shape) {B, 1, 384, 1024}, (Shape) {B, 1, 384, 1024}, (Shape) {B, 1, 384, 1024}};
             break;
         case BertLargeTMOpType::CREATE_Q_HEAD:
         case BertLargeTMOpType::CREATE_V_HEAD:
-            output_shape_vec = {(Shape) {9, 16, 384, 64}};
+            output_shape_vec = {(Shape) {B, 16, 384, 64}};
             break;
         case BertLargeTMOpType::CREATE_K_HEAD:
-            output_shape_vec = {(Shape) {9, 16, 64, 384}};
+            output_shape_vec = {(Shape) {B, 16, 64, 384}};
             break;
         case BertLargeTMOpType::CONCAT_HEADS:
-            output_shape_vec = {(Shape) {9, 1, 384, 1024}};
+            output_shape_vec = {(Shape) {B, 1, 384, 1024}};
             break;
         default:
             TT_ASSERT(false, "Unknown bert large tm op in compute_output_shapes!");
@@ -63,9 +73,10 @@ std::vector<Tensor> BertLargeTM::create_output_tensors(const std::vector<Tensor>
 operation::ProgramWithCallbacks BertLargeTM::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
+    const auto B = input_tensor.shape()[0];
 
     auto device_compute_and_storage_grid_size = input_tensor.device()->compute_and_storage_grid_size();
-    CoreCoord compute_and_storage_grid_size = {12, 9};
+    CoreCoord compute_and_storage_grid_size = {12, B};
     TT_ASSERT((compute_and_storage_grid_size.x <= device_compute_and_storage_grid_size.x && compute_and_storage_grid_size.y <= device_compute_and_storage_grid_size.y), "Unsupported grid shape");
 
     switch (this->bert_large_tm_op_type) {

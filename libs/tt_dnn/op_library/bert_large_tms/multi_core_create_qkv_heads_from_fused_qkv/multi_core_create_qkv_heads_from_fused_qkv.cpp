@@ -13,18 +13,9 @@ operation::ProgramWithCallbacks multi_core_create_qkv_heads_from_fused_qkv(const
 
     const auto& ashape = a.shape();
 
-    TT_ASSERT(ashape[0] == 9 and ashape[1] == 1 and ashape[2] == 384 and ashape[3] == 3072, "Input shape to this TM must be [9, 1, 384, 3072]!");
-    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
-    TT_ASSERT(a.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
-    TT_ASSERT(a.dtype() == tt::tt_metal::DataType::BFLOAT16 || a.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
-
     tt_metal::Device *device = a.device();
 
-    // TODO: CHANGE TO FUNCTION CONVERSION
-    tt::DataFormat cb_data_format = tt::DataFormat::Bfp8_b;
-    if (a.dtype() == tt::tt_metal::DataType::BFLOAT16) {
-        cb_data_format = tt::DataFormat::Float16_b;
-    }
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 
     uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
     tt_metal::Buffer *in0_buffer = a.buffer();
@@ -42,7 +33,7 @@ operation::ProgramWithCallbacks multi_core_create_qkv_heads_from_fused_qkv(const
     uint32_t num_blocks_per_tensor = num_tiles_per_tensor / block_size;
 
     // Per output tensor args
-    // Output shape is: [9, 16, 384, 64] (Q, V heads) or [9, 16, 64, 384] (K heads)
+    // Output shape is: [B, 16, 384, 64] (Q, V heads) or [B, 16, 64, 384] (K heads)
     // For K heads, we write "w_dim" to h_dim instead, but keep nomenclature the same
     uint32_t out_h_tiles = ashape[2] / TILE_HEIGHT;
     uint32_t out_w = 64;
@@ -55,7 +46,7 @@ operation::ProgramWithCallbacks multi_core_create_qkv_heads_from_fused_qkv(const
     uint32_t num_c_per_block = block_size_is_one ? 1 : block_size / out_w_tiles;
 
     // Parallelize ashape[2] (384 / 32 = 12 tiles) across columns
-    // Parallelize ashape[0] (9) across rows
+    // Parallelize ashape[0] (B) across rows
     uint32_t num_cores_x = ashape[2] / TILE_HEIGHT;
     uint32_t num_cores_y = ashape[0];
     TT_ASSERT(num_cores_x <= compute_and_storage_grid_size.x);

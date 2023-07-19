@@ -15,13 +15,13 @@ import torch
 
 
 def run_bert_large_create_qkv_heads_test(
-    dtype, in0_mem_config, out_mem_config, transpose_hw
+    batch, dtype, in0_mem_config, out_mem_config, transpose_hw
 ):
     torch.manual_seed(1234)
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device, ttl.device.MemoryAllocator.L1_BANKING)
     host = ttl.device.GetHost()
-    a_shape = [9, 1, 384, 1024]
+    a_shape = [batch, 1, 384, 1024]
 
     A = torch.randn(a_shape)
 
@@ -47,15 +47,19 @@ def run_bert_large_create_qkv_heads_test(
     assert out.memory_config().buffer_type == out_mem_config.buffer_type
 
     which_head_str = "K head" if transpose_hw else "Q/V head"
-    logger.debug(f"in0 is on: {a_t.memory_config().buffer_type}")
-    logger.debug(f"out ({which_head_str}) is on: {out.memory_config().buffer_type}")
+    logger.debug(f"in0: {a_t.memory_config().buffer_type} and {a_t.dtype()}")
+    logger.debug(
+        f"out ({which_head_str}): {out.memory_config().buffer_type} and {out.dtype()}"
+    )
 
     if transpose_hw:
-        expected_out_shape = [9, 16, 64, 384]
-        ref_out = torch.reshape(A, [9, 384, 16, 64]).transpose(-3, -2).transpose(-2, -1)
+        expected_out_shape = [batch, 16, 64, 384]
+        ref_out = (
+            torch.reshape(A, [batch, 384, 16, 64]).transpose(-3, -2).transpose(-2, -1)
+        )
     else:
-        expected_out_shape = [9, 16, 384, 64]
-        ref_out = torch.reshape(A, [9, 384, 16, 64]).transpose(-3, -2)
+        expected_out_shape = [batch, 16, 384, 64]
+        ref_out = torch.reshape(A, [batch, 384, 16, 64]).transpose(-3, -2)
 
     assert out.shape() == expected_out_shape
 
@@ -101,15 +105,24 @@ import pytest
     (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),
     ids=["BFLOAT8_B", "BFLOAT16"],
 )
+@pytest.mark.parametrize(
+    "batch",
+    (9, 8, 7),
+    ids=[
+        "batch_9",
+        "batch_8",
+        "batch_7",
+    ],
+)
 def test_bert_large_create_qkv_heads_test(
-    dtype, in0_mem_config, out_mem_config, transpose_hw, request
+    batch, dtype, in0_mem_config, out_mem_config, transpose_hw, request
 ):
     ttl.profiler.set_profiler_flag(False)
     ttl.profiler.set_profiler_location(
         f"tt_metal/tools/profiler/logs/BERT_large_create_heads_tm_{request.node.callspec.id}"
     )
     run_bert_large_create_qkv_heads_test(
-        dtype, in0_mem_config, out_mem_config, transpose_hw
+        batch, dtype, in0_mem_config, out_mem_config, transpose_hw
     )
 
 
@@ -118,13 +131,13 @@ def test_bert_large_create_qkv_heads_with_program_cache(use_program_cache):
     dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
     for _ in range(2):
         run_bert_large_create_qkv_heads_test(
-            dtype, dram_mem_config, dram_mem_config, transpose_hw=True
+            9, dtype, dram_mem_config, dram_mem_config, transpose_hw=True
         )
 
     dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
     for _ in range(2):
         run_bert_large_create_qkv_heads_test(
-            dtype, dram_mem_config, dram_mem_config, transpose_hw=False
+            9, dtype, dram_mem_config, dram_mem_config, transpose_hw=False
         )
 
     assert ttl.program_cache.num_entries() == 2

@@ -14,12 +14,12 @@ from python_api_testing.models.utility_functions import (
 import torch
 
 
-def run_bert_large_split_fused_qkv_test(dtype, in0_mem_config, out_mem_config):
+def run_bert_large_split_fused_qkv_test(batch, dtype, in0_mem_config, out_mem_config):
     torch.manual_seed(1234)
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device, ttl.device.MemoryAllocator.L1_BANKING)
     host = ttl.device.GetHost()
-    a_shape = [9, 1, 384, 3072]
+    a_shape = [batch, 1, 384, 3072]
 
     A = torch.randn(a_shape)
 
@@ -41,14 +41,14 @@ def run_bert_large_split_fused_qkv_test(dtype, in0_mem_config, out_mem_config):
     assert q.memory_config().buffer_type == out_mem_config.buffer_type
     assert k.memory_config().buffer_type == out_mem_config.buffer_type
     assert v.memory_config().buffer_type == out_mem_config.buffer_type
-    logger.debug(f"in0 is on: {a_t.memory_config().buffer_type}")
-    logger.debug(f"q is on: {q.memory_config().buffer_type}")
-    logger.debug(f"k is on: {k.memory_config().buffer_type}")
-    logger.debug(f"v is on: {v.memory_config().buffer_type}")
+    logger.debug(f"in0: {a_t.memory_config().buffer_type} and {a_t.dtype()}")
+    logger.debug(f"q: {q.memory_config().buffer_type} and {q.dtype()}")
+    logger.debug(f"k: {k.memory_config().buffer_type} and {k.dtype()}")
+    logger.debug(f"v: {v.memory_config().buffer_type} and {v.dtype()}")
 
-    assert q.shape() == [9, 1, 384, 1024]
-    assert k.shape() == [9, 1, 384, 1024]
-    assert v.shape() == [9, 1, 384, 1024]
+    assert q.shape() == [batch, 1, 384, 1024]
+    assert k.shape() == [batch, 1, 384, 1024]
+    assert v.shape() == [batch, 1, 384, 1024]
 
     tt_host_rm_q = q.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
     pyt_got_back_rm_q = torch.Tensor(tt_host_rm_q.data()).reshape(tt_host_rm_q.shape())
@@ -99,24 +99,33 @@ import pytest
     (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),
     ids=["BFLOAT8_B", "BFLOAT16"],
 )
+@pytest.mark.parametrize(
+    "batch",
+    (9, 8, 7),
+    ids=[
+        "batch_9",
+        "batch_8",
+        "batch_7",
+    ],
+)
 def test_bert_large_split_fused_qkv_test(
-    dtype, in0_mem_config, out_mem_config, request
+    batch, dtype, in0_mem_config, out_mem_config, request
 ):
     ttl.profiler.set_profiler_flag(False)
     ttl.profiler.set_profiler_location(
         f"tt_metal/tools/profiler/logs/BERT_large_split_fused_qkv_tm_{request.node.callspec.id}"
     )
-    run_bert_large_split_fused_qkv_test(dtype, in0_mem_config, out_mem_config)
+    run_bert_large_split_fused_qkv_test(batch, dtype, in0_mem_config, out_mem_config)
 
 
 def test_bert_large_split_fused_qkv_with_program_cache(use_program_cache):
     dtype = ttl.tensor.DataType.BFLOAT8_B
     dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
     for _ in range(2):
-        run_bert_large_split_fused_qkv_test(dtype, dram_mem_config, dram_mem_config)
+        run_bert_large_split_fused_qkv_test(9, dtype, dram_mem_config, dram_mem_config)
 
     dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
     for _ in range(2):
-        run_bert_large_split_fused_qkv_test(dtype, dram_mem_config, dram_mem_config)
+        run_bert_large_split_fused_qkv_test(9, dtype, dram_mem_config, dram_mem_config)
 
     assert ttl.program_cache.num_entries() == 2
