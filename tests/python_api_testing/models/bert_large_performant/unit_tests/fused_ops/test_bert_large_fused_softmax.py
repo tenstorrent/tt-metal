@@ -93,7 +93,7 @@ def generate_attn_mask(N, C, W, dev, offs, dtype, mem_config):
     return valtorch, val
 
 
-def run_softmax_tests(test_id, dtype, in0_mem_config):
+def run_softmax_tests(test_id, batch, dtype, in0_mem_config):
     if dtype == ttl.tensor.DataType.BFLOAT8_B:
         pytest.skip("Skipping BFP8_B tests since output is incorrect")
     torch.manual_seed(123)
@@ -107,7 +107,7 @@ def run_softmax_tests(test_id, dtype, in0_mem_config):
     device.InitializeDevice(dev, ttl.device.MemoryAllocator.L1_BANKING)
     host = device.GetHost()
 
-    test_dims = ((1, 9, 6144, 384),)
+    test_dims = ((batch, 1, 6144, 384),)
     for N, C, H, W in test_dims:
         for nrepeat in range(0, 1):
             x = torch.randn((N, C, H, W)) * 2.0 - 1.0
@@ -173,13 +173,18 @@ import pytest
     ids=["BFLOAT16", "BFLOAT8_B"],
 )
 @pytest.mark.parametrize(
+    "batch",
+    (9, 8),
+    ids=["batch_9", "batch_8"],
+)
+@pytest.mark.parametrize(
     "test_id",
     (0, 1),
     ids=["scale_mask_softmax", "softmax"],
 )
-def test_bert_large_softmax_test(test_id, dtype, in0_mem_config, request):
+def test_bert_large_softmax_test(test_id, batch, dtype, in0_mem_config, request):
     ttl.profiler.set_profiler_flag(False)
     ttl.profiler.set_profiler_location(
         f"tt_metal/tools/profiler/logs/BERT_large_fused_softmax_{request.node.callspec.id}"
     )
-    run_softmax_tests(test_id, dtype, in0_mem_config)
+    run_softmax_tests(test_id, batch, dtype, in0_mem_config)

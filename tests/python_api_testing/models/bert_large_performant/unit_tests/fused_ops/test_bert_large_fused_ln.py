@@ -73,7 +73,7 @@ def ref_layernorm(x, eps, gamma, beta, H, W):
     return lnorm(x)
 
 
-def run_layernorm_tests(test_id, dtype, in0_mem_config, out_mem_config):
+def run_layernorm_tests(test_id, batch, dtype, in0_mem_config, out_mem_config):
     torch.manual_seed(1234)
 
     # Initialize the device
@@ -85,7 +85,7 @@ def run_layernorm_tests(test_id, dtype, in0_mem_config, out_mem_config):
 
     epsf = 1e-2
 
-    test_dims = ((1, 9, 384, 1024),)
+    test_dims = ((batch, 1, 384, 1024),)
     for N, C, H, W in test_dims:
         """
         test_id = 0  : ln(x)*1+0 path
@@ -211,15 +211,24 @@ import pytest
     ids=["BFLOAT16"],
 )
 @pytest.mark.parametrize(
+    "batch",
+    (9, 8, 7),
+    ids=[
+        "batch_9",
+        "batch_8",
+        "batch_7",
+    ],
+)
+@pytest.mark.parametrize(
     "test_id",
     (0, 1, 2, 3),
     ids=["LN", "LN_G", "LN_GB", "add_LN_GB"],
 )
 def test_bert_large_layernorm_test(
-    test_id, dtype, in0_mem_config, out_mem_config, request
+    test_id, batch, dtype, in0_mem_config, out_mem_config, request
 ):
     ttl.profiler.set_profiler_flag(False)
     ttl.profiler.set_profiler_location(
         f"tt_metal/tools/profiler/logs/BERT_large_fused_layernorm_{request.node.callspec.id}"
     )
-    run_layernorm_tests(test_id, dtype, in0_mem_config, out_mem_config)
+    run_layernorm_tests(test_id, batch, dtype, in0_mem_config, out_mem_config)
