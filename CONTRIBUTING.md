@@ -14,6 +14,8 @@
       * [New feature and design specifications](#new-feature-and-design-specifications)
       * [Release flows](#release-flows)
       * [Logging, assertions, and exceptions](#logging-assertions-and-exceptions)
+   * [Hardware troubleshooting](#hardware-troubleshooting)
+      * [Resetting an accelerator board](#resetting-an-accelerator-board)
 
 <!-- tocstop -->
 
@@ -182,3 +184,16 @@ If you forwarded your port, navigate to `http://localhost:8888`.
 
 - Use Loguru for Python logging.
 - Use Tenstorrent logger for C++ logging.
+
+## Hardware troubleshooting
+
+### Resetting an accelerator board
+
+If a Tenstorrent chip seems to hang, you may try a software reset.
+
+For Grayskull: `tt-smi -tr all`
+
+For Wormhole: `tt-smi -wr all`
+
+If the software reset does not work, unfortunately you will have to power cycle
+the board. This usually means rebooting the host of a board.

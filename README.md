@@ -1,16 +1,24 @@
 <!-- toc -->
 
    * [Installing](#installing)
-      * [From source on a Tenstorrent machine](#from-source-on-a-tenstorrent-machine)
-      * [From a release wheel (BUDA-Eager only)](#from-a-release-wheel-buda-eager-only)
+      * [From source - Tenstorrent machine](#from-source---tenstorrent-machine)
+      * [From a release wheel](#from-a-release-wheel)
+         * [Install dependencies](#install-dependencies)
+         * [Common](#common)
+         * [Ubuntu](#ubuntu)
+         * [Install wheel](#install-wheel)
    * [Getting started](#getting-started)
       * [Environment setup](#environment-setup)
       * [Running example programs](#running-example-programs)
    * [Documentation](#documentation)
+   * [Troubleshooting and debugging tips](#troubleshooting-and-debugging-tips)
    * [Contributing](#contributing)
    * [Communication](#communication)
 
 <!-- tocstop -->
+
+Table of Contents generated with
+[github-markdown-toc](https://github.com/ekalinin/github-markdown-toc).
 
 ## Installing
 
@@ -193,6 +201,13 @@ in our documentation.
 
 Please refer to our
 [documentation](https://tenstorrent-metal.github.io/tt-metal/latest/index.html).
+
+## Troubleshooting and debugging tips
+
+You can check out relevant sections in the
+[contribution
+standards](https://github.com/tenstorrent-metal/tt-metal/blob/main/CONTRIBUTING.md)
+if you ever need hardware troubleshooting help or debugging tips.
 
 ## Contributing
 

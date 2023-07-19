@@ -16,6 +16,14 @@ then please file an
 `issue <https://github.com/tenstorrent-metal/tt-metal/issues/new/choose>`_ on
 GitHub.
 
+Troubleshooting and debugging tips
+----------------------------------
+
+You can check out relevant sections in the
+`contribution standards
+<https://github.com/tenstorrent-metal/tt-metal/blob/main/CONTRIBUTING.md>`_ if
+you ever need hardware troubleshooting help or debugging tips.
+
 Community
 ---------
 
