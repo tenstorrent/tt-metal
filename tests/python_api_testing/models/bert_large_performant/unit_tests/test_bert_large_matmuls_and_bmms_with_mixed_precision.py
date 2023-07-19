@@ -17,6 +17,7 @@ import pytest
 
 def run_bert_large_matmul_test(
     bert_large_op,
+    batch,
     in0_dtype,
     in1_dtype,
     bias_dtype,
@@ -29,11 +30,11 @@ def run_bert_large_matmul_test(
     gelu_activation = False
 
     if bert_large_op == ttl.tensor.bert_large_fused_qkv_matmul:
-        a_shape = [9, 1, 384, 1024]
+        a_shape = [batch, 1, 384, 1024]
         b_shape = [1, 1, 1024, 3072]
         bias_shape = [1, 1, 1, 3072]
         bias_pad_shape = [1, 1, 32, 3072]
-        expected_output_shape = [9, 1, 384, 3072]
+        expected_output_shape = [batch, 1, 384, 3072]
 
     elif bert_large_op == ttl.tensor.bert_large_ff1_matmul:
         if (
@@ -49,25 +50,25 @@ def run_bert_large_matmul_test(
             pytest.skip("Skipping test since these tensors won't fit on device!")
 
         gelu_activation = True
-        a_shape = [9, 1, 384, 1024]
+        a_shape = [batch, 1, 384, 1024]
         b_shape = [1, 1, 1024, 4096]
         bias_shape = [1, 1, 1, 4096]
         bias_pad_shape = [1, 1, 32, 4096]
-        expected_output_shape = [9, 1, 384, 4096]
+        expected_output_shape = [batch, 1, 384, 4096]
 
     elif bert_large_op == ttl.tensor.bert_large_ff2_matmul:
-        a_shape = [9, 1, 384, 4096]
+        a_shape = [batch, 1, 384, 4096]
         b_shape = [1, 1, 4096, 1024]
         bias_shape = [1, 1, 1, 1024]
         bias_pad_shape = [1, 1, 32, 1024]
-        expected_output_shape = [9, 1, 384, 1024]
+        expected_output_shape = [batch, 1, 384, 1024]
 
     elif bert_large_op == ttl.tensor.bert_large_selfout_matmul:
-        a_shape = [9, 1, 384, 1024]
+        a_shape = [batch, 1, 384, 1024]
         b_shape = [1, 1, 1024, 1024]
         bias_shape = [1, 1, 1, 1024]
         bias_pad_shape = [1, 1, 32, 1024]
-        expected_output_shape = [9, 1, 384, 1024]
+        expected_output_shape = [batch, 1, 384, 1024]
 
     else:
         raise NotImplementedError(f"bert_large matmul op is undefined!")
@@ -132,11 +133,19 @@ def run_bert_large_matmul_test(
         assert bias_t.dtype() == bias_dtype
     assert t2.memory_config().buffer_type == out_mem_config.buffer_type
     assert t2.dtype() == out_dtype
-    logger.debug(f"in0: {a_t.memory_config().buffer_type} and {a_t.dtype()}")
-    logger.debug(f"in1: {b_t.memory_config().buffer_type} and {b_t.dtype()}")
+    logger.debug(
+        f"in0 ({a_shape}): {a_t.memory_config().buffer_type} and {a_t.dtype()}"
+    )
+    logger.debug(
+        f"in1 ({b_shape}): {b_t.memory_config().buffer_type} and {b_t.dtype()}"
+    )
     if bias_mem_config is not None:
-        logger.debug(f"bias: {bias_t.memory_config().buffer_type} and {bias_t.dtype()}")
-    logger.debug(f"out: {t2.memory_config().buffer_type} and {t2.dtype()}")
+        logger.debug(
+            f"bias ({bias_shape}): {bias_t.memory_config().buffer_type} and {bias_t.dtype()}"
+        )
+    logger.debug(
+        f"out ({expected_output_shape}): {t2.memory_config().buffer_type} and {t2.dtype()}"
+    )
 
     assert t2.shape() == expected_output_shape
     tt_host_rm = t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
@@ -157,6 +166,7 @@ def run_bert_large_matmul_test(
 
 def run_bert_large_bmm_test(
     bert_large_op,
+    batch,
     in0_dtype,
     in1_dtype,
     out_dtype,
@@ -165,24 +175,24 @@ def run_bert_large_bmm_test(
     out_mem_config,
 ):
     if bert_large_op == ttl.tensor.bert_large_pre_softmax_bmm:
-        a_shape = [9, 16, 384, 64]
-        b_shape = [9, 16, 64, 384]
+        a_shape = [batch, 16, 384, 64]
+        b_shape = [batch, 16, 64, 384]
         expected_output_shape = [
-            9,
+            batch,
             1,
             16 * 384,
             384,
-        ]  # No-op reshape from [9, 16, 384, 384] in pre_softmax_bmm
+        ]  # No-op reshape from [batch, 16, 384, 384] in pre_softmax_bmm
 
     elif bert_large_op == ttl.tensor.bert_large_post_softmax_bmm:
         a_shape = [
-            9,
+            batch,
             1,
             16 * 384,
             384,
-        ]  # No-op reshape to [9, 16, 384, 384] in post_softmax_bmm
-        b_shape = [9, 16, 384, 64]
-        expected_output_shape = [9, 16, 384, 64]
+        ]  # No-op reshape to [batch, 16, 384, 384] in post_softmax_bmm
+        b_shape = [batch, 16, 384, 64]
+        expected_output_shape = [batch, 16, 384, 64]
 
     else:
         raise NotImplementedError(f"bert_large bmm op is undefined!")
@@ -225,9 +235,15 @@ def run_bert_large_bmm_test(
     assert b_t.dtype() == in1_dtype
     assert t2.memory_config().buffer_type == out_mem_config.buffer_type
     assert t2.dtype() == out_dtype
-    logger.debug(f"in0: {a_t.memory_config().buffer_type} and {a_t.dtype()}")
-    logger.debug(f"in1: {b_t.memory_config().buffer_type} and {b_t.dtype()}")
-    logger.debug(f"out: {t2.memory_config().buffer_type} and {t2.dtype()}")
+    logger.debug(
+        f"in0 ({a_shape}): {a_t.memory_config().buffer_type} and {a_t.dtype()}"
+    )
+    logger.debug(
+        f"in1 ({b_shape}): {b_t.memory_config().buffer_type} and {b_t.dtype()}"
+    )
+    logger.debug(
+        f"out ({expected_output_shape}): {t2.memory_config().buffer_type} and {t2.dtype()}"
+    )
 
     assert t2.shape() == expected_output_shape
     tt_host_rm = t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
@@ -237,7 +253,7 @@ def run_bert_large_bmm_test(
         ref_bmm = torch.matmul(A, B).reshape(expected_output_shape)
 
     elif bert_large_op == ttl.tensor.bert_large_post_softmax_bmm:
-        ref_bmm = torch.matmul(A.reshape([9, 16, 384, 384]), B)
+        ref_bmm = torch.matmul(A.reshape([a_shape[0], 16, 384, 384]), B)
 
     passing_pcc, output_pcc = comp_pcc(ref_bmm, pyt_got_back_rm, 0.99)
     logger.info(f"Passing={passing_pcc}")
@@ -286,6 +302,15 @@ def run_bert_large_bmm_test(
     ids=["in0_BFLOAT8_B", "in0_BFLOAT16"],
 )
 @pytest.mark.parametrize(
+    "batch",
+    (9, 8, 7),
+    ids=[
+        "batch_9",
+        "batch_8",
+        "batch_7",
+    ],
+)
+@pytest.mark.parametrize(
     "bert_large_op",
     (
         ttl.tensor.bert_large_fused_qkv_matmul,
@@ -297,6 +322,7 @@ def run_bert_large_bmm_test(
 )
 def test_bert_large_matmul(
     bert_large_op,
+    batch,
     in0_dtype,
     in1_dtype,
     bias_dtype,
@@ -313,6 +339,7 @@ def test_bert_large_matmul(
     )
     run_bert_large_matmul_test(
         bert_large_op,
+        batch,
         in0_dtype,
         in1_dtype,
         bias_dtype,
@@ -357,12 +384,22 @@ def test_bert_large_matmul(
     ids=["in0_BFLOAT8_B", "in0_BFLOAT16"],
 )
 @pytest.mark.parametrize(
+    "batch",
+    (9, 8, 7),
+    ids=[
+        "batch_9",
+        "batch_8",
+        "batch_7",
+    ],
+)
+@pytest.mark.parametrize(
     "bert_large_op",
     (ttl.tensor.bert_large_pre_softmax_bmm, ttl.tensor.bert_large_post_softmax_bmm),
     ids=["pre_softmax_bmm", "post_softmax_bmm"],
 )
 def test_bert_large_bmm(
     bert_large_op,
+    batch,
     in0_dtype,
     in1_dtype,
     out_dtype,
@@ -377,6 +414,7 @@ def test_bert_large_bmm(
     )
     run_bert_large_bmm_test(
         bert_large_op,
+        batch,
         in0_dtype,
         in1_dtype,
         out_dtype,

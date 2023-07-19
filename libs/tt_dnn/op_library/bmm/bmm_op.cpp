@@ -357,8 +357,12 @@ void BertLargeMatmul::validate(
     TT_ASSERT(input_tensors.size() == 2);
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
+    const auto B = input_tensor_a.shape()[0];
     TT_ASSERT((input_tensor_a.layout() == Layout::TILE && input_tensor_b.layout() == Layout::TILE), "Inputs to matmul must be tilized");
     TT_ASSERT(input_tensor_a.shape()[3] == input_tensor_b.shape()[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
+    // TODO: B should work for 2 - 9 (swept through some configs of fused_qkv and ff1 matmul and it passes)
+    // But there is a hang with batch 6 for post-softmax bmm (issue: #1744)
+    TT_ASSERT(B >= 7 && B <= 9, "Input batch size must be between 2 to 9 for bert large bmm ops!");
 
     TT_ASSERT(input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
     TT_ASSERT(input_tensor_a.storage_type() == StorageType::DEVICE and input_tensor_b.storage_type() == StorageType::DEVICE, "Operands to matmul need to be on device!");
@@ -367,29 +371,29 @@ void BertLargeMatmul::validate(
 
     switch (this->bert_large_matmul_op_type) {
         case BertLargeMatmulOpType::FUSED_QKV:
-            TT_ASSERT((input_tensor_a.shape() == std::array<uint32_t, 4>({9, 1, 384, 1024})), "Unsupported input shape");
+            TT_ASSERT((input_tensor_a.shape() == std::array<uint32_t, 4>({B, 1, 384, 1024})), "Unsupported input shape");
             TT_ASSERT((input_tensor_b.shape() == std::array<uint32_t, 4>({1, 1, 1024, 3072})), "Unsupported input shape");
             break;
         case BertLargeMatmulOpType::FF1:
             TT_ASSERT((input_tensor_a.dtype() != DataType::BFLOAT16 or input_tensor_b.dtype() != DataType::BFLOAT16 or this->output_dtype != DataType::BFLOAT16) or (this->output_mem_config.buffer_type == BufferType::DRAM) or (input_tensor_a.memory_config().buffer_type == BufferType::DRAM and input_tensor_b.memory_config().buffer_type == BufferType::DRAM), "For BFLOAT16, if output is on L1, one of in0 or in1 must be on DRAM!");
-            TT_ASSERT((input_tensor_a.shape() == std::array<uint32_t, 4>({9, 1, 384, 1024})), "Unsupported input shape");
+            TT_ASSERT((input_tensor_a.shape() == std::array<uint32_t, 4>({B, 1, 384, 1024})), "Unsupported input shape");
             TT_ASSERT((input_tensor_b.shape() == std::array<uint32_t, 4>({1, 1, 1024, 4096})), "Unsupported input shape");
             break;
         case BertLargeMatmulOpType::FF2:
-            TT_ASSERT((input_tensor_a.shape() == std::array<uint32_t, 4>({9, 1, 384, 4096})), "Unsupported input shape");
+            TT_ASSERT((input_tensor_a.shape() == std::array<uint32_t, 4>({B, 1, 384, 4096})), "Unsupported input shape");
             TT_ASSERT((input_tensor_b.shape() == std::array<uint32_t, 4>({1, 1, 4096, 1024})), "Unsupported input shape");
             break;
         case BertLargeMatmulOpType::SELFOUT:
-            TT_ASSERT((input_tensor_a.shape() == std::array<uint32_t, 4>({9, 1, 384, 1024})), "Unsupported input shape");
+            TT_ASSERT((input_tensor_a.shape() == std::array<uint32_t, 4>({B, 1, 384, 1024})), "Unsupported input shape");
             TT_ASSERT((input_tensor_b.shape() == std::array<uint32_t, 4>({1, 1, 1024, 1024})), "Unsupported input shape");
             break;
         case BertLargeMatmulOpType::PRE_SOFTMAX_BMM:
-            TT_ASSERT((input_tensor_a.shape() == std::array<uint32_t, 4>({9, 16, 384, 64})), "Unsupported input shape");
-            TT_ASSERT((input_tensor_b.shape() == std::array<uint32_t, 4>({9, 16, 64, 384})), "Unsupported input shape");
+            TT_ASSERT((input_tensor_a.shape() == std::array<uint32_t, 4>({B, 16, 384, 64})), "Unsupported input shape");
+            TT_ASSERT((input_tensor_b.shape() == std::array<uint32_t, 4>({B, 16, 64, 384})), "Unsupported input shape");
             break;
         case BertLargeMatmulOpType::POST_SOFTMAX_BMM:
-            TT_ASSERT((input_tensor_a.shape() == std::array<uint32_t, 4>({9, 1, 16 * 384, 384})), "Unsupported input shape");
-            TT_ASSERT((input_tensor_b.shape() == std::array<uint32_t, 4>({9, 16, 384, 64})), "Unsupported input shape");
+            TT_ASSERT((input_tensor_a.shape() == std::array<uint32_t, 4>({B, 1, 16 * 384, 384})), "Unsupported input shape");
+            TT_ASSERT((input_tensor_b.shape() == std::array<uint32_t, 4>({B, 16, 384, 64})), "Unsupported input shape");
             break;
         default:
             TT_ASSERT(false, "Unknown bert large matmul op in validate!");
@@ -414,8 +418,10 @@ void BertLargeMatmul::validate(
 std::vector<Shape> BertLargeMatmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     Shape output_shape;
     const auto& input_tensor_a = input_tensors.at(0);
-    const auto& input_tensor_b = input_tensors.at(1);    auto ashape = input_tensor_a.shape();
+    const auto& input_tensor_b = input_tensors.at(1);
+    auto ashape = input_tensor_a.shape();
     const auto& bshape = input_tensor_b.shape();
+    const auto B = ashape[0];
     switch (this->bert_large_matmul_op_type) {
         case BertLargeMatmulOpType::FUSED_QKV:
         case BertLargeMatmulOpType::FF1:
@@ -425,11 +431,10 @@ std::vector<Shape> BertLargeMatmul::compute_output_shapes(const std::vector<Tens
             output_shape.back() = bshape.back();
             break;
         case BertLargeMatmulOpType::PRE_SOFTMAX_BMM:
-            output_shape = {ashape[0], 1, ashape[1] * ashape[2], bshape[3]};
+            output_shape = {B, 1, ashape[1] * ashape[2], bshape[3]};
             break;
         case BertLargeMatmulOpType::POST_SOFTMAX_BMM:
-            ashape = {9, 16, 384, 384};
-            output_shape = ashape;
+            output_shape = {B, 16, 384, 384};
             output_shape.back() = bshape.back();
             break;
         default:
@@ -464,6 +469,7 @@ operation::ProgramWithCallbacks BertLargeMatmul::create_program(
     auto ashape = input_tensor_a.shape();
     const auto& bshape = input_tensor_b.shape();
     auto& output_tensor = output_tensors.at(0);
+    const auto B = ashape[0];
 
     auto device_compute_and_storage_grid_size = input_tensor_a.device()->compute_and_storage_grid_size();
     CoreCoord compute_and_storage_grid_size;
@@ -474,7 +480,7 @@ operation::ProgramWithCallbacks BertLargeMatmul::create_program(
 
     switch (this->bert_large_matmul_op_type) {
         case BertLargeMatmulOpType::FUSED_QKV:
-            compute_and_storage_grid_size = {12, 9};
+            compute_and_storage_grid_size = {12, B};
             TT_ASSERT((compute_and_storage_grid_size.x <= device_compute_and_storage_grid_size.x && compute_and_storage_grid_size.y <= device_compute_and_storage_grid_size.y), "Unsupported grid shape");
             in0_block_w = 4;
             out_subblock_h = 4;
@@ -483,7 +489,7 @@ operation::ProgramWithCallbacks BertLargeMatmul::create_program(
             per_core_N = 8;
             return matmul_multi_core_reuse_mcast_optimized_bert_large(input_tensor_a, input_tensor_b, bias, output_tensor, compute_and_storage_grid_size, output_dtype, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
         case BertLargeMatmulOpType::FF1:
-            compute_and_storage_grid_size = {12, 9};
+            compute_and_storage_grid_size = {12, B};
             TT_ASSERT((compute_and_storage_grid_size.x <= device_compute_and_storage_grid_size.x && compute_and_storage_grid_size.y <= device_compute_and_storage_grid_size.y), "Unsupported grid shape");
             in0_block_w = 4;
             out_subblock_h = 6;
@@ -492,7 +498,7 @@ operation::ProgramWithCallbacks BertLargeMatmul::create_program(
             per_core_N = 11;
             return matmul_multi_core_reuse_mcast_optimized_bert_large(input_tensor_a, input_tensor_b, bias, output_tensor, compute_and_storage_grid_size, output_dtype, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch, this->fuse_gelu_activation);
         case BertLargeMatmulOpType::FF2:
-            compute_and_storage_grid_size = {11, 9};
+            compute_and_storage_grid_size = {11, B};
             TT_ASSERT((compute_and_storage_grid_size.x <= device_compute_and_storage_grid_size.x && compute_and_storage_grid_size.y <= device_compute_and_storage_grid_size.y), "Unsupported grid shape");
             in0_block_w = 4;
             out_subblock_h = 6;
@@ -501,7 +507,7 @@ operation::ProgramWithCallbacks BertLargeMatmul::create_program(
             per_core_N = 3;
             return matmul_multi_core_reuse_mcast_optimized_bert_large(input_tensor_a, input_tensor_b, bias, output_tensor, compute_and_storage_grid_size, output_dtype, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
         case BertLargeMatmulOpType::SELFOUT:
-            compute_and_storage_grid_size = {11, 9};
+            compute_and_storage_grid_size = {11, B};
             TT_ASSERT((compute_and_storage_grid_size.x <= device_compute_and_storage_grid_size.x && compute_and_storage_grid_size.y <= device_compute_and_storage_grid_size.y), "Unsupported grid shape");
             in0_block_w = 4;
             out_subblock_h = 6;
@@ -510,7 +516,7 @@ operation::ProgramWithCallbacks BertLargeMatmul::create_program(
             per_core_N = 3;
             return matmul_multi_core_reuse_mcast_optimized_bert_large(input_tensor_a, input_tensor_b, bias, output_tensor, compute_and_storage_grid_size, output_dtype, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
         case BertLargeMatmulOpType::PRE_SOFTMAX_BMM:
-            compute_and_storage_grid_size = {12, 9};
+            compute_and_storage_grid_size = {12, B};
             TT_ASSERT((compute_and_storage_grid_size.x <= device_compute_and_storage_grid_size.x && compute_and_storage_grid_size.y <= device_compute_and_storage_grid_size.y), "Unsupported grid shape");
             in0_block_w = 1;
             out_subblock_h = 4;
@@ -521,7 +527,7 @@ operation::ProgramWithCallbacks BertLargeMatmul::create_program(
         case BertLargeMatmulOpType::POST_SOFTMAX_BMM:
             compute_and_storage_grid_size = {12, 9};
             TT_ASSERT((compute_and_storage_grid_size.x <= device_compute_and_storage_grid_size.x && compute_and_storage_grid_size.y <= device_compute_and_storage_grid_size.y), "Unsupported grid shape");
-            ashape = {9, 16, 384, 384};
+            ashape = {B, 16, 384, 384};
             in0_block_w = 2;
             out_subblock_h = 4;
             out_subblock_w = 2;
