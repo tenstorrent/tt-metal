@@ -303,9 +303,9 @@ operation::Hash Unpad::compute_program_hash(const std::vector<Tensor> &input_ten
 
 tt::stl::reflection::Attributes Unpad::attributes() const {
     return {
-        {"output_tensor_start", fmt::format("{}", this->output_tensor_start)},
-        {"output_tensor_end", fmt::format("{}", this->output_tensor_end)},
-        {"output_mem_config", fmt::format("{}", this->output_mem_config)},
+        {"output_tensor_start", this->output_tensor_start},
+        {"output_tensor_end", this->output_tensor_end},
+        {"output_mem_config", this->output_mem_config},
     };
 }
 
@@ -365,8 +365,8 @@ std::vector<Tensor> UnpadOnHost::compute_output_tensors(const std::vector<Tensor
 
 tt::stl::reflection::Attributes UnpadOnHost::attributes() const {
     return {
-        {"output_tensor_start", fmt::format("{}", this->output_tensor_start)},
-        {"output_tensor_end", fmt::format("{}", this->output_tensor_end)},
+        {"output_tensor_start", this->output_tensor_start},
+        {"output_tensor_end", this->output_tensor_end},
     };
 }
 

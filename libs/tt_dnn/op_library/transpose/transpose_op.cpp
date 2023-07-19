@@ -106,7 +106,7 @@ TransposeOpParallelizationStrategy::Enum Transpose::get_parallelization_strategy
 
 tt::stl::reflection::Attributes Transpose::attributes() const {
     return {
-        {"dim", fmt::format("{}", this->dim)},
+        {"dim", this->dim},
     };
 }
 

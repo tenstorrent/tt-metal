@@ -331,10 +331,10 @@ operation::Hash Reshape::compute_program_hash(const std::vector<Tensor> &input_t
 
 tt::stl::reflection::Attributes Reshape::attributes() const {
     return {
-        {"N", fmt::format("{}", this->N)},
-        {"C", fmt::format("{}", this->C)},
-        {"H", fmt::format("{}", this->H)},
-        {"W", fmt::format("{}", this->W)},
+        {"N", this->N},
+        {"C", this->C},
+        {"H", this->H},
+        {"W", this->W},
     };
 }
 

@@ -11,8 +11,6 @@ namespace tt_metal {
 
 namespace operation_history {
 
-inline std::string DEFAULT_FILE_PATH{"build/operation_history.csv"};
-
 struct TensorRecord {
     const StorageType storage_type;
     const Shape shape;
@@ -35,7 +33,7 @@ struct OperationHistory {
     ~OperationHistory();
 
     void append(OperationRecord&& record);
-    void to_csv(const std::filesystem::path& file_path);
+    void dump_to_csv();
 
   private:
     std::vector<OperationRecord> records;
@@ -49,6 +47,10 @@ template<typename ... Args>
 inline void append(Args&& ... args) {
     detail::OPERATION_HISTORY.append(std::forward<Args>(args)...);
 }
+
+const char* csv_file_name();
+
+bool enabled();
 
 }  // namespace operation_history
 

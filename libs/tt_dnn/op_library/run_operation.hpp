@@ -96,7 +96,9 @@ inline void log_operation(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors = {}) {
     detail::print_operation(operation, input_tensors, optional_input_tensors);
-    detail::append_operation_to_operation_history(operation, input_tensors, optional_input_tensors);
+    if (operation_history::enabled()) {
+        detail::append_operation_to_operation_history(operation, input_tensors, optional_input_tensors);
+    }
 }
 #else
 template<typename OperationType>

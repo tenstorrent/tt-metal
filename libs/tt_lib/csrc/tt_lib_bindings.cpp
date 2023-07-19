@@ -2760,10 +2760,10 @@ void TensorModule(py::module &m_tensor) {
                     input_tensors.push_back(tensor);
                 }
                 else if (py::isinstance(value, torch.attr("nn").attr("Module"))) {
-                    function_name = fmt::format("{}", function_name);
+                    // do nothing
                 }
                 else if (py::isinstance(value, torch.attr("Tensor"))) {
-                    attributes.push_back({fmt::format("{}", name), fmt::format("torch.Tensor")});
+                    attributes.push_back({fmt::format("{}", name), "torch.Tensor"});
                 }
                 else {
                     attributes.push_back({fmt::format("{}", name), fmt::format("{}", value)});

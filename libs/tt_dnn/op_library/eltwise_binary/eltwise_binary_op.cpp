@@ -117,7 +117,7 @@ BinaryOpParallelizationStrategy::Enum EltwiseBinary::get_parallelization_strateg
 
 tt::stl::reflection::Attributes EltwiseBinary::attributes() const {
     return {
-        {"op_type", fmt::format("{}", this->op_type)},
+        {"op_type", this->op_type},
     };
 }
 

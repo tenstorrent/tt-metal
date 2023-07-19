@@ -103,9 +103,9 @@ operation::Hash Reduce::compute_program_hash(const std::vector<Tensor> &input_te
 
 tt::stl::reflection::Attributes Reduce::attributes() const {
     return {
-        {"math_op", fmt::format("{}", this->math_op)},
-        {"dim", fmt::format("{}", this->dim)},
-        {"scaler", fmt::format("{}", this->scaler)},
+        {"math_op", this->math_op},
+        {"dim", this->dim},
+        {"scaler", this->scaler},
     };
 }
 

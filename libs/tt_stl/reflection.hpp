@@ -17,7 +17,22 @@ namespace tt {
 namespace stl {
 namespace reflection {
 
-using Attributes = std::vector<std::tuple<std::string, std::string>>;
+using AttributeName = std::variant<const char*, std::string>;
+
+struct Attribute {
+
+    template<typename T>
+    Attribute(const T& value) : to_string([value] { return fmt::format("{}", value); }) {}
+
+    const std::function<std::string()> to_string;
+};
+
+using Attributes = std::vector<std::tuple<AttributeName, Attribute>>;
+
+static std::ostream& operator<<(std::ostream& os, const Attribute& attribute) {
+    os << attribute.to_string();
+    return os;
+}
 
 static std::ostream& operator<<(std::ostream& os, const Attributes& attributes) {
     os << "(";

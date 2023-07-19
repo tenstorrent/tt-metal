@@ -337,8 +337,8 @@ operation::Hash Matmul::compute_program_hash(const std::vector<Tensor> &input_te
 
 tt::stl::reflection::Attributes Matmul::attributes() const {
     return {
-        {"bcast_batch", fmt::format("{}", this->bcast_batch)},
-        {"output_mem_config", fmt::format("{}", this->output_mem_config)},
+        {"bcast_batch", this->bcast_batch},
+        {"output_mem_config", this->output_mem_config},
     };
 }
 
@@ -552,9 +552,9 @@ operation::Hash BertLargeMatmul::compute_program_hash(
 
 tt::stl::reflection::Attributes BertLargeMatmul::attributes() const {
     return {
-        {"bert_large_matmul_op_type", fmt::format("{}", this->bert_large_matmul_op_type)},
-        {"output_mem_config", fmt::format("{}", this->output_mem_config)},
-        {"fuse_gelu_activation", fmt::format("{}", this->fuse_gelu_activation)},
+        {"bert_large_matmul_op_type", this->bert_large_matmul_op_type},
+        {"output_mem_config",  this->output_mem_config},
+        {"fuse_gelu_activation", this->fuse_gelu_activation},
     };
 }
 

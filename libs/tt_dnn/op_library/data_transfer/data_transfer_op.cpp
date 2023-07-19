@@ -27,7 +27,7 @@ std::vector<Tensor> DataTransferToHost::compute_output_tensors(const std::vector
 
 tt::stl::reflection::Attributes DataTransferToHost::attributes() const {
     return {
-        {"host", fmt::format("{}", "Host")},
+        {"host", "Host"},
     };
 }
 
@@ -58,8 +58,8 @@ std::vector<Tensor> DataTransferToDevice::compute_output_tensors(const std::vect
 
 tt::stl::reflection::Attributes DataTransferToDevice::attributes() const {
     return {
-        {"device", fmt::format("Device_{}", this->device->pcie_slot())},
-        {"mem_config", fmt::format("{}", this->mem_config)},
+        {"device", this->device->pcie_slot()},
+        {"mem_config", this->mem_config},
     };
 }
 

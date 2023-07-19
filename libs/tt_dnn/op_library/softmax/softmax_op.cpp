@@ -269,7 +269,7 @@ operation::Hash AttentionSoftmaxInPlace::compute_program_hash(
 
 tt::stl::reflection::Attributes AttentionSoftmaxInPlace::attributes() const {
     return {
-        {"scale", fmt::format("{}", this->scale)},
+        {"scale", this->scale},
     };
 }
 

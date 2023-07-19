@@ -96,14 +96,14 @@ operation::Hash FillRM::compute_program_hash(const std::vector<Tensor> &input_te
 
 tt::stl::reflection::Attributes FillRM::attributes() const {
     return {
-        {"N", fmt::format("{}", this->N)},
-        {"C", fmt::format("{}", this->C)},
-        {"H", fmt::format("{}", this->H)},
-        {"W", fmt::format("{}", this->W)},
-        {"hFill", fmt::format("{}", this->hFill)},
-        {"wFill", fmt::format("{}", this->wFill)},
-        {"val_hi", fmt::format("{}", this->val_hi)},
-        {"val_lo", fmt::format("{}", this->val_lo)},
+        {"N", this->N},
+        {"C", this->C},
+        {"H", this->H},
+        {"W", this->W},
+        {"hFill", this->hFill},
+        {"wFill", this->wFill},
+        {"val_hi", this->val_hi},
+        {"val_lo", this->val_lo},
     };
 }
 

@@ -561,13 +561,13 @@ operation::ProgramWithCallbacks Conv::create_program(const std::vector<Tensor>& 
 
 tt::stl::reflection::Attributes Conv::attributes() const {
     return {
-        {"conv_params", fmt::format("{}", this->conv_params)},
-        {"act_block_h_ntiles", fmt::format("{}", this->act_block_h_ntiles)},
-        {"act_block_w_ntiles", fmt::format("{}", this->act_block_w_ntiles)},
-        {"weight_block_w_ntiles", fmt::format("{}", this->weight_block_w_ntiles)},
-        {"out_subblock_h_ntiles", fmt::format("{}", this->out_subblock_h_ntiles)},
-        {"out_subblock_w_ntiles", fmt::format("{}", this->out_subblock_w_ntiles)},
-        {"untilize_out", fmt::format("{}", this->untilize_out)},
+        {"conv_params", this->conv_params},
+        {"act_block_h_ntiles", this->act_block_h_ntiles},
+        {"act_block_w_ntiles", this->act_block_w_ntiles},
+        {"weight_block_w_ntiles", this->weight_block_w_ntiles},
+        {"out_subblock_h_ntiles", this->out_subblock_h_ntiles},
+        {"out_subblock_w_ntiles", this->out_subblock_w_ntiles},
+        {"untilize_out", this->untilize_out},
     };
 }
 
@@ -1291,13 +1291,13 @@ operation::ProgramWithCallbacks ConvWithAddressMap::create_program(const std::ve
 
 tt::stl::reflection::Attributes ConvWithAddressMap::attributes() const {
     return {
-        {"conv_params", fmt::format("{}", this->conv_params)},
-        {"act_block_h_ntiles", fmt::format("{}", this->act_block_h_ntiles)},
-        {"act_block_w_ntiles", fmt::format("{}", this->act_block_w_ntiles)},
-        {"weight_block_w_ntiles", fmt::format("{}", this->weight_block_w_ntiles)},
-        {"out_subblock_h_ntiles", fmt::format("{}", this->out_subblock_h_ntiles)},
-        {"out_subblock_w_ntiles", fmt::format("{}", this->out_subblock_w_ntiles)},
-        {"untilize_out", fmt::format("{}", this->untilize_out)},
+        {"conv_params", this->conv_params},
+        {"act_block_h_ntiles", this->act_block_h_ntiles},
+        {"act_block_w_ntiles", this->act_block_w_ntiles},
+        {"weight_block_w_ntiles", this->weight_block_w_ntiles},
+        {"out_subblock_h_ntiles", this->out_subblock_h_ntiles},
+        {"out_subblock_w_ntiles", this->out_subblock_w_ntiles},
+        {"untilize_out", this->untilize_out},
     };
 }
 

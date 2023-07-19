@@ -11,18 +11,18 @@ namespace operation_history {
 
 tt::stl::reflection::Attributes TensorRecord::attributes() const {
     return {
-        {"storage_type", fmt::format("{}", this->storage_type)},
-        {"shape", fmt::format("{}", this->shape)},
-        {"data_type", fmt::format("{}", this->data_type)},
-        {"layout", fmt::format("{}", this->layout)},
-        {"memory_config", fmt::format("{}", this->memory_config)},
+        {"storage_type", this->storage_type},
+        {"shape", this->shape},
+        {"data_type", this->data_type},
+        {"layout", this->layout},
+        {"memory_config", this->memory_config},
     };
 }
 
 namespace detail {
 
 OperationHistory::~OperationHistory() {
-    this->to_csv(DEFAULT_FILE_PATH);
+    this->dump_to_csv();
 }
 
 void OperationHistory::append(OperationRecord&& record) {
@@ -94,8 +94,8 @@ void write_record(std::ofstream& output_file_stream, const OperationRecord& reco
     write_row(output_file_stream, row);
 }
 
-void OperationHistory::to_csv(const std::filesystem::path& output_file_path) {
-    std::ofstream output_file_stream(output_file_path);
+void OperationHistory::dump_to_csv() {
+    std::ofstream output_file_stream(csv_file_name());
     write_header(output_file_stream);
     for (const auto& record : this->records) {
         write_record(output_file_stream, record);
@@ -103,6 +103,14 @@ void OperationHistory::to_csv(const std::filesystem::path& output_file_path) {
 }
 
 }  // namespace detail
+
+const char* csv_file_name() {
+    return std::getenv("OPERATION_HISTORY_CSV");
+}
+
+bool enabled() {
+    return csv_file_name() != nullptr;
+}
 
 }  // namespace operation_history
 

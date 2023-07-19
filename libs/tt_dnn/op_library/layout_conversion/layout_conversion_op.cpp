@@ -31,7 +31,7 @@ std::vector<Tensor> LayoutConversionOnHost::compute_output_tensors(const std::ve
 
 tt::stl::reflection::Attributes LayoutConversionOnHost::attributes() const {
     return {
-        {"target_layout", fmt::format("{}", this->target_layout)},
+        {"target_layout", this->target_layout},
     };
 }
 

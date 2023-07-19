@@ -210,10 +210,10 @@ uint32_t Tensor::volume() const {
 
 tt::stl::reflection::Attributes Tensor::attributes() const {
     return {
-        {"storage", fmt::format("{}", this->storage_)},
-        {"shape", fmt::format("{}", this->shape_)},
-        {"dtype", fmt::format("{}", this->dtype_)},
-        {"layout", fmt::format("{}", this->layout_)},
+        {"storage", this->storage_},
+        {"shape", this->shape_},
+        {"dtype", this->dtype_},
+        {"layout", this->layout_},
     };
 }
 

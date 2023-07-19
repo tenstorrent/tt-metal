@@ -175,8 +175,8 @@ UnaryOpParallelizationStrategy::Enum EltwiseUnary::get_parallelization_strategy(
 
 tt::stl::reflection::Attributes EltwiseUnary::attributes() const {
     return {
-        {"op_type", fmt::format("{}", this->op_type)},
-        {"param", fmt::format("{}", this->param)},
+        {"op_type", this->op_type},
+        {"param", this->param},
     };
 }
 

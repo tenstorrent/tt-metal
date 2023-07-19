@@ -216,7 +216,7 @@ operation::Hash Untilize::compute_program_hash(const std::vector<Tensor> &input_
 
 tt::stl::reflection::Attributes Untilize::attributes() const {
     return {
-        {"output_mem_config", fmt::format("{}", this->output_mem_config)},
+        {"output_mem_config", this->output_mem_config},
     };
 }
 
@@ -488,9 +488,9 @@ operation::Hash UntilizeWithUnpadding::compute_program_hash(const std::vector<Te
 
 tt::stl::reflection::Attributes UntilizeWithUnpadding::attributes() const {
     return {
-        {"output_tensor_start", fmt::format("{}", this->output_tensor_start)},
-        {"output_tensor_end", fmt::format("{}", this->output_tensor_end)},
-        {"output_mem_config", fmt::format("{}", this->output_mem_config)},
+        {"output_tensor_start", this->output_tensor_start},
+        {"output_tensor_end", this->output_tensor_end},
+        {"output_mem_config", this->output_mem_config},
     };
 }
 

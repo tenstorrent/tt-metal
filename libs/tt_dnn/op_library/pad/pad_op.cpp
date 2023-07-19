@@ -296,10 +296,10 @@ operation::Hash Pad::compute_program_hash(const std::vector<Tensor> &input_tenso
 
 tt::stl::reflection::Attributes Pad::attributes() const {
     return {
-        {"output_tensor_shape", fmt::format("{}", this->output_tensor_shape)},
-        {"input_tensor_start", fmt::format("{}", this->input_tensor_start)},
-        {"pad_value", fmt::format("{}", this->pad_value)},
-        {"output_mem_config", fmt::format("{}", this->output_mem_config)},
+        {"output_tensor_shape", this->output_tensor_shape},
+        {"input_tensor_start", this->input_tensor_start},
+        {"pad_value", this->pad_value},
+        {"output_mem_config", this->output_mem_config},
     };
 }
 
@@ -336,9 +336,9 @@ std::vector<Tensor> PadOnHost::compute_output_tensors(const std::vector<Tensor>&
 
 tt::stl::reflection::Attributes PadOnHost::attributes() const {
     return {
-        {"output_tensor_shape", fmt::format("{}", this->output_tensor_shape)},
-        {"input_tensor_start", fmt::format("{}", this->input_tensor_start)},
-        {"pad_value", fmt::format("{}", this->pad_value)},
+        {"output_tensor_shape", this->output_tensor_shape},
+        {"input_tensor_start", this->input_tensor_start},
+        {"pad_value", this->pad_value},
     };
 }
 

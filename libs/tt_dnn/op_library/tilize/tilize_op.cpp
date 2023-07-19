@@ -237,7 +237,7 @@ operation::Hash Tilize::compute_program_hash(const std::vector<Tensor> &input_te
 
 tt::stl::reflection::Attributes Tilize::attributes() const {
     return {
-        {"output_mem_config", fmt::format("{}", this->output_mem_config)},
+        {"output_mem_config", this->output_mem_config},
     };
 }
 
@@ -525,10 +525,10 @@ operation::Hash TilizeWithValPadding::compute_program_hash(const std::vector<Ten
 
 tt::stl::reflection::Attributes TilizeWithValPadding::attributes() const {
     return {
-        {"output_tensor_shape", fmt::format("{}", this->output_tensor_shape)},
-        {"input_tensor_start", fmt::format("{}", this->input_tensor_start)},
-        {"pad_value", fmt::format("{}", this->pad_value)},
-        {"output_mem_config", fmt::format("{}", this->output_mem_config)},
+        {"output_tensor_shape", this->output_tensor_shape},
+        {"input_tensor_start", this->input_tensor_start},
+        {"pad_value", this->pad_value},
+        {"output_mem_config", this->output_mem_config},
     };
 }
 

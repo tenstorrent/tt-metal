@@ -105,8 +105,8 @@ operation::Hash BertLargeTM::compute_program_hash(const std::vector<Tensor> &inp
 
 tt::stl::reflection::Attributes BertLargeTM::attributes() const {
     return {
-        {"bert_large_tm_op_type", fmt::format("{}", this->bert_large_tm_op_type)},
-        {"output_mem_config", fmt::format("{}", this->output_mem_config)},
+        {"bert_large_tm_op_type", this->bert_large_tm_op_type},
+        {"output_mem_config", this->output_mem_config},
     };
 }
 

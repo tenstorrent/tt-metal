@@ -393,8 +393,8 @@ operation::Hash LayerNorm::compute_program_hash(
 
 tt::stl::reflection::Attributes LayerNorm::attributes() const {
     return {
-        {"eps", fmt::format("{}", this->eps)},
-        {"output_mem_config", fmt::format("{}", this->output_mem_config)},
+        {"eps", this->eps},
+        {"output_mem_config", this->output_mem_config},
     };
 }
 
@@ -469,8 +469,8 @@ operation::Hash BertLargeLayerNorm::compute_program_hash(
 
 tt::stl::reflection::Attributes BertLargeLayerNorm::attributes() const {
     return {
-        {"eps", fmt::format("{}", this->eps)},
-        {"output_mem_config", fmt::format("{}", this->output_mem_config)},
+        {"eps", this->eps},
+        {"output_mem_config", this->output_mem_config},
     };
 }
 

@@ -143,9 +143,9 @@ operation::Hash EltwiseBinaryBroadcast::compute_program_hash(const std::vector<T
 
 tt::stl::reflection::Attributes EltwiseBinaryBroadcast::attributes() const {
     return {
-        {"math_op", fmt::format("{}", this->math_op)},
-        {"dim", fmt::format("{}", this->dim)},
-        {"output_mem_config", fmt::format("{}", this->output_mem_config)},
+        {"math_op", this->math_op},
+        {"dim", this->dim},
+        {"output_mem_config", this->output_mem_config},
     };
 }
 

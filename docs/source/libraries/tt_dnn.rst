@@ -159,7 +159,8 @@ The logs will print currently running op and information related to program cach
     Op | DEBUG    | Operation Attributes: (op_type=tt::tt_metal::UnaryOpType::Enum::GELU, param=0)
     Op | DEBUG    | Input Tensors: {tt::tt_metal::Tensor(storage=tt::tt_metal::DeviceStorage(memory_config=tt::tt_metal::MemoryConfig(interleaved=true, buffer_type=tt::tt_metal::BufferType::DRAM)), shape={1, 1, 32, 32}, dtype=tt::tt_metal::DataType::BFLOAT16, layout=tt::tt_metal::Layout::TILE)}
 
-In addition to logs, the history of all executed operations gets dumped into `build/operation_history.csv`
+
+If `OPERATION_HISTORY_CSV=<csv_file_path>` environment variable is set, then the history of all executed operations will be dumped into `<csv_file_path>`
 
 
 tt-DNN API through ``tt_lib``

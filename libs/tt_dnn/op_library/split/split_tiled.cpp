@@ -86,9 +86,9 @@ operation::Hash SplitTiled::compute_program_hash(const std::vector<Tensor> &inpu
 
 tt::stl::reflection::Attributes SplitTiled::attributes() const {
     return {
-        {"dim", fmt::format("{}", this->dim)},
-        {"num_chunks", fmt::format("{}", this->num_chunks)},
-        {"output_mem_config", fmt::format("{}", this->output_mem_config)},
+        {"dim", this->dim},
+        {"num_chunks", this->num_chunks},
+        {"output_mem_config", this->output_mem_config},
     };
 }
 

@@ -22,21 +22,20 @@ tt::DataFormat datatype_to_dataformat_converter(tt::tt_metal::DataType datatype)
 
 tt::stl::reflection::Attributes MemoryConfig::attributes() const {
     return {
-        {"interleaved", fmt::format("{}", this->interleaved)},
-        {"buffer_type", fmt::format("{}", this->buffer_type)}
+        {"interleaved", this->interleaved},
+        {"buffer_type", this->buffer_type}
     };
 }
 
 
 tt::stl::reflection::Attributes HostStorage::attributes() const {
-    return {
-    };
+    return {};
 }
 
 
 tt::stl::reflection::Attributes DeviceStorage::attributes() const {
     return {
-        {"memory_config", fmt::format("{}", this->memory_config)}
+        {"memory_config", this->memory_config}
     };
 }
 
