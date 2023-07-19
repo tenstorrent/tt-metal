@@ -435,7 +435,7 @@ uint32_t CreateSemaphore(Program &program, const CoreRangeSet &core_range_set, u
     return address.value();
 }
 
-void WriteToDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
+void WriteToDevice(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
     tt_metal_profiler.markStart("WriteToDevice");
 
     uint32_t page_size = buffer.page_size();
@@ -475,7 +475,7 @@ void WriteToDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
     tt_metal_profiler.markStop("WriteToDevice");
 }
 
-void WriteToBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
+void WriteToBuffer(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
     switch (buffer.buffer_type()) {
         case BufferType::DRAM:
         case BufferType::L1: {

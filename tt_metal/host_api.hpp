@@ -578,7 +578,7 @@ uint32_t CreateSemaphore(Program &program, const CoreRangeSet &core_range_set, u
 * | buffer      | Buffer to send data to                          | const Buffer &          |                                                  | Yes      |
 * | host_buffer | Buffer on host to copy data from                | std::vector<uint32_t> & | Host buffer size must match buffer               | Yes      |
 */
-void WriteToBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer);
+void WriteToBuffer(const Buffer &buffer, const std::vector<uint32_t> &host_buffer);
 
 /**
 * Copies data from a buffer into a host buffer
