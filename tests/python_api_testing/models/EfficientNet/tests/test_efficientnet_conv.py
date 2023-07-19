@@ -12,25 +12,22 @@ from tests.python_api_testing.models.EfficientNet.tt.efficientnet_conv import (
     TtEfficientnetConv2d,
     TtEfficientnetConv2dNormActivation,
 )
+from tests.python_api_testing.models.EfficientNet.tt.efficientnet_model import (
+    reference_efficientnet_lite0,
+)
 
 
-def test_efficientnet_conv2d():
+def run_efficientnet_conv2d(state_dict, base_address, reference_module):
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
 
-    refence_model = torchvision.models.efficientnet_b0(pretrained=True)
-    refence_model.eval()
-
-    block = 0
-    refence_module = refence_model.features[block][0]
-
-    in_channels = refence_module.in_channels
-    out_channels = refence_module.out_channels
-    kernel_size = refence_module.kernel_size
-    stride = refence_module.stride
-    padding = refence_module.padding
-    groups = refence_module.groups
-    dilation = refence_module.dilation
+    in_channels = reference_module.in_channels
+    out_channels = reference_module.out_channels
+    kernel_size = reference_module.kernel_size
+    stride = reference_module.stride
+    padding = reference_module.padding
+    groups = reference_module.groups
+    dilation = reference_module.dilation
 
     logger.debug(f"in_channels {in_channels}")
     logger.debug(f"out_channels {out_channels}")
@@ -42,11 +39,11 @@ def test_efficientnet_conv2d():
 
     torch.manual_seed(0)
     test_input = torch.rand(1, 3, 224, 224)
-    pt_out = refence_module(test_input)
+    pt_out = reference_module(test_input)
 
     tt_module = TtEfficientnetConv2d(
-        state_dict=refence_model.state_dict(),
-        base_address=f"features.{block}.0",
+        state_dict=state_dict,
+        base_address=base_address,
         device=device,
         in_channels=in_channels,
         out_channels=out_channels,
@@ -76,24 +73,41 @@ def test_efficientnet_conv2d():
     assert does_pass
 
 
-def test_efficientnet_conv_norm_activation():
+def test_efficientnet_conv2d_b0():
+    reference_model = torchvision.models.efficientnet_b0(pretrained=True)
+    reference_model.eval()
+
+    run_efficientnet_conv2d(
+        state_dict=reference_model.state_dict(),
+        base_address=f"features.0.0",
+        reference_module=reference_model.features[0][0],
+    )
+
+
+def test_efficientnet_conv2d_lite0():
+    reference_model = reference_efficientnet_lite0()
+
+    run_efficientnet_conv2d(
+        state_dict=reference_model.state_dict(),
+        base_address=f"stem.0",
+        reference_module=reference_model.stem[0],
+    )
+
+
+def run_efficientnet_conv_norm_activation(
+    state_dict, conv_base_address, bn_base_address, reference_module, is_lite
+):
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
 
-    refence_model = torchvision.models.efficientnet_b0(pretrained=True)
-    refence_model.eval()
-
-    block = 0
-    refence_module = refence_model.features[block]
-
-    in_channels = refence_module[0].in_channels
-    out_channels = refence_module[0].out_channels
-    kernel_size = refence_module[0].kernel_size
-    stride = refence_module[0].stride
-    padding = refence_module[0].padding
-    groups = refence_module[0].groups
-    dilation = refence_module[0].dilation
-    # activation_layer = refence_module.activation_layer
+    in_channels = reference_module[0].in_channels
+    out_channels = reference_module[0].out_channels
+    kernel_size = reference_module[0].kernel_size
+    stride = reference_module[0].stride
+    padding = reference_module[0].padding
+    groups = reference_module[0].groups
+    dilation = reference_module[0].dilation
+    # activation_layer = reference_module.activation_layer
 
     logger.debug(f"in_channels {in_channels}")
     logger.debug(f"out_channels {out_channels}")
@@ -106,11 +120,12 @@ def test_efficientnet_conv_norm_activation():
 
     torch.manual_seed(0)
     test_input = torch.rand(1, 3, 224, 224)
-    pt_out = refence_module(test_input)
+    pt_out = reference_module(test_input)
 
     tt_module = TtEfficientnetConv2dNormActivation(
-        state_dict=refence_model.state_dict(),
-        base_address=f"features.{block}",
+        state_dict=state_dict,
+        conv_base_address=conv_base_address,
+        bn_base_address=bn_base_address,
         device=device,
         in_channels=in_channels,
         out_channels=out_channels,
@@ -121,6 +136,7 @@ def test_efficientnet_conv_norm_activation():
         activation_layer=True,
         dilation=dilation,
         conv_on_device=False,
+        is_lite=is_lite,
     )
 
     test_input = torch2tt_tensor(
@@ -139,3 +155,28 @@ def test_efficientnet_conv_norm_activation():
         logger.warning("test_efficientnet_conv_norm_activation Failed!")
 
     assert does_pass
+
+
+def test_efficientnet_conv_norm_activation_b0():
+    reference_model = torchvision.models.efficientnet_b0(pretrained=True)
+    reference_model.eval()
+
+    run_efficientnet_conv_norm_activation(
+        state_dict=reference_model.state_dict(),
+        conv_base_address=f"features.0.0",
+        bn_base_address=f"features.0.1",
+        reference_module=reference_model.features[0],
+        is_lite=False,
+    )
+
+
+def test_efficientnet_conv_norm_activation_lite0():
+    reference_model = reference_efficientnet_lite0()
+
+    run_efficientnet_conv_norm_activation(
+        state_dict=reference_model.state_dict(),
+        conv_base_address=f"stem.0",
+        bn_base_address=f"stem.1",
+        reference_module=reference_model.stem,
+        is_lite=True,
+    )

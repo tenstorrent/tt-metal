@@ -101,6 +101,8 @@ env pytest tests/python_api_testing/models/yolov3 -k detect_module
 env pytest tests/python_api_testing/models/yolov3 -k detection_model
 env pytest tests/python_api_testing/models/yolov3 -k upsample_module
 
-env pytest tests/python_api_testing/models/EfficientNet/tests/test_efficientnet_model.py
+env pytest tests/python_api_testing/models/EfficientNet/tests -k efficientnet_b0_model_real
+env pytest tests/python_api_testing/models/EfficientNet/tests -k efficientnet_v2_s_model_real
+env pytest tests/python_api_testing/models/EfficientNet/tests -k efficientnet_lite0_model_real
 
 env pytest tests/python_api_testing/models/nanogpt -k nanogpt_model_real

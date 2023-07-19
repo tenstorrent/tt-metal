@@ -150,7 +150,8 @@ class TtEfficientnetConv2dNormActivation(torch.nn.Module):
     def __init__(
         self,
         state_dict,
-        base_address,
+        conv_base_address,
+        bn_base_address,
         device,
         in_channels: int,
         out_channels: int,
@@ -163,12 +164,13 @@ class TtEfficientnetConv2dNormActivation(torch.nn.Module):
         activation_layer: bool = True,
         dilation: Union[int, Tuple[int, ...]] = 1,
         conv_on_device=False,
+        is_lite=False,
     ):
         super().__init__()
 
         self.conv2d = TtEfficientnetConv2d(
             state_dict=state_dict,
-            base_address=f"{base_address}.0",
+            base_address=conv_base_address,
             device=device,
             in_channels=in_channels,
             out_channels=out_channels,
@@ -180,10 +182,10 @@ class TtEfficientnetConv2dNormActivation(torch.nn.Module):
             conv_on_device=conv_on_device,
         )
 
-        bnorm_weights = state_dict[f"{base_address}.1.weight"]
-        bnrom_bias = state_dict[f"{base_address}.1.bias"]
-        running_mean = state_dict[f"{base_address}.1.running_mean"]
-        running_var = state_dict[f"{base_address}.1.running_var"]
+        bnorm_weights = state_dict[f"{bn_base_address}.weight"]
+        bnrom_bias = state_dict[f"{bn_base_address}.bias"]
+        running_mean = state_dict[f"{bn_base_address}.running_mean"]
+        running_var = state_dict[f"{bn_base_address}.running_var"]
 
         bnorm_weights = torch2tt_tensor(
             bnorm_weights, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
@@ -203,7 +205,7 @@ class TtEfficientnetConv2dNormActivation(torch.nn.Module):
             biases=bnrom_bias,
             running_mean=running_mean,
             running_var=running_var,
-            num_batches_tracked=state_dict[f"{base_address}.1.num_batches_tracked"],
+            num_batches_tracked=state_dict[f"{bn_base_address}.num_batches_tracked"],
             num_features=out_channels,
             eps=norm_layer_eps,
             momentum=norm_layer_momentum,
@@ -211,12 +213,18 @@ class TtEfficientnetConv2dNormActivation(torch.nn.Module):
 
         self.bnorm.eval()
         self.activation_layer = activation_layer
+        self.is_lite = is_lite
 
     def forward(self, x):
         x = self.conv2d(x)
         x = self.bnorm(x)
 
         if self.activation_layer is True:
-            x = fallback_ops.silu(x)
+            if self.is_lite:
+                # Lite variant has ReLU6 instead of silu
+                x = tt_lib.tensor.relu6(x)
+            else:
+                x = fallback_ops.silu(x)
+                # x = tt_lib.tensor.silu(x)
 
         return x

@@ -46,6 +46,7 @@ class TtEfficientnetFusedMBConv(torch.nn.Module):
         stochastic_depth_prob: float,
         norm_layer_eps: float = 1e-05,
         norm_layer_momentum: float = 0.1,
+        is_lite: bool = False,
     ) -> None:
         super().__init__()
 
@@ -64,7 +65,8 @@ class TtEfficientnetFusedMBConv(torch.nn.Module):
             layers.append(
                 TtEfficientnetConv2dNormActivation(
                     state_dict=state_dict,
-                    base_address=f"{base_address}.block.{len(layers)}",
+                    conv_base_address=f"{base_address}.block.{len(layers)}.0",
+                    bn_base_address=f"{base_address}.block.{len(layers)}.1",
                     device=device,
                     in_channels=cnf.input_channels,
                     out_channels=expanded_channels,
@@ -80,7 +82,8 @@ class TtEfficientnetFusedMBConv(torch.nn.Module):
             layers.append(
                 TtEfficientnetConv2dNormActivation(
                     state_dict=state_dict,
-                    base_address=f"{base_address}.block.{len(layers)}",
+                    conv_base_address=f"{base_address}.block.{len(layers)}.0",
+                    bn_base_address=f"{base_address}.block.{len(layers)}.1",
                     device=device,
                     in_channels=expanded_channels,
                     out_channels=cnf.out_channels,
@@ -94,7 +97,8 @@ class TtEfficientnetFusedMBConv(torch.nn.Module):
             layers.append(
                 TtEfficientnetConv2dNormActivation(
                     state_dict=state_dict,
-                    base_address=f"{base_address}.block.{len(layers)}",
+                    conv_base_address=f"{base_address}.block.{len(layers)}.0",
+                    bn_base_address=f"{base_address}.block.{len(layers)}.1",
                     device=device,
                     in_channels=cnf.input_channels,
                     out_channels=cnf.out_channels,

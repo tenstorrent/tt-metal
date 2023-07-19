@@ -23,6 +23,9 @@ from tests.python_api_testing.models.EfficientNet.tt.efficientnet_fused_mbconv i
     TtEfficientnetFusedMBConv,
     FusedMBConvConfig,
 )
+from tests.python_api_testing.models.EfficientNet.reference.efficientnet_lite import (
+    build_efficientnet_lite,
+)
 
 
 def flatten_via_reshape(x, start_dim):
@@ -40,6 +43,7 @@ class TtEfficientNet(torch.nn.Module):
         norm_layer_eps: float = 1e-05,
         norm_layer_momentum: float = 0.1,
         last_channel: Optional[int] = None,
+        is_lite=False,
     ):
         """
         EfficientNet V1 and V2 main class
@@ -72,7 +76,8 @@ class TtEfficientNet(torch.nn.Module):
         layers.append(
             TtEfficientnetConv2dNormActivation(
                 state_dict=state_dict,
-                base_address=f"features.{len(layers)}",
+                conv_base_address=f"stem.0" if is_lite else f"features.{len(layers)}.0",
+                bn_base_address=f"stem.1" if is_lite else f"features.{len(layers)}.1",
                 device=device,
                 in_channels=3,
                 out_channels=firstconv_output_channels,
@@ -81,6 +86,7 @@ class TtEfficientNet(torch.nn.Module):
                 norm_layer_eps=norm_layer_eps,
                 norm_layer_momentum=norm_layer_momentum,
                 activation_layer=True,
+                is_lite=is_lite,
             )
         )
 
@@ -108,12 +114,15 @@ class TtEfficientNet(torch.nn.Module):
                 stage.append(
                     block_cnf.block(
                         state_dict=state_dict,
-                        base_address=f"features.{len(layers)}.{len(stage)}",
+                        base_address=f"blocks.{len(layers)-1}.{len(stage)}"
+                        if is_lite
+                        else f"features.{len(layers)}.{len(stage)}",
                         device=device,
                         cnf=block_cnf,
                         stochastic_depth_prob=sd_prob,
                         norm_layer_eps=norm_layer_eps,
                         norm_layer_momentum=norm_layer_momentum,
+                        is_lite=is_lite,
                     )
                 )
 
@@ -123,14 +132,21 @@ class TtEfficientNet(torch.nn.Module):
 
         # building last several layers
         lastconv_input_channels = inverted_residual_setting[-1].out_channels
-        lastconv_output_channels = (
-            last_channel if last_channel is not None else 4 * lastconv_input_channels
-        )
+
+        if is_lite:
+            lastconv_output_channels = 1280
+        else:
+            lastconv_output_channels = (
+                last_channel
+                if last_channel is not None
+                else 4 * lastconv_input_channels
+            )
 
         layers.append(
             TtEfficientnetConv2dNormActivation(
                 state_dict=state_dict,
-                base_address=f"features.{len(layers)}",
+                conv_base_address=f"head.0" if is_lite else f"features.{len(layers)}.0",
+                bn_base_address=f"head.1" if is_lite else f"features.{len(layers)}.1",
                 device=device,
                 in_channels=lastconv_input_channels,
                 out_channels=lastconv_output_channels,
@@ -138,6 +154,7 @@ class TtEfficientNet(torch.nn.Module):
                 norm_layer_eps=norm_layer_eps,
                 norm_layer_momentum=norm_layer_momentum,
                 activation_layer=True,
+                is_lite=is_lite,
             )
         )
 
@@ -145,14 +162,16 @@ class TtEfficientNet(torch.nn.Module):
         self.avgpool = fallback_ops.AdaptiveAvgPool2d(1)
 
         self.classifier_weight = torch2tt_tensor(
-            state_dict[f"classifier.1.weight"],
+            state_dict["fc.weight" if is_lite else "classifier.1.weight"],
             device,
             tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
         )
 
-        if "classifier.1.bias" in state_dict:
+        bias_key = "fc.bias" if is_lite else "classifier.1.bias"
+
+        if bias_key in state_dict:
             self.classifier_bias = torch2tt_tensor(
-                state_dict[f"classifier.1.bias"],
+                state_dict[bias_key],
                 device,
                 tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
             )
@@ -185,6 +204,7 @@ def _efficientnet(
     last_channel: Optional[int],
     norm_layer_eps: float = 1e-05,
     norm_layer_momentum: float = 0.1,
+    is_lite=False,
 ) -> TtEfficientNet:
     model = TtEfficientNet(
         state_dict=state_dict,
@@ -194,6 +214,7 @@ def _efficientnet(
         norm_layer_eps=norm_layer_eps,
         norm_layer_momentum=norm_layer_momentum,
         last_channel=last_channel,
+        is_lite=is_lite,
     )
 
     return model
@@ -205,21 +226,32 @@ def _efficientnet_conf(
 ) -> Tuple[Sequence[Union[MBConvConfig, FusedMBConvConfig]], Optional[int]]:
     inverted_residual_setting: Sequence[Union[MBConvConfig, FusedMBConvConfig]]
 
-    if arch.startswith("efficientnet_b"):
+    if arch.startswith("efficientnet_b") or arch.startswith("efficientnet_lite"):
+        is_lite = arch.startswith("efficientnet_lite")
         bneck_conf = partial(
             MBConvConfig,
             width_mult=kwargs.pop("width_mult"),
             depth_mult=kwargs.pop("depth_mult"),
         )
         inverted_residual_setting = [
-            bneck_conf(1, 3, 1, 32, 16, 1),
-            bneck_conf(6, 3, 2, 16, 24, 2),
-            bneck_conf(6, 5, 2, 24, 40, 2),
-            bneck_conf(6, 3, 2, 40, 80, 3),
-            bneck_conf(6, 5, 1, 80, 112, 3),
-            bneck_conf(6, 5, 2, 112, 192, 4),
-            bneck_conf(6, 3, 1, 192, 320, 1),
+            bneck_conf(
+                1,
+                3,
+                1,
+                32,
+                16,
+                1,
+                False if is_lite else True,
+                False if is_lite else True,
+            ),
+            bneck_conf(6, 3, 2, 16, 24, 2, True, True),
+            bneck_conf(6, 5, 2, 24, 40, 2, True, True),
+            bneck_conf(6, 3, 2, 40, 80, 3, True, True),
+            bneck_conf(6, 5, 1, 80, 112, 3, True, True),
+            bneck_conf(6, 5, 2, 112, 192, 4, True, True),
+            bneck_conf(6, 3, 1, 192, 320, 1, False if is_lite else True, True),
         ]
+
         last_channel = None
     elif arch.startswith("efficientnet_v2_s"):
         inverted_residual_setting = [
@@ -264,15 +296,15 @@ def efficientnet_b0(device) -> TtEfficientNet:
     Neural Networks <https://arxiv.org/abs/1905.11946>`_ paper.
     """
 
-    refence_model = torchvision.models.efficientnet_b0(pretrained=True)
-    refence_model.eval()
+    reference_model = torchvision.models.efficientnet_b0(pretrained=True)
+    reference_model.eval()
 
     inverted_residual_setting, last_channel = _efficientnet_conf(
         "efficientnet_b0", width_mult=1.0, depth_mult=1.0
     )
 
     return _efficientnet(
-        state_dict=refence_model.state_dict(),
+        state_dict=reference_model.state_dict(),
         device=device,
         inverted_residual_setting=inverted_residual_setting,
         dropout=0.2,
@@ -285,15 +317,15 @@ def efficientnet_b1(device) -> TtEfficientNet:
     Neural Networks <https://arxiv.org/abs/1905.11946>`_ paper.
     """
 
-    refence_model = torchvision.models.efficientnet_b1(pretrained=True)
-    refence_model.eval()
+    reference_model = torchvision.models.efficientnet_b1(pretrained=True)
+    reference_model.eval()
 
     inverted_residual_setting, last_channel = _efficientnet_conf(
         "efficientnet_b1", width_mult=1.0, depth_mult=1.1
     )
 
     return _efficientnet(
-        state_dict=refence_model.state_dict(),
+        state_dict=reference_model.state_dict(),
         device=device,
         inverted_residual_setting=inverted_residual_setting,
         dropout=0.2,
@@ -306,15 +338,15 @@ def efficientnet_b2(device) -> TtEfficientNet:
     Neural Networks <https://arxiv.org/abs/1905.11946>`_ paper.
     """
 
-    refence_model = torchvision.models.efficientnet_b2(pretrained=True)
-    refence_model.eval()
+    reference_model = torchvision.models.efficientnet_b2(pretrained=True)
+    reference_model.eval()
 
     inverted_residual_setting, last_channel = _efficientnet_conf(
         "efficientnet_b2", width_mult=1.1, depth_mult=1.2
     )
 
     return _efficientnet(
-        state_dict=refence_model.state_dict(),
+        state_dict=reference_model.state_dict(),
         device=device,
         inverted_residual_setting=inverted_residual_setting,
         dropout=0.3,
@@ -327,15 +359,15 @@ def efficientnet_b3(device) -> TtEfficientNet:
     Neural Networks <https://arxiv.org/abs/1905.11946>`_ paper.
     """
 
-    refence_model = torchvision.models.efficientnet_b3(pretrained=True)
-    refence_model.eval()
+    reference_model = torchvision.models.efficientnet_b3(pretrained=True)
+    reference_model.eval()
 
     inverted_residual_setting, last_channel = _efficientnet_conf(
         "efficientnet_b3", width_mult=1.2, depth_mult=1.4
     )
 
     return _efficientnet(
-        state_dict=refence_model.state_dict(),
+        state_dict=reference_model.state_dict(),
         device=device,
         inverted_residual_setting=inverted_residual_setting,
         dropout=0.3,
@@ -348,15 +380,15 @@ def efficientnet_b4(device) -> TtEfficientNet:
     Neural Networks <https://arxiv.org/abs/1905.11946>`_ paper.
     """
 
-    refence_model = torchvision.models.efficientnet_b4(pretrained=True)
-    refence_model.eval()
+    reference_model = torchvision.models.efficientnet_b4(pretrained=True)
+    reference_model.eval()
 
     inverted_residual_setting, last_channel = _efficientnet_conf(
         "efficientnet_b4", width_mult=1.4, depth_mult=1.8
     )
 
     return _efficientnet(
-        state_dict=refence_model.state_dict(),
+        state_dict=reference_model.state_dict(),
         device=device,
         inverted_residual_setting=inverted_residual_setting,
         dropout=0.4,
@@ -369,15 +401,15 @@ def efficientnet_b5(device) -> TtEfficientNet:
     Neural Networks <https://arxiv.org/abs/1905.11946>`_ paper.
     """
 
-    refence_model = torchvision.models.efficientnet_b5(pretrained=True)
-    refence_model.eval()
+    reference_model = torchvision.models.efficientnet_b5(pretrained=True)
+    reference_model.eval()
 
     inverted_residual_setting, last_channel = _efficientnet_conf(
         "efficientnet_b5", width_mult=1.6, depth_mult=2.2
     )
 
     return _efficientnet(
-        state_dict=refence_model.state_dict(),
+        state_dict=reference_model.state_dict(),
         device=device,
         inverted_residual_setting=inverted_residual_setting,
         dropout=0.4,
@@ -392,15 +424,15 @@ def efficientnet_b6(device) -> TtEfficientNet:
     Neural Networks <https://arxiv.org/abs/1905.11946>`_ paper.
     """
 
-    refence_model = torchvision.models.efficientnet_b6(pretrained=True)
-    refence_model.eval()
+    reference_model = torchvision.models.efficientnet_b6(pretrained=True)
+    reference_model.eval()
 
     inverted_residual_setting, last_channel = _efficientnet_conf(
         "efficientnet_b6", width_mult=1.8, depth_mult=2.6
     )
 
     return _efficientnet(
-        state_dict=refence_model.state_dict(),
+        state_dict=reference_model.state_dict(),
         device=device,
         inverted_residual_setting=inverted_residual_setting,
         dropout=0.5,
@@ -415,15 +447,15 @@ def efficientnet_b7(device) -> TtEfficientNet:
     Neural Networks <https://arxiv.org/abs/1905.11946>`_ paper.
     """
 
-    refence_model = torchvision.models.efficientnet_b7(pretrained=True)
-    refence_model.eval()
+    reference_model = torchvision.models.efficientnet_b7(pretrained=True)
+    reference_model.eval()
 
     inverted_residual_setting, last_channel = _efficientnet_conf(
         "efficientnet_b7", width_mult=2.0, depth_mult=3.1
     )
 
     return _efficientnet(
-        state_dict=refence_model.state_dict(),
+        state_dict=reference_model.state_dict(),
         device=device,
         inverted_residual_setting=inverted_residual_setting,
         dropout=0.5,
@@ -439,13 +471,13 @@ def efficientnet_v2_s(device) -> TtEfficientNet:
     `EfficientNetV2: Smaller Models and Faster Training <https://arxiv.org/abs/2104.00298>`_.
     """
 
-    refence_model = torchvision.models.efficientnet_v2_s(pretrained=True)
-    refence_model.eval()
+    reference_model = torchvision.models.efficientnet_v2_s(pretrained=True)
+    reference_model.eval()
 
     inverted_residual_setting, last_channel = _efficientnet_conf("efficientnet_v2_s")
 
     return _efficientnet(
-        state_dict=refence_model.state_dict(),
+        state_dict=reference_model.state_dict(),
         device=device,
         inverted_residual_setting=inverted_residual_setting,
         dropout=0.2,
@@ -460,13 +492,13 @@ def efficientnet_v2_m(device) -> TtEfficientNet:
     `EfficientNetV2: Smaller Models and Faster Training <https://arxiv.org/abs/2104.00298>`_.
     """
 
-    refence_model = torchvision.models.efficientnet_v2_m(pretrained=True)
-    refence_model.eval()
+    reference_model = torchvision.models.efficientnet_v2_m(pretrained=True)
+    reference_model.eval()
 
     inverted_residual_setting, last_channel = _efficientnet_conf("efficientnet_v2_m")
 
     return _efficientnet(
-        state_dict=refence_model.state_dict(),
+        state_dict=reference_model.state_dict(),
         device=device,
         inverted_residual_setting=inverted_residual_setting,
         dropout=0.3,
@@ -481,16 +513,196 @@ def efficientnet_v2_l(device) -> TtEfficientNet:
     `EfficientNetV2: Smaller Models and Faster Training <https://arxiv.org/abs/2104.00298>`_.
     """
 
-    refence_model = torchvision.models.efficientnet_v2_l(pretrained=True)
-    refence_model.eval()
+    reference_model = torchvision.models.efficientnet_v2_l(pretrained=True)
+    reference_model.eval()
 
     inverted_residual_setting, last_channel = _efficientnet_conf("efficientnet_v2_l")
 
     return _efficientnet(
-        state_dict=refence_model.state_dict(),
+        state_dict=reference_model.state_dict(),
         device=device,
         inverted_residual_setting=inverted_residual_setting,
         dropout=0.4,
         last_channel=last_channel,
         norm_layer_eps=1e-03,
+    )
+
+
+def reference_efficientnet_lite0(pretrained: bool = True) -> torch.nn.Module:
+    reference_model = build_efficientnet_lite("efficientnet_lite0", 1000)
+    reference_model.load_pretrain(
+        "/mnt/MLPerf/tt_dnn-models/EfficientNet/models/efficientnet_lite0.pth"
+    )
+    reference_model.eval()
+
+    return reference_model
+
+
+def reference_efficientnet_lite1(pretrained: bool = True) -> torch.nn.Module:
+    reference_model = build_efficientnet_lite("efficientnet_lite1", 1000)
+    reference_model.load_pretrain(
+        "/mnt/MLPerf/tt_dnn-models/EfficientNet/models/efficientnet_lite1.pth"
+    )
+    reference_model.eval()
+
+    return reference_model
+
+
+def reference_efficientnet_lite2(pretrained: bool = True) -> torch.nn.Module:
+    reference_model = build_efficientnet_lite("efficientnet_lite2", 1000)
+    reference_model.load_pretrain(
+        "/mnt/MLPerf/tt_dnn-models/EfficientNet/models/efficientnet_lite2.pth"
+    )
+    reference_model.eval()
+
+    return reference_model
+
+
+def reference_efficientnet_lite3(pretrained: bool = True) -> torch.nn.Module:
+    reference_model = build_efficientnet_lite("efficientnet_lite3", 1000)
+    reference_model.load_pretrain(
+        "/mnt/MLPerf/tt_dnn-models/EfficientNet/models/efficientnet_lite3.pth"
+    )
+    reference_model.eval()
+
+    return reference_model
+
+
+def reference_efficientnet_lite4(pretrained: bool = True) -> torch.nn.Module:
+    reference_model = build_efficientnet_lite("efficientnet_lite4", 1000)
+    reference_model.load_pretrain(
+        "/mnt/MLPerf/tt_dnn-models/EfficientNet/models/efficientnet_lite4.pth"
+    )
+    reference_model.eval()
+
+    return reference_model
+
+
+# efficientnet_lite_params = {
+#     # width_coefficient, depth_coefficient, image_size, dropout_rate
+#     "efficientnet_lite0": [1.0, 1.0, 224, 0.2],
+def efficientnet_lite0(device) -> TtEfficientNet:
+    """
+    Constructs an EfficientNetV2-L architecture from
+    `EfficientNetV2: Smaller Models and Faster Training <https://arxiv.org/abs/2104.00298>`_.
+    """
+
+    reference_model = reference_efficientnet_lite0()
+    inverted_residual_setting, last_channel = _efficientnet_conf(
+        "efficientnet_lite0", width_mult=1.0, depth_mult=1.0
+    )
+
+    return _efficientnet(
+        state_dict=reference_model.state_dict(),
+        device=device,
+        inverted_residual_setting=inverted_residual_setting,
+        dropout=0.2,
+        last_channel=last_channel,
+        norm_layer_eps=1e-3,
+        norm_layer_momentum=0.01,
+        is_lite=True,
+    )
+
+
+# efficientnet_lite_params = {
+#     # width_coefficient, depth_coefficient, image_size, dropout_rate
+#     "efficientnet_lite1": [1.0, 1.1, 240, 0.2],
+def efficientnet_lite1(device) -> TtEfficientNet:
+    """
+    Constructs an EfficientNetV2-L architecture from
+    `EfficientNetV2: Smaller Models and Faster Training <https://arxiv.org/abs/2104.00298>`_.
+    """
+
+    reference_model = reference_efficientnet_lite1()
+    inverted_residual_setting, last_channel = _efficientnet_conf(
+        "efficientnet_lite1", width_mult=1.0, depth_mult=1.1
+    )
+
+    return _efficientnet(
+        state_dict=reference_model.state_dict(),
+        device=device,
+        inverted_residual_setting=inverted_residual_setting,
+        dropout=0.2,
+        last_channel=last_channel,
+        norm_layer_eps=1e-3,
+        norm_layer_momentum=0.01,
+        is_lite=True,
+    )
+
+
+# efficientnet_lite_params = {
+#     # width_coefficient, depth_coefficient, image_size, dropout_rate
+#     "efficientnet_lite2": [1.1, 1.2, 260, 0.3],
+def efficientnet_lite2(device) -> TtEfficientNet:
+    """
+    Constructs an EfficientNetV2-L architecture from
+    `EfficientNetV2: Smaller Models and Faster Training <https://arxiv.org/abs/2104.00298>`_.
+    """
+
+    reference_model = reference_efficientnet_lite2()
+    inverted_residual_setting, last_channel = _efficientnet_conf(
+        "efficientnet_lite2", width_mult=1.1, depth_mult=1.2
+    )
+
+    return _efficientnet(
+        state_dict=reference_model.state_dict(),
+        device=device,
+        inverted_residual_setting=inverted_residual_setting,
+        dropout=0.3,
+        last_channel=last_channel,
+        norm_layer_eps=1e-3,
+        norm_layer_momentum=0.01,
+        is_lite=True,
+    )
+
+
+# efficientnet_lite_params = {
+#     # width_coefficient, depth_coefficient, image_size, dropout_rate
+#     "efficientnet_lite3": [1.2, 1.4, 280, 0.3],
+def efficientnet_lite3(device) -> TtEfficientNet:
+    """
+    Constructs an EfficientNetV2-L architecture from
+    `EfficientNetV2: Smaller Models and Faster Training <https://arxiv.org/abs/2104.00298>`_.
+    """
+
+    reference_model = reference_efficientnet_lite3()
+    inverted_residual_setting, last_channel = _efficientnet_conf(
+        "efficientnet_lite3", width_mult=1.2, depth_mult=1.4
+    )
+
+    return _efficientnet(
+        state_dict=reference_model.state_dict(),
+        device=device,
+        inverted_residual_setting=inverted_residual_setting,
+        dropout=0.3,
+        last_channel=last_channel,
+        norm_layer_eps=1e-3,
+        norm_layer_momentum=0.01,
+        is_lite=True,
+    )
+
+
+# efficientnet_lite_params = {
+#     # width_coefficient, depth_coefficient, image_size, dropout_rate
+#     "efficientnet_lite4": [1.4, 1.8, 300, 0.3],
+def efficientnet_lite4(device) -> TtEfficientNet:
+    """
+    Constructs an EfficientNetV2-L architecture from
+    `EfficientNetV2: Smaller Models and Faster Training <https://arxiv.org/abs/2104.00298>`_.
+    """
+
+    reference_model = reference_efficientnet_lite4()
+    inverted_residual_setting, last_channel = _efficientnet_conf(
+        "efficientnet_lite4", width_mult=1.4, depth_mult=1.8
+    )
+
+    return _efficientnet(
+        state_dict=reference_model.state_dict(),
+        device=device,
+        inverted_residual_setting=inverted_residual_setting,
+        dropout=0.3,
+        last_channel=last_channel,
+        norm_layer_eps=1e-3,
+        norm_layer_momentum=0.01,
+        is_lite=True,
     )
