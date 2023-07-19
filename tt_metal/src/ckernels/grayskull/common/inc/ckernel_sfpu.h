@@ -254,6 +254,19 @@ void calculate_cube(uint16_t exp_base_scale_factor = 0)
 }
 */
 
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_expm1()
+{
+    // SFPU microcode
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        vFloat v = dst_reg[0];
+        v = calculate_exponential_body<APPROXIMATION_MODE,true>(v);
+        dst_reg[0] = v - 1.0f;
+        dst_reg++;
+    }
+}
+
 template <bool APPROXIMATION_MODE, bool ZERO_NEGATIVE, bool SCALE_EN, int ITERATIONS>
 inline void calculate_exponential(int16_t exp_base_scale_factor = 0)
 {
@@ -1539,6 +1552,9 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
     }
     else if constexpr (operation == SfpuType::heaviside) {
         calculate_heaviside<APPROXIMATION_MODE, ITERATIONS>(param0);
+    }
+    else if constexpr (operation == SfpuType::expm1) {
+        calculate_expm1<APPROXIMATION_MODE, ITERATIONS>();
     }
 }
 

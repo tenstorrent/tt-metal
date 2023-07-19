@@ -1315,6 +1315,20 @@ inline void relu_max(uint uint_threshold)
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_expm1()
+{
+    // SFPU microcode
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        vFloat v = dst_reg[0];
+        v = calculate_exponential_body<APPROXIMATION_MODE>(v);
+        dst_reg[0] = v - 1.0f;
+        dst_reg++;
+    }
+}
+
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void relu_min(uint uint_threshold)
 {
     vFloat threshold = Converter::to_float(uint_threshold);
@@ -1536,6 +1550,9 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
     }
     else if constexpr (operation == SfpuType::heaviside) {
         calculate_heaviside<APPROXIMATION_MODE, ITERATIONS>(param0);
+    }
+    else if constexpr (operation == SfpuType::expm1) {
+        calculate_expm1<APPROXIMATION_MODE, ITERATIONS>();
     }
 }
 

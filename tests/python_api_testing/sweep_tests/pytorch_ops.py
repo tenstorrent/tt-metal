@@ -210,6 +210,10 @@ def exp2(x, *args, **kwargs):
     return torch.exp2(x)
 
 
+def expm1(x, *args, **kwargs):
+    return torch.expm1(x)
+
+
 def sqrt(x, *args, **kwargs):
     return torch.sqrt(x)
 

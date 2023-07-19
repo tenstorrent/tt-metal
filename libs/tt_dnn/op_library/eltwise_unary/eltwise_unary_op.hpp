@@ -12,9 +12,10 @@ namespace tt_metal {
 
 struct UnaryOpType {
     enum Enum { EXP = 0, RECIP = 1, GELU = 2, RELU = 3, SQRT = 4, SIGMOID = 5, LOG = 6, TANH = 7, LOG2 = 8, LOG10 = 9, SIN = 10, COS = 11,
-                ABS=12, SIGN=13, SQUARE=14, EQZ = 15, NEZ = 16, GTZ = 17, LTZ = 18, GEZ = 19, LEZ = 20, RELU_MAX = 21, RELU_MIN = 22, POWER = 23, LEAKY_RELU = 24, ELU = 25, EXP2 = 26, HEAVISIDE = 27};
+                ABS=12, SIGN=13, SQUARE=14, EQZ = 15, NEZ = 16, GTZ = 17, LTZ = 18, GEZ = 19, LEZ = 20, RELU_MAX = 21, RELU_MIN = 22, POWER = 23, LEAKY_RELU = 24, ELU = 25, EXP2 = 26, HEAVISIDE = 27,
+                EXPM1 = 28};
     static const vector<Enum> all() { return { EXP, RECIP, GELU, RELU, SQRT, SIGMOID, LOG, TANH, LOG2, LOG10, SIN, COS, ABS, SIGN, SQUARE,
-					       EQZ , NEZ , GTZ , LTZ , GEZ , LEZ , RELU_MAX , RELU_MIN, POWER, LEAKY_RELU, ELU, EXP2, HEAVISIDE}; }
+					       EQZ , NEZ , GTZ , LTZ , GEZ , LEZ , RELU_MAX , RELU_MIN, POWER, LEAKY_RELU, ELU, EXP2, HEAVISIDE, EXPM1}; }
 };
 
 template <typename T>
@@ -67,6 +68,7 @@ inline Tensor tanh(const Tensor &input_tensor) { return operation::run_with_auto
 inline Tensor log2(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::LOG2}, {input_tensor}).at(0); }
 inline Tensor log10(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::LOG10}, {input_tensor}).at(0); }
 inline Tensor exp2(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::EXP2}, {input_tensor}).at(0); }
+inline Tensor expm1(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::EXPM1}, {input_tensor}).at(0); }
 
 
 inline Tensor sin(const Tensor &input_tensor) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::SIN}, {input_tensor}).at(0); }

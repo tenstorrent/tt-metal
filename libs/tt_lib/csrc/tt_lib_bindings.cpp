@@ -1792,6 +1792,21 @@ void TensorModule(py::module &m_tensor) {
         +----------+---------------------------+-----------+------------------------------+----------+
     )doc");
 
+    m_tensor.def("expm1", &expm1, R"doc(
+        Returns a new tensor with the expm1 of the elements of the input tensor ``arg0``.
+        expm1 = exp(x) - 1
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+----------------------------+-----------+------------------------------+----------+
+        | Argument | Description                | Data type | Valid range                  | Required |
+        +==========+============================+===========+==============================+==========+
+        | arg0     | Tensor expm1 is applied to | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+----------------------------+-----------+------------------------------+----------+
+    )doc");
+
     m_tensor.def("swish", swish, R"doc(
         Returns tensor with the swish all of elements of the input tensor ``arg0``.
 

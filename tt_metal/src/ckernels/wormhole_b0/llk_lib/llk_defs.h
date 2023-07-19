@@ -114,6 +114,7 @@ enum SfpuType
   elu,
   exp2,
   heaviside,
+  expm1,
   unused
 };
 

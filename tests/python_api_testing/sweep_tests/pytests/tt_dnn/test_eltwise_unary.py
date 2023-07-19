@@ -383,3 +383,18 @@ class TestEltwiseUnary:
             comparison_func,
             pcie_slot,
         )
+
+    def test_run_eltwise_expm1(self, input_shapes, pcie_slot, function_level_defaults):
+        datagen_func = [
+            generation_funcs.gen_func_with_cast(
+                partial(generation_funcs.gen_rand, low=-10, high=10), torch.bfloat16
+            )
+        ]
+        comparison_func = comparison_funcs.comp_pcc
+        run_single_pytorch_test(
+            f"eltwise-expm1",
+            input_shapes,
+            datagen_func,
+            comparison_func,
+            pcie_slot,
+        )

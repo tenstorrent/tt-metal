@@ -168,6 +168,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_exp2,
         "pytorch_op": pytorch_ops.exp2,
     },
+    "eltwise-expm1": {
+        "tt_lib_op": tt_lib_ops.eltwise_expm1,
+        "pytorch_op": pytorch_ops.expm1,
+    },
     "eltwise-recip": {
         "tt_lib_op": tt_lib_ops.eltwise_recip,
         "pytorch_op": pytorch_ops.recip,

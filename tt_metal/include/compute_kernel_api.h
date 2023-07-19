@@ -1118,4 +1118,13 @@ ALWI void heaviside_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_heaviside_init<APPROX>() ));
 }
 
+//expm1 : (exp(x) - 1)
+ALWI void expm1_tile(uint32_t idst) {
+    MATH(( llk_math_eltwise_unary_sfpu_expm1<true, SyncHalf>(idst) ));
+}
+
+ALWI void expm1_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_expm1_init<true>() ));
+}
+
 } // namespace ckernel
