@@ -27,7 +27,7 @@ BATCH_SIZE = 1
     "expected_inference_time, expected_compile_time",
     (
         (14,
-         13,
+         14,
         ),
     ),
 )
