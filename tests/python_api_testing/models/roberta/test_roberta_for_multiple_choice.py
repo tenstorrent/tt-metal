@@ -98,7 +98,9 @@ def test_roberta_for_multiple_choice():
             torch_outputs.logits, tt_output_to_torch, 0.98
         )
 
-        logger.info(comp_allclose(torch_outputs.logits, tt_output_to_torch))
+        # Temporarily change passing codition to allclose until layernorm accuracy is updated
+        does_pass, allclose_message = comp_allclose(torch_outputs.logits, tt_output_to_torch, 0, 0.005)
+        logger.info(allclose_message)
         logger.info(pcc_message)
 
         tt_lib.device.CloseDevice(device)

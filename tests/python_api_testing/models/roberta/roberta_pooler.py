@@ -17,7 +17,8 @@ from python_api_testing.models.roberta.roberta_common import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
-
+from models.helper_funcs import Linear as TTLinear
+from models.utility_functions import pad_by_zero
 import tt_lib
 from tt_lib.fallback_ops import fallback_ops
 
@@ -34,11 +35,17 @@ class TtRobertaPooler(nn.Module):
         super().__init__()
         self.device = device
 
-        self.dense_weight = torch2tt_tensor(
+        self.dense_weight = pad_by_zero(
             state_dict[f"{base_address}.dense.weight"], self.device
-        )
-        self.dense_bias = torch2tt_tensor(
+        )[0]
+        self.dense_bias = pad_by_zero(
             state_dict[f"{base_address}.dense.bias"], self.device
+        )[0]
+        self.dense_linear = TTLinear(
+            self.dense_weight.shape()[-1],
+            self.dense_weight.shape()[-2],
+            self.dense_weight,
+            self.dense_bias,
         )
 
     def linear(self, x, weight, bias):
@@ -59,8 +66,6 @@ class TtRobertaPooler(nn.Module):
         first_token_tensor = hidden_states_to_torch[:, 0]
         tt_first_token_tensor = torch2tt_tensor(first_token_tensor, self.device)
 
-        pooled_output = self.linear(
-            tt_first_token_tensor, self.dense_weight, self.dense_bias
-        )
+        pooled_output = self.dense_linear(tt_first_token_tensor)
         pooled_output = tt_lib.tensor.tanh(pooled_output)
         return pooled_output

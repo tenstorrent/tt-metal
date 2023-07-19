@@ -9,7 +9,7 @@ from tt_lib.fused_ops.softmax import softmax as tt_softmax
 
 import python_api_testing.models.bloom.baddbmm as baddbmm
 from typing import Optional, Tuple, Union
-
+from models.utility_functions import pad_by_zero
 
 def split_heads(
     fused_qkv: torch.Tensor, num_heads, head_dim
@@ -211,19 +211,19 @@ class TtBloomAttention(torch.nn.Module):
                 f" {self.num_heads})."
             )
 
-        self.weight_q = bloom_utils.torch2tt_tensor(
+        self.weight_q = pad_by_zero(
             state_dict[f"{base_address}.query_key_value.weight"], device
-        )
-        self.bias_q = bloom_utils.torch2tt_tensor(
+        )[0]
+        self.bias_q = pad_by_zero(
             state_dict[f"{base_address}.query_key_value.bias"], device
-        )
+        )[0]
 
-        self.weight_d = bloom_utils.torch2tt_tensor(
+        self.weight_d = pad_by_zero(
             state_dict[f"{base_address}.dense.weight"], device
-        )
-        self.bias_d = bloom_utils.torch2tt_tensor(
+        )[0]
+        self.bias_d = pad_by_zero(
             state_dict[f"{base_address}.dense.bias"], device
-        )
+        )[0]
 
         # Transpose the weights
         self.weight_q = tt_lib.tensor.transpose(self.weight_q)

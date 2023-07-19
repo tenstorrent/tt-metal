@@ -4,7 +4,7 @@ from torch.nn import functional as F
 import tt_lib
 import python_api_testing.models.bloom.bloom_utils as bloom_utils
 import python_api_testing.models.bloom.bloom_gelu_forward as bloom_gelu_forward
-
+from models.utility_functions import pad_by_zero
 
 # class BloomMLP(nn.Module):
 #     def __init__(self, config: BloomConfig):
@@ -63,12 +63,12 @@ class TtBloomMLP(torch.nn.Module):
         )
 
         # Load biases
-        self.tt_bias_mlp_h4h = bloom_utils.torch2tt_tensor(
+        self.tt_bias_mlp_h4h = pad_by_zero(
             state_dict[f"{base_address}.dense_h_to_4h.bias"], device
-        )
-        self.tt_bias_mlp_4hh = bloom_utils.torch2tt_tensor(
+        )[0]
+        self.tt_bias_mlp_4hh = pad_by_zero(
             state_dict[f"{base_address}.dense_4h_to_h.bias"], device
-        )
+        )[0]
 
         # self.gelu_impl = bloom_gelu_forward.tt_bloom_gelu_forward
         # self.gelu_impl = bloom_gelu_forward.bloom_gelu_forward

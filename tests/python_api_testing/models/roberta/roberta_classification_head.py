@@ -18,7 +18,8 @@ from python_api_testing.models.roberta.roberta_common import (
     tt2torch_tensor,
 )
 from python_api_testing.models.roberta.roberta_model import TtRobertaModel
-
+from models.helper_funcs import Linear as TTLinear
+from models.utility_functions import pad_by_zero
 import tt_lib
 from tt_lib.fallback_ops import fallback_ops
 
@@ -30,12 +31,12 @@ class TtRobertaClassificationHead(nn.Module):
         super().__init__()
         self.device = device
 
-        self.dense_weight = torch2tt_tensor(
+        self.dense_weight = pad_by_zero(
             state_dict[f"{base_address}.dense.weight"], self.device
-        )
-        self.dense_bias = torch2tt_tensor(
+        )[0]
+        self.dense_bias = pad_by_zero(
             state_dict[f"{base_address}.dense.bias"], self.device
-        )
+        )[0]
 
         # TODO: Add when supporting training
         # classifier_dropout = (
@@ -48,6 +49,18 @@ class TtRobertaClassificationHead(nn.Module):
         )
         self.out_proj_bias = torch2tt_tensor(
             state_dict[f"{base_address}.out_proj.bias"], self.device
+        )
+        self.dense_linear = TTLinear(
+            self.dense_weight.shape()[-1],
+            self.dense_weight.shape()[-2],
+            self.dense_weight,
+            self.dense_bias,
+        )
+        self.out_proj_linear = TTLinear(
+            self.out_proj_weight.shape()[-1],
+            self.out_proj_weight.shape()[-2],
+            self.out_proj_weight,
+            self.out_proj_bias,
         )
 
     def linear(self, x, weight, bias):
@@ -64,11 +77,11 @@ class TtRobertaClassificationHead(nn.Module):
 
         x = torch2tt_tensor(torch_x, self.device)
         # x = self.dropout(x)
-        x = self.linear(x, self.dense_weight, self.dense_bias)
+        x = self.dense_linear(x)
         x = tt_lib.tensor.tanh(x)
         # x = torch.tanh(x)
 
         # x = self.dropout(x)
-        x = self.linear(x, self.out_proj_weight, self.out_proj_bias)
+        x = self.out_proj_linear(x)
 
         return x

@@ -1,10 +1,6 @@
 import torch
 import tt_lib
-from python_api_testing.models.utility_functions_new import (
-    tt2torch_tensor,
-    torch2tt_tensor,
-)
-
+from models.utility_functions import pad_by_zero
 
 # class T5LayerNorm(nn.Module):
 #     def __init__(self, hidden_size, eps=1e-6):
@@ -41,48 +37,10 @@ class TtT5LayerNorm(torch.nn.Module):
         self.variance_epsilon = config["layer_norm_epsilon"]
         self.device = device
 
-        # hadle constant variance_epsilon
-        self.variance_epsilon_const = tt_lib.tensor.Tensor(
-            [self.variance_epsilon] + [0.0 for _ in range(32 * 32 - 1)],
-            [1, 1, 32, 32],
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.TILE,
-            self.device,
-        )
-
         # get weights
         pytorch_weights = state_dict[f"{base_address}.weight"]
-        pytorch_weights = pytorch_weights.repeat(1, 1, 32, 1)
 
-        self.weight = torch2tt_tensor(pytorch_weights, device)
+        self.weight = pad_by_zero(pytorch_weights, device)[0]
 
     def forward(self, hidden_states):
-        # variance = hidden_states.to(torch.float32).pow(2).mean(-1, keepdim=True)
-        torch_hidden_states = tt2torch_tensor(hidden_states)
-        variance = torch_hidden_states.to(torch.float32).pow(2).mean(-1, keepdim=True)
-        variance = variance.repeat(1, 1, 1, 32)
-        variance = torch2tt_tensor(variance, self.device)
-
-        # hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        tmp = tt_lib.tensor.bcast(
-            variance,
-            self.variance_epsilon_const,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
-        )
-        tmp = tt_lib.tensor.recip(tt_lib.tensor.sqrt(tmp))
-        hidden_states = tt_lib.tensor.bcast(
-            hidden_states,
-            tmp,
-            tt_lib.tensor.BcastOpMath.MUL,
-            tt_lib.tensor.BcastOpDim.W,
-        )
-
-        # weight * hidden_states
-        result = tt_lib.tensor.bcast(
-            hidden_states,
-            self.weight,
-            tt_lib.tensor.BcastOpMath.MUL,
-            tt_lib.tensor.BcastOpDim.H,
-        )
-        return result
+        return tt_lib.tensor.rmsnorm(hidden_states, self.variance_epsilon, self.weight)

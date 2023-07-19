@@ -1,11 +1,14 @@
 import torch
 import math
 from torch.nn import functional as F
+from functools import partial
 
 import python_api_testing.models.bloom.bloom_utils as bloom_utils
 import python_api_testing.models.bloom.bloom_block as bloom_block
+import tt_lib as ttl
 from tt_lib.fallback_ops import fallback_ops
 from typing import Optional, Tuple, Union
+from models.utility_functions import pad_by_zero
 
 
 def _make_causal_mask(
@@ -318,18 +321,18 @@ class TtBloomModel(torch.nn.Module):
             state_dict[f"{base_address}.word_embeddings.weight"]
         )
 
-        self.word_embeddings_layernorm_bias = bloom_utils.torch2tt_tensor(
+        self.word_embeddings_layernorm_bias = pad_by_zero(
             state_dict[f"{base_address}.word_embeddings_layernorm.bias"], device
-        )
-        self.word_embeddings_layernorm_weight = bloom_utils.torch2tt_tensor(
+        )[0]
+        self.word_embeddings_layernorm_weight = pad_by_zero(
             state_dict[f"{base_address}.word_embeddings_layernorm.weight"], device
-        )
+        )[0]
 
-        self.word_embeddings_layernorm = fallback_ops.LayerNorm(
-            self.word_embeddings_layernorm_weight,
-            self.word_embeddings_layernorm_bias,
+        self.word_embeddings_layernorm = partial(
+            ttl.tensor.layernorm,
+            gamma=self.word_embeddings_layernorm_weight,
+            beta=self.word_embeddings_layernorm_bias,
             eps=config.layer_norm_epsilon,
-            normalized_shape=config.hidden_size,
         )
 
         # Transformer blocks
@@ -343,19 +346,17 @@ class TtBloomModel(torch.nn.Module):
 
         self.h = torch.nn.ModuleList(blocks)
 
-        self.ln_f_bias = bloom_utils.torch2tt_tensor(
-            state_dict[f"{base_address}.ln_f.bias"], device
-        )
-        self.ln_f_weight = bloom_utils.torch2tt_tensor(
+        self.ln_f_bias = pad_by_zero(state_dict[f"{base_address}.ln_f.bias"], device)[0]
+        self.ln_f_weight = pad_by_zero(
             state_dict[f"{base_address}.ln_f.weight"], device
-        )
+        )[0]
 
         # Final Layer Norm
-        self.ln_f = fallback_ops.LayerNorm(
-            self.ln_f_weight,
-            self.ln_f_bias,
+        self.ln_f = partial(
+            ttl.tensor.layernorm,
+            gamma=self.ln_f_weight,
+            beta=self.ln_f_bias,
             eps=config.layer_norm_epsilon,
-            normalized_shape=config.hidden_size,
         )
 
     def build_alibi_tensor(

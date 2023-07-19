@@ -1,12 +1,9 @@
 import torch
 from torch import nn
 import tt_lib
-from tt_lib.fallback_ops import fallback_ops
-from python_api_testing.models.llama.llama_utils import (
-    tt2torch_tensor,
-    torch2tt_tensor,
-    linear,
-)
+
+from models.helper_funcs import Linear as TTLinear
+from models.utility_functions import torch2tt_tensor
 
 
 class TtLlamaMLP(nn.Module):
@@ -39,22 +36,41 @@ class TtLlamaMLP(nn.Module):
         )
 
         if hidden_act == "silu":  # silu
-            self.act_fn = fallback_ops.silu
+            self.act_fn = tt_lib.tensor.silu
+
+        self.gate_proj_linear = TTLinear(
+            self.out_gate_proj.shape()[-1],
+            self.out_gate_proj.shape()[-2],
+            self.out_gate_proj,
+            self.bias,
+        )
+        self.up_proj_linear = TTLinear(
+            self.out_up_proj.shape()[-1],
+            self.out_up_proj.shape()[-2],
+            self.out_up_proj,
+            self.bias,
+        )
+        self.down_proj_linear = TTLinear(
+            self.out_down_proj.shape()[-1],
+            self.out_down_proj.shape()[-2],
+            self.out_down_proj,
+            self.bias,
+        )
 
     def forward(self, x):
         # gate proj
-        gate = linear(x, self.out_gate_proj, self.bias)
+        gate = self.gate_proj_linear(x)
         # apply silu activation function
         gate = self.act_fn(gate)
 
         # up proj
-        up = linear(x, self.out_up_proj, self.bias)
+        up = self.up_proj_linear(x)
 
         # product
         prod = tt_lib.tensor.mul(gate, up)
 
         # down
-        hidden_states = linear(prod, self.out_down_proj, self.bias)
+        hidden_states = self.down_proj_linear(prod)
 
         # return TT Tensor
         return hidden_states

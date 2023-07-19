@@ -86,14 +86,17 @@ def tt2torch_tensor(tt_tensor, tt_host=None):
 
 def pad_by_zero(x: torch.Tensor, device):
     initial_shape = x.shape
-    if x.shape[3] % 32 != 0 or x.shape[2] % 32 != 0:
+    pad_shape = list(x.shape)
+    while len(pad_shape) < 4:
+        pad_shape.insert(0, 1)
+    if pad_shape[3] % 32 != 0 or pad_shape[2] % 32 != 0:
         tt_tensor = tt_lib.tensor.Tensor(
         x.reshape(-1).tolist(),
-        x.shape,
+        pad_shape,
         tt_lib.tensor.DataType.BFLOAT16,
         tt_lib.tensor.Layout.ROW_MAJOR,
         )
-        x = tt_tensor.pad((x.shape[0], x.shape[1], _nearest_32(x.shape[2]), _nearest_32(x.shape[3])), (0, 0, 0, 0), 0)
+        x = tt_tensor.pad((pad_shape[0], pad_shape[1], _nearest_32(pad_shape[2]), _nearest_32(pad_shape[3])), (0, 0, 0, 0), 0)
         x = x.to(tt_lib.tensor.Layout.TILE).to(device)
 
     else:

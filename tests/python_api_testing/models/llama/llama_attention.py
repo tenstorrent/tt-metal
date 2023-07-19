@@ -6,6 +6,7 @@ import tt_lib
 from typing import Optional, Tuple
 from python_api_testing.models.llama.llama_utils import *
 from tt_lib.fallback_ops import fallback_ops
+from models.helper_funcs import Linear as TTLinear
 
 
 def shape_tt(states, batch_size, seq_len, n_heads, head_dim):
@@ -155,6 +156,19 @@ class TtLlamaAttention(nn.Module):
             self.head_dim, max_position_embeddings=self.max_position_embeddings
         )
 
+        self.query_linear = TTLinear(
+            self.q_weights.shape()[-1], self.q_weights.shape()[-2], self.q_weights
+        )
+        self.key_linear = TTLinear(
+            self.k_weights.shape()[-1], self.k_weights.shape()[-2], self.k_weights
+        )
+        self.value_linear = TTLinear(
+            self.v_weights.shape()[-1], self.v_weights.shape()[-2], self.v_weights
+        )
+        self.attn_linear = TTLinear(
+            self.o_weights.shape()[-1], self.o_weights.shape()[-2], self.o_weights
+        )
+
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return (
             tensor.view(bsz, seq_len, self.num_heads, self.head_dim)
@@ -176,21 +190,19 @@ class TtLlamaAttention(nn.Module):
 
         bsz = hidden_states.shape()[0]
         q_len = hidden_states.shape()[2]
-
-        query = linear(hidden_states, self.q_weights)
+        query = self.query_linear(hidden_states)
         query_states = shape_tt(query, bsz, q_len, self.num_heads, self.head_dim)
 
-        key = linear(hidden_states, self.k_weights)
+        key = self.key_linear(hidden_states)
         key_states = shape_tt(key, bsz, q_len, self.num_heads, self.head_dim)
 
-        value = linear(hidden_states, self.v_weights)
+        value = self.value_linear(hidden_states)
         value_states = shape_tt(value, bsz, q_len, self.num_heads, self.head_dim)
 
         # return all states to pytorch =============================
         query_states = tt2torch_tensor(query_states)
         key_states = tt2torch_tensor(key_states)
         value_states = tt2torch_tensor(value_states)
-        hidden_states = tt2torch_tensor(hidden_states)
         # return all states to pytorch =============================
 
         # get positions_ids values if it is None
@@ -217,8 +229,12 @@ class TtLlamaAttention(nn.Module):
 
         if past_key_value is not None:
             # reuse k, v, self_attention
-            key_states = torch.cat([past_key_value[0], key_states], dim=2)
-            value_states = torch.cat([past_key_value[1], value_states], dim=2)
+            key_states = tt_lib.fallback_ops.concat(
+                [past_key_value[0], key_states], dim=2
+            )
+            value_states = tt_lib.fallback_ops.concat(
+                [past_key_value[1], value_states], dim=2
+            )
 
         past_key_value = (key_states, value_states) if use_cache else None
 
@@ -231,7 +247,9 @@ class TtLlamaAttention(nn.Module):
         mul = tt_lib.tensor.bmm(query_states_tt, key_states_tt_transposed)
 
         # create constant tensor
-        const_tensor_tt = fallback_ops.full(mul.shape(), math.sqrt(self.head_dim))
+        const_tensor_tt = tt_lib.tensor.full(
+            mul.shape(), math.sqrt(self.head_dim), device=self.device
+        )
 
         # divison
         recip = tt_lib.tensor.recip(const_tensor_tt)
@@ -269,7 +287,7 @@ class TtLlamaAttention(nn.Module):
         value_states = torch2tt_tensor(value_states, self.device)
 
         # torch softmax
-        attn_weights = fallback_ops.softmax(attn_weights, dim=-1)
+        attn_weights = tt_lib.tensor.softmax_in_place(attn_weights)
         attn_output = tt_lib.tensor.bmm(attn_weights, value_states)
 
         if attn_output.shape() != [bsz, self.num_heads, q_len, self.head_dim]:
@@ -282,7 +300,7 @@ class TtLlamaAttention(nn.Module):
         attn_output = tt_lib.tensor.reshape(
             attn_output, bsz, 1, q_len, self.hidden_size
         )
-        attn_output = linear(attn_output, self.o_weights)
+        attn_output = self.attn_linear(attn_output)
 
         if not output_attentions:
             attn_weights = None

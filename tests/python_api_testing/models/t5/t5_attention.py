@@ -4,7 +4,6 @@ from torch import nn
 import tt_lib
 
 from loguru import logger
-from tt_lib.fused_ops.softmax import softmax as tt_softmax
 from python_api_testing.models.utility_functions_new import (
     torch2tt_tensor,
     tt2torch_tensor,
@@ -45,6 +44,7 @@ def t5_unshape_pt(states, batch_size, inner_dim):
 
 
 def t5_unshape_tt(states, batch_size, inner_dim, device):
+    # Leave as fallback due to perf
     fall_back_to_torch = True
 
     if fall_back_to_torch:
@@ -52,7 +52,8 @@ def t5_unshape_tt(states, batch_size, inner_dim, device):
         states = t5_unshape_pt(states, batch_size, inner_dim)
         tt_out = torch2tt_tensor(states, device)
     else:
-        assert False
+        states = tt_lib.tensor.transpose_hc(states)
+        tt_out = tt_lib.tensor.reshape(states, 1, batch_size, -1, inner_dim)
 
     return tt_out
 
@@ -535,7 +536,6 @@ class TtT5Attention(nn.Module):
                     position_bias.requires_grad = True
             else:
                 position_bias = self.compute_bias_const(real_seq_length, key_length)
-
             # if key and values are already calculated
             # we want only the last query position bias
             if past_key_value is not None:
@@ -567,9 +567,7 @@ class TtT5Attention(nn.Module):
         scores = tt_lib.tensor.add(scores, position_bias)
 
         # attn_weights = nn.functional.softmax(scores.float(), dim=-1).type_as(scores)
-        attn_weights = tt_softmax(
-            scores, stable=False
-        )  # (batch_size, n_heads, seq_length, key_length)
+        attn_weights = tt_lib.tensor.softmax_in_place(scores)
 
         # Dropout is not used in inference
         # attn_weights = nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)  # (batch_size, n_heads, seq_length, key_length)

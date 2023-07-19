@@ -18,6 +18,8 @@ from python_api_testing.models.roberta.roberta_common import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
+from models.helper_funcs import Linear as TTLinear
+from models.utility_functions import pad_by_zero
 import tt_lib
 from tt_lib.fallback_ops import fallback_ops
 
@@ -40,26 +42,26 @@ class TtRobertaSelfAttention(nn.Module):
         self.attention_head_size = int(config.hidden_size / config.num_attention_heads)
         self.all_head_size = self.num_attention_heads * self.attention_head_size
 
-        self.query_weight = torch2tt_tensor(
+        self.query_weight = pad_by_zero(
             state_dict[f"{base_address}.query.weight"], self.device
-        )
-        self.query_bias = torch2tt_tensor(
+        )[0]
+        self.query_bias = pad_by_zero(
             state_dict[f"{base_address}.query.bias"], self.device
-        )
+        )[0]
 
-        self.key_weight = torch2tt_tensor(
+        self.key_weight = pad_by_zero(
             state_dict[f"{base_address}.key.weight"], self.device
-        )
-        self.key_bias = torch2tt_tensor(
+        )[0]
+        self.key_bias = pad_by_zero(
             state_dict[f"{base_address}.key.bias"], self.device
-        )
+        )[0]
 
-        self.value_weight = torch2tt_tensor(
+        self.value_weight = pad_by_zero(
             state_dict[f"{base_address}.value.weight"], self.device
-        )
-        self.value_bias = torch2tt_tensor(
+        )[0]
+        self.value_bias = pad_by_zero(
             state_dict[f"{base_address}.value.bias"], self.device
-        )
+        )[0]
 
         # TODO: Add dropout when supported
         # self.dropout = nn.Dropout(config.attention_probs_dropout_prob)
@@ -77,6 +79,25 @@ class TtRobertaSelfAttention(nn.Module):
             )
 
         self.is_decoder = config.is_decoder
+
+        self.query_linear = TTLinear(
+            self.query_weight.shape()[-1],
+            self.query_weight.shape()[-2],
+            self.query_weight,
+            self.query_bias,
+        )
+        self.key_linear = TTLinear(
+            self.key_weight.shape()[-1],
+            self.key_weight.shape()[-2],
+            self.key_weight,
+            self.key_bias,
+        )
+        self.value_linear = TTLinear(
+            self.value_weight.shape()[-1],
+            self.value_weight.shape()[-2],
+            self.value_weight,
+            self.value_bias,
+        )
 
     def transpose_for_scores(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         # x must be 4d originaly
@@ -108,9 +129,7 @@ class TtRobertaSelfAttention(nn.Module):
         past_key_value: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
         output_attentions: Optional[bool] = False,
     ) -> Tuple[tt_lib.tensor.Tensor]:
-        mixed_query_layer = self.linear(
-            hidden_states, self.query_weight, self.query_bias
-        )
+        mixed_query_layer = self.query_linear(hidden_states)
 
         # If this is instantiated as a cross-attention module, the keys
         # and values come from an encoder; the attention mask needs to be
@@ -124,28 +143,20 @@ class TtRobertaSelfAttention(nn.Module):
             attention_mask = encoder_attention_mask
         elif is_cross_attention:
             key_layer = self.transpose_for_scores(
-                self.linear(encoder_hidden_states, self.key_weight, self.key_bias)
+                self.key_linear(encoder_hidden_states)
             )
             value_layer = self.transpose_for_scores(
-                self.linear(encoder_hidden_states, self.value_weight, self.value_bias)
+                self.value_linear(encoder_hidden_states)
             )
             attention_mask = encoder_attention_mask
         elif past_key_value is not None:
-            key_layer = self.transpose_for_scores(
-                self.linear(hidden_states, self.key_weight, self.key_bias)
-            )
-            value_layer = self.transpose_for_scores(
-                self.linear(hidden_states, self.value_weight, self.value_bias)
-            )
+            key_layer = self.transpose_for_scores(self.key_linear(hidden_states))
+            value_layer = self.transpose_for_scores(self.value_linear(hidden_states))
             key_layer = fallback_ops.concat([past_key_value[0], key_layer], dim=2)
             value_layer = fallback_ops.concat([past_key_value[1], value_layer], dim=2)
         else:
-            key_layer = self.transpose_for_scores(
-                self.linear(hidden_states, self.key_weight, self.key_bias)
-            )
-            value_layer = self.transpose_for_scores(
-                self.linear(hidden_states, self.value_weight, self.value_bias)
-            )
+            key_layer = self.transpose_for_scores(self.key_linear(hidden_states))
+            value_layer = self.transpose_for_scores(self.value_linear(hidden_states))
 
         query_layer = self.transpose_for_scores(mixed_query_layer)
 
@@ -219,8 +230,9 @@ class TtRobertaSelfAttention(nn.Module):
             # back to tt
             attention_scores = torch2tt_tensor(attention_scores, self.device)
 
-        div_const = fallback_ops.full(
-            attention_scores.shape(), 1.0 / math.sqrt(self.attention_head_size)
+        div_const = tt_lib.tensor.full(
+            attention_scores.shape(),
+            1.0 / math.sqrt(self.attention_head_size),
         )
         attention_scores = tt_lib.tensor.mul(attention_scores, div_const)
 
@@ -242,6 +254,7 @@ class TtRobertaSelfAttention(nn.Module):
         # Normalize the attention scores to probabilities.
 
         # Fallback softmax drops PCC a bit from 0.9999 to 0.998
+        # Device softmax only support tile shape/layout
         attention_probs = fallback_ops.softmax(attention_scores, dim=-1)
 
         # This is actually dropping out entire tokens to attend to, which might

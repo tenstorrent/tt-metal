@@ -3,12 +3,14 @@ import math
 from torch.nn import functional as F
 from torch.nn import LayerNorm
 
+from functools import partial
+import tt_lib as ttl
 from tt_lib.fallback_ops import fallback_ops
 import python_api_testing.models.bloom.bloom_utils as bloom_utils
 import python_api_testing.models.bloom.bloom_attention as bloom_attention
 import python_api_testing.models.bloom.bloom_mlp as bloom_mlp
 from typing import Optional, Tuple, Union
-
+from models.utility_functions import pad_by_zero
 
 # class BloomBlock(nn.Module):
 #     def __init__(self, config: BloomConfig):
@@ -92,34 +94,34 @@ class TtBloomBlock(torch.nn.Module):
             config.apply_residual_connection_post_layernorm
         )
 
-        self.beta = bloom_utils.torch2tt_tensor(
+        self.beta = pad_by_zero(
             state_dict[f"{base_address}.input_layernorm.bias"], device
-        )
-        self.gamma = bloom_utils.torch2tt_tensor(
+        )[0]
+        self.gamma = pad_by_zero(
             state_dict[f"{base_address}.input_layernorm.weight"], device
-        )
-        self.input_layernorm = fallback_ops.LayerNorm(
-            self.gamma,
-            self.beta,
+        )[0]
+        self.input_layernorm = partial(
+            ttl.tensor.layernorm,
+            gamma=self.gamma,
+            beta=self.beta,
             eps=self.layer_norm_epsilon,
-            normalized_shape=self.hidden_size,
         )
 
         self.self_attention = bloom_attention.TtBloomAttention(
             config, state_dict, f"{base_address}.self_attention", device
         )
 
-        self.beta_2 = bloom_utils.torch2tt_tensor(
+        self.beta_2 = pad_by_zero(
             state_dict[f"{base_address}.post_attention_layernorm.bias"], device
-        )
-        self.gamma_2 = bloom_utils.torch2tt_tensor(
+        )[0]
+        self.gamma_2 = pad_by_zero(
             state_dict[f"{base_address}.post_attention_layernorm.weight"], device
-        )
-        self.post_attention_layernorm = fallback_ops.LayerNorm(
-            self.gamma_2,
-            self.beta_2,
+        )[0]
+        self.post_attention_layernorm = partial(
+            ttl.tensor.layernorm,
+            gamma=self.gamma_2,
+            beta=self.beta_2,
             eps=self.layer_norm_epsilon,
-            normalized_shape=self.hidden_size,
         )
 
         self.mlp = bloom_mlp.TtBloomMLP(

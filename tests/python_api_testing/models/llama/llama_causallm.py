@@ -2,15 +2,14 @@ import math
 import torch
 from torch import nn
 import tt_lib
-from python_api_testing.models.llama.llama_utils import (
-    tt2torch_tensor,
-    torch2tt_tensor,
-    linear,
-)
+
 from typing import List, Optional, Tuple, Union
 from python_api_testing.models.llama.llama_layer_norm import TtLlamaRMSNorm
 from python_api_testing.models.llama.llama_decoder import TtLlamaDecoderLayer
 from python_api_testing.models.llama.llama_model import TtLlamaShared
+
+from models.helper_funcs import Linear as TTLinear
+from models.utility_functions import torch2tt_tensor
 
 
 class TtLlamaForCausalLM(TtLlamaShared):
@@ -34,6 +33,10 @@ class TtLlamaForCausalLM(TtLlamaShared):
         self.weight = torch2tt_tensor(self.state_dict["lm_head.weight"], self.device)
         self.bias = None
 
+        self.linear = TTLinear(
+            self.weight.shape()[-1], self.weight.shape()[-2], self.weight, self.bias
+        )
+
     def forward(self, x):
         encoder_output = super().forward(x)
-        return linear(x, self.weight, self.bias)
+        return self.linear(x)
