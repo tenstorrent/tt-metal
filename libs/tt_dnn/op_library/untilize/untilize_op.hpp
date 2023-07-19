@@ -21,8 +21,8 @@ struct Untilize {
 };
 
 struct UntilizeWithUnpadding {
-    const std::array<uint32_t, 4> output_tensor_start;
-    const std::array<uint32_t, 4> output_tensor_end;
+    const Shape output_tensor_start;
+    const Shape output_tensor_end;
     const MemoryConfig& output_mem_config;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
@@ -35,7 +35,7 @@ struct UntilizeWithUnpadding {
 
 
 Tensor untilize (const Tensor &a, const MemoryConfig& mem_config = MemoryConfig{.interleaved = true});
-Tensor untilize_with_unpadding(const Tensor &a, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end, const MemoryConfig& mem_config = MemoryConfig{.interleaved = true});
+Tensor untilize_with_unpadding(const Tensor &a, const Shape &output_tensor_start, const Shape &output_tensor_end, const MemoryConfig& mem_config = MemoryConfig{.interleaved = true});
 
 }  // namespace tt_metal
 

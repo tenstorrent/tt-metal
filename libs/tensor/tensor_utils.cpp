@@ -22,7 +22,7 @@ namespace tt_metal {
         if (weight_matrix_rows % in1_block_h_datums != 0) {
             weight_matrix_rows = (uint32_t) std::ceil( (double) weight_matrix_rows / (double) in1_block_h_datums ) * in1_block_h_datums;
         }
-        std::array<uint32_t, 4> output_shape = {1, 1, weight_matrix_rows, weight_matrix_cols};
+        Shape output_shape = {1, 1, weight_matrix_rows, weight_matrix_cols};
         auto output_buffer = owned_buffer::create<T>(volume(output_shape));
         for(auto r = 0; r < w_shape[2]; r++) {
             for(auto s = 0; s < w_shape[3]; s++) {
@@ -53,7 +53,7 @@ namespace tt_metal {
         return to_w_tile_layout_map.at(conv_weight_tensor.dtype())(conv_weight_tensor, in1_block_h, in1_block_w);
     }
 
-const std::array<uint32_t, 4> infer_dims_for_reshape(int N, int C, int H, int W, uint32_t old_volume) {
+const Shape infer_dims_for_reshape(int N, int C, int H, int W, uint32_t old_volume) {
     vector<int> ns{N, C, H, W};
     int neg_idx = -1;
     for (int i = 0; i < ns.size(); i++) {

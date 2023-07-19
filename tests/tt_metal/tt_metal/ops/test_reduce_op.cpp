@@ -21,7 +21,7 @@ Tensor device_function(const Tensor& input_tensor, Host* host, Device* device) {
 
 template<auto DeviceFunction, typename ... Args>
 void run_test(Host* host, Device* device, Args ...  args) {
-    std::array<uint32_t, 4> shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+    Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
     auto input_tensor = tt::numpy::random::random(shape, DataType::BFLOAT16).to(Layout::TILE);
     auto device_output = DeviceFunction(input_tensor, host, device);
     // What should be validated? allclose against host implementation?

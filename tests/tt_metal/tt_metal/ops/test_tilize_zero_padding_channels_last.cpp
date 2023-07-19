@@ -48,7 +48,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        std::array<uint32_t, 4> shape = {1, 32, 32, 61};
+        Shape shape = {1, 32, 32, 61};
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a = tt::numpy::arange<bfloat16>(0, tt_metal::volume(shape), 1).reshape(shape).to(Layout::CHANNELS_LAST).to(device);
         Tensor b = tilize_with_zero_padding(a);
@@ -58,8 +58,8 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         std::cout << "Moving src data to host to validate" << std::endl;
         Tensor host_a = a.to(host); // Move tensor a to host to validate
-        std::array<uint32_t, 4> cl_shape = {shape[0], shape[2], shape[3], shape[1]};
-        Tensor g = Tensor(host_a.owned_storage().value(), cl_shape, DataType::BFLOAT16, Layout::ROW_MAJOR);
+        Shape cl_shape = {shape[0], shape[2], shape[3], shape[1]};
+        Tensor g = Tensor(host_a.storage(), cl_shape, DataType::BFLOAT16, Layout::ROW_MAJOR);
         // TODO: Update when tensor.pad_to_tile() function is added
         auto padded_shape = g.shape();
         padded_shape[2] = roundup(padded_shape[2], TILE_HEIGHT);

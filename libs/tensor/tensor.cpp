@@ -18,26 +18,29 @@ namespace tt {
 
 namespace tt_metal {
 
-namespace detail {
-
-// TODO(arakhmati): remove this function once Shape is changed to std::vector
-std::vector<uint32_t> convert_array_to_vector(const Shape& shape) {
-    return std::vector<uint32_t>(std::begin(shape), std::end(shape));
+Tensor::Tensor(const Storage& storage, const Shape& shape, DataType dtype, Layout layout)
+    : storage_(storage), shape_(shape), dtype_(dtype), layout_(layout) {
+    std::visit(
+        [&] (auto&& storage) {
+            using StorageType = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
+                TT_ASSERT(this->shape_.rank() == 4);
+            }
+            else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
+                TT_ASSERT(this->shape_.rank() == 4);
+                TT_ASSERT(storage.device != nullptr);
+                tensor_impl::validate_on_device_dtype_and_layout(storage.device, dtype, layout);
+            }
+            else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
+                // do nothing
+            }
+            else {
+                TT_THROW("Must be an external storage");
+            }
+        },
+        this->storage_
+    );
 }
-
-}
-
-Tensor::Tensor(const OwnedStorage& storage, const Shape& shape, DataType dtype, Layout layout)
-    : storage_(storage), shape_(detail::convert_array_to_vector(shape)), dtype_(dtype), layout_(layout) {}
-
-Tensor::Tensor(const DeviceStorage& storage, const Shape& shape, DataType dtype, Layout layout)
-    : storage_(storage), shape_(detail::convert_array_to_vector(shape)), dtype_(dtype), layout_(layout) {
-    TT_ASSERT(storage.device != nullptr);
-    tensor_impl::validate_on_device_dtype_and_layout(storage.device, dtype, layout);
-}
-
-Tensor::Tensor(const BorrowedStorage& storage, const std::vector<uint32_t>& shape, DataType dtype, Layout layout)
-    : storage_(storage), shape_(shape), dtype_(dtype), layout_(layout) {}
 
 Tensor::~Tensor() {
     this->deallocate();
@@ -70,7 +73,7 @@ void Tensor::deallocate() {
 
 Tensor Tensor::to(Device *target_device, const MemoryConfig &mem_config) const {
     if (storage_type() == StorageType::DEVICE) {
-        TT_ASSERT(this->device_storage().value().device == target_device && "Currently do not support moving between devices");
+        TT_ASSERT(this->device() == target_device && "Currently do not support moving between devices");
         return *this;
     }
     tensor_impl::validate_on_device_dtype_and_layout(target_device, this->dtype(), this->layout());
@@ -93,13 +96,13 @@ void Tensor::print(Layout print_layout, bool pretty_print) const {
     tensor_impl::print_wrapper(*this, print_layout, pretty_print);
 }
 
-Tensor Tensor::pad(const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) const {
+Tensor Tensor::pad(const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value) const {
     TT_ASSERT(this->storage_type() == StorageType::OWNED or this->storage_type() == StorageType::BORROWED && "Tensor must be on host for padding");
     TT_ASSERT(this->layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for padding");
     return tensor_impl::pad_wrapper(*this, output_tensor_shape, input_tensor_start, pad_value);
 }
 
-Tensor Tensor::unpad(const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) const {
+Tensor Tensor::unpad(const Shape &output_tensor_start, const Shape &output_tensor_end) const {
     TT_ASSERT(this->storage_type() == StorageType::OWNED && "Tensor must be on host for unpadding");
     TT_ASSERT(this->layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for unpadding");
     return tensor_impl::unpad_wrapper(*this, output_tensor_start, output_tensor_end);
@@ -108,18 +111,18 @@ Tensor Tensor::unpad(const std::array<uint32_t, 4> &output_tensor_start, const s
 Tensor Tensor::pad_to_tile(float pad_value) const {
     uint32_t padded_h = roundup(this->shape()[2], TILE_HEIGHT);
     uint32_t padded_w = roundup(this->shape()[3], TILE_WIDTH);
-    std::array<uint32_t, 4> output_tensor_shape = {this->shape()[0], this->shape()[1], padded_h, padded_w};
-    std::array<uint32_t, 4> input_tensor_start = {0, 0, 0, 0};
+    Shape output_tensor_shape = {this->shape()[0], this->shape()[1], padded_h, padded_w};
+    Shape input_tensor_start = {0, 0, 0, 0};
 
     return this->pad(output_tensor_shape, input_tensor_start, pad_value);
 }
 
-Tensor Tensor::unpad_from_tile(const std::array<uint32_t, 4> &output_tensor_shape) const {
+Tensor Tensor::unpad_from_tile(const Shape &output_tensor_shape) const {
     TT_ASSERT(this->shape()[0] == output_tensor_shape[0] && this->shape()[1] == output_tensor_shape[1], "Input shape must match output shape apart from last 2 dims");
     TT_ASSERT(this->shape()[2] % TILE_HEIGHT == 0 && this->shape()[3] % TILE_WIDTH==0, "Last 2 dims of input shape must be multiples of 32");
     TT_ASSERT(this->shape()[2] - TILE_HEIGHT < output_tensor_shape[2] && this->shape()[3] - TILE_WIDTH < output_tensor_shape[3], "Last 2 dims of output must be within range to have been padded to input");
-    std::array<uint32_t, 4> output_tensor_start = {0, 0, 0, 0};
-    std::array<uint32_t, 4> output_tensor_end = {output_tensor_shape[0] - 1, output_tensor_shape[1] - 1, output_tensor_shape[2] - 1, output_tensor_shape[3] - 1};
+    Shape output_tensor_start = {0, 0, 0, 0};
+    Shape output_tensor_end = {output_tensor_shape[0] - 1, output_tensor_shape[1] - 1, output_tensor_shape[2] - 1, output_tensor_shape[3] - 1};
     return this->unpad(output_tensor_start, output_tensor_end);
 }
 
@@ -143,7 +146,7 @@ Tensor Tensor::reshape(const Shape& new_shape) const {
     }
 
     auto new_tensor = *this;
-    new_tensor.shape_ = detail::convert_array_to_vector(new_shape);
+    new_tensor.shape_ = new_shape;
     return new_tensor;
 }
 
@@ -196,27 +199,19 @@ const Storage& Tensor::storage() const {
     return this->storage_;
 }
 
-const std::optional<OwnedStorage> Tensor::owned_storage() const {
-    if (std::holds_alternative<OwnedStorage>(this->storage_)) {
-        return std::get<OwnedStorage>(this->storage_);
-    }
-    return std::nullopt;
-}
-
-const std::optional<DeviceStorage> Tensor::device_storage() const {
-    if (std::holds_alternative<DeviceStorage>(this->storage_)) {
-        return std::get<DeviceStorage>(this->storage_);
-    }
-    return std::nullopt;
-}
-
 namespace detail {
-const std::array<uint32_t, 4> compute_strides(const Shape& shape) {
-    return {shape[1] * shape[2] * shape[3], shape[2] * shape[3], shape[3], 1};
+const Shape compute_strides(const Shape& shape) {
+    auto num_elements = volume(shape);
+    std::vector<std::uint32_t> strides;
+    for (std::int32_t index = 0; index < shape.rank(); index++) {
+        num_elements /= shape[index];
+        strides.push_back(num_elements);
+    }
+    return strides;
 }
 }
 
-const std::array<uint32_t, 4> Tensor::strides() const {
+const Shape Tensor::strides() const {
     return detail::compute_strides(this->shape());
 }
 

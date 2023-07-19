@@ -38,7 +38,7 @@ operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
 
-    std::array<uint32_t, 4> output_shape = output.shape();
+    Shape output_shape = output.shape();
 
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -181,7 +181,7 @@ operation::ProgramWithCallbacks transpose_hc_single_core(const Tensor &a, Tensor
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
 
-    std::array<uint32_t, 4> output_shape = output.shape();
+    Shape output_shape = output.shape();
 
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -299,7 +299,7 @@ operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
 
-    std::array<uint32_t, 4> output_shape = output.shape();
+    Shape output_shape = output.shape();
 
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");

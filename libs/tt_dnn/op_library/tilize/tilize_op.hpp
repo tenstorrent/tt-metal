@@ -22,8 +22,8 @@ struct Tilize {
 
 
 struct TilizeWithValPadding {
-    const std::array<uint32_t, 4> output_tensor_shape;
-    const std::array<uint32_t, 4> input_tensor_start;
+    const Shape output_tensor_shape;
+    const Shape input_tensor_start;
     const float pad_value;
     const MemoryConfig& output_mem_config;
 
@@ -37,7 +37,7 @@ struct TilizeWithValPadding {
 
 Tensor tilize (const Tensor &a, const MemoryConfig& mem_config = MemoryConfig{.interleaved = true});
 Tensor tilize_with_zero_padding (const Tensor &a, const MemoryConfig& mem_config = MemoryConfig{.interleaved = true});
-Tensor tilize_with_val_padding (const Tensor &a, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, const float pad_value, const MemoryConfig& mem_config = MemoryConfig{.interleaved = true});
+Tensor tilize_with_val_padding (const Tensor &a, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value, const MemoryConfig& mem_config = MemoryConfig{.interleaved = true});
 
 }  // namespace tt_metal
 

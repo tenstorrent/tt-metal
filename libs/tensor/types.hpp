@@ -38,7 +38,29 @@ enum class StorageType {
 
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
 
-using Shape = std::array<uint32_t, 4>;
+class Shape {
+    std::vector<uint32_t> data;
+
+  public:
+    Shape(const std::initializer_list<uint32_t> data);
+    Shape(const std::array<uint32_t, 4>& data);
+    Shape(const std::vector<uint32_t>& data);
+
+    uint32_t rank() const;
+
+    uint32_t& operator[](const std::size_t index);
+    const uint32_t& operator[](const std::size_t index) const;
+
+    uint32_t& back();
+    const uint32_t& back() const;
+
+    const uint32_t* begin() const;
+    const uint32_t* end() const;
+};
+
+bool operator==(const Shape& shape_a, const Shape& shape_b);
+bool operator!=(const Shape& shape_a, const Shape& shape_b);
+std::ostream& operator<<(std::ostream& os, const Shape& shape);
 
 struct MemoryConfig {
     bool interleaved = true;    // Interleave the data across multiple DRAM banks
@@ -58,7 +80,7 @@ struct OwnedStorage {
 
 using DeviceBuffer = std::shared_ptr<Buffer>;
 struct DeviceStorage {
-    std::shared_ptr<Buffer> buffer;
+    DeviceBuffer buffer;
     Device* device;
     MemoryConfig memory_config;
     tt::stl::reflection::Attributes attributes() const;

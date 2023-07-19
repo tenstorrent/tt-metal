@@ -48,7 +48,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        std::array<uint32_t, 4> shape = {1, 64, 32, 64};
+        Shape shape = {1, 64, 32, 64};
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a =  tt::numpy::random::random(shape).to(device);
         Tensor b = tilize(a);

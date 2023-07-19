@@ -39,7 +39,7 @@ int main(int argc, char **argv) {
             tt_metal::CreateDevice(arch, pci_express_slot);
         Host *host = GetHost();
         pass &= InitializeDevice(device);
-        std::array<uint32_t, 4> shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
+        Shape shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
         Tensor a = tt::numpy::random::random(shape).to(Layout::TILE).to(device);;
         Tensor c = layernorm(a, 1e-4f);
         Tensor d = c.to(host);

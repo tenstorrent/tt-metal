@@ -23,8 +23,8 @@ void SplitTiled::shape_asserts(const Tensor &a) const {
     int chunk_size = a.shape()[dim] / num_chunks;
     TT_ASSERT(a.shape()[0] == 1, "Only batch 1 implemented");
     TT_ASSERT(a.shape()[dim] % num_chunks == 0, "Incorrect shape on last dim");
-    TT_ASSERT(dim <= a.shape().size() && dim >= 0, "Improper dims");
-    TT_ASSERT(a.shape().size() == 4, "W,Z,Y,X tensor");
+    TT_ASSERT(dim <= a.shape().rank() && dim >= 0, "Improper dims");
+    TT_ASSERT(a.shape().rank() == 4, "W,Z,Y,X tensor");
     TT_ASSERT(a.layout() == Layout::TILE, "Currently only tile layout support");
     TT_ASSERT((a.shape()[2] % TILE_HEIGHT == 0), "Shape not divisible by tile");
     TT_ASSERT((a.shape()[3] % TILE_WIDTH == 0), "Shape not divisible by tile");

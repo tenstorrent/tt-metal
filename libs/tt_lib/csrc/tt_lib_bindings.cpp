@@ -317,7 +317,7 @@ void TensorModule(py::module &m_tensor) {
     pyTensor
         .def(
             py::init<>(
-                [](std::vector<float>&& data, const Shape& shape, DataType data_type, Layout layout) {
+                [](std::vector<float>&& data, const std::array<uint32_t, 4>& shape, DataType data_type, Layout layout) {
                     auto owned_buffer = detail::create_owned_buffer_from_list_of_floats(std::move(data), data_type);
                     return Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
                 }
@@ -351,7 +351,7 @@ void TensorModule(py::module &m_tensor) {
         )
         .def(
             py::init<>(
-                [](std::vector<float>&& data, const Shape& shape, DataType data_type, Layout layout, Device *device) {
+                [](std::vector<float>&& data, const std::array<uint32_t, 4>& shape, DataType data_type, Layout layout, Device *device) {
                     auto owned_buffer = detail::create_owned_buffer_from_list_of_floats(std::move(data), data_type);
                     auto tensor = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
                     return tensor.to(device, MemoryConfig{});
@@ -396,7 +396,7 @@ void TensorModule(py::module &m_tensor) {
         )
         .def(
             py::init<>(
-                [](std::vector<float>&& data, const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config) {
+                [](std::vector<float>&& data, const std::array<uint32_t, 4>& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config) {
                     auto owned_buffer = detail::create_owned_buffer_from_list_of_floats(std::move(data), data_type);
                     auto tensor = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
                     return tensor.to(device, memory_config);
@@ -467,7 +467,7 @@ void TensorModule(py::module &m_tensor) {
         )
         .def(
             py::init<>(
-                [](const DeviceStorage& storage, const Shape& shape, DataType data_type, Layout layout) {
+                [](const DeviceStorage& storage, const std::array<uint32_t, 4>& shape, DataType data_type, Layout layout) {
                     return Tensor(storage, shape, data_type, layout);
                 }
             ),
@@ -493,7 +493,7 @@ void TensorModule(py::module &m_tensor) {
                 .. code-block:: python
 
                     tt_tensor_b = tt_lib.tensor.Tensor(
-                        tt_tensor_a.device_storage(),
+                        tt_tensor_a.storage(),
                         new_shape,
                         tt_tensor_a.dtype(),
                         new_layout,
@@ -557,9 +557,11 @@ void TensorModule(py::module &m_tensor) {
 
                 tt_tensor = tt_tensor.to(tt_lib.tensor.Layout.TILE)
         )doc")
-        .def("pad", [](const Tensor &self, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
-            return self.pad(output_tensor_shape, input_tensor_start, pad_value);
-        }, R"doc(
+        .def("pad",
+            [] (const Tensor &self, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
+                return self.pad(output_tensor_shape, input_tensor_start, pad_value);
+            },
+            R"doc(
             Pad TT Tensor with given pad value ``arg2``.
 
             The input tensor must be on host and in ROW_MAJOR layout.
@@ -841,7 +843,8 @@ void TensorModule(py::module &m_tensor) {
 
         )doc")
         .def("shape", [](const Tensor &self) {
-            return self.shape();
+            const auto& shape = self.shape();
+            return std::vector<std::uint32_t>(std::begin(shape), std::end(shape));
         }, R"doc(
             Get the shape of the tensor as list of integers.
 
@@ -929,7 +932,7 @@ void TensorModule(py::module &m_tensor) {
                 dtype = tt_tensor.dtype()
         )doc")
         .def("device_storage", [](const Tensor &self) {
-            return self.device_storage().value();
+            return std::get<DeviceStorage>(self.storage());
         }, R"doc(
             Get underlying device storage of TT Tensor.
 
@@ -937,7 +940,7 @@ void TensorModule(py::module &m_tensor) {
 
                 device_storage = tt_tensor.device_storage()
 
-        )doc");;
+        )doc");
 
     m_tensor.def("where", &where, R"doc(
         Perform an ternary where operation on two tensors based on third @predicate.
@@ -1515,7 +1518,10 @@ void TensorModule(py::module &m_tensor) {
         +----------+--------------------------+-----------+------------------------------+----------+
     )doc");
 
-    m_tensor.def("zeros", &zeros,
+    m_tensor.def("zeros",
+        [] (const std::array<uint32_t, 4> shape, Layout layout, Device * device) {
+            return zeros(shape, layout, device);
+        },
         py::arg("shape"), py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device") = nullptr, R"doc(
         Returns a new tensor filled with zeros in shape specified by input ``shape``.
 
@@ -1534,7 +1540,10 @@ void TensorModule(py::module &m_tensor) {
         +----------+----------------------------+-----------+------------------------------+----------+
     )doc");
 
-    m_tensor.def("ones", &ones,
+    m_tensor.def("ones",
+        [] (const std::array<uint32_t, 4> shape, Layout layout, Device * device) {
+            return ones(shape, layout, device);
+        },
         py::arg("shape"), py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device") = nullptr, R"doc(
         Returns a new tensor filled with ones in shape specified by input ``shape``.
 
@@ -1553,7 +1562,10 @@ void TensorModule(py::module &m_tensor) {
         +----------+----------------------------+-----------+------------------------------+----------+
     )doc");
 
-    m_tensor.def("full", &full,
+    m_tensor.def("full",
+        [] (const std::array<uint32_t, 4> shape, float value, Layout layout, Device * device) {
+            return full(shape, value, layout, device);
+        },
         py::arg("shape"), py::arg("fill_value"), py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device") = nullptr, R"doc(
         Returns a new tensor filled with the scalar value in shape specified by input ``shape``.
 
@@ -2526,7 +2538,10 @@ void TensorModule(py::module &m_tensor) {
         +------------+------------------------------------+--------------+--------------------------------+----------+
     )doc");
 
-    m_tensor.def("tilize_with_val_padding", &tilize_with_val_padding,
+    m_tensor.def("tilize_with_val_padding",
+        [] (const Tensor &tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value, const MemoryConfig& mem_config) {
+            return tilize_with_val_padding(tensor, output_tensor_shape, input_tensor_start, pad_value, mem_config);
+        },
         py::arg("input").noconvert(), py::arg("output_tensor_shape").noconvert(), py::arg("input_tensor_start"), py::arg("pad_value"), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Tilizes a given tensor across memory on device. Pads to specified shape before tilizing.
 
@@ -2564,7 +2579,10 @@ void TensorModule(py::module &m_tensor) {
         +------------+------------------------------------+--------------+-----------------------------------------------------------------+----------+
     )doc");
 
-    m_tensor.def("untilize_with_unpadding", &untilize_with_unpadding,
+    m_tensor.def("untilize_with_unpadding",
+        [] (const Tensor &tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, const MemoryConfig& mem_config) {
+            return untilize_with_unpadding(tensor, output_tensor_shape, input_tensor_start, mem_config);
+        },
         py::arg("input").noconvert(), py::arg("output_tensor_start").noconvert(), py::arg("output_tensor_end"), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Changes data layout of input tensor to ROW_MAJOR and unpads/removes elements from the tensor.
 
@@ -2588,7 +2606,10 @@ void TensorModule(py::module &m_tensor) {
         +---------------------+----------------------------------------------+--------------+--------------------------------+----------+
     )doc");
 
-    m_tensor.def("pad", &pad,
+    m_tensor.def("pad",
+        [] (const Tensor &input_tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value, const MemoryConfig& mem_config) {
+            return pad(input_tensor, output_tensor_shape, input_tensor_start, pad_value, mem_config);
+        },
         py::arg("input").noconvert(), py::arg("output_tensor_shape").noconvert(), py::arg("input_tensor_start"), py::arg("pad_value"), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Pad TT Tensor with given pad value ``arg2``.
 
@@ -2612,7 +2633,10 @@ void TensorModule(py::module &m_tensor) {
         +---------------------+------------------------------------------------------+--------------+--------------------------------+----------+
     )doc");
 
-    m_tensor.def("unpad", &unpad,
+    m_tensor.def("unpad",
+        [] (const Tensor &input_tensor, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end, const MemoryConfig& mem_config) {
+            return unpad(input_tensor, output_tensor_start, output_tensor_end, mem_config);
+        },
         py::arg("input").noconvert(), py::arg("output_tensor_start").noconvert(), py::arg("output_tensor_end"), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Unpad TT Tensor.
 

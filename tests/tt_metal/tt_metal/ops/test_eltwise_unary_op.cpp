@@ -57,7 +57,7 @@ Tensor device_function(const Tensor& input_tensor, Host* host, Device* device) {
 }
 
 template <auto HostFunction, auto DeviceFunction, typename... Args>
-bool run_test(Host* host, Device* device, const std::array<uint32_t, 4>& shape, float low, float high, Args... args) {
+bool run_test(Host* host, Device* device, const Shape& shape, float low, float high, Args... args) {
     auto input_tensor = tt::numpy::random::uniform(bfloat16(low), bfloat16(high), shape).to(Layout::TILE);
 
     auto host_output = HostFunction(input_tensor);
@@ -70,7 +70,7 @@ void test_operation_infrastructure() {
     tt::log_info(tt::LogTest, "Running {}", __func__);
     using namespace tt::tt_metal;
 
-    auto shape = std::array<uint32_t, 4>{1, 1, TILE_HEIGHT, TILE_WIDTH};
+    auto shape = Shape{1, 1, TILE_HEIGHT, TILE_WIDTH};
     auto input_tensor = tt::numpy::random::uniform(bfloat16(0), bfloat16(1), shape).to(Layout::TILE);
 
     auto op = operation::DeviceOperation(EltwiseUnary{UnaryOpType::SQRT});
@@ -104,7 +104,7 @@ void test_numerically() {
 
     TT_ASSERT(tt::tt_metal::InitializeDevice(device));
 
-    auto shape = std::array<uint32_t, 4>{1, 1, TILE_HEIGHT, TILE_WIDTH};
+    auto shape = Shape{1, 1, TILE_HEIGHT, TILE_WIDTH};
     {
         auto allclose = run_test<host_function<::detail::sqrt>, device_function<tt::tt_metal::sqrt>>(
             host, device, shape, 0.0f, 1.0f, 1e-1f, 1e-5f);

@@ -46,7 +46,7 @@ namespace op_profiler {
             return ret;
         }
 
-        static string shape_to_str(const array<uint32_t, 4> shape)
+        static string shape_to_str(const Shape& shape)
         {
             return to_string(shape[0]) + "_" +\
                 to_string(shape[1]) + "_" +\

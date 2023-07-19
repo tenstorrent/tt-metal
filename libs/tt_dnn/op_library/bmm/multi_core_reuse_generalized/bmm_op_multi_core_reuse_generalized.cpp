@@ -302,7 +302,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_generalized(const Tensor
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    std::array<uint32_t, 4> cshape = output.shape(); // C=A*B, N1MK*11KN->N1MN
+    Shape cshape = output.shape(); // C=A*B, N1MK*11KN->N1MN
     tt_metal::Buffer *out_buffer = output.buffer();
     TT_ASSERT(out_buffer != nullptr, "Output buffer should be allocated on device!");
 

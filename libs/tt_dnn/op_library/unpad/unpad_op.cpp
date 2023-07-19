@@ -10,9 +10,9 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks unpad_rm(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
+operation::ProgramWithCallbacks unpad_rm(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end) {
 
-    const std::array<uint32_t, 4> output_shape = output.shape();
+    const Shape output_shape = output.shape();
 
     tt_metal::Program program = tt_metal::Program();
 
@@ -106,10 +106,10 @@ operation::ProgramWithCallbacks unpad_rm(const Tensor &a, Tensor& output, const 
     return {std::move(program), override_runtime_args_callback};
 }
 
-operation::ProgramWithCallbacks unpad_tile(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
+operation::ProgramWithCallbacks unpad_tile(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end) {
 
 
-    const std::array<uint32_t, 4> output_shape = output.shape();
+    const Shape output_shape = output.shape();
 
     tt_metal::Program program = tt_metal::Program();
 
@@ -298,10 +298,10 @@ tt::stl::reflection::Attributes Unpad::attributes() const {
     };
 }
 
-Tensor unpad(const Tensor &input_tensor_a, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end, const MemoryConfig& mem_config) {
+Tensor unpad(const Tensor &input_tensor_a, const Shape &output_tensor_start, const Shape &output_tensor_end, const MemoryConfig& mem_config) {
     // No-op (Will do a tensor copy)
     // TODO: We need to run asserts before this
-    const std::array<uint32_t, 4> output_tensor_shape = {
+    const Shape output_tensor_shape = {
         output_tensor_end[0] - output_tensor_start[0] + 1,
         output_tensor_end[1] - output_tensor_start[1] + 1,
         output_tensor_end[2] - output_tensor_start[2] + 1,
@@ -359,7 +359,7 @@ tt::stl::reflection::Attributes UnpadOnHost::attributes() const {
     };
 }
 
-Tensor unpad_on_host(const Tensor &input_tensor, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end, const MemoryConfig& mem_config) {
+Tensor unpad_on_host(const Tensor &input_tensor, const Shape &output_tensor_start, const Shape &output_tensor_end, const MemoryConfig& mem_config) {
     return operation::run(UnpadOnHost{output_tensor_start, output_tensor_end}, {input_tensor}).at(0);
 }
 

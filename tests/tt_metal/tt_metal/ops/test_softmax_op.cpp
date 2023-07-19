@@ -40,7 +40,7 @@ int main(int argc, char **argv) {
     Host *host = GetHost();
     pass &= InitializeDevice(device);
     tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}});
-    std::array<uint32_t, 4> shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
+    Shape shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
     Tensor a = tt::numpy::random::random(shape).to(Layout::TILE).to(device);
     Tensor c = softmax_in_place(a);
     Tensor d = c.to(host);

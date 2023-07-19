@@ -150,8 +150,15 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
                                     bool tilize_in0,
                                     bool untilize_out,
                                     Tensor &out) {
-    const auto [in0_batch, in0_channel, in0_height, in0_width] = in0.shape();
-    const auto [in1_batch, in1_channel, in1_height, in1_width] = in1.shape();
+
+    uint32_t in0_batch = in0.shape()[0];
+    uint32_t in0_channel = in0.shape()[1];
+    uint32_t in0_height = in0.shape()[2];
+    uint32_t in0_width = in0.shape()[3];
+    uint32_t in1_batch = in1.shape()[0];
+    uint32_t in1_channel = in1.shape()[1];
+    uint32_t in1_height = in1.shape()[2];
+    uint32_t in1_width = in1.shape()[3];
 
     // input matrix shape checks
     TT_ASSERT(in0_batch == 1, "Supports only batch = 1");
@@ -509,8 +516,16 @@ void BMMTilizeUntilize::validate(const std::vector<Tensor>& inputs) const {
 std::vector<Shape> BMMTilizeUntilize::compute_output_shapes(const std::vector<Tensor>& inputs) const {
     const auto& in0 = inputs.at(0);
     const auto& in1 = inputs.at(1);
-    const auto [in0_batch, in0_channel, in0_height, in0_width] = in0.shape();
-    const auto [in1_batch, in1_channel, in1_height, in1_width] = in1.shape();
+
+    auto in0_batch = in0.shape()[0];
+    auto in0_channel = in0.shape()[1];
+    auto in0_height = in0.shape()[2];
+    auto in0_width = in0.shape()[3];
+    auto in1_batch = in1.shape()[0];
+    auto in1_channel = in1.shape()[1];
+    auto in1_height = in1.shape()[2];
+    auto in1_width = in1.shape()[3];
+
     const Shape out_shape { in0_batch, in0_channel, in0_height, in1_width };
     return {out_shape};
 }

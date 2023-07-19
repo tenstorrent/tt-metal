@@ -10,8 +10,6 @@ namespace tt {
 
 namespace numpy {
 
-using Shape = std::array<uint32_t, 4>;
-
 using tt_metal::Tensor;
 using tt_metal::DataType;
 using tt_metal::Layout;

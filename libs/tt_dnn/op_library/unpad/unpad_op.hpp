@@ -9,8 +9,8 @@ namespace tt_metal {
 
 
 struct Unpad {
-    const std::array<uint32_t, 4> output_tensor_start;
-    const std::array<uint32_t, 4> output_tensor_end;
+    const Shape output_tensor_start;
+    const Shape output_tensor_end;
     const MemoryConfig& output_mem_config;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
@@ -21,11 +21,11 @@ struct Unpad {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-Tensor unpad(const Tensor &input_tensor_a, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end, const MemoryConfig& mem_config = MemoryConfig{.interleaved = true});
+Tensor unpad(const Tensor &input_tensor_a, const Shape &output_tensor_start, const Shape &output_tensor_end, const MemoryConfig& mem_config = MemoryConfig{.interleaved = true});
 
 struct UnpadOnHost {
-    const std::array<uint32_t, 4> output_tensor_start;
-    const std::array<uint32_t, 4> output_tensor_end;
+    const Shape output_tensor_start;
+    const Shape output_tensor_end;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -33,7 +33,7 @@ struct UnpadOnHost {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-Tensor unpad_on_host(const Tensor &input_tensor, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end, const MemoryConfig& mem_config = MemoryConfig{.interleaved = true});
+Tensor unpad_on_host(const Tensor &input_tensor, const Shape &output_tensor_start, const Shape &output_tensor_end, const MemoryConfig& mem_config = MemoryConfig{.interleaved = true});
 
 }  // namespace tt_metal
 

@@ -125,26 +125,26 @@ constexpr inline uint32_t packed_buffer_size_bytes<bfloat8_b>(uint32_t volume_un
 //                                  Layout converters
 // ======================================================================================
 template <typename T, template<typename> typename BufferType>
-inline std::vector<T> convert_layout_row_major_to_tile(const std::array<uint32_t, 4> &shape, const BufferType<T>& data_to_convert) {
+inline std::vector<T> convert_layout_row_major_to_tile(const Shape& shape, const BufferType<T>& data_to_convert) {
     TT_ASSERT((shape[2] % tt::constants::TILE_HEIGHT == 0 && shape[3] % tt::constants::TILE_WIDTH == 0), "Unsupported shape for tensor conversion");
     std::vector<uint32_t> shape_vec = {shape[0], shape[1], shape[2], shape[3]};
     return convert_layout(data_to_convert, shape_vec, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED32_4FACES);
 }
 
 template <typename T, template<typename> typename BufferType>
-inline std::vector<T> convert_layout_tile_to_row_major(const std::array<uint32_t, 4> &shape, const BufferType<T>& data_to_convert) {
+inline std::vector<T> convert_layout_tile_to_row_major(const Shape& shape, const BufferType<T>& data_to_convert) {
     std::vector<uint32_t> shape_vec = {shape[0], shape[1], shape[2], shape[3]};
     return convert_layout(data_to_convert, shape_vec, TensorLayout::TILED32_4FACES, TensorLayout::LIN_ROW_MAJOR);
 }
 
 template <typename T, template<typename> typename BufferType>
-inline std::vector<T> convert_layout_row_major_to_channels_last(const std::array<uint32_t, 4> &shape, const BufferType<T>& data_to_convert) {
+inline std::vector<T> convert_layout_row_major_to_channels_last(const Shape& shape, const BufferType<T>& data_to_convert) {
     std::vector<uint32_t> shape_vec = {shape[0], shape[1], shape[2], shape[3]};
     return convert_layout(data_to_convert, shape_vec, TensorLayout::LIN_ROW_MAJOR, TensorLayout::CHANNELS_LAST);
 }
 
 template <typename T, template<typename> typename BufferType>
-inline std::vector<T> convert_layout_channels_last_to_row_major(const std::array<uint32_t, 4> &shape, const BufferType<T>& data_to_convert) {
+inline std::vector<T> convert_layout_channels_last_to_row_major(const Shape& shape, const BufferType<T>& data_to_convert) {
     std::vector<uint32_t> shape_vec = {shape[0], shape[1], shape[2], shape[3]};
     return convert_layout(data_to_convert, shape_vec, TensorLayout::CHANNELS_LAST, TensorLayout::LIN_ROW_MAJOR);
 }
@@ -177,7 +177,7 @@ void print_data(const std::vector<T> &data, DataType dtype) {
 }
 
 template <typename T>
-void print_row_major_data(const std::vector<T> &data, std::array<uint32_t, 4> shape, DataType dtype) {
+void print_row_major_data(const std::vector<T> &data, const Shape& shape, DataType dtype) {
     std::cout << "[ ";
     for(auto w = 0; w < shape[0]; w++) {
         if(w == 0)
@@ -226,11 +226,6 @@ void print_row_major_data(const std::vector<T> &data, std::array<uint32_t, 4> sh
 // ======================================================================================
 void validate_on_device_dtype_and_layout(Device *device, DataType dtype, Layout layout);
 
-// ======================================================================================
-//                           Data reader, writer, and initializers
-// ======================================================================================
-std::tuple<int, int, int> get_interleaved_read_write_unit_metadata(DataType dtype, Layout layout, uint32_t total_size_bytes, const std::array<uint32_t, 4>& shape);
-
 // -----------------------------------------------------------------------------------------------------------------------------------------------
 // ===============================================================================================================================================
 //                                                              High Level APIs
@@ -251,7 +246,7 @@ DeviceBuffer allocate_buffer_on_device(
 
 template <typename T>
 std::vector<T> read_data_from_device(const Tensor &tensor, uint32_t size_in_bytes) {
-    auto device_buffer = tensor.device_storage().value().buffer;
+    auto device_buffer = tensor.buffer();
     TT_ASSERT(device_buffer->size() == size_in_bytes);
 
     std::vector<uint32_t> device_data;
@@ -365,9 +360,8 @@ inline Tensor to_host(const Tensor &tensor) {
         return tensor;
     }
     TT_ASSERT(tensor.is_allocated(), "Need DRAM buffers to be allocated!");
-    auto device_storage = tensor.device_storage().value();
-    auto device_buffer = device_storage.buffer;
-    auto device = device_storage.device;
+    auto device_buffer = tensor.buffer();
+    auto device = tensor.device();
     TT_ASSERT(device != nullptr && "Need device to be set copy data from device to host!");
     uint32_t size_in_bytes = device_buffer->size();
     auto data_vec = read_data_from_device<T>(tensor, size_in_bytes);
@@ -465,7 +459,7 @@ inline Tensor to_layout(const Tensor &tensor, Layout target_layout) {
 //                                  .pad() and .unpad()
 // ======================================================================================
 template <typename T>
-inline Tensor pad(const Tensor &tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
+inline Tensor pad(const Tensor &tensor, const Shape& output_tensor_shape, const Shape& input_tensor_start, float pad_value) {
     auto pad_value_ = static_cast<T>(pad_value);
     const auto input_tensor_shape = tensor.shape();
     const auto input_tensor_strides = tensor.strides();
@@ -557,12 +551,12 @@ inline Tensor pad(const Tensor &tensor, const std::array<uint32_t, 4> &output_te
 }
 
 template <typename T>
-inline Tensor unpad(const Tensor &tensor, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
+inline Tensor unpad(const Tensor &tensor, const Shape& output_tensor_start, const Shape& output_tensor_end) {
 
     auto input_buffer = owned_buffer::get_as<T>(tensor);
 
     // Check if tensor start and end indices are within input tensor shape
-    const std::array<uint32_t, 4> input_tensor_shape = tensor.shape();
+    const Shape& input_tensor_shape = tensor.shape();
     TT_ASSERT(output_tensor_start[0] < input_tensor_shape[0]);
     TT_ASSERT(output_tensor_end[0] < input_tensor_shape[0]);
     TT_ASSERT(output_tensor_start[1] < input_tensor_shape[1]);
@@ -579,14 +573,14 @@ inline Tensor unpad(const Tensor &tensor, const std::array<uint32_t, 4> &output_
     TT_ASSERT(output_tensor_start[3] <= output_tensor_end[3]);
 
     // Figure out output tensor shape
-    const std::array<uint32_t, 4> output_tensor_shape = {
+    const Shape output_tensor_shape = {
         output_tensor_end[0] - output_tensor_start[0] + 1,
         output_tensor_end[1] - output_tensor_start[1] + 1,
         output_tensor_end[2] - output_tensor_start[2] + 1,
         output_tensor_end[3] - output_tensor_start[3] + 1,
     };
 
-    const std::array<uint32_t, 4> input_tensor_strides = tensor.strides();
+    const Shape input_tensor_strides = tensor.strides();
 
     auto output_buffer = owned_buffer::create<T>(volume(output_tensor_shape));
     auto output_index = 0;
@@ -646,10 +640,7 @@ inline void print(const Tensor &tensor, Layout print_layout, bool pretty_print) 
                 pretty_print ? print_row_major_data(converted_data, tensor.shape(), tensor.dtype()) : print_data(converted_data, tensor.dtype());
             }
             else if (print_layout == Layout::CHANNELS_LAST) {
-                auto cl_shape = tensor.shape();
-                cl_shape[3] = tensor.shape()[1];
-                cl_shape[2] = tensor.shape()[3];
-                cl_shape[1] = tensor.shape()[2];
+                Shape cl_shape{tensor.shape()[0], tensor.shape()[3], tensor.shape()[2], tensor.shape()[1]};
                 pretty_print ? print_row_major_data(data_vec, cl_shape, tensor.dtype()) : print_data(data_vec, tensor.dtype());
             }
             else {

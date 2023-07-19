@@ -146,7 +146,7 @@ void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program &program,
     }
 }
 
-Tensor create_output_dram_buffer_(Device * device, DataType data_type, std::array<uint32_t, 4> cshape) {
+Tensor create_output_dram_buffer_(Device * device, DataType data_type, Shape cshape) {
     tt::tt_metal::Layout out_layout;
     tt_metal::Tensor output = tt_metal::create_device_tensor(
         cshape,
@@ -181,7 +181,9 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
     TT_ASSERT(b.layout() == Layout::TILE, "Conv weights should be in tiled layout");
     TT_ASSERT(b.shape()[0] == 1, "Conv weight matrix shape is invalid");
     TT_ASSERT(b.shape()[1] == 1, "Conv weight matrix shape is invalid");
-    const auto [notused1, notused2, weight_matrix_height, weight_matrix_width] = b.shape();
+    uint32_t weight_matrix_height = b.shape()[2];
+    uint32_t weight_matrix_width = b.shape()[3];
+
     // Normal matrix shape check
     TT_ASSERT(act_matrix_width == weight_matrix_height, "The width of tensor a needs to match the height of tensor b");
 
@@ -596,7 +598,7 @@ tt::stl::reflection::Attributes Conv::attributes() const {
 
 // generates address map for reader kernel which reads from dram buffer (tiled layout) into l1 buffer
 std::pair<vector<uint32_t>, vector<uint32_t>> generate_conv_weight_address_map(
-                            const std::array<uint32_t, 4>& weight_shape,
+                            const Shape& weight_shape,
                             uint32_t weight_block_h_datums,
                             uint32_t weight_block_w_datums,
                             uint32_t num_blocks_act_h,
@@ -679,7 +681,7 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_conv_weight_address_map(
 }
 
 std::pair<vector<uint32_t>, vector<uint32_t>> generate_conv_activation_address_map(
-                            const std::array<uint32_t, 4>& activation_shape,
+                            const Shape& activation_shape,
                             const vector<int>& conv_params,
                             uint32_t act_block_h_datums,
                             uint32_t act_block_w_datums,
@@ -880,7 +882,10 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
     uint32_t Ca = 1;
     auto Ha = num_rows;
     auto Wa = num_cols;
-    const auto [Bb, Cb, Hb, Wb] = b.shape();
+    uint32_t Bb = b.shape()[0];
+    uint32_t Cb = b.shape()[1];
+    uint32_t Hb = b.shape()[2];
+    uint32_t Wb = b.shape()[3];
     // Normal matrix shape checks
     TT_ASSERT(Ba == 1, "So far, large matmul op has only been tested for batch one.");
     TT_ASSERT(Ba == Bb, "Batch dimension needs to match");
@@ -1023,7 +1028,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
     tt_metal::Buffer *src1_dram_buffer = b.buffer();
     TT_ASSERT(src1_dram_buffer->size() % single_tile_size == 0, "Buffer size of tensor b must be divisible by single_tile_size (aka divisible by sizeof(df) * 1024)");
 
-    std::array<uint32_t, 4> cshape{Ba, Ca, Ha, Wb};
+    Shape cshape{Ba, Ca, Ha, Wb};
 
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");

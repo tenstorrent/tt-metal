@@ -360,29 +360,29 @@ void BertLargeMatmul::validate(
 
     switch (this->bert_large_matmul_op_type) {
         case BertLargeMatmulOpType::FUSED_QKV:
-            TT_ASSERT((input_tensor_a.shape() == std::array<uint32_t, 4>({B, 1, 384, 1024})), "Unsupported input shape");
-            TT_ASSERT((input_tensor_b.shape() == std::array<uint32_t, 4>({1, 1, 1024, 3072})), "Unsupported input shape");
+            TT_ASSERT((input_tensor_a.shape() == Shape({B, 1, 384, 1024})), "Unsupported input shape");
+            TT_ASSERT((input_tensor_b.shape() == Shape({1, 1, 1024, 3072})), "Unsupported input shape");
             break;
         case BertLargeMatmulOpType::FF1:
             TT_ASSERT((input_tensor_a.dtype() != DataType::BFLOAT16 or input_tensor_b.dtype() != DataType::BFLOAT16 or this->output_dtype != DataType::BFLOAT16) or (this->output_mem_config.buffer_type == BufferType::DRAM) or (input_tensor_a.memory_config().buffer_type == BufferType::DRAM and input_tensor_b.memory_config().buffer_type == BufferType::DRAM), "For BFLOAT16, if output is on L1, one of in0 or in1 must be on DRAM!");
-            TT_ASSERT((input_tensor_a.shape() == std::array<uint32_t, 4>({B, 1, 384, 1024})), "Unsupported input shape");
-            TT_ASSERT((input_tensor_b.shape() == std::array<uint32_t, 4>({1, 1, 1024, 4096})), "Unsupported input shape");
+            TT_ASSERT((input_tensor_a.shape() == Shape({B, 1, 384, 1024})), "Unsupported input shape");
+            TT_ASSERT((input_tensor_b.shape() == Shape({1, 1, 1024, 4096})), "Unsupported input shape");
             break;
         case BertLargeMatmulOpType::FF2:
-            TT_ASSERT((input_tensor_a.shape() == std::array<uint32_t, 4>({B, 1, 384, 4096})), "Unsupported input shape");
-            TT_ASSERT((input_tensor_b.shape() == std::array<uint32_t, 4>({1, 1, 4096, 1024})), "Unsupported input shape");
+            TT_ASSERT((input_tensor_a.shape() == Shape({B, 1, 384, 4096})), "Unsupported input shape");
+            TT_ASSERT((input_tensor_b.shape() == Shape({1, 1, 4096, 1024})), "Unsupported input shape");
             break;
         case BertLargeMatmulOpType::SELFOUT:
-            TT_ASSERT((input_tensor_a.shape() == std::array<uint32_t, 4>({B, 1, 384, 1024})), "Unsupported input shape");
-            TT_ASSERT((input_tensor_b.shape() == std::array<uint32_t, 4>({1, 1, 1024, 1024})), "Unsupported input shape");
+            TT_ASSERT((input_tensor_a.shape() == Shape({B, 1, 384, 1024})), "Unsupported input shape");
+            TT_ASSERT((input_tensor_b.shape() == Shape({1, 1, 1024, 1024})), "Unsupported input shape");
             break;
         case BertLargeMatmulOpType::PRE_SOFTMAX_BMM:
-            TT_ASSERT((input_tensor_a.shape() == std::array<uint32_t, 4>({B, 16, 384, 64})), "Unsupported input shape");
-            TT_ASSERT((input_tensor_b.shape() == std::array<uint32_t, 4>({B, 16, 64, 384})), "Unsupported input shape");
+            TT_ASSERT((input_tensor_a.shape() == Shape({B, 16, 384, 64})), "Unsupported input shape");
+            TT_ASSERT((input_tensor_b.shape() == Shape({B, 16, 64, 384})), "Unsupported input shape");
             break;
         case BertLargeMatmulOpType::POST_SOFTMAX_BMM:
-            TT_ASSERT((input_tensor_a.shape() == std::array<uint32_t, 4>({B, 1, 16 * 384, 384})), "Unsupported input shape");
-            TT_ASSERT((input_tensor_b.shape() == std::array<uint32_t, 4>({B, 16, 384, 64})), "Unsupported input shape");
+            TT_ASSERT((input_tensor_a.shape() == Shape({B, 1, 16 * 384, 384})), "Unsupported input shape");
+            TT_ASSERT((input_tensor_b.shape() == Shape({B, 16, 384, 64})), "Unsupported input shape");
             break;
         default:
             TT_ASSERT(false, "Unknown bert large matmul op in validate!");
@@ -405,10 +405,10 @@ void BertLargeMatmul::validate(
 }
 
 std::vector<Shape> BertLargeMatmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    Shape output_shape;
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     auto ashape = input_tensor_a.shape();
+    Shape output_shape = ashape;
     const auto& bshape = input_tensor_b.shape();
     const auto B = ashape[0];
     switch (this->bert_large_matmul_op_type) {
@@ -416,7 +416,6 @@ std::vector<Shape> BertLargeMatmul::compute_output_shapes(const std::vector<Tens
         case BertLargeMatmulOpType::FF1:
         case BertLargeMatmulOpType::FF2:
         case BertLargeMatmulOpType::SELFOUT:
-            output_shape = ashape;
             output_shape.back() = bshape.back();
             break;
         case BertLargeMatmulOpType::PRE_SOFTMAX_BMM:

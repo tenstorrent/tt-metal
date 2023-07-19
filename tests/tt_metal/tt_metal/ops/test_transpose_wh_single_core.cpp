@@ -20,7 +20,7 @@ using namespace constants;
 Tensor perform_transpose_wh(Tensor& input_tensor) {
     TT_ASSERT(input_tensor.storage_type() == StorageType::OWNED);
     auto ashape = input_tensor.shape();
-    TT_ASSERT(ashape.size() == 4);
+    TT_ASSERT(ashape.rank() == 4);
     auto bshape = ashape;
     bshape[2] = ashape[3];
     bshape[3] = ashape[2];
@@ -86,7 +86,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        std::array<uint32_t, 4> shape = {1, 1, 10*TILE_HEIGHT, 12*TILE_WIDTH};
+        Shape shape = {1, 1, 10*TILE_HEIGHT, 12*TILE_WIDTH};
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a =  tt::numpy::random::random(shape).to(Layout::TILE).to(device);
 

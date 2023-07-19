@@ -29,7 +29,7 @@ Tensor convert_from_channels_last_tensor_on_device(Tensor channels_last_tensor, 
     TT_ASSERT(channels_last_tensor.layout() == Layout::CHANNELS_LAST);
     // need to interpret channels last tensor as rm tensor to call transpose op
     Shape cl_as_rm_shape = {channels_last_tensor.shape()[0], channels_last_tensor.shape()[2], channels_last_tensor.shape()[3], channels_last_tensor.shape()[1]};
-    auto from_cl_tensor = Tensor(channels_last_tensor.device_storage().value(), cl_as_rm_shape, channels_last_tensor.dtype(), Layout::ROW_MAJOR);
+    auto from_cl_tensor = Tensor(channels_last_tensor.storage(), cl_as_rm_shape, channels_last_tensor.dtype(), Layout::ROW_MAJOR);
     if(pad_t) {
         Shape padded_shape_cl_as_rm = {padded_shape[0], padded_shape[2], padded_shape[3], padded_shape[1]};
         from_cl_tensor = pad(from_cl_tensor, padded_shape_cl_as_rm, {0, 0, 0, 0}, pad_value);
@@ -73,11 +73,11 @@ Tensor convert_to_channels_last_tensor_on_device(Tensor row_major_or_tile_tensor
     TT_ASSERT(transpose_2_output.layout() == Layout::ROW_MAJOR);
     TT_ASSERT(transpose_2_output.volume() == row_major_or_tile_tensor.volume());
     // re-interpret the final row major tensor as channels last tensor
-    Tensor channels_last_tensor = Tensor(transpose_2_output.device_storage().value(), row_major_or_tile_tensor.shape(), row_major_or_tile_tensor.dtype(), Layout::CHANNELS_LAST);
+    Tensor channels_last_tensor = Tensor(transpose_2_output.storage(), row_major_or_tile_tensor.shape(), row_major_or_tile_tensor.dtype(), Layout::CHANNELS_LAST);
     return channels_last_tensor;
 }
 
-Tensor AutoFormat::format_input_tensor(const Tensor &input, Device * device, const std::array<uint32_t, 4>& padded_shape, float pad_value, Layout target_layout) {
+Tensor AutoFormat::format_input_tensor(const Tensor &input, Device * device, const Shape& padded_shape, float pad_value, Layout target_layout) {
     bool pad_input = input.shape() != padded_shape;
     bool convert_layout = input.layout() != target_layout;
 
@@ -156,7 +156,7 @@ Tensor AutoFormat::format_input_tensor(const Tensor &input, Device * device, con
 }
 
 
-Tensor AutoFormat::format_output_tensor(const Tensor &output, const std::array<uint32_t, 4>& shape, Device* device, Layout target_layout) {
+Tensor AutoFormat::format_output_tensor(const Tensor &output, const Shape& shape, Device* device, Layout target_layout) {
     bool unpad_output = output.shape() != shape;
     bool convert_layout = output.layout() != target_layout;
 

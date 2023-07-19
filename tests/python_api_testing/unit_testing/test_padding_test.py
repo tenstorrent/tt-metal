@@ -28,12 +28,7 @@ def test_run_padding_test(
     inp = torch.rand(*input_tensor_shape, dtype=torch.bfloat16)
 
     # Create tensor on host
-    a = ttl.tensor.Tensor(
-        inp.reshape(-1).tolist(),
-        input_tensor_shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
+    a = ttl.tensor.Tensor(inp.to(torch.bfloat16))
 
     # Pad inputs on host
     a_pad = a.pad(output_tensor_shape, input_tensor_start, pad_value)

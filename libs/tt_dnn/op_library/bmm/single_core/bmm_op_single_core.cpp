@@ -24,7 +24,7 @@ operation::ProgramWithCallbacks matmul_single_core(const Tensor &a, const Tensor
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
-    std::array<uint32_t, 4> cshape = output.shape(); // C=A*B, N1MK*11KN->N1MN
+    Shape cshape = output.shape(); // C=A*B, N1MK*11KN->N1MN
 
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");

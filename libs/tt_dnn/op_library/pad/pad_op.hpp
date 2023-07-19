@@ -8,8 +8,8 @@ namespace tt {
 namespace tt_metal {
 
 struct Pad {
-    const std::array<uint32_t, 4> output_tensor_shape;
-    const std::array<uint32_t, 4> input_tensor_start;
+    const Shape output_tensor_shape;
+    const Shape input_tensor_start;
     const float pad_value;
     const MemoryConfig& output_mem_config;
 
@@ -21,11 +21,11 @@ struct Pad {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-Tensor pad(const Tensor &input_tensor_a, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, const float pad_value, const MemoryConfig& mem_config = MemoryConfig{.interleaved = true});
+Tensor pad(const Tensor &input_tensor_a, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value, const MemoryConfig& mem_config = MemoryConfig{.interleaved = true});
 
 struct PadOnHost {
-    const std::array<uint32_t, 4> output_tensor_shape;
-    const std::array<uint32_t, 4> input_tensor_start;
+    const Shape output_tensor_shape;
+    const Shape input_tensor_start;
     const float pad_value;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
@@ -34,7 +34,7 @@ struct PadOnHost {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-Tensor pad_on_host(const Tensor &input_tensor_a, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value);
+Tensor pad_on_host(const Tensor &input_tensor_a, const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value);
 
 }  // namespace tt_metal
 

@@ -230,9 +230,9 @@ Tensor untilize(const Tensor &input_tensor_a, const MemoryConfig& mem_config) {
 }
 
 
-operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
+operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end) {
 
-    const std::array<uint32_t, 4> output_shape = output.shape();
+    const Shape output_shape = output.shape();
 
     tt_metal::Program program = tt_metal::Program();
 
@@ -488,10 +488,10 @@ tt::stl::reflection::Attributes UntilizeWithUnpadding::attributes() const {
     };
 }
 
-Tensor untilize_with_unpadding(const Tensor &input_tensor_a, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end, const MemoryConfig& mem_config) {
+Tensor untilize_with_unpadding(const Tensor &input_tensor_a, const Shape &output_tensor_start, const Shape &output_tensor_end, const MemoryConfig& mem_config) {
     // No-op (Will do a tensor copy)
     // TODO: We need to run asserts before this
-    const std::array<uint32_t, 4> output_tensor_shape = {
+    const Shape output_tensor_shape = {
         output_tensor_end[0] - output_tensor_start[0] + 1,
         output_tensor_end[1] - output_tensor_start[1] + 1,
         output_tensor_end[2] - output_tensor_start[2] + 1,

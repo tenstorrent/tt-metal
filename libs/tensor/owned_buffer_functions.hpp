@@ -45,15 +45,33 @@ const Buffer<T> get_as(const OwnedBuffer& buffer) {
 template<typename T>
 Buffer<T> get_as(Tensor& tensor) {
     validate_datatype<T>(tensor);
-    auto& buffer = tensor.owned_storage().value().buffer;
-    return get_as<T>(buffer);
+    return std::visit(
+        [] (auto&& storage) -> Buffer<T> {
+            using StorageType = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
+                return get_as<T>(storage.buffer);
+            } else {
+                TT_THROW("Must be an owned storage");
+            }
+        },
+        tensor.storage()
+    );
 }
 
 template<typename T>
 const Buffer<T> get_as(const Tensor& tensor) {
     validate_datatype<T>(tensor);
-    const auto& buffer = tensor.owned_storage().value().buffer;
-    return get_as<T>(buffer);
+    return std::visit(
+        [] (auto&& storage) -> Buffer<T> {
+            using StorageType = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
+                return get_as<T>(storage.buffer);
+            } else {
+                TT_THROW("Must be a owned storage");
+            }
+        },
+        tensor.storage()
+    );
 }
 
 }  // namespace owned_buffer

@@ -26,9 +26,7 @@ class Tensor {
         // ======================================================================================
         //                                  Hi Level APIs
         // ======================================================================================
-        Tensor(const OwnedStorage& storage, const Shape& shape, DataType dtype, Layout layout);
-        Tensor(const DeviceStorage& storage, const Shape& shape, DataType dtype, Layout layout);
-        Tensor(const BorrowedStorage& storage, const std::vector<uint32_t>& shape, DataType dtype, Layout layout);
+        Tensor(const Storage& storage, const Shape& shape, DataType dtype, Layout layout);
 
         Tensor(const Tensor &other) = default;
         Tensor& operator=(const Tensor &other) = default;
@@ -46,13 +44,13 @@ class Tensor {
 
         Tensor to(Layout target_layout) const;
 
-        Tensor pad(const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) const;
+        Tensor pad(const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value) const;
 
-        Tensor unpad(const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) const;
+        Tensor unpad(const Shape &output_tensor_start, const Shape &output_tensor_end) const;
 
         Tensor pad_to_tile(float pad_value) const;
 
-        Tensor unpad_from_tile(const std::array<uint32_t, 4> &output_tensor_shape) const;
+        Tensor unpad_from_tile(const Shape &output_tensor_shape) const;
 
         void print(Layout print_layout=Layout::ROW_MAJOR, bool pretty_print=false) const;
 
@@ -68,13 +66,9 @@ class Tensor {
         // ======================================================================================
         //                                      Getters
         // ======================================================================================
-        const Shape shape() const {
-            std::array<uint32_t, 4> output{};
-            std::copy(std::begin(this->shape_), std::end(this->shape_), std::begin(output));
-            return output;
-        }
+        const Shape& shape() const { return this->shape_; }
 
-        const std::array<uint32_t, 4> strides() const;
+        const Shape strides() const;
 
         uint32_t volume() const;
 
@@ -84,16 +78,13 @@ class Tensor {
 
         bool is_allocated() const;
 
-        // TODO(arakhmati): clean up the methods below
         StorageType storage_type() const;
-
         const Storage& storage() const;
-        const std::optional<OwnedStorage> owned_storage() const;
-        const std::optional<DeviceStorage> device_storage() const;
 
-        Buffer* buffer() const { return this->device_storage().value().buffer.get(); }
-        Device* device() const { return this->device_storage().value().device; }
-        const MemoryConfig memory_config() const { return this->device_storage().value().memory_config; };
+        // TODO(arakhmati): clean up the methods below
+        Buffer* buffer() const { return std::get<DeviceStorage>(this->storage_).buffer.get(); }
+        Device* device() const { return std::get<DeviceStorage>(this->storage_).device; }
+        const MemoryConfig memory_config() const { return std::get<DeviceStorage>(this->storage_).memory_config; };
 
         // Size in bytes of a single element held in tensor
         uint32_t element_size() const;
@@ -103,7 +94,7 @@ class Tensor {
 
     private:
         Storage storage_;
-        std::vector<uint32_t> shape_;      // Outer-most dimension first
+        Shape shape_;      // Outer-most dimension first
         DataType dtype_;
         Layout layout_;
 };

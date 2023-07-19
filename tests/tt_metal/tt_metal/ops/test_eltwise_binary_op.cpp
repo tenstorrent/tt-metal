@@ -28,7 +28,7 @@ Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b)
 
 template <auto HostFunction, typename DeviceFunction, typename... Args>
 bool run_test(const DeviceFunction& device_function, Host* host, Device* device, Args... args) {
-    std::array<uint32_t, 4> shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+    Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
     auto input_tensor_a = tt::numpy::random::random(shape, DataType::BFLOAT16).to(Layout::TILE);
     auto input_tensor_b = tt::numpy::random::random(shape, DataType::BFLOAT16).to(Layout::TILE);
 

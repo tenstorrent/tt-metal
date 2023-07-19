@@ -25,7 +25,7 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
-    std::array<uint32_t, 4> cshape = output.shape(); // C=A*B, N1MK*11KN->N1MN
+    Shape cshape = output.shape(); // C=A*B, N1MK*11KN->N1MN
 
     auto compute_and_storage_grid_size = device->compute_and_storage_grid_size();
     uint32_t num_cores_x = compute_and_storage_grid_size.x;

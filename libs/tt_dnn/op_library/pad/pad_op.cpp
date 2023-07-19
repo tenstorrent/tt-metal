@@ -10,7 +10,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, const float pad_value) {
+operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value) {
 
     TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to pad needs to be on device!");
     TT_ASSERT(a.buffer() != nullptr, "Operand to pad needs to be allocated in a buffer on device!");
@@ -111,7 +111,7 @@ operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const st
     return {std::move(program), override_runtime_args_callback};
 }
 
-operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, const float pad_value) {
+operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value) {
 
     TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to pad needs to be on device!");
     TT_ASSERT(a.buffer() != nullptr, "Operand to pad needs to be allocated in a buffer on device!");
@@ -293,7 +293,7 @@ tt::stl::reflection::Attributes Pad::attributes() const {
     };
 }
 
-Tensor pad(const Tensor &input_tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value, const MemoryConfig& mem_config) {
+Tensor pad(const Tensor &input_tensor, const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value, const MemoryConfig& mem_config) {
     if (input_tensor.shape() == output_tensor_shape) {
         return input_tensor;
     }
@@ -332,7 +332,7 @@ tt::stl::reflection::Attributes PadOnHost::attributes() const {
     };
 }
 
-Tensor pad_on_host(const Tensor &input_tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
+Tensor pad_on_host(const Tensor &input_tensor, const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value) {
     return operation::run(PadOnHost{output_tensor_shape, input_tensor_start, pad_value}, {input_tensor}).at(0);
 }
 
