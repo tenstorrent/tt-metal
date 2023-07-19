@@ -14,12 +14,15 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        arch: [grayskull]
+        runner-info: [
+          {arch: grayskull, runs-on: ["model-runner-grayskull"], machine-type: "virtual_machine"},
+          {arch: grayskull, runs-on: ["grayskull", "self-reset"], machine-type: "bare_metal"},
+        ]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.arch }}
+      ARCH_NAME: ${{ matrix.runner-info.arch }}
     environment: dev
-    runs-on: ["${{ matrix.arch }}", "self-reset"]
+    runs-on: ${{ matrix.runner-info.runs-on }}
     steps:
       - uses: actions/checkout@v3
         with:
@@ -36,7 +39,7 @@ jobs:
         timeout-minutes: 60
         run: |
           source build/python_env/bin/activate
-          ./tests/scripts/run_performance.sh
+          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type models_performance_${{ matrix.runner-info.machine-type }}
       - name: Check perf report exists
         id: check-perf-report
         run: |
@@ -47,5 +50,5 @@ jobs:
       - name: Upload perf report
         uses: actions/upload-artifact@v3
         with:
-          name: perf-report-csv
+          name: perf-report-csv-${{ matrix.runner-info.arch }}-${{ matrix.runner-info.machine-type }}
           path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"

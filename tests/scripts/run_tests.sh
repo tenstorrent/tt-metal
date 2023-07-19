@@ -91,7 +91,14 @@ run_frequent_pipeline_tests() {
     ./tests/scripts/run_models.sh
 }
 
-run_metal_bert_bm_pipeline_tests() {
+run_models_performance() {
+    local tt_arch=$1
+    local pipeline_type=$2
+
+    ./tests/scripts/run_performance.sh --pipeline-type $pipeline_type
+}
+
+run_models_performance_bare_metal_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
 
@@ -102,8 +109,20 @@ run_metal_bert_bm_pipeline_tests() {
     else
         env TT_METAL_DEVICE_DISPATCH_MODE=1 pytest -svv tests/python_api_testing/models/metal_BERT_large_15/test_bert_batch_dram.py::test_bert_batch_dram[BERT_LARGE-batch_9-BFLOAT16-DRAM]
         env TT_METAL_DEVICE_DISPATCH_MODE=1 pytest -svv tests/python_api_testing/models/metal_BERT_large_15/test_bert_batch_dram.py::test_bert_batch_dram_with_program_cache[BERT_LARGE-batch_9-BFLOAT16-DRAM]
-        env TT_METAL_DEVICE_DISPATCH_MODE=1 pytest tests/python_api_testing/models/metal_BERT_large_15/perf_bert15.py
     fi
+
+    export TT_METAL_DEVICE_DISPATCH_MODE=1
+
+    run_models_performance "$tt_arch" "$pipeline_type"
+}
+
+run_models_performance_virtual_machine_pipeline_tests() {
+    local tt_arch=$1
+    local pipeline_type=$2
+
+    unset TT_METAL_DEVICE_DISPATCH_MODE
+
+    run_models_performance "$tt_arch" "$pipeline_type"
 }
 
 run_pipeline_tests() {
@@ -122,8 +141,10 @@ run_pipeline_tests() {
         run_eager_package_end_to_end_pipeline_tests "$tt_arch" "$pipeline_type"
     elif [[ $pipeline_type == "eager_package_silicon" ]]; then
         run_eager_package_end_to_end_pipeline_tests "$tt_arch" "$pipeline_type"
-    elif [[ $pipeline_type == "metal_bert_bm" ]]; then
-        run_metal_bert_bm_pipeline_tests "$tt_arch" "$pipeline_type"
+    elif [[ $pipeline_type == "models_performance_bare_metal" ]]; then
+        run_models_performance_bare_metal_pipeline_tests "$tt_arch" "$pipeline_type"
+    elif [[ $pipeline_type == "models_performance_virtual_machine" ]]; then
+        run_models_performance_virtual_machine_pipeline_tests "$tt_arch" "$pipeline_type"
     else
         echo "Unknown pipeline: $pipeline_type"
         exit 1
