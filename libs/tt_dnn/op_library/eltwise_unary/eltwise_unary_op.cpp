@@ -60,6 +60,7 @@ string get_op_name_default(UnaryOpType::Enum op_type) {
         case UnaryOpType::SIGMOID: op_name = "sigmoid_tile_init(); sigmoid_tile(0); pack_tile(0, tt::CB::c_out0);"; break;
         case UnaryOpType::LOG: op_name = "log_tile_init(); log_tile(0); pack_tile(0, tt::CB::c_out0);"; break;
         case UnaryOpType::TANH: op_name = "tanh_tile_init(); tanh_tile(0); pack_tile(0, tt::CB::c_out0);"; break;
+        case UnaryOpType::SIGNBIT: op_name = "signbit_tile_init(); signbit_tile(0); pack_tile(0, tt::CB::c_out0);"; break;
         case UnaryOpType::SIN: op_name = "sin_tile_init(); sin_tile(0); pack_tile(0, tt::CB::c_out0);"; break;
         case UnaryOpType::COS: op_name = "cos_tile_init(); cos_tile(0); pack_tile(0, tt::CB::c_out0);"; break;
         case UnaryOpType::LOG10:

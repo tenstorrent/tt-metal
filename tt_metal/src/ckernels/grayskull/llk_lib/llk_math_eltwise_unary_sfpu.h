@@ -181,6 +181,16 @@ inline void llk_math_eltwise_unary_sfpu_tanh(uint dst_index, int vector_mode = D
 }
 
 template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
+inline void llk_math_eltwise_unary_sfpu_signbit(uint dst_index, int vector_mode = Dim::RC) {
+    llk_math_eltwise_unary_sfpu<SfpuType::signbit, APPROXIMATE, dst_sync>(dst_index, vector_mode);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_signbit_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::signbit, APPROXIMATE>();
+}
+
+template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
 inline void llk_math_eltwise_unary_sfpu_sin(uint dst_index, int vector_mode = Dim::RC) {
     llk_math_eltwise_unary_sfpu<SfpuType::sine, APPROXIMATE, dst_sync>(dst_index, vector_mode);
 }

@@ -264,6 +264,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_tanhshrink,
         "pytorch_op": pytorch_ops.tanhshrink,
     },
+    "eltwise-signbit": {
+        "tt_lib_op": tt_lib_ops.eltwise_signbit,
+        "pytorch_op": pytorch_ops.signbit,
+    },
     # Eltwise binary
     "eltwise-ne": {
         "tt_lib_op": tt_lib_ops.eltwise_ne,

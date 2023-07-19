@@ -26,7 +26,9 @@ from python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytor
 )
 @pytest.mark.parametrize("pcie_slot", [0])
 class TestEltwiseUnary:
-    @pytest.mark.parametrize("fn_kind", ["relu", "sigmoid", "square", "tanh"])
+    @pytest.mark.parametrize(
+        "fn_kind", ["relu", "sigmoid", "square", "tanh"]
+    )
     def test_run_eltwise_unary_ops(
         self, input_shapes, fn_kind, pcie_slot, function_level_defaults
     ):
@@ -261,7 +263,7 @@ class TestEltwiseUnary:
             test_args,
         )
 
-    @pytest.mark.parametrize("fn_kind", ["abs", "sign", "neg"])
+    @pytest.mark.parametrize("fn_kind", ["abs", "sign", "neg", "signbit"])
     def test_run_eltwise_sign_ops(
         self, fn_kind, input_shapes, pcie_slot, function_level_defaults
     ):

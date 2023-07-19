@@ -268,6 +268,10 @@ def tanhshrink(x, *args, **kwargs):
     return torch.nn.functional.tanhshrink(x)
 
 
+def signbit(x, *args, **kwargs):
+    return torch.signbit(x)
+
+
 def sin(x, *args, **kwargs):
     return torch.sin(x)
 

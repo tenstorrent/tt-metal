@@ -510,6 +510,14 @@ ALWI void tanh_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_tanh_init<APPROX>() )); // TODO(AP): move out init
 }
 
+ALWI void signbit_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_signbit_init<APPROX>() ));
+}
+
+ALWI void signbit_tile(uint32_t idst) {
+    MATH(( llk_math_eltwise_unary_sfpu_signbit<APPROX, SyncHalf>(idst) ));
+}
+
 ALWI void sin_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_sin_init<APPROX>() ));
 }

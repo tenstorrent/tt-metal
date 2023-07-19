@@ -2117,6 +2117,20 @@ void TensorModule(py::module &m_tensor) {
         +----------+----------------------------------+-----------+------------------------------+--------------+
     )doc");
 
+    m_tensor.def("signbit", &signbit, R"doc(
+        Applies the signbit function to the elements of the input tensor ``arg0``.
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+----------------------------------+-----------+------------------------------+--------------+
+        | Argument | Description                      | Data type | Valid range                  | Required     |
+        +==========+==================================+===========+==============================+==============+
+        | arg0     | Tensor signbit is applied to     | Tensor    | Tensor of shape [W, Z, Y, X] | Yes          |
+        +----------+----------------------------------+-----------+------------------------------+--------------+
+    )doc");
+
     m_tensor.def("relu_min", &relu_min, R"doc(
         Returns tensor with the relu min of all of elements of the input tensor ``arg0``. This is equivalent
         to relu_min[x] = max(x,minvalue). It moves relu function down to carry out operation at minvalue

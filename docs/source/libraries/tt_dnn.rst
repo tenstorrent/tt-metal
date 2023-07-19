@@ -457,6 +457,8 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.tanhshrink
 
+.. autofunction:: tt_lib.tensor.signbit
+
 .. autofunction:: tt_lib.tensor.fill_rm
 
 .. autofunction:: tt_lib.tensor.fill_ones_rm

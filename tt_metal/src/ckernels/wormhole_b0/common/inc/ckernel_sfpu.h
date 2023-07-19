@@ -525,6 +525,27 @@ inline void calculate_sigmoid_appx()
     l_reg[LRegs::LReg2] = l2;
 }
 
+// TODO: Implement using bitwise comparision
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_signbit()
+{
+
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        vFloat val = dst_reg[0];
+        v_if (val <= -0.0f) {
+            val = 1.0f;
+        } v_elseif (val >= 0.0f) {
+            val = 0.0f;
+        }
+        v_endif;
+        dst_reg[0] = val;
+
+       dst_reg++;
+    }
+
+}
+
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_tanh()
 {

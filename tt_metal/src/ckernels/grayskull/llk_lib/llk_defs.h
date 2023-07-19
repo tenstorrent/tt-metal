@@ -124,6 +124,7 @@ enum SfpuType
   exp2,
   heaviside,
   expm1,
+  signbit,
   unused
 };
 

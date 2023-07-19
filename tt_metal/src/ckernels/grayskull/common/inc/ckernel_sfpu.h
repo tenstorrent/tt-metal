@@ -561,6 +561,29 @@ inline void calculate_tanh()
     l_reg[LRegs::LReg2] = l2;
 }
 
+// TODO: Implement using bitwise comparision
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_signbit()
+{
+
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        vFloat val = dst_reg[0];
+
+        v_if (val <= -0.0f) {
+            val = 1.0f;
+        } v_elseif (val >= 0.0f) {
+            val = 0.0f;
+        }
+        v_endif;
+
+        dst_reg[0] = val;
+
+       dst_reg++;
+    }
+
+}
+
 template <bool APPROXIMATION_MODE>
 inline void calculate_hardtanh(uint param0, uint param1, uint param2, int ITERATIONS)
 {
@@ -1455,6 +1478,9 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
     }
     else if constexpr (operation == SfpuType::tanh) {
         calculate_tanh<APPROXIMATION_MODE, ITERATIONS>();
+    }
+    else if constexpr (operation == SfpuType::signbit) {
+        calculate_signbit<APPROXIMATION_MODE, ITERATIONS>();
     }
     else if constexpr (operation == SfpuType::hardtanh) {
         calculate_hardtanh<APPROXIMATION_MODE, ITERATIONS>(param0, param1, param2);
