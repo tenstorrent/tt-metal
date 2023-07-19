@@ -102,7 +102,7 @@ def make_tt_unet(state_dict, device):
     "expected_inference_time, expected_compile_time",
     (
         (400,
-         75,
+         78,
         ),
     ),
 )

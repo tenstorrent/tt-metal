@@ -31,7 +31,7 @@ BATCH_SIZE = 1
         ),
     ),
 )
-def test_perf(use_program_cache, expected_inference_time, expected_compile_time):
+def test_perf(use_program_cache, imagenet_sample_input, expected_inference_time, expected_compile_time):
     profiler = Profiler()
     disable_compile_cache()
     first_key = "first_iter"

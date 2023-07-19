@@ -58,7 +58,7 @@ model_location_generator = model_location_generator_
     ),
 )
 def test_perf(use_program_cache, expected_inference_time, expected_compile_time):
-    model_config = get_model_config(dtype, mem_config)
+    model_config = get_model_config(model_config_str)
 
     disable_compile_cache()
     first_key = "first_iter"
