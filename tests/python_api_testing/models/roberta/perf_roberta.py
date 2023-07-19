@@ -75,13 +75,17 @@ def test_perf():
 
         profiler.start(first_key)
         tt_output = tt_model(inputs.input_ids, tt_attention_mask).logits
+        tt_lib.device.Synchronize()
         profiler.end(first_key)
+        del tt_output
 
         enable_compile_cache()
 
         profiler.start(second_key)
         tt_output = tt_model(inputs.input_ids, tt_attention_mask).logits
+        tt_lib.device.Synchronize()
         profiler.end(second_key)
+        del tt_output
 
     first_iter_time = profiler.get(first_key)
     second_iter_time = profiler.get(second_key)

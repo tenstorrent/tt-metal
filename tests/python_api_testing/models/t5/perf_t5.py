@@ -85,7 +85,9 @@ def test_perf():
             attention_mask=attention_mask,
             decoder_attention_mask=decoder_attention_mask,
         )
+        tt_lib.device.Synchronize()
         profiler.end(first_key)
+        del tt_model_outputs
 
         enable_compile_cache()
 
@@ -96,7 +98,9 @@ def test_perf():
             attention_mask=attention_mask,
             decoder_attention_mask=decoder_attention_mask,
         )
+        tt_lib.device.Synchronize()
         profiler.end(second_key)
+        del tt_model_outputs
 
     first_iter_time = profiler.get(first_key)
     second_iter_time = profiler.get(second_key)
