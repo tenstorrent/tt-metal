@@ -134,5 +134,8 @@ endif
 build: $(LIBS_TO_BUILD)
 
 clean: set_up_kernels/clean eager_package/clean
-	rm -rf $(OUT)
+	find build ! -path "build/python_env" -delete -mindepth 1
 	rm -rf dist/
+
+nuke: clean python_env/clean
+	rm -rf $(OUT)

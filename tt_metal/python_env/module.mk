@@ -6,6 +6,9 @@ python_env: $(PYTHON_ENV)/.installed
 
 python_env/dev: $(PYTHON_ENV)/.installed-dev
 
+python_env/clean:
+	rm -rf $(PYTHON_ENV)
+
 # .PRECIOUS: $(PYTHON_ENV)/.installed $(PYTHON_ENV)/%
 $(PYTHON_ENV)/.installed:
 	python3.8 -m venv $(PYTHON_ENV)

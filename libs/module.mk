@@ -24,6 +24,7 @@ endif
 libs: $(TT_LIBS_TO_BUILD)
 
 eager_package: python_env/dev
+	source build/python_env/bin/activate
 	python -m build --outdir $(EAGER_OUTPUT_DIR)
 
 eager_package/clean:

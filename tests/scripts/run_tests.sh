@@ -81,7 +81,7 @@ run_frequent_pipeline_tests() {
     fi
 
     # Switch to modules only soon
-    make clean
+    make nuke
     make build
     make tests
 
