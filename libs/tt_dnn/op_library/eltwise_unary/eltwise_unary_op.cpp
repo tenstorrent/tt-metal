@@ -152,11 +152,11 @@ operation::ProgramWithCallbacks EltwiseUnary::create_program(const std::vector<T
     auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
     switch (parallelization_strategy){
         case UnaryOpParallelizationStrategy::MULTI_CORE:
-            return eltwise_unary_multi_core(input_tensor, output_tensor, this->op_type,param);
+            return eltwise_unary_multi_core(input_tensor, output_tensor, this->op_type, param);
             break;
         case UnaryOpParallelizationStrategy::SINGLE_CORE:
         default:
-            return eltwise_unary_single_core(input_tensor, output_tensor, this->op_type,param);
+            return eltwise_unary_single_core(input_tensor, output_tensor, this->op_type, param);
     }
 }
 

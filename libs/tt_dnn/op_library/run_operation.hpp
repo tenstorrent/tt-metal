@@ -4,6 +4,7 @@
 
 #include "tt_dnn/op_library/operation.hpp"
 #include "tt_dnn/op_library/operation_history.hpp"
+#include "tt_dnn/op_library/auto_format.hpp"
 
 #include <libs/tensor/tensor.hpp>
 
@@ -181,23 +182,25 @@ inline std::vector<Tensor> run_with_autoformat(
     return run_with_autoformat(operation, input_tensors, optional_input_tensors, pad_value, pad_c);
 }
 
-std::vector<Tensor> run_with_autoformat(const DeviceOperation& op,
-                            const std::vector<Tensor> &input_tensors,
-                            vector<vector<bool>> pad_inputs,
-                            vector<Layout> target_input_layouts,
-                            Layout target_output_layout,
-                            const std::vector<std::optional<const Tensor>> &optional_input_tensors = {},
-                            const float pad_value = 0);
+std::vector<Tensor> run_with_autoformat(
+    const DeviceOperation& operation,
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<FormatParams> input_formatting,
+    const std::vector<Layout> output_layouts,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
+    const std::vector<FormatParams> optional_input_formatting = {}
+);
 template<typename ConcreteOperation>
-inline std::vector<Tensor> run_with_autoformat(ConcreteOperation&& concrete_op,
-                            const std::vector<Tensor> &input_tensors,
-                            vector<vector<bool>> pad_inputs,
-                            vector<Layout> target_input_layouts,
-                            Layout target_output_layout,
-                            const std::vector<std::optional<const Tensor>> &optional_input_tensors = {},
-                            const float pad_value = 0) {
-    const auto op = DeviceOperation(concrete_op);
-    return run_with_autoformat(op, input_tensors, pad_inputs, target_input_layouts, target_output_layout, optional_input_tensors, pad_value);
+inline std::vector<Tensor> run_with_autoformat(
+    ConcreteOperation&& concrete_op,
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<FormatParams> input_formatting,
+    const std::vector<Layout> output_layouts,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
+    const std::vector<FormatParams> optional_input_formatting = {}
+) {
+    const auto operation = DeviceOperation(concrete_op);
+    return run_with_autoformat(operation, input_tensors, input_formatting, output_layouts, optional_input_tensors, optional_input_formatting);
 }
 
 } //namespace operation

@@ -299,10 +299,10 @@ std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor &input_tensor, 
     } else {
         auto device = input_tensor.device();
         auto output_shape = op.compute_output_shapes({input_tensor}).at(0);
-        const auto padded_tensor = AutoFormat::format_input_tensor(input_tensor, device, padded_input_shape);
+        const auto padded_tensor = AutoFormat::format_input_tensor(input_tensor, device, padded_input_shape, 0.0, Layout::TILE);
         auto output_tensors = operation::run(op, {padded_tensor});
         for (auto &output_tensor : output_tensors) {
-            output_tensor = AutoFormat::format_output_tensor(output_tensor, output_shape, device);
+            output_tensor = AutoFormat::format_output_tensor(output_tensor, output_shape, device, Layout::TILE);
         }
         return output_tensors;
     }

@@ -11,6 +11,12 @@ namespace tt {
 
 namespace tt_metal {
 
+struct FormatParams {
+    Shape pad_shape;
+    float pad_value;
+    Layout target_layout;
+};
+
 class AutoFormat {
     private:
         inline static Device* device = nullptr;
@@ -31,6 +37,52 @@ class AutoFormat {
             return padded_shape;
         }
 
+        static Shape pad_to_rm_shape(const Shape& unpadded_shape) {
+            Shape padded_shape = unpadded_shape;
+            padded_shape[3] = roundup(unpadded_shape[3], 2);
+            return padded_shape;
+        }
+
+        static Shape pad_to_cl_shape(const Shape& unpadded_shape) {
+            Shape padded_shape = unpadded_shape;
+            padded_shape[1] = roundup(unpadded_shape[1], 2);
+            return padded_shape;
+        }
+
+        static Shape pad_to_legal_shape(const Shape& unpadded_shape, Layout layout) {
+            Shape padded_shape = unpadded_shape;
+            switch (layout) {
+                case Layout::CHANNELS_LAST: padded_shape = pad_to_cl_shape(unpadded_shape); break;
+                case Layout::ROW_MAJOR: padded_shape = pad_to_rm_shape(unpadded_shape); break;
+                case Layout::TILE: padded_shape = pad_to_tile_shape(unpadded_shape);
+                default: break;
+            }
+            return padded_shape;
+        }
+
+        // TODO: These legal checks should probably be somewhere else like tensor class, since it is common logic not just for autoformat
+        static bool legal_tile_shape(const Shape& shape) {
+            return (shape[2] % TILE_HEIGHT == 0 && shape[3] % TILE_WIDTH == 0);
+        }
+
+        static bool legal_rm_shape(const Shape& shape) {
+            return (shape[3] % 2 == 0);
+        }
+
+        static bool legal_cl_shape(const Shape& shape) {
+            return (shape[1] % 2 == 0);
+        }
+
+        static bool legal_device_shape(const Shape& shape, Layout layout) {
+            switch (layout) {
+                case Layout::CHANNELS_LAST: return legal_cl_shape(shape);
+                case Layout::ROW_MAJOR: return legal_rm_shape(shape);
+                case Layout::TILE: return legal_tile_shape(shape);
+                default: return true;
+            }
+        }
+
+
         static bool check_input_tensor_format(const Tensor &a, const Shape& shape, Layout target_layout = Layout::TILE) {
             if (a.layout() == target_layout && a.shape() == shape && a.storage_type() == StorageType::DEVICE) {
                 return true;
@@ -40,9 +92,9 @@ class AutoFormat {
 
         static Tensor move_tensor_to_device(const Tensor &input, Device * device, const std::optional<MemoryConfig>& mem_config = std::nullopt);
 
-        static Tensor format_input_tensor(const Tensor &input, Device * device, const Shape& padded_shape, float pad_value=0, Layout target_layout = Layout::TILE);
+        static Tensor format_input_tensor(const Tensor &input, Device * device, const Shape& padded_shape, float pad_value, Layout target_layout);
 
-        static Tensor format_output_tensor(const Tensor &output, const Shape& shape, Device* device, Layout target_layout = Layout::TILE);
+        static Tensor format_output_tensor(const Tensor &output, const Shape& shape, Device* device, Layout target_layout);
 };
 
 

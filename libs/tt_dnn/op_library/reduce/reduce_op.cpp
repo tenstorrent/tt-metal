@@ -146,7 +146,7 @@ Tensor reduce(const Tensor &input_tensor, ReduceOpMath::Enum reduce_math, Reduce
         auto input_tensor_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.shape());
         auto formatted_input_tensor = input_tensor;
         if (AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
-            formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, pad_value);
+            formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, pad_value, Layout::TILE);
         }
         const Tensor output_tensor = operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::W, scaler}, {formatted_input_tensor}).at(0);
         return operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::H, scaler}, {output_tensor}).at(0);
@@ -188,12 +188,12 @@ Tensor sum(const Tensor &input_tensor, uint dim) {
 
         auto formatted_input_tensor = input_tensor;
         if (AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
-            formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, 0);
+            formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, 0.0, Layout::TILE);
         }
         Tensor output = transpose_hc(formatted_input_tensor);
         output = sum(output, 2);
         output = transpose_hc(output);
-        return AutoFormat::format_output_tensor(output, out_shape, device);
+        return AutoFormat::format_output_tensor(output, out_shape, device, Layout::TILE);
     } else {
         // Pad before running the op to only pay cost of formatting once
         auto input_tensor_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.shape(), false, true);
@@ -202,12 +202,12 @@ Tensor sum(const Tensor &input_tensor, uint dim) {
 
         auto formatted_input_tensor = input_tensor;
         if (AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
-            formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, 0);
+            formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, 0.0, Layout::TILE);
         }
         Tensor output = transpose_nh(input_tensor);
         output = sum(output, 2);
         output = transpose_nh(output);
-        return AutoFormat::format_output_tensor(output, out_shape, device);
+        return AutoFormat::format_output_tensor(output, out_shape, device, Layout::TILE);
     }
 }
 

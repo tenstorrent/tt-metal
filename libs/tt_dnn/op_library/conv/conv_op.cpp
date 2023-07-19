@@ -511,12 +511,14 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
 Tensor conv(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
              uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels) {
     TT_ASSERT(b.layout() == Layout::TILE); // Weights should already be formatted
+    auto padded_a_shape = AutoFormat::pad_to_tile_shape(a.shape(), true, false, false, false);
+    FormatParams input_a_format_params = {.pad_shape=padded_a_shape, .pad_value=0.0, .target_layout=Layout::CHANNELS_LAST};
+    FormatParams input_b_format_params = {.pad_shape=b.shape(), .pad_value=0.0, .target_layout=Layout::TILE};
     return operation::run_with_autoformat(
         Conv(act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, conv_params, output_channels),
         {a, b},
-        {{false, true, false, false}, {false, false, false, false}},
-        {Layout::CHANNELS_LAST, Layout::TILE},
-        Layout::CHANNELS_LAST).at(0);
+        {input_a_format_params, input_b_format_params},
+        {Layout::CHANNELS_LAST}).at(0);
 }
 
 operation::ProgramWithCallbacks conv_single_core(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
@@ -1273,12 +1275,14 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
 Tensor conv_with_address_map(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
              uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels) {
     TT_ASSERT(b.layout() == Layout::TILE); // Weights should already be formatted
+    auto padded_a_shape = AutoFormat::pad_to_tile_shape(a.shape(), true, false, false, false);
+    FormatParams input_a_format_params = {.pad_shape=padded_a_shape, .pad_value=0.0, .target_layout=Layout::CHANNELS_LAST};
+    FormatParams input_b_format_params = {.pad_shape=b.shape(), .pad_value=0.0, .target_layout=Layout::TILE};
     return operation::run_with_autoformat(
         ConvWithAddressMap(act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, conv_params, output_channels),
         {a, b},
-        {{false, true, false, false}, {false, false, false, false}},
-        {Layout::CHANNELS_LAST, Layout::TILE},
-        Layout::CHANNELS_LAST).at(0);
+        {input_a_format_params, input_b_format_params},
+        {Layout::CHANNELS_LAST}).at(0);
 }
 
 operation::ProgramWithCallbacks conv_with_address_map_single_core(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,

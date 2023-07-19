@@ -106,7 +106,7 @@ Tensor AutoFormat::format_input_tensor(const Tensor &input, Device * device, con
             } else if (target_layout == Layout::CHANNELS_LAST && formatted_input.layout() == Layout::TILE) {
                 return convert_to_channels_last_tensor_on_device(formatted_input);
             }
-            else if (target_layout == Layout::ROW_MAJOR &&  formatted_input.layout() == Layout::CHANNELS_LAST && shape[3] % 2 == 0) {
+            else if (target_layout == Layout::ROW_MAJOR &&  formatted_input.layout() == Layout::CHANNELS_LAST && AutoFormat::legal_rm_shape(shape)) {
                 return convert_from_channels_last_tensor_on_device(formatted_input, target_layout);
             }
             else if (target_layout == Layout::TILE &&  formatted_input.layout() == Layout::CHANNELS_LAST) {
@@ -129,7 +129,7 @@ Tensor AutoFormat::format_input_tensor(const Tensor &input, Device * device, con
                 Tensor channels_last_tensor = convert_to_channels_last_tensor_on_device(formatted_input);
                 return pad(channels_last_tensor, padded_shape, {0, 0, 0, 0}, pad_value);
             }
-            else if (formatted_input.layout() == Layout::CHANNELS_LAST && ((target_layout == Layout::ROW_MAJOR && shape[3] % 2 == 0) || target_layout == Layout::TILE)) {
+            else if (formatted_input.layout() == Layout::CHANNELS_LAST && ((target_layout == Layout::ROW_MAJOR && AutoFormat::legal_rm_shape(shape)) || target_layout == Layout::TILE)) {
                 return convert_from_channels_last_tensor_on_device(formatted_input, target_layout, pad_input, padded_shape, pad_value);
             }
         }
@@ -174,7 +174,7 @@ Tensor AutoFormat::format_output_tensor(const Tensor &output, const Shape& shape
         if (!unpad_output && convert_layout) {
             // If target layout is tile but shape does not support tile, we don't do any conversions
             if (target_layout == Layout::TILE && formatted_output.layout() == Layout::ROW_MAJOR) {
-                if (formatted_output.shape()[2] % TILE_HEIGHT == 0 && formatted_output.shape()[3] % TILE_WIDTH == 0) {
+                if (AutoFormat::legal_tile_shape(formatted_output.shape())) {
                     formatted_output = tilize(formatted_output, mem_config);
                 }
                 return formatted_output;
@@ -189,24 +189,24 @@ Tensor AutoFormat::format_output_tensor(const Tensor &output, const Shape& shape
 
         } else if (unpad_output && !convert_layout) {
             // Output can be unpadded and layout supports the shape
-            if ((formatted_output.layout() == Layout::TILE && shape[2] % TILE_HEIGHT == 0 && shape[3] % TILE_WIDTH == 0) ||
-                (formatted_output.layout() == Layout::ROW_MAJOR && shape[3] % 2 == 0)) {
+            if ((formatted_output.layout() == Layout::TILE && AutoFormat::legal_tile_shape(shape)) ||
+                (formatted_output.layout() == Layout::ROW_MAJOR && AutoFormat::legal_rm_shape(shape))) {
                 formatted_output = unpad(formatted_output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}, mem_config);
                 return formatted_output;
             // Output is tile but shape cannot be tile. We leave in RM
-            } else if (formatted_output.layout() == Layout::TILE && shape[3] % 2 == 0) {
+            } else if (formatted_output.layout() == Layout::TILE && AutoFormat::legal_rm_shape(shape)) {
                 formatted_output = untilize_with_unpadding(formatted_output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}, mem_config);
                 return formatted_output;
             }
         } else if (unpad_output && convert_layout) {
-            if (formatted_output.layout() == Layout::TILE && target_layout == Layout::ROW_MAJOR && shape[3] % 2 == 0) {
+            if (formatted_output.layout() == Layout::TILE && target_layout == Layout::ROW_MAJOR && AutoFormat::legal_rm_shape(shape)) {
                 formatted_output = untilize_with_unpadding(formatted_output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}, mem_config);
                 return formatted_output;
-            } else if (formatted_output.layout() == Layout::ROW_MAJOR && target_layout == Layout::TILE && shape[2] % TILE_HEIGHT == 0 && shape[3] % TILE_WIDTH == 0) {
+            } else if (formatted_output.layout() == Layout::ROW_MAJOR && target_layout == Layout::TILE && AutoFormat::legal_tile_shape(shape)) {
                 formatted_output = unpad(formatted_output, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}, mem_config);
                 formatted_output = tilize(formatted_output, mem_config);
                 return formatted_output;
-            } else if (formatted_output.layout() == Layout::CHANNELS_LAST && ((target_layout == Layout::TILE && shape[2] % TILE_HEIGHT == 0 && shape[3] % TILE_WIDTH == 0) || (target_layout == Layout::ROW_MAJOR && shape[3] % 2 == 0)) ) {
+            } else if (formatted_output.layout() == Layout::CHANNELS_LAST && ((target_layout == Layout::TILE && AutoFormat::legal_tile_shape(shape)) || (target_layout == Layout::ROW_MAJOR && AutoFormat::legal_rm_shape(shape))) ) {
                 // need to interpret channels last tensor as rm tensor to call transpose op
                 auto tiled_tensor = convert_from_channels_last_tensor_on_device(formatted_output, target_layout);
                 auto unpadded_output = unpad(tiled_tensor, {0, 0, 0, 0}, {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1});
@@ -231,14 +231,10 @@ Tensor AutoFormat::format_output_tensor(const Tensor &output, const Shape& shape
 
     if (convert_layout) {
         // Default to RM layout if we can't match the formatted_input layout
-        if (target_layout == Layout::TILE && (formatted_output.shape()[2] % TILE_HEIGHT != 0 || formatted_output.shape()[3] % TILE_WIDTH != 0)) {
+        if (target_layout == Layout::TILE && !AutoFormat::legal_tile_shape(formatted_output.shape())) {
             if (formatted_output.layout() != Layout::ROW_MAJOR) {
                 formatted_output = layout_conversion_on_host(formatted_output, Layout::ROW_MAJOR);
             }
-        // We do not support CL <-> TILE conversions
-        } else if (target_layout == Layout::CHANNELS_LAST && formatted_output.layout() == Layout::TILE ||
-                   target_layout == Layout::TILE && formatted_output.layout() == Layout::CHANNELS_LAST) {
-            // No-Op, leave formatted_output in CL
         } else {
             formatted_output = layout_conversion_on_host(formatted_output, target_layout);
         }
@@ -247,9 +243,7 @@ Tensor AutoFormat::format_output_tensor(const Tensor &output, const Shape& shape
     // Send formatted_output to device if possible
     // Check that shape is supported on device
     if (formatted_output.storage_type() == StorageType::OWNED) {
-        if ((formatted_output.layout() == Layout::ROW_MAJOR && formatted_output.shape()[3] % 2 == 0) ||
-            (formatted_output.layout() == Layout::CHANNELS_LAST && formatted_output.shape()[1] % 2 == 0) ||
-            (formatted_output.layout() == Layout::TILE)) {
+        if (AutoFormat::legal_device_shape(formatted_output.shape(), formatted_output.layout())) {
             formatted_output = AutoFormat::move_tensor_to_device(formatted_output, device, mem_config);
         }
     }
