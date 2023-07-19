@@ -336,25 +336,27 @@ def run_mha_inference(
 
 
 @pytest.mark.parametrize(
-    "model_config_str",
+    "batch, model_config_str",
     (
-        "BFLOAT8_B-DRAM",
-        "BFLOAT16-DRAM",
-        "BFLOAT8_B-L1",
-        "BFLOAT16-L1",
-        "MIXED_PRECISION",
+        (9, "BFLOAT8_B-DRAM"),
+        (9, "BFLOAT16-DRAM"),
+        (9, "BFLOAT8_B-L1"),
+        (9, "BFLOAT16-L1"),
+        (9, "MIXED_PRECISION_BATCH9"),
+        (8, "MIXED_PRECISION_BATCH8"),
     ),
     ids=[
-        "BFLOAT8_B-DRAM",
-        "BFLOAT16-DRAM",
-        "BFLOAT8_B-L1",
-        "BFLOAT16-L1",
-        "MIXED_PRECISION",
+        "batch_9-BFLOAT8_B-DRAM",
+        "batch_9-BFLOAT16-DRAM",
+        "batch_9-BFLOAT8_B-L1",
+        "batch_9-BFLOAT16-L1",
+        "batch_9-MIXED_PRECISION_BATCH9",
+        "batch_8-MIXED_PRECISION_BATCH8",
     ],
 )
 @pytest.mark.parametrize(
-    "model_version, batch, seq_len, on_weka, pcc",
-    (("phiyodr/bert-large-finetuned-squad2", 9, 384, True, 0.99),),
+    "model_version, seq_len, on_weka, pcc",
+    (("phiyodr/bert-large-finetuned-squad2", 384, True, 0.99),),
     ids=["BERT_LARGE"],
 )
 def test_mha_inference(

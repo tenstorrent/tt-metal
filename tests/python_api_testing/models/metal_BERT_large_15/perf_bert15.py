@@ -37,7 +37,7 @@ from utility_functions_new import prep_report
 import pytest
 from loguru import logger
 
-BATCH_SIZE = 9
+BATCH_SIZE = 8
 model_name = "phiyodr/bert-large-finetuned-squad2"
 tokenizer_name = "phiyodr/bert-large-finetuned-squad2"
 comments = "Large"
@@ -45,7 +45,7 @@ seq_len = 384
 real_input = True
 attention_mask = True
 token_type_ids = True
-model_config_str="MIXED_PRECISION"
+model_config_str = "MIXED_PRECISION_BATCH8"
 model_location_generator = model_location_generator_
 
 

@@ -159,7 +159,9 @@ class TtBertEncoder(torch.nn.Module):
         return ffn_out_add_and_norm
 
     def forward(self, activation, attention_mask=None):
-        assert activation.shape() == [9, 1, 384, 1024]
+        activation_shape = activation.shape()
+        assert activation_shape == [activation_shape[0], 1, 384, 1024]
+
         # MHA - OP1 - OP10 ------------------------------->
         mha_res = self.mha(activation, attention_mask)
         # Don't deallocate activations here since it is used by more ops
@@ -290,25 +292,27 @@ def run_bert_encoder_inference(
 
 
 @pytest.mark.parametrize(
-    "model_config_str",
+    "batch, model_config_str",
     (
-        "BFLOAT8_B-DRAM",
-        "BFLOAT16-DRAM",
-        "BFLOAT8_B-L1",
-        "BFLOAT16-L1",
-        "MIXED_PRECISION",
+        (9, "BFLOAT8_B-DRAM"),
+        (9, "BFLOAT16-DRAM"),
+        (9, "BFLOAT8_B-L1"),
+        (9, "BFLOAT16-L1"),
+        (9, "MIXED_PRECISION_BATCH9"),
+        (8, "MIXED_PRECISION_BATCH8"),
     ),
     ids=[
-        "BFLOAT8_B-DRAM",
-        "BFLOAT16-DRAM",
-        "BFLOAT8_B-L1",
-        "BFLOAT16-L1",
-        "MIXED_PRECISION",
+        "batch_9-BFLOAT8_B-DRAM",
+        "batch_9-BFLOAT16-DRAM",
+        "batch_9-BFLOAT8_B-L1",
+        "batch_9-BFLOAT16-L1",
+        "batch_9-MIXED_PRECISION_BATCH9",
+        "batch_8-MIXED_PRECISION_BATCH8",
     ],
 )
 @pytest.mark.parametrize(
-    "model_version, batch, seq_len, on_weka, pcc",
-    (("phiyodr/bert-large-finetuned-squad2", 9, 384, True, 0.99),),
+    "model_version, seq_len, on_weka, pcc",
+    (("phiyodr/bert-large-finetuned-squad2", 384, True, 0.99),),
     ids=["BERT_LARGE"],
 )
 def test_bert_encoder_inference(
