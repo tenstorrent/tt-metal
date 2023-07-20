@@ -66,7 +66,7 @@ def convert_tt_tensor_to_pt_tensor(tt_tensor, host, output_format):
         ttl_tensor.DataType.BFLOAT16:  torch.bfloat16,
         ttl_tensor.DataType.BFLOAT8_B: torch.float,
     }[tt_tensor.dtype()]
-    return torch.frombuffer(tt_tensor.data(), dtype=dtype).reshape(tt_tensor.shape())
+    return torch.frombuffer(tt_tensor.data(), dtype=dtype).to(torch.float).reshape(tt_tensor.shape())
 
 
 def convert_pt_tensor_to_tt_tensor(pt_tensor, output_format):
