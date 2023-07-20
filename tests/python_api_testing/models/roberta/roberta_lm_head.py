@@ -97,7 +97,7 @@ class TtRobertaLMHead(nn.Module):
 
         if self.fallback_to_torch_linear:
             # project back to size of vocabulary with bias
-            torch_input = tt2torch_tensor(x)
+            torch_input = tt2torch_tensor(x).to(torch.float)
             torch_x = self.decoder(torch_input)
             x = torch2tt_tensor(torch_x, self.device)
         else:
