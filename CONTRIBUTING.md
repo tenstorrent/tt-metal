@@ -6,6 +6,9 @@
    * [Developing tt-metal](#developing-tt-metal)
       * [Building and viewing the documentation locally](#building-and-viewing-the-documentation-locally)
       * [Cleaning the dev environment with make nuke](#cleaning-the-dev-environment-with-make-nuke)
+   * [Running tests on tt-metal](#running-tests-on-tt-metal)
+      * [Running pre/post-commit regressions](#running-prepost-commit-regressions)
+      * [Running model performance tests](#running-model-performance-tests)
    * [Debugging tips](#debugging-tips)
    * [Contribution standards](#contribution-standards)
       * [CI/CD Guidelines](#cicd-guidelines)
@@ -102,6 +105,52 @@ the built Python dev environment stored at `build/python_env/`.
 
 To delete absolutely everything including the Python environment, use `make
 nuke`.
+
+## Running tests on tt-metal
+
+Ensure you're in a developer environment with necessary environment variables
+set as documentating in the [developing section](#developing-tt-metal).
+
+This includes the environment variables, Python dev environment etc.
+
+### Running pre/post-commit regressions
+
+You must run regressions before you commit something.
+
+These regressions will also run after every pushed commit to the GitHub repo.
+
+```
+make build
+make tests
+./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit
+```
+
+If changes affect `tensor` or `tt_dnn` libraries, run this suite of pytests
+which tests `tensor` APIs and `tt_dnn` ops. These are also tested in post
+commit.
+
+```
+pytest tests/python_api_testing/unit_testing/ -vvv
+pytest tests/python_api_testing/sweep_tests/pytests/ -vvv
+```
+
+### Running model performance tests
+
+After building the repo and activating the dev environment with the appropriate
+environment variables, you have two options for running performance regressions
+on model tests.
+
+If you are using a machine with virtual machine specs, please use
+
+```
+./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline_type models_performance_virtual_machine
+```
+
+If you are using a machine with bare metal machine specs, please use
+
+```
+./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline_type models_performance_bare_metal
+```
 
 ## Debugging tips
 

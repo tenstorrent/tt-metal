@@ -65,21 +65,8 @@ e.g.
 Run pre/post commit regressions
 -------------------------------
 
-You must run regressions before you commit something.
-
-These regressions will also run after every pushed commit to the GitHub repo.
-
-::
-
-    make build
-    make tests
-    export TT_METAL_HOME=<this repo dir>
-    source build/python_env/bin/activate
-    ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit
-
-If changes affect `tensor` or `tt_dnn` libraries, run this suite of pytests which tests `tensor` APIs and `tt_dnn` ops. These are also tested in post commit.
-
-::
-
-    pytest tests/python_api_testing/unit_testing/ -vvv
-    pytest tests/python_api_testing/sweep_tests/pytests/ -vvv
+Please refer to the
+`contribution standards
+<https://github.com/tenstorrent-metal/tt-metal/blob/main/CONTRIBUTING.md>`_ for
+instructions and expectations for running regressions before you merge changes
+into main.
