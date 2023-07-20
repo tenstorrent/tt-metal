@@ -94,6 +94,14 @@ example: `http://10.250.37.37:4242`, for port ``4242``.
 
 If you forwarded your port, navigate to `http://localhost:8888`.
 
+### Cleaning the dev environment with `make nuke`
+
+Normally, `make clean` only clears out build artifacts. It does **not** delete
+the built Python dev environment stored at `build/python_env/`.
+
+To delete absolutely everything including the Python environment, use `make
+nuke`.
+
 ## Debugging tips
 
 - To print within a kernel the following must be added:
