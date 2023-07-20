@@ -122,6 +122,7 @@ enum SfpuType
   relu_max,
   elu,
   exp2,
+  heaviside,
   unused
 };
 

@@ -279,6 +279,27 @@ class TestEltwiseUnary:
             pcie_slot,
         )
 
+    @pytest.mark.parametrize("value", [0.5])
+    def test_run_eltwise_heaviside(
+        self, input_shapes, value, pcie_slot, function_level_defaults
+    ):
+        datagen_func = [
+            generation_funcs.gen_func_with_cast(
+                partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16
+            )
+        ]
+        test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
+        test_args.update({"value": value})
+        comparison_func = comparison_funcs.comp_equal
+        run_single_pytorch_test(
+            "eltwise-heaviside",
+            input_shapes,
+            datagen_func,
+            comparison_func,
+            pcie_slot,
+            test_args,
+        )
+
     @pytest.mark.parametrize(
         "unary_kind", ["add_unary", "sub_unary", "mul_unary", "div_unary"]
     )

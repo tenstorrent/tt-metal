@@ -12,9 +12,9 @@ namespace tt_metal {
 
 struct UnaryOpType {
     enum Enum { EXP = 0, RECIP = 1, GELU = 2, RELU = 3, SQRT = 4, SIGMOID = 5, LOG = 6, TANH = 7, LOG2 = 8, LOG10 = 9, SIN = 10, COS = 11,
-                ABS=12, SIGN=13, SQUARE=14, EQZ = 15, NEZ = 16, GTZ = 17, LTZ = 18, GEZ = 19, LEZ = 20, RELU_MAX = 21, RELU_MIN = 22, POWER = 23, LEAKY_RELU = 24, ELU = 25, EXP2 = 26};
+                ABS=12, SIGN=13, SQUARE=14, EQZ = 15, NEZ = 16, GTZ = 17, LTZ = 18, GEZ = 19, LEZ = 20, RELU_MAX = 21, RELU_MIN = 22, POWER = 23, LEAKY_RELU = 24, ELU = 25, EXP2 = 26, HEAVISIDE = 27};
     static const vector<Enum> all() { return { EXP, RECIP, GELU, RELU, SQRT, SIGMOID, LOG, TANH, LOG2, LOG10, SIN, COS, ABS, SIGN, SQUARE,
-					       EQZ , NEZ , GTZ , LTZ , GEZ , LEZ , RELU_MAX , RELU_MIN, POWER, LEAKY_RELU, ELU, EXP2}; }
+					       EQZ , NEZ , GTZ , LTZ , GEZ , LEZ , RELU_MAX , RELU_MIN, POWER, LEAKY_RELU, ELU, EXP2, HEAVISIDE}; }
 };
 
 template <typename T>
@@ -26,6 +26,7 @@ bool is_parametrized_type(T val) {
   case UnaryOpType::LEAKY_RELU:
   case UnaryOpType::ELU:
   case UnaryOpType::GELU:
+  case UnaryOpType::HEAVISIDE:
     return true;
   default:
     return false;
@@ -87,6 +88,7 @@ inline Tensor power(const Tensor& input_tensor, uint32_t exponent) { return oper
 inline Tensor leaky_relu(const Tensor& input_tensor, float slope) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::LEAKY_RELU, slope}, {input_tensor}).at(0); }
 inline Tensor elu(const Tensor& input_tensor, float slope) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::ELU, slope}, {input_tensor}).at(0); }
 inline Tensor gelu(const Tensor &input_tensor,bool fast_and_approx=true) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::GELU,static_cast<float>(fast_and_approx)}, {input_tensor}).at(0); }
+inline Tensor heaviside(const Tensor& input_tensor, float value) { return operation::run_with_autoformat(EltwiseUnary{UnaryOpType::HEAVISIDE, value}, {input_tensor}).at(0); }
 
 // binop with tied inputs.
 Tensor sub_unary(const Tensor& input_tensor, float value);

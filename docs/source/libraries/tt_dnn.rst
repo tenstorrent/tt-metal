@@ -449,6 +449,8 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.sum
 
+.. autofunction:: tt_lib.tensor.heaviside
+
 .. autofunction:: tt_lib.tensor.fill_rm
 
 .. autofunction:: tt_lib.tensor.fill_ones_rm

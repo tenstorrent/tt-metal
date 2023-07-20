@@ -1954,6 +1954,23 @@ void TensorModule(py::module &m_tensor) {
         +----------+---------------------------+-----------+------------------------------+----------+
     )doc");
 
+    m_tensor.def("heaviside", &heaviside, R"doc(
+        Returns tensor with the Heaviside step function of all of elements of the input tensor ``arg0`` and value
+        factor as ``arg1``. HEAVISIDE(x) = 0 if x < 0 , 1 if x > 0 , else value.
+
+        Input tensor and value (used when input x is zero) must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+--------------------------------+-----------+------------------------------+----------+
+        | Argument | Description                    | Data type | Valid range                  | Required |
+        +==========+================================+===========+==============================+==========+
+        | arg0     | heaviside computed for tensor  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+--------------------------------+-----------+------------------------------+----------+
+        | arg1     | value                          | float     | scalar                       | Yes      |
+        +----------+--------------------------------+-----------+------------------------------+----------+
+        )doc");
+
 
     m_tensor.def("relu_min", &relu_min, R"doc(
         Returns tensor with the relu min of all of elements of the input tensor ``arg0``. This is equivalent

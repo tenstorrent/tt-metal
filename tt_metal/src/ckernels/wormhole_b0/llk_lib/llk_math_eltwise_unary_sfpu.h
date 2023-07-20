@@ -355,3 +355,14 @@ template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_exp2_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::exp2, APPROXIMATE>();
 }
+
+//heaviside
+template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
+inline void llk_math_eltwise_unary_sfpu_heaviside(uint dst_index,uint param0) {
+    llk_math_eltwise_unary_sfpu<SfpuType::heaviside, APPROXIMATE, dst_sync>(dst_index,param0);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_heaviside_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::heaviside, APPROXIMATE>();
+}

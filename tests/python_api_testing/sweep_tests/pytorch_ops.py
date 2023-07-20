@@ -226,6 +226,12 @@ def sigmoid(x, *args, **kwargs):
     return torch.sigmoid(x)
 
 
+def heaviside(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.heaviside(x, torch.tensor(value, dtype=torch.bfloat16))
+    return result
+
+
 def hardsigmoid(x, *args, **kwargs):
     return torch.nn.functional.hardsigmoid(x)
 

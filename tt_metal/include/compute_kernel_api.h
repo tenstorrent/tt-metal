@@ -1109,4 +1109,13 @@ ALWI void exp2_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_exp2_init<true>() ));
 }
 
+//heaviside : y = 0 if x < 0 , 1 if x > 0 , else value
+ALWI void heaviside_tile(uint32_t idst,uint32_t param0) {
+    MATH(( llk_math_eltwise_unary_sfpu_heaviside<APPROX, SyncHalf>(idst,param0) ));
+}
+
+ALWI void heaviside_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_heaviside_init<APPROX>() ));
+}
+
 } // namespace ckernel

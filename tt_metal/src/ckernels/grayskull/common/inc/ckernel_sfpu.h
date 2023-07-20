@@ -1403,6 +1403,33 @@ inline void calculate_sigmoid()
     return;
 }
 
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_heaviside(uint value)
+{
+    // SFPU microcode
+    Converter c_value;
+    c_value.u = value;
+    vFloat s = c_value.f;
+
+    #pragma GCC unroll 0
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat v = dst_reg[0];
+
+        v_if (v < 0.0f) {
+            v = 0.0f;
+        }v_elseif (v > 0.0f) {
+            v = 1.0f;
+        }v_else {
+            v = s;
+        }
+        v_endif;
+
+       dst_reg[0] = v;
+
+        dst_reg++;
+    }
+}
+
 template <SfpuType operation, bool APPROXIMATION_MODE, int SfpuType_PARAM = 0, int ITERATIONS = 4>
 inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, uint param3 = 0, uint param4 = 0, uint param5 = 0)
 {
@@ -1509,6 +1536,9 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
     }
     else if constexpr (operation == SfpuType::exp2) {
         calculate_exp2<APPROXIMATION_MODE, ITERATIONS>();
+    }
+    else if constexpr (operation == SfpuType::heaviside) {
+        calculate_heaviside<APPROXIMATION_MODE, ITERATIONS>(param0);
     }
 }
 
