@@ -5,6 +5,7 @@
       * [Hugepages setup](#hugepages-setup)
    * [Developing tt-metal](#developing-tt-metal)
       * [Building and viewing the documentation locally](#building-and-viewing-the-documentation-locally)
+      * [Cleaning the dev environment with make nuke](#cleaning-the-dev-environment-with-make-nuke)
    * [Debugging tips](#debugging-tips)
    * [Contribution standards](#contribution-standards)
       * [CI/CD Guidelines](#cicd-guidelines)
