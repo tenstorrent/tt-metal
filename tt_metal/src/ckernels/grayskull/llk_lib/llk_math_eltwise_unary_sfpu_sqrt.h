@@ -1,5 +1,4 @@
 #pragma once
-#include "ckernel_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_common_includes.h"
 #include "llk_math_eltwise_unary_sfpu_0_param.h"
 #include "ckernel_sfpu_sqrt.h"
@@ -20,5 +19,5 @@ inline void llk_math_eltwise_unary_sfpu_sqrt(uint dst_index, int vector_mode = D
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_sqrt_init() {
-    sfpu::sfpu_init<APPROXIMATE>(SfpuType::sqrt);
+    ckernel::sfpu::sqrt_init<APPROXIMATE>();
 }

@@ -1,7 +1,6 @@
 #pragma once
 
 
-#include "ckernel_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_common_includes.h"
 #include "llk_math_eltwise_unary_sfpu_1_param.h"
 #include "ckernel_sfpu_exp.h"
@@ -25,5 +24,5 @@ inline void llk_math_eltwise_unary_sfpu_exponential(uint dst_index, int vector_m
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_exponential_init() {
-    sfpu::sfpu_init<APPROXIMATE>(SfpuType::exponential);
+    sfpu::exp_init<APPROXIMATE>();
 }

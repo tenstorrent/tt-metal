@@ -5,7 +5,6 @@
 #include "noc_nonblocking_api.h"
 
 #include "sfpi.h"
-#include "ckernel_sfpu_init.h"
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_recip.h"
 
@@ -143,6 +142,19 @@ inline void calculate_sfpu_gelu()
 	  dst_reg++;
 	}
     }
+}
+
+template <bool APPROXIMATION_MODE>
+void gelu_init(){
+    uint imm0;
+    uint imm1;
+    uint imm2;
+    imm0 = 0x18FF;
+    imm1 = (APPROXIMATION_MODE)? 0x212C : 0x2010;
+    imm2 = 0xFF00;
+    TTI_SFPLOADI(0, 2, imm0);
+    TTI_SFPLOADI(1, 2, imm1);
+    TTI_SFPLOADI(2, 2, imm2);
 }
 
 template <bool APPROXIMATION_MODE, bool ZERO_NEGATIVE>
