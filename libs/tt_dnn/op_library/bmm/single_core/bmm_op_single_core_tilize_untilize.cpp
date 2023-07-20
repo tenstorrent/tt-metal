@@ -3,8 +3,10 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 
+#ifdef DEBUG
 #include "tt_metal/llrt/tt_debug_print_server.hpp"
 #include "tt_metal/hostdevcommon/debug_print_common.h"
+#endif
 
 namespace tt {
 namespace tt_metal {
@@ -210,7 +212,7 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
 
     // start debug server for kernel dprint
     // int hart_mask = DPRINT_HART_NC | DPRINT_HART_BR;
-    tt_start_debug_print_server(device->cluster(), {0}, {debug_core});
+    // tt_start_debug_print_server(device->cluster(), {0}, {debug_core});
 
     Buffer *dst_dram_buffer = out.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
