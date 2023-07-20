@@ -44,7 +44,7 @@ def test_run_embedding_inference():
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
-    host = ttl.device.GetHost()
+
 
     # setup tt models
     tt_input = torch_to_tt_tensor_rm(t_emb, device, put_on_device=False)
@@ -58,7 +58,7 @@ def test_run_embedding_inference():
     tt_model.eval()
 
     tt_output = tt_model(tt_input)
-    tt_output = tt_to_torch_tensor(tt_output, host)
+    tt_output = tt_to_torch_tensor(tt_output)
 
     passing = comp_pcc(torch_output, tt_output)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))

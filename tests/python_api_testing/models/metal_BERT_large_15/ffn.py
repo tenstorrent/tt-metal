@@ -202,7 +202,6 @@ def run_ffn_inference(
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     # Initialize the device
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
 
     if on_weka:
         model_name = str(
@@ -242,7 +241,7 @@ def run_ffn_inference(
         device, model_config["OP12_LAYERNORM_OUTPUT_MEMCFG"]
     )
 
-    tt_out = tt_ffn_model(tilized_ffn_input).to(host)
+    tt_out = tt_ffn_model(tilized_ffn_input).cpu()
     tt_out = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         tt_out.shape()
     )

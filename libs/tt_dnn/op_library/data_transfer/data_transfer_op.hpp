@@ -2,13 +2,11 @@
 
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
-
 namespace tt {
 
 namespace tt_metal {
 
 struct DataTransferToHost {
-    Host * host;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -16,7 +14,7 @@ struct DataTransferToHost {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-Tensor data_transfer_to_host (const Tensor &input_tensor, Host* host);
+Tensor data_transfer_to_host (const Tensor &input_tensor);
 
 struct DataTransferToDevice {
     Device* device;

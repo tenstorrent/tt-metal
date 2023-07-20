@@ -30,7 +30,7 @@ def test_hrnet_module_inference(model_name, pcc, reset_seeds):
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
-    host = tt_lib.device.GetHost()
+
 
     HR_MODULE_INDEX = 0
     base_address = f"stage2.{HR_MODULE_INDEX}"
@@ -66,7 +66,7 @@ def test_hrnet_module_inference(model_name, pcc, reset_seeds):
     tt_outputs = tt_model(tt_inputs)
 
     tt_outputs_torch = [
-        tt_to_torch_tensor(tt_outputs[i], host) for i in range(len(tt_outputs))
+        tt_to_torch_tensor(tt_outputs[i]) for i in range(len(tt_outputs))
     ]
 
     does_pass_list = []

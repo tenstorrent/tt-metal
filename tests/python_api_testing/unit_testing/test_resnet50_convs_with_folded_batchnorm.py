@@ -68,7 +68,6 @@ def test_resnet50_convs_with_folded_batch_norm():
         device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
         ttl.device.InitializeDevice(device)
         ttl.device.SetDefaultDevice(device)
-        host = ttl.device.GetHost()
 
         torch.manual_seed(1234)
         torch_resnet50 = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
@@ -133,11 +132,11 @@ def test_resnet50_convs_with_folded_batch_norm():
             # Run conv on device with folded batch norm
             conv_params = [conv.out_channels, conv.in_channels, conv.kernel_size[0], conv.kernel_size[1], conv.stride[0], conv.stride[1], conv.padding[0], conv.padding[1], 1, 1]
             assert(is_conv_supported_on_device(conv_params))
-            conv_on_device = run_conv_on_device_wrapper(conv_weight.reshape(-1).tolist(), conv_params, device, host, conv_bias.reshape(-1).tolist())
+            conv_on_device = run_conv_on_device_wrapper(conv_weight.reshape(-1).tolist(), conv_params, device, conv_bias.reshape(-1).tolist())
             x_on_device = create_conv_act_tensor(x, x_shape[0], x_shape[1], x_shape[2], x_shape[3]).to(device)
             x_on_device = conv_on_device(x_on_device)
             # Copy output to host and convert tt tensor to pytorch tensor
-            x_result = x_on_device.to(host)
+            x_result = x_on_device.cpu()
             out_result = torch.tensor(x_result.data()).reshape(x_result.shape())
             out_result = torch.transpose(out_result, 2, 3)
             out_result = torch.transpose(out_result, 1, 2)

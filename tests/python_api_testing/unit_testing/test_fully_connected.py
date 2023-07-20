@@ -44,7 +44,6 @@ def shape_padded(shape):
 def test_run_fully_connected(shapes, dtype, has_bias):
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
 
     act_shape, weight_shape, bias_shape, out_shape = shapes
 
@@ -90,7 +89,7 @@ def test_run_fully_connected(shapes, dtype, has_bias):
         bias = None
         out = ttl.tensor.fully_connected(ttact, ttweight)
 
-    out = out.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
+    out = out.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
     if out_shape != out_shape_padded:
         out = out.unpad_from_tile(out_shape)
     out_pytorch = torch.tensor(out.data()).reshape(out_shape)

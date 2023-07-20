@@ -28,7 +28,7 @@ def test_run_upsample_nearest_inference():
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
-    host = ttl.device.GetHost()
+
 
     # synthesize the input
     input_shape =  [1, 1, 32, 32]
@@ -39,7 +39,7 @@ def test_run_upsample_nearest_inference():
     tt_input = torch_to_tt_tensor(input, device)
     tt_up = TtUpsampleNearest2d(scale_factor=2.0)
     tt_out = tt_up(tt_input)
-    tt_output = tt_to_torch_tensor(tt_out, host)
+    tt_output = tt_to_torch_tensor(tt_out)
 
     passing = comp_pcc(torch_output, tt_output)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))

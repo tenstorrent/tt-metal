@@ -102,7 +102,6 @@ class TtEfficientnetConv2d(torch.nn.Module):
                 self.conv_weight.reshape(-1).tolist(),
                 self.conv_params,
                 self.device,
-                self.host,
                 conv_bias=None,
             )
 

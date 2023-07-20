@@ -10,7 +10,7 @@ def create_global_variables():
     global device
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     global host
-    host = ttl.device.GetHost()
+
 
 
 # tt_metal
@@ -38,7 +38,7 @@ def tt_batch_norm(x, gamma, beta, running_mean, running_var, eps:float, momentum
         Y = ttl.tensor.add(x_gamma, beta)
     else:
         print('train mode')
-        x_tor = x.to(host).data()
+        x_tor = x.cpu().data()
         x_tor = torch.Tensor(x_tor).view(batch_size,1,H,W)
         x_tor = untilize(x_tor)
         mean = x_tor.mean(dim=0)
@@ -51,7 +51,7 @@ def tt_batch_norm(x, gamma, beta, running_mean, running_var, eps:float, momentum
         var_plus_eps = ttl.tensor.add(eps_tt, var_tt)
         sqrt_var = ttl.tensor.sqrt(var_plus_eps)
         sqrt_inv = ttl.tensor.recip(sqrt_var)
-        sqrt_inv_data = sqrt_inv.to(host).data()
+        sqrt_inv_data = sqrt_inv.cpu().data()
         sqrt_inv_data = torch.Tensor(sqrt_inv_data).reshape((1,1,H,W))
         sqrt_inv_data = untilize(sqrt_inv_data)
         x_minus_mean = x_tor - mean
@@ -78,11 +78,11 @@ def tt_batch_norm(x, gamma, beta, running_mean, running_var, eps:float, momentum
         running_var_right = ttl.tensor.mul(momentum_tt, var_tt)
         running_var = ttl.tensor.add(running_var_left, running_var_right)
 
-        gamma_tor = gamma.to(host).data()
+        gamma_tor = gamma.cpu().data()
         gamma_tor = torch.Tensor(gamma_tor).reshape((1,1,H,W))
         gamma_tor = untilize(gamma_tor)
 
-        beta_tor = beta.to(host).data()
+        beta_tor = beta.cpu().data()
         beta_tor = torch.Tensor(beta_tor).reshape((1,1,H,W))
         beta_tor = untilize(beta_tor)
 
@@ -209,7 +209,7 @@ def run_btchnorm_forward(bn_size):
     bn_tt =  ttBatchNorm(bn_size)
     output_bn_tt, _, _ = bn_tt.forward(inputs_tt)
 
-    output_bn_tt_untilized = untilize(torch.Tensor(output_bn_tt.to(host).data()).reshape(output_bn_tt.shape()))
+    output_bn_tt_untilized = untilize(torch.Tensor(output_bn_tt.cpu().data()).reshape(output_bn_tt.shape()))
     output_bn_tt_untilized = output_bn_tt_untilized[0, 0, 0, :]
 
     print('pytorch_out:', output_bn_torch[0][0:10])

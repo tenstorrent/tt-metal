@@ -16,7 +16,7 @@ def test_tile_major_reshape():
     # Initialize the device
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
+
     N = 3
     C = 5
     H = 64
@@ -35,7 +35,7 @@ def test_tile_major_reshape():
     )
     xtt = ttl.tensor.reshape(xtt, 5, 3, 96, 64)
     assert xtt.shape() == [5, 3, 96, 64]
-    xtt_host = xtt.to(host)
+    xtt_host = xtt.cpu()
     tt_got_back = torch.Tensor(xtt_host.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         xtt_host.shape()
     )
@@ -44,7 +44,7 @@ def test_tile_major_reshape():
 
     xtt = ttl.tensor.reshape(xtt, 3, 5, 64, 96)
     assert xtt.shape() == [3, 5, 64, 96]
-    xtt_host = xtt.to(host)
+    xtt_host = xtt.cpu()
     tt_got_back = torch.Tensor(xtt_host.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         xtt_host.shape()
     )
@@ -53,7 +53,7 @@ def test_tile_major_reshape():
 
     xtt = ttl.tensor.reshape(xtt, -1, 5, 96, 64)
     assert xtt.shape() == [3, 5, 96, 64]
-    xtt_host = xtt.to(host)
+    xtt_host = xtt.cpu()
     tt_got_back = torch.Tensor(xtt_host.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         xtt_host.shape()
     )
@@ -62,7 +62,7 @@ def test_tile_major_reshape():
 
     xtt = ttl.tensor.reshape(xtt, 3, -1, 64, 96)
     assert xtt.shape() == [3, 5, 64, 96]
-    xtt_host = xtt.to(host)
+    xtt_host = xtt.cpu()
     tt_got_back = torch.Tensor(xtt_host.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         xtt_host.shape()
     )
@@ -71,7 +71,7 @@ def test_tile_major_reshape():
 
     xtt = ttl.tensor.reshape(xtt, 3, 5, -1, 64)
     assert xtt.shape() == [3, 5, 96, 64]
-    xtt_host = xtt.to(host)
+    xtt_host = xtt.cpu()
     tt_got_back = torch.Tensor(xtt_host.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         xtt_host.shape()
     )
@@ -80,7 +80,7 @@ def test_tile_major_reshape():
 
     xtt = ttl.tensor.reshape(xtt, 3, 5, 64, -1)
     assert xtt.shape() == [3, 5, 64, 96]
-    xtt_host = xtt.to(host)
+    xtt_host = xtt.cpu()
     tt_got_back = torch.Tensor(xtt_host.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         xtt_host.shape()
     )
@@ -89,7 +89,7 @@ def test_tile_major_reshape():
 
     xtt = ttl.tensor.reshape(xtt, 3, 5, 32, -1)
     assert xtt.shape() == [3, 5, 32, 96 * 2]
-    xtt_host = xtt.to(host)
+    xtt_host = xtt.cpu()
     tt_got_back = torch.Tensor(xtt_host.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         xtt_host.shape()
     )
@@ -108,7 +108,7 @@ def test_row_major_reshape():
     # Initialize the device
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
+
     # Power of 2 reshape
     N = 1
     C = 1
@@ -124,7 +124,7 @@ def test_row_major_reshape():
     )
 
     reshaped = ttl.tensor.reshape(xtt, 1, 128, 2, 64)
-    reshaped = torch.Tensor(reshaped.to(host).data()).reshape(reshaped.shape())
+    reshaped = torch.Tensor(reshaped.cpu().data()).reshape(reshaped.shape())
     torch_reshaped = torch.Tensor(x).reshape(1, 128, 2, 64)
     assert torch.equal(torch_reshaped, reshaped)
     ttl.device.CloseDevice(device)

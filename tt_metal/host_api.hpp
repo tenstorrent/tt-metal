@@ -2,14 +2,13 @@
 
 #include <optional>
 #include "tt_metal/impl/allocator/allocator.hpp"
-#include "tt_metal/impl/device/host.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 
 // To be removed at a later time, but need a global
 // command queue for the time being.
-inline unique_ptr<CommandQueue> HACK_CQ;
+inline std::unique_ptr<CommandQueue> HACK_CQ;
 
 /** @file */
 
@@ -35,7 +34,6 @@ class Buffer;
 // ==================================================
 //                  HOST API: host and device
 // ==================================================
-Host *GetHost();
 
 /**
  * Instantiates a device object.

@@ -68,7 +68,7 @@ class TtSwinEmbeddings(nn.Module):
         if bool_masked_pos is not None:
             mask_tokens = self.mask_token.expand(batch_size, seq_len, -1)
             # replace the masked visual tokens by mask_tokens
-            bool_masked_pos = tt_to_torch_tensor(bool_masked_pos, self.host)
+            bool_masked_pos = tt_to_torch_tensor(bool_masked_pos)
             mask = bool_masked_pos.unsqueeze(-1).type_as(mask_tokens)
 
             mask_tokens = torch_to_tt_tensor_rm(mask_tokens, self.device)

@@ -64,7 +64,7 @@ def test_run_resnet_inference():
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
-    host = ttl.device.GetHost()
+
 
     # setup tt model
     tt_resnet = TtResnetBlock2D(in_channels=in_channels,
@@ -80,7 +80,7 @@ def test_run_resnet_inference():
     tt_temb = torch_to_tt_tensor_rm(temb, device, put_on_device=False)
 
     tt_out = tt_resnet(tt_input, temb)
-    tt_output = tt_to_torch_tensor(tt_out, host)
+    tt_output = tt_to_torch_tensor(tt_out)
 
     passing = comp_pcc(torch_output, tt_output)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))

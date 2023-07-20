@@ -28,7 +28,7 @@ def test_select_adaptive_pool2d_inference(pcc, reset_seeds):
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
-    host = tt_lib.device.GetHost()
+
 
     base_address = f"head.globa_lpool"
     model = timm.create_model("hf_hub:timm/ese_vovnet19b_dw.ra_in1k", pretrained=True)
@@ -51,7 +51,7 @@ def test_select_adaptive_pool2d_inference(pcc, reset_seeds):
     # run tt model
     tt_input = torch_to_tt_tensor_rm(input, host)
     tt_output = tt_model(tt_input)
-    tt_output_torch = tt_to_torch_tensor(tt_output, host)
+    tt_output_torch = tt_to_torch_tensor(tt_output)
     tt_output_torch = tt_output_torch.squeeze(0).squeeze(0)
 
     # compare output

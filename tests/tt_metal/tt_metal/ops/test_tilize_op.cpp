@@ -41,7 +41,6 @@ int main(int argc, char **argv) {
         int pci_express_slot = 0;
         tt_metal::Device *device =
             tt_metal::CreateDevice(arch, pci_express_slot);
-        tt_metal::Host *host = tt_metal::GetHost();
 
         pass &= tt_metal::InitializeDevice(device);
 
@@ -53,12 +52,12 @@ int main(int argc, char **argv) {
         Tensor a =  tt::numpy::random::random(shape).to(device);
         Tensor b = tilize(a);
 
-        Tensor c = b.to(host);
+        Tensor c = b.cpu();
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
         std::cout << "Moving src data to host to validate" << std::endl;
-        Tensor host_a = a.to(host); // Move tensor a to host to validate
+        Tensor host_a = a.cpu(); // Move tensor a to host to validate
         Tensor golden = host_a.to(Layout::TILE);
         auto golden_vec = owned_buffer::get_as<bfloat16>(golden);
         auto result_vec = owned_buffer::get_as<bfloat16>(c);

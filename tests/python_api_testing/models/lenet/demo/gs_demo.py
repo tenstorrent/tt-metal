@@ -27,7 +27,7 @@ def test_gs_demo(mnist_sample_input, model_location_generator):
         device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
         tt_lib.device.InitializeDevice(device)
         tt_lib.device.SetDefaultDevice(device)
-        host = tt_lib.device.GetHost()
+
 
         tt_lenet = lenet5(num_classes, device, host, model_location_generator)
 
@@ -39,7 +39,7 @@ def test_gs_demo(mnist_sample_input, model_location_generator):
         )
 
         tt_output = tt_lenet(tt_image)
-        tt_output = tt_output.to(host)
+        tt_output = tt_output.cpu()
         tt_output = torch.Tensor(tt_output.data()).reshape(tt_output.shape())
 
         _, tt_predicted = torch.max(tt_output.data, -1)

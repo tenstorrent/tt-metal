@@ -36,7 +36,7 @@ class PytorchBatchNorm1D(nn.Module):
 
 
 def run_btchnorm_inference(bn_size, device):
-    host = ttl.device.GetHost()
+
 
     inputs = torch.FloatTensor(1, bn_size).uniform_(-1., 1.).requires_grad_(True)
     # torch
@@ -95,7 +95,7 @@ def run_btchnorm_inference(bn_size, device):
     bn_tt =  batchnorm1d_inference(gamma, beta, running_mean_tt, running_var_tt, eps_tt)
     output_bn_tt = bn_tt(X_tt)
 
-    output_bn_tt_untilized = untilize(torch.Tensor(output_bn_tt.to(host).data()).reshape(output_bn_tt.shape()))
+    output_bn_tt_untilized = untilize(torch.Tensor(output_bn_tt.cpu().data()).reshape(output_bn_tt.shape()))
     output_bn_tt_untilized = output_bn_tt_untilized[0, 0, 0, :]
 
     print('pytorch_out:', output_bn_torch[0][0:10])

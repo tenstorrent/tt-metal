@@ -32,11 +32,9 @@ class TtConvNormAct(nn.Module):
         state_dict=None,
         base_address=None,
         device=None,
-        host=None,
     ) -> None:
         super().__init__()
         self.device = device
-        self.host = host
         conv_weight = torch_to_tt_tensor_rm(
             state_dict[f"{base_address}.conv.weight"], self.device, put_on_device=False
         )

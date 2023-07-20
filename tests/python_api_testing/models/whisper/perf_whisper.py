@@ -48,7 +48,7 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time)
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
-    host = tt_lib.device.GetHost()
+
 
     pytorch_model = WhisperModel.from_pretrained("openai/whisper-tiny.en")
     configuration = pytorch_model.config

@@ -81,7 +81,7 @@ def test_layer_norm_fallback(
     input_shape, weight_shape, bias_shape, normalized_shape, eps, on_device
 ):
     torch.manual_seed(1234)
-    host = ttl.device.GetHost()
+
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
 
@@ -140,7 +140,7 @@ def test_layer_norm_fallback(
 
     t1 = ttl.fallback_ops.layer_norm(t0, normalized_shape, w0, b0, eps)
 
-    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+    output = torch.Tensor(t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t1.shape()
     )
     comp_pass, _ = comp_pcc(pt_out, output, 0.9999)
@@ -204,7 +204,7 @@ def test_LayerNorm_fallback(
     on_device,
 ):
     torch.manual_seed(1234)
-    host = ttl.device.GetHost()
+
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
 
@@ -249,7 +249,7 @@ def test_LayerNorm_fallback(
     )
     t1 = tt_nn(t0)
 
-    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+    output = torch.Tensor(t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t1.shape()
     )
     comp_pass, _ = comp_pcc(pt_out, output, 0.9999)

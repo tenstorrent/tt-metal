@@ -31,7 +31,7 @@ def test_swin_image_classification_inference(imagenet_sample_input, model_name, 
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
-    host = tt_lib.device.GetHost()
+
 
     feature_extractor = AutoFeatureExtractor.from_pretrained(model_name)
     model = HF_SwinForImageClassification.from_pretrained(model_name)
@@ -61,7 +61,7 @@ def test_swin_image_classification_inference(imagenet_sample_input, model_name, 
 
         tt_output = tt_model(tt_pixel_values)
 
-        tt_output_torch = tt_to_torch_tensor(tt_output.logits, host)
+        tt_output_torch = tt_to_torch_tensor(tt_output.logits)
         tt_output_torch = tt_output_torch.squeeze(0).squeeze(0)
         does_pass, pcc_message = comp_pcc(torch_output.logits, tt_output_torch, pcc)
 

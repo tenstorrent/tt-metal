@@ -76,7 +76,6 @@ def run_bert_large_matmul_test(
     torch.manual_seed(1234)
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
 
     A = torch.randn(a_shape)
     B = torch.randn(b_shape) - 0.95
@@ -148,7 +147,7 @@ def run_bert_large_matmul_test(
     )
 
     assert t2.shape() == expected_output_shape
-    tt_host_rm = t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
+    tt_host_rm = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
     pyt_got_back_rm = torch.Tensor(tt_host_rm.data()).reshape(tt_host_rm.shape())
 
     ref_bmm = torch.matmul(A, B)
@@ -200,7 +199,6 @@ def run_bert_large_bmm_test(
     torch.manual_seed(1234)
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
 
     A = torch.randn(a_shape)
     B = torch.randn(b_shape) - 0.95
@@ -246,7 +244,7 @@ def run_bert_large_bmm_test(
     )
 
     assert t2.shape() == expected_output_shape
-    tt_host_rm = t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
+    tt_host_rm = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
     pyt_got_back_rm = torch.Tensor(tt_host_rm.data()).reshape(tt_host_rm.shape())
 
     if bert_large_op == ttl.tensor.bert_large_pre_softmax_bmm:

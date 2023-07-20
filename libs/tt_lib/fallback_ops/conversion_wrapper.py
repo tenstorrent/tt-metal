@@ -45,7 +45,7 @@ def custom_tensor_print_handler(tensor_cls):
         tensor_cls.__repr__ = tensor_repr_og
 
 
-def convert_tt_tensor_to_pt_tensor(tt_tensor, host, output_format):
+def convert_tt_tensor_to_pt_tensor(tt_tensor, output_format):
     # Update output_format with format of first encountered arg
     if output_format.get("device", None) is None and tt_tensor.storage_type() == ttl_tensor.StorageType.DEVICE:
         output_format["device"] = tt_tensor.device()
@@ -57,7 +57,7 @@ def convert_tt_tensor_to_pt_tensor(tt_tensor, host, output_format):
         ttl_profiler.append_input_data(tt_tensor)
     # Convert to PT Tensor
     if tt_tensor.storage_type() == ttl_tensor.StorageType.DEVICE:
-        tt_tensor = tt_tensor.to(host)
+        tt_tensor = tt_tensor.cpu()
 
     if tt_tensor.layout() != ttl_tensor.Layout.ROW_MAJOR:
         tt_tensor = tt_tensor.to(ttl_tensor.Layout.ROW_MAJOR)
@@ -102,20 +102,20 @@ def convert_pt_tensor_to_tt_tensor(pt_tensor, output_format):
     return tt_tensor
 
 
-def convert_tt_tensors_to_pt_tensors(args, host, output_format):
+def convert_tt_tensors_to_pt_tensors(args, output_format):
     check_log_pytorch_warning(args)
     if isinstance(args, ttl_tensor.Tensor):
-        return convert_tt_tensor_to_pt_tensor(args, host, output_format)
+        return convert_tt_tensor_to_pt_tensor(args, output_format)
     elif isinstance(args, dict):
         outputs = {}
         for key, value in args.items():
             if isinstance(value, ttl_tensor.Tensor):
                 outputs[key] = convert_tt_tensor_to_pt_tensor(
-                    value, host, output_format
+                    value, output_format
                 )
             elif isinstance(value, (list, tuple, dict)):
                 outputs[key] = convert_tt_tensors_to_pt_tensors(
-                    value, host, output_format
+                    value, output_format
                 )
             else:
                 check_log_pytorch_warning(value)
@@ -125,10 +125,10 @@ def convert_tt_tensors_to_pt_tensors(args, host, output_format):
         outputs = []
         for arg in args:
             if isinstance(arg, ttl_tensor.Tensor):
-                outputs.append(convert_tt_tensor_to_pt_tensor(arg, host, output_format))
+                outputs.append(convert_tt_tensor_to_pt_tensor(arg, output_format))
             elif isinstance(arg, (list, tuple, dict)):
                 outputs.append(
-                    convert_tt_tensors_to_pt_tensors(arg, host, output_format)
+                    convert_tt_tensors_to_pt_tensors(arg, output_format)
                 )
             else:
                 check_log_pytorch_warning(arg)
@@ -166,7 +166,7 @@ def convert_pt_tensors_to_tt_tensors(args, output_format):
 
 
 def convert_tt_tensors_wrapper(func):
-    host = ttl_device.GetHost()
+
 
     @wraps(func)
     def wrap(*args, **kwargs):
@@ -203,9 +203,9 @@ def convert_tt_tensors_wrapper(func):
                         f"kwargs:({str(kwargs)})".replace(",", "|").replace(" ", "")
                     )
 
-        new_args = convert_tt_tensors_to_pt_tensors(args, host, output_format)
+        new_args = convert_tt_tensors_to_pt_tensors(args, output_format)
 
-        new_kwargs = convert_tt_tensors_to_pt_tensors(kwargs, host, output_format)
+        new_kwargs = convert_tt_tensors_to_pt_tensors(kwargs, output_format)
 
         # Set default output format
         if output_format.get("device", None) is None:

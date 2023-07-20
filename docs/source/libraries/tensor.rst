@@ -112,7 +112,7 @@ This example shows how to move a TT Tensor ``output`` from device to host and ho
 .. code-block:: python
 
     # move TT Tensor output from TT accelerator device to host
-    tt_output = tt_output.to(host)
+    tt_output = tt_output.cpu()
 
     # create a 1D PyTorch tensor from values in TT Tensor obtained with data() member function
     # and then reshape PyTorch tensor to shape of TT Tensor

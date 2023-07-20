@@ -30,11 +30,9 @@ class TtSwinLayer(nn.Module):
         base_address,
         device,
         shift_size,
-        host,
     ):
         super().__init__()
         self.device = device
-        self.host = host
         self.chunk_size_feed_forward = config.chunk_size_feed_forward
         self.shift_size = shift_size
         self.window_size = config.window_size
@@ -58,7 +56,6 @@ class TtSwinLayer(nn.Module):
             state_dict,
             f"{base_address}.attention",
             device,
-            host=host,
         )
 
         gamma_after = torch_to_tt_tensor_rm(
@@ -81,7 +78,6 @@ class TtSwinLayer(nn.Module):
             state_dict,
             f"{base_address}.intermediate",
             device,
-            host,
         )
         self.output = TtSwinOutput(
             config,
@@ -89,7 +85,6 @@ class TtSwinLayer(nn.Module):
             state_dict,
             f"{base_address}.output",
             device,
-            host,
         )
 
     def set_shift_and_window_size(self, input_resolution):
@@ -126,7 +121,7 @@ class TtSwinLayer(nn.Module):
                 mask_windows, -1, self.window_size * self.window_size, 1, 1
             )
 
-            mask_windows = tt_to_torch_tensor(mask_windows, self.host).squeeze()
+            mask_windows = tt_to_torch_tensor(mask_windows).squeeze()
             attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
             attn_mask = attn_mask.masked_fill(
                 attn_mask != 0, float(-100.0)
@@ -172,7 +167,7 @@ class TtSwinLayer(nn.Module):
         hidden_states, pad_values = self.maybe_pad(hidden_states, height, width)
 
         _, height_pad, width_pad, _ = hidden_states.shape()
-        hidden_states = tt_to_torch_tensor(hidden_states, self.host)
+        hidden_states = tt_to_torch_tensor(hidden_states)
         # cyclic shift
         if self.shift_size > 0:
             shifted_hidden_states = torch.roll(
@@ -215,7 +210,7 @@ class TtSwinLayer(nn.Module):
             attention_windows, self.window_size, height_pad, width_pad, self.host
         ).to(self.device)
 
-        shifted_windows = tt_to_torch_tensor(shifted_windows, self.host)
+        shifted_windows = tt_to_torch_tensor(shifted_windows)
         # reverse cyclic shift
         if self.shift_size > 0:
             attention_windows = torch.roll(

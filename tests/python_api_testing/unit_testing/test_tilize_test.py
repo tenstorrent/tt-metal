@@ -23,7 +23,7 @@ from tests.python_api_testing.models.utility_functions import tilize
 def test_run_tilize_test(nb, nc, nh, nw):
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
+
     nt = nb * nc * nh * nw
     shape = [nb, nc, 32 * nh, 32 * nw]
 
@@ -37,7 +37,7 @@ def test_run_tilize_test(nb, nc, nh, nw):
         device,
     )
     b = ttl.tensor.tilize(a)
-    c = torch.frombuffer(b.to(host).data(), dtype=torch.bfloat16).to(torch.float32).reshape(shape).numpy()
+    c = torch.frombuffer(b.cpu().data(), dtype=torch.bfloat16).to(torch.float32).reshape(shape).numpy()
 
     tilized_inp = tilize(inp.reshape(*shape))
 

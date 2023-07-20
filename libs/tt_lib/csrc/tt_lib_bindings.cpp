@@ -31,7 +31,6 @@
 #include "tensor/borrowed_buffer.hpp"
 #include "tensor/tensor_impl.hpp"
 #include "tensor/tensor_utils.hpp"
-
 #include "tt_lib_bindings.hpp"
 #include "type_caster.hpp"
 
@@ -491,18 +490,12 @@ void TensorModule(py::module &m_tensor) {
 
                 tt_tensor = tt_tensor.to(tt_device)
         )doc")
-        .def("to", py::overload_cast<Host*>(&Tensor::to, py::const_), R"doc(
+        .def("cpu", &Tensor::cpu, R"doc(
             Move TT Tensor from TT accelerator device to host device.
-
-            +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
-            | Argument  | Description                                     | Data type                  | Valid range           | Required |
-            +===========+=================================================+============================+=======================+==========+
-            | arg0      | Device to which tensor will be moved            | tt_lib.device.Host         | Host device           | Yes      |
-            +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
 
             .. code-block:: python
 
-                tt_tensor = tt_tensor.to(host)
+                tt_tensor = tt_tensor.cpu()
         )doc")
         .def("to", py::overload_cast<Layout>(&Tensor::to, py::const_), R"doc(
             Convert TT Tensor to provided memory layout. Available layouts conversions are:
@@ -862,7 +855,7 @@ void TensorModule(py::module &m_tensor) {
 
             .. code-block:: python
 
-                data = tt_tensor.to(host).data() # move TT Tensor to host and get values stored in it
+                data = tt_tensor.cpu().data() # move TT Tensor to host and get values stored in it
 
         )doc")
         .def("layout", [](const Tensor &self) {
@@ -2989,17 +2982,6 @@ void DeviceModule(py::module &m_device) {
             ), "Create device."
         );
 
-    auto pyHost = py::class_<Host>(m_device, "Host", "Class describing the host machine.");
-
-    pyHost
-        .def(
-            py::init<>(
-                []() {
-                    return Host();
-                }
-            ), "Create host."
-        );
-
     m_device.def("CreateDevice", &CreateDevice, R"doc(
         Creates an instance of TT device.
 
@@ -3081,11 +3063,6 @@ void DeviceModule(py::module &m_device) {
         +==================+==================================+=======================+=============+==========+
         | device           | Device to dump memory state for  | tt_lib.device.Device  |             | Yes      |
         +------------------+----------------------------------+-----------------------+-------------+----------+
-    )doc");
-
-    m_device.def("GetHost", &GetHost, R"doc(
-        Get a reference to host machine of a TT accelerator device, usually a reference to the host
-        machine executing Python code.
     )doc");
 
     m_device.def("Synchronize", &Synchronize, R"doc(

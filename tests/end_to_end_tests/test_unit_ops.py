@@ -8,7 +8,7 @@ import tt_lib
 def test_tile_major_reshape_sweep(reset_seeds, first_grayskull_device):
     device = first_grayskull_device
     tt_lib.device.InitializeDevice(device)
-    host = tt_lib.device.GetHost()
+
     N = 3
     C = 5
     H = 64
@@ -22,7 +22,7 @@ def test_tile_major_reshape_sweep(reset_seeds, first_grayskull_device):
     )
     xtt = tt_lib.tensor.reshape(xtt, 5, 3, 96, 64)
     assert xtt.shape() == [5, 3, 96, 64]
-    xtt_host = xtt.to(host)
+    xtt_host = xtt.cpu()
     tt_got_back = torch.Tensor(xtt_host.to(tt_lib.tensor.Layout.ROW_MAJOR).data()).reshape(
         xtt_host.shape()
     )
@@ -31,7 +31,7 @@ def test_tile_major_reshape_sweep(reset_seeds, first_grayskull_device):
 
     xtt = tt_lib.tensor.reshape(xtt, 3, 5, 64, 96)
     assert xtt.shape() == [3, 5, 64, 96]
-    xtt_host = xtt.to(host)
+    xtt_host = xtt.cpu()
     tt_got_back = torch.Tensor(xtt_host.to(tt_lib.tensor.Layout.ROW_MAJOR).data()).reshape(
         xtt_host.shape()
     )
@@ -40,7 +40,7 @@ def test_tile_major_reshape_sweep(reset_seeds, first_grayskull_device):
 
     xtt = tt_lib.tensor.reshape(xtt, -1, 5, 96, 64)
     assert xtt.shape() == [3, 5, 96, 64]
-    xtt_host = xtt.to(host)
+    xtt_host = xtt.cpu()
     tt_got_back = torch.Tensor(xtt_host.to(tt_lib.tensor.Layout.ROW_MAJOR).data()).reshape(
         xtt_host.shape()
     )
@@ -49,7 +49,7 @@ def test_tile_major_reshape_sweep(reset_seeds, first_grayskull_device):
 
     xtt = tt_lib.tensor.reshape(xtt, 3, -1, 64, 96)
     assert xtt.shape() == [3, 5, 64, 96]
-    xtt_host = xtt.to(host)
+    xtt_host = xtt.cpu()
     tt_got_back = torch.Tensor(xtt_host.to(tt_lib.tensor.Layout.ROW_MAJOR).data()).reshape(
         xtt_host.shape()
     )
@@ -58,7 +58,7 @@ def test_tile_major_reshape_sweep(reset_seeds, first_grayskull_device):
 
     xtt = tt_lib.tensor.reshape(xtt, 3, 5, -1, 64)
     assert xtt.shape() == [3, 5, 96, 64]
-    xtt_host = xtt.to(host)
+    xtt_host = xtt.cpu()
     tt_got_back = torch.Tensor(xtt_host.to(tt_lib.tensor.Layout.ROW_MAJOR).data()).reshape(
         xtt_host.shape()
     )
@@ -67,7 +67,7 @@ def test_tile_major_reshape_sweep(reset_seeds, first_grayskull_device):
 
     xtt = tt_lib.tensor.reshape(xtt, 3, 5, 64, -1)
     assert xtt.shape() == [3, 5, 64, 96]
-    xtt_host = xtt.to(host)
+    xtt_host = xtt.cpu()
     tt_got_back = torch.Tensor(xtt_host.to(tt_lib.tensor.Layout.ROW_MAJOR).data()).reshape(
         xtt_host.shape()
     )
@@ -76,7 +76,7 @@ def test_tile_major_reshape_sweep(reset_seeds, first_grayskull_device):
 
     xtt = tt_lib.tensor.reshape(xtt, 3, 5, 32, -1)
     assert xtt.shape() == [3, 5, 32, 96 * 2]
-    xtt_host = xtt.to(host)
+    xtt_host = xtt.cpu()
     tt_got_back = torch.Tensor(xtt_host.to(tt_lib.tensor.Layout.ROW_MAJOR).data()).reshape(
         xtt_host.shape()
     )

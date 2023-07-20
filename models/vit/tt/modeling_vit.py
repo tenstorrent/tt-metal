@@ -615,7 +615,7 @@ class TtViTModel(nn.Module):
         # and head_mask is converted to shape [num_hidden_layers x batch x num_heads x seq_length x seq_length]
         head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)
 
-        pixel_values = tt_to_torch_tensor(pixel_values, tt_lib.device.GetHost())
+        pixel_values = tt_to_torch_tensor(pixel_values)
         # TODO: maybe have a cleaner way to cast the input (from `ImageProcessor` side?)
         expected_dtype = self.embeddings.patch_embeddings.projection.weight.dtype
         if pixel_values.dtype != expected_dtype:

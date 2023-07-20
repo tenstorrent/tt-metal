@@ -18,10 +18,3 @@ def test_device_arch():
     assert tt_lib.device.Arch.GRAYSKULL.name == "GRAYSKULL"
     assert tt_lib.device.Arch.WORMHOLE_B0.name == "WORMHOLE_B0"
     pass
-
-
-@pytest.mark.eager_host_side
-@pytest.mark.post_commit
-def test_device_host():
-    host = tt_lib.device.Host()
-    pass

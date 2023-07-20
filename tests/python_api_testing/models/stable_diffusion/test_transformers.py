@@ -72,7 +72,7 @@ def test_run_basic_transformer_inference():
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
-    host = ttl.device.GetHost()
+
 
     # setup tt model
     tt_input = torch_to_tt_tensor(input, device)
@@ -94,7 +94,7 @@ def test_run_basic_transformer_inference():
     tt_basic_transformer.eval()
     tt_out = tt_basic_transformer(tt_input, tt_encoder_hidden_states)
 
-    tt_output = tt_to_torch_tensor(tt_out, host)
+    tt_output = tt_to_torch_tensor(tt_out)
 
     passing = comp_pcc(torch_output, tt_output)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))
@@ -176,7 +176,7 @@ def test_run_transformer_inference():
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
-    host = ttl.device.GetHost()
+
 
     # setup tt model
     tt_input = torch_to_tt_tensor_rm(input, device, put_on_device=False)
@@ -193,7 +193,7 @@ def test_run_transformer_inference():
         base_address=base_address,)
 
     tt_out = tt_transformer(tt_input, tt_encoder_hidden_states)
-    tt_output = tt_to_torch_tensor(tt_out, host)
+    tt_output = tt_to_torch_tensor(tt_out)
 
     passing = comp_pcc(torch_output, tt_output)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))

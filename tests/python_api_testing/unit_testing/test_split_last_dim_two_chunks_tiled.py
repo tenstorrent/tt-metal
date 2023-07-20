@@ -96,7 +96,7 @@ def test_split_tiled_w(
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
-    host = ttl.device.GetHost()
+
     tile_size = 32
     W = 1
     Z = shape[1]
@@ -145,7 +145,7 @@ def test_split_tiled_w(
     for index, buff in enumerate(dev_buffers):
         logger.debug(f"buff{index} is on: {buff.memory_config().buffer_type}")
         assert buff.shape() == [W, Z, Y, int(X / num_splits)]
-        tt_host_rm_buff = buff.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
+        tt_host_rm_buff = buff.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
         pyt_got_back_rm_buff = torch.Tensor(tt_host_rm_buff.data()).reshape(
             tt_host_rm_buff.shape()
         )

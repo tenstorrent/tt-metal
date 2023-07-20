@@ -15,13 +15,13 @@ using namespace tt_metal;
 using namespace constants;
 
 
-bool test_single_tile_single_dram_bank_loopback(Device *device, Host *host) {
+bool test_single_tile_single_dram_bank_loopback(Device *device) {
     bool pass = true;
     Shape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
 
     Tensor host_a = tt::numpy::random::random(single_tile_shape).to(Layout::TILE);
     Tensor device_a = host_a.to(device);
-    Tensor loopbacked_a = device_a.to(host);
+    Tensor loopbacked_a = device_a.cpu();
     auto host_a_data = owned_buffer::get_as<bfloat16>(host_a);
     auto loopbacked_a_data = owned_buffer::get_as<bfloat16>(loopbacked_a);
     pass &= host_a_data == loopbacked_a_data;
@@ -29,13 +29,13 @@ bool test_single_tile_single_dram_bank_loopback(Device *device, Host *host) {
     return pass;
 }
 
-bool test_multi_tile_multi_dram_bank_loopback(Device *device, Host *host) {
+bool test_multi_tile_multi_dram_bank_loopback(Device *device) {
     bool pass = true;
     Shape multi_tile_shape = {1, 1, 4*TILE_HEIGHT, 3*TILE_WIDTH};
 
     Tensor host_a = tt::numpy::random::random(multi_tile_shape).to(Layout::TILE);
     Tensor device_a = host_a.to(device);
-    Tensor loopbacked_a = device_a.to(host);
+    Tensor loopbacked_a = device_a.cpu();
     auto host_a_data = owned_buffer::get_as<bfloat16>(host_a);
     auto loopbacked_a_data = owned_buffer::get_as<bfloat16>(loopbacked_a);
     pass &= host_a_data == loopbacked_a_data;
@@ -64,13 +64,12 @@ int main(int argc, char **argv) {
         int pci_express_slot = 0;
         tt_metal::Device *device =
             tt_metal::CreateDevice(arch, pci_express_slot);
-        tt_metal::Host *host = tt_metal::GetHost();
 
         pass &= tt_metal::InitializeDevice(device);
 
-        pass &= test_single_tile_single_dram_bank_loopback(device, host);
+        pass &= test_single_tile_single_dram_bank_loopback(device);
 
-        pass &= test_multi_tile_multi_dram_bank_loopback(device, host);
+        pass &= test_multi_tile_multi_dram_bank_loopback(device);
 
         pass &= tt_metal::CloseDevice(device);
 

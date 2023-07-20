@@ -37,14 +37,13 @@ int main(int argc, char **argv) {
     int pci_express_slot = 0;
     tt_metal::Device *device =
         tt_metal::CreateDevice(arch, pci_express_slot);
-    Host *host = GetHost();
     pass &= InitializeDevice(device);
     tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}});
     Shape shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
     Tensor a = tt::numpy::random::random(shape).to(Layout::TILE).to(device);
     Tensor c = softmax_in_place(a);
-    Tensor d = c.to(host);
-    Tensor host_a = a.to(host); // Move tensor a to host to validate
+    Tensor d = c.cpu();
+    Tensor host_a = a.cpu(); // Move tensor a to host to validate
     pass &= CloseDevice(device);
 
 

@@ -32,7 +32,7 @@ def test_perf(imagenet_sample_input):
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
-    host = tt_lib.device.GetHost()
+
 
     torch_model = timm.create_model(
         "hf_hub:timm/ese_vovnet19b_dw.ra_in1k", pretrained=True
@@ -40,7 +40,6 @@ def test_perf(imagenet_sample_input):
 
     tt_model = vovnet_for_image_classification(
         device=device,
-        host=host,
     )
 
     input = imagenet_sample_input
@@ -53,7 +52,7 @@ def test_perf(imagenet_sample_input):
 
         profiler.start(first_key)
         tt_output = tt_model(tt_input)
-        tt_output_torch = tt_to_torch_tensor(tt_output, host)
+        tt_output_torch = tt_to_torch_tensor(tt_output)
         tt_output_torch = tt_output_torch.squeeze(0).squeeze(0)
         profiler.end(first_key)
 
@@ -61,7 +60,7 @@ def test_perf(imagenet_sample_input):
 
         profiler.start(second_key)
         tt_output = tt_model(tt_input)
-        tt_output_torch = tt_to_torch_tensor(tt_output, host)
+        tt_output_torch = tt_to_torch_tensor(tt_output)
         tt_output_torch = tt_output_torch.squeeze(0).squeeze(0)
         profiler.end(second_key)
 

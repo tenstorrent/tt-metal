@@ -65,7 +65,7 @@ class TtSwinPatchMerging(nn.Module):
         )
 
         input_feature = self.maybe_pad(input_feature, height, width)
-        input_feature = tt_to_torch_tensor(input_feature, self.host)
+        input_feature = tt_to_torch_tensor(input_feature)
 
         # [batch_size, height/2, width/2, num_channels]
         input_feature_0 = input_feature[:, 0::2, 0::2, :]

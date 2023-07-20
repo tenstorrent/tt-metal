@@ -28,7 +28,7 @@ def test_run_unet_mid_block_real_input_inference(model_location_generator):
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
-    host = ttl.device.GetHost()
+
 
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
@@ -84,7 +84,7 @@ def test_run_unet_mid_block_real_input_inference(model_location_generator):
         cross_attention_kwargs=cross_attention_kwargs
         )
 
-    tt_output = tt_to_torch_tensor(tt_output, host)
+    tt_output = tt_to_torch_tensor(tt_output)
 
     passing = comp_pcc(torch_output, tt_output)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))
@@ -143,7 +143,7 @@ def test_run_unet_mid_block_inference():
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
-    host = ttl.device.GetHost()
+
 
     tt_mid_block = TtUNetMidBlock2DCrossAttn(
                     in_channels=in_channels,
@@ -167,7 +167,7 @@ def test_run_unet_mid_block_inference():
         cross_attention_kwargs=cross_attention_kwargs
         )
 
-    tt_output = tt_to_torch_tensor(tt_output, host)
+    tt_output = tt_to_torch_tensor(tt_output)
 
     passing = comp_pcc(torch_output, tt_output)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))

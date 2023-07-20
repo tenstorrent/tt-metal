@@ -108,7 +108,7 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
 
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
+
 
     if on_weka:
         model_name = str(model_location_generator("tt_dnn-models/Bert/BertForQuestionAnswering/models/") / model_version)
@@ -173,7 +173,7 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
     tt_out_list = tt_bert_model(1, **bert_input)
 
     # the first inference pass
-    tt_out = tt_out_list[0].to(host)
+    tt_out = tt_out_list[0].cpu()
     tt_untilized_output = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(batch, 1, seq_len, -1)
 
     print(f"Enable profiler and enable binary and compile cache")
@@ -192,7 +192,7 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
     for i in range(PERF_CNT):
         profiler.start("processing_output_to_string")
 
-        tt_out = tt_out_list[i].to(host)
+        tt_out = tt_out_list[i].cpu()
         tt_untilized_output = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(batch, 1, seq_len, -1)
 
         tt_start_logits = tt_untilized_output[..., :, 0].squeeze(1)

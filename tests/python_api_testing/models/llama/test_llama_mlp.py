@@ -113,7 +113,7 @@ def test_LlamaMLP_inference(
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
 
-    host = tt_lib.device.GetHost()
+
     run_test_LlamaMLP_inference(
         device, host, model_version, tokenizer_version, batch, seq_len, on_weka, pcc
     )

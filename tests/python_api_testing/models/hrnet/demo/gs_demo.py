@@ -25,7 +25,7 @@ def test_gs_demo(imagenet_sample_input, imagenet_label_dict, model_name, reset_s
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
-    host = tt_lib.device.GetHost()
+
 
     tt_model = hrnet_w18_small(device, host, multi_scale_output=True)
 
@@ -34,7 +34,7 @@ def test_gs_demo(imagenet_sample_input, imagenet_label_dict, model_name, reset_s
     with torch.no_grad():
         tt_output = tt_model(tt_input)
 
-    tt_output_torch = tt_to_torch_tensor(tt_output, host).view(1, -1)
+    tt_output_torch = tt_to_torch_tensor(tt_output).view(1, -1)
 
     logger.info("GS's Predicted Output")
     logger.info(imagenet_label_dict[tt_output_torch[0].argmax(-1).item()])

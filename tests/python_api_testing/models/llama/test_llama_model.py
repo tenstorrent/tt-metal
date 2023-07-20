@@ -81,7 +81,7 @@ def run_test_Llama_inference(
         num_decoders,
     )
 
-    tt_out = tt_llama_model(llama_input).to(host)
+    tt_out = tt_llama_model(llama_input).cpu()
     tt_out = tt2torch_tensor(tt_out)
     tt_out = tt_out.squeeze(1)
 
@@ -128,10 +128,9 @@ def test_Llama_inference(
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
 
-    host = tt_lib.device.GetHost()
+
     run_test_Llama_inference(
         device,
-        host,
         model_version,
         tokenizer_version,
         batch,

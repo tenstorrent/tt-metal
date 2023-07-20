@@ -42,8 +42,8 @@ def torch2tt_tensor(py_tensor: torch.Tensor, tt_device, dtype, mem_config):
 
 
 def tt2torch_tensor(tt_tensor):
-    host = ttl.device.GetHost()
-    tt_output = tt_tensor.to(host)
+
+    tt_output = tt_tensor.cpu()
     if tt_output.layout() != ttl.tensor.Layout.ROW_MAJOR:
         tt_output = tt_output.to(ttl.tensor.Layout.ROW_MAJOR)
     dtype = {
@@ -254,7 +254,6 @@ def run_mha_inference(
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     # Initialize the device
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
 
     if on_weka:
         model_name = str(
@@ -312,7 +311,7 @@ def run_mha_inference(
         .to(device, model_config["OP8_SOFTMAX_ATTENTION_MASK_MEMCFG"])
     )
 
-    tt_out = tt_mha_model(tt_mha_input, tt_bert_attention_mask).to(host)
+    tt_out = tt_mha_model(tt_mha_input, tt_bert_attention_mask).cpu()
     tt_out1 = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         tt_out.shape()
     )

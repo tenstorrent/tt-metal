@@ -64,7 +64,7 @@ class TtDeiTForImageClassificationWithTeacher(nn.Module):
         sequence_output = outputs[0]
 
         # move to cpu (no slicing fallbacks yet)
-        sequence_output = tt_to_torch_tensor(sequence_output, tt_lib.device.GetHost())
+        sequence_output = tt_to_torch_tensor(sequence_output)
         cls_classifier_input = torch_to_tt_tensor_rm(sequence_output[:, :, 0, :], self.device)
         distillation_classifier_input = torch_to_tt_tensor_rm(sequence_output[:, :, 1, :], self.device)
 

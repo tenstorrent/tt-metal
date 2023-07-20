@@ -28,7 +28,7 @@ def test_sequential_append_list_inference(pcc, reset_seeds):
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
-    host = tt_lib.device.GetHost()
+
 
     STAGE_INDEX = 0
     BLOCK_INDEX = 0
@@ -52,7 +52,7 @@ def test_sequential_append_list_inference(pcc, reset_seeds):
 
     tt_input = torch_to_tt_tensor_rm(input, device)
     tt_output = tt_model(tt_input, [tt_input])
-    tt_output_torch = tt_to_torch_tensor(tt_output, host)
+    tt_output_torch = tt_to_torch_tensor(tt_output)
     tt_output_torch = tt_output_torch.squeeze(0)
 
     passing, pcc_message = comp_pcc(model_output, tt_output_torch, pcc)

@@ -97,7 +97,7 @@ def test_run_bmm_single_core_tilize_untilize(a_height_nblocks,
 
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
+
 
     a_batch = b_batch = 1
     a_channel = b_channel = 1
@@ -149,10 +149,10 @@ def test_run_bmm_single_core_tilize_untilize(a_height_nblocks,
        precision=2, threshold=10000,
        sci_mode=False, edgeitems=80, linewidth=400)
 
-    # tta_pytorch = untilize(torch.tensor(tta.to(host).data()).reshape(a_shape))
+    # tta_pytorch = untilize(torch.tensor(tta.cpu().data()).reshape(a_shape))
     # print(f'a slice: {tta_pytorch[0, 0, 0:32*a_block_height_ntiles*a_height_nblocks:32*a_block_height_ntiles, 0:32*a_width_nblocks*a_block_width_ntiles:1]}')
 
-    # ttb_pytorch = untilize(torch.tensor(ttb.to(host).data()).reshape(b_shape))
+    # ttb_pytorch = untilize(torch.tensor(ttb.cpu().data()).reshape(b_shape))
     # print(f'b slice: {ttb_pytorch[0, 0, 0:32*a_block_width_ntiles*a_width_nblocks:32, 0:32*b_width_nblocks*b_block_width_ntiles:1]}')
 
     ## compute out
@@ -161,7 +161,7 @@ def test_run_bmm_single_core_tilize_untilize(a_height_nblocks,
                                          a_block_height_ntiles, a_block_width_ntiles, b_block_width_ntiles,
                                          out_subblock_height_ntiles, out_subblock_width_ntiles,
                                          tilize_a, untilize_out)
-    out = out.to(host)
+    out = out.cpu()
     if not untilize_out:
         ## output is in tiled format
         out_pytorch = untilize(torch.tensor(out.data()).reshape(out_shape))

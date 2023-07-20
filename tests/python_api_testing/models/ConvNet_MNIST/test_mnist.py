@@ -24,7 +24,7 @@ def run_mnist_inference(model, on_weka, pcc, model_location_generator):
         device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
         tt_lib.device.InitializeDevice(device)
         tt_lib.device.SetDefaultDevice(device)
-        host = tt_lib.device.GetHost()
+
 
         if on_weka:
             model_name = str(
@@ -37,7 +37,7 @@ def run_mnist_inference(model, on_weka, pcc, model_location_generator):
         test_dataset, test_loader = prep_data()
         first_input, label = next(iter(test_loader))
 
-        tt_convnet = TtConvNet(device, host, state_dict)
+        tt_convnet = TtConvNet(device, state_dict)
         with torch.no_grad():
             img = first_input.to("cpu")
             # unsqueeze to go from [batch, 10] to [batch, 1, 1, 10]
@@ -52,7 +52,7 @@ def run_mnist_inference(model, on_weka, pcc, model_location_generator):
                 tt_lib.tensor.Layout.ROW_MAJOR,
             )
             tt_output = tt_convnet(tt_image)
-            tt_output = tt2torch_tensor(tt_output, host)
+            tt_output = tt2torch_tensor(tt_output)
 
             pcc_passing, pcc_output = comp_pcc(torch_output, tt_output)
             logger.info(f"Output {pcc_output}")
@@ -67,4 +67,3 @@ def run_mnist_inference(model, on_weka, pcc, model_location_generator):
 )
 def test_mnist_inference(model, on_weka, pcc, model_location_generator, reset_seeds):
     run_mnist_inference(model, on_weka, pcc, model_location_generator)
-

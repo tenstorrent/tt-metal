@@ -55,7 +55,6 @@ def test_cross_attn_inference():
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
-    host = ttl.device.GetHost()
 
     # setup tt model
     tt_cross_attn = TtCrossAttention(query_dim=query_dim,
@@ -72,7 +71,7 @@ def test_cross_attn_inference():
     tt_input = torch_to_tt_tensor_rm(input, device, put_on_device=False)
     tt_encoder_hidden_states = torch_to_tt_tensor_rm(encoder_hidden_states, device, put_on_device=False) if encoder_hidden_states is not None else None
     tt_out = tt_cross_attn(tt_input, tt_encoder_hidden_states)
-    tt_output = tt_to_torch_tensor(tt_out, host)
+    tt_output = tt_to_torch_tensor(tt_out)
 
 
     passing = comp_pcc(torch_output, tt_output)

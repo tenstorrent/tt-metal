@@ -199,7 +199,6 @@ def run_bert_encoder_inference(
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     # Initialize the device
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
 
     if on_weka:
         model_name = str(
@@ -260,9 +259,8 @@ def run_bert_encoder_inference(
         .to(device, model_config["OP8_SOFTMAX_ATTENTION_MASK_MEMCFG"])
     )
 
-    tt_out = tt_bert_encoder_model(tt_bert_encoder_input, tt_bert_attention_mask).to(
-        host
-    )
+    tt_out = tt_bert_encoder_model(tt_bert_encoder_input, tt_bert_attention_mask).cpu()
+
     tt_out = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         tt_out.shape()
     )

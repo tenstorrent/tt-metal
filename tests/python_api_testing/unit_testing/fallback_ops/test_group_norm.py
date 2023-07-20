@@ -81,7 +81,7 @@ def test_group_norm_fallback(
     input_shape, weight_shape, bias_shape, num_groups, eps, on_device
 ):
     torch.manual_seed(1234)
-    host = ttl.device.GetHost()
+
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
 
@@ -146,7 +146,7 @@ def test_group_norm_fallback(
         b0 = None
     t1 = ttl.fallback_ops.group_norm(t0, num_groups, w0, b0, eps)
 
-    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+    output = torch.Tensor(t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t1.shape()
     )
     comp_pass, _ = comp_pcc(pt_out, output, 0.9999)
@@ -215,7 +215,7 @@ def test_GroupNorm_fallback(
     on_device,
 ):
     torch.manual_seed(1234)
-    host = ttl.device.GetHost()
+
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
 
@@ -268,7 +268,7 @@ def test_GroupNorm_fallback(
     )
     t1 = tt_nn(t0)
 
-    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+    output = torch.Tensor(t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t1.shape()
     )
     comp_pass, _ = comp_pcc(pt_out, output, 0.9999)

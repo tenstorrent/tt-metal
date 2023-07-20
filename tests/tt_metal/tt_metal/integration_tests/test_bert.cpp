@@ -125,7 +125,7 @@ void test_bert() {
     using tt::constants::TILE_WIDTH;
     using tt::tt_metal::DataType;
     using tt::tt_metal::Device;
-    using tt::tt_metal::Host;
+
     using tt::tt_metal::Layout;
     using tt::tt_metal::Tensor;
 
@@ -133,7 +133,6 @@ void test_bert() {
 
     int pci_express_slot = 0;
     auto device = tt::tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
-    auto host = tt::tt_metal::GetHost();
 
     TT_ASSERT(tt::tt_metal::InitializeDevice(device));
 
@@ -173,7 +172,7 @@ void test_bert() {
         for (auto encoder_index = 0; encoder_index < num_encoders; encoder_index++) {
             hidden_states = encoder(std::move(hidden_states), attention_mask, parameters, encoder_index, head_size);
         }
-        auto output = qa_head(std::move(hidden_states), parameters).to(host);
+        auto output = qa_head(std::move(hidden_states), parameters).cpu();
         auto end = std::chrono::steady_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
         tt::log_info(tt::LogTest, "run_bert finished in {} microseconds", duration);

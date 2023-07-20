@@ -17,7 +17,7 @@ def test_tensor_with_owned_storage(shape, tt_dtype):
     # Initialize the device
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
-    host = tt_lib.device.GetHost()
+
 
     dtype = {
         tt_lib.tensor.DataType.FLOAT32:   torch.float,
@@ -41,7 +41,7 @@ def test_tensor_with_owned_storage(shape, tt_dtype):
     )
     if tt_dtype in {tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B}:
         tt_tensor = tt_tensor.to(device)
-        tt_tensor = tt_tensor.to(host)
+        tt_tensor = tt_tensor.cpu()
 
     tt_tensor_data = tt_tensor.data()
     torch_tensor_after_round_trip = torch.frombuffer(tt_tensor_data, dtype=dtype).reshape(shape)
@@ -68,7 +68,6 @@ def test_tensor_with_borrowed_storage(shape, tt_dtype):
     # Initialize the device
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
-    host = tt_lib.device.GetHost()
 
     dtype = {
         tt_lib.tensor.DataType.FLOAT32:   torch.float,
@@ -81,7 +80,7 @@ def test_tensor_with_borrowed_storage(shape, tt_dtype):
     tt_tensor = tt_lib.tensor.Tensor(torch_tensor)
     if tt_dtype in {tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B}:
         tt_tensor = tt_tensor.to(device)
-        tt_tensor = tt_tensor.to(host)
+        tt_tensor = tt_tensor.cpu()
 
     tt_tensor_data = tt_tensor.data()
     torch_tensor_after_round_trip = torch.frombuffer(tt_tensor_data, dtype=dtype).reshape(shape)

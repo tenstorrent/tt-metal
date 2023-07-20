@@ -66,7 +66,7 @@ def create_unpadded_tensor(ttm_tensor, input_tensors_shape, input_tensor_start=[
         input_tensor_start[i] + input_tensors_shape[i] - 1
         for i in range(len(input_tensors_shape))
     )
-    ttm_tensor = ttm_tensor.to(ttm.device.GetHost()).to(ttm.tensor.Layout.ROW_MAJOR).unpad(output_tensor_start, output_tensor_end)
+    ttm_tensor = ttm_tensor.cpu().to(ttm.tensor.Layout.ROW_MAJOR).unpad(output_tensor_start, output_tensor_end)
 
     return ttm_tensor
 
@@ -88,8 +88,8 @@ def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
 
 
 def tt2torch_tensor(tt_tensor):
-    host = ttm.device.GetHost()
-    tt_output = tt_tensor.to(host)
+
+    tt_output = tt_tensor.cpu()
     if tt_output.layout() != ttm.tensor.Layout.ROW_MAJOR:
         tt_output = tt_output.to(ttm.tensor.Layout.ROW_MAJOR)
     dtype = {
@@ -144,7 +144,7 @@ def closestNumberDivisibleByTileSize(n):
     return num
 
 
-def tt_load_layer_weights(layer_name, state_dict):
+def tt_load_layer_weights(layer_name, state_dict, device):
 
     weights = state_dict[layer_name]
     input_shape = list(weights.shape)
@@ -159,7 +159,7 @@ def tt_load_layer_weights(layer_name, state_dict):
 
     # print(f"Weights shape {[d0, d1, d2, d3]}")
 
-    weights = create_padded_tensor(input_shape, weights, [d0, d1, d2, d3], 0, ttm.device.GetHost())
+    weights = create_padded_tensor(input_shape, weights, [d0, d1, d2, d3], 0, device)
     return weights
 
 

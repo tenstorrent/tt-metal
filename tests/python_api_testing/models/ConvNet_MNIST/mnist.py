@@ -45,10 +45,9 @@ class ConvNet(nn.Module):
 
 
 class TtConvNet(nn.Module):
-    def __init__(self, device=None, host=None, state_dict=None) -> None:
+    def __init__(self, device=None, state_dict=None) -> None:
         super().__init__()
         self.device = device
-        self.host = host
 
         conv1_weight = state_dict["conv1.weight"]
         self.tt_conv1_weight = tt_lib.tensor.Tensor(
@@ -123,7 +122,7 @@ class TtConvNet(nn.Module):
         out = tt_lib.tensor.relu(out)
 
         # Convert TT tensor to Torch tensor
-        out = out.to(self.host)
+        out = out.cpu()
         out = torch.Tensor(out.data()).reshape(out.shape())
 
         out = F.max_pool2d(out, 2)  # On CPU
@@ -132,7 +131,7 @@ class TtConvNet(nn.Module):
         out = tt_lib.tensor.relu(out)
 
         # Convert TT tensor to Torch tensor
-        out = out.to(self.host)
+        out = out.cpu()
         out = torch.Tensor(out.data()).reshape(out.shape())
 
         out = F.max_pool2d(out, 2)  # On CPU
@@ -201,4 +200,3 @@ def prep_data():
     )
 
     return test_dataset, test_loader
-

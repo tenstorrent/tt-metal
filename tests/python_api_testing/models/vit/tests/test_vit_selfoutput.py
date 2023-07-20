@@ -31,7 +31,7 @@ def test_vit_selfoutput(pcc=0.99):
         device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
         tt_lib.device.InitializeDevice(device)
         tt_lib.device.SetDefaultDevice(device)
-        host = tt_lib.device.GetHost()
+
 
         tt_hidden_state = torch_to_tt_tensor_rm(
             hidden_state, device, put_on_device=False
@@ -44,7 +44,7 @@ def test_vit_selfoutput(pcc=0.99):
         )
 
         tt_output = tt_layer(tt_hidden_state, None)
-        tt_output = tt_to_torch_tensor(tt_output, host)
+        tt_output = tt_to_torch_tensor(tt_output)
         pcc_passing, _ = comp_pcc(HF_output, tt_output, pcc)
         _, pcc_output = comp_allclose_and_pcc(HF_output, tt_output, pcc)
         logger.info(f"Output {pcc_output}")

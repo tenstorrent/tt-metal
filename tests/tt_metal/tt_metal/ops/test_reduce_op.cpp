@@ -5,7 +5,6 @@
 #include "tensor/tensor.hpp"
 #include "constants.hpp"
 
-using tt::tt_metal::Host;
 using tt::tt_metal::Device;
 using tt::tt_metal::Tensor;
 using tt::tt_metal::DataType;
@@ -15,15 +14,15 @@ using tt::tt_metal::ReduceOpMath;
 using tt::tt_metal::ReduceOpDim;
 
 template<ReduceOpMath::Enum op_math, ReduceOpDim::Enum op_dim>
-Tensor device_function(const Tensor& input_tensor, Host* host, Device* device) {
-    return reduce(input_tensor.to(device), op_math, op_dim).to(host);
+Tensor device_function(const Tensor& input_tensor, Device* device) {
+    return reduce(input_tensor.to(device), op_math, op_dim).cpu();
 }
 
 template<auto DeviceFunction, typename ... Args>
-void run_test(Host* host, Device* device, Args ...  args) {
+void run_test(Device* device, Args ...  args) {
     Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
     auto input_tensor = tt::numpy::random::random(shape, DataType::BFLOAT16).to(Layout::TILE);
-    auto device_output = DeviceFunction(input_tensor, host, device);
+    auto device_output = DeviceFunction(input_tensor, device);
     // What should be validated? allclose against host implementation?
 }
 
@@ -33,59 +32,58 @@ int main () {
 
     int pci_express_slot = 0;
     auto device = tt::tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
-    auto host = tt::tt_metal::GetHost();
 
     TT_ASSERT(tt::tt_metal::InitializeDevice(device));
 
     {
-        run_test<device_function<ReduceOpMath::SUM, ReduceOpDim::H>>(host, device);
+        run_test<device_function<ReduceOpMath::SUM, ReduceOpDim::H>>( device);
     }
 
     {
-        run_test<device_function<ReduceOpMath::SUM, ReduceOpDim::W>>(host, device);
+        run_test<device_function<ReduceOpMath::SUM, ReduceOpDim::W>>( device);
     }
 
     {
-        run_test<device_function<ReduceOpMath::SUM, ReduceOpDim::HW>>(host, device);
+        run_test<device_function<ReduceOpMath::SUM, ReduceOpDim::HW>>( device);
     }
 
     {
-        run_test<device_function<ReduceOpMath::MAX, ReduceOpDim::H>>(host, device);
+        run_test<device_function<ReduceOpMath::MAX, ReduceOpDim::H>>( device);
     }
 
     {
-        run_test<device_function<ReduceOpMath::MAX, ReduceOpDim::W>>(host, device);
+        run_test<device_function<ReduceOpMath::MAX, ReduceOpDim::W>>( device);
     }
 
     {
-        run_test<device_function<ReduceOpMath::MAX, ReduceOpDim::HW>>(host, device);
+        run_test<device_function<ReduceOpMath::MAX, ReduceOpDim::HW>>( device);
     }
 
     tt::tt_metal::program_cache::enable();
 
     auto run_reduce_ops = [&] {
         {
-            run_test<device_function<ReduceOpMath::SUM, ReduceOpDim::H>>(host, device);
+            run_test<device_function<ReduceOpMath::SUM, ReduceOpDim::H>>( device);
         }
 
         {
-            run_test<device_function<ReduceOpMath::SUM, ReduceOpDim::W>>(host, device);
+            run_test<device_function<ReduceOpMath::SUM, ReduceOpDim::W>>( device);
         }
 
         {
-            run_test<device_function<ReduceOpMath::SUM, ReduceOpDim::HW>>(host, device);
+            run_test<device_function<ReduceOpMath::SUM, ReduceOpDim::HW>>( device);
         }
 
         {
-            run_test<device_function<ReduceOpMath::MAX, ReduceOpDim::H>>(host, device);
+            run_test<device_function<ReduceOpMath::MAX, ReduceOpDim::H>>( device);
         }
 
         {
-            run_test<device_function<ReduceOpMath::MAX, ReduceOpDim::W>>(host, device);
+            run_test<device_function<ReduceOpMath::MAX, ReduceOpDim::W>>( device);
         }
 
         {
-            run_test<device_function<ReduceOpMath::MAX, ReduceOpDim::HW>>(host, device);
+            run_test<device_function<ReduceOpMath::MAX, ReduceOpDim::HW>>( device);
         }
     };
 

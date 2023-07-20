@@ -37,7 +37,7 @@ def test_vit_image_classification(pcc=0.95):
         device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
         tt_lib.device.InitializeDevice(device)
         tt_lib.device.SetDefaultDevice(device)
-        host = tt_lib.device.GetHost()
+
 
         tt_inputs = torch_to_tt_tensor_rm(
             inputs["pixel_values"], device, put_on_device=False
@@ -47,7 +47,7 @@ def test_vit_image_classification(pcc=0.95):
         )
         tt_model.vit.get_head_mask = reference.vit.get_head_mask
         tt_output = tt_model(tt_inputs)[0]
-        tt_output = tt_to_torch_tensor(tt_output, host).squeeze(0)[:, 0, :]
+        tt_output = tt_to_torch_tensor(tt_output).squeeze(0)[:, 0, :]
         pcc_passing, _ = comp_pcc(HF_output, tt_output, pcc)
         _, pcc_output = comp_allclose_and_pcc(HF_output, tt_output, pcc)
         logger.info(f"Output {pcc_output}")

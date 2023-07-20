@@ -30,7 +30,7 @@ def test_mobilenetv2_inference(fuse_ops, imagenet_sample_input):
         # Initialize the device
         device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
         tt_lib.device.InitializeDevice(device)
-        host = tt_lib.device.GetHost()
+
         image_processor = transformers.AutoImageProcessor.from_pretrained("google/mobilenet_v2_1.0_224")
         torch_model = transformers.MobileNetV2Model.from_pretrained("google/mobilenet_v2_1.0_224")
 
@@ -39,7 +39,7 @@ def test_mobilenetv2_inference(fuse_ops, imagenet_sample_input):
 
         if not fuse_ops:
             # TODO(nshanker): enable running of conv on tt device. Currently, it results in low PCC = 0.97 so it is disabled.
-            tt_model = TtMobileNetv2Model(config=torch_model.config, state_dict=state_dict, device=device, host=host, disable_conv_on_tt_device=True)
+            tt_model = TtMobileNetv2Model(config=torch_model.config, state_dict=state_dict, device=device, disable_conv_on_tt_device=True)
         else:
             tt_model = TtMobileNetv2Model(config=torch_model.config, state_dict=state_dict)
 

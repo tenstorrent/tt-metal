@@ -36,7 +36,6 @@ class TtConv2D(torch.nn.Module):
     ):
         super().__init__()
         self.device = device
-        self.host = tt_lib.device.GetHost()
         self.conv_on_device = False
 
         # Get conv2d parameters
@@ -61,7 +60,6 @@ class TtConv2D(torch.nn.Module):
                 self.conv_weight.reshape(-1).tolist(),
                 self.conv_params,
                 self.device,
-                self.host,
                 conv_bias=None,
             )
 

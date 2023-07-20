@@ -14,11 +14,10 @@ from tt_lib.fallback_ops import fallback_ops
 
 
 class TtSwinPatchEmbeddings(nn.Module):
-    def __init__(self, config, state_dict, base_address, device, host):
+    def __init__(self, config, state_dict, base_address, device):
         super().__init__()
         self.config = config
         self.device = device
-        self.host = host
         image_size, patch_size = config.image_size, config.patch_size
         num_channels, hidden_size = config.num_channels, config.embed_dim
         image_size = (

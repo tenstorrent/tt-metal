@@ -32,13 +32,11 @@ class TtSwinEncoder(nn.Module):
         state_dict,
         base_address,
         device,
-        host,
     ):
         super().__init__()
         self.config = config
         self.num_layers = len(config.depths)
         self.device = device
-        self.host = host
         self.layers = nn.ModuleList(
             [
                 TtSwinStage(
@@ -56,7 +54,6 @@ class TtSwinEncoder(nn.Module):
                     state_dict=state_dict,
                     base_address=f"{base_address}.layers.{i_layer}",
                     device=self.device,
-                    host=self.host,
                 )
                 for i_layer in range(self.num_layers)
             ]

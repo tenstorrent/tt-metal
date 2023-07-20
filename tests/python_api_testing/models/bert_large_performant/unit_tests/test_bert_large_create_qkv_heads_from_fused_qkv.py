@@ -20,7 +20,6 @@ def run_bert_large_create_qkv_heads_from_fused_qkv_test(
     torch.manual_seed(1234)
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
     a_shape = [batch, 1, 384, 3072]
 
     A = torch.randn(a_shape)
@@ -52,11 +51,11 @@ def run_bert_large_create_qkv_heads_from_fused_qkv_test(
     assert k.shape() == [batch, 16, 64, 384]
     assert v.shape() == [batch, 16, 384, 64]
 
-    tt_host_rm_q = q.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
+    tt_host_rm_q = q.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
     pyt_got_back_rm_q = torch.Tensor(tt_host_rm_q.data()).reshape(tt_host_rm_q.shape())
-    tt_host_rm_k = k.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
+    tt_host_rm_k = k.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
     pyt_got_back_rm_k = torch.Tensor(tt_host_rm_k.data()).reshape(tt_host_rm_k.shape())
-    tt_host_rm_v = v.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
+    tt_host_rm_v = v.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
     pyt_got_back_rm_v = torch.Tensor(tt_host_rm_v.data()).reshape(tt_host_rm_v.shape())
 
     (ref_q, ref_k, ref_v) = torch.split(A, 1024, dim=-1)

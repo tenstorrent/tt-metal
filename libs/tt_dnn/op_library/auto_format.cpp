@@ -62,9 +62,7 @@ Tensor AutoFormat::format_input_tensor(const Tensor &input, Device * device, con
             }
         }
         // Fall back to host conversions
-        auto host = GetHost();
-        formatted_input = data_transfer_to_host(formatted_input, host);
-        delete host;
+        formatted_input = data_transfer_to_host(formatted_input);
     }
 
     // Host side conversions
@@ -133,9 +131,7 @@ Tensor AutoFormat::format_output_tensor(const Tensor &output, const Shape& shape
             }
         }
         // Fall back to host conversions
-        auto host = GetHost();
-        formatted_output = data_transfer_to_host(formatted_output, host);
-        delete host;
+        formatted_output = data_transfer_to_host(formatted_output);
     }
 
     // Host side conversions

@@ -129,7 +129,7 @@ class MobileNetV2ConvLayer(nn.Module):
             conv_bias = None
             if bias:
                 conv_bias = state_dict[f"{base_address}.convolution.bias"]
-            self.convolution = run_conv_on_device_wrapper(conv_weight.reshape(-1).tolist(), self.conv_params, self.device, self.host, conv_bias)
+            self.convolution = run_conv_on_device_wrapper(conv_weight.reshape(-1).tolist(), self.conv_params, self.device, conv_bias)
         else:
             self.convolution = nn.Conv2d(
                 in_channels=in_channels,

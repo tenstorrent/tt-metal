@@ -14,7 +14,7 @@ import pytest
 @pytest.mark.parametrize("fill_value", [13.8, 5.5, 31, 0.1])
 def test_full_fallback(input_shape, fill_value):
     torch.manual_seed(1234)
-    host = ttl.device.GetHost()
+
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
 
@@ -23,7 +23,7 @@ def test_full_fallback(input_shape, fill_value):
 
     t0 = ttl.fallback_ops.full(input_shape, fill_value)
 
-    output = torch.Tensor(t0.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+    output = torch.Tensor(t0.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t0.shape()
     )
     comp_pass, _ = comp_pcc(pt_out, output, 0.9999)

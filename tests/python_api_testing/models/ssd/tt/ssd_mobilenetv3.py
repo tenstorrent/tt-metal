@@ -40,12 +40,10 @@ class TtMobileNetV3Model(nn.Module):
         state_dict=None,
         base_address="",
         device=None,
-        host=None,
     ) -> None:
         super().__init__()
         self.config = config
         self.device = device
-        self.host = host
         self.base_address_with_dot = "" if base_address == "" else f"{base_address}"
 
         in_channels = [16, 24, 24, 40, 40, 40, 80, 80, 80, 80, 112, 112, 160, 160]
@@ -86,7 +84,6 @@ class TtMobileNetV3Model(nn.Module):
             state_dict=state_dict,
             base_address=f"{self.base_address_with_dot}.0",
             device=device,
-            host=host,
         )
 
         self.stem_layer = TtMobileNetV3Stem(
@@ -100,7 +97,6 @@ class TtMobileNetV3Model(nn.Module):
             state_dict=state_dict,
             base_address=f"{self.base_address_with_dot}.1",
             device=device,
-            host=host,
         )
 
         for i in range(14):
@@ -159,7 +155,7 @@ class TtMobileNetV3Model(nn.Module):
 
         self.avgpool = fallback_ops.AdaptiveAvgPool2d(1)
 
-        self.classifier = TtClassifier(state_dict=state_dict, device=device, host=host)
+        self.classifier = TtClassifier(state_dict=state_dict, device=device)
 
     def forward(
         self,
@@ -175,7 +171,7 @@ class TtMobileNetV3Model(nn.Module):
 
         avg_out = self.avgpool(last_hidden_state)
 
-        flatten_in = tt_to_torch_tensor(avg_out, self.host)
+        flatten_in = tt_to_torch_tensor(avg_out)
         flatten = torch.flatten(flatten_in, start_dim=1)
         flatten_out = torch.unsqueeze(torch.unsqueeze(flatten, 0), 0)
         flatten = torch_to_tt_tensor_rm(flatten_out, self.device)

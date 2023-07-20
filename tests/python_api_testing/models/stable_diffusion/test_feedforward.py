@@ -39,13 +39,13 @@ def test_feedforward_inference():
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
-    host = ttl.device.GetHost()
+
 
     # setup tt model
     tt_ff = TtFeedForward(dim=dim, dropout=dropout, activation_fn=act, final_dropout=False, state_dict=state_dict, device=device, host=host,)
     tt_input = torch_to_tt_tensor(input, device)
     tt_output = tt_ff(tt_input)
-    tt_output = tt_to_torch_tensor(tt_output, host)
+    tt_output = tt_to_torch_tensor(tt_output)
 
     passing = comp_pcc(torch_output, tt_output)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))

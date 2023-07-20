@@ -120,8 +120,6 @@ std::optional<uint32_t> get_semaphore_address(const Program &program, const Core
 
 void ClearCompileCache() { detail::HashLookup::inst().clear(); }
 
-Host *GetHost() { return new Host(); }
-
 Device *CreateDevice(tt::ARCH arch, int pcie_slot) { return new Device(arch, pcie_slot); }
 
 bool InitializeDevice(Device *device) {

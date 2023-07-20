@@ -21,7 +21,7 @@ std::vector<Tensor> DataTransferToHost::compute_output_tensors(const std::vector
     if (input_tensor.storage_type() == StorageType::OWNED) {
         return {input_tensor};
     } else {
-        return {input_tensor.to(this->host)};
+        return {input_tensor.cpu() };
     }
 }
 
@@ -31,8 +31,8 @@ tt::stl::reflection::Attributes DataTransferToHost::attributes() const {
     };
 }
 
-Tensor data_transfer_to_host(const Tensor &input_tensor, Host* host) {
-    return operation::run(DataTransferToHost{host}, {input_tensor}).at(0);
+Tensor data_transfer_to_host(const Tensor &input_tensor) {
+    return operation::run(DataTransferToHost(), {input_tensor}).at(0);
 }
 
 void DataTransferToDevice::validate(const std::vector<Tensor> &input_tensors) const {

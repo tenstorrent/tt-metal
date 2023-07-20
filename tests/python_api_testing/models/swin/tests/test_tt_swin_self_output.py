@@ -28,7 +28,7 @@ def test_swin_self_output_inference(pcc, reset_seeds):
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
-    host = tt_lib.device.GetHost()
+
 
     SELF_OUTPUT_LAYER_INDEX = 0
     base_address = f"encoder.layers.{SELF_OUTPUT_LAYER_INDEX}.blocks.{SELF_OUTPUT_LAYER_INDEX}.attention.output"
@@ -69,7 +69,7 @@ def test_swin_self_output_inference(pcc, reset_seeds):
     tt_output = tt_model(tt_hidden_states, tt_input_tensor)
 
     # Compare outputs
-    tt_output_torch = tt_to_torch_tensor(tt_output, host)
+    tt_output_torch = tt_to_torch_tensor(tt_output)
     tt_output_torch = tt_output_torch.squeeze(0)
 
     does_pass, pcc_message = comp_pcc(torch_output, tt_output_torch, pcc)

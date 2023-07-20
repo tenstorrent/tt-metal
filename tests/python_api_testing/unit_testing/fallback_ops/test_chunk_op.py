@@ -16,7 +16,7 @@ import pytest
 @pytest.mark.parametrize("on_device", [False, True])
 def test_chunk_fallback(input_shape, chunks, dim, on_device):
     torch.manual_seed(1234)
-    host = ttl.device.GetHost()
+
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
 
@@ -38,7 +38,7 @@ def test_chunk_fallback(input_shape, chunks, dim, on_device):
     for i in range(len(pt_out)):
         pt_output = pt_out[i]
         tt_output = torch.Tensor(
-            tt_out[i].to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
+            tt_out[i].cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()
         ).reshape(tt_out[i].shape())
         comp_pass, _ = comp_pcc(pt_output, tt_output, 0.9999)
         _, comp_out = comp_allclose_and_pcc(pt_output, tt_output)

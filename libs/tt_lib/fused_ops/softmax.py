@@ -45,7 +45,7 @@ def ref_stable_softmax(x):
 if __name__ == "__main__":
     device = device.CreateDevice(device.Arch.GRAYSKULL, 0)
     device.InitializeDevice(device)
-    host = device.GetHost()
+
     H, W = 64, 96
     torch.manual_seed(123)
 
@@ -56,7 +56,7 @@ if __name__ == "__main__":
     t0 = tensor.Tensor(x_t, [1, 1, H, W], tensor.DataType.BFLOAT16, tensor.Layout.TILE, device)
     func = softmax
     t1 = func(t0)
-    t2_data = t1.to(host).data()
+    t2_data = t1.cpu().data()
 
     tt_got_back = torch.Tensor(t2_data).reshape((1,1,H,W))
     tt_got_back = untilize(tt_got_back)

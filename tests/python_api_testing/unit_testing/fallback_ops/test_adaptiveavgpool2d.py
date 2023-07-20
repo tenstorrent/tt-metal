@@ -23,7 +23,7 @@ def test_AdaptiveAvgPool2d_fallback(
     on_device,
 ):
     torch.manual_seed(1234)
-    host = ttl.device.GetHost()
+
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
 
@@ -44,7 +44,7 @@ def test_AdaptiveAvgPool2d_fallback(
     tt_nn = ttl.fallback_ops.AdaptiveAvgPool2d(output_size)
     t1 = tt_nn(t0)
 
-    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+    output = torch.Tensor(t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t1.shape()
     )
     comp_pass, _ = comp_pcc(pt_out, output, 0.9999)

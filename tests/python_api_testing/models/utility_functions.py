@@ -94,9 +94,9 @@ def ttP(x, count=4, offset=0, stride=1):
     if type(x) == torch.Tensor:
         t1 = x.reshape(-1)
     else:
-        host = ttl.device.GetHost()
+
         shp = x.shape()
-        tt_out = x.to(host)
+        tt_out = x.cpu()
         torch_out = untilize(torch.Tensor(tt_out.data()).reshape(shp))
         t1 = torch_out.reshape(-1)
     print("Tensor vals: (", end="")
@@ -261,11 +261,7 @@ def torch2tt_tensor(
 
 
 def tt2torch_tensor(tt_tensor, tt_host=None):
-    if tt_host == None:
-        host = ttl.device.GetHost()
-    else:
-        host = tt_host
-    tt_output = tt_tensor.to(host)
+    tt_output = tt_tensor.cpu()
     if tt_output.layout() != ttl.tensor.Layout.ROW_MAJOR:
         tt_output = tt_output.to(ttl.tensor.Layout.ROW_MAJOR)
     dtype = {
@@ -298,7 +294,7 @@ def unpad_from_zero(x, desired_shape, host):
     if x.shape()[-1] == desired_shape[-1] and x.shape()[-2] == desired_shape[-2]:
         x = tt2torch_tensor(x)
     else:
-        x = x.to(host)
+        x = x.cpu()
         if x.layout() != ttl.tensor.Layout.ROW_MAJOR:
             x = x.to(ttl.tensor.Layout.ROW_MAJOR)
         x = x.unpad(
@@ -367,8 +363,8 @@ class Profiler:
 profiler = Profiler()
 
 
-def tt_to_torch_tensor(tt_tensor, host):
-    tt_tensor = tt_tensor.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
+def tt_to_torch_tensor(tt_tensor):
+    tt_tensor = tt_tensor.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
     # create a 1D PyTorch tensor from values in TT Tensor obtained with data() member function
     # and then reshape PyTorch tensor to shape of TT Tensor
     py_tensor = torch.Tensor(tt_tensor.data()).reshape(tt_tensor.shape())

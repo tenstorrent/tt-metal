@@ -6,7 +6,7 @@ def test_tensor_alignment():
     a = torch.arange(1022).to(torch.bfloat16).reshape(1, 1, 1, 1022)
     b = torch.arange(1024).to(torch.bfloat16).reshape(1, 1, 32, 32)
 
-    host = ttl.device.GetHost()
+
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
 
@@ -27,11 +27,11 @@ def test_tensor_alignment():
 
     t1_d = t1.to(device)
 
-    t0_h = t0_d.to(host)
+    t0_h = t0_d.cpu()
 
     assert torch.equal(a, torch.Tensor(t0_h.data()).reshape(t0_h.shape()))
 
-    t1_h = t1_d.to(host)
+    t1_h = t1_d.cpu()
 
     assert torch.equal(b, torch.Tensor(t1_h.data()).reshape(t1_h.shape()))
 

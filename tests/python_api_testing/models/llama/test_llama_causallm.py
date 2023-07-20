@@ -77,7 +77,7 @@ def run_test_llamaCausallm_inference(
         num_decoders,
     )
 
-    tt_out = tt_causal_llama_model(llama_input).to(host)
+    tt_out = tt_causal_llama_model(llama_input).cpu()
     tt_out = tt2torch_tensor(tt_out)
     tt_out = tt_out.squeeze(1)
 
@@ -122,7 +122,7 @@ def test_llamaCausallm_inference(
     # Initialize the device
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
+
     run_test_llamaCausallm_inference(
         device,
         host,

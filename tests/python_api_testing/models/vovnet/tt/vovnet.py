@@ -28,7 +28,6 @@ class TtVoVNet(nn.Module):
         global_pool="avg",
         output_stride=32,
         device=None,
-        host=None,
         state_dict=None,
         base_address=None,
     ):
@@ -54,7 +53,6 @@ class TtVoVNet(nn.Module):
         block_per_stage = cfg["block_per_stage"]
         layer_per_block = cfg["layer_per_block"]
         self.device = device
-        self.host = host
         self.state_dict = state_dict
         self.base_address = base_address
 
@@ -70,7 +68,6 @@ class TtVoVNet(nn.Module):
                     stride=2,
                     base_address=f"stem.0",
                     device=self.device,
-                    host=self.host,
                     state_dict=self.state_dict,
                 ),
                 conv_type(
@@ -81,7 +78,6 @@ class TtVoVNet(nn.Module):
                     groups=64,
                     base_address=f"stem.1",
                     device=device,
-                    host=host,
                     state_dict=state_dict,
                 ),
                 conv_type(
@@ -92,7 +88,6 @@ class TtVoVNet(nn.Module):
                     groups=64,
                     base_address=f"stem.2",
                     device=device,
-                    host=host,
                     state_dict=state_dict,
                 ),
             ]
@@ -120,7 +115,6 @@ class TtVoVNet(nn.Module):
                     base_address=f"stages.{i}",
                     state_dict=self.state_dict,
                     device=self.device,
-                    host=self.host,
                     groups=stage_conv_chs[i],
                 )
             ]
@@ -146,17 +140,16 @@ class TtVoVNet(nn.Module):
         return x
 
 
-def _vovnet(device, host, state_dict) -> TtVoVNet:
+def _vovnet(device, state_dict) -> TtVoVNet:
     tt_model = TtVoVNet(
         state_dict=state_dict,
         device=device,
-        host=host,
     )
     return tt_model
 
 
-def vovnet_for_image_classification(device, host) -> TtVoVNet:
+def vovnet_for_image_classification(device) -> TtVoVNet:
     model = timm.create_model("hf_hub:timm/ese_vovnet19b_dw.ra_in1k", pretrained=True)
     state_dict = model.state_dict()
-    tt_model = _vovnet(device=device, state_dict=state_dict, host=host)
+    tt_model = _vovnet(device=device, state_dict=state_dict)
     return tt_model

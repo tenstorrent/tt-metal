@@ -58,7 +58,7 @@ def run_add_and_norm_inference(model_version, batch, seq_len, on_weka, pcc, mode
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     # Initialize the device
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
+
 
     if on_weka:
         model_name = str(model_location_generator("tt_dnn-models/Bert/BertForQuestionAnswering/models/") / model_version)
@@ -86,7 +86,7 @@ def run_add_and_norm_inference(model_version, batch, seq_len, on_weka, pcc, mode
     tt_add_and_norm_input_b = ttl.tensor.Tensor(pad_add_and_norm_inputb.reshape(-1).tolist(), pad_add_and_norm_inputb.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
     tt_add_and_norm_input_b = tt_add_and_norm_input_b.to(device)
 
-    tt_out = tt_add_and_norm_model(tt_add_and_norm_input_a, tt_add_and_norm_input_b).to(host)
+    tt_out = tt_add_and_norm_model(tt_add_and_norm_input_a, tt_add_and_norm_input_b).cpu()
     tt_out = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(tt_out.shape())
 
     ttl.device.CloseDevice(device)

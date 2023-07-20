@@ -139,12 +139,12 @@ def test_run_padding_and_add_test(
     # Run add op on device with padded tensors
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
+
 
     a_dev = a_pad.to(ttl.tensor.Layout.TILE).to(device)
     b_dev = b_pad.to(ttl.tensor.Layout.TILE).to(device)
     out_dev = ttl.tensor.add(a_dev, b_dev)
-    out_pad = out_dev.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
+    out_pad = out_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
 
     # Unpad out to get result
     out = out_pad.unpad(output_tensor_start, output_tensor_end)
@@ -283,12 +283,12 @@ def test_run_tile_padding_and_add_test(input_tensor_shape, pad_value):
     # Run add op on device with padded tensors
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
+
 
     a_dev = a_pad.to(ttl.tensor.Layout.TILE).to(device)
     b_dev = b_pad.to(ttl.tensor.Layout.TILE).to(device)
     out_dev = ttl.tensor.add(a_dev, b_dev)
-    out_pad = out_dev.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
+    out_pad = out_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
 
     # Unpad out to get result
     out = out_pad.unpad_from_tile(input_tensor_shape)

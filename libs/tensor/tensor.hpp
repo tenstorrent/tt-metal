@@ -7,7 +7,6 @@
 
 #include "tensor/types.hpp"
 #include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/impl/device/host.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "common/test_tiles.hpp"
 #include "common/tt_backend_api_types.hpp"
@@ -40,11 +39,11 @@ class Tensor {
 
         Tensor to(Device *target_device, const MemoryConfig &mem_config={.interleaved=true}) const;
 
-        Tensor to(Host *host) const;
-
         Tensor to(Layout target_layout) const;
 
         Tensor pad(const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value) const;
+
+        Tensor cpu() const;
 
         Tensor unpad(const Shape &output_tensor_start, const Shape &output_tensor_end) const;
 

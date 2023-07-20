@@ -34,7 +34,7 @@ def run_mnist_inference(model, on_weka, pcc, PERF_CNT, model_location_generator)
         device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
         tt_lib.device.InitializeDevice(device)
         tt_lib.device.SetDefaultDevice(device)
-        host = tt_lib.device.GetHost()
+
 
         if on_weka:
             model_name = str(
@@ -47,7 +47,7 @@ def run_mnist_inference(model, on_weka, pcc, PERF_CNT, model_location_generator)
         test_dataset, test_loader = prep_data()
         first_input, label = next(iter(test_loader))
 
-        tt_convnet = TtConvNet(device, host, state_dict)
+        tt_convnet = TtConvNet(device, state_dict)
 
         profiler.enable()
 
@@ -76,7 +76,7 @@ def run_mnist_inference(model, on_weka, pcc, PERF_CNT, model_location_generator)
             tt_output = tt_convnet(tt_image)
             profiler.end("\nAverage execution time of tt_mnist model")
 
-        tt_output = tt2torch_tensor(tt_output, host)
+        tt_output = tt2torch_tensor(tt_output)
 
         logger.info(
             f"Sample Correct Output from the batch: {pytorch_out.topk(1).indices[0]}"

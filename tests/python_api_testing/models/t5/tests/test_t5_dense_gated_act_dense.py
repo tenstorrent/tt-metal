@@ -59,6 +59,6 @@ def run_test_T5DenseGatedActDense_inference(device):
 def test_T5DenseGatedActDense_inference():
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
-    host = tt_lib.device.GetHost()
+
     run_test_T5DenseGatedActDense_inference(device)
     tt_lib.device.CloseDevice(device)

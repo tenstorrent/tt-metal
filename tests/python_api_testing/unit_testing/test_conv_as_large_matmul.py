@@ -70,7 +70,6 @@ def test_run_conv_as_large_matmul(use_program_cache, run_conv_with_address_map, 
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
-    host = ttl.device.GetHost()
     num_iterations = 1
     if not run_conv_with_address_map:
         num_iterations = 2 # run twice to test op caching flow for conv op (without address map)
@@ -115,7 +114,7 @@ def test_run_conv_as_large_matmul(use_program_cache, run_conv_with_address_map, 
             out = ttl.tensor.conv_with_address_map(A, B_tiled, [R,S,stride_h,stride_w,pad_h,pad_w], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w, K)
         else:
             out = ttl.tensor.conv(A, B_tiled, [R,S,stride_h,stride_w,pad_h,pad_w], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w, K)
-        out = out.to(host)
+        out = out.cpu()
         assert(out.shape() == conv_output_shape)
         assert(out.layout() == ttl.tensor.Layout.ROW_MAJOR)
 

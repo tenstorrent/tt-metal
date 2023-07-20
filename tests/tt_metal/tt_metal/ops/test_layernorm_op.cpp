@@ -37,13 +37,12 @@ int main(int argc, char **argv) {
         int pci_express_slot = 0;
         tt_metal::Device *device =
             tt_metal::CreateDevice(arch, pci_express_slot);
-        Host *host = GetHost();
         pass &= InitializeDevice(device);
         Shape shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
         Tensor a = tt::numpy::random::random(shape).to(Layout::TILE).to(device);;
         Tensor c = layernorm(a, 1e-4f);
-        Tensor d = c.to(host);
-        Tensor host_a = a.to(host); // Move tensor a to host to validate
+        Tensor d = c.cpu();
+        Tensor host_a = a.cpu(); // Move tensor a to host to validate
         pass &= CloseDevice(device);
     } catch (const std::exception &e) {
         pass = false;

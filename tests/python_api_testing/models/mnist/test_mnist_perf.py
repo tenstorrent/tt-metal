@@ -2,6 +2,7 @@ from pathlib import Path
 import sys
 
 f = f"{Path(__file__).parent}"
+sys.path.append(f"{f}")
 sys.path.append(f"{f}/..")
 sys.path.append(f"{f}/../../../..")
 
@@ -19,7 +20,7 @@ from utility_functions_new import (
     comp_pcc,
     get_oom_of_float,
 )
-from mnist import *
+from mnist import TtMnistModel, PytorchMnistModel
 
 _batch_size = 1
 
@@ -28,7 +29,7 @@ def run_mnist_inference(pcc, PERF_CNT=1):
     # Initialize the device
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
-    host = tt_lib.device.GetHost()
+
 
     # Data preprocessing/loading
     transform = transforms.Compose([transforms.ToTensor()])
@@ -40,7 +41,7 @@ def run_mnist_inference(pcc, PERF_CNT=1):
     # Trained to 68% accuracy in modelzoo
     state_dict = torch.load(f"{Path(__file__).parent}/mnist_model.pt")
 
-    tt_mnist_model = TtMnistModel(device, host, state_dict)
+    tt_mnist_model = TtMnistModel(device, state_dict)
     pytorch_mnist_model = PytorchMnistModel(state_dict)
 
     with torch.no_grad():
@@ -74,7 +75,7 @@ def run_mnist_inference(pcc, PERF_CNT=1):
             tt_output = tt_mnist_model(tt_image)
             profiler.end("\nAverage execution time of tt_mnist model")
 
-        tt_output = tt_output.to(host)
+        tt_output = tt_output.cpu()
         tt_output = torch.Tensor(tt_output.data()).reshape(tt_output.shape())
 
         logger.info(f"Correct Output: {actual_output}")

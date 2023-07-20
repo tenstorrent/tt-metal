@@ -86,7 +86,7 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
 
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
+
 
     if on_weka:
         model_name = str(model_location_generator("tt_dnn-models/Bert/BertForQuestionAnswering/models/") / model_version)
@@ -153,7 +153,7 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
 
     profiler.start("processing_output_to_string")
 
-    tt_out = tt_out.to(host)
+    tt_out = tt_out.cpu()
     tt_untilized_output = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(batch, 1, seq_len, -1)
 
     tt_start_logits = tt_untilized_output[..., :, 0].squeeze(1)

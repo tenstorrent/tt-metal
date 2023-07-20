@@ -73,7 +73,7 @@ def test_Yolov5_Conv2D():
     test_input = torch2tt_tensor(test_input, device)
     tt_out = tt_module(test_input)
 
-    tt_out = tt_out.to(tt_lib.device.GetHost())
+    tt_out = tt_out.cpu()
     tt_out = tt_out.to(tt_lib.tensor.Layout.ROW_MAJOR)
 
     tt_out = tt2torch_tensor(tt_out)
@@ -250,7 +250,7 @@ def test_Yolov5_Conv2D_real():
     test_input = torch2tt_tensor(test_input, device)
     tt_out = tt_module(test_input)
 
-    tt_out = tt_out.to(tt_lib.device.GetHost())
+    tt_out = tt_out.cpu()
     tt_out = tt_out.to(tt_lib.tensor.Layout.ROW_MAJOR)
 
     tt_out = tt2torch_tensor(tt_out)

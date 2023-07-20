@@ -208,11 +208,11 @@ class TtBloomAttention(torch.nn.Module):
                 f" {self.num_heads})."
             )
 
-        self.weight_q = bloom_utils.tt_load_layer_weights(f"{base_address}.query_key_value.weight", state_dict)
-        self.bias_q = bloom_utils.tt_load_layer_weights(f"{base_address}.query_key_value.bias", state_dict)
+        self.weight_q = bloom_utils.tt_load_layer_weights(f"{base_address}.query_key_value.weight", state_dict, device)
+        self.bias_q = bloom_utils.tt_load_layer_weights(f"{base_address}.query_key_value.bias", state_dict, device)
 
-        self.weight_d = bloom_utils.tt_load_layer_weights(f"{base_address}.dense.weight", state_dict)
-        self.bias_d = bloom_utils.tt_load_layer_weights(f"{base_address}.dense.bias", state_dict)
+        self.weight_d = bloom_utils.tt_load_layer_weights(f"{base_address}.dense.weight", state_dict, device)
+        self.bias_d = bloom_utils.tt_load_layer_weights(f"{base_address}.dense.bias", state_dict, device)
 
         # Layer-wise attention scaling
         self.inv_norm_factor = 1.0 / math.sqrt(self.head_dim)

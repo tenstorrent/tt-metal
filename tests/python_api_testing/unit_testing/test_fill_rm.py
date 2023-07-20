@@ -14,7 +14,7 @@ def test_fill_rm():
     # Initialize the device
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
-    host = tt_lib.device.GetHost()
+
 
     N = 2
     C = 3
@@ -40,7 +40,7 @@ def test_fill_rm():
     xtt = tt_lib.tensor.fill_ones_rm(N, C, H, W, fillH, fillW, xt)
     assert xtt.shape() == [N, C, H, W]
 
-    xtt_data = xtt.to(host).data()
+    xtt_data = xtt.cpu().data()
     tt_got_back = torch.Tensor(xtt_data).reshape((N, C, H, W))
 
     # x[1,1,2,2] = 2.0

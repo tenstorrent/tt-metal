@@ -57,7 +57,7 @@ class PytorchBatchNorm1D(nn.Module):
 
 
 def run_full_inference(in_features, hidden_features, out_features, device):
-    host = ttl.device.GetHost()
+
 
     # set inputs
     inputs_torch = torch.FloatTensor(1, in_features).uniform_(-1., 1.).requires_grad_(True)
@@ -218,10 +218,10 @@ def run_full_inference(in_features, hidden_features, out_features, device):
     output_layer2_tt = ttl.tensor.relu(output_bn2_tt)
 
     # compare
-    output_layer1_tt_untilized = untilize(torch.Tensor(output_layer1_tt.to(host).data()).reshape(output_layer1_tt.shape()))
+    output_layer1_tt_untilized = untilize(torch.Tensor(output_layer1_tt.cpu().data()).reshape(output_layer1_tt.shape()))
     output_layer1_tt_untilized = output_layer1_tt_untilized[0, 0, 0, :]
 
-    output_layer2_tt_untilized = untilize(torch.Tensor(output_layer2_tt.to(host).data()).reshape(output_layer2_tt.shape()))
+    output_layer2_tt_untilized = untilize(torch.Tensor(output_layer2_tt.cpu().data()).reshape(output_layer2_tt.shape()))
     output_layer2_tt_untilized = output_layer2_tt_untilized[0, 0, 0, :]
 
     print('pytorch_layer1_out:', output_layer1_torch[0][0:10])

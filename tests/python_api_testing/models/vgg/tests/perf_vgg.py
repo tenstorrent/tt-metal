@@ -45,7 +45,7 @@ def test_perf(use_program_cache, imagenet_sample_input, expected_inference_time,
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
-    host = tt_lib.device.GetHost()
+
 
     tt_image = tt_lib.tensor.Tensor(
         image.reshape(-1).tolist(),

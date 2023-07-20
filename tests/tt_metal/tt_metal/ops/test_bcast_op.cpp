@@ -37,7 +37,6 @@ int main(int argc, char **argv) {
         int pci_express_slot = 0;
         tt_metal::Device *device =
             tt_metal::CreateDevice(arch, pci_express_slot);
-        tt_metal::Host *host = tt_metal::GetHost();
 
         pass &= InitializeDevice(device);
 
@@ -52,12 +51,12 @@ int main(int argc, char **argv) {
         for (auto bcast_dim: BcastOpDim::all())
         for (auto bcast_math: BcastOpMath::all()) {
             Tensor c = bcast(a, b, bcast_math, bcast_dim);
-            Tensor d = c.to(host);
+            Tensor d = c.cpu();
 
             ////////////////////////////////////////////////////////////////////////////
             //                      Validation & Teardown
             ////////////////////////////////////////////////////////////////////////////
-            Tensor host_a = a.to(host); // Move tensor a to host to validate
+            Tensor host_a = a.cpu(); // Move tensor a to host to validate
             //pass &= (host_a.data() == d.data()); // src1 is all 0's
         }
 

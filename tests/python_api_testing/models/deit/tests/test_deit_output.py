@@ -44,7 +44,7 @@ def test_deit_output_inference(pcc=0.99):
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
-    host = tt_lib.device.GetHost()
+
 
     # setup tt model
     tt_output = TtDeiTOutput(DeiTConfig(), device, state_dict, base_address)
@@ -53,7 +53,7 @@ def test_deit_output_inference(pcc=0.99):
     tt_input_tensor = torch_to_tt_tensor_rm(input_tensor, device, put_on_device=False)
 
     tt_output = tt_output(tt_hidden_state, tt_input_tensor)
-    tt_output = tt_to_torch_tensor(tt_output, host).squeeze(0)
+    tt_output = tt_to_torch_tensor(tt_output).squeeze(0)
 
     pcc_passing, _ = comp_pcc(torch_output, tt_output, pcc)
     _, pcc_output = comp_allclose_and_pcc(torch_output, tt_output, pcc)

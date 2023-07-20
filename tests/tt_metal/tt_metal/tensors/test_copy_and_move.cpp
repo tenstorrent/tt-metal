@@ -17,7 +17,7 @@ using namespace tt_metal;
 using namespace constants;
 
 
-bool test_tensor_copy_semantics(Device *device, Host *host) {
+bool test_tensor_copy_semantics(Device *device) {
 
     bool pass = true;
     Shape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
@@ -32,8 +32,8 @@ bool test_tensor_copy_semantics(Device *device, Host *host) {
     // dev tensor to dev tensor copy constructor
     Tensor dev_a = tt::numpy::random::random(single_tile_shape).to(Layout::TILE).to(device);
     Tensor dev_a_copy = dev_a;
-    auto dev_a_on_host = dev_a.to(host);
-    auto dev_a_copy_on_host = dev_a_copy.to(host);
+    auto dev_a_on_host = dev_a.cpu();
+    auto dev_a_copy_on_host = dev_a_copy.cpu();
     auto dev_a_data = owned_buffer::get_as<bfloat16>(dev_a_on_host);
     auto dev_a_copy_data = owned_buffer::get_as<bfloat16>(dev_a_copy_on_host);
     pass &= dev_a_data == dev_a_copy_data;
@@ -50,7 +50,7 @@ bool test_tensor_copy_semantics(Device *device, Host *host) {
     Tensor host_d_copy = tt::numpy::random::random(single_tile_shape).to(Layout::TILE);
     host_d_copy = dev_a;
     pass &= (host_d_copy.storage_type() == StorageType::DEVICE);
-    auto host_d_copy_on_host = host_d_copy.to(host);
+    auto host_d_copy_on_host = host_d_copy.cpu();
     auto host_d_copy_data = owned_buffer::get_as<bfloat16>(host_d_copy_on_host);
     pass &= dev_a_data == host_d_copy_data;
 
@@ -68,8 +68,8 @@ bool test_tensor_copy_semantics(Device *device, Host *host) {
     Tensor dev_b_copy = tt::numpy::zeros(single_tile_shape).to(Layout::TILE).to(device);
     dev_b_copy = dev_b;
     pass &= (dev_b_copy.storage_type() == StorageType::DEVICE);
-    auto dev_b_on_host = dev_b.to(host);
-    auto dev_b_copy_on_host = dev_b_copy.to(host);
+    auto dev_b_on_host = dev_b.cpu();
+    auto dev_b_copy_on_host = dev_b_copy.cpu();
     auto dev_b_data = owned_buffer::get_as<bfloat16>(dev_b_on_host);
     auto dev_b_copy_data = owned_buffer::get_as<bfloat16>(dev_b_copy_on_host);
     pass &= dev_b_data == dev_b_copy_data;
@@ -77,7 +77,7 @@ bool test_tensor_copy_semantics(Device *device, Host *host) {
     return pass;
 }
 
-bool test_tensor_move_semantics(Device *device, Host *host) {
+bool test_tensor_move_semantics(Device *device) {
     bool pass = true;
     Shape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
 
@@ -95,7 +95,7 @@ bool test_tensor_move_semantics(Device *device, Host *host) {
     auto og_buffer_a = dev_a.buffer();
     Tensor dev_a_copy = std::move(dev_a);
     pass &= (dev_a.buffer() == nullptr and dev_a_copy.buffer() == og_buffer_a);
-    auto dev_a_copy_on_host = dev_a_copy.to(host);
+    auto dev_a_copy_on_host = dev_a_copy.cpu();
     auto dev_a_copy_data = owned_buffer::get_as<bfloat16>(dev_a_copy_on_host);
     pass &= dev_a_copy_data == bfloat_data;
 
@@ -112,7 +112,7 @@ bool test_tensor_move_semantics(Device *device, Host *host) {
     Tensor host_d_copy = Tensor(host_c_copy.storage(), single_tile_shape, DataType::BFLOAT16, Layout::TILE);
     host_d_copy = std::move(dev_a_copy);
     pass &= (host_d_copy.storage_type() == StorageType::DEVICE);
-    auto host_d_copy_on_host = host_d_copy.to(host);
+    auto host_d_copy_on_host = host_d_copy.cpu();
     auto host_d_copy_data = owned_buffer::get_as<bfloat16>(host_d_copy_on_host);
     pass &= host_d_copy_data == bfloat_data;
 
@@ -133,7 +133,7 @@ bool test_tensor_move_semantics(Device *device, Host *host) {
     Tensor dev_b_copy = Tensor(dev_e_copy.storage(), single_tile_shape, DataType::BFLOAT16, Layout::TILE).to(device);
     dev_b_copy = std::move(dev_b);
     pass &= (dev_b_copy.storage_type() == StorageType::DEVICE);
-    auto dev_b_copy_on_host = dev_b_copy.to(host);
+    auto dev_b_copy_on_host = dev_b_copy.cpu();
     auto dev_b_copy_data = owned_buffer::get_as<bfloat16>(dev_b_copy_on_host);
     pass &= dev_b_copy_data == bfloat_data_five;
 
@@ -164,11 +164,10 @@ int main(int argc, char **argv) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(arch, pci_express_slot);
         pass &= tt_metal::InitializeDevice(device);
-        tt_metal::Host *host = tt_metal::GetHost();
 
-        pass &= test_tensor_copy_semantics(device, host);
+        pass &= test_tensor_copy_semantics(device);
 
-        pass &= test_tensor_move_semantics(device, host);
+        pass &= test_tensor_move_semantics(device);
 
         pass &= tt_metal::CloseDevice(device);
 

@@ -23,14 +23,13 @@ class TtSwinImageClassifierOutput:
 
 
 class TtSwinForImageClassification(nn.Module):
-    def __init__(self, config, state_dict, base_address, device, host) -> None:
+    def __init__(self, config, state_dict, base_address, device) -> None:
         super().__init__()
         self.config = config
         self.device = device
-        self.host = host
         self.num_labels = self.config.num_labels
         self.swin = TtSwinModel(
-            self.config, state_dict, base_address, self.device, self.host
+            self.config, state_dict, base_address, self.device
         )
 
         self.weight = torch_to_tt_tensor_rm(
@@ -44,7 +43,7 @@ class TtSwinForImageClassification(nn.Module):
             return TtLinear(pooled_output, self.weight, self.bias)
         else:
             classifier = nn.Identity()
-            pooled_output = tt_to_torch_tensor(pooled_output, self.host)
+            pooled_output = tt_to_torch_tensor(pooled_output)
             pooled_output = classifier(pooled_output)
             pooled_output = torch_to_tt_tensor_rm(pooled_output, self.device)
             return pooled_output
@@ -74,7 +73,7 @@ class TtSwinForImageClassification(nn.Module):
         pooled_output = outputs.pooler_output
 
         logits = self.classifier(pooled_output)
-        logits = tt_to_torch_tensor(logits, self.host).squeeze(0).squeeze(0)
+        logits = tt_to_torch_tensor(logits).squeeze(0).squeeze(0)
         loss = None
         if labels is not None:
             if self.config.problem_type is None:

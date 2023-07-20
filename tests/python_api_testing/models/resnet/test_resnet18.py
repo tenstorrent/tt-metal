@@ -28,7 +28,6 @@ def test_run_resnet18_inference(fold_batchnorm, imagenet_sample_input):
         device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
         tt_lib.device.InitializeDevice(device)
         tt_lib.device.SetDefaultDevice(device)
-        host = tt_lib.device.GetHost()
 
         torch_resnet = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
         torch_resnet.eval()
@@ -37,7 +36,6 @@ def test_run_resnet18_inference(fold_batchnorm, imagenet_sample_input):
 
         tt_resnet18 = ResNet(BasicBlock, [2, 2, 2, 2],
                         device=device,
-                        host=host,
                         state_dict=state_dict,
                         base_address="",
                         fold_batchnorm=fold_batchnorm)

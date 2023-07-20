@@ -25,7 +25,7 @@ def torchLinear(in_features, out_features, weight, bias):
 
 
 def run_linear_test(in_features, out_features, device):
-    host = ttl.device.GetHost()
+
     # torch
     torch_input_tensor = torch.randn(1, in_features)
     weight = torch.randn(out_features, in_features)
@@ -52,7 +52,7 @@ def run_linear_test(in_features, out_features, device):
 
     linear_tt = ttLinear(weight_tt, bias_tt)
     output_tt = linear_tt(inputs_tt)
-    output_tt = untilize(torch.Tensor(output_tt.to(host).data()).reshape(output_tt.shape()))
+    output_tt = untilize(torch.Tensor(output_tt.cpu().data()).reshape(output_tt.shape()))
     output_tt = output_tt[0, 0, 0, :]
 
     test_results, output = comp_allclose_and_pcc(output_torch, output_tt)

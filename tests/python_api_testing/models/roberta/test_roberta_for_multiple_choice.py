@@ -74,7 +74,7 @@ def test_roberta_for_multiple_choice():
             inputs_dict["attention_mask"], 0
         )
         inputs_dict["attention_mask"] = torch2tt_tensor(
-            inputs_dict["attention_mask"], tt_lib.device.GetHost()
+            inputs_dict["attention_mask"], device
         )
         print(inputs_dict["attention_mask"].shape())
 

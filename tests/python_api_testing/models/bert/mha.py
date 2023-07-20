@@ -161,7 +161,7 @@ def run_mha_inference(model_version, batch, seq_len, on_weka, pcc, model_locatio
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     # Initialize the device
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
+
 
     if on_weka:
         model_name = str(model_location_generator("tt_dnn-models/Bert/BertForQuestionAnswering/models/") / model_version)
@@ -182,7 +182,7 @@ def run_mha_inference(model_version, batch, seq_len, on_weka, pcc, model_locatio
     tt_mha_input = ttl.tensor.Tensor(pad_mha_input.reshape(-1).tolist(), pad_mha_input.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
     tt_mha_input = tt_mha_input.to(device)
 
-    tt_out = tt_mha_model(tt_mha_input).to(host)
+    tt_out = tt_mha_model(tt_mha_input).cpu()
     tt_out1 = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(tt_out.shape())
 
     ttl.device.CloseDevice(device)

@@ -98,7 +98,7 @@ def test_conv2d_module(model_location_generator):
         tt_out = tt_model(tt_im)
 
     # Compare PCC
-    tt_out = tt_out.to(tt_lib.device.GetHost())
+    tt_out = tt_out.cpu()
     tt_out = tt_out.to(tt_lib.tensor.Layout.ROW_MAJOR)
 
     tt_out = tt2torch_tensor(tt_out)

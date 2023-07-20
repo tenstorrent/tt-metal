@@ -25,7 +25,7 @@ import torch
 def run_tilize_matmul_test(M, K, N):
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
+
     a_shape = [1, 1, M, K]
     a_shape_padded = [1, 1, _nearest_32(M), K]
     b_shape = [1, 1, K, N]
@@ -53,7 +53,7 @@ def run_tilize_matmul_test(M, K, N):
     print("Shape of B_t - " + str(b_t.shape()))
     t2 = ttl.tensor.bmm(a_t, b_t)
     assert t2.shape() == output_shape
-    tt_host_rm = t2.to(host).data()
+    tt_host_rm = t2.cpu().data()
     pyt_got_back = torch.Tensor(tt_host_rm).reshape(output_shape)
     # TODO: add support to remove padding in untilize
     pyt_got_back_rm = untilize(pyt_got_back)

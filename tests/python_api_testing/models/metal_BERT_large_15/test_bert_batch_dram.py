@@ -181,7 +181,6 @@ def run_bert_question_and_answering_inference(
 
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
 
     if on_weka:
         model_name = str(
@@ -297,7 +296,7 @@ def run_bert_question_and_answering_inference(
     profiler.start("processing_output_to_string")
 
     tt_untilized_output = torch.Tensor(
-        tt_out.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
+        tt_out.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()
     ).reshape(batch, 1, seq_len, -1)
 
     tt_start_logits = tt_untilized_output[..., :, 0].squeeze(1)

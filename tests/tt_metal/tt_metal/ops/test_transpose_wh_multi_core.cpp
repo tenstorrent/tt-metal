@@ -79,7 +79,6 @@ int main(int argc, char **argv) {
         int pci_express_slot = 0;
         tt_metal::Device *device =
             tt_metal::CreateDevice(arch, pci_express_slot);
-        tt_metal::Host *host = tt_metal::GetHost();
 
         pass &= InitializeDevice(device);
 
@@ -92,12 +91,12 @@ int main(int argc, char **argv) {
 
         tt_metal::Tensor c = tt_metal::transpose_wh(a);
 
-        tt_metal::Tensor d = c.to(host);
+        tt_metal::Tensor d = c.cpu();
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Tensor host_a = a.to(host); // Move tensor a to host to validate
+        tt_metal::Tensor host_a = a.cpu(); // Move tensor a to host to validate
         auto host_vec = owned_buffer::get_as<bfloat16>(host_a);
         auto transposed_host_a = perform_transpose_wh(host_a);
         auto golden_vec = owned_buffer::get_as<bfloat16>(transposed_host_a);

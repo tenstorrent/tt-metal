@@ -45,7 +45,6 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
-    host = ttl.device.GetHost()
 
     A_pyt = pytorch_inputs_and_golden[0]
     B_pyt = pytorch_inputs_and_golden[1]
@@ -89,7 +88,7 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
         out_subblock_w,
         K
     )
-    out = out.to(host)
+    out = out.cpu()
     assert(out.shape() == conv_output_shape)
     assert(out.layout() == ttl.tensor.Layout.ROW_MAJOR)
 

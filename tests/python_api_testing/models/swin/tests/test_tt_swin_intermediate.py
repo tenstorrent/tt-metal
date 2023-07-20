@@ -27,7 +27,7 @@ def test_swin_intermediate_inference(pcc, reset_seeds):
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
-    host = tt_lib.device.GetHost()
+
 
     INTERMEDIATE_LAYER_INDEX = 0
     base_address = f"encoder.layers.{INTERMEDIATE_LAYER_INDEX}.blocks.{INTERMEDIATE_LAYER_INDEX}.intermediate"
@@ -63,7 +63,7 @@ def test_swin_intermediate_inference(pcc, reset_seeds):
     tt_output = tt_model(tt_hidden_states)
 
     # Compare outputs
-    tt_output_torch = tt_to_torch_tensor(tt_output, host)
+    tt_output_torch = tt_to_torch_tensor(tt_output)
     tt_output_torch = tt_output_torch.squeeze(0)
 
     does_pass, pcc_message = comp_pcc(torch_output, tt_output_torch, pcc)

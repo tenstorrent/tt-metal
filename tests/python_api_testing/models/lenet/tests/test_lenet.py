@@ -32,14 +32,14 @@ def test_lenet_inference(
         device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
         tt_lib.device.InitializeDevice(device)
         tt_lib.device.SetDefaultDevice(device)
-        host = tt_lib.device.GetHost()
+
 
         # Initialize Torch model
         pt_model_path = model_location_generator("tt_dnn-models/LeNet/model.pt")
         torch_LeNet, _ = load_torch_lenet(pt_model_path, num_classes)
 
         # Initialize TT model
-        tt_lenet = lenet5(num_classes, device, host, model_location_generator)
+        tt_lenet = lenet5(num_classes, device, model_location_generator)
 
         image = prepare_image(mnist_sample_input)
 
@@ -49,7 +49,7 @@ def test_lenet_inference(
         tt_image = torch2tt_tensor(image, device, tt_lib.tensor.Layout.ROW_MAJOR)
 
         tt_output = tt_lenet(tt_image)
-        tt_output = tt_output.to(host)
+        tt_output = tt_output.cpu()
         tt_output = torch.Tensor(tt_output.data()).reshape(tt_output.shape())
 
         _, tt_predicted = torch.max(tt_output.data, -1)

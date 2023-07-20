@@ -141,7 +141,7 @@ class TtMnistModel(nn.Module):
         relu3_out = self.TtRelu(lin3_out)
 
         # Softmax on CPU
-        lin3_out_cpu = relu3_out.to(host)
+        lin3_out_cpu = relu3_out.cpu()
 
         # Make pytorch tensor... since we had to pad the output, we need
         # to only retrieve the 10 values that represent actual classes
@@ -227,6 +227,6 @@ def test_run_mnist_inference():
     # Initialize the device
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
+
     run_mnist_inference()
     ttl.device.CloseDevice(device)

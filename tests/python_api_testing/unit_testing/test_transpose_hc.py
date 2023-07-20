@@ -14,7 +14,7 @@ def test_transpose_hc():
     # Initialize the device
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
+
 
     N = 3
     C = 32 * 2
@@ -35,7 +35,7 @@ def test_transpose_hc():
     xtt = ttl.tensor.transpose_hc(xt)
     assert xtt.shape() == [N, H, C, W]
 
-    xtt_data = xtt.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
+    xtt_data = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()
     tt_got_back = torch.Tensor(xtt_data).reshape(xtt.shape())
 
     print("reshape() max absdiff=")

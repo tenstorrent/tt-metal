@@ -69,7 +69,7 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time)
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
-    host = ttl.device.GetHost()
+
 
     HF_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
     HF_model.eval()

@@ -105,7 +105,6 @@ def run_softmax_tests(test_id, batch, dtype, in0_mem_config):
 
     dev = device.CreateDevice(device.Arch.GRAYSKULL, 0)
     device.InitializeDevice(dev)
-    host = device.GetHost()
 
     test_dims = ((batch, 1, 6144, 384),)
     for N, C, H, W in test_dims:
@@ -141,7 +140,7 @@ def run_softmax_tests(test_id, batch, dtype, in0_mem_config):
             else:
                 assert False
 
-            t2_data_fused = t1_fused.to(host).data()
+            t2_data_fused = t1_fused.cpu().data()
             tt_got_back_fused = torch.Tensor(t2_data_fused).reshape((N, C, H, W))
             tt_unt = untilize(tt_got_back_fused)
 

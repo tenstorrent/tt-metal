@@ -38,7 +38,6 @@ int main(int argc, char **argv) {
         int pci_express_slot = 0;
         tt_metal::Device *device =
             tt_metal::CreateDevice(arch, pci_express_slot);
-        tt_metal::Host *host = tt_metal::GetHost();
 
         pass &= tt_metal::InitializeDevice(device);
 
@@ -59,13 +58,13 @@ int main(int argc, char **argv) {
         Tensor b = tt::numpy::zeros(shapeb, DataType::BFLOAT16).to(Layout::TILE).to(device);
         Tensor b1 = tt::numpy::zeros(shapeb1, DataType::BFLOAT16).to(Layout::TILE).to(device);
 
-        Tensor mm = bmm(a, b).to(host);
-        Tensor mm1 = matmul(a, b1).to(host);
+        Tensor mm = bmm(a, b).cpu();
+        Tensor mm1 = matmul(a, b1).cpu();
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
-        Tensor host_a = a.to(host); // Move tensor a to host to validate
+        Tensor host_a = a.cpu(); // Move tensor a to host to validate
 
         pass &= tt_metal::CloseDevice(device);;
 

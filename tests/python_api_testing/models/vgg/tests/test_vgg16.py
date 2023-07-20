@@ -30,7 +30,7 @@ def test_vgg16_inference(pcc, imagenet_sample_input):
         device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
         tt_lib.device.InitializeDevice(device)
         tt_lib.device.SetDefaultDevice(device)
-        host = tt_lib.device.GetHost()
+
 
         torch_vgg = models.vgg16(weights=models.VGG16_Weights.IMAGENET1K_V1)
         torch_vgg.eval()
@@ -48,7 +48,7 @@ def test_vgg16_inference(pcc, imagenet_sample_input):
 
         tt_output = tt_vgg(tt_image)
 
-        tt_output = tt_output.to(host)
+        tt_output = tt_output.cpu()
         tt_output = torch.Tensor(tt_output.data()).reshape(tt_output.shape())
 
         pcc_passing, pcc_output = comp_pcc(torch_output, tt_output, pcc)

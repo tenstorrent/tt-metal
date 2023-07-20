@@ -133,7 +133,7 @@ def run_add_and_norm_inference(
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     # Initialize the device
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
+
 
     if on_weka:
         model_name = str(

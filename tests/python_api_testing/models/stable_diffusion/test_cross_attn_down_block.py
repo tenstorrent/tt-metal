@@ -62,7 +62,6 @@ def test_run_cross_attn_down_block_real_input_inference(index, model_location_ge
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
-    host = ttl.device.GetHost()
 
     tt_sample = torch_to_tt_tensor_rm(sample, device, put_on_device=False)
     tt_emb = torch_to_tt_tensor_rm(emb.unsqueeze(0).unsqueeze(0), device, put_on_device=False)
@@ -80,10 +79,10 @@ def test_run_cross_attn_down_block_real_input_inference(index, model_location_ge
         cross_attention_kwargs=cross_attention_kwargs
         )
 
-    tt_output = tt_to_torch_tensor(tt_output, host)
+    tt_output = tt_to_torch_tensor(tt_output)
 
     for _tt, _torch in zip(list_out, torch_list_out):
-        tt_o = tt_to_torch_tensor(_tt, host)
+        tt_o = tt_to_torch_tensor(_tt)
         logger.info(comp_allclose_and_pcc(_torch, tt_o))
 
 
@@ -148,7 +147,6 @@ def test_run_cross_attn_down_block_inference():
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
-    host = ttl.device.GetHost()
 
     tt_cross_attn_down_block = TtCrossAttnDownBlock2D(
                             in_channels = in_channels,
@@ -186,7 +184,7 @@ def test_run_cross_attn_down_block_inference():
         cross_attention_kwargs=cross_attention_kwargs
         )
 
-    tt_output = tt_to_torch_tensor(tt_output, host)
+    tt_output = tt_to_torch_tensor(tt_output)
 
     passing = comp_pcc(torch_output, tt_output)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))

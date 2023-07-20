@@ -121,7 +121,7 @@ def run_ffn_inference(model_version, batch, seq_len, on_weka, pcc, model_locatio
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     # Initialize the device
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
+
 
     if on_weka:
         model_name = str(model_location_generator("tt_dnn-models/Bert/BertForQuestionAnswering/models/") / model_version)
@@ -142,7 +142,7 @@ def run_ffn_inference(model_version, batch, seq_len, on_weka, pcc, model_locatio
     tilized_ffn_input = ttl.tensor.Tensor(pad_ffn_input.reshape(-1).tolist(), pad_ffn_input.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
     tilized_ffn_input = tilized_ffn_input.to(device)
 
-    tt_out = tt_ffn_model(tilized_ffn_input).to(host)
+    tt_out = tt_ffn_model(tilized_ffn_input).cpu()
     tt_out = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(tt_out.shape())
 
     ttl.device.CloseDevice(device)

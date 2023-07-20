@@ -16,7 +16,6 @@ def test_gs_demo():
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
-    host = tt_lib.device.GetHost()
 
     image_processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
     HF_model = ViTForImageClassification.from_pretrained(
@@ -31,7 +30,7 @@ def test_gs_demo():
 
     with torch.no_grad():
         tt_output = tt_model(tt_inputs)[0]
-        tt_output = tt_to_torch_tensor(tt_output, host).squeeze(0)[:, 0, :]
+        tt_output = tt_to_torch_tensor(tt_output).squeeze(0)[:, 0, :]
 
     # model predicts one of the 1000 ImageNet classes
     image.save("vit_input_image.jpg")

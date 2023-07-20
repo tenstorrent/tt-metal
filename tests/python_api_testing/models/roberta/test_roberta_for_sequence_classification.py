@@ -64,7 +64,7 @@ def test_roberta_for_sequence_classification():
         logger.info("Running tt model ...")
         tt_attention_mask = torch.unsqueeze(inputs.attention_mask, 0)
         tt_attention_mask = torch.unsqueeze(tt_attention_mask, 0)
-        tt_attention_mask = torch2tt_tensor(tt_attention_mask, tt_lib.device.GetHost())
+        tt_attention_mask = torch2tt_tensor(tt_attention_mask, device)
         tt_output = tt_model(inputs.input_ids, tt_attention_mask).logits
 
         # Compare outputs

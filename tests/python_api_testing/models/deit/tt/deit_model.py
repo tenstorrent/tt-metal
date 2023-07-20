@@ -59,7 +59,7 @@ class TtDeiTModel(nn.Module):
 
         head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)
 
-        pixel_values = tt_to_torch_tensor(pixel_values, tt_lib.device.GetHost())
+        pixel_values = tt_to_torch_tensor(pixel_values)
 
         expected_dtype = self.embeddings.patch_embeddings.projection.weight.dtype
         if pixel_values.dtype != expected_dtype:

@@ -25,11 +25,9 @@ class TtClassifier(torch.nn.Module):
         self,
         state_dict=None,
         device=None,
-        host=None,
     ) -> None:
         super().__init__()
         self.device = device
-        self.host = host
 
         self.classifier1_weight = torch_to_tt_tensor_rm(
             state_dict["classifier.0.weight"], device, put_on_device=False
@@ -48,7 +46,7 @@ class TtClassifier(torch.nn.Module):
 
     def forward(self, input: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         linear_1 = TtLinear(input, self.classifier1_weight, self.classifier1_bias)
-        scale = tt_to_torch_tensor(linear_1, self.host)
+        scale = tt_to_torch_tensor(linear_1)
         scale = self.scale_activation(scale)
         scale = torch_to_tt_tensor_rm(scale, self.device)
         linear_2 = TtLinear(scale, self.classifier2_weight, self.classifier2_bias)

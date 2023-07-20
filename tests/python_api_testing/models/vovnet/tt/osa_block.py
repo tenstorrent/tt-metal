@@ -29,12 +29,10 @@ class TtOsaBlock(nn.Module):
         depthwise=True,
         base_address=None,
         state_dict=None,
-        host=None,
         device=None,
     ) -> None:
         super().__init__()
         self.device = device
-        self.host = host
         self.residual = residual
         self.depthwise = depthwise
         self.state_dict = state_dict
@@ -57,7 +55,6 @@ class TtOsaBlock(nn.Module):
                 state_dict=state_dict,
                 base_address=f"{base_address}.conv_reduction",
                 device=self.device,
-                host=self.host,
             )
         else:
             self.conv_reduction = None
@@ -87,7 +84,6 @@ class TtOsaBlock(nn.Module):
             state_dict=state_dict,
             base_address=f"{base_address}.conv_concat",
             device=device,
-            host=host,
         )
 
         self.attn = TtEffectiveSEModule(
@@ -101,7 +97,6 @@ class TtOsaBlock(nn.Module):
             state_dict=state_dict,
             base_address=f"{base_address}.attn",
             device=device,
-            host=host,
         )
 
     def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:

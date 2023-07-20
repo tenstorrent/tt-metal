@@ -25,13 +25,11 @@ class TtSwinStage(nn.Module):
         state_dict,
         base_address,
         device,
-        host,
     ):
         super().__init__()
         self.config = config
         self.dim = dim
         self.device = device
-        self.host = host
         self.blocks = nn.ModuleList(
             [
                 TtSwinLayer(

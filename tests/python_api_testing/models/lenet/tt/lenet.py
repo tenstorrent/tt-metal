@@ -9,10 +9,9 @@ from tt_lib.fallback_ops import fallback_ops
 
 
 class TtLeNet5(nn.Module):
-    def __init__(self, num_classes, device, host, state_dict):
+    def __init__(self, num_classes, device, state_dict):
         super().__init__()
         self.device = device
-        self.host = host
 
         conv1_weight = state_dict["layer1.0.weight"]
         conv1_bias = state_dict["layer1.0.bias"]
@@ -170,12 +169,12 @@ class TtLeNet5(nn.Module):
         return out
 
 
-def _lenet5(num_classes, device, host, state_dict) -> TtLeNet5:
-    return TtLeNet5(num_classes, device, host, state_dict)
+def _lenet5(num_classes, device, state_dict) -> TtLeNet5:
+    return TtLeNet5(num_classes, device, state_dict)
 
 
-def lenet5(num_classes, device, host, model_location_generator) -> TtLeNet5:
+def lenet5(num_classes, device, model_location_generator) -> TtLeNet5:
     pt_model_path = model_location_generator("tt_dnn-models/LeNet/model.pt")
     _, state_dict = load_torch_lenet(pt_model_path, num_classes)
-    model = _lenet5(num_classes, device, host, state_dict)
+    model = _lenet5(num_classes, device, state_dict)
     return model

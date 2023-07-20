@@ -27,14 +27,12 @@ class TtOsaStage(nn.Module):
         depthwise=True,
         base_address=None,
         device=None,
-        host=None,
         state_dict=None,
     ):
         super(TtOsaStage, self).__init__()
         self.device = device
         self.base_address = f"{base_address}.blocks.0"
         self.state_dict = state_dict
-        self.host = host
         if downsample:
             self.pool = fallback_ops.MaxPool2d(kernel_size=3, stride=2, ceil_mode=True)
         else:
@@ -54,7 +52,6 @@ class TtOsaStage(nn.Module):
                     base_address=self.base_address,
                     state_dict=self.state_dict,
                     device=self.device,
-                    host=self.host,
                 )
             ]
             in_chs = out_chs

@@ -36,14 +36,12 @@ class TtVGG(nn.Module):
         init_weights: bool = True,
         dropout: float = 0.5,
         device=None,
-        host=None,
         state_dict=None,
         base_address="",
     ) -> None:
         super().__init__()
         assert init_weights == False, "we are loading weights, not initializing them"
         self.device = device
-        self.host = host
         self.state_dict = state_dict
         self.base_address = base_address
 
@@ -138,7 +136,6 @@ def make_layers(
     state_dict=None,
     base_address="features",
     device=None,
-    host=None,
     disable_conv_on_tt_device=True,
 ) -> nn.Sequential:
     layers: List = []
@@ -163,7 +160,6 @@ def make_layers(
                         conv2d_weight.reshape(-1).tolist(),
                         conv2d_params,
                         device,
-                        host,
                         conv2d_bias,
                     )
                 else:
@@ -236,17 +232,16 @@ cfgs: Dict[str, List[Union[str, int]]] = {
 }
 
 
-def _vgg(features, init_weights, device, host, state_dict, base_address=""):
+def _vgg(features, init_weights, device, state_dict, base_address=""):
     return TtVGG(
                 features,
                 init_weights=init_weights,
                 device=device,
-                host=host,
                 state_dict=state_dict,
                 base_address=base_address
                 )
 
-def vgg16(device, host, disable_conv_on_tt_device=True) -> TtVGG:
+def vgg16(device, disable_conv_on_tt_device=True) -> TtVGG:
 
     torch_vgg = models.vgg16(weights=models.VGG16_Weights.IMAGENET1K_V1)
     torch_vgg.eval()
@@ -257,17 +252,15 @@ def vgg16(device, host, disable_conv_on_tt_device=True) -> TtVGG:
             batch_norm=False,
             state_dict=state_dict,
             device=device,
-            host=host,
             disable_conv_on_tt_device=disable_conv_on_tt_device,
         ),
         init_weights=False,
         device=device,
-        host=host,
         state_dict=state_dict,
     )
     return model
 
-def vgg11(device, host, disable_conv_on_tt_device=True) -> TtVGG:
+def vgg11(device, disable_conv_on_tt_device=True) -> TtVGG:
 
     torch_vgg = models.vgg11(weights=models.VGG11_Weights.IMAGENET1K_V1)
     torch_vgg.eval()
@@ -278,12 +271,10 @@ def vgg11(device, host, disable_conv_on_tt_device=True) -> TtVGG:
             batch_norm=False,
             state_dict=state_dict,
             device=device,
-            host=host,
             disable_conv_on_tt_device=disable_conv_on_tt_device,
         ),
         init_weights=False,
         device=device,
-        host=host,
         state_dict=state_dict,
     )
     return model

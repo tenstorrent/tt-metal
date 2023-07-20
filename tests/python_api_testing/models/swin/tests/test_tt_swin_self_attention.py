@@ -28,7 +28,6 @@ def test_swin_self_attention_inference(pcc, reset_seeds):
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
-    host = tt_lib.device.GetHost()
 
     SELF_ATTN_LAYER_INDEX = 0
     base_address = f"encoder.layers.{SELF_ATTN_LAYER_INDEX}.blocks.{SELF_ATTN_LAYER_INDEX}.attention.self"
@@ -52,7 +51,6 @@ def test_swin_self_attention_inference(pcc, reset_seeds):
         base_address=base_address,
         device=device,
         state_dict=model.state_dict(),
-        host=host,
     )
 
     # Run torch model
@@ -66,12 +64,12 @@ def test_swin_self_attention_inference(pcc, reset_seeds):
     tt_hidden_states = torch_to_tt_tensor_rm(hidden_states, device)
 
     attention_mask = torch.unsqueeze(attention_mask, 0)
-    tt_attention_mask = torch_to_tt_tensor_rm(attention_mask, host)
+    tt_attention_mask = torch_to_tt_tensor_rm(attention_mask, device)
 
     tt_output = tt_model(tt_hidden_states, tt_attention_mask)
 
     # Compare outputs
-    tt_output_torch = tt_to_torch_tensor(tt_output[0], host)
+    tt_output_torch = tt_to_torch_tensor(tt_output[0])
     tt_output_torch = tt_output_torch.squeeze(0)
 
     does_pass, pcc_message = comp_pcc(torch_output[0], tt_output_torch, pcc)

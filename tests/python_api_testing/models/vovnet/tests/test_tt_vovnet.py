@@ -27,7 +27,7 @@ def test_vovnet_model_inference(pcc, imagenet_sample_input, model_name, reset_se
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
-    host = tt_lib.device.GetHost()
+
 
     model = timm.create_model(model_name, pretrained=True)
 
@@ -35,7 +35,6 @@ def test_vovnet_model_inference(pcc, imagenet_sample_input, model_name, reset_se
 
     tt_model = vovnet_for_image_classification(
         device=device,
-        host=host,
     )
 
     input = imagenet_sample_input
@@ -43,7 +42,7 @@ def test_vovnet_model_inference(pcc, imagenet_sample_input, model_name, reset_se
 
     tt_input = torch_to_tt_tensor_rm(input, device)
     tt_output = tt_model(tt_input)
-    tt_output_torch = tt_to_torch_tensor(tt_output, host)
+    tt_output_torch = tt_to_torch_tensor(tt_output)
     tt_output_torch = tt_output_torch.squeeze(0).squeeze(0)
 
     passing, pcc_message = comp_pcc(model_output, tt_output_torch, pcc)

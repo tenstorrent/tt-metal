@@ -24,9 +24,6 @@ These are the steps:
         tt_device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
         tt_lib.device.InitializeDevice(tt_device)
 
-        # Gat handle to host machine
-        host = tt_lib.device.GetHost()
-
         # Create random PyTorch tensor
         py_tensor = torch.randn((1, 1, 32, 32))
 
@@ -43,7 +40,7 @@ These are the steps:
         tt_relu_out = tt_lib.tensor.relu(tt_tensor)
 
         # Move TT Tensor tt_relu_out from TT accelerator device to host
-        tt_output = tt_relu_out.to(host)
+        tt_output = tt_relu_out.cpu()
 
         # Print TT Tensor
         tt_output.pretty_print()
@@ -78,9 +75,6 @@ Lastly, we run ``exp`` on TT Accelerator device (suppling it with output from ``
         tt_device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
         tt_lib.device.InitializeDevice(tt_device)
 
-        # Gat handle to host machine
-        host = tt_lib.device.GetHost()
-
         # Create random PyTorch tensor
         py_tensor = torch.randn((1, 1, 32, 32))
 
@@ -97,7 +91,7 @@ Lastly, we run ``exp`` on TT Accelerator device (suppling it with output from ``
         tt_relu_out = tt_lib.tensor.relu(tt_tensor)
 
         # Move TT Tensor tt_relu_out to host and convert it to PyTorch tensor py_relu_out
-        tt_relu_out = tt_relu_out.to(host)
+        tt_relu_out = tt_relu_out.cpu()
         py_relu_out = torch.Tensor(tt_relu_out.data()).reshape(tt_relu_out.shape())
 
         # Execute pow using PyTorch (since pow is not available from tt_lib)
@@ -121,7 +115,7 @@ Lastly, we run ``exp`` on TT Accelerator device (suppling it with output from ``
         tt_exp_out = tt_lib.tensor.exp(tt_silu_out)
 
         # Move TT Tensor output from TT accelerator device to host
-        tt_output = tt_exp_out.to(host)
+        tt_output = tt_exp_out.cpu()
 
         # Print TT Tensor
         tt_output.pretty_print()
@@ -159,9 +153,6 @@ can be modified as follow:
         # This device will be used to execute TT Tensors that are not assigned to a device
         tt_lib.device.SetDefaultDevice(tt_device)
 
-        # Gat handle to host machine
-        host = tt_lib.device.GetHost()
-
         # Create random PyTorch tensor
         py_tensor = torch.randn((1, 1, 32, 31))
 
@@ -180,7 +171,7 @@ can be modified as follow:
 
         # Move TT Tensor output from TT accelerator device to host
         # Note that in this example this call will not do anything since tt_relu_out is already on host machine
-        tt_output = tt_relu_out.to(host)
+        tt_output = tt_relu_out.cpu()
 
         # Print TT Tensor
         tt_output.pretty_print()

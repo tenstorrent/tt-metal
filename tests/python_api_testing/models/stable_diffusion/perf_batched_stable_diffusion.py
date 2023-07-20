@@ -122,7 +122,6 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time)
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
-    host = ttl.device.GetHost()
 
     # 1. Load the autoencoder model which will be used to decode the latents into image space.
     vae = AutoencoderKL.from_pretrained(
@@ -258,7 +257,7 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time)
                 tt_latent_model_input, _t, encoder_hidden_states=tt_text_embeddings
             )
             ttl.device.Synchronize()
-            noise_pred = tt_to_torch_tensor(tt_noise_pred, host)
+            noise_pred = tt_to_torch_tensor(tt_noise_pred)
 
         # perform guidance
         noise_pred = guide(noise_pred, guidance_scale, t)

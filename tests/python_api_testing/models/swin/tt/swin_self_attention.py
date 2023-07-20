@@ -155,7 +155,7 @@ class TtSwinSelfAttention(nn.Module):
 
         attention_scores = tt_lib.tensor.permute(attention_scores, 3, 0, 1, 2)
 
-        attention_scores = tt_to_torch_tensor(attention_scores, self.host)
+        attention_scores = tt_to_torch_tensor(attention_scores)
 
         if attention_mask is not None:
             # Apply the attention mask is (precomputed for all layers in SwinModel forward() function)
@@ -171,7 +171,7 @@ class TtSwinSelfAttention(nn.Module):
                 dim,
             )
             attention_scores = attention_scores + tt_to_torch_tensor(
-                attention_mask, self.host
+                attention_mask
             ).unsqueeze(2)
             """
             attention score is 5 D tensor

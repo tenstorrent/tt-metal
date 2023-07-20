@@ -6,7 +6,6 @@
 #include "tt_dnn/op_library/program_cache.hpp"
 #include "tt_numpy/functions.hpp"
 
-using tt::tt_metal::Host;
 using tt::tt_metal::DataType;
 using tt::tt_metal::Device;
 using tt::tt_metal::Layout;
@@ -27,13 +26,13 @@ Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b)
 }
 
 template <auto HostFunction, typename DeviceFunction, typename... Args>
-bool run_test(const DeviceFunction& device_function, Host* host, Device* device, Args... args) {
+bool run_test(const DeviceFunction& device_function, Device* device, Args... args) {
     Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
     auto input_tensor_a = tt::numpy::random::random(shape, DataType::BFLOAT16).to(Layout::TILE);
     auto input_tensor_b = tt::numpy::random::random(shape, DataType::BFLOAT16).to(Layout::TILE);
 
     auto host_output = HostFunction(input_tensor_a, input_tensor_b);
-    auto device_output = device_function(input_tensor_a.to(device), input_tensor_b.to(device)).to(host);
+    auto device_output = device_function(input_tensor_a.to(device), input_tensor_b.to(device)).cpu();
 
     return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
 }
@@ -44,22 +43,21 @@ int main() {
 
     int pci_express_slot = 0;
     auto device = tt::tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
-    auto host = tt::tt_metal::GetHost();
 
     TT_ASSERT(tt::tt_metal::InitializeDevice(device));
 
     {
-        auto allclose = run_test<host_function<std::plus<float>>>(tt::tt_metal::add, host, device);
+        auto allclose = run_test<host_function<std::plus<float>>>(tt::tt_metal::add, device);
         TT_ASSERT(allclose);
     }
 
     {
-        auto allclose = run_test<host_function<std::minus<float>>>(tt::tt_metal::sub, host, device);
+        auto allclose = run_test<host_function<std::minus<float>>>(tt::tt_metal::sub, device);
         TT_ASSERT(allclose);
     }
 
     {
-        auto allclose = run_test<host_function<std::multiplies<float>>>(tt::tt_metal::mul, host, device, 1e-2f, 1e-3f);
+        auto allclose = run_test<host_function<std::multiplies<float>>>(tt::tt_metal::mul, device, 1e-2f, 1e-3f);
         TT_ASSERT(allclose);
     }
 
@@ -67,18 +65,18 @@ int main() {
 
     auto run_binary_ops = [&] {
         {
-            auto allclose = run_test<host_function<std::plus<float>>>(tt::tt_metal::add, host, device);
+            auto allclose = run_test<host_function<std::plus<float>>>(tt::tt_metal::add, device);
             TT_ASSERT(allclose);
         }
 
         {
-            auto allclose = run_test<host_function<std::minus<float>>>(tt::tt_metal::sub, host, device);
+            auto allclose = run_test<host_function<std::minus<float>>>(tt::tt_metal::sub, device);
             TT_ASSERT(allclose);
         }
 
         {
             auto allclose =
-                run_test<host_function<std::multiplies<float>>>(tt::tt_metal::mul, host, device, 1e-2f, 1e-3f);
+                run_test<host_function<std::multiplies<float>>>(tt::tt_metal::mul, device, 1e-2f, 1e-3f);
             TT_ASSERT(allclose);
         }
     };

@@ -28,7 +28,6 @@ def test_swin_model_inference(imagenet_sample_input, pcc, reset_seeds):
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
-    host = tt_lib.device.GetHost()
 
     image = imagenet_sample_input
 
@@ -49,7 +48,6 @@ def test_swin_model_inference(imagenet_sample_input, pcc, reset_seeds):
             state_dict=model.state_dict(),
             base_address=base_address,
             device=device,
-            host=host,
         )
 
         # Run torch model
@@ -60,7 +58,7 @@ def test_swin_model_inference(imagenet_sample_input, pcc, reset_seeds):
         tt_pixel_values = torch_to_tt_tensor_rm(tt_pixel_values, device)
         tt_output = tt_model(tt_pixel_values)
 
-        tt_output_torch = tt_to_torch_tensor(tt_output.last_hidden_state, host)
+        tt_output_torch = tt_to_torch_tensor(tt_output.last_hidden_state)
         tt_output_torch = tt_output_torch.squeeze(0)
 
         does_pass, pcc_message = comp_pcc(

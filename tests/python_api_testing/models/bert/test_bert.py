@@ -82,7 +82,7 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
 
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
+
 
     if on_weka:
         model_name = str(model_location_generator("tt_dnn-models/Bert/BertForQuestionAnswering/models/") / model_version)
@@ -137,10 +137,10 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
     # since we don't yet have embedding support on device
     if real_input:
         pytorch_out = hugging_face_reference_model(**bert_input)
-        tt_out = tt_bert_model(**bert_input).to(host)
+        tt_out = tt_bert_model(**bert_input).cpu()
     else:
         pytorch_out = hugging_face_reference_model(bert_input)
-        tt_out = tt_bert_model(bert_input).to(host)
+        tt_out = tt_bert_model(bert_input).cpu()
     tt_untilized_output = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(batch, 1, seq_len, -1)
 
     ttl.device.CloseDevice(device)

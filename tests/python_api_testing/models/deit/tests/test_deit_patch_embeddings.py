@@ -39,7 +39,7 @@ def test_deit_patch_embeddings_inference(pcc=0.99):
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
-    host = tt_lib.device.GetHost()
+
 
     # setup tt model
     tt_patch_embeddings = DeiTPatchEmbeddings(DeiTConfig(), state_dict, base_address)

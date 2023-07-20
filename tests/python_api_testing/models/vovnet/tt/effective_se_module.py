@@ -22,14 +22,12 @@ class TtEffectiveSEModule(nn.Module):
         add_maxpool=False,
         state_dict=None,
         device=None,
-        host=None,
         base_address=None,
         **_,
     ):
         super(TtEffectiveSEModule, self).__init__()
         self.add_maxpool = add_maxpool
         self.device = device
-        self.host = host
         self.base_address = base_address
 
         conv_weight = torch_to_tt_tensor_rm(
@@ -54,12 +52,12 @@ class TtEffectiveSEModule(nn.Module):
         self.activation = tt_lib.tensor.hardsigmoid
 
     def forward(self, input: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
-        out = tt_to_torch_tensor(input, self.host)
+        out = tt_to_torch_tensor(input)
         out = out.mean((2, 3), keepdim=True)
         if self.add_maxpool:
             # experimental codepath, may remove or change
             out = 0.5 * out + 0.5 * input.amax((2, 3), keepdim=True)
-        out = torch_to_tt_tensor_rm(out, self.host)
+        out = torch_to_tt_tensor_rm(out)
         out = self.fc(out)
         out = self.activation(out)
         out = tt_lib.tensor.bcast(

@@ -55,7 +55,7 @@ class PytorchBatchNorm1D(nn.Module):
 
 
 def run_block_inference(in_features, out_features, device):
-    host = ttl.device.GetHost()
+
 
     # set inputs
     inputs_torch = torch.FloatTensor(1, in_features).uniform_(-1., 1.).requires_grad_(True)
@@ -142,13 +142,13 @@ def run_block_inference(in_features, out_features, device):
     output_full_tt = ttl.tensor.relu(output_bn_tt)
 
     # compare
-    output_lin_tt_untilized = untilize(torch.Tensor(output_lin_tt.to(host).data()).reshape(output_lin_tt.shape()))
+    output_lin_tt_untilized = untilize(torch.Tensor(output_lin_tt.cpu().data()).reshape(output_lin_tt.shape()))
     output_lin_tt_untilized = output_lin_tt_untilized[0, 0, 0, :]
 
-    output_bn_tt_untilized = untilize(torch.Tensor(output_bn_tt.to(host).data()).reshape(output_bn_tt.shape()))
+    output_bn_tt_untilized = untilize(torch.Tensor(output_bn_tt.cpu().data()).reshape(output_bn_tt.shape()))
     output_bn_tt_untilized = output_bn_tt_untilized[0, 0, 0, :]
 
-    output_full_tt_untilized = untilize(torch.Tensor(output_full_tt.to(host).data()).reshape(output_full_tt.shape()))
+    output_full_tt_untilized = untilize(torch.Tensor(output_full_tt.cpu().data()).reshape(output_full_tt.shape()))
     output_full_tt_untilized = output_full_tt_untilized[0, 0, 0, :]
 
     print('pytorch_linear_out:', output_lin_torch[0][0:10])

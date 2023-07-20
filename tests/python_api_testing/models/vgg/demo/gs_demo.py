@@ -31,7 +31,7 @@ def test_gs_demo(imagenet_sample_input, imagenet_label_dict):
         device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
         tt_lib.device.InitializeDevice(device)
         tt_lib.device.SetDefaultDevice(device)
-        host = tt_lib.device.GetHost()
+
 
 
         # TODO: enable conv on tt device after adding fast dtx transform
@@ -46,7 +46,7 @@ def test_gs_demo(imagenet_sample_input, imagenet_label_dict):
 
         tt_output = tt_vgg(tt_image)
 
-        tt_output = tt_output.to(host)
+        tt_output = tt_output.cpu()
         tt_output = torch.Tensor(tt_output.data()).reshape(tt_output.shape())
 
         logger.info(

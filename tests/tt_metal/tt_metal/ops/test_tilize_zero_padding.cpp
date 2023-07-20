@@ -41,7 +41,6 @@ int main(int argc, char **argv) {
         int pci_express_slot = 0;
         tt_metal::Device *device =
             tt_metal::CreateDevice(arch, pci_express_slot);
-        tt_metal::Host *host = tt_metal::GetHost();
 
         pass &= tt_metal::InitializeDevice(device);
 
@@ -52,12 +51,12 @@ int main(int argc, char **argv) {
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a =  tt::numpy::random::random(shape).to(device);
         Tensor b = tilize_with_zero_padding(a);
-        Tensor c =  b.to(host);
+        Tensor c =  b.cpu();
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
         std::cout << "Moving src data to host to validate" << std::endl;
-        Tensor host_a = a.to(host); // Move tensor a to host to validate
+        Tensor host_a = a.cpu(); // Move tensor a to host to validate
         // TODO: Update when tensor.pad_to_tile() function is added
         auto padded_shape = a.shape();
         padded_shape[2] = roundup(padded_shape[2], TILE_HEIGHT);

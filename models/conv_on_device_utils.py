@@ -14,7 +14,7 @@ def is_conv_supported_on_device(conv_params):
 
     return True
 
-def run_conv_on_device_wrapper(conv_weight, conv_params, device, host, conv_bias=None):
+def run_conv_on_device_wrapper(conv_weight, conv_params, device, conv_bias=None):
     K, C, R, S, U, V, P_H, P_W, dilation, groups = [conv_params[i] for i in range(10)]
     conv_on_device = TtConv(conv_weight, conv_params, device, conv_bias)
 

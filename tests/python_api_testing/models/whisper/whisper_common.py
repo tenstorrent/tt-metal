@@ -8,22 +8,22 @@ def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
     while len(size) < 4:
         size.insert(0, 1)
 
-    if size[-1] % 2 != 0:
-        tt_device = tt_lib.device.GetHost()
-
     tt_tensor = tt_lib.tensor.Tensor(
         py_tensor.reshape(-1).tolist(),
         size,
         tt_lib.tensor.DataType.BFLOAT16,
         tt_lib.tensor.Layout.ROW_MAJOR,
-    ).to(tt_device)
+    )
+
+    if size[-1] % 2 == 0:
+        tt_tensor = tt_tensor.to(tt_device)
 
     return tt_tensor
 
 
 def tt2torch_tensor(tt_tensor):
-    host = tt_lib.device.GetHost()
-    tt_output = tt_tensor.to(host)
+
+    tt_output = tt_tensor.cpu()
     if tt_output.layout() != tt_lib.tensor.Layout.ROW_MAJOR:
         tt_output = tt_output.to(tt_lib.tensor.Layout.ROW_MAJOR)
     dtype = {
@@ -87,7 +87,7 @@ def create_unpadded_tensor(
         for i in range(len(input_tensors_shape))
     )
     ttm_tensor = (
-        ttm_tensor.to(tt_lib.device.GetHost())
+        ttm_tensor.cpu()
         .to(tt_lib.tensor.Layout.ROW_MAJOR)
         .unpad(output_tensor_start, output_tensor_end)
     )

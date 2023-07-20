@@ -39,7 +39,7 @@ class PytorchLlamaRMSNormModel(torch.nn.Module):
 
 
 def run_test_LlamaLayerNorm_inference(
-    device, host, model_version, tokenizer_version, batch, seq_len, on_weka, pcc
+    device, model_version, tokenizer_version, batch, seq_len, on_weka, pcc
 ):
     model_name = model_version
     tokenizer_name = tokenizer_version
@@ -118,8 +118,8 @@ def test_LlamaLayerNorm_inference(
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
 
-    host = tt_lib.device.GetHost()
+
     run_test_LlamaLayerNorm_inference(
-        device, host, model_version, tokenizer_version, batch, seq_len, on_weka, pcc
+        device, model_version, tokenizer_version, batch, seq_len, on_weka, pcc
     )
     tt_lib.device.CloseDevice(device)

@@ -50,7 +50,7 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time)
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
-    host = tt_lib.device.GetHost()
+
 
     with torch.no_grad():
         tokenizer = AutoTokenizer.from_pretrained(
@@ -79,7 +79,7 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time)
 
         tt_attention_mask = torch.unsqueeze(inputs.attention_mask, 0)
         tt_attention_mask = torch.unsqueeze(tt_attention_mask, 0)
-        tt_attention_mask = torch2tt_tensor(tt_attention_mask, tt_lib.device.GetHost())
+        tt_attention_mask = torch2tt_tensor(tt_attention_mask)
 
         profiler.start(first_key)
         tt_output = tt_model(inputs.input_ids, tt_attention_mask).logits

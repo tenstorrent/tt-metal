@@ -101,7 +101,7 @@ def demo():
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
-    host = ttl.device.GetHost()
+
 
     # 1. Load the autoencoder model which will be used to decode the latents into image space.
     vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
@@ -230,8 +230,8 @@ def demo():
         with torch.no_grad():
             tt_noise_pred_cond = tt_unet(tt_conditioned, _t_cond, encoder_hidden_states=tt_text_embeddings)
             tt_noise_pred_uncond = tt_unet(tt_unconditioned, _t_uncond, encoder_hidden_states=tt_uncond_embeddings)
-            noise_pred_cond = tt_to_torch_tensor(tt_noise_pred_cond, host)
-            noise_pred_uncond = tt_to_torch_tensor(tt_noise_pred_uncond, host)
+            noise_pred_cond = tt_to_torch_tensor(tt_noise_pred_cond)
+            noise_pred_uncond = tt_to_torch_tensor(tt_noise_pred_uncond)
         # perform guidance
         noise_pred = guide(noise_pred_uncond, noise_pred_cond, guidance_scale, t)
         # compute the previous noisy sample x_t -> x_t-1

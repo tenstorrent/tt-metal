@@ -51,7 +51,7 @@ def test_layer_norm(input_shape, normalized_shape_hint):
     # Initialize the device
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
-    host = tt_lib.device.GetHost()
+
 
     pcc = 0.99
 
@@ -75,7 +75,7 @@ def test_layer_norm(input_shape, normalized_shape_hint):
         x, normalized_shape=normalized_shape, eps=eps
     )
 
-    xtt_data = tt_lib.tensor.layernorm(xt, eps).to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
+    xtt_data = tt_lib.tensor.layernorm(xt, eps).cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()
     tt_got_back_rm = torch.Tensor(xtt_data).reshape(input_shape)
 
     torch_output = golden

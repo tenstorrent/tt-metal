@@ -21,7 +21,7 @@ import pytest
 @pytest.mark.parametrize("on_device", [True, False])
 def test_softmax_fallback(input_shape, dim, on_device):
     torch.manual_seed(1234)
-    host = ttl.device.GetHost()
+
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
 
@@ -40,7 +40,7 @@ def test_softmax_fallback(input_shape, dim, on_device):
 
     t1 = ttl.fallback_ops.softmax(t0, dim)
 
-    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+    output = torch.Tensor(t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t1.shape()
     )
     comp_pass, _ = comp_pcc(pt_out, output, 0.9999)

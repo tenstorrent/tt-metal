@@ -26,8 +26,6 @@ def test_swin_patch_embeddings_inference(pcc, reset_seeds):
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
-    host = tt_lib.device.GetHost()
-
     base_address = f"embeddings.patch_embeddings"
 
     model = SwinModel.from_pretrained("microsoft/swin-tiny-patch4-window7-224")
@@ -41,7 +39,6 @@ def test_swin_patch_embeddings_inference(pcc, reset_seeds):
         state_dict=model.state_dict(),
         base_address=base_address,
         device=device,
-        host=host,
     )
 
     # Run torch model
@@ -55,7 +52,7 @@ def test_swin_patch_embeddings_inference(pcc, reset_seeds):
     tt_output = tt_model(tt_pixel_values)
 
     # Compare outputs
-    tt_output_torch = tt_to_torch_tensor(tt_output[0], host)
+    tt_output_torch = tt_to_torch_tensor(tt_output[0])
     tt_output_torch = tt_output_torch.squeeze(0)
     does_pass, pcc_message = comp_pcc(torch_output[0], tt_output_torch, pcc)
 

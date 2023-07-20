@@ -21,7 +21,6 @@ def run_bert_large_fused_qkv_matmul_test(
     torch.manual_seed(1234)
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
     a_shape = [9, 1, 384, 1024]
     b_shape = [1, 1, 1024, 3072]
     bias_shape = [1, 1, 1, 3072]
@@ -81,7 +80,7 @@ def run_bert_large_fused_qkv_matmul_test(
     logger.debug(f"out is on: {t2.memory_config().buffer_type}")
 
     assert t2.shape() == [9, 1, 384, 3072]
-    tt_host_rm = t2.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
+    tt_host_rm = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
     pyt_got_back_rm = torch.Tensor(tt_host_rm.data()).reshape(tt_host_rm.shape())
 
     ref_bmm = torch.matmul(A, B)

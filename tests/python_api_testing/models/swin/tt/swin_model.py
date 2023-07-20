@@ -31,14 +31,12 @@ class TtSwinModel(nn.Module):
         state_dict,
         base_address,
         device,
-        host,
         add_pooling_layer=True,
         use_mask_token=False,
     ):
         super().__init__()
         self.config = config
         self.device = device
-        self.host = host
         self.num_layers = len(config.depths)
         self.num_features = int(config.embed_dim * 2 ** (self.num_layers - 1))
         self.embeddings = TtSwinEmbeddings(
@@ -46,7 +44,6 @@ class TtSwinModel(nn.Module):
             state_dict,
             f"{base_address}" + "embeddings",
             self.device,
-            self.host,
             use_mask_token=use_mask_token,
         )
         self.encoder = TtSwinEncoder(
@@ -55,7 +52,6 @@ class TtSwinModel(nn.Module):
             state_dict,
             f"{base_address}" + "encoder",
             self.device,
-            self.host,
         )
 
         gamma = torch_to_tt_tensor_rm(
@@ -96,7 +92,7 @@ class TtSwinModel(nn.Module):
         is_attention_chunked: bool = False,
     ) -> tt_lib.tensor.Tensor:
         if head_mask is not None:
-            torch_head_mask = tt_to_torch_tensor(head_mask, self.host)
+            torch_head_mask = tt_to_torch_tensor(head_mask)
         else:
             torch_head_mask = None
 
@@ -169,7 +165,7 @@ class TtSwinModel(nn.Module):
         if self.pooler is not None:
             sequence_output_transpose = tt_lib.tensor.transpose(sequence_output)
             sequence_output_transpose = tt_to_torch_tensor(
-                sequence_output_transpose, self.host
+                sequence_output_transpose
             ).squeeze(0)
             pooled_output = self.pooler(sequence_output_transpose)
             pooled_output = torch.flatten(pooled_output, 1)

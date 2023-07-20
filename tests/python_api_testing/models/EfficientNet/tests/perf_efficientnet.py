@@ -53,7 +53,6 @@ def test_perf_efficientnet_b0(
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
-    host = tt_lib.device.GetHost()
 
     test_input = make_input_tensor(imagenet_sample_input)
 

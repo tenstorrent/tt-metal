@@ -55,7 +55,6 @@ class TtYolov5Conv2D(torch.nn.Module):
             p = autopad(k, p, d)
 
         self.device = device
-        self.host = tt_lib.device.GetHost()
         self.conv_on_device = conv_on_device
 
         # conv_params = [out_channels, in_channels, kernel_size, kernel_size, stride, stride, padding, padding, dilation, groups]
@@ -68,7 +67,6 @@ class TtYolov5Conv2D(torch.nn.Module):
                 self.conv_weight.reshape(-1).tolist(),
                 self.conv_params,
                 self.device,
-                self.host,
                 conv_bias=None,
             )
 

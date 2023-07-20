@@ -28,7 +28,7 @@ def test_squeezenet1_inference(fuse_ops, imagenet_sample_input):
         # Initialize the device
         device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
         ttl.device.InitializeDevice(device)
-        host = ttl.device.GetHost()
+
         torch_squeezenet = models.squeezenet1_1(weights=models.SqueezeNet1_1_Weights.IMAGENET1K_V1)
 
         torch_squeezenet.eval()

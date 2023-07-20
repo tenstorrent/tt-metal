@@ -31,7 +31,7 @@ def test_ssd_sequeeze_excitation_inference(pcc, reset_seeds):
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
-    host = tt_lib.device.GetHost()
+
 
     model = pretrained(weights=MobileNet_V3_Large_Weights.IMAGENET1K_V1)
 
@@ -61,7 +61,7 @@ def test_ssd_sequeeze_excitation_inference(pcc, reset_seeds):
     tt_output = tt_model(tt_sequeeze_input)
 
     # Compare outputs
-    tt_output_torch = tt_to_torch_tensor(tt_output, host)
+    tt_output_torch = tt_to_torch_tensor(tt_output)
 
     does_pass, pcc_message = comp_pcc(torch_output, tt_output_torch, pcc)
 

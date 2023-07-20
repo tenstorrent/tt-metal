@@ -62,11 +62,8 @@ def torch2tt_tensor(py_tensor: torch.Tensor, tt_device, tt_layout=tt_lib.tensor.
 
 
 def tt2torch_tensor(tt_tensor, tt_host=None):
-    if tt_host == None:
-        host = tt_lib.device.GetHost()
-    else:
-        host = tt_host
-    tt_output = tt_tensor.to(host)
+
+    tt_output = tt_tensor.cpu()
     if tt_output.layout() != tt_lib.tensor.Layout.ROW_MAJOR:
         tt_output = tt_output.to(tt_lib.tensor.Layout.ROW_MAJOR)
 
@@ -95,11 +92,11 @@ def pad_by_zero(x: torch.Tensor, device):
     return x, initial_shape
 
 
-def unpad_from_zero(x, desired_shape, host):
+def unpad_from_zero(x, desired_shape):
     if x.shape()[-1] == desired_shape[-1] and x.shape()[-2] == desired_shape[-2] :
         x = tt2torch_tensor(x)
     else:
-        x = x.to(host)
+        x = x.cpu()
         if(x.layout() != tt_lib.tensor.Layout.ROW_MAJOR):
             x = x.to(tt_lib.tensor.Layout.ROW_MAJOR)
         x = x.unpad((0, 0, 0, 0), (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1) )
@@ -113,8 +110,8 @@ def unpad_from_zero(x, desired_shape, host):
     return x
 
 
-def tt_to_torch_tensor(tt_tensor, host):
-    tt_output = tt_tensor.to(host).to(tt_lib.tensor.Layout.ROW_MAJOR)
+def tt_to_torch_tensor(tt_tensor):
+    tt_output = tt_tensor.cpu().to(tt_lib.tensor.Layout.ROW_MAJOR)
     # create a 1D PyTorch tensor from values in TT Tensor obtained with data() member function
     # and then reshape PyTorch tensor to shape of TT Tensor
 

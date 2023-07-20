@@ -30,7 +30,7 @@ def test_effective_se_module_inference(pcc, reset_seeds):
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
-    host = tt_lib.device.GetHost()
+
 
     base_address = f"stages.0.blocks.0.attn"
 
@@ -49,7 +49,6 @@ def test_effective_se_module_inference(pcc, reset_seeds):
         state_dict=model.state_dict(),
         base_address=base_address,
         device=device,
-        host=host,
     )
 
     # run torch model
@@ -59,7 +58,7 @@ def test_effective_se_module_inference(pcc, reset_seeds):
     # run tt model
     tt_input = torch_to_tt_tensor_rm(input, device)
     tt_output = tt_model(tt_input)
-    tt_output_torch = tt_to_torch_tensor(tt_output, host)
+    tt_output_torch = tt_to_torch_tensor(tt_output)
     tt_output_torch = tt_output_torch.squeeze(0)
 
     # compare output

@@ -80,7 +80,7 @@ Tensor Tensor::to(Device *target_device, const MemoryConfig &mem_config) const {
     return tensor_impl::to_device_wrapper(*this, target_device, mem_config);
 }
 
-Tensor Tensor::to(Host *host) const {
+Tensor Tensor::cpu() const {
     if (storage_type() == StorageType::OWNED) {
         return *this;
     }

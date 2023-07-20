@@ -20,7 +20,6 @@ def run_bert_large_create_qkv_heads_test(
     torch.manual_seed(1234)
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
     a_shape = [batch, 1, 384, 1024]
 
     A = torch.randn(a_shape)
@@ -63,7 +62,7 @@ def run_bert_large_create_qkv_heads_test(
 
     assert out.shape() == expected_out_shape
 
-    tt_host_rm_out = out.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
+    tt_host_rm_out = out.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
     pyt_got_back_rm_out = torch.Tensor(tt_host_rm_out.data()).reshape(
         tt_host_rm_out.shape()
     )
