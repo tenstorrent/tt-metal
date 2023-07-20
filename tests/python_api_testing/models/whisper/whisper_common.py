@@ -32,7 +32,7 @@ def tt2torch_tensor(tt_tensor):
         tt_lib.tensor.DataType.BFLOAT8_B: torch.float,
     }[tt_tensor.dtype()]
 
-    py_output = torch.frombuffer(tt_output.data(), dtype=dtype).reshape(tt_output.shape())
+    py_output = torch.frombuffer(tt_output.data(), dtype=dtype).to(torch.float).reshape(tt_output.shape())
     return py_output
 
 
