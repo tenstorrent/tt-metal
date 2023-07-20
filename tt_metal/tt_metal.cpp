@@ -61,7 +61,6 @@ namespace detail {
 namespace {
 
 detail::CompilationReporter compilation_reporter = detail::CompilationReporter();
-detail::MemoryReporter memory_reporter = detail::MemoryReporter();
 
 void DownloadFirmware(Device *device, CoreCoord phys_core) {
     for (int riscv_id = 0; riscv_id < 5; riscv_id++) {
@@ -122,13 +121,9 @@ bool enable_compilation_reports = false;
 void EnableCompilationReports() { enable_compilation_reports = true; }
 void DisableCompilationReports() { enable_compilation_reports = false; }
 
-bool enable_memory_reports = false;
-void EnableMemoryReports() { enable_memory_reports = true; }
-void DisableMemoryReports() { enable_memory_reports = false; }
-
-void DumpDeviceMemoryState(const Device *device) { memory_reporter.dump_memory_usage_state(device); }
-
-void DumpHostProfileResults(std::string name_prepend) { tt_metal_profiler.dumpHostResults(name_prepend); }
+void DumpHostProfileResults(std::string name_prepend){
+    tt_metal_profiler.dumpHostResults(name_prepend);
+}
 
 void DumpDeviceProfileResults(Device *device, const Program &program) {
     tt_metal_profiler.markStart("DumpDeviceProfileResults");
@@ -845,8 +840,8 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
     if (enable_compilation_reports) {
         compilation_reporter.flush_program_entry(program, enable_compile_cache);
     }
-    if (enable_memory_reports) {
-        memory_reporter.flush_program_memory_usage(program, device);
+    if (detail::MemoryReporter::is_enabled()) {
+        detail::MemoryReporter::Get().flush_program_memory_usage(program, device);
     }
 
     tt_metal_profiler.markStop("CompileProgram");

@@ -23,6 +23,7 @@
 #include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
 #include "tt_dnn/op_library/program_cache.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
+#include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "tensor/owned_buffer.hpp"
 #include "tensor/borrowed_buffer.hpp"
 #include "tensor/tensor_impl.hpp"
@@ -3109,14 +3110,14 @@ void DeviceModule(py::module &m_device) {
         Disables generation of compilation statistics reports in tt-metal
     )doc");
 
-    m_device.def("EnableMemoryReports", &EnableMemoryReports, R"doc(
+    m_device.def("EnableMemoryReports", &detail::EnableMemoryReports, R"doc(
         Enables tt-metal to generate reports of memory allocation statistics
     )doc");
-    m_device.def("DisableMemoryReports", &DisableMemoryReports, R"doc(
+    m_device.def("DisableMemoryReports", &detail::DisableMemoryReports, R"doc(
         Disables generation of memory allocation statistics reports in tt-metal
     )doc");
 
-    m_device.def("DumpDeviceMemoryState", &DumpDeviceMemoryState, R"doc(
+    m_device.def("DumpDeviceMemoryState", &detail::DumpDeviceMemoryState, R"doc(
         Generates reports to dump device memory state. Three reports are generated:
         - `l1_usage_summary.csv` has a table with an entry for each program indicating the minimum largest free L1 block and size of largest L1 buffer that can be interleaved across available free L1 blocks
         - `memory_usage_summary.csv` for each program there is an entry indicating total allocatable, allocated, free, and largest free block sizes for each DRAM and L1 bank
