@@ -16,7 +16,7 @@ namespace sfpu
 
 
 template <bool save_reg, int max_iter = 3>
-sfpi_inline vFloat sfpu_reciprocal(const vFloat in)
+sfpi_inline vFloat sfpu_reciprocal_opt(const vFloat in)
 {
     vInt orig_exp;
 
@@ -70,7 +70,7 @@ inline void calculate_sfpu_reciprocal()
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat in = dst_reg[0];
-        vFloat out = sfpu_reciprocal<false, APPROXIMATION_MODE ? 2 : 3>(in);
+        vFloat out = sfpu_reciprocal_opt<false, APPROXIMATION_MODE ? 2 : 3>(in);
 
         // Reload to reduce register pressure
         v_if (dst_reg[0] < 0.0F) {

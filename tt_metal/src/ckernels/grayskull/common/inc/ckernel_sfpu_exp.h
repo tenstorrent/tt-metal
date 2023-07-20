@@ -17,7 +17,7 @@ namespace sfpu
 
 
 
-sfpi_inline vFloat sfpu_exp(vFloat val)
+sfpi_inline vFloat sfpu_exp_opt(vFloat val)
 {
     // If exponent is > -1 extract it and replace with -1
     vInt exp = exexp(val);
@@ -46,7 +46,7 @@ sfpi_inline vFloat sfpu_exp(vFloat val)
 }
 
 template <bool APPROXIMATION_MODE, bool ZERO_NEGATIVE, bool SCALE_EN=false, int ITERATIONS=4>
-inline void calculate_sfpu_exponential(int16_t exp_base_scale_factor = 0)
+inline void calculate_sfpu_exponential(uint exp_base_scale_factor = 0)
 {
     vFloat c23_73;
     vInt adj_exp;
@@ -92,14 +92,14 @@ inline void calculate_sfpu_exponential(int16_t exp_base_scale_factor = 0)
         else
         {
             // Force sign to 0 (make number positive)
-            val = sfpu_exp(setsgn(val, 0));
+            val = sfpu_exp_opt(setsgn(val, 0));
 
             vFloat orig = dst_reg[0];
 
             // Loaded by reciprocal
             dst_reg[0] = val;
             v_if (orig < 0) {
-                dst_reg[0] = sfpu_reciprocal<false>(val);
+                dst_reg[0] = sfpu_reciprocal_opt<false>(val);
             }
             v_endif;
         }
