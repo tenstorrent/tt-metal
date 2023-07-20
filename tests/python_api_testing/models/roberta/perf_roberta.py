@@ -33,14 +33,15 @@ BATCH_SIZE = 1
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (11,
-         21,
+        (9,
+         19,
         ),
     ),
 )
 def test_perf(use_program_cache, expected_inference_time, expected_compile_time):
     profiler = Profiler()
     disable_compile_cache()
+    comments = "Base Emotion"
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_key"
@@ -104,13 +105,13 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time)
         BATCH_SIZE,
         first_iter_time,
         second_iter_time,
-        "Base Emotion",
+        comments,
         cpu_time,
     )
     compile_time = first_iter_time - second_iter_time
 
-    logger.info(f"roberta Base Emotion inference time: {second_iter_time}")
+    logger.info(f"roberta {comments} inference time: {second_iter_time}")
     logger.info(f"roberta compile time: {compile_time}")
 
-    assert second_iter_time < expected_inference_time, "roberta Base Emotion is too slow"
-    assert compile_time < expected_compile_time, "roberta compile time is too slow"
+    assert second_iter_time < expected_inference_time, f"roberta {comments} is too slow"
+    assert compile_time < expected_compile_time, f"roberta {comments} compile time is too slow"

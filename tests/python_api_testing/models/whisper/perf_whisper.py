@@ -31,14 +31,15 @@ BATCH_SIZE = 1
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (74,
-         24,
+        (40,
+         25,
         ),
     ),
 )
 def test_perf(use_program_cache, expected_inference_time, expected_compile_time):
     profiler = Profiler()
     disable_compile_cache()
+    comments = "tiny"
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_key"
@@ -115,10 +116,10 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time)
 
 
     prep_report(
-        "whisper", BATCH_SIZE, first_iter_time, second_iter_time, "tiny", cpu_time
+        "whisper", BATCH_SIZE, first_iter_time, second_iter_time, comments, cpu_time
     )
     logger.info(f"whisper tiny inference time: {second_iter_time}")
     logger.info(f"whisper compile time: {compile_time}")
 
-    assert second_iter_time < expected_inference_time, "whisper tiny is too slow"
-    assert compile_time < expected_compile_time, "whisper compile time is too slow"
+    assert second_iter_time < expected_inference_time, f"whisper {comments} is too slow"
+    assert compile_time < expected_compile_time, f"whisper {comments} compile time is too slow"

@@ -32,7 +32,7 @@ BATCH_SIZE = 1
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (18,
+        (13,
          13,
         ),
     ),
@@ -44,6 +44,7 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time)
     cpu_key = "ref_key"
     model_name = "bigscience/bloom-560m"
     tokenizer_name = "bigscience/bloom-560m"
+    comments = "560M"
 
     # Initialize the device
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
@@ -98,9 +99,9 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time)
     cpu_time = profiler.get(cpu_key)
     compile_time = first_iter_time - second_iter_time
 
-    prep_report("bloom", BATCH_SIZE, first_iter_time, second_iter_time, "560M", cpu_time)
-    logger.info(f"bloom 560M inference time: {second_iter_time}")
-    logger.info(f"bloom 560M compile time: {compile_time}")
+    prep_report("bloom", BATCH_SIZE, first_iter_time, second_iter_time, comments, cpu_time)
+    logger.info(f"bloom {comments} inference time: {second_iter_time}")
+    logger.info(f"bloom {comments} compile time: {compile_time}")
 
-    assert second_iter_time < expected_inference_time, "bloom 560M is too slow"
-    assert compile_time < expected_compile_time, "bloom 560M compile time is too slow"
+    assert second_iter_time < expected_inference_time, f"bloom {comments} is too slow"
+    assert compile_time < expected_compile_time, f"bloom {comments} compile time is too slow"

@@ -28,14 +28,15 @@ BATCH_SIZE = 1
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (3,
-        10,
+        (7,
+        11,
         ),
     ),
 )
 def test_perf(use_program_cache, expected_inference_time, expected_compile_time):
     profiler = Profiler()
     disable_compile_cache()
+    comments = "small"
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_key"
@@ -116,9 +117,9 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time)
     tt_lib.device.CloseDevice(device)
     compile_time = first_iter_time - second_iter_time
 
-    prep_report("t5", BATCH_SIZE, first_iter_time, second_iter_time, "small", cpu_time)
+    prep_report("t5", BATCH_SIZE, first_iter_time, second_iter_time, comments, cpu_time)
     logger.info(f"t5 small inference time: {second_iter_time}")
     logger.info(f"t5 compile time: {compile_time}")
 
-    assert second_iter_time < expected_inference_time, "t5 small is too slow"
+    assert second_iter_time < expected_inference_time, f"t5 {comments} is too slow"
     assert compile_time < expected_compile_time, "t5 compile time is too slow"

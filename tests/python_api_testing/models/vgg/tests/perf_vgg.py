@@ -26,7 +26,7 @@ BATCH_SIZE = 1
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (14,
+        (11,
          14,
         ),
     ),
@@ -37,6 +37,7 @@ def test_perf(use_program_cache, imagenet_sample_input, expected_inference_time,
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_key"
+    comments = "16"
 
     image = imagenet_sample_input
 
@@ -82,9 +83,9 @@ def test_perf(use_program_cache, imagenet_sample_input, expected_inference_time,
     cpu_time = profiler.get(cpu_key)
     compile_time = first_iter_time - second_iter_time
 
-    prep_report("vgg", BATCH_SIZE, first_iter_time, second_iter_time, "vgg16", cpu_time)
+    prep_report("vgg", BATCH_SIZE, first_iter_time, second_iter_time, comments, cpu_time)
     logger.info(f"vgg inference time: {second_iter_time}")
     logger.info(f"vgg compile time: {compile_time}")
 
-    assert second_iter_time < expected_inference_time, "vgg is too slow"
-    assert compile_time < expected_compile_time, "vgg compile time is too slow"
+    assert second_iter_time < expected_inference_time, f"vgg {comments} is too slow"
+    assert compile_time < expected_compile_time, f"vgg {comments} compile time is too slow"
