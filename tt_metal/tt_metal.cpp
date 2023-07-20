@@ -620,39 +620,8 @@ bool GenerateBinaries(
     return true;
 }
 
-void CompileBlankKernel(Device *device, bool profile_kernel) {
-    // Crude way to check if blank_op needs to be compiled or not
-    // TODO(pgk):
-    //  - fw is compiled every run
-    //  - for unknown reasons, fw size can vary run to run
-    //  - kernels from one run linked against fw from another run may clash
-    //  - rebuid blank kernels once per run
-    static bool compiled = false;
-    if (compiled) {
-        return;
-    }
-
-    build_kernel_for_riscv_options_t blank_build_options(device->pcie_slot(), "blank_op");
-    struct hlk_args_t {
-        std::int32_t dummy;
-    };
-    void *hlk_args = new hlk_args_t{
-        .dummy = 0,
-    };
-    blank_build_options.set_hlk_args_all_cores(hlk_args, sizeof(hlk_args_t));
-    blank_build_options.set_hlk_file_name_all_cores("tt_metal/kernels/compute/blank.cpp");
-    blank_build_options.ncrisc_kernel_file_name = "tt_metal/kernels/dataflow/blank.cpp";
-    blank_build_options.brisc_kernel_file_name = "tt_metal/kernels/dataflow/blank.cpp";
-    std::string arch_name = tt::get_string_lowercase(device->arch());
-
-    generate_binaries_params_t default_params;
-    detail::GenerateBankToNocCoordHeaders(device, &blank_build_options, blank_build_options.name);
-    generate_binaries_all_riscs(&blank_build_options, blank_build_options.name, arch_name, default_params, profile_kernel);
-
-    compiled = true;
-}
-
-void SetCircularBufferDataFormat(Device *device, const Program &program, Kernel *kernel, build_kernel_for_riscv_options_t &build_options) {
+void SetCircularBufferDataFormat(
+    Device *device, const Program &program, Kernel *kernel, build_kernel_for_riscv_options_t &build_options) {
     for (auto logical_core : kernel->logical_cores()) {
         auto cbs_on_core = program.circular_buffers_on_core(logical_core);
         for (auto circular_buffer : cbs_on_core) {
@@ -773,6 +742,7 @@ void AddBlankKernels(Device *device, Program &program, bool profile_kernel) {
     std::set<CoreRange> unique_core_ranges_without_brisc_kernel,
                         unique_core_ranges_without_ncrisc_kernel,
                         unique_core_ranges_without_compute_kernel ;
+    vector<Kernel *> blanks;
     for (auto &[logical_core, kernel_group] : program.core_to_kernel_group()) {
         CoreRange core_range = {.start = logical_core, .end = logical_core};
         if (kernel_group.riscv_0 == nullptr)
@@ -787,24 +757,34 @@ void AddBlankKernels(Device *device, Program &program, bool profile_kernel) {
         CoreRangeSet core_range_set = CoreRangeSet(unique_core_ranges_without_brisc_kernel);
         auto blank_kernel = CreateDataMovementKernel(
             program, "tt_metal/kernels/dataflow/blank.cpp", core_range_set, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
-        CompileKernel(device, program, blank_kernel, profile_kernel);
-        blank_kernel->read_binaries(device->pcie_slot());
+        blanks.push_back(blank_kernel);
     }
 
     if (not unique_core_ranges_without_ncrisc_kernel.empty()) {
         CoreRangeSet core_range_set = CoreRangeSet(unique_core_ranges_without_ncrisc_kernel);
         auto blank_kernel = CreateDataMovementKernel(
             program, "tt_metal/kernels/dataflow/blank.cpp", core_range_set, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
-        CompileKernel(device, program, blank_kernel, profile_kernel);
-        blank_kernel->read_binaries(device->pcie_slot());
+
+        blanks.push_back(blank_kernel);
     }
     if (not unique_core_ranges_without_compute_kernel.empty()) {
         CoreRangeSet core_range_set = CoreRangeSet(unique_core_ranges_without_compute_kernel);
         auto blank_kernel = CreateComputeKernel(
             program, "tt_metal/kernels/compute/blank.cpp", core_range_set, {0}, MathFidelity::HiFi4, false, false);
+
+        blanks.push_back(blank_kernel);
+    }
+
+    const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
+    if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
+        for (const auto &blank_kernel : blanks) {
+            blank_kernel->add_define("TT_METAL_DEVICE_DISPATCH_MODE", 1);
+        }
+    }
+
+    for (const auto &blank_kernel : blanks) {
         CompileKernel(device, program, blank_kernel, profile_kernel);
         blank_kernel->read_binaries(device->pcie_slot());
-
     }
 
 }
@@ -815,41 +795,6 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
         "Device needs to be initialized before program {} compilation! Generating headers for banking information is dependent on information that is set during device initialization.", program.get_id()
     );
 
-    // Currently we want to support both slow and fast dispatch until we
-    // fully move over to fast, so using this env var method to set all
-    // the kernels to using fast dispatch mode.
-    const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
-
-    if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
-        // Ensure that none of the kernels have core ranges that include the
-        // dispatch cores/storage cores
-
-        for (auto kernel : program.kernels()) {
-            const auto &core_range_set = kernel->core_range_set();
-
-            /*
-            Need way to cleanly ensure that no kernels/cbs/sem configs allocated on a
-            dispatch core
-
-            int chip_id = 0;  // TODO(agrebenisan): No hard-coding
-            auto &soc_desc = device->cluster()->get_soc_desc(chip_id);
-
-            // Need way to automatically get these. Hardcoding for now.
-            CoreCoord dispatch1 = {0, 9};
-            CoreCoord dispatch2 = {6, 9};
-
-            log_assert(
-                not(core_range_set.core_coord_in_core_ranges(dispatch1) or
-                    core_range_set.core_coord_in_core_ranges(dispatch2)),
-                "Cannot target a dispatch core as part of worker core core_range_set");
-            */
-
-            // This triggers the firmware to do logic only needed for fast
-            // dispatch
-            kernel->add_define("TT_METAL_DEVICE_DISPATCH_MODE", 1);
-        }
-    }
-
     bool pass = true;
     tt_metal_profiler.markStart("CompileProgram");
     std::vector< std::future<void> > events;
@@ -859,18 +804,28 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
     {
         tf::Taskflow tf;
 
-        // This can be removed when we load BRISC FW separately from kernel
-        tf.emplace ( [device, profile_kernel] { CompileBlankKernel(device, profile_kernel); } );
+        tf.emplace([device, &program, profile_kernel] { AddBlankKernels(device, program, profile_kernel); });
 
+        // Currently we want to support both slow and fast dispatch until we
+        // fully move over to fast, so using this env var method to set all
+        // the kernels to using fast dispatch mode. Need to be done after adding
+        // blanks to ensure that they get the define, too.
+        const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
 
-        for (auto kernel : program.kernels()) {
-            tf.emplace ( [kernel, device, &program, profile_kernel] { CompileKernel(device, program, kernel, profile_kernel);
-                                                                                } );
-
+        if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
+            for (auto kernel : program.kernels()) {
+                tf.emplace([kernel, device, &program, profile_kernel] {
+                    kernel->add_define("TT_METAL_DEVICE_DISPATCH_MODE", 1);
+                    CompileKernel(device, program, kernel, profile_kernel);
+                });
+            }
+        } else {
+            for (auto kernel : program.kernels()) {
+                tf.emplace([kernel, device, &program, profile_kernel] {
+                    CompileKernel(device, program, kernel, profile_kernel);
+                });
+            }
         }
-        tf.emplace ( [device, &program, profile_kernel ] {
-                                       AddBlankKernels(device, program, profile_kernel);   }
-        );
 
         GetExecutor().run(tf).wait();
     }
