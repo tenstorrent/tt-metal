@@ -16,7 +16,7 @@ from models.utility_functions import (
 from models.llama.tt.llama import llama_first_half, llama_second_half
 
 from tests.python_api_testing.models.utility_functions_new import (
-    profiler,
+    Profiler,
     enable_compile_cache,
     disable_compile_cache,
     prep_report,
@@ -73,6 +73,7 @@ def run_llama_split_inference(
 
 
 def call_tt_llama_forward_func(
+    profiler,
     configuration,
     state_dict,
     base_url,
@@ -99,7 +100,7 @@ def call_tt_llama_forward_func(
     attention_mask_padded = attention_mask
     position_ids_padded = gen_position_ids(input_ids_padded)
 
-    # The first half performance measure ----------------------------------------
+    # The first half performance measure ========================================
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
@@ -153,7 +154,7 @@ def call_tt_llama_forward_func(
     tt_lib.device.CloseDevice(device)
     logger.debug(f"The first call ended")
 
-    # The second half performance measure ------------------------------------
+    # The second half performance measure ======================================
     # Disable compile cache
     disable_compile_cache()
 
@@ -254,7 +255,8 @@ prompt = "I believe the meaning of life is to"
     "prompt",
     ((prompt),),
 )
-def test_llama_pcc(prompt):
+def test_perf(prompt, use_program_cache):
+    profiler = Profiler()
     cpu_key = "ref_key"
     comments = "llama model with two loads (halfs)"
 
@@ -317,6 +319,7 @@ def test_llama_pcc(prompt):
             second_half_first_iter_time,
             second_half_second_iter_time,
         ) = call_tt_llama_forward_func(
+            profiler,
             configuration,
             state_dict,
             base_url,
@@ -334,10 +337,19 @@ def test_llama_pcc(prompt):
     cpu_time = profiler.get(cpu_key)
 
     prep_report(
-        "lamma",
+        "lammaFirstHalf",
         BATCH_SIZE,
-        first_half_first_iter_time + second_half_first_iter_time,
-        first_half_second_iter_time + second_half_second_iter_time,
+        first_half_first_iter_time,
+        first_half_second_iter_time,
+        comments,
+        cpu_time,
+    )
+
+    prep_report(
+        "lammaSecondHalf",
+        BATCH_SIZE,
+        second_half_first_iter_time,
+        second_half_second_iter_time,
         comments,
         cpu_time,
     )
