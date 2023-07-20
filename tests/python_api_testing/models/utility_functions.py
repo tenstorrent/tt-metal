@@ -324,7 +324,13 @@ def unpad_from_zero(x, desired_shape, host):
                 desired_shape[3] - 1,
             ),
         )
-        x = torch.Tensor(x.data()).reshape(x.shape())
+        dtype = {
+            ttl.tensor.DataType.FLOAT32:   torch.float,
+            ttl.tensor.DataType.BFLOAT16:  torch.bfloat16,
+            ttl.tensor.DataType.BFLOAT8_B: torch.float,
+        }[x.dtype()]
+
+        x = torch.frombuffer(x.data(), dtype=dtype).reshape(x.shape())
     return x
 
 

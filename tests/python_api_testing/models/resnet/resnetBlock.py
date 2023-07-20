@@ -5,12 +5,30 @@ import torch
 import torch.nn as nn
 
 from utils import conv3x3, conv1x1, fold_bn_to_conv
-from utility_functions_new import pad_by_zero, unpad_from_zero
+from utility_functions_new import pad_by_zero, tt2torch_tensor
 from tt_lib.utils import pad_weight
 
 from tt_lib.fused_ops.linear import Linear as TtLinear
 from tt_lib.fused_ops.softmax import softmax as TtSoftmax
 from conv_on_device_utils_new import is_conv_supported_on_device, run_conv_on_device_wrapper
+
+# Local copy of unpad_from_zero to always set output to
+def unpad_from_zero(x, desired_shape, host):
+    if x.shape()[-1] == desired_shape[-1] and x.shape()[-2] == desired_shape[-2] :
+        x = tt2torch_tensor(x)
+    else:
+        x = x.to(host)
+        if(x.layout() != tt_lib.tensor.Layout.ROW_MAJOR):
+            x = x.to(tt_lib.tensor.Layout.ROW_MAJOR)
+        x = x.unpad((0, 0, 0, 0), (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1) )
+        dtype = {
+            tt_lib.tensor.DataType.FLOAT32:   torch.float,
+            tt_lib.tensor.DataType.BFLOAT16:  torch.bfloat16,
+            tt_lib.tensor.DataType.BFLOAT8_B: torch.float,
+        }[x.dtype()]
+
+        x = torch.frombuffer(x.data(), dtype=dtype).to(torch.float).reshape(x.shape())
+    return x
 
 
 class Bottleneck(nn.Module):

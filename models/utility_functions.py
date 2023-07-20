@@ -119,7 +119,13 @@ def unpad_from_zero(x, desired_shape, host):
         if(x.layout() != tt_lib.tensor.Layout.ROW_MAJOR):
             x = x.to(tt_lib.tensor.Layout.ROW_MAJOR)
         x = x.unpad((0, 0, 0, 0), (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1) )
-        x = torch.Tensor(x.data()).reshape(x.shape())
+        dtype = {
+            tt_lib.tensor.DataType.FLOAT32:   torch.float,
+            tt_lib.tensor.DataType.BFLOAT16:  torch.bfloat16,
+            tt_lib.tensor.DataType.BFLOAT8_B: torch.float,
+        }[x.dtype()]
+
+        x = torch.frombuffer(x.data(), dtype=dtype).reshape(x.shape())
     return x
 
 
