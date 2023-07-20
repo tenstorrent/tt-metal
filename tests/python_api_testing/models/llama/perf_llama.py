@@ -28,33 +28,26 @@ BATCH_SIZE = 1
 
 
 @pytest.mark.parametrize(
-    "model_version, tokenizer_version, batch, seq_len, num_decoders, max_position_embeddings, on_weka, expected_inference_time, expected_compile_time",
+    "expected_inference_time, expected_compile_time",
     (
         (
-            "decapoda-research/llama-7b-hf",
-            "hf-internal-testing/llama-tokenizer",
-            1,
-            64,
-            2,
-            2048,
-            False,
-            6,
-            17
+            5,
+            15
         ),
     ),
 )
 def test_perf(
-    model_version,
-    tokenizer_version,
-    batch,
-    seq_len,
-    num_decoders,
-    max_position_embeddings,
-    on_weka,
+    use_program_cache,
     expected_inference_time,
     expected_compile_time,
-    use_program_cache,
-):
+            ):
+    model_version = "decapoda-research/llama-7b-hf"
+    tokenizer_version = "hf-internal-testing/llama-tokenizer"
+    batch = 1
+    seq_len = 64
+    num_decoders = 2
+    max_position_embeddings = 2048
+    on_weka = False
     profiler = Profiler()
     disable_compile_cache()
     first_key = "first_iter"

@@ -52,7 +52,7 @@ model_location_generator = model_location_generator_
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (22,
+        (0.14,
             12,
         ),
     ),
