@@ -16,7 +16,7 @@ namespace tt {
 namespace tt_metal {
 
 Tensor AutoFormat::move_tensor_to_device(const Tensor &input, Device * device, const std::optional<MemoryConfig>& mem_config) {
-    if (input.storage_type() == StorageType::HOST) {
+    if (input.storage_type() == StorageType::OWNED) {
         return data_transfer_to_device(input, device, mem_config.has_value() ? mem_config.value() : default_mem_config);
     } else {
         return input;
@@ -163,7 +163,7 @@ Tensor AutoFormat::format_output_tensor(const Tensor &output, const std::array<u
 
     // Send formatted_output to device if possible
     // Check that shape is supported on device
-    if (formatted_output.storage_type() == StorageType::HOST) {
+    if (formatted_output.storage_type() == StorageType::OWNED) {
         if ((formatted_output.layout() == Layout::ROW_MAJOR && formatted_output.shape()[3] % 2 == 0) ||
             (formatted_output.layout() == Layout::CHANNELS_LAST && formatted_output.shape()[1] % 2 == 0) ||
             (formatted_output.layout() == Layout::TILE)) {

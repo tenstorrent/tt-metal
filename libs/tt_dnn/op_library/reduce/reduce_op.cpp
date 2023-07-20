@@ -136,7 +136,7 @@ Tensor reduce(const Tensor &input_tensor, ReduceOpMath::Enum reduce_math, Reduce
         Device * device;
 
         // Get the device
-        if (input_tensor.storage_type() == StorageType::HOST) {
+        if (input_tensor.storage_type() == StorageType::OWNED) {
             device = AutoFormat::GetDefaultDevice();
             TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
         } else {
@@ -168,7 +168,7 @@ Tensor sum(const Tensor &input_tensor, uint dim) {
     Device * device;
 
     // Get the device
-    if (input_tensor.storage_type() == StorageType::HOST) {
+    if (input_tensor.storage_type() == StorageType::OWNED) {
         device = AutoFormat::GetDefaultDevice();
         TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
     } else {

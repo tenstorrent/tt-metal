@@ -30,7 +30,7 @@ tt::stl::reflection::Attributes MemoryConfig::attributes() const {
 }
 
 
-tt::stl::reflection::Attributes HostStorage::attributes() const {
+tt::stl::reflection::Attributes OwnedStorage::attributes() const {
     return {};
 }
 
@@ -42,7 +42,7 @@ tt::stl::reflection::Attributes DeviceStorage::attributes() const {
 }
 
 
-tt::stl::reflection::Attributes ExternalStorage::attributes() const {
+tt::stl::reflection::Attributes BorrowedStorage::attributes() const {
     return {};
 }
 

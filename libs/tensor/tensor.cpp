@@ -27,7 +27,7 @@ std::vector<uint32_t> convert_array_to_vector(const Shape& shape) {
 
 }
 
-Tensor::Tensor(const HostStorage& storage, const Shape& shape, DataType dtype, Layout layout)
+Tensor::Tensor(const OwnedStorage& storage, const Shape& shape, DataType dtype, Layout layout)
     : storage_(storage), shape_(detail::convert_array_to_vector(shape)), dtype_(dtype), layout_(layout) {}
 
 Tensor::Tensor(const DeviceStorage& storage, const Shape& shape, DataType dtype, Layout layout)
@@ -36,7 +36,7 @@ Tensor::Tensor(const DeviceStorage& storage, const Shape& shape, DataType dtype,
     tensor_impl::validate_on_device_dtype_and_layout(storage.device, dtype, layout);
 }
 
-Tensor::Tensor(const ExternalStorage& storage, const std::vector<uint32_t>& shape, DataType dtype, Layout layout)
+Tensor::Tensor(const BorrowedStorage& storage, const std::vector<uint32_t>& shape, DataType dtype, Layout layout)
     : storage_(storage), shape_(shape), dtype_(dtype), layout_(layout) {}
 
 Tensor::~Tensor() {
@@ -48,7 +48,7 @@ void Tensor::deallocate() {
         [](auto&& storage)
         {
             using T = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<T, HostStorage>) {
+            if constexpr (std::is_same_v<T, OwnedStorage>) {
                 std::visit([](auto&& buffer) { buffer.reset(); }, storage.buffer);
             }
             else if constexpr (std::is_same_v<T, DeviceStorage>) {
@@ -57,7 +57,7 @@ void Tensor::deallocate() {
                 }
                 storage.buffer.reset();
             }
-            else if constexpr (std::is_same_v<T, ExternalStorage>) {
+            else if constexpr (std::is_same_v<T, BorrowedStorage>) {
                 // do nothing
             }
             else {
@@ -78,14 +78,14 @@ Tensor Tensor::to(Device *target_device, const MemoryConfig &mem_config) const {
 }
 
 Tensor Tensor::to(Host *host) const {
-    if (storage_type() == StorageType::HOST) {
+    if (storage_type() == StorageType::OWNED) {
         return *this;
     }
     return tensor_impl::to_host_wrapper(*this);
 }
 
 Tensor Tensor::to(Layout target_layout) const {
-    TT_ASSERT(this->storage_type() == StorageType::HOST && "Bring tensor to host before converting to target layout");
+    TT_ASSERT(this->storage_type() != StorageType::DEVICE && "Bring tensor to host before converting to target layout");
     return tensor_impl::to_layout_wrapper(*this, target_layout);
 }
 
@@ -94,13 +94,13 @@ void Tensor::print(Layout print_layout, bool pretty_print) const {
 }
 
 Tensor Tensor::pad(const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) const {
-    TT_ASSERT(this->storage_type() == StorageType::HOST && "Tensor must be on host for padding");
+    TT_ASSERT(this->storage_type() == StorageType::OWNED && "Tensor must be on host for padding");
     TT_ASSERT(this->layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for padding");
     return tensor_impl::pad_wrapper(*this, output_tensor_shape, input_tensor_start, pad_value);
 }
 
 Tensor Tensor::unpad(const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) const {
-    TT_ASSERT(this->storage_type() == StorageType::HOST && "Tensor must be on host for unpadding");
+    TT_ASSERT(this->storage_type() == StorageType::OWNED && "Tensor must be on host for unpadding");
     TT_ASSERT(this->layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for unpadding");
     return tensor_impl::unpad_wrapper(*this, output_tensor_start, output_tensor_end);
 }
@@ -152,13 +152,13 @@ bool Tensor::is_allocated() const {
         [](auto&& storage) -> bool
         {
             using T = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<T, HostStorage>) {
+            if constexpr (std::is_same_v<T, OwnedStorage>) {
                 return std::visit([](auto&& buffer) -> bool { return buffer.is_allocated(); }, storage.buffer);
             }
             else if constexpr (std::is_same_v<T, DeviceStorage>) {
                 return bool(storage.buffer);
             }
-            else if constexpr (std::is_same_v<T, ExternalStorage>) {
+            else if constexpr (std::is_same_v<T, BorrowedStorage>) {
                 return true;
             }
             else {
@@ -175,14 +175,14 @@ StorageType Tensor::storage_type() const {
         [] (auto&& storage) -> StorageType
         {
             using T = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<T, HostStorage>) {
-                return StorageType::HOST;
+            if constexpr (std::is_same_v<T, OwnedStorage>) {
+                return StorageType::OWNED;
             }
             else if constexpr (std::is_same_v<T, DeviceStorage>) {
                 return StorageType::DEVICE;
             }
-            else if constexpr (std::is_same_v<T, ExternalStorage>) {
-                return StorageType::EXTERNAL;
+            else if constexpr (std::is_same_v<T, BorrowedStorage>) {
+                return StorageType::BORROWED;
             }
             else {
                 raise_unsupported_storage<T>();
@@ -196,9 +196,9 @@ const Storage& Tensor::storage() const {
     return this->storage_;
 }
 
-const std::optional<HostStorage> Tensor::host_storage() const {
-    if (std::holds_alternative<HostStorage>(this->storage_)) {
-        return std::get<HostStorage>(this->storage_);
+const std::optional<OwnedStorage> Tensor::owned_storage() const {
+    if (std::holds_alternative<OwnedStorage>(this->storage_)) {
+        return std::get<OwnedStorage>(this->storage_);
     }
     return std::nullopt;
 }

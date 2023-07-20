@@ -1,7 +1,7 @@
 #pragma once
 
 #include "tensor/tensor.hpp"
-#include "tensor/host_buffer.hpp"
+#include "tensor/owned_buffer.hpp"
 
 #include <vector>
 
@@ -9,7 +9,7 @@ namespace tt {
 
 namespace tt_metal {
 
-namespace host_buffer {
+namespace owned_buffer {
 
 template<typename T>
 Buffer<T> create(std::vector<T>&& storage) {
@@ -33,30 +33,30 @@ void validate_datatype(const Tensor& tensor) {
 }
 
 template<typename T>
-Buffer<T> get_as(HostBuffer& buffer) {
+Buffer<T> get_as(OwnedBuffer& buffer) {
     return std::get<Buffer<T>>(buffer);
 }
 
 template<typename T>
-const Buffer<T> get_as(const HostBuffer& buffer) {
+const Buffer<T> get_as(const OwnedBuffer& buffer) {
     return std::get<Buffer<T>>(buffer);
 }
 
 template<typename T>
 Buffer<T> get_as(Tensor& tensor) {
     validate_datatype<T>(tensor);
-    auto& buffer = tensor.host_storage().value().buffer;
+    auto& buffer = tensor.owned_storage().value().buffer;
     return get_as<T>(buffer);
 }
 
 template<typename T>
 const Buffer<T> get_as(const Tensor& tensor) {
     validate_datatype<T>(tensor);
-    const auto& buffer = tensor.host_storage().value().buffer;
+    const auto& buffer = tensor.owned_storage().value().buffer;
     return get_as<T>(buffer);
 }
 
-}  // namespace host_buffer
+}  // namespace owned_buffer
 
 }  // namespace tt_metal
 

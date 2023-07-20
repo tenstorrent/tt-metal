@@ -219,7 +219,7 @@ std::vector<Tensor> run_without_autoformat(
     std::vector<Tensor> input_tensors_on_dev;
     input_tensors_on_dev.reserve(input_tensors.size());
     for (auto& input_tensor : input_tensors) {
-        if (input_tensor.storage_type() == StorageType::HOST) {
+        if (input_tensor.storage_type() == StorageType::OWNED) {
             input_tensors_on_dev.push_back(AutoFormat::move_tensor_to_device(input_tensor, device));
         } else {
             input_tensors_on_dev.push_back(input_tensor);
@@ -228,7 +228,7 @@ std::vector<Tensor> run_without_autoformat(
     std::vector<std::optional<const Tensor>> optional_input_tensors_on_dev;
     optional_input_tensors_on_dev.reserve(optional_input_tensors.size());
     for (auto& optional_input_tensor : optional_input_tensors) {
-        if (optional_input_tensor.has_value() and optional_input_tensor.value().storage_type() == StorageType::HOST) {
+        if (optional_input_tensor.has_value() and optional_input_tensor.value().storage_type() == StorageType::OWNED) {
             optional_input_tensors_on_dev.push_back(AutoFormat::move_tensor_to_device(optional_input_tensor.value(), device));
         } else {
             optional_input_tensors_on_dev.push_back(optional_input_tensor);

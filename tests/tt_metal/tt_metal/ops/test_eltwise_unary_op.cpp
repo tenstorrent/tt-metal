@@ -2,8 +2,8 @@
 
 #include "constants.hpp"
 #include "tensor/tensor.hpp"
-#include "tensor/host_buffer.hpp"
-#include "tensor/host_buffer_functions.hpp"
+#include "tensor/owned_buffer.hpp"
+#include "tensor/owned_buffer_functions.hpp"
 #include "tt_metal/host_api.hpp"
 
 #include "tt_numpy/functions.hpp"
@@ -39,16 +39,16 @@ Tensor gelu_slow(const Tensor& t) {
 
 template <auto UnaryFunction>
 Tensor host_function(const Tensor& input_tensor) {
-    auto input_buffer = host_buffer::get_as<bfloat16>(input_tensor);
+    auto input_buffer = owned_buffer::get_as<bfloat16>(input_tensor);
 
-    auto output_buffer = host_buffer::create<bfloat16>(input_tensor.volume());
+    auto output_buffer = owned_buffer::create<bfloat16>(input_tensor.volume());
 
     for (auto index = 0; index < output_buffer.size(); index++) {
         auto value = UnaryFunction(input_buffer[index].to_float());
         output_buffer[index] = bfloat16(value);
     }
 
-    return Tensor(HostStorage{output_buffer}, input_tensor.shape(), input_tensor.dtype(), input_tensor.layout());
+    return Tensor(OwnedStorage{output_buffer}, input_tensor.shape(), input_tensor.dtype(), input_tensor.layout());
 }
 
 template <auto Operation>
@@ -77,7 +77,7 @@ void test_operation_infrastructure() {
 
     auto program_hash = op.compute_program_hash({input_tensor});
     TT_ASSERT(
-        program_hash == "tt::tt_metal::EltwiseUnary(op_type=tt::tt_metal::UnaryOpType::Enum::SQRT, param=std::nullopt)_tt::tt_metal::Tensor(storage=tt::tt_metal::HostStorage(), shape={1, 1, 32, 32}, dtype=tt::tt_metal::DataType::BFLOAT16, layout=tt::tt_metal::Layout::TILE)",
+        program_hash == "tt::tt_metal::EltwiseUnary(op_type=tt::tt_metal::UnaryOpType::Enum::SQRT, param=std::nullopt)_tt::tt_metal::Tensor(storage=tt::tt_metal::OwnedStorage(), shape={1, 1, 32, 32}, dtype=tt::tt_metal::DataType::BFLOAT16, layout=tt::tt_metal::Layout::TILE)",
         fmt::format("Actual value is {}", program_hash)
     );
 

@@ -26,9 +26,9 @@ class Tensor {
         // ======================================================================================
         //                                  Hi Level APIs
         // ======================================================================================
-        Tensor(const HostStorage& storage, const Shape& shape, DataType dtype, Layout layout);
+        Tensor(const OwnedStorage& storage, const Shape& shape, DataType dtype, Layout layout);
         Tensor(const DeviceStorage& storage, const Shape& shape, DataType dtype, Layout layout);
-        Tensor(const ExternalStorage& storage, const std::vector<uint32_t>& shape, DataType dtype, Layout layout);
+        Tensor(const BorrowedStorage& storage, const std::vector<uint32_t>& shape, DataType dtype, Layout layout);
 
         Tensor(const Tensor &other) = default;
         Tensor& operator=(const Tensor &other) = default;
@@ -88,7 +88,7 @@ class Tensor {
         StorageType storage_type() const;
 
         const Storage& storage() const;
-        const std::optional<HostStorage> host_storage() const;
+        const std::optional<OwnedStorage> owned_storage() const;
         const std::optional<DeviceStorage> device_storage() const;
 
         Buffer* buffer() const { return this->device_storage().value().buffer.get(); }

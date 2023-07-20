@@ -1,7 +1,7 @@
 #pragma once
 
-#include "tensor/external_buffer.hpp"
-#include "tensor/host_buffer.hpp"
+#include "tensor/borrowed_buffer.hpp"
+#include "tensor/owned_buffer.hpp"
 
 #include "common/bfloat16.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
@@ -31,9 +31,9 @@ enum class DataType {
 };
 
 enum class StorageType {
-    HOST,
+    OWNED,
     DEVICE,
-    EXTERNAL,  // for storing torch/numpy/etc tensors
+    BORROWED,  // for storing torch/numpy/etc tensors
 };
 
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
@@ -46,13 +46,13 @@ struct MemoryConfig {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-using HostBuffer = std::variant<
-    host_buffer::Buffer<uint32_t>,
-    host_buffer::Buffer<float>,
-    host_buffer::Buffer<bfloat16>
+using OwnedBuffer = std::variant<
+    owned_buffer::Buffer<uint32_t>,
+    owned_buffer::Buffer<float>,
+    owned_buffer::Buffer<bfloat16>
 >;
-struct HostStorage {
-    HostBuffer buffer;
+struct OwnedStorage {
+    OwnedBuffer buffer;
     tt::stl::reflection::Attributes attributes() const;
 };
 
@@ -64,20 +64,20 @@ struct DeviceStorage {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-using ExternalBuffer = std::variant<
-    external_buffer::Buffer<uint32_t>,
-    external_buffer::Buffer<float>,
-    external_buffer::Buffer<bfloat16>
+using BorrowedBuffer = std::variant<
+    borrowed_buffer::Buffer<uint32_t>,
+    borrowed_buffer::Buffer<float>,
+    borrowed_buffer::Buffer<bfloat16>
 >;
-struct ExternalStorage {
-    ExternalBuffer buffer;
+struct BorrowedStorage {
+    BorrowedBuffer buffer;
     tt::stl::reflection::Attributes attributes() const;
 };
 
 using Storage = std::variant<
-    HostStorage,
+    OwnedStorage,
     DeviceStorage,
-    ExternalStorage
+    BorrowedStorage
 >;
 
 namespace detail {

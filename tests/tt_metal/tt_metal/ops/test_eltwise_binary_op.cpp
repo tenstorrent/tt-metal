@@ -1,6 +1,6 @@
 #include "constants.hpp"
-#include "tensor/host_buffer.hpp"
-#include "tensor/host_buffer_functions.hpp"
+#include "tensor/owned_buffer.hpp"
+#include "tensor/owned_buffer_functions.hpp"
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
 #include "tt_dnn/op_library/program_cache.hpp"
@@ -14,16 +14,16 @@ using tt::tt_metal::Tensor;
 
 template <typename BinaryFunction>
 Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
-    auto input_a_buffer = host_buffer::get_as<bfloat16>(input_tensor_a);
-    auto input_b_buffer = host_buffer::get_as<bfloat16>(input_tensor_b);
+    auto input_a_buffer = owned_buffer::get_as<bfloat16>(input_tensor_a);
+    auto input_b_buffer = owned_buffer::get_as<bfloat16>(input_tensor_b);
 
-    auto output_buffer = host_buffer::create<bfloat16>(input_tensor_a.volume());
+    auto output_buffer = owned_buffer::create<bfloat16>(input_tensor_a.volume());
 
     for (auto index = 0; index < output_buffer.size(); index++) {
         auto value = BinaryFunction{}(input_a_buffer[index].to_float(), input_b_buffer[index].to_float());
         output_buffer[index] = bfloat16(value);
     }
-    return Tensor(HostStorage{output_buffer}, input_tensor_a.shape(), input_tensor_a.dtype(), input_tensor_a.layout());
+    return Tensor(OwnedStorage{output_buffer}, input_tensor_a.shape(), input_tensor_a.dtype(), input_tensor_a.layout());
 }
 
 template <auto HostFunction, typename DeviceFunction, typename... Args>

@@ -1,6 +1,6 @@
 #include "tensor/tensor_utils.hpp"
-#include "tensor/host_buffer.hpp"
-#include "tensor/host_buffer_functions.hpp"
+#include "tensor/owned_buffer.hpp"
+#include "tensor/owned_buffer_functions.hpp"
 
 namespace tt {
 
@@ -9,7 +9,7 @@ namespace tt_metal {
     template <typename T>
     Tensor to_weight_tile_layout(const Tensor& conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w) {
         auto w_shape = conv_weight_tensor.shape();
-        auto input_buffer = host_buffer::get_as<T>(conv_weight_tensor);
+        auto input_buffer = owned_buffer::get_as<T>(conv_weight_tensor);
         auto weight_matrix_cols = w_shape[0];
         // width padding
         uint32_t in1_block_w_datums = in1_block_w * 32;
@@ -23,7 +23,7 @@ namespace tt_metal {
             weight_matrix_rows = (uint32_t) std::ceil( (double) weight_matrix_rows / (double) in1_block_h_datums ) * in1_block_h_datums;
         }
         std::array<uint32_t, 4> output_shape = {1, 1, weight_matrix_rows, weight_matrix_cols};
-        auto output_buffer = host_buffer::create<T>(volume(output_shape));
+        auto output_buffer = owned_buffer::create<T>(volume(output_shape));
         for(auto r = 0; r < w_shape[2]; r++) {
             for(auto s = 0; s < w_shape[3]; s++) {
                 for(auto c = 0; c < w_shape[1]; c++) {
@@ -37,7 +37,7 @@ namespace tt_metal {
                 }
             }
         }
-        auto rm_tensor = Tensor(HostStorage{output_buffer}, output_shape, conv_weight_tensor.dtype(), Layout::ROW_MAJOR);
+        auto rm_tensor = Tensor(OwnedStorage{output_buffer}, output_shape, conv_weight_tensor.dtype(), Layout::ROW_MAJOR);
         return rm_tensor.to(Layout::TILE);
     }
 

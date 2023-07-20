@@ -61,10 +61,12 @@ A TT Tensor of shape ``[W, Z, Y, X]`` can have TILE layout only if both ``X`` an
 Tensor Storage
 ==============
 
-Tensor class has 2 types of storages: `HostStorage` and `DeviceStorage`. And it has a constructor for each type.
+Tensor class has 3 types of storages: `OwnedStorage`, `BorrowedStorage` and `DeviceStorage`. And it has a constructor for each type.
 
-`HostStorage` is used to store the data in host DRAM. Every data type is stored in the vector corresponding to that data type.
+`OwnedStorage` is used to store the data in host DRAM. Every data type is stored in the vector corresponding to that data type.
 And the vector itself is stored in the shared pointer. That is done so that if the Tensor object is copied, the underlying storage is simply reference counted and not copied as well.
+
+`BorrowedStorage` is used to borrow buffers from `torch`, `numpy`, etc
 
 `DeviceStorage` is used to store the data in device DRAM or device L1. It also uses a shared pointer to store the underlying buffer. And the reason is also to allow for copying Tensor objects without having to copy the underlying storage.
 

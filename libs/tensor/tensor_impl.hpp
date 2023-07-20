@@ -3,8 +3,8 @@
 #include "tensor/types.hpp"
 #include "tensor/tensor.hpp"
 #include "tensor/tensor_utils.hpp"
-#include "tensor/external_buffer_functions.hpp"
-#include "tensor/host_buffer_functions.hpp"
+#include "tensor/borrowed_buffer_functions.hpp"
+#include "tensor/owned_buffer_functions.hpp"
 #include "tt_metal/host_api.hpp"
 
 namespace tt {
@@ -265,7 +265,7 @@ std::vector<T> read_data_from_device(const Tensor &tensor, uint32_t size_in_byte
     std::vector<T> unpacked_data;
     if (tensor.dtype() == DataType::BFLOAT8_B) {
         std::vector<float> float_unpacked_data = unpack_bfp8_tiles_into_float_vec(device_data, /*row_major_output=*/false, /*is_exp_a=*/false);
-        auto float_unpacked_data_view = host_buffer::create<float>(std::move(float_unpacked_data));
+        auto float_unpacked_data_view = owned_buffer::create<float>(std::move(float_unpacked_data));
         unpacked_data = cast_vec<T>(float_unpacked_data_view);
     } else {
         unpacked_data = unpack_uint32_vec<T>(device_data);
@@ -324,8 +324,8 @@ inline DeviceBuffer to_device_buffer(const Storage& storage, Device* device, con
     return std::visit(
         [&device, &shape, &data_type, &layout, memory_config] (auto&& storage) -> DeviceBuffer {
             using StorageType = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<StorageType, HostStorage>) {
-                auto data_to_write = host_buffer::get_as<T>(storage.buffer);
+            if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
+                auto data_to_write = owned_buffer::get_as<T>(storage.buffer);
                 TT_ASSERT(volume(shape) == data_to_write.size(), "Tensor shape and number of data elements does not match");
                 if (layout == Layout::TILE) {
                     TT_ASSERT((shape[2] % tt::constants::TILE_HEIGHT == 0 && shape[3] % tt::constants::TILE_WIDTH == 0), "Tensor shape incompatible for specified layout");
@@ -335,9 +335,9 @@ inline DeviceBuffer to_device_buffer(const Storage& storage, Device* device, con
             else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
                 TT_THROW("Device storage doesn't support to_device_buffer");
             }
-            else if constexpr (std::is_same_v<StorageType, ExternalStorage>) {
+            else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
                 if constexpr (std::is_same_v<T, float> or std::is_same_v<T, bfloat16>) {
-                    auto data_to_write = external_buffer::get_as<T>(storage.buffer);
+                    auto data_to_write = borrowed_buffer::get_as<T>(storage.buffer);
                     TT_ASSERT(volume(shape) == data_to_write.size(), "Tensor shape and number of data elements does not match");
                     if (layout == Layout::TILE) {
                         TT_ASSERT((shape[2] % tt::constants::TILE_HEIGHT == 0 && shape[3] % tt::constants::TILE_WIDTH == 0), "Tensor shape incompatible for specified layout");
@@ -364,18 +364,18 @@ inline Tensor to_host(const Tensor &tensor) {
     auto device_storage = tensor.device_storage().value();
     auto device_buffer = device_storage.buffer;
     auto device = device_storage.device;
-    TT_ASSERT(tensor.storage_type() != StorageType::HOST and tensor.is_allocated(), "Need DRAM buffers on device to exist to copy data to host!");
+    TT_ASSERT(tensor.storage_type() != StorageType::OWNED and tensor.is_allocated(), "Need DRAM buffers on device to exist to copy data to host!");
     TT_ASSERT(device != nullptr && "Need device to be set copy data from device to host!");
     uint32_t size_in_bytes = device_buffer->size();
     auto data_vec = read_data_from_device<T>(tensor, size_in_bytes);
-    auto output_buffer = host_buffer::create<T>(std::move(data_vec));
-    return Tensor(HostStorage{output_buffer}, tensor.shape(), tensor.dtype(), tensor.layout());
+    auto output_buffer = owned_buffer::create<T>(std::move(data_vec));
+    return Tensor(OwnedStorage{output_buffer}, tensor.shape(), tensor.dtype(), tensor.layout());
 }
 
 template <typename T>
 inline Tensor to_device(const Tensor &tensor, Device *target_device, const MemoryConfig &memory_config) {
     TT_ASSERT(tensor.storage_type() != StorageType::DEVICE);
-    if (tensor.storage_type() ==  StorageType::HOST) {
+    if (tensor.storage_type() ==  StorageType::OWNED) {
         TT_ASSERT(tensor.is_allocated(), "Need host buffer on device to exist to copy data to device!");
     }
     TT_ASSERT(target_device != nullptr && "Need target device in order to move tensor to device!");
@@ -397,7 +397,7 @@ inline Tensor to_layout(const Tensor &tensor, Layout target_layout) {
         return tensor;
     }
 
-    const auto& input_data = host_buffer::get_as<T>(tensor).get();
+    const auto& input_data = owned_buffer::get_as<T>(tensor).get();
     std::vector<T> output_data;
 
     switch (tensor.layout()) {
@@ -432,8 +432,8 @@ inline Tensor to_layout(const Tensor &tensor, Layout target_layout) {
             TT_ASSERT(false && "Unsupported layout conversion");
     }
 
-    auto output_buffer = host_buffer::create<T>(std::move(output_data));
-    return Tensor(HostStorage{output_buffer}, tensor.shape(), tensor.dtype(), target_layout);
+    auto output_buffer = owned_buffer::create<T>(std::move(output_data));
+    return Tensor(OwnedStorage{output_buffer}, tensor.shape(), tensor.dtype(), target_layout);
 }
 
 // ======================================================================================
@@ -443,7 +443,7 @@ template <typename T>
 inline Tensor pad(const Tensor &tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
     auto pad_value_ = static_cast<T>(pad_value);
 
-    auto input_buffer = host_buffer::get_as<T>(tensor);
+    auto input_buffer = owned_buffer::get_as<T>(tensor);
 
     // Check if input tensor fits in output tensor given the input tensor start indices
     const std::array<uint32_t, 4> input_tensor_shape = tensor.shape();
@@ -468,7 +468,7 @@ inline Tensor pad(const Tensor &tensor, const std::array<uint32_t, 4> &output_te
         1
     };
 
-    auto output_buffer = host_buffer::create<T>(volume(output_tensor_shape));
+    auto output_buffer = owned_buffer::create<T>(volume(output_tensor_shape));
     auto output_index = 0;
     for(auto i = 0; i < pad_size[0][0] * output_tensor_strides[0]; i++) {
         output_buffer[output_index++] = pad_value_;
@@ -505,13 +505,13 @@ inline Tensor pad(const Tensor &tensor, const std::array<uint32_t, 4> &output_te
         output_buffer[output_index++] = pad_value_;
     }
 
-    return Tensor(HostStorage{output_buffer}, output_tensor_shape, tensor.dtype(), tensor.layout());
+    return Tensor(OwnedStorage{output_buffer}, output_tensor_shape, tensor.dtype(), tensor.layout());
 }
 
 template <typename T>
 inline Tensor unpad(const Tensor &tensor, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
 
-    auto input_buffer = host_buffer::get_as<T>(tensor);
+    auto input_buffer = owned_buffer::get_as<T>(tensor);
 
     // Check if tensor start and end indices are within input tensor shape
     const std::array<uint32_t, 4> input_tensor_shape = tensor.shape();
@@ -540,7 +540,7 @@ inline Tensor unpad(const Tensor &tensor, const std::array<uint32_t, 4> &output_
 
     const std::array<uint32_t, 4> input_tensor_strides = tensor.strides();
 
-    auto output_buffer = host_buffer::create<T>(volume(output_tensor_shape));
+    auto output_buffer = owned_buffer::create<T>(volume(output_tensor_shape));
     auto output_index = 0;
     for(auto dim0 = output_tensor_start[0]; dim0 <= output_tensor_end[0]; dim0++) {
         for(auto dim1 = output_tensor_start[1]; dim1 <= output_tensor_end[1]; dim1++) {
@@ -553,7 +553,7 @@ inline Tensor unpad(const Tensor &tensor, const std::array<uint32_t, 4> &output_
         }
     }
 
-    return Tensor(HostStorage{output_buffer}, output_tensor_shape, tensor.dtype(), tensor.layout());
+    return Tensor(OwnedStorage{output_buffer}, output_tensor_shape, tensor.dtype(), tensor.layout());
 }
 
 // ======================================================================================
@@ -566,7 +566,7 @@ inline void print(const Tensor &tensor, Layout print_layout, bool pretty_print) 
         return;
     }
 
-    auto data_vec = host_buffer::get_as<T>(tensor).get();
+    auto data_vec = owned_buffer::get_as<T>(tensor).get();
 
     switch (tensor.layout()) {
         case Layout::ROW_MAJOR:

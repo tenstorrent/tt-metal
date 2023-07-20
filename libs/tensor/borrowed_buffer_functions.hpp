@@ -1,7 +1,7 @@
 #pragma once
 
 #include "tensor/tensor.hpp"
-#include "tensor/external_buffer.hpp"
+#include "tensor/borrowed_buffer.hpp"
 
 #include <vector>
 
@@ -9,7 +9,7 @@ namespace tt {
 
 namespace tt_metal {
 
-namespace external_buffer {
+namespace borrowed_buffer {
 
 template<typename T>
 void validate_datatype(const Tensor& tensor) {
@@ -23,12 +23,12 @@ void validate_datatype(const Tensor& tensor) {
 }
 
 template<typename T>
-Buffer<T> get_as(ExternalBuffer& buffer) {
+Buffer<T> get_as(BorrowedBuffer& buffer) {
     return std::get<Buffer<T>>(buffer);
 }
 
 template<typename T>
-const Buffer<T> get_as(const ExternalBuffer& buffer) {
+const Buffer<T> get_as(const BorrowedBuffer& buffer) {
     return std::get<Buffer<T>>(buffer);
 }
 
@@ -38,10 +38,10 @@ Buffer<T> get_as(Tensor& tensor) {
     return std::visit(
         [&] (auto&& storage) {
             using StorageType = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<StorageType, ExternalStorage>) {
+            if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
                 return get_as<T>(storage.buffer);
             } else {
-                TT_THROW("Must be an external storage");
+                TT_THROW("Must be a BorrowedStorage");
             }
         },
         tensor.storage()
@@ -54,17 +54,17 @@ const Buffer<T> get_as(const Tensor& tensor) {
     return std::visit(
         [] (auto&& storage) {
             using StorageType = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<StorageType, ExternalStorage>) {
+            if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
                 return get_as<T>(storage.buffer);
             } else {
-                TT_THROW("Must be an external storage");
+                TT_THROW("Must be an BorrowedStorage");
             }
         },
         tensor.storage()
     );
 }
 
-}  // namespace external_buffer
+}  // namespace borrowed_buffer
 
 }  // namespace tt_metal
 

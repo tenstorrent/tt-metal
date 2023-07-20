@@ -2,7 +2,7 @@
 
 #include "constants.hpp"
 #include "tensor/tensor.hpp"
-#include "tensor/host_buffer.hpp"
+#include "tensor/owned_buffer.hpp"
 #include "tt_metal/host_api.hpp"
 
 #include "tt_numpy/functions.hpp"

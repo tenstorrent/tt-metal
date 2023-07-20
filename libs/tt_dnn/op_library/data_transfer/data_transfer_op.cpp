@@ -18,7 +18,7 @@ std::vector<Shape> DataTransferToHost::compute_output_shapes(const std::vector<T
 }
 std::vector<Tensor> DataTransferToHost::compute_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    if (input_tensor.storage_type() == StorageType::HOST) {
+    if (input_tensor.storage_type() == StorageType::OWNED) {
         return {input_tensor};
     } else {
         return {input_tensor.to(this->host)};

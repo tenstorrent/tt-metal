@@ -7,7 +7,7 @@
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tensor/tensor.hpp"
 #include "tensor/tensor_utils.hpp"
-#include "tensor/host_buffer_functions.hpp"
+#include "tensor/owned_buffer_functions.hpp"
 
 
 namespace tt {
@@ -23,8 +23,8 @@ template<typename T>
 Tensor mk_scalar(T value) {
     assert(std::is_scalar<T>::value && "T should be scalar");
     std::array<unsigned int,4> shape = {1,1,1,1};
-    auto buffer = host_buffer::create(std::vector{bfloat16(value)});
-    Tensor scalar = Tensor(HostStorage{buffer}, shape, DataType::BFLOAT16, Layout::ROW_MAJOR);
+    auto buffer = owned_buffer::create(std::vector{bfloat16(value)});
+    Tensor scalar = Tensor(OwnedStorage{buffer}, shape, DataType::BFLOAT16, Layout::ROW_MAJOR);
     return scalar;
 }
 

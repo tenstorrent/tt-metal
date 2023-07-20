@@ -327,7 +327,7 @@ Tensor unpad(const Tensor &input_tensor_a, const std::array<uint32_t, 4> &output
 
 void UnpadOnHost::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    TT_ASSERT(input_tensor.storage_type() == StorageType::HOST);
+    TT_ASSERT(input_tensor.storage_type() == StorageType::OWNED);
     TT_ASSERT(input_tensor.layout() == Layout::ROW_MAJOR);
 
     TT_ASSERT(this->output_tensor_start[0] < input_tensor.shape()[0]);

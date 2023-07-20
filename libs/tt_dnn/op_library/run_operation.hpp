@@ -53,7 +53,7 @@ static auto create_tensor_record(const Tensor& tensor) {
     return std::visit(
         [&] (const auto& storage) -> operation_history::TensorRecord {
             using T = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<T, HostStorage>) {
+            if constexpr (std::is_same_v<T, OwnedStorage>) {
                 return operation_history::TensorRecord{
                     tensor.storage_type(), tensor.shape(), tensor.dtype(), tensor.layout(), std::nullopt
                 };
@@ -63,7 +63,7 @@ static auto create_tensor_record(const Tensor& tensor) {
                     tensor.storage_type(), tensor.shape(), tensor.dtype(), tensor.layout(), storage.memory_config
                 };
             }
-            else if constexpr (std::is_same_v<T, ExternalStorage>) {
+            else if constexpr (std::is_same_v<T, BorrowedStorage>) {
                 return operation_history::TensorRecord{
                     tensor.storage_type(), tensor.shape(), tensor.dtype(), tensor.layout()
                 };

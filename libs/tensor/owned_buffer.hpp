@@ -7,7 +7,7 @@ namespace tt {
 
 namespace tt_metal {
 
-namespace host_buffer {
+namespace owned_buffer {
 
 template<typename T>
 struct Buffer {
@@ -58,7 +58,7 @@ bool operator!=(const Buffer<T>& buffer_a, const Buffer<T>& buffer_b) noexcept {
     return not (buffer_a == buffer_b);
 }
 
-}  // namespace host_buffer
+}  // namespace owned_buffer
 
 }  // namespace tt_metal
 

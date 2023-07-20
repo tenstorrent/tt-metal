@@ -6,7 +6,7 @@ namespace tt {
 
 namespace tt_metal {
 
-namespace external_buffer {
+namespace borrowed_buffer {
 
 template<typename T>
 struct Buffer {
@@ -51,7 +51,7 @@ bool operator!=(const Buffer<T>& buffer_a, const Buffer<T>& buffer_b) noexcept {
     return not (buffer_a == buffer_b);
 }
 
-}  // namespace external_buffer
+}  // namespace borrowed_buffer
 
 }  // namespace tt_metal
 

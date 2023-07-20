@@ -283,7 +283,7 @@ std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor &input_tensor, 
 
     tt_metal::Device *device;
     // Get the device
-    if (input_tensor.storage_type() == StorageType::HOST) {
+    if (input_tensor.storage_type() == StorageType::OWNED) {
         device = AutoFormat::GetDefaultDevice();
         TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
     } else {

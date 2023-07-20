@@ -73,7 +73,7 @@ namespace op_profiler {
                 shape_to_str(tensor.shape()),
                 layout_to_str.at(tensor.layout()),
                 dtype_to_str.at(tensor.dtype()),
-                tensor.storage_type() == StorageType::HOST ? "HOST" : fmt::format("DEV_{}_{}", tensor.device()->pcie_slot(), magic_enum::enum_name(tensor.memory_config().buffer_type)),
+                tensor.storage_type() == StorageType::OWNED ? "OWNED" : fmt::format("DEV_{}_{}", tensor.device()->pcie_slot(), magic_enum::enum_name(tensor.memory_config().buffer_type)),
             };
 
             return join_vector(tensorStrs, "|");

@@ -1,7 +1,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tensor/tensor.hpp"
-#include "tensor/host_buffer.hpp"
-#include "tensor/host_buffer_functions.hpp"
+#include "tensor/owned_buffer.hpp"
+#include "tensor/owned_buffer_functions.hpp"
 #include "tt_dnn/op_library/transpose/transpose_op.hpp"
 #include <tt_numpy/functions.hpp>
 
@@ -18,15 +18,15 @@ using namespace constants;
 //////////////////////////////////////////////////////////////////////////////////////////
 
 Tensor perform_transpose_wh(Tensor& input_tensor) {
-    TT_ASSERT(input_tensor.storage_type() == StorageType::HOST);
+    TT_ASSERT(input_tensor.storage_type() == StorageType::OWNED);
     auto ashape = input_tensor.shape();
     TT_ASSERT(ashape.size() == 4);
     auto bshape = ashape;
     bshape[2] = ashape[3];
     bshape[3] = ashape[2];
     TT_ASSERT(input_tensor.layout() == tt::tt_metal::Layout::TILE, "This transpose assumes that the data layout is tiled!");
-    auto input_buffer = host_buffer::get_as<bfloat16>(input_tensor);
-    auto output_buffer = host_buffer::create<bfloat16>(input_buffer.size());
+    auto input_buffer = owned_buffer::get_as<bfloat16>(input_tensor);
+    auto output_buffer = owned_buffer::create<bfloat16>(input_buffer.size());
     auto N = ashape[0];
     auto C = ashape[1];
     auto H = ashape[2];
@@ -54,7 +54,7 @@ Tensor perform_transpose_wh(Tensor& input_tensor) {
             }
         }
     }
-    return tt_metal::Tensor(HostStorage{output_buffer}, bshape, input_tensor.dtype(), tt::tt_metal::Layout::TILE);
+    return tt_metal::Tensor(OwnedStorage{output_buffer}, bshape, input_tensor.dtype(), tt::tt_metal::Layout::TILE);
 }
 
 int main(int argc, char **argv) {
@@ -98,10 +98,10 @@ int main(int argc, char **argv) {
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::Tensor host_a = a.to(host); // Move tensor a to host to validate
-        auto host_vec = host_buffer::get_as<bfloat16>(host_a);
+        auto host_vec = owned_buffer::get_as<bfloat16>(host_a);
         auto transposed_host_a = perform_transpose_wh(host_a);
-        auto golden_vec = host_buffer::get_as<bfloat16>(transposed_host_a);
-        auto result_vec = host_buffer::get_as<bfloat16>(d);
+        auto golden_vec = owned_buffer::get_as<bfloat16>(transposed_host_a);
+        auto result_vec = owned_buffer::get_as<bfloat16>(d);
         if(golden_vec != result_vec) {
             assert(golden_vec.size() == result_vec.size());
             for(uint32_t i = 0; i < golden_vec.size(); i++) {

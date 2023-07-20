@@ -13,7 +13,7 @@ import tt_lib
 
 @pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
 @pytest.mark.parametrize("tt_dtype", [tt_lib.tensor.DataType.FLOAT32, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B])
-def test_host_tensor(shape, tt_dtype):
+def test_tensor_with_owned_storage(shape, tt_dtype):
     # Initialize the device
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
@@ -64,7 +64,7 @@ def test_host_tensor(shape, tt_dtype):
 
 @pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
 @pytest.mark.parametrize("tt_dtype", [tt_lib.tensor.DataType.FLOAT32, tt_lib.tensor.DataType.BFLOAT16])
-def test_external_tensor(shape, tt_dtype):
+def test_tensor_with_borrowed_storage(shape, tt_dtype):
     # Initialize the device
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)

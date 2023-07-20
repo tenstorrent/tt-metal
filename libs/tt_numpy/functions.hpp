@@ -1,7 +1,7 @@
 #include <tensor/tensor.hpp>
 #include <tensor/tensor_utils.hpp>
-#include <tensor/host_buffer.hpp>
-#include <tensor/host_buffer_functions.hpp>
+#include <tensor/owned_buffer.hpp>
+#include <tensor/owned_buffer_functions.hpp>
 
 #include <optional>
 #include <random>
@@ -38,9 +38,9 @@ constexpr static DataType get_data_type() {
 template<typename T>
 static Tensor full(const Shape& shape, T value, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr) {
     constexpr DataType data_type = detail::get_data_type<T>();
-    auto host_buffer = host_buffer::create<T>(tt_metal::volume(shape));
-    std::fill(std::begin(host_buffer), std::end(host_buffer), value);
-    auto output = Tensor(HostStorage{host_buffer}, shape, data_type, layout);
+    auto owned_buffer = owned_buffer::create<T>(tt_metal::volume(shape));
+    std::fill(std::begin(owned_buffer), std::end(owned_buffer), value);
+    auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
     if (device != nullptr) {
         output = output.to(device);
     }
@@ -90,17 +90,17 @@ static Tensor arange(int64_t start, int64_t stop, int64_t step, const Layout lay
     TT_ASSERT(step > 0, "Step must be greater than 0");
     TT_ASSERT(start < stop, "Start must be less than step");
     auto size = divup((stop - start), step);
-    auto host_buffer  = host_buffer::create<T>(size);
+    auto owned_buffer  = owned_buffer::create<T>(size);
 
     auto index = 0;
     for (auto value = start; value < stop; value += step) {
         if constexpr (std::is_same_v<T, bfloat16>) {
-         host_buffer[index++] = static_cast<T>(static_cast<float>(value));
+         owned_buffer[index++] = static_cast<T>(static_cast<float>(value));
         } else {
-         host_buffer[index++] = static_cast<T>(value);
+         owned_buffer[index++] = static_cast<T>(value);
         }
     }
-    auto output = Tensor(HostStorage{host_buffer}, {1, 1, 1, static_cast<uint32_t>(size)}, data_type, layout);
+    auto output = Tensor(OwnedStorage{owned_buffer}, {1, 1, 1, static_cast<uint32_t>(size)}, data_type, layout);
     if (device != nullptr) {
         output = output.to(device);
     }
@@ -119,26 +119,26 @@ template<typename T>
 static Tensor uniform(T low, T high, const Shape& shape, const Layout layout = Layout::ROW_MAJOR) {
     constexpr DataType data_type = detail::get_data_type<T>();
 
-    auto host_buffer = host_buffer::create<T>(tt_metal::volume(shape));
+    auto owned_buffer = owned_buffer::create<T>(tt_metal::volume(shape));
 
     if constexpr (std::is_same_v<T, uint32_t> ) {
         auto rand_value = std::bind(std::uniform_int_distribution<T>(low, high), RANDOM_GENERATOR);
-        for (auto index = 0; index < host_buffer.size(); index++) {
-            host_buffer[index] = rand_value();
+        for (auto index = 0; index < owned_buffer.size(); index++) {
+            owned_buffer[index] = rand_value();
         }
     } else if constexpr (std::is_same_v<T, float>) {
         auto rand_value = std::bind(std::uniform_real_distribution<T>(low, high), RANDOM_GENERATOR);
-        for (auto index = 0; index < host_buffer.size(); index++) {
-            host_buffer[index] = rand_value();
+        for (auto index = 0; index < owned_buffer.size(); index++) {
+            owned_buffer[index] = rand_value();
         }
     } else if constexpr (std::is_same_v<T, bfloat16>) {
         auto rand_value = std::bind(std::uniform_real_distribution<float>(low.to_float(), high.to_float()), RANDOM_GENERATOR);
-        for (auto index = 0; index < host_buffer.size(); index++) {
-            host_buffer[index] = bfloat16(rand_value());
+        for (auto index = 0; index < owned_buffer.size(); index++) {
+            owned_buffer[index] = bfloat16(rand_value());
         }
     }
 
-    return Tensor(HostStorage{host_buffer}, shape, data_type, layout);
+    return Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
 }
 
 static Tensor random(const Shape& shape, const DataType data_type = DataType::BFLOAT16, const Layout layout = Layout::ROW_MAJOR) {
@@ -185,8 +185,8 @@ static bool allclose(const Tensor& tensor_a, const Tensor& tensor_b, Args ...  a
         return false;
     }
 
-    auto tensor_a_buffer = host_buffer::get_as<DataType>(tensor_a);
-    auto tensor_b_buffer = host_buffer::get_as<DataType>(tensor_b);
+    auto tensor_a_buffer = owned_buffer::get_as<DataType>(tensor_a);
+    auto tensor_b_buffer = owned_buffer::get_as<DataType>(tensor_b);
 
     for (int index = 0; index < tensor_a_buffer.size(); index++) {
         if (not detail::nearly_equal(tensor_a_buffer[index], tensor_b_buffer[index], args...)) {
