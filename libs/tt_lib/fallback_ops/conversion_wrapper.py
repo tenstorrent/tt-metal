@@ -61,8 +61,12 @@ def convert_tt_tensor_to_pt_tensor(tt_tensor, host, output_format):
 
     if tt_tensor.layout() != ttl_tensor.Layout.ROW_MAJOR:
         tt_tensor = tt_tensor.to(ttl_tensor.Layout.ROW_MAJOR)
-
-    return torch.Tensor(tt_tensor.data()).reshape(tt_tensor.shape())
+    dtype = {
+        ttl_tensor.DataType.FLOAT32:   torch.float,
+        ttl_tensor.DataType.BFLOAT16:  torch.bfloat16,
+        ttl_tensor.DataType.BFLOAT8_B: torch.float,
+    }[tt_tensor.dtype()]
+    return torch.frombuffer(tt_tensor.data(), dtype=dtype).reshape(tt_tensor.shape())
 
 
 def convert_pt_tensor_to_tt_tensor(pt_tensor, output_format):

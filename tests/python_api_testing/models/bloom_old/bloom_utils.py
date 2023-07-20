@@ -92,7 +92,13 @@ def tt2torch_tensor(tt_tensor):
     tt_output = tt_tensor.to(host)
     if tt_output.layout() != ttm.tensor.Layout.ROW_MAJOR:
         tt_output = tt_output.to(ttm.tensor.Layout.ROW_MAJOR)
-    py_output = torch.Tensor(tt_output.data()).reshape(tt_output.shape())
+    dtype = {
+        ttm.tensor.DataType.FLOAT32:   torch.float,
+        ttm.tensor.DataType.BFLOAT16:  torch.bfloat16,
+        ttm.tensor.DataType.BFLOAT8_B: torch.float,
+    }[tt_tensor.dtype()]
+
+    py_output = torch.frombuffer(tt_output.data(), dtype=dtype).reshape(tt_output.shape())
     return py_output
 
 
