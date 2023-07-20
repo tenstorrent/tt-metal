@@ -80,7 +80,14 @@ def tt2torch_tensor(tt_tensor, tt_host=None):
     tt_output = tt_tensor.to(host)
     if tt_output.layout() != tt_lib.tensor.Layout.ROW_MAJOR:
         tt_output = tt_output.to(tt_lib.tensor.Layout.ROW_MAJOR)
-    py_output = torch.Tensor(tt_output.data()).reshape(tt_output.shape())
+
+    dtype = {
+        tt_lib.tensor.DataType.FLOAT32:   torch.float,
+        tt_lib.tensor.DataType.BFLOAT16:  torch.bfloat16,
+        tt_lib.tensor.DataType.BFLOAT8_B: torch.float,
+    }[tt_tensor.dtype()]
+
+    py_output = torch.frombuffer(tt_output.data(), dtype=dtype).reshape(tt_output.shape())
     return py_output
 
 
@@ -120,7 +127,17 @@ def tt_to_torch_tensor(tt_tensor, host):
     tt_tensor = tt_tensor.to(host).to(tt_lib.tensor.Layout.ROW_MAJOR)
     # create a 1D PyTorch tensor from values in TT Tensor obtained with data() member function
     # and then reshape PyTorch tensor to shape of TT Tensor
-    py_tensor = torch.Tensor(tt_tensor.data()).reshape(tt_tensor.shape())
+
+    # py_tensor = torch.Tensor(tt_tensor.data()).reshape(tt_tensor.shape())
+
+    dtype = {
+        tt_lib.tensor.DataType.FLOAT32:   torch.float,
+        tt_lib.tensor.DataType.BFLOAT16:  torch.bfloat16,
+        tt_lib.tensor.DataType.BFLOAT8_B: torch.float,
+    }[tt_tensor.dtype()]
+
+    py_output = torch.frombuffer(tt_output.data(), dtype=dtype).reshape(tt_output.shape())
+
     return py_tensor
 
 
