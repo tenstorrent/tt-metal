@@ -124,7 +124,7 @@ def unpad_from_zero(x, desired_shape, host):
 
 
 def tt_to_torch_tensor(tt_tensor, host):
-    tt_tensor = tt_tensor.to(host).to(tt_lib.tensor.Layout.ROW_MAJOR)
+    tt_output = tt_tensor.to(host).to(tt_lib.tensor.Layout.ROW_MAJOR)
     # create a 1D PyTorch tensor from values in TT Tensor obtained with data() member function
     # and then reshape PyTorch tensor to shape of TT Tensor
 
@@ -138,7 +138,7 @@ def tt_to_torch_tensor(tt_tensor, host):
 
     py_output = torch.frombuffer(tt_output.data(), dtype=dtype).reshape(tt_output.shape())
 
-    return py_tensor
+    return py_output
 
 
 def torch_to_tt_tensor_rm(py_tensor, device, shape=None, put_on_device=True):
