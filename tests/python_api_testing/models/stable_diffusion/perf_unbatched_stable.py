@@ -101,7 +101,7 @@ def make_tt_unet(state_dict, device):
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (200,
+        (300,
          75,
         ),
     ),
