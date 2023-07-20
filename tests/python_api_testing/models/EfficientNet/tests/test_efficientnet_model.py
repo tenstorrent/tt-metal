@@ -1,4 +1,3 @@
-import cv2
 import tt_lib
 import torch
 from loguru import logger
