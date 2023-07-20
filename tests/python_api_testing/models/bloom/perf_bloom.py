@@ -81,6 +81,7 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time)
         tt_output = tt_model.forward(device, input_ids)
         tt_lib.device.Synchronize()
         profiler.end(first_key)
+        del tt_output
 
         enable_compile_cache()
 
@@ -88,6 +89,7 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time)
         tt_output = tt_model.forward(device, input_ids)
         tt_lib.device.Synchronize()
         profiler.end(second_key)
+        del tt_output
 
 
     first_iter_time = profiler.get(first_key)
