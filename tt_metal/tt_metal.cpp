@@ -17,7 +17,7 @@
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "tt_metal/detail/program.hpp"
 
-//TODO(MO): hack until ticket #1184 is in
+// TODO(MO): hack until ticket #1184 is in
 bool enable_fw_profile_hack = false;
 
 namespace tt {
@@ -60,13 +60,13 @@ namespace detail {
 
 namespace {
 
-    detail::CompilationReporter compilation_reporter = detail::CompilationReporter();
-    detail::MemoryReporter memory_reporter = detail::MemoryReporter();
+detail::CompilationReporter compilation_reporter = detail::CompilationReporter();
+detail::MemoryReporter memory_reporter = detail::MemoryReporter();
 
-    void DownloadFirmware(Device *device, CoreCoord phys_core) {
-        for (int riscv_id = 0; riscv_id < 5; riscv_id++)  {
-            string fname;
-            switch (riscv_id) {
+void DownloadFirmware(Device *device, CoreCoord phys_core) {
+    for (int riscv_id = 0; riscv_id < 5; riscv_id++) {
+        string fname;
+        switch (riscv_id) {
             case 0:
                 fname = "brisc/brisc.hex";
                 tt::llrt::program_brisc_startup_addr(device->cluster(), device->pcie_slot(), phys_core);
@@ -75,34 +75,40 @@ namespace {
             case 2: fname = "tensix_thread0/tensix_thread0.hex"; break;
             case 3: fname = "tensix_thread1/tensix_thread1.hex"; break;
             case 4: fname = "tensix_thread2/tensix_thread2.hex"; break;
-            }
-            tt::llrt::test_load_write_read_risc_binary(device->cluster(), fname, device->pcie_slot(),
-                                                    phys_core, riscv_id, true);
         }
-    }
-
-    std::optional<uint32_t> get_semaphore_address(const Program &program, const CoreRange &core_range) {
-        std::optional<uint32_t> address;
-        auto start_core = core_range.start;
-        auto end_core = core_range.end;
-        for (auto x = start_core.x; x <= end_core.x; x++) {
-            for (auto y = start_core.y; y <= end_core.y; y++) {
-                auto logical_core = CoreCoord{x, y};
-                auto num_semaphores = program.num_semaphores(logical_core);
-                if (num_semaphores == NUM_SEMAPHORES) {
-                    TT_THROW("Cannot add semaphore on core " + logical_core.str() + ". Max number of semaphores (" + std::to_string(NUM_SEMAPHORES) + ") reached!");
-                }
-                uint32_t addr = num_semaphores == 0 ? SEMAPHORE_BASE : program.semaphore_address(num_semaphores-1) + ALIGNED_SIZE_PER_SEMAPHORE;
-                if (!address.has_value()) {
-                    address = addr;
-                } else if (addr != address) {
-                    TT_THROW("Expected semaphore on logical core " + logical_core.str() + " to be initialized at L1 address " + std::to_string(address.value()) + " but it is at " + std::to_string(addr));
-                }
-            }
-        }
-        return address;
+        tt::llrt::test_load_write_read_risc_binary(
+            device->cluster(), fname, device->pcie_slot(), phys_core, riscv_id, true);
     }
 }
+
+std::optional<uint32_t> get_semaphore_address(const Program &program, const CoreRange &core_range) {
+    std::optional<uint32_t> address;
+    auto start_core = core_range.start;
+    auto end_core = core_range.end;
+    for (auto x = start_core.x; x <= end_core.x; x++) {
+        for (auto y = start_core.y; y <= end_core.y; y++) {
+            auto logical_core = CoreCoord{x, y};
+            auto num_semaphores = program.num_semaphores(logical_core);
+            if (num_semaphores == NUM_SEMAPHORES) {
+                TT_THROW(
+                    "Cannot add semaphore on core " + logical_core.str() + ". Max number of semaphores (" +
+                    std::to_string(NUM_SEMAPHORES) + ") reached!");
+            }
+            uint32_t addr = num_semaphores == 0
+                                ? SEMAPHORE_BASE
+                                : program.semaphore_address(num_semaphores - 1) + ALIGNED_SIZE_PER_SEMAPHORE;
+            if (!address.has_value()) {
+                address = addr;
+            } else if (addr != address) {
+                TT_THROW(
+                    "Expected semaphore on logical core " + logical_core.str() + " to be initialized at L1 address " +
+                    std::to_string(address.value()) + " but it is at " + std::to_string(addr));
+            }
+        }
+    }
+    return address;
+}
+}  // namespace
 
 static Profiler tt_metal_profiler = Profiler();
 
@@ -120,19 +126,14 @@ bool enable_memory_reports = false;
 void EnableMemoryReports() { enable_memory_reports = true; }
 void DisableMemoryReports() { enable_memory_reports = false; }
 
-void DumpDeviceMemoryState(const Device *device) {
-    memory_reporter.dump_memory_usage_state(device);
-}
+void DumpDeviceMemoryState(const Device *device) { memory_reporter.dump_memory_usage_state(device); }
 
-void DumpHostProfileResults(std::string name_prepend){
-    tt_metal_profiler.dumpHostResults(name_prepend);
-}
+void DumpHostProfileResults(std::string name_prepend) { tt_metal_profiler.dumpHostResults(name_prepend); }
 
 void DumpDeviceProfileResults(Device *device, const Program &program) {
     tt_metal_profiler.markStart("DumpDeviceProfileResults");
     TT_ASSERT(tt_is_print_server_running() == false, "Debug print server is running, cannot dump device profiler data");
-    auto worker_cores_used_in_program =\
-        device->worker_cores_from_logical_cores(program.logical_cores());
+    auto worker_cores_used_in_program = device->worker_cores_from_logical_cores(program.logical_cores());
 
     auto cluster = device->cluster();
     auto pcie_slot = device->pcie_slot();
@@ -140,32 +141,19 @@ void DumpDeviceProfileResults(Device *device, const Program &program) {
     tt_metal_profiler.markStop("DumpDeviceProfileResults");
 }
 
-void SetHostProfilerFlag(bool do_profile){
-     tt_metal_profiler.setHostDoProfile(do_profile);
-}
+void SetHostProfilerFlag(bool do_profile) { tt_metal_profiler.setHostDoProfile(do_profile); }
 
-void SetProfilerDir(std::string output_dir){
-     tt_metal_profiler.setOutputDir(output_dir);
-}
+void SetProfilerDir(std::string output_dir) { tt_metal_profiler.setOutputDir(output_dir); }
 
-void FreshProfilerHostLog(){
-     tt_metal_profiler.setHostNewLogFlag(true);
-}
+void FreshProfilerHostLog() { tt_metal_profiler.setHostNewLogFlag(true); }
 
-void FreshProfilerDeviceLog(){
-     tt_metal_profiler.setDeviceNewLogFlag(true);
-}
+void FreshProfilerDeviceLog() { tt_metal_profiler.setDeviceNewLogFlag(true); }
 
-Host *GetHost() {
-    return new Host();
-}
+Host *GetHost() { return new Host(); }
 
-Device *CreateDevice(tt::ARCH arch, int pcie_slot) {
-    return new Device(arch, pcie_slot);
-}
+Device *CreateDevice(tt::ARCH arch, int pcie_slot) { return new Device(arch, pcie_slot); }
 
 bool InitializeDevice(Device *device, const MemoryAllocator &memory_allocator) {
-
     bool init;
     if (device->initialize(memory_allocator)) {
         static std::mutex build_mutex;
@@ -179,11 +167,7 @@ bool InitializeDevice(Device *device, const MemoryAllocator &memory_allocator) {
                 detail::GenerateBankToNocCoordHeaders(device, &build_options, "");
                 std::string arch_name = tt::get_string_lowercase(device->arch());
                 generate_binaries_params_t default_params;
-                generate_binaries_all_riscs(&build_options,
-                                            "",
-                                            arch_name,
-                                            default_params,
-                                            enable_fw_profile_hack);
+                generate_binaries_all_riscs(&build_options, "", arch_name, default_params, enable_fw_profile_hack);
 
                 char *dbg_print = std::getenv("TT_KERNEL_DEBUG_PRINT");
                 if (dbg_print != nullptr) {
@@ -230,7 +214,6 @@ bool InitializeDevice(Device *device, const MemoryAllocator &memory_allocator) {
 }
 
 bool CloseDevice(Device *device) {
-
     // Needed to ensure that HACK_CQ doesn't contain a closed device
     if (HACK_CQ) {
         HACK_CQ.reset(nullptr);
@@ -239,11 +222,9 @@ bool CloseDevice(Device *device) {
     return device->close();
 }
 
-void StartDebugPrintServer(Device* device) {
-    tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}});
-}
+void StartDebugPrintServer(Device *device) { tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}}); }
 
-void StartDebugPrintServerOnCores(Device* device, const vector<vector<int>>& in_cores) {
+void StartDebugPrintServerOnCores(Device *device, const vector<vector<int>> &in_cores) {
     vector<CoreCoord> cores;
     for (int j = 0; j < in_cores.size(); j++) {
         TT_ASSERT(in_cores[j].size() == 2);
@@ -260,7 +241,7 @@ DataMovementKernel *CreateDataMovementKernel(
     DataMovementProcessor processor_type,
     NOC noc) {
     DataMovementKernel *kernel = new DataMovementKernel(file_name, core, compile_args, processor_type, noc);
-    detail::AddKernel( program, kernel);
+    detail::AddKernel(program, kernel);
     return kernel;
 }
 
@@ -271,7 +252,7 @@ DataMovementKernel *CreateDataMovementKernel(
     DataMovementProcessor processor_type,
     NOC noc) {
     DataMovementKernel *kernel = new DataMovementKernel(file_name, core, processor_type, noc);
-    detail::AddKernel( program, kernel);
+    detail::AddKernel(program, kernel);
     return kernel;
 }
 
@@ -284,7 +265,7 @@ DataMovementKernel *CreateDataMovementKernel(
     NOC noc) {
     TT_ASSERT(core_range.start == core_range.end or core_range.start < core_range.end && "Invalid core range!");
     DataMovementKernel *kernel = new DataMovementKernel(file_name, core_range, compile_args, processor_type, noc);
-    detail::AddKernel( program, kernel);
+    detail::AddKernel(program, kernel);
     return kernel;
 }
 
@@ -296,7 +277,7 @@ DataMovementKernel *CreateDataMovementKernel(
     NOC noc) {
     TT_ASSERT(core_range.start == core_range.end or core_range.start < core_range.end && "Invalid core range!");
     DataMovementKernel *kernel = new DataMovementKernel(file_name, core_range, processor_type, noc);
-    detail::AddKernel( program, kernel);
+    detail::AddKernel(program, kernel);
     return kernel;
 }
 
@@ -308,7 +289,7 @@ DataMovementKernel *CreateDataMovementKernel(
     DataMovementProcessor processor_type,
     NOC noc) {
     DataMovementKernel *kernel = new DataMovementKernel(file_name, core_range_set, compile_args, processor_type, noc);
-    detail::AddKernel( program, kernel);
+    detail::AddKernel(program, kernel);
     return kernel;
 }
 
@@ -319,7 +300,7 @@ DataMovementKernel *CreateDataMovementKernel(
     DataMovementProcessor processor_type,
     NOC noc) {
     DataMovementKernel *kernel = new DataMovementKernel(file_name, core_range_set, processor_type, noc);
-    detail::AddKernel( program, kernel);
+    detail::AddKernel(program, kernel);
     return kernel;
 }
 
@@ -331,14 +312,9 @@ ComputeKernel *CreateComputeKernel(
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode) {
-    ComputeKernel *kernel = new ComputeKernel(
-        file_name,
-        core,
-        compile_args,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode);
-    detail::AddKernel( program, kernel);
+    ComputeKernel *kernel =
+        new ComputeKernel(file_name, core, compile_args, math_fidelity, fp32_dest_acc_en, math_approx_mode);
+    detail::AddKernel(program, kernel);
     return kernel;
 }
 
@@ -351,14 +327,9 @@ ComputeKernel *CreateComputeKernel(
     bool fp32_dest_acc_en,
     bool math_approx_mode) {
     TT_ASSERT(core_range.start == core_range.end or core_range.start < core_range.end && "Invalid core range!");
-    ComputeKernel *kernel = new ComputeKernel(
-        file_name,
-        core_range,
-        compile_args,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode);
-    detail::AddKernel( program, kernel);
+    ComputeKernel *kernel =
+        new ComputeKernel(file_name, core_range, compile_args, math_fidelity, fp32_dest_acc_en, math_approx_mode);
+    detail::AddKernel(program, kernel);
     return kernel;
 }
 
@@ -370,20 +341,13 @@ ComputeKernel *CreateComputeKernel(
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode) {
-    ComputeKernel *kernel = new ComputeKernel(
-        file_name,
-        core_range_set,
-        compile_args,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode);
-    detail::AddKernel( program, kernel);
+    ComputeKernel *kernel =
+        new ComputeKernel(file_name, core_range_set, compile_args, math_fidelity, fp32_dest_acc_en, math_approx_mode);
+    detail::AddKernel(program, kernel);
     return kernel;
 }
 
-uint32_t TileSize(const DataFormat &data_format) {
-    return tt::tile_size(data_format);
-}
+uint32_t TileSize(const DataFormat &data_format) { return tt::tile_size(data_format); }
 
 const CircularBuffer &CreateCircularBuffer(
     Program &program,
@@ -394,7 +358,14 @@ const CircularBuffer &CreateCircularBuffer(
     DataFormat data_format,
     std::optional<uint32_t> l1_address) {
     CoreRange single_core_range = {.start = core, .end = core};
-    return CreateCircularBuffers(program, std::set<u32>({buffer_index}), CoreRangeSet({single_core_range}), num_tiles, size_in_bytes, data_format, l1_address);
+    return CreateCircularBuffers(
+        program,
+        std::set<u32>({buffer_index}),
+        CoreRangeSet({single_core_range}),
+        num_tiles,
+        size_in_bytes,
+        data_format,
+        l1_address);
 }
 
 const CircularBuffer &CreateCircularBuffers(
@@ -405,7 +376,14 @@ const CircularBuffer &CreateCircularBuffers(
     uint32_t size_in_bytes,
     DataFormat data_format,
     std::optional<uint32_t> l1_address) {
-    return CreateCircularBuffers(program, std::set<u32>({buffer_index}), CoreRangeSet({core_range}), num_tiles, size_in_bytes, data_format, l1_address);
+    return CreateCircularBuffers(
+        program,
+        std::set<u32>({buffer_index}),
+        CoreRangeSet({core_range}),
+        num_tiles,
+        size_in_bytes,
+        data_format,
+        l1_address);
 }
 
 const CircularBuffer &CreateCircularBuffers(
@@ -416,7 +394,8 @@ const CircularBuffer &CreateCircularBuffers(
     uint32_t size_in_bytes,
     DataFormat data_format,
     std::optional<uint32_t> l1_address) {
-    return CreateCircularBuffers(program, std::set<u32>({buffer_index}), core_range_set, num_tiles, size_in_bytes, data_format, l1_address);
+    return CreateCircularBuffers(
+        program, std::set<u32>({buffer_index}), core_range_set, num_tiles, size_in_bytes, data_format, l1_address);
 }
 
 const CircularBuffer &CreateCircularBuffers(
@@ -427,17 +406,17 @@ const CircularBuffer &CreateCircularBuffers(
     uint32_t size_in_bytes,
     DataFormat data_format,
     std::optional<uint32_t> l1_address) {
-    return program.add_circular_buffer(core_range_set, buffer_indices, num_tiles, size_in_bytes, data_format, l1_address);
+    return program.add_circular_buffer(
+        core_range_set, buffer_indices, num_tiles, size_in_bytes, data_format, l1_address);
 }
 
-
 uint32_t CreateSemaphore(Program &program, const CoreRange &core_range, uint32_t initial_value) {
-    return CreateSemaphore ( program, CoreRangeSet({core_range}), initial_value );
+    return CreateSemaphore(program, CoreRangeSet({core_range}), initial_value);
 }
 
 uint32_t CreateSemaphore(Program &program, const CoreRangeSet &core_range_set, uint32_t initial_value) {
     std::optional<uint32_t> address;
-    TT_ASSERT( core_range_set.ranges().size() > 0, "Expecting a non-empty CoreRangeSet!");
+    TT_ASSERT(core_range_set.ranges().size() > 0, "Expecting a non-empty CoreRangeSet!");
     for (auto core_range : core_range_set.ranges()) {
         auto start_core = core_range.start;
         auto end_core = core_range.end;
@@ -449,7 +428,7 @@ uint32_t CreateSemaphore(Program &program, const CoreRangeSet &core_range_set, u
             TT_ASSERT(addr == address);
         }
     }
-    TT_ASSERT( address.has_value(), "Expecting a valid Semaphore address!");
+    TT_ASSERT(address.has_value(), "Expecting a valid Semaphore address!");
 
     program.add_semaphore(core_range_set, address.value(), initial_value);
 
@@ -474,20 +453,20 @@ void WriteToDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
     for (int page_index = 0; page_index < num_pages; page_index++) {
         auto absolute_address = buffer.page_address(bank_index, page_index);
         std::vector<uint32_t> page;
-        page.insert(page.end(), host_buffer.begin() + data_index, host_buffer.begin() + data_index + num_entries_per_page);
+        page.insert(
+            page.end(), host_buffer.begin() + data_index, host_buffer.begin() + data_index + num_entries_per_page);
         switch (buffer.buffer_type()) {
             case BufferType::DRAM: {
                 auto dram_channel = buffer.dram_channel_from_bank_id(bank_index);
-                device->cluster()->write_dram_vec(page, tt_target_dram{device->pcie_slot(), dram_channel, 0}, absolute_address);
-            }
-            break;
+                device->cluster()->write_dram_vec(
+                    page, tt_target_dram{device->pcie_slot(), dram_channel, 0}, absolute_address);
+            } break;
             case BufferType::L1: {
                 auto noc_coordinates = buffer.noc_coordinates(bank_index);
-                llrt::write_hex_vec_to_core(device->cluster(), device->pcie_slot(), noc_coordinates, page, absolute_address);
-            }
-            break;
-            default:
-                TT_ASSERT(false && "Unsupported buffer type to write to device!");
+                llrt::write_hex_vec_to_core(
+                    device->cluster(), device->pcie_slot(), noc_coordinates, page, absolute_address);
+            } break;
+            default: TT_ASSERT(false && "Unsupported buffer type to write to device!");
         }
 
         bank_index = (bank_index + 1) % num_banks;
@@ -501,21 +480,18 @@ void WriteToBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
         case BufferType::DRAM:
         case BufferType::L1: {
             WriteToDevice(buffer, host_buffer);
-        }
-        break;
+        } break;
         case BufferType::SYSTEM_MEMORY: {
             TT_ASSERT(false && "Writing to host memory is unsupported!");
-        }
-        break;
-        default:
-            TT_ASSERT(false && "Unsupported buffer type!");
+        } break;
+        default: TT_ASSERT(false && "Unsupported buffer type!");
     }
 }
 
 void ReadFromDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
     tt_metal_profiler.markStart("ReadFromDevice");
 
-    host_buffer.clear(); // overwrite the data
+    host_buffer.clear();  // overwrite the data
     uint32_t page_size = buffer.page_size();
     TT_ASSERT(buffer.size() % page_size == 0);
     uint32_t num_pages = buffer.size() / page_size;
@@ -530,20 +506,19 @@ void ReadFromDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
         switch (buffer.buffer_type()) {
             case BufferType::DRAM: {
                 auto dram_channel = buffer.dram_channel_from_bank_id(bank_index);
-                device->cluster()->read_dram_vec(page, tt_target_dram{device->pcie_slot(), dram_channel, 0}, absolute_address, page_size);
-            }
-            break;
+                device->cluster()->read_dram_vec(
+                    page, tt_target_dram{device->pcie_slot(), dram_channel, 0}, absolute_address, page_size);
+            } break;
             case BufferType::L1: {
                 auto noc_coordinates = buffer.noc_coordinates(bank_index);
-                page = llrt::read_hex_vec_from_core(device->cluster(), device->pcie_slot(), noc_coordinates, absolute_address, page_size);
-            }
-            break;
-            default:
-                TT_ASSERT(false && "Unsupported buffer type to write to device!");
+                page = llrt::read_hex_vec_from_core(
+                    device->cluster(), device->pcie_slot(), noc_coordinates, absolute_address, page_size);
+            } break;
+            default: TT_ASSERT(false && "Unsupported buffer type to write to device!");
         }
 
         // Copy page into host buffer
-        for (uint32_t entry: page) {
+        for (uint32_t entry : page) {
             host_buffer.push_back(entry);
         }
 
@@ -558,22 +533,18 @@ void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
         case BufferType::DRAM:
         case BufferType::L1: {
             ReadFromDevice(buffer, host_buffer);
-        }
-        break;
+        } break;
         case BufferType::SYSTEM_MEMORY: {
             TT_ASSERT(false && "Reading from host memory is unsupported!");
-        }
-        break;
-        default:
-            TT_ASSERT(false && "Unsupported buffer type!");
+        } break;
+        default: TT_ASSERT(false && "Unsupported buffer type!");
     }
 }
 
-void DeallocateBuffer(Buffer &buffer) {
-    buffer.deallocate();
-}
+void DeallocateBuffer(Buffer &buffer) { buffer.deallocate(); }
 
-bool ReadFromDeviceDRAMChannel(Device *device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t> &host_buffer) {
+bool ReadFromDeviceDRAMChannel(
+    Device *device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t> &host_buffer) {
     tt_metal_profiler.markStart("ReadFromDeviceDRAMChannel");
     bool pass = true;
     device->cluster()->read_dram_vec(host_buffer, tt_target_dram{device->pcie_slot(), dram_channel, 0}, address, size);
@@ -589,7 +560,8 @@ bool WriteToDeviceDRAMChannel(Device *device, int dram_channel, uint32_t address
     return pass;
 }
 
-bool WriteToDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t address, std::vector<uint32_t> &host_buffer) {
+bool WriteToDeviceL1(
+    Device *device, const CoreCoord &logical_core, uint32_t address, std::vector<uint32_t> &host_buffer) {
     tt_metal_profiler.markStart("WriteToDeviceL1");
     bool pass = true;
     auto worker_core = device->worker_core_from_logical_core(logical_core);
@@ -598,7 +570,12 @@ bool WriteToDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t add
     return pass;
 }
 
-bool ReadFromDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t address, uint32_t size, std::vector<uint32_t> &host_buffer) {
+bool ReadFromDeviceL1(
+    Device *device,
+    const CoreCoord &logical_core,
+    uint32_t address,
+    uint32_t size,
+    std::vector<uint32_t> &host_buffer) {
     tt_metal_profiler.markStart("ReadFromDeviceL1");
     bool pass = true;
     auto worker_core = device->worker_core_from_logical_core(logical_core);
@@ -612,8 +589,7 @@ bool GenerateBinaries(
     build_kernel_for_riscv_options_t *build_options,
     const std::string &op_path_suffix,
     bool profile_kernel,
-    Kernel *kernel)
-{
+    Kernel *kernel) {
     std::string arch_name = tt::get_string_lowercase(device->arch());
 
     generate_descriptors(build_options, op_path_suffix);
@@ -629,8 +605,7 @@ bool GenerateBinaries(
                         dm_kernel->noc(),
                         dm_kernel->compile_time_args(),
                         profile_kernel);
-                }
-                break;
+                } break;
                 case (DataMovementProcessor::RISCV_1): {
                     generate_binary_for_ncrisc(
                         build_options,
@@ -639,10 +614,8 @@ bool GenerateBinaries(
                         dm_kernel->noc(),
                         dm_kernel->compile_time_args(),
                         profile_kernel);
-                }
-                break;
-                default:
-                    TT_ASSERT(false, "Unsupported data movement processor!");
+                } break;
+                default: TT_ASSERT(false, "Unsupported data movement processor!");
             }
         } else if (auto compute_kernel = dynamic_cast<ComputeKernel *>(kernel)) {
             generate_binaries_for_triscs(
@@ -670,7 +643,8 @@ void SetCircularBufferDataFormat(
 #include <fstream>
 #endif
 
-size_t KernelCompileHash(Kernel *kernel, build_kernel_for_riscv_options_t &build_options, const int &pcie_slot, bool profile_kernel) {
+size_t KernelCompileHash(
+    Kernel *kernel, build_kernel_for_riscv_options_t &build_options, const int &pcie_slot, bool profile_kernel) {
     string compile_hash_str = std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc));
     compile_hash_str += kernel->compile_time_args_hash();
     compile_hash_str += std::to_string(kernel->define_args_hash());
@@ -691,34 +665,27 @@ size_t KernelCompileHash(Kernel *kernel, build_kernel_for_riscv_options_t &build
 
     size_t compile_hash = std::hash<std::string>{}(compile_hash_str);
 
-    #ifdef GENERATE_HASH_LOG
+#ifdef GENERATE_HASH_LOG
     static std::ofstream f("/tmp/hashlog.txt");
     static std::mutex mutex_;
     {
         unique_lock<mutex> lock;
-        f << kernel->name() << " :: "
-          << std::hash<tt_hlk_desc>{}(build_options.hlk_desc) << " :: "
-          << kernel->compile_time_args_hash() << " :: "
-          << kernel->define_args_hash() << " :: "
-          << std::hash<std::string>{}(kernel->name()) << " :: ";
-          << profile_kernel << " :: ";
+        f << kernel->name() << " :: " << std::hash<tt_hlk_desc>{}(build_options.hlk_desc)
+          << " :: " << kernel->compile_time_args_hash() << " :: " << kernel->define_args_hash()
+          << " :: " << std::hash<std::string>{}(kernel->name()) << " :: ";
+        << profile_kernel << " :: ";
         if (auto dm_kernel = dynamic_cast<DataMovementKernel *>(kernel)) {
             f << dm_kernel->noc() << " :: ";
         } else {
             auto compute_kernel = dynamic_cast<ComputeKernel *>(kernel);
-            f << compute_kernel->math_fidelity() << " :: "
-              << compute_kernel->fp32_dest_acc_en() << " :: "
-              << compute_kernel->math_approx_mode() << " :: ";
+            f << compute_kernel->math_fidelity() << " :: " << compute_kernel->fp32_dest_acc_en()
+              << " :: " << compute_kernel->math_approx_mode() << " :: ";
         }
-        f << compile_hash_str
-        f << compile_hash
-          << std::endl << std::flush;
+        f << compile_hash_str f << compile_hash << std::endl << std::flush;
     }
-    #endif
+#endif
     return compile_hash;
 }
-
-
 
 void SetBuildKernelOptions(Kernel *kernel, build_kernel_for_riscv_options_t &build_options) {
     if (auto compute_kernel = dynamic_cast<ComputeKernel *>(kernel)) {
@@ -730,18 +697,15 @@ void SetBuildKernelOptions(Kernel *kernel, build_kernel_for_riscv_options_t &bui
     } else {
         auto dm_kernel = dynamic_cast<DataMovementKernel *>(kernel);
         switch (dm_kernel->data_movement_processor()) {
-                case (DataMovementProcessor::RISCV_0): {
-                    build_options.brisc_kernel_file_name = dm_kernel->kernel_path_file_name();
-                    build_options.brisc_defines = dm_kernel->defines();
-                }
-                break;
-                case (DataMovementProcessor::RISCV_1): {
-                    build_options.ncrisc_kernel_file_name = dm_kernel->kernel_path_file_name();
-                    build_options.ncrisc_defines = dm_kernel->defines();
-                }
-                break;
-                default:
-                    TT_ASSERT(false, "Unsupported data movement processor!");
+            case (DataMovementProcessor::RISCV_0): {
+                build_options.brisc_kernel_file_name = dm_kernel->kernel_path_file_name();
+                build_options.brisc_defines = dm_kernel->defines();
+            } break;
+            case (DataMovementProcessor::RISCV_1): {
+                build_options.ncrisc_kernel_file_name = dm_kernel->kernel_path_file_name();
+                build_options.ncrisc_defines = dm_kernel->defines();
+            } break;
+            default: TT_ASSERT(false, "Unsupported data movement processor!");
         }
     }
 }
@@ -757,9 +721,9 @@ void CompileKernel(Device *device, Program &program, Kernel *kernel, bool profil
 
     bool cache_hit = true;
     bool path_exists = std::filesystem::exists(build_options.outpath + kernel_path_suffix);
-    if ( enable_compile_cache && path_exists ){
-        TT_ASSERT ( detail::HashLookup::inst().exists(kernel_hash) );
-    } else if ( detail::HashLookup::inst().add(kernel_hash) ) {
+    if (enable_compile_cache && path_exists) {
+        TT_ASSERT(detail::HashLookup::inst().exists(kernel_hash));
+    } else if (detail::HashLookup::inst().add(kernel_hash)) {
         cache_hit = false;
         GenerateBinaries(device, &build_options, kernel_path_suffix, profile_kernel, kernel);
     }
@@ -781,7 +745,7 @@ void AddBlankKernels(Device *device, Program &program, bool profile_kernel) {
         CoreRange core_range = {.start = logical_core, .end = logical_core};
         if (kernel_group.riscv_0 == nullptr)
             unique_core_ranges_without_brisc_kernel.insert(core_range);
-        if (kernel_group.riscv_1 == nullptr )
+        if (kernel_group.riscv_1 == nullptr)
             unique_core_ranges_without_ncrisc_kernel.insert(core_range);
         if (kernel_group.compute == nullptr)
             unique_core_ranges_without_compute_kernel.insert(core_range);
@@ -820,14 +784,14 @@ void AddBlankKernels(Device *device, Program &program, bool profile_kernel) {
         CompileKernel(device, program, blank_kernel, profile_kernel);
         blank_kernel->read_binaries(device->pcie_slot());
     }
-
 }
 
 bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
     log_assert(
         device->is_initialized(),
-        "Device needs to be initialized before program {} compilation! Generating headers for banking information is dependent on information that is set during device initialization.", program.get_id()
-    );
+        "Device needs to be initialized before program {} compilation! Generating headers for banking information is "
+        "dependent on information that is set during device initialization.",
+        program.get_id());
 
     const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
     if (TT_METAL_DEVICE_DISPATCH_MODE == nullptr) {
@@ -836,8 +800,9 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
 
     bool pass = true;
     tt_metal_profiler.markStart("CompileProgram");
-    std::vector< std::future<void> > events;
-    log_assert(!(profile_kernel && tt_is_print_server_running()), "Debug print server is running, profiling is not allowed");
+    std::vector<std::future<void>> events;
+    log_assert(
+        !(profile_kernel && tt_is_print_server_running()), "Debug print server is running, profiling is not allowed");
     tt_set_profiler_state_for_debug_print(profile_kernel);
 
     {
@@ -871,7 +836,7 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
         tf::Taskflow tf;
 
         for (auto kernel : program.kernels()) {
-            tf.emplace ( [kernel, device] { kernel->read_binaries(device->pcie_slot()); });
+            tf.emplace([kernel, device] { kernel->read_binaries(device->pcie_slot()); });
         }
         GetExecutor().run(tf).wait();
     }
@@ -891,7 +856,9 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
 void ValidateKernelGroup(const KernelGroup &kernel_group, const CoreCoord &logical_core) {
     if (kernel_group.riscv_0 != nullptr and kernel_group.riscv_1 != nullptr) {
         if (kernel_group.riscv_0->noc() == kernel_group.riscv_1->noc() and kernel_group.riscv_0->name() != "blank") {
-            TT_THROW("Data movement kernels on RISCV_0 and RISCV_1 on core " + logical_core.str() + " cannot use the same NOC, doing so results in a hang!");
+            TT_THROW(
+                "Data movement kernels on RISCV_0 and RISCV_1 on core " + logical_core.str() +
+                " cannot use the same NOC, doing so results in a hang!");
         }
     }
 }
@@ -924,17 +891,18 @@ bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
         llrt::CircularBufferConfigVec circular_buffer_config_vec = llrt::create_circular_buffer_config_vector();
 
         // Load firmware into L1 of worker core
-        llrt::disable_ncrisc(cluster, pcie_slot, worker_core); // PROF_BEGIN("CONF_DISABLE_NCTR")
-        llrt::disable_triscs(cluster, pcie_slot, worker_core); // PROF_END("CONF_DISABLE_NCTR")
+        llrt::disable_ncrisc(cluster, pcie_slot, worker_core);     // PROF_BEGIN("CONF_DISABLE_NCTR")
+        llrt::disable_triscs(cluster, pcie_slot, worker_core);     // PROF_END("CONF_DISABLE_NCTR")
 
-        ConfigureKernelGroup(kernel_group, device, logical_core); // PROF_BEGIN("CONF_KERN") PROF_END("CONF_KERN")
+        ConfigureKernelGroup(kernel_group, device, logical_core);  // PROF_BEGIN("CONF_KERN") PROF_END("CONF_KERN")
 
         // Initialize registers to INVALID
-        constexpr static uint32_t INVALID = 0x4321; // PROF_BEGIN("WRITE_HEX")
+        constexpr static uint32_t INVALID = 0x4321;  // PROF_BEGIN("WRITE_HEX")
         uint32_t stream_register_address = STREAM_REG_ADDR(0, 24);
-        llrt::write_hex_vec_to_core(cluster, pcie_slot, worker_core, {INVALID}, stream_register_address); // PROF_END("WRITE_HEX")
+        llrt::write_hex_vec_to_core(
+            cluster, pcie_slot, worker_core, {INVALID}, stream_register_address);  // PROF_END("WRITE_HEX")
 
-        auto cbs_on_core = program.circular_buffers_on_core(logical_core); // PROF_BEGIN("CBS")
+        auto cbs_on_core = program.circular_buffers_on_core(logical_core);         // PROF_BEGIN("CBS")
         for (auto circular_buffer : cbs_on_core) {
             for (auto buffer_index : circular_buffer.buffer_indices()) {
                 llrt::set_config_for_circular_buffer(
@@ -942,19 +910,22 @@ bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
                     buffer_index,
                     circular_buffer.address(),
                     circular_buffer.size(),
-                    circular_buffer.num_tiles()
-                );
+                    circular_buffer.num_tiles());
             }
-        } // PROF_END("CBS")
+        }  // PROF_END("CBS")
 
-        llrt::write_circular_buffer_config_vector_to_core(cluster, pcie_slot, worker_core, circular_buffer_config_vec); // PROF_BEGIN("WRITE_CBS") PROF_END("WRITE_CBS")
+        llrt::write_circular_buffer_config_vector_to_core(
+            cluster,
+            pcie_slot,
+            worker_core,
+            circular_buffer_config_vec);  // PROF_BEGIN("WRITE_CBS") PROF_END("WRITE_CBS")
 
         program.init_semaphores(*device, logical_core);
     }
 
     // Skip loading of blank kernels to storage cores when using L1 banking
     if (device->allocator_scheme() == MemoryAllocator::L1_BANKING) {
-        for (const auto& core : device->cluster()->get_soc_desc(device->pcie_slot()).storage_cores) {
+        for (const auto &core : device->cluster()->get_soc_desc(device->pcie_slot()).storage_cores) {
             const auto logical_coord = get_core_coord_from_relative(core, device->logical_grid_size());
             worker_cores.push_back(device->worker_core_from_logical_core(logical_coord));
         }
@@ -962,9 +933,9 @@ bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
     }
 
     // Load blank kernel to all riscs of all cores excluding those in worker_cores
-    const llrt::TensixRiscsOptions riscs_options = llrt::TensixRiscsOptions::ALL_RISCS; // PROF_BEGIN("LOAD_BLANK")
+    const llrt::TensixRiscsOptions riscs_options = llrt::TensixRiscsOptions::ALL_RISCS;  // PROF_BEGIN("LOAD_BLANK")
     llrt::internal_::load_blank_kernel_to_all_worker_cores_with_exceptions(
-        cluster, pcie_slot, riscs_options, worker_cores);                               // PROF_END("LOAD_BLANK")
+        cluster, pcie_slot, riscs_options, worker_cores);                                // PROF_END("LOAD_BLANK")
 
     tt_metal_profiler.markStop("ConfigureDeviceWithProgram");
     return pass;
@@ -1003,14 +974,11 @@ void WriteRuntimeArgsToDevice(Device *device, const Program &program) {
         switch (riscv) {
             case RISCV::BRISC: {
                 l1_arg_base = BRISC_L1_ARG_BASE;
-            }
-            break;
+            } break;
             case RISCV::NCRISC: {
                 l1_arg_base = NCRISC_L1_ARG_BASE;
-            }
-            break;
-            default:
-                log_assert(false, "Unsupported {} processor does not support runtime args", riscv);
+            } break;
+            default: log_assert(false, "Unsupported {} processor does not support runtime args", riscv);
         }
         return l1_arg_base;
     };
@@ -1047,7 +1015,6 @@ llrt::TensixRiscsOptions GetRiscOptionFromCoreConfig(bool core_runs_ncrisc, bool
 }
 
 bool LaunchKernels(Device *device, const Program &program, bool stagger_start) {
-
     tt_metal_profiler.markStart("LaunchKernels");
     bool pass = true;
 
@@ -1087,20 +1054,14 @@ bool LaunchKernels(Device *device, const Program &program, bool stagger_start) {
     // Reset the device that was running
     cluster->broadcast_remote_tensix_risc_reset(pcie_slot, TENSIX_ASSERT_SOFT_RESET);
 
-
     tt_metal_profiler.markStop("LaunchKernels");
     return pass;
 }
 
-bool WriteToDeviceL1(
-    Device *device,
-    const CoreCoord &core,
-    op_info_t op_info,
-    int op_idx) {
+bool WriteToDeviceL1(Device *device, const CoreCoord &core, op_info_t op_info, int op_idx) {
     int pass = true;
     auto worker_core = device->worker_core_from_logical_core(core);
-    llrt::write_graph_interpreter_op_info_to_core(
-        device->cluster(), device->pcie_slot(), worker_core, op_info, op_idx);
+    llrt::write_graph_interpreter_op_info_to_core(device->cluster(), device->pcie_slot(), worker_core, op_info, op_idx);
     return pass;
 }
 
