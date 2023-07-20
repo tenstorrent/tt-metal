@@ -24,6 +24,40 @@ namespace tt {
 
 namespace tt_metal {
 
+namespace detail {
+    inline void CompileBlankKernel(Device *device, bool profile_kernel) {
+        // Crude way to check if blank_op needs to be compiled or not
+        // TODO(pgk):
+        //  - fw is compiled every run
+        //  - for unknown reasons, fw size can vary run to run
+        //  - kernels from one run linked against fw from another run may clash
+        //  - rebuid blank kernels once per run
+        static bool compiled = false;
+        if (compiled) {
+            return;
+        }
+
+        build_kernel_for_riscv_options_t blank_build_options(device->pcie_slot(), "blank_op");
+        struct hlk_args_t {
+            std::int32_t dummy;
+        };
+        void *hlk_args = new hlk_args_t{
+            .dummy = 0,
+        };
+        blank_build_options.set_hlk_args_all_cores(hlk_args, sizeof(hlk_args_t));
+        blank_build_options.set_hlk_file_name_all_cores("tt_metal/kernels/compute/blank.cpp");
+        blank_build_options.ncrisc_kernel_file_name = "tt_metal/kernels/dataflow/blank.cpp";
+        blank_build_options.brisc_kernel_file_name = "tt_metal/kernels/dataflow/blank.cpp";
+        std::string arch_name = tt::get_string_lowercase(device->arch());
+
+        generate_binaries_params_t default_params;
+        detail::GenerateBankToNocCoordHeaders(device, &blank_build_options, blank_build_options.name);
+        generate_binaries_all_riscs(&blank_build_options, blank_build_options.name, arch_name, default_params, profile_kernel);
+
+        compiled = true;
+    }
+}
+
 namespace {
 
     detail::CompilationReporter compilation_reporter = detail::CompilationReporter();
@@ -795,6 +829,11 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
         "Device needs to be initialized before program {} compilation! Generating headers for banking information is dependent on information that is set during device initialization.", program.get_id()
     );
 
+    const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
+    if (TT_METAL_DEVICE_DISPATCH_MODE == nullptr) {
+        tt::tt_metal::detail::CompileBlankKernel(device, profile_kernel);
+    }
+
     bool pass = true;
     tt_metal_profiler.markStart("CompileProgram");
     std::vector< std::future<void> > events;
@@ -810,7 +849,6 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
         // fully move over to fast, so using this env var method to set all
         // the kernels to using fast dispatch mode. Need to be done after adding
         // blanks to ensure that they get the define, too.
-        const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
 
         if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
             for (auto kernel : program.kernels()) {
