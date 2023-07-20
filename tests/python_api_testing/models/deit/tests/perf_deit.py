@@ -22,7 +22,7 @@ from tt.deit_for_image_classification_with_teacher import deit_for_image_classif
 
 BATCH_SIZE = 1
 
-def test_perf():
+def test_perf(use_program_cache):
     disable_compile_cache()
     first_key = "first_iter"
     second_key = "second_iter"

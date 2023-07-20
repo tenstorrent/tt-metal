@@ -27,7 +27,7 @@ from resnetBlock import ResNet, Bottleneck
 BATCH_SIZE = 1
 
 
-def test_perf():
+def test_perf(use_program_cache):
     disable_compile_cache()
     first_key = "first_iter"
     second_key = "second_iter"

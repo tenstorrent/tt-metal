@@ -24,7 +24,7 @@ from tt.vgg import *
 BATCH_SIZE = 1
 
 
-def test_perf(imagenet_sample_input):
+def test_perf(imagenet_sample_input, use_program_cache):
     profiler = Profiler()
     disable_compile_cache()
     first_key = "first_iter"

@@ -98,7 +98,7 @@ def make_tt_unet(state_dict, device):
     return tt_unet
 
 
-def test_perf():
+def test_perf(use_program_cache):
     profiler = Profiler()
     first_key = "first_iter"
     second_key = "second_iter"

@@ -23,7 +23,7 @@ from models.vit.tt.modeling_vit import vit_for_image_classification
 BATCH_SIZE = 1
 
 
-def test_perf():
+def test_perf(use_program_cache):
     profiler = Profiler()
     disable_compile_cache()
     first_key = "first_iter"

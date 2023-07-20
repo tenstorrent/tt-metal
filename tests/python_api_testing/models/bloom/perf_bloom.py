@@ -30,7 +30,7 @@ import python_api_testing.models.bloom.bloom_model as bloom_model
 BATCH_SIZE = 1
 
 
-def test_perf():
+def test_perf(use_program_cache):
     disable_compile_cache()
     first_key = "first_iter"
     second_key = "second_iter"

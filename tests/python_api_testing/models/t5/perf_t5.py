@@ -25,7 +25,7 @@ from python_api_testing.models.t5.t5_model import TtT5Model
 BATCH_SIZE = 1
 
 
-def test_perf():
+def test_perf(use_program_cache):
     profiler = Profiler()
     disable_compile_cache()
     first_key = "first_iter"

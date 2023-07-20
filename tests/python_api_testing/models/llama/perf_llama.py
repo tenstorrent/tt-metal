@@ -49,6 +49,7 @@ def test_perf(
     num_decoders,
     max_position_embeddings,
     on_weka,
+    use_program_cache,
 ):
     profiler = Profiler()
     disable_compile_cache()

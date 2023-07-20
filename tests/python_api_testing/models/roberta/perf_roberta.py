@@ -31,7 +31,7 @@ from python_api_testing.models.roberta.roberta_for_sequence_classification impor
 BATCH_SIZE = 1
 
 
-def test_perf():
+def test_perf(use_program_cache):
     profiler = Profiler()
     disable_compile_cache()
     first_key = "first_iter"
