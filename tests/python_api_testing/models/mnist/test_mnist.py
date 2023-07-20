@@ -53,9 +53,6 @@ def run_mnist_inference(pcc):
         tt_output = tt_mnist_model(tt_image)
         pytorch_out = pytorch_mnist_model(first_input)
 
-        tt_output = tt_output.to(host)
-        tt_output = torch.Tensor(tt_output.data()).reshape(tt_output.shape())
-
         pcc_passing, pcc_output = comp_pcc(pytorch_out, tt_output, pcc)
         logger.info(f"Output {pcc_output}")
         assert pcc_passing, f"Model output does not meet PCC requirement {pcc}."
