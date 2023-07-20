@@ -8,7 +8,9 @@ from tests.python_api_testing.models.utility_functions_new import (
     tt2torch_tensor,
     comp_pcc,
 )
-from models.EfficientNet.tt.efficientnet_squeeze_excitation import TtEfficientnetSqueezeExcitation
+from models.EfficientNet.tt.efficientnet_squeeze_excitation import (
+    TtEfficientnetSqueezeExcitation,
+)
 
 
 def test_efficientnet_squeeze_excitation_b0():

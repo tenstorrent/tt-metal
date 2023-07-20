@@ -13,6 +13,11 @@ import torch
 import torchvision
 from loguru import logger
 from datasets import load_dataset
+from models.EfficientNet.demo.demo_utils import (
+    load_imagenet_labels,
+    download_images,
+    preprocess,
+)
 
 
 def load_efficientnet_model():
@@ -24,41 +29,12 @@ def load_efficientnet_model():
     return model
 
 
-def preprocess():
-    """
-    Define the transform for the input image/frames.
-    Resize, crop, convert to tensor, and apply ImageNet normalization stats.
-    """
-    transform = torchvision.transforms.Compose(
-        [
-            torchvision.transforms.ToPILImage(),
-            torchvision.transforms.Resize(256),
-            torchvision.transforms.CenterCrop(224),
-            torchvision.transforms.ToTensor(),
-            torchvision.transforms.Normalize(
-                mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-            ),
-        ]
-    )
-
-    return transform
-
-
-def download_images(img_path):
-    dataset = load_dataset("huggingface/cats-image")
-    image = dataset["test"]["image"][0]
-    image.save(img_path)
-
-
-def test_cpu_demo(imagenet_label_dict):
+def test_cpu_demo_v2_s():
     img_path = ROOT / "input_image.jpg"
     download_images(img_path)
 
     model = load_efficientnet_model()
-    categories = [
-        imagenet_label_dict[key]
-        for key in sorted(imagenet_label_dict.keys(), reverse=False)
-    ]
+    categories = load_imagenet_labels()
     transform = preprocess()
 
     image = cv2.imread(str(img_path))

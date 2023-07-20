@@ -24,10 +24,6 @@ from models.EfficientNet.tt.efficientnet_fused_mbconv import (
 )
 
 
-def flatten_via_reshape(x, start_dim):
-    shape = x.shape()
-
-
 class TtEfficientNet(torch.nn.Module):
     def __init__(
         self,
@@ -524,11 +520,25 @@ def efficientnet_v2_l(device) -> TtEfficientNet:
     )
 
 
+import requests
+
+
+def save_file_from_url(url, path):
+    response = requests.get(url)
+    open(path, "wb").write(response.content)
+
+
 def reference_efficientnet_lite0(pretrained: bool = True) -> torch.nn.Module:
     reference_model = build_efficientnet_lite("efficientnet_lite0", 1000)
-    reference_model.load_pretrain(
-        "/mnt/MLPerf/tt_dnn-models/EfficientNet/models/efficientnet_lite0.pth"
+
+    save_path = "./efficientnet_lite0.pth"
+    save_file_from_url(
+        "https://github.com/RangiLyu/EfficientNet-Lite/releases/download/v1.0/efficientnet_lite0.pth",
+        save_path,
     )
+    logger.info(f"Weights for efficientnet_lite0 saved to '{save_path}'")
+
+    reference_model.load_pretrain(save_path)
     reference_model.eval()
 
     return reference_model
@@ -536,9 +546,15 @@ def reference_efficientnet_lite0(pretrained: bool = True) -> torch.nn.Module:
 
 def reference_efficientnet_lite1(pretrained: bool = True) -> torch.nn.Module:
     reference_model = build_efficientnet_lite("efficientnet_lite1", 1000)
-    reference_model.load_pretrain(
-        "/mnt/MLPerf/tt_dnn-models/EfficientNet/models/efficientnet_lite1.pth"
+
+    save_path = "./efficientnet_lite1.pth"
+    save_file_from_url(
+        "https://github.com/RangiLyu/EfficientNet-Lite/releases/download/v1.0/efficientnet_lite1.pth",
+        save_path,
     )
+    logger.info(f"Weights for efficientnet_lite1 saved to '{save_path}'")
+
+    reference_model.load_pretrain(save_path)
     reference_model.eval()
 
     return reference_model
@@ -546,9 +562,15 @@ def reference_efficientnet_lite1(pretrained: bool = True) -> torch.nn.Module:
 
 def reference_efficientnet_lite2(pretrained: bool = True) -> torch.nn.Module:
     reference_model = build_efficientnet_lite("efficientnet_lite2", 1000)
-    reference_model.load_pretrain(
-        "/mnt/MLPerf/tt_dnn-models/EfficientNet/models/efficientnet_lite2.pth"
+
+    save_path = "./efficientnet_lite2.pth"
+    save_file_from_url(
+        "https://github.com/RangiLyu/EfficientNet-Lite/releases/download/v1.0/efficientnet_lite2.pth",
+        save_path,
     )
+    logger.info(f"Weights for efficientnet_lite2 saved to '{save_path}'")
+
+    reference_model.load_pretrain(save_path)
     reference_model.eval()
 
     return reference_model
@@ -556,9 +578,15 @@ def reference_efficientnet_lite2(pretrained: bool = True) -> torch.nn.Module:
 
 def reference_efficientnet_lite3(pretrained: bool = True) -> torch.nn.Module:
     reference_model = build_efficientnet_lite("efficientnet_lite3", 1000)
-    reference_model.load_pretrain(
-        "/mnt/MLPerf/tt_dnn-models/EfficientNet/models/efficientnet_lite3.pth"
+
+    save_path = "./efficientnet_lite3.pth"
+    save_file_from_url(
+        "https://github.com/RangiLyu/EfficientNet-Lite/releases/download/v1.0/efficientnet_lite3.pth",
+        save_path,
     )
+    logger.info(f"Weights for efficientnet_lite3 saved to '{save_path}'")
+
+    reference_model.load_pretrain(save_path)
     reference_model.eval()
 
     return reference_model
@@ -566,9 +594,15 @@ def reference_efficientnet_lite3(pretrained: bool = True) -> torch.nn.Module:
 
 def reference_efficientnet_lite4(pretrained: bool = True) -> torch.nn.Module:
     reference_model = build_efficientnet_lite("efficientnet_lite4", 1000)
-    reference_model.load_pretrain(
-        "/mnt/MLPerf/tt_dnn-models/EfficientNet/models/efficientnet_lite4.pth"
+
+    save_path = "./efficientnet_lite4.pth"
+    save_file_from_url(
+        "https://github.com/RangiLyu/EfficientNet-Lite/releases/download/v1.0/efficientnet_lite4.pth",
+        save_path,
     )
+    logger.info(f"Weights for efficientnet_lite4 saved to '{save_path}'")
+
+    reference_model.load_pretrain(save_path)
     reference_model.eval()
 
     return reference_model

@@ -6,8 +6,9 @@ from dataclasses import dataclass
 from typing import List, Callable, Optional
 
 from models.EfficientNet.tt.efficientnet_conv import TtEfficientnetConv2dNormActivation
-from models.EfficientNet.tt.efficientnet_squeeze_excitation import TtEfficientnetSqueezeExcitation
-
+from models.EfficientNet.tt.efficientnet_squeeze_excitation import (
+    TtEfficientnetSqueezeExcitation,
+)
 
 
 def _make_divisible(v: float, divisor: int, min_value=None) -> int:

@@ -1,13 +1,3 @@
-import os
-import sys
-from pathlib import Path
-
-FILE = Path(__file__).resolve()
-ROOT = FILE.parents[0]  # YOLOv5 root directory
-if str(ROOT) not in sys.path:
-    sys.path.append(str(ROOT))  # add ROOT to PATH
-ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
-
 import cv2
 import tt_lib
 import torch
@@ -45,39 +35,24 @@ from models.EfficientNet.tt.efficientnet_model import (
 )
 
 
-def download_images(img_path):
-    dataset = load_dataset("huggingface/cats-image")
-    image = dataset["test"]["image"][0]
-    image.save(img_path)
-
-
-def make_input_tensor(resize=256, crop=224):
-    img_path = ROOT / "input_image.jpg"
-    download_images(img_path)
-
+def make_input_tensor(imagenet_sample_input, resize=256, crop=224):
     transform = torchvision.transforms.Compose(
         [
-            torchvision.transforms.ToPILImage(),
             torchvision.transforms.Resize(resize),
             torchvision.transforms.CenterCrop(crop),
-            torchvision.transforms.ToTensor(),
             torchvision.transforms.Normalize(
                 mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
             ),
         ]
     )
 
-    image = cv2.imread(str(img_path))
-    rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    input_tensor = transform(image)
-    input_batch = input_tensor.unsqueeze(0)
-
-    return input_batch
+    return transform(imagenet_sample_input)
 
 
 def run_efficientnet_model_test(
     reference_model_class,
     tt_model_class,
+    imagenet_sample_input,
     pcc=0.99,
     real_input=False,
     resize=256,
@@ -91,9 +66,9 @@ def run_efficientnet_model_test(
     torch.manual_seed(0)
 
     if real_input:
-        test_input = make_input_tensor(resize, crop)
+        test_input = make_input_tensor(imagenet_sample_input, resize, crop)
     else:
-        test_input = torch.rand(1, 3, 224, 224)
+        test_input = torch.rand(1, 3, crop, crop)
 
     with torch.no_grad():
         refence_model.eval()
@@ -123,60 +98,87 @@ def run_efficientnet_model_test(
     assert does_pass
 
 
-def test_efficientnet_b0_model():
-    run_efficientnet_model_test(torchvision.models.efficientnet_b0, efficientnet_b0)
-
-
-def test_efficientnet_b1_model():
+def test_efficientnet_b0_model_synt(imagenet_sample_input):
     run_efficientnet_model_test(
-        torchvision.models.efficientnet_b1, efficientnet_b1, 0.97
+        torchvision.models.efficientnet_b0, efficientnet_b0, imagenet_sample_input
     )
 
 
-def test_efficientnet_b2_model():
-    run_efficientnet_model_test(torchvision.models.efficientnet_b2, efficientnet_b2)
+def test_efficientnet_b1_model_synt(imagenet_sample_input):
+    run_efficientnet_model_test(
+        torchvision.models.efficientnet_b1, efficientnet_b1, imagenet_sample_input, 0.97
+    )
 
 
-def test_efficientnet_b3_model():
-    run_efficientnet_model_test(torchvision.models.efficientnet_b3, efficientnet_b3)
+def test_efficientnet_b2_model_synt(imagenet_sample_input):
+    run_efficientnet_model_test(
+        torchvision.models.efficientnet_b2, efficientnet_b2, imagenet_sample_input
+    )
 
 
-def test_efficientnet_b4_model():
-    run_efficientnet_model_test(torchvision.models.efficientnet_b4, efficientnet_b4)
+def test_efficientnet_b3_model_synt(imagenet_sample_input):
+    run_efficientnet_model_test(
+        torchvision.models.efficientnet_b3, efficientnet_b3, imagenet_sample_input
+    )
 
 
-def test_efficientnet_b5_model():
-    run_efficientnet_model_test(torchvision.models.efficientnet_b5, efficientnet_b5)
+def test_efficientnet_b4_model_synt(imagenet_sample_input):
+    run_efficientnet_model_test(
+        torchvision.models.efficientnet_b4, efficientnet_b4, imagenet_sample_input
+    )
 
 
-def test_efficientnet_b6_model():
-    run_efficientnet_model_test(torchvision.models.efficientnet_b6, efficientnet_b6)
+def test_efficientnet_b5_model_synt(imagenet_sample_input):
+    run_efficientnet_model_test(
+        torchvision.models.efficientnet_b5, efficientnet_b5, imagenet_sample_input
+    )
 
 
-def test_efficientnet_b7_model():
-    run_efficientnet_model_test(torchvision.models.efficientnet_b7, efficientnet_b7)
+def test_efficientnet_b6_model_synt(imagenet_sample_input):
+    run_efficientnet_model_test(
+        torchvision.models.efficientnet_b6, efficientnet_b6, imagenet_sample_input
+    )
 
 
-def test_efficientnet_v2_s_model():
-    run_efficientnet_model_test(torchvision.models.efficientnet_v2_s, efficientnet_v2_s)
+def test_efficientnet_b7_model_synt(imagenet_sample_input):
+    run_efficientnet_model_test(
+        torchvision.models.efficientnet_b7, efficientnet_b7, imagenet_sample_input
+    )
 
 
-def test_efficientnet_v2_m_model():
-    run_efficientnet_model_test(torchvision.models.efficientnet_v2_m, efficientnet_v2_m)
+def test_efficientnet_v2_s_model_synt(imagenet_sample_input):
+    run_efficientnet_model_test(
+        torchvision.models.efficientnet_v2_s, efficientnet_v2_s, imagenet_sample_input
+    )
 
 
-def test_efficientnet_v2_l_model():
-    run_efficientnet_model_test(torchvision.models.efficientnet_v2_l, efficientnet_v2_l)
+def test_efficientnet_v2_m_model_synt(imagenet_sample_input):
+    run_efficientnet_model_test(
+        torchvision.models.efficientnet_v2_m, efficientnet_v2_m, imagenet_sample_input
+    )
 
 
-def test_efficientnet_lite0_model():
-    run_efficientnet_model_test(reference_efficientnet_lite0, efficientnet_lite0)
+def test_efficientnet_v2_l_model_synt(imagenet_sample_input):
+    run_efficientnet_model_test(
+        torchvision.models.efficientnet_v2_l, efficientnet_v2_l, imagenet_sample_input
+    )
 
 
-def test_efficientnet_lite1_model():
+def test_efficientnet_lite0_model_synt(imagenet_sample_input):
+    run_efficientnet_model_test(
+        reference_efficientnet_lite0,
+        efficientnet_lite0,
+        imagenet_sample_input,
+        0.99,
+        real_input=False,
+    )
+
+
+def test_efficientnet_lite1_model_synt(imagenet_sample_input):
     run_efficientnet_model_test(
         reference_efficientnet_lite1,
         efficientnet_lite1,
+        imagenet_sample_input,
         0.99,
         real_input=False,
         resize=280,
@@ -184,10 +186,11 @@ def test_efficientnet_lite1_model():
     )
 
 
-def test_efficientnet_lite2_model():
+def test_efficientnet_lite2_model_synt(imagenet_sample_input):
     run_efficientnet_model_test(
         reference_efficientnet_lite2,
         efficientnet_lite2,
+        imagenet_sample_input,
         0.99,
         real_input=False,
         resize=300,
@@ -195,10 +198,11 @@ def test_efficientnet_lite2_model():
     )
 
 
-def test_efficientnet_lite3_model():
+def test_efficientnet_lite3_model_synt(imagenet_sample_input):
     run_efficientnet_model_test(
         reference_efficientnet_lite3,
         efficientnet_lite3,
+        imagenet_sample_input,
         0.99,
         real_input=False,
         resize=320,
@@ -206,10 +210,11 @@ def test_efficientnet_lite3_model():
     )
 
 
-def test_efficientnet_lite4_model():
+def test_efficientnet_lite4_model_synt(imagenet_sample_input):
     run_efficientnet_model_test(
         reference_efficientnet_lite4,
         efficientnet_lite4,
+        imagenet_sample_input,
         0.99,
         real_input=False,
         resize=350,
@@ -217,82 +222,131 @@ def test_efficientnet_lite4_model():
     )
 
 
-def test_efficientnet_b0_model_real():
+def test_efficientnet_b0_model_real(imagenet_sample_input):
     run_efficientnet_model_test(
-        torchvision.models.efficientnet_b0, efficientnet_b0, 0.97, real_input=True
+        torchvision.models.efficientnet_b0,
+        efficientnet_b0,
+        imagenet_sample_input,
+        0.97,
+        real_input=True,
     )
 
 
-def test_efficientnet_b1_model_real():
+def test_efficientnet_b1_model_real(imagenet_sample_input):
     run_efficientnet_model_test(
-        torchvision.models.efficientnet_b1, efficientnet_b1, 0.97, real_input=True
+        torchvision.models.efficientnet_b1,
+        efficientnet_b1,
+        imagenet_sample_input,
+        0.97,
+        real_input=True,
     )
 
 
-def test_efficientnet_b2_model_real():
+def test_efficientnet_b2_model_real(imagenet_sample_input):
     run_efficientnet_model_test(
-        torchvision.models.efficientnet_b2, efficientnet_b2, 0.96, real_input=True
+        torchvision.models.efficientnet_b2,
+        efficientnet_b2,
+        imagenet_sample_input,
+        0.96,
+        real_input=True,
     )
 
 
-def test_efficientnet_b3_model_real():
+def test_efficientnet_b3_model_real(imagenet_sample_input):
     run_efficientnet_model_test(
-        torchvision.models.efficientnet_b3, efficientnet_b3, 0.96, real_input=True
+        torchvision.models.efficientnet_b3,
+        efficientnet_b3,
+        imagenet_sample_input,
+        0.96,
+        real_input=True,
     )
 
 
-def test_efficientnet_b4_model_real():
+def test_efficientnet_b4_model_real(imagenet_sample_input):
     run_efficientnet_model_test(
-        torchvision.models.efficientnet_b4, efficientnet_b4, 0.97, real_input=True
+        torchvision.models.efficientnet_b4,
+        efficientnet_b4,
+        imagenet_sample_input,
+        0.97,
+        real_input=True,
     )
 
 
-def test_efficientnet_b5_model_real():
+def test_efficientnet_b5_model_real(imagenet_sample_input):
     run_efficientnet_model_test(
-        torchvision.models.efficientnet_b5, efficientnet_b5, 0.97, real_input=True
+        torchvision.models.efficientnet_b5,
+        efficientnet_b5,
+        imagenet_sample_input,
+        0.97,
+        real_input=True,
     )
 
 
-def test_efficientnet_b6_model_real():
+def test_efficientnet_b6_model_real(imagenet_sample_input):
     run_efficientnet_model_test(
-        torchvision.models.efficientnet_b6, efficientnet_b6, 0.97, real_input=True
+        torchvision.models.efficientnet_b6,
+        efficientnet_b6,
+        imagenet_sample_input,
+        0.97,
+        real_input=True,
     )
 
 
-def test_efficientnet_b7_model_real():
+def test_efficientnet_b7_model_real(imagenet_sample_input):
     run_efficientnet_model_test(
-        torchvision.models.efficientnet_b7, efficientnet_b7, 0.97, real_input=True
+        torchvision.models.efficientnet_b7,
+        efficientnet_b7,
+        imagenet_sample_input,
+        0.97,
+        real_input=True,
     )
 
 
-def test_efficientnet_v2_s_model_real():
+def test_efficientnet_v2_s_model_real(imagenet_sample_input):
     run_efficientnet_model_test(
-        torchvision.models.efficientnet_v2_s, efficientnet_v2_s, 0.97, real_input=True
+        torchvision.models.efficientnet_v2_s,
+        efficientnet_v2_s,
+        imagenet_sample_input,
+        0.97,
+        real_input=True,
     )
 
 
-def test_efficientnet_v2_m_model_real():
+def test_efficientnet_v2_m_model_real(imagenet_sample_input):
     run_efficientnet_model_test(
-        torchvision.models.efficientnet_v2_m, efficientnet_v2_m, 0.97, real_input=True
+        torchvision.models.efficientnet_v2_m,
+        efficientnet_v2_m,
+        imagenet_sample_input,
+        0.97,
+        real_input=True,
     )
 
 
-def test_efficientnet_v2_l_model_real():
+def test_efficientnet_v2_l_model_real(imagenet_sample_input):
     run_efficientnet_model_test(
-        torchvision.models.efficientnet_v2_l, efficientnet_v2_l, 0.97, real_input=True
+        torchvision.models.efficientnet_v2_l,
+        efficientnet_v2_l,
+        imagenet_sample_input,
+        0.97,
+        real_input=True,
     )
 
 
-def test_efficientnet_lite0_model_real():
+def test_efficientnet_lite0_model_real(imagenet_sample_input):
     run_efficientnet_model_test(
-        reference_efficientnet_lite0, efficientnet_lite0, 0.98, real_input=True
+        reference_efficientnet_lite0,
+        efficientnet_lite0,
+        imagenet_sample_input,
+        0.98,
+        real_input=True,
     )
 
 
-def test_efficientnet_lite1_model_real():
+def test_efficientnet_lite1_model_real(imagenet_sample_input):
     run_efficientnet_model_test(
         reference_efficientnet_lite1,
         efficientnet_lite1,
+        imagenet_sample_input,
         0.98,
         real_input=True,
         resize=280,
@@ -300,10 +354,11 @@ def test_efficientnet_lite1_model_real():
     )
 
 
-def test_efficientnet_lite2_model_real():
+def test_efficientnet_lite2_model_real(imagenet_sample_input):
     run_efficientnet_model_test(
         reference_efficientnet_lite2,
         efficientnet_lite2,
+        imagenet_sample_input,
         0.97,
         real_input=True,
         resize=300,
@@ -311,10 +366,11 @@ def test_efficientnet_lite2_model_real():
     )
 
 
-def test_efficientnet_lite3_model_real():
+def test_efficientnet_lite3_model_real(imagenet_sample_input):
     run_efficientnet_model_test(
         reference_efficientnet_lite3,
         efficientnet_lite3,
+        imagenet_sample_input,
         0.97,
         real_input=True,
         resize=320,
@@ -322,10 +378,11 @@ def test_efficientnet_lite3_model_real():
     )
 
 
-def test_efficientnet_lite4_model_real():
+def test_efficientnet_lite4_model_real(imagenet_sample_input):
     run_efficientnet_model_test(
         reference_efficientnet_lite4,
         efficientnet_lite4,
+        imagenet_sample_input,
         0.97,
         real_input=True,
         resize=350,
