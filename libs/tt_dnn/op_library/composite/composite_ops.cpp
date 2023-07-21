@@ -90,6 +90,13 @@ Tensor softplus(const Tensor& x) {
     return result_log1p;
 }
 
+//tanhshrink(x) = x - tanh(x)
+Tensor tanhshrink(const Tensor& x) {
+    Tensor tan_x = tanh(x);
+    Tensor result = sub(x, tan_x);
+    return result;
+}
+
 //mish[x] = x*tanh[softplus[x]]
 //use transformation y = x*tanh[softplus[x]] by broadcast
 //Ref: https://krutikabapat.github.io/Swish-Vs-Mish-Latest-Activation-Functions/

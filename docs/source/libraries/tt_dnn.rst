@@ -454,6 +454,8 @@ Other Operations
 .. autofunction:: tt_lib.tensor.log_sigmoid
 
 .. autofunction:: tt_lib.tensor.expm1
+    
+.. autofunction:: tt_lib.tensor.tanhshrink
 
 .. autofunction:: tt_lib.tensor.fill_rm
 

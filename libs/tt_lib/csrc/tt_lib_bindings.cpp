@@ -1596,6 +1596,21 @@ void TensorModule(py::module &m_tensor) {
         | arg0     | Tensor log10 is applied to | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
         +----------+----------------------------+-----------+------------------------------+----------+
     )doc");
+    m_tensor.def("tanhshrink", &tanhshrink, R"doc(
+        Applies tanh on the input tensor "arg0" and subtracted from the input tensor.
+            tanhshrink(x) = x - tanh(x)
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+----------------------------------+-----------+------------------------------+----------+
+        | Argument | Description                      | Data type | Valid range                  | Required |
+        +==========+==================================+===========+==============================+==========+
+        | arg0     | Tensor tanhshrink is applied to  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+----------------------------------+-----------+------------------------------+----------+
+    )doc");
+
     m_tensor.def("tanh", &tanh, R"doc(
         Returns tensor with the hyperbolic tangent of elements of the input tensor ``arg0``.
 

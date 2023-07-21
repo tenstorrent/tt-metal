@@ -909,6 +909,28 @@ def eltwise_tanh(x, *args, host, device, dtype, layout, on_device, **kwargs):
 
 
 @setup_host_and_device
+def eltwise_tanhshrink(x, *args, host, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    t1 = ttl.tensor.tanhshrink(t0)
+
+    output = torch.Tensor(t1.to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
+
+    return output
+
+
+@setup_host_and_device
 def eltwise_sin(x, *args, host, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),

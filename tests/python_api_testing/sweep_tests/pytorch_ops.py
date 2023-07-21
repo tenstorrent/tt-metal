@@ -264,6 +264,10 @@ def tanh(x, *args, **kwargs):
     return torch.tanh(x)
 
 
+def tanhshrink(x, *args, **kwargs):
+    return torch.nn.functional.tanhshrink(x)
+
+
 def sin(x, *args, **kwargs):
     return torch.sin(x)
 

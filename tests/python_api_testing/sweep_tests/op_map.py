@@ -260,6 +260,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_tanh,
         "pytorch_op": pytorch_ops.tanh,
     },
+    "eltwise-tanhshrink": {
+        "tt_lib_op": tt_lib_ops.eltwise_tanhshrink,
+        "pytorch_op": pytorch_ops.tanhshrink,
+    },
     # Eltwise binary
     "eltwise-ne": {
         "tt_lib_op": tt_lib_ops.eltwise_ne,

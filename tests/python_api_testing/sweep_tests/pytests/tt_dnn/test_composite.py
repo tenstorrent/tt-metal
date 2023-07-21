@@ -69,6 +69,7 @@ def custom_compare(*args, **kwargs):
                 "sinh",
                 "cosh",
                 "log_sigmoid",
+                "tanhshrink",
             ),
             ([[1, 1, 32, 32]], [[1, 3, 320, 64]]),
             (0,),
@@ -98,6 +99,7 @@ def test_run_eltwise_composite_test(
     options["softsign"] = (1, 100)
 
     options["sinh"] = (-9, 9)
+    options["tanhshrink"] = (-100, 100)
     options["cosh"] = options["sinh"]
 
     generator = generation_funcs.gen_rand
