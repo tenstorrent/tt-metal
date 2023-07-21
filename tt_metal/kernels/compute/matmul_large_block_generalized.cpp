@@ -1,8 +1,6 @@
 #include <cstdint>
 
-#include "compute_kernel_api/tilize_untilize.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/matmul.h"
+#include "compute_kernel_api.h"
 #include "debug_print.h"
 
 
