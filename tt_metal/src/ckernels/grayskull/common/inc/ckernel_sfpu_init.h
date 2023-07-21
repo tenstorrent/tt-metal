@@ -17,7 +17,7 @@ namespace sfpu
 
 
 template <bool APPROXIMATION_MODE>
-inline void sfpu_init(SfpuType operation, uint param0 = 0)
+inline void sfpu_init_opt(SfpuType operation, uint param0 = 0)
 {
     uint imm0;
     uint imm1;
