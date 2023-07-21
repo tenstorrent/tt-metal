@@ -2,11 +2,11 @@ import copy
 import torch
 from torch import nn
 
-from python_api_testing.models.utility_functions_new import (
+from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
-from python_api_testing.models.t5.t5_stack import TtT5Stack
+from models.t5.tt.t5_stack import TtT5Stack
 
 
 class TtT5Model(nn.Module):

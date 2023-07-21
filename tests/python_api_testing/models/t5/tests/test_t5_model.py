@@ -1,26 +1,15 @@
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
-import copy
 import torch
 import json
-from torch import nn
 import tt_lib
 from loguru import logger
 
 from transformers import AutoTokenizer, T5Tokenizer, T5Model
-from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
-from python_api_testing.models.utility_functions_new import (
+from tests.python_api_testing.models.utility_functions_new import (
     torch2tt_tensor,
     tt2torch_tensor,
+    comp_pcc,
 )
-from python_api_testing.models.t5.t5_model import TtT5Model
+from models.t5.tt.t5_model import TtT5Model
 
 
 def run_test_T5Model_inference(device, use_attention_mask, model_name):

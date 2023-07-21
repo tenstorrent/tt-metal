@@ -1,12 +1,12 @@
 import torch
 from torch import nn
 
-from python_api_testing.models.utility_functions_new import (
+from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
-from python_api_testing.models.t5.t5_block import TtT5Block
-from python_api_testing.models.t5.t5_layer_norm import TtT5LayerNorm
+from models.t5.tt.t5_block import TtT5Block
+from models.t5.tt.t5_layer_norm import TtT5LayerNorm
 
 
 class BaseModelOutputWithPastAndCrossAttentions:
