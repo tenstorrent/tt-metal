@@ -12,7 +12,7 @@ using namespace ckernel;
 using namespace ckernel::packer;
 
 template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
-inline void llk_pack_mop_config(const uint32_t num_faces = 4) {
+inline void llk_pack_mop_config(const uint32_t num_faces = 4, const uint32_t face_r_dim = 16) {
     addr_mod_pack_t{
         .y_src = {.incr = untilize ? 0 : 1},
         .y_dst = {.incr = 1},
@@ -40,10 +40,10 @@ inline void llk_pack_mop_config(const uint32_t num_faces = 4) {
         .y_dst = { .incr = 0, .clr = 0, .cr = 0  },
     }.set(ADDR_MOD_2);
 
-    const uint MOP_INNER_LOOP = 16;
+    const uint MOP_INNER_LOOP = face_r_dim;
     const uint MOP_UNTILIZE_INNER_LOOP = FaceLayout == DstTileFaceLayout::ColMajor ? 8 : 4;
     const uint MOP_OUTER_LOOP = 1;
-    const uint MOP_UNTILIZE_OUTER_LOOP = 8;
+    const uint MOP_UNTILIZE_OUTER_LOOP = (face_r_dim == 1) ? 1 : face_r_dim / 2;
     const uint PACKCNT = num_faces;
     const uint MEGAROW = 1;
     constexpr uint ZERO_OUTPUT_FLAG = zero_output ? p_pacr::P_ZERO_OUTPUT_ENABLED : p_pacr::P_ZERO_OUTPUT_DISABLED;
@@ -60,8 +60,10 @@ inline void llk_pack_mop_config(const uint32_t num_faces = 4) {
             1, 0, p_ind::LD_16B, LO_16(0), p_ind::INC_NONE, p_gpr_pack::TILE_HEADER, p_gpr_pack::OUTPUT_ADDR));
     } else {
         tmp.set_start_op(TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
-        tmp.set_loop_op0(TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 4, 0));
-        tmp.set_end_op(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
+        if (face_r_dim>1) {
+            tmp.set_loop_op0(TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 4, 0));
+            tmp.set_end_op(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
+        }    
         tmp.set_last_inner_loop_instr(TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 4, 0));
         tmp.set_last_outer_loop_instr(TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 4, 0));
     }
@@ -71,8 +73,7 @@ inline void llk_pack_mop_config(const uint32_t num_faces = 4) {
 
 template <bool untilize = false, bool is_fp32_dest_acc_en = false>
 inline void llk_pack_hw_configure(const llk_pack_params_t *pack_params) {
-    const uint num_faces = get_num_faces(get_output_id(pack_params->pack_output));
-    configure_pack<is_fp32_dest_acc_en>(get_output_id(pack_params->pack_output), pack_params->relu_config.val, num_faces);
+    configure_pack<is_fp32_dest_acc_en>(get_output_id(pack_params->pack_output), pack_params->relu_config.val);
 }
 
 template <bool untilize = false, bool is_fp32_dest_acc_en = false, ReluType relu_type = ReluType::NO_RELU, std::uint32_t relu_threshold = 0>
@@ -85,8 +86,7 @@ inline void llk_pack_hw_configure_disaggregated(std::uint32_t pack_output, const
 // FIXME: Remove once edge mask spec is defined
 template <bool untilize = false, PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en = false>
 inline void llk_pack_reduce_hw_configure(const llk_pack_params_t *pack_params) {
-    const uint num_faces = get_num_faces(get_output_id(pack_params->pack_output));
-    configure_pack<is_fp32_dest_acc_en>(get_output_id(pack_params->pack_output), pack_params->relu_config.val, num_faces);
+    configure_pack<is_fp32_dest_acc_en>(get_output_id(pack_params->pack_output), pack_params->relu_config.val);
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
 
     ckernel::packer::pck_edge_offset_u pack_edge_offset = {.val = 0};
@@ -134,7 +134,8 @@ inline void llk_pack_reduce_hw_configure_disaggregated(std::uint32_t pack_output
 template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
 inline void llk_pack_init(const uint32_t out_tile_dims[2] = default_tile_dims) {
     const uint num_faces = get_num_faces(out_tile_dims);
-    llk_pack_mop_config<untilize, zero_output, FaceLayout>(num_faces);
+    const uint face_r_dim = get_face_r_dim(out_tile_dims);
+    llk_pack_mop_config<untilize, zero_output, FaceLayout>(num_faces, face_r_dim);
 }
 
 template <bool out_of_order_output, bool untilize>
