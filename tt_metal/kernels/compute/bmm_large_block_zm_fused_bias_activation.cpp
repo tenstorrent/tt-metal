@@ -8,7 +8,7 @@
 #endif
 
 #ifdef FUSE_GELU_ACTIVATION
-#include "compute_kernel_api/eltwise_unary/gelu.h"
+#include "compute_kernel_api/eltwise_unary.h"
 #endif
 namespace NAMESPACE {
 void MAIN {

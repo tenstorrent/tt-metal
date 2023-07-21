@@ -10,7 +10,7 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #endif
 #include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_unary/softmax.h"
+#include "compute_kernel_api/eltwise_unary.h"
 #include "compute_kernel_api/reduce.h"
 
 ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
