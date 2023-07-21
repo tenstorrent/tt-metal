@@ -9,20 +9,20 @@ namespace tt::tt_metal::detail{
  *
  * Return value: void
  */
-void EnableCompileCache();
+void EnablePersistentKernelCache();
 
 /**
  * Disables kernel compilation cache from being persistent across runs.
  *
  * Return value: void
  */
-void DisableCompileCache();
+void DisablePersistentKernelCache();
 
 /**
  * Returns bool indicating whether persistent caching is enabled.
  *
  * Return value: bool
  */
-bool GetCompileCacheEnabled();
+bool GetPersistentKernelCacheEnabled();
 
 }

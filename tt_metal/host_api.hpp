@@ -626,7 +626,7 @@ void ClearCompileCache();
  *  TODO: Kernel hash needs to account for device architecture as binaries are not the same across architectures.
  *  On cache hits the kernel is not recompiled if the output binary directory exists, otherwise the kernel is compiled.
  *  This cache is static is enabled for the duration of the running process.
- *  By default the cache does not persistent across runs, but can be enabled by calling EnableCompileCache(). Setting this will skip compilation when output binary directory exists.
+ *  By default the cache does not persistent across runs, but can be enabled by calling EnablePersistentKernelCache(). Setting this will skip compilation when output binary directory exists.
  *
  *  Return value: bool
  *

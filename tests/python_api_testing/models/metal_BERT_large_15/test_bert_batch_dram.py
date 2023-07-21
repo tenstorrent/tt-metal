@@ -17,14 +17,14 @@ from python_api_testing.models.metal_BERT_large_15.embeddings import PytorchEmbe
 from python_api_testing.models.metal_BERT_large_15.bert_encoder import TtBertEncoder
 from tt_lib.utils import pad_activation, pad_weight
 from utility_functions import (
-    enable_compile_cache,
+    enable_persistent_kernel_cache,
     enable_compilation_reports,
     disable_compilation_reports,
     enable_memory_reports,
     comp_allclose_and_pcc,
     comp_pcc,
     comp_allclose,
-    disable_compile_cache,
+    disable_persistent_kernel_cache,
 )
 from utility_functions import profiler
 
@@ -287,7 +287,7 @@ def run_bert_question_and_answering_inference(
     tt_bert_input = tt_bert_model.model_preprocessing(**bert_input)
     print(f"Enable profiler and enable binary and compile cache")
     profiler.enable()
-    enable_compile_cache()
+    enable_persistent_kernel_cache()
 
     # NOTE: Passing in pytorch tensor here instead of ll buda tensor
     # since we don't yet have embedding support on device
@@ -429,7 +429,7 @@ def test_bert_batch_dram(
     # Performance is reported only for PERF_CNT number of runs.
     PERF_CNT = 1
 
-    disable_compile_cache()
+    disable_persistent_kernel_cache()
     disable_compilation_reports()
 
     ttl.profiler.set_profiler_flag(False)
@@ -507,7 +507,7 @@ def test_bert_batch_dram_with_program_cache(
     # Performance is reported only for PERF_CNT number of runs.
     PERF_CNT = 1
 
-    disable_compile_cache()
+    disable_persistent_kernel_cache()
     disable_compilation_reports()
 
     ttl.profiler.set_profiler_flag(False)

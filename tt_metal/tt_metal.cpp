@@ -16,7 +16,7 @@
 #include "tt_metal/detail/reports/compilation_reporter.hpp"
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "tt_metal/detail/program.hpp"
-#include "tt_metal/detail/compile_cache.hpp"
+#include "tt_metal/detail/persistent_kernel_cache.hpp"
 
 // TODO(MO): hack until ticket #1184 is in
 bool enable_fw_profile_hack = false;
@@ -60,7 +60,6 @@ namespace detail {
 }
 
 namespace {
-    std::atomic<bool> enable_compile_cache = false;
 
 void DownloadFirmware(Device *device, CoreCoord phys_core) {
     for (int riscv_id = 0; riscv_id < 5; riscv_id++) {
@@ -104,11 +103,33 @@ std::optional<uint32_t> get_semaphore_address(const Program &program, const Core
                     std::to_string(address.value()) + " but it is at " + std::to_string(addr));
             }
         }
+        return address;
     }
-    return address;
 }
+
+
 }  // namespace
 
+namespace detail{
+
+std::atomic<bool> enable_persistent_kernel_cache = false;
+
+void EnablePersistentKernelCache()
+{
+    enable_persistent_kernel_cache = true;
+}
+
+void DisablePersistentKernelCache()
+{
+    enable_persistent_kernel_cache = false;
+}
+
+bool GetPersistentKernelCacheEnabled()
+{
+    return enable_persistent_kernel_cache;
+}
+
+}
 static Profiler tt_metal_profiler = Profiler();
 
 void ClearCompileCache() { detail::HashLookup::inst().clear(); }
@@ -708,7 +729,7 @@ void CompileKernel(Device *device, Program &program, Kernel *kernel, bool profil
 
     bool cache_hit = true;
     bool path_exists = std::filesystem::exists(build_options.outpath + kernel_path_suffix);
-    if ( detail::GetCompileCacheEnabled() && path_exists ) {
+    if ( detail::GetPersistentKernelCacheEnabled() && path_exists ) {
         if ( not detail::HashLookup::inst().exists(kernel_hash) ) detail::HashLookup::inst().add(kernel_hash);
     } else if ( detail::HashLookup::inst().add(kernel_hash) ) {
         cache_hit = false;
@@ -830,7 +851,7 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
     program.construct_core_range_set_for_worker_cores();
 
     if (detail::CompilationReporter::enabled()) {
-        detail::CompilationReporter::inst().flush_program_entry(program, enable_compile_cache);
+        detail::CompilationReporter::inst().flush_program_entry(program, enable_persistent_kernel_cache);
     }
     if (detail::MemoryReporter::enabled()) {
         detail::MemoryReporter::inst().flush_program_memory_usage(program, device);

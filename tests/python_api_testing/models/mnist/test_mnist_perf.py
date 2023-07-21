@@ -14,8 +14,8 @@ import pytest
 import tt_lib
 from utility_functions_new import (
     profiler,
-    enable_compile_cache,
-    disable_compile_cache,
+    enable_persistent_kernel_cache,
+    disable_persistent_kernel_cache,
     comp_pcc,
     get_oom_of_float,
 )
@@ -66,7 +66,7 @@ def run_mnist_inference(pcc, PERF_CNT=1):
         pytorch_out = pytorch_mnist_model(first_input)
         profiler.end("\nExec time of reference model")
 
-        enable_compile_cache()
+        enable_persistent_kernel_cache()
 
         logger.info(f"\nRunning the tt_mnist model for {PERF_CNT} iterations . . . ")
         for i in range(PERF_CNT):
@@ -106,7 +106,7 @@ def run_mnist_inference(pcc, PERF_CNT=1):
     ((0.99, 2),),
 )
 def test_mnist_inference(pcc, iter):
-    disable_compile_cache()
+    disable_persistent_kernel_cache()
     run_mnist_inference(pcc, iter)
 
 

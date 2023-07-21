@@ -14,7 +14,7 @@ from python_api_testing.models.bert_large_perf.embeddings import PytorchEmbeddin
 from python_api_testing.models.bert_large_perf.bert_encoder import TtBertEncoder
 from python_api_testing.models.bert_large_perf.fused_ops.linear import Linear
 from tt_lib.utils import pad_activation, pad_weight
-from utility_functions import enable_compile_cache, comp_allclose_and_pcc, comp_pcc, comp_allclose, disable_compile_cache
+from utility_functions import enable_persistent_kernel_cache, comp_allclose_and_pcc, comp_pcc, comp_allclose, disable_persistent_kernel_cache
 from utility_functions import profiler
 from python_api_testing.models.bert_large_perf.fused_ops.layernorm import create_var_scaler
 
@@ -178,7 +178,7 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
 
     print(f"Enable profiler and enable binary and compile cache")
     profiler.enable()
-    enable_compile_cache()
+    enable_persistent_kernel_cache()
 
     # NOTE: Passing in pytorch tensor here instead of ll buda tensor
     # since we don't yet have embedding support on device
@@ -260,7 +260,7 @@ def test_bert_batch_dram(model_version, batch, seq_len, on_weka, real_input, att
     # Performance is reported only for PERF_CNT number of runs.
     PERF_CNT = 1
 
-    disable_compile_cache()
+    disable_persistent_kernel_cache()
 
     run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc, model_location_generator, PERF_CNT)
 

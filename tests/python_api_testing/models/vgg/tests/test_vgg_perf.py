@@ -16,8 +16,8 @@ import pytest
 import tt_lib
 from utility_functions_new import (
     profiler,
-    enable_compile_cache,
-    disable_compile_cache,
+    enable_persistent_kernel_cache,
+    disable_persistent_kernel_cache,
     comp_pcc,
 )
 from tt.vgg import *
@@ -27,7 +27,7 @@ _batch_size = 1
 
 @pytest.mark.parametrize("pcc, PERF_CNT", ((0.99, 2),),)
 def test_vgg_inference(pcc, PERF_CNT, imagenet_sample_input, imagenet_label_dict):
-    disable_compile_cache()
+    disable_persistent_kernel_cache()
     image = imagenet_sample_input
     class_labels = imagenet_label_dict
     batch_size = _batch_size
@@ -63,7 +63,7 @@ def test_vgg_inference(pcc, PERF_CNT, imagenet_sample_input, imagenet_label_dict
         tt_output = tt_vgg(tt_image)
         profiler.end("\nExecution time of tt_vgg first run")
 
-        enable_compile_cache()
+        enable_persistent_kernel_cache()
 
         logger.info(f"\nRunning the tt_vgg model for {PERF_CNT} iterations . . . ")
         for i in range(PERF_CNT):

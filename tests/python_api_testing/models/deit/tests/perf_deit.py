@@ -16,7 +16,7 @@ from loguru import logger
 import pytest
 import tt_lib
 from utility_functions_new import torch_to_tt_tensor_rm, tt_to_torch_tensor, profiler
-from utility_functions_new import disable_compile_cache, enable_compile_cache
+from utility_functions_new import disable_persistent_kernel_cache, enable_persistent_kernel_cache
 from utility_functions_new import prep_report
 from tt.deit_for_image_classification_with_teacher import deit_for_image_classification_with_teacher
 
@@ -31,7 +31,7 @@ BATCH_SIZE = 1
     ),
 )
 def test_perf(use_program_cache, expected_inference_time, expected_compile_time):
-    disable_compile_cache()
+    disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_key"
@@ -65,7 +65,7 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time)
         tt_lib.device.Synchronize()
         profiler.end(first_key)
 
-        enable_compile_cache()
+        enable_persistent_kernel_cache()
 
         profiler.start(second_key)
         tt_output = tt_model(tt_inputs)[0]

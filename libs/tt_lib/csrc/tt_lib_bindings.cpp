@@ -25,7 +25,7 @@
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "tt_metal/detail/reports/compilation_reporter.hpp"
-#include "tt_metal/detail/compile_cache.hpp"
+#include "tt_metal/detail/persistent_kernel_cache.hpp"
 #include "tensor/owned_buffer.hpp"
 #include "tensor/borrowed_buffer.hpp"
 #include "tensor/tensor_impl.hpp"
@@ -3092,16 +3092,16 @@ void DeviceModule(py::module &m_device) {
     m_device.def("StartDebugPrintServer", &StartDebugPrintServer);
     m_device.def("StartDebugPrintServerOnCores", &StartDebugPrintServerOnCores);
 
-    m_device.def("EnableCompileCache", &detail::EnableCompileCache, R"doc(
+    m_device.def("EnablePersistentKernelCache", &detail::EnablePersistentKernelCache, R"doc(
         Enable kernel compilation cache to be persistent across runs. When this is called, kernels will not be compiled if the output binary path exists.
     )doc");
-    m_device.def("DisableCompileCache", &detail::DisableCompileCache, R"doc(
+    m_device.def("DisablePersistentKernelCache", &detail::DisablePersistentKernelCache, R"doc(
         Disables kernel compilation cache from being persistent across runs
     )doc");
     m_device.def("ClearCompileCache", &ClearCompileCache, R"doc(
         Clears the current kernel compilation cache
     )doc");
-    m_device.def("GetCompileCacheEnabled", &detail::GetCompileCacheEnabled, R"doc(
+    m_device.def("GetPersistentKernelCacheEnabled", &detail::GetPersistentKernelCacheEnabled, R"doc(
         Returns bool indicating whether persistent kernel compilation cache is enabled
     )doc");
 

@@ -24,13 +24,13 @@ from test_bert_batch_dram import TtBertBatchDram
 from python_api_testing.models.metal_BERT_large_15.model_config import get_model_config
 
 from utility_functions import (
-    enable_compile_cache,
+    enable_persistent_kernel_cache,
     enable_compilation_reports,
     enable_memory_reports,
     comp_allclose_and_pcc,
     comp_pcc,
     comp_allclose,
-    disable_compile_cache,
+    disable_persistent_kernel_cache,
     profiler,
 )
 from utility_functions_new import prep_report
@@ -60,7 +60,7 @@ model_location_generator = model_location_generator_
 def test_perf(use_program_cache, expected_inference_time, expected_compile_time):
     model_config = get_model_config(model_config_str)
 
-    disable_compile_cache()
+    disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_key"
@@ -108,7 +108,7 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time)
         del tt_output
         tt_input = tt_model.model_preprocessing(**inputs)
 
-        enable_compile_cache()
+        enable_persistent_kernel_cache()
 
         profiler.start(second_key)
         tt_output = tt_model(1, *tt_input)

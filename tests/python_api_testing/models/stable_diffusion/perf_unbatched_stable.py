@@ -24,7 +24,7 @@ from diffusers import LMSDiscreteScheduler
 from tqdm.auto import tqdm
 
 from utility_functions_new import torch_to_tt_tensor_rm, tt_to_torch_tensor, Profiler
-from utility_functions_new import enable_compile_cache, disable_compile_cache
+from utility_functions_new import enable_persistent_kernel_cache, disable_persistent_kernel_cache
 from utility_functions_new import prep_report
 import tt_lib as ttl
 from unet_2d_condition import UNet2DConditionModel as tt_unet_condition
@@ -145,7 +145,7 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time)
         num_train_timesteps=1000,
     )
 
-    disable_compile_cache()
+    disable_persistent_kernel_cache()
     torch_device = "cpu"
     vae.to(torch_device)
     text_encoder.to(torch_device)
@@ -281,7 +281,7 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time)
         # save things required!
         iter += 1
         # we enable compile cache after the first iteration
-        enable_compile_cache()
+        enable_persistent_kernel_cache()
 
     first_iter_time = profiler.get(first_key)
     second_iter_time = profiler.get(second_key)

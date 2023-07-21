@@ -106,25 +106,25 @@ def ttP(x, count=4, offset=0, stride=1):
     print(")")
 
 
-def enable_compile_cache():
+def enable_persistent_kernel_cache():
     """
     Enables persistent compiled kernel caching - disables recompiling the kernels for the duration of running process if built/kernels/.../hash directory with kernel binaries is present.
     """
-    ttl.device.EnableCompileCache()
+    ttl.device.EnablePersistentKernelCache()
 
 
-def disable_compile_cache():
+def disable_persistent_kernel_cache():
     """
     Disables persistent compiled kernel caching. This is the default state.
     """
-    ttl.device.DisableCompileCache()
+    ttl.device.DisablePersistentKernelCache()
 
 
-def get_compile_cache_enabled():
+def get_persistent_kernel_cache_enabled():
     """
     Returns the current state of persistent compile cache on/off switch.
     """
-    return ttl.device.GetCompileCacheEnabled()
+    return ttl.device.GetPersistentKernelCacheEnabled()
 
 
 def enable_compilation_reports():

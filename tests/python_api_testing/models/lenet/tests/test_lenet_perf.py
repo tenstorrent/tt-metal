@@ -15,8 +15,8 @@ import tt_lib
 
 from utility_functions_new import (
     profiler,
-    enable_compile_cache,
-    disable_compile_cache,
+    enable_persistent_kernel_cache,
+    disable_persistent_kernel_cache,
     comp_pcc,
 )
 from tt.lenet import lenet5
@@ -31,7 +31,7 @@ from utility_functions_new import torch2tt_tensor
 def test_lenet_perf_inference(
     pcc, PERF_CNT, mnist_sample_input, model_location_generator, reset_seeds
 ):
-    disable_compile_cache()
+    disable_persistent_kernel_cache()
     image = prepare_image(mnist_sample_input)
     num_classes = 10
     batch_size = 1
@@ -63,7 +63,7 @@ def test_lenet_perf_inference(
         tt_output = tt_lenet(tt_image)
         profiler.end("\nExecution time of tt_vgg first run")
 
-        enable_compile_cache()
+        enable_persistent_kernel_cache()
 
         logger.info(f"\nRunning the tt_vgg model for {PERF_CNT} iterations . . . ")
         for i in range(PERF_CNT):

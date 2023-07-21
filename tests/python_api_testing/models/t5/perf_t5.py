@@ -18,7 +18,7 @@ import pytest
 
 import tt_lib
 from utility_functions_new import torch_to_tt_tensor_rm, tt_to_torch_tensor, Profiler
-from utility_functions_new import disable_compile_cache, enable_compile_cache
+from utility_functions_new import disable_persistent_kernel_cache, enable_persistent_kernel_cache
 from utility_functions_new import prep_report
 
 from python_api_testing.models.t5.t5_model import TtT5Model
@@ -35,7 +35,7 @@ BATCH_SIZE = 1
 )
 def test_perf(use_program_cache, expected_inference_time, expected_compile_time):
     profiler = Profiler()
-    disable_compile_cache()
+    disable_persistent_kernel_cache()
     comments = "small"
     first_key = "first_iter"
     second_key = "second_iter"
@@ -98,7 +98,7 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time)
         profiler.end(first_key)
         del tt_model_outputs
 
-        enable_compile_cache()
+        enable_persistent_kernel_cache()
 
         profiler.start(second_key)
         tt_model_outputs = tt_model(

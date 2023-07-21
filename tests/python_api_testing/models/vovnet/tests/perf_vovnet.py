@@ -11,8 +11,8 @@ import tt_lib
 from loguru import logger
 from models.utility_functions_new import (
     Profiler,
-    disable_compile_cache,
-    enable_compile_cache,
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
     prep_report,
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
@@ -24,7 +24,7 @@ BATCH_SIZE = 1
 
 def test_perf(imagenet_sample_input):
     profiler = Profiler()
-    disable_compile_cache()
+    disable_persistent_kernel_cache()
     first_key = "Execution time of vovnet first run"
     second_key = "Execution time of vovnet second run"
     cpu_key = "Execution time of reference model"
@@ -57,7 +57,7 @@ def test_perf(imagenet_sample_input):
         tt_output_torch = tt_output_torch.squeeze(0).squeeze(0)
         profiler.end(first_key)
 
-        enable_compile_cache()
+        enable_persistent_kernel_cache()
 
         profiler.start(second_key)
         tt_output = tt_model(tt_input)

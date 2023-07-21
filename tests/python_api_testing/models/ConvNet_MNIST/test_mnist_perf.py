@@ -15,8 +15,8 @@ import pytest
 import tt_lib
 from utility_functions_new import (
     profiler,
-    enable_compile_cache,
-    disable_compile_cache,
+    enable_persistent_kernel_cache,
+    disable_persistent_kernel_cache,
     comp_pcc,
     tt2torch_tensor,
 )
@@ -68,7 +68,7 @@ def run_mnist_inference(model, on_weka, pcc, PERF_CNT, model_location_generator)
         tt_out = tt_convnet(tt_image)
         profiler.end("\nExecution time of tt_mnist first run")
 
-        enable_compile_cache()
+        enable_persistent_kernel_cache()
 
         logger.info(f"\nRunning the tt_mnist model for {PERF_CNT} iterations . . . ")
         for i in range(PERF_CNT):
@@ -99,6 +99,5 @@ def run_mnist_inference(model, on_weka, pcc, PERF_CNT, model_location_generator)
     (("convnet_mnist.pt", True, 0.99, 2),),
 )
 def test_mnist_inference(model, on_weka, pcc, iter, model_location_generator, reset_seeds):
-    disable_compile_cache()
+    disable_persistent_kernel_cache()
     run_mnist_inference(model, on_weka, pcc, iter, model_location_generator)
-

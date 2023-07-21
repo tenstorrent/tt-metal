@@ -21,7 +21,7 @@ from transformers import (
 from python_api_testing.models.llama.llama_model import TtLlamaModel
 import tt_lib
 from utility_functions_new import torch_to_tt_tensor_rm, tt_to_torch_tensor, Profiler
-from utility_functions_new import disable_compile_cache, enable_compile_cache
+from utility_functions_new import disable_persistent_kernel_cache, enable_persistent_kernel_cache
 from utility_functions_new import prep_report
 
 BATCH_SIZE = 1
@@ -49,7 +49,7 @@ def test_perf(
     max_position_embeddings = 2048
     on_weka = False
     profiler = Profiler()
-    disable_compile_cache()
+    disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_key"
@@ -111,7 +111,7 @@ def test_perf(
         profiler.end(first_key)
         del tt_out
 
-        enable_compile_cache()
+        enable_persistent_kernel_cache()
         profiler.start(second_key)
         tt_out = tt_llama_model(llama_input)
         tt_lib.device.Synchronize()
