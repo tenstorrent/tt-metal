@@ -2,7 +2,6 @@
 
 
 #include "common_globals.h"
-#include "compute_kernel_api/llk_pack_includes.h"
 
 namespace ckernel {
 

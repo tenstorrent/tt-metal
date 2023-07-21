@@ -1,26 +1,15 @@
 #pragma once
 
 
-#include "compute_kernel_api/common_globals.h"
+#include "compute_kernel_api/common.h"
 #ifdef TRISC_MATH
 #include "llk_math_reduce.h"
-#define MAIN math_main()
-#define MATH(x) x
-#else
-#define MATH(x)
 #endif
 
 
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/llk_pack_includes.h"
 #ifdef TRISC_UNPACK
-#include "llk_unpack_common.h"
 #include "llk_unpack_AB.h"
 #include "llk_unpack_reduce.h"
-#define UNPACK(x) x
-#define MAIN unpack_main()
-#else
-#define UNPACK(x)
 #endif
 
 

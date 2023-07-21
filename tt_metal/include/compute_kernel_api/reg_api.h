@@ -1,14 +1,6 @@
 #pragma once
 
 #include "compute_kernel_api/common_globals.h"
-#ifdef TRISC_MATH
-#include "llk_math_common.h"
-#define MATH(x) x
-#define MAIN math_main()
-#else
-#define MATH(x)
-#endif
-#include "compute_kernel_api/llk_pack_includes.h"
 
 namespace ckernel {
 

@@ -1,9 +1,13 @@
 #pragma once
 
 
-#include "compute_kernel_api/llk_matmul_includes.h"
-#include "compute_kernel_api/llk_unpack_AB_matmul_includes.h"
-
+#include "compute_kernel_api/common.h"
+#ifdef TRISC_MATH
+#include "llk_math_matmul.h"
+#endif
+#ifdef TRISC_UNPACK
+#include "llk_unpack_AB_matmul.h"
+#endif
 
 namespace ckernel {
 

@@ -1,8 +1,12 @@
 #pragma once
 
-#include "compute_kernel_api/pack.h"
-#include "compute_kernel_api/llk_unpack_A_includes.h"
-#include "compute_kernel_api/llk_eltwise_unary_datacopy_includes.h"
+#include "compute_kernel_api/common.h"
+#ifdef TRISC_MATH
+#include "llk_math_eltwise_unary_datacopy.h"
+#endif
+#ifdef TRISC_UNPACK
+#include "llk_unpack_A.h"
+#endif
 
 
 namespace ckernel {
