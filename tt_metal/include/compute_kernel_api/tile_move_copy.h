@@ -1,16 +1,12 @@
 #pragma once
 
-#include "compute_kernel_api/common_globals.h"
+#include "chlkc_list.h"
+#include "ckernel.h"
+#include "ckernel_globals.h"
+#include "ckernel_include.h"
+#include "hostdevcommon/kernel_structs.h"
 
-#ifdef TRISC_MATH
-#include "llk_math_common.h"
-#include "llk_math_eltwise_unary_datacopy.h"
-#define MATH(x) x
-#define MAIN math_main()
-#else
-#define MATH(x)
-#endif
-#include "compute_kernel_api/llk_unpack_includes.h"
+#include "compute_kernel_api/llk_includes.h"
 
 namespace ckernel {
 

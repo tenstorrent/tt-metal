@@ -2,9 +2,8 @@
 
 #define SYNC SyncHalf
 
-#include "compute_kernel_api/common_globals.h"
-#include "compute_kernel_api/llk_pack_includes.h"
-#include "compute_kernel_api/llk_unpack_includes.h"
+#include "compute_kernel_api/llk_includes.h"
+
 namespace ckernel {
 
 // documented in dataflow_api.h
