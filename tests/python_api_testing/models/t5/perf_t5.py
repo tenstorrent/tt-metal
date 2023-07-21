@@ -28,8 +28,8 @@ BATCH_SIZE = 1
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (7,
-        11,
+        (0.1,
+        5.9,
         ),
     ),
 )
