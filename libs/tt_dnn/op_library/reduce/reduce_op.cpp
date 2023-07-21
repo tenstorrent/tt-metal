@@ -57,21 +57,26 @@ void Reduce::validate(const std::vector<Tensor> &input_tensors) const {
 std::vector<Shape> Reduce::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
 
-    auto output_shape = std::vector(std::begin(input_tensor.shape()), std::end(input_tensor.shape()));
+    auto output_shape = input_tensor.shape();
+    auto padding = output_shape.padding();
     switch (this->dim){
         case ReduceOpDim::H:
             output_shape[2] = 32;
+            padding[2] = Padding::PadDimension{0, 31};
             break;
         case ReduceOpDim::W:
             output_shape[3] = 32;
+            padding[3] = Padding::PadDimension{0, 31};
             break;
         case ReduceOpDim::HW:
             output_shape[2] = 32;
             output_shape[3] = 32;
+            padding[2] = Padding::PadDimension{0, 31};
+            padding[3] = Padding::PadDimension{0, 31};
             break;
 
     }
-    return {output_shape};
+    return {Shape(output_shape, padding)};
 }
 
 std::vector<Tensor> Reduce::create_output_tensors(const std::vector<Tensor> &input_tensors) const {

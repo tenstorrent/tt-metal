@@ -109,9 +109,14 @@ Tensor Tensor::unpad(const Shape &output_tensor_start, const Shape &output_tenso
 }
 
 Tensor Tensor::pad_to_tile(float pad_value) const {
-    uint32_t padded_h = roundup(this->shape()[2], TILE_HEIGHT);
-    uint32_t padded_w = roundup(this->shape()[3], TILE_WIDTH);
-    Shape output_tensor_shape = {this->shape()[0], this->shape()[1], padded_h, padded_w};
+    uint32_t h = this->shape()[2];
+    uint32_t w = this->shape()[3];
+    uint32_t padded_h = roundup(h, TILE_HEIGHT);
+    uint32_t padded_w = roundup(w, TILE_WIDTH);
+
+    auto padding = Padding({{0, 0}, {0, 0}, {0, padded_h - h}, {0, padded_w - w}}, Padding::PadValue::Any);
+
+    Shape output_tensor_shape = Shape({this->shape()[0], this->shape()[1], padded_h, padded_w}, padding);
     Shape input_tensor_start = {0, 0, 0, 0};
 
     return this->pad(output_tensor_shape, input_tensor_start, pad_value);
@@ -141,6 +146,7 @@ Tensor Tensor::reshape(int N, int C, int H, int W) {
 }
 
 Tensor Tensor::reshape(const Shape& new_shape) const {
+    TT_ASSERT(this->volume() == tt::tt_metal::volume(new_shape));
     if (this->layout() == Layout::TILE) {
         TT_ASSERT(new_shape[2] % TILE_HEIGHT == 0 && new_shape[3] % TILE_WIDTH == 0 && "Expected a multiple of 32 for H, W (or -1 evaluating to such) in Tensor::reshape()!");
     }

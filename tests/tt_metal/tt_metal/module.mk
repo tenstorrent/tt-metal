@@ -8,6 +8,7 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/dtx/overlap \
 		 tests/tt_metal/dtx/collapse_transformations \
 		 tests/tt_metal/integration_tests/test_bert \
+		 tests/tt_metal/ops/test_average_pool \
 		 tests/tt_metal/ops/test_eltwise_binary_op \
 		 tests/tt_metal/ops/test_eltwise_unary_op \
 		 tests/tt_metal/ops/test_softmax_op \

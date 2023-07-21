@@ -8,6 +8,7 @@
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
 #include "tt_dnn/op_library/groupnorm/groupnorm_op.hpp"
+#include "tt_dnn/op_library/pool/average_pool.hpp"
 #include "tt_dnn/op_library/fully_connected/fully_connected_op.hpp"
 #include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
 #include "tt_dnn/op_library/transpose/transpose_op.hpp"
@@ -2929,6 +2930,18 @@ void TensorModule(py::module &m_tensor) {
         | act      | Input activations tensor   | Tensor     |                               | Yes      |
         | weights  | Input weights tensor       | Tensor     |                               | Yes      |
         | bias     | Input bias tensor          | Tensor     |                               | No       |
+        +----------+----------------------------+------------+-------------------------------+----------+
+    )doc");
+
+    // Pools
+    m_tensor.def("average_pool_2d", &average_pool_2d, R"doc(
+        Average Pool 2D
+        It operates on tensors whose that have channels as the last dimension
+
+        +----------+----------------------------+------------+-------------------------------+----------+
+        | Argument | Description                | Data type  | Valid range                   | Required |
+        +==========+============================+============+===============================+==========+
+        | act      | Input activations tensor   | Tensor     |                               | Yes      |
         +----------+----------------------------+------------+-------------------------------+----------+
     )doc");
 

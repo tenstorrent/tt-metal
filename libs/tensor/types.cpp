@@ -69,6 +69,10 @@ Shape::Shape(const std::vector<uint32_t>& dimensions) : rank_(dimensions.size())
     std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));
 }
 
+Shape::Shape(const std::initializer_list<uint32_t> dimensions, const Padding& padding) : rank_(dimensions.size()), padding_(padding) {
+    TT_ASSERT(this->padding_.rank_ == this->rank_);
+    std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));
+}
 Shape::Shape(const std::vector<uint32_t>& dimensions, const Padding& padding) : rank_(dimensions.size()), padding_(padding) {
     TT_ASSERT(this->padding_.rank_ == this->rank_);
     std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));

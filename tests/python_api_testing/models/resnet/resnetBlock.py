@@ -8,6 +8,7 @@ from utils import conv3x3, conv1x1, fold_bn_to_conv, fold_bn_to_conv_weights_bia
 from utility_functions_new import pad_by_zero, tt2torch_tensor
 from tt_lib.utils import pad_weight
 
+from tt_lib.fused_ops.average_pool import run_avg_pool_on_device_wrapper as TtAvgPool
 from tt_lib.fused_ops.linear import Linear as TtLinear
 from tt_lib.fused_ops.softmax import softmax as TtSoftmax
 from conv_on_device_utils import is_conv_supported_on_device, run_conv_on_device_wrapper, _nearest_32
@@ -335,8 +336,7 @@ class ResNet(nn.Module):
         self.layer2 = self._make_layer(block, 128, layers[1], stride=2, dilate=replace_stride_with_dilation[0], name="layer2", state_dict=state_dict)
         self.layer3 = self._make_layer(block, 256, layers[2], stride=2, dilate=replace_stride_with_dilation[1], name="layer3", state_dict=state_dict)
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2, dilate=replace_stride_with_dilation[2], name="layer4", state_dict=state_dict)
-        self.avgpool = fallback_ops.AdaptiveAvgPool2d((1, 1), channels_last=True)
-
+        self.avgpool = TtAvgPool(self.device)
 
         fc_weight = pad_weight(state_dict[f"{self.base_address_with_dot}fc.weight"])
         fc_weight = tt_lib.tensor.Tensor(fc_weight.reshape(-1).tolist(), fc_weight.shape, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.Layout.ROW_MAJOR).to(tt_lib.tensor.Layout.TILE).data()
@@ -431,11 +431,7 @@ class ResNet(nn.Module):
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         x = torch.permute(x, (0, 2, 3, 1))
-        x = tt_lib.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                tt_lib.tensor.DataType.BFLOAT16,
-                tt_lib.tensor.Layout.ROW_MAJOR)
+        x = tt_lib.tensor.Tensor(x.contiguous().to(torch.bfloat16))
         x = x.pad((x.shape()[0], x.shape()[1], x.shape()[2], _nearest_32(x.shape()[3])), (0, 0, 0, 0), 0)
         x = x.to(self.device)
         x = self.conv1(x)
@@ -451,7 +447,7 @@ class ResNet(nn.Module):
         x = self.layer3(x)
         x = self.layer4(x)
         x = self.avgpool(x)
-        x = fallback_ops.reshape(x, 1, 1, 1, x.shape()[3])
+        # x = fallback_ops.reshape(x, 1, 1, 1, x.shape()[3])
         #x = torch.flatten(x, 1).unsqueeze(1).unsqueeze(1)
 
         x = self.fc(x)

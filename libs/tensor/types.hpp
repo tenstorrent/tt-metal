@@ -81,6 +81,7 @@ class Shape {
     Shape(const std::array<uint32_t, 4>&);
     Shape(const std::vector<uint32_t>&);
 
+    Shape(const std::initializer_list<uint32_t>, const Padding&);
     Shape(const std::vector<uint32_t>&, const Padding&);
     Shape(const Shape&, const Padding&);
 
