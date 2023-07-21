@@ -6,9 +6,9 @@
 
 
 
-
+#if FUSED_SCALE_MASK
 #include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#endif
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_unary/softmax.h"
 #include "compute_kernel_api/reduce.h"
