@@ -5,6 +5,7 @@
 #include "noc_nonblocking_api.h"
 
 #include "sfpi.h"
+#include "ckernel_sfpu_init.h"
 using namespace sfpi;
 
 namespace ckernel

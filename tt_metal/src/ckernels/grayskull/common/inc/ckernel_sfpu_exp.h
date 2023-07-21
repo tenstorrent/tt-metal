@@ -6,6 +6,7 @@
 
 #include "sfpi.h"
 
+#include "ckernel_sfpu_init.h"
 #include "ckernel_sfpu_recip.h"
 using namespace sfpi;
 
@@ -110,14 +111,6 @@ inline void calculate_sfpu_exponential(uint exp_base_scale_factor = 0)
     {
         l_reg[LRegs::LReg0] = c23_73;
         l_reg[LRegs::LReg2] = adj_exp;
-    }
-}
-
-template <bool APPROXIMATION_MODE>
-void exp_init(){
-    if constexpr(APPROXIMATION_MODE) {
-        TTI_SFPLOADI(p_sfpu::LREG0, 0, p_exp::C23_73);
-        TTI_SFPLOADI(p_sfpu::LREG2, 0, p_exp::ADJ_EXP);
     }
 }
 

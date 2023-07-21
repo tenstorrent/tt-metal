@@ -5,6 +5,7 @@
 #include "noc_nonblocking_api.h"
 
 #include "sfpi.h"
+#include "ckernel_sfpu_init.h"
 using namespace sfpi;
 
 namespace ckernel
@@ -58,11 +59,7 @@ inline void calculate_sfpu_sqrt()
         dst_reg++;
     }
 }
-template <bool APPROXIMATION_MODE>
-void sqrt_init(){
-    if (APPROXIMATION_MODE) {
-        TTI_SFPLOADI(2, 0, 127 << 7);
-    }
-}
+
+
 } // namespace sfpu
 } // namespace ckernel

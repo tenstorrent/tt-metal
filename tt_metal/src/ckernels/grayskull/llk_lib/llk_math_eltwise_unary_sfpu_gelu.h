@@ -1,4 +1,5 @@
 #pragma once
+#include "ckernel_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_common_includes.h"
 #include "llk_math_eltwise_unary_sfpu_0_param.h"
 #include "llk_math_eltwise_unary_sfpu_1_param.h"
@@ -29,7 +30,7 @@ inline void llk_math_eltwise_unary_sfpu_gelu(uint dst_index, int vector_mode = D
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_gelu_init() {
-    sfpu::gelu_init<APPROXIMATE>();
+    sfpu::sfpu_init<APPROXIMATE>(SfpuType::gelu);
 }
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
@@ -44,5 +45,5 @@ inline void llk_math_eltwise_unary_sfpu_gelu_derivative(uint dst_index, int vect
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_gelu_derivative_init() {
-;
+    sfpu::sfpu_init<APPROXIMATE>(SfpuType::gelu_derivative);
 }
