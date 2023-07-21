@@ -221,7 +221,7 @@ std::vector<Shape> Tilize::compute_output_shapes(const std::vector<Tensor> &inpu
 
 std::vector<Tensor> Tilize::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE, this->output_mem_config);
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor_a.dtype(), Layout::TILE, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks Tilize::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -503,7 +503,7 @@ std::vector<Shape> TilizeWithValPadding::compute_output_shapes(const std::vector
 }
 std::vector<Tensor> TilizeWithValPadding::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE, this->output_mem_config);
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor_a.dtype(), Layout::TILE, this->output_mem_config);
 }
 
 // TODO: If pad is called on a tile and output is not tile, we could untilize then pad, and output is RM

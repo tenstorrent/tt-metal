@@ -261,7 +261,7 @@ std::vector<Shape> Pad::compute_output_shapes(const std::vector<Tensor> &input_t
 
 std::vector<Tensor> Pad::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.layout(), this->output_mem_config);
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), input_tensor.layout(), this->output_mem_config);
 }
 
 // TODO: If pad is called on a tile and output is not tile, we could untilize then pad, and output is RM

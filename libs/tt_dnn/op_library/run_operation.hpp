@@ -15,19 +15,21 @@ namespace operation {
 std::vector<Tensor> generic_create_output_tensors(
     const DeviceOperation& operation,
     const std::vector<Tensor>& input_tensors,
-    const Layout output_layout = tt::tt_metal::Layout::TILE,
-    const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}
+    const DataType output_dtype,
+    const Layout output_layout,
+    const MemoryConfig& output_mem_config
 );
 template<typename ConcreteOperation>
 std::vector<Tensor> generic_create_output_tensors(
     const ConcreteOperation& concrete_op,
     const std::vector<Tensor>& input_tensors,
-    const Layout output_layout = tt::tt_metal::Layout::TILE,
-    const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}
+    const DataType output_dtype,
+    const Layout output_layout,
+    const MemoryConfig& output_mem_config
 ) {
     if constexpr (detail::is_device_operation<ConcreteOperation>()) {
         const auto operation = DeviceOperation(concrete_op);
-        return generic_create_output_tensors(operation, input_tensors, output_layout, output_mem_config);
+        return generic_create_output_tensors(operation, input_tensors, output_dtype, output_layout, output_mem_config);
     } else {
         static_assert(detail::always_false<ConcreteOperation>, "Unsupported Operation");
     }

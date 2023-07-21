@@ -151,6 +151,7 @@ std::vector<Tensor> run_with_program_cache(
 std::vector<Tensor> generic_create_output_tensors(
     const DeviceOperation& operation,
     const std::vector<Tensor>& input_tensors,
+    const DataType output_dtype,
     const Layout output_layout,
     const MemoryConfig& output_mem_config
 ) {
@@ -162,7 +163,7 @@ std::vector<Tensor> generic_create_output_tensors(
     std::vector<Tensor> output_tensors;
     output_tensors.reserve(output_shapes.size());
     for (const auto& output_shape : output_shapes) {
-        output_tensors.emplace_back(create_device_tensor(output_shape, input_tensor.dtype(), output_layout, input_tensor.device(), output_mem_config));
+        output_tensors.emplace_back(create_device_tensor(output_shape, output_dtype, output_layout, input_tensor.device(), output_mem_config));
     }
     return output_tensors;
 }

@@ -71,7 +71,8 @@ std::vector<Shape> SplitTiled::compute_output_shapes(
 
 std::vector<Tensor> SplitTiled::create_output_tensors(
     const std::vector<Tensor> &input_tensors) const {
-    return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE, this->output_mem_config);
+    const auto& input_tensor = input_tensors.at(0);
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks SplitTiled::create_program(

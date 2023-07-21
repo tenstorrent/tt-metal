@@ -297,7 +297,8 @@ std::vector<Shape> Matmul::compute_output_shapes(const std::vector<Tensor>& inpu
 }
 
 std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE, this->output_mem_config);
+    const auto& input_tensor = input_tensors.at(0);
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks Matmul::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -444,18 +445,8 @@ std::vector<Shape> BertLargeMatmul::compute_output_shapes(const std::vector<Tens
 }
 
 std::vector<Tensor> BertLargeMatmul::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    // TODO: Uplift generic_create_output_tensors to take in dtype and switch to call that instead
     const auto& input_tensor = input_tensors.at(0);
-    const auto& output_shapes = this->compute_output_shapes(input_tensors);
-
-    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE);
-
-    std::vector<Tensor> output_tensors;
-    output_tensors.reserve(output_shapes.size());
-    for (const auto& output_shape : output_shapes) {
-        output_tensors.emplace_back(create_device_tensor(output_shape, this->output_dtype, Layout::TILE, input_tensor.device(), this->output_mem_config));
-    }
-    return output_tensors;
+    return operation::generic_create_output_tensors(*this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks BertLargeMatmul::create_program(

@@ -372,7 +372,8 @@ std::vector<Shape> LayerNorm::compute_output_shapes(const std::vector<Tensor> &i
 }
 
 std::vector<Tensor> LayerNorm::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
-    return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE, this->output_mem_config);
+    const auto& input_tensor = input_tensors.at(0);
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks LayerNorm::create_program(
@@ -447,7 +448,8 @@ std::vector<Shape> BertLargeLayerNorm::compute_output_shapes(const std::vector<T
 }
 
 std::vector<Tensor> BertLargeLayerNorm::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
-    return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE, this->output_mem_config);
+    const auto& input_tensor = input_tensors.at(0);
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
 }
 
 
@@ -522,7 +524,8 @@ std::vector<Shape> RMSNorm::compute_output_shapes(const std::vector<Tensor> &inp
 }
 
 std::vector<Tensor> RMSNorm::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
-    return operation::generic_create_output_tensors(*this, input_tensors, Layout::TILE, this->output_mem_config);
+    const auto& input_tensor = input_tensors.at(0);
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks RMSNorm::create_program(

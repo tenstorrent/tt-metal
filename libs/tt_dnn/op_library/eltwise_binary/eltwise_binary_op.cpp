@@ -80,7 +80,8 @@ std::vector<Shape> EltwiseBinary::compute_output_shapes(
 
 std::vector<Tensor> EltwiseBinary::create_output_tensors(
     const std::vector<Tensor>& input_tensors) const {
-    return operation::generic_create_output_tensors(*this, input_tensors);
+    const auto& input_tensor = input_tensors.at(0);
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, MemoryConfig{.interleaved = true});
 }
 
 operation::ProgramWithCallbacks EltwiseBinary::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {

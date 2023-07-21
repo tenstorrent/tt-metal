@@ -200,7 +200,7 @@ std::vector<Shape> Untilize::compute_output_shapes(const std::vector<Tensor> &in
 
 std::vector<Tensor> Untilize::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, Layout::ROW_MAJOR, this->output_mem_config);
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor_a.dtype(), Layout::ROW_MAJOR, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks Untilize::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -466,7 +466,7 @@ std::vector<Shape> UntilizeWithUnpadding::compute_output_shapes(const std::vecto
 }
 std::vector<Tensor> UntilizeWithUnpadding::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, Layout::ROW_MAJOR, this->output_mem_config);
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor_a.dtype(), Layout::ROW_MAJOR, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks UntilizeWithUnpadding::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {

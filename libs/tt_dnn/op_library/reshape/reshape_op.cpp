@@ -308,7 +308,7 @@ std::vector<Shape> Reshape::compute_output_shapes(const std::vector<Tensor> &inp
 
 std::vector<Tensor> Reshape::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor_a.layout());
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor_a.dtype(), input_tensor_a.layout(), MemoryConfig{.interleaved = true});
 }
 
 operation::ProgramWithCallbacks Reshape::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
