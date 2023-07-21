@@ -6,7 +6,7 @@
 #include "ckernel_include.h"
 #include "hostdevcommon/kernel_structs.h"
 
-#include "compute_kernel_api/llk_includes.h"
+#include "llk_includes.h"
 
 namespace ckernel {
 
@@ -40,6 +40,11 @@ namespace ckernel {
  * | icb            | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31                                             | True     |
  * | icb_tile       | The index of the tile in the output CB to copy to | uint32_t | Must be less than the size of the CB                | True     |
  */
+ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb)
+{
+    PACK((  llk_pack<false, SYNC, false >(ifrom_dst, icb)  ));
+}
+
 ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t cbid) {
     UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, false>() ));
     UNPACK(( llk_unpack_reconfig_data_format(1, cbid, 0, 0) ));
