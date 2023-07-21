@@ -5,6 +5,8 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
+#include "tt_metal/detail/util.hpp"
+
 #include "dtx/dtx.hpp"
 #include "dtx/dtx_passes.hpp"
 
@@ -34,7 +36,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 
-    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
     int32_t num_tiles = a.volume() / TILE_HW;
     uint32_t stick_s =  a.layout() == Layout::ROW_MAJOR ? a.shape()[3] : a.shape()[1];
@@ -265,7 +267,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
     tt_metal::Buffer *src0_buffer = a.buffer();
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
     int32_t num_tiles = output.volume() / TILE_HW;
 

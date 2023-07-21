@@ -5,6 +5,8 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/common/tile_math.hpp"
+#include "tt_metal/detail/util.hpp"
+
 #include <optional>
 
 using u32 = std::uint32_t;
@@ -36,13 +38,13 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
 
     Program program = Program();
 
-    uint32_t scalar_tile_size = tt_metal::TileSize(tt::DataFormat::Float16_b);
+    uint32_t scalar_tile_size = tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
 
     tt::DataFormat in0_cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t in0_tile_size = tt_metal::TileSize(in0_cb_data_format);
+    uint32_t in0_tile_size = tt_metal::detail::TileSize(in0_cb_data_format);
 
     tt::DataFormat mask_cb_data_format = mask.has_value() ? tt_metal::datatype_to_dataformat_converter(mask.value().dtype()) : tt::DataFormat::Float16_b;
-    uint32_t mask_tile_size = tt_metal::TileSize(mask_cb_data_format);
+    uint32_t mask_tile_size = tt_metal::detail::TileSize(mask_cb_data_format);
 
     auto src0_dram_buffer = input_tensor.buffer();
 

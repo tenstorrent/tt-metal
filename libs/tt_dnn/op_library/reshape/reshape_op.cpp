@@ -2,6 +2,8 @@
 #include "tt_dnn/op_library/math.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
+#include "tt_metal/detail/util.hpp"
+
 #include "tensor/tensor_utils.hpp"
 
 #include <algorithm>
@@ -19,7 +21,7 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
 
@@ -132,7 +134,7 @@ operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& 
     uint32_t new_stick_size = output_shape[3] * 2; // Assuming bfloat16 data format
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = (a.shape()[1] * a.shape()[2] * a.shape()[3] / TILE_HW);
     uint32_t num_output_tiles = (output_shape[1] * output_shape[2] * output_shape[3] / TILE_HW);

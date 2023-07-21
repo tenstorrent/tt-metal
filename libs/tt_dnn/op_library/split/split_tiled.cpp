@@ -4,6 +4,8 @@
 
 #include "common/constants.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/util.hpp"
+
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
@@ -54,7 +56,7 @@ void SplitTiled::validate(const std::vector<Tensor> &input_tensors) const {
     const auto &input_tensor = input_tensors.at(0);
     tt_metal::Buffer *in0_buffer = input_tensor.buffer();
     auto cb_data_format = get_data_format(input_tensor);
-    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
     TT_ASSERT(in0_buffer->size() % single_tile_size == 0);
     boiler_plate_asserts((const Tensor &)input_tensor);
     shape_asserts((const Tensor &)input_tensor);

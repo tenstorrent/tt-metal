@@ -2,6 +2,7 @@
 #include "tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
+#include "tt_metal/detail/util.hpp"
 
 using namespace tt::constants;
 
@@ -17,7 +18,7 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
     const auto& ashape = a.shape(), bshape = b.shape();
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
     MathFidelity math_fidelity = MathFidelity::HiFi4;
 
     tt_metal::Buffer *src0_buffer = a.buffer();

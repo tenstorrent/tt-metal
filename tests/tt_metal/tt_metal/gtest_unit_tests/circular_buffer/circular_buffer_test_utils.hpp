@@ -1,8 +1,9 @@
 #pragma once
 
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/util.hpp"
 
-using namespace tt::tt_metal;
+using namespace tt::tt_metal::detail;
 
 namespace basic_tests::circular_buffer {
 

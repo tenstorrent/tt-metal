@@ -3,6 +3,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
+#include "tt_metal/detail/util.hpp"
 
 using namespace tt::constants;
 using namespace tt;
@@ -27,9 +28,9 @@ operation::ProgramWithCallbacks create_program(
 
     tt_metal::Program program{};
 
-    uint32_t in0_single_tile_size = tt_metal::TileSize(in0_data_format);
-    uint32_t in1_single_tile_size = tt_metal::TileSize(in1_data_format);
-    uint32_t output_single_tile_size = tt_metal::TileSize(output_data_format);
+    uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
+    uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
+    uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_data_format);
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles * 2; // double buffer
@@ -441,8 +442,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_bert_large_(co
 
     tt_metal::Device *device = a.device();
 
-    uint32_t in0_single_tile_size = tt_metal::TileSize(in0_data_format);
-    uint32_t in1_single_tile_size = tt_metal::TileSize(in1_data_format);
+    uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
+    uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
     tt_metal::Buffer *in0_buffer = a.buffer();
     tt_metal::Buffer *in1_buffer = b.buffer();
     if (bcast_batch)

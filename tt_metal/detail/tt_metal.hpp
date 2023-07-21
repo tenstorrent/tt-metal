@@ -1,11 +1,11 @@
 #pragma once
 #include <mutex>
-
 using std::unique_lock;
 using std::mutex;
 
 namespace tt::tt_metal{
     namespace detail {
+
 
         inline void GenerateBankToNocCoordHeaders(  Device *device,
                                              build_kernel_for_riscv_options_t *build_options,

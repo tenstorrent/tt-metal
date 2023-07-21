@@ -3,6 +3,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
+#include "tt_metal/detail/util.hpp"
 
 using namespace tt::constants;
 using u32 = uint32_t;
@@ -18,7 +19,7 @@ operation::ProgramWithCallbacks fill_rm_single_core(const Tensor& any, Tensor &o
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(any.dtype());
-    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");

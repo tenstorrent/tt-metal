@@ -3,6 +3,7 @@
 #include "tt_metal/host_api.hpp"
 
 #include "tt_metal/common/constants.hpp"
+#include "tt_metal/detail/util.hpp"
 
 
 using namespace tt::tt_metal;
@@ -42,7 +43,7 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 
-    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;

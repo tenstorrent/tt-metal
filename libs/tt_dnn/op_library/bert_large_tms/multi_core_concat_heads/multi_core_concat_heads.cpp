@@ -1,6 +1,7 @@
 #include "tt_dnn/op_library/bert_large_tms/bert_large_tms.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
+#include "tt_metal/detail/util.hpp"
 
 using namespace tt::constants;
 using namespace tt;
@@ -17,7 +18,7 @@ operation::ProgramWithCallbacks multi_core_concat_heads(const Tensor &a, Tensor&
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 
-    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
     tt_metal::Buffer *in0_buffer = a.buffer();
     TT_ASSERT(in0_buffer->size() % single_tile_size == 0);
 

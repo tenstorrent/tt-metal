@@ -4,6 +4,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat8.hpp"
+#include "tt_metal/detail/util.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -42,7 +43,7 @@ int main(int argc, char **argv) {
 
         CoreCoord core = {0, 0};
 
-        uint32_t single_tile_size = tt_metal::TileSize(tt::DataFormat::Bfp8_b);
+        uint32_t single_tile_size = tt_metal::detail::TileSize(tt::DataFormat::Bfp8_b);
         TT_ASSERT(single_tile_size == (256 * 4) + (16 *4));
         uint32_t num_tiles = 1;
         uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of BFP8_B

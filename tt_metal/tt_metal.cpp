@@ -355,8 +355,6 @@ ComputeKernel *CreateComputeKernel(
     return kernel;
 }
 
-uint32_t TileSize(const DataFormat &data_format) { return tt::tile_size(data_format); }
-
 const CircularBuffer &CreateCircularBuffer(
     Program &program,
     uint32_t buffer_index,

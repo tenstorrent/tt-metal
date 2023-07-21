@@ -5,6 +5,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
+#include "tt_metal/detail/util.hpp"
 
 #include "third_party/magic_enum/magic_enum.hpp"
 
@@ -53,8 +54,8 @@ operation::ProgramWithCallbacks layernorm_(
     uint32_t block_size = find_max_divisor(Wt, 8);
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
-    uint32_t bfloat16_tile_size = tt_metal::TileSize(tt::DataFormat::Float16_b);
+    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    uint32_t bfloat16_tile_size = tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
 
     auto a_addr = a.buffer()->address();
     auto b_dram_addr = b ? b.value().buffer()->address() : 0;

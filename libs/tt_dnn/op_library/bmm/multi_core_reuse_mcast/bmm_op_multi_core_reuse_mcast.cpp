@@ -3,6 +3,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "hostdevcommon/common_values.hpp"
+#include "tt_metal/detail/util.hpp"
 
 using namespace tt::constants;
 using namespace tt;
@@ -931,7 +932,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast(const Tensor &a, c
     const auto& ashape = a.shape(), bshape = b.shape();
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = tt_metal::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     tt_metal::Buffer *in0_buffer = a.buffer();
     tt_metal::Buffer *in1_buffer = b.buffer();

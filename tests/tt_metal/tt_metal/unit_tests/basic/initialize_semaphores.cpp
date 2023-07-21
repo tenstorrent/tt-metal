@@ -6,13 +6,14 @@
 #include "single_device_fixture.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
+#include "tt_metal/detail/util.hpp"
 
 using namespace tt;
 
 namespace unit_tests::initialize_semaphores {
 
 void initialize_and_compile_program(tt_metal::Device *device, tt_metal::Program &program, const CoreRange &core_range) {
-    uint32_t single_tile_size = tt_metal::TileSize(tt::DataFormat::Float16_b);
+    uint32_t single_tile_size = tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
     uint32_t num_tiles = 2048;
 
     uint32_t src0_cb_index = 0;
