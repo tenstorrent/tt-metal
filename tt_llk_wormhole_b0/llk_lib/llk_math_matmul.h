@@ -62,39 +62,20 @@ inline void matmul_configure_addrmod(const bool transpose, const std::uint32_t c
     const uint8_t dest_increment = transpose == false ? 8 : 24;
 
     if (is_in0_16x32||is_in0_32x16) {
-        //if (transpose) {
-        //    addr_mod_t{
-        //        .srca = {.incr = 16, .clr = 0, .cr = 0},
-        //        .srcb = {.incr = 0,  .clr = 0, .cr = 1}, // cr=16 before
-        //        .dest = {.incr = 24, .clr = 0, .cr = 0},
-        //    }
-        //        .set(ADDR_MOD_1);
-
-        //} else {
-            addr_mod_t{
-                .srca = {.incr = 16, .clr = 0, .cr = 0},
-                .srcb = {.incr = 0,  .clr = 0, .cr = 1}, // cr=16 before
-                .dest = {.incr = 8,  .clr = 0, .cr = 0},
-            }
-                .set(ADDR_MOD_1);
-        //}        
+        addr_mod_t{
+            .srca = {.incr = 16, .clr = 0, .cr = 0},
+            .srcb = {.incr = 0,  .clr = 0, .cr = 1}, // cr=16 before
+            .dest = {.incr = 8,  .clr = 0, .cr = 0},
+        }
+            .set(ADDR_MOD_1);
     } else {
         if (is_in1_32x16) {
-            //if (transpose) {
                 addr_mod_t{
                     .srca = {.incr =  16, .clr = 0, .cr = 0},
                     .srcb = {.incr =  8, .clr = 0, .cr = 0},
                     .dest = {.incr =  0, .clr = 0, .cr = 1},
                 }
                     .set(ADDR_MOD_1);
-            //} else {
-            //    addr_mod_t{
-            //        .srca = {.incr = 32, .clr = 0, .cr = 0},
-            //        .srcb = {.incr =  8, .clr = 0, .cr = 0},
-            //        .dest = {.incr =  0, .clr = 0, .cr = 1},
-            //    }
-            //        .set(ADDR_MOD_1);
-            //}    
         } else {
             if (transpose) {
                 addr_mod_t{
@@ -116,37 +97,19 @@ inline void matmul_configure_addrmod(const bool transpose, const std::uint32_t c
     }        
 
     if (is_in1_32x16) {
-        //if (transpose) {
-            addr_mod_t{
-                .srca = {.incr = 16, .clr = 0, .cr = 0},
-                .srcb = {.incr = 8, .clr = 0, .cr = 0},
-                .dest = {.incr = 0, .clr = 0, .cr = 1}, // cr=16  
-            }
-                .set(ADDR_MOD_2);
-        //} else {
-        //    addr_mod_t{
-        //        .srca = {.incr = 32, .clr = 0, .cr = 0},
-        //        .srcb = {.incr = 8,  .clr = 0, .cr = 0},
-        //        .dest = {.incr = 0,  .clr = 0, .cr = 1}, // cr=32 before
-        //    }
-        //        .set(ADDR_MOD_2);
-        //}     
+         addr_mod_t{
+             .srca = {.incr = 16, .clr = 0, .cr = 0},
+             .srcb = {.incr = 8, .clr = 0, .cr = 0},
+             .dest = {.incr = 0, .clr = 0, .cr = 1}, // cr=16  
+         }
+             .set(ADDR_MOD_2);
     } else if (is_in0_16x32||is_in0_32x16) {
-        //if (transpose) {
-        //    addr_mod_t{
-        //        .srca = {.incr = 16, .clr = 0, .cr = 0},
-        //        .srcb = {.incr = 0, .clr = 0, .cr = 1},
-        //        .dest = {.incr = 24, .clr = 0, .cr = 0},
-        //    }
-        //        .set(ADDR_MOD_2);
-        //} else {
-            addr_mod_t{
-                .srca = {.incr = 16, .clr = 0, .cr = 0},
-                .srcb = {.incr = 0, .clr = 0, .cr = 1},
-                .dest = {.incr = 8, .clr = 0, .cr = 0},
-            }
-                .set(ADDR_MOD_2);
-        //}    
+        addr_mod_t{
+            .srca = {.incr = 16, .clr = 0, .cr = 0},
+            .srcb = {.incr = 0, .clr = 0, .cr = 1},
+            .dest = {.incr = 8, .clr = 0, .cr = 0},
+        }
+            .set(ADDR_MOD_2);
     } else {
         addr_mod_t{
             .srca = {.incr =  0, .clr = 0, .cr = 1},
