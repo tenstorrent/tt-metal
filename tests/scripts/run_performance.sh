@@ -27,7 +27,7 @@ env pytest tests/python_api_testing/models/stable_diffusion/perf_unbatched_stabl
 
 env pytest tests/python_api_testing/models/vgg/tests/perf_vgg.py
 
-env pytest tests/python_api_testing/models/whisper/perf_whisper.py
+env TT_METAL_DEVICE_DISPATCH_MODE=1 pytest tests/python_api_testing/models/whisper/perf_whisper.py
 
 ## Merge all the generated reports
 env python tests/python_api_testing/models/merge_perf_results.py
