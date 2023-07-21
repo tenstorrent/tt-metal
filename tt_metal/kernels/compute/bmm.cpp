@@ -1,7 +1,5 @@
 #include <cstdint>
-
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/matmul.h"
+#include "compute_kernel_api.h"
 
 using std::uint32_t;
 
