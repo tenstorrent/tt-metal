@@ -5,6 +5,27 @@ namespace tt::tt_metal {
 
 namespace detail {
 
+std::atomic<bool> CompilationReporter::enable_compile_reports_ = false;
+
+void EnableCompilationReports() { CompilationReporter::toggle(true); }
+void DisableCompilationReports() { CompilationReporter::toggle(false); }
+
+void CompilationReporter::toggle(bool state)
+{
+    enable_compile_reports_ = state;
+}
+
+bool CompilationReporter::enabled()
+{
+    return enable_compile_reports_;
+}
+
+CompilationReporter& CompilationReporter::inst()
+{
+    static CompilationReporter inst;
+    return inst;
+}
+
 CompilationReporter::CompilationReporter() {}
 
 CompilationReporter::~CompilationReporter() {

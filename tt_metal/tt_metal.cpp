@@ -61,7 +61,6 @@ namespace detail {
 
 namespace {
     std::atomic<bool> enable_compile_cache = false;
-    detail::CompilationReporter compilation_reporter = detail::CompilationReporter();
 
 void DownloadFirmware(Device *device, CoreCoord phys_core) {
     for (int riscv_id = 0; riscv_id < 5; riscv_id++) {
@@ -113,10 +112,6 @@ std::optional<uint32_t> get_semaphore_address(const Program &program, const Core
 static Profiler tt_metal_profiler = Profiler();
 
 void ClearCompileCache() { detail::HashLookup::inst().clear(); }
-
-bool enable_compilation_reports = false;
-void EnableCompilationReports() { enable_compilation_reports = true; }
-void DisableCompilationReports() { enable_compilation_reports = false; }
 
 void DumpHostProfileResults(std::string name_prepend){
     tt_metal_profiler.dumpHostResults(name_prepend);
@@ -720,8 +715,8 @@ void CompileKernel(Device *device, Program &program, Kernel *kernel, bool profil
         GenerateBinaries(device, &build_options, kernel_path_suffix, profile_kernel, kernel);
     }
 
-    if (enable_compilation_reports) {
-        compilation_reporter.add_kernel_compile_stats(program, kernel, cache_hit, kernel_hash);
+    if (detail::CompilationReporter::enabled()) {
+        detail::CompilationReporter::inst().add_kernel_compile_stats(program, kernel, cache_hit, kernel_hash);
     }
 
     kernel->set_binary_path(kernel_path_suffix);
@@ -834,11 +829,11 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
     }
     program.construct_core_range_set_for_worker_cores();
 
-    if (enable_compilation_reports) {
-        compilation_reporter.flush_program_entry(program, enable_compile_cache);
+    if (detail::CompilationReporter::enabled()) {
+        detail::CompilationReporter::inst().flush_program_entry(program, enable_compile_cache);
     }
-    if (detail::MemoryReporter::is_enabled()) {
-        detail::MemoryReporter::Get().flush_program_memory_usage(program, device);
+    if (detail::MemoryReporter::enabled()) {
+        detail::MemoryReporter::inst().flush_program_memory_usage(program, device);
     }
 
     tt_metal_profiler.markStop("CompileProgram");
