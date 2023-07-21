@@ -3,15 +3,9 @@
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 
+#include "compute_kernel_api.h"
 
-
-
-#if FUSED_SCALE_MASK
-#include "compute_kernel_api/eltwise_binary.h"
-#endif
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_unary.h"
-#include "compute_kernel_api/reduce.h"
+#include "debug_print.h"
 
 ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
 ALWI void REL() { release_dst(tt::DstMode::Half); }

@@ -4,14 +4,7 @@
 
 #include "compute_kernel_api/common_globals.h"
 #include "compute_kernel_api/llk_pack_includes.h"
-
-#ifdef TRISC_UNPACK
-#include "llk_unpack_common.h"
-#define UNPACK(x) x
-#define MAIN unpack_main()
-#else
-#define UNPACK(x)
-#endif
+#include "compute_kernel_api/llk_unpack_includes.h"
 namespace ckernel {
 
 // documented in dataflow_api.h
