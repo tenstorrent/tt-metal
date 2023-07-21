@@ -1,15 +1,6 @@
 #include <cstdint>
 
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/matmul.h"
-
-#ifdef FUSE_BIAS
-#include "compute_kernel_api/bcast.h"
-#endif
-
-#ifdef FUSE_GELU_ACTIVATION
-#include "compute_kernel_api/gelu.h"
-#endif
+#include "compute_kernel_api.h"
 namespace NAMESPACE {
 void MAIN {
 
