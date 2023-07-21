@@ -22,7 +22,7 @@ extern uint32_t perf_end;
 // Perf-buffer are double buffered for spill_to_dram.
 // Ncrisc will move one half to dram while trisc populates the other half.
 // When INTERMED_DUMP = 0, we only dump into perf_buf_base[0].
-extern volatile uint32_t tt_l1_ptr *perf_buf_base[2];
+extern volatile uint32_t *perf_buf_base[2];
 // Selects the half of perf_buffer that trisc is currently writing into.
 extern uint8_t perf_buf_base_id;
 extern uint32_t last_clock_32h;
