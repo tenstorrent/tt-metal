@@ -224,7 +224,7 @@ operation::ProgramWithCallbacks layernorm_(
     bool math_approx_mode = true;
     auto eltwise_binary_kernels = CreateComputeKernel(
         program,
-        rms_norm ? "kernels/compute/rmsnorm.cpp" : "kernels/compute/layernorm.cpp",
+        rms_norm ? "tt_metal/kernels/compute/rmsnorm.cpp" : "tt_metal/kernels/compute/layernorm.cpp",
         all_cores,
         compute_args,
         MathFidelity::HiFi4,

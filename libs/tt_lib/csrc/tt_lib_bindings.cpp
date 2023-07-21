@@ -7,6 +7,7 @@
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
+#include "tt_dnn/op_library/groupnorm/groupnorm_op.hpp"
 #include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
 #include "tt_dnn/op_library/transpose/transpose_op.hpp"
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
@@ -2833,6 +2834,12 @@ void TensorModule(py::module &m_tensor) {
         "Performs a softmax operation on the last tensor dimension. Returns a reference to the input tensor modified in place.");
     m_tensor.def("scale_mask_softmax_in_place", &scale_mask_softmax_in_place,
         "Performs a fused scale->attention_mask->softmax operation. Returns a reference to the input tensor modified in place.");
+
+    // groupnorm
+    m_tensor.def("groupnorm", &groupnorm,
+        py::arg("input").noconvert(), py::arg("group_size").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        "Performs a groupnorm operation on the channel dimension grouped per group_size, with optional fused with post-multiplication and addition via W-bcast.
+    )doc");
 
     // layernorm
     m_tensor.def("layernorm", &layernorm,
