@@ -128,10 +128,10 @@ void MemoryReporter::init_reports() {
     write_headers(this->program_memory_usage_summary_report_, this->program_l1_usage_summary_report_, /*add_program_id=*/true);
 }
 void DumpDeviceMemoryState(const Device *device) {
-    MemoryReporter::Get().dump_memory_usage_state(device);
+    MemoryReporter::inst().dump_memory_usage_state(device);
 }
 
-bool MemoryReporter::is_enabled() {
+bool MemoryReporter::enabled() {
     return is_enabled_;
 }
 
@@ -140,7 +140,7 @@ void MemoryReporter::toggle(bool state)
     is_enabled_ = state;
 }
 
-MemoryReporter& MemoryReporter::Get()
+MemoryReporter& MemoryReporter::inst()
 {
     static MemoryReporter inst;
     return inst;

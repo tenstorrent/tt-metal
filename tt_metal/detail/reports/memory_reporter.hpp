@@ -48,15 +48,17 @@ void DumpDeviceMemoryState(const Device *device);
 class MemoryReporter {
    public:
     MemoryReporter& operator=(const MemoryReporter&) = delete;
+    MemoryReporter& operator=(MemoryReporter&& other) noexcept = delete;
     MemoryReporter(const MemoryReporter&) = delete;
+    MemoryReporter(MemoryReporter&& other) noexcept = delete;
 
     void flush_program_memory_usage(const Program &program, const Device *device);
 
     void dump_memory_usage_state(const Device *device) const;
 
     static void toggle(bool state);
-    static MemoryReporter& Get();
-    static bool is_enabled();
+    static MemoryReporter& inst();
+    static bool enabled();
    private:
     MemoryReporter(){};
     ~MemoryReporter();
