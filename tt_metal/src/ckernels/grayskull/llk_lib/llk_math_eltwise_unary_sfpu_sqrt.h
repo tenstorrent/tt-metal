@@ -1,9 +1,8 @@
 #pragma once
-#define OPTIMIZED_COMPILE_SQRT
+#include "llk_math_eltwise_unary_sfpu_common.h"
 #ifdef OPTIMIZED_COMPILE_SQRT
 #include "ckernel_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_common_includes.h"
-#include "llk_math_eltwise_unary_sfpu_0_param.h"
 #include "ckernel_sfpu_sqrt.h"
 #else
 #include "llk_math_eltwise_unary_sfpu_common.h"
@@ -16,18 +15,57 @@ using namespace ckernel;
 #ifdef OPTIMIZED_COMPILE_SQRT
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
 inline void llk_math_eltwise_unary_sfpu_sqrt(uint dst_index, int vector_mode = Dim::RC) {
-    constexpr bool zero_negative = true;
-    constexpr int first_iterations = 1;
-    llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
-                                (ckernel::sfpu::calculate_sfpu_sqrt<APPROXIMATE, first_iterations>,
-                                ckernel::sfpu::calculate_sfpu_sqrt<APPROXIMATE>,
-                                dst_index, vector_mode);
-
+ constexpr bool zero_negative = true;
+ if constexpr ((Dst == DstSync::SyncTile16) || (Dst == DstSync::SyncTile2)) {
+        math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(math_sync_tile_dst_index);
+    } else {
+        math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
+    }
+    if (vector_mode == Dim::R) {
+        // Do a row vector, Face0 + Face1 -- first iteration
+        const int ITERATIONS = 1;
+#pragma GCC unroll 0
+        for (int face = 0; face < 2; face++) {
+            ckernel::sfpu::calculate_sfpu_sqrt<APPROXIMATE, ITERATIONS>();
+            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+        }
+        // Skip the next 2 faces
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+    } else if (vector_mode == Dim::C) {
+        // Do a column vector, Face0 + Face2 -- full face
+#pragma GCC unroll 0
+        for (int face = 0; face < 2; face++) {
+            ckernel::sfpu::calculate_sfpu_sqrt<APPROXIMATE>();
+            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+        }
+    } else {
+#pragma GCC unroll 0
+        // Do all four faces, and iterate through all 4 blocks of 4 rows each
+        for (int face = 0; face < 4; face++) {
+            ckernel::sfpu::calculate_sfpu_sqrt<APPROXIMATE>();
+            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+        }
+    }
+    math::clear_dst_reg_addr();
+    // Do all four faces, and iterate through all 4 blocks of 4 rows each
+    for (int face = 0; face < 4; face++) {
+        ckernel::sfpu::calculate_sfpu_sqrt<APPROXIMATE>();
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+    }
 }
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_sqrt_init() {
-    sfpu::sfpu_init_opt<APPROXIMATE>(SfpuType::sqrt);
+    sfpu::sfpu_init<APPROXIMATE>(SfpuType::sqrt);
 }
 #else
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>

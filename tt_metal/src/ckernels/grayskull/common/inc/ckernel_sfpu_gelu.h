@@ -176,7 +176,7 @@ sfpi_inline vFloat calculate_exponential_body(vFloat in)
     else
     {
         // Force sign to 0 (make number positive)
-        vFloat exp = sfpu_exp_opt(setsgn(in, 0));
+        vFloat exp = sfpu_exp(setsgn(in, 0));
 
         // Load input value, to determine whether reciprocal needs to be run
         vFloat val = dst_reg[0];
@@ -186,7 +186,7 @@ sfpi_inline vFloat calculate_exponential_body(vFloat in)
         dst_reg[0] = exp;
 
         v_if (val < 0) {
-            dst_reg[0] = sfpu_reciprocal_opt<true>(exp);
+            dst_reg[0] = sfpu_reciprocal<true>(exp);
         }
         v_endif;
     }
