@@ -216,7 +216,7 @@ def clear_program_cache():
     ttl.program_cache.disable_and_clear()
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture()
 def clear_compile_cache():
     yield
     import tt_lib as ttl
