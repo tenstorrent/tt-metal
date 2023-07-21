@@ -37,7 +37,7 @@ from utility_functions_new import prep_report
 import pytest
 from loguru import logger
 
-BATCH_SIZE = 9
+BATCH_SIZE = 8
 model_name = "phiyodr/bert-large-finetuned-squad2"
 tokenizer_name = "phiyodr/bert-large-finetuned-squad2"
 comments = "Large"

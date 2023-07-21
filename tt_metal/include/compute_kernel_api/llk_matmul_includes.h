@@ -3,7 +3,6 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_common.h"
 #include "llk_math_matmul.h"
 #define MAIN math_main()
 #define MATH(x) x
