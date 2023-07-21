@@ -1,8 +1,8 @@
 #include "../basic_harness.hpp"
+#include "command_queue_test_utils.hpp"
 #include "gtest/gtest.h"
 #include "tt_metal/common/bfloat16.hpp"
 #include "tt_metal/host_api.hpp"
-#include "command_queue_test_utils.hpp"
 
 using namespace tt::tt_metal;
 
@@ -144,7 +144,6 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, const
 bool test_EnqueueWrap_on_EnqueueWriteBuffer(Device* device, CommandQueue& cq, const BufferConfig& config) {
     EnqueueWriteBuffer_prior_to_wrap(device, cq, config);
 
-
     /*
     This just ensures we don't hang on the subsequent EnqueueWriteBuffer
     */
@@ -201,6 +200,24 @@ TEST_F(CommandQueueHarness, TestSingleSemaphoreConfigCorrectlySentSingleCore) {
     EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_sems(this->device, *this->cq, config));
 }
 
+TEST_F(CommandQueueHarness, TestAutoInsertedBlankBriscKernelInDeviceDispatchMode) {
+    char env[] = "TT_METAL_DEVICE_DISPATCH_MODE=1";
+    putenv(env);
+    Program program;
+
+    CoreRange cr = {.start = {0, 0}, .end = {0, 0}};
+    CoreRangeSet cr_set({cr});
+    // Add an NCRISC blank manually, but in compile program, the BRISC blank will be
+    // added separately
+    auto dummy_reader_kernel = CreateDataMovementKernel(
+        program, "tt_metal/kernels/dataflow/blank.cpp", cr_set, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
+
+    CompileProgram(this->device, program, false);
+
+    EnqueueProgram(*this->cq, program, false);
+    Finish(*this->cq);
+}
+
 }  // end namespace single_core_tests
 
 namespace multicore_tests {
@@ -242,9 +259,6 @@ TEST_F(CommandQueueHarness, DISABLED_TestProgramVectorSizeMatch) {}
 }  // end namespace basic_tests
 
 namespace stress_tests {
-TEST_F(CommandQueueHarness, DISABLED_TestSendMaxNumberOfRuntimeArgs) {
-
-}
-
+TEST_F(CommandQueueHarness, DISABLED_TestSendMaxNumberOfRuntimeArgs) {}
 
 }  // namespace stress_tests
