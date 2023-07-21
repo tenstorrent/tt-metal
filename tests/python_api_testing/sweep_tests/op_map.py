@@ -224,6 +224,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_sigmoid,
         "pytorch_op": pytorch_ops.sigmoid,
     },
+    "eltwise-log_sigmoid": {
+        "tt_lib_op": tt_lib_ops.eltwise_log_sigmoid,
+        "pytorch_op": pytorch_ops.log_sigmoid,
+    },
     "eltwise-heaviside": {
         "tt_lib_op": tt_lib_ops.eltwise_heaviside,
         "pytorch_op": pytorch_ops.heaviside,

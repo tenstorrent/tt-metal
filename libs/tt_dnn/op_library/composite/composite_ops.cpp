@@ -293,6 +293,14 @@ Tensor squared_difference(const Tensor& input_a, const Tensor& input_b) {
     return result;
 }
 
+// @tt-aho TODO: Straightforward fuse with binary op once sfpu fusing generalization is implemented
+//logsigmoid(x) = log(sigmoid(x))
+Tensor log_sigmoid(const Tensor& input_a) {
+    Tensor s_res  = sigmoid(input_a);
+    Tensor result = log(s_res);
+    return result;
+}
+
 
 //these ops need more polish - TBD
 #if 0

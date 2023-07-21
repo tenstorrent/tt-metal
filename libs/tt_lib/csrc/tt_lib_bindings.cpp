@@ -1971,6 +1971,19 @@ void TensorModule(py::module &m_tensor) {
         +----------+--------------------------------+-----------+------------------------------+----------+
         )doc");
 
+    m_tensor.def("log_sigmoid", &log_sigmoid, R"doc(
+        Applies the logsigmoid function to the elements of the input tensor ``arg0``.
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+----------------------------------+-----------+------------------------------+--------------+
+        | Argument | Description                      | Data type | Valid range                  | Required     |
+        +==========+==================================+===========+==============================+==============+
+        | arg0     | Tensor logsigmoid is applied to  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes          |
+        +----------+----------------------------------+-----------+------------------------------+--------------+
+    )doc");
 
     m_tensor.def("relu_min", &relu_min, R"doc(
         Returns tensor with the relu min of all of elements of the input tensor ``arg0``. This is equivalent

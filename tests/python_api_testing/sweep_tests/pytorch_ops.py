@@ -225,6 +225,10 @@ def relu(x, *args, **kwargs):
 def sigmoid(x, *args, **kwargs):
     return torch.sigmoid(x)
 
+def log_sigmoid(x, *args, **kwargs):
+    result = torch.nn.functional.logsigmoid(x)
+    return result
+
 
 def heaviside(x, *args, **kwargs):
     value = kwargs.pop("value")

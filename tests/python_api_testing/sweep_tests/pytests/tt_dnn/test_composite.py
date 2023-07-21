@@ -68,6 +68,7 @@ def custom_compare(*args, **kwargs):
                 "softshrink",
                 "sinh",
                 "cosh",
+                "log_sigmoid",
             ),
             ([[1, 1, 32, 32]], [[1, 3, 320, 64]]),
             (0,),
