@@ -16,6 +16,7 @@
 #include "tt_metal/detail/reports/compilation_reporter.hpp"
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "tt_metal/detail/program.hpp"
+#include "tt_metal/detail/compile_cache.hpp"
 
 // TODO(MO): hack until ticket #1184 is in
 bool enable_fw_profile_hack = false;
@@ -59,8 +60,8 @@ namespace detail {
 }
 
 namespace {
-
-detail::CompilationReporter compilation_reporter = detail::CompilationReporter();
+    std::atomic<bool> enable_compile_cache = false;
+    detail::CompilationReporter compilation_reporter = detail::CompilationReporter();
 
 void DownloadFirmware(Device *device, CoreCoord phys_core) {
     for (int riscv_id = 0; riscv_id < 5; riscv_id++) {
@@ -111,11 +112,7 @@ std::optional<uint32_t> get_semaphore_address(const Program &program, const Core
 
 static Profiler tt_metal_profiler = Profiler();
 
-bool enable_compile_cache = false;
-void EnableCompileCache() { enable_compile_cache = true; }
-void DisableCompileCache() { enable_compile_cache = false; }
 void ClearCompileCache() { detail::HashLookup::inst().clear(); }
-bool GetCompileCacheEnabled() { return enable_compile_cache; }
 
 bool enable_compilation_reports = false;
 void EnableCompilationReports() { enable_compilation_reports = true; }
@@ -716,9 +713,9 @@ void CompileKernel(Device *device, Program &program, Kernel *kernel, bool profil
 
     bool cache_hit = true;
     bool path_exists = std::filesystem::exists(build_options.outpath + kernel_path_suffix);
-    if (enable_compile_cache && path_exists) {
-        TT_ASSERT(detail::HashLookup::inst().exists(kernel_hash));
-    } else if (detail::HashLookup::inst().add(kernel_hash)) {
+    if ( detail::GetCompileCacheEnabled() && path_exists ) {
+        if ( not detail::HashLookup::inst().exists(kernel_hash) ) detail::HashLookup::inst().add(kernel_hash);
+    } else if ( detail::HashLookup::inst().add(kernel_hash) ) {
         cache_hit = false;
         GenerateBinaries(device, &build_options, kernel_path_suffix, profile_kernel, kernel);
     }

@@ -629,34 +629,12 @@ bool ReadFromDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t ad
 //
 // ==================================================
 
-
-/**
- * Enable kernel compilation cache to be persistent across runs. When this is called, kernels will not be compiled if the output binary path exists.
- *
- * Return value: void
- */
-void EnableCompileCache();
-
-/**
- * Disables kernel compilation cache from being persistent across runs.
- *
- * Return value: void
- */
-void DisableCompileCache();
-
 /**
  * Clear the current kernel compilation cache.
  *
  * Return value: void
  */
 void ClearCompileCache();
-
-/**
- * Returns bool indicating whether persistent caching is enabled.
- *
- * Return value: bool
- */
-bool GetCompileCacheEnabled();
 
 /**
  *  Compiles all kernels within the program, and generates binaries that are written to `$TT_METAL_HOME/built/kernels/<kernel name>/<kernel hash>`
