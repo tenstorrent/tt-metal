@@ -124,27 +124,27 @@ constexpr inline uint32_t packed_buffer_size_bytes<bfloat8_b>(uint32_t volume_un
 // ======================================================================================
 //                                  Layout converters
 // ======================================================================================
-template <typename T>
-inline std::vector<T> convert_layout_row_major_to_tile(const std::array<uint32_t, 4> &shape, const std::vector<T>& data_to_convert) {
+template <typename T, template<typename> typename BufferType>
+inline std::vector<T> convert_layout_row_major_to_tile(const std::array<uint32_t, 4> &shape, const BufferType<T>& data_to_convert) {
     TT_ASSERT((shape[2] % tt::constants::TILE_HEIGHT == 0 && shape[3] % tt::constants::TILE_WIDTH == 0), "Unsupported shape for tensor conversion");
     std::vector<uint32_t> shape_vec = {shape[0], shape[1], shape[2], shape[3]};
     return convert_layout(data_to_convert, shape_vec, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED32_4FACES);
 }
 
-template <typename T>
-inline std::vector<T> convert_layout_tile_to_row_major(const std::array<uint32_t, 4> &shape, const std::vector<T>& data_to_convert) {
+template <typename T, template<typename> typename BufferType>
+inline std::vector<T> convert_layout_tile_to_row_major(const std::array<uint32_t, 4> &shape, const BufferType<T>& data_to_convert) {
     std::vector<uint32_t> shape_vec = {shape[0], shape[1], shape[2], shape[3]};
     return convert_layout(data_to_convert, shape_vec, TensorLayout::TILED32_4FACES, TensorLayout::LIN_ROW_MAJOR);
 }
 
-template <typename T>
-inline std::vector<T> convert_layout_row_major_to_channels_last(const std::array<uint32_t, 4> &shape, const std::vector<T>& data_to_convert) {
+template <typename T, template<typename> typename BufferType>
+inline std::vector<T> convert_layout_row_major_to_channels_last(const std::array<uint32_t, 4> &shape, const BufferType<T>& data_to_convert) {
     std::vector<uint32_t> shape_vec = {shape[0], shape[1], shape[2], shape[3]};
     return convert_layout(data_to_convert, shape_vec, TensorLayout::LIN_ROW_MAJOR, TensorLayout::CHANNELS_LAST);
 }
 
-template <typename T>
-inline std::vector<T> convert_layout_channels_last_to_row_major(const std::array<uint32_t, 4> &shape, const std::vector<T>& data_to_convert) {
+template <typename T, template<typename> typename BufferType>
+inline std::vector<T> convert_layout_channels_last_to_row_major(const std::array<uint32_t, 4> &shape, const BufferType<T>& data_to_convert) {
     std::vector<uint32_t> shape_vec = {shape[0], shape[1], shape[2], shape[3]};
     return convert_layout(data_to_convert, shape_vec, TensorLayout::CHANNELS_LAST, TensorLayout::LIN_ROW_MAJOR);
 }
@@ -345,7 +345,7 @@ inline DeviceBuffer to_device_buffer(const Storage& storage, Device* device, con
                     return initialize_data_on_device<T>(data_to_write, device, shape, data_type, layout, memory_config);
                 }
                 else {
-                    TT_THROW("External storage doesn't support this data type");
+                    TT_THROW("Borrowed storage doesn't support this data type");
                 }
             }
             else {
@@ -397,40 +397,62 @@ inline Tensor to_layout(const Tensor &tensor, Layout target_layout) {
         return tensor;
     }
 
-    const auto& input_data = owned_buffer::get_as<T>(tensor).get();
-    std::vector<T> output_data;
+    auto shape = tensor.shape();
+    auto source_layout = tensor.layout();
+    auto convert = [&shape, source_layout, target_layout] (const auto& input_data) -> std::vector<T> {
+        switch (source_layout) {
+            case Layout::ROW_MAJOR:
+                if (target_layout == Layout::TILE) {
+                    return convert_layout_row_major_to_tile(shape, input_data);
+                }
+                else if (target_layout == Layout::CHANNELS_LAST) {
+                    return convert_layout_row_major_to_channels_last(shape, input_data);
+                }
+                else {
+                    TT_THROW("Unsupported layout conversion");
+                }
+            break;
+            case Layout::TILE:
+                if (target_layout == Layout::ROW_MAJOR) {
+                    return convert_layout_tile_to_row_major(shape, input_data);
+                }
+                else {
+                    TT_THROW("Unsupported layout conversion");
+                }
+            break;
+            case Layout::CHANNELS_LAST:
+                if (target_layout == Layout::ROW_MAJOR) {
+                    return convert_layout_channels_last_to_row_major(shape, input_data);
+                }
+                else {
+                    TT_THROW("Unsupported layout conversion");
+                }
+            break;
+            default:
+                TT_THROW("Unsupported layout conversion");
+        }
+    };
 
-    switch (tensor.layout()) {
-        case Layout::ROW_MAJOR:
-            if (target_layout == Layout::TILE) {
-                output_data = convert_layout_row_major_to_tile(tensor.shape(), input_data);
+    auto output_data = std::visit(
+        [&convert] (auto&& storage)  -> std::vector<T> {
+            using StorageType = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
+                const auto input_data = owned_buffer::get_as<T>(storage.buffer);
+                return convert(input_data);
             }
-            else if (target_layout == Layout::CHANNELS_LAST) {
-                output_data = convert_layout_row_major_to_channels_last(tensor.shape(), input_data);
+            else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
+                const auto input_data = borrowed_buffer::get_as<T>(storage.buffer);
+                return convert(input_data);
             }
-            else {
-                TT_ASSERT(false && "Unsupported layout conversion");
-            }
-        break;
-        case Layout::TILE:
-            if (target_layout == Layout::ROW_MAJOR) {
-                output_data = convert_layout_tile_to_row_major(tensor.shape(), input_data);
+            else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
+                TT_THROW("Device storage isnt' supported");
             }
             else {
-                TT_ASSERT(false && "Unsupported layout conversion");
+                raise_unsupported_storage<StorageType>();
             }
-        break;
-        case Layout::CHANNELS_LAST:
-            if (target_layout == Layout::ROW_MAJOR) {
-                output_data = convert_layout_channels_last_to_row_major(tensor.shape(), input_data);
-            }
-            else {
-                TT_ASSERT(false && "Unsupported layout conversion");
-            }
-        break;
-        default:
-            TT_ASSERT(false && "Unsupported layout conversion");
-    }
+        },
+        tensor.storage()
+    );
 
     auto output_buffer = owned_buffer::create<T>(std::move(output_data));
     return Tensor(OwnedStorage{output_buffer}, tensor.shape(), tensor.dtype(), target_layout);
@@ -578,7 +600,7 @@ inline void print(const Tensor &tensor, Layout print_layout, bool pretty_print) 
                 print_data(converted_data, tensor.dtype());
             }
             else {
-                TT_ASSERT(false && "Unsupported print layout");
+                TT_THROW("Unsupported print layout");
             }
         break;
         case Layout::TILE:
@@ -589,7 +611,7 @@ inline void print(const Tensor &tensor, Layout print_layout, bool pretty_print) 
                 TT_ASSERT(pretty_print == false && "Can only pretty print in Row Major layout!");
                 print_data(data_vec, tensor.dtype());
             } else {
-                TT_ASSERT(false && "Unsupported print layout");
+                TT_THROW("Unsupported print layout");
             }
         break;
         case Layout::CHANNELS_LAST:
@@ -605,11 +627,11 @@ inline void print(const Tensor &tensor, Layout print_layout, bool pretty_print) 
                 pretty_print ? print_row_major_data(data_vec, cl_shape, tensor.dtype()) : print_data(data_vec, tensor.dtype());
             }
             else {
-                TT_ASSERT(false && "Unsupported print layout");
+                TT_THROW("Unsupported print layout");
             }
         break;
         default:
-            TT_ASSERT(false && "Unsupported print layout");
+            TT_THROW("Unsupported print layout");
     }
 }
 

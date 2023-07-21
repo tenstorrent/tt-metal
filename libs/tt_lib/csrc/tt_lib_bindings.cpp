@@ -85,8 +85,8 @@ struct DataTypeToFormatType<bfloat16> {
 };
 
 template<class CppType, class DataType, class PyType>
-void implement_buffer_protocol(PyType& py_owned_buffer_for_data_type) {
-    py_owned_buffer_for_data_type
+void implement_buffer_protocol(PyType& py_buffer_t) {
+    py_buffer_t
         .def(
             "__getitem__",
             [](const CppType& self, std::size_t index) {

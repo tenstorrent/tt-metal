@@ -214,12 +214,8 @@ def torch2tt_tensor(py_tensor: torch.Tensor, tt_device, tt_layout=tt_lib.tensor.
     while len(size) < 4:
         size.insert(0, 1)
 
-    tt_tensor = tt_lib.tensor.Tensor(
-        py_tensor.reshape(-1).tolist(),
-        size,
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.ROW_MAJOR,
-    ).to(tt_layout)
+    py_tensor = py_tensor.to(torch.bfloat16).reshape(size)
+    tt_tensor = tt_lib.tensor.Tensor(py_tensor).to(tt_layout)
 
     if not isinstance(tt_device, tt_lib.device.Host):
         tt_tensor = tt_tensor.to(tt_device, tt_memory_config)

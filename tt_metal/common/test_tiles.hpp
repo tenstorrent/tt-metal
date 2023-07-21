@@ -17,8 +17,8 @@ enum TensorLayout {
     CHANNELS_LAST = 3
 };
 
-template <class T>
-std::vector<T> convert_to_tile_layout(const std::vector<T>& data) {
+template <class T, template<typename> typename BufferType>
+std::vector<T> convert_to_tile_layout(const BufferType<T>& data) {
     std::vector<T> result;
     TT_ASSERT(data.size() % (32 * 32) == 0);
     int num_tiles = data.size() / (32 * 32);
@@ -32,13 +32,13 @@ std::vector<T> convert_to_tile_layout(const std::vector<T>& data) {
         for(int row = 0; row < 32; row++) {
             for(int col = 0; col < 32; col++) {
                 if(row < 16 and col < 16) {
-                    top_left.push_back(data.at(index));
+                    top_left.push_back(data[index]);
                 } else if(row < 16 and col >= 16) {
-                    top_right.push_back(data.at(index));
+                    top_right.push_back(data[index]);
                 } else if(row >= 16 and col < 16) {
-                    bottom_left.push_back(data.at(index));
+                    bottom_left.push_back(data[index]);
                 } else if(row >= 16 and col >= 16) {
-                    bottom_right.push_back(data.at(index));
+                    bottom_right.push_back(data[index]);
                 } else {
                     TT_ASSERT(false);
                 }
@@ -59,8 +59,8 @@ std::vector<T> convert_to_tile_layout(const std::vector<T>& data) {
     return result;
 }
 
-template <class T>
-std::vector<T> convert_to_flat_layout(const std::vector<T>& data) {
+template <class T, template<typename> typename BufferTyp>
+std::vector<T> convert_to_flat_layout(const BufferTyp<T>& data) {
     std::vector<T> result;
     TT_ASSERT(data.size() % (32 * 32) == 0);
     int num_tiles = data.size() / (32 * 32);
@@ -72,7 +72,7 @@ std::vector<T> convert_to_flat_layout(const std::vector<T>& data) {
                 for(int face_x = 0; face_x < 2; face_x++) {
                     int offset = face_x * (16 * 16);
                     for(int col = offset; col < offset + 16; col++) {
-                        result.push_back(data.at(start + col));
+                        result.push_back(data[start + col]);
                     }
                 }
             }
@@ -84,8 +84,8 @@ std::vector<T> convert_to_flat_layout(const std::vector<T>& data) {
 
 
 // Converts a 32-swizzled tilized row-major tensor to a linear 32-zero-padded row-major tensor
-template<typename T>
-inline std::vector<T> untilize_nchw(const std::vector<T>& in, const std::vector<std::uint32_t>& shape) {
+template<typename T, template<typename> typename BufferType>
+inline std::vector<T> untilize_nchw(const BufferType<T>& in, const std::vector<std::uint32_t>& shape) {
 
     TT_ASSERT(shape.size() == 4);
     TT_ASSERT(shape[2] % 32 == 0 && shape[3] % 32 == 0);
@@ -101,7 +101,7 @@ inline std::vector<T> untilize_nchw(const std::vector<T>& in, const std::vector<
     for (int ws32 = 0; ws32 < W; ws32 += 32) // iterate over w with stride 32
     for (int h32 = 0; h32 < 32; h32++) // hs32 + h32 = h
     for (int w32 = 0; w32 < 32; w32++) { // ws32 + w32 = w
-        T val = in.at(linear);
+        T val = in[linear];
         auto w = w32 + ws32;
         auto h = h32 + hs32;
         auto offs = w + h*W + c*H*W + n*C*H*W;
@@ -115,8 +115,8 @@ inline std::vector<T> untilize_nchw(const std::vector<T>& in, const std::vector<
 inline std::uint32_t round_up_to_mul32(std::uint32_t val) { return ((val & 31) == 0) ? val : (val | 31)+1; }
 
 // Converts a linear non-zero-padded row-major tensor to zero-padded-32 32-swizzled tilized row-major tensor
-template<typename T>
-inline std::vector<T> tilize_nchw(const std::vector<T>& in_rowmajor, const std::vector<std::uint32_t>& shape) {
+template<typename T, template<typename> typename BufferType>
+inline std::vector<T> tilize_nchw(const BufferType<T>& in_rowmajor, const std::vector<std::uint32_t>& shape) {
     int N = shape[0], C = shape[1], H = shape[2], W = shape[3];
     int NCHW = N*C*H*W;
     int OH = round_up_to_mul32(H);
@@ -134,7 +134,7 @@ inline std::vector<T> tilize_nchw(const std::vector<T>& in_rowmajor, const std::
         auto w = w32+ws32;
         auto h = h32+hs32;
         auto in_offs = w + h*W + c*H*W + n*C*H*W;
-        auto val = (w >= W || h >= H || c >= C || in_offs >= NCHW) ? 0 : in_rowmajor.at(in_offs);
+        auto val = (w >= W || h >= H || c >= C || in_offs >= NCHW) ? 0 : in_rowmajor[in_offs];
         int out_w = (out_index % OW);
         int out_h = (out_index / OW) % OH;
         int out_c = (out_index / (OH*OW)) % C;
@@ -152,8 +152,8 @@ inline std::vector<T> tilize_nchw(const std::vector<T>& in_rowmajor, const std::
 }
 
 // Converts a linear row-major tensor (interpreted as NCHW) to a linear channels last tensor (interpreted as NHWC)
-template<typename T>
-inline std::vector<T> convert_row_major_to_channels_last(const std::vector<T>& in_rowmajor, const std::vector<std::uint32_t>& shape) {
+template<typename T, template<typename> typename BufferType>
+inline std::vector<T> convert_row_major_to_channels_last(const BufferType<T>& in_rowmajor, const std::vector<std::uint32_t>& shape) {
     int N = shape[0], C = shape[1], H = shape[2], W = shape[3];
     std::vector<T> channels_last_result;
     channels_last_result.resize(N*C*H*W);
@@ -163,7 +163,7 @@ inline std::vector<T> convert_row_major_to_channels_last(const std::vector<T>& i
                 for(int c = 0; c < C; c++) {
                     auto in_offs = w + h*W + c*H*W + n*C*H*W;
                     auto out_offs = c + w*C + h*W*C + n*H*W*C;
-                    channels_last_result[out_offs] = in_rowmajor.at(in_offs);
+                    channels_last_result[out_offs] = in_rowmajor[in_offs];
                 }
             }
         }
@@ -172,8 +172,8 @@ inline std::vector<T> convert_row_major_to_channels_last(const std::vector<T>& i
 }
 
 // Converts a linear channels last tensor (interpreted as NHWC) to a linear row-major tensor (interpreted as NCHW)
-template<typename T>
-inline std::vector<T> convert_channels_last_to_row_major(const std::vector<T>& in_channels_last, const std::vector<std::uint32_t>& shape) {
+template<typename T, template<typename> typename BufferType>
+inline std::vector<T> convert_channels_last_to_row_major(const BufferType<T>& in_channels_last, const std::vector<std::uint32_t>& shape) {
     int N = shape[0], C = shape[1], H = shape[2], W = shape[3];
     std::vector<T> row_major_result;
     row_major_result.resize(N*C*H*W);
@@ -183,7 +183,7 @@ inline std::vector<T> convert_channels_last_to_row_major(const std::vector<T>& i
                 for(int w = 0; w < W; w++) {
                     auto in_offs = c + w*C + h*W*C + n*H*W*C;
                     auto out_offs = w + h*W + c*H*W + n*C*H*W;
-                    row_major_result[out_offs] = in_channels_last.at(in_offs);
+                    row_major_result[out_offs] = in_channels_last[in_offs];
                 }
             }
         }
@@ -208,8 +208,8 @@ struct TensAddr {
     }
 };
 
-template<typename T>
-inline vector<T> convert_layout(const vector<T>& inp, const vector<uint32_t>& shape, TensorLayout inL, TensorLayout outL) {
+template<typename T, template<typename> typename BufferType>
+inline vector<T> convert_layout(const BufferType<T>& inp, const vector<uint32_t>& shape, TensorLayout inL, TensorLayout outL) {
     switch (inL) {
         case TILED32_SWIZZLED:
             if (outL == TILED32_4FACES) {
