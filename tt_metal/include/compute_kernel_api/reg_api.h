@@ -1,5 +1,13 @@
 #pragma once
 
+#define SYNC SyncHalf
+
+#if __DOXYGEN__
+    #define ALWI
+#else
+    #define ALWI inline __attribute__((always_inline))
+#endif
+
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
 #include "llk_math_common.h"

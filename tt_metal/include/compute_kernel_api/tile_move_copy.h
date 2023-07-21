@@ -2,9 +2,25 @@
 
 #include "compute_kernel_api/common_globals.h"
 
-#include "compute_kernel_api/llk_eltwise_unary_datacopy_includes.h"
+#ifdef TRISC_MATH
+#include "llk_math_common.h"
+#include "llk_math_eltwise_unary_datacopy.h"
+#define MATH(x) x
+#define MAIN math_main()
+#else
+#define MATH(x)
+#endif
 #include "compute_kernel_api/llk_pack_includes.h"
-#include "compute_kernel_api/llk_unpack_A_includes.h"
+
+#ifdef TRISC_UNPACK
+#include "llk_unpack_common.h"
+#include "llk_unpack_A.h"
+#define UNPACK(x) x
+#define MAIN unpack_main()
+#else
+#define UNPACK(x)
+#endif
+
 
 namespace ckernel {
 
