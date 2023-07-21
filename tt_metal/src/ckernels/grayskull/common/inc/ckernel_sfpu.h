@@ -5,7 +5,6 @@
 #include "noc_nonblocking_api.h"
 
 #include "sfpi.h"
-
 using namespace sfpi;
 
 namespace ckernel

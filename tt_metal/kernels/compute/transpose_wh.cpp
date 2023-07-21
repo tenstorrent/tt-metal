@@ -1,6 +1,6 @@
 #include <cstdint>
 
-#include "compute_kernel_api.h"
+#include "compute_kernel_api/transpose_wh.h"
 
 namespace NAMESPACE {
 void MAIN {

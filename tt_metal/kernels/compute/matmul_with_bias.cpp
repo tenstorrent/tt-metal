@@ -3,7 +3,8 @@
 #define BCAST_LLKOP ELWADD
 #define BCAST_DIM   BroadcastType::ROW
 
-#include "compute_kernel_api.h"
+#include "compute_kernel_api/matmul.h"
+#include "compute_kernel_api/bcast.h"
 
 namespace NAMESPACE {
 void MAIN {

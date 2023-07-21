@@ -9,7 +9,6 @@
 #include "llk_format_conversions.h"
 #include "llk_math_common.h"
 #include "llk_param_structs.h"
-
 using namespace ckernel;
 template <SfpuType sfpu_type>
 void static_assert_sfpu_type_dependent() {
