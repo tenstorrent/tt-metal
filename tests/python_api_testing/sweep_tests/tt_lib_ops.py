@@ -7,7 +7,6 @@ from itertools import product
 
 def setup_host_and_device(func):
     def wrap(*args, pcie_slot, **kwargs):
-
         device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
         ttl.device.InitializeDevice(device)
         ttl.device.SetDefaultDevice(device)
@@ -25,9 +24,7 @@ def setup_host_and_device(func):
 ################## Helper-Funcs ################
 ################################################
 @setup_host_and_device
-def linear(
-    x, weight, bias=None, *args, device, dtype, layout, on_device, **kwargs
-):
+def linear(x, weight, bias=None, *args, device, dtype, layout, on_device, **kwargs):
     tt_bias = None
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
@@ -72,9 +69,38 @@ def linear(
 #################### TT-DNN ####################
 ################################################
 @setup_host_and_device
-def eltwise_bitwise_complement(
-    x, *args, device, dtype, layout, on_device, **kwargs
+def move(
+    x,
+    *args,
+    input_mem_config,
+    output_mem_config,
+    device,
+    dtype,
+    layout,
+    on_device,
+    **kwargs,
 ):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device, input_mem_config)
+
+    t1 = ttl.tensor.move(t0, output_mem_config)
+
+    output = torch.Tensor(t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
+    return output
+
+
+@setup_host_and_device
+def eltwise_bitwise_complement(x, *args, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -209,9 +235,7 @@ def eltwise_leaky_relu(
 
 
 @setup_host_and_device
-def eltwise_hardshrink(
-    x, *args, _lambda, device, dtype, layout, on_device, **kwargs
-):
+def eltwise_hardshrink(x, *args, _lambda, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -232,9 +256,7 @@ def eltwise_hardshrink(
 
 
 @setup_host_and_device
-def eltwise_softshrink(
-    x, *args, _lambda, device, dtype, layout, on_device, **kwargs
-):
+def eltwise_softshrink(x, *args, _lambda, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -591,9 +613,7 @@ def eltwise_sqrt(x, *args, device, dtype, layout, on_device, **kwargs):
 
 
 @setup_host_and_device
-def eltwise_gelu(
-    x, *args, fast_and_appx, device, dtype, layout, on_device, **kwargs
-):
+def eltwise_gelu(x, *args, fast_and_appx, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -637,9 +657,7 @@ def eltwise_relu(x, *args, device, dtype, layout, on_device, **kwargs):
 
 
 @setup_host_and_device
-def eltwise_relu_min(
-    x, *args, lower_limit, device, dtype, layout, on_device, **kwargs
-):
+def eltwise_relu_min(x, *args, lower_limit, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -661,9 +679,7 @@ def eltwise_relu_min(
 
 
 @setup_host_and_device
-def eltwise_relu_max(
-    x, *args, upper_limit, device, dtype, layout, on_device, **kwargs
-):
+def eltwise_relu_max(x, *args, upper_limit, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -816,9 +832,7 @@ def eltwise_heaviside(x, *args, device, dtype, layout, on_device, **kwargs):
     return output
 
 
-def eltwise_log_common(
-    log_kind, x, *args, device, dtype, layout, on_device, **kwargs
-):
+def eltwise_log_common(log_kind, x, *args, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -1201,9 +1215,7 @@ def full(x, *args, scalar, device, dtype, layout, on_device, **kwargs):
 
 
 @setup_host_and_device
-def arange(
-    x, *args, start, end, step=1, device, dtype, layout, on_device, **kwargs
-):
+def arange(x, *args, start, end, step=1, device, dtype, layout, on_device, **kwargs):
     t1 = ttl.tensor.arange(start, end, step)
 
     output = torch.Tensor(t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data())
@@ -1293,9 +1305,7 @@ def where(x, y, z, device, dtype, layout, on_device, **kwargs):
 
 
 @setup_host_and_device
-def eltwise_div_unary(
-    x, *args, scalar, device, dtype, layout, on_device, **kwargs
-):
+def eltwise_div_unary(x, *args, scalar, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -1317,9 +1327,7 @@ def eltwise_div_unary(
 
 
 @setup_host_and_device
-def eltwise_mul_unary(
-    x, *args, scalar, device, dtype, layout, on_device, **kwargs
-):
+def eltwise_mul_unary(x, *args, scalar, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -1341,9 +1349,7 @@ def eltwise_mul_unary(
 
 
 @setup_host_and_device
-def eltwise_sub_unary(
-    x, *args, scalar, device, dtype, layout, on_device, **kwargs
-):
+def eltwise_sub_unary(x, *args, scalar, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -1365,9 +1371,7 @@ def eltwise_sub_unary(
 
 
 @setup_host_and_device
-def eltwise_add_unary(
-    x, *args, scalar, device, dtype, layout, on_device, **kwargs
-):
+def eltwise_add_unary(x, *args, scalar, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -1813,9 +1817,7 @@ def eltwise_max(x, y, *args, device, dtype, layout, on_device, **kwargs):
 
 
 @setup_host_and_device
-def eltwise_squared_difference(
-    x, y, *args, device, dtype, layout, on_device, **kwargs
-):
+def eltwise_squared_difference(x, y, *args, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -2670,9 +2672,7 @@ def tilize(x, *args, device, dtype, layout, on_device, **kwargs):
 
 
 @setup_host_and_device
-def tilize_with_zero_padding(
-    x, *args, device, dtype, layout, on_device, **kwargs
-):
+def tilize_with_zero_padding(x, *args, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -2863,9 +2863,7 @@ def eltwise_power(x, *args, exponent, device, dtype, layout, on_device, **kwargs
 
 def make_eltwise_binary_op(ttl_tensor_binop):
     @setup_host_and_device
-    def eltwise_binary_op(
-        x, y, *args, device, dtype, layout, on_device, **kwargs
-    ):
+    def eltwise_binary_op(x, y, *args, device, dtype, layout, on_device, **kwargs):
         t0 = ttl.tensor.Tensor(
             x.reshape(-1).tolist(),
             x.shape,
@@ -2890,9 +2888,9 @@ def make_eltwise_binary_op(ttl_tensor_binop):
 
         t2 = ttl_tensor_binop(t0, t1)
 
-        output = torch.Tensor(
-            t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(t2.shape())
+        output = torch.Tensor(t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+            t2.shape()
+        )
 
         return output
 
@@ -2918,7 +2916,6 @@ def datacopy(
     memory_config=ttl.tensor.MemoryConfig(),
     **kwargs,
 ):
-
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
     ttl.device.InitializeDevice(device)
 

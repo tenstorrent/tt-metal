@@ -23,6 +23,7 @@
 #include "tt_dnn/op_library/bert_large_tms/bert_large_tms.hpp"
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
+#include "tt_dnn/op_library/move/move_op.hpp"
 #include "tt_dnn/op_library/program_cache.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "tt_metal/detail/reports/memory_reporter.hpp"
@@ -1234,6 +1235,21 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     // *** eltwise unary ***
+    m_tensor.def("move", &move,
+        py::arg().noconvert(), py::arg("mem_config").noconvert() = std::nullopt, R"doc(
+        Moves the elements of the input tensor ``arg0`` to a location in memory with specified memory layout.
+
+        If no memory layout is specified, output memory will be the same as the input tensor memory config.
+
+        +----------+----------------------------+----------------------------+---------------------------------+----------+
+        | Argument | Description                | Data type                  | Valid range                     | Required |
+        +==========+============================+============================+=================================+==========+
+        | arg0     | Tensor to move             | Tensor                     | Tensor of shape [W, Z, Y, X]    | Yes      |
+        +----------+----------------------------+----------------------------+---------------------------------+----------+
+        | arg1     | MemoryConfig of tensor of  | tt_lib.tensor.MemoryConfig | Default is same as input tensor | No       |
+        |          | TT accelerator device      |                            |                                 |          |
+        +----------+----------------------------+----------------------------+---------------------------------+----------+
+    )doc");
     m_tensor.def("gelu", &gelu,
 		 py::arg().noconvert(), py::arg("fast_and_appx") = true, R"doc(
         Applies the Gaussian Error Linear Units (GELU) function to the elements of the input tensor ``arg0``.

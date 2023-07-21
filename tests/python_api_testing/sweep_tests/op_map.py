@@ -14,6 +14,10 @@ op_map = {
     ################################################
     #################### TT-DNN ####################
     ################################################
+    "move": {
+        "tt_lib_op": tt_lib_ops.move,
+        "pytorch_op": pytorch_ops.move,
+    },
     "arange": {
         "tt_lib_op": tt_lib_ops.arange,
         "pytorch_op": pytorch_ops.arange,
