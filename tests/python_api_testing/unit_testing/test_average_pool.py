@@ -37,7 +37,6 @@ def test_run_average_pool(act_shape, dtype):
 
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-    host = ttl.device.GetHost()
 
     torch.manual_seed(0)
 
@@ -50,7 +49,7 @@ def test_run_average_pool(act_shape, dtype):
 
     out = ttl.tensor.average_pool_2d(ttact)
 
-    out = out.to(host).to(ttl.tensor.Layout.ROW_MAJOR)
+    out = out.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
     out_shape = [ batch_size, 1, 1, channels ]
     out_shape_padded = shape_padded(out_shape)
     if out_shape != out_shape_padded:

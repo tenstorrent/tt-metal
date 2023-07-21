@@ -11,7 +11,7 @@ using tt::tt_metal::Tensor;
 using tt::tt_metal::DataType;
 using tt::tt_metal::Layout;
 
-Tensor run_avg_pool_2d_resnet(Shape& tensor_shape, Host* host, Device* device) {
+Tensor run_avg_pool_2d_resnet(Shape& tensor_shape, Device* device) {
     auto input_tensor = tt::numpy::random::random(tensor_shape, DataType::BFLOAT16);
     auto padded_input_shape = AutoFormat::pad_to_tile_shape(tensor_shape, false, false);
     Tensor padded_input_tensor = input_tensor;
@@ -19,17 +19,16 @@ Tensor run_avg_pool_2d_resnet(Shape& tensor_shape, Host* host, Device* device) {
         padded_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, padded_input_shape, 0, Layout::TILE);    // pad with 0s
     }
     auto device_output = average_pool_2d(padded_input_tensor);
-    return device_output.to(host);
+    return device_output.cpu();
 };
 
 int main () {
     int pci_express_slot = 0;
     auto device = tt::tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
-    auto host = tt::tt_metal::GetHost();
     TT_ASSERT(tt::tt_metal::InitializeDevice(device));
 
     Shape resnet18_shape = {1, 1, 7 * 7, 2048};
-    auto result = run_avg_pool_2d_resnet(resnet18_shape, host, device);
+    auto result = run_avg_pool_2d_resnet(resnet18_shape, device);
 
     TT_ASSERT(result.shape() == Shape({1, 1, TILE_HEIGHT, 2048}));
     TT_ASSERT(result.shape().without_padding() == Shape({1, 1, 1, 2048}));

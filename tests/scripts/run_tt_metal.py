@@ -80,6 +80,7 @@ TT_METAL_TEST_ENTRIES = (
     TestEntry("tt_metal/tests/ops/test_tilize_zero_padding_channels_last", "ops/test_tilize_zero_padding_channels_last"),
     TestEntry("tt_metal/tests/ops/test_layernorm_op", "ops/test_layernorm_op"),
     TestEntry("tt_metal/tests/ops/test_softmax_op", "ops/test_softmax_op"),
+    TestEntry("tt_metal/tests/ops/test_average_pool", "ops/test_average_pool"),
 
     TestEntry("tt_metal/tests/tensors/test_host_device_loopback", "tensors/test_host_device_loopback"),
     TestEntry("tt_metal/tests/tensors/test_copy_and_move", "tensors/test_copy_and_move"),
