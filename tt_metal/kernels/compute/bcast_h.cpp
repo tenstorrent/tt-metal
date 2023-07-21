@@ -1,6 +1,6 @@
 #include <cstdint>
 
-#include "compute_kernel_api/bcast.h"
+#include "compute_kernel_api.h"
 
 namespace NAMESPACE {
 void MAIN {
