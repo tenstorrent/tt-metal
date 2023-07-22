@@ -274,6 +274,8 @@ void TensorModule(py::module &m_tensor) {
     auto py_borrowed_buffer_for_bfloat16_t = py::class_<borrowed_buffer::Buffer<bfloat16>>(m_tensor, "borrowed_buffer_for_bfloat16_t", py::buffer_protocol());
     detail::implement_buffer_protocol<borrowed_buffer::Buffer<bfloat16>, bfloat16>(py_borrowed_buffer_for_bfloat16_t);
 
+    auto pyDeviceStorage = py::class_<DeviceStorage>(m_tensor, "DeviceStorage", "Class describing the underlying device storage of Tensor.");
+
     // Tensor constructors that accept device and .to(device) function use keep alive call policy to communicate that Device needs to outlive Tensor.
     // This is because when tensors on device are destroyed they need to deallocate their buffers via device.
     // keep_alive increases the ref count of the Device object being passed into the constructor and .to() function.
@@ -461,6 +463,41 @@ void TensorModule(py::module &m_tensor) {
 
                     py_tensor = torch.randn((1, 1, 32, 32))
                     tt_lib.tensor.Tensor(py_tensor)
+            )doc"
+        )
+        .def(
+            py::init<>(
+                [](const DeviceStorage& storage, const Shape& shape, DataType data_type, Layout layout) {
+                    return Tensor(storage, shape, data_type, layout);
+                }
+            ),
+            py::return_value_policy::move,
+            R"doc(
+                Creates a tensor object with data previously allocated and stored on device.
+                Can be used to reinterpret the data with a different shape/layout like Pytorch "view"
+                This constructor does not copy/swizzle/move the underlying data. It returns the tensor with the same data.
+                +---------------+---------------+
+                | Argument      | Name          |
+                +===============+===============+
+                | arg0          | device_storage|
+                +---------------+---------------+
+                | arg1          | shape         |
+                +---------------+---------------+
+                | arg2          | data_type     |
+                +---------------+---------------+
+                | arg3          | layout        |
+                +---------------+---------------+
+
+                Example of creating a TT Tensor, "tt_tensor_b" with device storage of an existing tensor, "tt_tensor_a", with a new shape and layout:
+
+                .. code-block:: python
+
+                    tt_tensor_b = tt_lib.tensor.Tensor(
+                        tt_tensor_a.device_storage(),
+                        new_shape,
+                        tt_tensor_a.dtype(),
+                        new_layout,
+                    )
             )doc"
         )
         .def("deallocate", [](Tensor &self) {
@@ -890,6 +927,15 @@ void TensorModule(py::module &m_tensor) {
             .. code-block:: python
 
                 dtype = tt_tensor.dtype()
+        )doc")
+        .def("device_storage", [](const Tensor &self) {
+            return self.device_storage().value();
+        }, R"doc(
+            Get underlying device storage of TT Tensor.
+
+            .. code-block:: python
+
+                device_storage = tt_tensor.device_storage()
 
         )doc");;
 

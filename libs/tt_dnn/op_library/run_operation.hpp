@@ -179,6 +179,25 @@ inline std::vector<Tensor> run_with_autoformat(
     return run_with_autoformat(operation, input_tensors, optional_input_tensors, pad_value, pad_c);
 }
 
+std::vector<Tensor> run_with_autoformat(const DeviceOperation& op,
+                            const std::vector<Tensor> &input_tensors,
+                            vector<vector<bool>> pad_inputs,
+                            vector<Layout> target_input_layouts,
+                            Layout target_output_layout,
+                            const std::vector<std::optional<const Tensor>> &optional_input_tensors = {},
+                            const float pad_value = 0);
+template<typename ConcreteOperation>
+inline std::vector<Tensor> run_with_autoformat(ConcreteOperation&& concrete_op,
+                            const std::vector<Tensor> &input_tensors,
+                            vector<vector<bool>> pad_inputs,
+                            vector<Layout> target_input_layouts,
+                            Layout target_output_layout,
+                            const std::vector<std::optional<const Tensor>> &optional_input_tensors = {},
+                            const float pad_value = 0) {
+    const auto op = DeviceOperation(concrete_op);
+    return run_with_autoformat(op, input_tensors, pad_inputs, target_input_layouts, target_output_layout, optional_input_tensors, pad_value);
+}
+
 }
 
 }

@@ -17,7 +17,7 @@ import tt_lib
 from sweep_tests.comparison_funcs import comp_allclose_and_pcc, comp_pcc
 
 
-@pytest.mark.parametrize("fold_batchnorm", [False, True], ids=['Batchnorm not folded', "Batchnorm folded"])
+@pytest.mark.parametrize("fold_batchnorm", [True], ids=["Batchnorm folded"])
 def test_run_resnet18_inference(fold_batchnorm, imagenet_sample_input):
     image = imagenet_sample_input
 
@@ -27,6 +27,7 @@ def test_run_resnet18_inference(fold_batchnorm, imagenet_sample_input):
         # Initialize the device
         device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
         tt_lib.device.InitializeDevice(device)
+        tt_lib.device.SetDefaultDevice(device)
         host = tt_lib.device.GetHost()
 
         torch_resnet = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)

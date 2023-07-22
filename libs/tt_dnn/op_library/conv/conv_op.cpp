@@ -296,7 +296,8 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
     uint32_t out_block_row_size_bytes = weight_block_w_ntiles*TILE_WIDTH*num_bytes_of_df;
     uint32_t out_row_size_bytes = output_channels_padded_to_tile_width*num_bytes_of_df;
     uint32_t batch_size = 1;
-
+    // output data format
+    const auto out_df = datatype_to_dataformat_converter(a.dtype());
     // For debug
     {
         log_debug(tt::LogOp, "act_matrix_height_ntiles: {}", act_matrix_height_ntiles);
@@ -406,7 +407,8 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
             num_blocks_weight_w,
             out_row_size_bytes,
             last_block_row_size_bytes,
-            act_matrix_height_unpadded
+            act_matrix_height_unpadded,
+            static_cast<uint32_t>(out_df)
         };
     } else {
         assert(false && "Tiled output unsupported");
@@ -518,9 +520,12 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
 Tensor conv(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
              uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels) {
     TT_ASSERT(b.layout() == Layout::TILE); // Weights should already be formatted
-    return operation::run(
+    return operation::run_with_autoformat(
         Conv(act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, conv_params, output_channels),
-        {a, b}).at(0);
+        {a, b},
+        {{false, true, false, false}, {false, false, false, false}},
+        {Layout::CHANNELS_LAST, Layout::TILE},
+        Layout::CHANNELS_LAST).at(0);
 }
 
 operation::ProgramWithCallbacks conv_single_core(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
@@ -1070,6 +1075,8 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
     uint32_t weight_noc_x = weight_dram_noc_xy.x;
     uint32_t weight_noc_y = weight_dram_noc_xy.y;
 
+    // output data format
+    const auto out_df = datatype_to_dataformat_converter(a.dtype());
     // For debug
     {
         log_debug(tt::LogOp, "Hat (activation height in tiles): {}", Hat);
@@ -1156,7 +1163,8 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
             num_blocks_weight_w,
             output_channels_padded_to_tile_width*num_bytes_of_df,
             last_block_row_size_bytes,
-            matrix_shape_unpadded[1]
+            matrix_shape_unpadded[1],
+            static_cast<uint32_t>(out_df)
         };
     } else {
         assert(false && "Tiled output unsupported");
@@ -1274,9 +1282,12 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
 Tensor conv_with_address_map(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
              uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels) {
     TT_ASSERT(b.layout() == Layout::TILE); // Weights should already be formatted
-    return operation::run(
+    return operation::run_with_autoformat(
         ConvWithAddressMap(act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, conv_params, output_channels),
-        {a, b}).at(0);
+        {a, b},
+        {{false, true, false, false}, {false, false, false, false}},
+        {Layout::CHANNELS_LAST, Layout::TILE},
+        Layout::CHANNELS_LAST).at(0);
 }
 
 operation::ProgramWithCallbacks conv_with_address_map_single_core(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,

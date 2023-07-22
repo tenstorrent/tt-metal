@@ -22,11 +22,11 @@ class AutoFormat {
         static Device * GetDefaultDevice() { return device; }
 
 
-        static std::array<uint32_t, 4> pad_to_tile_shape(const std::array<uint32_t, 4>& unpadded_shape, bool pad_c=false, bool pad_n=false) {
+        static std::array<uint32_t, 4> pad_to_tile_shape(const std::array<uint32_t, 4>& unpadded_shape, bool pad_c=false, bool pad_n=false, bool pad_h=true, bool pad_w=true) {
             auto n = pad_n ? roundup(unpadded_shape[0], TILE_HEIGHT) : unpadded_shape[0];
-            auto c = pad_c ? roundup(unpadded_shape[1], TILE_HEIGHT) : unpadded_shape[1];
-            auto h = roundup(unpadded_shape[2], TILE_HEIGHT);
-            auto w = roundup(unpadded_shape[3], TILE_WIDTH);
+            auto c = pad_c ? roundup(unpadded_shape[1], TILE_WIDTH) : unpadded_shape[1];
+            auto h = pad_h ? roundup(unpadded_shape[2], TILE_HEIGHT) : unpadded_shape[2];
+            auto w = pad_w ? roundup(unpadded_shape[3], TILE_WIDTH) : unpadded_shape[3];
             std::array<uint32_t, 4> padded_shape = {n, c, h, w};
             return padded_shape;
         }

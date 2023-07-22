@@ -32,8 +32,6 @@ def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
     if bias is None:
         bias_on_device = None
     else:
-        #TODO (nshanker): Enable conv bias on device with broadcast op with channels last layout
-        assert(False)
         bias_shape = [1,1,1,K]
         bias_channels_padded_shape = [1, 1, 1, _nearest_32(K)]
         bias_ = tensor.Tensor(
@@ -56,8 +54,6 @@ def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
         assert(output.storage_type() == tensor.StorageType.DEVICE)
 
         if bias_on_device is not None:
-            #TODO (nshanker): Enable conv bias on device with broadcast op with channels last layout
-            assert(False)
             # need to interpret channels last tensor as row major tensor to call bcast op for adding bias
             output_cl_as_rm_shape = [output.shape()[0], 1, output.shape()[2] * output.shape()[3], output.shape()[1]]
             output_cl_as_rm_tensor = tensor.Tensor(output.device_storage(), output_cl_as_rm_shape, output.dtype(), tensor.Layout.ROW_MAJOR)
