@@ -57,6 +57,23 @@ namespace detail {
 
         compiled = true;
     }
+
+    std::atomic<bool> enable_persistent_kernel_cache = false;
+
+    void EnablePersistentKernelCache()
+    {
+        enable_persistent_kernel_cache = true;
+    }
+
+    void DisablePersistentKernelCache()
+    {
+        enable_persistent_kernel_cache = false;
+    }
+
+    bool GetPersistentKernelCacheEnabled()
+    {
+        return enable_persistent_kernel_cache;
+    }
 }
 
 namespace {
@@ -103,33 +120,11 @@ std::optional<uint32_t> get_semaphore_address(const Program &program, const Core
                     std::to_string(address.value()) + " but it is at " + std::to_string(addr));
             }
         }
-        return address;
     }
+    return address;
 }
-
-
 }  // namespace
 
-namespace detail{
-
-std::atomic<bool> enable_persistent_kernel_cache = false;
-
-void EnablePersistentKernelCache()
-{
-    enable_persistent_kernel_cache = true;
-}
-
-void DisablePersistentKernelCache()
-{
-    enable_persistent_kernel_cache = false;
-}
-
-bool GetPersistentKernelCacheEnabled()
-{
-    return enable_persistent_kernel_cache;
-}
-
-}
 static Profiler tt_metal_profiler = Profiler();
 
 void ClearCompileCache() { detail::HashLookup::inst().clear(); }
@@ -849,7 +844,7 @@ bool CompileProgram(Device *device, Program &program, bool profile_kernel) {
     program.construct_core_range_set_for_worker_cores();
 
     if (detail::CompilationReporter::enabled()) {
-        detail::CompilationReporter::inst().flush_program_entry(program, enable_persistent_kernel_cache);
+        detail::CompilationReporter::inst().flush_program_entry(program, detail::enable_persistent_kernel_cache);
     }
     if (detail::MemoryReporter::enabled()) {
         detail::MemoryReporter::inst().flush_program_memory_usage(program, device);
