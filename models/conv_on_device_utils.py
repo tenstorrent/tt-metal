@@ -28,7 +28,7 @@ def run_conv_on_device_wrapper(conv_weight, conv_params, device, host, conv_bias
 
         OH = ((int) ((H - R + 2 * P_H) / U)) + 1
         OW = ((int) ((W - S + 2 * P_W) / V)) + 1
-        conv_as_mm_output_shape_unpadded = [1,1,OH*OW,K]
+        conv_output_shape = [1,K,OH,OW]
         x_shape_channel_padded = [N,_nearest_32(C),H,W]
         x = tt_lib.tensor.Tensor(
             x.reshape(-1).tolist(),
@@ -38,13 +38,18 @@ def run_conv_on_device_wrapper(conv_weight, conv_params, device, host, conv_bias
             ).pad(x_shape_channel_padded, (0,0,0,0), 0).to(tt_lib.tensor.Layout.CHANNELS_LAST).to(device)
         logger.info("Going to run conv on tt device")
         x = conv_on_device(x)
-
         logger.info("conv on tt device done")
-        x = unpad_from_zero(x, conv_as_mm_output_shape_unpadded, host)
+        x = x.to(host)
+        assert(x.shape() == conv_output_shape)
+        assert(x.layout() == tt_lib.tensor.Layout.CHANNELS_LAST)
 
-        # Convert matmul output layout to conv output layout
+        # Copy output to host and convert tt tensor to pytorch tensor
+        conv_output_shape_cl = [1,OH,OW,K]
+        x = torch.tensor(x.data()).reshape(conv_output_shape_cl)
         x = torch.transpose(x, 2, 3)
-        assert(list(x.shape) == [1,1,K,(OH*OW)])
+        x = torch.transpose(x, 1, 2)
 
-        return x.reshape([1,K,OH,OW])
+        assert(list(x.shape) == [1,K,OH,OW])
+
+        return x
     return run_conv_on_device

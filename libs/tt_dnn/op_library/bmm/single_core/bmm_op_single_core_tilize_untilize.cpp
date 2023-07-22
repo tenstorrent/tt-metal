@@ -393,7 +393,6 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
     // Writer kernel
     std::string writer_kernel;
     vector<uint32_t> writer_rt_args;
-
     if (untilize_out) {
         // out is row major
         writer_kernel = "tt_metal/kernels/dataflow/writer_unary_stick_layout_8bank_blocks.cpp";
@@ -405,6 +404,8 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
             in0_num_blocks_h,
             in1_num_blocks_w,
             in1_width * out.element_size(),   // output_row_size
+            in1_block_w * constants::TILE_WIDTH * out.element_size(), // last block_row_size (same as block row size)
+            in0_height,
             static_cast<uint32_t>(out_df)
         };
     } else {

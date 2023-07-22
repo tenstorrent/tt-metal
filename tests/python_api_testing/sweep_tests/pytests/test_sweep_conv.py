@@ -44,6 +44,7 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
     # torch.manual_seed(0)
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
+    ttl.device.SetDefaultDevice(device)
     host = ttl.device.GetHost()
 
     A_pyt = pytorch_inputs_and_golden[0]
@@ -57,14 +58,9 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
     out_subblock_h = 4
     out_subblock_w = 2
 
-    OH = ((int)((H - R + 2 * pad_h) / stride_h)) + 1
-    OW = ((int)((W - S + 2 * pad_w) / stride_w)) + 1
-    mm_output_shape = [
-        1,
-        1,
-        _nearest_y(OH * OW, 32 * act_block_h),
-        _nearest_y(K, 32 * weight_block_w),
-    ]
+    OH = ((int) ((H - R + 2 * pad_h) / stride_h)) + 1
+    OW = ((int) ((W - S + 2 * pad_w) / stride_w)) + 1
+    conv_output_shape = [1,K, OH, OW]
 
     # Prepare activations
     A_cl_host = create_conv_act_tensor(A_pyt, 1, C, H, W)
@@ -82,7 +78,6 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
         return True
     assert conv_op_test_params.test_level == TestLevel.OP_FULL_COMPUTE
 
-    untilize_out = True
     # Run TT metal OP
     out = ttl.tensor.conv(
         A,
@@ -93,21 +88,17 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
         weight_block_w,
         out_subblock_h,
         out_subblock_w,
+        K
     )
     out = out.to(host)
-    assert out.shape() == mm_output_shape
-    if not untilize_out:
-        # untilize
-        out = out.to(ttl.tensor.Layout.ROW_MAJOR)
-    # Copy output to host and convert tt tensor to pytorch tensor
-    out_pytorch_padded = torch.tensor(out.data()).reshape(mm_output_shape)
-    # remove padding
-    out_pytorch = out_pytorch_padded[:, :, 0 : (OH * OW), 0:K]
+    assert(out.shape() == conv_output_shape)
+    assert(out.layout() == ttl.tensor.Layout.CHANNELS_LAST)
 
-    # Convert matmul output layout to conv output layout
-    out_tr = torch.transpose(out_pytorch, 2, 3)
-    assert list(out_tr.shape) == [1, 1, K, (OH * OW)]
-    out_result = out_tr.reshape([1, K, OH, OW])
+    # Copy output to host and convert tt tensor to pytorch tensor
+    conv_output_shape_cl = [1,OH,OW,K]
+    out_result = torch.tensor(out.data()).reshape(conv_output_shape_cl)
+    out_result = torch.transpose(out_result, 2, 3)
+    out_result = torch.transpose(out_result, 1, 2)
 
     # Compare against pytorch golden result
     out_golden = pytorch_inputs_and_golden[2]

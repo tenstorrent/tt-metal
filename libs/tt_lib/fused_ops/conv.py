@@ -11,10 +11,10 @@ def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
     assert(len(conv_params) == 10)
     K, C, R, S, U, V, P_H, P_W, dilation, groups = [conv_params[i] for i in range(10)]
     # Hardcode block sizes
-    act_block_h = 8
-    act_block_w = 8
+    act_block_h = 4
+    act_block_w = 4
     weight_block_h = act_block_w
-    weight_block_w = 8
+    weight_block_w = 4
     out_subblock_h = 4
     out_subblock_w = 2
     if dilation != 1 or groups != 1:
@@ -32,6 +32,8 @@ def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
     if bias is None:
         bias_on_device = None
     else:
+        #TODO (nshanker): Enable conv bias on device with broadcast op with channels last layout
+        assert(False)
         bias_shape = [1,1,1,K]
         bias_channels_padded_shape = [1, 1, 1, _nearest_32(K)]
         bias_ = tensor.Tensor(
@@ -46,15 +48,27 @@ def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
         [_,_,H,W] = activation.shape()
         OH = ((int) ((H - R + 2 * P_H) / U)) + 1
         OW = ((int) ((W - S + 2 * P_W) / V)) + 1
-        conv_as_mm_output_shape = [1,1,_nearest_y(OH*OW, 32*act_block_h),_nearest_y(K, 32*weight_block_w)]
-        output = tensor.conv(activation, weight_on_device, [R,S,U,V,P_H,P_W], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w)
+        conv_output_shape = [1,K,OH,OW]
+        output = tensor.conv(activation, weight_on_device, [R,S,U,V,P_H,P_W], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w, K)
 
-        assert(output.shape() == conv_as_mm_output_shape)
+        assert(output.shape() == conv_output_shape)
+        assert(output.layout() == tensor.Layout.CHANNELS_LAST)
+        assert(output.storage_type() == tensor.StorageType.DEVICE)
 
         if bias_on_device is not None:
-            print(str(output.shape()))
-            print(str(bias_on_device.shape()))
-            output_plus_bias = tensor.bcast(output, bias_on_device, tensor.BcastOpMath.ADD, tensor.BcastOpDim.H)
+            #TODO (nshanker): Enable conv bias on device with broadcast op with channels last layout
+            assert(False)
+            # need to interpret channels last tensor as row major tensor to call bcast op for adding bias
+            output_cl_as_rm_shape = [output.shape()[0], 1, output.shape()[2] * output.shape()[3], output.shape()[1]]
+            output_cl_as_rm_tensor = tensor.Tensor(output.device_storage(), output_cl_as_rm_shape, output.dtype(), tensor.Layout.ROW_MAJOR)
+            output_plus_bias = tensor.bcast(output_cl_as_rm_tensor, bias_on_device, tensor.BcastOpMath.ADD, tensor.BcastOpDim.H)
+            if(output_plus_bias.layout() != tensor.Layout.ROW_MAJOR):
+                assert(output_plus_bias.layout() == tensor.Layout.TILE)
+                assert(output_plus_bias.storage_type() == tensor.StorageType.DEVICE)
+                output_plus_bias = tensor.untilize_with_unpadding(output_plus_bias, [0, 0, 0, 0], [output_cl_as_rm_shape[0] - 1, output_cl_as_rm_shape[1] - 1, output_cl_as_rm_shape[2] - 1, output_cl_as_rm_shape[3] - 1], output_plus_bias.memory_config());
+                assert(output_plus_bias.layout() == tensor.Layout.ROW_MAJOR)
+            # reinterpret row major tensor to channels last tensor
+            output_plus_bias = tensor.Tensor(output_plus_bias.device_storage(), output.shape(), output.dtype(), tensor.Layout.CHANNELS_LAST)
             return output_plus_bias
 
         return output
