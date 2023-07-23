@@ -256,7 +256,7 @@ void create_CBs_for_fused_matmul(tt_metal::Program &program, tt_metal::Device* d
     }
 }
 
-bool test_matmul_large_block(const tt::ARCH& arch, bool activations_rm, bool output_rm) {
+bool test_matmul_large_block(tt_metal::Device *device, const tt::ARCH& arch, bool activations_rm, bool output_rm) {
     bool pass = true;
 
     // Once this test is uplifted to use fast dispatch, this can be removed.
@@ -267,12 +267,6 @@ bool test_matmul_large_block(const tt::ARCH& arch, bool activations_rm, bool out
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
-        int pci_express_slot = 0;
-        tt_metal::Device *device =
-            tt_metal::CreateDevice(arch, pci_express_slot);
-
-        pass &= tt_metal::InitializeDevice(device);;
-
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
@@ -476,20 +470,12 @@ bool test_matmul_large_block(const tt::ARCH& arch, bool activations_rm, bool out
             print_faces(tensor.get_values(), "Golden");
         }
 
-        pass &= tt_metal::CloseDevice(device);;
-
     } catch (const std::exception &e) {
         pass = false;
         // Capture the exception error message
         log_error(LogTest, "{}", e.what());
         // Capture system call errors that may have returned from driver/kernel
         log_error(LogTest, "System error message: {}", std::strerror(errno));
-    }
-
-    if (pass) {
-        log_info(LogTest, "Test Passed");
-    } else {
-        log_fatal(LogTest, "Test Failed");
     }
 
     return pass;
@@ -511,17 +497,31 @@ int main(int argc, char **argv) {
     }
     const tt::ARCH arch = tt::get_arch_from_string(arch_name);
 
+    int pci_express_slot = 0;
+    tt_metal::Device *device =
+        tt_metal::CreateDevice(arch, pci_express_slot);
+
+    pass &= tt_metal::InitializeDevice(device);;
+
     // Row major input, tilized output
-    pass &= test_matmul_large_block(arch, true, false);
+    pass &= test_matmul_large_block(device, arch, true, false);
 
     // Row major input, untilized output
-    pass &= test_matmul_large_block(arch, true, true);
+    pass &= test_matmul_large_block(device, arch, true, true);
 
     // Tilized input, tilized output
-    pass &= test_matmul_large_block(arch, false, false);
+    pass &= test_matmul_large_block(device, arch, false, false);
 
     // Tilized input, untilized output
-    pass &= test_matmul_large_block(arch, false, true);
+    pass &= test_matmul_large_block(device, arch, false, true);
+
+    pass &= tt_metal::CloseDevice(device);;
+
+    if (pass) {
+        log_info(LogTest, "Test Passed");
+    } else {
+        log_fatal(LogTest, "Test Failed");
+    }
 
     TT_ASSERT(pass);
 }
