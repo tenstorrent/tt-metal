@@ -150,7 +150,7 @@ bool InitializeDevice(Device *device) {
                 if (dbg_print != nullptr) {
                     uint32_t x, y;
                     sscanf(dbg_print, "%d,%d", &x, &y);
-                    auto hart_mask = DPRINT_HART_BR;
+                    auto hart_mask = DPRINT_HART_BR | DPRINT_HART_TR0 | DPRINT_HART_TR1 | DPRINT_HART_TR2 | DPRINT_HART_NC;
                     CoreCoord coord = {x, y};
                     tt_start_debug_print_server(device->cluster(), {0}, {coord}, hart_mask);
                     log_debug(tt::LogMetal, "Started debug print server on core {}", coord.str());
