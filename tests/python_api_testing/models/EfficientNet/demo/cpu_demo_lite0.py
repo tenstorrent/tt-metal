@@ -65,4 +65,6 @@ def test_cpu_demo_lite0():
         )
         logger.info(categories[top5_catid[i]], top5_prob[i].item())
 
-    cv2.imwrite(str(ROOT / "out_image.jpg"), image)
+    out_path = str(ROOT / "out_image.jpg")
+    cv2.imwrite(out_path, image)
+    logger.info(f"Output image saved to {out_path}")

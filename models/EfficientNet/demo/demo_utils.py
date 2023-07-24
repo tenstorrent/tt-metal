@@ -46,6 +46,7 @@ def download_images(img_path):
     dataset = load_dataset("huggingface/cats-image")
     image = dataset["test"]["image"][0]
     image.save(img_path)
+    logger.info(f"Input image saved to {img_path}")
 
 
 def load_imagenet_labels():
@@ -115,4 +116,6 @@ def run_gs_demo(efficientnet_model_constructor):
         )
         logger.info(categories[top5_catid[i]], top5_prob[i].item())
 
-    cv2.imwrite(str(ROOT / "out_image.jpg"), image)
+    out_path = str(ROOT / "out_image.jpg")
+    cv2.imwrite(out_path, image)
+    logger.info(f"Output image saved to {out_path}")
