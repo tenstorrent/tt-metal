@@ -22,13 +22,6 @@ def disable_persistent_kernel_cache():
     tt_lib.device.DisablePersistentKernelCache()
 
 
-def get_persistent_kernel_cache_enabled():
-    """
-    Returns the current state of persistent compile cache on/off switch.
-    """
-    return tt_lib.device.GetPersistentKernelCacheEnabled()
-
-
 def enable_compilation_reports():
     """
     Enables generating reports of compilation statistics in .reports/tt_metal dir

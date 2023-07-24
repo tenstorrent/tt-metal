@@ -18,11 +18,4 @@ void EnablePersistentKernelCache();
  */
 void DisablePersistentKernelCache();
 
-/**
- * Returns bool indicating whether persistent caching is enabled.
- *
- * Return value: bool
- */
-bool GetPersistentKernelCacheEnabled();
-
 }

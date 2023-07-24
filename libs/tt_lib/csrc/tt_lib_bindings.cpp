@@ -3101,10 +3101,6 @@ void DeviceModule(py::module &m_device) {
     m_device.def("ClearCompileCache", &ClearCompileCache, R"doc(
         Clears the current kernel compilation cache
     )doc");
-    m_device.def("GetPersistentKernelCacheEnabled", &detail::GetPersistentKernelCacheEnabled, R"doc(
-        Returns bool indicating whether persistent kernel compilation cache is enabled
-    )doc");
-
     m_device.def("EnableCompilationReports", &detail::EnableCompilationReports, R"doc(
         Enables tt-metal to generate reports of compilation statistics
     )doc");
