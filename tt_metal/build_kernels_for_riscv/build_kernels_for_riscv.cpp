@@ -171,8 +171,19 @@ struct CompileState {
     }
 
     string generate_gpp_options(bool is_asm) const {
-        string options_string =
-            " -march=rv32i -mabi=ilp32 \"-m" + get_string_aliased_arch_lowercase(arch) + "\" -MD -MP -flto -ffast-math -g -Wall -Werror";
+
+        string options_string;
+
+        if (arch == tt::ARCH::GRAYSKULL) {
+            options_string = " -mgrayskull -march=rv32iy -mtune=rvtt-b1 ";
+        } else if (arch == tt::ARCH::WORMHOLE_B0) {
+            options_string = " -mwormhole -march=rv32imw -mtune=rvtt-b1 ";
+        } else {
+            TT_ASSERT(false, "Invalid arch");
+        }
+
+        options_string +=
+            "-mabi=ilp32 \"-m" + get_string_aliased_arch_lowercase(arch) + "\" -MD -MP -flto -ffast-math -g -Wall -Werror";
         if (!is_asm) // TODO(AP): wasn't necessary to split for assembler
             options_string +=
                 " -std=c++17 -Wno-unknown-pragmas -fno-use-cxa-atexit "
@@ -300,7 +311,17 @@ struct CompileState {
 
     vector<string> get_link_cmd(const vector<string>& obj_names) const
     {
-        string linkopts = " -march=rv32i -mabi=ilp32 -m" + get_string_aliased_arch_lowercase(arch) + " -flto -ffast-math"
+        string linkopts;
+
+        if (arch == tt::ARCH::GRAYSKULL) {
+            linkopts = " -mgrayskull -march=rv32iy -mtune=rvtt-b1 ";
+        } else if (arch == tt::ARCH::WORMHOLE_B0) {
+            linkopts = " -mwormhole -march=rv32imw -mtune=rvtt-b1 ";
+        } else {
+            TT_ASSERT(false, "Invalid arch");
+        }
+
+        linkopts += "-mabi=ilp32 -m" + get_string_aliased_arch_lowercase(arch) + " -flto -ffast-math"
                           " -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 "
                           " -nostartfiles -g";
 
