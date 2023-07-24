@@ -8,6 +8,7 @@
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
 #include "tt_dnn/op_library/groupnorm/groupnorm_op.hpp"
+#include "tt_dnn/op_library/fully_connected/fully_connected_op.hpp"
 #include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
 #include "tt_dnn/op_library/transpose/transpose_op.hpp"
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
@@ -2932,6 +2933,19 @@ void TensorModule(py::module &m_tensor) {
     m_tensor.def("rmsnorm", &rmsnorm,
         py::arg("input").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         "Performs a rmsnorm operation on the last tensor dimension with optional fused with post-multiplication and addition via W-bcast.
+    )doc");
+
+    // FC
+    m_tensor.def("fully_connected", &fully_connected,
+        py::arg("act").noconvert(), py::arg("weights").noconvert(), py::arg("bias").noconvert() = std::nullopt, R"doc(
+        Fully connected layer (linear.)
+        +----------+----------------------------+------------+-------------------------------+----------+
+        | Argument | Description                | Data type  | Valid range                   | Required |
+        +==========+============================+============+===============================+==========+
+        | act      | Input activations tensor   | Tensor     |                               | Yes      |
+        | weights  | Input weights tensor       | Tensor     |                               | Yes      |
+        | bias     | Input bias tensor          | Tensor     |                               | No       |
+        +----------+----------------------------+------------+-------------------------------+----------+
     )doc");
 
     // TMs

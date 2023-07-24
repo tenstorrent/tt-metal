@@ -11,6 +11,7 @@ TT_DNN_SRCS = \
 	libs/tt_dnn/op_library/pad/pad_op.cpp \
 	libs/tt_dnn/op_library/unpad/unpad_op.cpp \
 	libs/tt_dnn/op_library/fill_rm/fill_rm_op.cpp \
+	libs/tt_dnn/op_library/fully_connected/fully_connected_op.cpp \
 	libs/tt_dnn/op_library/transpose/transpose_op.cpp \
 	libs/tt_dnn/op_library/transpose/wh_multi_core/transpose_wh_op_multi_core.cpp \
 	libs/tt_dnn/op_library/transpose/hc_multi_core/transpose_hc_op_multi_core.cpp \
