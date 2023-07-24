@@ -215,9 +215,9 @@ inline void llk_unpack_A_init(const std::uint32_t transpose_of_faces=0, const st
     llk_unpack_A_mop_config<BType, acc_to_dest, binary_reuse_dest>(transpose_of_faces>0, num_faces);
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
     if (face_r_dim == FACE_R_DIM) {
-        TTI_SETADCXX(0b11, FACE_C_DIM*FACE_R_DIM-1, 0x0);
+        TTI_SETADCXX(p_setadc::UNP_AB, FACE_C_DIM*FACE_R_DIM-1, 0x0);
     } else {
-        TT_SETADCXX(0b11, FACE_C_DIM*face_r_dim-1, 0x0);
+        TT_SETADCXX(p_setadc::UNP_AB, FACE_C_DIM*face_r_dim-1, 0x0);
     }    
 }
 
