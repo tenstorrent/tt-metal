@@ -9,31 +9,31 @@ from upblock_2d import TtUpBlock2D as UpBlock2D
 from unet_2d_blocks import TtUNetMidBlock2DCrossAttn as UNetMidBlock2DCrossAttn
 from unet_2d_blocks import TtCrossAttnDownBlock2D as CrossAttnDownBlock2D
 from unet_2d_blocks import TtCrossAttnUpBlock2D as CrossAttnUpBlock2D
-
+import tt_lib as ttl
 from tt_lib.fallback_ops import fallback_ops
 
 
-def get_down_block(down_block_type,
-                    num_layers,
-                    in_channels,
-                    out_channels,
-                    temb_channels,
-                    add_downsample,
-                    resnet_eps,
-                    resnet_act_fn,
-                    attn_num_head_channels,
-                    resnet_groups=None,
-                    cross_attention_dim=None,
-                    downsample_padding=None,
-                    dual_cross_attention=False,
-                    use_linear_projection=False,
-                    only_cross_attention=False,
-                    upcast_attention=False,
-                    resnet_time_scale_shift="default",
-                    state_dict=None,
-                    base_address=""
-                    ):
-
+def get_down_block(
+    down_block_type,
+    num_layers,
+    in_channels,
+    out_channels,
+    temb_channels,
+    add_downsample,
+    resnet_eps,
+    resnet_act_fn,
+    attn_num_head_channels,
+    resnet_groups=None,
+    cross_attention_dim=None,
+    downsample_padding=None,
+    dual_cross_attention=False,
+    use_linear_projection=False,
+    only_cross_attention=False,
+    upcast_attention=False,
+    resnet_time_scale_shift="default",
+    state_dict=None,
+    base_address="",
+):
     if down_block_type == "DownBlock2D":
         return DownBlock2D(
             num_layers=num_layers,
@@ -48,7 +48,7 @@ def get_down_block(down_block_type,
             resnet_time_scale_shift=resnet_time_scale_shift,
             state_dict=state_dict,
             base_address=base_address,
-            )
+        )
     elif down_block_type == "CrossAttnDownBlock2D":
         return CrossAttnDownBlock2D(
             num_layers=num_layers,
@@ -69,31 +69,34 @@ def get_down_block(down_block_type,
             resnet_time_scale_shift=resnet_time_scale_shift,
             state_dict=state_dict,
             base_address=base_address,
-            )
+        )
     else:
-        assert False, f"CrossAttnDownBlock2D, and DownBlock2D are the only down blocks implemented! you requested {down_block_type}"
+        assert (
+            False
+        ), f"CrossAttnDownBlock2D, and DownBlock2D are the only down blocks implemented! you requested {down_block_type}"
 
 
-def get_up_block(up_block_type,
-                num_layers,
-                in_channels,
-                out_channels,
-                prev_output_channel,
-                temb_channels,
-                add_upsample,
-                resnet_eps,
-                resnet_act_fn,
-                attn_num_head_channels,
-                resnet_groups=None,
-                cross_attention_dim=None,
-                dual_cross_attention=False,
-                use_linear_projection=False,
-                only_cross_attention=False,
-                upcast_attention=False,
-                resnet_time_scale_shift="default",
-                state_dict=None,
-                base_address=""
-                ):
+def get_up_block(
+    up_block_type,
+    num_layers,
+    in_channels,
+    out_channels,
+    prev_output_channel,
+    temb_channels,
+    add_upsample,
+    resnet_eps,
+    resnet_act_fn,
+    attn_num_head_channels,
+    resnet_groups=None,
+    cross_attention_dim=None,
+    dual_cross_attention=False,
+    use_linear_projection=False,
+    only_cross_attention=False,
+    upcast_attention=False,
+    resnet_time_scale_shift="default",
+    state_dict=None,
+    base_address="",
+):
     if up_block_type == "UpBlock2D":
         return UpBlock2D(
             num_layers=num_layers,
@@ -107,8 +110,8 @@ def get_up_block(up_block_type,
             resnet_groups=resnet_groups,
             resnet_time_scale_shift=resnet_time_scale_shift,
             state_dict=state_dict,
-            base_address=base_address
-            )
+            base_address=base_address,
+        )
     elif up_block_type == "CrossAttnUpBlock2D":
         return CrossAttnUpBlock2D(
             num_layers=num_layers,
@@ -131,8 +134,9 @@ def get_up_block(up_block_type,
             base_address=base_address,
         )
     else:
-        assert False, f"CrossAttnUpBlock2D, and UpBlock2D are the only up blocks implemented! you requested {up_block_type}"
-
+        assert (
+            False
+        ), f"CrossAttnUpBlock2D, and UpBlock2D are the only up blocks implemented! you requested {up_block_type}"
 
 
 class UNet2DConditionModel(nn.Module):
@@ -189,7 +193,12 @@ class UNet2DConditionModel(nn.Module):
             "DownBlock2D",
         ),
         mid_block_type: str = "UNetMidBlock2DCrossAttn",
-        up_block_types: Tuple[str] = ("UpBlock2D", "CrossAttnUpBlock2D", "CrossAttnUpBlock2D", "CrossAttnUpBlock2D"),
+        up_block_types: Tuple[str] = (
+            "UpBlock2D",
+            "CrossAttnUpBlock2D",
+            "CrossAttnUpBlock2D",
+            "CrossAttnUpBlock2D",
+        ),
         only_cross_attention: Union[bool, Tuple[bool]] = False,
         block_out_channels: Tuple[int] = (320, 640, 1280, 1280),
         layers_per_block: int = 2,
@@ -209,7 +218,7 @@ class UNet2DConditionModel(nn.Module):
         state_dict=None,
         base_address="",
         device=None,
-        host=None
+        host=None,
     ):
         super().__init__()
         self.base_address_with_dot = "" if base_address == "" else f"{base_address}."
@@ -219,20 +228,23 @@ class UNet2DConditionModel(nn.Module):
         # input
         conv_in_w = state_dict[f"{self.base_address_with_dot}conv_in.weight"]
         conv_in_b = state_dict[f"{self.base_address_with_dot}conv_in.bias"]
-        self.conv_in = fallback_ops.Conv2d(in_channels=in_channels,
-                                            out_channels=block_out_channels[0],
-                                            kernel_size=3,
-                                            padding=(1, 1),
-                                            weights=conv_in_w,
-                                            biases=conv_in_b,
-                                            )
+        self.conv_in = fallback_ops.Conv2d(
+            in_channels=in_channels,
+            out_channels=block_out_channels[0],
+            kernel_size=3,
+            padding=(1, 1),
+            weights=conv_in_w,
+            biases=conv_in_b,
+        )
 
         timestep_input_dim = block_out_channels[0]
 
-        self.time_embedding = TimestepEmbedding(timestep_input_dim,
-                                                time_embed_dim,
-                                                state_dict=state_dict,
-                                                base_address=f"{self.base_address_with_dot}time_embedding")
+        self.time_embedding = TimestepEmbedding(
+            timestep_input_dim,
+            time_embed_dim,
+            state_dict=state_dict,
+            base_address=f"{self.base_address_with_dot}time_embedding",
+        )
 
         # class embedding
         if class_embed_type is None and num_class_embeds is not None:
@@ -302,7 +314,7 @@ class UNet2DConditionModel(nn.Module):
                 use_linear_projection=use_linear_projection,
                 upcast_attention=upcast_attention,
                 state_dict=state_dict,
-                base_address=f"{self.base_address_with_dot}mid_block"
+                base_address=f"{self.base_address_with_dot}mid_block",
             )
         elif mid_block_type == "UNetMidBlock2DSimpleCrossAttn":
             assert False, "this is not happening"
@@ -317,7 +329,7 @@ class UNet2DConditionModel(nn.Module):
                 resnet_groups=norm_num_groups,
                 resnet_time_scale_shift=resnet_time_scale_shift,
                 state_dict=state_dict,
-                base_address=f"{self.base_address_with_dot}mid_block"
+                base_address=f"{self.base_address_with_dot}mid_block",
             )
         else:
             raise ValueError(f"unknown mid_block_type : {mid_block_type}")
@@ -335,7 +347,9 @@ class UNet2DConditionModel(nn.Module):
 
             prev_output_channel = output_channel
             output_channel = reversed_block_out_channels[i]
-            input_channel = reversed_block_out_channels[min(i + 1, len(block_out_channels) - 1)]
+            input_channel = reversed_block_out_channels[
+                min(i + 1, len(block_out_channels) - 1)
+            ]
 
             # add upsample block for all BUT final layer
             if not is_final_block:
@@ -369,34 +383,39 @@ class UNet2DConditionModel(nn.Module):
             prev_output_channel = output_channel
 
         # out
-        conv_norm_out_w = state_dict[f"{self.base_address_with_dot}conv_norm_out.weight"]
+        conv_norm_out_w = state_dict[
+            f"{self.base_address_with_dot}conv_norm_out.weight"
+        ]
         conv_norm_out_b = state_dict[f"{self.base_address_with_dot}conv_norm_out.bias"]
-        self.conv_norm_out = fallback_ops.GroupNorm(num_channels=block_out_channels[0],
-                                                num_groups=norm_num_groups,
-                                                eps=norm_eps,
-                                                weights=conv_norm_out_w,
-                                                biases=conv_norm_out_b
-                                                )
+        self.conv_norm_out = fallback_ops.GroupNorm(
+            num_channels=block_out_channels[0],
+            num_groups=norm_num_groups,
+            eps=norm_eps,
+            weights=conv_norm_out_w,
+            biases=conv_norm_out_b,
+        )
 
-        self.conv_act = fallback_ops.silu
+        # self.conv_act = fallback_ops.silu
+        self.conv_act = ttl.tensor.silu
 
         conv_out_w = state_dict[f"{self.base_address_with_dot}conv_out.weight"]
         conv_out_b = state_dict[f"{self.base_address_with_dot}conv_out.bias"]
-        self.conv_out = fallback_ops.Conv2d(in_channels=block_out_channels[0],
-                                            out_channels=out_channels,
-                                            kernel_size=3,
-                                            padding=1,
-                                            weights=conv_out_w,
-                                            biases=conv_out_b
-                                            )
+        self.conv_out = fallback_ops.Conv2d(
+            in_channels=block_out_channels[0],
+            out_channels=out_channels,
+            kernel_size=3,
+            padding=1,
+            weights=conv_out_w,
+            biases=conv_out_b,
+        )
 
     def forward(
         self,
         sample,
         timestep,
         encoder_hidden_states,
-        class_labels = None,
-        attention_mask = None,
+        class_labels=None,
+        attention_mask=None,
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = True,
     ):
@@ -443,7 +462,6 @@ class UNet2DConditionModel(nn.Module):
         # 1. time
         timesteps = timestep
 
-
         # # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
         # timesteps = timesteps.expand(sample.shape[0]) # Nonte: IS ON TORCH
 
@@ -461,7 +479,9 @@ class UNet2DConditionModel(nn.Module):
         if self.class_embedding is not None:
             assert False, "this should not be trigerred!"
             if class_labels is None:
-                raise ValueError("class_labels should be provided when num_class_embeds > 0")
+                raise ValueError(
+                    "class_labels should be provided when num_class_embeds > 0"
+                )
 
             if self.config.class_embed_type == "timestep":
                 class_labels = self.time_proj(class_labels)
@@ -475,8 +495,10 @@ class UNet2DConditionModel(nn.Module):
         # 3. down
         down_block_res_samples = (sample,)
         for downsample_block in self.down_blocks:
-            if hasattr(downsample_block, "has_cross_attention") and downsample_block.has_cross_attention:
-
+            if (
+                hasattr(downsample_block, "has_cross_attention")
+                and downsample_block.has_cross_attention
+            ):
                 sample, res_samples = downsample_block(
                     hidden_states=sample,
                     temb=emb,
@@ -503,13 +525,18 @@ class UNet2DConditionModel(nn.Module):
             is_final_block = i == len(self.up_blocks) - 1
 
             res_samples = down_block_res_samples[-len(upsample_block.resnets) :]
-            down_block_res_samples = down_block_res_samples[: -len(upsample_block.resnets)]
+            down_block_res_samples = down_block_res_samples[
+                : -len(upsample_block.resnets)
+            ]
 
             # if we have not reached the final block and need to forward the
             # upsample size, we do it here
             if not is_final_block and forward_upsample_size:
                 upsample_size = down_block_res_samples[-1].shape[2:]
-            if hasattr(upsample_block, "has_cross_attention") and upsample_block.has_cross_attention:
+            if (
+                hasattr(upsample_block, "has_cross_attention")
+                and upsample_block.has_cross_attention
+            ):
                 sample = upsample_block(
                     hidden_states=sample,
                     temb=emb,
@@ -521,7 +548,10 @@ class UNet2DConditionModel(nn.Module):
                 )
             else:
                 sample = upsample_block(
-                    hidden_states=sample, temb=emb, res_hidden_states_tuple=res_samples, upsample_size=upsample_size
+                    hidden_states=sample,
+                    temb=emb,
+                    res_hidden_states_tuple=res_samples,
+                    upsample_size=upsample_size,
                 )
         # 6. post-process
         sample = self.conv_norm_out(sample)

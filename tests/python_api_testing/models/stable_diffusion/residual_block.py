@@ -1,5 +1,6 @@
 from pathlib import Path
 import sys
+
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
 sys.path.append(f"{f}/../..")
@@ -40,13 +41,13 @@ class TtResnetBlock2D(nn.Module):
         up=False,
         down=False,
         state_dict=None,
-        base_address= None,
-        host = None,
-        device = None
+        base_address=None,
+        host=None,
+        device=None,
     ):
         super().__init__()
         self.pre_norm = pre_norm
-        self.pre_norm = True # this is part of the original code
+        self.pre_norm = True  # this is part of the original code
         self.in_channels = in_channels
         out_channels = in_channels if out_channels is None else out_channels
         self.out_channels = out_channels
@@ -63,13 +64,26 @@ class TtResnetBlock2D(nn.Module):
 
         norm1_weights = state_dict[f"{base_address}.norm1.weight"]
         norm1_bias = state_dict[f"{base_address}.norm1.bias"]
-        self.norm1 = fallback_ops.GroupNorm(norm1_weights, norm1_bias, num_groups=groups, num_channels=self.in_channels, eps=eps, affine=True)
-
+        self.norm1 = fallback_ops.GroupNorm(
+            norm1_weights,
+            norm1_bias,
+            num_groups=groups,
+            num_channels=self.in_channels,
+            eps=eps,
+            affine=True,
+        )
 
         conv1_weights = state_dict[f"{base_address}.conv1.weight"]
         conv1_bias = state_dict[f"{base_address}.conv1.bias"]
-        self.conv1 = fallback_ops.Conv2d(conv1_weights, conv1_bias, self.in_channels, self.out_channels, kernel_size=3, stride=1, padding=1)
-
+        self.conv1 = fallback_ops.Conv2d(
+            conv1_weights,
+            conv1_bias,
+            self.in_channels,
+            self.out_channels,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+        )
 
         if temb_channels is not None:
             if self.time_embedding_norm == "default":
@@ -77,15 +91,19 @@ class TtResnetBlock2D(nn.Module):
             elif self.time_embedding_norm == "scale_shift":
                 time_emb_proj_out_channels = out_channels * 2
             else:
-                raise ValueError(f"unknown time_embedding_norm : {self.time_embedding_norm} ")
+                raise ValueError(
+                    f"unknown time_embedding_norm : {self.time_embedding_norm} "
+                )
 
             time_emb_proj_weights = state_dict[f"{base_address}.time_emb_proj.weight"]
             time_emb_proj_bias = state_dict[f"{base_address}.time_emb_proj.bias"]
-            self.time_emb_proj = make_linear(in_features=temb_channels,
-                                            out_features=time_emb_proj_out_channels,
-                                            weights=time_emb_proj_weights,
-                                            bias=time_emb_proj_bias,
-                                            device=self.device)
+            self.time_emb_proj = make_linear(
+                in_features=temb_channels,
+                out_features=time_emb_proj_out_channels,
+                weights=time_emb_proj_weights,
+                bias=time_emb_proj_bias,
+                device=self.device,
+            )
 
         else:
             self.time_emb_proj = None
@@ -93,22 +111,36 @@ class TtResnetBlock2D(nn.Module):
         norm2_weights = state_dict[f"{base_address}.norm2.weight"]
         norm2_bias = state_dict[f"{base_address}.norm2.bias"]
 
-
-        self.norm2 = fallback_ops.GroupNorm(norm2_weights, norm2_bias, num_groups=groups, num_channels=self.out_channels, eps=eps, affine=True)
+        self.norm2 = fallback_ops.GroupNorm(
+            norm2_weights,
+            norm2_bias,
+            num_groups=groups,
+            num_channels=self.out_channels,
+            eps=eps,
+            affine=True,
+        )
 
         conv2_weights = state_dict[f"{base_address}.conv2.weight"]
         conv2_bias = state_dict[f"{base_address}.conv2.bias"]
 
-        self.conv2 = fallback_ops.Conv2d(conv2_weights, conv2_bias, self.out_channels, self.out_channels, kernel_size=3, stride=1, padding=1)
-
+        self.conv2 = fallback_ops.Conv2d(
+            conv2_weights,
+            conv2_bias,
+            self.out_channels,
+            self.out_channels,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+        )
 
         if non_linearity == "swish":
-
-            self.nonlinearity = fallback_ops.silu
+            # self.nonlinearity = fallback_ops.silu
+            self.nonlinearity = ttl.tensor.silu
         elif non_linearity == "mish":
             assert False, "Mish is not implemented!"
         elif non_linearity == "silu":
-            self.nonlinearity = fallback_ops.silu
+            # self.nonlinearity = fallback_ops.silu
+            self.nonlinearity = ttl.tensor.silu
 
         self.upsample = self.downsample = None
         if self.up:
@@ -116,14 +148,26 @@ class TtResnetBlock2D(nn.Module):
         elif self.down:
             assert False, "Down block within residual block is not implemented!"
 
-        self.use_in_shortcut = self.in_channels != self.out_channels if use_in_shortcut is None else use_in_shortcut
+        self.use_in_shortcut = (
+            self.in_channels != self.out_channels
+            if use_in_shortcut is None
+            else use_in_shortcut
+        )
         self.conv_shortcut = None
         if self.use_in_shortcut:
             conv_shortcut_weights = state_dict[f"{base_address}.conv_shortcut.weight"]
             conv_shortcut_bias = state_dict[f"{base_address}.conv_shortcut.bias"]
-            self.conv_shortcut = fallback_ops.Conv2d(conv_shortcut_weights, conv_shortcut_bias, self.in_channels, self.out_channels, kernel_size=1, stride=1, padding=0)
+            self.conv_shortcut = fallback_ops.Conv2d(
+                conv_shortcut_weights,
+                conv_shortcut_bias,
+                self.in_channels,
+                self.out_channels,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+            )
 
-    def  forward(self, input_tensor, temb):
+    def forward(self, input_tensor, temb):
         hidden_states = input_tensor
         hidden_states = self.norm1(hidden_states)
         hidden_states = self.nonlinearity(hidden_states)
@@ -142,7 +186,12 @@ class TtResnetBlock2D(nn.Module):
             temb = fallback_ops.reshape(temb, temb.shape()[2], temb.shape()[3], 1, 1)
 
         if temb is not None and self.time_embedding_norm == "default":
-            hidden_states = ttl.tensor.bcast(hidden_states, temb, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.HW)
+            hidden_states = ttl.tensor.bcast(
+                hidden_states,
+                temb,
+                ttl.tensor.BcastOpMath.ADD,
+                ttl.tensor.BcastOpDim.HW,
+            )
 
         hidden_states = self.norm2(hidden_states)
 
@@ -154,7 +203,6 @@ class TtResnetBlock2D(nn.Module):
 
         if self.conv_shortcut is not None:
             input_tensor = self.conv_shortcut(input_tensor)
-
 
         # create a tensor of size output_scale_factor
         output_sc_recip = 1 / self.output_scale_factor

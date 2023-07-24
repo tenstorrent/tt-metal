@@ -1,5 +1,6 @@
 from pathlib import Path
 import sys
+
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
 sys.path.append(f"{f}/../..")
@@ -27,23 +28,36 @@ class TtGEGLU(nn.Module):
         dim_out (`int`): The number of channels in the output.
     """
 
-    def __init__(self, dim_in: int, dim_out: int, device=None, host=None, state_dict=None, base_address="mid_block.attentions.0.transformer_blocks.0.ff.net.0"):
+    def __init__(
+        self,
+        dim_in: int,
+        dim_out: int,
+        device=None,
+        host=None,
+        state_dict=None,
+        base_address="mid_block.attentions.0.transformer_blocks.0.ff.net.0",
+    ):
         super().__init__()
         self.device = device
         self.host = host
 
-
         weights = state_dict[f"{base_address}.proj.weight"]
         bias = state_dict[f"{base_address}.proj.bias"]
-        self.proj = make_linear(in_features=dim_in, out_features=dim_out * 2, weights=weights, bias=bias, device=device)
+        self.proj = make_linear(
+            in_features=dim_in,
+            out_features=dim_out * 2,
+            weights=weights,
+            bias=bias,
+            device=device,
+        )
 
     def gelu(self, gate):
         return ttl.tensor.gelu(gate)
 
     def forward(self, hidden_states):
         hidden_states = self.proj(hidden_states)
-
-        hidden_states, gate = fallback_ops.chunk(hidden_states, 2, -1)
+        # hidden_states, gate = fallback_ops.chunk(hidden_states, 2, -1)
+        hidden_states, gate = ttl.tensor.split_last_dim_two_chunks_tiled(hidden_states)
         act = self.gelu(gate)
         return ttl.tensor.mul(hidden_states, act)
 
@@ -72,18 +86,26 @@ class TtFeedForward(nn.Module):
         device=None,
         host=None,
         state_dict=None,
-        base_address="mid_block.attentions.0.transformer_blocks.0.ff"
+        base_address="mid_block.attentions.0.transformer_blocks.0.ff",
     ):
         super().__init__()
         assert dropout == 0.0, "we do not support dropout"
         assert final_dropout == False, "we do not support dropout"
-        assert activation_fn == "geglu", "except GEGLU, other activation functions are not supported."
+        assert (
+            activation_fn == "geglu"
+        ), "except GEGLU, other activation functions are not supported."
         inner_dim = int(dim * mult)
         dim_out = dim_out if dim_out is not None else dim
 
-
         if activation_fn == "geglu":
-            act_fn = TtGEGLU(dim, inner_dim, device, host, state_dict, base_address=f"{base_address}.net.0")
+            act_fn = TtGEGLU(
+                dim,
+                inner_dim,
+                device,
+                host,
+                state_dict,
+                base_address=f"{base_address}.net.0",
+            )
         else:
             assert False, "other activation ops are not implemented"
 
@@ -91,8 +113,13 @@ class TtFeedForward(nn.Module):
 
         weights = state_dict[f"{base_address}.net.2.weight"]
         bias = state_dict[f"{base_address}.net.2.bias"]
-        self.linear = make_linear(in_features=inner_dim, out_features=dim_out, weights=weights, bias=bias, device=device)
-
+        self.linear = make_linear(
+            in_features=inner_dim,
+            out_features=dim_out,
+            weights=weights,
+            bias=bias,
+            device=device,
+        )
 
     def forward(self, hidden_states):
         hidden_states = self.act_fn(hidden_states)
