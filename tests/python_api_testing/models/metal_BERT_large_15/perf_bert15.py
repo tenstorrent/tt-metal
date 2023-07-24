@@ -53,7 +53,7 @@ model_location_generator = model_location_generator_
     "expected_inference_time, expected_compile_time",
     (
         (0.08,
-         9.6,
+         9.3,
         ),
     ),
 )
