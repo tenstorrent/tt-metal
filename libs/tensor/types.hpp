@@ -71,6 +71,47 @@ using BorrowedBuffer = std::variant<
 >;
 struct BorrowedStorage {
     BorrowedBuffer buffer;
+    std::function<void()> on_creation_callback = []{};
+    std::function<void()> on_destruction_callback = []{};
+
+
+    explicit BorrowedStorage(const BorrowedBuffer& buffer, const std::function<void()>& on_creation_callback, const std::function<void()>& on_destruction_callback)
+    : buffer(buffer), on_creation_callback(on_creation_callback), on_destruction_callback(on_destruction_callback) {
+        this->on_creation_callback();
+    }
+
+    BorrowedStorage(const BorrowedStorage& other)
+    : buffer(other.buffer), on_creation_callback(other.on_creation_callback), on_destruction_callback(other.on_destruction_callback) {
+        this->on_creation_callback();
+    }
+
+    BorrowedStorage operator=(const BorrowedStorage& other) {
+        this->buffer = other.buffer;
+        this->on_creation_callback = other.on_creation_callback;
+        this->on_destruction_callback = other.on_destruction_callback;
+        this->on_creation_callback();
+        return *this;
+    }
+
+    BorrowedStorage(BorrowedStorage&& other)
+    : buffer(other.buffer), on_creation_callback(other.on_creation_callback), on_destruction_callback(other.on_destruction_callback) {
+        other.on_creation_callback = []{};
+        other.on_destruction_callback = []{};
+    }
+
+    BorrowedStorage operator=(BorrowedStorage&& other) {
+        this->buffer = other.buffer;
+        this->on_creation_callback = other.on_creation_callback;
+        this->on_destruction_callback = other.on_destruction_callback;
+        other.on_creation_callback = []{};
+        other.on_destruction_callback = []{};
+        return *this;
+    }
+
+    ~BorrowedStorage() {
+        this->on_destruction_callback();
+    }
+
     tt::stl::reflection::Attributes attributes() const;
 };
 

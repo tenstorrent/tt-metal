@@ -248,14 +248,9 @@ def tt2torch_tensor(tt_tensor, tt_host=None):
 
 def pad_by_zero(x: torch.Tensor, device):
     initial_shape = x.shape
-    if x.shape[3] % 32 != 0 or x.shape[2] % 32 != 0:
-        tt_tensor = tt_lib.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.ROW_MAJOR,
-        )
-        x = tt_tensor.pad((x.shape[0], x.shape[1], _nearest_32(x.shape[2]), _nearest_32(x.shape[3])), (0, 0, 0, 0), 0)
+    if initial_shape[3] % 32 != 0 or initial_shape[2] % 32 != 0:
+        x = tt_lib.tensor.Tensor(x.contiguous().to(torch.bfloat16))
+        x = x.pad((initial_shape[0], initial_shape[1], _nearest_32(initial_shape[2]), _nearest_32(initial_shape[3])), (0, 0, 0, 0), 0)
         x = x.to(tt_lib.tensor.Layout.TILE).to(device)
 
     else:
@@ -352,12 +347,7 @@ def torch_to_tt_tensor_rm(py_tensor, device, shape=None, put_on_device=True):
             shape.insert(0, 1)
 
     tt_tensor = (
-        tt_lib.tensor.Tensor(
-            py_tensor.reshape(-1).tolist(), # PyTorch tensor flatten into a list of floats
-            shape,               # shape of TT Tensor that will be created
-            tt_lib.tensor.DataType.BFLOAT16, # data type that will be used in created TT Tensor
-            tt_lib.tensor.Layout.ROW_MAJOR,  # memory layout that will be used in created TT Tensor
-        )
+         tt_lib.tensor.Tensor(py_tensor.contiguous().to(torch.bfloat16).reshape(shape))
     )
     if put_on_device:
         tt_tensor = tt_tensor.to(device)
@@ -370,12 +360,7 @@ def torch_to_tt_tensor(py_tensor, device):
         shape.insert(0, 1)
 
     tt_tensor = (
-        tt_lib.tensor.Tensor(
-            py_tensor.reshape(-1).tolist(), # PyTorch tensor flatten into a list of floats
-            shape,               # shape of TT Tensor that will be created
-            tt_lib.tensor.DataType.BFLOAT16, # data type that will be used in created TT Tensor
-            tt_lib.tensor.Layout.ROW_MAJOR,  # memory layout that will be used in created TT Tensor
-        )
+         tt_lib.tensor.Tensor(py_tensor.contiguous().to(torch.bfloat16).reshape(shape))
         .to(tt_lib.tensor.Layout.TILE)     # change memory layout of TT Tensor to TILE (as operation that will use it expects TILE layout)
         .to(device)                         # move TT Tensor from host to TT accelerator device (device is of type tt_lib.device.Device)
     )

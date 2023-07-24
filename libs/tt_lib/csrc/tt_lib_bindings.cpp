@@ -131,26 +131,45 @@ Tensor convert_torch_tensor_to_tt_tensor(const py::handle& torch_tensor) {
     auto torch_dtype = torch_tensor.attr("dtype");
     auto shape = py::cast<std::vector<uint32_t>>(torch_tensor.attr("shape"));
 
+    auto on_creation_callback = [torch_tensor] {
+        torch_tensor.inc_ref();
+    };
+
+    auto on_destruction_callback = [torch_tensor] {
+        torch_tensor.dec_ref();
+    };
+
     if (torch_dtype.equal(torch.attr("float32"))) {
         auto data_ptr = reinterpret_cast<float*>(py::cast<std::size_t>(torch_tensor.attr("data_ptr")()));
-        auto storage = BorrowedStorage{.buffer=borrowed_buffer::Buffer(data_ptr, volume(shape))};
+        auto storage = BorrowedStorage(
+            borrowed_buffer::Buffer(data_ptr, volume(shape)),
+            on_creation_callback,
+            on_destruction_callback
+        );
         return Tensor(std::move(storage), shape, DataType::FLOAT32, Layout::ROW_MAJOR);
     }
     else if (torch_dtype.equal(torch.attr("bfloat16"))) {
         auto data_ptr = reinterpret_cast<bfloat16*>(py::cast<std::size_t>(torch_tensor.attr("data_ptr")()));
-        auto storage = BorrowedStorage{.buffer=borrowed_buffer::Buffer(data_ptr, volume(shape))};
+        auto storage = BorrowedStorage(
+            borrowed_buffer::Buffer(data_ptr, volume(shape)),
+            on_creation_callback,
+            on_destruction_callback
+        );
         return Tensor(std::move(storage), shape, DataType::BFLOAT16, Layout::ROW_MAJOR);
     }
     else if (torch_dtype.equal(torch.attr("int64"))) {
          // TODO(arakhmati): add DataType::INT64
         auto data_ptr = reinterpret_cast<uint32_t*>(py::cast<std::size_t>(torch_tensor.attr("data_ptr")()));
-        auto storage = BorrowedStorage{.buffer=borrowed_buffer::Buffer(data_ptr, volume(shape) * 2)};
+        auto storage = BorrowedStorage(
+            borrowed_buffer::Buffer(data_ptr, volume(shape) * 2), // times 2 because INT64 is converted to UINT32
+            on_creation_callback,
+            on_destruction_callback
+        );
         return Tensor(std::move(storage), shape, DataType::UINT32, Layout::ROW_MAJOR);
     }
     else {
         TT_THROW(fmt::format("Unsupported DataType: {}", py::repr(torch_dtype)));
     }
-
 }
 
 }
@@ -204,8 +223,9 @@ void TensorModule(py::module &m_tensor) {
         .value("L1", BufferType::L1);
 
     py::enum_<StorageType>(m_tensor, "StorageType")
-        .value("HOST", StorageType::OWNED)
-        .value("DEVICE", StorageType::DEVICE);
+        .value("OWNED", StorageType::OWNED)
+        .value("DEVICE", StorageType::DEVICE)
+        .value("BORROWED", StorageType::BORROWED);
 
     auto pyMemoryConfig = py::class_<MemoryConfig>(m_tensor, "MemoryConfig", R"doc(
         Class defining memory configuration for storing tensor data on TT Accelerator device.

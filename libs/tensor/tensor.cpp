@@ -94,7 +94,7 @@ void Tensor::print(Layout print_layout, bool pretty_print) const {
 }
 
 Tensor Tensor::pad(const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) const {
-    TT_ASSERT(this->storage_type() == StorageType::OWNED && "Tensor must be on host for padding");
+    TT_ASSERT(this->storage_type() == StorageType::OWNED or this->storage_type() == StorageType::BORROWED && "Tensor must be on host for padding");
     TT_ASSERT(this->layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for padding");
     return tensor_impl::pad_wrapper(*this, output_tensor_shape, input_tensor_start, pad_value);
 }

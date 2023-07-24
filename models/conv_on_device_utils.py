@@ -30,12 +30,9 @@ def run_conv_on_device_wrapper(conv_weight, conv_params, device, host, conv_bias
         OW = ((int) ((W - S + 2 * P_W) / V)) + 1
         conv_output_shape = [1,K,OH,OW]
         x_shape_channel_padded = [N,_nearest_32(C),H,W]
-        x = tt_lib.tensor.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.ROW_MAJOR,
-            ).pad(x_shape_channel_padded, (0,0,0,0), 0).to(tt_lib.tensor.Layout.CHANNELS_LAST).to(device)
+
+        x = tt_lib.tensor.Tensor(x.contiguous().to(torch.bfloat16))
+        x = x.pad(x_shape_channel_padded, (0,0,0,0), 0).to(tt_lib.tensor.Layout.CHANNELS_LAST).to(device)
         logger.info("Going to run conv on tt device")
         x = conv_on_device(x)
         logger.info("conv on tt device done")

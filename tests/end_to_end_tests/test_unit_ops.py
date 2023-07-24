@@ -16,12 +16,7 @@ def test_tile_major_reshape_sweep(reset_seeds, first_grayskull_device):
     x = torch.randn((N, C, H, W)).to(torch.bfloat16).to(torch.float32)
 
     xtt = (
-        tt_lib.tensor.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.ROW_MAJOR,
-        )
+         tt_lib.tensor.Tensor(x.contiguous().to(torch.bfloat16))
         .to(tt_lib.tensor.Layout.TILE)
         .to(device)
     )

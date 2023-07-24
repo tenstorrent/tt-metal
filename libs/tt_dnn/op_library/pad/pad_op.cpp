@@ -303,7 +303,7 @@ Tensor pad(const Tensor &input_tensor, const std::array<uint32_t, 4> &output_ten
 
 void PadOnHost::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    TT_ASSERT(input_tensor.storage_type() == StorageType::OWNED);
+    TT_ASSERT(input_tensor.storage_type() == StorageType::OWNED or input_tensor.storage_type() == StorageType::BORROWED);
     TT_ASSERT(input_tensor.layout() == Layout::ROW_MAJOR);
     TT_ASSERT(input_tensor.shape()[0] + this->input_tensor_start[0] <= this->output_tensor_shape[0], "Output size cannot fit input with offset");
     TT_ASSERT(input_tensor.shape()[1] + this->input_tensor_start[1] <= this->output_tensor_shape[1], "Output size cannot fit input with offset");

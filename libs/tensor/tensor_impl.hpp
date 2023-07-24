@@ -361,10 +361,13 @@ inline DeviceBuffer to_device_buffer(const Storage& storage, Device* device, con
 // ======================================================================================
 template <typename T>
 inline Tensor to_host(const Tensor &tensor) {
+    if (tensor.storage_type() != StorageType::DEVICE) {
+        return tensor;
+    }
+    TT_ASSERT(tensor.is_allocated(), "Need DRAM buffers to be allocated!");
     auto device_storage = tensor.device_storage().value();
     auto device_buffer = device_storage.buffer;
     auto device = device_storage.device;
-    TT_ASSERT(tensor.storage_type() != StorageType::OWNED and tensor.is_allocated(), "Need DRAM buffers on device to exist to copy data to host!");
     TT_ASSERT(device != nullptr && "Need device to be set copy data from device to host!");
     uint32_t size_in_bytes = device_buffer->size();
     auto data_vec = read_data_from_device<T>(tensor, size_in_bytes);
@@ -434,7 +437,7 @@ inline Tensor to_layout(const Tensor &tensor, Layout target_layout) {
     };
 
     auto output_data = std::visit(
-        [&convert] (auto&& storage)  -> std::vector<T> {
+        [&convert] (auto&& storage) -> std::vector<T> {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
                 const auto input_data = owned_buffer::get_as<T>(storage.buffer);
@@ -445,7 +448,7 @@ inline Tensor to_layout(const Tensor &tensor, Layout target_layout) {
                 return convert(input_data);
             }
             else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
-                TT_THROW("Device storage isnt' supported");
+                TT_THROW("Device storage isn't supported");
             }
             else {
                 raise_unsupported_storage<StorageType>();
@@ -464,69 +467,92 @@ inline Tensor to_layout(const Tensor &tensor, Layout target_layout) {
 template <typename T>
 inline Tensor pad(const Tensor &tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
     auto pad_value_ = static_cast<T>(pad_value);
+    const auto input_tensor_shape = tensor.shape();
+    const auto input_tensor_strides = tensor.strides();
 
-    auto input_buffer = owned_buffer::get_as<T>(tensor);
+    auto pad =
+        [&input_tensor_shape, &input_tensor_strides, &output_tensor_shape, &input_tensor_start, &pad_value_]
+        (const auto& input_buffer) {
+        // Check if input tensor fits in output tensor given the input tensor start indices
+        TT_ASSERT(input_tensor_shape[0] + input_tensor_start[0] <= output_tensor_shape[0]);
+        TT_ASSERT(input_tensor_shape[1] + input_tensor_start[1] <= output_tensor_shape[1]);
+        TT_ASSERT(input_tensor_shape[2] + input_tensor_start[2] <= output_tensor_shape[2]);
+        TT_ASSERT(input_tensor_shape[3] + input_tensor_start[3] <= output_tensor_shape[3]);
 
-    // Check if input tensor fits in output tensor given the input tensor start indices
-    const std::array<uint32_t, 4> input_tensor_shape = tensor.shape();
-    TT_ASSERT(input_tensor_shape[0] + input_tensor_start[0] <= output_tensor_shape[0]);
-    TT_ASSERT(input_tensor_shape[1] + input_tensor_start[1] <= output_tensor_shape[1]);
-    TT_ASSERT(input_tensor_shape[2] + input_tensor_start[2] <= output_tensor_shape[2]);
-    TT_ASSERT(input_tensor_shape[3] + input_tensor_start[3] <= output_tensor_shape[3]);
+        // Figure out pad size on each dim
+        uint32_t pad_size[4][2] = {
+            {input_tensor_start[0], output_tensor_shape[0] - input_tensor_shape[0] - input_tensor_start[0]},
+            {input_tensor_start[1], output_tensor_shape[1] - input_tensor_shape[1] - input_tensor_start[1]},
+            {input_tensor_start[2], output_tensor_shape[2] - input_tensor_shape[2] - input_tensor_start[2]},
+            {input_tensor_start[3], output_tensor_shape[3] - input_tensor_shape[3] - input_tensor_start[3]}
+        };
 
-    // Figure out pad size on each dim
-    uint32_t pad_size[4][2] = {
-        {input_tensor_start[0], output_tensor_shape[0] - input_tensor_shape[0] - input_tensor_start[0]},
-        {input_tensor_start[1], output_tensor_shape[1] - input_tensor_shape[1] - input_tensor_start[1]},
-        {input_tensor_start[2], output_tensor_shape[2] - input_tensor_shape[2] - input_tensor_start[2]},
-        {input_tensor_start[3], output_tensor_shape[3] - input_tensor_shape[3] - input_tensor_start[3]}
-    };
+        const std::array<uint32_t, 4> output_tensor_strides = {
+            output_tensor_shape[1] * output_tensor_shape[2] * output_tensor_shape[3],
+            output_tensor_shape[2] * output_tensor_shape[3],
+            output_tensor_shape[3],
+            1
+        };
 
-    const std::array<uint32_t, 4> input_tensor_strides = tensor.strides();
-    const std::array<uint32_t, 4> output_tensor_strides = {
-        output_tensor_shape[1] * output_tensor_shape[2] * output_tensor_shape[3],
-        output_tensor_shape[2] * output_tensor_shape[3],
-        output_tensor_shape[3],
-        1
-    };
-
-    auto output_buffer = owned_buffer::create<T>(volume(output_tensor_shape));
-    auto output_index = 0;
-    for(auto i = 0; i < pad_size[0][0] * output_tensor_strides[0]; i++) {
-        output_buffer[output_index++] = pad_value_;
-    }
-    for(auto dim0 = 0; dim0 < input_tensor_shape[0]; dim0++) {
-        for(auto i = 0; i < pad_size[1][0] * output_tensor_strides[1]; i++) {
+        auto output_buffer = owned_buffer::create<T>(volume(output_tensor_shape));
+        auto output_index = 0;
+        for(auto i = 0; i < pad_size[0][0] * output_tensor_strides[0]; i++) {
             output_buffer[output_index++] = pad_value_;
         }
-        for(auto dim1 = 0; dim1 < input_tensor_shape[1]; dim1++) {
-            for(auto i = 0; i < pad_size[2][0] * output_tensor_strides[2]; i++) {
+        for(auto dim0 = 0; dim0 < input_tensor_shape[0]; dim0++) {
+            for(auto i = 0; i < pad_size[1][0] * output_tensor_strides[1]; i++) {
                 output_buffer[output_index++] = pad_value_;
             }
-            for(auto dim2 = 0; dim2 < input_tensor_shape[2]; dim2++) {
-                for(auto i = 0; i < pad_size[3][0] * output_tensor_strides[3]; i++) {
+            for(auto dim1 = 0; dim1 < input_tensor_shape[1]; dim1++) {
+                for(auto i = 0; i < pad_size[2][0] * output_tensor_strides[2]; i++) {
                     output_buffer[output_index++] = pad_value_;
                 }
-                for(auto dim3 = 0; dim3 < input_tensor_shape[3]; dim3++) {
-                    auto input_index = dim3 + input_tensor_strides[2] * dim2 + input_tensor_strides[1] * dim1 + input_tensor_strides[0] * dim0;
-                    output_buffer[output_index++] = input_buffer[input_index];
+                for(auto dim2 = 0; dim2 < input_tensor_shape[2]; dim2++) {
+                    for(auto i = 0; i < pad_size[3][0] * output_tensor_strides[3]; i++) {
+                        output_buffer[output_index++] = pad_value_;
+                    }
+                    for(auto dim3 = 0; dim3 < input_tensor_shape[3]; dim3++) {
+                        auto input_index = dim3 + input_tensor_strides[2] * dim2 + input_tensor_strides[1] * dim1 + input_tensor_strides[0] * dim0;
+                        output_buffer[output_index++] = input_buffer[input_index];
+                    }
+                    for(auto i = 0; i < pad_size[3][1] * output_tensor_strides[3]; i++) {
+                        output_buffer[output_index++] = pad_value_;
+                    }
                 }
-                for(auto i = 0; i < pad_size[3][1] * output_tensor_strides[3]; i++) {
+                for(auto i = 0; i < pad_size[2][1] * output_tensor_strides[2]; i++) {
                     output_buffer[output_index++] = pad_value_;
                 }
             }
-            for(auto i = 0; i < pad_size[2][1] * output_tensor_strides[2]; i++) {
+            for(auto i = 0; i < pad_size[1][1] * output_tensor_strides[1]; i++) {
                 output_buffer[output_index++] = pad_value_;
             }
         }
-        for(auto i = 0; i < pad_size[1][1] * output_tensor_strides[1]; i++) {
+        for(auto i = 0; i < pad_size[0][1] * output_tensor_strides[0]; i++) {
             output_buffer[output_index++] = pad_value_;
         }
-    }
-    for(auto i = 0; i < pad_size[0][1] * output_tensor_strides[0]; i++) {
-        output_buffer[output_index++] = pad_value_;
-    }
+        return output_buffer;
+    };
 
+    auto output_buffer = std::visit(
+        [&pad] (auto&& storage) -> owned_buffer::Buffer<T> {
+            using StorageType = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
+                const auto input_data = owned_buffer::get_as<T>(storage.buffer);
+                return pad(input_data);
+            }
+            else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
+                const auto input_data = borrowed_buffer::get_as<T>(storage.buffer);
+                return pad(input_data);
+            }
+            else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
+                TT_THROW("Device storage isn't supported");
+            }
+            else {
+                raise_unsupported_storage<StorageType>();
+            }
+        },
+        tensor.storage()
+    );
     return Tensor(OwnedStorage{output_buffer}, output_tensor_shape, tensor.dtype(), tensor.layout());
 }
 
