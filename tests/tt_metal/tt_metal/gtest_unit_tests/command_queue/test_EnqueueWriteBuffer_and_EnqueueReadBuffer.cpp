@@ -170,6 +170,13 @@ TEST_F(CommandQueueHarness, TestNon32BAlignedPageSizeForDram) {
     EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device, *this->cq, config));
 }
 
+TEST_F(CommandQueueHarness, TestNon32BAlignedPageSizeForDram2) {
+    // From stable diffusion read buffer
+    BufferConfig config = {.num_pages = 8 * 1024, .page_size = 80, .buftype = BufferType::DRAM};
+
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device, *this->cq, config));
+}
+
 TEST_F(CommandQueueHarness, TestWrapHostHugepageOnEnqueueReadBuffer) {
     BufferConfig buf_config = {.num_pages = 524270, .page_size = 2048, .buftype = BufferType::DRAM};
 

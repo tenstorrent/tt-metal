@@ -293,7 +293,7 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(u32 dst_ad
         u32 num_pages_per_remainder_burst = 0;
         remaining_buffer_size = remainder_burst_size;
         if (remainder_burst_size <= available_l1) {
-            num_pages_per_remainder_burst = remainder_burst_size / this->buffer.page_size();
+            num_pages_per_remainder_burst = remainder_burst_size / padded_page_size;
         } else {
             remainder_burst_size = 0;
         }
