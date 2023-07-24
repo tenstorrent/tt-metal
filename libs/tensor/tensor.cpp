@@ -35,7 +35,7 @@ Tensor::Tensor(const Storage& storage, const Shape& shape, DataType dtype, Layou
                 // do nothing
             }
             else {
-                TT_THROW("Must be an external storage");
+                raise_unsupported_storage<StorageType>();
             }
         },
         this->storage_

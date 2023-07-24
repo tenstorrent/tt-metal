@@ -21,20 +21,26 @@ tt::DataFormat datatype_to_dataformat_converter(tt::tt_metal::DataType datatype)
     }
 }
 
-Shape::Shape(const std::initializer_list<uint32_t> data) : data(data) {}
-Shape::Shape(const std::array<uint32_t, 4>& data) : data(std::vector<uint32_t>(std::begin(data), std::end(data))) {}
-Shape::Shape(const std::vector<uint32_t>& data) : data(data) {}
+Shape::Shape(const std::initializer_list<uint32_t> data) : rank_(data.size()) {
+    std::copy(std::begin(data), std::end(data), std::begin(this->data_));
+}
+Shape::Shape(const std::array<uint32_t, 4>& data) : rank_(data.size()) {
+    std::copy(std::begin(data), std::end(data), std::begin(this->data_));
+}
+Shape::Shape(const std::vector<uint32_t>& data) : rank_(data.size()) {
+    std::copy(std::begin(data), std::end(data), std::begin(this->data_));
+}
 
-uint32_t Shape::rank() const { return this->data.size(); }
+uint32_t Shape::rank() const { return this->rank_; }
 
-uint32_t& Shape::operator[](const std::size_t index) { return this->data[index]; }
-const uint32_t& Shape::operator[](const std::size_t index) const { return this->data[index]; }
+uint32_t& Shape::operator[](const std::size_t index) { return this->data_[index]; }
+const uint32_t& Shape::operator[](const std::size_t index) const { return this->data_[index]; }
 
-uint32_t& Shape::back() { return this->data.back(); }
-const uint32_t& Shape::back() const { return this->data.back(); }
+uint32_t& Shape::back() { return this->data_[this->rank_ - 1]; }
+const uint32_t& Shape::back() const { return this->data_[this->rank_ - 1]; }
 
-const uint32_t* Shape::begin() const { return this->data.data(); }
-const uint32_t* Shape::end() const { return this->data.data() + this->data.size(); }
+const uint32_t* Shape::begin() const { return this->data_.data(); }
+const uint32_t* Shape::end() const { return this->data_.data() + this->rank_; }
 
 
 bool operator==(const Shape& shape_a, const Shape& shape_b) {

@@ -39,7 +39,9 @@ enum class StorageType {
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
 
 class Shape {
-    std::vector<uint32_t> data;
+    std::array<uint32_t, 8> data_;
+    std::size_t rank_;
+
 
   public:
     Shape(const std::initializer_list<uint32_t> data);
