@@ -8,6 +8,7 @@ from models.t5.tt.t5_for_conditional_generation import (
     flan_t5_small_for_conditional_generation,
 )
 from models.generation_utils import run_generate
+from tests.python_api_testing.models.utility_functions_new import comp_pcc
 
 
 def run_T5ForConditionalGeneration(model_constructor, model_name):
@@ -62,6 +63,7 @@ def run_T5ForConditionalGeneration(model_constructor, model_name):
         device,
         run_tt_model=False,
         log=True,
+        comp_pcc=comp_pcc,
     )
 
     tt_output_sentance = run_generate(
@@ -71,6 +73,7 @@ def run_T5ForConditionalGeneration(model_constructor, model_name):
         device,
         run_tt_model=True,
         log=True,
+        comp_pcc=comp_pcc,
     )
 
     logger.info(f"Pt Decoded output: {pt_output_sentance}")

@@ -4,11 +4,11 @@ import tt_lib
 from loguru import logger
 
 from transformers import T5Model
-from tests.python_api_testing.models.utility_functions_new import (
+from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
-    comp_pcc,
 )
+from tests.python_api_testing.models.utility_functions_new import comp_pcc
 from models.t5.tt.t5_dense_act_dense import TtT5DenseActDense
 
 
