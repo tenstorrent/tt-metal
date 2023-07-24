@@ -259,18 +259,6 @@ BmmOpParallelizationStrategy::Enum get_parallelization_strategy(const std::vecto
 namespace tt {
 namespace tt_metal {
 
-Tensor large_bmm(const Tensor& a, const Tensor& b, bool tilize_act, bool untilize_out) {
-    auto parallelization_strategy = Matmul{}.get_parallelization_strategy({a, b});
-    if (parallelization_strategy != BmmOpParallelizationStrategy::SINGLE_CORE) {
-        log_warning("WARNING: Only single core mode supported for large_bmm. Falling back to single core.");
-    }
-    return large_bmm_single_core(a, b, tilize_act, untilize_out);
-}
-
-Tensor large_bmm_single_block(const Tensor& a, const Tensor& b, bool tilize_a, bool untilize_out) {
-    return large_bmm_single_core_single_block(a, b, tilize_a, untilize_out);
-}
-
 void Matmul::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);

@@ -454,16 +454,12 @@ Other Operations
 .. autofunction:: tt_lib.tensor.log_sigmoid
 
 .. autofunction:: tt_lib.tensor.expm1
-    
+
 .. autofunction:: tt_lib.tensor.tanhshrink
 
 .. autofunction:: tt_lib.tensor.fill_rm
 
 .. autofunction:: tt_lib.tensor.fill_ones_rm
-
-.. autofunction:: tt_lib.tensor.large_bmm
-
-.. autofunction:: tt_lib.tensor.large_bmm_single_block
 
 .. autofunction:: tt_lib.tensor.conv
 

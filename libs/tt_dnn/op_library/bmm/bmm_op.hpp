@@ -132,14 +132,6 @@ inline Tensor bert_large_post_softmax_bmm(const Tensor &input_tensor_a, const Te
     return operation::run(BertLargeMatmul{BertLargeMatmulOpType::POST_SOFTMAX_BMM, mem_config, output_dtype.value_or(input_tensor_a.dtype()), false}, {input_tensor_a, input_tensor_b}, {std::nullopt}).at(0);
 }
 
-
-// TODO: Refactor and uplift these bmms
-Tensor large_bmm(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool tilize_act, bool untilize_out); // Tilizes, untilizes b
-Tensor large_bmm_single_block(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool tilize_a, bool untilize_out); // Allows support for tilizing a, untilize b
-Tensor large_bmm_single_core(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool tilize_act, bool untilize_out); // Tilizes a, untilizes b
-Tensor large_bmm_single_core_single_block(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool tilize_a, bool untilize_out); // Allows support for tilizing a, untilize b
-
-
 /**
  * Generalized blocked matmul with support for tilize and untilize and mixed-prec
  */
