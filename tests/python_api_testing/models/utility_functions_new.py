@@ -214,7 +214,9 @@ def torch2tt_tensor(py_tensor: torch.Tensor, tt_device, tt_layout=tt_lib.tensor.
     while len(size) < 4:
         size.insert(0, 1)
 
-    py_tensor = py_tensor.to(torch.bfloat16).reshape(size)
+    py_tensor = py_tensor.contiguous()
+    py_tensor = py_tensor.to(torch.bfloat16)
+    py_tensor = py_tensor.reshape(size)
     tt_tensor = tt_lib.tensor.Tensor(py_tensor).to(tt_layout)
 
     if not isinstance(tt_device, tt_lib.device.Host):
