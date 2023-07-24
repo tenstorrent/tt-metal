@@ -95,19 +95,21 @@ endif
 DEVICE_LDFLAGS += \
 	-L$(TT_METAL_HOME)/tt_metal/third_party/common_lib \
 	-lz \
-	-l:libboost_system.so.1.65.1 \
-	-l:libboost_filesystem.so.1.65.1 \
-	-l:libicudata.so.60 \
-	-l:libicui18n.so.60 \
-	-l:libicuuc.so.60 \
-	-l:libboost_thread.so.1.65.1 \
-	-l:libboost_regex.so.1.65.1 \
 	-lpthread \
 	-latomic \
 	-lcommon
 
 ifeq ($(TT_METAL_VERSIM_DISABLED),0)
-  DEVICE_LDFLAGS += -l:versim-core.so -l:libc_verilated_hw.so
+  DEVICE_LDFLAGS += \
+    -l:libboost_system.so.1.65.1 \
+    -l:libboost_filesystem.so.1.65.1 \
+    -l:libicudata.so.60 \
+    -l:libicui18n.so.60 \
+    -l:libicuuc.so.60 \
+    -l:libboost_thread.so.1.65.1 \
+    -l:libboost_regex.so.1.65.1 \
+    -l:versim-core.so \
+    -l:libc_verilated_hw.so
 endif
 
 CLANG_WARNINGS := $(filter-out -Wmaybe-uninitialized,$(WARNINGS))
@@ -148,12 +150,17 @@ endif
 # Each module has a top level target as the entrypoint which must match the subdir name
 device: $(DEVICE_LIB)
 
-# Device can be static now since we use compile-time flags for TT_METAL_ARCH
-# anyway
+
 $(DEVICE_LIB): $(COMMON_LIB) $(DEVICE_OBJS)
 	@mkdir -p $(LIBDIR)
+ifeq ($(TT_METAL_VERSIM_DISABLED),0)
+  # Need to build everything and link with versim if it is included
 	$(DEVICE_CXX) $(DEVICE_CXXFLAGS) $(SHARED_LIB_FLAGS) -o $(DEVICE_LIB) $^ $(LDFLAGS) $(DEVICE_LDFLAGS)
-  # ar rcs -o $@ $(DEVICE_OBJS)
+else
+  # Device can be static now when running without versim since we use compile-time flags for TT_METAL_ARCH
+  # anyway
+	ar rcs -o $@ $(DEVICE_OBJS)
+endif
 
 $(OBJDIR)/tt_metal/device/%.o: tt_metal/device/%.cpp
 	@mkdir -p $(@D)
