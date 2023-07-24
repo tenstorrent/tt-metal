@@ -1,5 +1,14 @@
 set -eo pipefail
 
+echo Current date / time is $(date)
+
+echo "Info: Trying tt-smi -s to see if we have devices..."
+echo "Info: An error here likely means devices cannot be found"
+
+tt-smi -s -f tt_smi_devices.log
+
+rm tt_smi_devices.log
+
 reset_output=$(tt-smi -tr all)
 
 echo "${reset_output}"
@@ -34,5 +43,3 @@ else
   echo "Hugepages check did not pass - error"
   exit 1
 fi
-
-echo Current date / time is $(date)

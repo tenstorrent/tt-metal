@@ -105,22 +105,6 @@ run_frequent_pipeline_tests() {
     ./tests/scripts/run_models.sh
 }
 
-run_frequent_pipeline_tests_single_threaded() {
-    local tt_arch=$1
-    local pipeline_type=$2
-
-    export TT_METAL_THREADCOUNT=1
-
-    run_frequent_pipeline_tests "$tt_arch" "$pipeline_type"
-}
-
-run_frequent_pipeline_tests_multi_threaded() {
-    local tt_arch=$1
-    local pipeline_type=$2
-
-    run_frequent_pipeline_tests "$tt_arch" "$pipeline_type"
-}
-
 run_metal_bert_bm_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
@@ -147,9 +131,7 @@ run_pipeline_tests() {
     if [[ $pipeline_type == "post_commit" ]]; then
         run_post_commit_pipeline_tests "$tt_arch" "$pipeline_type"
     elif [[ $pipeline_type == "frequent" ]]; then
-        run_frequent_pipeline_tests_single_threaded "$tt_arch" "$pipeline_type"
-    elif [[ $pipeline_type == "frequent_multi_threaded" ]]; then
-        run_frequent_pipeline_tests_multi_threaded "$tt_arch" "$pipeline_type"
+        run_frequent_pipeline_tests "$tt_arch" "$pipeline_type"
     elif [[ $pipeline_type == "eager_host_side" ]]; then
         run_eager_package_end_to_end_pipeline_tests "$tt_arch" "$pipeline_type"
     elif [[ $pipeline_type == "eager_package_silicon" ]]; then
