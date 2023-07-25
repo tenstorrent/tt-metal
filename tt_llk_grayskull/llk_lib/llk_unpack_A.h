@@ -172,8 +172,9 @@ inline void llk_unpack_A_hw_configure_disaggregated(const std::uint32_t unpA_ope
 
 template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 // within_face_16x16_transpose is used on WH but not used for GS, this transpose is done in math on GS
-inline void llk_unpack_A_init(const std::uint32_t transpose_of_faces=0, const std::uint32_t within_face_16x16_transpose=0, const std::uint32_t in_tile_dims[2] = default_tile_dims) {
-    // Todo: do something with default_tile_dims
+inline void llk_unpack_A_init(const std::uint32_t transpose_of_faces=0, const std::uint32_t within_face_16x16_transpose=0, const std::uint32_t operand = 255) {    
+    // Todo: figure out tile dims.
+    // If passed in operand is default (255), it means that it has not been passed by llk, and we should assume default tile dims.
     llk_unpack_A_mop_config<BType, acc_to_dest>(transpose_of_faces);
 }
 

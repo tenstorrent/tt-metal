@@ -216,9 +216,9 @@ inline void matmul_configure_mop(bool transpose) {
 }
 
 template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
-inline void llk_math_matmul_init(std::uint32_t transpose=0, const std::uint32_t in0_tile_dims[2] = default_tile_dims, const std::uint32_t in1_tile_dims[2] = default_tile_dims, const std::uint32_t ct_dim=0, const std::uint32_t rt_dim=0, const std::uint32_t kt_dim=0) {
+inline void llk_math_matmul_init(const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t transpose=0, const std::uint32_t ct_dim=0, const std::uint32_t rt_dim=0, const std::uint32_t kt_dim=0) {
 
-    // Todo: do stuff init params
+    // Todo: figure out tile dims based on operandA and operandB
 
     matmul_configure_addrmod<NUM_FIDELITY_PHASES, FaceLayout>();
     matmul_configure_mop<NUM_FIDELITY_PHASES, FaceLayout>(transpose>0);
