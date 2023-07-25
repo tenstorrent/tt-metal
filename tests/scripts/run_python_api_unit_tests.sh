@@ -7,7 +7,12 @@ if [[ -z "$TT_METAL_HOME" ]]; then
   exit 1
 fi
 
-env TT_METAL_DEVICE_DISPATCH_MODE=1 pytest $TT_METAL_HOME/tests/python_api_testing/unit_testing/ -vvv
+# Need to skip tests that use L1 buffers for time being since when run in suite, they fail, but when run by themselves, they pass.
+env TT_METAL_DEVICE_DISPATCH_MODE=1 pytest $(find $TT_METAL_HOME/tests/python_api_testing/unit_testing/ -name '*.py' -a ! -name 'test_layernorm.py' -a ! -name 'test_split_last_dim_two_chunks_tiled.py') -vvv
+
+# Not sure yet why these need to be separate from the main suite (although there is some issue with L1 buffers)
+env TT_METAL_DEVICE_DISPATCH_MODE=1 pytest tests/python_api_testing/unit_testing/test_layernorm.py -vvv
+env TT_METAL_DEVICE_DISPATCH_MODE=1 pytest tests/python_api_testing/unit_testing/test_split_last_dim_two_chunks_tiled.py -vvv
 pytest $TT_METAL_HOME/tests/python_api_testing/sweep_tests/pytests/ -vvv
 
 # For now, adding tests with fast dispatch and non-32B divisible page sizes here. Python/models people,
