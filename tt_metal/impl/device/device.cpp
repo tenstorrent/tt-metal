@@ -55,8 +55,10 @@ void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
     for (const auto& core: soc_desc.cores) {
         config.core_type_from_noc_coord_table.insert({core.first, AllocCoreType::Invalid});
     }
-    for (const auto& core : soc_desc.compute_and_storage_cores) {
-        config.core_type_from_noc_coord_table[core] = AllocCoreType::ComputeAndStore;
+    for (const auto& core : soc_desc.compute_with_storage_cores) {
+        const auto logical_coord = get_core_coord_from_relative(core, this->post_harvested_worker_grid_size_);
+        const auto noc_coord = this->logical_to_routing_coord_lookup_table_[logical_coord];
+        config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::ComputeAndStore;
     }
     for (const auto& core : soc_desc.storage_cores) {
         const auto logical_coord = get_core_coord_from_relative(core, this->post_harvested_worker_grid_size_);
@@ -205,18 +207,11 @@ CoreCoord Device::logical_grid_size() const {
     return this->post_harvested_worker_grid_size_;
 }
 
-CoreCoord Device::compute_and_storage_grid_size() const {
+CoreCoord Device::compute_with_storage_grid_size() const {
     if (not cluster_is_initialized()) {
         TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
     }
-    return this->cluster_->get_soc_desc(pcie_slot_).compute_and_storage_grid_size;
-}
-
-CoreCoord Device::post_harvested_worker_grid_size() const {
-    if (not cluster_is_initialized()) {
-        TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
-    }
-    return this->post_harvested_worker_grid_size_;
+    return this->cluster_->get_soc_desc(pcie_slot_).compute_with_storage_grid_size;
 }
 
 CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) const {

@@ -89,7 +89,7 @@ operation::ProgramWithCallbacks create_program(
     uint32_t num_blocks_y = (M - 1) / per_core_M + 1; // Should always be 1
     uint32_t num_blocks_x = (N - 1) / per_core_N + 1; // SHould always be 1
 
-    CoreRangeSet all_cores(tt::tt_metal::num_cores_to_corerange_set(num_blocks_x * num_blocks_y, device->compute_and_storage_grid_size(), true));
+    CoreRangeSet all_cores(tt::tt_metal::num_cores_to_corerange_set(num_blocks_x * num_blocks_y, device->compute_with_storage_grid_size(), true));
     uint32_t src0_cb_index = 0;
     auto cb_src0 = tt_metal::CreateCircularBuffers(
         program,
@@ -320,9 +320,9 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_padding(const Tensor &a,
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
-    auto compute_and_storage_grid_size = device->compute_and_storage_grid_size();
-    uint32_t num_cores_x = compute_and_storage_grid_size.x;
-    uint32_t num_cores_y = compute_and_storage_grid_size.y;
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     // Calculate number of blocks along x and y; tensor dims are padded up to 512
     uint32_t num_blocks_y = (Mt - 1) / per_core_M + 1; // Should always be 1

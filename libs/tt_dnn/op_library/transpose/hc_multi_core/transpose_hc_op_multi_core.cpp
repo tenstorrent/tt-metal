@@ -37,10 +37,10 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
 
-    auto compute_and_storage_grid_size = device->compute_and_storage_grid_size();
-    uint32_t num_cores_x = compute_and_storage_grid_size.x;
-    uint32_t num_cores_y = compute_and_storage_grid_size.y;
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = split_work_to_cores(compute_and_storage_grid_size, num_tensor_tiles);
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
 
     Shape output_shape = output.shape();
 

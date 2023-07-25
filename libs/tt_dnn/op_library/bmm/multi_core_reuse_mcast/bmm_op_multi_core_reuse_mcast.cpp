@@ -958,9 +958,9 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast(const Tensor &a, c
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
-    auto compute_and_storage_grid_size = device->compute_and_storage_grid_size();
-    uint32_t num_cores_x = compute_and_storage_grid_size.x;
-    uint32_t num_cores_y = compute_and_storage_grid_size.y;
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     uint32_t num_blocks_total = (Mt / per_core_M) * (Nt / per_core_N);
     TT_ASSERT(num_blocks_total <= num_cores_x * num_cores_y);

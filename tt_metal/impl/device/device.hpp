@@ -47,9 +47,7 @@ class Device {
 
     CoreCoord logical_grid_size() const;
 
-    CoreCoord compute_and_storage_grid_size() const;
-
-    CoreCoord post_harvested_worker_grid_size() const;
+    CoreCoord compute_with_storage_grid_size() const;
 
     CoreCoord worker_core_from_logical_core(const CoreCoord &logical_core) const;
 

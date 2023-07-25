@@ -52,12 +52,12 @@ struct tt_SocDescriptor {
   tt::ARCH arch;
   CoreCoord grid_size;
   CoreCoord worker_grid_size;
-  CoreCoord compute_and_storage_grid_size;
+  CoreCoord compute_with_storage_grid_size;
   std::unordered_map<CoreCoord, CoreDescriptor> cores;
   std::vector<CoreCoord> arc_cores;
   std::vector<CoreCoord> workers;
   std::vector<CoreCoord> harvested_workers;
-  std::vector<CoreCoord> compute_and_storage_cores;  // saved as CoreType::WORKER
+  std::vector<RelativeCoreCoord> compute_with_storage_cores;  // saved as CoreType::WORKER
   std::vector<RelativeCoreCoord> storage_cores;  // saved as CoreType::WORKER
   std::vector<RelativeCoreCoord> dispatch_cores; // saved as CoreType::WORKER
   std::vector<CoreCoord> pcie_cores;

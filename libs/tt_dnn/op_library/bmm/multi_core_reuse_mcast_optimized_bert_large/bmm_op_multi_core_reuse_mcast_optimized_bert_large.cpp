@@ -893,7 +893,7 @@ namespace tt {
 namespace tt_metal {
 
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_optimized_bert_large_(const Tensor &a, const Tensor &b, const std::optional<const Tensor> bias, Tensor& output, bool bcast_batch, CoreCoord compute_and_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool fuse_gelu_activation) {
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_optimized_bert_large_(const Tensor &a, const Tensor &b, const std::optional<const Tensor> bias, Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool fuse_gelu_activation) {
 
     const auto& ashape = a.shape(), bshape = b.shape();
 
@@ -954,8 +954,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_optimized_bert_lar
     TT_ASSERT(Kt % in0_block_w == 0);
 
     // This should allocate a DRAM buffer on the device
-    uint32_t num_cores_x = compute_and_storage_grid_size.x;
-    uint32_t num_cores_y = compute_and_storage_grid_size.y;
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     // Calculate number of blocks along x and y; tensor dims are padded up to 512
     uint32_t num_blocks_y = (Mt - 1) / per_core_M + 1;
@@ -999,8 +999,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_optimized_bert_lar
     return {};
 }
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_optimized_bert_large(const Tensor& a, const Tensor& b, const std::optional<const Tensor> bias, Tensor& output_tensor, CoreCoord compute_and_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool fuse_gelu_activation) {
-    return matmul_multi_core_reuse_mcast_optimized_bert_large_(a, b, bias, output_tensor, true, compute_and_storage_grid_size, output_dtype, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch, fuse_gelu_activation);
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_optimized_bert_large(const Tensor& a, const Tensor& b, const std::optional<const Tensor> bias, Tensor& output_tensor, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool fuse_gelu_activation) {
+    return matmul_multi_core_reuse_mcast_optimized_bert_large_(a, b, bias, output_tensor, true, compute_with_storage_grid_size, output_dtype, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch, fuse_gelu_activation);
 }
 
 }  // namespace tt_metal

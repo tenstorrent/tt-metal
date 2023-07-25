@@ -76,23 +76,23 @@ operation::ProgramWithCallbacks BertLargeTM::create_program(const std::vector<Te
     auto& output_tensor = output_tensors.at(0);
     const auto B = input_tensor.shape()[0];
 
-    auto device_compute_and_storage_grid_size = input_tensor.device()->compute_and_storage_grid_size();
-    CoreCoord compute_and_storage_grid_size = {12, B};
-    TT_ASSERT((compute_and_storage_grid_size.x <= device_compute_and_storage_grid_size.x && compute_and_storage_grid_size.y <= device_compute_and_storage_grid_size.y), "Unsupported grid shape");
+    auto device_compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    CoreCoord compute_with_storage_grid_size = {12, B};
+    TT_ASSERT((compute_with_storage_grid_size.x <= device_compute_with_storage_grid_size.x && compute_with_storage_grid_size.y <= device_compute_with_storage_grid_size.y), "Unsupported grid shape");
 
     switch (this->bert_large_tm_op_type) {
         case BertLargeTMOpType::CREATE_QKV_HEADS:
-            return  multi_core_create_qkv_heads_from_fused_qkv(input_tensor, output_tensors, compute_and_storage_grid_size);
+            return  multi_core_create_qkv_heads_from_fused_qkv(input_tensor, output_tensors, compute_with_storage_grid_size);
         case BertLargeTMOpType::SPLIT_FUSED_QKV:
-            return  multi_core_split_fused_qkv(input_tensor, output_tensors, compute_and_storage_grid_size);
+            return  multi_core_split_fused_qkv(input_tensor, output_tensors, compute_with_storage_grid_size);
         // Q and V heads use transpose_hw=false, while K head requires the additional transpose with transpose_hw=true.
         case BertLargeTMOpType::CREATE_Q_HEAD:
         case BertLargeTMOpType::CREATE_V_HEAD:
-            return multi_core_create_qkv_heads(input_tensor, output_tensor, compute_and_storage_grid_size, /*transpose_hw=*/false);
+            return multi_core_create_qkv_heads(input_tensor, output_tensor, compute_with_storage_grid_size, /*transpose_hw=*/false);
         case BertLargeTMOpType::CREATE_K_HEAD:
-            return multi_core_create_qkv_heads(input_tensor, output_tensor, compute_and_storage_grid_size, /*transpose_hw=*/true);
+            return multi_core_create_qkv_heads(input_tensor, output_tensor, compute_with_storage_grid_size, /*transpose_hw=*/true);
         case BertLargeTMOpType::CONCAT_HEADS:
-            return multi_core_concat_heads(input_tensor, output_tensor, compute_and_storage_grid_size);
+            return multi_core_concat_heads(input_tensor, output_tensor, compute_with_storage_grid_size);
         default:
             TT_ASSERT(false, "Unknown bert large tm op in create_program!");
     }

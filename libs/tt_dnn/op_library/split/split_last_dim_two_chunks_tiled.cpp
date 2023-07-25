@@ -128,8 +128,8 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     uint32_t z = input_shape[1];
     uint32_t num_tiles_dim_2 = input_shape[2] / TILE_HEIGHT;
     uint32_t num_tiles_dim_3 = input_shape[3] / TILE_WIDTH;
-    uint32_t num_cores_x_limit = device->compute_and_storage_grid_size().x;
-    uint32_t num_cores_y_limit = device->compute_and_storage_grid_size().y;
+    uint32_t num_cores_x_limit = device->compute_with_storage_grid_size().x;
+    uint32_t num_cores_y_limit = device->compute_with_storage_grid_size().y;
 
     // parallelize z
     auto num_cores_z = z;

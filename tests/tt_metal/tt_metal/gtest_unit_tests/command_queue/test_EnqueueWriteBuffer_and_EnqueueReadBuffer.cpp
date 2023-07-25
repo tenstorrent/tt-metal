@@ -194,8 +194,9 @@ TEST_F(CommandQueueHarness, WriteOneTileToL1Bank0) {
 }
 
 TEST_F(CommandQueueHarness, WriteOneTileToAllL1Banks) {
+    auto compute_with_storage_grid = this->device->compute_with_storage_grid_size();
     BufferConfig config = {
-        .num_pages = u32(this->device->cluster()->get_soc_desc(this->pcie_id).compute_and_storage_cores.size()),
+        .num_pages = u32(compute_with_storage_grid.x * compute_with_storage_grid.y),
         .page_size = 2048,
         .buftype = BufferType::L1};
 
@@ -203,8 +204,9 @@ TEST_F(CommandQueueHarness, WriteOneTileToAllL1Banks) {
 }
 
 TEST_F(CommandQueueHarness, WriteOneTileToAllL1BanksTwiceRoundRobin) {
+    auto compute_with_storage_grid = this->device->compute_with_storage_grid_size();
     BufferConfig config = {
-        .num_pages = 2 * u32(this->device->cluster()->get_soc_desc(this->pcie_id).compute_and_storage_cores.size()),
+        .num_pages = 2 * u32(compute_with_storage_grid.x * compute_with_storage_grid.y),
         .page_size = 2048,
         .buftype = BufferType::L1};
 

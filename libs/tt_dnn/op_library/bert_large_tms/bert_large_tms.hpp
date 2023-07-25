@@ -17,10 +17,10 @@ enum class BertLargeTMOpType {
     CONCAT_HEADS = 5,
 };
 
-operation::ProgramWithCallbacks multi_core_create_qkv_heads_from_fused_qkv(const Tensor &input_tensor_a, std::vector<Tensor> &output, CoreCoord compute_and_storage_grid_size);
-operation::ProgramWithCallbacks multi_core_split_fused_qkv(const Tensor &input_tensor_a, std::vector<Tensor> &output, CoreCoord compute_and_storage_grid_size);
-operation::ProgramWithCallbacks multi_core_create_qkv_heads(const Tensor &input_tensor_a, Tensor &output_tensor, CoreCoord compute_and_storage_grid_size, bool transpose_hw);
-operation::ProgramWithCallbacks multi_core_concat_heads(const Tensor &input_tensor_a, Tensor &output_tensor, CoreCoord compute_and_storage_grid_size);
+operation::ProgramWithCallbacks multi_core_create_qkv_heads_from_fused_qkv(const Tensor &input_tensor_a, std::vector<Tensor> &output, CoreCoord compute_with_storage_grid_size);
+operation::ProgramWithCallbacks multi_core_split_fused_qkv(const Tensor &input_tensor_a, std::vector<Tensor> &output, CoreCoord compute_with_storage_grid_size);
+operation::ProgramWithCallbacks multi_core_create_qkv_heads(const Tensor &input_tensor_a, Tensor &output_tensor, CoreCoord compute_with_storage_grid_size, bool transpose_hw);
+operation::ProgramWithCallbacks multi_core_concat_heads(const Tensor &input_tensor_a, Tensor &output_tensor, CoreCoord compute_with_storage_grid_size);
 
 struct BertLargeTM {
     BertLargeTMOpType bert_large_tm_op_type;

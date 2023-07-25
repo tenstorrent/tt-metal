@@ -76,8 +76,8 @@ enum class BertLargeMatmulOpType {
     POST_SOFTMAX_BMM = 5,
 };
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_optimized_bert_large(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const Tensor> bias, Tensor &output_tensor, CoreCoord compute_and_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool gelu=false);
-operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized_bert_large(const Tensor& input_tensor_a, const Tensor& input_tensor_b, const Shape &ashape, const Shape &bshape, Tensor &output_tensor, CoreCoord compute_and_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_optimized_bert_large(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const Tensor> bias, Tensor &output_tensor, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool gelu=false);
+operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized_bert_large(const Tensor& input_tensor_a, const Tensor& input_tensor_b, const Shape &ashape, const Shape &bshape, Tensor &output_tensor, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
 
 
 struct BertLargeMatmul {

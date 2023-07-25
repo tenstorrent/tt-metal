@@ -40,7 +40,6 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
     std::unordered_map<u32, i64> bank_id_to_bank_offset;
 
     num_banks_t num_banks = compute_total_and_storage_only_num_l1_banks(alloc_config);
-    TT_ASSERT(alloc_config.worker_l1_size % alloc_config.l1_bank_size == 0);
 
     // Define the bank assignment here.
     std::vector<u32> shuffled_bank_id = {};

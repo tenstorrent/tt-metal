@@ -10,7 +10,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks multi_core_create_qkv_heads_from_fused_qkv(const Tensor &a, std::vector<Tensor>& output, CoreCoord compute_and_storage_grid_size) {
+operation::ProgramWithCallbacks multi_core_create_qkv_heads_from_fused_qkv(const Tensor &a, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
 
     const auto& ashape = a.shape();
 
@@ -50,8 +50,8 @@ operation::ProgramWithCallbacks multi_core_create_qkv_heads_from_fused_qkv(const
     // Parallelize ashape[0] (B) across rows
     uint32_t num_cores_x = ashape[2] / TILE_HEIGHT;
     uint32_t num_cores_y = ashape[0];
-    TT_ASSERT(num_cores_x <= compute_and_storage_grid_size.x);
-    TT_ASSERT(num_cores_y <= compute_and_storage_grid_size.y);
+    TT_ASSERT(num_cores_x <= compute_with_storage_grid_size.x);
+    TT_ASSERT(num_cores_y <= compute_with_storage_grid_size.y);
     CoreCoord core_range = {num_cores_x, num_cores_y};
 
 

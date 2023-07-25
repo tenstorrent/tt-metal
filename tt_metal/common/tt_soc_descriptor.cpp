@@ -340,21 +340,26 @@ void load_dispatch_and_banking_config(tt_SocDescriptor &soc_descriptor, uint32_t
 
   soc_descriptor.l1_bank_size = config["l1_bank_size"].as<int>();
 
-  std::set<int> compute_and_storage_coords_x;
-  std::set<int> compute_and_storage_coords_y;
-  for (const auto &core_node : config["compute_and_storage_cores"]) {
-    CoreCoord coord = {};
-    if (core_node.IsScalar()) {
-      coord = format_node(core_node.as<std::string>());
-    } else {
-      tt::log_fatal ("Only noc coords supported for compute_and_storage_cores cores");
-    }
-    compute_and_storage_coords_x.insert(coord.x);
-    compute_and_storage_coords_y.insert(coord.y);
-    soc_descriptor.compute_and_storage_cores.push_back(coord);
-  }
+  // TODO: Add validation for compute_with_storage, storage only, and dispatch core specification
+  auto compute_with_storage_start = config["compute_with_storage_grid_range"]["start"];
+  auto compute_with_storage_end = config["compute_with_storage_grid_range"]["end"];
+  TT_ASSERT(compute_with_storage_start.IsSequence() and compute_with_storage_end.IsSequence());
+  TT_ASSERT(compute_with_storage_end[0].as<size_t>() >= compute_with_storage_start[0].as<size_t>());
+  TT_ASSERT(compute_with_storage_end[1].as<size_t>() >= compute_with_storage_start[1].as<size_t>());
 
-  soc_descriptor.compute_and_storage_grid_size = CoreCoord(compute_and_storage_coords_x.size(), compute_and_storage_coords_y.size());
+  soc_descriptor.compute_with_storage_grid_size = CoreCoord({
+    .x = (compute_with_storage_end[0].as<size_t>() - compute_with_storage_start[0].as<size_t>()) + 1,
+    .y = (compute_with_storage_end[1].as<size_t>() - compute_with_storage_start[1].as<size_t>()) + 1,
+  });
+
+  // compute_with_storage_cores are a subset of worker cores
+  // they have already been parsed as CoreType::WORKER and saved into `cores` map when parsing `functional_workers`
+  for (auto x = 0; x < soc_descriptor.compute_with_storage_grid_size.x; x++) {
+    for (auto y = 0; y < soc_descriptor.compute_with_storage_grid_size.y; y++) {
+        const auto relative_coord = RelativeCoreCoord({.x = x, .y = y});
+        soc_descriptor.compute_with_storage_cores.push_back(relative_coord);
+    }
+  }
 
   // storage_cores are a subset of worker cores
   // they have already been parsed as CoreType::WORKER and saved into `cores` map when parsing `functional_workers`
@@ -362,10 +367,7 @@ void load_dispatch_and_banking_config(tt_SocDescriptor &soc_descriptor, uint32_t
     RelativeCoreCoord coord = {};
     if (core_node.IsSequence()) {
       // Logical coord
-      coord = RelativeCoreCoord({
-        .x = core_node[0].as<int>(),
-        .y = core_node[1].as<int>(),
-      });
+      coord = RelativeCoreCoord({.x = core_node[0].as<int>(), .y = core_node[1].as<int>()});
     } else {
       tt::log_fatal ("Only logical relative coords supported for storage_cores cores");
     }
@@ -378,10 +380,7 @@ void load_dispatch_and_banking_config(tt_SocDescriptor &soc_descriptor, uint32_t
     RelativeCoreCoord coord = {};
     if (core_node.IsSequence()) {
       // Logical coord
-      coord = RelativeCoreCoord({
-        .x = core_node[0].as<int>(),
-        .y = core_node[1].as<int>(),
-      });
+      coord = RelativeCoreCoord({.x = core_node[0].as<int>(), .y = core_node[1].as<int>()});
     } else {
       tt::log_fatal ("Only logical relative coords supported for dispatch_cores cores");
     }

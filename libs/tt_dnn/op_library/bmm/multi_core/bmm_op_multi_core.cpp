@@ -28,11 +28,11 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
     tt_metal::Device *device = a.device();
     Shape cshape = output.shape(); // C=A*B, N1MK*11KN->N1MN
 
-    auto compute_and_storage_grid_size = device->compute_and_storage_grid_size();
-    uint32_t num_cores_x = compute_and_storage_grid_size.x;
-    uint32_t num_cores_y = compute_and_storage_grid_size.y;
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto num_output_tiles_total = cshape[0] * cshape[1] * cshape[2] * cshape[3] / TILE_HW;
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_output_tiles_per_core_group_1, num_output_tiles_per_core_group_2] = split_work_to_cores(compute_and_storage_grid_size, num_output_tiles_total);
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_output_tiles_per_core_group_1, num_output_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_output_tiles_total);
 
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");

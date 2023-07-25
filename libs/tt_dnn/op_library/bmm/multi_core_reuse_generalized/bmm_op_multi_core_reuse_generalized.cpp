@@ -74,7 +74,7 @@ operation::ProgramWithCallbacks create_program(
     uint32_t num_blocks_y = M / per_core_M;
     uint32_t num_blocks_x = N / per_core_N;
 
-    CoreRangeSet all_cores(tt::tt_metal::num_cores_to_corerange_set(num_blocks_x * num_blocks_y, device->compute_and_storage_grid_size(), true));
+    CoreRangeSet all_cores(tt::tt_metal::num_cores_to_corerange_set(num_blocks_x * num_blocks_y, device->compute_with_storage_grid_size(), true));
 
     // Create circular buffers
     uint32_t src0_cb_index = 0;
@@ -282,9 +282,9 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_generalized(const Tensor
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
-    auto compute_and_storage_grid_size = device->compute_and_storage_grid_size();
-    uint32_t num_cores_x = compute_and_storage_grid_size.x;
-    uint32_t num_cores_y = compute_and_storage_grid_size.y;
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     // Get large matmul params
     auto matmul_params = bmm_op_utils::get_large_matmul_params(Mt, Nt, num_cores_y, num_cores_x, in0_block_w);

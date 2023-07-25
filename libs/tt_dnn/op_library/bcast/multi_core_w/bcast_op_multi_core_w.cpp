@@ -41,10 +41,10 @@ operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &a, const Tensor
 
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
-	auto compute_and_storage_grid_size = device->compute_and_storage_grid_size();
-    uint32_t num_cores_x = compute_and_storage_grid_size.x;
-    uint32_t num_cores_y = compute_and_storage_grid_size.y;
-    auto [num_cores, all_cores, core_group_1, core_group_2, Wt_per_core_group_1, Wt_per_core_group_2] = split_work_to_cores(compute_and_storage_grid_size, Wt);
+	auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    auto [num_cores, all_cores, core_group_1, core_group_2, Wt_per_core_group_1, Wt_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, Wt);
 
 	auto src0_buffer = a.buffer();
 	auto src1_buffer = b.buffer();

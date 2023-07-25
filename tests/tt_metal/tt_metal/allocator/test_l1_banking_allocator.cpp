@@ -21,8 +21,7 @@ CoreCoord get_logical_coord_from_noc_coord(tt::tt_metal::Device *device, const C
 
 std::vector<uint32_t> get_logical_compute_and_storage_core_bank_ids(tt_metal::Device *device) {
     auto soc_desc = device->cluster()->get_soc_desc(device->pcie_slot());
-    auto compute_and_storage_core_noc_coord = soc_desc.compute_and_storage_cores.at(0);
-    auto logical_core = get_logical_coord_from_noc_coord(device, compute_and_storage_core_noc_coord);
+    auto logical_core = get_core_coord_from_relative(soc_desc.compute_with_storage_cores.at(0), device->logical_grid_size());
     return device->bank_ids_from_logical_core(logical_core);
 }
 
