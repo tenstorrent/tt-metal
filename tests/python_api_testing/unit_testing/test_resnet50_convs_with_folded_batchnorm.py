@@ -154,3 +154,4 @@ def test_resnet50_convs_with_folded_batch_norm():
                 # run maxpool to get the correct shape for next conv
                 x_golden = maxpool(x_golden)
             x_shape = x_golden.shape # for next iteration
+    ttl.device.CloseDevice(device)
