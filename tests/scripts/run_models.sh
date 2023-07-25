@@ -11,6 +11,13 @@ cd $TT_METAL_HOME
 
 export PYTHONPATH=$TT_METAL_HOME
 
+
+# This test doesn't yet work with fast dispatch on
+env pytest tests/python_api_testing/models/bloom -k bloom_causal_lm
+
+# Turning on fast dispatch for the remaining models
+export TT_METAL_DEVICE_DISPATCH_MODE=1
+
 env pytest tests/python_api_testing/models/stable_diffusion/test_embedding.py
 env pytest tests/python_api_testing/models/stable_diffusion/test_cross_attn_down_block.py -k test_run_cross_attn_down_block_real_input_inference
 env pytest tests/python_api_testing/models/stable_diffusion/test_cross_attn_up_block.py -k test_run_cross_attn_up_block_real_input_inference
@@ -93,7 +100,6 @@ env pytest tests/python_api_testing/models/bloom -k bloom_gelu_forward
 env pytest tests/python_api_testing/models/bloom -k bloom_merge_heads
 env pytest tests/python_api_testing/models/bloom -k bloom_mlp
 env pytest tests/python_api_testing/models/bloom -k bloom_model
-env pytest tests/python_api_testing/models/bloom -k bloom_causal_lm
 
 env pytest tests/python_api_testing/models/yolov3 -k conv2d_module
 env pytest tests/python_api_testing/models/yolov3 -k conv_module
