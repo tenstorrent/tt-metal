@@ -30,8 +30,10 @@ class TtTimestepEmbedding(nn.Module):
         base_address="",
         host=None,
         device=None,
+        use_fallback_ops=False,
     ):
         super().__init__()
+        self.use_fallback_ops=use_fallback_ops
 
         weights = state_dict[f"{base_address}.linear_1.weight"]
         bias = state_dict[f"{base_address}.linear_1.bias"]
@@ -44,8 +46,10 @@ class TtTimestepEmbedding(nn.Module):
         )
         self.act = None
         if act_fn == "silu":
-            # self.act = fallback_ops.silu
-            self.act = ttl.tensor.silu
+            if self.use_fallback_ops:
+                self.act = fallback_ops.silu
+            else:
+                self.act = ttl.tensor.silu
         elif act_fn == "mish":
             assert False, "tt does not support nn.Mish() yet"
             self.act = nn.Mish()

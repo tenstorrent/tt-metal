@@ -219,8 +219,10 @@ class UNet2DConditionModel(nn.Module):
         base_address="",
         device=None,
         host=None,
+        use_fallback_ops=False,
     ):
         super().__init__()
+        self.use_fallback_ops=use_fallback_ops
         self.base_address_with_dot = "" if base_address == "" else f"{base_address}."
         self.sample_size = sample_size
         time_embed_dim = block_out_channels[0] * 4
@@ -395,8 +397,10 @@ class UNet2DConditionModel(nn.Module):
             biases=conv_norm_out_b,
         )
 
-        # self.conv_act = fallback_ops.silu
-        self.conv_act = ttl.tensor.silu
+        if self.use_fallback_ops:
+            self.conv_act = fallback_ops.silu
+        else:
+            self.conv_act = ttl.tensor.silu
 
         conv_out_w = state_dict[f"{self.base_address_with_dot}conv_out.weight"]
         conv_out_b = state_dict[f"{self.base_address_with_dot}conv_out.bias"]

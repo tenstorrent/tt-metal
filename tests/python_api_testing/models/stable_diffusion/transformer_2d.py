@@ -61,9 +61,10 @@ class TtBasicTransformerBlock(nn.Module):
         host=None,
         state_dict=None,
         base_address=None,
+        use_fallback_ops=False,
     ):
         super().__init__()
-
+        self.use_fallback_ops=use_fallback_ops
         self.device = device
         self.host = host
         self.only_cross_attention = only_cross_attention
@@ -132,29 +133,31 @@ class TtBasicTransformerBlock(nn.Module):
                 False
             ), "AdaLayerNormZero not supported and not used in stable diffusion"
         else:
-            # norm1_weights = state_dict[f"{base_address}.norm1.weight"]
-            # norm1_bias = state_dict[f"{base_address}.norm1.bias"]
-            # self.norm1 = fallback_ops.LayerNorm(weights=norm1_weights,
-            #                                     biases=norm1_bias,
-            #                                     normalized_shape=dim,
-            #                                     elementwise_affine=norm_elementwise_affine)
-            norm1_gamma = torch_to_tt_tensor_rm(
-                state_dict[f"{base_address}.norm1.weight"],
-                self.device,
-                put_on_device=False,
-            )
-            norm1_beta = torch_to_tt_tensor_rm(
-                state_dict[f"{base_address}.norm1.bias"],
-                self.device,
-                put_on_device=False,
-            )
+            if self.use_fallback_ops:
+                norm1_weights = state_dict[f"{base_address}.norm1.weight"]
+                norm1_bias = state_dict[f"{base_address}.norm1.bias"]
+                self.norm1 = fallback_ops.LayerNorm(weights=norm1_weights,
+                                                    biases=norm1_bias,
+                                                    normalized_shape=dim,
+                                                    elementwise_affine=norm_elementwise_affine)
+            else:
+                norm1_gamma = torch_to_tt_tensor_rm(
+                    state_dict[f"{base_address}.norm1.weight"],
+                    self.device,
+                    put_on_device=False,
+                )
+                norm1_beta = torch_to_tt_tensor_rm(
+                    state_dict[f"{base_address}.norm1.bias"],
+                    self.device,
+                    put_on_device=False,
+                )
 
-            self.norm1 = partial(
-                ttl.tensor.layernorm,
-                gamma=norm1_gamma,
-                beta=norm1_beta,
-                eps=1e-05,
-            )
+                self.norm1 = partial(
+                    ttl.tensor.layernorm,
+                    gamma=norm1_gamma,
+                    beta=norm1_beta,
+                    eps=1e-05,
+                )
 
         if cross_attention_dim is not None:
             # We currently only use AdaLayerNormZero for self attention where there will only be one attention block.
@@ -164,53 +167,57 @@ class TtBasicTransformerBlock(nn.Module):
                 not self.use_ada_layer_norm
             ), "AdaLayerNorm is not supported and not used in stable diffusion"
 
-            # norm2_weights = state_dict[f"{base_address}.norm2.weight"]
-            # norm2_bias = state_dict[f"{base_address}.norm2.bias"]
-            # self.norm2 = fallback_ops.LayerNorm(weights=norm2_weights,
-            #                                     biases=norm2_bias,
-            #                                     normalized_shape=dim,
-            #                                     elementwise_affine=norm_elementwise_affine)
-            norm2_gamma = torch_to_tt_tensor_rm(
-                state_dict[f"{base_address}.norm2.weight"],
-                self.device,
-                put_on_device=False,
-            )
-            norm2_beta = torch_to_tt_tensor_rm(
-                state_dict[f"{base_address}.norm2.bias"],
-                self.device,
-                put_on_device=False,
-            )
+            if self.use_fallback_ops:
+                norm2_weights = state_dict[f"{base_address}.norm2.weight"]
+                norm2_bias = state_dict[f"{base_address}.norm2.bias"]
+                self.norm2 = fallback_ops.LayerNorm(weights=norm2_weights,
+                                                    biases=norm2_bias,
+                                                    normalized_shape=dim,
+                                                    elementwise_affine=norm_elementwise_affine)
+            else:
+                norm2_gamma = torch_to_tt_tensor_rm(
+                    state_dict[f"{base_address}.norm2.weight"],
+                    self.device,
+                    put_on_device=False,
+                )
+                norm2_beta = torch_to_tt_tensor_rm(
+                    state_dict[f"{base_address}.norm2.bias"],
+                    self.device,
+                    put_on_device=False,
+                )
 
-            self.norm2 = partial(
-                ttl.tensor.layernorm,
-                gamma=norm2_gamma,
-                beta=norm2_beta,
-                eps=1e-05,
-            )
+                self.norm2 = partial(
+                    ttl.tensor.layernorm,
+                    gamma=norm2_gamma,
+                    beta=norm2_beta,
+                    eps=1e-05,
+                )
 
         else:
             self.norm2 = None
 
         # 3. Feed-forward
-        # norm3_weight = state_dict[f"{base_address}.norm3.weight"]
-        # norm3_bias = state_dict[f"{base_address}.norm3.bias"]
-        # self.norm3 = fallback_ops.LayerNorm(weights=norm3_weight,
-        #                                     biases=norm3_bias,
-        #                                     normalized_shape=dim,
-        #                                     elementwise_affine=norm_elementwise_affine)
-        norm3_gamma = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.norm3.weight"], self.device, put_on_device=False
-        )
-        norm3_beta = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.norm3.bias"], self.device, put_on_device=False
-        )
+        if self.use_fallback_ops:
+            norm3_weight = state_dict[f"{base_address}.norm3.weight"]
+            norm3_bias = state_dict[f"{base_address}.norm3.bias"]
+            self.norm3 = fallback_ops.LayerNorm(weights=norm3_weight,
+                                                biases=norm3_bias,
+                                                normalized_shape=dim,
+                                                elementwise_affine=norm_elementwise_affine)
+        else:
+            norm3_gamma = torch_to_tt_tensor_rm(
+                state_dict[f"{base_address}.norm3.weight"], self.device, put_on_device=False
+            )
+            norm3_beta = torch_to_tt_tensor_rm(
+                state_dict[f"{base_address}.norm3.bias"], self.device, put_on_device=False
+            )
 
-        self.norm3 = partial(
-            ttl.tensor.layernorm,
-            gamma=norm3_gamma,
-            beta=norm3_beta,
-            eps=1e-05,
-        )
+            self.norm3 = partial(
+                ttl.tensor.layernorm,
+                gamma=norm3_gamma,
+                beta=norm3_beta,
+                eps=1e-05,
+            )
 
     def forward(
         self,

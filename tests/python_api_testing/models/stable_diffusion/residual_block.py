@@ -44,8 +44,10 @@ class TtResnetBlock2D(nn.Module):
         base_address=None,
         host=None,
         device=None,
+        use_fallback_ops=False,
     ):
         super().__init__()
+        self.use_fallback_ops=use_fallback_ops
         self.pre_norm = pre_norm
         self.pre_norm = True  # this is part of the original code
         self.in_channels = in_channels
@@ -134,13 +136,17 @@ class TtResnetBlock2D(nn.Module):
         )
 
         if non_linearity == "swish":
-            # self.nonlinearity = fallback_ops.silu
-            self.nonlinearity = ttl.tensor.silu
+            if self.use_fallback_ops:
+                self.nonlinearity = fallback_ops.silu
+            else:
+                self.nonlinearity = ttl.tensor.silu
         elif non_linearity == "mish":
             assert False, "Mish is not implemented!"
         elif non_linearity == "silu":
-            # self.nonlinearity = fallback_ops.silu
-            self.nonlinearity = ttl.tensor.silu
+            if self.use_fallback_ops:
+                self.nonlinearity = fallback_ops.silu
+            else:
+                self.nonlinearity = ttl.tensor.silu
 
         self.upsample = self.downsample = None
         if self.up:
