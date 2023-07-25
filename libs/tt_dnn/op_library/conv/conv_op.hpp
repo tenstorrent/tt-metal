@@ -10,7 +10,7 @@ namespace tt_metal {
 // TODO: Accept parallelization
 struct ConvOpParallelizationStrategy {
     enum Enum { MULTI_CORE = 0, MULTI_CORE_REUSE = 1, MULTI_CORE_REUSE_MCAST = 2, SINGLE_CORE = 3 };
-    static const vector<Enum> all() { return { MULTI_CORE, MULTI_CORE_REUSE, MULTI_CORE_REUSE_MCAST, SINGLE_CORE }; }
+    static const auto all() { return magic_enum::enum_values<Enum>(); }
 };
 
 struct Conv {

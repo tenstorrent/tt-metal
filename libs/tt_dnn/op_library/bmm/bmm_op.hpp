@@ -21,18 +21,7 @@ struct BmmOpParallelizationStrategy {
         MULTI_CORE_REUSE_MCAST_PADDING = 6,
         SINGLE_CORE = 7
     };
-    static const vector<Enum> all() {
-        return {
-            MULTI_CORE,
-            MULTI_CORE_REUSE,
-            MULTI_CORE_REUSE_MCAST,
-            MULTI_CORE_REUSE_GENERALIZED,
-            MULTI_CORE_REUSE_MCAST_GENERALIZED,
-            MULTI_CORE_REUSE_PADDING,
-            MULTI_CORE_REUSE_MCAST_PADDING,
-            SINGLE_CORE
-        };
-    }
+    static const auto all() { return magic_enum::enum_values<Enum>(); }
 };
 
 

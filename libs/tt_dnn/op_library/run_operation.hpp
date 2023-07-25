@@ -1,5 +1,7 @@
 #pragma once
 
+#include "third_party/magic_enum/magic_enum.hpp"
+
 #include "tt_dnn/op_library/operation.hpp"
 #include "tt_dnn/op_library/operation_history.hpp"
 
@@ -51,7 +53,7 @@ static void print_operation(
     }
 }
 
-static auto create_tensor_record(const Tensor& tensor) {
+static operation_history::TensorRecord create_tensor_record(const Tensor& tensor) {
     return std::visit(
         [&] (const auto& storage) -> operation_history::TensorRecord {
             using T = std::decay_t<decltype(storage)>;
@@ -88,11 +90,11 @@ static void append_operation_to_operation_history(
     input_tensor_records.reserve(input_tensors.size() + optional_input_tensors.size());
 
     for (const auto& tensor : input_tensors) {
-        input_tensor_records.push_back(create_tensor_record(tensor));
+        input_tensor_records.emplace_back(create_tensor_record(tensor));
     }
     for (const auto& tensor : optional_input_tensors) {
         if (tensor.has_value()) {
-            input_tensor_records.push_back(create_tensor_record(tensor.value()));
+            input_tensor_records.emplace_back(create_tensor_record(tensor.value()));
         }
     }
     operation_history::append(operation_history::OperationRecord{operation.get_type_name(), operation.attributes(), input_tensor_records});
@@ -198,6 +200,6 @@ inline std::vector<Tensor> run_with_autoformat(ConcreteOperation&& concrete_op,
     return run_with_autoformat(op, input_tensors, pad_inputs, target_input_layouts, target_output_layout, optional_input_tensors, pad_value);
 }
 
-}
+} //namespace operation
 
-}
+} //namespace tt::tt_metal

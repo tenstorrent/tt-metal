@@ -14,18 +14,18 @@ namespace tt_metal {
 
 struct BcastOpMath {
     enum Enum { ADD = 0, SUB = 1, MUL = 2 };
-    static const vector<Enum> all() { return { ADD, SUB, MUL }; }
+    static const auto all() { return magic_enum::enum_values<Enum>(); }
 };
 
 struct BcastOpDim {
     enum Enum { H = 0, W = 1, HW = 2 };
-    static const vector<Enum> all() { return { H, W, HW }; }
+    static const auto all() { return magic_enum::enum_values<Enum>(); }
 };
 
 // TODO: Accept parallelization
 struct BcastOpParallelizationStrategy {
     enum Enum { MULTI_CORE_H = 0, MULTI_CORE_W = 1, MULTI_CORE_HW = 2, SINGLE_CORE = 3 };
-    static const vector<Enum> all() { return { MULTI_CORE_H, MULTI_CORE_W, MULTI_CORE_HW, SINGLE_CORE }; }
+    static const auto all() { return magic_enum::enum_values<Enum>(); }
 };
 
 operation::ProgramWithCallbacks bcast_single_core(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor& output_tensor, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim);

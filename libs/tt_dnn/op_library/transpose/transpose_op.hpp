@@ -10,12 +10,12 @@ namespace tt_metal {
 
 struct TransposeOpDim {
     enum Enum { WH = 0, HC = 1, CN = 2, NH = 3, NW = 4, CW = 5 };
-    static const vector<Enum> all() { return { WH, HC, CN, NH, NW, CW }; }
+    static const auto all() { return magic_enum::enum_values<Enum>(); }
 };
 
 struct TransposeOpParallelizationStrategy {
     enum Enum { MULTI_CORE_WH = 0, MULTI_CORE_HC = 1, SINGLE_CORE = 2 };
-    static const vector<Enum> all() { return { MULTI_CORE_WH, MULTI_CORE_HC, SINGLE_CORE }; }
+    static const auto all() { return magic_enum::enum_values<Enum>(); }
 };
 
 struct Transpose {

@@ -10,17 +10,17 @@ namespace tt {
 namespace tt_metal {
 struct ReduceOpMath {
     enum Enum { SUM = 0, MAX = 1 };
-    static const vector<Enum> all() { return { SUM, MAX }; }
+    static const auto all() { return magic_enum::enum_values<Enum>(); }
 };
 
 struct ReduceOpDim {
     enum Enum { H = 0, W = 1, HW = 2 };
-    static const vector<Enum> all() { return { H, W, HW }; }
+    static const auto all() { return magic_enum::enum_values<Enum>(); }
 };
 
 struct ReduceOpParallelizationStrategy {
     enum Enum { MULTI_CORE_H = 0, MULTI_CORE_W = 1, MULTI_CORE_HW = 2, SINGLE_CORE = 3 };
-    static const vector<Enum> all() { return { MULTI_CORE_H, MULTI_CORE_W, MULTI_CORE_HW, SINGLE_CORE }; }
+    static const auto all() { return magic_enum::enum_values<Enum>(); }
 };
 
 // TODO: Accept parallelization

@@ -5,6 +5,8 @@
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
 
+#include "third_party/magic_enum/magic_enum.hpp"
+
 using namespace tt;
 using namespace tt::tt_metal;
 
@@ -24,7 +26,7 @@ using namespace tt::tt_metal;
 
 struct BinaryOpType {
     enum Enum { ADD = 0, SUB = 1, MUL = 2 };
-    static const vector<Enum> all() { return { ADD, SUB, MUL }; }
+    static const auto all() { return magic_enum::enum_values<Enum>(); }
 };
 
 void add_defines(ComputeKernel * eltwise_binary_kernel, BinaryOpType::Enum op_type){

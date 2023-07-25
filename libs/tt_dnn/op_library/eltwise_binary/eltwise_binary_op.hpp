@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include "third_party/magic_enum/magic_enum.hpp"
 
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
@@ -12,12 +13,12 @@ namespace tt_metal {
 
 struct BinaryOpType {
     enum Enum { ADD = 0, SUB = 1, MUL = 2, GT = 3, LT = 4, LTE = 5, GTE = 6, EQ = 7, NE = 8 };
-    static const vector<Enum> all() { return {ADD, SUB, MUL, GT, LT, LTE, GTE, EQ, NE}; }
+    static const auto all() { return magic_enum::enum_values<Enum>(); }
 };
 
 struct BinaryOpParallelizationStrategy {
     enum Enum { MULTI_CORE = 0, SINGLE_CORE = 1 };
-    static const vector<Enum> all() { return {MULTI_CORE, SINGLE_CORE}; }
+    static const auto all() { return magic_enum::enum_values<Enum>(); }
 };
 
 operation::ProgramWithCallbacks eltwise_binary_single_core(const Tensor &a, const Tensor &b, Tensor &output_tensor, BinaryOpType::Enum op_type);
