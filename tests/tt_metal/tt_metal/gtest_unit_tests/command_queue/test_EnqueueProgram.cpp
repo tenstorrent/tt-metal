@@ -170,6 +170,29 @@ bool test_EnqueueWrap_on_EnqueueProgram(Device* device, CommandQueue& cq, const 
 }  // namespace local_test_functions
 
 namespace basic_tests {
+
+namespace compiler_workaround_hardware_bug_tests {
+
+TEST_F(CommandQueueHarness, TestArbiterDoesNotHang) {
+    char env[] = "TT_METAL_DEVICE_DISPATCH_MODE=1";
+    putenv(env);
+    Program program;
+
+    CoreRange cr = {.start = {0, 0}, .end = {0, 0}};
+    CoreRangeSet cr_set({cr});
+    // Add an NCRISC blank manually, but in compile program, the BRISC blank will be
+    // added separately
+    auto dummy_reader_kernel = CreateDataMovementKernel(
+        program, "tests/tt_metal/tt_metal/gtest_unit_tests/command_queue/test_kernels/arbiter_hang.cpp", cr_set, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
+
+    CompileProgram(this->device, program, false);
+
+    EnqueueProgram(*this->cq, program, false);
+    Finish(*this->cq);
+}
+
+}
+
 namespace single_core_tests {
 
 TEST_F(CommandQueueHarness, TestSingleCbConfigCorrectlySentSingleCore) {
