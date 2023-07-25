@@ -198,7 +198,7 @@ void Tilize::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     TT_ASSERT(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to tilize need to be on device!");
     TT_ASSERT(input_tensor_a.buffer() != nullptr , "Operands to tilize need to be allocated in buffers on device!");
-    TT_ASSERT(input_tensor_a.layout() == Layout::ROW_MAJOR or input_tensor_a.layout() == Layout::CHANNELS_LAST, "Can only tilize row major or channels last data");
+    TT_ASSERT(input_tensor_a.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
 
     TT_ASSERT(input_tensor_a.volume() % TILE_HW == 0);
 
@@ -214,10 +214,6 @@ void Tilize::validate(const std::vector<Tensor> &input_tensors) const {
 std::vector<Shape> Tilize::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto output_shape = input_tensor_a.shape();
-    if(input_tensor_a.layout() == Layout::CHANNELS_LAST) {
-        // Set channels last in the innermost dim in the shape
-        output_shape = {input_tensor_a.shape()[0], input_tensor_a.shape()[2], input_tensor_a.shape()[3], input_tensor_a.shape()[1]};
-    }
     return {output_shape};
 }
 
@@ -273,9 +269,6 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
 
     auto true_input_shape = a.shape();
     auto true_output_shape = output.shape();
-    if (a.layout() == Layout::CHANNELS_LAST) {
-        true_input_shape = {a.shape()[0], a.shape()[2], a.shape()[3], a.shape()[1]};
-    }
 
     uint32_t unpadded_row_size_datum = true_input_shape[3];
     uint32_t padded_row_size_datum = true_output_shape[3];
@@ -477,7 +470,7 @@ void TilizeWithValPadding::validate(const std::vector<Tensor> &input_tensors) co
     const auto& input_tensor_a = input_tensors.at(0);
     TT_ASSERT(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
     TT_ASSERT(input_tensor_a.buffer() != nullptr , "Operands need to be allocated in buffers on device!");
-    TT_ASSERT(input_tensor_a.layout() == Layout::ROW_MAJOR or input_tensor_a.layout() == Layout::CHANNELS_LAST, "Can only tilize row major or channels last data");
+    TT_ASSERT(input_tensor_a.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
     TT_ASSERT(input_tensor_a.dtype() == DataType::BFLOAT16);
 
     TT_ASSERT(input_tensor_a.shape()[0] + this->input_tensor_start[0] <= this->output_tensor_shape[0]);
@@ -488,19 +481,12 @@ void TilizeWithValPadding::validate(const std::vector<Tensor> &input_tensors) co
 
     uint32_t num_rows = this->output_tensor_shape[2];
     uint32_t inner_dim = this->output_tensor_shape[3];
-    if (input_tensor_a.layout() == Layout::CHANNELS_LAST) {
-        num_rows = this->output_tensor_shape[3];
-        inner_dim = this->output_tensor_shape[1];
-    }
     TT_ASSERT(num_rows % TILE_HEIGHT == 0, "Output shape must be tilizable");
     TT_ASSERT(inner_dim % TILE_WIDTH == 0, "Output shape must be tilizable");
 }
 std::vector<Shape> TilizeWithValPadding::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto output_shape = this->output_tensor_shape;
-    if (input_tensor_a.layout() == Layout::CHANNELS_LAST) {
-        output_shape = {output_shape[0], output_shape[2], output_shape[3], output_shape[1]};
-    }
     return {output_shape};
 }
 std::vector<Tensor> TilizeWithValPadding::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
@@ -553,13 +539,9 @@ Tensor tilize_with_zero_padding(const Tensor &input_tensor_a, const MemoryConfig
     }
     auto shape = input_tensor_a.shape();
 
-    if (input_tensor_a.layout() == Layout::CHANNELS_LAST) {
-        shape[3] = roundup(shape[3], TILE_HEIGHT);
-        shape[1] = roundup(shape[1], TILE_WIDTH);
-    } else {
-        shape[2] = roundup(shape[2], TILE_HEIGHT);
-        shape[3] = roundup(shape[3], TILE_WIDTH);
-    }
+
+    shape[2] = roundup(shape[2], TILE_HEIGHT);
+    shape[3] = roundup(shape[3], TILE_WIDTH);
     return tilize_with_val_padding(input_tensor_a, shape, {0, 0, 0, 0}, 0, mem_config);
 }
 

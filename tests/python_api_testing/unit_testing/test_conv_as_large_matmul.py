@@ -8,7 +8,7 @@ sys.path.append(f"{f}/../..")
 import numpy as np
 
 import tt_lib as ttl
-from tt_lib.utils import tilize_to_list, tilize, untilize, channels_last, _nearest_32, _nearest_y, convert_weights_2d_matrix
+from tt_lib.utils import tilize_to_list, tilize, untilize, _nearest_32, _nearest_y, convert_weights_2d_matrix
 from python_api_testing.models.utility_functions import print_diff_argmax, is_close, comp_pcc
 from tests.python_api_testing.conv.conv_unit_test_utils import create_conv_act_tensor, create_conv_weight_tensor
 import torch
@@ -92,7 +92,7 @@ def test_run_conv_as_large_matmul(use_program_cache, run_conv_with_address_map, 
 
         OH = ((int) ((H - R + 2 * pad_h) / stride_h)) + 1
         OW = ((int) ((W - S + 2 * pad_w) / stride_w)) + 1
-        conv_output_shape = [1,K, OH,OW]
+        conv_output_shape = [1,OH,OW,K]
 
         # Prepare activations
         A_cl_host = create_conv_act_tensor(A_pyt, 1, C, H, W)
@@ -117,7 +117,7 @@ def test_run_conv_as_large_matmul(use_program_cache, run_conv_with_address_map, 
             out = ttl.tensor.conv(A, B_tiled, [R,S,stride_h,stride_w,pad_h,pad_w], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w, K)
         out = out.to(host)
         assert(out.shape() == conv_output_shape)
-        assert(out.layout() == ttl.tensor.Layout.CHANNELS_LAST)
+        assert(out.layout() == ttl.tensor.Layout.ROW_MAJOR)
 
 
         # Copy output to host and convert tt tensor to pytorch tensor

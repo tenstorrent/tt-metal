@@ -73,6 +73,7 @@ def convert_pt_tensor_to_tt_tensor(pt_tensor, output_format):
     output_shape = pt_tensor.shape
     if len(output_shape) < 4:
         output_shape = [1] * (4 - len(output_shape)) + output_shape
+
     tt_tensor = ttl_tensor.Tensor(
         pt_tensor.reshape(-1).tolist(),
         output_shape,
@@ -94,8 +95,6 @@ def convert_pt_tensor_to_tt_tensor(pt_tensor, output_format):
             tt_tensor.layout() == ttl_tensor.Layout.TILE
             or tt_tensor.layout() == ttl_tensor.Layout.ROW_MAJOR
             and tt_tensor.shape()[3] % 2 == 0
-            or tt_tensor.layout() == ttl_tensor.Layout.CHANNELS_LAST
-            and tt_tensor.shape()[1] % 2 == 0
         ):
             tt_tensor = tt_tensor.to(output_format["device"])
     if ttl_profiler.get_profiler_flag():

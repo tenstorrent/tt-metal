@@ -57,9 +57,7 @@ def test_Yolov5_bottleneck():
         device=device,
     )
 
-    test_input = torch2tt_tensor(
-        test_input, tt_device=device  # , tt_layout=tt_lib.tensor.Layout.CHANNELS_LAST
-    )
+    test_input = torch2tt_tensor(test_input, tt_device=device)
 
     tt_out = tt_module(test_input)
     tt_out = tt2torch_tensor(tt_out)

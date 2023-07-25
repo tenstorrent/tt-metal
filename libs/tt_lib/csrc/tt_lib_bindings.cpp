@@ -213,8 +213,7 @@ void TensorModule(py::module &m_tensor) {
     // layout enums
     py::enum_<Layout>(m_tensor, "Layout")
         .value("ROW_MAJOR", Layout::ROW_MAJOR)
-        .value("TILE", Layout::TILE)
-        .value("CHANNELS_LAST", Layout::CHANNELS_LAST);
+        .value("TILE", Layout::TILE);
 
     py::enum_<DataType>(m_tensor, "DataType")
         .value("FLOAT32", DataType::FLOAT32)
@@ -278,8 +277,6 @@ void TensorModule(py::module &m_tensor) {
     auto py_borrowed_buffer_for_bfloat16_t = py::class_<borrowed_buffer::Buffer<bfloat16>>(m_tensor, "borrowed_buffer_for_bfloat16_t", py::buffer_protocol());
     detail::implement_buffer_protocol<borrowed_buffer::Buffer<bfloat16>, bfloat16>(py_borrowed_buffer_for_bfloat16_t);
 
-    auto pyDeviceStorage = py::class_<DeviceStorage>(m_tensor, "DeviceStorage", "Class describing the underlying device storage of Tensor.");
-
     // Tensor constructors that accept device and .to(device) function use keep alive call policy to communicate that Device needs to outlive Tensor.
     // This is because when tensors on device are destroyed they need to deallocate their buffers via device.
     // keep_alive increases the ref count of the Device object being passed into the constructor and .to() function.
@@ -308,8 +305,6 @@ void TensorModule(py::module &m_tensor) {
         | layout     | Layout of tensor data in memory                        | tt_lib.tensor.Layout      | tt_lib.tensor.Layout.ROW_MAJOR     | Yes      |
         |            |                                                        |                           |                                    |          |
         |            |                                                        |                           | tt_lib.tensor.Layout.TILE          |          |
-        |            |                                                        |                           |                                    |          |
-        |            |                                                        |                           | tt_lib.tensor.Layout.CHANNELS_LAST |          |
         +------------+--------------------------------------------------------+---------------------------+------------------------------------+----------+
         | device     | Device on which tensor will be created                 | tt_lib.device.Device      | Host or TT accelerator device      | No       |
         +------------+--------------------------------------------------------+---------------------------+------------------------------------+----------+
@@ -469,41 +464,6 @@ void TensorModule(py::module &m_tensor) {
                     tt_lib.tensor.Tensor(py_tensor)
             )doc"
         )
-        .def(
-            py::init<>(
-                [](const DeviceStorage& storage, const std::array<uint32_t, 4>& shape, DataType data_type, Layout layout) {
-                    return Tensor(storage, shape, data_type, layout);
-                }
-            ),
-            py::return_value_policy::move,
-            R"doc(
-                Creates a tensor object with data previously allocated and stored on device.
-                Can be used to reinterpret the data with a different shape/layout like Pytorch "view"
-                This constructor does not copy/swizzle/move the underlying data. It returns the tensor with the same data.
-                +---------------+---------------+
-                | Argument      | Name          |
-                +===============+===============+
-                | arg0          | device_storage|
-                +---------------+---------------+
-                | arg1          | shape         |
-                +---------------+---------------+
-                | arg2          | data_type     |
-                +---------------+---------------+
-                | arg3          | layout        |
-                +---------------+---------------+
-
-                Example of creating a TT Tensor, "tt_tensor_b" with device storage of an existing tensor, "tt_tensor_a", with a new shape and layout:
-
-                .. code-block:: python
-
-                    tt_tensor_b = tt_lib.tensor.Tensor(
-                        tt_tensor_a.storage(),
-                        new_shape,
-                        tt_tensor_a.dtype(),
-                        new_layout,
-                    )
-            )doc"
-        )
         .def("deallocate", [](Tensor &self) {
             return self.deallocate();
         }, R"doc(
@@ -547,14 +507,13 @@ void TensorModule(py::module &m_tensor) {
         .def("to", py::overload_cast<Layout>(&Tensor::to, py::const_), R"doc(
             Convert TT Tensor to provided memory layout. Available layouts conversions are:
 
-            * ROW_MAJOR to TILE or CHANNELS_LAST
+            * ROW_MAJOR to TILE
             * TILE to ROW_MAJOR
-            * CHANNELS_LAST to ROW_MAJOR
 
             +-----------+-------------------------------------------------+----------------------------+--------------------------------+----------+
             | Argument  | Description                                     | Data type                  | Valid range                    | Required |
             +===========+=================================================+============================+================================+==========+
-            | arg0      | Target memory layout                            | tt_lib.tensor.Layout       | ROW_MAJOR, TILE, CHANNELS_LAST | Yes      |
+            | arg0      | Target memory layout                            | tt_lib.tensor.Layout       | ROW_MAJOR, TILE                | Yes      |
             +-----------+-------------------------------------------------+----------------------------+--------------------------------+----------+
 
             .. code-block:: python
@@ -934,16 +893,6 @@ void TensorModule(py::module &m_tensor) {
             .. code-block:: python
 
                 dtype = tt_tensor.dtype()
-        )doc")
-        .def("device_storage", [](const Tensor &self) {
-            return std::get<DeviceStorage>(self.storage());
-        }, R"doc(
-            Get underlying device storage of TT Tensor.
-
-            .. code-block:: python
-
-                device_storage = tt_tensor.device_storage()
-
         )doc");
 
     m_tensor.def("where", &where, R"doc(
@@ -2514,7 +2463,7 @@ void TensorModule(py::module &m_tensor) {
         py::arg("input").noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Changes data layout of input tensor to TILE.
 
-        Input tensor must be on TT accelerator device, in ROW_MAJOR or CHANNELS_LAST layout, and have BFLOAT16 data type.
+        Input tensor must be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type.
 
         Output tensor will be on TT accelerator device, in TILE layout, and have BFLOAT16 data type.
 

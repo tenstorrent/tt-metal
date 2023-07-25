@@ -43,16 +43,9 @@ class AutoFormat {
             return padded_shape;
         }
 
-        static Shape pad_to_cl_shape(const Shape& unpadded_shape) {
-            Shape padded_shape = unpadded_shape;
-            padded_shape[1] = roundup(unpadded_shape[1], 2);
-            return padded_shape;
-        }
-
         static Shape pad_to_legal_shape(const Shape& unpadded_shape, Layout layout) {
             Shape padded_shape = unpadded_shape;
             switch (layout) {
-                case Layout::CHANNELS_LAST: padded_shape = pad_to_cl_shape(unpadded_shape); break;
                 case Layout::ROW_MAJOR: padded_shape = pad_to_rm_shape(unpadded_shape); break;
                 case Layout::TILE: padded_shape = pad_to_tile_shape(unpadded_shape);
                 default: break;
@@ -69,13 +62,8 @@ class AutoFormat {
             return (shape[3] % 2 == 0);
         }
 
-        static bool legal_cl_shape(const Shape& shape) {
-            return (shape[1] % 2 == 0);
-        }
-
         static bool legal_device_shape(const Shape& shape, Layout layout) {
             switch (layout) {
-                case Layout::CHANNELS_LAST: return legal_cl_shape(shape);
                 case Layout::ROW_MAJOR: return legal_rm_shape(shape);
                 case Layout::TILE: return legal_tile_shape(shape);
                 default: return true;

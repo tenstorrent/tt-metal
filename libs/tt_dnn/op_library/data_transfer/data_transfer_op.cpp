@@ -38,7 +38,6 @@ Tensor data_transfer_to_host(const Tensor &input_tensor, Host* host) {
 void DataTransferToDevice::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     switch (input_tensor.layout()) {
-        case Layout::CHANNELS_LAST: TT_ASSERT(input_tensor.shape()[1] % 2 == 0); break;
         case Layout::ROW_MAJOR: TT_ASSERT(input_tensor.shape()[3] % 2 == 0); break;
         default: break;
     }

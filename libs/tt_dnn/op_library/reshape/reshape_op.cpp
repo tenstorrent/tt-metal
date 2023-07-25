@@ -344,8 +344,7 @@ Tensor reshape (Tensor &input_tensor_a, int N, int C, int H, int W) {
     // No-op (Will do a tensor copy)
     auto output_shape = infer_dims_for_reshape(N, C, H, W, input_tensor_a.volume());
     if (
-        ((input_tensor_a.layout() == Layout::TILE or input_tensor_a.layout() == Layout::ROW_MAJOR) && output_shape[3] == input_tensor_a.shape()[3]) ||
-        ((input_tensor_a.layout() == Layout::CHANNELS_LAST) && output_shape[1] == input_tensor_a.shape()[1])
+        ((input_tensor_a.layout() == Layout::TILE or input_tensor_a.layout() == Layout::ROW_MAJOR) && output_shape[3] == input_tensor_a.shape()[3])
     ) {
         // Don't need to do a check here to see the H and W both divisible by 32
         // since handled within the tensor reshape method

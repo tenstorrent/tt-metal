@@ -9,15 +9,11 @@ import tt_lib as ttl
 from tt_lib.utils import _nearest_32
 
 def create_conv_act_tensor(torch_tensor, N, C, H, W):
-    act_shape = [N, C, H, W]
-    act_shape_channel_padded = [N, _nearest_32(C), H, W]
-    A_ = ttl.tensor.Tensor(
-        torch.flatten(torch_tensor).tolist(),
-        act_shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR).pad(act_shape_channel_padded, (0,0,0,0), 0.0)
-    A_cl_host = A_.to(ttl.tensor.Layout.CHANNELS_LAST)
-    return A_cl_host
+    torch_tensor = torch.permute(torch_tensor, (0, 2, 3, 1))
+    act_shape_channel_padded = [N, H, W, _nearest_32(C)]
+    tt_tensor = ttl.tensor.Tensor(torch_tensor.to(torch.bfloat16).contiguous())
+    tt_tensor = tt_tensor.pad(act_shape_channel_padded, (0,0,0,0), 0.0)
+    return tt_tensor
 
 def create_conv_weight_tensor(torch_tensor, K, C, R, S, in1_block_h, in1_block_w):
     weights_shape = [K,C,R,S]

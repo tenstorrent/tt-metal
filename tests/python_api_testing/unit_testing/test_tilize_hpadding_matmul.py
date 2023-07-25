@@ -11,7 +11,6 @@ from tt_lib.utils import (
     tilize_to_list,
     tilize,
     untilize,
-    channels_last,
     _nearest_32,
     pad_activation,
 )

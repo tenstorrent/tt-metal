@@ -137,18 +137,6 @@ inline std::vector<T> convert_layout_tile_to_row_major(const Shape& shape, const
     return convert_layout(data_to_convert, shape_vec, TensorLayout::TILED32_4FACES, TensorLayout::LIN_ROW_MAJOR);
 }
 
-template <typename T, template<typename> typename BufferType>
-inline std::vector<T> convert_layout_row_major_to_channels_last(const Shape& shape, const BufferType<T>& data_to_convert) {
-    std::vector<uint32_t> shape_vec = {shape[0], shape[1], shape[2], shape[3]};
-    return convert_layout(data_to_convert, shape_vec, TensorLayout::LIN_ROW_MAJOR, TensorLayout::CHANNELS_LAST);
-}
-
-template <typename T, template<typename> typename BufferType>
-inline std::vector<T> convert_layout_channels_last_to_row_major(const Shape& shape, const BufferType<T>& data_to_convert) {
-    std::vector<uint32_t> shape_vec = {shape[0], shape[1], shape[2], shape[3]};
-    return convert_layout(data_to_convert, shape_vec, TensorLayout::CHANNELS_LAST, TensorLayout::LIN_ROW_MAJOR);
-}
-
 // ======================================================================================
 //                                         Print
 // ======================================================================================
@@ -279,11 +267,7 @@ inline void write_data_to_device_buffer(const BufferType<T>& data_to_write, Devi
         uint32_data = pack_fp32_vec_as_bfp8_tiles(float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
     } else if (data_type == DataType::BFLOAT16) {
         if (memory_config.interleaved) {
-            if (layout == Layout::ROW_MAJOR) {
-                TT_ASSERT(shape[3] % 2 == 0, "Input tensor width must be a multiple of 2 to pack interleaved row major data");
-            } else if (layout == Layout::CHANNELS_LAST) {
-                TT_ASSERT(shape[1] % 2 == 0, "Input tensor channel must be a multiple of 2 to pack interleaved channels last data");
-            }
+            TT_ASSERT(shape[3] % 2 == 0, "Input tensor width must be a multiple of 2 to pack interleaved row major data");
         } else {
             TT_ASSERT(volume(shape) % 2 == 0, "Input tensor volume must be a multiple of 2 to pack contiguous data");
         }
@@ -402,37 +386,18 @@ inline Tensor to_layout(const Tensor &tensor, Layout target_layout) {
                 if (target_layout == Layout::TILE) {
                     return convert_layout_row_major_to_tile(shape, input_data);
                 }
-                else if (target_layout == Layout::CHANNELS_LAST) {
-                    return convert_layout_row_major_to_channels_last(shape, input_data);
-                }
                 else {
                     TT_THROW("Unsupported layout conversion");
                 }
-            break;
+                break;
             case Layout::TILE:
                 if (target_layout == Layout::ROW_MAJOR) {
                     return convert_layout_tile_to_row_major(shape, input_data);
                 }
-                else if (target_layout == Layout::CHANNELS_LAST) {
-                    auto output_data = convert_layout_tile_to_row_major(shape, input_data);
-                    return convert_layout_row_major_to_channels_last(shape, output_data);
-                }
                 else {
                     TT_THROW("Unsupported layout conversion");
                 }
-            break;
-            case Layout::CHANNELS_LAST:
-                if (target_layout == Layout::ROW_MAJOR) {
-                    return convert_layout_channels_last_to_row_major(shape, input_data);
-                }
-                else if (target_layout == Layout::TILE) {
-                    auto output_data = convert_layout_channels_last_to_row_major(shape, input_data);
-                    return convert_layout_row_major_to_tile(shape, output_data);
-                }
-                else {
-                    TT_THROW("Unsupported layout conversion");
-                }
-            break;
+                break;
             default:
                 TT_THROW("Unsupported layout conversion");
         }
@@ -630,7 +595,7 @@ inline void print(const Tensor &tensor, Layout print_layout, bool pretty_print) 
             else {
                 TT_THROW("Unsupported print layout");
             }
-        break;
+            break;
         case Layout::TILE:
             if (print_layout == Layout::ROW_MAJOR) {
                 auto converted_data = convert_layout_tile_to_row_major(tensor.shape(), data_vec);
@@ -641,20 +606,7 @@ inline void print(const Tensor &tensor, Layout print_layout, bool pretty_print) 
             } else {
                 TT_THROW("Unsupported print layout");
             }
-        break;
-        case Layout::CHANNELS_LAST:
-            if (print_layout == Layout::ROW_MAJOR) {
-                auto converted_data = convert_layout_channels_last_to_row_major(tensor.shape(), data_vec);
-                pretty_print ? print_row_major_data(converted_data, tensor.shape(), tensor.dtype()) : print_data(converted_data, tensor.dtype());
-            }
-            else if (print_layout == Layout::CHANNELS_LAST) {
-                Shape cl_shape{tensor.shape()[0], tensor.shape()[3], tensor.shape()[2], tensor.shape()[1]};
-                pretty_print ? print_row_major_data(data_vec, cl_shape, tensor.dtype()) : print_data(data_vec, tensor.dtype());
-            }
-            else {
-                TT_THROW("Unsupported print layout");
-            }
-        break;
+            break;
         default:
             TT_THROW("Unsupported print layout");
     }

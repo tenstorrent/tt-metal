@@ -60,11 +60,10 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
 
     OH = ((int) ((H - R + 2 * pad_h) / stride_h)) + 1
     OW = ((int) ((W - S + 2 * pad_w) / stride_w)) + 1
-    conv_output_shape = [1,K, OH, OW]
+    conv_output_shape = [1,OH, OW,K]
 
     # Prepare activations
     A_cl_host = create_conv_act_tensor(A_pyt, 1, C, H, W)
-    A_cl_data = A_cl_host.data()
     A = A_cl_host.to(device)
 
     # Prepare weights
@@ -92,11 +91,10 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
     )
     out = out.to(host)
     assert(out.shape() == conv_output_shape)
-    assert(out.layout() == ttl.tensor.Layout.CHANNELS_LAST)
+    assert(out.layout() == ttl.tensor.Layout.ROW_MAJOR)
 
     # Copy output to host and convert tt tensor to pytorch tensor
-    conv_output_shape_cl = [1,OH,OW,K]
-    out_result = torch.tensor(out.data()).reshape(conv_output_shape_cl)
+    out_result = torch.tensor(out.data()).reshape(conv_output_shape)
     out_result = torch.transpose(out_result, 2, 3)
     out_result = torch.transpose(out_result, 1, 2)
 

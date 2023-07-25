@@ -19,8 +19,7 @@ namespace tt_metal {
 
 enum class Layout {
     ROW_MAJOR = 0,
-    TILE = 1,
-    CHANNELS_LAST = 2
+    TILE = 1
 };
 
 enum class DataType {

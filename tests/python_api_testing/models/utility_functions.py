@@ -20,7 +20,6 @@ from tt_lib.utils import (
     roundup32,
     float_to_bits,
     divup,
-    channels_last,
     convert_weights_2d_matrix,
 )
 

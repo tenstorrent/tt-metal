@@ -58,8 +58,7 @@ namespace op_profiler {
         {
             const unordered_map <Layout, string> layout_to_str = {
                 {Layout::ROW_MAJOR, "ROW_MAJOR"},
-                {Layout::TILE, "TILE"},
-                {Layout::CHANNELS_LAST, "CHANNELS_LAST"}
+                {Layout::TILE, "TILE"}
             };
 
             const unordered_map <DataType, string> dtype_to_str = {

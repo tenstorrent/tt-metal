@@ -14,7 +14,6 @@ enum TensorLayout {
     LIN_ROW_MAJOR = 0, // standard element-wise row-major
     TILED32_SWIZZLED = 1, // row-major of tiles 32x32, each tile is row-major-swizzled
     TILED32_4FACES = 2,  // rowm major of tiles 32x32, each tile is 4 faces, each face is row-major, faces are swizzled
-    CHANNELS_LAST = 3
 };
 
 template <class T, template<typename> typename BufferType>
@@ -151,46 +150,6 @@ inline std::vector<T> tilize_nchw(const BufferType<T>& in_rowmajor, const std::v
     return tilized_result;
 }
 
-// Converts a linear row-major tensor (interpreted as NCHW) to a linear channels last tensor (interpreted as NHWC)
-template<typename T, template<typename> typename BufferType>
-inline std::vector<T> convert_row_major_to_channels_last(const BufferType<T>& in_rowmajor, const std::vector<std::uint32_t>& shape) {
-    int N = shape[0], C = shape[1], H = shape[2], W = shape[3];
-    std::vector<T> channels_last_result;
-    channels_last_result.resize(N*C*H*W);
-    for(int n = 0; n < N; n++) {
-        for(int h = 0; h < H; h++) {
-            for(int w = 0; w < W; w++) {
-                for(int c = 0; c < C; c++) {
-                    auto in_offs = w + h*W + c*H*W + n*C*H*W;
-                    auto out_offs = c + w*C + h*W*C + n*H*W*C;
-                    channels_last_result[out_offs] = in_rowmajor[in_offs];
-                }
-            }
-        }
-    }
-    return channels_last_result;
-}
-
-// Converts a linear channels last tensor (interpreted as NHWC) to a linear row-major tensor (interpreted as NCHW)
-template<typename T, template<typename> typename BufferType>
-inline std::vector<T> convert_channels_last_to_row_major(const BufferType<T>& in_channels_last, const std::vector<std::uint32_t>& shape) {
-    int N = shape[0], C = shape[1], H = shape[2], W = shape[3];
-    std::vector<T> row_major_result;
-    row_major_result.resize(N*C*H*W);
-    for(int n = 0; n < N; n++) {
-        for(int c = 0; c < C; c++) {
-            for(int h = 0; h < H; h++) {
-                for(int w = 0; w < W; w++) {
-                    auto in_offs = c + w*C + h*W*C + n*H*W*C;
-                    auto out_offs = w + h*W + c*H*W + n*C*H*W;
-                    row_major_result[out_offs] = in_channels_last[in_offs];
-                }
-            }
-        }
-    }
-    return row_major_result;
-}
-
 struct TensAddr {
     vector<std::uint32_t> sh;
 
@@ -225,8 +184,6 @@ inline vector<T> convert_layout(const BufferType<T>& inp, const vector<uint32_t>
             } else if (outL == TILED32_4FACES) {
                 auto swiz32 = convert_layout<T>(inp, shape, inL, TILED32_SWIZZLED);
                 return convert_layout<T>(swiz32, shape, TILED32_SWIZZLED, outL);
-            } else if (outL == CHANNELS_LAST) {
-                return convert_row_major_to_channels_last<T>(inp, shape);
             } else
                 TT_ASSERT(false && "Unsupported conversion.");
         break;
@@ -236,12 +193,6 @@ inline vector<T> convert_layout(const BufferType<T>& inp, const vector<uint32_t>
             } else if (outL == LIN_ROW_MAJOR) {
                 auto swiz32 = convert_layout<T>(inp, shape, inL, TILED32_SWIZZLED);
                 return untilize_nchw<T>(swiz32, shape);
-            } else {
-                TT_ASSERT(false && "Unsupported conversion");
-            }
-        case CHANNELS_LAST:
-            if (outL == LIN_ROW_MAJOR) {
-                return convert_channels_last_to_row_major<T>(inp, shape);
             } else {
                 TT_ASSERT(false && "Unsupported conversion");
             }

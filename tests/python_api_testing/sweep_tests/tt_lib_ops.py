@@ -1939,10 +1939,6 @@ def bcast_add_w(x, y, *args, host, device, dtype, layout, on_device, **kwargs):
         pad_shape = list(y.shape)
         pad_shape[3] = 2
         t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
-    elif on_device and layout == ttl.tensor.Layout.CHANNELS_LAST:
-        pad_shape = list(y.shape)
-        pad_shape[1] = 2
-        t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
     t1 = t1.to(layout)
     if on_device:
         t1 = t1.to(device)
@@ -1982,10 +1978,6 @@ def bcast_add_hw(x, y, *args, host, device, dtype, layout, on_device, **kwargs):
     elif on_device and layout == ttl.tensor.Layout.ROW_MAJOR:
         pad_shape = list(y.shape)
         pad_shape[3] = 2
-        t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
-    elif on_device and layout == ttl.tensor.Layout.CHANNELS_LAST:
-        pad_shape = list(y.shape)
-        pad_shape[1] = 2
         t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
     t1 = t1.to(layout)
     if on_device:
@@ -2061,10 +2053,6 @@ def bcast_sub_w(x, y, *args, host, device, dtype, layout, on_device, **kwargs):
         pad_shape = list(y.shape)
         pad_shape[3] = 2
         t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
-    elif on_device and layout == ttl.tensor.Layout.CHANNELS_LAST:
-        pad_shape = list(y.shape)
-        pad_shape[1] = 2
-        t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
     t1 = t1.to(layout)
     if on_device:
         t1 = t1.to(device)
@@ -2104,10 +2092,6 @@ def bcast_sub_hw(x, y, *args, host, device, dtype, layout, on_device, **kwargs):
     elif on_device and layout == ttl.tensor.Layout.ROW_MAJOR:
         pad_shape = list(y.shape)
         pad_shape[3] = 2
-        t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
-    elif on_device and layout == ttl.tensor.Layout.CHANNELS_LAST:
-        pad_shape = list(y.shape)
-        pad_shape[1] = 2
         t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
     t1 = t1.to(layout)
     if on_device:
@@ -2183,10 +2167,6 @@ def bcast_mul_w(x, y, *args, host, device, dtype, layout, on_device, **kwargs):
         pad_shape = list(y.shape)
         pad_shape[3] = 2
         t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
-    elif on_device and layout == ttl.tensor.Layout.CHANNELS_LAST:
-        pad_shape = list(y.shape)
-        pad_shape[1] = 2
-        t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
     t1 = t1.to(layout)
     if on_device:
         t1 = t1.to(device)
@@ -2226,10 +2206,6 @@ def bcast_mul_hw(x, y, *args, host, device, dtype, layout, on_device, **kwargs):
     elif on_device and layout == ttl.tensor.Layout.ROW_MAJOR:
         pad_shape = list(y.shape)
         pad_shape[3] = 2
-        t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
-    elif on_device and layout == ttl.tensor.Layout.CHANNELS_LAST:
-        pad_shape = list(y.shape)
-        pad_shape[1] = 2
         t1 = t1.pad(pad_shape, [0, 0, 0, 0], 0)
     t1 = t1.to(layout)
     if on_device:

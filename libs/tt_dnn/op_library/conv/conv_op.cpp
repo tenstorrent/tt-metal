@@ -17,10 +17,6 @@ pair<uint32_t, uint32_t> compute_conv_output_face_shape(uint32_t conv_activation
     uint32_t conv_output_w = ((conv_activation_w - filter_w + (2 * pad_w)) / stride_w) + 1;
     return {conv_output_h, conv_output_w};
 }
-Shape compute_conv_output_shape(uint32_t batch_size, uint32_t conv_activation_h, uint32_t conv_activation_w, uint32_t conv_output_channels, uint32_t filter_h, uint32_t filter_w, uint32_t stride_h, uint32_t stride_w, uint32_t pad_h, uint32_t pad_w) {
-    auto [conv_output_h, conv_output_w] = compute_conv_output_face_shape(conv_activation_h, conv_activation_w, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w);
-    return {batch_size, conv_output_channels, conv_output_h, conv_output_w};
-}
 pair<vector<uint32_t>, vector<uint32_t>> compute_conv_activation_as_mm_shape(Shape conv_activation_shape, vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles) {
     uint32_t filter_h = (uint32_t) conv_params[0];
     uint32_t filter_w = (uint32_t) conv_params[1];
@@ -28,12 +24,12 @@ pair<vector<uint32_t>, vector<uint32_t>> compute_conv_activation_as_mm_shape(Sha
     uint32_t stride_w = (uint32_t) conv_params[3];
     uint32_t pad_h = (uint32_t) conv_params[4];
     uint32_t pad_w = (uint32_t) conv_params[5];
-    auto [conv_output_h, conv_output_w] = compute_conv_output_face_shape(conv_activation_shape[2], conv_activation_shape[3], filter_h, filter_w, stride_h, stride_w, pad_h, pad_w);
+    auto [conv_output_h, conv_output_w] = compute_conv_output_face_shape(conv_activation_shape[1], conv_activation_shape[2], filter_h, filter_w, stride_h, stride_w, pad_h, pad_w);
     // pad height
     uint32_t num_rows = (uint32_t) conv_output_h*conv_output_w;
     uint32_t act_block_h_datums = act_block_h_ntiles * TILE_HEIGHT;
     uint32_t num_rows_padded = (uint32_t) (ceil((double) num_rows / (double) act_block_h_datums ) * act_block_h_datums);
-    uint32_t num_cols = conv_activation_shape[1] * filter_h * filter_w;
+    uint32_t num_cols = conv_activation_shape[3] * filter_h * filter_w;
     uint32_t act_block_w_datums = act_block_w_ntiles * TILE_WIDTH;
     uint32_t num_cols_padded = (uint32_t) (ceil((double) num_cols / (double) act_block_w_datums ) * act_block_w_datums);
     return {{1, num_rows_padded, num_cols_padded}, {1, num_rows, num_cols}};
@@ -152,14 +148,12 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
     bool pass = true;
     bool untilize_out = true;
     tt_metal::Device *device = a.device();
-    TT_ASSERT(a.layout() == Layout::CHANNELS_LAST, "Conv activation should be in channels last layout");
+    TT_ASSERT(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     uint32_t act_batch_size = a.shape()[0];
     TT_ASSERT(act_batch_size == 1, "Only batch size 1 supported.");
     TT_ASSERT(output_channels <= b.shape()[3], "Invalid weight shape. Incorrect weight tensor.");
     uint32_t num_bytes_of_df = 2; // 2 bytes for bfloat16
     // Compute the 2d matrix shape
-    vector<int> activation_shape = {(int)a.shape()[1], (int)a.shape()[2], (int)a.shape()[3]};    // TODO: Update types to use just one kind
-    // Shape activation_shape_shape = {a.shape()[0], a.shape()[1], a.shape()[2], a.shape()[3]};
     auto [act_matrix_shape, act_matrix_shape_unpadded] = compute_conv_activation_as_mm_shape(a.shape(), conv_params, act_block_h_ntiles, act_block_w_ntiles);
     assert(act_matrix_shape.size() == 3);
     assert(act_matrix_shape[0] == 1);
@@ -264,9 +258,9 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
     uint32_t weight_noc_y = weight_dram_noc_xy.y;
 
     // more args for reader
-    uint32_t conv_act_size_w = a.shape()[3];
-    uint32_t conv_act_size_h = a.shape()[2];
-    uint32_t conv_act_size_c = a.shape()[1];
+    uint32_t conv_act_size_h = a.shape()[1];
+    uint32_t conv_act_size_w = a.shape()[2];
+    uint32_t conv_act_size_c = a.shape()[3];
     uint32_t weight_size_h = (uint32_t) conv_params[0];
     uint32_t weight_size_w = (uint32_t) conv_params[1];
     uint32_t stride_h = (uint32_t) conv_params[2];
@@ -511,14 +505,14 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
 Tensor conv(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
              uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels) {
     TT_ASSERT(b.layout() == Layout::TILE); // Weights should already be formatted
-    auto padded_a_shape = AutoFormat::pad_to_tile_shape(a.shape(), true, false, false, false);
-    FormatParams input_a_format_params = {.pad_shape=padded_a_shape, .pad_value=0.0, .target_layout=Layout::CHANNELS_LAST};
+    auto padded_a_shape = AutoFormat::pad_to_tile_shape(a.shape(), false, false, false, true);
+    FormatParams input_a_format_params = {.pad_shape=padded_a_shape, .pad_value=0.0, .target_layout=Layout::ROW_MAJOR};
     FormatParams input_b_format_params = {.pad_shape=b.shape(), .pad_value=0.0, .target_layout=Layout::TILE};
     return operation::run_with_autoformat(
         Conv(act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, conv_params, output_channels),
         {a, b},
         {input_a_format_params, input_b_format_params},
-        {Layout::CHANNELS_LAST}).at(0);
+        {Layout::ROW_MAJOR}).at(0);
 }
 
 operation::ProgramWithCallbacks conv_single_core(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
@@ -534,8 +528,8 @@ void Conv::validate(const std::vector<Tensor>& input_tensors) const {
 
 std::vector<Shape> Conv::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    uint32_t conv_activation_h = input_tensor_a.shape()[2];
-    uint32_t conv_activation_w = input_tensor_a.shape()[3];
+    uint32_t conv_activation_h = input_tensor_a.shape()[1];
+    uint32_t conv_activation_w = input_tensor_a.shape()[2];
     // TODO: clean up here
     uint32_t filter_h = (uint32_t) conv_params[0];
     uint32_t filter_w = (uint32_t) conv_params[1];
@@ -546,16 +540,16 @@ std::vector<Shape> Conv::compute_output_shapes(const std::vector<Tensor>& input_
     auto [conv_output_h, conv_output_w] = compute_conv_output_face_shape(conv_activation_h, conv_activation_w, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w);
 
     // pad the output channels to TILE_WIDTH as conv writer kernel does not remove padding for tile
-    auto num_channels = roundup(output_channels, TILE_WIDTH);
+    auto output_channels = roundup(this->output_channels, TILE_WIDTH);
 
     // TODO: Update batch size below
-    Shape output_tensor_shape = {1, num_channels, conv_output_h, conv_output_w};
+    Shape output_tensor_shape = {1, conv_output_h, conv_output_w, output_channels};
     return {output_tensor_shape};
 }
 
 std::vector<Tensor> Conv::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::CHANNELS_LAST, MemoryConfig{.interleaved = true});
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::ROW_MAJOR, MemoryConfig{.interleaved = true});
 }
 
 operation::Hash Conv::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
@@ -680,9 +674,9 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_conv_activation_address_m
                             uint32_t num_bytes_df) {
     vector<uint32_t> address_map;
     vector<uint32_t> address_map_metadata;
-    uint32_t conv_input_x = activation_shape[3];
-    uint32_t conv_input_y = activation_shape[2];
-    uint32_t conv_input_z = activation_shape[1];
+    uint32_t conv_input_y = activation_shape[1];
+    uint32_t conv_input_x = activation_shape[2];
+    uint32_t conv_input_z = activation_shape[3];
     uint32_t R = conv_params[0];
     uint32_t S = conv_params[1];
     uint32_t U = conv_params[2];
@@ -851,13 +845,11 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
     bool pass = true;
     bool untilize_out = true;
     tt_metal::Device *device = a.device();
-    TT_ASSERT(a.layout() == Layout::CHANNELS_LAST, "Conv activation should be in channels last layout");
+    TT_ASSERT(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_ASSERT(a.shape()[0] == 1, "Only batch size 1 supported.");
     TT_ASSERT(output_channels <= b.shape()[3], "Invalid weight shape. Incorrect weight tensor.");
 
     uint32_t num_bytes_of_df = 2; // 2 bytes for bfloat16
-    uint32_t activation_C = a.shape()[1];
-    //TT_ASSERT(activation_C % TILE_WIDTH == 0, "Channel depth must be divisible by tile width(32).");
     // Compute the 2d matrix shape
     auto [matrix_shape, matrix_shape_unpadded] = compute_conv_activation_as_mm_shape(a.shape(), conv_params, act_block_h_ntiles, act_block_w_ntiles);
     assert(matrix_shape.size() == 3);
@@ -1015,8 +1007,6 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
     tt_metal::Buffer *src1_dram_buffer = b.buffer();
     TT_ASSERT(src1_dram_buffer->size() % single_tile_size == 0, "Buffer size of tensor b must be divisible by single_tile_size (aka divisible by sizeof(df) * 1024)");
-
-    Shape cshape{Ba, Ca, Ha, Wb};
 
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -1275,14 +1265,14 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
 Tensor conv_with_address_map(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
              uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels) {
     TT_ASSERT(b.layout() == Layout::TILE); // Weights should already be formatted
-    auto padded_a_shape = AutoFormat::pad_to_tile_shape(a.shape(), true, false, false, false);
-    FormatParams input_a_format_params = {.pad_shape=padded_a_shape, .pad_value=0.0, .target_layout=Layout::CHANNELS_LAST};
+    auto padded_a_shape = AutoFormat::pad_to_tile_shape(a.shape(), false, false, false, true);
+    FormatParams input_a_format_params = {.pad_shape=padded_a_shape, .pad_value=0.0, .target_layout=Layout::ROW_MAJOR};
     FormatParams input_b_format_params = {.pad_shape=b.shape(), .pad_value=0.0, .target_layout=Layout::TILE};
     return operation::run_with_autoformat(
         ConvWithAddressMap(act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, conv_params, output_channels),
         {a, b},
         {input_a_format_params, input_b_format_params},
-        {Layout::CHANNELS_LAST}).at(0);
+        {Layout::ROW_MAJOR}).at(0);
 }
 
 operation::ProgramWithCallbacks conv_with_address_map_single_core(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
@@ -1298,8 +1288,8 @@ void ConvWithAddressMap::validate(const std::vector<Tensor>& input_tensors) cons
 
 std::vector<Shape> ConvWithAddressMap::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    uint32_t conv_activation_h = input_tensor_a.shape()[2];
-    uint32_t conv_activation_w = input_tensor_a.shape()[3];
+    uint32_t conv_activation_h = input_tensor_a.shape()[1];
+    uint32_t conv_activation_w = input_tensor_a.shape()[2];
     // TODO: clean up here
     uint32_t filter_h = (uint32_t) conv_params[0];
     uint32_t filter_w = (uint32_t) conv_params[1];
@@ -1308,14 +1298,18 @@ std::vector<Shape> ConvWithAddressMap::compute_output_shapes(const std::vector<T
     uint32_t pad_h = (uint32_t) conv_params[4];
     uint32_t pad_w = (uint32_t) conv_params[5];
     auto [conv_output_h, conv_output_w] = compute_conv_output_face_shape(conv_activation_h, conv_activation_w, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w);
+
+    // pad the output channels to TILE_WIDTH as conv writer kernel does not remove padding for tile
+    auto output_channels = roundup(this->output_channels, TILE_WIDTH);
+
     // TODO: Update batch size below
-    Shape output_tensor_shape = {1, output_channels, conv_output_h, conv_output_w};
+    Shape output_tensor_shape = {1, conv_output_h, conv_output_w, output_channels};
     return {output_tensor_shape};
 }
 
 std::vector<Tensor> ConvWithAddressMap::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::CHANNELS_LAST, MemoryConfig{.interleaved = true});
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::ROW_MAJOR, MemoryConfig{.interleaved = true});
 }
 
 operation::ProgramWithCallbacks ConvWithAddressMap::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {

@@ -714,15 +714,23 @@ class MaxPool2d(torch.nn.Module):
         dilation: Union[int, Tuple[int, int]] = 1,
         return_indices: bool = False,
         ceil_mode: bool = False,
+        channels_last = False,
     ):
         super().__init__()
         self.pt_fallback = torch.nn.MaxPool2d(
             kernel_size, stride, padding, dilation, return_indices, ceil_mode
         )
+        self.channels_last = channels_last
 
     @convert_tt_tensors_wrapper
     def forward(self, input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
-        return self.pt_fallback(input)
+        output = input
+        if self.channels_last:
+            output = torch.permute(output, (0, 3, 1, 2))
+        output = self.pt_fallback(output)
+        if self.channels_last:
+            output = torch.permute(output, (0, 2, 3, 1))
+        return output
 
 
 class AdaptiveAvgPool2d(torch.nn.Module):
@@ -742,11 +750,20 @@ class AdaptiveAvgPool2d(torch.nn.Module):
 
     @convert_tt_tensors_wrapper
     def __init__(
-        self, output_size: Union[int, None, Tuple[Optional[int], Optional[int]]]
+        self,
+        output_size: Union[int, None, Tuple[Optional[int], Optional[int]]],
+        channels_last = False,
     ):
         super().__init__()
         self.pt_fallback = torch.nn.AdaptiveAvgPool2d(output_size)
+        self.channels_last = channels_last
 
     @convert_tt_tensors_wrapper
     def forward(self, input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
-        return self.pt_fallback(input)
+        output = input
+        if self.channels_last:
+            output = torch.permute(output, (0, 3, 1, 2))
+        output = self.pt_fallback(output)
+        if self.channels_last:
+            output = torch.permute(output, (0, 2, 3, 1))
+        return output

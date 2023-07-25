@@ -52,9 +52,6 @@ uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes,
             TT_ASSERT(total_size_bytes % page_size == 0);
         }
         break;
-        case Layout::CHANNELS_LAST:
-            page_size = C * 2;
-        break;
         default:
             TT_ASSERT(false && "Unsupported layout to write to device");
     }

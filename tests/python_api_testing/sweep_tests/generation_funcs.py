@@ -16,7 +16,6 @@ supported_tt_dtypes = {ttl.tensor.DataType.BFLOAT16}
 supported_tt_layouts = [
     ttl.tensor.Layout.ROW_MAJOR,
     ttl.tensor.Layout.TILE,
-    # ttl.tensor.Layout.CHANNELS_LAST,
 ]
 
 on_device_options = [
@@ -295,11 +294,6 @@ def sanitize_args(input_shapes, dtype_device_layout):
                 dtype_device_layout["layout"] == ttl.tensor.Layout.TILE
                 and (shape[2] % 32 != 0 or shape[3] % 32 != 0)
             )  # Shape cannot be tilized
-            or (
-                dtype_device_layout["layout"] == ttl.tensor.Layout.CHANNELS_LAST
-                and dtype_device_layout["on_device"]
-                and shape[1] % 2 != 0
-            )  # Shape cannot be placed as channels last on device
             or (
                 dtype_device_layout["layout"] == ttl.tensor.Layout.ROW_MAJOR
                 and dtype_device_layout["on_device"]
