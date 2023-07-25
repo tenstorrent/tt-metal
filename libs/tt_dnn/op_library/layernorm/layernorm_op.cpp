@@ -556,8 +556,8 @@ operation::Hash RMSNorm::compute_program_hash(
 
 tt::stl::reflection::Attributes RMSNorm::attributes() const {
     return {
-        {"eps", fmt::format("{}", this->eps)},
-        {"output_mem_config", fmt::format("{}", this->output_mem_config)},
+        {"eps", this->eps},
+        {"output_mem_config", this->output_mem_config},
     };
 }
 

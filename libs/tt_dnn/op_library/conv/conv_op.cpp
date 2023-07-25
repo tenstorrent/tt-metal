@@ -146,17 +146,6 @@ void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program &program,
     }
 }
 
-Tensor create_output_dram_buffer_(Device * device, DataType data_type, Shape cshape) {
-    tt::tt_metal::Layout out_layout;
-    tt_metal::Tensor output = tt_metal::create_device_tensor(
-        cshape,
-        data_type,
-        tt::tt_metal::Layout::CHANNELS_LAST,
-        device);
-
-    return output;
-}
-
 operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<int> conv_params,
                                        uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
                                        uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, Tensor &output) {
@@ -553,21 +542,18 @@ std::vector<Shape> Conv::compute_output_shapes(const std::vector<Tensor>& input_
     uint32_t pad_h = (uint32_t) conv_params[4];
     uint32_t pad_w = (uint32_t) conv_params[5];
     auto [conv_output_h, conv_output_w] = compute_conv_output_face_shape(conv_activation_h, conv_activation_w, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w);
+
+    // pad the output channels to TILE_WIDTH as conv writer kernel does not remove padding for tile
+    auto num_channels = roundup(output_channels, TILE_WIDTH);
+
     // TODO: Update batch size below
-    Shape output_tensor_shape = {1, output_channels, conv_output_h, conv_output_w};
+    Shape output_tensor_shape = {1, num_channels, conv_output_h, conv_output_w};
     return {output_tensor_shape};
 }
 
 std::vector<Tensor> Conv::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    auto output_shape = this->compute_output_shapes(input_tensors).at(0);
     const auto& input_tensor = input_tensors.at(0);
-    // pad the output channels to TILE_WIDTH as conv writer kernel does not remove padding for tile
-    output_shape[1] = roundup(output_shape[1], TILE_WIDTH);
-    Tensor output = create_output_dram_buffer_(input_tensor.device(), input_tensor.dtype(), output_shape);
-    std::vector<Tensor> output_tensors;
-    // TODO: check if anything else needs to be done here.
-    output_tensors.emplace_back(output);
-    return output_tensors;
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::CHANNELS_LAST, MemoryConfig{.interleaved = true});
 }
 
 operation::Hash Conv::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
@@ -1324,15 +1310,8 @@ std::vector<Shape> ConvWithAddressMap::compute_output_shapes(const std::vector<T
 }
 
 std::vector<Tensor> ConvWithAddressMap::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    auto output_shape = this->compute_output_shapes(input_tensors).at(0);
     const auto& input_tensor = input_tensors.at(0);
-    // pad the output channels to TILE_WIDTH as conv writer kernel does not remove padding for tile
-    output_shape[1] = roundup(output_shape[1], TILE_WIDTH);
-    Tensor output = create_output_dram_buffer_(input_tensor.device(), input_tensor.dtype(), output_shape);
-    std::vector<Tensor> output_tensors;
-    // TODO: check if anything else needs to be done here.
-    output_tensors.emplace_back(output);
-    return output_tensors;
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::CHANNELS_LAST, MemoryConfig{.interleaved = true});
 }
 
 operation::ProgramWithCallbacks ConvWithAddressMap::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {

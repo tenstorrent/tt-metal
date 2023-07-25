@@ -527,14 +527,9 @@ std::vector<Shape> BMMTilizeUntilize::compute_output_shapes(const std::vector<Te
     return {out_shape};
 }
 
-std::vector<Tensor> BMMTilizeUntilize::create_output_tensors(const std::vector<Tensor>& inputs) const {
-    const auto& output_shapes = this->compute_output_shapes(inputs);
-    auto output_layout = untilize_out_ ? Layout::ROW_MAJOR : Layout::TILE;
-    std::vector<Tensor> output_tensors;
-    // There is just one output tensor
-    output_tensors.reserve(1);
-    output_tensors.emplace_back(create_device_tensor(output_shapes.at(0), out_dt_, output_layout, inputs.at(0).device()));
-    return output_tensors;
+std::vector<Tensor> BMMTilizeUntilize::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+    auto output_layout = this->untilize_out_ ? Layout::ROW_MAJOR : Layout::TILE;
+    return operation::generic_create_output_tensors(*this, input_tensors, this->out_dt_, output_layout, MemoryConfig{.interleaved = true});
 }
 
 operation::ProgramWithCallbacks BMMTilizeUntilize::create_program(const std::vector<Tensor>& inputs,
@@ -553,17 +548,17 @@ operation::ProgramWithCallbacks BMMTilizeUntilize::create_program(const std::vec
 
 stl::reflection::Attributes BMMTilizeUntilize::attributes() const {
     return {
-        {"out_dt", fmt::format("{}", out_dt_)},
-        {"in0_nblocks_h", fmt::format("{}", in0_nblocks_h_)},
-        {"in0_nblocks_w", fmt::format("{}", in0_nblocks_w_)},
-        {"in1_nblocks_w", fmt::format("{}", in1_nblocks_w_)},
-        {"in0_block_ntiles_h", fmt::format("{}", in0_block_ntiles_h_)},
-        {"in0_block_ntiles_w", fmt::format("{}", in0_block_ntiles_w_)},
-        {"in1_block_ntiles_w", fmt::format("{}", in1_block_ntiles_w_)},
-        {"out_subblock_ntiles_h", fmt::format("{}", out_subblock_ntiles_h_)},
-        {"out_subblock_ntiles_w", fmt::format("{}", out_subblock_ntiles_w_)},
-        {"tilize_in0", fmt::format("{}", tilize_in0_)},
-        {"untilize_out", fmt::format("{}", untilize_out_)}
+        {"out_dt", this->out_dt_},
+        {"in0_nblocks_h", this->in0_nblocks_h_},
+        {"in0_nblocks_w", this->in0_nblocks_w_},
+        {"in1_nblocks_w", this->in1_nblocks_w_},
+        {"in0_block_ntiles_h", this->in0_block_ntiles_h_},
+        {"in0_block_ntiles_w", this->in0_block_ntiles_w_},
+        {"in1_block_ntiles_w", this->in1_block_ntiles_w_},
+        {"out_subblock_ntiles_h", this->out_subblock_ntiles_h_},
+        {"out_subblock_ntiles_w", this->out_subblock_ntiles_w_},
+        {"tilize_in0", this->tilize_in0_},
+        {"untilize_out", this->untilize_out_}
     };
 }
 
