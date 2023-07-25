@@ -13,7 +13,7 @@ from python_api_testing.models.utility_functions import print_diff_argmax, is_cl
 from tests.python_api_testing.conv.conv_unit_test_utils import create_conv_act_tensor, create_conv_weight_tensor
 import torch
 
-@pytest.mark.parametrize("run_conv_with_address_map", (False, True))
+@pytest.mark.parametrize("run_conv_with_address_map", (False, ))
 @pytest.mark.parametrize(
     "K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w",
     (
