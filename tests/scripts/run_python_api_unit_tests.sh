@@ -7,14 +7,12 @@ if [[ -z "$TT_METAL_HOME" ]]; then
   exit 1
 fi
 
-pytest $TT_METAL_HOME/tests/python_api_testing/unit_testing/ -vvv
+env TT_METAL_DEVICE_DISPATCH_MODE=1 pytest $TT_METAL_HOME/tests/python_api_testing/unit_testing/ -vvv
 pytest $TT_METAL_HOME/tests/python_api_testing/sweep_tests/pytests/ -vvv
 
 # For now, adding tests with fast dispatch and non-32B divisible page sizes here. Python/models people,
 # you can move to where you'd like.
 env TT_METAL_DEVICE_DISPATCH_MODE=1 python tests/python_api_testing/models/mnist/test_mnist.py
-env TT_METAL_DEVICE_DISPATCH_MODE=1 pytest tests/python_api_testing/sweep_tests/pytests/tt_dnn/test_pad.py
-env TT_METAL_DEVICE_DISPATCH_MODE=1 pytest tests/python_api_testing/sweep_tests/pytests/tt_dnn/test_unpad.py
 
 # Tests for tensors in L1
 pytest $TT_METAL_HOME/tests/python_api_testing/models/bert_large_performant/unit_tests/test_bert_large*matmul* -k in0_L1-in1_L1-bias_L1-out_L1
