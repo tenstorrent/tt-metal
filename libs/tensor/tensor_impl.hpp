@@ -413,6 +413,10 @@ inline Tensor to_layout(const Tensor &tensor, Layout target_layout) {
                 if (target_layout == Layout::ROW_MAJOR) {
                     return convert_layout_tile_to_row_major(shape, input_data);
                 }
+                else if (target_layout == Layout::CHANNELS_LAST) {
+                    auto output_data = convert_layout_tile_to_row_major(shape, input_data);
+                    return convert_layout_row_major_to_channels_last(shape, output_data);
+                }
                 else {
                     TT_THROW("Unsupported layout conversion");
                 }
@@ -420,6 +424,10 @@ inline Tensor to_layout(const Tensor &tensor, Layout target_layout) {
             case Layout::CHANNELS_LAST:
                 if (target_layout == Layout::ROW_MAJOR) {
                     return convert_layout_channels_last_to_row_major(shape, input_data);
+                }
+                else if (target_layout == Layout::TILE) {
+                    auto output_data = convert_layout_channels_last_to_row_major(shape, input_data);
+                    return convert_layout_row_major_to_tile(shape, output_data);
                 }
                 else {
                     TT_THROW("Unsupported layout conversion");
