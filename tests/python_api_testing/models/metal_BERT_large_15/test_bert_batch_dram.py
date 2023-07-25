@@ -46,6 +46,7 @@ class TtBertBatchDram(torch.nn.Module):
 
         # So far on CPU until we add embeddings support on device
         self.embeddings = PytorchEmbeddings(hugging_face_reference_model)
+#        self.embeddings.to_csv('embeddings.csv')
         self.get_extended_attention_mask = (
             hugging_face_reference_model.get_extended_attention_mask
         )
