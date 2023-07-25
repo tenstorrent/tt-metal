@@ -106,6 +106,8 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
     passing_pcc, output_pcc = comp_pcc(out_golden, out_result, 0.99)
     print("Passing=", passing_pcc)
     print("Output pcc=", output_pcc)
+
+    ttl.device.CloseDevice(device)
     return passing_pcc
 
 
