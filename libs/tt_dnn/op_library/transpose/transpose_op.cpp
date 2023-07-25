@@ -14,6 +14,7 @@ void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operands to transpose need to be on device!");
     TT_ASSERT(input_tensor.buffer() != nullptr , "Operands to transpose need to be allocated in buffers on device!");
+    TT_ASSERT((input_tensor.buffer()->buffer_type() == BufferType::DRAM));
     const auto shape = input_tensor.shape();
     u32 W = shape[3], H = shape[2], C = shape[1], N = shape[0];
     u32 HW = H*W;
