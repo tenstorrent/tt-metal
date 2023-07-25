@@ -201,12 +201,7 @@ def run_ffn_inference(
 ):
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     # Initialize the device
-    ttl.device.InitializeDevice(
-        device,
-        ttl.device.MemoryAllocator.BASIC
-        if model_config["DEFAULT_MEMCFG"].buffer_type == ttl.tensor.BufferType.DRAM
-        else ttl.device.MemoryAllocator.L1_BANKING,
-    )
+    ttl.device.InitializeDevice(device)
     host = ttl.device.GetHost()
 
     if on_weka:

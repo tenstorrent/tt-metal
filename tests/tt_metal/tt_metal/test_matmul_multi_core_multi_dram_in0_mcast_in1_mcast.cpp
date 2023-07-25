@@ -453,7 +453,7 @@ int main(int argc, char **argv) {
     try {
         int start_core_x = 0;
         int start_core_y = 0;
-        int num_cores_r = 10;
+        int num_cores_r = 9;
         int num_cores_c = 12;
         uint32_t M = 16 * num_cores_r;
         uint32_t K = 16 * 12;

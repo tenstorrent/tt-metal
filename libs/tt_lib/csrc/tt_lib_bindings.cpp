@@ -3030,10 +3030,6 @@ void DeviceModule(py::module &m_device) {
         .value("GRAYSKULL", tt::ARCH::GRAYSKULL)
         .value("WORMHOLE_B0", tt::ARCH::WORMHOLE_B0);
 
-    py::enum_<tt::tt_metal::MemoryAllocator>(m_device, "MemoryAllocator", "Enum of types of memory allocation schemes.")
-        .value("BASIC", tt::tt_metal::MemoryAllocator::BASIC)
-        .value("L1_BANKING", tt::tt_metal::MemoryAllocator::L1_BANKING);
-
     auto pyDevice = py::class_<Device>(m_device, "Device", "Class describing a Tenstorrent accelerator device.");
     pyDevice
         .def(
@@ -3066,17 +3062,13 @@ void DeviceModule(py::module &m_device) {
         | pci_express_slot | PCI Express slot index | int                 |                              | Yes      |
         +------------------+------------------------+---------------------+------------------------------+----------+
     )doc");
-    m_device.def("InitializeDevice", &InitializeDevice, py::arg().noconvert(), py::arg("memory_allocator") = tt::tt_metal::MemoryAllocator::BASIC, R"doc(
+    m_device.def("InitializeDevice", &InitializeDevice, py::arg().noconvert(), R"doc(
         Initialize instance of TT accelerator device.
 
         +-------------------+--------------------------------------------------------+----------------------------------+-------------------------------------------+----------+
         |  Argument         |                 Description                            |       Data type                  |           Valid range                     | Required |
         +===================+========================================================+==================================+============================================+=========+
         | device            | Device to initialize                                   | tt_lib.device.Device             |                                           | Yes      |
-        +-------------------+--------------------------------------------------------+----------------------------------+-------------------------------------------+----------+
-        | memory_allocator  | Type of memory allocator scheme to use                 | tt_lib.device.MemoryAllocator    | tt_lib.device.MemoryAllocator.BASIC       | No       |
-        |                   |                                                        |                                  |                                           |          |
-        |                   |                                                        |                                  | tt_lib.device.MemoryAllocator.L1_BANKING  |          |
         +-------------------+--------------------------------------------------------+----------------------------------+-------------------------------------------+----------+
     )doc");
     m_device.def("CloseDevice", &CloseDevice, R"doc(

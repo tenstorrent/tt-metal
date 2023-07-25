@@ -21,7 +21,7 @@ class Device {
    public:
     static size_t detect_num_available_devices(const TargetDevice target_type = TargetDevice::Silicon);
     friend void tt_gdb(Device* device, int chip_id, const vector<CoreCoord> cores, vector<string> ops);
-    Device(tt::ARCH arch, int pcie_slot) : arch_(arch), pcie_slot_(pcie_slot), allocator_scheme_(MemoryAllocator::BASIC) {}
+    Device(tt::ARCH arch, int pcie_slot) : arch_(arch), pcie_slot_(pcie_slot) {}
 
     ~Device();
 
@@ -35,8 +35,6 @@ class Device {
     tt::ARCH arch() const { return arch_; }
 
     int pcie_slot() const { return pcie_slot_; }
-
-    MemoryAllocator allocator_scheme() const { return this->allocator_scheme_; }
 
     tt_cluster *cluster() const;  // Need to access cluster in llrt APIs
 
@@ -83,10 +81,10 @@ class Device {
 
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
-    bool initialize(const MemoryAllocator &memory_allocator=MemoryAllocator::BASIC, const std::vector<uint32_t>& l1_bank_remap = {});
-    friend bool InitializeDevice(Device *device, const MemoryAllocator &memory_allocator);
+    bool initialize(const std::vector<uint32_t>& l1_bank_remap = {});
+    friend bool InitializeDevice(Device *device);
     void initialize_cluster();
-    void initialize_allocator(const MemoryAllocator &memory_allocator=MemoryAllocator::BASIC, const std::vector<uint32_t>& l1_bank_remap = {});
+    void initialize_allocator(const std::vector<uint32_t>& l1_bank_remap = {});
     void initialize_harvesting_information();
     // Puts device into reset
     bool close();
@@ -95,17 +93,17 @@ class Device {
     // TODO: Uplift usage of friends. Buffer and Program just need access to allocator
     friend class Buffer;
     friend class Program;
-
+    
 #ifdef TT_METAL_VERSIM_DISABLED
     static constexpr TargetDevice target_type_ = TargetDevice::Silicon;
 #else
     static constexpr TargetDevice target_type_ = TargetDevice::Versim;
 #endif
+    static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
     tt::ARCH arch_;
     tt_cluster *cluster_ = nullptr;
     int pcie_slot_;
     std::unique_ptr<Allocator> allocator_ = nullptr;
-    MemoryAllocator allocator_scheme_;
     bool initialized_ = false;
 
     bool harvesting_initialized_ = false;

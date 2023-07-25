@@ -12,7 +12,9 @@ namespace tt_metal {
 
 namespace allocator {
 
-void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const AllocatorConfig &alloc_config) {
+struct num_banks_t {  u32 total;  u32 per_storage_core; };
+
+num_banks_t compute_total_and_storage_only_num_l1_banks(const AllocatorConfig &alloc_config) {
     auto num_in_category = [](const std::unordered_map<CoreCoord, AllocCoreType> &core_allocation_types, const AllocCoreType &alloc_type){
         int num_cores = 0;
         for (const auto& core_allocation_type: core_allocation_types) {
@@ -22,27 +24,36 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
         }
         return num_cores;
     };
+
+    auto num_compute_and_storage_cores = num_in_category(alloc_config.core_type_from_noc_coord_table, AllocCoreType::ComputeAndStore);
+    auto num_storage_only_cores = num_in_category(alloc_config.core_type_from_noc_coord_table, AllocCoreType::StorageOnly);
+    u32 num_banks_per_storage_core = 0;
+    if (num_storage_only_cores > 0) {
+        TT_ASSERT(alloc_config.worker_l1_size % alloc_config.l1_bank_size == 0);
+        num_banks_per_storage_core = alloc_config.worker_l1_size / alloc_config.l1_bank_size;
+    }
+    u32 num_l1_banks = num_compute_and_storage_cores + (num_banks_per_storage_core * num_storage_only_cores);
+    return num_banks_t{.total = num_l1_banks, .per_storage_core = num_banks_per_storage_core};
+}
+
+void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const AllocatorConfig &alloc_config) {
     std::unordered_map<u32, i64> bank_id_to_bank_offset;
 
+    num_banks_t num_banks = compute_total_and_storage_only_num_l1_banks(alloc_config);
     TT_ASSERT(alloc_config.worker_l1_size % alloc_config.l1_bank_size == 0);
-
-    u32 num_banks_per_storage_core = alloc_config.worker_l1_size / alloc_config.l1_bank_size;
-    int expected_num_l1_banks =
-        num_in_category(alloc_config.core_type_from_noc_coord_table, AllocCoreType::ComputeAndStore) +
-        (num_banks_per_storage_core * num_in_category(alloc_config.core_type_from_noc_coord_table, AllocCoreType::StorageOnly));
 
     // Define the bank assignment here.
     std::vector<u32> shuffled_bank_id = {};
     if (not alloc_config.l1_bank_remap.empty()) {
         log_assert(
-            expected_num_l1_banks == alloc_config.l1_bank_remap.size(),
+            num_banks.total == alloc_config.l1_bank_remap.size(),
             "override l1_bank_remap.size()={} which is not equal to the expected expected_num_l1_banks={} from soc-desc",
-            alloc_config.l1_bank_remap.size(), expected_num_l1_banks
+            alloc_config.l1_bank_remap.size(), num_banks.total
         );
         std::copy(alloc_config.l1_bank_remap.begin(),alloc_config.l1_bank_remap.end(), std::back_inserter(shuffled_bank_id));
     } else {
         // randomize remap
-        for (u32 id = 0; id < expected_num_l1_banks; id++) {
+        for (u32 id = 0; id < num_banks.total; id++) {
             shuffled_bank_id.push_back(id);
         }
         auto rng = std::default_random_engine(0);
@@ -73,7 +84,7 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
                 bank_id++;
             } else if (alloc_config.core_type_from_noc_coord_table.at(noc_core) == AllocCoreType::StorageOnly) {
                 std::vector<u32> bank_ids;
-                for (int storage_bank_index = 0; storage_bank_index < num_banks_per_storage_core; storage_bank_index++) {
+                for (int storage_bank_index = 0; storage_bank_index < num_banks.per_storage_core; storage_bank_index++) {
                     u32 remapped_bank_id = shuffled_bank_id[bank_id];
                     bank_ids.push_back(remapped_bank_id);
                     allocator.bank_id_to_logical_core.insert({remapped_bank_id, logical_core});
@@ -88,10 +99,10 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
     }
 
     log_assert(
-        bank_id_to_bank_offset.size() == expected_num_l1_banks,
+        bank_id_to_bank_offset.size() == num_banks.total,
         "init_compute_and_storage_l1_bank_manager() -- banks setup={} must be equal to the number of bankes expected={}",
         bank_id_to_bank_offset.size(),
-        expected_num_l1_banks
+        num_banks.total
     );
 
     // There is only alloc_config.l1_bank_size bytes available for L1 buffers to be allocated in

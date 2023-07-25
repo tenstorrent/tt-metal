@@ -298,7 +298,7 @@ int main(int argc, char **argv) {
     bool pass = true;
 
     try {
-        int num_cores_r = 10;
+        int num_cores_r = 9;
         int num_cores_c = 12;
         uint32_t M = 16 * num_cores_r;
         uint32_t K = 16 * 12;
@@ -422,7 +422,7 @@ int main(int argc, char **argv) {
         tt_metal::WriteRuntimeArgsToDevice(device, program);
         log_info(LogTest, "Copying inputs to dram and runtime args to cores complete");
 
-        log_info(LogTest, "Running Matmul 120 core test");
+        log_info(LogTest, "Running Matmul 108 core test");
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
         pass &= tt_metal::LaunchKernels(device, program);
         log_info(LogTest, "Matmul test done");

@@ -188,7 +188,7 @@ int main(int argc, char **argv) {
         // |        bank 0    |        bank 1     |
         // |   512 KB         |    512 KB         |
         // ----------------------------------------
-        pass &= tt_metal::InitializeDevice(device, tt_metal::MemoryAllocator::L1_BANKING);
+        pass &= tt_metal::InitializeDevice(device);
 
         // Resulting L1 banks after test_l1_buffers_allocated_top_down:
         // compute and storage core L1

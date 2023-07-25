@@ -104,7 +104,7 @@ def run_softmax_tests(test_id, batch, dtype, in0_mem_config):
     device = ttl.device
 
     dev = device.CreateDevice(device.Arch.GRAYSKULL, 0)
-    device.InitializeDevice(dev, ttl.device.MemoryAllocator.L1_BANKING)
+    device.InitializeDevice(dev)
     host = device.GetHost()
 
     test_dims = ((batch, 1, 6144, 384),)

@@ -32,7 +32,7 @@ def run_groupnorm_tests(test_id, group_size, dtype, in0_mem_config, out_mem_conf
     tensor = ttl.tensor
     device = ttl.device
     dev = device.CreateDevice(device.Arch.GRAYSKULL, 0)
-    device.InitializeDevice(dev, ttl.device.MemoryAllocator.L1_BANKING)
+    device.InitializeDevice(dev)
     host = device.GetHost()
 
     epsf = 1e-2

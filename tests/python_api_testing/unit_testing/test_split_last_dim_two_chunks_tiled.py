@@ -96,7 +96,7 @@ def test_split_tiled_w(
     num_splits = 2
     torch.manual_seed(1234)
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device, ttl.device.MemoryAllocator.L1_BANKING)
+    ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
     host = ttl.device.GetHost()
     tile_size = 32

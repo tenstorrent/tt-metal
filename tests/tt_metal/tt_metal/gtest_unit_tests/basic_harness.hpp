@@ -18,7 +18,7 @@ class CommandQueueHarness : public ::testing::Test {
 
         const int pci_express_slot = 0;
         this->device = tt::tt_metal::CreateDevice(arch, pci_express_slot);
-        tt::tt_metal::InitializeDevice(this->device, tt::tt_metal::MemoryAllocator::L1_BANKING);
+        tt::tt_metal::InitializeDevice(this->device);
         this->cq = std::make_unique<CommandQueue>(this->device);
 
         this->pcie_id = 0;

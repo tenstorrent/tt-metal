@@ -59,7 +59,7 @@ void check_semaphores_are_initialized(tt_metal::Device *device, const CoreRangeS
 bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_metal::Program &program, const CoreRangeSet &core_range_set) {
     bool pass = true;
     uint32_t single_tile_size = 2 * 1024;
-    uint32_t num_tiles = 32;
+    uint32_t num_tiles = 4;
     uint32_t buffer_size = single_tile_size * num_tiles;
 
     auto src_dram_buffer = tt_metal::Buffer(device, buffer_size, buffer_size, tt_metal::BufferType::DRAM);

@@ -75,7 +75,7 @@ def run_bert_large_matmul_test(
 
     torch.manual_seed(1234)
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device, ttl.device.MemoryAllocator.L1_BANKING)
+    ttl.device.InitializeDevice(device)
     host = ttl.device.GetHost()
 
     A = torch.randn(a_shape)
@@ -199,7 +199,7 @@ def run_bert_large_bmm_test(
 
     torch.manual_seed(1234)
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device, ttl.device.MemoryAllocator.L1_BANKING)
+    ttl.device.InitializeDevice(device)
     host = ttl.device.GetHost()
 
     A = torch.randn(a_shape)

@@ -130,16 +130,15 @@ Device *CreateDevice(tt::ARCH arch, int pcie_slot);
 /**
  * Initializes a device by creating a tt_cluster object and memory manager. Puts device into reset.
  *
- * Currently device has a 1:1 mapping with tt_cluster and memory manager only allocates DRAM addresses.
+ * Currently device has a 1:1 mapping with tt_cluster
  *
  * Return value: bool
  *
  * | Argument                    | Description                                 | Type                 | Valid Range         | Required |
  * |-----------------------------|---------------------------------------------|----------------------|---------------------|----------|
  * | device                      | Pointer to device object                    | Device *             |                     | Yes      |
- * | memory_allocator            | Type of memory allocator scheme to use      | MemoryAllocator enum | BASIC or L1_BANKING | No       |
  */
-bool InitializeDevice(Device *device, const MemoryAllocator &memory_allocator = MemoryAllocator::BASIC);
+bool InitializeDevice(Device *device);
 
 /**
  * Resets device and closes device

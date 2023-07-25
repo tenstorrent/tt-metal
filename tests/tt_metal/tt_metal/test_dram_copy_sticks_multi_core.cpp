@@ -69,13 +69,14 @@ int main(int argc, char **argv) {
         auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, dram_buffer_size, tt_metal::BufferType::DRAM);
 
         auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
-        uint32_t l1_buffer_addr = 400 * 1024;
         assert(src_dram_buffer.size() % (num_cores_r * num_cores_c) == 0);
         uint32_t per_core_l1_size = src_dram_buffer.size() / (num_cores_r * num_cores_c);
+        std::unordered_map<CoreCoord, uint32_t> core_to_l1_addr;
         for(int i = start_core.y; i < start_core.y + num_cores_r; i++) {
             for(int j = start_core.x; j < start_core.x + num_cores_c; j++) {
                 CoreCoord core = {(std::size_t) j, (std::size_t) i};
-                auto l1_b0 = tt_metal::Buffer(device, per_core_l1_size, l1_buffer_addr, per_core_l1_size, tt_metal::BufferType::L1);
+                auto l1_b0 = tt_metal::Buffer(device, per_core_l1_size, per_core_l1_size, tt_metal::BufferType::L1);
+                core_to_l1_addr[core] = l1_b0.address();
             }
         }
         auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
@@ -106,7 +107,7 @@ int main(int argc, char **argv) {
                 tt_metal::SetRuntimeArgs(
                     unary_reader_kernel,
                     core,
-                    {l1_buffer_addr,
+                    {core_to_l1_addr.at(core),
                     dram_buffer_src_addr + (core_index * stick_size),
                     (std::uint32_t)dram_src_noc_xy.x,
                     (std::uint32_t)dram_src_noc_xy.y,

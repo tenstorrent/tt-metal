@@ -80,7 +80,7 @@ def run_layernorm_tests(test_id, dtype, in0_mem_config, out_mem_config):
     tensor = ttl.tensor
     device = ttl.device
     dev = device.CreateDevice(device.Arch.GRAYSKULL, 0)
-    device.InitializeDevice(dev, ttl.device.MemoryAllocator.L1_BANKING)
+    device.InitializeDevice(dev)
     host = device.GetHost()
 
     epsf = 1e-2

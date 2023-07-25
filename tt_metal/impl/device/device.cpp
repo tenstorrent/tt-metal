@@ -28,7 +28,7 @@ void Device::initialize_cluster() {
     llrt::assert_reset_for_all_chips(cluster_);
 }
 
-void Device::initialize_allocator(const MemoryAllocator &memory_allocator, const std::vector<uint32_t>& l1_bank_remap) {
+void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
     TT_ASSERT(cluster_is_initialized() && "Cluster needs to be initialized!");
     tt::log_assert(
         this->harvesting_initialized_,
@@ -68,20 +68,10 @@ void Device::initialize_allocator(const MemoryAllocator &memory_allocator, const
         const auto noc_coord = this->logical_to_routing_coord_lookup_table_[logical_coord];
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::Dispatch;
     }
-    // assign memory allocator with specified configuration
-    switch (memory_allocator) {
-        case MemoryAllocator::BASIC: {
-            this->allocator_ = std::make_unique<BasicAllocator>(config);
-        }
-        break;
-        case MemoryAllocator::L1_BANKING: {
-            this->allocator_ = std::make_unique<L1BankingAllocator>(config);
-        }
-        break;
-        default:
-            TT_ASSERT(false && "Unsupported memory allocator");
-    }
-    this->allocator_scheme_ = memory_allocator;
+    // L1_BANKING scheme creates 1 bank per DRAM core and splits up L1 such that there are power 2 num L1 banks
+    // This is the only allocator scheme supported because kernel APIs assume num L1 banks are power of 2
+    static_assert(this->allocator_scheme_ == MemoryAllocator::L1_BANKING);
+    this->allocator_ = std::make_unique<L1BankingAllocator>(config);
 }
 
 void Device::initialize_harvesting_information() {
@@ -157,10 +147,10 @@ void Device::initialize_harvesting_information() {
     this->harvesting_initialized_ = true;
 }
 
-bool Device::initialize(const MemoryAllocator &memory_allocator, const std::vector<uint32_t>& l1_bank_remap) {
+bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
     this->initialize_cluster();
     this->initialize_harvesting_information();
-    this->initialize_allocator(memory_allocator, l1_bank_remap);
+    this->initialize_allocator(l1_bank_remap);
     this->initialized_ = true;
     return true;
 }

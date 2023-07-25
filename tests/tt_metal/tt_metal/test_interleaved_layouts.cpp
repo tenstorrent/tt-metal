@@ -435,7 +435,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
     tt_metal::Device *device =
         tt_metal::CreateDevice(arch, pci_express_slot);
 
-    pass &= tt_metal::InitializeDevice(device, tt_metal::MemoryAllocator::L1_BANKING);
+    pass &= tt_metal::InitializeDevice(device);
 
     tt_metal::Program program = tt_metal::Program();
     CoreCoord core = {0, 0};

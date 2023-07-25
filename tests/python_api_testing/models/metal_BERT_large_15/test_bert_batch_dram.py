@@ -180,12 +180,7 @@ def run_bert_question_and_answering_inference(
     torch.manual_seed(1234)
 
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(
-        device,
-        ttl.device.MemoryAllocator.BASIC
-        if model_config["DEFAULT_MEMCFG"].buffer_type == ttl.tensor.BufferType.DRAM
-        else ttl.device.MemoryAllocator.L1_BANKING,
-    )
+    ttl.device.InitializeDevice(device)
     host = ttl.device.GetHost()
 
     if on_weka:

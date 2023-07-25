@@ -43,7 +43,7 @@ int main(int argc, char **argv) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(arch, pci_express_slot);
 
-        pass &= tt_metal::InitializeDevice(device, tt_metal::MemoryAllocator::L1_BANKING);
+        pass &= tt_metal::InitializeDevice(device);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup

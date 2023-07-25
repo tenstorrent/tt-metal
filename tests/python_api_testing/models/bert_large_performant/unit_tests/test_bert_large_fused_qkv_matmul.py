@@ -20,7 +20,7 @@ def run_bert_large_fused_qkv_matmul_test(
 ):
     torch.manual_seed(1234)
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device, ttl.device.MemoryAllocator.L1_BANKING)
+    ttl.device.InitializeDevice(device)
     host = ttl.device.GetHost()
     a_shape = [9, 1, 384, 1024]
     b_shape = [1, 1, 1024, 3072]

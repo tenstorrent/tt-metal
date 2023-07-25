@@ -74,13 +74,7 @@ int main(int argc, char **argv) {
         int num_bank_pages_one = 258;
         int num_bank_pages_two = 378;
 
-        // First run tests with basic memory allocator
-        pass &= tt_metal::InitializeDevice(device, tt_metal::MemoryAllocator::BASIC);
-        pass &= test_interleaved_l1_buffer(device, num_bank_pages_one, num_bank_pages_two, page_size);
-
-        // Close device and re-initialize it with L1 banking allocator
-        pass &= tt_metal::CloseDevice(device);
-        pass &= tt_metal::InitializeDevice(device, tt_metal::MemoryAllocator::L1_BANKING);
+        pass &= tt_metal::InitializeDevice(device);
 
         pass &= test_interleaved_l1_buffer(device, num_bank_pages_one, num_bank_pages_two, page_size);
 
