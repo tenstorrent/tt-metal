@@ -143,8 +143,6 @@ inline void llk_unpack_AB_matmul_init(const std::uint32_t transpose=0, const std
     const uint32_t unpA_num_faces = get_num_faces(in1_tile_dims);
     const uint32_t unpB_num_faces = partial_face ? 1 : get_num_faces(in0_tile_dims); // if partial face -> unpack face by face
 
-    llk_unpack_AB_matmul_mop_config(transpose != 0, ct_dim, rt_dim, kt_dim, partial_face);
-
     // also turn on within_face_16x16_transpose if it was turned off by datacopy at runtime
     // on WH, the unpacker performs both transpose of faces as well as transpose each face.
     // the former is configured in mop, the latter is configured in cfg register in hw_configure
@@ -153,12 +151,24 @@ inline void llk_unpack_AB_matmul_init(const std::uint32_t transpose=0, const std
 
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
 
+    // Loading partial face into srcA is not supported
     const uint32_t unpA_x_end = unpA_num_faces*unpA_face_r_dim*FACE_C_DIM-1;
-    const uint32_t unpB_x_end = unpB_num_faces*unpB_face_r_dim*FACE_C_DIM-1;
     TT_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0);
-    TT_SETADCXX(p_setadc::UNP_B, unpB_x_end, 0x0);
+
+    if (partial_face) {
+        // Do face by face unpacking. Need to program correct face dim 
+        // to compute address of the next face
+        config_face_dim<false, p_setadc::UNP_B>(unpB_face_r_dim);
+    } else {
+        // Do full tile unpacking. No need to program face dim
+        // as address counter pointing to the face is not incremented
+        const uint32_t unpB_x_end = unpB_num_faces*unpB_face_r_dim*FACE_C_DIM-1;
+        TT_SETADCXX(p_setadc::UNP_B, unpB_x_end, 0x0);
+    }   
 
     TT_SETDMAREG(0, LOWER_HALFWORD(kt_dim), 0, LO_16(p_gpr_unpack::KT_DIM)); // store kt_dim to gpr for scaling tile size
+
+    llk_unpack_AB_matmul_mop_config(transpose != 0, ct_dim, rt_dim, kt_dim, partial_face);
 }
 
 inline void llk_unpack_AB_matmul(

@@ -34,6 +34,11 @@ struct p_gpr_unpack
     constexpr static uint TILE_SIZE_A       = 36;   // Holds tile size for unpacker 0
     constexpr static uint TILE_SIZE_B       = 37;   // Holds tile size for unpacker 1
     constexpr static uint KT_DIM            = 38;   // Holds matmul kt_dim
+    constexpr static uint FACE_DIM_16x16    = 40;   // Holds face dimension (16x16)
+    constexpr static uint FACE_DIM_8x16     = 41;   // Holds face dimension (8x16)
+    constexpr static uint FACE_DIM_4x16     = 42;   // Holds face dimension (4x16)
+    constexpr static uint FACE_DIM_2x16     = 43;   // Holds face dimension (2x16)
+    constexpr static uint FACE_DIM_1x16     = 44;   // Holds face dimension (1x16)
 };
 
 // Math GPR thread

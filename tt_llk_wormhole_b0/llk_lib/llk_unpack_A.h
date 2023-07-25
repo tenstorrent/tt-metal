@@ -212,13 +212,10 @@ template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, E
 inline void llk_unpack_A_init(const std::uint32_t transpose_of_faces=0, const std::uint32_t within_face_16x16_transpose=0, const std::uint32_t in_tile_dims[2] = default_tile_dims) {
     const std::uint32_t num_faces = get_num_faces(in_tile_dims);
     const std::uint32_t face_r_dim = get_face_r_dim(in_tile_dims);
-    llk_unpack_A_mop_config<BType, acc_to_dest, binary_reuse_dest>(transpose_of_faces>0, num_faces);
+    constexpr std::uint32_t UNP_SEL = (BType == BroadcastType::NONE) ? p_setadc::UNP_A : p_setadc::UNP_B;
+    config_face_dim<false, UNP_SEL>(face_r_dim);
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
-    if (face_r_dim == FACE_R_DIM) {
-        TTI_SETADCXX(p_setadc::UNP_AB, FACE_C_DIM*FACE_R_DIM-1, 0x0);
-    } else {
-        TT_SETADCXX(p_setadc::UNP_AB, FACE_C_DIM*face_r_dim-1, 0x0);
-    }    
+    llk_unpack_A_mop_config<BType, acc_to_dest, binary_reuse_dest>(transpose_of_faces>0, num_faces);
 }
 
 template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>

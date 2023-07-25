@@ -351,18 +351,23 @@ namespace ckernel::unpacker
    
       // Program unpacker0 per context x_dim (face size in l1)
       // Overrides value set by tile descriptor when thread override bit is set in unpack instruction
-      const uint face_size = unpA_face_r_dim*FACE_C_DIM;
-      cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32] = face_size | (face_size << 16);
+      const uint face_dim = unpA_face_r_dim*FACE_C_DIM;
+      cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32] = face_dim | (face_dim << 16);
 
+      constexpr uint face_dim_16x16 = FACE_R_DIM*FACE_C_DIM;
+      regfile[p_gpr_unpack::FACE_DIM_16x16] = (face_dim_16x16/1 ) | ((face_dim_16x16/1 )<<16);
+      regfile[p_gpr_unpack::FACE_DIM_8x16]  = (face_dim_16x16/2 ) | ((face_dim_16x16/2 )<<16);
+      regfile[p_gpr_unpack::FACE_DIM_4x16]  = (face_dim_16x16/4 ) | ((face_dim_16x16/4 )<<16);
+      regfile[p_gpr_unpack::FACE_DIM_2x16]  = (face_dim_16x16/8 ) | ((face_dim_16x16/8 )<<16); 
+      regfile[p_gpr_unpack::FACE_DIM_1x16]  = (face_dim_16x16/16) | ((face_dim_16x16/16)<<16);
+      sync_regfile_write(p_gpr_unpack::FACE_DIM_1x16);
 
       TTI_SETC16(SRCA_SET_Base_ADDR32, 0x4);
 
       // Enable address counter for unpacker ch1/dst address 
       // final address is calculated as: Dest_cntx0/1_address + address_counter_ch1
       // used for face by face unpacking of entire tile into srcA
-      if (unpA_face_r_dim < FACE_R_DIM) {
-         cfg[UNP0_ADD_DEST_ADDR_CNTR_add_dest_addr_cntr_ADDR32] = 0x1<<UNP0_ADD_DEST_ADDR_CNTR_add_dest_addr_cntr_SHAMT;
-      }
+      cfg[UNP0_ADD_DEST_ADDR_CNTR_add_dest_addr_cntr_ADDR32] = 0x1<<UNP0_ADD_DEST_ADDR_CNTR_add_dest_addr_cntr_SHAMT;
 
       /*
       // Workaround for HW bug (fp32 dest and movd2a/b is used with srcA/B configured with 5-bit exponent)
@@ -375,6 +380,37 @@ namespace ckernel::unpacker
       // Clear context ID
       reset_config_context();
    }
+
+   template <bool INSERT_FENCE=false, std::uint32_t UNP_SEL = p_setadc::UNP_AB>
+   inline void config_face_dim(const uint32_t face_r_dim) 
+   {
+      switch (face_r_dim) {
+         case 1: 
+            TTI_SETADCXX(UNP_SEL, 1*FACE_C_DIM-1, 0x0);
+            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_1x16);
+            break;
+         case 2: 
+            TTI_SETADCXX(UNP_SEL, 2*FACE_C_DIM-1, 0x0);
+            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_2x16);
+            break;
+         case 4: 
+            TTI_SETADCXX(UNP_SEL, 4*FACE_C_DIM-1, 0x0);
+            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_4x16);
+            break;
+         case 8: 
+            TTI_SETADCXX(UNP_SEL, 8*FACE_C_DIM-1, 0x0);
+            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_8x16);
+            break;
+         default:      
+            TTI_SETADCXX(UNP_SEL, FACE_R_DIM*FACE_C_DIM-1, 0x0);
+            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_16x16);
+            break;
+      }
+
+      if constexpr (INSERT_FENCE) {
+         TTI_DMANOP; // Insert fence if reg2flop is followed by an unpack
+      }
+   }   
 
    inline uint32_t get_operand_id(uint32_t operand) 
    {
