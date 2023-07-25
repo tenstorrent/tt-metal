@@ -477,9 +477,6 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
 
     // Compile and launch
     bool pass = CompileProgram(device, program, false);
-    pass &= ConfigureDeviceWithProgram(device, program);
-    WriteRuntimeArgsToDevice(device, program);
-    pass &= LaunchKernels(device, program);
 
     TT_ASSERT(pass);
 
