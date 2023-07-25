@@ -35,8 +35,10 @@ bool reader_only(
     auto input_dram_buffer =
         tt_metal::Buffer(device, byte_size, dram_byte_address, byte_size, tt_metal::BufferType::DRAM);
     auto dram_noc_xy = input_dram_buffer.noc_coordinates();
-    auto l1_buffer =
-        tt_metal::Buffer(device, byte_size, l1_byte_address, byte_size, tt_metal::BufferType::L1);
+    // TODO (abhullar): Use L1 buffer after bug with L1 banking and writing to < 1 MB is fixed.
+    //                  Try this after KM uplifts TLB setup
+    // auto l1_buffer =
+    //     tt_metal::Buffer(device, byte_size, l1_byte_address, byte_size, tt_metal::BufferType::L1);
 
     auto reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
@@ -67,7 +69,8 @@ bool reader_only(
     pass &= tt_metal::LaunchKernels(device, program);
 
     std::vector<uint32_t> dest_core_data;
-    tt_metal::ReadFromBuffer(l1_buffer, dest_core_data);
+    // tt_metal::ReadFromBuffer(l1_buffer, dest_core_data);
+    tt_metal::ReadFromDeviceL1(device, reader_core, l1_byte_address, byte_size, dest_core_data);
     pass &= (dest_core_data == inputs);
     if (not pass) {
         std::cout << "Mismatch at Core: " << reader_core.str() << std::endl;
@@ -95,8 +98,10 @@ bool writer_only(
         tt_metal::Buffer(device, byte_size, dram_byte_address, byte_size, tt_metal::BufferType::DRAM);
     auto dram_noc_xy = output_dram_buffer.noc_coordinates();
     auto l1_bank_ids = device->bank_ids_from_logical_core(writer_core);
-    auto l1_buffer =
-        tt_metal::Buffer(device, byte_size, l1_byte_address, byte_size, tt_metal::BufferType::L1);
+    // TODO (abhullar): Use L1 buffer after bug with L1 banking and writing to < 1 MB is fixed.
+    //                  Try this after KM uplifts TLB setup
+    // auto l1_buffer =
+    //     tt_metal::Buffer(device, byte_size, l1_byte_address, byte_size, tt_metal::BufferType::L1);
 
     auto writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
@@ -110,7 +115,8 @@ bool writer_only(
     ////////////////////////////////////////////////////////////////////////////
     pass &= tt_metal::CompileProgram(device, program);
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
-    tt_metal::WriteToBuffer(l1_buffer, inputs);
+    tt_metal::WriteToDeviceL1(device, writer_core, l1_byte_address, inputs);
+    //tt_metal::WriteToBuffer(l1_buffer, inputs);
 
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
     tt_metal::SetRuntimeArgs(

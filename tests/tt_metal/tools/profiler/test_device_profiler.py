@@ -72,7 +72,7 @@ def test_custom_cycle_count():
 
 
 def test_full_buffer():
-    REF_COUNT = 4200  # 120(cores) x 5(riscs) x 7(buffer size in marker)
+    REF_COUNT = 3780  # 108(compute cores) x 5(riscs) x 7(buffer size in marker)
     REF_RISC_COUNT = 5
 
     devicesData = run_device_profiler_test(setup=True)
