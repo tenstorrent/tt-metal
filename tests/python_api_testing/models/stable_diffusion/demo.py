@@ -15,9 +15,6 @@ import time
 from PIL import Image
 from tqdm.auto import tqdm
 from loguru import logger
-
-
-
 from transformers import CLIPTextModel, CLIPTokenizer
 from diffusers import AutoencoderKL, UNet2DConditionModel, PNDMScheduler, HeunDiscreteScheduler, DPMSolverMultistepScheduler
 from diffusers import LMSDiscreteScheduler
@@ -240,6 +237,8 @@ def demo():
     images = (image * 255).round().astype("uint8")
     pil_images = [Image.fromarray(image) for image in images][0]
     pil_images.save(f"{experiment_name}_tt.png")
+
+    ttl.device.CloseDevice(device)
 
 '''
 @article{patil2022stable,
