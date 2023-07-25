@@ -553,10 +553,6 @@ void WriteRuntimeArgsToDevice(Device *device, const Program &program);
 // All kernels on a given Tensix core must be launched.
 bool LaunchKernels(Device *device, const Program &program, bool stagger_start = false);
 
-void Synchronize();
-
-
-
 /**
  * Reads a buffer from the device
  *

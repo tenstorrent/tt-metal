@@ -27,6 +27,7 @@
 #include "tt_dnn/op_library/move/move_op.hpp"
 #include "tt_dnn/op_library/program_cache.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "tt_metal/detail/reports/compilation_reporter.hpp"
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
@@ -2859,7 +2860,7 @@ void DeviceModule(py::module &m_device) {
         +------------------+----------------------------------+-----------------------+-------------+----------+
     )doc");
 
-    m_device.def("Synchronize", &Synchronize, R"doc(
+    m_device.def("Synchronize", &detail::Synchronize, R"doc(
         Wait for all kernels on TT device to complete.
     )doc");
 }

@@ -156,6 +156,13 @@ namespace tt::tt_metal{
             return true;
         }
 
+        inline void Synchronize()
+        {
+            if (detail::HACK_CQ) {
+                Finish(*detail::HACK_CQ);
+            }
+        }
+        
         inline void GenerateBankToNocCoordHeaders(  Device *device,
                                              build_kernel_for_riscv_options_t *build_options,
                                              const std::string &op_path_suffix)

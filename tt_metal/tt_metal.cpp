@@ -983,12 +983,6 @@ bool LaunchKernels(Device *device, const Program &program, bool stagger_start) {
 }
 
 
-void Synchronize() {
-    if (detail::HACK_CQ) {
-        Finish(*detail::HACK_CQ);
-    }
-}
-
 }  // namespace tt_metal
 
 }  // namespace tt
