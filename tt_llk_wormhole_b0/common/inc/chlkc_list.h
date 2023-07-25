@@ -27,6 +27,7 @@ void math_main(const struct hlk_args_t* hlk_args=nullptr, const void* llk_args=n
 #include "chlkc_math_approx_mode.h"
 #include "chlkc_math_data_format.h"
 #include "chlkc_pack_tile_dims.h"
+#include "chlkc_math_tile_dims.h" // needed in case of SFPU executing on pack thread 
 #include "chlkc_pack.cpp"
 #include "hlk_args_struct_init.h"
 void pack_main(const struct hlk_args_t* hlk_args=nullptr, const void* llk_args=nullptr, const int loop_count=0);

@@ -54,6 +54,8 @@
 
 #define DELAY_EN (INSERT_UNPACK_DELAY || INSERT_PACK_DELAY || INSERT_MATH_DELAY)
 
+#define TT_ALWAYS_INLINE inline __attribute__ ((always_inline)) 
+
 #include <cstdint>
 
 #include "ckernel_include.h"

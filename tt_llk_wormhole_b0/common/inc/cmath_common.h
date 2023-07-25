@@ -223,5 +223,16 @@ inline const uint32_t get_num_faces(const std::uint32_t in_tile_dims[] = default
    }
 }
 
+inline const uint32_t get_num_faces(const std::uint32_t operand_id)
+{
+    if ((math_tile_dims[operand_id][TileDim::R_IDX] <= FACE_R_DIM) && (math_tile_dims[operand_id][TileDim::C_IDX] <= FACE_C_DIM)) {
+        return 1;
+    } else if ((math_tile_dims[operand_id][TileDim::R_IDX] == TILE_R_DIM) && (math_tile_dims[operand_id][TileDim::C_IDX] == TILE_C_DIM)) { 
+        return 4;
+    } else {
+        return 2;
+    }
+}
+
 
 } // namespace ckernel::math

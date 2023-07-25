@@ -78,5 +78,4 @@ struct llk_pack_params_t {
     std::uint32_t pack_output;
     llk_relu_config_u relu_config;
     bool srnd_fpu_en;
-    const std::uint32_t out_tile_dims[2];
 };

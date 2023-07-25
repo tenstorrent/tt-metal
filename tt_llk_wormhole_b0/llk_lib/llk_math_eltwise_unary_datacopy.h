@@ -155,9 +155,11 @@ inline void eltwise_unary_configure_mop(uint rows_per_inst, uint total_rows, con
 
 template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NONE>
 // within_face_16x16_transpose is used by unpacker, math does not transpose
-inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t transpose_of_faces=0 /*unused*/, const std::uint32_t within_face_16x16_transpose=0 /* unused */, const std::uint32_t in_tile_dims[2] = default_tile_dims) {
-    const uint32_t num_faces = get_num_faces(in_tile_dims);
- 
+inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t transpose_of_faces=0 /*unused*/, const std::uint32_t within_face_16x16_transpose=0 /* unused */, const std::uint32_t operand = 255) {
+    // If operand is 255, it means that it is not passed explicitly, and we should assume default tile tiles
+    // This will be fixed once all hlk inits which translate to this get operand argument
+    const std::uint32_t num_faces = operand != 255 ? get_num_faces(get_operand_id(operand)) : 4;
+     
     eltwise_unary_configure_addrmod<type, src_b_bcast_type>();
 
     if constexpr (type == A2D) {

@@ -14,13 +14,13 @@
 using namespace ckernel;
 
 template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
-inline void matmul_configure_addrmod(const bool transpose, const std::uint32_t ct_dim, const std::uint32_t rt_dim, const std::uint32_t kt_dim, const std::uint32_t in0_tile_dims[2] = default_tile_dims, const std::uint32_t in1_tile_dims[2] = default_tile_dims) {
+inline void matmul_configure_addrmod(const bool transpose, const std::uint32_t ct_dim, const std::uint32_t rt_dim, const std::uint32_t kt_dim, const std::uint32_t in0_id, const std::uint32_t in1_id) {
 
     constexpr bool high_fidelity = (NUM_FIDELITY_PHASES > 0);
-    const bool is_in0_16x32 = (in0_tile_dims[TileDim::R_IDX]<=FACE_R_DIM) && (in0_tile_dims[TileDim::C_IDX]> FACE_C_DIM);
-    const bool is_in0_32x16 = (in0_tile_dims[TileDim::R_IDX]> FACE_R_DIM) && (in0_tile_dims[TileDim::C_IDX]<=FACE_C_DIM);
-    const bool is_in1_32x16 = (in1_tile_dims[TileDim::R_IDX]> FACE_R_DIM) && (in1_tile_dims[TileDim::C_IDX]<=FACE_C_DIM);
-    const bool partial_face = in0_tile_dims[TileDim::R_IDX] < FACE_R_DIM;
+
+    const bool is_in0_16x32 = (math_tile_dims[in0_id][TileDim::R_IDX]<=FACE_R_DIM) && (math_tile_dims[in0_id][TileDim::C_IDX]> FACE_C_DIM);
+    const bool is_in0_32x16 = (math_tile_dims[in0_id][TileDim::R_IDX]> FACE_R_DIM) && (math_tile_dims[in0_id][TileDim::C_IDX]<=FACE_C_DIM);
+    const bool is_in1_32x16 = (math_tile_dims[in1_id][TileDim::R_IDX]> FACE_R_DIM) && (math_tile_dims[in1_id][TileDim::C_IDX]<=FACE_C_DIM);
 
     static_assert(FaceLayout == DstTileFaceLayout::RowMajor, "FaceLayout must be RowMajor");
 
@@ -105,22 +105,12 @@ inline void matmul_configure_addrmod(const bool transpose, const std::uint32_t c
          }
              .set(ADDR_MOD_2);
     } else if (is_in0_16x32||is_in0_32x16) {
-        if (partial_face) {
-            addr_mod_t{
-                .srca = {.incr = 16, .clr = 0, .cr = 0},
-                .srcb = {.incr = 0, .clr = 0, .cr = 0},
-                .dest = {.incr = 16, .clr = 0, .cr = 0},
-                .bias = {.incr = 1},
-            }
-                .set(ADDR_MOD_2);
-        } else {
-            addr_mod_t{
-                .srca = {.incr = 16, .clr = 0, .cr = 0},
-                .srcb = {.incr = 0, .clr = 0, .cr = 1},
-                .dest = {.incr = 8, .clr = 0, .cr = 0},
-            }
-                .set(ADDR_MOD_2);
-        }    
+        addr_mod_t{
+            .srca = {.incr = 16, .clr = 0, .cr = 0},
+            .srcb = {.incr = 0, .clr = 0, .cr = 1},
+            .dest = {.incr = 8, .clr = 0, .cr = 0},
+        }
+            .set(ADDR_MOD_2);
     } else {
         addr_mod_t{
             .srca = {.incr =  0, .clr = 0, .cr = 1},
@@ -131,23 +121,13 @@ inline void matmul_configure_addrmod(const bool transpose, const std::uint32_t c
     }        
 
     if (is_in0_16x32) {
-        if (partial_face) {
-            addr_mod_t{
-                .srca = {.incr =16, .clr = 0, .cr = 0},
-                .srcb = {.incr =16, .clr = 0, .cr = 0},
-                .dest = {.incr =0 , .clr = 1, .cr = 0},
-                .bias = {.incr = 1},
-            }
-                .set(ADDR_MOD_4);
-        } else {
-            addr_mod_t{
-                .srca = {.incr =16, .clr = 0, .cr = 0},
-                .srcb = {.incr =16, .clr = 0, .cr = 1},
-                .dest = {.incr = 0, .clr = 0, .cr = 1},
-                .bias = {.incr = 1},
-            }
-                .set(ADDR_MOD_4);
-        }        
+        addr_mod_t{
+            .srca = {.incr =16, .clr = 0, .cr = 0},
+            .srcb = {.incr =16, .clr = 0, .cr = 1},
+            .dest = {.incr = 0, .clr = 0, .cr = 1},
+            .bias = {.incr = 1},
+        }
+            .set(ADDR_MOD_4);
     } else if (is_in0_32x16) {
         addr_mod_t{
             .srca = {.incr =0 , .clr = 0, .cr = 1},
@@ -188,7 +168,7 @@ inline void matmul_configure_addrmod(const bool transpose, const std::uint32_t c
 }
 
 template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
-inline void matmul_configure_mop(bool transpose, const std::uint32_t ct_dim, const std::uint32_t rt_dim, const std::uint32_t kt_dim, const std::uint32_t in0_tile_dims[2] = default_tile_dims, const std::uint32_t in1_tile_dims[2] = default_tile_dims) {
+inline void matmul_configure_mop(bool transpose, const std::uint32_t ct_dim, const std::uint32_t rt_dim, const std::uint32_t kt_dim, const std::uint32_t in0_id, const std::uint32_t in1_id) {
 
     // in0 - loaded to SrcB
     // in1 - loaded to SrcA
@@ -198,35 +178,33 @@ inline void matmul_configure_mop(bool transpose, const std::uint32_t ct_dim, con
     // Col major layout in dest only impacs destination address increment
     // if col major layout faces are ordered as f0,f2,f1,f3
 
+    constexpr uint replay_buf_len = 16;
     constexpr bool high_fidelity = NUM_FIDELITY_PHASES > 0;
-
     const bool reuse_a = ct_dim>=rt_dim;
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
 
-    const bool is_in0_16x32 = (in0_tile_dims[TileDim::R_IDX]<=FACE_R_DIM) && (in0_tile_dims[TileDim::C_IDX]> FACE_C_DIM);
-    const bool is_in1_32x16 = (in1_tile_dims[TileDim::R_IDX]> FACE_R_DIM) && (in1_tile_dims[TileDim::C_IDX]<=FACE_C_DIM);
-    const bool is_in0_32x16 = (in0_tile_dims[TileDim::R_IDX]> FACE_R_DIM) && (in0_tile_dims[TileDim::C_IDX]<=FACE_C_DIM);
-    const bool is_in0_16x16 = (in0_tile_dims[TileDim::R_IDX]<=FACE_R_DIM) && (in0_tile_dims[TileDim::C_IDX]<=FACE_C_DIM);
-    const bool is_in1_16x16 = (in1_tile_dims[TileDim::R_IDX]<=FACE_R_DIM) && (in1_tile_dims[TileDim::C_IDX]<=FACE_C_DIM);
-    const bool partial_face = in0_tile_dims[TileDim::R_IDX] < FACE_R_DIM;
+    const bool is_in0_16x32 = (math_tile_dims[in0_id][TileDim::R_IDX]<=FACE_R_DIM) && (math_tile_dims[in0_id][TileDim::C_IDX]> FACE_C_DIM);
+    const bool is_in1_32x16 = (math_tile_dims[in1_id][TileDim::R_IDX]> FACE_R_DIM) && (math_tile_dims[in1_id][TileDim::C_IDX]<=FACE_C_DIM);
+    const bool is_in0_32x16 = (math_tile_dims[in0_id][TileDim::R_IDX]> FACE_R_DIM) && (math_tile_dims[in0_id][TileDim::C_IDX]<=FACE_C_DIM);
+    const bool is_in0_16x16 = (math_tile_dims[in0_id][TileDim::R_IDX]<=FACE_R_DIM) && (math_tile_dims[in0_id][TileDim::C_IDX]<=FACE_C_DIM);
+    const bool is_in1_16x16 = (math_tile_dims[in1_id][TileDim::R_IDX]<=FACE_R_DIM) && (math_tile_dims[in1_id][TileDim::C_IDX]<=FACE_C_DIM);
 
-    const std::uint32_t replay_buf_len = (is_in0_16x16 || is_in1_16x16) ? (partial_face ? 2 : 4) :
-                                         ((is_in0_16x32 || is_in1_32x16 || is_in0_32x16) ? (partial_face ? 4 : 8) : 16);
-
-    TT_REPLAY(replay_buf_offset, replay_buf_len, 0, 1);
+    if (is_in0_16x16 || is_in1_16x16) {
+        TTI_REPLAY(replay_buf_offset, replay_buf_len/4, 0, 1);
+    } else if (is_in0_16x32 || is_in1_32x16 || is_in0_32x16) {
+        TTI_REPLAY(replay_buf_offset, replay_buf_len/2, 0, 1);
+    } else {
+        TTI_REPLAY(replay_buf_offset, replay_buf_len, 0, 1);
+    }
 
     if (is_in1_16x16) {
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0 // srca=srca, srcb+=8,  dest+=8
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B0A0 // srca=srca, srcb+=24, dest+=24 //FIXME: dest not correct
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0); // B2A0 // // srca=srca, srcb+=8, dest+=8,  bias=1
     } else if (is_in0_16x16) {
-        if (partial_face) {
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B0A0 // srca+=16,  srcb=0,   dest=+16, bias = 1
-        } else {
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0 // srca=srca, srcb+=8,  dest+=8
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B0A0 // srca+=16,  srcb=0,   dest+=8
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0); // B0A1 // srca=srca, srcb+=8,  dest+=8,  bias=1
-        }    
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0 // srca=srca, srcb+=8,  dest+=8
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B0A0 // srca+=16,  srcb=0,   dest+=8
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0); // B0A1 // srca=srca, srcb+=8,  dest+=8,  bias=1
     } else if (is_in1_32x16) {
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0 // srca=srca, srcb+=8,  dest+=8
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B0A0 // srca+=16,  srcb+=8,  dest=0
@@ -237,20 +215,14 @@ inline void matmul_configure_mop(bool transpose, const std::uint32_t ct_dim, con
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B2A0 // srca+=16,  srcb+=8,  dest=16
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0); // B3A1 // srca=srca, srcb+=8,  dest+=8, bias=1
     } else if (is_in0_16x32 || is_in0_32x16) {
-        if (partial_face) {
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B0A0 // srca+=16,  srcb=0,   dest=+16, bias = 1
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A1 // srca+=16,  srcb+=16,  dest=0 (addr_mod_4), bias=0 
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B1A2 // srca+=16,  srcb=0,  dest=+16, bias = 1
-        } else {
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0 // srca=srca, srcb+=8,  dest+=8
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B0A0 // srca+=16,  srcb=0,   dest+=8
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0); // B0A1 // srca=srca, srcb+=8,  dest+=8,  bias=1
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A1 // srca+=16/=0,  srcb=16,  dest=0/+=8 (addr_mod_4), bias=0 // srca=0 dest+=8 if in0_32x16
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0 // srca=srca, srcb+=8,  dest+=8
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B0A0 // srca+=16,  srcb=0,   dest+=8/24, // dest+=24 if transposed
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0); // B0A1 // srca=srca, srcb+=8,  dest+=8,  bias=1
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A1 // srca+=16/=0,  srcb=16,  dest=0/+=8 (addr_mod_4), bias=0 // srca=0 dest+=8 if in0_32x16
 
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A2 // srca=srca, srcb+=8,  dest+=8
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B1A2 // srca+=16,  srcb=16,  dest+=8/24 // dest+=24 if transposed
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0); // B1A3 // srca=srca, srcb+=8,  dest+=8,  bias=1
-        }    
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A2 // srca=srca, srcb+=8,  dest+=8
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B1A2 // srca+=16,  srcb=16,  dest+=8/24 // dest+=24 if transposed
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0); // B1A3 // srca=srca, srcb+=8,  dest+=8,  bias=1
     } else {
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0 // srca=srca, srcb+=8,  dest+=8
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B0A0 // srca+=16/32, srcb=0, dest+=8  // srca+=32 if transposed
@@ -293,7 +265,8 @@ inline void matmul_configure_mop(bool transpose, const std::uint32_t ct_dim, con
 
     // TODO: can we commonize this?
     constexpr uint inner_loops = high_fidelity ? NUM_FIDELITY_PHASES : 1;
-    ckernel_template tmp(1 /* outer loop */, inner_loops, TT_OP_REPLAY(replay_buf_offset, replay_buf_len, 0, 0)); 
+    ckernel_template tmp(1 /* outer loop */, inner_loops, TT_OP_REPLAY(replay_buf_offset, (is_in0_16x16||is_in1_16x16) ? replay_buf_len/4 : 
+                                                                                          (is_in0_16x32||is_in1_32x16||is_in0_32x16) ? replay_buf_len/2 : replay_buf_len, 0, 0));
 
     if constexpr(high_fidelity) {
         if (t_dim>1) { //
@@ -312,11 +285,13 @@ inline void matmul_configure_mop(bool transpose, const std::uint32_t ct_dim, con
 }
 
 template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
-inline void llk_math_matmul_init(std::uint32_t transpose=0, const std::uint32_t in0_tile_dims[2] = default_tile_dims, const std::uint32_t in1_tile_dims[2] = default_tile_dims, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
-    matmul_configure_addrmod<NUM_FIDELITY_PHASES, FaceLayout>(transpose, ct_dim, rt_dim, kt_dim, in0_tile_dims, in1_tile_dims);
-    // Todo: do something with input tile dims
-
-    matmul_configure_mop<NUM_FIDELITY_PHASES, FaceLayout>(transpose>0, ct_dim, rt_dim, kt_dim, in0_tile_dims, in1_tile_dims);
+inline void llk_math_matmul_init(const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t transpose=0, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
+    
+    const std::uint32_t id_a = get_operand_id(operandA);
+    const std::uint32_t id_b = get_operand_id(operandB);
+    
+    matmul_configure_addrmod<NUM_FIDELITY_PHASES, FaceLayout>(transpose, ct_dim, rt_dim, kt_dim, id_a, id_b);
+    matmul_configure_mop<NUM_FIDELITY_PHASES, FaceLayout>(transpose>0, ct_dim, rt_dim, kt_dim, id_a, id_b);
     const bool reuse_a = ct_dim>=rt_dim;
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
     if (t_dim>1) {
