@@ -137,7 +137,8 @@ ifneq ($(filter "$(ARCH_NAME)","wormhole" "wormhole_b0"),)
 	DEVICE_CXXFLAGS += -DEN_DRAM_ALIAS
 endif
 
-ifeq ($(TT_METAL_VERSIM_DISABLED),1)
+ifeq ($(TT_METAL_VERSIM_DISABLED),0)
+else
   DEVICE_CXXFLAGS += -DTT_METAL_VERSIM_DISABLED
 endif
 ifeq ($(ISSUE_3487_FIX), 1)

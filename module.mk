@@ -33,6 +33,12 @@ else
 $(error Unknown value for CONFIG "$(CONFIG)")
 endif
 
+ifeq ($(TT_METAL_VERSIM_DISABLED),0)
+else
+  # Need to always define this versim disabled flag for cpp
+  CONFIG_CFLAGS += -DTT_METAL_VERSIM_DISABLED
+endif
+
 ifeq ($(BACKEND_PROFILER_EN), 1)
 CONFIG_CFLAGS += -DBACKEND_PERF_PROFILER
 endif
