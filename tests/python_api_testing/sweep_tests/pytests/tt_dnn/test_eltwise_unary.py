@@ -412,7 +412,7 @@ class TestEltwiseUnary:
             pcie_slot,
         )
 
-    @pytest.mark.skip("expm1 only returns -1.0")
+    #@pytest.mark.skip("expm1 only returns -1.0")
     def test_run_eltwise_expm1(self, input_shapes, pcie_slot, function_level_defaults):
         datagen_func = [
             generation_funcs.gen_func_with_cast(

@@ -165,16 +165,17 @@ inline void sfpu_init(SfpuType operation, uint param0 = 0)
         break;
     case SfpuType::sigmoid:
         break;
-    case SfpuType::elu:
     case SfpuType::exponential:
         if constexpr(APPROXIMATION_MODE) {
             TTI_SFPLOADI(p_sfpu::LREG0, 0, p_exp::C23_73);
             TTI_SFPLOADI(p_sfpu::LREG2, 0, p_exp::ADJ_EXP);
         }
         break;
+    case SfpuType::elu:
+    case SfpuType::gelu_derivative:
+    case SfpuType::expm1:
     case SfpuType::exp2:
         if constexpr(APPROXIMATION_MODE) {
-            TTI_SFPLOADI(p_sfpu::LREG0, 0, p_exp::C23_73);
             TTI_SFPLOADI(p_sfpu::LREG2, 0, p_exp::ADJ_EXP);
         }
         break;
@@ -252,16 +253,70 @@ void calculate_cube(uint16_t exp_base_scale_factor = 0)
     }
 }
 */
+template <bool APPROXIMATION_MODE, bool ZERO_NEGATIVE>
+sfpi_inline vFloat calculate_exponential_body_improved(vFloat in)
+{
+    vFloat out;
+
+    if constexpr (APPROXIMATION_MODE)
+    {
+
+        vInt adj_exp;
+        adj_exp = l_reg[LRegs::LReg2];
+
+        // * by 1/ln2 and add convert to 7.3 FxP format
+        vFloat val = in * vConst1p4424 + s2vFloat16b(p_exp::C23_73);
+
+        // Remove Exponent of 7 and bias the Mantissa to 127.
+        // LREG2 already holds 2's complement value so we simply do REG2 + REG3
+        vInt val_short =  adj_exp + reinterpret<vInt>(val);
+
+        // SHL to move integer bits to exponent
+        val_short <<= 10 - p_exp::FRAC_BITS;
+        out = reinterpret<vFloat>(val_short);
+
+        // Needed for fused kernels such as math_row_softmax_tables which call calculate_exponential()
+        // without using Relu in Packer to clamp -ve Infinity to 0.
+        if constexpr (ZERO_NEGATIVE)
+        {
+            v_if (val_short < 0) {
+                out = vConst0;
+            }
+            v_endif;
+        }
+        l_reg[LRegs::LReg2] = adj_exp;
+    }
+    else
+    {
+        // Force sign to 0 (make number positive)
+        vFloat exp = sfpu_exp(setsgn(in, 0));
+
+        // Load input value, to determine whether reciprocal needs to be run
+        vFloat val = dst_reg[0];
+
+        // store tentatively e^x
+        // reciprocal function relies on reloading input
+        out = exp;
+
+        v_if (val < 0) {
+            //dst_reg[0] = sfpu_reciprocal<true>(exp);
+            out = sfpu_reciprocal<true>(exp);
+        }
+        v_endif;
+    }
+    return out;
+}
+
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_expm1()
 {
-    // SFPU microcode
+   // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat v = dst_reg[0];
-        v = calculate_exponential_body<APPROXIMATION_MODE,true>(v);
-        dst_reg[0] = v - 1.0f;
+        vFloat out = calculate_exponential_body_improved<true, true>(v);
+        dst_reg[0] = out - 1.0f;
         dst_reg++;
     }
 }
@@ -750,13 +805,12 @@ inline void calculate_gelu_derivative()
 
         // exp = e^(val) * 1/sqrt(2*pi)
         if constexpr(APPROXIMATION_MODE) {
-            vFloat exp = calculate_exponential_body<APPROXIMATION_MODE, APPROXIMATION_MODE>(result);
+            vFloat exp = calculate_exponential_body_improved<APPROXIMATION_MODE, APPROXIMATION_MODE>(result);
             exp *= 0.39844F;
             dst_reg[0] = exp * val;
         } else {
             dst_reg[0] = result;
-            calculate_exponential_body<APPROXIMATION_MODE, APPROXIMATION_MODE>(result);
-            vFloat exp = dst_reg[0];
+            vFloat exp = calculate_exponential_body_improved<APPROXIMATION_MODE, APPROXIMATION_MODE>(result);
             exp *= 0.39844F;
             dst_reg[0] = exp * val;
         }
@@ -929,8 +983,9 @@ inline void calculate_elu(uint slope)
         vFloat v = dst_reg[0];
 
         v_if (v < 0.0f) {
-	  vFloat v_exp = calculate_exponential_body<true,zero_negative>(v);
-	  v = s*(v_exp - 1.0f);
+         vFloat v_exp = calculate_exponential_body_improved<true,zero_negative>(v);
+
+         v = s*(v_exp - 1.0f);
         }
         v_endif;
 
@@ -1217,13 +1272,6 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_exp2()
 {
     constexpr bool zero_negative = true;
-    vFloat c23_73;
-    vInt adj_exp;
-    if constexpr (APPROXIMATION_MODE)
-    {
-        c23_73 = l_reg[LRegs::LReg0];
-        adj_exp = l_reg[LRegs::LReg2];
-    }
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++)
     {
@@ -1231,43 +1279,9 @@ inline void calculate_exp2()
         // y = exp(x * log(2))
         // log(2) = 0.6931471805;
         v = v * 0.6931471805f;
-        vFloat val = v;
-        if constexpr (APPROXIMATION_MODE)
-        {
-            val = val * vConst1p4424 + c23_73;
-            vInt val_short = adj_exp + reinterpret<vInt>(val);
-
-            val_short <<= 10 - p_exp::FRAC_BITS;
-            dst_reg[0] = reinterpret<vFloat>(val_short);
-
-            if constexpr (zero_negative)
-            {
-                v_if (val_short < 0) {
-                    dst_reg[0] = vConst0;
-                }
-                v_endif;
-            }
-        }
-        else
-        {
-           // Force sign to 0 (make number positive)
-            val = sfpu_exp(setsgn(val, 0));
-
-            vFloat orig = v;
-
-            // Loaded by reciprocal
-            dst_reg[0] = val;
-            v_if (orig < 0) {
-                dst_reg[0] = sfpu_reciprocal<false>(val);
-            }
-            v_endif;
-        }
+        vFloat exp = calculate_exponential_body_improved<APPROXIMATION_MODE, zero_negative>(v);
+        dst_reg[0] = exp;
         dst_reg++;
-    }
-    if constexpr (APPROXIMATION_MODE)
-    {
-        l_reg[LRegs::LReg0] = c23_73;
-        l_reg[LRegs::LReg2] = adj_exp;
     }
 }
 
