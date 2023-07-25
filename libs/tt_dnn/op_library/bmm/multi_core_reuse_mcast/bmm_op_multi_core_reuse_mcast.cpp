@@ -7,7 +7,10 @@
 
 using namespace tt::constants;
 using namespace tt;
-operation::ProgramWithCallbacks create_program_mcast_in0_in1(
+using tt_metal::Buffer;
+using tt_metal::DataMovementKernel;
+
+tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt_metal::Device *device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
@@ -359,7 +362,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     return {std::move(program), override_runtime_args_callback};
 }
 
-operation::ProgramWithCallbacks create_program_mcast_in0(
+tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0(
     tt_metal::Device *device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
@@ -641,7 +644,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     return {std::move(program), override_runtime_args_callback};
 }
 
-operation::ProgramWithCallbacks create_program_mcast_in1(
+tt_metal::operation::ProgramWithCallbacks create_program_mcast_in1(
     tt_metal::Device *device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,

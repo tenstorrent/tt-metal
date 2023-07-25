@@ -12,6 +12,7 @@ using namespace tt;
 namespace mcast_reuse_generalized_helpers {
 using namespace tt::constants;
 using namespace tt;
+using namespace tt_metal;
 
 operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt_metal::Device *device,

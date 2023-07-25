@@ -4,12 +4,6 @@
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-
-// To be removed at a later time, but need a global
-// command queue for the time being.
-inline std::unique_ptr<CommandQueue> HACK_CQ;
-
 /** @file */
 
 /** \mainpage tt-metal Internal C++ Documentation
@@ -30,6 +24,8 @@ class Host;
 class Device;
 class Program;
 class Buffer;
+class CommandQueue;
+class CircularBuffer;
 
 // ==================================================
 //                  HOST API: host and device
@@ -559,9 +555,6 @@ bool LaunchKernels(Device *device, const Program &program, bool stagger_start = 
 
 void Synchronize();
 
-}  // namespace tt_metal
-
-}  // namespace tt
 
 
 /**
@@ -615,3 +608,7 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
  * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
  */
 void Finish(CommandQueue& cq);
+
+}  // namespace tt_metal
+
+}  // namespace tt

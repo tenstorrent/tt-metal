@@ -8,6 +8,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tensor/tensor.hpp"
 #include "tools/profiler/profiler.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 
 namespace tt {
 

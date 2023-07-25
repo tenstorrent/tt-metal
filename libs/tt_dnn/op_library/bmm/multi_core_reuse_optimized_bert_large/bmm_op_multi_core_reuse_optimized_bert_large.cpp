@@ -1,5 +1,6 @@
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
+#include "tt_dnn/op_library/operation.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -12,7 +13,7 @@ using namespace tt;
 namespace reuse_optimized_bert_large_helpers {
 using namespace tt::constants;
 using namespace tt;
-
+using namespace tt_metal;
 operation::ProgramWithCallbacks create_program(
     tt_metal::Device *device,
     MathFidelity math_fidelity,

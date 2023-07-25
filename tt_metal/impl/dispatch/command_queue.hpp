@@ -16,7 +16,9 @@
 #include "tt_metal/impl/program.hpp"
 #include "tt_metal/src/firmware/riscv/grayskull/noc/noc_parameters.h"
 
-using namespace tt::tt_metal;
+
+namespace tt::tt_metal {
+
 using std::pair;
 using std::set;
 using std::shared_ptr;
@@ -243,3 +245,5 @@ class CommandQueue {
     friend void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
     friend void Finish(CommandQueue& cq);
 };
+
+} // namespace tt::tt_metal

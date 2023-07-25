@@ -4,6 +4,9 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/llrt/tt_debug_print_server.hpp"
+#include "tt_metal/impl/dispatch/command_queue.hpp"
+
+namespace tt::tt_metal {
 
 u64 get_noc_multicast_encoding(const CoreCoord& top_left, const CoreCoord& bottom_right) {
     return NOC_MULTICAST_ENCODING(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
@@ -829,3 +832,5 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
 }
 
 void Finish(CommandQueue& cq) { cq.finish(); }
+
+} // namespace tt::tt_metal

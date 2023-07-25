@@ -4,13 +4,14 @@
 #include "tt_metal/common/constants.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "tt_metal/detail/util.hpp"
+#include "tt_dnn/op_library/operation.hpp"
 
 using namespace tt::constants;
 using namespace tt;
-
 namespace mcast_reuse_padding_helpers {
 using namespace tt::constants;
 using namespace tt;
+using namespace tt_metal;
 
 operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt_metal::Device *device,

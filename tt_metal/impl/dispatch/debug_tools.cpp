@@ -1,6 +1,7 @@
 #include "debug_tools.hpp"
-
 namespace internal {
+
+using namespace tt::tt_metal;
 
 void match_device_program_data_with_host_program_data(const char* host_file, const char* device_file) {
 

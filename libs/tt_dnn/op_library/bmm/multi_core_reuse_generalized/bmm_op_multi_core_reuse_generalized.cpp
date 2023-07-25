@@ -12,8 +12,9 @@ using namespace tt;
 namespace reuse_generalized_helpers {
 using namespace tt::constants;
 using namespace tt;
+using tt_metal::Buffer;
 
-operation::ProgramWithCallbacks create_program(
+tt_metal::operation::ProgramWithCallbacks create_program(
     tt_metal::Device *device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,

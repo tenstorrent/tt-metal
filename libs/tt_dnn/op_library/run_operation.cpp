@@ -4,7 +4,7 @@
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_dnn/op_library/program_cache.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
-
+#include "tt_metal/detail/tt_metal.hpp"
 #include "tt_numpy/functions.hpp"
 
 #include "tt_stl/reflection.hpp"
@@ -91,7 +91,7 @@ std::vector<Tensor> run_without_program_cache(
     CompileProgram(device, program);
     const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
     if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
-        EnqueueProgram(*HACK_CQ, program, false);
+        EnqueueProgram(*::detail::HACK_CQ, program, false);
         // Only need to dump device data when in dispatch mode
         // LaunchKernel automatically dumps device data
         op_profiler::dump_device_profiler_results(device, program);
@@ -133,7 +133,7 @@ std::vector<Tensor> run_with_program_cache(
 
     const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
     if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
-        EnqueueProgram(*HACK_CQ, program, false);
+        EnqueueProgram(*::detail::HACK_CQ, program, false);
         // Only need to dump device data when in dispatch mode
         // LaunchKernel automatically dumps device data
         op_profiler::dump_device_profiler_results(device, program);

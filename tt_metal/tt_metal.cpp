@@ -179,7 +179,7 @@ bool InitializeDevice(Device *device) {
 
     const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
     if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
-        HACK_CQ = std::make_unique<CommandQueue>(device);
+        detail::HACK_CQ = std::make_unique<CommandQueue>(device);
     }
 
     return init;
@@ -187,8 +187,8 @@ bool InitializeDevice(Device *device) {
 
 bool CloseDevice(Device *device) {
     // Needed to ensure that HACK_CQ doesn't contain a closed device
-    if (HACK_CQ) {
-        HACK_CQ.reset(nullptr);
+    if (detail::HACK_CQ) {
+        detail::HACK_CQ.reset(nullptr);
     }
 
     return device->close();
@@ -984,8 +984,8 @@ bool LaunchKernels(Device *device, const Program &program, bool stagger_start) {
 
 
 void Synchronize() {
-    if (HACK_CQ) {
-        Finish(*HACK_CQ);
+    if (detail::HACK_CQ) {
+        Finish(*detail::HACK_CQ);
     }
 }
 

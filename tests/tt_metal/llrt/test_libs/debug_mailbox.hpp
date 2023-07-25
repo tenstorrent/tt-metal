@@ -1,4 +1,5 @@
 #include "tensix.h"
+#include "tt_metal/llrt/llrt.hpp"
 
 void read_trisc_debug_mailbox(tt_cluster* cluster, int chip_id, const CoreCoord core, uint16_t trisc_id, uint32_t index = 0) {
     std::uint32_t debug_mailbox_addr;

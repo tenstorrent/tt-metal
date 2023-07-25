@@ -1,4 +1,5 @@
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
+#include "tt_dnn/op_library/operation.hpp"
 
 #include <algorithm>
 #include "tt_metal/host_api.hpp"
@@ -12,6 +13,7 @@ using namespace tt;
 namespace reuse_mcast_optimized_bert_large_helpers {
 using namespace tt::constants;
 using namespace tt;
+using namespace tt_metal;
 
 operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt_metal::Device *device,

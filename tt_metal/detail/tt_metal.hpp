@@ -9,6 +9,9 @@ using std::mutex;
 namespace tt::tt_metal{
 
     namespace detail {
+        // To be removed at a later time, but need a global
+        // command queue for the time being.
+        inline unique_ptr<CommandQueue> HACK_CQ;
 
         /**
          * Read device side profiler data and dump results into device side CSV log

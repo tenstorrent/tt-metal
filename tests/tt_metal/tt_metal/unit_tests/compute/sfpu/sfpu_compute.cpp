@@ -12,11 +12,13 @@
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "tt_metal/impl/dispatch/command_queue.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 using namespace unit_tests;
+using namespace tt::tt_metal;
 
 namespace unit_tests::sfpu_util {
 

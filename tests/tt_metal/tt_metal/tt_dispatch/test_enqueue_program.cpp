@@ -1,8 +1,8 @@
 #include "tt_metal/common/bfloat16.hpp"
 #include "tt_metal/host_api.hpp"
-
+#include "tt_metal/impl/dispatch/command_queue.hpp"
 using namespace tt;
-
+using namespace tt::tt_metal;
 u32 NUM_TILES = 2048;
 
 tt_metal::Program generate_eltwise_unary_program(Device *device) {

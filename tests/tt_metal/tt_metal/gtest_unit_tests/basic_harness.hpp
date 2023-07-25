@@ -1,7 +1,9 @@
 #include "gtest/gtest.h"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
+#include "tt_metal/impl/dispatch/command_queue.hpp"
 
+using namespace tt::tt_metal;
 class CommandQueueHarness : public ::testing::Test {
    protected:
     tt::ARCH arch;

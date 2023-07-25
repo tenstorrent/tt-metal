@@ -6,7 +6,7 @@
 #include "llrt/tt_debug_print_server.hpp"
 #include "test_gold_impls.hpp"
 #include "tt_metal/host_api.hpp"
-
+#include "tt_metal/impl/dispatch/command_queue.hpp"
 using namespace tt;
 using namespace tt::tt_metal;
 
