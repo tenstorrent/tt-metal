@@ -384,9 +384,9 @@ def prep_report(model_name: str, batch_size: int, inference_and_compile_time: fl
         "First Run (sec)": "{:.2f}".format(inference_and_compile_time),
         "Second Run (sec)":  "{:.2f}".format(inference_time),
         "Compile Time (sec)": "{:.2f}".format(compile_time),
-        "Inference Time GS (sec)": "{:.2f}".format(inference_time),
+        "Inference Time GS (sec)": "{:.4f}".format(inference_time),
         "Throughput GS (batch*inf/sec)": gs_throughput,
-        "Inference Time CPU (sec)": "{:.2f}".format(inference_time_cpu),
+        "Inference Time CPU (sec)": "{:.4f}".format(inference_time_cpu),
         "Throughput CPU (batch*inf/sec)": cpu_throughput,
     }
 
