@@ -38,13 +38,9 @@ std::int32_t tt_SiliconDevice::get_static_tlb_index(CoreCoord target) {
 
         int flat_index = target.y * 8 + target.x;
 
-        const int num_locations_with_1MB_TLBs = 70;
-        // First 70 get a pair of 1MB TLBs
-        // Last 10 get a single 2MB TLB
-        bool has_pair_of_1MB_TLB_entry = flat_index < num_locations_with_1MB_TLBs;
-        int tlb_index = has_pair_of_1MB_TLB_entry ?
-                            2 * flat_index + DEVICE_DATA.ETH_LOCATIONS.size() :
-                            156 + flat_index - 70;
+        // All 80 get single 1MB TLB.
+        int tlb_index = DEVICE_DATA.ETH_LOCATIONS.size() + flat_index;
+
         return tlb_index;
     } else {
         return -1;
@@ -59,19 +55,11 @@ std::optional<std::tuple<std::uint32_t, std::uint32_t>> tt_SiliconDevice::descri
     std::uint32_t TLB_BASE_1M = 0;
     std::uint32_t TLB_BASE_2M = TLB_COUNT_1M * (1 << 20);
     std::uint32_t TLB_BASE_16M = TLB_BASE_2M + TLB_COUNT_2M * (1 << 21);
-
     if (tlb_index < 0) { return std::nullopt; }
 
     if (tlb_index >= 0 && tlb_index < TLB_COUNT_1M) {
         std::uint32_t size = 1 << 20;
-        std::uint32_t tlb_size;
-        if (tlb_index >= 16 && tlb_index % 2 == 0) {
-            // We have setup the even tlbs after 16 to take a 2M space of the bar.
-            tlb_size = 1 << 21;
-        } else {
-            tlb_size = 1 << 20;
-        }
-        return std::tuple(TLB_BASE_1M + size * tlb_index, tlb_size);
+        return std::tuple(TLB_BASE_1M + size * tlb_index, size);
     } else if(tlb_index >= 0 && tlb_index < TLB_COUNT_1M + TLB_COUNT_2M) {
         auto tlb_offset = tlb_index - TLB_COUNT_1M;
         auto size = 1 << 21;

@@ -448,6 +448,7 @@ class tt_SiliconDevice: public tt_device
 
         // Utility Functions
         std::optional<std::uint64_t> get_tlb_data(std::uint32_t tlb_index, TLB_DATA data);
+        bool address_in_tlb_space(uint32_t address, uint32_t size_in_bytes, uint32_t tlb_offset, uint32_t tlb_size);
         std::int32_t get_static_tlb_index(CoreCoord coord);
         std::optional<std::tuple<std::uint32_t, std::uint32_t>> describe_tlb(std::int32_t tlb_index);
         std::optional<std::tuple<std::uint32_t, std::uint32_t>> describe_tlb(CoreCoord coord);
