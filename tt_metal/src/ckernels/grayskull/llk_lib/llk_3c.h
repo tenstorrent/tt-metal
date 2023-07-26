@@ -293,7 +293,7 @@ ALWI void add_tiles_init_nof() {
 
     // MATH( kernel_profiler::mark_time(11) );
     MATH(( llk_math_eltwise_binary_init<ELWADD, NONE>() ));
-    MATH( kernel_profiler::mark_time(12) );
+    // MATH( kernel_profiler::mark_time(12) );
 
     }
 ALWI void add_tiles_init() {

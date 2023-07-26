@@ -4,4 +4,4 @@ make programming_examples/loopback
 ./build/programming_examples/loopback 1             # <number of tiles>
 
 make programming_examples/eltwise_binary
-./build/programming_examples/eltwise_binary 1       # <number of tiles>
+./build/programming_examples/eltwise_binary 1 2048      # <number of tiles> <single tile size>

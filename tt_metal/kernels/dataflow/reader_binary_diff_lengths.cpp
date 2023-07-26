@@ -24,6 +24,19 @@ void kernel_main() {
 
     uint32_t num_tiles = src0_num_tiles > src1_num_tiles ? src0_num_tiles : src1_num_tiles;
 
+    // kernel_profiler::mark_time(5);
+    // kernel_profiler::mark_time(6);
+    // kernel_profiler::mark_time(7);
+    // kernel_profiler::mark_time(8);
+    // kernel_profiler::mark_time(9);
+    // kernel_profiler::mark_time(10);
+    // kernel_profiler::mark_time(11);
+    // kernel_profiler::mark_time(12);
+    // kernel_profiler::mark_time(13);
+    // kernel_profiler::mark_time(14);
+    // kernel_profiler::mark_time(15);
+    // kernel_profiler::mark_time(16);
+
     // read ublocks from src0/src1 to CB0/CB1, then push ublocks to compute (unpacker)
     for (uint32_t i=0; i<num_tiles; i += ublock_size_tiles) {
         // if (i < src0_num_tiles) {
@@ -72,4 +85,6 @@ void kernel_main() {
             src1_addr += ublock_size_bytes_1;
         }
     }
+
+    // kernel_profiler::mark_time(6);
 }

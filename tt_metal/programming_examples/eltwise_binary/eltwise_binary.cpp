@@ -60,7 +60,7 @@ int main(int argc, char **argv) {
 
         constexpr CoreCoord core = {0, 0};
 
-        constexpr uint32_t single_tile_size = 2 * 1024;
+        uint32_t single_tile_size = stoi(argv[2]);
         uint32_t num_tiles = stoi(argv[1]);
         uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 

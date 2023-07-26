@@ -49,3 +49,11 @@ bash profile_scripts/DRAM2Tensix.sh
 ## Fine-grain profile and visualization of noc_async_read components
 
 Measuring noc_async_read issues and noc_asycn_read barrier latency requires manual modifications in read kernel. The data movement kernel utilized in this measurement is `tt_metal/kernels/dataflow/reader_bmm_single_core_tilize_untilize.cpp`. In this kernel, `dim_x` defines the transfer size and `dim_y` defines the number of transfers. The tile size to transfer is 256x256 in Bfloat16 format. Change the transfer size and execute the script `profile_scripts/bmm_tilize_untilize.sh`. THe profiled cycle numbers are stored in `tt_metal/tools/profiler/logs/profile_log_device.csv`. Visualize the profiling results by executing `tt_metal/tools/profiler/process_device_log.py`. Download and execute the script `profile_website.sh` on the local machine and open http://localhost:8888 to visualize the profiling results. Cycles between time marker 5 and 6 are corresponding to noc_async_read issue, while that between 6 and 7 are corresponding to noc_async_read_barrier.
+
+## Profile overhead on 5 types of RISC cores
+
+Use `Elewise_binary` programming example to profile the profiler marker overhead. Add 12 consecutive profiler marker in the kernels `tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp`, `tt_metal/kernels/dataflow/write_unary.cpp` and `tt_metal/kernels/compute/elewise_binary.cpp` with marker `5-16`. The post process script average the gap cycle number between neighboring profile markers. Note that the profiler marker has different overhead at different positions. BRISC and NCRISC have 35 and 27 cycle overhead at Tensix2Tensix read/write speed profile experiment, but has 45 and 38 cycle overhead in this experiment.
+
+```
+bash profile_scripts/profile_all_risc_overhead.sh
+```
