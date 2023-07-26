@@ -279,7 +279,7 @@ bool run_chained_sfpu_test(const tt::ARCH& arch, int chain_length) {
                 .unary = 1
             };
 
-            tt_metal::WriteToDeviceL1(device, core, op_info, idx);
+            tt_metal::detail::WriteToDeviceL1(device, core, op_info, idx);
         }
 
 
@@ -521,7 +521,7 @@ bool run_binary_add_and_then_eltwise_gelu_test(const tt::ARCH& arch) {
                 .unary = 0
             };
 
-            tt_metal::WriteToDeviceL1(device, core, op_info, 0);
+            tt_metal::detail::WriteToDeviceL1(device, core, op_info, 0);
         }
 
         // Gelu Op reads from interm cb 0, and writes to output cb
@@ -544,7 +544,7 @@ bool run_binary_add_and_then_eltwise_gelu_test(const tt::ARCH& arch) {
                 .unary = 1
             };
 
-            tt_metal::WriteToDeviceL1(device, core, op_info, 1);
+            tt_metal::detail::WriteToDeviceL1(device, core, op_info, 1);
         }
 
         ////////////////////////////////////////////////////////////////////////////
@@ -792,7 +792,7 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
                 .unary = 0
             };
 
-            tt_metal::WriteToDeviceL1(device, core, op_info, idx);
+            tt_metal::detail::WriteToDeviceL1(device, core, op_info, idx);
         }
 
         // Op 1
@@ -820,7 +820,7 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
                 .unary = 0
             };
 
-            tt_metal::WriteToDeviceL1(device, core, op_info, idx);
+            tt_metal::detail::WriteToDeviceL1(device, core, op_info, idx);
         }
 
         // Op 2
@@ -846,7 +846,7 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
                 .unary = 0
             };
 
-            tt_metal::WriteToDeviceL1(device, core, op_info, idx);
+            tt_metal::detail::WriteToDeviceL1(device, core, op_info, idx);
         }
 
         // Op 3
@@ -874,7 +874,7 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
                 .unary = 0
             };
 
-            tt_metal::WriteToDeviceL1(device, core, op_info, idx);
+            tt_metal::detail::WriteToDeviceL1(device, core, op_info, idx);
         }
 
         // Op 4
@@ -902,7 +902,7 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
                 .unary = 0
             };
 
-            tt_metal::WriteToDeviceL1(device, core, op_info, idx);
+            tt_metal::detail::WriteToDeviceL1(device, core, op_info, idx);
         }
 
         // Op 5
@@ -930,7 +930,7 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
                 .unary = 0
             };
 
-            tt_metal::WriteToDeviceL1(device, core, op_info, idx);
+            tt_metal::detail::WriteToDeviceL1(device, core, op_info, idx);
         }
 
         // Op 6
@@ -958,7 +958,7 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
                 .unary = 0
             };
 
-            tt_metal::WriteToDeviceL1(device, core, op_info, idx);
+            tt_metal::detail::WriteToDeviceL1(device, core, op_info, idx);
         }
 
         // Op 7
@@ -986,7 +986,7 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
                 .unary = 0
             };
 
-            tt_metal::WriteToDeviceL1(device, core, op_info, idx);
+            tt_metal::detail::WriteToDeviceL1(device, core, op_info, idx);
         }
 
         // Op 8
@@ -1014,7 +1014,7 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
                 .unary = 0
             };
 
-            tt_metal::WriteToDeviceL1(device, core, op_info, idx);
+            tt_metal::detail::WriteToDeviceL1(device, core, op_info, idx);
         }
 
         // Op 9
@@ -1042,7 +1042,7 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
                 .unary = 0
             };
 
-            tt_metal::WriteToDeviceL1(device, core, op_info, idx);
+            tt_metal::detail::WriteToDeviceL1(device, core, op_info, idx);
         }
 
 

@@ -511,45 +511,6 @@ void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
 
 void DeallocateBuffer(Buffer &buffer) { buffer.deallocate(); }
 
-bool ReadFromDeviceDRAMChannel(
-    Device *device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t> &host_buffer) {
-    detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("ReadFromDeviceDRAMChannel");
-
-    bool pass = true;
-    device->cluster()->read_dram_vec(host_buffer, tt_target_dram{device->pcie_slot(), dram_channel, 0}, address, size);
-    return pass;
-}
-
-bool WriteToDeviceDRAMChannel(Device *device, int dram_channel, uint32_t address, std::vector<uint32_t> &host_buffer) {
-    detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("WriteToDeviceDRAMChannel");
-
-    bool pass = true;
-    device->cluster()->write_dram_vec(host_buffer, tt_target_dram{device->pcie_slot(), dram_channel, 0}, address);
-    return pass;
-}
-
-bool WriteToDeviceL1(
-    Device *device, const CoreCoord &logical_core, uint32_t address, std::vector<uint32_t> &host_buffer) {
-    detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("WriteToDeviceL1");
-    bool pass = true;
-    auto worker_core = device->worker_core_from_logical_core(logical_core);
-    llrt::write_hex_vec_to_core(device->cluster(), device->pcie_slot(), worker_core, host_buffer, address);
-    return pass;
-}
-
-bool ReadFromDeviceL1(
-    Device *device,
-    const CoreCoord &logical_core,
-    uint32_t address,
-    uint32_t size,
-    std::vector<uint32_t> &host_buffer) {
-    detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("ReadFromDeviceL1");
-    bool pass = true;
-    auto worker_core = device->worker_core_from_logical_core(logical_core);
-    host_buffer = llrt::read_hex_vec_from_core(device->cluster(), device->pcie_slot(), worker_core, address, size);
-    return pass;
-}
-
 bool GenerateBinaries(
     Device *device,
     build_kernel_for_riscv_options_t *build_options,
@@ -1019,12 +980,6 @@ bool LaunchKernels(Device *device, const Program &program, bool stagger_start) {
     return pass;
 }
 
-bool WriteToDeviceL1(Device *device, const CoreCoord &core, op_info_t op_info, int op_idx) {
-    int pass = true;
-    auto worker_core = device->worker_core_from_logical_core(core);
-    llrt::write_graph_interpreter_op_info_to_core(device->cluster(), device->pcie_slot(), worker_core, op_info, op_idx);
-    return pass;
-}
 
 void Synchronize() {
     if (HACK_CQ) {

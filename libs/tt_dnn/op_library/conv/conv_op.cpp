@@ -1,6 +1,7 @@
 #include "tt_dnn/op_library/conv/conv_op.hpp"
 
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/common/constants.hpp"
 // #include "test/tt_metal/llrt/test_libs/debug_mailbox.hpp"
 #include "llrt/tt_debug_print_server.hpp"
@@ -995,8 +996,8 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
     uint32_t weight_address_map_dram_noc_y = weight_address_map_dram_noc_xy.y;
 
     // Write address maps to DRAM
-    WriteToDeviceDRAMChannel(device, dram_bank_id, act_address_map_dram_addr, act_address_map);
-    WriteToDeviceDRAMChannel(device, dram_bank_id, weight_address_map_dram_addr, weight_address_map);
+    detail::WriteToDeviceDRAMChannel(device, dram_bank_id, act_address_map_dram_addr, act_address_map);
+    detail::WriteToDeviceDRAMChannel(device, dram_bank_id, weight_address_map_dram_addr, weight_address_map);
 
     tt_metal::Program program = tt_metal::Program();
     CoreCoord core_coord = {0, 0};      // TODO: avoid another var here. Find a way to use core range instead.
@@ -1222,8 +1223,8 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
         writer_rt_args
     );
 
-    tt_metal::WriteToDeviceL1(device, core_coord, act_address_map_metadata_l1_address, act_address_map_metadata);
-    tt_metal::WriteToDeviceL1(device, core_coord, weight_address_map_metadata_l1_address, weight_address_map_metadata);
+    tt_metal::detail::WriteToDeviceL1(device, core_coord, act_address_map_metadata_l1_address, act_address_map_metadata);
+    tt_metal::detail::WriteToDeviceL1(device, core_coord, weight_address_map_metadata_l1_address, weight_address_map_metadata);
 
      auto override_runtime_args_callback = [
         reader_kernel=reader,

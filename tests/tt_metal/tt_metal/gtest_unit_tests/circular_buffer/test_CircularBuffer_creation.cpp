@@ -2,6 +2,7 @@
 #include "gtest/gtest.h"
 #include "circular_buffer_test_utils.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
 
 using namespace tt::tt_metal;
@@ -22,7 +23,7 @@ bool test_cb_config_written_to_core(Program &program, Device *device, const Core
             for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
                 for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
                     CoreCoord core_coord{.x = x, .y = y};
-                    tt::tt_metal::ReadFromDeviceL1(
+                    tt::tt_metal::detail::ReadFromDeviceL1(
                         device, core_coord, CIRCULAR_BUFFER_CONFIG_BASE, cb_config_buffer_size, cb_config_vector);
 
                     for (const auto buffer_index : cb.buffer_indices()) {

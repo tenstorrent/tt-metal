@@ -4,6 +4,7 @@
 #include <optional>
 
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/impl/buffers/semaphore.hpp"
@@ -44,7 +45,7 @@ void check_semaphores_are_initialized(tt_metal::Device *device, const CoreRangeS
             for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
                 auto logical_core = CoreCoord{x, y};
                 std::vector<uint32_t> res;
-                tt_metal::ReadFromDeviceL1(device, logical_core, SEMAPHORE_BASE, SEMAPHORE_SIZE, res);
+                tt_metal::detail::ReadFromDeviceL1(device, logical_core, SEMAPHORE_BASE, SEMAPHORE_SIZE, res);
                 std::vector<uint32_t> filtered_res;
                 constexpr static uint32_t num_u32_to_skip = UINT32_WORDS_PER_SEMAPHORE * sizeof(uint32_t);
                 for (int i = 0; i < res.size(); i+=num_u32_to_skip) {

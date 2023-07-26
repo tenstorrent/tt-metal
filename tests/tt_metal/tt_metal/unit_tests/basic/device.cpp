@@ -6,6 +6,7 @@
 #include "multi_device_fixture.hpp"
 #include "single_device_fixture.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -29,14 +30,14 @@ bool l1_ping(
     for (int y = 0; y < grid_size.y; y++) {
         for (int x = 0; x < grid_size.x; x++) {
             CoreCoord dest_core({.x = static_cast<size_t>(x), .y = static_cast<size_t>(y)});
-            tt_metal::WriteToDeviceL1(device, dest_core, l1_byte_address, inputs);
+            tt_metal::detail::WriteToDeviceL1(device, dest_core, l1_byte_address, inputs);
         }
     }
     for (int y = 0; y < grid_size.y; y++) {
         for (int x = 0; x < grid_size.x; x++) {
             CoreCoord dest_core({.x = static_cast<size_t>(x), .y = static_cast<size_t>(y)});
             std::vector<uint32_t> dest_core_data;
-            tt_metal::ReadFromDeviceL1(device, dest_core, l1_byte_address, byte_size, dest_core_data);
+            tt_metal::detail::ReadFromDeviceL1(device, dest_core, l1_byte_address, byte_size, dest_core_data);
             pass &= (dest_core_data == inputs);
             if (not pass) {
                 MESSAGE("Mismatch at Core: ", dest_core.str());
@@ -60,11 +61,11 @@ bool dram_ping(
     bool pass = true;
     auto inputs = generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
     for (unsigned int channel = 0; channel < num_channels; channel++) {
-        tt_metal::WriteToDeviceDRAMChannel(device, channel, dram_byte_address, inputs);
+        tt_metal::detail::WriteToDeviceDRAMChannel(device, channel, dram_byte_address, inputs);
     }
     for (unsigned int channel = 0; channel < num_channels; channel++) {
         std::vector<uint32_t> dest_channel_data;
-        tt_metal::ReadFromDeviceDRAMChannel(device, channel, dram_byte_address, byte_size, dest_channel_data);
+        tt_metal::detail::ReadFromDeviceDRAMChannel(device, channel, dram_byte_address, byte_size, dest_channel_data);
         pass &= (dest_channel_data == inputs);
         if (not pass) {
             cout << "Mismatch at Channel: " << channel << std::endl;

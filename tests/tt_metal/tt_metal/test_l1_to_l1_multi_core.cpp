@@ -3,6 +3,7 @@
 #include <random>
 
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
 // #include "tt_gdb/tt_gdb.hpp"
 
@@ -108,7 +109,7 @@ int main(int argc, char **argv) {
         for(uint32_t i = 0; i < 10; i++) {
             for(uint32_t j = i+1; j < 10; j++) {
                 CoreCoord core = {(size_t) j, (size_t) i};
-                tt_metal::ReadFromDeviceL1(device, core, l1_buffer_addr, total_tiles_size_bytes, result_vec);
+                tt_metal::detail::ReadFromDeviceL1(device, core, l1_buffer_addr, total_tiles_size_bytes, result_vec);
                 std::vector<uint32_t> src_vec = create_constant_vector_of_bfloat16(
                     dram_buffer_size, j * 10 + i);
                 if(src_vec != result_vec) {

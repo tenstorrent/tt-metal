@@ -3,6 +3,7 @@
 #include <random>
 
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
 
 #include "llrt/tt_debug_print_server.hpp"
@@ -189,7 +190,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-        pass &= tt_metal::WriteToDeviceDRAMChannel(device, dram_src_channel_id, src_dram_buffer.address(), src_vec);
+        pass &= tt_metal::detail::WriteToDeviceDRAMChannel(device, dram_src_channel_id, src_dram_buffer.address(), src_vec);
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
@@ -214,7 +215,7 @@ int main(int argc, char **argv) {
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::ReadFromDeviceDRAMChannel(
+        tt_metal::detail::ReadFromDeviceDRAMChannel(
             device, dram_dst_channel_id, dst_dram_buffer.address(), dst_dram_buffer.size(), result_vec);
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

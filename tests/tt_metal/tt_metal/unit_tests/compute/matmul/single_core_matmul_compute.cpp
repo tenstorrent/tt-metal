@@ -12,6 +12,7 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/tilization.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -450,10 +451,10 @@ bool single_core_matmul(tt_metal::Device* device, const SingleCoreMatmulConfig& 
     //                      Comparison Checking
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> input0_l1_readback_packed;
-    tt_metal::ReadFromDeviceL1(device, cfg.core, 120 * 1024, 2 * single_tile_size, input0_l1_readback_packed);
+    tt_metal::detail::ReadFromDeviceL1(device, cfg.core, 120 * 1024, 2 * single_tile_size, input0_l1_readback_packed);
     REQUIRE(input0_l1_readback_packed == packed_activation);
     std::vector<uint32_t> input1_l1_readback_packed;
-    tt_metal::ReadFromDeviceL1(device, cfg.core, 250 * 1024, 2 * single_tile_size, input1_l1_readback_packed);
+    tt_metal::detail::ReadFromDeviceL1(device, cfg.core, 250 * 1024, 2 * single_tile_size, input1_l1_readback_packed);
     REQUIRE(input1_l1_readback_packed == packed_identity);
 
     // std::vector<uint32_t> input1_l1_readback_packed;

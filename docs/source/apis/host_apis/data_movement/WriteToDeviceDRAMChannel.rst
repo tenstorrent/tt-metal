@@ -1,4 +1,0 @@
-WriteToDeviceDRAMChannel
-=========================
-
-.. doxygenfunction:: WriteToDeviceDRAMChannel

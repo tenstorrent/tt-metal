@@ -5,6 +5,7 @@
 #include "doctest.h"
 #include "single_device_fixture.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -63,7 +64,7 @@ bool verify_result(Device *device, const Program &program, const std::map<CoreCo
             auto expected_rt_args = core_to_rt_args.at(logical_core);
             CHECK(rt_args == expected_rt_args);
             std::vector<uint32_t> written_args;
-            tt_metal::ReadFromDeviceL1(device, logical_core, rt_arg_addr, rt_args.size()*sizeof(uint32_t), written_args);
+            tt_metal::detail::ReadFromDeviceL1(device, logical_core, rt_arg_addr, rt_args.size()*sizeof(uint32_t), written_args);
             bool got_expected_result = rt_args == written_args;
             CHECK(got_expected_result);
             pass &= got_expected_result;

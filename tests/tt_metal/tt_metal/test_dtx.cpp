@@ -4,6 +4,7 @@
 #include "dtx/dtx.hpp"
 #include "dtx/dtx_passes.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -105,7 +106,7 @@ int main(int argc, char **argv) {
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
 
-        tt_metal::WriteToDeviceL1(device, core, address_map_l1_addr, address_map);
+        tt_metal::detail::WriteToDeviceL1(device, core, address_map_l1_addr, address_map);
 
         tt_metal::SetRuntimeArgs(
             dram_to_l1_copy_kernel,
@@ -121,7 +122,7 @@ int main(int argc, char **argv) {
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::ReadFromDeviceL1(device, core, l1_buffer_addr, dram_buffer_size, result_vec);
+        tt_metal::detail::ReadFromDeviceL1(device, core, l1_buffer_addr, dram_buffer_size, result_vec);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

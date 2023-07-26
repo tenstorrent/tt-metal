@@ -4,6 +4,7 @@
 #include <cstdlib> // for putenv()
 
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
 #include "hostdevcommon/common_values.hpp"
 
@@ -275,7 +276,7 @@ int main(int argc, char **argv) {
         // host initializes only the sender's semaphores, reciver's semaphores are initialized by the kernel
         std::vector<uint32_t> invalid = {INVALID};
         for (auto core : cores) {
-            tt_metal::WriteToDeviceL1(device, core, sender_semaphore_addr, invalid);
+            tt_metal::detail::WriteToDeviceL1(device, core, sender_semaphore_addr, invalid);
         }
 
         // send run-time kernel arguments

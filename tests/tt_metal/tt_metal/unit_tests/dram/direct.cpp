@@ -5,6 +5,7 @@
 #include "doctest.h"
 #include "single_device_fixture.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
@@ -70,7 +71,7 @@ bool reader_only(
 
     std::vector<uint32_t> dest_core_data;
     // tt_metal::ReadFromBuffer(l1_buffer, dest_core_data);
-    tt_metal::ReadFromDeviceL1(device, reader_core, l1_byte_address, byte_size, dest_core_data);
+    tt_metal::detail::ReadFromDeviceL1(device, reader_core, l1_byte_address, byte_size, dest_core_data);
     pass &= (dest_core_data == inputs);
     if (not pass) {
         std::cout << "Mismatch at Core: " << reader_core.str() << std::endl;
@@ -115,7 +116,7 @@ bool writer_only(
     ////////////////////////////////////////////////////////////////////////////
     pass &= tt_metal::CompileProgram(device, program);
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
-    tt_metal::WriteToDeviceL1(device, writer_core, l1_byte_address, inputs);
+    tt_metal::detail::WriteToDeviceL1(device, writer_core, l1_byte_address, inputs);
     //tt_metal::WriteToBuffer(l1_buffer, inputs);
 
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);

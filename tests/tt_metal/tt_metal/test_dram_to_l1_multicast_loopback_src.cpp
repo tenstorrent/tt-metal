@@ -3,6 +3,7 @@
 #include <random>
 
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 
@@ -107,7 +108,7 @@ int main(int argc, char **argv) {
             for(int j = 0 ; j < grid_size.x; j++) {
                 CoreCoord dest_core = {(std::size_t) core_start.x + j, (std::size_t) core_start.y + i};
                 std::vector<uint32_t> dest_core_data;
-                tt_metal::ReadFromDeviceL1(device, dest_core, dest_buffer_addr, dram_buffer_size, dest_core_data);
+                tt_metal::detail::ReadFromDeviceL1(device, dest_core, dest_buffer_addr, dram_buffer_size, dest_core_data);
                 auto dest_core_data_unpacked = unpack_uint32_vec_into_bfloat16_vec(dest_core_data);
                 pass &= (dest_core_data_unpacked == tensor.get_values());
                 if(not (dest_core_data_unpacked == tensor.get_values())) {

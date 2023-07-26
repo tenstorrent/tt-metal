@@ -13,6 +13,7 @@
 #include<chrono>
 #include <tuple>
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
 #include "common/constants.hpp"
 // This file contains helper functions to do layout transformations (tilize, untilize) and
@@ -310,13 +311,13 @@ int main(int argc, char **argv) {
             writer_rt_args);
         tt_metal::WriteRuntimeArgsToDevice(device, program);
         std::cout << "DONE DEVICE CONFIGURE. GOING TO WRITE address map TO DEVICE L1" << std::endl;
-        tt_metal::WriteToDeviceL1(device, core, source_addresses_in_l1_addr, source_addresses);
+        tt_metal::detail::WriteToDeviceL1(device, core, source_addresses_in_l1_addr, source_addresses);
 
         // DEBUG
         // Sanity check to verify address map in L1
         std::vector<uint32_t> source_addresses_in_l1;
 
-        tt_metal::ReadFromDeviceL1(device, core, source_addresses_in_l1_addr, source_addresses.size() * sizeof(uint32_t), source_addresses_in_l1);
+        tt_metal::detail::ReadFromDeviceL1(device, core, source_addresses_in_l1_addr, source_addresses.size() * sizeof(uint32_t), source_addresses_in_l1);
         assert(source_addresses == source_addresses_in_l1);
         // END DEBUG
 

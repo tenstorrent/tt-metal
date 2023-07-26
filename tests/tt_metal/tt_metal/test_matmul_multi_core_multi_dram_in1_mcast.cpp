@@ -3,6 +3,7 @@
 #include <random>
 
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "test_tiles.hpp"
@@ -372,7 +373,7 @@ bool move_tiles_to_dram(tt_metal::Device *device, std::vector<uint32_t> tensor, 
             uint32_t dram_addr = (tile_id / 8) * tile_size_bytes + dram_buffer_addr;
             int dram_channel = tile_id % 8;
 
-            pass &= tt_metal::WriteToDeviceDRAMChannel(device, dram_channel, dram_addr, tile);
+            pass &= tt_metal::detail::WriteToDeviceDRAMChannel(device, dram_channel, dram_addr, tile);
             start_index += tile_size;
             tile_id++;
         }
@@ -463,7 +464,7 @@ int main(int argc, char **argv) {
             for(int j = 0; j < num_cores_c; j++) {
                 std::vector<uint32_t> invalid = {INVALID};
                 CoreCoord core = {(std::size_t) start_core_x + j, (std::size_t) start_core_y + i};
-                tt_metal::WriteToDeviceL1(device, core, in1_mcast_sender_semaphore_addr, invalid);
+                tt_metal::detail::WriteToDeviceL1(device, core, in1_mcast_sender_semaphore_addr, invalid);
             }
         }
 
@@ -498,7 +499,7 @@ int main(int argc, char **argv) {
                 int dram_bank = tile_id % 8;
                 uint32_t dram_address = ((tile_id / 8) * single_tile_size) + out_dram_addr;
                 std::vector<uint32_t> result_vec;
-                tt_metal::ReadFromDeviceDRAMChannel(device, dram_bank, dram_address, single_tile_size, result_vec);
+                tt_metal::detail::ReadFromDeviceDRAMChannel(device, dram_bank, dram_address, single_tile_size, result_vec);
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
                 auto result_flat_layout = convert_to_flat_layout(result_bfp16);
 

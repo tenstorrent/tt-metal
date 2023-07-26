@@ -3,6 +3,7 @@
 #include "gtest/gtest.h"
 #include "tt_metal/common/bfloat16.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 
 using namespace tt::tt_metal;
 
@@ -83,7 +84,7 @@ bool test_dummy_EnqueueProgram_with_cbs(Device* device, CommandQueue& cq, const 
             auto [core_coord, terminate_] = core_range_generator();
 
             terminate = terminate_;
-            tt::tt_metal::ReadFromDeviceL1(
+            tt::tt_metal::detail::ReadFromDeviceL1(
                 device, core_coord, CIRCULAR_BUFFER_CONFIG_BASE, cb_config_buffer_size, cb_config_vector);
 
             u32 cb_id = 0;
@@ -126,7 +127,7 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, const
             auto [core_coord, terminate_] = core_range_generator();
 
             terminate = terminate_;
-            tt::tt_metal::ReadFromDeviceL1(device, core_coord, SEMAPHORE_BASE, sem_buffer_size, sem_vector);
+            tt::tt_metal::detail::ReadFromDeviceL1(device, core_coord, SEMAPHORE_BASE, sem_buffer_size, sem_vector);
 
             u32 sem_id = 0;
             for (u32 i = 0; i < sem_vector.size(); i += sizeof(u32)) {

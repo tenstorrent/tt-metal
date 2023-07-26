@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
 
 #include "test_tiles.hpp"
@@ -154,7 +155,6 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         auto seed = std::chrono::system_clock::now().time_since_epoch().count();
         vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(dram_buffer_bytes, 100.0f, 0x1234);
-        //pass &= tt_metal::WriteToDeviceDRAMChannel(device, dram_src0_channel_id, src0_vec, src0_dram_buffer->address());
         tt_metal::WriteToBuffer(src0_dram_buffer, src0_vec);
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
@@ -188,8 +188,6 @@ int main(int argc, char **argv) {
 
         // The kernel will view the input as TILED32_4FACES
         vector<uint32_t> result_vec;
-        //tt_metal::ReadFromDeviceDRAMChannel(
-        //    device, dram_dst_channel_id, dst_dram_buffer->address(), result_vec, dst_dram_buffer->size());
         tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);
         TT_ASSERT(result_vec.size() == NC*H*W/2); // we are expecting one tile in H, and half the elements since the vector packs 2 uint16_ts
 

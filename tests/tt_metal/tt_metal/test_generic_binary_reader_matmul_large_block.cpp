@@ -3,6 +3,7 @@
 #include <random>
 
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "test_tiles.hpp"
@@ -340,7 +341,7 @@ int main(int argc, char **argv) {
         auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
         tt_metal::WriteToBuffer(src1_dram_buffer, weights);
-        tt_metal::WriteToDeviceL1(device, core, source_addresses_in_l1_addr, source_addresses);
+        tt_metal::detail::WriteToDeviceL1(device, core, source_addresses_in_l1_addr, source_addresses);
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
         tt_metal::SetRuntimeArgs(

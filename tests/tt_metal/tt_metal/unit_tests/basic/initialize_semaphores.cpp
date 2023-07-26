@@ -5,6 +5,7 @@
 #include "doctest.h"
 #include "single_device_fixture.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
 #include "tt_metal/detail/util.hpp"
 
@@ -94,7 +95,7 @@ void create_and_read_max_num_semaphores(tt_metal::Device *device, tt_metal::Prog
                 std::vector<uint32_t> single_val;
                 uint32_t semaphore_addr = SEMAPHORE_BASE + (ALIGNED_SIZE_PER_SEMAPHORE * i);
                 uint32_t semaphore_size = UINT32_WORDS_PER_SEMAPHORE * sizeof(uint32_t);
-                tt_metal::ReadFromDeviceL1(device, logical_core, semaphore_addr, semaphore_size, single_val);
+                tt_metal::detail::ReadFromDeviceL1(device, logical_core, semaphore_addr, semaphore_size, single_val);
                 REQUIRE(single_val.size() == 1);
                 res.push_back(single_val.at(0));
             }
