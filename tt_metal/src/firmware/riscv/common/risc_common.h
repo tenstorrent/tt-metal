@@ -12,7 +12,6 @@
 
 #include "noc_parameters.h"
 #include "tensix.h"
-#include "risc.h"
 #include "eth_l1_address_map.h"
 #include "noc_overlay_parameters.h"
 #include "stream_io_map.h"
@@ -122,15 +121,23 @@ inline uint32_t reg_read_barrier_l1(uint32_t addr)
 
 inline void assert_trisc_reset() {
   uint32_t soft_reset_0 = READ_REG(RISCV_DEBUG_REG_SOFT_RESET_0);
-  uint32_t trisc_reset_mask = 0x7000;
+  uint32_t trisc_reset_mask = RISCV_SOFT_RESET_0_TRISCS;
   WRITE_REG(RISCV_DEBUG_REG_SOFT_RESET_0, soft_reset_0 | trisc_reset_mask);
 }
 
 
 inline void deassert_trisc_reset() {
   uint32_t soft_reset_0 = READ_REG(RISCV_DEBUG_REG_SOFT_RESET_0);
-  uint32_t trisc_reset_mask = 0x7000;
+  uint32_t trisc_reset_mask = RISCV_SOFT_RESET_0_TRISCS;
   WRITE_REG(RISCV_DEBUG_REG_SOFT_RESET_0, soft_reset_0 & ~trisc_reset_mask);
+}
+
+inline void deassert_all_reset() {
+  WRITE_REG(RISCV_DEBUG_REG_SOFT_RESET_0, RISCV_SOFT_RESET_0_NONE);
+}
+
+inline void assert_just_ncrisc_reset() {
+  WRITE_REG(RISCV_DEBUG_REG_SOFT_RESET_0, RISCV_SOFT_RESET_0_NCRISC);
 }
 
 inline uint32_t special_mult(uint32_t a, uint32_t special_b) {
@@ -145,7 +152,6 @@ inline uint32_t special_mult(uint32_t a, uint32_t special_b) {
   else if (special_b == TILE_WORD_32_BIT)
     return a * TILE_WORD_32_BIT;
 
-  RISC_POST_STATUS(0xDEAD0002);
   while(true);
   return 0;
 }
@@ -261,21 +267,18 @@ inline void breakpoint_(uint32_t line) {
         asm("li t0, " MACRO_SP(BRISC_SP_MACRO));
         BREAKPOINT = BRISC_BREAKPOINT;
         LNUM = BRISC_BP_LNUM;
-    #else
-    extern uint32_t __firmware_start[];
-    if ((uint32_t)__firmware_start == (uint32_t)l1_mem::address_map::TRISC0_BASE) {
+    #elif COMPILE_FOR_TRISC == 0
         asm("li t0, " MACRO_SP(TRISC0_SP_MACRO));
         BREAKPOINT = TRISC0_BREAKPOINT;
-        LNUM = TRISC0_BP_LNUM
-    } else if ((uint32_t)__firmware_start == (uint32_t)l1_mem::address_map::TRISC1_BASE) {
+        LNUM = TRISC0_BP_LNUM;
+    #elif COMPILE_FOR_TRISC == 1
         asm("li t0, " MACRO_SP(TRISC1_SP_MACRO));
         BREAKPOINT = TRISC1_BREAKPOINT;
-        LNUM = TRISC1_BP_LNUM
-    } else if ((uint32_t)__firmware_start == (uint32_t)l1_mem::address_map::TRISC2_BASE) {
+        LNUM = TRISC1_BP_LNUM;
+    #elif COMPILE_FOR_TRISC == 2
         asm("li t0, " MACRO_SP(TRISC2_SP_MACRO));
         BREAKPOINT = TRISC2_BREAKPOINT;
-        LNUM = TRISC2_BP_LNUM
-    }
+        LNUM = TRISC2_BP_LNUM;
     #endif
 
     // Write '1' to breakpoint location so that this core keeps

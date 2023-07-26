@@ -167,7 +167,6 @@ namespace detail {
         ZoneScoped;
         return program.compile(device);
     }
-
 }
 
 Device *CreateDevice(int device_id, const std::vector<uint32_t>& l1_bank_remap) {
@@ -486,40 +485,27 @@ bool LaunchProgram(Device *device, Program &program, bool stagger_start) {
     auto device_id = device->id();
 
     cluster->dram_barrier(device_id);
-    cluster->l1_barrier(device_id);
 
-    // Deassert cores used in the program
-    TensixSoftResetOptions soft_reset_option = stagger_start ? TENSIX_DEASSERT_SOFT_RESET : TENSIX_DEASSERT_SOFT_RESET_NO_STAGGER;
+    // Note: the l1_barrier below is needed to be sure writes to cores that
+    // don't get the GO mailbox (eg, storage cores) have all landed
+    cluster->l1_barrier(device->id());
+
     auto logical_cores_used_in_program = program.logical_cores();
-    for (const CoreCoord &logical_core : logical_cores_used_in_program) {
-        CoreCoord worker_core = device->worker_core_from_logical_core(logical_core);
-        cluster->set_tensix_risc_reset_on_core(tt_cxy_pair(device_id, worker_core), soft_reset_option);
+    std::vector<uint32_t> run_mailbox_go_val = {RUN_MESSAGE_GO};
+    for (const auto &logical_core : logical_cores_used_in_program) {
+        // XXXX move this to llrt
+        auto worker_core = device->worker_core_from_logical_core(logical_core);
+        tt::llrt::write_hex_vec_to_core(cluster, device_id, worker_core, run_mailbox_go_val, MEM_RUN_MAILBOX_ADDRESS);
     }
 
     bool riscs_are_done = false;
     while (not riscs_are_done) {
         riscs_are_done = true;
         for (const auto &logical_core : logical_cores_used_in_program) {
-            // Check if all the riscs on the core are done
-            bool ncrisc_runs = core_runs_ncrisc(program, logical_core);
-            bool triscs_run = core_runs_triscs(program, logical_core);
-            auto risc_option = GetRiscOptionFromCoreConfig(ncrisc_runs, triscs_run);
             auto worker_core = device->worker_core_from_logical_core(logical_core);
             riscs_are_done &=
-                llrt::internal_::check_if_riscs_on_specified_core_done(cluster, device_id, risc_option, worker_core);
+                llrt::internal_::check_if_riscs_on_specified_core_done(cluster, device_id, worker_core);
         }
-    }
-
-    // Reset the mailboxes on each core to enable multiple launches of the same program
-    // without needing to re-configure the device
-    for (const auto &logical_core : logical_cores_used_in_program) {
-        bool ncrisc_runs = core_runs_ncrisc(program, logical_core);
-        bool triscs_run = core_runs_triscs(program, logical_core);
-        auto risc_option = GetRiscOptionFromCoreConfig(ncrisc_runs, triscs_run);
-        auto worker_core = device->worker_core_from_logical_core(logical_core);
-        llrt::internal_::setup_riscs_on_specified_core(cluster, device_id, risc_option, worker_core);
-        // Reset the cores that were running
-        cluster->set_tensix_risc_reset_on_core(tt_cxy_pair(device_id, worker_core), TENSIX_ASSERT_SOFT_RESET);
     }
 
     }//Profiler scope end

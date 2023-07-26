@@ -26,7 +26,6 @@ namespace ckernel
 volatile uint tt_reg_ptr * const regfile = reinterpret_cast<volatile uint *>(REGFILE_BASE);
 volatile uint tt_reg_ptr * const instrn_buffer = reinterpret_cast<volatile uint *>(INSTRN_BUF_BASE);
 volatile uint tt_reg_ptr * const pc_buf_base = reinterpret_cast<volatile uint *>(PC_BUF_BASE);
-volatile uint tt_reg_ptr * const trisc_run_mailbox = reinterpret_cast<volatile uint *>(MEM_RUN_MAILBOX_ADDRESS + PREPROCESSOR_EXPAND(MEM_MAILBOX_TRISC, COMPILE_FOR_TRISC, _OFFSET));
 }
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];

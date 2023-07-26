@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <cstdint>
 
+#include "risc.h"
 #include "risc_common.h"
 #include "noc_overlay_parameters.h"
 #include "ckernel_structs.h"
@@ -52,7 +53,7 @@ extern uint8_t kernel_noc_id_var;
 
 void kernel_launch() {
 
-    firmware_kernel_common_init((void *)MEM_BRISC_INIT_LOCAL_L1_BASE);
+    firmware_kernel_common_init((void tt_l1_ptr *)MEM_BRISC_INIT_LOCAL_L1_BASE);
 
 #if defined(IS_DISPATCH_KERNEL)
     setup_cq_read_write_interface();

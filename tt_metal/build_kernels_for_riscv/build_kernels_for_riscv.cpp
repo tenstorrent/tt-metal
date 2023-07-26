@@ -506,8 +506,8 @@ static void compile_for_risc(
                 {"ncrisck.o",  "risc_common.o",  "risc_chip_specific.o", "substitutes.o",   "tmu-crt0k.o"},
             },
             {   // firmware
-                {"ncrisc.cc", "risc_common.cc", "risc_chip_specific.c", "substitutes.cpp", "tmu-crt0.S"},
-                {"ncrisc.o",  "risc_common.o",  "risc_chip_specific.o", "substitutes.o",   "tmu-crt0.o"},
+                {"ncrisc.cc", "risc_common.cc", "risc_chip_specific.c", "substitutes.cpp", "ncrisc-halt.S", "tmu-crt0.S"},
+                {"ncrisc.o",  "risc_common.o",  "risc_chip_specific.o", "substitutes.o",   "ncrisc-halt.o", "tmu-crt0.o"},
             },
         },
         {   // trisc
@@ -538,11 +538,12 @@ static void compile_for_risc(
     int risc_type = 0;
     switch (risc_id) {
         case RISCID::NC:
-            cwds.resize(5);
+            cwds.resize(6);
             cwds[0] = "tt_metal/src/firmware/riscv/targets/ncrisc";
             cwds[1] = "tt_metal/src/firmware/riscv/common";
             cwds[2] = "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(ctx.arch) + "";
             cwds[3] = "tt_metal/src/firmware/riscv/toolchain";
+            cwds[4] = "tt_metal/src/firmware/riscv/toolchain";
             risc_type = 0;
         break;
         case RISCID::BR:
@@ -607,7 +608,7 @@ void link_for_risc(RISCID risc_id,
         tobjl = {"ckernel_main.o", "substitutes.o", "ckernel_template.o", "tmu-crt0k.o" };
     } else {
         bobjl = {"brisc.o", "risc_common.o", "tdma_xmov.o", "noc.o", "substitutes.o", "tmu-crt0.o"};
-        nobjl = {"ncrisc.o", "risc_common.o", "risc_chip_specific.o", "substitutes.o", "tmu-crt0.o"};
+        nobjl = {"ncrisc.o", "risc_common.o", "risc_chip_specific.o", "substitutes.o", "ncrisc-halt.o", "tmu-crt0.o"};
         tobjl = {"substitutes.o", "ckernel.o", "tmu-crt0.o" };
     }
 

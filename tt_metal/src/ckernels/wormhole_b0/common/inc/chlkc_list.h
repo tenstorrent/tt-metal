@@ -37,7 +37,6 @@ uint run_kernel() {
 #ifdef UCK_CHLKC_MATH
     FWLOG1("run_kernel = %s", HLKC_MATH);
     regfile[p_gpr::DBG_CKID] = HLKC_MATH;
-    trisc_run_mailbox_write((HLKC_MATH << 16) | KERNEL_IN_PROGRESS);
     zeroacc();
     chlkc_math::math_main();
 #endif
@@ -45,14 +44,12 @@ uint run_kernel() {
 #ifdef UCK_CHLKC_PACK
     FWLOG1("run_kernel = %s", HLKC_PACK);
     regfile[p_gpr::DBG_CKID] = HLKC_PACK;
-    trisc_run_mailbox_write((HLKC_PACK << 16) | KERNEL_IN_PROGRESS);
     chlkc_pack::pack_main();
 #endif
 
 #ifdef UCK_CHLKC_UNPACK
     FWLOG1("run_kernel = %s", HLKC_UNPACK);
     regfile[p_gpr::DBG_CKID] = HLKC_UNPACK;
-    trisc_run_mailbox_write((HLKC_UNPACK << 16) | KERNEL_IN_PROGRESS);
     zerosrc();
     chlkc_unpack::unpack_main();
 #endif

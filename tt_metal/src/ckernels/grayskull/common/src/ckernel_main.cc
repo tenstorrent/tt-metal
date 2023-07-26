@@ -23,17 +23,16 @@ uint32_t gl_alu_format_spec_reg = 0;
 
 namespace ckernel
 {
-volatile uint * const regfile = reinterpret_cast<volatile uint *>(REGFILE_BASE);
-volatile uint * const instrn_buffer = reinterpret_cast<volatile uint *>(INSTRN_BUF_BASE);
-volatile uint * const pc_buf_base = reinterpret_cast<volatile uint *>(PC_BUF_BASE);
-volatile uint * const trisc_run_mailbox = reinterpret_cast<volatile uint *>(MEM_RUN_MAILBOX_ADDRESS + PREPROCESSOR_EXPAND(MEM_MAILBOX_TRISC, COMPILE_FOR_TRISC, _OFFSET));
+volatile tt_reg_ptr uint * const regfile = reinterpret_cast<volatile uint *>(REGFILE_BASE);
+volatile tt_reg_ptr uint * const instrn_buffer = reinterpret_cast<volatile uint *>(INSTRN_BUF_BASE);
+volatile tt_reg_ptr uint * const pc_buf_base = reinterpret_cast<volatile uint *>(PC_BUF_BASE);
 }
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
 
 void kernel_launch()
 {
-    uint *local_l1_start_addr = (uint *)PREPROCESSOR_EXPAND(MEM_TRISC, COMPILE_FOR_TRISC, _INIT_LOCAL_L1_BASE);
+    tt_l1_ptr uint *local_l1_start_addr = (tt_l1_ptr uint *)PREPROCESSOR_EXPAND(MEM_TRISC, COMPILE_FOR_TRISC, _INIT_LOCAL_L1_BASE);
     firmware_kernel_common_init(local_l1_start_addr);
 
     run_kernel();

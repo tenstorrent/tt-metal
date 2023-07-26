@@ -5,10 +5,18 @@
 #include "ckernel.h"
 #include "fw_debug.h"
 #include "ckernel_globals.h"
+#include "risc_common.h"
 #include <tensix.h>
 #include "hostdevcommon/common_runtime_address_map.h"
+#include "run_sync.h"
 
 #include "tools/profiler/kernel_profiler.hpp"
+
+#include "debug_print.h"
+
+namespace kernel_profiler {
+uint32_t wIndex __attribute__((used));
+}
 
 namespace ckernel
 {
@@ -37,7 +45,10 @@ const uint8_t thread_id = COMPILE_FOR_TRISC;
 
 volatile uint local_mem_barrier __attribute__((used));
 
-volatile uint tt_l1_ptr * const trisc_run_mailbox = reinterpret_cast<volatile uint tt_l1_ptr *>(MEM_RUN_MAILBOX_ADDRESS + PREPROCESSOR_EXPAND(MEM_MAILBOX_TRISC, COMPILE_FOR_TRISC, _OFFSET));
+#define GET_TRISC_RUN_EVAL(x, t) (x)->trisc##t
+#define GET_TRISC_RUN(x, t) GET_TRISC_RUN_EVAL(x, t)
+volatile uint8_t tt_l1_ptr * const trisc_run = &GET_TRISC_RUN((run_sync_message_t tt_l1_ptr *)(MEM_SLAVE_RUN_MAILBOX_ADDRESS), COMPILE_FOR_TRISC);
+volatile uint8_t tt_l1_ptr * const trisc_master_run = &GET_TRISC_RUN((run_sync_message_t tt_l1_ptr *)(MEM_MASTER_RUN_MAILBOX_ADDRESS), COMPILE_FOR_TRISC);
 
 } // namespace ckernel
 
@@ -45,17 +56,23 @@ volatile tt_l1_ptr uint32_t l1_buffer[16] __attribute__ ((section ("l1_data"))) 
 
 using namespace ckernel;
 
+inline void profiler_mark_time(uint32_t timer_id)
+{
+#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
+    kernel_profiler::mark_time(timer_id);
+#endif
+}
+
 int main(int argc, char *argv[])
 {
+    DEBUG_STATUS('I');
+
     uint tt_l1_ptr *local_l1_start_addr = (uint tt_l1_ptr *)PREPROCESSOR_EXPAND(MEM_TRISC, COMPILE_FOR_TRISC, _INIT_LOCAL_L1_BASE);
     int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
     l1_to_local_mem_copy((uint *)__ldm_data_start, local_l1_start_addr, num_words);
 
     kernel_profiler::init_profiler();
 
-#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
-    kernel_profiler::mark_time(CC_MAIN_START);
-#endif
     FWEVENT("Launching production env kernels");
 
     // Initialize GPRs to all 0s
@@ -74,8 +91,6 @@ int main(int argc, char *argv[])
 
     reset_cfg_state_id();
 
-    trisc_run_mailbox_write(RESET_VAL);
-
     if ((uint) __firmware_start == (uint)MEM_TRISC2_BASE) {
         reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0); // Clear debug feature disable in case it was set by previous kernel on TRISC0
                                                              // e.g workaround for bug https://yyz-gitlab.local.tenstorrent.com/tenstorrent/budabackend/-/issues/1372
@@ -83,22 +98,24 @@ int main(int argc, char *argv[])
         sync_regfile_write(p_gpr_unpack::L1_BUFFER_ADDR);
     }
 
-    //while (ready_for_next_epoch())
-    {
-#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
-        kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
-#endif
+    uint8_t trisc_run_toggle = 0;
+    while (1) {
+        profiler_mark_time(CC_MAIN_START);
+
+        DEBUG_STATUS('W');
+        while (*trisc_run == trisc_run_toggle);
+
+        DEBUG_STATUS('R');
+        profiler_mark_time(CC_KERNEL_MAIN_START);
         kernel_init();
-#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
-        kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
-#endif
+        profiler_mark_time(CC_KERNEL_MAIN_END);
+        DEBUG_STATUS('D');
+
+        // Signal completion
+        trisc_run_toggle ^= RUN_SYNC_MESSAGE_GO;
+        tensix_sync();
+        *trisc_master_run = trisc_run_toggle;
+
+        profiler_mark_time(CC_MAIN_END);
     }
-
-    // Signal completion
-    tensix_sync();
-    trisc_run_mailbox_write(KERNEL_COMPLETE);
-
-#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
-    kernel_profiler::mark_time(CC_MAIN_END);
-#endif
 }

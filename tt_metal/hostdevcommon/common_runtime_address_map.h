@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include "common_values.hpp"
+#include "dev_mem_map.h"
 
 /*
 * This file contains addresses that are visible to both host and device compiled code.
@@ -86,10 +87,6 @@ constexpr static std::uint32_t BRISC_BP_LNUM = BRISC_BP_LNUM_MACRO;
 constexpr static std::uint32_t OP_INFO_BASE_ADDR = 109628;
 constexpr static std::uint32_t OP_INFO_SIZE      = 280; // So far, holds up to 10 ops
 
-// Deassert reset from kernel dispatch
-constexpr static std::uint32_t DEASSERT_RESET_SRC_L1_ADDR = 110752;
-constexpr static std::uint32_t ASSERT_RESET_SRC_L1_ADDR   = 110784;
-
 // Dispatch message address
 constexpr static std::uint32_t DISPATCH_MESSAGE_ADDR = 110816;
 constexpr static std::uint64_t DISPATCH_MESSAGE_REMOTE_SENDER_ADDR = 110848;
@@ -114,3 +111,9 @@ constexpr static std::uint32_t DRAM_ALIGNMENT = 32;
 constexpr static std::uint32_t DRAM_BARRIER_SIZE = ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
 
 constexpr static std::uint32_t DRAM_UNRESERVED_BASE = DRAM_BARRIER_BASE + DRAM_BARRIER_SIZE; // Start of unreserved space
+
+// Messages for host to tell brisc to go
+constexpr static uint64_t RUN_MAILBOX_ADDR = MEM_RUN_MAILBOX_ADDRESS;
+constexpr uint32_t RUN_MESSAGE_INIT = 0x40;
+constexpr uint32_t RUN_MESSAGE_GO   = 0x80;
+constexpr uint32_t RUN_MESSAGE_DONE = 0;

@@ -195,7 +195,10 @@ static void dump_noc_sanity_status(FILE *f, WatcherDevice *wdev, CoreCoord core)
 static void dump_run_mailboxes(FILE *f, WatcherDevice *wdev, CoreCoord core) {
 
     std::vector<uint32_t> data;
+
     data = read_hex_vec_from_core(wdev->cluster_, wdev->device_id_, core, MEM_RUN_MAILBOX_ADDRESS, sizeof(uint32_t));
+    // TODO(pgk): fix
+#if 0
     char code = 'U';
     if (data[0] == INIT_VALUE) code = 'I';
     if (data[0] == DONE_VALUE) code = 'D';
@@ -204,6 +207,7 @@ static void dump_run_mailboxes(FILE *f, WatcherDevice *wdev, CoreCoord core) {
     } else {
         fprintf(f, "rmb:%c ", code);
     }
+#endif
 }
 
 static void dump_debug_status(FILE *f, WatcherDevice *wdev, CoreCoord core) {

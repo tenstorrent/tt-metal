@@ -53,10 +53,6 @@ constexpr uint PACK_FLUSH_COUNTERS = // counters flush
     (1 << PACK_COUNTERS_SEC2_pack_reads_per_xy_plane_SHAMT) |
     (1 << PACK_COUNTERS_SEC2_pack_xys_per_tile_SHAMT);
 
-constexpr uint RESET_VAL = 0;
-constexpr uint KERNEL_IN_PROGRESS = 15;
-constexpr uint KERNEL_COMPLETE = 1;
-
 extern volatile uint tt_reg_ptr * const reg_base;
 extern volatile uint tt_reg_ptr * const pc_buf_base;
 extern volatile uint tt_reg_ptr * const regfile;
@@ -64,7 +60,6 @@ extern uint tt_reg_ptr * regmem;
 extern volatile uint tt_reg_ptr * const instrn_buffer;
 extern volatile uint tt_reg_ptr *mailbox_base[4];
 extern volatile uint tt_reg_ptr *dbg_event_scratch;
-extern volatile uint tt_reg_ptr * const trisc_run_mailbox;
 extern volatile uint local_mem_barrier;
 
 extern uint32_t cfg_state_id;
@@ -354,16 +349,6 @@ inline uint32_t mailbox_read_full(const uint8_t thread)
 inline bool mailbox_not_empty_full(const uint8_t thread)
 {
     return mailbox_base[thread][1] > 0;
-}
-
-inline void trisc_run_mailbox_write(const uint data)
-{
-    trisc_run_mailbox[0] = data;
-}
-
-inline uint trisc_run_mailbox_read()
-{
-    return trisc_run_mailbox[0];
 }
 
 template <class T>

@@ -45,6 +45,7 @@ Device::Device(int device_id, const std::vector<uint32_t>& l1_bank_remap) : id_(
     static bool global_init_complete = false;
 
     {
+        // XXXX TODO(pgk); this code is wrong for multi-device
         // Need a lock here to prevent the race of building mulitple times
         const std::lock_guard<std::mutex> lock(build_mutex);
         if (!global_init_complete) {
@@ -62,30 +63,42 @@ Device::Device(int device_id, const std::vector<uint32_t>& l1_bank_remap) : id_(
     }
 
     // Download to worker cores
+    tt_cluster *cluster = this->cluster();
+    std::vector<uint32_t> run_mailbox_init_val = {RUN_MESSAGE_INIT};
     CoreCoord grid_size = this->logical_grid_size();
-    int num_download_fws = 0;
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord logical_core(x, y);
-            CoreCoord phys_core = this->worker_core_from_logical_core(logical_core);
-            DownloadFirmware(this, phys_core);
-            num_download_fws++;
+            CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
 
-            // This is ugly
-            // Enable ncrisc/trisc on worker cores since device dispatch
-            // expects this.  Non device-dispatch will override and device
-            // dispatch will set up the dispatch cores appropriately
-            tt::llrt::enable_ncrisc(this->cluster(), this->id(), phys_core);
-            tt::llrt::enable_triscs(this->cluster(), this->id(), phys_core);
+            // TODO(AG): create consts for these or an api to query
+            if (worker_core.y != 11 || worker_core.x == 1) {
+                DownloadFirmware(this, worker_core);
+                tt::llrt::write_hex_vec_to_core(cluster, this->id(), worker_core, run_mailbox_init_val, RUN_MAILBOX_ADDR);
+            }
         }
     }
 
-    tt::llrt::watcher_attach(this, this->cluster(), this->id(),
-                            [&, this]() { return this->logical_grid_size(); },
-                            [&, this](CoreCoord core) { return this->worker_core_from_logical_core(core); },
-                            get_compile_outpath()
-                            );
+    // Barrier between L1 writes above and deassert below
+    cluster->l1_barrier(this->id());
 
+    for (uint32_t y = 0; y < grid_size.y; y++) {
+        for (uint32_t x = 0; x < grid_size.x; x++) {
+            CoreCoord logical_core(x, y);
+            CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
+
+            // TODO(AG): create consts for these or an api to query
+            if (worker_core.y != 11 || worker_core.x == 1) {
+                cluster->set_tensix_risc_reset_on_core(tt_cxy_pair(this->id(), worker_core), TENSIX_DEASSERT_SOFT_RESET_NO_STAGGER);
+            }
+        }
+    }
+
+    tt::llrt::watcher_attach(this, cluster, this->id(),
+                             [&, this]() { return this->logical_grid_size(); },
+                             [&, this](CoreCoord core) { return this->worker_core_from_logical_core(core); },
+                             get_compile_outpath()
+                             );
 }
 
 size_t Device::detect_num_available_devices(const TargetDevice target_type) {

@@ -41,7 +41,7 @@ uint32_t l1_bank_to_noc_xy[NUM_L1_BANKS];
 
 void kernel_launch() {
 
-    firmware_kernel_common_init((void *)MEM_NCRISC_INIT_LOCAL_L1_BASE);
+    firmware_kernel_common_init((void tt_l1_ptr *)MEM_NCRISC_INIT_LOCAL_L1_BASE);
 
     setup_cb_read_write_interfaces();
 

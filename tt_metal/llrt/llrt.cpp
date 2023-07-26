@@ -375,144 +375,26 @@ void load_blank_kernel_to_all_worker_cores_with_exceptions(
     load_blank_kernel_to_cores(cluster, chip_id, riscs_to_load, cores_to_load_with_blanks);
 }
 
-void setup_riscs_on_specified_core(
-    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const CoreCoord &core) {
-    if (riscs_options == TensixRiscsOptions::NONE) {
-        TT_THROW("You can't run nothing on the riscs on core " + core.str());
-    }
-
-    bool involves_triscs = deduce_if_involves_triscs(riscs_options);
-    bool involves_ncrisc = deduce_if_involves_ncrisc(riscs_options);
-
-    std::vector<uint32_t> run_mailbox_init_val = {INIT_VALUE};
-
-    std::function<void(uint64_t)> initialize_and_check_run_mailbox = [&](uint64_t run_mailbox_address_) {
-        write_hex_vec_to_core(cluster, chip_id, core, run_mailbox_init_val, run_mailbox_address_);
-        std::vector<uint32_t> run_mailbox_init_val_check;
-        run_mailbox_init_val_check = read_hex_vec_from_core(
-            cluster, chip_id, core, run_mailbox_address_, sizeof(uint32_t));  // read a single uint32_t
-        TT_ASSERT(run_mailbox_init_val_check[0] == INIT_VALUE);
-        log_debug(
-            tt::LogLLRuntime,
-            "checked test_mailbox is correctly initialized to value = {} for core {}",
-            run_mailbox_init_val_check[0],
-            core.str());
-    };
-
-    initialize_and_check_run_mailbox(MEM_RUN_MAILBOX_ADDRESS);
-
-    if (!involves_ncrisc) {
-        disable_ncrisc(cluster, chip_id, core);
-    } else {
-        enable_ncrisc(cluster, chip_id, core);
-    }
-
-    if (!involves_triscs) {
-        disable_triscs(cluster, chip_id, core);
-    } else {
-        enable_triscs(cluster, chip_id, core);
-    }
-}
-
-void setup_riscs_on_specified_cores(
-    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const std::vector<CoreCoord> &cores) {
-    for (const CoreCoord &core : cores) {
-        setup_riscs_on_specified_core(cluster, chip_id, riscs_options, core);
-    }
-}
-
 bool check_if_riscs_on_specified_core_done(
-    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const CoreCoord &core) {
+    tt_cluster *cluster, int chip_id, const CoreCoord &core) {
 
     std::function<bool(uint64_t)> get_mailbox_is_done = [&](uint64_t run_mailbox_address_) {
-        std::vector<uint32_t> run_mailbox_read_val = {0};
+        constexpr int RUN_MAILBOX_BOGUS = 3;
+        std::vector<uint32_t> run_mailbox_read_val = {RUN_MAILBOX_BOGUS};
         run_mailbox_read_val = read_hex_vec_from_core(
             cluster, chip_id, core, run_mailbox_address_, sizeof(uint32_t));  // read a single uint32_t
 
-        if (run_mailbox_read_val[0] != INIT_VALUE && run_mailbox_read_val[0] != DONE_VALUE) {
-            fprintf(stderr, "Read unexpected run_mailbox value: %x (expected %x or %x)\n", run_mailbox_read_val[0], INIT_VALUE, DONE_VALUE);
+        if (run_mailbox_read_val[0] != RUN_MESSAGE_GO && run_mailbox_read_val[0] != RUN_MESSAGE_DONE) {
+            fprintf(stderr, "Read unexpected run_mailbox value: 0x%x (expected %x or %x)\n", run_mailbox_read_val[0], RUN_MESSAGE_GO, RUN_MESSAGE_DONE);
             TT_ASSERT(
-                run_mailbox_read_val[0] == INIT_VALUE || run_mailbox_read_val[0] == DONE_VALUE);
+                run_mailbox_read_val[0] == RUN_MESSAGE_GO || run_mailbox_read_val[0] == RUN_MESSAGE_DONE);
         }
 
-        return run_mailbox_read_val[0] == DONE_VALUE;
+        return run_mailbox_read_val[0] == RUN_MESSAGE_DONE;
     };
 
     return get_mailbox_is_done(RUN_MAILBOX_ADDR);
 }
-
-void cleanup_risc_on_specified_core(
-    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const CoreCoord &core) {
-    bool involves_triscs = deduce_if_involves_triscs(riscs_options);
-    bool involves_ncrisc = deduce_if_involves_ncrisc(riscs_options);
-
-    if (!involves_ncrisc) {
-        enable_ncrisc(cluster, chip_id, core);
-    }
-
-    if (!involves_triscs) {
-        enable_triscs(cluster, chip_id, core);
-    }
-}
-
-void run_riscs_on_specified_cores(
-    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_option, const std::vector<CoreCoord> &cores, const std::vector<uint32_t> &hugepage_done_addrs, bool stagger_start) {
-
-    bool write_to_huge_page = hugepage_done_addrs.size() > 0;
-    if (write_to_huge_page) {
-        uint32_t dispatch_done_addr = 0;
-        vector<uint32_t> reset = {0};
-        cluster->write_sysmem_vec(reset, dispatch_done_addr, chip_id);
-    }
-
-    for (const CoreCoord &core_ : cores) {
-        tt_cxy_pair core = tt_cxy_pair(chip_id, core_);
-        if (stagger_start){
-            cluster->set_tensix_risc_reset_on_core(core, TENSIX_DEASSERT_SOFT_RESET);
-        }
-        else
-        {
-            cluster->set_tensix_risc_reset_on_core(core, TENSIX_DEASSERT_SOFT_RESET_NO_STAGGER);
-        }
-    }
-
-    if (write_to_huge_page) {
-        // In this path, host polls hugepage memory rather than the cores
-        // to check that they're done
-        bool riscs_are_done = false;
-        uint32_t dispatch_done_addr = 0;
-        vector<uint32_t> reset = {0};
-
-        vector<uint32_t> riscs_are_done_vec;
-        while (not riscs_are_done) {
-            riscs_are_done = true;
-            // Poll hugepage to see that dispatch has completed
-            uint32_t idx = 0;
-            for (const CoreCoord &core : cores) {
-                uint32_t hugepage_done_addr = hugepage_done_addrs.at(idx++);
-                cluster->read_sysmem_vec(riscs_are_done_vec, dispatch_done_addr, 4, chip_id);
-                riscs_are_done &= riscs_are_done_vec.at(0) == NOTIFY_HOST_KERNEL_COMPLETE_VALUE;
-            }
-        }
-        cluster->write_sysmem_vec(reset, dispatch_done_addr, chip_id);
-    } else {
-        // In this path, host polls core L1 to check whether they're done
-        bool riscs_are_done = false;
-        while (!riscs_are_done) {
-            riscs_are_done = true;
-            for (const CoreCoord &core : cores) {
-                riscs_are_done &= check_if_riscs_on_specified_core_done(cluster, chip_id, riscs_option, core);
-            }
-        }
-    }
-
-    for (const CoreCoord &core : cores) {
-        cleanup_risc_on_specified_core(cluster, chip_id, riscs_option, core);
-    }
-
-    assert_reset_for_all_chips(cluster);
-}
-
 
 }  // namespace internal_
 

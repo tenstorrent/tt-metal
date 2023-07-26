@@ -625,9 +625,12 @@ void send_dispatch_kernel_to_device(Device* device) {
     tt::tt_metal::detail::WriteToDeviceL1(device, dispatch_logical_core, CQ_READ_TOGGLE, toggle_start_vector);
     tt::tt_metal::detail::WriteToDeviceL1(device, dispatch_logical_core, CQ_WRITE_TOGGLE, toggle_start_vector);
 
-    tt::llrt::internal_::setup_riscs_on_specified_core(
-        device->cluster(), 0, tt::llrt::TensixRiscsOptions::BRISC_ONLY, {device->worker_core_from_logical_core(dispatch_logical_core)});
-    device->cluster()->set_tensix_risc_reset_on_core(tt_cxy_pair(0, device->worker_core_from_logical_core(dispatch_logical_core)), TENSIX_DEASSERT_SOFT_RESET);
+    // XXXX move this to llrt
+    CoreCoord dpc = device->worker_core_from_logical_core(dispatch_logical_core);
+    tt::llrt::disable_ncrisc(device->cluster(), device->id(), dpc);
+    tt::llrt::disable_triscs(device->cluster(), device->id(), dpc);
+    std::vector<uint32_t> run_mailbox_go_val = {RUN_MESSAGE_GO};
+    tt::llrt::write_hex_vec_to_core(device->cluster(), device->id(), dpc, run_mailbox_go_val, MEM_RUN_MAILBOX_ADDRESS);
 }
 
 // CommandQueue section

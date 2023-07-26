@@ -11,6 +11,16 @@
 #include "debug_status.h"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 
+static uint32_t deassert_packet __attribute__((section("l1_data"))) __attribute__((aligned(16))) = (uint32_t)TENSIX_DEASSERT_SOFT_RESET_NO_STAGGER;
+
+// TODO(pgk) move all this to host/device interface
+static uint32_t go_packet[4] __attribute__((section("l1_data"))) __attribute__((aligned(16))) = {
+    RUN_MESSAGE_GO,     // brisc
+    true,               // enable ncrisc (TODO(pgk))
+    true,               // enable trisc (TODO(pgk))
+    0,                  // ncrisc fw size (TODO(pgk))
+};
+
 template <typename T>
 inline T min(T a, T b) {
     return (a < b) ? a: b;
@@ -213,30 +223,25 @@ FORCE_INLINE void launch_program(u32 num_workers, u32 num_multicast_messages, vo
     if (not num_workers)
         return;
 
-    volatile uint32_t* message_addr_ptr = reinterpret_cast<volatile uint32_t*>(DISPATCH_MESSAGE_ADDR);
+    volatile tt_l1_ptr uint32_t* message_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(DISPATCH_MESSAGE_ADDR);
     *message_addr_ptr = 0;
     for (u32 i = 0; i < num_multicast_messages * 2; i += 2) {
         u64 worker_core_noc_coord = u64(command_ptr[i]) << 32;
         u32 num_messages = command_ptr[i + 1];
-        u64 deassert_addr = worker_core_noc_coord | tensix_soft_reset_addr;
-        noc_semaphore_set_multicast(DEASSERT_RESET_SRC_L1_ADDR, deassert_addr, num_messages);
-    }
+        u64 launch_packet_dst_addr = worker_core_noc_coord | MEM_KERNEL_LAUNCH_PACKET_MAILBOX_ADDRESS;
 
+        noc_async_write_multicast((uint32_t)go_packet,
+                                  launch_packet_dst_addr,
+                                  MEM_KERNEL_LAUNCH_PACKET_SIZE,
+                                  num_messages);
+    }
     noc_async_write_barrier();
 
     // Wait on worker cores to notify me that they have completed
     DEBUG_STATUS('Q', 'W');
-    while (reinterpret_cast<volatile tt_l1_ptr u32*>(DISPATCH_MESSAGE_ADDR)[0] != num_workers)
+    while (*message_addr_ptr != num_workers)
         ;
     DEBUG_STATUS('Q', 'D');
-    for (u32 i = 0; i < num_multicast_messages * 2; i += 2) {
-        u64 worker_core_noc_coord = u64(command_ptr[i]) << 32;
-        u32 num_messages = command_ptr[i + 1];
-        u64 assert_addr = worker_core_noc_coord | tensix_soft_reset_addr;
-
-        noc_semaphore_set_multicast(ASSERT_RESET_SRC_L1_ADDR, assert_addr, num_messages);
-    }
-    noc_async_write_barrier();
 }
 
 FORCE_INLINE void finish_program(u32 finish) {

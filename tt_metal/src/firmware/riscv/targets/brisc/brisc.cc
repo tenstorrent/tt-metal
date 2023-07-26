@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <cstdint>
 
+#include "risc.h"
 #include "risc_common.h"
 #include "noc_overlay_parameters.h"
 #include "ckernel_structs.h"
@@ -15,31 +16,33 @@
 #include "tdma_xmov.h"
 #include "noc_nonblocking_api.h"
 #include "ckernel_globals.h"
+#include "run_sync.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
 #include "debug_status.h"
 #include "debug_print.h"
 #include "tt_metal/src/firmware/riscv/common/risc_attribs.h"
 
-// TODO: commonize this w/ the runtime -- it's the same configs
-// these consts must be constexprs
-constexpr uint32_t TRISC_RUN_MAILBOX_OFFSET = MEM_RUN_MAILBOX_ADDRESS + MEM_MAILBOX_BRISC_OFFSET;
 
-volatile tt_l1_ptr uint32_t * const brisc_run_mailbox_address =
-    ( volatile tt_l1_ptr uint32_t *)(MEM_RUN_MAILBOX_ADDRESS + MEM_MAILBOX_BRISC_OFFSET);
-volatile tt_l1_ptr uint32_t * const ncrisc_run_mailbox_address =
-    (volatile tt_l1_ptr uint32_t *)(MEM_RUN_MAILBOX_ADDRESS + MEM_MAILBOX_NCRISC_OFFSET);
-volatile tt_l1_ptr uint32_t * const trisc_run_mailbox_addresses[3] = {
-    (volatile tt_l1_ptr uint32_t *)(MEM_RUN_MAILBOX_ADDRESS + MEM_MAILBOX_TRISC0_OFFSET),
-    (volatile tt_l1_ptr uint32_t *)(MEM_RUN_MAILBOX_ADDRESS + MEM_MAILBOX_TRISC1_OFFSET),
-    (volatile tt_l1_ptr uint32_t *)(MEM_RUN_MAILBOX_ADDRESS + MEM_MAILBOX_TRISC2_OFFSET)
-};
+// TODO(pgk) move this too
+static_assert(MEM_KERNEL_LAUNCH_PACKET_MAILBOX_ADDRESS % 16 == 0);
+
+constexpr uint32_t RISCV_IC_BRISC_MASK = 0x1;
+constexpr uint32_t RISCV_IC_TRISC0_MASK = 0x2;
+constexpr uint32_t RISCV_IC_TRISC1_MASK = 0x4;
+constexpr uint32_t RISCV_IC_TRISC2_MASK = 0x8;
+constexpr uint32_t RISCV_IC_TRISC_ALL_MASK = RISCV_IC_TRISC0_MASK | RISCV_IC_TRISC1_MASK | RISCV_IC_TRISC2_MASK;
+
+volatile tt_l1_ptr uint32_t * const brisc_run = (volatile tt_l1_ptr uint32_t *)(MEM_RUN_MAILBOX_ADDRESS);
+volatile tt_l1_ptr run_sync_message_t * const slave_run = (volatile tt_l1_ptr run_sync_message_t *)(MEM_SLAVE_RUN_MAILBOX_ADDRESS);
+volatile tt_l1_ptr run_sync_message_t * const master_run = (volatile tt_l1_ptr run_sync_message_t *)(MEM_MASTER_RUN_MAILBOX_ADDRESS);
+volatile tt_l1_ptr uint32_t * const ncrisc_resume_addr = (volatile tt_l1_ptr uint32_t *)MEM_NCRISC_RESUME_ADDR_MAILBOX_ADDRESS;
 
 c_tensix_core core;
 
-volatile uint32_t* instrn_buf[MAX_THREADS];
-volatile uint32_t* pc_buf[MAX_THREADS];
-volatile uint32_t* mailbox[MAX_THREADS];
+volatile tt_l1_ptr uint32_t* instrn_buf[MAX_THREADS];
+volatile tt_l1_ptr uint32_t* pc_buf[MAX_THREADS];
+volatile tt_l1_ptr uint32_t* mailbox[MAX_THREADS];
 
 volatile uint32_t local_mem_barrier __attribute__((used));
 
@@ -139,10 +142,10 @@ void enable_power_management() {
     }
 }
 
-void set_trisc_address() {
+void set_deassert_addresses() {
+
     volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
 
-    // cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = l1_mem::address_map::NCRISC_FIRMWARE_BASE;
     cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = MEM_NCRISC_IRAM_BASE;
     cfg_regs[TRISC_RESET_PC_SEC0_PC_ADDR32] = MEM_TRISC0_BASE;
     cfg_regs[TRISC_RESET_PC_SEC1_PC_ADDR32] = MEM_TRISC1_BASE;
@@ -198,22 +201,12 @@ void device_setup() {
     noc_set_cfg_reg(ROUTER_CFG_0, router_cfg1 | 0x1);
     noc_set_active_instance(0);
 
-    set_trisc_address();
+    set_deassert_addresses();
 
     wzeromem(MEM_ZEROS_BASE, MEM_ZEROS_SIZE);
 
-    volatile tt_l1_ptr uint32_t* use_ncrisc = (volatile tt_l1_ptr uint32_t*)(MEM_ENABLE_NCRISC_MAILBOX_ADDRESS);
-    if (*use_ncrisc) {
-        l1_to_ncrisc_iram_copy();
-
-        *ncrisc_run_mailbox_address = 42;
-
-        // Bring NCRISC out of reset, keep TRISCs under reset
-        WRITE_REG(RISCV_DEBUG_REG_SOFT_RESET_0, 0x7000);
-    }
-
     // Invalidate tensix icache for all 4 risc cores
-    cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = 0xf;
+    cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK;
 
     // Clear destination registers
     core.ex_zeroacc(instrn_buf[0]);
@@ -242,9 +235,6 @@ void device_setup() {
     // // config state semaphore
     // core.ex_sem_init(semaphore::CFG_STATE_BUSY, MAX_CONFIG_STATES, 0, instrn_buf[0]);
 
-    // Check before clearing debug mailboxes below
-    // bool debugger_en = debugger::is_enabled();
-
     // Read counter at start
     core.wall_clock_mailbox()[0] = core.read_wall_clock();
 }
@@ -258,6 +248,57 @@ void init_sync_registers() {
       tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
       tiles_acked_ptr[0] = 0;
     }
+}
+
+inline void deassert_ncrisc_trisc(uint32_t *ncrisc_run_toggle, uint32_t *trisc_run_toggle)
+{
+    *ncrisc_run_toggle = 0;
+    *trisc_run_toggle = 0;
+    // Below sets ncrisc to go so we can wait until it is cleared on first iteration
+    master_run->all = RUN_SYNC_MESSAGE_GO;
+    slave_run->all = 0;
+
+    l1_to_ncrisc_iram_copy();
+
+    // Bring ncrisc/triscs out of reset
+    deassert_all_reset();
+}
+
+inline void set_ncrisc_kernel_resume_deassert_address()
+{
+    volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
+    DEBUG_STATUS('I', 'N', 'W');
+    while (*ncrisc_resume_addr == 0);
+    DEBUG_STATUS('I', 'N', 'D');
+    cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = *ncrisc_resume_addr;
+}
+
+inline void run_ncrisc_trisc(uint32_t *ncrisc_run_toggle, uint32_t *trisc_run_toggle)
+{
+    bool use_triscs = *(volatile tt_l1_ptr uint32_t*)(MEM_ENABLE_TRISC_MAILBOX_ADDRESS);
+    if (use_triscs) {
+        *trisc_run_toggle ^= RUN_SYNC_MESSAGE_ALL_TRISCS_GO;
+        slave_run->all = *trisc_run_toggle;
+    }
+
+    bool use_ncrisc = *(volatile tt_l1_ptr uint32_t*)(MEM_ENABLE_NCRISC_MAILBOX_ADDRESS);
+    if (use_ncrisc) {
+        *ncrisc_run_toggle ^= RUN_SYNC_MESSAGE_GO;
+        slave_run->ncrisc = *ncrisc_run_toggle;
+
+        // TODO(pgk): don't copy all of iram! 1K cycles?
+        l1_to_ncrisc_iram_copy();
+
+        // Note: only ncrisc is in reset, so just deasserts ncrisc
+        deassert_all_reset();
+    }
+}
+
+inline void wait_ncrisc_trisc(uint32_t ncrisc_run_toggle, uint32_t trisc_run_toggle)
+{
+    DEBUG_STATUS('N', 'T', 'W');
+    while (master_run->all != (ncrisc_run_toggle | trisc_run_toggle));
+    DEBUG_STATUS('N', 'T', 'D');
 }
 
 inline void profiler_mark_time(uint32_t timer_id)
@@ -276,69 +317,58 @@ int main() {
 
     kernel_profiler::init_BR_profiler();
 
-    profiler_mark_time(CC_MAIN_START);
     RISC_POST_STATUS(0x10000000);
 
-    // note: BRISC uses NOC0, NCRISC uses NOC1
-    // "risc_init" currently initialized global variables for both NOCs, but it is just reg reads, and it's probably
-    // fine because this is done before we launch NCRISC (in "device_setup")
-    // TODO: we could specialize it via "noc_id", in the same manner as "noc_init" (see below)
     risc_init();
+    device_setup();
 
-    init_sync_registers();  // this init needs to be done before NCRISC / TRISCs are launched, only done by BRISC
-    device_setup();  // NCRISC is disabled/enabled here
+    // Set ncrisc's resume address to 0 so we know when ncrisc has overwritten it
+    *ncrisc_resume_addr = 0;
+    uint32_t trisc_run_toggle;
+    uint32_t ncrisc_run_toggle;
+    deassert_ncrisc_trisc(&ncrisc_run_toggle, &trisc_run_toggle);
+    set_ncrisc_kernel_resume_deassert_address();
 
-    volatile tt_l1_ptr uint32_t* use_triscs = (volatile tt_l1_ptr uint32_t*)(MEM_ENABLE_TRISC_MAILBOX_ADDRESS);
-    if (*use_triscs) {
-        // FIXME: this is not sufficient to bring Trisc / Tensix out of a bad state
-        // do we need do more than just assert_trisc_reset() ?
-        // for now need to call /device/bin/silicon/tensix-reset from host when TRISCs/Tensix get into a bad state
-        assert_trisc_reset();
+    // Wait for ncrisc to halt
+    DEBUG_STATUS('I', 'N', 'W');
+    while (master_run->ncrisc != RUN_SYNC_MESSAGE_DONE);
+    DEBUG_STATUS('I', 'N', 'D');
 
-        *trisc_run_mailbox_addresses[0] = 42;
-        *trisc_run_mailbox_addresses[1] = 42;
-        *trisc_run_mailbox_addresses[2] = 42;
+    while (1) {
+        profiler_mark_time(CC_MAIN_START);
 
-        // Bring TRISCs out of reset
-        deassert_trisc_reset();
-    }
+        init_sync_registers();
+        assert_just_ncrisc_reset();
 
-    DEBUG_STATUS('R');
-    profiler_mark_time(CC_KERNEL_MAIN_START);
-    // Run the BRISC kernel
-    kernel_init();
+        // Wait...
+        DEBUG_STATUS('G', 'W');
+        while (*brisc_run != RUN_MESSAGE_GO);
+        DEBUG_STATUS('G', 'D');
 
-    profiler_mark_time(CC_KERNEL_MAIN_END);
+        // Invalidate the i$ now the kernels have loaded and before running
+        volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
+        cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK;
 
-    if (*use_triscs) {
-        DEBUG_STATUS('T', 'W');
-        while (
-            !(*trisc_run_mailbox_addresses[0] == 1 &&
-              *trisc_run_mailbox_addresses[1] == 1 &&
-              *trisc_run_mailbox_addresses[2] == 1)) {
+        run_ncrisc_trisc(&ncrisc_run_toggle, &trisc_run_toggle);
+
+        // Run the BRISC kernel
+        DEBUG_STATUS('R');
+        profiler_mark_time(CC_KERNEL_MAIN_START);
+        kernel_init();
+        profiler_mark_time(CC_KERNEL_MAIN_END);
+        DEBUG_STATUS('D');
+
+        wait_ncrisc_trisc(ncrisc_run_toggle, trisc_run_toggle);
+
+        *brisc_run = RUN_MESSAGE_DONE;
+
+        // Notify dispatcher core that it has completed
+        if (dispatch_addr != 0) {
+            noc_fast_atomic_increment(kernel_noc_id_var, NCRISC_AT_CMD_BUF, dispatch_addr, 1, 31 /*wrap*/, false /*linked*/);
         }
 
-        // Once all 3 have finished, assert reset on all of them
-        assert_trisc_reset();
+        profiler_mark_time(CC_MAIN_END);
     }
 
-    volatile tt_l1_ptr uint32_t* use_ncrisc = (volatile tt_l1_ptr uint32_t*)(MEM_ENABLE_NCRISC_MAILBOX_ADDRESS);
-    if (*use_ncrisc) {
-        DEBUG_STATUS('N', 'W');
-        while (*ncrisc_run_mailbox_address != 1);
-    }
-
-    *brisc_run_mailbox_address = 0x1;
-
-    profiler_mark_time(CC_MAIN_END);
-
-    // Notify dispatcher core that it has completed
-    if (dispatch_addr != 0) {
-        noc_fast_atomic_increment(kernel_noc_id_var, NCRISC_AT_CMD_BUF, dispatch_addr, 1, 31 /*wrap*/, false /*linked*/);
-    }
-
-    DEBUG_STATUS('D');
-
-    while (true);
     return 0;
 }

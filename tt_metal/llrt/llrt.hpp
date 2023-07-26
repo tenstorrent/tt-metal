@@ -21,14 +21,6 @@
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "build_kernels_for_riscv/build_kernels_for_riscv.hpp"
 
-constexpr static uint64_t RUN_MAILBOX_ADDR = MEM_RUN_MAILBOX_ADDRESS + MEM_MAILBOX_BRISC_OFFSET;
-constexpr static int INIT_VALUE = 42;
-constexpr static int DONE_VALUE = 1;
-
-constexpr static uint32_t TRISC_BASE = MEM_TRISC0_BASE;
-
-constexpr static uint32_t trisc_sizes[3] = {MEM_TRISC0_SIZE, MEM_TRISC1_SIZE, MEM_TRISC2_SIZE};
-
 namespace tt {
 
 // llrt = lower-level runtime
@@ -190,20 +182,8 @@ void load_blank_kernel_to_all_worker_cores_with_exceptions(
 
 void assert_enable_core_mailbox_is_valid_for_core(tt_cluster *cluster, int chip_id, const CoreCoord &core);
 
-void setup_riscs_on_specified_core(
-    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const CoreCoord &core);
-
-void setup_riscs_on_specified_cores(
-    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const std::vector<CoreCoord> &core);
-
 bool check_if_riscs_on_specified_core_done(
-    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const CoreCoord &core);
-
-void cleanup_risc_on_specified_core(
-    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_options, const CoreCoord &core);
-
-void run_riscs_on_specified_cores(
-    tt_cluster *cluster, int chip_id, const TensixRiscsOptions riscs_option, const std::vector<CoreCoord> &cores, const std::vector<uint32_t> &hugepage_done_addrs = vector<uint32_t>(), bool stagger_start = false);
+    tt_cluster *cluster, int chip_id, const CoreCoord &core);
 
 void dispatch(
     tt_cluster *cluster,

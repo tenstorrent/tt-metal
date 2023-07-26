@@ -5,6 +5,7 @@
 #include "risc_common.h"
 #include "noc_overlay_parameters.h"
 #include "noc_nonblocking_api.h"
+#include "run_sync.h"
 #include "stream_io_map.h"
 #ifdef PERF_DUMP
 #include "risc_perf.h"
@@ -15,11 +16,14 @@
 
 #include "debug_status.h"
 
+#include "debug_print.h"
+
 volatile uint32_t local_mem_barrier __attribute__((used));
-volatile tt_l1_ptr uint32_t* const run_mailbox_address = (volatile tt_l1_ptr uint32_t*)(MEM_RUN_MAILBOX_ADDRESS + MEM_MAILBOX_NCRISC_OFFSET);
 
 uint8_t mailbox_index = 0;
 uint8_t mailbox_end = 32;
+
+uint32_t halt_stack_ptr_save;
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
@@ -37,6 +41,9 @@ inline void profiler_mark_time(uint32_t timer_id)
 #endif
 }
 
+extern "C" void ncrisc_resume(void);
+extern "C" void notify_brisc_and_halt(uint32_t ncrisc_go_toggle);
+
 int main(int argc, char *argv[]) {
 
   DEBUG_STATUS('I');
@@ -46,21 +53,26 @@ int main(int argc, char *argv[]) {
 
   kernel_profiler::init_profiler();
 
-  profiler_mark_time(CC_MAIN_START);
-
   risc_init();
+  *(volatile tt_l1_ptr uint32_t *)MEM_NCRISC_RESUME_ADDR_MAILBOX_ADDRESS = (uint32_t)ncrisc_resume;
 
-  DEBUG_STATUS('R');
-  profiler_mark_time(CC_KERNEL_MAIN_START);
-  kernel_init();
-  profiler_mark_time(CC_KERNEL_MAIN_END);
+  uint32_t ncrisc_go_toggle = 0;
+  while (1) {
+      profiler_mark_time(CC_MAIN_START);
 
-  *run_mailbox_address = 0x1;
+      DEBUG_STATUS('W');
+      notify_brisc_and_halt(ncrisc_go_toggle);
 
-  profiler_mark_time(CC_MAIN_END);
+      DEBUG_STATUS('R');
+      profiler_mark_time(CC_KERNEL_MAIN_START);
+      kernel_init();
+      profiler_mark_time(CC_KERNEL_MAIN_END);
+      DEBUG_STATUS('D');
 
-  DEBUG_STATUS('D');
+      ncrisc_go_toggle ^= RUN_SYNC_MESSAGE_GO;
 
-  while (true);
+      profiler_mark_time(CC_MAIN_END);
+  }
+
   return 0;
 }

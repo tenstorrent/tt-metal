@@ -16,11 +16,6 @@ void kernel_main() {
     static constexpr u32 command_start_addr = L1_UNRESERVED_BASE; // Space between L1_UNRESERVED_BASE -> data_start is for commands
     static constexpr u32 data_start_addr = DEVICE_COMMAND_DATA_ADDR;
 
-    // These are totally temporary until PK checks in his changes for
-    // separating kernels from firmware
-    noc_prepare_deassert_reset_flag(DEASSERT_RESET_SRC_L1_ADDR);
-    noc_prepare_assert_reset_flag(ASSERT_RESET_SRC_L1_ADDR);
-
     // Write my own NOC address to local L1 so that when I dispatch kernels,
     // they will know how to let me know they have finished
     *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(DISPATCH_MESSAGE_REMOTE_SENDER_ADDR) = get_noc_addr(DISPATCH_MESSAGE_ADDR);

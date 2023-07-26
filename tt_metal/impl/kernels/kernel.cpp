@@ -239,17 +239,6 @@ RISCV DataMovementKernel::processor() const {
 
 RISCV ComputeKernel::processor() const { return RISCV::COMPUTE; }
 
-void init_run_mailbox(Device *device, const CoreCoord &core, uint64_t run_mailbox_addr) {
-    std::vector<uint32_t> run_mailbox_init_val = {INIT_VALUE};
-    tt::llrt::write_hex_vec_to_core(
-        device->cluster(), device->id(), core, run_mailbox_init_val, run_mailbox_addr);
-
-    std::vector<uint32_t> run_mailbox_init_val_check;
-    run_mailbox_init_val_check = tt::llrt::read_hex_vec_from_core(
-        device->cluster(), device->id(), core, run_mailbox_addr, sizeof(uint32_t));  // read a single uint32_t
-    TT_ASSERT(run_mailbox_init_val_check[0] == INIT_VALUE);
-}
-
 bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core) const {
     bool pass = true;
     if (not is_on_logical_core(logical_core)) {
@@ -264,7 +253,6 @@ bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core
     switch (this->config_.processor) {
         case (DataMovementProcessor::RISCV_0): {
             riscv_id = 0;
-            init_run_mailbox(device, worker_core, RUN_MAILBOX_ADDR);
         }
         break;
         case (DataMovementProcessor::RISCV_1): {
