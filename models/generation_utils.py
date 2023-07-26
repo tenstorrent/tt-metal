@@ -3,9 +3,10 @@ from loguru import logger
 from typing import Callable, List, Optional, Union
 from transformers.generation.configuration_utils import GenerationConfig
 
-from models.utility_functions import (
+from tests.python_api_testing.models.utility_functions_new import (
     torch2tt_tensor,
     tt2torch_tensor,
+    comp_pcc,
 )
 
 from transformers.generation.logits_process import (
@@ -240,23 +241,13 @@ def pad_input_32(tensor, value):
     return tensor
 
 
-def run_generate(
-    input_sentance,
-    tokenizer,
-    tt_model_constructor,
-    device,
-    run_tt_model=True,
-    log=True,
-    comp_pcc=None,
-):
+def run_generate(input_sentance, tokenizer, tt_model_constructor, device, run_tt_model=True, log=True):
     tt_model, hf_reference_model = tt_model_constructor(device)
 
     # Prepare input
     tokenized = tokenizer(input_sentance, return_tensors="pt")  # Batch size 1
 
-    input_ids = pad_input_32(
-        tokenized.input_ids, hf_reference_model.generation_config.pad_token_id
-    )
+    input_ids = pad_input_32(tokenized.input_ids, hf_reference_model.generation_config.pad_token_id)
     attention_mask = pad_input_32(tokenized.attention_mask, 0)
 
     if log:
@@ -265,13 +256,12 @@ def run_generate(
 
     logits_processor = get_logits_processor(input_ids, hf_reference_model.config)
 
-    decoder_start_values = (
-        hf_reference_model.generation_config.pad_token_id
-        * torch.ones(1, 32).to(torch.long)
+    decoder_start_values = hf_reference_model.generation_config.pad_token_id * torch.ones(1, 32).to(
+        torch.long
     )
-    decoder_input_ids = hf_reference_model.generation_config.pad_token_id * torch.ones(
-        1, 64
-    ).to(torch.long)
+    decoder_input_ids = hf_reference_model.generation_config.pad_token_id * torch.ones(1, 64).to(
+        torch.long
+    )
 
     if log:
         logger.debug(f"decoder_input_ids {decoder_input_ids}")
@@ -298,12 +288,10 @@ def run_generate(
             )
             encoder_outputs = tt_out.encoder_outputs
             next_token_logits = tt_out.logits
+            does_pass, pcc_message = comp_pcc(pt_out.logits, tt_out.logits, 0.98)
 
-            if comp_pcc is not None:
-                does_pass, pcc_message = comp_pcc(pt_out.logits, tt_out.logits, 0.98)
-
-                if log:
-                    logger.info(pcc_message)
+            if log:
+                logger.info(pcc_message)
         else:
             next_token_logits = pt_out.logits
 
