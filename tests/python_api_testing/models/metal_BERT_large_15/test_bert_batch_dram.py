@@ -153,6 +153,8 @@ class TtBertBatchDram(torch.nn.Module):
             for encoder in self.encoders:
                 # profiler.start("__one_encoder")
                 hidden_states = encoder(hidden_states, attention_mask)
+                if self.model_config["MOVE_ENCODER_OUTPUT_BOOL"]:
+                    hidden_states = ttl.tensor.move(hidden_states)
                 # profiler.end("__one_encoder")
 
             # profiler.end("_run_encoders")
@@ -522,8 +524,7 @@ def test_bert_batch_dram_with_program_cache(
     )
 
     if batch == 8 and model_config_str == "MIXED_PRECISION_BATCH8":
-        # TODO: Why is this 15 and not 14?
-        assert ttl.program_cache.num_entries() == 15
+        assert ttl.program_cache.num_entries() == 13
 
     else:
         assert ttl.program_cache.num_entries() == 12

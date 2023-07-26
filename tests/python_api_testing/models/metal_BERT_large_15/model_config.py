@@ -85,7 +85,7 @@ def pretty_print_model_config(model_config):
         if key.endswith("MEMCFG"):
             print_str.append(f"{key}: {val.buffer_type}")
 
-        elif key.endswith("DTYPE"):
+        elif key.endswith("DTYPE") or key.endswith("BOOL"):
             print_str.append(f"{key}: {val}")
 
         else:
@@ -125,6 +125,7 @@ def get_model_config(model_config_str):
     model_config = {
         "DEFAULT_DTYPE": dtype,
         "DEFAULT_MEMCFG": mem_config,
+        "MOVE_ENCODER_OUTPUT_BOOL": False,
     }  # DEFAULT_MEMCFG also used to determine banking for ttl.device.InitializeDevice
     model_config.update(dict(zip(OP_MEMCFG_KEYS, [mem_config] * len(OP_MEMCFG_KEYS))))
     model_config.update(dict(zip(OP_DTYPE_KEYS, [dtype] * len(OP_DTYPE_KEYS))))
@@ -215,6 +216,7 @@ def get_model_config(model_config_str):
 
     elif model_config_str == "MIXED_PRECISION_BATCH8":
         new_config_values = {
+            "MOVE_ENCODER_OUTPUT_BOOL": True,
             # MHA
             "OP1_FUSED_QKV_MM_WEIGHTS_MEMCFG": DRAM_MEMCFG,
             "OP1_FUSED_QKV_MM_BIAS_MEMCFG": DRAM_MEMCFG,
@@ -226,8 +228,6 @@ def get_model_config(model_config_str):
             "OP13_FF1_MM_BIAS_MEMCFG": DRAM_MEMCFG,
             "OP14_FF2_MM_WEIGHTS_MEMCFG": DRAM_MEMCFG,
             "OP14_FF2_MM_BIAS_MEMCFG": DRAM_MEMCFG,
-            # FFN LAYERNORM
-            "OP15_LAYERNORM_OUTPUT_MEMCFG": DRAM_MEMCFG, # TODO: L1 de-frag API will allow us to put output in L1
             # After all encoders
             "QA_LINEAR_WEIGHTS_MEMCFG": DRAM_MEMCFG,
             "QA_LINEAR_BIAS_MEMCFG": DRAM_MEMCFG,
