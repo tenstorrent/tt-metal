@@ -37,31 +37,68 @@ enum class StorageType {
 
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
 
-class Shape {
-    std::array<uint32_t, 8> data_;
-    std::size_t rank_;
 
+static constexpr std::size_t MAX_NUM_DIMENSIONS = 8;
+
+struct Padding {
+    enum class PadValue {
+        Zero,
+        Infinity,
+        NegativeInfinity
+    };
+
+    struct PadDimension {
+        std::size_t front;
+        std::size_t back;
+        tt::stl::reflection::Attributes attributes() const;
+    };
+
+    std::size_t rank_;
+    std::array<PadDimension, MAX_NUM_DIMENSIONS> pad_dimensions_;
+    PadValue pad_value_;
+
+    Padding(const std::size_t rank);
+    Padding(const std::initializer_list<PadDimension> pad_dimensions, PadValue pad_value);
+    Padding(const std::vector<PadDimension>& pad_dimensions, PadValue pad_value);
+
+    PadDimension& operator[](const std::int64_t index);
+    const PadDimension& operator[](const std::int64_t index) const;
+
+    PadValue pad_value() const;
+
+    tt::stl::reflection::Attributes attributes() const;
+};
+
+class Shape {
+    std::size_t rank_;
+    std::array<uint32_t, MAX_NUM_DIMENSIONS> dimensions_;
+    Padding padding_;
 
   public:
-    Shape(const std::initializer_list<uint32_t> data);
-    Shape(const std::array<uint32_t, 4>& data);
-    Shape(const std::vector<uint32_t>& data);
+
+    Shape(const std::initializer_list<uint32_t>);
+    Shape(const std::array<uint32_t, 4>&);
+    Shape(const std::vector<uint32_t>&);
+
+    Shape(const std::vector<uint32_t>&, const Padding&);
+    Shape(const Shape&, const Padding&);
 
     uint32_t rank() const;
 
-    uint32_t& operator[](const std::size_t index);
-    const uint32_t& operator[](const std::size_t index) const;
-
-    uint32_t& back();
-    const uint32_t& back() const;
+    uint32_t& operator[](const std::int64_t index);
+    const uint32_t& operator[](const std::int64_t index) const;
 
     const uint32_t* begin() const;
     const uint32_t* end() const;
+
+    const Padding& padding() const;
+    const Shape without_padding() const;
+
+    tt::stl::reflection::Attributes attributes() const;
 };
 
 bool operator==(const Shape& shape_a, const Shape& shape_b);
 bool operator!=(const Shape& shape_a, const Shape& shape_b);
-std::ostream& operator<<(std::ostream& os, const Shape& shape);
 
 struct MemoryConfig {
     bool interleaved = true;    // Interleave the data across multiple DRAM banks

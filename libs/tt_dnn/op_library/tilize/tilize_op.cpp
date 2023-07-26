@@ -485,9 +485,16 @@ void TilizeWithValPadding::validate(const std::vector<Tensor> &input_tensors) co
     TT_ASSERT(inner_dim % TILE_WIDTH == 0, "Output shape must be tilizable");
 }
 std::vector<Shape> TilizeWithValPadding::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
-    auto output_shape = this->output_tensor_shape;
-    return {output_shape};
+    auto input_shape = input_tensors.at(0).shape();
+    auto dimensions_pads = std::vector<Padding::PadDimension>();
+    for (auto index = 0; index < input_shape.rank(); index++) {
+        auto front = this->input_tensor_start[index];
+        auto back = this->output_tensor_shape[index] - (this->input_tensor_start[index] + input_shape[index]);
+        dimensions_pads.push_back(Padding::PadDimension{.front=front, .back=back});
+    }
+    TT_ASSERT(this->pad_value == 0.0f); // TODO(arakhmati): map this->pad_value to Padding::PadValue enum
+    const auto padding = Padding(dimensions_pads, Padding::PadValue::Zero);
+    return {Shape(this->output_tensor_shape, padding)};
 }
 std::vector<Tensor> TilizeWithValPadding::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);

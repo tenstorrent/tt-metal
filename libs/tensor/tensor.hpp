@@ -66,20 +66,20 @@ class Tensor {
         // ======================================================================================
         //                                      Getters
         // ======================================================================================
+        const Storage& storage() const;
         const Shape& shape() const { return this->shape_; }
+        DataType dtype() const { return this->dtype_; }
+        Layout layout() const { return this->layout_; }
 
-        const Shape strides() const;
-
-        uint32_t volume() const;
-
-        DataType dtype() const { return dtype_; }
-
-        Layout layout() const { return layout_; }
-
-        bool is_allocated() const;
+        // ======================================================================================
+        //                                      Extra Helper Functions
+        // ======================================================================================
 
         StorageType storage_type() const;
-        const Storage& storage() const;
+        const Shape strides() const;
+        uint32_t volume() const;
+
+        bool is_allocated() const;
 
         // TODO(arakhmati): clean up the methods below
         Buffer* buffer() const { return std::get<DeviceStorage>(this->storage_).buffer.get(); }
@@ -94,7 +94,7 @@ class Tensor {
 
     private:
         Storage storage_;
-        Shape shape_;      // Outer-most dimension first
+        Shape shape_;
         DataType dtype_;
         Layout layout_;
 };

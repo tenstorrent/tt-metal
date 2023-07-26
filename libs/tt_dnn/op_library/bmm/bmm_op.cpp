@@ -279,8 +279,9 @@ void Matmul::validate(const std::vector<Tensor>& input_tensors) const {
 
 std::vector<Shape> Matmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    const auto& input_tensor_b = input_tensors.at(1);    auto output_shape = input_tensor_a.shape();
-    output_shape.back() = input_tensor_b.shape().back();
+    const auto& input_tensor_b = input_tensors.at(1);
+    auto output_shape = input_tensor_a.shape();
+    output_shape[-1] = input_tensor_b.shape()[-1];
     return {output_shape};
 }
 
@@ -416,14 +417,14 @@ std::vector<Shape> BertLargeMatmul::compute_output_shapes(const std::vector<Tens
         case BertLargeMatmulOpType::FF1:
         case BertLargeMatmulOpType::FF2:
         case BertLargeMatmulOpType::SELFOUT:
-            output_shape.back() = bshape.back();
+            output_shape[-1] = bshape[-1];
             break;
         case BertLargeMatmulOpType::PRE_SOFTMAX_BMM:
             output_shape = {B, 1, ashape[1] * ashape[2], bshape[3]};
             break;
         case BertLargeMatmulOpType::POST_SOFTMAX_BMM:
             output_shape = {B, 16, 384, 384};
-            output_shape.back() = bshape.back();
+            output_shape[-1] = bshape[-1];
             break;
         default:
             TT_ASSERT(false, "Unknown bert large matmul op in compute_output_shapes!");

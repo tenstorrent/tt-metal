@@ -46,12 +46,29 @@ static void print_operation(
     const OperationType& operation,
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) {
+
     tt::log_debug(tt::LogOp, "Operation Type: {}", operation.get_type_name());
-    tt::log_debug(tt::LogOp, "Operation Attributes: {}", operation.attributes());
-    tt::log_debug(tt::LogOp, "Input Tensors: {}", input_tensors);
-    if (not optional_input_tensors.empty()) {
-        tt::log_debug(tt::LogOp, "Optional Input Tensors: {}", optional_input_tensors);
+
+    tt::log_debug(tt::LogOp, "Operation Attributes:");
+    for (auto&& [name, value] : operation.attributes()) {
+        tt::log_debug(tt::LogOp, "\t{} = {}", name, value);
     }
+
+    tt::log_debug(tt::LogOp, "Input Tensors:");
+    for (auto index = 0; index < input_tensors.size(); index++) {
+        const auto& tensor = input_tensors[index];
+        tt::log_debug(tt::LogOp, "\t{}: {}", index, tensor);
+    }
+
+    if (not optional_input_tensors.empty()) {
+        tt::log_debug(tt::LogOp, "Optional Input Tensors:");
+        for (auto index = 0; index < optional_input_tensors.size(); index++) {
+            const auto& tensor = optional_input_tensors[index];
+            tt::log_debug(tt::LogOp, "\t{}: {}", index, tensor);
+        }
+    }
+
+    tt::log_debug(tt::LogOp, "");
 }
 
 static operation_history::TensorRecord create_tensor_record(const Tensor& tensor) {

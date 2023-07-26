@@ -9,6 +9,7 @@
 #include "tt_numpy/functions.hpp"
 
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "tt_dnn/op_library/pad/pad_op.hpp"
 #include "tt_dnn/op_library/operation.hpp"
 #include "tt_dnn/op_library/program_cache.hpp"
 
@@ -77,7 +78,7 @@ void test_operation_infrastructure() {
 
     auto program_hash = op.compute_program_hash({input_tensor});
     TT_ASSERT(
-        program_hash == "tt::tt_metal::EltwiseUnary(op_type=tt::tt_metal::UnaryOpType::Enum::SQRT, param=std::nullopt)_tt::tt_metal::Tensor(storage=tt::tt_metal::OwnedStorage(), shape={1, 1, 32, 32}, dtype=tt::tt_metal::DataType::BFLOAT16, layout=tt::tt_metal::Layout::TILE)",
+        program_hash == "tt::tt_metal::EltwiseUnary(op_type=tt::tt_metal::UnaryOpType::Enum::SQRT, param=std::nullopt)_tt::tt_metal::Tensor(storage=tt::tt_metal::OwnedStorage(), shape=tt::tt_metal::Shape(dimensions={1, 1, 32, 32}), dtype=tt::tt_metal::DataType::BFLOAT16, layout=tt::tt_metal::Layout::TILE)",
         fmt::format("Actual value is {}", program_hash)
     );
 
@@ -90,6 +91,31 @@ void test_operation_infrastructure() {
         profiler_info.parallelization_strategy.value() == "tt::tt_metal::UnaryOpParallelizationStrategy::Enum::SINGLE_CORE",
         fmt::format("Actual value is {}", profiler_info.parallelization_strategy.value())
     );
+}
+
+void test_shape_padding() {
+    tt::log_info(tt::LogTest, "Running {}", __func__);
+
+    int pci_express_slot = 0;
+    auto device = tt::tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
+    tt::tt_metal::AutoFormat::SetDefaultDevice(device);
+
+    TT_ASSERT(tt::tt_metal::InitializeDevice(device));
+
+    auto input_shape = Shape{1, 1, 13, 18};
+    auto padded_input_shape = Shape{1, 1, TILE_HEIGHT, TILE_WIDTH};
+    auto input_tensor = tt::numpy::random::uniform(bfloat16(0), bfloat16(1), input_shape);
+
+    auto padded_input_tensor = operation::run(tt::tt_metal::PadOnHost{padded_input_shape, {0, 0, 0, 0}, 0}, {input_tensor}).at(0);
+    padded_input_tensor = padded_input_tensor.to(Layout::TILE);
+    padded_input_tensor = padded_input_tensor.to(device);
+    auto output_tensor = operation::run(tt::tt_metal::EltwiseUnary{tt::tt_metal::UnaryOpType::SQRT}, {padded_input_tensor}).at(0);
+
+    auto output_shape = output_tensor.shape();
+    TT_ASSERT(output_shape == padded_input_shape);
+    TT_ASSERT(output_shape.without_padding() == input_shape);
+
+    TT_ASSERT(tt::tt_metal::CloseDevice(device));
 }
 
 void test_numerically() {
@@ -226,6 +252,7 @@ void test_program_cache() {
 
 int main(int argc, char** argv) {
     test_operation_infrastructure();
+    test_shape_padding();
     test_numerically();
     test_program_cache();
     return 0;

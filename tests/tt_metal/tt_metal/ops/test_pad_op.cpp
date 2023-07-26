@@ -23,10 +23,15 @@ void test_operation_infrastructure() {
     tt::log_info(tt::LogTest, "Running {}", __func__);
     using namespace tt::tt_metal;
 
-    auto shape = Shape{1, 1, TILE_HEIGHT, TILE_WIDTH};
-    auto input_tensor = tt::numpy::random::uniform(bfloat16(0), bfloat16(1), shape);
+    auto input_shape = Shape{1, 1, 18, 13};
+    auto padded_shape = Shape{1, 1, TILE_HEIGHT, TILE_WIDTH};
 
-    auto output_tensor = operation::run(PadOnHost{shape, {0, 0, 0, 0}, 0}, {input_tensor}).at(0);
+    auto input_tensor = tt::numpy::random::uniform(bfloat16(0), bfloat16(1), input_shape);
+    auto output_tensor = operation::run(PadOnHost{padded_shape, {0, 0, 0, 0}, 0}, {input_tensor}).at(0);
+
+    auto output_shape = output_tensor.shape();
+    TT_ASSERT(output_shape == padded_shape);
+    TT_ASSERT(output_shape.without_padding() == input_shape);
 }
 
 int main(int argc, char** argv) {

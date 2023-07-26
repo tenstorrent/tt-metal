@@ -257,7 +257,16 @@ void Pad::validate(const std::vector<Tensor> &input_tensors) const {
 }
 
 std::vector<Shape> Pad::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    return {this->output_tensor_shape};
+    auto input_shape = input_tensors.at(0).shape();
+    auto dimensions_pads = std::vector<Padding::PadDimension>();
+    for (auto index = 0; index < input_shape.rank(); index++) {
+        auto front = this->input_tensor_start[index];
+        auto back = this->output_tensor_shape[index] - (this->input_tensor_start[index] + input_shape[index]);
+        dimensions_pads.push_back(Padding::PadDimension{.front=front, .back=back});
+    }
+    TT_ASSERT(this->pad_value == 0.0f); // TODO(arakhmati): map this->pad_value to Padding::PadValue enum
+    const auto padding = Padding(dimensions_pads, Padding::PadValue::Zero);
+    return {Shape(this->output_tensor_shape, padding)};
 }
 
 std::vector<Tensor> Pad::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
@@ -313,15 +322,25 @@ void PadOnHost::validate(const std::vector<Tensor> &input_tensors) const {
 }
 
 std::vector<Shape> PadOnHost::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    return {this->output_tensor_shape};
+    auto input_shape = input_tensors.at(0).shape();
+    auto dimensions_pads = std::vector<Padding::PadDimension>();
+    for (auto index = 0; index < input_shape.rank(); index++) {
+        auto front = this->input_tensor_start[index];
+        auto back = this->output_tensor_shape[index] - (this->input_tensor_start[index] + input_shape[index]);
+        dimensions_pads.push_back(Padding::PadDimension{.front=front, .back=back});
+    }
+    TT_ASSERT(this->pad_value == 0.0f); // TODO(arakhmati): map this->pad_value to Padding::PadValue enum
+    const auto padding = Padding(dimensions_pads, Padding::PadValue::Zero);
+    return {Shape(this->output_tensor_shape, padding)};
 }
 
 std::vector<Tensor> PadOnHost::compute_output_tensors(const std::vector<Tensor>& input_tensors) const {
+    auto output_shape = this->compute_output_shapes(input_tensors).at(0);
     const auto& input_tensor = input_tensors.at(0);
     if (input_tensor.shape() == this->output_tensor_shape) {
         return {input_tensor};
     } else {
-        return {input_tensor.pad(this->output_tensor_shape, this->input_tensor_start, this->pad_value)};
+        return {input_tensor.pad(output_shape, this->input_tensor_start, this->pad_value)};
     }
 }
 
