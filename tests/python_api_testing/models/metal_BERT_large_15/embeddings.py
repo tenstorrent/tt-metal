@@ -1,12 +1,7 @@
 import torch
 
 
-class TtEmbeddings(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
 
-    def forward(self, x):
-        return
 
 
 class PytorchEmbeddings(torch.nn.Module):
@@ -20,8 +15,12 @@ class PytorchEmbeddings(torch.nn.Module):
     def forward(self, input_ids, token_type_ids=None):
         return self.embeddings(input_ids=input_ids, token_type_ids=token_type_ids)
 
-    #def to_csv(self, csv_file):
-    #    self.embeddings.to_csv(csv_file)
+class TtEmbeddings(PytorchEmbeddings):
+    def __init__(self, hugging_face_reference_model):
+        super().__init__(hugging_face_reference_model)
+
+    def forward(self, input_ids, token_type_ids=None):
+        return super().forward(input_ids, token_type_ids)
 
 
 def run_embeddings_inference():
