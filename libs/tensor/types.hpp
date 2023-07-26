@@ -42,6 +42,7 @@ static constexpr std::size_t MAX_NUM_DIMENSIONS = 8;
 
 struct Padding {
     enum class PadValue {
+        Any,
         Zero,
         Infinity,
         NegativeInfinity

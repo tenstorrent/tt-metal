@@ -264,8 +264,7 @@ std::vector<Shape> Pad::compute_output_shapes(const std::vector<Tensor> &input_t
         auto back = this->output_tensor_shape[index] - (this->input_tensor_start[index] + input_shape[index]);
         dimensions_pads.push_back(Padding::PadDimension{.front=front, .back=back});
     }
-    TT_ASSERT(this->pad_value == 0.0f); // TODO(arakhmati): map this->pad_value to Padding::PadValue enum
-    const auto padding = Padding(dimensions_pads, Padding::PadValue::Zero);
+    const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
     return {Shape(this->output_tensor_shape, padding)};
 }
 
@@ -329,8 +328,7 @@ std::vector<Shape> PadOnHost::compute_output_shapes(const std::vector<Tensor> &i
         auto back = this->output_tensor_shape[index] - (this->input_tensor_start[index] + input_shape[index]);
         dimensions_pads.push_back(Padding::PadDimension{.front=front, .back=back});
     }
-    TT_ASSERT(this->pad_value == 0.0f); // TODO(arakhmati): map this->pad_value to Padding::PadValue enum
-    const auto padding = Padding(dimensions_pads, Padding::PadValue::Zero);
+    const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
     return {Shape(this->output_tensor_shape, padding)};
 }
 

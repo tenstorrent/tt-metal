@@ -492,8 +492,7 @@ std::vector<Shape> TilizeWithValPadding::compute_output_shapes(const std::vector
         auto back = this->output_tensor_shape[index] - (this->input_tensor_start[index] + input_shape[index]);
         dimensions_pads.push_back(Padding::PadDimension{.front=front, .back=back});
     }
-    TT_ASSERT(this->pad_value == 0.0f); // TODO(arakhmati): map this->pad_value to Padding::PadValue enum
-    const auto padding = Padding(dimensions_pads, Padding::PadValue::Zero);
+    const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
     return {Shape(this->output_tensor_shape, padding)};
 }
 std::vector<Tensor> TilizeWithValPadding::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
