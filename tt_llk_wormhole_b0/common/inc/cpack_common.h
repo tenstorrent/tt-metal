@@ -117,6 +117,22 @@ namespace ckernel::packer
       pck_edge_offset_t f;
    } pck_edge_offset_u;
 
+   // Pack counters
+   typedef struct {
+      uint32_t pack_per_xy_plane : 8;
+      uint32_t pack_reads_per_xy_plane : 8;
+      uint32_t pack_xys_per_til : 7;
+      uint32_t pack_yz_transposed : 1;
+      uint32_t pack_per_xy_plane_offset : 8;
+   } pack_counters_t;
+
+   static_assert(sizeof(pack_counters_t) == (sizeof(uint32_t)));
+
+   typedef union {
+      uint32_t val;
+      pack_counters_t f;
+   } pack_counters_u;
+
    inline const uint32_t get_num_faces(const std::uint32_t out_tile_dims[] = default_tile_dims)
    {
       if ((out_tile_dims[TileDim::R_IDX] <= FACE_R_DIM) && (out_tile_dims[TileDim::C_IDX] <= FACE_C_DIM)) {
@@ -433,7 +449,11 @@ namespace ckernel::packer
       // PACK_COUNTERS_SEC0_pack_reads_per_xy_plane = cfg_reg_array[3][8 +: 8];
       // PACK_COUNTERS_SEC0_pack_xys_per_tile = cfg_reg_array[3][16 +: 7];
       // PACK_COUNTERS_SEC0_pack_yz_transposed = cfg_reg_array[3][23 +: 1];
-      for (uint i=0; i<4; i++) cfg[PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32+i]=0; // disable auto last generation
+      pack_counters_u pack_counters;
+      pack_counters.val = 0;
+      pack_counters.f.pack_reads_per_xy_plane = get_face_r_dim(pack_output_id); // Number of reads per face
+                                                                                // Used for resetting tile posistion generator for edge masks
+      for (uint i=0; i<4; i++) cfg[PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32+i]=pack_counters.val; // disable auto last generation
 
       pck_edge_offset_u pck_edge_offset;
       pck_edge_offset.val = 0;

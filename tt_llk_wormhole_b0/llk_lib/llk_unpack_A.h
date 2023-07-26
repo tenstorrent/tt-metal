@@ -193,10 +193,10 @@ inline void llk_unpack_A_hw_configure(const llk_unpack_A_params_t *unpack_A_para
 
     const uint32_t unpA_num_faces = get_num_faces(unpA_operand_id);
 
-    constexpr uint32_t unpA_face_height = 16;
+    const uint32_t unpA_face_r_dim = get_face_r_dim(unpA_operand_id);
 
     configure_unpack_AB(unpA_operand_id, unpA_operand_id,
-        unpA_face_height, unpA_face_height, is_row_pool, within_face_16x16_transpose, is_fp32_dest_acc_en, srnd_fpu_en, unpA_num_faces, unpA_num_faces);
+        unpA_face_r_dim, unpA_face_r_dim, is_row_pool, within_face_16x16_transpose, is_fp32_dest_acc_en, srnd_fpu_en, unpA_num_faces, unpA_num_faces);
 }
 
 template <bool is_fp32_dest_acc_en = false, bool srnd_fpu_en = false>
@@ -209,14 +209,20 @@ inline void llk_unpack_A_hw_configure_disaggregated(const std::uint32_t unpA_ope
 }
 
 template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void llk_unpack_A_init(const std::uint32_t transpose_of_faces=0, const std::uint32_t within_face_16x16_transpose=0, const std::uint32_t operand = 255) {
+__attribute__((always_inline))  inline void llk_unpack_A_init(const std::uint32_t transpose_of_faces=0, const std::uint32_t within_face_16x16_transpose=0, const std::uint32_t operand = 255) {
+
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
+
     // If operand is 255, it means that it is not passed explicitly, and we should assume default tile tiles
     // This will be fixed once all hlk inits which translate to this get operand argument
-    const std::uint32_t num_faces = operand != 255 ? get_num_faces(get_operand_id(operand)) : 4;
+    const std::uint32_t operand_id = get_operand_id(operand);
 
+    const std::uint32_t num_faces  = operand != 255 ? get_num_faces(operand_id) : TILE_NUM_FACES;
+    const std::uint32_t face_r_dim = operand != 255 ? get_face_r_dim(operand_id) : FACE_R_DIM;
+
+    constexpr std::uint32_t UNP_SEL = (BType == BroadcastType::NONE) ? p_setadc::UNP_A : p_setadc::UNP_B;
+    config_face_dim<false, UNP_SEL>(face_r_dim);
     llk_unpack_A_mop_config<BType, acc_to_dest, binary_reuse_dest>(transpose_of_faces>0, num_faces);
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
-    TTI_SETADCXX(0b11, FACE_WIDTH*FACE_HEIGHT-1, 0x0);
 }
 
 template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
