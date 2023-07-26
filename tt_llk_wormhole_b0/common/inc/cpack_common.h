@@ -208,6 +208,7 @@ namespace ckernel::packer
       volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
 
       const uint num_faces = get_num_faces(output_id);
+      const bool partial_face = get_face_r_dim(output_id) < FACE_R_DIM;
       
       // Set packer config
       pack_config_u config;
@@ -216,7 +217,7 @@ namespace ckernel::packer
       }
 
       config.f.exp_section_size = (((uint)pack_dst_format[output_id] == (uint)DataFormat::Lf8) || 
-                                   ((uint)pack_dst_format[output_id] == (uint)DataFormat::Int8)) ? 0 : num_faces; // set to num_faces as exp section size is not used for non-bfp formats except for lf8/int8
+                                   ((uint)pack_dst_format[output_id] == (uint)DataFormat::Int8)) ? 0 : (partial_face ? 1 : num_faces); // set to num_faces as exp section size is not used for non-bfp formats except for lf8/int8
 
       config.f.uncompress   = 1;
       config.f.out_data_format   = (uint)pack_dst_format[output_id];
@@ -421,7 +422,7 @@ namespace ckernel::packer
 
    }
 
-   template <bool is_fp32_dest_acc_en>
+   template <bool is_fp32_dest_acc_en, bool untilize>
    inline void configure_pack(uint pack_output_id, uint relu_config = 0)
    {
       // Get pointer to registers for current state ID
@@ -479,8 +480,10 @@ namespace ckernel::packer
 
       cfg[STACC_RELU_ApplyRelu_ADDR32] = hw_relu_config.val[0];
 
-      constexpr uint pack_x_dim = 16; // Number of datums to pack per row
-      TTI_SETADCXX(p_setadc::PAC, pack_x_dim-1, 0x0); 
+      const uint face_r_dim = get_face_r_dim(pack_output_id);
+      const uint face_dim = face_r_dim * FACE_C_DIM;
+      const uint pack_x_dim = untilize ? 16 : face_dim; // Number of datums to pack per row
+      TT_SETADCXX(p_setadc::PAC, pack_x_dim-1, 0x0); 
    }
 
    template <DstTileFaceLayout FaceLayout, bool untilize, bool is_fp32_dest_acc_en>

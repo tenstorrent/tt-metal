@@ -13,8 +13,10 @@ using namespace ckernel::packer;
 
 template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
 inline void llk_pack_mop_config(const uint32_t num_faces = 4, const uint32_t face_r_dim = 16) {
+    constexpr bool partial_face = false; // FIXME: face_r_dim < 16 && bfp
+
     addr_mod_pack_t{
-        .y_src = {.incr = untilize ? 0 : 1},
+        .y_src = {.incr = untilize ? 0 : 16},
         .y_dst = {.incr = 1},
     }
         .set(ADDR_MOD_0);
@@ -40,25 +42,30 @@ inline void llk_pack_mop_config(const uint32_t num_faces = 4, const uint32_t fac
         .y_dst = { .incr = 0, .clr = 0, .cr = 0  },
     }.set(ADDR_MOD_2);
 
-    const uint MOP_INNER_LOOP = face_r_dim;
+    const uint MOP_INNER_LOOP = 1;
     const uint MOP_UNTILIZE_INNER_LOOP = FaceLayout == DstTileFaceLayout::ColMajor ? 8 : 4;
     const uint MOP_OUTER_LOOP = 1;
     const uint MOP_UNTILIZE_OUTER_LOOP = (face_r_dim == 1) ? 1 : face_r_dim / 2;
-    const uint PACKCNT = num_faces;
+    const uint PACKCNT = partial_face ? 1 : num_faces;
     const uint MEGAROW = 1;
     constexpr uint ZERO_OUTPUT_FLAG = zero_output ? p_pacr::P_ZERO_OUTPUT_ENABLED : p_pacr::P_ZERO_OUTPUT_DISABLED;
 
-    ckernel::ckernel_template tmp(
-        untilize ? MOP_UNTILIZE_OUTER_LOOP : MOP_OUTER_LOOP, untilize ? MOP_UNTILIZE_INNER_LOOP : MOP_INNER_LOOP, TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
 
     // Write header to l1
     if constexpr (!untilize) {
-        tmp.set_last_inner_loop_instr(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, 0, 0, 1));
-        tmp.set_last_outer_loop_instr(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, 0, 0, 1));
+        ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 1));
+        //tmp.set_last_inner_loop_instr(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, 0, 0, 0));
+        //tmp.set_last_outer_loop_instr(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, 0, 0, 1));
         // Write header to l1
+        if (partial_face) {
+            tmp.set_loop_op0(TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0)); // Don't close the tile, point to the next face
+            tmp.set_loop_op1(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 1)); // Close the tile
+        }
         tmp.set_end_op(TT_OP_STOREIND(
             1, 0, p_ind::LD_16B, LO_16(0), p_ind::INC_NONE, p_gpr_pack::TILE_HEADER, p_gpr_pack::OUTPUT_ADDR));
+        tmp.program(instrn_buffer);
     } else {
+        ckernel::ckernel_template tmp(MOP_UNTILIZE_OUTER_LOOP, MOP_UNTILIZE_INNER_LOOP, TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
         tmp.set_start_op(TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
         if (face_r_dim>1) {
             tmp.set_loop_op0(TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 4, 0));
@@ -66,14 +73,14 @@ inline void llk_pack_mop_config(const uint32_t num_faces = 4, const uint32_t fac
         }    
         tmp.set_last_inner_loop_instr(TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 4, 0));
         tmp.set_last_outer_loop_instr(TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 4, 0));
+        tmp.program(instrn_buffer);
     }
 
-    tmp.program(instrn_buffer);
 }
 
 template <bool untilize = false, bool is_fp32_dest_acc_en = false>
 inline void llk_pack_hw_configure(const llk_pack_params_t *pack_params) {
-    configure_pack<is_fp32_dest_acc_en>(get_output_id(pack_params->pack_output), pack_params->relu_config.val);
+    configure_pack<is_fp32_dest_acc_en, untilize>(get_output_id(pack_params->pack_output), pack_params->relu_config.val);
 }
 
 template <bool untilize = false, bool is_fp32_dest_acc_en = false, ReluType relu_type = ReluType::NO_RELU, std::uint32_t relu_threshold = 0>
@@ -86,7 +93,7 @@ inline void llk_pack_hw_configure_disaggregated(std::uint32_t pack_output) {
 // FIXME: Remove once edge mask spec is defined
 template <bool untilize = false, PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en = false>
 inline void llk_pack_reduce_hw_configure(const llk_pack_params_t *pack_params) {
-    configure_pack<is_fp32_dest_acc_en>(get_output_id(pack_params->pack_output), pack_params->relu_config.val);
+    configure_pack<is_fp32_dest_acc_en, untilize>(get_output_id(pack_params->pack_output), pack_params->relu_config.val);
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
 
     ckernel::packer::pck_edge_offset_u pack_edge_offset = {.val = 0};
