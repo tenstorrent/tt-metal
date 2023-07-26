@@ -1,5 +1,6 @@
 from pathlib import Path
 import sys
+
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/")
 sys.path.append(f"{f}/..")
@@ -24,7 +25,10 @@ from diffusers import LMSDiscreteScheduler
 from tqdm.auto import tqdm
 
 from utility_functions_new import torch_to_tt_tensor_rm, tt_to_torch_tensor, Profiler
-from utility_functions_new import enable_persistent_kernel_cache, disable_persistent_kernel_cache
+from utility_functions_new import (
+    enable_persistent_kernel_cache,
+    disable_persistent_kernel_cache,
+)
 from utility_functions_new import prep_report
 import tt_lib as ttl
 from unet_2d_condition import UNet2DConditionModel as tt_unet_condition
@@ -98,11 +102,13 @@ def make_tt_unet(state_dict, device):
     )
     return tt_unet
 
+
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (108,
-         80,
+        (
+            108,
+            80,
         ),
     ),
 )
@@ -300,8 +306,14 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time)
         comments,
         cpu_time,
     )
-    logger.info(f"Unbatched Stable Diffusion {comments} inference time: {second_iter_time}")
+    logger.info(
+        f"Unbatched Stable Diffusion {comments} inference time: {second_iter_time}"
+    )
     logger.info(f"Unbatched Stable Diffusion {comments} compile time: {compile_time}")
 
-    assert second_iter_time < expected_inference_time, f"Unabtched Stable Diffusion {comments} is too slow"
-    assert compile_time < expected_compile_time, f"Unabtched Stable Diffusion {comments} compile time is too slow"
+    assert (
+        second_iter_time < expected_inference_time
+    ), f"Unabtched Stable Diffusion {comments} is too slow"
+    assert (
+        compile_time < expected_compile_time
+    ), f"Unabtched Stable Diffusion {comments} compile time is too slow"
