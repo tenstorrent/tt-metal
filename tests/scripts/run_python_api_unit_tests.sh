@@ -9,7 +9,10 @@ fi
 
 env TT_METAL_DEVICE_DISPATCH_MODE=1 pytest $TT_METAL_HOME/tests/python_api_testing/unit_testing/
 
-pytest $TT_METAL_HOME/tests/python_api_testing/sweep_tests/pytests/ -vvv
+env TT_METAL_DEVICE_DISPATCH_MODE=1 pytest  $(find $TT_METAL_HOME/tests/python_api_testing/sweep_tests/pytests/ -name 'test_*.py' -a ! -name 'test_sweep_conv_with_address_map.py') -vvv
+
+# This must run in slow dispatch mode
+pytest -svv $TT_METAL_HOME/tests/python_api_testing/sweep_tests/pytests/test_sweep_conv_with_address_map.py
 
 # For now, adding tests with fast dispatch and non-32B divisible page sizes here. Python/models people,
 # you can move to where you'd like.
