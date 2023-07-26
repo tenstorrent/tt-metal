@@ -236,7 +236,6 @@ class TtBloomForCausalLM:
             raise ValueError(f"Got unexpected arguments: {deprecated_arguments}")
 
         return_dict = return_dict if return_dict is not None else self.use_return_dict
-
         transformer_outputs = self.transformer.forward(
             device,
             input_ids,
@@ -251,10 +250,11 @@ class TtBloomForCausalLM:
         )
 
         hidden_states = transformer_outputs[0]
-        lm_logits = bloom_utils.tt_matmul(
-            hidden_states, self.lm_head_weight, device, on_torch=True
-        )
-        lm_logits = bloom_utils.tt2torch_tensor(lm_logits)
+
+        # Not running tt_matmul since we don't want the output to be a tt tensor
+        hidden_states_torch = bloom_utils.tt2torch_tensor(hidden_states)
+        lm_head_weight_torch = bloom_utils.tt2torch_tensor(self.lm_head_weight)
+        lm_logits = torch.matmul(hidden_states_torch, lm_head_weight_torch)
         lm_logits = lm_logits.squeeze(0)
 
         loss = None
