@@ -3,16 +3,14 @@ import torch
 import warnings
 from torch import nn
 import tt_lib
-import json
 from typing import Optional, Tuple
 
-from models.utility_functions import (
+from python_api_testing.models.utility_functions_new import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
-from models.t5.tt.t5_stack import TtT5Stack
+from python_api_testing.models.t5.t5_stack import TtT5Stack
 from loguru import logger
-from transformers import T5ForConditionalGeneration
 
 
 class Seq2SeqLMOutput:
@@ -301,55 +299,3 @@ class TtT5ForConditionalGeneration(nn.Module):
             cross_attentions=decoder_outputs.cross_attentions,
             encoder_outputs=encoder_outputs,
         )
-
-
-def _t5_for_conditional_generation(
-    config, state_dict, device
-) -> TtT5ForConditionalGeneration:
-    return TtT5ForConditionalGeneration(
-        config=config, state_dict=state_dict, device=device
-    )
-
-
-def t5_small_for_conditional_generation(device) -> TtT5ForConditionalGeneration:
-    hf_reference_model = T5ForConditionalGeneration.from_pretrained("t5-small")
-    hf_reference_model.eval()
-
-    generation_config = hf_reference_model.generation_config
-    config = json.loads(hf_reference_model.config.to_json_string())
-    config["tie_word_embeddings"] = hf_reference_model.config.tie_word_embeddings
-
-    return (
-        _t5_for_conditional_generation(config, hf_reference_model.state_dict(), device),
-        hf_reference_model,
-    )
-
-
-def t5_base_for_conditional_generation(device) -> TtT5ForConditionalGeneration:
-    hf_reference_model = T5ForConditionalGeneration.from_pretrained("t5-base")
-    hf_reference_model.eval()
-
-    generation_config = hf_reference_model.generation_config
-    config = json.loads(hf_reference_model.config.to_json_string())
-    config["tie_word_embeddings"] = hf_reference_model.config.tie_word_embeddings
-
-    return (
-        _t5_for_conditional_generation(config, hf_reference_model.state_dict(), device),
-        hf_reference_model,
-    )
-
-
-def flan_t5_small_for_conditional_generation(device) -> TtT5ForConditionalGeneration:
-    hf_reference_model = T5ForConditionalGeneration.from_pretrained(
-        "google/flan-t5-small"
-    )
-    hf_reference_model.eval()
-
-    generation_config = hf_reference_model.generation_config
-    config = json.loads(hf_reference_model.config.to_json_string())
-    config["tie_word_embeddings"] = hf_reference_model.config.tie_word_embeddings
-
-    return (
-        _t5_for_conditional_generation(config, hf_reference_model.state_dict(), device),
-        hf_reference_model,
-    )

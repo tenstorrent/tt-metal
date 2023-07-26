@@ -1,13 +1,15 @@
 import torch
 from torch import nn
 
-from models.utility_functions import (
+from python_api_testing.models.utility_functions_new import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
-from models.t5.tt.t5_layer_self_attention import TtT5LayerSelfAttention
-from models.t5.tt.t5_layer_cross_attention import TtT5LayerCrossAttention
-from models.t5.tt.t5_layer_ff import TtT5LayerFF
+from python_api_testing.models.t5.t5_layer_self_attention import TtT5LayerSelfAttention
+from python_api_testing.models.t5.t5_layer_cross_attention import (
+    TtT5LayerCrossAttention,
+)
+from python_api_testing.models.t5.t5_layer_ff import TtT5LayerFF
 
 
 class TtT5Block(nn.Module):

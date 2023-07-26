@@ -1,15 +1,26 @@
+from pathlib import Path
+import sys
+
+f = f"{Path(__file__).parent}"
+sys.path.append(f"{f}/..")
+sys.path.append(f"{f}/../..")
+sys.path.append(f"{f}/../../..")
+sys.path.append(f"{f}/../../../..")
+
 import torch
 import json
 import tt_lib
 from loguru import logger
 
 from transformers import T5Model
-from tests.python_api_testing.models.utility_functions_new import (
+from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from python_api_testing.models.utility_functions_new import (
     torch2tt_tensor,
     tt2torch_tensor,
-    comp_pcc,
 )
-from models.t5.tt.t5_layer_cross_attention import TtT5LayerCrossAttention
+from python_api_testing.models.t5.t5_layer_cross_attention import (
+    TtT5LayerCrossAttention,
+)
 
 
 def run_test_T5LayerCrossAttention_inference(device, model_name, input_h, input_w):

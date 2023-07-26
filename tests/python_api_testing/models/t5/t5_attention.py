@@ -4,7 +4,7 @@ from torch import nn
 import tt_lib
 
 from loguru import logger
-from models.utility_functions import (
+from python_api_testing.models.utility_functions_new import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
