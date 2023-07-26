@@ -24,7 +24,8 @@ static constexpr u32 DEVICE_COMMAND_DATA_ADDR = 150 * 1024;
 static constexpr u32 DEVICE_COMMAND_NUM_ENTRIES = 5632; // 22KB device command
 static constexpr u32 NUM_ENTRIES_PER_BUFFER_RELAY = 12;
 static constexpr u32 CONTROL_SECTION_NUM_ENTRIES = 16;
-static constexpr u32 RELAY_BUFFER_NUM_ENTRIES = 4 * NUM_ENTRIES_PER_BUFFER_RELAY;
+static constexpr u32 NUM_DATA_MOVEMENT_INSTRUCTIONS = 4;
+static constexpr u32 RELAY_BUFFER_NUM_ENTRIES = NUM_DATA_MOVEMENT_INSTRUCTIONS * NUM_ENTRIES_PER_BUFFER_RELAY;
 static constexpr u32
     RELAY_PROGRAM_NUM_ENTRIES =  // Whatever is left of the available size, we allocate for relaying program data
     DEVICE_COMMAND_NUM_ENTRIES - CONTROL_SECTION_NUM_ENTRIES - RELAY_BUFFER_NUM_ENTRIES - NUM_DISPATCH_CORES;

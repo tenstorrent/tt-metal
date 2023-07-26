@@ -38,6 +38,9 @@ void DeviceCommand::add_buffer_relay(
     u32 num_pages_per_remainder_burst,
     u32 banking_enum,
     u32 starting_bank_id) {
+    constexpr static u32 upper_bound_on_relay_buffer_entry_idx = CONTROL_SECTION_NUM_ENTRIES + NUM_DISPATCH_CORES + RELAY_BUFFER_NUM_ENTRIES;
+    tt::log_assert(this->relay_buffer_entry_idx < upper_bound_on_relay_buffer_entry_idx, "relay_buffer_entry_idx ({}) out of bounds ({})", relay_buffer_entry_idx, upper_bound_on_relay_buffer_entry_idx);
+
     this->desc.at(this->relay_buffer_entry_idx) = addr0;
     this->desc.at(this->relay_buffer_entry_idx + 1) = addr0_noc;
     this->desc.at(this->relay_buffer_entry_idx + 2) = addr1;
@@ -52,7 +55,6 @@ void DeviceCommand::add_buffer_relay(
     this->desc.at(this->relay_buffer_entry_idx + 11) = starting_bank_id;
     this->relay_buffer_entry_idx += this->num_4B_words_in_relay_buffer_instruction;
 
-    tt::log_assert(this->relay_buffer_entry_idx < CONTROL_SECTION_NUM_ENTRIES + NUM_DISPATCH_CORES + RELAY_BUFFER_NUM_ENTRIES, "relay_buffer_entry_idx out of bounds");
 }
 
 void DeviceCommand::add_read_buffer_instruction(
@@ -69,6 +71,8 @@ void DeviceCommand::add_read_buffer_instruction(
     u32 banking_enum,
     u32 starting_bank_id) {
     this->desc.at(this->num_relay_buffer_reads_idx)++;
+    tt::log_assert(this->desc.at(this->num_relay_buffer_reads_idx) <= NUM_DATA_MOVEMENT_INSTRUCTIONS, "There can be max {} read commands", NUM_DATA_MOVEMENT_INSTRUCTIONS);
+
     this->add_buffer_relay(
         dst,
         dst_noc,
@@ -98,6 +102,7 @@ void DeviceCommand::add_write_buffer_instruction(
     u32 banking_enum,
     u32 starting_bank_id) {
     this->desc.at(this->num_relay_buffer_writes_idx)++;
+    tt::log_assert(this->desc.at(this->num_relay_buffer_writes_idx) <= NUM_DATA_MOVEMENT_INSTRUCTIONS, "There can be max {} write commands", NUM_DATA_MOVEMENT_INSTRUCTIONS);
 
     this->add_buffer_relay(
         src,
