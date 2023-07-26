@@ -60,6 +60,9 @@ tt_metal/src/firmware/riscv/common/dataflow_internals.h @davorchap @DrJessop @my
 # tests/tt_metal/tools/profiler/ @mo-tenstorrent @TT-billteng
 # tt_metal/hostdevcommon/profiler_common.h @mo-tenstorrent @TT-billteng
 # docs/source/performance_measurement_tools/profiler.rst @mo-tenstorrent @TT-billteng
+tt-metal/tt_metal/programming_examples/profiler @mo-tenstorrent
+
+# test scripts
 tests/scripts/run_profiler_regressions.sh @mo-tenstorrent @tt-rkim
 tests/scripts/run_performance.sh @ashayestehmanesh @farbabi
 
