@@ -17,7 +17,8 @@ from tt_lib.utils import (
 )
 import torch
 
-
+# Seeding to prevent non-determinism
+torch.manual_seed(5555)
 def test_tilize_hpadding_cl():
     pcie_0 = 0
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_0)
