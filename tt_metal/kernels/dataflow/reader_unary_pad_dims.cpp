@@ -24,7 +24,7 @@ void kernel_main() {
     const uint32_t pad_value                = get_arg_val<uint32_t>(11);
     const uint32_t temp_buffer_l1_addr      = get_arg_val<uint32_t>(12);
 
-    std::uint32_t* temp_buffer = (uint32_t*)(temp_buffer_l1_addr);
+    tt_l1_ptr std::uint32_t* temp_buffer = (tt_l1_ptr uint32_t*)(temp_buffer_l1_addr);
 
     // TODO(agrebenisan): This isn't good... here we are assuming
     // that the stick size dictates tiles c, but stick size
@@ -58,7 +58,7 @@ void kernel_main() {
                 for (uint32_t k = 0; k < 32; k++) {
                     if (row_id_in_face >= num_unpadded_Y) {
                         // pad the tile by reading values from zero buffer in L1
-                        volatile std::uint32_t* dst = (volatile uint32_t*)(l1_write_addr);
+                        volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(l1_write_addr);
                         for(uint32_t z = 0; z < padded_X_size / 4; z++) {
                             dst[z] = pad_value;
                         }
@@ -72,8 +72,8 @@ void kernel_main() {
                         uint64_t diff_addr = src_noc_addr - round_down_addr;
                         noc_async_read(round_down_addr, temp_buffer_l1_addr, unpadded_X_size + diff_addr);
 
-                        volatile std::uint32_t* dst = (volatile uint32_t*)(l1_write_addr + unpadded_X_size);
-                        volatile std::uint32_t* temp = (volatile uint32_t*)(temp_buffer_l1_addr + diff_addr);
+                        volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(l1_write_addr + unpadded_X_size);
+                        volatile tt_l1_ptr std::uint32_t* temp = (volatile tt_l1_ptr uint32_t*)(temp_buffer_l1_addr + diff_addr);
 
                         // Pad Columns first
                         for(uint32_t z = 0; z < (padded_X_size - unpadded_X_size) / 4; z++) {
@@ -82,7 +82,7 @@ void kernel_main() {
 
                         // Block before copying data from tmp to cb buffer
                         noc_async_read_barrier();
-                        dst = (volatile uint32_t*)(l1_write_addr);
+                        dst = (volatile tt_l1_ptr uint32_t*)(l1_write_addr);
                         for(uint32_t z = 0; z < (unpadded_X_size) / 4; z++) {
                             dst[z] = temp[z];
                         }
@@ -100,7 +100,7 @@ void kernel_main() {
             cb_reserve_back(cb_id_in0, num_tiles_c);
             uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
             // pad the tile by reading values from zero buffer in L1
-            volatile std::uint32_t* dst = (volatile uint32_t*)(l1_write_addr);
+            volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(l1_write_addr);
             // * 32 / 4
             for(uint32_t z = 0; z < padded_X_size * 8; z++) {
                 dst[z] = pad_value;
@@ -113,7 +113,7 @@ void kernel_main() {
         cb_reserve_back(cb_id_in0, num_tiles_c);
         uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
         // pad the tile by reading values from zero buffer in L1
-        volatile std::uint32_t* dst = (volatile uint32_t*)(l1_write_addr);
+        volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(l1_write_addr);
         // * 32 / 4
         for(uint32_t z = 0; z < padded_X_size * 8; z++) {
             dst[z] = pad_value;

@@ -25,7 +25,7 @@ void kernel_main() {
     constexpr uint32_t cb0_id = 0;
     constexpr uint32_t cb1_id = 1;
 
-    volatile std::uint32_t* source_addresses = (volatile uint32_t*)(address_map_l1_addr);
+    volatile tt_l1_ptr std::uint32_t* source_addresses = (volatile tt_l1_ptr uint32_t*)(address_map_l1_addr);
 
     uint32_t source_addresses_list_index = 0;
     // We push one block of tiles of src0 and src1.

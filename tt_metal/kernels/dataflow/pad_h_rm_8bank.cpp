@@ -65,7 +65,7 @@ void kernel_main() {
     uint32_t l1_tmp_addr = get_write_ptr(cb_id_in0);
     uint32_t l1_zeros_addr = get_write_ptr(cb_id_in1);
     constexpr uint32_t num_elems0 = (2048<<4) / sizeof(uint32_t); // tile size*16 tiles/4
-    volatile uint32_t* zeros = reinterpret_cast<volatile uint32_t*>(l1_zeros_addr);
+    volatile tt_l1_ptr uint32_t* zeros = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_zeros_addr);
     for (uint32_t iz = 0; iz < num_elems0; iz++)
         zeros[iz] = 0;
 

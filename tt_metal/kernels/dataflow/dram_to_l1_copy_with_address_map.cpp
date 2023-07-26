@@ -14,7 +14,7 @@ void kernel_main() {
     std::uint32_t address_map_l1_addr        = get_arg_val<uint32_t>(4);
     std::uint32_t address_map_size           = get_arg_val<uint32_t>(5);
 
-    volatile std::uint32_t* address_map = (volatile uint32_t*)(address_map_l1_addr);
+    volatile tt_l1_ptr std::uint32_t* address_map = (volatile tt_l1_ptr uint32_t*)(address_map_l1_addr);
 
 
     for(std::uint32_t i = 0; i < address_map_size; i+=3) {

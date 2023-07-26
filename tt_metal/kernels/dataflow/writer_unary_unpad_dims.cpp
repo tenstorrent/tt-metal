@@ -25,8 +25,8 @@ void kernel_main() {
     const uint32_t cache_buffer_l1_addr     = get_arg_val<uint32_t>(11);
     const uint32_t temp_buffer_l1_addr      = get_arg_val<uint32_t>(12);
 
-    std::uint32_t* cache_buffer = (uint32_t*)(cache_buffer_l1_addr);
-    std::uint32_t* temp_buffer = (uint32_t*)(temp_buffer_l1_addr);
+    tt_l1_ptr std::uint32_t* cache_buffer = (tt_l1_ptr uint32_t*)(cache_buffer_l1_addr);
+    tt_l1_ptr std::uint32_t* temp_buffer = (tt_l1_ptr uint32_t*)(temp_buffer_l1_addr);
 
 
     // TODO(agrebenisan): This isn't good... here we are assuming
@@ -67,14 +67,14 @@ void kernel_main() {
                             uint64_t diff_addr = dst_noc_addr - round_down_addr;
 
                             // Copy from cache to tmp buffer
-                            volatile std::uint32_t* cache = (volatile uint32_t*)(l1_cache_addr);
-                            volatile std::uint32_t* temp = (volatile uint32_t*)(temp_buffer_l1_addr);
+                            volatile tt_l1_ptr std::uint32_t* cache = (volatile tt_l1_ptr uint32_t*)(l1_cache_addr);
+                            volatile tt_l1_ptr std::uint32_t* temp = (volatile tt_l1_ptr uint32_t*)(temp_buffer_l1_addr);
                             for(uint32_t z = 0; z < (diff_addr) / 4; z++) {
                                 temp[z] = cache[z];
                             }
                             // Copy from CB to tmp buffer
-                            volatile std::uint32_t* src = (volatile uint32_t*)(l1_read_addr);
-                            temp = (volatile uint32_t*)(temp_buffer_l1_addr + diff_addr);
+                            volatile tt_l1_ptr std::uint32_t* src = (volatile tt_l1_ptr uint32_t*)(l1_read_addr);
+                            temp = (volatile tt_l1_ptr uint32_t*)(temp_buffer_l1_addr + diff_addr);
                             for(uint32_t z = 0; z < (unpadded_X_size) / 4; z++) {
                                 temp[z] = src[z];
                             }
@@ -85,7 +85,7 @@ void kernel_main() {
                             // Copy from tmp to cache
                             uint64_t next_round_down_addr = round_down_32(dst_noc_addr + unpadded_X_size);
                             uint64_t cache_to_write = dst_noc_addr + unpadded_X_size - next_round_down_addr;
-                            temp = (volatile uint32_t*)(temp_buffer_l1_addr + diff_addr + unpadded_X_size - cache_to_write);
+                            temp = (volatile tt_l1_ptr uint32_t*)(temp_buffer_l1_addr + diff_addr + unpadded_X_size - cache_to_write);
                             for(uint32_t z = 0; z < (cache_to_write) / 4; z++) {
                                 cache[z] = temp[z];
                             }

@@ -32,7 +32,7 @@ void kernel_main() {
     uint32_t pad_buffer_l1_addr = get_write_ptr(cb_id_out1);
 
     // Fill pad tile with pad value
-    volatile uint32_t* pad_buffer = reinterpret_cast<volatile uint32_t*>(pad_buffer_l1_addr);
+    volatile tt_l1_ptr uint32_t* pad_buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pad_buffer_l1_addr);
     const uint32_t num_elems = tile_size / sizeof(uint32_t);
     for (uint32_t z = 0; z < num_elems; z++) {
         pad_buffer[z] = pad_value;

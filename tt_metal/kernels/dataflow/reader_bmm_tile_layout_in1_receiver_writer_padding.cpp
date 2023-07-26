@@ -65,7 +65,7 @@ void kernel_main() {
         constexpr uint32_t in3_mcast_sender_semaphore_addr    = get_compile_time_arg_val(17);
         constexpr uint32_t in3_mcast_receiver_semaphore_addr  = get_compile_time_arg_val(18);
         constexpr uint32_t cb_id_in3 = 3;
-        volatile uint32_t* in3_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(in3_mcast_receiver_semaphore_addr);
+        volatile tt_l1_ptr uint32_t* in3_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in3_mcast_receiver_semaphore_addr);
     #endif
 
     // WRITER
@@ -80,7 +80,7 @@ void kernel_main() {
     const uint32_t output_single_tile_size_bytes = get_tile_size(cb_id_out0);
     const DataFormat output_data_format = get_dataformat(cb_id_out0);
 
-    volatile uint32_t* in1_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(in1_mcast_receiver_semaphore_addr);
+    volatile tt_l1_ptr uint32_t* in1_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_mcast_receiver_semaphore_addr);
 
     // WRITER
     const InterleavedAddrGenFast<out_is_dram> s = {

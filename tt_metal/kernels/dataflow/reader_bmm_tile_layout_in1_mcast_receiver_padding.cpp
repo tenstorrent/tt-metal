@@ -72,7 +72,7 @@ void kernel_main() {
         pad_buffer[i] = 0;
     }
 
-    volatile uint32_t* in1_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(in1_mcast_receiver_semaphore_addr);
+    volatile tt_l1_ptr uint32_t* in1_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_mcast_receiver_semaphore_addr);
 
     bool one_time_noc_wait = true;
     bool one_time_cb_push = true;

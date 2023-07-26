@@ -12,7 +12,7 @@ void kernel_main() {
     uint32_t receiver_semaphore_addr = get_arg_val<uint32_t>(4);
     uint32_t num_repetitions         = get_arg_val<uint32_t>(5);
 
-    volatile uint32_t* receiver_semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(receiver_semaphore_addr);
+    volatile tt_l1_ptr uint32_t* receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_semaphore_addr);
 
     constexpr uint32_t cb_id            = get_compile_time_arg_val(0);
     constexpr uint32_t block_size_tiles = get_compile_time_arg_val(1);

@@ -25,8 +25,8 @@ void kernel_main() {
     std::uint32_t dram_channels_noc_x_raw_start = L1_ARG_BASE + 8;
     std::uint32_t dram_channels_noc_y_raw_start = L1_ARG_BASE + 12;
     for (std::uint32_t dram_channel_id = 0; dram_channel_id < MAX_CHANNELS; dram_channel_id++) {
-        dram_channels_noc_x[dram_channel_id] = *(volatile uint32_t*)(dram_channels_noc_x_raw_start + dram_channel_id * 2 * 4);
-        dram_channels_noc_y[dram_channel_id] = *(volatile uint32_t*)(dram_channels_noc_y_raw_start + dram_channel_id * 2 * 4);
+        dram_channels_noc_x[dram_channel_id] = *(volatile tt_l1_ptr uint32_t*)(dram_channels_noc_x_raw_start + dram_channel_id * 2 * 4);
+        dram_channels_noc_y[dram_channel_id] = *(volatile tt_l1_ptr uint32_t*)(dram_channels_noc_y_raw_start + dram_channel_id * 2 * 4);
     }
 
     std::uint32_t remaining_args_offset = 8 + num_dram_channels * 2 * 4;

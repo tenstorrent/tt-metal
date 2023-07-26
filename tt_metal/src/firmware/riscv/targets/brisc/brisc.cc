@@ -14,19 +14,20 @@
 #include "tools/profiler/kernel_profiler.hpp"
 
 #include "debug_print.h"
+#include "tt_metal/src/firmware/riscv/common/risc_attribs.h"
 
 // TODO: commonize this w/ the runtime -- it's the same configs
 // these consts must be constexprs
 constexpr uint32_t TRISC_RUN_MAILBOX_OFFSET = MEM_RUN_MAILBOX_ADDRESS + MEM_MAILBOX_BRISC_OFFSET;
 
-volatile uint32_t * const brisc_run_mailbox_address =
-    ( volatile uint32_t *)(MEM_RUN_MAILBOX_ADDRESS + MEM_MAILBOX_BRISC_OFFSET);
-volatile uint32_t * const ncrisc_run_mailbox_address =
-    (volatile uint32_t *)(MEM_RUN_MAILBOX_ADDRESS + MEM_MAILBOX_NCRISC_OFFSET);
-volatile uint32_t * const trisc_run_mailbox_addresses[3] = {
-    (volatile uint32_t *)(MEM_RUN_MAILBOX_ADDRESS + MEM_MAILBOX_TRISC0_OFFSET),
-    (volatile uint32_t *)(MEM_RUN_MAILBOX_ADDRESS + MEM_MAILBOX_TRISC1_OFFSET),
-    (volatile uint32_t *)(MEM_RUN_MAILBOX_ADDRESS + MEM_MAILBOX_TRISC2_OFFSET)
+volatile tt_l1_ptr uint32_t * const brisc_run_mailbox_address =
+    ( volatile tt_l1_ptr uint32_t *)(MEM_RUN_MAILBOX_ADDRESS + MEM_MAILBOX_BRISC_OFFSET);
+volatile tt_l1_ptr uint32_t * const ncrisc_run_mailbox_address =
+    (volatile tt_l1_ptr uint32_t *)(MEM_RUN_MAILBOX_ADDRESS + MEM_MAILBOX_NCRISC_OFFSET);
+volatile tt_l1_ptr uint32_t * const trisc_run_mailbox_addresses[3] = {
+    (volatile tt_l1_ptr uint32_t *)(MEM_RUN_MAILBOX_ADDRESS + MEM_MAILBOX_TRISC0_OFFSET),
+    (volatile tt_l1_ptr uint32_t *)(MEM_RUN_MAILBOX_ADDRESS + MEM_MAILBOX_TRISC1_OFFSET),
+    (volatile tt_l1_ptr uint32_t *)(MEM_RUN_MAILBOX_ADDRESS + MEM_MAILBOX_TRISC2_OFFSET)
 };
 
 c_tensix_core core;
@@ -134,7 +135,7 @@ void enable_power_management() {
 }
 
 void set_trisc_address() {
-    volatile uint32_t* cfg_regs = core.cfg_regs_base(0);
+    volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
 
     // cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = l1_mem::address_map::NCRISC_FIRMWARE_BASE;
     cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = MEM_NCRISC_IRAM_BASE;
@@ -170,7 +171,7 @@ void device_setup() {
     mailbox[1] = core.mailbox_base(1);
     mailbox[2] = core.mailbox_base(2);
 
-    volatile uint32_t* cfg_regs = core.cfg_regs_base(0);
+    volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
 
     stagger_startup();
 
@@ -196,7 +197,7 @@ void device_setup() {
 
     wzeromem(MEM_ZEROS_BASE, MEM_ZEROS_SIZE);
 
-    volatile uint32_t* use_ncrisc = (volatile uint32_t*)(MEM_ENABLE_NCRISC_MAILBOX_ADDRESS);
+    volatile tt_l1_ptr uint32_t* use_ncrisc = (volatile tt_l1_ptr uint32_t*)(MEM_ENABLE_NCRISC_MAILBOX_ADDRESS);
     if (*use_ncrisc) {
         l1_to_ncrisc_iram_copy();
 
@@ -247,8 +248,8 @@ void device_setup() {
 }
 
 void init_sync_registers() {
-    volatile uint* tiles_received_ptr;
-    volatile uint* tiles_acked_ptr;
+    volatile tt_reg_ptr uint* tiles_received_ptr;
+    volatile tt_reg_ptr uint* tiles_acked_ptr;
     for (uint32_t operand = 0; operand < NUM_CIRCULAR_BUFFERS; operand++) {
       tiles_received_ptr = get_cb_tiles_received_ptr(operand);
       tiles_received_ptr[0] = 0;
@@ -278,7 +279,7 @@ int main() {
     init_sync_registers();  // this init needs to be done before NCRISC / TRISCs are launched, only done by BRISC
     device_setup();  // NCRISC is disabled/enabled here
 
-    volatile uint32_t* use_triscs = (volatile uint32_t*)(MEM_ENABLE_TRISC_MAILBOX_ADDRESS);
+    volatile tt_l1_ptr uint32_t* use_triscs = (volatile tt_l1_ptr uint32_t*)(MEM_ENABLE_TRISC_MAILBOX_ADDRESS);
     if (*use_triscs) {
         // FIXME: this is not sufficient to bring Trisc / Tensix out of a bad state
         // do we need do more than just assert_trisc_reset() ?
@@ -313,7 +314,7 @@ int main() {
         assert_trisc_reset();
     }
 
-    volatile uint32_t* use_ncrisc = (volatile uint32_t*)(MEM_ENABLE_NCRISC_MAILBOX_ADDRESS);
+    volatile tt_l1_ptr uint32_t* use_ncrisc = (volatile tt_l1_ptr uint32_t*)(MEM_ENABLE_NCRISC_MAILBOX_ADDRESS);
     if (*use_ncrisc) {
         while (*ncrisc_run_mailbox_address != 1);
     }

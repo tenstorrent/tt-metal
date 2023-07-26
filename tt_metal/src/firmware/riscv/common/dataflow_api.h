@@ -83,7 +83,7 @@ template <typename T>
 FORCE_INLINE T get_arg_val(int arg_idx) {
     // only 4B args are supported (eg int32, uint32)
     static_assert("Error: only 4B args are supported" && sizeof(T) == 4);
-    return *((volatile T*)(get_arg_addr(arg_idx)));
+    return *((volatile tt_l1_ptr T*)(get_arg_addr(arg_idx)));
 }
 
 /**
@@ -114,7 +114,7 @@ void init_l1_bank_to_noc_coord_lookup_tables() {
 
 // can be used on NCRICS and/or BRISC, as both can act as tile producers into Tensix
 void setup_cb_read_write_interfaces() {
-    volatile uint32_t* circular_buffer_config_addr = (volatile uint32_t*)(CIRCULAR_BUFFER_CONFIG_BASE);
+    volatile tt_l1_ptr uint32_t* circular_buffer_config_addr = (volatile uint32_t*)(CIRCULAR_BUFFER_CONFIG_BASE);
 
     for (uint32_t cb_id = 0; cb_id < NUM_CIRCULAR_BUFFERS; cb_id++) {
         // write_to_local_mem_barrier are needed on GS because of the RTL bug
@@ -206,7 +206,7 @@ void cb_push_back(const int32_t operand, const int32_t num_pages) {
 
     uint32_t num_words = num_pages * cb_interface[operand].fifo_page_size;
 
-    volatile uint32_t* pages_received_ptr = get_cb_tiles_received_ptr(operand);
+    volatile tt_reg_ptr uint32_t* pages_received_ptr = get_cb_tiles_received_ptr(operand);
     pages_received_ptr[0] += num_pages;
 
     cb_interface[operand].fifo_wr_ptr += num_words;
@@ -244,7 +244,7 @@ void cb_push_back(const int32_t operand, const int32_t num_pages) {
  */
 FORCE_INLINE
 void cb_pop_front(int32_t operand, int32_t num_pages) {
-    volatile uint32_t* pages_acked_ptr = get_cb_tiles_acked_ptr(operand);
+    volatile tt_reg_ptr uint32_t* pages_acked_ptr = get_cb_tiles_acked_ptr(operand);
     pages_acked_ptr[0] += num_pages;
 
     uint32_t num_words = num_pages * cb_interface[operand].fifo_page_size;
@@ -320,7 +320,7 @@ inline __attribute__((always_inline)) uint32_t get_read_ptr(uint32_t operand) {
 }
 
 inline void wait_for_sync_register_value(uint32_t addr, int32_t val) {
-    volatile uint32_t* reg_ptr = (volatile uint32_t*)addr;
+    volatile tt_reg_ptr uint32_t* reg_ptr = (volatile uint32_t*)addr;
     int32_t reg_value;
     do {
         reg_value = reg_ptr[0];
@@ -932,7 +932,7 @@ void noc_async_write_barrier() {
  * | val       | The target value of the semaphore                              | uint32_t | Any uint32_t value | True |
  */
 FORCE_INLINE
-void noc_semaphore_wait(volatile uint32_t* sem_addr, uint32_t val) {
+void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
     while ((*sem_addr) != val)
         ;
 }
@@ -952,7 +952,7 @@ void noc_semaphore_wait(volatile uint32_t* sem_addr, uint32_t val) {
  * | val       | Value to set the semaphore to                                  | uint32_t | Any uint32_t value | True |
  */
 FORCE_INLINE
-void noc_semaphore_set(volatile uint32_t* sem_addr, uint32_t val) {
+void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
     // set semaphore value to val
     (*sem_addr) = val;
 }
@@ -1044,11 +1044,11 @@ inline void noc_fast_write_inc_num_dests(uint32_t num_issued) {
 }
 
 inline void noc_prepare_deassert_reset_flag(uint32_t l1_addr) {
-    reinterpret_cast<volatile uint32_t*>(l1_addr)[0] = uint32_t(TENSIX_DEASSERT_SOFT_RESET_NO_STAGGER);
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_addr)[0] = uint32_t(TENSIX_DEASSERT_SOFT_RESET_NO_STAGGER);
 }
 
 inline void noc_prepare_assert_reset_flag(uint32_t l1_addr) {
-    reinterpret_cast<volatile uint32_t*>(l1_addr)[0] = uint32_t(TENSIX_ASSERT_SOFT_RESET);
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_addr)[0] = uint32_t(TENSIX_ASSERT_SOFT_RESET);
 }
 
 // Command queue APIs
@@ -1065,7 +1065,7 @@ void notify_host_of_cq_read_pointer() {
     u64 pcie_address = get_noc_addr(0, 4, HOST_CQ_READ_PTR);  // For now, we are writing to host hugepages at offset
                                                               // 0 (nothing else currently writing to it)
     u32 rd_ptr = cq_read_interface.fifo_rd_ptr;
-    volatile u32* rd_ptr_addr = get_cq_read_ptr();
+    volatile tt_l1_ptr u32* rd_ptr_addr = get_cq_read_ptr();
     rd_ptr_addr[0] = rd_ptr;
     noc_async_write(CQ_READ_PTR, pcie_address, 4);
     noc_async_write_barrier();
@@ -1076,7 +1076,7 @@ void notify_host_of_cq_read_toggle() {
     u64 pcie_address = get_noc_addr(0, 4, HOST_CQ_READ_TOGGLE_PTR);  // For now, we are writing to host hugepages at
                                                                      // offset 0 (nothing else currently writing to it)
     cq_read_interface.fifo_rd_toggle = not cq_read_interface.fifo_rd_toggle;
-    volatile u32* rd_toggle_ptr = get_cq_read_toggle();
+    volatile tt_l1_ptr u32* rd_toggle_ptr = get_cq_read_toggle();
     rd_toggle_ptr[0] = cq_read_interface.fifo_rd_toggle;
 
     noc_async_write(CQ_READ_TOGGLE, pcie_address, 4);

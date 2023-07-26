@@ -14,7 +14,7 @@ inline void async_read_from_dram_using_address_map(uint32_t dram_start_addr,
                                             uint32_t address_map_group_dram_addr,
                                             uint32_t address_map_dram_noc_x,
                                             uint32_t address_map_dram_noc_y) {
-    volatile uint32_t * address_map_scratch_pad_buffer = (volatile uint32_t*)(address_map_scratch_pad_l1_addr);
+    volatile tt_l1_ptr uint32_t * address_map_scratch_pad_buffer = (volatile tt_l1_ptr uint32_t*)(address_map_scratch_pad_l1_addr);
     uint32_t address_map_scratch_pad_buffer_size_bytes = 32; // TODO (nshanker): make this a compile time kernel arg
     uint32_t address_map_scratch_pad_buffer_size = address_map_scratch_pad_buffer_size_bytes >> 2;
     uint32_t address_map_scratch_pad_index = 0;
@@ -112,15 +112,15 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
     // Scratchpad buffer in l1 to stream address map from DRAM into L1
-    volatile std::uint32_t* scratch_pad_for_address_map_l1_buffer = (volatile uint32_t*)(scratch_pad_for_address_map_in_l1_addr);
+    volatile tt_l1_ptr std::uint32_t* scratch_pad_for_address_map_l1_buffer = (volatile tt_l1_ptr uint32_t*)(scratch_pad_for_address_map_in_l1_addr);
     // Address map metadata buffers in l1. Metadata is copied into L1 buffers by the host before kernel is launched
-    volatile std::uint32_t* in0_address_map_metdata_l1_buffer = (volatile uint32_t*)(in0_address_map_metadata_l1_addr);
-    volatile std::uint32_t* in1_address_map_metdata_l1_buffer = (volatile uint32_t*)(in1_address_map_metadata_l1_addr);
+    volatile tt_l1_ptr std::uint32_t* in0_address_map_metdata_l1_buffer = (volatile tt_l1_ptr uint32_t*)(in0_address_map_metadata_l1_addr);
+    volatile tt_l1_ptr std::uint32_t* in1_address_map_metdata_l1_buffer = (volatile tt_l1_ptr uint32_t*)(in1_address_map_metadata_l1_addr);
 
     // TODO (nshanker): For a more performant padding implementation which is switched off because it fails non deterministically
     // // Put zeroes in the zero buffer for padding
     // constexpr uint32_t num_elements_in_zeros_buffer = MEM_ZEROS_SIZE / sizeof(uint32_t);
-    // volatile uint32_t* zero_base_ptr = reinterpret_cast<volatile uint32_t*>(MEM_ZEROS_BASE);
+    // volatile tt_l1_ptr uint32_t* zero_base_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MEM_ZEROS_BASE);
     // for (uint32_t zero_base_offset = 0; zero_base_offset < num_elements_in_zeros_buffer; zero_base_offset++) {
     //     *(zero_base_ptr + zero_base_offset) = 0;
     // }

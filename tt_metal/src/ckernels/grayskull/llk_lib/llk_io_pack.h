@@ -18,7 +18,7 @@ void write_to_local_mem_barrier(uint32_t data) {
 
 inline void llk_setup_cb_interface() {
 
-    volatile std::uint32_t* circular_buffer_config_addr = (volatile uint32_t*)(CIRCULAR_BUFFER_CONFIG_BASE);
+    volatile tt_l1_ptr std::uint32_t* circular_buffer_config_addr = (volatile tt_l1_ptr uint32_t*)(CIRCULAR_BUFFER_CONFIG_BASE);
 
     for (std::uint32_t cb_id = 0; cb_id < NUM_CIRCULAR_BUFFERS; cb_id++) {
 
@@ -54,8 +54,8 @@ inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32
 
     std::uint32_t output = operand;
 
-    volatile std::uint32_t* tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
-    volatile std::uint32_t* tiles_received_ptr = get_cb_tiles_received_ptr(operand);
+    volatile tt_reg_ptr std::uint32_t* tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
+    volatile tt_reg_ptr std::uint32_t* tiles_received_ptr = get_cb_tiles_received_ptr(operand);
 
     // while the producer (write-side interface) is waiting for space to free up "tiles_pushed" is not changing
     // "tiles_pushed" is updated by the producer only when the tiles are pushed
@@ -80,8 +80,8 @@ inline void llk_push_to_brisc(const std::int32_t operand, const std::int32_t num
     std::uint32_t output = operand;
 
     // Tensix uses 4B addresses (tiles_received_ptr byte address but div-by-4)
-    volatile std::uint32_t* tiles_received_ptr_tensix =
-        (volatile std::uint32_t*)((((volatile std::uint32_t)get_cb_tiles_received_ptr(operand)) >> 2) & 0x3ffff);
+    volatile tt_l1_ptr std::uint32_t* tiles_received_ptr_tensix =
+        (volatile tt_l1_ptr std::uint32_t*)((((volatile std::uint32_t)get_cb_tiles_received_ptr(operand)) >> 2) & 0x3ffff);
 
     // cb_interface[output].tiles_received is used only by the TRISC2 (the one driving packer)
     // we need it becasue tiles_received_ptr is updated by the packer, and in cb_reserve_back func (see above) we want to avoid synchronization with packer

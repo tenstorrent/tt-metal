@@ -54,7 +54,7 @@ void kernel_main() {
             cb_reserve_back(cb_id_in0, num_tiles_block_c);
             uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
             // pad the tile by reading values from zero buffer in L1
-            volatile std::uint32_t* dst = (volatile uint32_t*)(l1_write_addr);
+            volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(l1_write_addr);
             // 8 = tile_height / 4
             for(uint32_t z = 0; z < block_row_size * 8; z++) {
                 dst[z] = pad_value;
@@ -74,7 +74,7 @@ void kernel_main() {
             noc_async_read(src_noc_addr, l1_write_addr, block_size);
 
             if (block_row_size > block_size) {
-                volatile std::uint32_t* dst = (volatile uint32_t*)(l1_write_addr + block_size);
+                volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(l1_write_addr + block_size);
                 for(uint32_t z = 0; z < (block_row_size - block_size) / 4; z++) {
                     dst[z] = pad_value;
                 }
@@ -85,7 +85,7 @@ void kernel_main() {
             l1_write_addr += block_row_size;
         }
         if (num_rows < tile_height) {
-            volatile std::uint32_t* dst = (volatile uint32_t*)(l1_write_addr);
+            volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(l1_write_addr);
 
             for(uint32_t z = 0; z < (block_row_size) / 4 * (tile_height - num_rows); z++) {
                 dst[z] = pad_value;

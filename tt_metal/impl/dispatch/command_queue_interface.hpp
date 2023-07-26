@@ -3,7 +3,6 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/llrt/llrt.hpp"
 #include "tt_metal/src/firmware/riscv/grayskull/noc/noc_overlay_parameters.h"
-#include "tt_metal/src/firmware/riscv/grayskull/stream_io_map.h"
 
 using namespace tt::tt_metal;
 

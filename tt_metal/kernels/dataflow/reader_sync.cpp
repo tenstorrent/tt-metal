@@ -21,7 +21,7 @@ void kernel_main() {
     std::uint32_t l1_address = get_write_ptr(0);
 
     // Scratch address in L1, two write register value before we copy it to into local/remote registers
-    volatile uint32_t* constant_ptr = reinterpret_cast<volatile uint32_t*>(CONSTANT_REGISTER_VALUE);
+    volatile tt_l1_ptr uint32_t* constant_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CONSTANT_REGISTER_VALUE);
     *(constant_ptr) = INVALID_VAL;
 
     std::uint32_t counter = 0;

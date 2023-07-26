@@ -20,8 +20,8 @@ void kernel_main() {
     const uint32_t pad_value                = get_arg_val<uint32_t>(13);
     const uint32_t dst_buffer_l1_addr       = get_arg_val<uint32_t>(14);
 
-    std::uint32_t* dst_buffer = (uint32_t*)(dst_buffer_l1_addr);
-    volatile std::uint32_t* dst_pad = (volatile uint32_t*)(dst_buffer_l1_addr + unpadded_X_size);
+    tt_l1_ptr std::uint32_t* dst_buffer = (tt_l1_ptr uint32_t*)(dst_buffer_l1_addr);
+    volatile tt_l1_ptr std::uint32_t* dst_pad = (volatile tt_l1_ptr uint32_t*)(dst_buffer_l1_addr + unpadded_X_size);
 
     constexpr bool src0_is_dram          = get_compile_time_arg_val(0) == 1;
     constexpr bool dst_is_dram           = get_compile_time_arg_val(1) == 1;

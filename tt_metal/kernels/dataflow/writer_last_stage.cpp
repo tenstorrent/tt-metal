@@ -27,7 +27,7 @@ void kernel_main() {
                 noc_async_write_barrier();
 
                 // some delay to test backpressure
-                // volatile uint32_t *l1_read_addr_ptr = reinterpret_cast<volatile uint32_t*>(BRISC_BREAKPOINT);
+                // volatile uint32_t *l1_read_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(BRISC_BREAKPOINT);
                 // for (int delay = 0; delay < 10000; delay++) {
                 //     *l1_read_addr_ptr = 1;
                 // }

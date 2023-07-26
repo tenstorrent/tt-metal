@@ -74,7 +74,7 @@ public:
     static inline uint32_t read_stream_register_field(uint32_t stream_id, uint32_t index, uint32_t shift, uint32_t width);
 
 private:
-    static inline volatile uint32_t* noc_stream_registers(uint32_t stream_id);
+    static inline volatile tt_reg_ptr uint32_t* noc_stream_registers(uint32_t stream_id);
 };
 
 

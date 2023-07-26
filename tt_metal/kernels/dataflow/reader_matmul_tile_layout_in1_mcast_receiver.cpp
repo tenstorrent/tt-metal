@@ -54,7 +54,7 @@ void kernel_main() {
     uint32_t l1_write_addr_in0;
 
     uint32_t in0_tensor_current_block_start_tile_id = in0_tensor_start_tile_id;
-    volatile uint32_t* in1_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(in1_mcast_receiver_semaphore_addr);
+    volatile tt_l1_ptr uint32_t* in1_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_mcast_receiver_semaphore_addr);
 
     bool one_time_noc_wait = true;
     bool one_time_cb_push = true;

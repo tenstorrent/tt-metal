@@ -41,12 +41,12 @@ extern uint8_t noc_size_y;
 extern volatile uint32_t local_mem_barrier;
 
 inline void WRITE_REG(uint32_t addr, uint32_t val) {
-  volatile uint32_t* ptr = (volatile uint32_t*)addr;
+  volatile tt_reg_ptr uint32_t* ptr = (volatile tt_reg_ptr uint32_t*)addr;
   ptr[0] = val;
 }
 
 inline uint32_t READ_REG(uint32_t addr) {
-  volatile uint32_t* ptr = (volatile uint32_t*)addr;
+  volatile tt_reg_ptr uint32_t* ptr = (volatile tt_reg_ptr uint32_t*)addr;
   return ptr[0];
 }
 
@@ -100,7 +100,7 @@ inline __attribute__((always_inline)) uint32_t buf_ptr_dec_wrap(uint32_t buf_ptr
 
 inline uint32_t reg_read_barrier(uint32_t addr)
 {
-    volatile uint32_t *p_reg = reinterpret_cast<volatile uint32_t *> (addr);
+    volatile tt_reg_ptr uint32_t *p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t *> (addr);
     uint32_t data = p_reg[0];
     local_mem_barrier = data;
     return data;
@@ -108,7 +108,7 @@ inline uint32_t reg_read_barrier(uint32_t addr)
 
 inline uint32_t reg_read_barrier_l1(uint32_t addr)
 {
-    volatile uint32_t *p_reg = reinterpret_cast<volatile uint32_t *> (addr);
+    volatile tt_reg_ptr uint32_t *p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t *> (addr);
     uint32_t data = p_reg[0];
     local_mem_barrier = data;
     return data;
@@ -240,8 +240,8 @@ inline void breakpoint_(uint32_t line) {
     */
     uint32_t BREAKPOINT;
     uint32_t LNUM;
-    volatile uint32_t* bp;
-    volatile uint32_t* lnum;
+    volatile tt_l1_ptr uint32_t* bp;
+    volatile tt_l1_ptr uint32_t* lnum;
 
     #define MACRO_SP_AUX(SP) #SP
     #define MACRO_SP(SP) MACRO_SP_AUX(SP)
@@ -275,10 +275,10 @@ inline void breakpoint_(uint32_t line) {
     // Write '1' to breakpoint location so that this core keeps
     // busy looping until host releases it
     asm("sw sp, 0(t0)");
-    bp = reinterpret_cast<volatile uint32_t*>(BREAKPOINT);
+    bp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(BREAKPOINT);
     bp[0] = 1;
 
-    lnum    = reinterpret_cast<volatile uint32_t*>(LNUM);
+    lnum    = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(LNUM);
     lnum[0] = line;
 
     while (bp[0] == 1);

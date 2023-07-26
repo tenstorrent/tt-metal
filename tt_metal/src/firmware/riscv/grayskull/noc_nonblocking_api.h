@@ -17,42 +17,42 @@ extern uint32_t noc_nonposted_writes_acked[NUM_NOCS];
 
 inline void NOC_CMD_BUF_WRITE_REG(uint32_t noc, uint32_t buf, uint32_t addr, uint32_t val) {
   uint32_t offset = (buf << NOC_CMD_BUF_OFFSET_BIT) + (noc << NOC_INSTANCE_OFFSET_BIT) + addr;
-  volatile uint32_t* ptr = (volatile uint32_t*)offset;
+  volatile tt_reg_ptr uint32_t* ptr = (volatile tt_reg_ptr uint32_t*)offset;
   *ptr = val;
 }
 
 
 inline uint32_t NOC_CMD_BUF_READ_REG(uint32_t noc, uint32_t buf, uint32_t addr) {
   uint32_t offset = (buf << NOC_CMD_BUF_OFFSET_BIT) + (noc << NOC_INSTANCE_OFFSET_BIT) + addr;
-  volatile uint32_t* ptr = (volatile uint32_t*)offset;
+  volatile tt_reg_ptr uint32_t* ptr = (volatile tt_reg_ptr uint32_t*)offset;
   return *ptr;
 }
 
 
 inline uint32_t NOC_STATUS_READ_REG(uint32_t noc, uint32_t reg_id) {
   uint32_t offset = (noc << NOC_INSTANCE_OFFSET_BIT) + NOC_STATUS(reg_id);
-  volatile uint32_t* ptr = (volatile uint32_t*)offset;
+  volatile tt_reg_ptr uint32_t* ptr = (volatile tt_reg_ptr uint32_t*)offset;
   return *ptr;
 }
 
 
 inline void NOC_CMD_BUF_WRITE_REG_L1(uint32_t noc, uint32_t buf, uint32_t addr, uint32_t val) {
   uint32_t offset = (buf << NOC_CMD_BUF_OFFSET_BIT) + (noc << NOC_INSTANCE_OFFSET_BIT) + addr;
-  volatile uint32_t* ptr = (volatile uint32_t*)offset;
+  volatile tt_reg_ptr uint32_t* ptr = (volatile tt_reg_ptr uint32_t*)offset;
   *ptr = val;
 }
 
 
 inline uint32_t NOC_CMD_BUF_READ_REG_L1(uint32_t noc, uint32_t buf, uint32_t addr) {
   uint32_t offset = (buf << NOC_CMD_BUF_OFFSET_BIT) + (noc << NOC_INSTANCE_OFFSET_BIT) + addr;
-  volatile uint32_t* ptr = (volatile uint32_t*)offset;
+  volatile tt_reg_ptr uint32_t* ptr = (volatile tt_reg_ptr uint32_t*)offset;
   return *ptr;
 }
 
 
 inline uint32_t NOC_STATUS_READ_REG_L1(uint32_t noc, uint32_t reg_id) {
   uint32_t offset = (noc << NOC_INSTANCE_OFFSET_BIT) + NOC_STATUS(reg_id);
-  volatile uint32_t* ptr = (volatile uint32_t*)offset;
+  volatile tt_reg_ptr uint32_t* ptr = (volatile tt_reg_ptr uint32_t*)offset;
   return *ptr;
 }
 

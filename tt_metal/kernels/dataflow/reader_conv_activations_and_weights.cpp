@@ -3,8 +3,8 @@
 #include "debug_print.h"
 
 inline void pad_l1_buffer_with_zeroes(uint32_t l1_addr, uint32_t pad_size_bytes) {
-    volatile std::uint32_t* dst = reinterpret_cast<volatile std::uint32_t*>(l1_addr);
-    volatile std::uint32_t* end_dst = dst + (pad_size_bytes >> 2);  // Divide by 4 using right shift
+    volatile tt_l1_ptr std::uint32_t* dst = reinterpret_cast<volatile std::uint32_t*>(l1_addr);
+    volatile tt_l1_ptr std::uint32_t* end_dst = dst + (pad_size_bytes >> 2);  // Divide by 4 using right shift
 
     while (dst < end_dst) {
         *dst++ = 0;
@@ -12,7 +12,7 @@ inline void pad_l1_buffer_with_zeroes(uint32_t l1_addr, uint32_t pad_size_bytes)
 
     uint32_t remainder = pad_size_bytes & 0x3;  // Get the remainder using bitwise AND
     if (remainder != 0) {
-        volatile std::uint8_t* byte_dst = reinterpret_cast<volatile std::uint8_t*>(dst);
+        volatile tt_l1_ptr std::uint8_t* byte_dst = reinterpret_cast<volatile tt_l1_ptr std::uint8_t*>(dst);
         for (uint32_t i = 0; i < remainder; ++i) {
             *byte_dst++ = 0;
         }

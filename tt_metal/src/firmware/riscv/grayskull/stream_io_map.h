@@ -4,6 +4,8 @@
 #include <stdint.h>
 
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
+#include "tt_metal/src/firmware/riscv/common/risc_attribs.h"
+
 
 // TODO: in ll-buda we can probably just start at stream 0 and not at stream 8?
 /*
@@ -24,13 +26,13 @@ inline __attribute__((always_inline)) uint32_t get_operand_stream_id(int operand
 // Pointers to stream scratch registers (implemented using don't-care functional registers) that are used for CB
 // synchronization
 
-inline __attribute__((always_inline)) volatile uint32_t* get_cb_tiles_received_ptr(int operand) {
-    return (volatile uint32_t*)(uintptr_t)(STREAM_REG_ADDR(
+inline __attribute__((always_inline)) volatile tt_reg_ptr uint32_t* get_cb_tiles_received_ptr(int operand) {
+    return (volatile tt_reg_ptr uint32_t*)(uintptr_t)(STREAM_REG_ADDR(
         get_operand_stream_id(operand), STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX));
 }
 
-inline __attribute__((always_inline)) volatile uint32_t* get_cb_tiles_acked_ptr(int operand) {
-    return (volatile uint32_t*)(uintptr_t)(STREAM_REG_ADDR(
+inline __attribute__((always_inline)) volatile tt_reg_ptr uint32_t* get_cb_tiles_acked_ptr(int operand) {
+    return (volatile tt_reg_ptr uint32_t*)(uintptr_t)(STREAM_REG_ADDR(
         get_operand_stream_id(operand), STREAM_REMOTE_DEST_BUF_START_REG_INDEX));
 }
 
@@ -50,12 +52,12 @@ inline __attribute__((always_inline)) volatile u32* get_cq_write_toggle() {
     return reinterpret_cast<volatile u32*>(CQ_WRITE_TOGGLE);
 }
 
-inline __attribute__((always_inline)) volatile uint32_t* get_cq_finish_ptr() {
-    return (volatile uint32_t*)(uintptr_t)(STREAM_REG_ADDR(
+inline __attribute__((always_inline)) volatile tt_l1_ptr uint32_t* get_cq_finish_ptr() {
+    return (volatile tt_l1_ptr uint32_t*)(uintptr_t)(STREAM_REG_ADDR(
         get_operand_stream_id(0), STREAM_REMOTE_DEST_BUF_START_REG_INDEX));
 }
 
-inline __attribute__((always_inline)) volatile uint32_t* get_sync_register_ptr() {
-    return (volatile uint32_t*)(uintptr_t)(STREAM_REG_ADDR(0, STREAM_PHASE_AUTO_CFG_PTR_REG_INDEX));
+inline __attribute__((always_inline)) volatile tt_l1_ptr uint32_t* get_sync_register_ptr() {
+    return (volatile tt_l1_ptr uint32_t*)(uintptr_t)(STREAM_REG_ADDR(0, STREAM_PHASE_AUTO_CFG_PTR_REG_INDEX));
 }
 #endif

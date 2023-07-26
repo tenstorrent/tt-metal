@@ -9,9 +9,9 @@
 
 void kernel_main() {
 
-    volatile std::uint32_t* arg_a = (volatile uint32_t*)(L1_ARG_BASE);
-    volatile std::uint32_t* arg_b = (volatile uint32_t*)(L1_ARG_BASE + 4);
-    volatile std::uint32_t* result = (volatile uint32_t*)(L1_RESULT_BASE);
+    volatile tt_l1_ptr std::uint32_t* arg_a = (volatile tt_l1_ptr uint32_t*)(L1_ARG_BASE);
+    volatile tt_l1_ptr std::uint32_t* arg_b = (volatile tt_l1_ptr uint32_t*)(L1_ARG_BASE + 4);
+    volatile tt_l1_ptr std::uint32_t* result = (volatile tt_l1_ptr uint32_t*)(L1_RESULT_BASE);
 
     //Sample print statement
     DPRINT << 123;

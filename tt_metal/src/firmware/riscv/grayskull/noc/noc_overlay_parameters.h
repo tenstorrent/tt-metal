@@ -47,15 +47,15 @@
 #define NCRISC_PIC_CONFIG_PHASE_DEFAULT           0
 
 
-#define NOC_STREAM_WRITE_REG(stream_id, reg_id, val)  ((*((volatile uint32_t*)(STREAM_REG_ADDR(stream_id, reg_id)))) = (val))
-#define NOC_STREAM_READ_REG(stream_id, reg_id)        (*((volatile uint32_t*)(STREAM_REG_ADDR(stream_id, reg_id))))
+#define NOC_STREAM_WRITE_REG(stream_id, reg_id, val)  ((*((volatile tt_reg_ptr uint32_t*)(STREAM_REG_ADDR(stream_id, reg_id)))) = (val))
+#define NOC_STREAM_READ_REG(stream_id, reg_id)        (*((volatile tt_reg_ptr uint32_t*)(STREAM_REG_ADDR(stream_id, reg_id))))
 
 #define NOC_STREAM_WRITE_REG_FIELD(stream_id, reg_id, field, val) (NOC_STREAM_WRITE_REG(stream_id, reg_id, ((NOC_STREAM_READ_REG(stream_id, reg_id) & ~((1 << field##_WIDTH) - 1)) | ((val & ((1 << field##_WIDTH) - 1)) << field))))
 #define NOC_STREAM_READ_REG_FIELD(stream_id, reg_id, field)       ((NOC_STREAM_READ_REG(stream_id, reg_id) >> field) & ((1 << field##_WIDTH) - 1))
 #define NOC_STREAM_GET_REG_FIELD(reg_val, field)       (((reg_val) >> field) & ((1 << field##_WIDTH) - 1))
 
-#define NOC_WRITE_REG(addr, val) ((*((volatile uint32_t*)(addr)))) = (val)
-#define NOC_READ_REG(addr)       (*((volatile uint32_t*)(addr)))
+#define NOC_WRITE_REG(addr, val) ((*((volatile tt_reg_ptr uint32_t*)(addr)))) = (val)
+#define NOC_READ_REG(addr)       (*((volatile tt_reg_ptr uint32_t*)(addr)))
 
 
 #define NOC_ID_WIDTH     6

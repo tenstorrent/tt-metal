@@ -13,9 +13,9 @@ void kernel_main() {
     uint32_t num_repetitions         = get_arg_val<uint32_t>(6);
 
     // initialized by the host to 0 before program launch
-    volatile uint32_t* sender_semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(sender_semaphore_addr);
+    volatile tt_l1_ptr uint32_t* sender_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr);
     // local valid value in L1
-    volatile uint32_t* l1_valid_value_addr_ptr = reinterpret_cast<volatile uint32_t*>(l1_valid_value_addr);
+    volatile tt_l1_ptr uint32_t* l1_valid_value_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_valid_value_addr);
     *(l1_valid_value_addr_ptr) = VALID;
 
     constexpr uint32_t cb_id            = get_compile_time_arg_val(0);

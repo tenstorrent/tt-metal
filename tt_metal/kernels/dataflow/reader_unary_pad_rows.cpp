@@ -15,7 +15,7 @@ void kernel_main() {
     const uint32_t row_size                 = get_arg_val<uint32_t>(4);
     const uint32_t zero_buffer_l1_addr      = get_arg_val<uint32_t>(5);
 
-    volatile std::uint32_t* zero_buffer = (volatile uint32_t*)(zero_buffer_l1_addr);
+    volatile tt_l1_ptr std::uint32_t* zero_buffer = (volatile tt_l1_ptr uint32_t*)(zero_buffer_l1_addr);
 
     // TODO(agrebenisan): This isn't good... here we are assuming
     // that the stick size dictates tiles c, but stick size
@@ -50,7 +50,7 @@ void kernel_main() {
             for (uint32_t j = 0; j < 32; j++) {
                 if (row_id_in_face >= num_rows) {
                     // pad the tile by reading values from zero buffer in L1
-                    volatile std::uint32_t* dst = (volatile uint32_t*)(l1_write_addr);
+                    volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(l1_write_addr);
                     for(uint32_t z = 0; z < row_size / 4; z++) {
                         dst[z] = zero_buffer[z];
                     }

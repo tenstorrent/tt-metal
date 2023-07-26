@@ -7,11 +7,13 @@
 #endif
 #include "ckernel_globals.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "tt_metal/src/firmware/riscv/common/risc_attribs.h"
+
 
 volatile uint32_t local_mem_barrier __attribute__((used));
-volatile uint32_t* const run_mailbox_address = (volatile uint32_t*)(MEM_RUN_MAILBOX_ADDRESS + MEM_MAILBOX_NCRISC_OFFSET);
+volatile tt_l1_ptr uint32_t* const run_mailbox_address = (volatile tt_l1_ptr uint32_t*)(MEM_RUN_MAILBOX_ADDRESS + MEM_MAILBOX_NCRISC_OFFSET);
 
-volatile uint16_t *debug_mailbox_base = nullptr;
+volatile tt_l1_ptr uint16_t *debug_mailbox_base = nullptr;
 uint8_t mailbox_index = 0;
 uint8_t mailbox_end = 32;
 
@@ -52,7 +54,7 @@ inline void record_mailbox_value_with_index_l1(uint8_t index, uint16_t event_val
 
 inline void allocate_debug_mailbox_buffer() {
   std::int32_t debug_mailbox_addr = MEM_DEBUG_MAILBOX_ADDRESS + 3*MEM_DEBUG_MAILBOX_SIZE;
-  debug_mailbox_base = reinterpret_cast<volatile uint16_t *>(debug_mailbox_addr);
+  debug_mailbox_base = reinterpret_cast<volatile tt_l1_ptr uint16_t *>(debug_mailbox_addr);
 }
 
 int main(int argc, char *argv[]) {

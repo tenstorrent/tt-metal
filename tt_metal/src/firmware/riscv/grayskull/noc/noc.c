@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "noc_parameters.h"
+#include "tt_metal/src/firmware/riscv/common/risc_attribs.h"
 
 ////
 
@@ -12,8 +13,8 @@
 
 #else
 
-#define NOC_WRITE_REG(addr, val) ((*((volatile uint32_t*)(noc_get_cmd_buf()*NOC_CMD_BUF_OFFSET+noc_get_active_instance()*NOC_INSTANCE_OFFSET+(addr)))) = (val))
-#define NOC_READ_REG(addr)       (*((volatile uint32_t*)(noc_get_cmd_buf()*NOC_CMD_BUF_OFFSET+noc_get_active_instance()*NOC_INSTANCE_OFFSET+(addr))))
+#define NOC_WRITE_REG(addr, val) ((*((volatile tt_reg_ptr uint32_t*)(noc_get_cmd_buf()*NOC_CMD_BUF_OFFSET+noc_get_active_instance()*NOC_INSTANCE_OFFSET+(addr)))) = (val))
+#define NOC_READ_REG(addr)       (*((volatile tt_reg_ptr uint32_t*)(noc_get_cmd_buf()*NOC_CMD_BUF_OFFSET+noc_get_active_instance()*NOC_INSTANCE_OFFSET+(addr))))
 
 #endif
 

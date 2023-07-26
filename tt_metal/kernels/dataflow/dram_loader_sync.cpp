@@ -20,8 +20,8 @@ void kernel_main() {
     std::uint32_t transient_buffer_size_tiles       = get_arg_val<uint32_t>(8);
     std::uint32_t transient_buffer_size_bytes       = get_arg_val<uint32_t>(9);
 
-    // Scratch address in L1, two write register value before we copy it to into local/remote registers
-    volatile uint32_t* constant_ptr = reinterpret_cast<volatile uint32_t*>(CONSTANT_REGISTER_VALUE);
+    // Scratch address in L1, to write register value before we copy it to into local/remote registers
+    volatile tt_l1_ptr uint32_t* constant_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CONSTANT_REGISTER_VALUE);
     *(constant_ptr) = VALID_VAL;
     // Local and remote register addresses (used for sync)
     std::uint64_t local = get_noc_addr(stream_register_address);

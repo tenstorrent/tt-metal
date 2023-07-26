@@ -34,8 +34,8 @@ void kernel_main() {
         noc_async_read(src1_noc_addr, l1_write_addr_in1, in1_block_size_bytes);
 
         noc_async_read_barrier();
-        auto ptr0 = reinterpret_cast<volatile uint32_t*> (l1_write_addr_in0);
-        auto ptr1 = reinterpret_cast<volatile uint32_t*> (l1_write_addr_in1);
+        auto ptr0 = reinterpret_cast<volatile tt_l1_ptr uint32_t*> (l1_write_addr_in0);
+        auto ptr1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*> (l1_write_addr_in1);
 
         cb_push_back(in0_cb, in0_block_tile_cnt);
         cb_push_back(in1_cb, in1_block_tile_cnt);

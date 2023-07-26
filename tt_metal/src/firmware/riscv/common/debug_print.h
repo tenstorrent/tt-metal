@@ -100,11 +100,11 @@ template<> const uint8_t* DebugPrintTypeAddr<char*>(char** val)              { r
 
 
 struct DebugPrinter {
-    volatile uint32_t* wpos() {
+    volatile tt_l1_ptr uint32_t* wpos() {
         auto printbuf = get_debug_print_buffer();
         return &reinterpret_cast<DebugPrintMemLayout*>(printbuf)->aux.wpos;
     }
-    volatile uint32_t* rpos() {
+    volatile tt_l1_ptr uint32_t* rpos() {
         auto printbuf = get_debug_print_buffer();
         return &reinterpret_cast<DebugPrintMemLayout*>(printbuf)->aux.rpos;
     }
