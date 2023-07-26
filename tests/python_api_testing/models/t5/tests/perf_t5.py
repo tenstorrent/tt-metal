@@ -17,9 +17,8 @@ from models.t5.tt.t5_model import TtT5Model
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (
-            0.1,
-            5.1,
+        (0.1,
+        5.1,
         ),
     ),
 )
