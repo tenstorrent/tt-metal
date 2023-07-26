@@ -2,6 +2,8 @@
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/hostdevcommon/common_values.hpp"
 #include "tt_metal/common/tile_math.hpp"
+#include "common/assert.hpp"
+#include "tt_metal/impl/device/device.hpp"
 
 #include "llrt/llrt.hpp"
 

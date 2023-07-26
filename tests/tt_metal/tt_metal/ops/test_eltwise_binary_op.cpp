@@ -10,13 +10,15 @@ using tt::tt_metal::DataType;
 using tt::tt_metal::Device;
 using tt::tt_metal::Layout;
 using tt::tt_metal::Tensor;
+using tt::tt_metal::OwnedStorage;
+using tt::tt_metal::Shape;
 
 template <typename BinaryFunction>
 Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
-    auto input_a_buffer = owned_buffer::get_as<bfloat16>(input_tensor_a);
-    auto input_b_buffer = owned_buffer::get_as<bfloat16>(input_tensor_b);
+    auto input_a_buffer = tt::tt_metal::owned_buffer::get_as<bfloat16>(input_tensor_a);
+    auto input_b_buffer = tt::tt_metal::owned_buffer::get_as<bfloat16>(input_tensor_b);
 
-    auto output_buffer = owned_buffer::create<bfloat16>(input_tensor_a.volume());
+    auto output_buffer = tt::tt_metal::owned_buffer::create<bfloat16>(input_tensor_a.volume());
 
     for (auto index = 0; index < output_buffer.size(); index++) {
         auto value = BinaryFunction{}(input_a_buffer[index].to_float(), input_b_buffer[index].to_float());

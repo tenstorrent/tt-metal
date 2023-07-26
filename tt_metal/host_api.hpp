@@ -3,6 +3,8 @@
 #include <optional>
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
+#include "tt_metal/impl/program.hpp"
+#include "tt_metal/impl/buffers/buffer.hpp"
 
 /** @file */
 
@@ -22,8 +24,6 @@ namespace tt_metal {
 
 class Host;
 class Device;
-class Program;
-class Buffer;
 class CommandQueue;
 class CircularBuffer;
 
@@ -68,19 +68,19 @@ bool InitializeDevice(Device *device);
 bool CloseDevice(Device *device);
 
 /**
- * Starts a debug print server on core {1,1} in physical core grid coordinates.
-*/
-void StartDebugPrintServer(Device *device);
-
-/**
- * Starts a debug print server on specified cores (in physical core grid coordinates).
+ * Starts a debug print server on given set of core grid coordinates.
  *
- * |      Argument     |                                                      Description                                                      |        Data type        |    Valid range    | required |
- * |:-----------------:|:---------------------------------------------------------------------------------------------------------------------:|:-----------------------:|:-----------------:|----------|
- * | device            | Device pointer                                                                                                        |                         |                   | Yes      |
- * | cores             | Array of x,y pairs with locations of the Tensix cores (physical coordinates)                                          | const CoreCoord &      | {0, 0} -> {9, 11} | Yes      |
-*/
-void StartDebugPrintServerOnCores(Device *device, const std::vector<std::vector<int>>& cores);
+ * Return value: void
+ *
+ * | Argument | Description                | Type                   | Valid Range | Required |
+ * |----------|----------------------------|------------------------|-------------|----------|
+ * | device   | Pointer to a device object | Device *               |             | True     |
+ * | cores    | set of core coordinates    | std::vector <CoreCoord>|             | True     |
+
+ */
+
+void StartDebugPrintServer(Device *device, const std::vector<CoreCoord> & cores);
+
 
 // ==================================================
 //                  HOST API: program & kernels

@@ -2,6 +2,7 @@
 #include <tensor/tensor_utils.hpp>
 #include <tensor/owned_buffer.hpp>
 #include <tensor/owned_buffer_functions.hpp>
+#include <tensor/types.hpp>
 
 #include <optional>
 #include <random>
@@ -13,7 +14,9 @@ namespace numpy {
 using tt_metal::Tensor;
 using tt_metal::DataType;
 using tt_metal::Layout;
-
+using tt_metal::Shape;
+using tt_metal::Device;
+using tt_metal::OwnedStorage;
 namespace detail
 {
 
@@ -36,7 +39,7 @@ constexpr static DataType get_data_type() {
 template<typename T>
 static Tensor full(const Shape& shape, T value, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr) {
     constexpr DataType data_type = detail::get_data_type<T>();
-    auto owned_buffer = owned_buffer::create<T>(tt_metal::volume(shape));
+    auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::volume(shape));
     std::fill(std::begin(owned_buffer), std::end(owned_buffer), value);
     auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
     if (device != nullptr) {
@@ -88,7 +91,7 @@ static Tensor arange(int64_t start, int64_t stop, int64_t step, const Layout lay
     TT_ASSERT(step > 0, "Step must be greater than 0");
     TT_ASSERT(start < stop, "Start must be less than step");
     auto size = divup((stop - start), step);
-    auto owned_buffer  = owned_buffer::create<T>(size);
+    auto owned_buffer  = tt_metal::owned_buffer::create<T>(size);
 
     auto index = 0;
     for (auto value = start; value < stop; value += step) {
@@ -117,7 +120,7 @@ template<typename T>
 static Tensor uniform(T low, T high, const Shape& shape, const Layout layout = Layout::ROW_MAJOR) {
     constexpr DataType data_type = detail::get_data_type<T>();
 
-    auto owned_buffer = owned_buffer::create<T>(tt_metal::volume(shape));
+    auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::volume(shape));
 
     if constexpr (std::is_same_v<T, uint32_t> ) {
         auto rand_value = std::bind(std::uniform_int_distribution<T>(low, high), RANDOM_GENERATOR);
@@ -183,8 +186,8 @@ static bool allclose(const Tensor& tensor_a, const Tensor& tensor_b, Args ...  a
         return false;
     }
 
-    auto tensor_a_buffer = owned_buffer::get_as<DataType>(tensor_a);
-    auto tensor_b_buffer = owned_buffer::get_as<DataType>(tensor_b);
+    auto tensor_a_buffer = tt_metal::owned_buffer::get_as<DataType>(tensor_a);
+    auto tensor_b_buffer = tt_metal::owned_buffer::get_as<DataType>(tensor_b);
 
     for (int index = 0; index < tensor_a_buffer.size(); index++) {
         if (not detail::nearly_equal(tensor_a_buffer[index], tensor_b_buffer[index], args...)) {

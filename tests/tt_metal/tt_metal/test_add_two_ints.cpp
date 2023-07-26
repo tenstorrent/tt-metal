@@ -57,7 +57,7 @@ int main(int argc, char **argv) {
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
         if (getDeviceProfilerState() == false){
-            StartDebugPrintServer(device);
+            StartDebugPrintServer(device, {{1,1}});
         }
         tt_metal::SetRuntimeArgs(add_two_ints_kernel, core, first_runtime_args);
 

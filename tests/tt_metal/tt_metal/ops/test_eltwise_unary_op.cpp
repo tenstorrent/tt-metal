@@ -18,6 +18,8 @@ using tt::tt_metal::Device;
 
 using tt::tt_metal::Layout;
 using tt::tt_metal::Tensor;
+using tt::tt_metal::OwnedStorage;
+using tt::tt_metal::Shape;
 
 namespace detail {
 float sqrt(float x) { return std::sqrt(x); }
@@ -40,9 +42,9 @@ Tensor gelu_slow(const Tensor& t) {
 
 template <auto UnaryFunction>
 Tensor host_function(const Tensor& input_tensor) {
-    auto input_buffer = owned_buffer::get_as<bfloat16>(input_tensor);
+    auto input_buffer = tt::tt_metal::owned_buffer::get_as<bfloat16>(input_tensor);
 
-    auto output_buffer = owned_buffer::create<bfloat16>(input_tensor.volume());
+    auto output_buffer = tt::tt_metal::owned_buffer::create<bfloat16>(input_tensor.volume());
 
     for (auto index = 0; index < output_buffer.size(); index++) {
         auto value = UnaryFunction(input_buffer[index].to_float());
@@ -101,10 +103,10 @@ void test_shape_padding() {
     auto padded_input_shape = Shape{1, 1, TILE_HEIGHT, TILE_WIDTH};
     auto input_tensor = tt::numpy::random::uniform(bfloat16(0), bfloat16(1), input_shape);
 
-    auto padded_input_tensor = operation::run(tt::tt_metal::PadOnHost{padded_input_shape, {0, 0, 0, 0}, 0}, {input_tensor}).at(0);
+    auto padded_input_tensor = tt::tt_metal::operation::run(tt::tt_metal::PadOnHost{padded_input_shape, {0, 0, 0, 0}, 0}, {input_tensor}).at(0);
     padded_input_tensor = padded_input_tensor.to(Layout::TILE);
     padded_input_tensor = padded_input_tensor.to(device);
-    auto output_tensor = operation::run(tt::tt_metal::EltwiseUnary{tt::tt_metal::UnaryOpType::SQRT, std::nullopt, MemoryConfig{.interleaved = true}}, {padded_input_tensor}).at(0);
+    auto output_tensor = tt::tt_metal::operation::run(tt::tt_metal::EltwiseUnary{tt::tt_metal::UnaryOpType::SQRT, std::nullopt, tt::tt_metal::MemoryConfig{.interleaved = true}}, {padded_input_tensor}).at(0);
 
     auto output_shape = output_tensor.shape();
     TT_ASSERT(output_shape == padded_input_shape);

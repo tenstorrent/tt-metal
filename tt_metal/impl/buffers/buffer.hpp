@@ -2,13 +2,13 @@
 
 #include "common/tt_backend_api_types.hpp"
 #include "common/core_coord.h"
-#include "common/assert.hpp"
-#include "hostdevcommon/common_runtime_address_map.h"
-#include "tt_metal/impl/device/device.hpp"
+#include "hostdevcommon/common_values.hpp"
 
 namespace tt {
 
 namespace tt_metal {
+
+class Device;
 
 enum class BufferType {
     DRAM,

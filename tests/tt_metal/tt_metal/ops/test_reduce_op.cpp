@@ -12,6 +12,7 @@ using tt::tt_metal::Layout;
 
 using tt::tt_metal::ReduceOpMath;
 using tt::tt_metal::ReduceOpDim;
+using tt::tt_metal::Shape;
 
 template<ReduceOpMath::Enum op_math, ReduceOpDim::Enum op_dim>
 Tensor device_function(const Tensor& input_tensor, Device* device) {

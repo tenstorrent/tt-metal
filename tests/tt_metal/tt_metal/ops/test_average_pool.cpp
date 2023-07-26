@@ -1,5 +1,6 @@
 #include "tt_dnn/op_library/pool/average_pool.hpp"
 #include "tt_dnn/op_library/program_cache.hpp"
+#include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_numpy/functions.hpp"
 
 #include "tensor/tensor.hpp"
@@ -10,6 +11,8 @@ using tt::tt_metal::Device;
 using tt::tt_metal::Tensor;
 using tt::tt_metal::DataType;
 using tt::tt_metal::Layout;
+using tt::tt_metal::Shape;
+using tt::tt_metal::AutoFormat;
 
 Tensor run_avg_pool_2d_resnet(Shape& tensor_shape, Device* device) {
     auto input_tensor = tt::numpy::random::random(tensor_shape, DataType::BFLOAT16);

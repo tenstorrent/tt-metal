@@ -121,7 +121,7 @@ std::optional<uint32_t> get_semaphore_address(const Program &program, const Core
 Device *CreateDevice(tt::ARCH arch, int pcie_slot) { return new Device(arch, pcie_slot); }
 
 bool InitializeDevice(Device *device) {
-    TT_ASSERT(not HACK_CQ, "HACK_CQ should not be initialized prior to InitializeDevice!");
+    TT_ASSERT(not detail::HACK_CQ, "HACK_CQ should not be initialized prior to InitializeDevice!");
 
     bool init;
     if (device->initialize()) {
@@ -194,14 +194,8 @@ bool CloseDevice(Device *device) {
     return device->close();
 }
 
-void StartDebugPrintServer(Device *device) { tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}}); }
-
-void StartDebugPrintServerOnCores(Device *device, const vector<vector<int>> &in_cores) {
-    vector<CoreCoord> cores;
-    for (int j = 0; j < in_cores.size(); j++) {
-        TT_ASSERT(in_cores[j].size() == 2);
-        cores.push_back(CoreCoord{size_t(in_cores[j][0]), size_t(in_cores[j][1])});
-    }
+void StartDebugPrintServer(Device *device, const std::vector<CoreCoord> & cores)
+{
     tt_start_debug_print_server(device->cluster(), {0}, cores);
 }
 
