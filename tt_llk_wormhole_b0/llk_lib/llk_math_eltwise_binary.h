@@ -327,7 +327,8 @@ template <
     BroadcastType src_b_bcast_type,
     int NUM_FIDELITY_PHASES = 0,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void llk_math_eltwise_binary_init(const std::uint32_t transpose=0, const std::uint32_t acc_to_dest = 0) {
+inline void llk_math_eltwise_binary_init_impl(const std::uint32_t num_faces_A, const std::uint32_t num_faces_B, const std::uint32_t transpose, const std::uint32_t acc_to_dest) {
+    // todo: do something with num_faces
     eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type>();
 
     if constexpr (
@@ -341,3 +342,26 @@ inline void llk_math_eltwise_binary_init(const std::uint32_t transpose=0, const 
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
+
+// Version with no operand
+template <
+    EltwiseBinaryType eltwise_binary_type,
+    BroadcastType src_b_bcast_type,
+    int NUM_FIDELITY_PHASES = 0,
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+inline void llk_math_eltwise_binary_init(const std::uint32_t transpose=0, const std::uint32_t acc_to_dest = 0) {
+    llk_math_eltwise_binary_init_impl<eltwise_binary_type, src_b_bcast_type, NUM_FIDELITY_PHASES, binary_reuse_dest>(4, 4, transpose, acc_to_dest);
+}
+
+// Version with operands
+template <
+    EltwiseBinaryType eltwise_binary_type,
+    BroadcastType src_b_bcast_type,
+    int NUM_FIDELITY_PHASES = 0,
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+inline void llk_math_eltwise_binary_init_with_operands(const std::uint32_t operand_A, const std::uint32_t operand_B, const std::uint32_t transpose=0, const std::uint32_t acc_to_dest = 0) {
+    const std::uint32_t num_faces_A = get_num_faces(get_operand_id(operand_A));
+    const std::uint32_t num_faces_B = get_num_faces(get_operand_id(operand_B));
+    llk_math_eltwise_binary_init_impl<eltwise_binary_type, src_b_bcast_type, NUM_FIDELITY_PHASES, binary_reuse_dest>(num_faces_A, num_faces_B, transpose, acc_to_dest);
+}
+

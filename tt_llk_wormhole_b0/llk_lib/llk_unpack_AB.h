@@ -121,7 +121,8 @@ inline void llk_unpack_AB_hw_configure_disaggregated(
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
-inline void llk_unpack_AB_init(const std::uint32_t transpose=0, const std::uint32_t acc_to_dest=0) {
+inline void llk_unpack_AB_init(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const std::uint32_t transpose=0, const std::uint32_t acc_to_dest=0) {
+    // Todo: get num faces from operands
     llk_unpack_AB_mop_config<BType>(transpose>0); // transpose of faces 0,2,1,3
 
     //Need to be able to configure tranpose srca for fused ops
