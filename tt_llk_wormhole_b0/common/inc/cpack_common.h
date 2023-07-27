@@ -133,28 +133,8 @@ namespace ckernel::packer
       pack_counters_t f;
    } pack_counters_u;
 
-   inline const uint32_t get_num_faces(const std::uint32_t out_tile_dims[] = default_tile_dims)
-   {
-      if ((out_tile_dims[TileDim::R_IDX] <= FACE_R_DIM) && (out_tile_dims[TileDim::C_IDX] <= FACE_C_DIM)) {
-         return 1;
-      } else if ((out_tile_dims[TileDim::R_IDX] == TILE_R_DIM) && (out_tile_dims[TileDim::C_IDX] == TILE_C_DIM)) { 
-         return 4;
-      } else {
-         return 2;
-      }
-   }
-
-   inline const uint32_t get_face_r_dim(const std::uint32_t out_tile_dims[] = default_tile_dims)
-   {
-      if (out_tile_dims[TileDim::R_IDX] < FACE_R_DIM) {
-         return out_tile_dims[TileDim::R_IDX];
-      } else {
-         return 16;
-      }
-   }
-
-   // Must be TT_ALWAYS_INLINE, otherwise it is not working due to a possible compiler bug.
-   TT_ALWAYS_INLINE const uint32_t get_num_faces(const std::uint32_t output_id)
+   
+   __attribute__ ((always_inline)) inline const uint32_t get_num_faces(const std::uint32_t output_id) //FIXME: why we have to always inline
    {
       if ((pack_tile_dims[output_id][TileDim::R_IDX] <= FACE_R_DIM) && (pack_tile_dims[output_id][TileDim::C_IDX] <= FACE_C_DIM)) {
          return 1;
@@ -165,13 +145,18 @@ namespace ckernel::packer
       }
    }
 
-   inline const uint32_t get_face_r_dim(const std::uint32_t output_id)
+    __attribute__ ((always_inline)) inline const uint32_t get_face_r_dim(const std::uint32_t output_id)
    {
       if (pack_tile_dims[output_id][TileDim::R_IDX] < FACE_R_DIM) {
          return pack_tile_dims[output_id][TileDim::R_IDX];
       } else {
          return 16;
       } 
+   }
+
+    __attribute__ ((always_inline)) inline const uint32_t get_tile_c_dim(const std::uint32_t output_id)
+   {
+      return pack_tile_dims[output_id][TileDim::C_IDX];
    }
 
    // Set unpacker offsets to 0, except for unpacker 0, channel 1, X, which is the tile X dimension
@@ -482,7 +467,9 @@ namespace ckernel::packer
 
       const uint face_r_dim = get_face_r_dim(pack_output_id);
       const uint face_dim = face_r_dim * FACE_C_DIM;
-      const uint pack_x_dim = untilize ? 16 : face_dim; // Number of datums to pack per row
+      const bool narrow_tile = get_tile_c_dim(pack_output_id) < TILE_C_DIM;
+      const uint pack_x_dim = untilize ? (narrow_tile ? face_dim : 16) : face_dim; // Number of datums to pack per row
+                                                                                   // To untilize narrow tile (32x16) we just pack 2 faces back to back
       TT_SETADCXX(p_setadc::PAC, pack_x_dim-1, 0x0); 
    }
 
