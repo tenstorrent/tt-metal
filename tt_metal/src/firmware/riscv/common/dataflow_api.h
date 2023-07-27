@@ -19,20 +19,7 @@
 
 extern uint8_t loading_noc;
 
-/*
- * This is a trick with Doxygen to force it to not expand the always_inline
- * attribute property. We turn on predefine-only expansion with MACRO_EXPANSION
- * and EXPAND_ONLY_PREDEF set to YES. Then, we send in __DOXYGEN__ and
- * FORCE_INLINE to remove it from the source entirely when fed in Doxygen.
- *
- * However, this should not affect what the actual source code declaration,
- * and functions that were declared such will still be alwyas_inline.
- */
-#if __DOXYGEN__
-#define FORCE_INLINE
-#else
 #define FORCE_INLINE inline __attribute__((always_inline))
-#endif
 
 /** @file */
 

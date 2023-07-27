@@ -1,9 +1,6 @@
 #ifndef _RISC_ATTRIBS_H_
 #define _RISC_ATTRIBS_H_
 
-#define tt_l1_ptr __attribute__((rvtt_l1_ptr))
-#define tt_reg_ptr __attribute__((rvtt_reg_ptr))
-
 union tt_uint64_t {
     uint64_t v;
     struct {
@@ -11,6 +8,10 @@ union tt_uint64_t {
         uint32_t lo;
     };
 };
+
+#define tt_l1_ptr __attribute__((rvtt_l1_ptr))
+#define tt_reg_ptr __attribute__((rvtt_reg_ptr))
+
 
 inline __attribute__((always_inline)) uint64_t tt_l1_load(tt_uint64_t tt_l1_ptr *p)
 {

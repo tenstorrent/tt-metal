@@ -9,11 +9,7 @@
 
 #define SYNC SyncHalf
 
-#if __DOXYGEN__
-    #define ALWI
-#else
-    #define ALWI inline __attribute__((always_inline))
-#endif
+#define ALWI inline __attribute__((always_inline))
 
 #ifdef TRISC_MATH
 #include "llk_math_common.h"
