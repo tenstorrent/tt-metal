@@ -185,7 +185,7 @@ TEST_F(CommandQueueHarness, TestArbiterDoesNotHang) {
     auto dummy_reader_kernel = CreateDataMovementKernel(
         program, "tests/tt_metal/tt_metal/gtest_unit_tests/command_queue/test_kernels/arbiter_hang.cpp", cr_set, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
 
-    CompileProgram(this->device, program, false);
+    CompileProgram(this->device, program);
 
     EnqueueProgram(*this->cq, program, false);
     Finish(*this->cq);
