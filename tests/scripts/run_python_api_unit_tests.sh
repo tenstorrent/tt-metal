@@ -9,7 +9,7 @@ fi
 
 if [[ -z "$FAST_DISPATCH" ]]; then
   env pytest $TT_METAL_HOME/tests/python_api_testing/unit_testing/
-  env pytest $(find $TT_METAL_HOME/tests/python_api_testing/sweep_tests/pytests/ -name 'test_*.py' -a ! -name 'test_sweep_conv_with_address_map.py') -vvv
+  env pytest $(find $TT_METAL_HOME/tests/python_api_testing/sweep_tests/pytests/ -name 'test_*.py' -a ! -name 'test_sweep_conv_with_address_map.py' -a ! -name 'test_sweep_conv.py') -vvv
 else
   env TT_METAL_DEVICE_DISPATCH_MODE=1 pytest $TT_METAL_HOME/tests/python_api_testing/unit_testing/
   env TT_METAL_DEVICE_DISPATCH_MODE=1 pytest $(find $TT_METAL_HOME/tests/python_api_testing/sweep_tests/pytests/ -name 'test_*.py' -a ! -name 'test_sweep_conv_with_address_map.py') -vvv
