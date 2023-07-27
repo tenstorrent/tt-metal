@@ -109,9 +109,8 @@ void MAIN {
             }
             // we don't pop cb_x until we compute Ex
         }
-        reduce_revert_delta_v2();
-
         pack_tile(dst0, cb_ex);
+        reduce_revert_delta_v2();
         REL();
 
         cb_push_back(cb_ex, 1);
@@ -169,8 +168,8 @@ void MAIN {
                 //reduce_tile_v2(REDUCE_OP, REDUCE_DIM, cb_xmm, cb_scaler, wt+wtr, scaler0, dst0);
         }
         cb_pop_front(cb_xmm2, Wt);
-        reduce_revert_delta_v2();
         pack_tile(dst0, cb_ex2);
+        reduce_revert_delta_v2();
         REL();
 
         cb_push_back(cb_ex2, 1);
@@ -191,13 +190,13 @@ void MAIN {
         pack_tile(dst0, cb_ex2pe);
         cb_push_back(cb_ex2pe, 1);
         REL();
+        cb_pop_front(cb_ex2, 1);
 
         /* ln(x) * gamma + beta (gamma and beta are optional)
          * now xmm = (x-E[x])
          * we have 1.0/sqrt( E[(x-E[x])^2] + eps) in cb_ex2pe
          * just need to bcast_mul xmm with cb_ex2pe
          */
-        cb_reserve_back(cb_ex2pe, 1); // 2
         cb_wait_front(cb_ex2pe, 1);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
                         //if (ht == 1) UNPACK(( DPRINT << "wt_2=" << wt << " " ));
