@@ -296,3 +296,13 @@ inline void llk_math_eltwise_binary_init(const std::uint32_t transpose=0, const 
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
+
+template <
+    EltwiseBinaryType eltwise_binary_type,
+    BroadcastType src_b_bcast_type,
+    int NUM_FIDELITY_PHASES = 0,
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+inline void llk_math_eltwise_binary_init_with_operands(const std::uint32_t operand_A, const std::uint32_t operand_B, const std::uint32_t transpose = 0, const std::uint32_t acc_to_dest = 0) {
+    // Todo: get num faces based on operand_A and operand_B
+    llk_math_eltwise_binary_init<eltwise_binary_type, src_b_bcast_type, NUM_FIDELITY_PHASES, binary_reuse_dest>(transpose, acc_to_dest);
+}
