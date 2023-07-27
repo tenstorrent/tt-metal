@@ -19,7 +19,7 @@ operation::ProgramWithCallbacks reduce_single_core(const Tensor &a, Tensor& outp
     uint32_t Wt = W/TILE_WIDTH;
     uint32_t Ht = H/TILE_HEIGHT;
     if (reduce_dim == ReduceOpDim::HW)
-        TT_ASSERT(scaler == 1.0f && "ReduceHW currently only works correctly with scaler == 1.0f!");
+        scaler = sqrt(scaler);
 
     uint32_t num_tensor_tiles = NC*H*W / TILE_HW;
 

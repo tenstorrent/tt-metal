@@ -148,7 +148,7 @@ Tensor reduce(const Tensor &input_tensor, ReduceOpMath::Enum reduce_math, Reduce
         if (AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
             formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, pad_value, Layout::TILE);
         }
-        const Tensor output_tensor = operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::W, scaler}, {formatted_input_tensor}).at(0);
+        const Tensor output_tensor = operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::W, 1.0}, {formatted_input_tensor}).at(0);
         return operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::H, scaler}, {output_tensor}).at(0);
     } else {
         return operation::run_with_autoformat(Reduce{reduce_math, reduce_dim, scaler}, {input_tensor}, {}, pad_value).at(0);
