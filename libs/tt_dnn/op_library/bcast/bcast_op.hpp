@@ -36,7 +36,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &input_tensor_a
 struct EltwiseBinaryBroadcast {
     const BcastOpMath::Enum math_op;
     const BcastOpDim::Enum dim;
-    const MemoryConfig& output_mem_config;
+    const MemoryConfig output_mem_config;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;

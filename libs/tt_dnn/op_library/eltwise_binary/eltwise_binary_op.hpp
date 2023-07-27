@@ -26,6 +26,7 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
 
 struct EltwiseBinary {
     const BinaryOpType::Enum op_type;
+    const MemoryConfig output_mem_config;
 
     BinaryOpParallelizationStrategy::Enum get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
 
@@ -44,28 +45,30 @@ struct EltwiseBinary {
 };
 
 template <BinaryOpType::Enum binary_op_type>
-Tensor run_eltwise_binary(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
-    TT_ASSERT(input_tensor_a.shape() == input_tensor_b.shape(), "Input shapes must be the same!");
-    return operation::run_with_autoformat(EltwiseBinary{binary_op_type}, {input_tensor_a, input_tensor_b}).at(0);
-};
+struct make_eltwise_binary {
+     Tensor operator()(const Tensor& input_tensor_a, const Tensor& input_tensor_b, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) const {
+         TT_ASSERT(input_tensor_a.shape() == input_tensor_b.shape(), "Input shapes must be the same!");
+         return operation::run_with_autoformat(EltwiseBinary{binary_op_type, output_mem_config}, {input_tensor_a, input_tensor_b}).at(0);
+     }
+ };
 
-inline Tensor add_without_autoformat(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
+inline Tensor add_without_autoformat(const Tensor& input_tensor_a, const Tensor& input_tensor_b, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
     TT_ASSERT(input_tensor_a.shape() == input_tensor_b.shape(), "Input shapes must be the same!");
-    return operation::run_without_autoformat(EltwiseBinary{BinaryOpType::ADD}, {input_tensor_a, input_tensor_b}).at(0);
+    return operation::run_without_autoformat(EltwiseBinary{BinaryOpType::ADD, output_mem_config}, {input_tensor_a, input_tensor_b}).at(0);
 }
 
-// arithmetic binary ops
-constexpr auto add = run_eltwise_binary<BinaryOpType::ADD>;
-constexpr auto sub = run_eltwise_binary<BinaryOpType::SUB>;
-constexpr auto mul = run_eltwise_binary<BinaryOpType::MUL>;
+ // arithmetic binary ops
+ constexpr auto add = make_eltwise_binary<BinaryOpType::ADD>{};
+ constexpr auto sub = make_eltwise_binary<BinaryOpType::SUB>{};
+ constexpr auto mul = make_eltwise_binary<BinaryOpType::MUL>{};
 
-// comparative binary ops
-constexpr auto lt = run_eltwise_binary<BinaryOpType::LT>;
-constexpr auto gt = run_eltwise_binary<BinaryOpType::GT>;
-constexpr auto lte = run_eltwise_binary<BinaryOpType::LTE>;
-constexpr auto gte = run_eltwise_binary<BinaryOpType::GTE>;
-constexpr auto eq = run_eltwise_binary<BinaryOpType::EQ>;
-constexpr auto ne = run_eltwise_binary<BinaryOpType::NE>;
+ // comparative binary ops
+ constexpr auto lt = make_eltwise_binary<BinaryOpType::LT>{};
+ constexpr auto gt = make_eltwise_binary<BinaryOpType::GT>{};
+ constexpr auto lte = make_eltwise_binary<BinaryOpType::LTE>{};
+ constexpr auto gte = make_eltwise_binary<BinaryOpType::GTE>{};
+ constexpr auto eq = make_eltwise_binary<BinaryOpType::EQ>{};
+ constexpr auto ne = make_eltwise_binary<BinaryOpType::NE>{};
 
 }  // namespace tt_metal
 

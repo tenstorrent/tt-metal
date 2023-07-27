@@ -44,19 +44,33 @@ operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tenso
         num_output_tiles * single_tile_size,
         cb_data_format
     );
-    // no need to create c_in2 buffer since we pass scaler=0 to reader
+
+    auto src_buffer = a.buffer();
+    auto dst_buffer = output.buffer();
+
+    // Op not uplifted for L1 yet, but need to provide arg to kernel
+    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(cb_data_format), (uint32_t)src_is_dram};
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> writer_compile_time_args = {
+        (std::uint32_t) output_cb_index,
+        static_cast<uint32_t>(cb_data_format),
+        (std::uint32_t) dst_is_dram
+    };
 
     tt_metal::DataMovementKernel *unary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_unary_8bank.cpp",
+        "tt_metal/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         core,
+        reader_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_1,
         tt_metal::NOC::RISCV_1_default);
 
     tt_metal::DataMovementKernel *unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_8bank.cpp",
+        "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
+        writer_compile_time_args,
         tt_metal::DataMovementProcessor::RISCV_0,
         tt_metal::NOC::RISCV_0_default);
 
@@ -79,21 +93,13 @@ operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tenso
 
     eltwise_unary_op_utils::add_defines(eltwise_unary_kernel, op_type, param);
 
-    auto src_dram_buffer = a.buffer();
-    auto src_dram_noc_xy = src_dram_buffer->noc_coordinates();
-
-    auto dst_dram_buffer = output.buffer();
-    auto dst_dram_noc_xy = dst_dram_buffer->noc_coordinates();
 
     SetRuntimeArgs(
         unary_reader_kernel,
         core,
         {
-            src_dram_buffer->address(),
-            uint32_t(src_dram_noc_xy.x),
-            uint32_t(src_dram_noc_xy.y),
-            num_tiles,
-            0, 0, 0, 0, 0  // TODO(AP): [8] is scaler
+            src_buffer->address(),
+            num_tiles, 0
         }
     );
 
@@ -101,10 +107,8 @@ operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tenso
         unary_writer_kernel,
         core,
         {
-            dst_dram_buffer->address(),
-            uint32_t(dst_dram_noc_xy.x),
-            uint32_t(dst_dram_noc_xy.y),
-            num_tiles
+            dst_buffer->address(),
+            num_tiles, 0
         }
     );
 
@@ -114,26 +118,20 @@ operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tenso
     ) {
 
         auto src_dram_buffer = input_buffers.at(0);
-        auto src_dram_noc_xy = src_dram_buffer->noc_coordinates();
 
         auto dst_dram_buffer = output_buffers.at(0);
-        auto dst_dram_noc_xy = dst_dram_buffer->noc_coordinates();
 
         CoreCoord core = {0, 0};
 
         {
             auto runtime_args = GetRuntimeArgs(unary_reader_kernel, core);
             runtime_args[0] = src_dram_buffer->address();
-            runtime_args[1] = uint32_t(src_dram_noc_xy.x);
-            runtime_args[2] = uint32_t(src_dram_noc_xy.y);
             SetRuntimeArgs(unary_reader_kernel, core, runtime_args);
         }
 
         {
             auto runtime_args = GetRuntimeArgs(unary_writer_kernel, core);
             runtime_args[0] = dst_dram_buffer->address();
-            runtime_args[1] = uint32_t(dst_dram_noc_xy.x);
-            runtime_args[2] = uint32_t(dst_dram_noc_xy.y);
             SetRuntimeArgs(unary_writer_kernel, core, runtime_args);
         }
     };

@@ -10,7 +10,7 @@ namespace tt_metal {
 // TODO: Accept parallelization
 
 struct Untilize {
-    const MemoryConfig& output_mem_config;
+    const MemoryConfig output_mem_config;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -23,7 +23,7 @@ struct Untilize {
 struct UntilizeWithUnpadding {
     const Shape output_tensor_start;
     const Shape output_tensor_end;
-    const MemoryConfig& output_mem_config;
+    const MemoryConfig output_mem_config;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;

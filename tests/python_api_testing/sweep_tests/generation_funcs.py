@@ -18,6 +18,11 @@ supported_tt_layouts = [
     ttl.tensor.Layout.TILE,
 ]
 
+supported_mem_configs = [
+    ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+    ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
+]
+
 on_device_options = [
     True,
     False,

@@ -1679,102 +1679,6 @@ def eltwise_eqz(x, *args, device, dtype, layout, on_device, **kwargs):
 
 
 @setup_host_and_device
-def eltwise_add(x, y, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-    t1 = ttl.tensor.Tensor(
-        y.reshape(-1).tolist(),
-        y.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t1 = t1.to(layout)
-    if on_device:
-        t1 = t1.to(device)
-
-    t2 = ttl.tensor.add(t0, t1)
-
-    output = torch.Tensor(t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
-        t2.shape()
-    )
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_sub(x, y, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-    t1 = ttl.tensor.Tensor(
-        y.reshape(-1).tolist(),
-        y.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t1 = t1.to(layout)
-    if on_device:
-        t1 = t1.to(device)
-
-    t2 = ttl.tensor.sub(t0, t1)
-
-    output = torch.Tensor(t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
-        t2.shape()
-    )
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_mul(x, y, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-    t1 = ttl.tensor.Tensor(
-        y.reshape(-1).tolist(),
-        y.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t1 = t1.to(layout)
-    if on_device:
-        t1 = t1.to(device)
-
-    t2 = ttl.tensor.mul(t0, t1)
-
-    output = torch.Tensor(t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
-        t2.shape()
-    )
-
-    return output
-
-
-@setup_host_and_device
 def eltwise_min(x, y, *args, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
@@ -2885,7 +2789,18 @@ def eltwise_power(x, *args, exponent, device, dtype, layout, on_device, **kwargs
 
 def make_eltwise_binary_op(ttl_tensor_binop):
     @setup_host_and_device
-    def eltwise_binary_op(x, y, *args, device, dtype, layout, on_device, **kwargs):
+    def eltwise_binary_op(
+        x,
+        y,
+        *args,
+        device,
+        dtype,
+        layout,
+        on_device,
+        input_mem_config=ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+        output_mem_config=ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+        **kwargs,
+    ):
         t0 = ttl.tensor.Tensor(
             x.reshape(-1).tolist(),
             x.shape,
@@ -2919,6 +2834,9 @@ def make_eltwise_binary_op(ttl_tensor_binop):
     return eltwise_binary_op
 
 
+eltwise_add = make_eltwise_binary_op(ttl.tensor.add)
+eltwise_sub = make_eltwise_binary_op(ttl.tensor.sub)
+eltwise_mul = make_eltwise_binary_op(ttl.tensor.mul)
 eltwise_ne = make_eltwise_binary_op(ttl.tensor.ne)
 eltwise_eq = make_eltwise_binary_op(ttl.tensor.eq)
 eltwise_gt = make_eltwise_binary_op(ttl.tensor.gt)

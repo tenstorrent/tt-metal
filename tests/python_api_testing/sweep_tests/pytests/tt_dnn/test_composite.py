@@ -40,6 +40,8 @@ def custom_compare(*args, **kwargs):
         product(
             (
                 "squared_difference",
+                "min",
+                "max",
                 "swish",
                 "log1p",
                 "softplus",
@@ -109,7 +111,7 @@ def test_run_eltwise_composite_test(
     num_inputs = 1
     if fn == "mac":
         num_inputs = 3
-    elif fn in ["hypot", "squared_difference"]:
+    elif fn in ["hypot", "squared_difference", "min", "max"]:
         num_inputs = 2
 
     input_shapes = input_shapes * num_inputs

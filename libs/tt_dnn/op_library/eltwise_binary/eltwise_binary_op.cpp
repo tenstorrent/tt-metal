@@ -69,7 +69,6 @@ void EltwiseBinary::validate(const std::vector<Tensor>& input_tensors) const {
     TT_ASSERT((input_tensor_a.layout() == Layout::TILE && input_tensor_b.layout() == Layout::TILE), "Inputs to eltwise binary must be tilized");
     TT_ASSERT(input_tensor_a.dtype() == input_tensor_b.dtype());
     TT_ASSERT(input_tensor_a.dtype() == DataType::BFLOAT16);
-    TT_ASSERT((input_tensor_a.buffer()->buffer_type() == BufferType::DRAM && input_tensor_b.buffer()->buffer_type() == BufferType::DRAM));
 }
 
 std::vector<Shape> EltwiseBinary::compute_output_shapes(
@@ -81,7 +80,7 @@ std::vector<Shape> EltwiseBinary::compute_output_shapes(
 std::vector<Tensor> EltwiseBinary::create_output_tensors(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, MemoryConfig{.interleaved = true});
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks EltwiseBinary::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -119,6 +118,7 @@ BinaryOpParallelizationStrategy::Enum EltwiseBinary::get_parallelization_strateg
 tt::stl::reflection::Attributes EltwiseBinary::attributes() const {
     return {
         {"op_type", this->op_type},
+        {"output_mem_config", this->output_mem_config},
     };
 }
 

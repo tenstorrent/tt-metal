@@ -140,7 +140,6 @@ void EltwiseUnary::validate(const std::vector<Tensor> &input_tensors) const {
     TT_ASSERT(input_tensor_a.buffer() != nullptr , "Operands to eltwise unary need to be allocated in buffers on device!");
     TT_ASSERT((input_tensor_a.layout() == Layout::TILE), "Inputs to eltwise unary must be tilized");
     TT_ASSERT(input_tensor_a.dtype() == DataType::BFLOAT16);
-    TT_ASSERT((input_tensor_a.buffer()->buffer_type() == BufferType::DRAM));
 }
 
 std::vector<Shape> EltwiseUnary::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
@@ -150,7 +149,7 @@ std::vector<Shape> EltwiseUnary::compute_output_shapes(const std::vector<Tensor>
 
 std::vector<Tensor> EltwiseUnary::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, MemoryConfig{.interleaved = true});
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks EltwiseUnary::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -189,6 +188,7 @@ tt::stl::reflection::Attributes EltwiseUnary::attributes() const {
     return {
         {"op_type", this->op_type},
         {"param", this->param},
+        {"output_mem_config", this->output_mem_config},
     };
 }
 

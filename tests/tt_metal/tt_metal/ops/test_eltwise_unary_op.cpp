@@ -52,17 +52,12 @@ Tensor host_function(const Tensor& input_tensor) {
     return Tensor(OwnedStorage{output_buffer}, input_tensor.shape(), input_tensor.dtype(), input_tensor.layout());
 }
 
-template <auto Operation>
-Tensor device_function(const Tensor& input_tensor, Device* device) {
-    return Operation(input_tensor.to(device)).cpu();
-}
-
-template <auto HostFunction, auto DeviceFunction, typename... Args>
-bool run_test(Device* device, const Shape& shape, float low, float high, Args... args) {
+template <auto HostFunction, typename DeviceFunction, typename... Args>
+bool run_test(const DeviceFunction& device_function, Device* device, const Shape& shape, float low, float high, Args... args) {
     auto input_tensor = tt::numpy::random::uniform(bfloat16(low), bfloat16(high), shape).to(Layout::TILE);
 
     auto host_output = HostFunction(input_tensor);
-    auto device_output = DeviceFunction(input_tensor, device);
+    auto device_output = device_function(input_tensor.to(device)).cpu();
 
     return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
 }
@@ -74,11 +69,11 @@ void test_operation_infrastructure() {
     auto shape = Shape{1, 1, TILE_HEIGHT, TILE_WIDTH};
     auto input_tensor = tt::numpy::random::uniform(bfloat16(0), bfloat16(1), shape).to(Layout::TILE);
 
-    auto op = operation::DeviceOperation(EltwiseUnary{UnaryOpType::SQRT});
+    auto op = operation::DeviceOperation(EltwiseUnary{UnaryOpType::SQRT, std::nullopt, MemoryConfig{.interleaved = true}});
 
     auto program_hash = op.compute_program_hash({input_tensor});
     TT_ASSERT(
-        program_hash == "tt::tt_metal::EltwiseUnary(op_type=tt::tt_metal::UnaryOpType::Enum::SQRT, param=std::nullopt)_tt::tt_metal::Tensor(storage=tt::tt_metal::OwnedStorage(), shape=tt::tt_metal::Shape(dimensions={1, 1, 32, 32}), dtype=tt::tt_metal::DataType::BFLOAT16, layout=tt::tt_metal::Layout::TILE)",
+        program_hash == "tt::tt_metal::EltwiseUnary(op_type=tt::tt_metal::UnaryOpType::Enum::SQRT, param=std::nullopt, output_mem_config=tt::tt_metal::MemoryConfig(interleaved=true, buffer_type=tt::tt_metal::BufferType::DRAM))_tt::tt_metal::Tensor(storage=tt::tt_metal::OwnedStorage(), shape=tt::tt_metal::Shape(dimensions={1, 1, 32, 32}), dtype=tt::tt_metal::DataType::BFLOAT16, layout=tt::tt_metal::Layout::TILE)",
         fmt::format("Actual value is {}", program_hash)
     );
 
@@ -109,7 +104,7 @@ void test_shape_padding() {
     auto padded_input_tensor = operation::run(tt::tt_metal::PadOnHost{padded_input_shape, {0, 0, 0, 0}, 0}, {input_tensor}).at(0);
     padded_input_tensor = padded_input_tensor.to(Layout::TILE);
     padded_input_tensor = padded_input_tensor.to(device);
-    auto output_tensor = operation::run(tt::tt_metal::EltwiseUnary{tt::tt_metal::UnaryOpType::SQRT}, {padded_input_tensor}).at(0);
+    auto output_tensor = operation::run(tt::tt_metal::EltwiseUnary{tt::tt_metal::UnaryOpType::SQRT, std::nullopt, MemoryConfig{.interleaved = true}}, {padded_input_tensor}).at(0);
 
     auto output_shape = output_tensor.shape();
     TT_ASSERT(output_shape == padded_input_shape);
@@ -131,49 +126,49 @@ void test_numerically() {
 
     auto shape = Shape{1, 1, TILE_HEIGHT, TILE_WIDTH};
     {
-        auto allclose = run_test<host_function<::detail::sqrt>, device_function<tt::tt_metal::sqrt>>(
-            device, shape, 0.0f, 1.0f, 1e-1f, 1e-5f);
+        auto allclose = run_test<host_function<::detail::sqrt>>(
+            tt::tt_metal::sqrt, device, shape, 0.0f, 1.0f, 1e-1f, 1e-5f);
         TT_ASSERT(allclose);
     }
     {
-        auto allclose = run_test<host_function<::detail::exp>, device_function<tt::tt_metal::exp>>(
-            device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
+        auto allclose = run_test<host_function<::detail::exp>>(
+            tt::tt_metal::exp, device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
         TT_ASSERT(allclose);
     }
     {
-        auto allclose = run_test<host_function<::detail::recip>, device_function<tt::tt_metal::recip>>(
-            device, shape, 1.0f, 10.0f, 1e-1f, 1e-5f);
+        auto allclose = run_test<host_function<::detail::recip>>(
+            tt::tt_metal::recip, device, shape, 1.0f, 10.0f, 1e-1f, 1e-5f);
         TT_ASSERT(allclose);
     }
     {
-        auto allclose = run_test<host_function<::detail::gelu>, device_function<gelu_fast>>(
-            device, shape, 1.0f, 10.0f, 1e-1f, 1e-3f);
+        auto allclose = run_test<host_function<::detail::gelu>>(
+            gelu_fast, device, shape, 1.0f, 10.0f, 1e-1f, 1e-3f);
         TT_ASSERT(allclose);
     }
     {
-        auto allclose = run_test<host_function<::detail::gelu>, device_function<gelu_slow>>(
-            device, shape, 1.0f, 10.0f, 1e-1f, 1e-3f);
+        auto allclose = run_test<host_function<::detail::gelu>>(
+            gelu_slow, device, shape, 1.0f, 10.0f, 1e-1f, 1e-3f);
         TT_ASSERT(allclose);
     }
 
     {
-        auto allclose = run_test<host_function<::detail::relu>, device_function<tt::tt_metal::relu>>(
-            device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
+        auto allclose = run_test<host_function<::detail::relu>>(
+            tt::tt_metal::relu, device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
         TT_ASSERT(allclose);
     }
     {
-        auto allclose = run_test<host_function<::detail::sigmoid>, device_function<tt::tt_metal::sigmoid>>(
-            device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
+        auto allclose = run_test<host_function<::detail::sigmoid>>(
+            tt::tt_metal::sigmoid, device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
         TT_ASSERT(allclose);
     }
     {
-        auto allclose = run_test<host_function<::detail::log>, device_function<tt::tt_metal::log>>(
-            device, shape, 0.0f, 1.0f, 1e-1f, 1e-2f);
+        auto allclose = run_test<host_function<::detail::log>>(
+            tt::tt_metal::log, device, shape, 0.0f, 1.0f, 1e-1f, 1e-2f);
         TT_ASSERT(allclose);
     }
     {
-        auto allclose = run_test<host_function<::detail::tanh>, device_function<tt::tt_metal::tanh>>(
-            device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
+        auto allclose = run_test<host_function<::detail::tanh>>(
+            tt::tt_metal::tanh, device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
         TT_ASSERT(allclose);
     }
 
@@ -193,47 +188,47 @@ void test_program_cache() {
 
     auto run_tests = [&]() {
         // Program Cache Miss
-        run_test<host_function<::detail::sqrt>, device_function<tt::tt_metal::sqrt>>(
-            device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<host_function<::detail::sqrt>>(
+            tt::tt_metal::sqrt, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
 
         // Program Cache Hit
-        run_test<host_function<::detail::sqrt>, device_function<tt::tt_metal::sqrt>>(
-            device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<host_function<::detail::sqrt>>(
+            tt::tt_metal::sqrt, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
 
         // Program Cache Miss
-        run_test<host_function<::detail::sqrt>, device_function<tt::tt_metal::sqrt>>(
-            device, {1, 1, 384, 4096}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<host_function<::detail::sqrt>>(
+            tt::tt_metal::sqrt, device, {1, 1, 384, 4096}, 0.0f, 1.0f, 1e-1f, 1e-5f);
 
         // Program Cache Miss
-        run_test<host_function<::detail::exp>, device_function<tt::tt_metal::exp>>(
-            device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<host_function<::detail::exp>>(
+            tt::tt_metal::exp, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
 
         // Program Cache Hit
-        run_test<host_function<::detail::sqrt>, device_function<tt::tt_metal::sqrt>>(
-            device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<host_function<::detail::sqrt>>(
+            tt::tt_metal::sqrt, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
 
         // Allocate a tensor to show that the addresses aren't cached
         auto input_tensor =
             tt::numpy::random::uniform(bfloat16(0.0f), bfloat16(0.0f), {1, 1, 32, 32}).to(Layout::TILE).to(device);
 
         // Program Cache Hit
-        run_test<host_function<::detail::exp>, device_function<tt::tt_metal::exp>>(
-            device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<host_function<::detail::exp>>(
+            tt::tt_metal::exp, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
 
         // Program Cache Miss
-        run_test<host_function<::detail::gelu>, device_function<gelu_fast>>(
-            device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 1.0f, 10.0f, 1e-1f, 1e-3f);
+        run_test<host_function<::detail::gelu>>(
+            gelu_fast, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 1.0f, 10.0f, 1e-1f, 1e-3f);
 
-        run_test<host_function<::detail::gelu>, device_function<gelu_slow>>(
-            device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 1.0f, 10.0f, 1e-1f, 1e-3f);
-
-        // Program Cache Hit
-        run_test<host_function<::detail::sqrt>, device_function<tt::tt_metal::sqrt>>(
-            device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<host_function<::detail::gelu>>(
+            gelu_slow, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 1.0f, 10.0f, 1e-1f, 1e-3f);
 
         // Program Cache Hit
-        run_test<host_function<::detail::sqrt>, device_function<tt::tt_metal::sqrt>>(
-            device, {1, 1, 384, 4096}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<host_function<::detail::sqrt>>(
+            tt::tt_metal::sqrt, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+
+        // Program Cache Hit
+        run_test<host_function<::detail::sqrt>>(
+            tt::tt_metal::sqrt, device, {1, 1, 384, 4096}, 0.0f, 1.0f, 1e-1f, 1e-5f);
     };
 
     tt::tt_metal::program_cache::enable();
