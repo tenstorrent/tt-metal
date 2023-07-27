@@ -12,7 +12,11 @@ cd $TT_METAL_HOME
 export PYTHONPATH=$TT_METAL_HOME
 
 # Turning on fast dispatch for the remaining models
-export TT_METAL_DEVICE_DISPATCH_MODE=1
+if [[ -z "$FAST_DISPATCH" ]]; then
+
+else
+    export TT_METAL_DEVICE_DISPATCH_MODE=1
+fi
 
 env pytest tests/python_api_testing/models/stable_diffusion/test_embedding.py
 env pytest tests/python_api_testing/models/stable_diffusion/test_cross_attn_down_block.py -k test_run_cross_attn_down_block_real_input_inference
