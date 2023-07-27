@@ -400,3 +400,22 @@ class TestEltwiseUnary:
             comparison_func,
             pcie_slot,
         )
+
+    @pytest.mark.parametrize("arc_trig_kind", ["asin", "acos"])
+    def test_run_eltwise_arc_trig_ops(
+        self, input_shapes, arc_trig_kind, pcie_slot, function_level_defaults
+    ):
+        datagen_func = [
+            generation_funcs.gen_func_with_cast(
+                partial(generation_funcs.gen_rand, low=-1, high=1),
+                torch.bfloat16,
+            )
+        ]
+        comparison_func = comparison_funcs.comp_pcc
+        run_single_pytorch_test(
+            f"eltwise-{arc_trig_kind}",
+            input_shapes,
+            datagen_func,
+            comparison_func,
+            pcie_slot,
+        )

@@ -14,7 +14,7 @@ namespace tt_metal {
 struct UnaryOpType {
     enum Enum { EXP = 0, RECIP = 1, GELU = 2, RELU = 3, SQRT = 4, SIGMOID = 5, LOG = 6, TANH = 7, LOG2 = 8, LOG10 = 9, SIN = 10, COS = 11,
                 ABS=12, SIGN=13, SQUARE=14, EQZ = 15, NEZ = 16, GTZ = 17, LTZ = 18, GEZ = 19, LEZ = 20, RELU_MAX = 21, RELU_MIN = 22, POWER = 23, LEAKY_RELU = 24, ELU = 25, EXP2 = 26, HEAVISIDE = 27,
-                EXPM1 = 28, SIGNBIT = 29};
+                EXPM1 = 28, SIGNBIT = 29, ASIN = 30, ACOS = 31};
     static const auto all() { return magic_enum::enum_values<Enum>(); }
 };
 
@@ -81,6 +81,8 @@ inline Tensor expm1(const Tensor &input_tensor) { return run_eltwise_unary<Unary
 
 inline Tensor sin(const Tensor &input_tensor) { return run_eltwise_unary<UnaryOpType::SIN>(input_tensor); }
 inline Tensor cos(const Tensor &input_tensor) { return run_eltwise_unary<UnaryOpType::COS>(input_tensor); }
+inline Tensor asin(const Tensor &input_tensor) { return run_eltwise_unary<UnaryOpType::ASIN>(input_tensor); }
+inline Tensor acos(const Tensor &input_tensor) { return run_eltwise_unary<UnaryOpType::ACOS>(input_tensor); }
 inline Tensor abs(const Tensor &input_tensor) { return run_eltwise_unary<UnaryOpType::ABS>(input_tensor); }
 inline Tensor sign(const Tensor &input_tensor) { return run_eltwise_unary<UnaryOpType::SIGN>(input_tensor); }
 inline Tensor signbit(const Tensor &input_tensor) { return run_eltwise_unary<UnaryOpType::SIGNBIT>(input_tensor); }

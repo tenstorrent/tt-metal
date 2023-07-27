@@ -1924,6 +1924,34 @@ void TensorModule(py::module &m_tensor) {
         +----------+----------------------------+-----------+------------------------------+----------+
     )doc");
 
+    m_tensor.def("asin", &asin, R"doc(
+        Returns a new tensor with the arcsine of the elements of the input tensor ``arg0``.
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+----------------------------+-----------+------------------------------+----------+
+        | Argument | Description                | Data type | Valid range                  | Required |
+        +==========+============================+===========+==============================+==========+
+        | arg0     | Tensor asin is applied to  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+----------------------------+-----------+------------------------------+----------+
+    )doc");
+
+    m_tensor.def("acos", &acos, R"doc(
+        Returns a new tensor with the arccosine of the elements of the input tensor ``arg0``.
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+----------------------------+-----------+------------------------------+----------+
+        | Argument | Description                | Data type | Valid range                  | Required |
+        +==========+============================+===========+==============================+==========+
+        | arg0     | Tensor acos is applied to  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+----------------------------+-----------+------------------------------+----------+
+    )doc");
+
     m_tensor.def("swish", swish, R"doc(
         Returns tensor with the swish all of elements of the input tensor ``arg0``.
 

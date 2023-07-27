@@ -160,6 +160,14 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_sin,
         "pytorch_op": pytorch_ops.sin,
     },
+    "eltwise-asin": {
+        "tt_lib_op": tt_lib_ops.eltwise_asin,
+        "pytorch_op": pytorch_ops.asin,
+    },
+    "eltwise-acos": {
+        "tt_lib_op": tt_lib_ops.eltwise_acos,
+        "pytorch_op": pytorch_ops.acos,
+    },
     "eltwise-exp": {
         "tt_lib_op": tt_lib_ops.eltwise_exp,
         "pytorch_op": pytorch_ops.exp,

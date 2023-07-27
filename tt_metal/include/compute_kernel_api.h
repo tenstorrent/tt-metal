@@ -1135,4 +1135,21 @@ ALWI void expm1_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_expm1_init<true>() ));
 }
 
+//arcsine
+ALWI void asin_tile(uint32_t idst) {
+    MATH(( llk_math_eltwise_unary_sfpu_asin<true, SyncHalf>(idst) ));
+}
+
+ALWI void asin_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_asin_init<true>() ));
+}
+
+//arccosine
+ALWI void acos_tile(uint32_t idst) {
+    MATH(( llk_math_eltwise_unary_sfpu_acos<true, SyncHalf>(idst) ));
+}
+
+ALWI void acos_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_acos_init<true>() ));
+}
 } // namespace ckernel

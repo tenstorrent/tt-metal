@@ -229,6 +229,7 @@ def relu(x, *args, **kwargs):
 def sigmoid(x, *args, **kwargs):
     return torch.sigmoid(x)
 
+
 def log_sigmoid(x, *args, **kwargs):
     result = torch.nn.functional.logsigmoid(x)
     return result
@@ -274,6 +275,14 @@ def signbit(x, *args, **kwargs):
 
 def sin(x, *args, **kwargs):
     return torch.sin(x)
+
+
+def asin(x, *args, **kwargs):
+    return torch.asin(x)
+
+
+def acos(x, *args, **kwargs):
+    return torch.acos(x)
 
 
 def cos(x, *args, **kwargs):

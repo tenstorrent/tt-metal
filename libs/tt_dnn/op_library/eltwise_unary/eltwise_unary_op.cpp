@@ -92,6 +92,10 @@ string get_op_name_default(UnaryOpType::Enum op_type) {
             op_name = "exp2_tile_init(); exp2_tile(0); pack_tile(0,tt::CB::c_out0);"; break;
         case UnaryOpType::EXPM1:
             op_name = "expm1_tile_init(); expm1_tile(0); pack_tile(0,tt::CB::c_out0);"; break;
+        case UnaryOpType::ASIN:
+            op_name = "asin_tile_init(); asin_tile(0); pack_tile(0,tt::CB::c_out0);"; break;
+        case UnaryOpType::ACOS:
+            op_name = "acos_tile_init(); acos_tile(0); pack_tile(0,tt::CB::c_out0);"; break;
         default: TT_ASSERT(false && "Undefined op type");
     }
     return op_name;

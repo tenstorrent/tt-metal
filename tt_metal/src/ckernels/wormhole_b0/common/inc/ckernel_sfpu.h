@@ -1348,6 +1348,71 @@ inline void calculate_expm1()
     }
 }
 
+template <bool APPROXIMATION_MODE>
+sfpi_inline vFloat sfpu_asine_maclaurin_series(vFloat val)
+{
+    // input for [-1:1]
+    // Mclauren series
+    // arcsin(x) = x + [(1/2) *x^3/3] + [(1 * 3) / (2 * 4) * x^5 / 5] + [(1 * 3 * 5) / (2 * 4 * 6) * x^7 / 7 ] + ...
+    // arcsin(x) ≈ x + (1/6) * x^3 + (3/40) * x^5 + (5/112) * x^7 + (35/1152) * x^9 + (63/2816) * x^11a
+
+    vFloat tmp = val;
+    vFloat val_square = val * val;
+    // x
+    vFloat output = tmp;
+    // (1/6) * x^3
+    tmp = tmp * val_square;
+    output += 0.166666666 * tmp;
+    // (3/40) * x^5
+    tmp = tmp * val_square;
+    output +=  0.075 * tmp;
+
+    //(5/112) * x^7
+    tmp = tmp * val_square;
+    output += 0.044642857 * tmp;
+
+    // (35/1152) *x^9
+    tmp = tmp * val_square;
+    output += 0.03038194 * tmp;
+
+    //(63/2816) * x^11
+    tmp = tmp * val_square;
+    output += 0.02237216 * tmp;
+
+    // Write out output
+    return output;
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_asin()
+{
+    // SFPU microcode
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        vFloat v = dst_reg[0];
+        v = sfpu_asine_maclaurin_series<APPROXIMATION_MODE>(v);
+        dst_reg[0] = v;
+        dst_reg++;
+    }
+}
+
+
+#define PI_2 (1.570796326794)
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_acos()
+{
+    // SFPU microcode
+    // acos = (pi/2 - asin)
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        vFloat v = dst_reg[0];
+        v = sfpu_asine_maclaurin_series<APPROXIMATION_MODE>(v);
+        v = PI_2 - v;
+        dst_reg[0] = v;
+        dst_reg++;
+    }
+}
+
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void relu_min(uint uint_threshold)
@@ -1574,6 +1639,12 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
     }
     else if constexpr (operation == SfpuType::expm1) {
         calculate_expm1<APPROXIMATION_MODE, ITERATIONS>();
+    }
+    else if constexpr (operation == SfpuType::asin) {
+        calculate_asin<APPROXIMATION_MODE, ITERATIONS>();
+    }
+    else if constexpr (operation == SfpuType::acos) {
+        calculate_acos<APPROXIMATION_MODE, ITERATIONS>();
     }
 }
 

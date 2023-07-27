@@ -771,6 +771,7 @@ def eltwise_sigmoid(x, *args, device, dtype, layout, on_device, **kwargs):
 
     return output
 
+
 @setup_host_and_device
 def eltwise_log_sigmoid(x, *args, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
@@ -985,6 +986,50 @@ def eltwise_cos(x, *args, device, dtype, layout, on_device, **kwargs):
         t0 = t0.to(device)
 
     t1 = ttl.tensor.cos(t0)
+
+    output = torch.Tensor(t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
+
+    return output
+
+
+@setup_host_and_device
+def eltwise_asin(x, *args, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    t1 = ttl.tensor.asin(t0)
+
+    output = torch.Tensor(t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t1.shape()
+    )
+
+    return output
+
+
+@setup_host_and_device
+def eltwise_acos(x, *args, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    t1 = ttl.tensor.acos(t0)
 
     output = torch.Tensor(t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
         t1.shape()

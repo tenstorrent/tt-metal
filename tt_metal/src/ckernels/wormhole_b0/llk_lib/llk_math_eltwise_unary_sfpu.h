@@ -387,3 +387,25 @@ template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_expm1_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::expm1, APPROXIMATE>();
 }
+
+//Asin
+template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
+inline void llk_math_eltwise_unary_sfpu_asin(uint dst_index) {
+    llk_math_eltwise_unary_sfpu<SfpuType::asin, APPROXIMATE, dst_sync>(dst_index);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_asin_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::asin, APPROXIMATE>();
+}
+
+//Acos
+template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
+inline void llk_math_eltwise_unary_sfpu_acos(uint dst_index) {
+    llk_math_eltwise_unary_sfpu<SfpuType::acos, APPROXIMATE, dst_sync>(dst_index);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_acos_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::acos, APPROXIMATE>();
+}
