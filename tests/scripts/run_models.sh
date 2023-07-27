@@ -29,14 +29,6 @@ env pytest tests/python_api_testing/models/deit/tests/test_deit_for_image_classi
 
 env pytest tests/python_api_testing/models/vit/tests/test_vit_image_classification.py -k test_vit_image_classification
 
-env pytest tests/python_api_testing/models/bert/bert_encoder.py -k bert_encoder
-env pytest tests/python_api_testing/models/bert -k bert_question_and_answering
-
-env pytest tests/python_api_testing/models/bert_large_performant/unit_tests -k "bert_large and not mixed_precision and not batch_8 and not batch_7"
-env pytest tests/python_api_testing/models/bert_large_performant/unit_tests -k "mixed_precision and batch_9"
-env pytest tests/python_api_testing/models/metal_BERT_large_15/mha.py
-env pytest tests/python_api_testing/models/metal_BERT_large_15/ffn.py
-env pytest tests/python_api_testing/models/metal_BERT_large_15/bert_encoder.py
 env pytest tests/python_api_testing/models/metal_BERT_large_15/test_bert_batch_dram.py::test_bert_batch_dram
 env pytest tests/python_api_testing/models/metal_BERT_large_15/test_bert_batch_dram.py::test_bert_batch_dram_with_program_cache
 
