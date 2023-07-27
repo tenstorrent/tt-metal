@@ -414,10 +414,13 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
             act_matrix_height_ntiles / out_subblock_h_ntiles
         };
     }
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(cb_data_format), (uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0)};
+
     auto reader = tt_metal::CreateDataMovementKernel(
         program,
         reader_kernel,
-        core, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
+        core, reader_compile_time_args, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
 
     auto writer = tt_metal::CreateDataMovementKernel(
         program,

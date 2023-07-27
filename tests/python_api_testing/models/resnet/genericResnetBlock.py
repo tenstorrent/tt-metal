@@ -10,8 +10,8 @@ from tt_lib.utils import pad_weight
 
 from tt_lib.fused_ops.average_pool import run_avg_pool_on_device_wrapper as TtAvgPool
 from tt_lib.fused_ops.linear import Linear as TtLinear
-from tt_lib.fused_ops.softmax import softmax as TtSoftmax
-from conv_on_device_utils import is_conv_supported_on_device, run_conv_on_device_wrapper, _nearest_32
+from tt_lib.fused_ops.conv import conv as TtConv
+from conv_on_device_utils import is_conv_supported_on_device, _nearest_32
 from tt_lib.fallback_ops import fallback_ops
 # Local copy of unpad_from_zero to always set output to
 def unpad_from_zero(x, desired_shape):
@@ -117,19 +117,19 @@ class Bottleneck(nn.Module):
 
         self.conv1_params = [width, inplanes, 1, 1, 1, 1, 0, 0, dilation, groups]
         if is_conv_supported_on_device(self.conv1_params):
-            self.conv1 = run_conv_on_device_wrapper(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, conv1_bias.tolist() if conv1_bias is not None else None)
+            self.conv1 = TtConv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, conv1_bias.tolist() if conv1_bias is not None else None)
         else:
             self.conv1 = fallback_ops.Conv2d(conv1_weight, conv1_bias, inplanes, width, kernel_size=1, stride=1, padding=0)
 
         self.conv2_params = [width, width, 3, 3, stride, stride, 1, 1, dilation, groups]
         if is_conv_supported_on_device(self.conv2_params):
-            self.conv2 = run_conv_on_device_wrapper(conv2_weight.reshape(-1).tolist(), self.conv2_params, self.device, conv2_bias.tolist() if conv2_bias is not None else None)
+            self.conv2 = TtConv(conv2_weight.reshape(-1).tolist(), self.conv2_params, self.device, conv2_bias.tolist() if conv2_bias is not None else None)
         else:
             self.conv2 = fallback_ops.Conv2d(conv2_weight, conv2_bias, width, width, kernel_size=3, stride=1, padding=1)
 
         self.conv3_params = [planes * self.expansion, width, 1, 1, 1, 1, 0, 0, dilation, groups]
         if is_conv_supported_on_device(self.conv3_params):
-            self.conv3 = run_conv_on_device_wrapper(conv3_weight.reshape(-1).tolist(), self.conv3_params, self.device, conv3_bias.tolist() if conv3_bias is not None else None)
+            self.conv3 = TtConv(conv3_weight.reshape(-1).tolist(), self.conv3_params, self.device, conv3_bias.tolist() if conv3_bias is not None else None)
         else:
             self.conv3 = fallback_ops.Conv2d(conv3_weight, conv3_bias, width, planes * self.expansion, kernel_size=1, stride=1, padding=0)
 
@@ -230,13 +230,13 @@ class BasicBlock(nn.Module):
 
         self.conv1_params = [planes, inplanes, 3, 3, stride, stride, 1, 1, dilation, groups]
         if is_conv_supported_on_device(self.conv1_params):
-            self.conv1 = run_conv_on_device_wrapper(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, conv1_bias.tolist() if conv1_bias is not None else None)
+            self.conv1 = TtConv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, conv1_bias.tolist() if conv1_bias is not None else None)
         else:
             self.conv1 = fallback_ops.Conv2d(conv1_weight, conv1_bias, inplanes, planes, kernel_size=3, stride=1, padding=1)
 
         self.conv2_params = [planes, planes, 3, 3, 1, 1, 1, 1, dilation, groups]
         if is_conv_supported_on_device(self.conv2_params):
-            self.conv2 = run_conv_on_device_wrapper(conv2_weight.reshape(-1).tolist(), self.conv2_params, self.device, conv2_bias.tolist() if conv2_bias is not None else None)
+            self.conv2 = TtConv(conv2_weight.reshape(-1).tolist(), self.conv2_params, self.device, conv2_bias.tolist() if conv2_bias is not None else None)
         else:
             self.conv2 = fallback_ops.Conv2d(conv2_weight, conv2_bias, planes, planes, kernel_size=3, stride=1, padding=1)
 
@@ -326,7 +326,7 @@ class ResNet(nn.Module):
 
         self.conv1_params = [self.inplanes, 3, 7, 7, 2, 2, 3, 3, 1, groups]
         if is_conv_supported_on_device(self.conv1_params):
-            self.conv1 = run_conv_on_device_wrapper(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, conv1_bias.tolist() if conv1_bias is not None else None)
+            self.conv1 = TtConv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, conv1_bias.tolist() if conv1_bias is not None else None)
         else:
             self.conv1 = fallback_ops.Conv2d(conv1_weight, conv1_bias, 3, self.inplanes, kernel_size=7, stride=2, padding=3)
 
@@ -382,7 +382,7 @@ class ResNet(nn.Module):
 
             self.downsample_params = [planes * block.expansion, self.inplanes, 1, 1, stride, stride, 0, 0, self.dilation, 1]
             if is_conv_supported_on_device(self.downsample_params):
-                self.downsample_conv_on_tt = run_conv_on_device_wrapper(downsample_conv_weight.reshape(-1).tolist(), self.downsample_params, self.device, downsample_conv_bias.tolist() if downsample_conv_bias is not None else None)
+                self.downsample_conv_on_tt = TtConv(downsample_conv_weight.reshape(-1).tolist(), self.downsample_params, self.device, downsample_conv_bias.tolist() if downsample_conv_bias is not None else None)
                 self.norm_layer_after_downsample_conv_on_tt = nl
             else:
                 downsample_conv = fallback_ops.Conv2d(downsample_conv_weight, downsample_conv_bias, self.inplanes, planes * block.expansion, kernel_size=1, stride=stride, padding=0)

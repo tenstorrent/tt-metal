@@ -67,6 +67,10 @@ Tensor run_eltwise_unary(const Tensor& input_tensor, std::optional<float> param 
     return operation::run_with_autoformat(EltwiseUnary{unary_op_type, param}, {input_tensor}, {input_format_params}, {Layout::TILE}).at(0);
 }
 
+inline Tensor relu_without_autoformat(const Tensor& input_tensor) {
+    return operation::run_without_autoformat(EltwiseUnary{UnaryOpType::RELU, std::nullopt}, {input_tensor}).at(0);
+}
+
 inline Tensor sqrt(const Tensor &input_tensor) { return run_eltwise_unary<UnaryOpType::SQRT>(input_tensor); }
 inline Tensor exp(const Tensor &input_tensor) { return run_eltwise_unary<UnaryOpType::EXP>(input_tensor); }
 inline Tensor recip(const Tensor &input_tensor) { return run_eltwise_unary<UnaryOpType::RECIP>(input_tensor); }

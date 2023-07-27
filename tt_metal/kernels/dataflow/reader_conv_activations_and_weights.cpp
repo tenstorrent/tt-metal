@@ -3,9 +3,19 @@
 #include "debug_print.h"
 
 inline void pad_l1_buffer_with_zeroes(uint32_t l1_addr, uint32_t pad_size_bytes) {
-    volatile std::uint8_t* start_dst= (volatile uint8_t*)(l1_addr);
-    for (uint32_t offset = 0; offset < pad_size_bytes; offset++) {
-        *(start_dst + offset) = 0;
+    volatile std::uint32_t* dst = reinterpret_cast<volatile std::uint32_t*>(l1_addr);
+    volatile std::uint32_t* end_dst = dst + (pad_size_bytes >> 2);  // Divide by 4 using right shift
+
+    while (dst < end_dst) {
+        *dst++ = 0;
+    }
+
+    uint32_t remainder = pad_size_bytes & 0x3;  // Get the remainder using bitwise AND
+    if (remainder != 0) {
+        volatile std::uint8_t* byte_dst = reinterpret_cast<volatile std::uint8_t*>(dst);
+        for (uint32_t i = 0; i < remainder; ++i) {
+            *byte_dst++ = 0;
+        }
     }
 }
 
@@ -59,12 +69,15 @@ void kernel_main() {
     uint32_t src_dram_weight_buffer_size_bytes = get_arg_val<uint32_t>(i); i+=1;
     uint32_t dst_l1_weight_buffer_size_bytes = get_arg_val<uint32_t>(i); i+=1;
 
+    constexpr DataFormat data_format = static_cast<DataFormat>(get_compile_time_arg_val(0));
+    constexpr bool act_in_dram = get_compile_time_arg_val(1) == 1;
+
     constexpr uint32_t cb_id_act = 0;
     constexpr uint32_t cb_id_weight = 1;
     constexpr uint32_t tile_size_pow2_exponent = 11;
     uint32_t channel_stick_size = conv_act_size_c;
     uint32_t channel_stick_size_bytes = channel_stick_size << 1;
-    const InterleavedAddrGen<true> s_act = {
+    const InterleavedAddrGen<act_in_dram> s_act = {
         .bank_base_address = act_addr_dram_base,
         .page_size = channel_stick_size_bytes
     };
@@ -88,6 +101,7 @@ void kernel_main() {
             uint32_t start_block_2d_index_w = block_idx_w * act_block_w_datums;
             uint32_t start_block_2d_index = (start_block_2d_index_h * act_block_w_datums * num_blocks_act_w) + start_block_2d_index_w;
             uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
+            // TODO (nshanker): add macro to disable checks
             if(start_block_2d_index_w >= act_matrix_width_unpadded) {
                 DPRINT << "Problem" << ENDL();
             }
@@ -97,6 +111,7 @@ void kernel_main() {
                 if (h >= act_matrix_height_unpadded) {
                     // pad (block shape padding for height dim)
                     uint32_t pad_size_bytes = act_block_w_datums<<1;
+                    // TODO (nshanker): add macro to disable checks
                     if(dst_address_offset_l1 + (pad_size_bytes-1) >= dst_l1_act_buffer_size_bytes) {
                         DPRINT << "Problem" << ENDL();
                     }
@@ -106,6 +121,7 @@ void kernel_main() {
                 else {
                     uint32_t w = start_block_2d_index_w;
                     uint32_t end_block_2d_index_w = start_block_2d_index_w + act_block_w_datums - 1;
+                    // TODO (nshanker): add macro to disable checks
                     if(end_block_2d_index_w >= act_matrix_width) {
                         DPRINT << "Problem" << ENDL();
                     }
@@ -115,6 +131,7 @@ void kernel_main() {
                         uint32_t pad = 0;
                         if (w >= act_matrix_width_unpadded) {
                             // pad (block shape padding for width dim)
+                            // TODO (nshanker): add macro to disable checks
                             if(end_block_2d_index_w != act_matrix_width-1) {
                                 DPRINT << "Problem" << ENDL();
                             }

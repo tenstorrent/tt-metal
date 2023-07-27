@@ -21,7 +21,7 @@ from utility_functions_new import prep_report
 
 from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 from loguru import logger
-from resnetBlock import ResNet, Bottleneck
+from tests.python_api_testing.models.resnet.metalResnetBlock import ResNet, Bottleneck
 
 BATCH_SIZE = 1
 

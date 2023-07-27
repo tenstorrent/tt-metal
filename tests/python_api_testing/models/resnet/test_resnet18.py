@@ -11,7 +11,7 @@ from loguru import logger
 import torch
 from torchvision import models
 import pytest
-from resnetBlock import ResNet, BasicBlock
+from tests.python_api_testing.models.resnet.genericResnetBlock import ResNet, BasicBlock
 import tt_lib
 
 from sweep_tests.comparison_funcs import comp_allclose_and_pcc, comp_pcc

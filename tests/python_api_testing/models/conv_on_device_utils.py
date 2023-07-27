@@ -21,11 +21,10 @@ def run_conv_on_device_wrapper(conv_weight, conv_params, device, conv_bias=None)
     def run_conv_on_device(x):
         [N,C,H,W] = x.shape()
 
-        logger.info("Running Conv with following parameters on device -")
-        logger.info("K="+str(K)+" C="+str(C)+" H="+str(H)+" W="+str(W)+" R="+str(R)+" S="+str(S)+" U="+str(U)+" V="+str(V)+" PH="+str(P_H)+" PW="+str(P_W)+" dilation="+str(dilation)+" groups="+str(groups))
-
-        logger.info("Going to run conv on tt device")
+        logger.debug("Running Conv with following parameters on device -")
+        logger.debug("K="+str(K)+" C="+str(C)+" H="+str(H)+" W="+str(W)+" R="+str(R)+" S="+str(S)+" U="+str(U)+" V="+str(V)+" PH="+str(P_H)+" PW="+str(P_W)+" dilation="+str(dilation)+" groups="+str(groups))
+        logger.debug("Going to run conv on tt device")
         x = conv_on_device(x)
-        logger.info("conv on tt device done")
+        logger.debug("conv on tt device done")
         return x
     return run_conv_on_device

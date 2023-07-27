@@ -13,7 +13,7 @@ from torchvision import models
 import pytest
 import tt_lib
 
-from tests.python_api_testing.models.resnet.genericResnetBlock import ResNet, Bottleneck
+from tests.python_api_testing.models.resnet.metalResnetBlock import ResNet, Bottleneck
 from sweep_tests.comparison_funcs import comp_allclose_and_pcc, comp_pcc
 
 
@@ -46,5 +46,4 @@ def test_run_resnet50_inference(fold_batchnorm, imagenet_sample_input):
 
         passing, info = comp_pcc(torch_output, tt_output, pcc=0.985)
         logger.info(info)
-        tt_lib.device.CloseDevice(device)
         assert passing

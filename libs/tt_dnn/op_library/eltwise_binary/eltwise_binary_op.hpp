@@ -49,6 +49,11 @@ Tensor run_eltwise_binary(const Tensor& input_tensor_a, const Tensor& input_tens
     return operation::run_with_autoformat(EltwiseBinary{binary_op_type}, {input_tensor_a, input_tensor_b}).at(0);
 };
 
+inline Tensor add_without_autoformat(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
+    TT_ASSERT(input_tensor_a.shape() == input_tensor_b.shape(), "Input shapes must be the same!");
+    return operation::run_without_autoformat(EltwiseBinary{BinaryOpType::ADD}, {input_tensor_a, input_tensor_b}).at(0);
+}
+
 // arithmetic binary ops
 constexpr auto add = run_eltwise_binary<BinaryOpType::ADD>;
 constexpr auto sub = run_eltwise_binary<BinaryOpType::SUB>;

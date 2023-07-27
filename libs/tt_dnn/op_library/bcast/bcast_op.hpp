@@ -80,6 +80,9 @@ inline Tensor bcast(const Tensor &input_tensor_a, const Tensor &input_tensor_b, 
     return operation::run_with_autoformat(EltwiseBinaryBroadcast{bcast_op, bcast_dim, mem_config}, {input_tensor_a, input_tensor_b}).at(0);
 }
 
+inline Tensor bcast_without_autoformat(const Tensor &input_tensor_a, const Tensor &input_tensor_b, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim, const MemoryConfig& mem_config = MemoryConfig{.interleaved = true}) {
+    return operation::run_without_autoformat(EltwiseBinaryBroadcast{bcast_op, bcast_dim, mem_config}, {input_tensor_a, input_tensor_b}).at(0);
+}
 
 }  // namespace tt_metal
 
