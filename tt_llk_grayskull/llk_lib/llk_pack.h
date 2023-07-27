@@ -124,8 +124,8 @@ inline void llk_pack_reduce_hw_configure_disaggregated(std::uint32_t pack_output
 }
 
 template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
-inline void llk_pack_init(const uint32_t out_tile_dims[2] = default_tile_dims) {
-    // To do: do something with tile dims
+inline void llk_pack_init(const uint32_t pack_output) {
+    // Figure out tile dims based on pack_output
     llk_pack_mop_config<untilize, zero_output, FaceLayout>();
 }
 
@@ -185,8 +185,9 @@ inline void llk_pack_decouple(std::uint32_t tile_index, std::uint32_t output, st
 #endif
 
 template <bool out_of_order_output = false, DstSync Dst = SyncFull, bool untilize = false>
-inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32_t output_tile_index = 0, const std::uint32_t out_tile_dims[2] = default_tile_dims) {
-    //Todo: do something with tile dims
+inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32_t output_tile_index = 0) {
+    
+    // Todo: figure out tile dims based on output
     std::uint8_t output_id = get_output_id(output);
 
     static_assert((!(untilize && out_of_order_output)) && "untilize out of order packing is not supported!");
@@ -210,9 +211,4 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
         TTI_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_Y, 0);
         TTI_INCADCZW(p_setadc::PAC, 0, 0, 0, 1);
     }
-}
-
-template <bool out_of_order_output = false, DstSync Dst = SyncFull, bool untilize = false>
-inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, const std::uint32_t out_tile_dims[2]) {
-    llk_pack<out_of_order_output, Dst, untilize>(tile_index, output, 0, out_tile_dims);
 }
