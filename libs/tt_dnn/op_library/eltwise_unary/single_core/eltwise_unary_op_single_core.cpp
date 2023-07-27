@@ -34,16 +34,6 @@ operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tenso
         cb_data_format
     );
 
-    uint32_t src1_cb_index = 1;
-    auto cb_src1 = tt_metal::CreateCircularBuffers(
-        program,
-        src1_cb_index,
-        core,
-        num_input_tiles,
-        num_input_tiles * single_tile_size,
-        cb_data_format
-    );
-
     uint32_t output_cb_index = 16; // output operands start at index 16
     uint32_t num_output_tiles = 2;
     auto cb_output = tt_metal::CreateCircularBuffers(
