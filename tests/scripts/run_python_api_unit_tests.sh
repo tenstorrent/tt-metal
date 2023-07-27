@@ -24,7 +24,7 @@ fi
 if [[ -z "$FAST_DISPATCH" ]]; then
     echo "Not running mnist with fast dispatch"
 else
-    env TT_METAL_DEVICE_DISPATCH_MODE=1 python tests/python_api_testing/models/mnist/test_mnist.py
+    env TT_METAL_DEVICE_DISPATCH_MODE=1 pytest tests/python_api_testing/models/mnist/tests/test_mnist.py
 fi
 
 
