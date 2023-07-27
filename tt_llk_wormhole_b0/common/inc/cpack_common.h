@@ -153,7 +153,8 @@ namespace ckernel::packer
       }
    }
 
-   inline const uint32_t get_num_faces(const std::uint32_t output_id)
+   // Must be TT_ALWAYS_INLINE, otherwise it is not working due to a possible compiler bug.
+   TT_ALWAYS_INLINE const uint32_t get_num_faces(const std::uint32_t output_id)
    {
       if ((pack_tile_dims[output_id][TileDim::R_IDX] <= FACE_R_DIM) && (pack_tile_dims[output_id][TileDim::C_IDX] <= FACE_C_DIM)) {
          return 1;
