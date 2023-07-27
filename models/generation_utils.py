@@ -1,37 +1,16 @@
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
-import json
 import torch
-import warnings
-from torch import nn
-import tt_lib
 from loguru import logger
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
-
-from transformers import AutoTokenizer, T5Tokenizer, T5ForConditionalGeneration
+from typing import Callable, List, Optional, Union
 from transformers.generation.configuration_utils import GenerationConfig
 
-from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
-from python_api_testing.models.utility_functions_new import (
+from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
-)
-from python_api_testing.models.t5.t5_for_conditional_generation import (
-    TtT5ForConditionalGeneration as TtT5Model,
 )
 
 from transformers.generation.logits_process import (
     EncoderNoRepeatNGramLogitsProcessor,
     EncoderRepetitionPenaltyLogitsProcessor,
-    EpsilonLogitsWarper,
-    EtaLogitsWarper,
     ExponentialDecayLengthPenalty,
     ForcedBOSTokenLogitsProcessor,
     ForcedEOSTokenLogitsProcessor,
@@ -48,10 +27,6 @@ from transformers.generation.logits_process import (
     RepetitionPenaltyLogitsProcessor,
     SuppressTokensAtBeginLogitsProcessor,
     SuppressTokensLogitsProcessor,
-    TemperatureLogitsWarper,
-    TopKLogitsWarper,
-    TopPLogitsWarper,
-    TypicalLogitsWarper,
 )
 
 
@@ -265,35 +240,42 @@ def pad_input_32(tensor, value):
     return tensor
 
 
-def run_generate(input_sentance, run_tt_model, device, model_name):
-    tokenizer = AutoTokenizer.from_pretrained(model_name, model_max_length=32)
-    hf_reference_model = T5ForConditionalGeneration.from_pretrained(model_name)
-    hf_reference_model.eval()
+def run_generate(
+    input_sentance,
+    tokenizer,
+    tt_model_constructor,
+    device,
+    run_tt_model=True,
+    log=True,
+    comp_pcc=None,
+):
+    tt_model, hf_reference_model = tt_model_constructor(device)
 
     # Prepare input
     tokenized = tokenizer(input_sentance, return_tensors="pt")  # Batch size 1
 
-    generation_config = hf_reference_model.generation_config
-    config = json.loads(hf_reference_model.config.to_json_string())
-    config["tie_word_embeddings"] = hf_reference_model.config.tie_word_embeddings
-
-    input_ids = pad_input_32(tokenized.input_ids, generation_config.pad_token_id)
+    input_ids = pad_input_32(
+        tokenized.input_ids, hf_reference_model.generation_config.pad_token_id
+    )
     attention_mask = pad_input_32(tokenized.attention_mask, 0)
 
-    logger.debug(f"input_ids {input_ids.shape} {input_ids}")
-    logger.debug(f"attention_mask {attention_mask.shape} {attention_mask}")
+    if log:
+        logger.debug(f"input_ids {input_ids.shape} {input_ids}")
+        logger.debug(f"attention_mask {attention_mask.shape} {attention_mask}")
 
     logits_processor = get_logits_processor(input_ids, hf_reference_model.config)
 
-    decoder_start_values = generation_config.pad_token_id * torch.ones(1, 32).to(
-        torch.long
+    decoder_start_values = (
+        hf_reference_model.generation_config.pad_token_id
+        * torch.ones(1, 32).to(torch.long)
     )
-    decoder_input_ids = generation_config.pad_token_id * torch.ones(1, 64).to(
-        torch.long
-    )
-    logger.debug(f"decoder_input_ids {decoder_input_ids}")
+    decoder_input_ids = hf_reference_model.generation_config.pad_token_id * torch.ones(
+        1, 64
+    ).to(torch.long)
 
-    tt_model = TtT5Model(config, hf_reference_model.state_dict(), device)
+    if log:
+        logger.debug(f"decoder_input_ids {decoder_input_ids}")
+
     encoder_outputs = None
     use_cache = False
 
@@ -317,8 +299,11 @@ def run_generate(input_sentance, run_tt_model, device, model_name):
             encoder_outputs = tt_out.encoder_outputs
             next_token_logits = tt_out.logits
 
-            does_pass, pcc_message = comp_pcc(pt_out.logits, tt_out.logits, 0.98)
-            logger.info(pcc_message)
+            if comp_pcc is not None:
+                does_pass, pcc_message = comp_pcc(pt_out.logits, tt_out.logits, 0.98)
+
+                if log:
+                    logger.info(pcc_message)
         else:
             next_token_logits = pt_out.logits
 
@@ -327,9 +312,11 @@ def run_generate(input_sentance, run_tt_model, device, model_name):
 
         # argmax
         next_tokens = torch.argmax(next_tokens_scores, dim=-1)
-        logger.debug(f"next_tokens {next_tokens}")
 
-        if next_tokens[0][i] == generation_config.eos_token_id:
+        if log:
+            logger.debug(f"next_tokens {next_tokens}")
+
+        if next_tokens[0][i] == hf_reference_model.generation_config.eos_token_id:
             break
 
         # We need to expand decoder_input_ids
@@ -339,77 +326,8 @@ def run_generate(input_sentance, run_tt_model, device, model_name):
             )
 
         decoder_input_ids[0][i + 1] = next_tokens[0][i]
-        logger.debug(f"decoder_input_ids {decoder_input_ids[0]}")
+
+        if log:
+            logger.debug(f"decoder_input_ids {decoder_input_ids[0]}")
 
     return tokenizer.decode(decoder_input_ids[0], skip_special_tokens=True)
-
-
-def run_T5ForConditionalGeneration(model_name):
-    input_sentance = "translate English to German: The house is wonderful."
-    if model_name == "t5-small":
-        correct_output = "Das Haus ist wunderbar."
-    elif model_name == "google/flan-t5-small":
-        correct_output = "Das Haus ist schön."
-    elif model_name == "t5-base":
-        correct_output = "Das Haus ist wunderbar."
-
-    # input_sentance = "summarize: QuillBot's Summarizer wants to change how you read! Instead of reading through loads of documents, you can get a short annotated summary or bullet points with all the key information."
-    # if model_name == "t5-small":
-    #     correct_output = "QuillBot's Summarizer wants to change how you read. instead of reading through loads of documents, you can get a short annotated summary or bullet points with all the key information."
-    # elif model_name == "google/flan-t5-small":
-    #     correct_output = "QuillBot's Summarizer is a free eBook that lets you read your documents."
-    # elif model_name == "t5-base":
-    #     correct_output = "QuillBot's Summarizer is a quick and easy way to read documents. instead of reading through documents, you can get a short annotated summary."
-
-    # input_sentance = "translate English to French: Welcome to NYC"
-    # if model_name == "t5-small":
-    #     correct_output = "Bienvenue à NYC"
-    # elif model_name == "google/flan-t5-small":
-    #     correct_output = "Accueil à NCT"
-    # elif model_name == "t5-base":
-    #     correct_output = "Bienvenue à New York"
-
-    # input_sentance = "The <extra_id_0> walks in <extra_id_1> park"
-    # if model_name == "t5-small":
-    #     correct_output = "park offers the park."
-    # elif model_name == "google/flan-t5-small":
-    #     correct_output = "a swansea swansea swansea swansea swansea swansea swansea swansea swansea swansea s"
-    # elif model_name == "t5-base":
-    #     correct_output = "park is a short walk from the park. There are the park is a short walk from the park. There are park has the park has the the park is a short walk from the park. There are the park has park has the"
-
-    # input_sentance = "summarize: I'm sitting here in a boring room. It's just another rainy Sunday afternoon. I'm wasting my time I got nothing to do. I'm hanging around I'm waiting for you. But nothing ever happens. And I wonder"
-    # if model_name == "t5-small":
-    #     correct_output = "i'm sitting here in a boring room. I'm wasting my time I got nothing to do. I wonder if nothing ever happens."
-    # elif model_name == "google/flan-t5-small":
-    #     correct_output = "I'm wasting my time."
-    # elif model_name == "t5-base":
-    #     correct_output = "bob greene: it's another rainy Sunday afternoon. he's wasting his time. he says he's hanging around waiting for you. but nothing ever happens. greene: i wonder if he'll ever get to see you again. he"
-
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
-    tt_lib.device.InitializeDevice(device)
-
-    pt_output_sentance = run_generate(
-        input_sentance, run_tt_model=False, device=device, model_name=model_name
-    )
-
-    tt_output_sentance = run_generate(
-        input_sentance, run_tt_model=True, device=device, model_name=model_name
-    )
-
-    logger.info(f"Pt Decoded output: {pt_output_sentance}")
-    logger.info(f"Tt Decoded output: {tt_output_sentance}")
-
-    tt_lib.device.CloseDevice(device)
-    assert tt_output_sentance == correct_output
-
-
-# def test_T5ForConditionalGeneration_t5_small():
-#     run_T5ForConditionalGeneration("t5-small")
-
-
-# def test_T5ForConditionalGeneration_flan_t5_small():
-#     run_T5ForConditionalGeneration("google/flan-t5-small")
-
-
-def test_T5ForConditionalGeneration_t5_base():
-    run_T5ForConditionalGeneration("t5-base")

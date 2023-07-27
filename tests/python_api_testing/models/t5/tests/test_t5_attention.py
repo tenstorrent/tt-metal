@@ -1,26 +1,16 @@
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
 import torch
 import json
 import tt_lib
 
 from transformers import T5Model
-from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
-
 from loguru import logger
 from tt_lib.fused_ops.softmax import softmax as tt_softmax
-from python_api_testing.models.utility_functions_new import (
+from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
-from python_api_testing.models.t5.t5_attention import (
+from tests.python_api_testing.models.utility_functions_new import comp_pcc
+from models.t5.tt.t5_attention import (
     TtT5Attention,
     t5_unshape_pt,
     t5_unshape_tt,
@@ -50,8 +40,6 @@ def run_test_t5_shape(device):
     assert tt_out.shape == pt_out.shape
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)
-
-    logger.info(comp_allclose(pt_out, tt_out))
     logger.info(pcc_message)
 
     assert does_pass
@@ -76,8 +64,6 @@ def run_test_t5_unshape(device):
     tt_out = tt2torch_tensor(tt_out)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)
-
-    logger.info(comp_allclose(pt_out, tt_out))
     logger.info(pcc_message)
 
     assert does_pass
@@ -97,8 +83,6 @@ def run_test_transpose(device):
     tt_out = tt2torch_tensor(tt_out)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)
-
-    logger.info(comp_allclose(pt_out, tt_out))
     logger.info(pcc_message)
 
     assert does_pass
@@ -121,8 +105,6 @@ def run_test_matmul(device):
     tt_out = tt2torch_tensor(tt_out)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)
-
-    logger.info(comp_allclose(pt_out, tt_out))
     logger.info(pcc_message)
 
     assert does_pass
@@ -143,8 +125,6 @@ def run_test_softmax(device):
     tt_out = tt2torch_tensor(tt_out)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)
-
-    logger.info(comp_allclose(pt_out, tt_out))
     logger.info(pcc_message)
 
     assert does_pass
