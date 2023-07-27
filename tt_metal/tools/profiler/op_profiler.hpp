@@ -56,23 +56,23 @@ namespace op_profiler {
 
         static string tensor_to_str(const Tensor& tensor)
         {
-            const unordered_map <Layout, string> layout_to_str = {
-                {Layout::ROW_MAJOR, "ROW_MAJOR"},
-                {Layout::TILE, "TILE"}
-            };
-
-            const unordered_map <DataType, string> dtype_to_str = {
-                {DataType::BFLOAT16, "BFLOAT16"},
-                {DataType::FLOAT32, "FLOAT32"},
-                {DataType::UINT32, "UINT32"},
-                {DataType::BFLOAT8_B, "BFLOAT8_B"}
-            };
+            string tensorStorageStr;
+            if (tensor.storage_type() == StorageType::DEVICE)
+            {
+                tensorStorageStr = fmt::format("DEV_{}_{}",
+                        tensor.device()->pcie_slot(),
+                        magic_enum::enum_name(tensor.memory_config().buffer_type));
+            }
+            else
+            {
+                tensorStorageStr = fmt::format("{}", magic_enum::enum_name(tensor.storage_type()));
+            }
 
             vector<string> tensorStrs = {
                 shape_to_str(tensor.shape()),
-                layout_to_str.at(tensor.layout()),
-                dtype_to_str.at(tensor.dtype()),
-                tensor.storage_type() == StorageType::OWNED ? "OWNED" : fmt::format("DEV_{}_{}", tensor.device()->pcie_slot(), magic_enum::enum_name(tensor.memory_config().buffer_type)),
+                fmt::format("{}", magic_enum::enum_name(tensor.layout())),
+                fmt::format("{}", magic_enum::enum_name(tensor.dtype())),
+                tensorStorageStr
             };
 
             return join_vector(tensorStrs, "|");

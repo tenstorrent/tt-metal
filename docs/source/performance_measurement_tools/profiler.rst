@@ -127,12 +127,12 @@ the under test command is executed twice, once with device profiling and once wi
 The results of the two runs are then stitched together into on csv to present device data alongside host time data
 that is not affected by device download overhead.
 
-Setp 2 above can manually be replicated by:
+Setp 2 above can manually be replicated if we have a profiler enabled build:
 
-1. Run you command without device profiling i.e. env variable ``TT_METAL_DEVICE_PROFILER=0``
-2. Run you command with device profiling using the same logs folder location as step 1 i.e. env variable ``TT_METAL_DEVICE_PROFILER=0``
+1. Run your command without device profiling i.e. env variable ``TT_METAL_DEVICE_PROFILER=0``
+2. Run your command with device profiling using the same logs folder location as step 1 i.e. env variable ``TT_METAL_DEVICE_PROFILER=0``
    te profiler will automatically append ``_device`` to the folder location
-3. run ``process_ops_logs.py`` with the input log location ``-i`` pointed to the logs location set by ``set_profiler_location``
+3. Run ``process_ops_logs.py`` with the input log location ``-i`` pointed to the logs location set by ``set_profiler_location``
 
 
 Profiling OPs
