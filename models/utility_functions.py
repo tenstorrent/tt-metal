@@ -49,14 +49,25 @@ def disable_memory_reports():
     """
     return tt_lib.device.DisableMemoryReports()
 
-def torch2tt_tensor(py_tensor: torch.Tensor, tt_device, tt_layout=tt_lib.tensor.Layout.TILE, tt_memory_config=tt_lib.tensor.MemoryConfig(True)):
+
+def torch2tt_tensor(
+    py_tensor: torch.Tensor,
+    tt_device,
+    tt_layout=tt_lib.tensor.Layout.TILE,
+    tt_memory_config=tt_lib.tensor.MemoryConfig(True),
+):
     size = list(py_tensor.size())
 
     while len(size) < 4:
         size.insert(0, 1)
 
     tt_tensor = tt_lib.tensor.Tensor(py_tensor.contiguous().to(torch.bfloat16).reshape(size))
-    tt_tensor = tt_tensor.to(tt_layout).to(tt_device, tt_memory_config)
+    tt_tensor = tt_tensor.to(tt_layout)
+
+    if not isinstance(tt_device, tt_lib.device.Host):
+        tt_tensor = tt_tensor.to(tt_device, tt_memory_config)
+    else:
+        tt_tensor = tt_tensor.cpu()
 
     return tt_tensor
 
@@ -68,12 +79,14 @@ def tt2torch_tensor(tt_tensor, tt_host=None):
         tt_output = tt_output.to(tt_lib.tensor.Layout.ROW_MAJOR)
 
     dtype = {
-        tt_lib.tensor.DataType.FLOAT32:   torch.float,
-        tt_lib.tensor.DataType.BFLOAT16:  torch.bfloat16,
+        tt_lib.tensor.DataType.FLOAT32: torch.float,
+        tt_lib.tensor.DataType.BFLOAT16: torch.bfloat16,
         tt_lib.tensor.DataType.BFLOAT8_B: torch.float,
     }[tt_tensor.dtype()]
 
-    py_output = torch.frombuffer(tt_output.data(), dtype=dtype).reshape(tt_output.shape())
+    py_output = torch.frombuffer(tt_output.data(), dtype=dtype).reshape(
+        tt_output.shape()
+    )
     return py_output
 
 
@@ -99,10 +112,18 @@ def unpad_from_zero(x, desired_shape):
         x = x.cpu()
         if(x.layout() != tt_lib.tensor.Layout.ROW_MAJOR):
             x = x.to(tt_lib.tensor.Layout.ROW_MAJOR)
-        x = x.unpad((0, 0, 0, 0), (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1) )
+        x = x.unpad(
+            (0, 0, 0, 0),
+            (
+                desired_shape[0] - 1,
+                desired_shape[1] - 1,
+                desired_shape[2] - 1,
+                desired_shape[3] - 1,
+            ),
+        )
         dtype = {
-            tt_lib.tensor.DataType.FLOAT32:   torch.float,
-            tt_lib.tensor.DataType.BFLOAT16:  torch.bfloat16,
+            tt_lib.tensor.DataType.FLOAT32: torch.float,
+            tt_lib.tensor.DataType.BFLOAT16: torch.bfloat16,
             tt_lib.tensor.DataType.BFLOAT8_B: torch.float,
         }[x.dtype()]
 
@@ -118,12 +139,14 @@ def tt_to_torch_tensor(tt_tensor):
     # py_tensor = torch.Tensor(tt_tensor.data()).reshape(tt_tensor.shape())
 
     dtype = {
-        tt_lib.tensor.DataType.FLOAT32:   torch.float,
-        tt_lib.tensor.DataType.BFLOAT16:  torch.bfloat16,
+        tt_lib.tensor.DataType.FLOAT32: torch.float,
+        tt_lib.tensor.DataType.BFLOAT16: torch.bfloat16,
         tt_lib.tensor.DataType.BFLOAT8_B: torch.float,
     }[tt_tensor.dtype()]
 
-    py_output = torch.frombuffer(tt_output.data(), dtype=dtype).reshape(tt_output.shape())
+    py_output = torch.frombuffer(tt_output.data(), dtype=dtype).reshape(
+        tt_output.shape()
+    )
 
     return py_output
 
