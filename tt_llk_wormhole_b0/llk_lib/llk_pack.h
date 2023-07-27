@@ -12,8 +12,11 @@ using namespace ckernel;
 using namespace ckernel::packer;
 
 template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
-inline void llk_pack_mop_config(const uint32_t num_faces = 4, const uint32_t face_r_dim = 16) {
-    constexpr bool partial_face = false; // FIXME: face_r_dim < 16 && bfp
+inline void llk_pack_mop_config(const uint32_t output_id) {
+
+    const uint num_faces = get_num_faces(output_id);
+    const uint face_r_dim = get_face_r_dim(output_id);
+    const bool partial_face = (face_r_dim < FACE_R_DIM) && IS_BFP_FORMAT((uint)pack_dst_format[output_id]);
 
     addr_mod_pack_t{
         .y_src = {.incr = untilize ? 0 : 16},
@@ -141,9 +144,7 @@ inline void llk_pack_reduce_hw_configure_disaggregated(std::uint32_t pack_output
 template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
 inline void llk_pack_init(const std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
-    const uint num_faces = get_num_faces(output_id);
-    const uint face_r_dim = get_face_r_dim(output_id);
-    llk_pack_mop_config<untilize, zero_output, FaceLayout>(num_faces, face_r_dim);
+    llk_pack_mop_config<untilize, zero_output, FaceLayout>(output_id);
 }
 
 template <bool out_of_order_output, bool untilize>
