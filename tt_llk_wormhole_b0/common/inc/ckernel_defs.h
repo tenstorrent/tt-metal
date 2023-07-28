@@ -85,11 +85,10 @@ static_assert((DEST_NUM_TILES_FP16 & (DEST_NUM_TILES_FP16 - 1)) == 0);
 #define LO_16(REG) (2 * (REG))
 #define HI_16(REG) (2 * (REG) + 1)
 
-#define SCALE_DATUM_SIZE(format,datum_count) (((format&0x3) == (uint8_t)DataFormat::Float32) ? (datum_count<<2) : (datum_count<<1))
 
 /*
 constexpr static std::int32_t MUL_TILE_SIZE_AND_INDEX(uint format, uint index) {
-    switch (format&0x1F) {
+    switch (format&0xF) {
         case ((uint8_t)DataFormat::Float32): return ((index<<8)+(index<<1));
         case ((uint8_t)DataFormat::Float16):
         case ((uint8_t)DataFormat::Float16_b): return ((index<<7)+(index<<1));
@@ -107,7 +106,7 @@ constexpr static std::int32_t MUL_TILE_SIZE_AND_INDEX(uint format, uint index) {
 }
 
 constexpr static std::int32_t MUL_DEST_TILE_SIZE_AND_INDEX(uint format, uint index) {
-    switch (format&0x1F) {
+    switch (format&0xF) {
         case ((uint8_t)DataFormat::Float32): return (index<<12);
         case ((uint8_t)DataFormat::Float16):
         case ((uint8_t)DataFormat::Float16_b): return (index<<11);
@@ -124,7 +123,7 @@ constexpr static std::int32_t MUL_DEST_TILE_SIZE_AND_INDEX(uint format, uint ind
 }
 
 constexpr static std::int32_t GET_L1_TILE_SIZE(uint format) {
-    switch (format&0x1F) {
+    switch (format&0xF) {
         case ((uint8_t)DataFormat::Float32): return ((4096>>4)+(32>>4));
         case ((uint8_t)DataFormat::Float16):
         case ((uint8_t)DataFormat::Float16_b): return ((2048>>4)+(32>>4));
@@ -141,7 +140,7 @@ constexpr static std::int32_t GET_L1_TILE_SIZE(uint format) {
 }
 
 constexpr static std::int32_t GET_DEST_TILE_BYTE_SIZE(uint format) {
-    switch (format&0x1F) {
+    switch (format&0xF) {
         case ((uint8_t)DataFormat::Float32): return 4096;
         case ((uint8_t)DataFormat::Float16):
         case ((uint8_t)DataFormat::Float16_b): return 2048;
@@ -158,8 +157,8 @@ constexpr static std::int32_t GET_DEST_TILE_BYTE_SIZE(uint format) {
 }
 */
 
-constexpr static std::int32_t GET_L1_HEADERLESS_TILE_SIZE(uint format) {
-    switch (format&0x1F) {
+constexpr static std::uint32_t GET_L1_HEADERLESS_TILE_SIZE(uint format) {
+    switch (format&0xF) {
         case ((uint8_t)DataFormat::Float32): return (4096>>4);
         case ((uint8_t)DataFormat::Float16):
         case ((uint8_t)DataFormat::Float16_b): return (2048>>4);
@@ -176,7 +175,7 @@ constexpr static std::int32_t GET_L1_HEADERLESS_TILE_SIZE(uint format) {
 }
 
 constexpr static bool IS_BFP_FORMAT(uint format) {
-    switch (format&0x1F) {
+    switch (format&0xF) {
         case ((uint8_t)DataFormat::Bfp8):
         case ((uint8_t)DataFormat::Bfp8_b):
         case ((uint8_t)DataFormat::Bfp4):
@@ -188,11 +187,20 @@ constexpr static bool IS_BFP_FORMAT(uint format) {
 }
 
 constexpr static bool IS_BFP_A_FORMAT(uint format) {
-    switch (format&0x1F) {
+    switch (format&0xF) {
         case ((uint8_t)DataFormat::Bfp8):
         case ((uint8_t)DataFormat::Bfp4):
         case ((uint8_t)DataFormat::Bfp2): return true;
         default: return false;
+    };
+}
+
+constexpr static std::uint32_t SCALE_DATUM_SIZE(uint format, uint datum_count) {
+    switch (format&0xF) {
+        case ((uint8_t)DataFormat::Float32): return (datum_count<<2);
+        case ((uint8_t)DataFormat::Float16): 
+        case ((uint8_t)DataFormat::Float16_b): return (datum_count<<1);
+        default: return datum_count;
     };
 }
 
