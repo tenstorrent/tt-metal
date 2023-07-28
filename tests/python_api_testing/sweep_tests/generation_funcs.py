@@ -49,6 +49,11 @@ def gen_rand(size, low=0, high=100):
     return torch.Tensor(size=size).uniform_(low, high)
 
 
+def gen_linspace(size, low=0, high=100):
+    lsteps = size[0] * size[1] * size[2] * size[3]
+    return torch.linspace(low, high, lsteps).reshape(size)
+
+
 def gen_rand_symmetric(size, low=0, high=100):
     signs = torch.randint(0, 2, size) * 2 - 1
     return torch.Tensor(size=size).uniform_(low, high) * signs
@@ -582,6 +587,7 @@ def gen_shrink_args(input_shapes, low=0, high=100, dtype=torch.bfloat16):
 def gen_leaky_relu_args(input_shapes, low=0, high=100, dtype=torch.bfloat16):
     for input_info in gen_scalar_args(input_shapes, "negative_slope", low, high, dtype):
         yield input_info
+
 
 def gen_elu_args(input_shapes, low=-10, high=10, dtype=torch.bfloat16):
     for input_info in gen_scalar_args(input_shapes, "alpha", low, high, dtype):

@@ -31,6 +31,7 @@ def run_tt_lib_test(
     output_comparison_func,
     pcie_slot,
     test_args,
+    plot_func = None
 ):
     logger.info(f"Running with args: {test_args}")
 
@@ -44,6 +45,10 @@ def run_tt_lib_test(
     pytorch_out = pytorch_op(*tensor_inputs, **test_args)
 
     result, output = output_comparison_func(pytorch_out, tt_lib_out)
+
+    if plot_func is not None:
+        test_name = str(pytorch_op).split()[1]
+        plot_func(test_name, *tensor_inputs, pytorch_out, tt_lib_out)
     return result, output
 
 

@@ -117,3 +117,27 @@ def comp_allclose_and_pcc(golden, calculated, rtol=1e-05, atol=1e-08, pcc=0.99):
     passing &= torch.allclose(golden, calculated, rtol, atol, True)
     passing &= cal_pcc >= pcc
     return passing, output_str
+
+
+def comp_using_plot(tname, input, golden, calculated):
+    import matplotlib.pyplot as plt
+
+    if golden.dtype == torch.bfloat16:
+        golden = golden.type(torch.float32)
+        calculated = calculated.type(torch.float32)
+        input = input.type(torch.float32)
+    shape = "x".join(list(map(str, list(input.size()))))
+    plot_name = (
+        "plot_"
+        + tname
+        + "_"
+        + shape + ".png"
+    )
+    input = input.flatten()
+    golden = golden.flatten()
+    calculated = calculated.flatten()
+    plt.plot(input, golden, "+r", label="CPU (golden)")
+    plt.plot(input, calculated, "-b", label="On device (calculated)")
+    plt.legend(loc="upper center")
+    plt.savefig(plot_name)
+    plt.close()

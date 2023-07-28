@@ -26,6 +26,7 @@ def run_single_pytorch_test(
     pcie_slot,
     test_args={},
     env="",
+    plot_func=None,
 ):
     assert test_name in op_map.keys()
 
@@ -66,6 +67,7 @@ def run_single_pytorch_test(
         comparison_func,
         pcie_slot,
         test_args,
+        plot_func = plot_func,
     )
     logger.debug(f"Test pass/fail: {test_pass} with {test_output}")
     logger.debug(f"Test args: {test_args}")
