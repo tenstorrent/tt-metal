@@ -4,8 +4,7 @@ import torch
 from torch import nn
 import tt_lib
 from typing import Optional, Tuple
-from python_api_testing.models.llama.llama_utils import *
-from tt_lib.fallback_ops import fallback_ops
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
 from models.helper_funcs import Linear as TTLinear
 
 
@@ -169,6 +168,8 @@ class TtLlamaAttention(nn.Module):
             self.o_weights.shape()[-1], self.o_weights.shape()[-2], self.o_weights
         )
 
+        self.scalar = pad_by_zero(torch.Tensor([1/math.sqrt(self.head_dim)]), self.device)[0]
+
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return (
             tensor.view(bsz, seq_len, self.num_heads, self.head_dim)
@@ -246,14 +247,8 @@ class TtLlamaAttention(nn.Module):
         key_states_tt_transposed = tt_lib.tensor.transpose(key_states_tt)
         mul = tt_lib.tensor.bmm(query_states_tt, key_states_tt_transposed)
 
-        # create constant tensor
-        const_tensor_tt = tt_lib.tensor.full(
-            mul.shape(), math.sqrt(self.head_dim), device=self.device
-        )
-
-        # divison
-        recip = tt_lib.tensor.recip(const_tensor_tt)
-        attn_weights = tt_lib.tensor.mul(mul, recip)
+        # TODO: Fuse into softmax
+        attn_weights = tt_lib.tensor.bcast(mul, self.scalar, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.HW)
 
         if attn_weights.shape() != [bsz, self.num_heads, q_len, kv_seq_len]:
             raise ValueError(
