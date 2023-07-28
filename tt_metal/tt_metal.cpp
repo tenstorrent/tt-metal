@@ -164,11 +164,13 @@ bool InitializeDevice(Device *device) {
 
         // Download to worker cores
         CoreCoord grid_size = device->logical_grid_size();
+        int num_download_fws = 0;
         for (uint32_t y = 0; y < grid_size.y; y++) {
             for (uint32_t x = 0; x < grid_size.x; x++) {
                 CoreCoord logical_core(x, y);
                 CoreCoord phys_core = device->worker_core_from_logical_core(logical_core);
                 DownloadFirmware(device, phys_core);
+                num_download_fws++;
 
                 // This is ugly
                 // Enable ncrisc/trisc on worker cores since device dispatch
@@ -626,13 +628,14 @@ bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
     ZoneScoped;
     detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("ConfigureDeviceWithProgram");
 
-    std::vector<CoreCoord> worker_cores;
+    std::unordered_set<CoreCoord> worker_cores;
     auto cluster = device->cluster();
     auto pcie_slot = device->pcie_slot();
 
     for (auto &[logical_core, kernel_group] : program.core_to_kernel_group()) {
         auto worker_core = device->worker_core_from_logical_core(logical_core);
-        worker_cores.push_back(worker_core);
+        std::cout << "Logical core in program is: " << logical_core.str() << " worker core " << worker_core.str() << std::endl;
+        worker_cores.insert(worker_core);
 
         if (program.circular_buffers_on_core(logical_core).size()) {
             detail::ValidateCircularBufferRegion(program, device, logical_core);
@@ -678,9 +681,11 @@ bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
     // Skip loading of blank kernels to storage cores
     for (const auto &core : device->cluster()->get_soc_desc(device->pcie_slot()).storage_cores) {
         const auto logical_coord = get_core_coord_from_relative(core, device->logical_grid_size());
-        worker_cores.push_back(device->worker_core_from_logical_core(logical_coord));
+        worker_cores.insert(device->worker_core_from_logical_core(logical_coord));
     }
-    std::sort(worker_cores.begin(), worker_cores.end());
+    // std::sort(worker_cores.begin(), worker_cores.end());
+
+    std::cout << "NUM WORKER CORES " << worker_cores.size() << std::endl;
 
     // Load blank kernel to all riscs of all cores excluding those in worker_cores
     const llrt::TensixRiscsOptions riscs_options = llrt::TensixRiscsOptions::ALL_RISCS;  // PROF_BEGIN("LOAD_BLANK")

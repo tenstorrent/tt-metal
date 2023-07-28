@@ -229,6 +229,7 @@ static bool test_load_write_read_risc_binary_imp(
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size()*sizeof(uint32_t));
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len) {
         uint64_t relo_addr = relocate_dev_addr(addr, local_init_addr);
+
         cluster->write_dram_vec(&*mem_ptr, len, tt_cxy_pair(chip_id, core), relo_addr);
     });
 
@@ -364,14 +365,20 @@ void load_blank_kernel_to_cores(
 }
 
 void load_blank_kernel_to_all_worker_cores_with_exceptions(
-    tt_cluster *cluster, int chip_id, const TensixRiscsOptions &riscs_to_load, std::vector<CoreCoord> exceptions) {
+    tt_cluster *cluster, int chip_id, const TensixRiscsOptions &riscs_to_load, std::unordered_set<CoreCoord> exceptions) {
     std::vector<CoreCoord> cores_to_load_with_blanks;  // PROF_BEGIN("set_diff")
-    std::set_difference(
-        cluster->get_soc_desc(chip_id).workers.begin(),
-        cluster->get_soc_desc(chip_id).workers.end(),
-        exceptions.begin(),
-        exceptions.end(),
-        std::inserter(cores_to_load_with_blanks, cores_to_load_with_blanks.begin()));
+
+    uint32_t harvested_noc_rows = 0;
+    if (cluster->type == tt::TargetDevice::Silicon) {
+        harvested_noc_rows = cluster->get_harvested_rows(chip_id);
+    }
+    for (const CoreCoord &worker_core : cluster->get_soc_desc(chip_id).workers) {
+        unsigned int row = worker_core.y;
+        bool row_harvested = (harvested_noc_rows>>row)&0x1;
+        if (not row_harvested and exceptions.find(worker_core) == exceptions.end()) {
+            cores_to_load_with_blanks.push_back(worker_core);
+        }
+    }
     // PROF_END("set_diff")
 
     for (const CoreCoord &core : cores_to_load_with_blanks) {  // PROF_BEGIN("log_blank")

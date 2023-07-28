@@ -180,7 +180,7 @@ void load_blank_kernel_to_cores(
     tt_cluster *cluster, int chip_id, const TensixRiscsOptions &riscs_to_load, std::vector<CoreCoord> cores);
 
 void load_blank_kernel_to_all_worker_cores_with_exceptions(
-    tt_cluster *cluster, int chip_id, const TensixRiscsOptions &riscs_to_load, std::vector<CoreCoord> exceptions);
+    tt_cluster *cluster, int chip_id, const TensixRiscsOptions &riscs_to_load, std::unordered_set<CoreCoord> exceptions);
 
 void assert_enable_core_mailbox_is_valid_for_core(tt_cluster *cluster, int chip_id, const CoreCoord &core);
 
