@@ -222,8 +222,6 @@ def clear_compile_cache():
     import tt_lib as ttl
 
     ttl.device.DisablePersistentKernelCache()
-    ttl.device.ClearKernelCache()
-
 
 @pytest.fixture(autouse=True)
 def reset_default_device():
