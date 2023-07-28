@@ -28,7 +28,6 @@ from python_api_testing.models.llama.llama_model import TtLlamaShared, TtLlamaMo
 
 def run_test_Llama_inference(
     device,
-    host,
     model_version,
     tokenizer_version,
     batch,
