@@ -1,14 +1,15 @@
 from transformers import AutoImageProcessor, ViTForImageClassification
 import torch
 from loguru import logger
+from PIL import Image
 
 import tt_lib
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 from models.vit.tt.modeling_vit import vit_for_image_classification
 
 
-def test_gs_demo(hf_cat_image_sample_input):
-    image = hf_cat_image_sample_input
+def test_gs_demo():
+    image = Image.open("models/sample_data/huggingface_cat_image.jpg")
 
     # Initialize the device
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
