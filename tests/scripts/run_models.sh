@@ -12,9 +12,7 @@ cd $TT_METAL_HOME
 export PYTHONPATH=$TT_METAL_HOME
 
 # Turning on fast dispatch for the remaining models
-if [[ -z "$FAST_DISPATCH" ]]; then
-
-else
+if [[ ! -z "$FAST_DISPATCH" ]]; then
     export TT_METAL_DEVICE_DISPATCH_MODE=1
 fi
 
