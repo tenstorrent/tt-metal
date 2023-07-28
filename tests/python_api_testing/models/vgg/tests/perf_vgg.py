@@ -54,7 +54,7 @@ def test_perf(use_program_cache, imagenet_sample_input, expected_inference_time,
         tt_lib.tensor.Layout.ROW_MAJOR,
     )
 
-    tt_vgg = vgg16(device, host, disable_conv_on_tt_device=True)
+    tt_vgg = vgg16(device, disable_conv_on_tt_device=True)
 
     torch_vgg = models.vgg16(weights=models.VGG16_Weights.IMAGENET1K_V1)
     torch_vgg.eval()

@@ -38,7 +38,7 @@ class PytorchLlamaMLPModel(torch.nn.Module):
 
 
 def run_test_LlamaMLP_inference(
-    device, host, model_version, tokenizer_version, batch, seq_len, on_weka, pcc
+    device, model_version, tokenizer_version, batch, seq_len, on_weka, pcc
 ):
     model_name = model_version
     tokenizer_name = tokenizer_version
@@ -115,6 +115,6 @@ def test_LlamaMLP_inference(
 
 
     run_test_LlamaMLP_inference(
-        device, host, model_version, tokenizer_version, batch, seq_len, on_weka, pcc
+        device, model_version, tokenizer_version, batch, seq_len, on_weka, pcc
     )
     tt_lib.device.CloseDevice(device)
