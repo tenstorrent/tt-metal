@@ -36,7 +36,6 @@ struct CompileState {
     RISCID           hwthread               { RISCID::NC }; // 0=NC, 1=UNPACK, BR=4
     uint32_t         perf_dump_level        { 0 };
     uint32_t         noc_index              { 0 };
-    bool             firmware               { false };
     bool             profile_kernel         { false };
     vector<uint32_t> compile_time_args;
     string           kernel_inc;
@@ -192,7 +191,7 @@ struct CompileState {
         }
 
         options_string +=
-            "-mabi=ilp32 \"-m" + get_string_aliased_arch_lowercase(arch) + "\" -MD -MP -flto -ffast-math -g -Wall -Werror";
+            "-mabi=ilp32 \"-m" + get_string_aliased_arch_lowercase(arch) + "\" -flto -ffast-math -g -Wall -Werror";
         if (!is_asm) // TODO(AP): wasn't necessary to split for assembler
             options_string +=
                 " -std=c++17 -Wno-unknown-pragmas -fno-use-cxa-atexit "
@@ -265,7 +264,7 @@ struct CompileState {
 
         if (perf_dump_level != 0 || is_trisc()) // TODO(AP): double check
             result += " -DPERF_DUMP_LEVEL=" + to_string(perf_dump_level);
-        result += " -DTENSIX_FIRMWARE"; // TODO(AP): verify where firmware flag comes from
+        result += " -DTENSIX_FIRMWARE";
         if (profile_kernel) {
             result += " -DPROFILE_KERNEL=1";
         }
@@ -273,8 +272,6 @@ struct CompileState {
             result += " -DKERNEL_COMPILE_TIME_ARG_" + to_string(j) + "=" + to_string(compile_time_args[j]);
         if (!is_trisc())
             result += " -DNOC_INDEX=" + to_string(noc_index);
-        if (firmware)
-            result += " -DTENSIX_FIRMWARE";
         const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
             result += " -DTT_METAL_SLOW_DISPATCH_MODE=1";
@@ -627,11 +624,13 @@ void link_for_risc(RISCID risc_id,
     tt::utils::run_command(pushd_cmd + verilogcmds[0], ctx.log_file, false);
     tt::utils::run_command(pushd_cmd + verilogcmds[1], ctx.log_file, false);
 
-    string weaken_cmd = ctx.get_weaken_cmd(link[1]);
-    log_debug(tt::LogBuildKernels, "    objcopy cmd: {}", weaken_cmd);
-    if (!tt::utils::run_command(weaken_cmd, ctx.log_file, false)) {
-        log_fatal(tt::LogBuildKernels, "{}RISC objcopy failed -- cmd: {}", RISCID_to_string(ctx.hwthread), weaken_cmd);
-        exit(1);
+    if (build_opts->fw_build_) {
+        string weaken_cmd = ctx.get_weaken_cmd(link[1]);
+        log_debug(tt::LogBuildKernels, "    objcopy cmd: {}", weaken_cmd);
+        if (!tt::utils::run_command(weaken_cmd, ctx.log_file, false)) {
+            log_fatal(tt::LogBuildKernels, "{}RISC objcopy failed -- cmd: {}", RISCID_to_string(ctx.hwthread), weaken_cmd);
+            exit(1);
+        }
     }
 }
 
@@ -1210,7 +1209,9 @@ void generate_binaries_all_riscs(
     const std::string tracyPrefix = "generate_binaries_all_riscs_";
     ZoneName( (tracyPrefix + out_dir_path).c_str(), out_dir_path.length() + tracyPrefix.length());
 
-    generate_descriptors(opts, out_dir_path);
+    if (!opts->fw_build_) {
+        generate_descriptors(opts, out_dir_path);
+    }
 
     std::vector<std::thread> threads;
     std::function<void()> lambdas[] = {
