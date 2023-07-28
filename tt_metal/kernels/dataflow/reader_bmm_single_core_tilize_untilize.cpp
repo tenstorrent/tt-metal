@@ -89,7 +89,7 @@ void kernel_main() {
         .page_size = dim_x
     };
 
-    // kernel_profiler::mark_time(5);
+    kernel_profiler::mark_time(5);
     uint32_t in0_curr_block_start_row_id = in0_start_row_id;
     // loop over in0 blocks along h
     for(uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
@@ -108,19 +108,19 @@ void kernel_main() {
                 // in0 DRAM -> L1 (activations in row major form)
                 // partial rows are read since multiple blocks can span along the rows
                 cb_reserve_back(in0_cb_id, in0_block_num_tiles);
-                // kernel_profiler::mark_time(7);
+                // kernel_profiler::mark_time(6);
                 uint32_t in0_write_l1_addr = get_write_ptr(in0_cb_id);
                 uint32_t in0_curr_block_row_id = in0_curr_block_start_row_id;
                 // loop over in0 block tiles along h
 
-                kernel_profiler::mark_time(5);
-                for (uint32_t in0_curr_row_bank_id = 0; in0_curr_row_bank_id < dim_y; ++in0_curr_row_bank_id) {
-                    uint64_t in0_row_noc_addr = get_noc_addr(in0_curr_row_bank_id, s3, in0_row_offset_bytes);
-                    DPRINT << "in0_row_noc_addr: " << in0_row_noc_addr << " in0_write_l1_addr: " << in0_write_l1_addr << ENDL();
-                    noc_async_read(in0_row_noc_addr, in0_write_l1_addr, dim_x);
-                    in0_write_l1_addr += dim_x;
-                }
-                kernel_profiler::mark_time(6);
+                // kernel_profiler::mark_time(5);
+                // for (uint32_t in0_curr_row_bank_id = 0; in0_curr_row_bank_id < dim_y; ++in0_curr_row_bank_id) {
+                //     uint64_t in0_row_noc_addr = get_noc_addr(in0_curr_row_bank_id, s3, in0_row_offset_bytes);
+                //     DPRINT << "in0_row_noc_addr: " << in0_row_noc_addr << " in0_write_l1_addr: " << in0_write_l1_addr << ENDL();
+                //     noc_async_read(in0_row_noc_addr, in0_write_l1_addr, dim_x);
+                //     in0_write_l1_addr += dim_x;
+                // }
+                // kernel_profiler::mark_time(6);
 
 
 
@@ -132,27 +132,30 @@ void kernel_main() {
 
 
 
-                // for (uint32_t in0_tile_h_i = 0; in0_tile_h_i < in0_block_h; ++in0_tile_h_i) {
-                //     uint32_t in0_curr_row_bank_id = in0_curr_block_row_id;
-                //     // loop over each row of the tile
-                //     for (uint32_t in0_row_h_i = 0; in0_row_h_i < TILE_HEIGHT; ++in0_row_h_i) {
-                // // kernel_profiler::mark_time_once(11, &one_time_rowmajor_start);
-                //         uint64_t in0_row_noc_addr = get_noc_addr(in0_curr_row_bank_id, s0, in0_row_offset_bytes);
-                //         noc_async_read(in0_row_noc_addr, in0_write_l1_addr, in0_read_row_size_bytes);
-                //         in0_write_l1_addr += in0_read_row_size_bytes;
-                //         ++in0_curr_row_bank_id;
-                // // kernel_profiler::mark_time_once(12, &one_time_rowmajor_end);
-                //     }
-                //     in0_curr_block_row_id += TILE_HEIGHT;
-                // } // for in0_block_h
+                for (uint32_t in0_tile_h_i = 0; in0_tile_h_i < in0_block_h; ++in0_tile_h_i) {
+                    uint32_t in0_curr_row_bank_id = in0_curr_block_row_id;
+                    // loop over each row of the tile
+                    for (uint32_t in0_row_h_i = 0; in0_row_h_i < TILE_HEIGHT; ++in0_row_h_i) {
+                // kernel_profiler::mark_time_once(11, &one_time_rowmajor_start);
+                        uint64_t in0_row_noc_addr = get_noc_addr(in0_curr_row_bank_id, s0, in0_row_offset_bytes);
+                        noc_async_read(in0_row_noc_addr, in0_write_l1_addr, in0_read_row_size_bytes);
+                        in0_write_l1_addr += in0_read_row_size_bytes;
+                        ++in0_curr_row_bank_id;
+                // kernel_profiler::mark_time_once(12, &one_time_rowmajor_end);
+                    }
+                    in0_curr_block_row_id += TILE_HEIGHT;
+                } // for in0_block_h
 
 
-                // kernel_profiler::mark_time(8);
+                // kernel_profiler::mark_time(7);
                 noc_async_read_barrier();
 
-DPRINT << "Pass Barrier\n";
+                // kernel_profiler::mark_time(8);
 
-                kernel_profiler::mark_time(7);
+
+// DPRINT << "Pass Barrier\n";
+
+                // kernel_profiler::mark_time(7);
 
                 // for (int k = 0; k < 32; k++) {
                 //     auto s8 = SliceRange{ .h0 = k, .h1 = k+1, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1 };
@@ -186,8 +189,10 @@ DPRINT << "Pass Barrier\n";
                     } // for in1_block_w
                     in1_row_start_tile_id += in1_stride_h;
                 } // for in1_block_h
+
                 // kernel_profiler::mark_time(10);
                 noc_async_read_barrier();
+                // kernel_profiler::mark_time(11);
 
                 // DPRINT << "IN1 BLOCK: " << in1_block_w_i << "," << in0_block_w_i << ENDL();
                 // auto slice1 = SliceRange{ .h0 = 0, .h1 = 32, .hs = 16, .w0 = 0, .w1 = 32, .ws = 16 };
@@ -200,4 +205,7 @@ DPRINT << "Pass Barrier\n";
         } // for in1_num_blocks_w
         in0_curr_block_start_row_id += in0_block_nrows;
     } // for in0_num_blocks_h
+
+    kernel_profiler::mark_time(6);
+
 } // kernel_main()

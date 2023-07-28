@@ -24,7 +24,7 @@ void kernel_main() {
 
     uint32_t num_tiles = src0_num_tiles > src1_num_tiles ? src0_num_tiles : src1_num_tiles;
 
-    // kernel_profiler::mark_time(5);
+    kernel_profiler::mark_time(5);
     // kernel_profiler::mark_time(6);
     // kernel_profiler::mark_time(7);
     // kernel_profiler::mark_time(8);
@@ -43,23 +43,23 @@ void kernel_main() {
             uint64_t src0_noc_addr = get_noc_addr(src0_noc_x, src0_noc_y, src0_addr);
             // uint64_t src1_noc_addr = get_noc_addr(src1_noc_x, src1_noc_y, src1_addr);
 
-            kernel_profiler::mark_time(5);
+            // kernel_profiler::mark_time(5);
             cb_reserve_back(cb_id_in0, ublock_size_tiles);
             // cb_reserve_back(cb_id_in1, ublock_size_tiles);
             l1_write_addr_in0 = get_write_ptr(cb_id_in0);
             // l1_write_addr_in1 = get_write_ptr(cb_id_in1);
 
-            kernel_profiler::mark_time(6);
+            // kernel_profiler::mark_time(6);
             noc_async_read(src0_noc_addr, l1_write_addr_in0, ublock_size_bytes_0);
             // noc_async_read(src1_noc_addr, l1_write_addr_in1, ublock_size_bytes_1);
 
-            kernel_profiler::mark_time(7);
+            // kernel_profiler::mark_time(7);
             noc_async_read_barrier();
 
-            kernel_profiler::mark_time(8);
+            // kernel_profiler::mark_time(8);
             cb_push_back(cb_id_in0, ublock_size_tiles);
             // cb_push_back(cb_id_in1, ublock_size_tiles);
-            kernel_profiler::mark_time(9);
+            // kernel_profiler::mark_time(9);
 
             src0_addr += ublock_size_bytes_0;
             // src1_addr += ublock_size_bytes_1;
@@ -68,23 +68,23 @@ void kernel_main() {
         if (i < src1_num_tiles) {
             uint64_t src1_noc_addr = get_noc_addr(src1_noc_x, src1_noc_y, src1_addr);
 
-            kernel_profiler::mark_time(10);
+            // kernel_profiler::mark_time(10);
             cb_reserve_back(cb_id_in1, ublock_size_tiles);
             l1_write_addr_in1 = get_write_ptr(cb_id_in1);
 
-            kernel_profiler::mark_time(11);
+            // kernel_profiler::mark_time(11);
             noc_async_read(src1_noc_addr, l1_write_addr_in1, ublock_size_bytes_1);
 
-            kernel_profiler::mark_time(12);
+            // kernel_profiler::mark_time(12);
             noc_async_read_barrier();
 
-            kernel_profiler::mark_time(13);
+            // kernel_profiler::mark_time(13);
             cb_push_back(cb_id_in1, ublock_size_tiles);
-            kernel_profiler::mark_time(14);
+            // kernel_profiler::mark_time(14);
 
             src1_addr += ublock_size_bytes_1;
         }
     }
 
-    // kernel_profiler::mark_time(6);
+    kernel_profiler::mark_time(6);
 }

@@ -1,6 +1,7 @@
 import sys
 import pytest
 import itertools
+import argparse
 
 from pathlib import Path
 
@@ -25,26 +26,26 @@ TILE_HEIGHT = TILE_WIDTH = 32
 # a_height_nblocks = [1, 5, 8]  ## various
 # a_width_nblocks = [1, 8]   ## various
 # b_width_nblocks = [1, 8]   ## various
-a_height_nblocks = [1]  ## various
-a_width_nblocks = [1]   ## various
-b_width_nblocks = [1]   ## various
-# block sizes as number of tiles along h and w:
-a_block_height_ntiles = [8] ## various
-a_block_width_ntiles = [8]  ## various
-b_block_width_ntiles = [4]  ## various
-# output sublobcking per block:
-out_subblock_height_ntiles = [2]    ## == a_block_height_ntiles, <= 8 (various)
-out_subblock_width_ntiles = [2]     ## == b_block_width_ntiles, <= 8 (various)
+# a_height_nblocks = [1, 2]  ## various
+# a_width_nblocks = [1]   ## various
+# b_width_nblocks = [1]   ## various
+# # block sizes as number of tiles along h and w:
+# a_block_height_ntiles = [1] ## various
+# a_block_width_ntiles = [1]  ## various
+# b_block_width_ntiles = [1]  ## various
+# # output sublobcking per block:
+# out_subblock_height_ntiles = [1]    ## == a_block_height_ntiles, <= 8 (various)
+# out_subblock_width_ntiles = [1]     ## == b_block_width_ntiles, <= 8 (various)
 
 
-@pytest.mark.parametrize(
-    'a_height_nblocks, a_width_nblocks, b_width_nblocks,\
-     a_block_height_ntiles, a_block_width_ntiles, b_block_width_ntiles,\
-     out_subblock_height_ntiles, out_subblock_width_ntiles',
-    itertools.product(a_height_nblocks, a_width_nblocks, b_width_nblocks,
-                      a_block_height_ntiles, a_block_width_ntiles, b_block_width_ntiles,
-                      out_subblock_height_ntiles, out_subblock_width_ntiles)
-)
+# @pytest.mark.parametrize(
+#     'a_height_nblocks, a_width_nblocks, b_width_nblocks,\
+#      a_block_height_ntiles, a_block_width_ntiles, b_block_width_ntiles,\
+#      out_subblock_height_ntiles, out_subblock_width_ntiles',
+#     itertools.product(a_height_nblocks, a_width_nblocks, b_width_nblocks,
+#                       a_block_height_ntiles, a_block_width_ntiles, b_block_width_ntiles,
+#                       out_subblock_height_ntiles, out_subblock_width_ntiles)
+# )
 def test_run_bmm_single_core_tilize_untilize(a_height_nblocks,
                                              a_width_nblocks,
                                              b_width_nblocks,
@@ -128,3 +129,27 @@ def test_run_bmm_single_core_tilize_untilize(a_height_nblocks,
     print(f'Output PCC = {output_pcc}')
 
     # assert(passing_pcc)
+
+def get_args():
+    parser = argparse.ArgumentParser('bmm_tilize_untilize parameters')
+    parser.add_argument("--a-height-nblocks", default=1, type=int, help="a_height_nblocks")
+    parser.add_argument("--a-width-nblocks", default=1, type=int, help="a_width_nblocks")
+    parser.add_argument("--b-width-nblocks", default=1, type=int, help="b_width_nblocks")
+    parser.add_argument("--a-block-height-ntiles", default=1, type=int, help="a_block_height_ntiles")
+    parser.add_argument("--a-block-width-ntiles", default=1, type=int, help="a_block_width_ntiles")
+    parser.add_argument("--b-block-width-ntiles", default=1, type=int, help="b_block_width_ntiles")
+    parser.add_argument("--out-subblock-height-ntiles", default=1, type=int, help="out_subblock_height_ntiles")
+    parser.add_argument("--out-subblock-width-ntiles", default=1, type=int, help="out_subblock_width_ntiles")
+    args = parser.parse_args()
+    return args
+
+args = get_args()
+
+test_run_bmm_single_core_tilize_untilize(args.a_height_nblocks,
+                                             args.a_width_nblocks,
+                                             args.b_width_nblocks,
+                                             args.a_block_height_ntiles,
+                                             args.a_block_width_ntiles,
+                                             args.b_block_width_ntiles,
+                                             args.out_subblock_height_ntiles,
+                                             args.out_subblock_width_ntiles)

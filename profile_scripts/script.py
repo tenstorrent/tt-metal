@@ -249,12 +249,49 @@ def profile_noc_utilization(file_name, read_or_write):
         if read_write_flag and noc_util_flag and buffer_flag:
             print(non_NIU_programming, line[:-1])
 
+def Print_Elewise_Binary_Multi_Tile(file_name, num_repetitions, r):
+    f = open(file_name, "r")
+    lines = f.readlines()
+    read_batch = []
+    write_batch = []
+    for i in range(num_repetitions):
+        read_lst = []
+        write_lst = []
+        for j in range(r * 4):
+            line = lines[i * r * 4+j]
+            lst = line.split()
+            if "read" in line:
+                read_lst.append(int(lst[-1]))
+            elif "write" in line:
+                write_lst.append(int(lst[-1]))
+        read_batch.append(read_lst)
+        write_batch.append(write_lst)
+        # for i in read_lst:
+        #     print(i, end=" ")
+        # print()
+        # for i in write_lst:
+        #     print(i, end=" ")
+        # print()
+
+
+    print("read write")
+    for i in range(r):
+        read_sum = 0
+        for j in range(num_repetitions):
+            read_sum += read_batch[j][i]
+        write_sum = 0
+        for j in range(num_repetitions):
+            write_sum += write_batch[j][i]
+        print("{:.0f} {:.0f}".format(read_sum/num_repetitions, write_sum/num_repetitions))
+
 
 def get_args():
     parser = argparse.ArgumentParser('Profile raw results.')
     parser.add_argument("--file-name", help="file to profile")
-    parser.add_argument("--profile-target", choices=["Tensix2Tensix", "DRAM2Tensix", "Tensix2Tensix_Issue_Barrier", "Tensix2Tensix_Fine_Grain", "Print_Tensix2Tensix_Issue_Barrier", "Profile_Tensix2Tensix_Constant_Flit", "Profile_NOC_Utilization"], help="profile target choice")
+    parser.add_argument("--profile-target", choices=["Tensix2Tensix", "DRAM2Tensix", "Tensix2Tensix_Issue_Barrier", "Tensix2Tensix_Fine_Grain", "Print_Tensix2Tensix_Issue_Barrier", "Profile_Tensix2Tensix_Constant_Flit", "Profile_NOC_Utilization", "Print_Elewise_Binary_Multi_Tile"], help="profile target choice")
     parser.add_argument("--read-or-write", choices=["read", "write"], help="read or write choice")
+    parser.add_argument("--num-repetitions", default=1, type=int, help="experiment repetitions")
+    parser.add_argument("--range", default=1, type=int, help="parameter range")
     args = parser.parse_args()
     return args
 
@@ -277,3 +314,5 @@ elif args.profile_target == "Profile_Tensix2Tensix_Constant_Flit":
     profile_tensix_constant_flit(file_name)
 elif args.profile_target == "Profile_NOC_Utilization":
     profile_noc_utilization(file_name, args.read_or_write)
+elif args.profile_target == "Print_Elewise_Binary_Multi_Tile":
+    Print_Elewise_Binary_Multi_Tile(file_name, args.num_repetitions, args.range)

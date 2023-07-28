@@ -29,6 +29,9 @@ void kernel_main() {
 
         .page_size = output_row_size
     };
+
+    kernel_profiler::mark_time(5);
+
     for(uint32_t batch = 0; batch < batch_size; batch++) {
         for(uint32_t block_h = 0; block_h < num_blocks_h; block_h++) {
             uint32_t block_row_offset = 0;
@@ -38,6 +41,7 @@ void kernel_main() {
                 for (uint32_t i = 0; i < num_rows_block / 32; i++) {
                     // We reserve back an entire tile row and issue a bunch of reads
                     cb_wait_front(cb_id_out0, num_tiles_block_c);
+        // kernel_profiler::mark_time(6);
 
                     uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
                     for (uint32_t j = 0; j < 32; j++) {
@@ -49,7 +53,9 @@ void kernel_main() {
                         l1_read_addr += block_row_size;
                         block_row_id++;
                     }
+                // kernel_profiler::mark_time(7);
                     noc_async_write_barrier();
+                // kernel_profiler::mark_time(8);
                     cb_pop_front(cb_id_out0, num_tiles_block_c);
                 }
                 block_row_offset += block_row_size;
@@ -59,5 +65,7 @@ void kernel_main() {
         }
         //DPRINT << 'W' << ENDL();
     }
+
+    kernel_profiler::mark_time(6);
 
 }

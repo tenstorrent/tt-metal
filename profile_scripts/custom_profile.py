@@ -244,11 +244,56 @@ def profile_Elewise_binary_read_write(file_name):
     print_Elewise_binary_fine_grain(read_dic, "NCRISC", read_function)
     print_Elewise_binary_fine_grain(write_dic, "BRISC", write_function)
 
+def profile_bmm_tilize_untilize_read_write(file_name):
+    f = open(file_name, "r")
+    lines = f.readlines()
+    read_dic = {}
+    write_dic = {}
+    prefix_read = "0, 0, 0, NCRISC"
+    prefix_write = "0, 0, 0, BRISC"
+
+    read_function = {"5-6": "cb_reserve_back", "6-7": "noc_async_read", "7-8": "noc_async_read_barrier", "8-9": "cb_reserve_back", "9-10": "noc_async_read", "10-11": "noc_async_read_barrier"}
+    write_function = {"5-6": "cb_wait_front", "6-7": "noc_async_write", "7-8": "noc_async_write_barrier"}
+
+
+    for line in lines:
+        lst = line.split()
+        if prefix_read in line:
+            read_dic[int(lst[-2][:-1])] = int(lst[-1])
+        elif prefix_write in line:
+            write_dic[int(lst[-2][:-1])] = int(lst[-1])
+
+    print_Elewise_binary_fine_grain(read_dic, "NCRISC", read_function)
+    print_Elewise_binary_fine_grain(write_dic, "BRISC", write_function)
+
+
+def profile_Elewise_binary_multi_tile(file_name):
+    f = open(file_name, "r")
+    lines = f.readlines()
+    read_dic = {}
+    write_dic = {}
+    prefix_read = "0, 0, 0, NCRISC"
+    prefix_write = "0, 0, 0, BRISC"
+
+    read_function = {"5-6": "read kernel"}
+    write_function = {"5-6": "write kernel"}
+
+
+    for line in lines:
+        lst = line.split()
+        if prefix_read in line:
+            read_dic[int(lst[-2][:-1])] = int(lst[-1])
+        elif prefix_write in line:
+            write_dic[int(lst[-2][:-1])] = int(lst[-1])
+
+    print_Elewise_binary_fine_grain(read_dic, "NCRISC", read_function)
+    print_Elewise_binary_fine_grain(write_dic, "BRISC", write_function)
+
 
 def get_args():
     parser = argparse.ArgumentParser('Profile raw results.')
     parser.add_argument("--file-name", help="file to profile")
-    parser.add_argument("--profile-target", choices=["profile_Tensix2Tensix_issue_barrier", "profile_Tensix2Tensix_fine_grain", "profile_overhead", "profile_noc_cmd_buf_write_reg", "profile_elewise_binary", "profile_Elewise_binary_fine_grain", "profile_RISC_overhead", "profile_Elewise_binary_read_write"], help="profile target choice")
+    parser.add_argument("--profile-target", choices=["profile_Tensix2Tensix_issue_barrier", "profile_Tensix2Tensix_fine_grain", "profile_overhead", "profile_noc_cmd_buf_write_reg", "profile_elewise_binary", "profile_Elewise_binary_fine_grain", "profile_RISC_overhead", "profile_Elewise_binary_read_write", "profile_Elewise_binary_multi_tile", "profile_bmm_tilize_untilize_read_write"], help="profile target choice")
     parser.add_argument("--read-or-write", choices=["read", "write"], help="read or write choice")
     parser.add_argument("--log-prefix", default="0, 0, 0, NCRISC", type=str, help="core coordination and RISCV core type prefix in profile log")
     args = parser.parse_args()
@@ -272,3 +317,7 @@ if args.profile_target == "profile_RISC_overhead":
     profile_RISC_overhead(file_name, args.log_prefix)
 if args.profile_target == "profile_Elewise_binary_read_write":
     profile_Elewise_binary_read_write(file_name)
+if args.profile_target == "profile_bmm_tilize_untilize_read_write":
+    profile_bmm_tilize_untilize_read_write(file_name)
+if args.profile_target == "profile_Elewise_binary_multi_tile":
+    profile_Elewise_binary_multi_tile(file_name)
