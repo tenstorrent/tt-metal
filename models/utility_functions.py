@@ -64,7 +64,7 @@ def torch2tt_tensor(
     tt_tensor = tt_lib.tensor.Tensor(py_tensor.contiguous().to(torch.bfloat16).reshape(size))
     tt_tensor = tt_tensor.to(tt_layout)
 
-    if not isinstance(tt_device, tt_lib.device.Host):
+    if tt_device is not None:
         tt_tensor = tt_tensor.to(tt_device, tt_memory_config)
     else:
         tt_tensor = tt_tensor.cpu()

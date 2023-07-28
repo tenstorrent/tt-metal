@@ -7,23 +7,22 @@ from models.utility_functions import torch2tt_tensor
 
 
 class TtConvNet(torch.nn.Module):
-    def __init__(self, device=None, host=None, state_dict=None):
+    def __init__(self, device=None, state_dict=None):
         super().__init__()
         self.device = device
-        self.host = host
 
         self.tt_conv1_weight = torch2tt_tensor(
-            state_dict[f"conv1.weight"], host, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
+            state_dict[f"conv1.weight"], None, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
         )
         self.tt_conv1_bias = torch2tt_tensor(
-            state_dict[f"conv1.bias"], host, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
+            state_dict[f"conv1.bias"], None, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
         )
 
         self.tt_conv2_weight = torch2tt_tensor(
-            state_dict[f"conv2.weight"], host, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
+            state_dict[f"conv2.weight"], None, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
         )
         self.tt_conv2_bias = torch2tt_tensor(
-            state_dict[f"conv2.bias"], host, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
+            state_dict[f"conv2.bias"], None, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
         )
 
         self.linear1_weights = torch2tt_tensor(
@@ -76,8 +75,8 @@ class TtConvNet(torch.nn.Module):
         return fallback_ops.softmax(out, -1)
 
 
-def _convnet_mnist(device, host, state_dict) -> TtConvNet:
-    return TtConvNet(device, host, state_dict)
+def _convnet_mnist(device, state_dict) -> TtConvNet:
+    return TtConvNet(device, state_dict)
 
 
 def convnet_mnist(device) -> TtConvNet:
@@ -87,7 +86,7 @@ def convnet_mnist(device) -> TtConvNet:
     pt_model.eval()
 
     tt_model = _convnet_mnist(
-        device=device, host=tt_lib.device.GetHost(), state_dict=pt_model.state_dict()
+        device=device, state_dict=pt_model.state_dict()
     )
 
     tt_model.eval()
