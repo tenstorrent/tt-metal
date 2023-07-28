@@ -63,7 +63,7 @@ env pytest tests/python_api_testing/models/whisper -k whisper_for_conditional_ge
 
 env pytest tests/python_api_testing/models/lenet -k test_lenet_inference
 env pytest tests/python_api_testing/models/ConvNet_MNIST -k mnist
-env pytest tests/python_api_testing/models/mnist -k mnist_inference
+env pytest tests/python_api_testing/models/mnist/tests -k mnist_inference
 
 env pytest tests/python_api_testing/models/roberta -k roberta_self_attention
 env pytest tests/python_api_testing/models/roberta -k roberta_self_output
