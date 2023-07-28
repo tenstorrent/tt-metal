@@ -5,7 +5,7 @@
 
 #include <optional>
 
-#include "tt_metal/common/tile_math.hpp"
+#include "tt_metal/common/math.hpp"
 using namespace tt::constants;
 
 namespace tt {

@@ -143,7 +143,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
             {
                 src0_buffer->address(),
                 num_tiles_per_core,
-                rounddown(num_tiles_read, HtWt) + h * Wt + w,
+                round_down(num_tiles_read, HtWt) + h * Wt + w,
                 h,
                 w
             }

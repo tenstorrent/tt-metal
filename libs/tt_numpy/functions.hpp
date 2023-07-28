@@ -3,7 +3,7 @@
 #include <tensor/owned_buffer.hpp>
 #include <tensor/owned_buffer_functions.hpp>
 #include <tensor/types.hpp>
-#include <common/tile_math.hpp>
+#include <common/math.hpp>
 
 #include <optional>
 #include <random>

@@ -4,6 +4,25 @@
 
 #include "third_party/magic_enum/magic_enum.hpp"
 
+namespace move_op_utils {
+using namespace tt::tt_metal;
+
+bool can_deallocate(const Tensor &input_tensor) {
+    return std::visit(
+        [](auto&& storage)
+        {
+            using T = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<T, DeviceStorage>) {
+                return storage.buffer.use_count() == 1;
+            } else {
+                return false;
+            }
+        },
+        input_tensor.storage()
+    );
+}
+
+} // namespace move_op_utils
 
 namespace tt {
 
@@ -31,7 +50,8 @@ operation::ProgramWithCallbacks Move::create_program(const std::vector<Tensor>& 
     switch (parallelization_strategy){
         case MoveOpParallelizationStrategy::MULTI_CORE:
             return move_multi_core(input_tensor, output_tensor);
-            break;
+        case MoveOpParallelizationStrategy::MULTI_CORE_OVERLAP:
+            return move_multi_core_with_overlap(input_tensor, output_tensor);
         case MoveOpParallelizationStrategy::SINGLE_CORE:
         default:
             return move_single_core(input_tensor, output_tensor);

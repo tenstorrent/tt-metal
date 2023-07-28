@@ -6,7 +6,7 @@
 #include "common/bfloat16.hpp"
 #include "llrt/llrt.hpp"
 #include "tt_metal/common/constants.hpp"
-#include "tt_metal/common/tile_math.hpp"
+#include "tt_metal/common/math.hpp"
 
 #include "tt_stl/reflection.hpp"
 
