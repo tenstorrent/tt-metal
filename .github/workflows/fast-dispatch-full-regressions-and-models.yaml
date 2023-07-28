@@ -1,0 +1,32 @@
+name: Scheduled fast dispatch build and run all regressions and models
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 1,6 * * *"
+
+jobs:
+  build-and-test-all:
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        arch: [grayskull]
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ matrix.arch }}
+    environment: dev
+    runs-on: model-runner-${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+          token: ${{ secrets.CHECKOUT_TOKEN }}
+          lfs: true
+      - name: Set up dyanmic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV && echo "FAST_DISPATCH=1" >> $GITHUB_ENV
+      - name: Run clean + build + all reg tests scripts
+        timeout-minutes: 300
+        run: ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.arch }} --pipeline-type frequent
