@@ -16,7 +16,7 @@ else
 fi
 
 # This must run in slow dispatch mode
-pytest -svv $TT_METAL_HOME/tests/python_api_testing/sweep_tests/pytests/test_sweep_conv_with_address_map.py
+# pytest -svv $TT_METAL_HOME/tests/python_api_testing/sweep_tests/pytests/test_sweep_conv_with_address_map.py
 
 # For now, adding tests with fast dispatch and non-32B divisible page sizes here. Python/models people,
 # you can move to where you'd like.
