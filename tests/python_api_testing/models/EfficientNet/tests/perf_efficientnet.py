@@ -92,6 +92,7 @@ def test_perf_efficientnet_b0(
     logger.info(f"efficientnet_b0 inference time: {second_iter_time}")
     logger.info(f"efficientnet_b0 compile time: {compile_time}")
 
+    tt_lib.device.CloseDevice(device)
     assert second_iter_time < expected_inference_time, "efficientnet_b0 is too slow"
     assert (
         compile_time < expected_compile_time

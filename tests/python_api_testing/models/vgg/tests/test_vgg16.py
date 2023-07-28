@@ -53,4 +53,5 @@ def test_vgg16_inference(pcc, imagenet_sample_input):
 
         pcc_passing, pcc_output = comp_pcc(torch_output, tt_output, pcc)
         logger.info(f"Output {pcc_output}")
+        tt_lib.device.CloseDevice(device)
         assert pcc_passing, f"Model output does not meet PCC requirement {pcc}."

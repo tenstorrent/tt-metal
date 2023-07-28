@@ -342,6 +342,8 @@ def run_bert_question_and_answering_inference(
 
     profiler.print()
 
+
+    tt_lib.device.CloseDevice(device)
     assert profiler.get("whole_model") < 70.0
     assert (
         passing_start and passing_end

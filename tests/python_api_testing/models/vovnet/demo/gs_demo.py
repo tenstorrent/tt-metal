@@ -53,3 +53,4 @@ def test_vovnet_model_inference(
 
     save_image(imagenet_sample_input, "vonet_input.jpg")
     logger.info("Input image is saved for reference as vovnet_input.jpg")
+    tt_lib.device.CloseDevice(device)

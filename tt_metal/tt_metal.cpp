@@ -123,6 +123,8 @@ void ClearCompileCache() { detail::HashLookup::inst().clear(); }
 Device *CreateDevice(tt::ARCH arch, int pcie_slot) { return new Device(arch, pcie_slot); }
 
 bool InitializeDevice(Device *device) {
+    TT_ASSERT(not HACK_CQ, "HACK_CQ should not be initialized prior to InitializeDevice!");
+
     bool init;
     if (device->initialize()) {
         static std::mutex build_mutex;

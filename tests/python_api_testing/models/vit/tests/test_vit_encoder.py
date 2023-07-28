@@ -69,4 +69,5 @@ def test_vit_encoder(hf_cat_image_sample_input, pcc=0.92):
         pcc_passing, _ = comp_pcc(HF_output, tt_output, pcc)
         _, pcc_output = comp_allclose_and_pcc(HF_output, tt_output, pcc)
         logger.info(f"Output {pcc_output}")
+        tt_lib.device.CloseDevice(device)
         assert pcc_passing, f"Model output does not meet PCC requirement {pcc}."

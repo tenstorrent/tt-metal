@@ -63,6 +63,7 @@ def test_mobilenetv2_inference(fuse_ops, imagenet_sample_input):
         tt_output = tt_model(image)[0]
 
         passing = comp_pcc(torch_output, tt_output)
+        tt_lib.device.CloseDevice(device)
         assert passing[0], passing[1:]
 
     logger.info(f"PASSED {passing[1]}")

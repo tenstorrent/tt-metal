@@ -26,7 +26,6 @@ def test_gs_demo(imagenet_sample_input, imagenet_label_dict, model_name, reset_s
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
 
-
     tt_model = hrnet_w18_small(device, host, multi_scale_output=True)
 
     tt_input = torch_to_tt_tensor_rm(imagenet_sample_input, device, put_on_device=False)
@@ -41,3 +40,4 @@ def test_gs_demo(imagenet_sample_input, imagenet_label_dict, model_name, reset_s
 
     save_image(imagenet_sample_input, "hrnet_input.jpg")
     logger.info("Input image is saved for reference as hrnet_input.jpg")
+    tt_lib.device.CloseDevice(device)

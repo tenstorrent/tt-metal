@@ -53,3 +53,5 @@ def test_gs_demo(imagenet_sample_input, model_name):
 
         save_image(imagenet_sample_input, "swin_input.jpg")
         logger.info("Input image is saved for reference as swin_input.jpg")
+
+    tt_lib.device.CloseDevice(device)

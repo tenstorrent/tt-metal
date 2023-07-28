@@ -101,3 +101,4 @@ def test_perf(use_program_cache, model_location_generator):
     prep_report(
         "yolov3", BATCH_SIZE, first_iter_time, second_iter_time, comments, cpu_time
     )
+    tt_lib.device.CloseDevice(device)

@@ -72,5 +72,6 @@ def test_perf(expected_inference_time, expected_compile_time, imagenet_sample_in
     compile_time = first_iter_time - second_iter_time
     logger.info(f"hrnet inference time: {second_iter_time}")
     logger.info(f"hrnet compile time: {compile_time}")
+    tt_lib.device.CloseDevice(device)
     assert second_iter_time < expected_inference_time, "hrnet is too slow"
     assert compile_time < expected_compile_time, "hrnet compile time is too slow"

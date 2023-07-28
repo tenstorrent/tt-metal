@@ -57,4 +57,5 @@ def test_deit_embeddings_inference(hf_cat_image_sample_input, pcc=0.99):
     pcc_passing, _ = comp_pcc(torch_output, tt_output, pcc)
     _, pcc_output = comp_allclose_and_pcc(torch_output, tt_output, pcc)
     logger.info(f"Output {pcc_output}")
+    tt_lib.device.CloseDevice(device)
     assert(pcc_passing), f"Failed! Low pcc: {pcc}."

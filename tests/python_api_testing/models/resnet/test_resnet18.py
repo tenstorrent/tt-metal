@@ -47,4 +47,5 @@ def test_run_resnet18_inference(fold_batchnorm, imagenet_sample_input):
         passing, info = comp_pcc(torch_output, tt_output)
         logger.info(info)
 
+        tt_lib.device.CloseDevice(device)
         assert passing

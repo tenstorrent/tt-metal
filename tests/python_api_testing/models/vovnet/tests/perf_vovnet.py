@@ -74,3 +74,4 @@ def test_perf(imagenet_sample_input):
     prep_report(
         "vovnet", BATCH_SIZE, first_iter_time, second_iter_time, "vovnet", cpu_time
     )
+    tt_lib.device.CloseDevice(device)

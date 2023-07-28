@@ -74,6 +74,7 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
     if conv_op_test_params.test_level == TestLevel.INPUT_TENSOR_CREATE:
         print("Ran test till tensor creation only. Did not run full op compute.")
         return True
+
     assert conv_op_test_params.test_level == TestLevel.OP_FULL_COMPUTE
 
     # Run TT metal OP
@@ -103,6 +104,7 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
     passing_pcc, output_pcc = comp_pcc(out_golden, out_result, 0.99)
     print("Passing=", passing_pcc)
     print("Output pcc=", output_pcc)
+    ttl.device.CloseDevice(device)
     return passing_pcc
 
 

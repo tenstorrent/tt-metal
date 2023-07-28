@@ -49,4 +49,5 @@ def test_vit_layer(pcc=0.99):
         pcc_passing, _ = comp_pcc(HF_output, tt_output, pcc)
         _, pcc_output = comp_allclose_and_pcc(HF_output, tt_output, pcc)
         logger.info(f"Output {pcc_output}")
+        tt_lib.device.CloseDevice(device)
         assert pcc_passing, f"Model output does not meet PCC requirement {pcc}."

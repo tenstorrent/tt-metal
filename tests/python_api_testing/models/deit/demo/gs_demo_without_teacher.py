@@ -42,3 +42,4 @@ def test_gs_demo(hf_cat_image_sample_input):
 
     logger.info(f"Input image saved as deit_without_teacher_gs_input_image.jpg")
     logger.info(f"TT's prediction: {torch_model.config.id2label[predicted_label]}.")
+    tt_lib.device.CloseDevice(device)

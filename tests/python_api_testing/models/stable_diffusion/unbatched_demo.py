@@ -261,6 +261,8 @@ def demo():
     pil_images = [Image.fromarray(image) for image in images][0]
     pil_images.save(f"{experiment_name}_tt.png")
 
+    tt_lib.device.CloseDevice(device)
+
 '''
 @article{patil2022stable,
 author = {Patil, Suraj and Cuenca, Pedro and Lambert, Nathan and von Platen, Patrick},

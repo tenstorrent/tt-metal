@@ -74,3 +74,4 @@ def test_perf():
     prep_report(
         "yolov5", BATCH_SIZE, first_iter_time, second_iter_time, "yolov5s", cpu_time
     )
+    tt_lib.device.CloseDevice(device)
