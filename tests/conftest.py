@@ -221,8 +221,8 @@ def clear_compile_cache():
     yield
     import tt_lib as ttl
 
-    ttl.device.DisableCompileCache()
-    ttl.device.ClearCompileCache()
+    ttl.device.DisablePersistentKernelCache()
+    ttl.device.ClearKernelCache()
 
 
 @pytest.fixture(autouse=True)

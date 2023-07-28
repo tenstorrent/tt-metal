@@ -465,13 +465,6 @@ void DeallocateBuffer(Buffer &buffer);
 // ==================================================
 
 /**
- * Clear the current kernel compilation cache.
- *
- * Return value: void
- */
-void ClearCompileCache();
-
-/**
  *  Compiles all kernels within the program, and generates binaries that are written to `$TT_METAL_HOME/built/kernels/<kernel name>/<kernel hash>`
  *  Blank data movement kernel targeting RISCV_0 are placed onto cores that are missing a RISCV_0 kernel because RISCV_0 processor needs to run to enable Compute and RISCV_1 processors
  *

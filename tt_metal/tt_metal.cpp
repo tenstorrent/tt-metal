@@ -17,6 +17,7 @@
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "tt_metal/detail/program.hpp"
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
+#include "tt_metal/detail/kernel_cache.hpp"
 
 namespace tt {
 
@@ -116,9 +117,6 @@ std::optional<uint32_t> get_semaphore_address(const Program &program, const Core
     return address;
 }
 }  // namespace
-
-
-void ClearCompileCache() { detail::HashLookup::inst().clear(); }
 
 Device *CreateDevice(tt::ARCH arch, int pcie_slot) { return new Device(arch, pcie_slot); }
 

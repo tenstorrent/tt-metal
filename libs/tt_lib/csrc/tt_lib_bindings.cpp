@@ -29,6 +29,7 @@
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "tt_metal/detail/reports/compilation_reporter.hpp"
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
+#include "tt_metal/detail/kernel_cache.hpp"
 #include "tensor/owned_buffer.hpp"
 #include "tensor/borrowed_buffer.hpp"
 #include "tensor/tensor_impl.hpp"
@@ -3120,7 +3121,7 @@ void DeviceModule(py::module &m_device) {
     m_device.def("DisablePersistentKernelCache", &detail::DisablePersistentKernelCache, R"doc(
         Disables kernel compilation cache from being persistent across runs
     )doc");
-    m_device.def("ClearCompileCache", &ClearCompileCache, R"doc(
+    m_device.def("ClearKernelCache", &detail::ClearKernelCache, R"doc(
         Clears the current kernel compilation cache
     )doc");
     m_device.def("EnableCompilationReports", &detail::EnableCompilationReports, R"doc(
