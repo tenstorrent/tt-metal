@@ -29,7 +29,7 @@ const char* get_reader_name(BcastOpDim::Enum bcast_dim, BcastOpParallelizationSt
         } else if (bcast_dim == BcastOpDim::W) {
             return "tt_metal/kernels/dataflow/reader_bcast_w_8bank_input_cols_partitioned.cpp";
         } if (bcast_dim == BcastOpDim::HW) {
-            return "tt_metal/kernels/dataflow/reader_bcast_hw_8bank_partitioned.cpp";
+            return "tt_metal/kernels/dataflow/reader_bcast_hw_interleaved_partitioned.cpp";
         }
     }
     TT_ASSERT(false && "Unexpected bcast_dim!");

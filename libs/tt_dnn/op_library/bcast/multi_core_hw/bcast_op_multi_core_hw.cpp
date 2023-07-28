@@ -27,9 +27,9 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
 
     uint32_t Wt = W/TILE_WIDTH;
     uint32_t Ht = H/TILE_HEIGHT;
+	uint32_t HtWt = Ht * Wt;
 
     uint32_t num_tensor_tiles = NC*Ht*Wt;
-    uint32_t num_btensor_tiles = NC*bH*bW / TILE_HW;
 
 	uint32_t bnc1 = (bN*bC == 1) ? 1 : 0;
 
@@ -134,6 +134,10 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
 		math_approx_mode
 	);
 	bcast_op_utils::add_defines(bcast_kernel_group_1, bcast_dim, bcast_math);
+	if(bnc1) {
+		binary_reader_kernel->add_define("BCAST_SCALAR", "1");
+		bcast_kernel_group_1->add_define("BCAST_SCALAR", "1");
+	}
 	if (!core_group_2.ranges().empty()) {
 		// TODO(AP): add dimensions and op params
 		// Ignore Ht and just read num_tiles_per_core
@@ -152,6 +156,9 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
 			math_approx_mode
 		);
 		bcast_op_utils::add_defines(bcast_kernel_group_2, bcast_dim, bcast_math);
+		if(bnc1) {
+			bcast_kernel_group_2->add_define("BCAST_SCALAR", "1");
+		}
 	}
 
 	for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++){
@@ -170,20 +177,12 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
 			core,
 			{
 				a.buffer()->address(), // 0
-				0, // 1
-				0, // 2
-				num_tensor_tiles_per_core, // 3
-				b.buffer()->address(), // 4
-				0, // 5
-				0, // 6
-				num_btensor_tiles, // 7
-				num_tensor_tiles_per_core, // 8
-				1, // 9
-				1, // 10
-				num_tensor_tiles_per_core, // 11
-				bnc1, // 12
-				num_tiles_read, // 13
-				Ht*Wt, // 14
+				b.buffer()->address(),
+				num_tensor_tiles_per_core,
+				HtWt,
+				num_tiles_read / HtWt * HtWt,
+				num_tiles_read % HtWt,
+				bnc1 ? 0 : num_tiles_read / HtWt
 			}
 		);
 
@@ -221,7 +220,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
             {
                 auto runtime_args = GetRuntimeArgs(binary_reader_kernel, core);
                 runtime_args[0] = src_dram_buffer_a->address();
-                runtime_args[4] = src_dram_buffer_b->address();
+                runtime_args[1] = src_dram_buffer_b->address();
                 SetRuntimeArgs(binary_reader_kernel, core, runtime_args);
             }
 
