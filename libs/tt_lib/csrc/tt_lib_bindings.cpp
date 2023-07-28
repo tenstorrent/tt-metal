@@ -1395,6 +1395,18 @@ void TensorModule(py::module &m_tensor) {
         R"doc("Indicate true for approx and fast mode; false for accurate and slow mode", "bool", "default of true", "No")doc"
     );
     detail::bind_unary_op_with_param(
+        m_tensor, "erf", &erf,
+        py::arg("fast_and_approx") = true,
+        R"doc(Computes error function for all elements of the input tensor ``{0}``.)doc",
+        R"doc("Indicate true for approx and fast mode; false for accurate and slow mode", "bool", "default of true", "No")doc"
+    );
+    detail::bind_unary_op_with_param(
+        m_tensor, "erfc", &erfc,
+        py::arg("fast_and_approx") = true,
+        R"doc(Computes complementary error function for all elements of the input tensor ``{0}``.)doc",
+        R"doc("Indicate true for approx and fast mode; false for accurate and slow mode", "bool", "default of true", "No")doc"
+    );
+    detail::bind_unary_op_with_param(
         m_tensor, "relu_max", relu_max,
         py::arg("upper_limit"),
         R"doc(Returns tensor with the relu max of all of elements of the input tensor ``{0}``. This is equivalent

@@ -44,7 +44,9 @@ string get_op_name_parameterized(UnaryOpType::Enum op_type,float param0) {
     case UnaryOpType::GELU: op_name = "gelu_tile_init(); gelu_tile(0,"+std::to_string((uint32_t)param0)+"u); pack_tile(0, tt::CB::c_out0);"; break;
     case UnaryOpType::RSQRT: op_name = "rsqrt_tile_init(); rsqrt_tile(0,"+std::to_string((uint32_t)param0)+"u);; pack_tile(0, tt::CB::c_out0);"; break;
     case UnaryOpType::HEAVISIDE: op_name = "heaviside_tile_init(); heaviside_tile(0,"+Converter::to_hex(param0)+"u); pack_tile(0, tt::CB::c_out0);"; break;
-    default:
+    case UnaryOpType::ERF: op_name = "erf_tile_init(); erf_tile(0,"+std::to_string((uint32_t)param0)+"u); pack_tile(0, tt::CB::c_out0);"; break;
+    case UnaryOpType::ERFC: op_name = "erfc_tile_init(); erfc_tile(0,"+std::to_string((uint32_t)param0)+"u); pack_tile(0, tt::CB::c_out0);"; break;
+     default:
 	  TT_ASSERT( false && "unexpected parameterized type");
     };
     return op_name;

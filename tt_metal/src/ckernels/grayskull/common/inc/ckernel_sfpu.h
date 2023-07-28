@@ -1614,6 +1614,81 @@ inline void calculate_heaviside(uint value)
     }
 }
 
+#define POLYVAL6withZERO(coef5, coef4, coef3, coef2, coef1, val) (((((coef5 * val + coef4) * val + coef3) * val + coef2) * val + coef1) * val)
+
+template <bool APPROXIMATION_MODE>
+sfpi_inline vFloat calculate_erf_body(vFloat x){
+    vFloat result;
+    if constexpr(not APPROXIMATION_MODE){
+        vFloat temp = POLYVAL5(0.078108f, 0.000972f, 0.230389f, 0.278393f, 1.0f, x);
+        temp =  temp* temp;
+        temp =  temp* temp;
+        dst_reg[0]=temp;
+        temp = sfpu_reciprocal<true>(temp);
+        result = 1.0 - temp;
+    }else{
+        #if 0
+        vFloat temp = 1.0 + (0.3275911 * x);
+        dst_reg[0]=temp;
+        temp = sfpu_reciprocal<true>(temp);
+        temp = POLYVAL6withZERO(1.061405429f, -1.453152027f, 1.421413741f, -0.284496736f, 0.254829592f, temp);
+        result=-1.0*x*x;
+        dst_reg[0]=result;
+        result = calculate_exponential_body<true, true>(result);
+        result = 1.0 - (result * temp);
+        #endif
+    }
+    return result;
+}
+
+// TODO: Fix assertion error for accurate mode
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_erf()
+{
+    // SFPU microcode:
+    #pragma GCC unroll 0
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        vFloat x = dst_reg[0];
+        vInt flag=0;
+        v_if(x < 0.0f){
+            x = -x;
+            flag=1;
+        }v_endif;
+        v_if(flag){
+            dst_reg[0] = (-1.0)*calculate_erf_body<APPROXIMATION_MODE>(x);
+        }v_else{
+            dst_reg[0] = calculate_erf_body<APPROXIMATION_MODE>(x);
+        }v_endif;
+        flag=0;
+        dst_reg++;
+    }
+}
+
+// TODO: Fix assertion error for accurate mode
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_erfc()
+{
+    // SFPU microcode:
+    #pragma GCC unroll 0
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        vFloat x = dst_reg[0];
+        vInt flag=0;
+        v_if(x < 0.0f) {
+            x = -x;
+            flag=1;
+        }v_endif;
+        v_if(flag){
+            dst_reg[0] = 1.0 + (calculate_erf_body<APPROXIMATION_MODE>(x));
+        }v_else{
+            dst_reg[0] = 1.0 - (calculate_erf_body<APPROXIMATION_MODE>(x));
+        }v_endif;
+        flag=0;
+        dst_reg++;
+    }
+}
+
 template <SfpuType operation, bool APPROXIMATION_MODE, int SfpuType_PARAM = 0, int ITERATIONS = 4>
 inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, uint param3 = 0, uint param4 = 0, uint param5 = 0)
 {
@@ -1748,6 +1823,19 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
     }
     else if constexpr (operation == SfpuType::atan) {
         calculate_atan<APPROXIMATION_MODE, ITERATIONS>();
+    } else if constexpr (operation == SfpuType::erf) {
+        if ( param0 ) {
+        calculate_erf<true, ITERATIONS>();
+        } else {
+        calculate_erf<false, ITERATIONS>();
+        }
+    }
+    else if constexpr (operation == SfpuType::erfc) {
+        if ( param0 ) {
+        calculate_erfc<true, ITERATIONS>();
+        } else {
+        calculate_erfc<false, ITERATIONS>();
+        }
     }
 }
 

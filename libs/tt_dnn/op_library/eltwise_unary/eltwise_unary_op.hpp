@@ -14,7 +14,7 @@ namespace tt_metal {
 struct UnaryOpType {
     enum Enum { EXP = 0, RECIP = 1, GELU = 2, RELU = 3, SQRT = 4, SIGMOID = 5, LOG = 6, TANH = 7, LOG2 = 8, LOG10 = 9, SIN = 10, COS = 11,
                 ABS=12, SIGN=13, SQUARE=14, EQZ = 15, NEZ = 16, GTZ = 17, LTZ = 18, GEZ = 19, LEZ = 20, RELU_MAX = 21, RELU_MIN = 22, POWER = 23, LEAKY_RELU = 24, ELU = 25, EXP2 = 26, HEAVISIDE = 27,
-                EXPM1 = 28, SIGNBIT = 29, ASIN = 30, ACOS = 31, RSQRT = 32, RELU6 = 33, ATAN = 34};
+                EXPM1 = 28, SIGNBIT = 29, ASIN = 30, ACOS = 31, RSQRT = 32, RELU6 = 33, ATAN = 34, ERF = 35, ERFC = 36 };
     static const auto all() { return magic_enum::enum_values<Enum>(); }
 };
 
@@ -29,6 +29,8 @@ bool is_parametrized_type(T val) {
     case UnaryOpType::GELU:
     case UnaryOpType::RSQRT:
     case UnaryOpType::HEAVISIDE:
+    case UnaryOpType::ERF:
+    case UnaryOpType::ERFC:
         return true;
     default:
         return false;
@@ -123,6 +125,12 @@ inline Tensor gelu(const Tensor &input_tensor, bool fast_and_approx=true, const 
 }
 inline Tensor rsqrt(const Tensor &input_tensor, bool fast_and_approx=true, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
     return make_eltwise_unary_with_param<UnaryOpType::RSQRT>{}(input_tensor, static_cast<float>(fast_and_approx), output_mem_config);
+}
+inline Tensor erf(const Tensor &input_tensor, bool fast_and_approx=true, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
+    return make_eltwise_unary_with_param<UnaryOpType::ERF>{}(input_tensor, static_cast<float>(fast_and_approx), output_mem_config);
+}
+inline Tensor erfc(const Tensor &input_tensor, bool fast_and_approx=true, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
+    return make_eltwise_unary_with_param<UnaryOpType::ERFC>{}(input_tensor, static_cast<float>(fast_and_approx), output_mem_config);
 }
 
 // binop with tied inputs.
