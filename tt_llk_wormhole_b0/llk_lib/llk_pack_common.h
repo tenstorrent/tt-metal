@@ -82,7 +82,8 @@ inline void llk_pack_dest_init() {
 }
 
 template <DstSync Dst, DstTileFaceLayout FaceLayout, bool untilize = false>
-inline void llk_init_packer_dest_offset_registers() {
+inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_output) {
+    // Todo: get tile dims based on pack_output
     TTI_STALLWAIT(p_stall::STALL_TDMA|p_stall::STALL_THCON, p_stall::PACK);  // wait for pack to finish
     if constexpr (untilize) {
        if constexpr (FaceLayout == ColMajor) {
