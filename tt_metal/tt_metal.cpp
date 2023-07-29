@@ -811,7 +811,9 @@ bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
         auto worker_core = device->worker_core_from_logical_core(logical_core);
         worker_cores.push_back(worker_core);
 
-        detail::ValidateCircularBufferRegion(program, device, logical_core);
+        if (program.circular_buffers_on_core(logical_core).size()) {
+            detail::ValidateCircularBufferRegion(program, device, logical_core);
+        }
         // CircularBufferConfigVec -- common across all kernels, so written once to the core
         llrt::CircularBufferConfigVec circular_buffer_config_vec = llrt::create_circular_buffer_config_vector();
 
@@ -839,11 +841,13 @@ bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
             }
         }  // PROF_END("CBS")
 
-        llrt::write_circular_buffer_config_vector_to_core(
-            cluster,
-            pcie_slot,
-            worker_core,
-            circular_buffer_config_vec);  // PROF_BEGIN("WRITE_CBS") PROF_END("WRITE_CBS")
+        if (cbs_on_core.size()) {
+            llrt::write_circular_buffer_config_vector_to_core(
+                cluster,
+                pcie_slot,
+                worker_core,
+                circular_buffer_config_vec);  // PROF_BEGIN("WRITE_CBS") PROF_END("WRITE_CBS")
+        }
 
         program.init_semaphores(*device, logical_core);
     }

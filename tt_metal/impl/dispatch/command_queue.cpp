@@ -628,57 +628,50 @@ EnqueueCommandType EnqueueWrapCommand::type() { return this->type_; }
 void send_dispatch_kernel_to_device(Device* device) {
     // Ideally, this should be some separate API easily accessible in
     // TT-metal, don't like the fact that I'm writing this from scratch
-    std::string arch_name = tt::get_string_lowercase(device->arch());
-    tt::build_kernel_for_riscv_options_t build_kernel_for_riscv_options(device->pcie_slot(), "command_queue");
 
-    build_kernel_for_riscv_options.fp32_dest_acc_en = false;
-
-    // Hard-coding as BRISC for now, could potentially be NCRISC
-    build_kernel_for_riscv_options.brisc_kernel_file_name = "tt_metal/kernels/dataflow/dispatch/command_queue.cpp";
-    std::map<string, string> brisc_defines = {{"IS_DISPATCH_KERNEL", ""}, {"PCIE_NOC_X", "0"}, {"PCIE_NOC_Y", "4"}};
+    Program dispatch_program = Program();
+    CoreCoord dispatch_logical_core = {0, 9};
+    auto dispatch_kernel = tt::tt_metal::CreateDataMovementKernel(
+        dispatch_program,
+        "tt_metal/kernels/dataflow/dispatch/command_queue.cpp",
+        dispatch_logical_core,
+        tt::tt_metal::DataMovementProcessor::RISCV_0,
+        tt::tt_metal::NOC::RISCV_0_default
+    );
+    dispatch_kernel->add_define("IS_DISPATCH_KERNEL", "");
+    vector<CoreCoord> pcie_cores = device->cluster()->get_soc_desc(device->pcie_slot()).pcie_cores;
+    TT_ASSERT(pcie_cores.size() == 1, "Should only have one pcie core");
+    dispatch_kernel->add_define("PCIE_NOC_X", pcie_cores[0].x);
+    dispatch_kernel->add_define("PCIE_NOC_Y", pcie_cores[0].y);
 
     const char* DISPATCH_MAP_DUMP = std::getenv("TT_METAL_DISPATCH_MAP_DUMP");
     if (DISPATCH_MAP_DUMP) {
-        brisc_defines.emplace("TT_METAL_DISPATCH_MAP_DUMP", "");
+        dispatch_kernel->add_define("TT_METAL_DISPATCH_MAP_DUMP", "");
     }
 
-    build_kernel_for_riscv_options.brisc_defines = brisc_defines;
-    bool profile = false;
+    CompileProgram(device, dispatch_program);
+    tt::tt_metal::ConfigureDeviceWithProgram(device, dispatch_program);
 
-    detail::GenerateBankToNocCoordHeaders(device, &build_kernel_for_riscv_options, "command_queue");
-    generate_binary_for_risc(
-        RISCID::BR, &build_kernel_for_riscv_options, build_kernel_for_riscv_options.name, arch_name, 0, {});
-
-    // Currently hard-coded. TODO(agrebenisan): Once we add support for multiple dispatch cores, this can be refactored,
-    // but don't yet have a plan for where this variable should exist.
-    CoreCoord dispatch_core = {1, 11};
-    tt::llrt::test_load_write_read_risc_binary(device->cluster(), "command_queue/brisc/brisc.hex", 0, dispatch_core, 0);
-
-    // Initialize cq pointers
     u32 fifo_addr = (HOST_CQ_FINISH_PTR + 32) >> 4;
     vector<u32> fifo_addr_vector = {fifo_addr};
-    tt::llrt::write_hex_vec_to_core(device->cluster(), 0, {1, 11}, fifo_addr_vector, CQ_READ_PTR);
-    tt::llrt::write_hex_vec_to_core(device->cluster(), 0, {1, 11}, fifo_addr_vector, CQ_WRITE_PTR);
+    tt::tt_metal::detail::WriteToDeviceL1(device, dispatch_logical_core, CQ_READ_PTR, fifo_addr_vector);
+    tt::tt_metal::detail::WriteToDeviceL1(device, dispatch_logical_core, CQ_WRITE_PTR, fifo_addr_vector);
 
     // Initialize wr toggle
     vector<u32> toggle_start_vector = {0};
-    tt::llrt::write_hex_vec_to_core(device->cluster(), 0, {1, 11}, toggle_start_vector, CQ_READ_TOGGLE);
-    tt::llrt::write_hex_vec_to_core(device->cluster(), 0, {1, 11}, toggle_start_vector, CQ_WRITE_TOGGLE);
+    tt::tt_metal::detail::WriteToDeviceL1(device, dispatch_logical_core, CQ_READ_TOGGLE, toggle_start_vector);
+    tt::tt_metal::detail::WriteToDeviceL1(device, dispatch_logical_core, CQ_WRITE_TOGGLE, toggle_start_vector);
 
-    // Deassert reset of dispatch core BRISC. TODO(agrebenisan): Refactor once Paul's changes in
     tt::llrt::internal_::setup_riscs_on_specified_core(
-        device->cluster(), 0, tt::llrt::TensixRiscsOptions::BRISC_ONLY, {dispatch_core});
-    device->cluster()->set_remote_tensix_risc_reset(tt_cxy_pair(0, dispatch_core), TENSIX_DEASSERT_SOFT_RESET);
-
-    u32 chip_id = 0;  // TODO(agrebenisan): Remove hardcoding
-    const auto& sdesc = device->cluster()->get_soc_desc(chip_id);
+        device->cluster(), 0, tt::llrt::TensixRiscsOptions::BRISC_ONLY, {device->worker_core_from_logical_core(dispatch_logical_core)});
+    device->cluster()->set_remote_tensix_risc_reset(tt_cxy_pair(0, device->worker_core_from_logical_core(dispatch_logical_core)), TENSIX_DEASSERT_SOFT_RESET);
 }
 
 // CommandQueue section
 CommandQueue::CommandQueue(Device* device) {
-    // Setting read/write pointers to 6, zeroing out finish
-    vector<u32> pointers(96 / sizeof(u32), 0);
-    pointers[0] = 6;  // rd ptr
+    vector<u32> pointers(CQ_START / sizeof(u32), 0);
+    pointers[0] = CQ_START >> 4;  // rd ptr (96 >> 4 = 6)
+
     device->cluster()->write_sysmem_vec(pointers, 0, 0);
 
     send_dispatch_kernel_to_device(device);
