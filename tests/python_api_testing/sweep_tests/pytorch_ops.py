@@ -224,6 +224,10 @@ def gelu(x, *args, **kwargs):
     return torch.nn.functional.gelu(x)
 
 
+def rsqrt(x, *args, **kwargs):
+    return torch.rsqrt(x)
+
+
 def relu(x, *args, **kwargs):
     return torch.nn.functional.relu(x)
 

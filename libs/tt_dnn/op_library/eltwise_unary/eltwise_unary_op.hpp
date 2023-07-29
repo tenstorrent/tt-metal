@@ -14,7 +14,7 @@ namespace tt_metal {
 struct UnaryOpType {
     enum Enum { EXP = 0, RECIP = 1, GELU = 2, RELU = 3, SQRT = 4, SIGMOID = 5, LOG = 6, TANH = 7, LOG2 = 8, LOG10 = 9, SIN = 10, COS = 11,
                 ABS=12, SIGN=13, SQUARE=14, EQZ = 15, NEZ = 16, GTZ = 17, LTZ = 18, GEZ = 19, LEZ = 20, RELU_MAX = 21, RELU_MIN = 22, POWER = 23, LEAKY_RELU = 24, ELU = 25, EXP2 = 26, HEAVISIDE = 27,
-                EXPM1 = 28, SIGNBIT = 29, ASIN = 30, ACOS = 31};
+                EXPM1 = 28, SIGNBIT = 29, ASIN = 30, ACOS = 31, RSQRT = 32};
     static const auto all() { return magic_enum::enum_values<Enum>(); }
 };
 
@@ -27,6 +27,7 @@ bool is_parametrized_type(T val) {
     case UnaryOpType::LEAKY_RELU:
     case UnaryOpType::ELU:
     case UnaryOpType::GELU:
+    case UnaryOpType::RSQRT:
     case UnaryOpType::HEAVISIDE:
         return true;
     default:
@@ -101,6 +102,7 @@ inline Tensor power(const Tensor& input_tensor, uint32_t exponent) { return run_
 inline Tensor leaky_relu(const Tensor& input_tensor, float slope) { return run_eltwise_unary<UnaryOpType::LEAKY_RELU>(input_tensor, slope); }
 inline Tensor elu(const Tensor& input_tensor, float slope) { return run_eltwise_unary<UnaryOpType::ELU>(input_tensor, slope); }
 inline Tensor gelu(const Tensor &input_tensor,bool fast_and_approx=true) { return run_eltwise_unary<UnaryOpType::GELU>(input_tensor, static_cast<float>(fast_and_approx)); }
+inline Tensor rsqrt(const Tensor &input_tensor,bool fast_and_approx=true) { return run_eltwise_unary<UnaryOpType::RSQRT>(input_tensor, static_cast<float>(fast_and_approx)); }
 inline Tensor heaviside(const Tensor& input_tensor, float value) { return run_eltwise_unary<UnaryOpType::HEAVISIDE>(input_tensor, value); }
 
 // binop with tied inputs.

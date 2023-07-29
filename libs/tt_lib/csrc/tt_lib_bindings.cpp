@@ -1269,6 +1269,20 @@ void TensorModule(py::module &m_tensor) {
         +----------+----------------------------+-----------+------------------------------+----------+
     )doc");
 
+    m_tensor.def("rsqrt", &rsqrt, R"doc(
+        Returns a new tensor with the reciprocal of the square-root of each of the elements of the input tensor ``arg0``.
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+----------------------------+-----------+------------------------------+----------+
+        | Argument | Description                | Data type | Valid range                  | Required |
+        +==========+============================+===========+==============================+==========+
+        | arg0     | Tensor rsqrt is aplied to  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+----------------------------+-----------+------------------------------+----------+
+    )doc");
+
     m_tensor.def("relu", &relu, R"doc(
         Applies the rectified linear unit (ReLU) function to the elements of the input tensor ``arg0``.
 

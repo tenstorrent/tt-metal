@@ -455,6 +455,8 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.expm1
 
+.. autofunction:: tt_lib.tensor.rsqrt
+
 .. autofunction:: tt_lib.tensor.asin
 
 .. autofunction:: tt_lib.tensor.acos

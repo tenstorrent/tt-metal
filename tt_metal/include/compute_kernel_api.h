@@ -431,6 +431,21 @@ ALWI void gelu_tile(uint32_t idst,bool fast_and_approx=true) {
   }
 }
 
+ALWI void rsqrt_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_rsqrt_init<APPROX>() ));
+}
+
+/**
+ *  Please refer to documentation for exp_tile.
+ */
+ALWI void rsqrt_tile(uint32_t idst,bool fast_and_approx=true) {
+  if (fast_and_approx) {
+    MATH(( llk_math_eltwise_unary_sfpu_rsqrt<true, SyncHalf>(idst) ));
+  } else {
+    MATH(( llk_math_eltwise_unary_sfpu_rsqrt<false, SyncHalf>(idst) ));
+  }
+}
+
 ALWI void recip_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_reciprocal_init<APPROX>() ));
 }

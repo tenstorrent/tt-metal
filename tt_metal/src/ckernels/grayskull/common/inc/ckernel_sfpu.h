@@ -569,6 +569,29 @@ inline void calculate_gelu()
     }
 }
 
+template <bool APPROXIMATION_MODE, int ITERATIONS, int RECIPROCAL_ITERATIONS>
+inline void calculate_rsqrt()
+{
+
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+
+        vFloat in = dst_reg[0];
+        vFloat result = sfpu_reciprocal<false>(in);
+
+        for (int r = 0; r < RECIPROCAL_ITERATIONS; r++)
+        {
+            // y = y * (1.5 - 0.5 * x * y * y) Newton's method iteration.
+            result = result * (1.5F - 0.5F  * dst_reg[0] * result * result);
+        }
+
+        dst_reg[0] = result;
+
+        dst_reg++;
+
+    }
+}
+
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_add1()
 {
@@ -1558,6 +1581,16 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
 	  calculate_gelu<true, ITERATIONS>();
 	} else {
 	  calculate_gelu<false, ITERATIONS>();
+	}
+    }
+    else if constexpr (operation == SfpuType::rsqrt) {
+	//param0 = true -> approximate fast mode
+	//         false -> high precision mode
+    // The algorithm uses Newton's method based on no.of iteration better approximation can be calculated
+	if ( param0 ) {
+	  calculate_rsqrt<true, ITERATIONS, 10>();
+	} else {
+	  calculate_rsqrt<false, ITERATIONS, 25>();
 	}
     }
     else if constexpr (operation == SfpuType::reciprocal) {

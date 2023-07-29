@@ -196,6 +196,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_gelu,
         "pytorch_op": pytorch_ops.gelu,
     },
+    "eltwise-rsqrt": {
+        "tt_lib_op": tt_lib_ops.eltwise_rsqrt,
+        "pytorch_op": pytorch_ops.rsqrt,
+    },
     "eltwise-leaky_relu": {
         "tt_lib_op": tt_lib_ops.eltwise_leaky_relu,
         "pytorch_op": pytorch_ops.leaky_relu,

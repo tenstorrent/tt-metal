@@ -87,6 +87,7 @@ enum SfpuType
   sigmoid_appx,
   reciprocal,
   sqrt,
+  rsqrt,
   lrelu,
   power,
   multiply,
