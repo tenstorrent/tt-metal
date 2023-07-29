@@ -1,4 +1,5 @@
 import torch.nn as nn
+
 # import torch.nn.functional as F
 import torch
 
@@ -7,6 +8,7 @@ from tt_lib.fallback_ops import fallback_ops
 
 from models.stable_diffusion.tt.residual_block import TtResnetBlock2D
 from models.stable_diffusion.tt.upsample_2d import TtUpsample2D
+from models.stable_diffusion.tt.experimental_ops import concat
 
 
 class TtUpBlock2D(nn.Module):
@@ -36,7 +38,6 @@ class TtUpBlock2D(nn.Module):
         self.host = host
         self.state_dict = state_dict
 
-
         for i in range(num_layers):
             res_skip_channels = in_channels if (i == num_layers - 1) else out_channels
             resnet_in_channels = prev_output_channel if i == 0 else out_channels
@@ -56,29 +57,43 @@ class TtUpBlock2D(nn.Module):
                     device=self.device,
                     host=self.host,
                     state_dict=self.state_dict,
-                    base_address=f"{base_address}.resnets.{i}"
+                    base_address=f"{base_address}.resnets.{i}",
                 )
             )
 
         # self.resnets = nn.ModuleList(resnets)
         self.resnets = resnets
         if add_upsample:
-            self.upsamplers = [TtUpsample2D(channels=out_channels, out_channels=out_channels, use_conv=True, use_conv_transpose = False,name = 'op',
-                                            state_dict=self.state_dict, base_address=f"{base_address}.upsamplers.0")]
+            self.upsamplers = [
+                TtUpsample2D(
+                    channels=out_channels,
+                    out_channels=out_channels,
+                    use_conv=True,
+                    use_conv_transpose=False,
+                    name="op",
+                    state_dict=self.state_dict,
+                    base_address=f"{base_address}.upsamplers.0",
+                )
+            ]
 
         else:
             self.upsamplers = None
 
         self.gradient_checkpointing = False
 
-    def forward(self, hidden_states: ttl.tensor.Tensor, res_hidden_states_tuple, temb=None, upsample_size=None) -> ttl.tensor.Tensor:
+    def forward(
+        self,
+        hidden_states: ttl.tensor.Tensor,
+        res_hidden_states_tuple,
+        temb=None,
+        upsample_size=None,
+    ) -> ttl.tensor.Tensor:
         for resnet in self.resnets:
             # pop res hidden states
             res_hidden_states = res_hidden_states_tuple[-1]
             res_hidden_states_tuple = res_hidden_states_tuple[:-1]
 
-
-            hidden_states = fallback_ops.concat([hidden_states, res_hidden_states], dim=1)
+            hidden_states = concat([hidden_states, res_hidden_states], dim=1)
             hidden_states = resnet(hidden_states, temb)
 
         if self.upsamplers is not None:

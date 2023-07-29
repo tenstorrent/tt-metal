@@ -2162,6 +2162,7 @@ void TensorModule(py::module &m_tensor) {
         +----------+--------------------------------+------------+-------------------------------+----------+
     )doc");
 
+    //transpose = transpose_wh
     m_tensor.def("transpose", py::overload_cast<const Tensor&>(&transpose), R"doc(
         Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``X`` and ``Y`` are swapped.
 
@@ -2192,6 +2193,49 @@ void TensorModule(py::module &m_tensor) {
 
     m_tensor.def("transpose_cn", &transpose_cn, R"doc(
         Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``Z`` and ``W`` are swapped.
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+--------------------------------+------------+-------------------------------+----------+
+        | Argument | Description                    | Data type  | Valid range                   | Required |
+        +==========+================================+============+===============================+==========+
+        | arg0     | Input tensor                   | Tensor     | Tensor of shape [W, Z, Y, X]  | Yes      |
+        +----------+--------------------------------+------------+-------------------------------+----------+
+    )doc");
+
+
+    m_tensor.def("transpose_nh", &transpose_nh, R"doc(
+        Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``W`` and ``Y`` are swapped.
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+--------------------------------+------------+-------------------------------+----------+
+        | Argument | Description                    | Data type  | Valid range                   | Required |
+        +==========+================================+============+===============================+==========+
+        | arg0     | Input tensor                   | Tensor     | Tensor of shape [W, Z, Y, X]  | Yes      |
+        +----------+--------------------------------+------------+-------------------------------+----------+
+    )doc");
+
+    m_tensor.def("transpose_cw", &transpose_cw, R"doc(
+        Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``Z`` and ``X`` are swapped.
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+--------------------------------+------------+-------------------------------+----------+
+        | Argument | Description                    | Data type  | Valid range                   | Required |
+        +==========+================================+============+===============================+==========+
+        | arg0     | Input tensor                   | Tensor     | Tensor of shape [W, Z, Y, X]  | Yes      |
+        +----------+--------------------------------+------------+-------------------------------+----------+
+    )doc");
+
+    m_tensor.def("transpose_nw", &transpose_nw, R"doc(
+        Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``W`` and ``X`` are swapped.
 
         Input tensor must have BFLOAT16 data type.
 

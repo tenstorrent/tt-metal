@@ -5,6 +5,7 @@ import torch
 import tt_lib as ttl
 from tt_lib.fallback_ops import fallback_ops
 from models.stable_diffusion.sd_utils import make_linear
+from models.stable_diffusion.tt.experimental_ops import Conv2d
 
 
 class TtResnetBlock2D(nn.Module):
@@ -34,7 +35,7 @@ class TtResnetBlock2D(nn.Module):
         use_fallback_ops=False,
     ):
         super().__init__()
-        self.use_fallback_ops=use_fallback_ops
+        self.use_fallback_ops = use_fallback_ops
         self.pre_norm = pre_norm
         self.pre_norm = True  # this is part of the original code
         self.in_channels = in_channels
@@ -112,7 +113,7 @@ class TtResnetBlock2D(nn.Module):
         conv2_weights = state_dict[f"{base_address}.conv2.weight"]
         conv2_bias = state_dict[f"{base_address}.conv2.bias"]
 
-        self.conv2 = fallback_ops.Conv2d(
+        self.conv2 = Conv2d(
             conv2_weights,
             conv2_bias,
             self.out_channels,
@@ -150,7 +151,7 @@ class TtResnetBlock2D(nn.Module):
         if self.use_in_shortcut:
             conv_shortcut_weights = state_dict[f"{base_address}.conv_shortcut.weight"]
             conv_shortcut_bias = state_dict[f"{base_address}.conv_shortcut.bias"]
-            self.conv_shortcut = fallback_ops.Conv2d(
+            self.conv_shortcut = Conv2d(
                 conv_shortcut_weights,
                 conv_shortcut_bias,
                 self.in_channels,
@@ -160,7 +161,9 @@ class TtResnetBlock2D(nn.Module):
                 padding=0,
             )
 
-    def forward(self, input_tensor: ttl.tensor.Tensor, temb: ttl.tensor.Tensor) -> ttl.tensor.Tensor:
+    def forward(
+        self, input_tensor: ttl.tensor.Tensor, temb: ttl.tensor.Tensor
+    ) -> ttl.tensor.Tensor:
         hidden_states = input_tensor
         hidden_states = self.norm1(hidden_states)
         hidden_states = self.nonlinearity(hidden_states)
@@ -173,7 +176,6 @@ class TtResnetBlock2D(nn.Module):
         hidden_states = self.conv1(hidden_states)
 
         if temb is not None:
-
             temb = self.nonlinearity(temb)
 
             temb = self.time_emb_proj(temb)

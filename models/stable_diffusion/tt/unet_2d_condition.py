@@ -3,14 +3,23 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import torch.nn as nn
 
 from models.stable_diffusion.sd_utils import make_linear
-from models.stable_diffusion.tt.embeddings import TtTimestepEmbedding as TimestepEmbedding
+from models.stable_diffusion.tt.embeddings import (
+    TtTimestepEmbedding as TimestepEmbedding,
+)
 from models.stable_diffusion.tt.downblock_2d import TtDownBlock2D as DownBlock2D
 from models.stable_diffusion.tt.upblock_2d import TtUpBlock2D as UpBlock2D
-from models.stable_diffusion.tt.unet_2d_blocks import TtUNetMidBlock2DCrossAttn as UNetMidBlock2DCrossAttn
-from models.stable_diffusion.tt.unet_2d_blocks import TtCrossAttnDownBlock2D as CrossAttnDownBlock2D
-from models.stable_diffusion.tt.unet_2d_blocks import TtCrossAttnUpBlock2D as CrossAttnUpBlock2D
+from models.stable_diffusion.tt.unet_2d_blocks import (
+    TtUNetMidBlock2DCrossAttn as UNetMidBlock2DCrossAttn,
+)
+from models.stable_diffusion.tt.unet_2d_blocks import (
+    TtCrossAttnDownBlock2D as CrossAttnDownBlock2D,
+)
+from models.stable_diffusion.tt.unet_2d_blocks import (
+    TtCrossAttnUpBlock2D as CrossAttnUpBlock2D,
+)
 import tt_lib as ttl
 from tt_lib.fallback_ops import fallback_ops
+from models.stable_diffusion.tt.experimental_ops import Conv2d
 
 
 def get_down_block(
@@ -222,7 +231,7 @@ class UNet2DConditionModel(nn.Module):
         use_fallback_ops=False,
     ):
         super().__init__()
-        self.use_fallback_ops=use_fallback_ops
+        self.use_fallback_ops = use_fallback_ops
         self.base_address_with_dot = "" if base_address == "" else f"{base_address}."
         self.sample_size = sample_size
         time_embed_dim = block_out_channels[0] * 4
@@ -230,7 +239,7 @@ class UNet2DConditionModel(nn.Module):
         # input
         conv_in_w = state_dict[f"{self.base_address_with_dot}conv_in.weight"]
         conv_in_b = state_dict[f"{self.base_address_with_dot}conv_in.bias"]
-        self.conv_in = fallback_ops.Conv2d(
+        self.conv_in = Conv2d(
             in_channels=in_channels,
             out_channels=block_out_channels[0],
             kernel_size=3,
@@ -404,7 +413,7 @@ class UNet2DConditionModel(nn.Module):
 
         conv_out_w = state_dict[f"{self.base_address_with_dot}conv_out.weight"]
         conv_out_b = state_dict[f"{self.base_address_with_dot}conv_out.bias"]
-        self.conv_out = fallback_ops.Conv2d(
+        self.conv_out = Conv2d(
             in_channels=block_out_channels[0],
             out_channels=out_channels,
             kernel_size=3,

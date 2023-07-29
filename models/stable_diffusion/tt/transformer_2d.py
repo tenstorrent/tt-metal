@@ -11,6 +11,7 @@ from models.stable_diffusion.tt.cross_attention import TtCrossAttention
 from models.stable_diffusion.tt.feedforward import TtFeedForward
 from models.stable_diffusion.sd_utils import make_linear
 from models.utility_functions import pad_by_zero, torch2tt_tensor, torch_to_tt_tensor_rm
+from models.stable_diffusion.tt.experimental_ops import Conv2d
 
 
 class TtBasicTransformerBlock(nn.Module):
@@ -52,7 +53,7 @@ class TtBasicTransformerBlock(nn.Module):
         use_fallback_ops=False,
     ):
         super().__init__()
-        self.use_fallback_ops=use_fallback_ops
+        self.use_fallback_ops = use_fallback_ops
         self.device = device
         self.host = host
         self.only_cross_attention = only_cross_attention
@@ -124,10 +125,12 @@ class TtBasicTransformerBlock(nn.Module):
             if self.use_fallback_ops:
                 norm1_weights = state_dict[f"{base_address}.norm1.weight"]
                 norm1_bias = state_dict[f"{base_address}.norm1.bias"]
-                self.norm1 = fallback_ops.LayerNorm(weights=norm1_weights,
-                                                    biases=norm1_bias,
-                                                    normalized_shape=dim,
-                                                    elementwise_affine=norm_elementwise_affine)
+                self.norm1 = fallback_ops.LayerNorm(
+                    weights=norm1_weights,
+                    biases=norm1_bias,
+                    normalized_shape=dim,
+                    elementwise_affine=norm_elementwise_affine,
+                )
             else:
                 norm1_gamma = torch_to_tt_tensor_rm(
                     state_dict[f"{base_address}.norm1.weight"],
@@ -158,10 +161,12 @@ class TtBasicTransformerBlock(nn.Module):
             if self.use_fallback_ops:
                 norm2_weights = state_dict[f"{base_address}.norm2.weight"]
                 norm2_bias = state_dict[f"{base_address}.norm2.bias"]
-                self.norm2 = fallback_ops.LayerNorm(weights=norm2_weights,
-                                                    biases=norm2_bias,
-                                                    normalized_shape=dim,
-                                                    elementwise_affine=norm_elementwise_affine)
+                self.norm2 = fallback_ops.LayerNorm(
+                    weights=norm2_weights,
+                    biases=norm2_bias,
+                    normalized_shape=dim,
+                    elementwise_affine=norm_elementwise_affine,
+                )
             else:
                 norm2_gamma = torch_to_tt_tensor_rm(
                     state_dict[f"{base_address}.norm2.weight"],
@@ -188,16 +193,22 @@ class TtBasicTransformerBlock(nn.Module):
         if self.use_fallback_ops:
             norm3_weight = state_dict[f"{base_address}.norm3.weight"]
             norm3_bias = state_dict[f"{base_address}.norm3.bias"]
-            self.norm3 = fallback_ops.LayerNorm(weights=norm3_weight,
-                                                biases=norm3_bias,
-                                                normalized_shape=dim,
-                                                elementwise_affine=norm_elementwise_affine)
+            self.norm3 = fallback_ops.LayerNorm(
+                weights=norm3_weight,
+                biases=norm3_bias,
+                normalized_shape=dim,
+                elementwise_affine=norm_elementwise_affine,
+            )
         else:
             norm3_gamma = torch_to_tt_tensor_rm(
-                state_dict[f"{base_address}.norm3.weight"], self.device, put_on_device=False
+                state_dict[f"{base_address}.norm3.weight"],
+                self.device,
+                put_on_device=False,
             )
             norm3_beta = torch_to_tt_tensor_rm(
-                state_dict[f"{base_address}.norm3.bias"], self.device, put_on_device=False
+                state_dict[f"{base_address}.norm3.bias"],
+                self.device,
+                put_on_device=False,
             )
 
             self.norm3 = partial(
@@ -367,7 +378,7 @@ class TtTransformer2DModel(nn.Module):
             else:
                 proj_in_weights = state_dict[f"{base_address}.proj_in.weight"]
                 proj_in_bias = state_dict[f"{base_address}.proj_in.bias"]
-                self.proj_in = fallback_ops.Conv2d(
+                self.proj_in = Conv2d(
                     weights=proj_in_weights,
                     biases=proj_in_bias,
                     in_channels=in_channels,
@@ -422,7 +433,7 @@ class TtTransformer2DModel(nn.Module):
             else:
                 proj_out_weights = state_dict[f"{base_address}.proj_out.weight"]
                 proj_out_bias = state_dict[f"{base_address}.proj_out.bias"]
-                self.proj_out = fallback_ops.Conv2d(
+                self.proj_out = Conv2d(
                     weights=proj_out_weights,
                     biases=proj_out_bias,
                     in_channels=inner_dim,
