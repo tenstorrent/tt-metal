@@ -719,9 +719,7 @@ bool CompileProgram(Device *device, Program &program) {
         program.get_id());
 
     const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
-    if (TT_METAL_DEVICE_DISPATCH_MODE == nullptr) {
-        tt::tt_metal::detail::CompileBlankKernel(device);
-    }
+    tt::tt_metal::detail::CompileBlankKernel(device);
 
     bool pass = true;
     detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("CompileProgram");
