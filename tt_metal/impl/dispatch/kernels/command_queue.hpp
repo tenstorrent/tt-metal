@@ -48,7 +48,7 @@ void write_buffer(
 
 FORCE_INLINE void write_buffers(
     u32 num_buffer_writes,
-    volatile u32*& command_ptr,
+    volatile tt_l1_ptr u32*& command_ptr,
     InterleavedAddrGen<true>& dram_addr_gen,
     InterleavedAddrGen<false>& l1_addr_gen) {
     for (u32 i = 0; i < num_buffer_writes; i++) {
@@ -117,7 +117,7 @@ FORCE_INLINE void read_buffer(
 
 FORCE_INLINE void read_buffers(
     u32 num_buffer_reads,
-    volatile u32*& command_ptr,
+    volatile tt_l1_ptr u32*& command_ptr,
     InterleavedAddrGen<true>& dram_addr_gen,
     InterleavedAddrGen<false>& l1_addr_gen) {
     for (u32 i = 0; i < num_buffer_reads; i++) {
@@ -148,7 +148,7 @@ FORCE_INLINE void read_buffers(
 }
 
 FORCE_INLINE void write_program_section(
-    u32 src, u32 src_noc, u32 transfer_size, u32 num_writes, volatile u32*& command_ptr) {
+    u32 src, u32 src_noc, u32 transfer_size, u32 num_writes, volatile tt_l1_ptr u32*& command_ptr) {
     // Bring in a program section into L1
 
     noc_async_read(((u64(src_noc) << 32) | src), DEVICE_COMMAND_DATA_ADDR, transfer_size);
@@ -168,7 +168,7 @@ FORCE_INLINE void write_program_section(
 #ifdef TT_METAL_DISPATCH_MAP_DUMP
         DPRINT << "CHUNK" << ENDL();
         for (u32 i = 0; i < transfer_size; i += sizeof(u32)) {
-            DPRINT << *reinterpret_cast<volatile u32*>(src + i) << ENDL();
+            DPRINT << *reinterpret_cast<volatile tt_l1_ptr u32*>(src + i) << ENDL();
         }
         #else
         noc_async_write_multicast(src, u64(dst_noc) << 32 | dst, transfer_size, num_receivers);
@@ -179,7 +179,7 @@ FORCE_INLINE void write_program_section(
     #endif
 }
 
-FORCE_INLINE void write_program(u32 num_program_relays, volatile u32*& command_ptr) {
+FORCE_INLINE void write_program(u32 num_program_relays, volatile tt_l1_ptr u32*& command_ptr) {
     for (u32 relay = 0; relay < num_program_relays; relay++) {
         u32 src = command_ptr[0];
         u32 src_noc = command_ptr[1];
@@ -197,7 +197,7 @@ FORCE_INLINE void write_program(u32 num_program_relays, volatile u32*& command_p
 #endif
 }
 
-FORCE_INLINE void launch_program(u32 num_workers, u32 num_multicast_messages, volatile u32*& command_ptr) {
+FORCE_INLINE void launch_program(u32 num_workers, u32 num_multicast_messages, volatile tt_l1_ptr u32*& command_ptr) {
 // Never launch a program when this tool is used.
 #ifdef TT_METAL_DISPATCH_MAP_DUMP
     return;
@@ -218,7 +218,7 @@ FORCE_INLINE void launch_program(u32 num_workers, u32 num_multicast_messages, vo
     noc_async_write_barrier();
 
     // Wait on worker cores to notify me that they have completed
-    while (reinterpret_cast<volatile u32*>(DISPATCH_MESSAGE_ADDR)[0] != num_workers)
+    while (reinterpret_cast<volatile tt_l1_ptr u32*>(DISPATCH_MESSAGE_ADDR)[0] != num_workers)
         ;
     for (u32 i = 0; i < num_multicast_messages * 2; i += 2) {
         u64 worker_core_noc_coord = u64(command_ptr[i]) << 32;
@@ -234,7 +234,7 @@ FORCE_INLINE void finish_program(u32 finish) {
     if (not finish)
         return;
 
-    volatile u32* finish_ptr = get_cq_finish_ptr();
+    volatile tt_l1_ptr u32* finish_ptr = get_cq_finish_ptr();
     finish_ptr[0] = 1;
     uint64_t finish_noc_addr = get_noc_addr(PCIE_NOC_X, PCIE_NOC_Y, HOST_CQ_FINISH_PTR);
     noc_async_write(u32(finish_ptr), finish_noc_addr, 4);

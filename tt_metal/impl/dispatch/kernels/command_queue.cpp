@@ -17,10 +17,10 @@ void kernel_main() {
 
     // Write my own NOC address to local L1 so that when I dispatch kernels,
     // they will know how to let me know they have finished
-    *reinterpret_cast<volatile uint64_t*>(DISPATCH_MESSAGE_REMOTE_SENDER_ADDR) = get_noc_addr(DISPATCH_MESSAGE_ADDR);
+    *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(DISPATCH_MESSAGE_REMOTE_SENDER_ADDR) = get_noc_addr(DISPATCH_MESSAGE_ADDR);
 
     while (true) {
-        volatile u32* command_ptr = reinterpret_cast<volatile u32*>(command_start_addr);
+        volatile tt_l1_ptr u32* command_ptr = reinterpret_cast<volatile tt_l1_ptr u32*>(command_start_addr);
 
         cq_wait_front();
         // Hardcoded for time being, need to clean this up
