@@ -3,6 +3,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "noc_parameters.h"
+#include "tt_metal/src/firmware/riscv/common/risc_attribs.h"
+
 
 ////
 

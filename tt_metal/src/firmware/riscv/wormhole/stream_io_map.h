@@ -4,6 +4,8 @@
 #include <stdint.h>
 
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
+#include "tt_metal/src/firmware/riscv/common/risc_attribs.h"
+
 
 // TODO: in ll-buda we can probably just start at stream 0 and not at stream 8?
 /*
