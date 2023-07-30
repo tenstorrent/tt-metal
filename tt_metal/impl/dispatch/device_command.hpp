@@ -47,7 +47,7 @@ static_assert(DEVICE_COMMAND_NUM_ENTRIES * sizeof(u32) % 32 == 0);
 static constexpr u32 NUM_16B_WORDS_IN_DEVICE_COMMAND = (DEVICE_COMMAND_NUM_ENTRIES * sizeof(u32)) / 16;
 class DeviceCommand {
    private:
-    static constexpr u32 num_4B_words_in_relay_buffer_instruction = 12;
+    static constexpr u32 num_4B_words_in_relay_buffer_instruction = 8;
     static constexpr u32 num_possible_relay_buffer_instructions = 4;
 
     // Command header
@@ -75,23 +75,20 @@ class DeviceCommand {
 
     array<u32, DEVICE_COMMAND_NUM_ENTRIES> desc;
 
-    // Creates a relay instruction in which the first address is a single page and the second can be multiple pages.
+    // Creates a buffer read or write in which the first address is a single page and the second can be multiple pages.
     // Num bursts corresponds to how many bursts of data we need to pull into the dispatch core (essentially the number
     // of relays). We try to read in as much data per burst as possible, and if the data is not divisible by num bursts,
     // we have a remainder step in which we try to relay the last chunk, specified by remainder_burst_size.
-    void add_buffer_relay(
+    void add_buffer_instruction(
         u32 addr0,
         u32 addr0_noc,
         u32 addr1,
-        u32 addr1_noc_start,
-        u32 num_bursts,
+
+        u32 padded_buf_size,
         u32 burst_size,
-        u32 num_pages_per_burst,
         u32 page_size,
-        u32 remainder_burst_size,
-        u32 num_pages_per_remainder_burst,
-        u32 banking_enum,
-        u32 starting_bank_id);
+        u32 padded_page_size,
+        u32 buf_type);
 
    public:
     DeviceCommand();
@@ -106,35 +103,27 @@ class DeviceCommand {
 
     void set_worker_noc_coord(u32 noc_coord);
 
-    // 'dst' must be a single bank
     void add_read_buffer_instruction(
         u32 dst,
         u32 dst_noc,
         u32 src,
-        u32 src_noc_start,
-        u32 num_bursts,
-        u32 burst_size,
-        u32 num_pages_per_burst,
-        u32 page_size,
-        u32 remainder_burst_size,
-        u32 num_pages_per_remainder_burst,
-        u32 banking_enum,
-        u32 starting_bank_id);
 
-    // 'src' must be a single bank
+        u32 padded_buf_size,
+        u32 burst_size,
+        u32 page_size,
+        u32 padded_page_size,
+        u32 buf_type);
+
     void add_write_buffer_instruction(
         u32 src,
         u32 src_noc,
         u32 dst,
-        u32 dst_noc_start,
-        u32 num_bursts,
+
+        u32 padded_buf_size,
         u32 burst_size,
-        u32 num_pages_per_burst,
         u32 page_size,
-        u32 remainder_burst_size,
-        u32 num_pages_per_remainder_burst,
-        u32 banking_enum,
-        u32 starting_bank_id);
+        u32 padded_page_size,
+        u32 buf_type);
 
     // The data transfer pattern that this instruction
     // attempts to resolve is when we need to read data

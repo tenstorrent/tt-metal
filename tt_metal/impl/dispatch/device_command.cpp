@@ -25,98 +25,80 @@ void DeviceCommand::set_multicast_message_noc_coord(u32 noc_coord, u32 num_messa
     this->worker_launch_idx += 2;
 }
 
-void DeviceCommand::add_buffer_relay(
+void DeviceCommand::add_buffer_instruction(
     u32 addr0,
     u32 addr0_noc,
     u32 addr1,
-    u32 addr1_noc_start,
-    u32 num_bursts,
+
+    u32 padded_buf_size,
     u32 burst_size,
-    u32 num_pages_per_burst,
     u32 page_size,
-    u32 remainder_burst_size,
-    u32 num_pages_per_remainder_burst,
-    u32 banking_enum,
-    u32 starting_bank_id) {
+    u32 padded_page_size,
+    u32 buf_type) {
     constexpr static u32 upper_bound_on_relay_buffer_entry_idx = CONTROL_SECTION_NUM_ENTRIES + NUM_DISPATCH_CORES + RELAY_BUFFER_NUM_ENTRIES;
     tt::log_assert(this->relay_buffer_entry_idx < upper_bound_on_relay_buffer_entry_idx, "relay_buffer_entry_idx ({}) out of bounds ({})", relay_buffer_entry_idx, upper_bound_on_relay_buffer_entry_idx);
 
     this->desc.at(this->relay_buffer_entry_idx) = addr0;
     this->desc.at(this->relay_buffer_entry_idx + 1) = addr0_noc;
     this->desc.at(this->relay_buffer_entry_idx + 2) = addr1;
-    this->desc.at(this->relay_buffer_entry_idx + 3) = addr1_noc_start;
-    this->desc.at(this->relay_buffer_entry_idx + 4) = num_bursts;
-    this->desc.at(this->relay_buffer_entry_idx + 5) = burst_size;
-    this->desc.at(this->relay_buffer_entry_idx + 6) = num_pages_per_burst;
-    this->desc.at(this->relay_buffer_entry_idx + 7) = page_size;
-    this->desc.at(this->relay_buffer_entry_idx + 8) = remainder_burst_size;
-    this->desc.at(this->relay_buffer_entry_idx + 9) = num_pages_per_remainder_burst;
-    this->desc.at(this->relay_buffer_entry_idx + 10) = banking_enum;
-    this->desc.at(this->relay_buffer_entry_idx + 11) = starting_bank_id;
-    this->relay_buffer_entry_idx += this->num_4B_words_in_relay_buffer_instruction;
 
+    this->desc.at(this->relay_buffer_entry_idx + 3) = padded_buf_size;
+    this->desc.at(this->relay_buffer_entry_idx + 4) = burst_size;
+    this->desc.at(this->relay_buffer_entry_idx + 5) = page_size;
+    this->desc.at(this->relay_buffer_entry_idx + 6) = padded_page_size;
+    this->desc.at(this->relay_buffer_entry_idx + 7) = buf_type;
+    this->relay_buffer_entry_idx += this->num_4B_words_in_relay_buffer_instruction;
 }
 
 void DeviceCommand::add_read_buffer_instruction(
     u32 dst,
     u32 dst_noc,
     u32 src,
-    u32 src_noc_start,
-    u32 num_bursts,
+
+    u32 padded_buf_size,
     u32 burst_size,
-    u32 num_pages_per_burst,
     u32 page_size,
-    u32 remainder_burst_size,
-    u32 num_pages_per_remainder_burst,
-    u32 banking_enum,
-    u32 starting_bank_id) {
+    u32 padded_page_size,
+    u32 buf_type) {
     this->desc.at(this->num_relay_buffer_reads_idx)++;
     tt::log_assert(this->desc.at(this->num_relay_buffer_reads_idx) <= NUM_DATA_MOVEMENT_INSTRUCTIONS, "There can be max {} read commands", NUM_DATA_MOVEMENT_INSTRUCTIONS);
 
-    this->add_buffer_relay(
+    this->add_buffer_instruction(
         dst,
         dst_noc,
         src,
-        src_noc_start,
-        num_bursts,
+
+        padded_buf_size,
         burst_size,
-        num_pages_per_burst,
         page_size,
-        remainder_burst_size,
-        num_pages_per_remainder_burst,
-        banking_enum,
-        starting_bank_id);
+        padded_page_size,
+        buf_type);
 }
 
 void DeviceCommand::add_write_buffer_instruction(
     u32 src,
     u32 src_noc,
     u32 dst,
-    u32 dst_noc_start,
-    u32 num_bursts,
+
+    u32 padded_buf_size,
     u32 burst_size,
-    u32 num_pages_per_burst,
     u32 page_size,
-    u32 remainder_burst_size,
-    u32 num_pages_per_remainder_burst,
-    u32 banking_enum,
-    u32 starting_bank_id) {
+    u32 padded_page_size,
+    u32 buf_type) {
+
     this->desc.at(this->num_relay_buffer_writes_idx)++;
     tt::log_assert(this->desc.at(this->num_relay_buffer_writes_idx) <= NUM_DATA_MOVEMENT_INSTRUCTIONS, "There can be max {} write commands", NUM_DATA_MOVEMENT_INSTRUCTIONS);
 
-    this->add_buffer_relay(
+    this->add_buffer_instruction(
         src,
         src_noc,
         dst,
-        dst_noc_start,
-        num_bursts,
+
+        padded_buf_size,
         burst_size,
-        num_pages_per_burst,
         page_size,
-        remainder_burst_size,
-        num_pages_per_remainder_burst,
-        banking_enum,
-        starting_bank_id);
+        padded_page_size,
+        buf_type);
 }
 
 void DeviceCommand::add_read_multi_write_instruction(

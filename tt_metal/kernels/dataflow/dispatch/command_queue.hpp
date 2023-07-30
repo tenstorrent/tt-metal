@@ -5,54 +5,42 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 
 template <typename T>
+inline T min(T a, T b) {
+    return (a < b) ? a: b;
+}
+
+template <typename T>
 void write_buffer(
     T& addr_gen,
     u32 src_addr,
     u32 src_noc,
     u32 dst_addr,
 
-    u32 num_bursts,
+    u32 padded_buf_size,
     u32 burst_size,
-    u32 num_pages_per_burst,
     u32 page_size,
-    u32 remainder_burst_size,
-    u32 num_pages_per_remainder_burst,
-    u32 banking_enum,
-    u32 starting_bank_id) {
+    u32 padded_page_size) {
     // Base address of where we are writing to
     addr_gen.bank_base_address = dst_addr;
-    addr_gen.page_size = page_size;
+    addr_gen.page_size = padded_page_size;
 
-    u32 bank_id = starting_bank_id;
-    for (u32 j = 0; j < num_bursts; j++) {
-        u32 data_addr = DEVICE_COMMAND_DATA_ADDR;
+    u32 bank_id = 0;
+    while (padded_buf_size > 0) {
+
+        // Read in a big chunk of data
+        u32 read_size = min(burst_size, padded_buf_size);
         u64 src_noc_addr = (u64(src_noc) << 32) | src_addr;
-
-        noc_async_read(src_noc_addr, data_addr, burst_size);
-
-        src_addr += burst_size;
+        noc_async_read(src_noc_addr, DEVICE_COMMAND_DATA_ADDR, read_size);
+        padded_buf_size -= read_size;
+        src_addr += read_size;
+        u32 local_addr = DEVICE_COMMAND_DATA_ADDR;
         noc_async_read_barrier();
 
-        for (u32 k = 0; k < num_pages_per_burst; k++) {
-            u64 addr = addr_gen.get_noc_addr(bank_id++);
-
-            noc_async_write(data_addr, addr, page_size);
-            data_addr += page_size;
-        }
-        noc_async_write_barrier();
-    }
-    // In case where the final burst size is a different size than the others
-    if (remainder_burst_size) {
-        u32 data_addr = DEVICE_COMMAND_DATA_ADDR;
-        u64 src_noc_addr = (u64(src_noc) << 32) | src_addr;
-        noc_async_read(src_noc_addr, data_addr, remainder_burst_size);
-        noc_async_read_barrier();
-
-        for (u32 k = 0; k < num_pages_per_remainder_burst; k++) {
-            u64 addr = addr_gen.get_noc_addr(bank_id++);
-
-            noc_async_write(data_addr, addr, page_size);
-            data_addr += page_size;
+        // Send pages within the chunk to their destination
+        for (u32 i = 0; i < read_size; i += padded_page_size) {
+            u64 dst_addr = addr_gen.get_noc_addr(bank_id++);
+            noc_async_write(local_addr, dst_addr, page_size);
+            local_addr += padded_page_size;
         }
         noc_async_write_barrier();
     }
@@ -67,22 +55,18 @@ FORCE_INLINE void write_buffers(
         u32 src_addr = command_ptr[0];
         u32 src_noc = command_ptr[1];
         u32 dst_addr = command_ptr[2];
-        u32 dst_noc_start = command_ptr[3];
-        u32 num_bursts = command_ptr[4];
-        u32 burst_size = command_ptr[5];
-        u32 num_pages_per_burst = command_ptr[6];
-        u32 page_size = command_ptr[7];
-        u32 remainder_burst_size = command_ptr[8];
-        u32 num_pages_per_remainder_burst = command_ptr[9];
-        u32 banking_enum = command_ptr[10];
-        u32 starting_bank_id = command_ptr[11];
+
+        u32 padded_buf_size = command_ptr[3];
+        u32 burst_size = command_ptr[4];
+        u32 page_size = command_ptr[5];
+        u32 padded_page_size = command_ptr[6];
+        u32 buf_type = command_ptr[7];
 
 #define write_buffer_args                                                                                      \
-    src_addr, src_noc, dst_addr, num_bursts, burst_size, num_pages_per_burst, page_size, remainder_burst_size, \
-        num_pages_per_remainder_burst, banking_enum, starting_bank_id
+    src_addr, src_noc, dst_addr, padded_buf_size, burst_size, page_size, padded_page_size
 
         u64 src_noc_addr = (u64(src_noc) << 32) | src_addr;
-        switch (banking_enum) {
+        switch (buf_type) {
             case 0:  // DRAM
                 write_buffer(dram_addr_gen, write_buffer_args);
                 break;
@@ -91,7 +75,7 @@ FORCE_INLINE void write_buffers(
                 break;
         }
 
-        command_ptr += 12;
+        command_ptr += 8;
     }
 }
 
@@ -102,49 +86,31 @@ FORCE_INLINE void read_buffer(
     u32 dst_noc,
     u32 src_addr,
 
-    u32 num_bursts,
+    u32 padded_buf_size,
     u32 burst_size,
-    u32 num_pages_per_burst,
     u32 page_size,
-    u32 remainder_burst_size,
-    u32 num_pages_per_remainder_burst,
-    u32 banking_enum,
-    u32 starting_bank_id) {
+    u32 padded_page_size) {
     // Base address of where we are reading from
     addr_gen.bank_base_address = src_addr;
-    addr_gen.page_size = page_size;
+    addr_gen.page_size = padded_page_size;
 
-    u32 bank_id = starting_bank_id;
-    for (u32 j = 0; j < num_bursts; j++) {
-        u32 data_addr = DEVICE_COMMAND_DATA_ADDR;
+    u32 bank_id = 0;
+    while (padded_buf_size > 0) {
+        // Read in pages until we don't have anymore memory
+        // available
+        u32 write_size = min(burst_size, padded_buf_size);
+        u32 local_addr = DEVICE_COMMAND_DATA_ADDR;
         u64 dst_noc_addr = (u64(dst_noc) << 32) | dst_addr;
+        dst_addr += write_size;
+        padded_buf_size -= write_size;
 
-        for (u32 k = 0; k < num_pages_per_burst; k++) {
-            u64 addr = addr_gen.get_noc_addr(bank_id++);
-
-            noc_async_read(addr, data_addr, page_size);
-            data_addr += page_size;
+        for (u32 i = 0; i < write_size; i += padded_page_size) {
+            u64 src_addr = addr_gen.get_noc_addr(bank_id++);
+            noc_async_read(src_addr, local_addr, page_size);
+            local_addr += padded_page_size;
         }
         noc_async_read_barrier();
-
-        noc_async_write(DEVICE_COMMAND_DATA_ADDR, dst_noc_addr, burst_size);
-        dst_addr += burst_size;
-        noc_async_write_barrier();
-    }
-
-    if (remainder_burst_size) {
-        u32 data_addr = DEVICE_COMMAND_DATA_ADDR;
-        u64 dst_noc_addr = (u64(dst_noc) << 32) | dst_addr;
-
-        for (u32 k = 0; k < num_pages_per_remainder_burst; k++) {
-            u64 addr = addr_gen.get_noc_addr(bank_id++);
-
-            noc_async_read(addr, data_addr, page_size);
-            data_addr += page_size;
-        }
-        noc_async_read_barrier();
-
-        noc_async_write(DEVICE_COMMAND_DATA_ADDR, dst_noc_addr, remainder_burst_size);
+        noc_async_write(DEVICE_COMMAND_DATA_ADDR, dst_noc_addr, write_size);
         noc_async_write_barrier();
     }
 }
@@ -158,34 +124,26 @@ FORCE_INLINE void read_buffers(
         u32 dst_addr = command_ptr[0];
         u32 dst_noc = command_ptr[1];
         u32 src_addr = command_ptr[2];
-        u32 src_noc_start = command_ptr[3];
-        u32 num_bursts = command_ptr[4];
-        u32 burst_size = command_ptr[5];
-        u32 num_pages_per_burst = command_ptr[6];
-        u32 page_size = command_ptr[7];
-        u32 remainder_burst_size = command_ptr[8];
-        u32 num_pages_per_remainder_burst = command_ptr[9];
-        u32 banking_enum = command_ptr[10];
-        u32 starting_bank_id = command_ptr[11];
+
+        u32 padded_buf_size = command_ptr[3];
+        u32 burst_size = command_ptr[4];
+        u32 page_size = command_ptr[5];
+        u32 padded_page_size = command_ptr[6];
+        u32 buf_type = command_ptr[7];
 
 #define read_buffer_args                                                                                       \
-    dst_addr, dst_noc, src_addr, num_bursts, burst_size, num_pages_per_burst, page_size, remainder_burst_size, \
-        num_pages_per_remainder_burst, banking_enum, starting_bank_id
+    dst_addr, dst_noc, src_addr, padded_buf_size, burst_size, page_size, padded_page_size
 
-        switch (banking_enum) {
+        switch (buf_type) {
             case 0:  // DRAM
-                read_buffer(
-                    dram_addr_gen,
-                    read_buffer_args);
-                    break;
+                read_buffer(dram_addr_gen, read_buffer_args);
+                break;
             case 1:  // L1
-                read_buffer(
-                    l1_addr_gen,
-                    read_buffer_args);
-                    break;
+                read_buffer(l1_addr_gen, read_buffer_args);
+                break;
         }
 
-        command_ptr += 12;
+        command_ptr += 8;
     }
 }
 

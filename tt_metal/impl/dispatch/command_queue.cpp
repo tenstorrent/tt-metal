@@ -279,48 +279,23 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(u32 dst_ad
     u32 data_size_in_bytes = padded_page_size * num_pages;
     command.set_data_size_in_bytes(data_size_in_bytes);
 
-    u32 starting_bank_id = 0;
-    u32 remainder_burst_size;
     u32 available_l1 = MEM_L1_SIZE - DEVICE_COMMAND_DATA_ADDR;
-    u32 potential_burst_size = available_l1;
-    u32 remaining_buffer_size = data_size_in_bytes;
-    u32 num_pages_per_burst = potential_burst_size / padded_page_size;
-    u32 burst_size = num_pages_per_burst * padded_page_size;
-    do {
-        u32 num_bursts = remaining_buffer_size / available_l1;
-        remainder_burst_size = remaining_buffer_size - (num_bursts * burst_size);
+    u32 burst_size = (available_l1 / padded_page_size) * padded_page_size;
 
-        u32 num_pages_per_remainder_burst = 0;
-        remaining_buffer_size = remainder_burst_size;
-        if (remainder_burst_size <= available_l1) {
-            num_pages_per_remainder_burst = remainder_burst_size / padded_page_size;
-        } else {
-            remainder_burst_size = 0;
-        }
+    vector<CoreCoord> pcie_cores = this->device->cluster()->get_soc_desc(this->device->pcie_slot()).pcie_cores;
+    TT_ASSERT(pcie_cores.size() == 1, "Should only have one pcie core");
+    const CoreCoord& pcie_core = pcie_cores.at(0);
 
-        u32 pcie_slot = 0;
-        vector<CoreCoord> pcie_cores = this->device->cluster()->get_soc_desc(pcie_slot).pcie_cores;
-        TT_ASSERT(pcie_cores.size() == 1, "Should only have one pcie core");
-        const CoreCoord& pcie_core = pcie_cores.at(0);
+    command.add_read_buffer_instruction(
+        dst_address,
+        NOC_XY_ENCODING(pcie_core.x, pcie_core.y),
+        this->buffer.address(),
 
-        command.add_read_buffer_instruction(
-            dst_address,
-            NOC_XY_ENCODING(pcie_core.x, pcie_core.y),
-            this->buffer.address(),
-            noc_coord_to_u32(this->buffer.noc_coordinates()),
-            num_bursts,
-            burst_size,
-            num_pages_per_burst,
-            padded_page_size,
-            remainder_burst_size,
-            num_pages_per_remainder_burst,
-            (u32)(this->buffer.buffer_type()),
-            starting_bank_id);
-
-        dst_address += num_bursts * burst_size;
-
-        starting_bank_id += num_pages_per_burst * num_bursts;
-    } while (remaining_buffer_size > available_l1);
+        data_size_in_bytes,
+        burst_size,
+        this->buffer.page_size(),
+        padded_page_size,
+        (u32) this->buffer.buffer_type());
 
     return command;
 }
@@ -366,48 +341,23 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(u32 src_a
     u32 data_size_in_bytes = padded_page_size * num_pages;
     command.set_data_size_in_bytes(data_size_in_bytes);
 
-    u32 starting_bank_id = 0;
-    u32 remainder_burst_size;
     u32 available_l1 = MEM_L1_SIZE - DEVICE_COMMAND_DATA_ADDR;
-    u32 potential_burst_size = available_l1;
-    u32 remaining_buffer_size = data_size_in_bytes;
+    u32 burst_size = (available_l1 / padded_page_size) * padded_page_size;
 
-    do {
-        u32 num_bursts = remaining_buffer_size / available_l1;
-        u32 num_pages_per_burst = potential_burst_size / padded_page_size;
-        u32 burst_size = num_pages_per_burst * padded_page_size;
-        remainder_burst_size = remaining_buffer_size - (num_bursts * burst_size);
+    vector<CoreCoord> pcie_cores = this->device->cluster()->get_soc_desc(this->device->pcie_slot()).pcie_cores;
+    TT_ASSERT(pcie_cores.size() == 1, "Should only have one pcie core");
+    const CoreCoord& pcie_core = pcie_cores.at(0);
 
-        u32 num_pages_per_remainder_burst = 0;
-        remaining_buffer_size = remainder_burst_size;
-        if (remainder_burst_size <= available_l1) {
-            num_pages_per_remainder_burst = remainder_burst_size / padded_page_size;
-        } else {
-            remainder_burst_size = 0;
-        }
+    command.add_write_buffer_instruction(
+        src_address,
+        NOC_XY_ENCODING(pcie_core.x, pcie_core.y),
+        this->buffer.address(),
 
-        u32 pcie_slot = 0;
-        vector<CoreCoord> pcie_cores = this->device->cluster()->get_soc_desc(pcie_slot).pcie_cores;
-        TT_ASSERT(pcie_cores.size() == 1, "Should only have one pcie core");
-        const CoreCoord& pcie_core = pcie_cores.at(0);
-
-        command.add_write_buffer_instruction(
-            src_address,
-            NOC_XY_ENCODING(pcie_core.x, pcie_core.y),
-            this->buffer.address(),
-            noc_coord_to_u32(this->buffer.noc_coordinates()),
-            num_bursts,
-            burst_size,
-            num_pages_per_burst,
-            padded_page_size,
-            remainder_burst_size,
-            num_pages_per_remainder_burst,
-            (u32)(this->buffer.buffer_type()),
-            starting_bank_id);
-
-        src_address += num_bursts * burst_size;
-        starting_bank_id += num_pages_per_burst * num_bursts;
-    } while (remaining_buffer_size > available_l1);
+        data_size_in_bytes,
+        burst_size,
+        this->buffer.page_size(),
+        padded_page_size,
+        (u32)(this->buffer.buffer_type()));
 
     return command;
 }
@@ -743,7 +693,10 @@ void CommandQueue::enqueue_write_buffer(Buffer& buffer, vector<u32>& src, bool b
 
     u32 write_buffer_command_size = DeviceCommand::size_in_bytes() + buffer.size();
     if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + write_buffer_command_size >= HUGE_PAGE_SIZE) {
-        tt::log_assert(write_buffer_command_size <= HUGE_PAGE_SIZE - 96, "EnqueueWriteBuffer command is too large: {}", write_buffer_command_size);
+        tt::log_assert(
+            write_buffer_command_size <= HUGE_PAGE_SIZE - 96,
+            "EnqueueWriteBuffer command is too large: {}",
+            write_buffer_command_size);
         this->wrap();
     }
     tt::log_debug(tt::LogDispatch, "EnqueueWriteBuffer");
@@ -798,8 +751,10 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
     auto rt_args = get_current_runtime_args();
 
     u32 runtime_args_and_device_command_size = DeviceCommand::size_in_bytes() + (rt_args.size() * sizeof(u32));
-    if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + runtime_args_and_device_command_size >= HUGE_PAGE_SIZE) {
-        tt::log_assert(runtime_args_and_device_command_size <= HUGE_PAGE_SIZE - 96, "EnqueueProgram command size too large");
+    if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + runtime_args_and_device_command_size >=
+        HUGE_PAGE_SIZE) {
+        tt::log_assert(
+            runtime_args_and_device_command_size <= HUGE_PAGE_SIZE - 96, "EnqueueProgram command size too large");
         this->wrap();
     }
 
@@ -814,8 +769,7 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
 }
 
 void CommandQueue::finish() {
-    if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + DeviceCommand::size_in_bytes() >=
-        HUGE_PAGE_SIZE) {
+    if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + DeviceCommand::size_in_bytes() >= HUGE_PAGE_SIZE) {
         this->wrap();
     }
     tt::log_debug(tt::LogDispatch, "Finish");
@@ -860,7 +814,6 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
         TT_ASSERT(
             DISPATCH_MAP_DUMP != nullptr,
             "Cannot compare dispatch device output to host when dispatch map dump not enabled");
-
 
         string device_dispatch_dump_file = "device_" + string(DISPATCH_MAP_DUMP);
         auto hart_mask = DPRINT_HART_BR;
