@@ -2623,9 +2623,9 @@ def sum(x, *args, dim, device, dtype, layout, on_device, **kwargs):
     )
 
     if dim == 2:
-        output = output[:, :, 0, :]
+        output = output[:, :, :1, :]
     elif dim == 3:
-        output = output[:, :, :, 0]
+        output = output[:, :, :, :1]
     return output
 
 

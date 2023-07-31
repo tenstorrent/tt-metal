@@ -97,6 +97,8 @@ string get_op_name_default(UnaryOpType::Enum op_type) {
             op_name = "asin_tile_init(); asin_tile(0); pack_tile(0,tt::CB::c_out0);"; break;
         case UnaryOpType::ACOS:
             op_name = "acos_tile_init(); acos_tile(0); pack_tile(0,tt::CB::c_out0);"; break;
+        case UnaryOpType::RELU6:
+            op_name = "relu_max_tile_init(); relu_max_tile(0,0x40c00000); pack_tile(0, tt::CB::c_out0);"; break;
         default: TT_ASSERT(false && "Undefined op type");
     }
     return op_name;

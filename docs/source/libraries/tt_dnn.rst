@@ -278,11 +278,23 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.sin
 
+.. autofunction:: tt_lib.tensor.cosh
+
+.. autofunction:: tt_lib.tensor.sinh
+
+.. autofunction:: tt_lib.tensor.acos
+
+.. autofunction:: tt_lib.tensor.asin
+
 .. autofunction:: tt_lib.tensor.squared_difference
 
 .. autofunction:: tt_lib.tensor.elu
 
 .. autofunction:: tt_lib.tensor.exp2
+
+.. autofunction:: tt_lib.tensor.tanhshrink
+
+.. autofunction:: tt_lib.tensor.heaviside
 
 Tensor relational operations
 ----------------------------------
@@ -449,19 +461,11 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.sum
 
-.. autofunction:: tt_lib.tensor.heaviside
-
 .. autofunction:: tt_lib.tensor.log_sigmoid
 
 .. autofunction:: tt_lib.tensor.expm1
 
 .. autofunction:: tt_lib.tensor.rsqrt
-
-.. autofunction:: tt_lib.tensor.asin
-
-.. autofunction:: tt_lib.tensor.acos
-
-.. autofunction:: tt_lib.tensor.tanhshrink
 
 .. autofunction:: tt_lib.tensor.signbit
 

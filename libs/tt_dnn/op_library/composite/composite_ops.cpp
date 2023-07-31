@@ -56,24 +56,6 @@ Tensor silu(const Tensor& a) {
     return silu_a;
 }
 
-
-// Function neg
-//use transformation y = -1 * x by broadcast
-Tensor neg(const Tensor& a) {
-    Tensor minus_one = mk_scalar(-1.0f);
-    Tensor result_neg = bcast(a, minus_one, BcastOpMath::MUL, BcastOpDim::HW);
-    return result_neg;
-}
-
-
-//add 1
-//use transformation y = 1.0 + x by broadcast
-Tensor add1(const Tensor& a) {
-    Tensor one = mk_scalar(1.0f);
-    Tensor result_addone = bcast(a, one, BcastOpMath::ADD, BcastOpDim::HW);
-    return result_addone;
-}
-
 //log1p 1
 //use transformation y = log(1.0 + x) by broadcast
 Tensor log1p(const Tensor& x) {
@@ -373,20 +355,6 @@ Tensor std(const Tensor& y) {
 }
 #endif
 
-//deg2rad(a) using scale pi/180.
-Tensor deg2rad(const Tensor &input_a) {
-    constexpr float scale = (float)(M_PI/180.0);
-    Tensor t_scale = mk_scalar(scale);
-    return  bcast(input_a, t_scale, BcastOpMath::MUL, BcastOpDim::HW);
-}
-
-//rad2deg(a) using scale 180/pi.
-Tensor rad2deg(const Tensor &input_a) {
-    constexpr float scale = (float)(180.0/M_PI);
-    Tensor t_scale = mk_scalar(scale);
-    return  bcast(input_a, t_scale, BcastOpMath::MUL, BcastOpDim::HW);
-}
-
 //hypot(a,b) = sqrt[ a^2 + b^2 ]
 Tensor hypot(const Tensor &input_a, const Tensor &input_b) {
     Tensor a_sq = square(input_a);
@@ -394,13 +362,6 @@ Tensor hypot(const Tensor &input_a, const Tensor &input_b) {
     Tensor c_sq = add(a_sq, b_sq);
     return  sqrt( c_sq );
 }
-
-//relu6(a) = min(relu(a),6);
-Tensor relu6(const Tensor &input_a) {
-    return relu_max(input_a, 6.0f);
-}
-
-
 
 //threshold(a,t,v) = (a <= t)*v + (a > t)*a
 Tensor threshold(const Tensor &input_a, float threshold, float value) {

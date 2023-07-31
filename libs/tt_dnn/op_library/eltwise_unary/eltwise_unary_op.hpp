@@ -14,7 +14,7 @@ namespace tt_metal {
 struct UnaryOpType {
     enum Enum { EXP = 0, RECIP = 1, GELU = 2, RELU = 3, SQRT = 4, SIGMOID = 5, LOG = 6, TANH = 7, LOG2 = 8, LOG10 = 9, SIN = 10, COS = 11,
                 ABS=12, SIGN=13, SQUARE=14, EQZ = 15, NEZ = 16, GTZ = 17, LTZ = 18, GEZ = 19, LEZ = 20, RELU_MAX = 21, RELU_MIN = 22, POWER = 23, LEAKY_RELU = 24, ELU = 25, EXP2 = 26, HEAVISIDE = 27,
-                EXPM1 = 28, SIGNBIT = 29, ASIN = 30, ACOS = 31, RSQRT = 32};
+                EXPM1 = 28, SIGNBIT = 29, ASIN = 30, ACOS = 31, RSQRT = 32, RELU6 = 33 };
     static const auto all() { return magic_enum::enum_values<Enum>(); }
 };
 
@@ -71,6 +71,7 @@ inline Tensor sqrt(const Tensor &input_tensor) { return run_eltwise_unary<UnaryO
 inline Tensor exp(const Tensor &input_tensor) { return run_eltwise_unary<UnaryOpType::EXP>(input_tensor); }
 inline Tensor recip(const Tensor &input_tensor) { return run_eltwise_unary<UnaryOpType::RECIP>(input_tensor); }
 inline Tensor relu(const Tensor &input_tensor) { return run_eltwise_unary<UnaryOpType::RELU>(input_tensor); }
+inline Tensor relu6(const Tensor &input_tensor) { return run_eltwise_unary<UnaryOpType::RELU6>(input_tensor); }
 inline Tensor sigmoid(const Tensor &input_tensor) { return run_eltwise_unary<UnaryOpType::SIGMOID>(input_tensor); }
 inline Tensor log(const Tensor &input_tensor) { return run_eltwise_unary<UnaryOpType::LOG>(input_tensor); }
 inline Tensor tanh(const Tensor &input_tensor) { return run_eltwise_unary<UnaryOpType::TANH>(input_tensor); }
@@ -117,6 +118,20 @@ Tensor mul_unary(float value, const Tensor& input_tensor);
 
 Tensor div_unary(const Tensor& input_tensor, float value);
 Tensor div_unary(float value, const Tensor& input_tensor);
+
+//deg2rad(a) using scale pi/180.
+inline Tensor deg2rad(const Tensor &input_tensor) { return mul_unary(input_tensor, (float)(M_PI/180.0)); }
+
+//rad2deg(a) using scale 180/pi.
+inline Tensor rad2deg(const Tensor &input_tensor) { return mul_unary(input_tensor, (float)(180.0/M_PI)); }
+
+// Function neg
+//use transformation y = -1 * x by broadcast
+inline Tensor neg(const Tensor &input_tensor) { return mul_unary(input_tensor, -1.0f); }
+
+//add 1
+//use transformation y = 1.0 + x by broadcast
+inline Tensor add1(const Tensor &input_tensor) { return add_unary(input_tensor, 1.0f); }
 
 }  // namespace tt_metal
 

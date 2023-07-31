@@ -56,14 +56,6 @@ Tensor mac_scalar(const Tensor& a, float b, float c);
 // Ref: https://pytorch.org/docs/stable/generated/torch.nn.SiLU.html?highlight=silu#torch.nn.SiLU
 Tensor silu(const Tensor& a);
 
-// Function neg
-//use transformation y = -1 * x by broadcast
-Tensor neg(const Tensor& a);
-
-//add 1
-//use transformation y = 1.0 + x by broadcast
-Tensor add1(const Tensor& a);
-
 //log1p 1
 //use transformation y = log(1.0 + x) by broadcast
 Tensor log1p(const Tensor& x);
@@ -103,17 +95,8 @@ Tensor tanhshrink(const Tensor &input_a);
 //square difference(x, y) = (x - y) * (x - y)
 Tensor squared_difference(const Tensor &input_a,const Tensor &input_b);
 
-//deg2rad(a) using scale pi/180.
-Tensor deg2rad(const Tensor &input_a);
-
-//rad2deg(a) using scale 180/pi.
-Tensor rad2deg(const Tensor &input_a);
-
 //hypot(a,b) = sqrt[ a^2 + b^2 ]
 Tensor hypot(const Tensor &input_a, const Tensor &input_b);
-
-//relu6(a) = min(relu(a),6);
-Tensor relu6(const Tensor &input_a);
 
 //threshold(a,t,v) = (a < t)*v + (a > t)*a
 Tensor threshold(const Tensor &input_a,float threshold, float value);

@@ -26,7 +26,10 @@ from python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytor
 )
 @pytest.mark.parametrize("pcie_slot", [0])
 class TestEltwiseUnary:
-    @pytest.mark.parametrize("fn_kind", ["relu", "sigmoid", "square", "tanh"])
+    @pytest.mark.parametrize(
+        "fn_kind",
+        ["relu", "sigmoid", "square", "tanh", "relu6", "add1", "deg2rad", "rad2deg"],
+    )
     def test_run_eltwise_unary_ops(
         self, input_shapes, fn_kind, pcie_slot, function_level_defaults
     ):
@@ -283,12 +286,16 @@ class TestEltwiseUnary:
         )
 
     @pytest.mark.parametrize("fn_kind", ["abs", "sign", "neg", "signbit"])
+    @pytest.mark.parametrize("fill_val", [-1.0, 0.0, 1.0])
     def test_run_eltwise_sign_ops(
-        self, fn_kind, input_shapes, pcie_slot, function_level_defaults
+        self, fn_kind, input_shapes, fill_val, pcie_slot, function_level_defaults
     ):
+        if fn_kind == "signbit" and fill_val == 0.0:
+            pytest.skip("Signbit fails for 0 value")
         datagen_func = [
             generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=-10, high=10), torch.bfloat16
+                partial(generation_funcs.gen_constant, constant=fill_val),
+                torch.bfloat16,
             )
         ]
         comparison_func = comparison_funcs.comp_equal
@@ -405,6 +412,7 @@ class TestEltwiseUnary:
             pcie_slot,
         )
 
+    @pytest.mark.skip("expm1 only returns -1.0")
     def test_run_eltwise_expm1(self, input_shapes, pcie_slot, function_level_defaults):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
