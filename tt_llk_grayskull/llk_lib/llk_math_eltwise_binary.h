@@ -25,7 +25,7 @@ template <
     DstSync Dst = DstSync::SyncFull,
     int NUM_FIDELITY_PHASES = 0,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void llk_math_eltwise_binary(uint dst_index, const bool clear_fp32_dst_acc = true /*not used*/) {
+inline void llk_math_eltwise_binary_impl(const std::uint32_t num_faces_A, const std::uint32_t num_faces_B, uint dst_index, const bool clear_fp32_dst_acc/*not used*/) {
     if constexpr ((Dst == DstSync::SyncTile16) || (Dst == DstSync::SyncTile2)) {
         math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(math_sync_tile_dst_index);
 
@@ -160,6 +160,27 @@ inline void llk_math_eltwise_binary(uint dst_index, const bool clear_fp32_dst_ac
         FWASSERT("Unsupported op!", false);
     }
     math::clear_dst_reg_addr();
+}
+
+template <
+    EltwiseBinaryType eltwise_binary_type,
+    BroadcastType src_b_bcast_type,
+    DstSync Dst = DstSync::SyncFull,
+    int NUM_FIDELITY_PHASES = 0,
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+inline void llk_math_eltwise_binary(uint dst_index, const bool clear_fp32_dst_acc = true /*not used*/) {
+    llk_math_eltwise_binary_impl<eltwise_binary_type, src_b_bcast_type, Dst, NUM_FIDELITY_PHASES, binary_reuse_dest>(4, 4, dst_index, clear_fp32_dst_acc);
+}
+
+template <
+    EltwiseBinaryType eltwise_binary_type,
+    BroadcastType src_b_bcast_type,
+    DstSync Dst = DstSync::SyncFull,
+    int NUM_FIDELITY_PHASES = 0,
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+inline void llk_math_eltwise_binary(const std::uint32_t operand_A, const std::uint32_t operand_B, uint dst_index, const bool clear_fp32_dst_acc = true /*not used*/) {
+    // Todo: get num faces based on operand A, and operand B
+    llk_math_eltwise_binary_impl<eltwise_binary_type, src_b_bcast_type, Dst, NUM_FIDELITY_PHASES, binary_reuse_dest>(4, 4, dst_index, clear_fp32_dst_acc);
 }
 
 template <EltwiseBinaryType eltwise_binary_type, BroadcastType bcast_type>
