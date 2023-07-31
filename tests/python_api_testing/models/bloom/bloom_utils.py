@@ -9,7 +9,7 @@ def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
     while len(size) < 4:
         size.insert(0, 1)
 
-    tt_tensor = tt_lib.tensor.Tensor(py_tensor.contiguous().to(torch.bfloat16).reshape(size)).to(tt_device)
+    tt_tensor = tt_lib.tensor.Tensor(py_tensor.reshape(size), tt_lib.tensor.DataType.BFLOAT16).to(tt_device)
 
     return tt_tensor
 

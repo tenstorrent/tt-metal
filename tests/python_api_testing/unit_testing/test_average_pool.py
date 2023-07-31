@@ -41,7 +41,7 @@ def test_run_average_pool(act_shape, dtype):
     torch.manual_seed(0)
 
     act = torch.randn(act_shape, dtype=torch.bfloat16).float()
-    ttact = ttl.tensor.Tensor(act.to(torch.bfloat16))
+    ttact = ttl.tensor.Tensor(act, ttl.tensor.DataType.BFLOAT16)
     act_shape_padded = shape_padded(act_shape)
     if act_shape != act_shape_padded:
         ttact = ttact.pad_to_tile(0.)

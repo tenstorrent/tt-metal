@@ -11,7 +11,7 @@ from tt_lib.utils import _nearest_32
 def create_conv_act_tensor(torch_tensor, N, C, H, W):
     torch_tensor = torch.permute(torch_tensor, (0, 2, 3, 1))
     act_shape_channel_padded = [N, H, W, _nearest_32(C)]
-    tt_tensor = ttl.tensor.Tensor(torch_tensor.to(torch.bfloat16).contiguous())
+    tt_tensor = ttl.tensor.Tensor(torch_tensor,  ttl.tensor.DataType.BFLOAT16)
     tt_tensor = tt_tensor.pad(act_shape_channel_padded, (0,0,0,0), 0.0)
     return tt_tensor
 

@@ -206,10 +206,8 @@ def torch2tt_tensor(py_tensor: torch.Tensor, tt_device, tt_layout=tt_lib.tensor.
     while len(size) < 4:
         size.insert(0, 1)
 
-    py_tensor = py_tensor.contiguous()
-    py_tensor = py_tensor.to(torch.bfloat16)
     py_tensor = py_tensor.reshape(size)
-    tt_tensor = tt_lib.tensor.Tensor(py_tensor).to(tt_layout)
+    tt_tensor = tt_lib.tensor.Tensor(py_tensor, tt_lib.tensor.DataType.BFLOAT16).to(tt_layout)
 
     tt_tensor = tt_tensor.to(tt_device, tt_memory_config)
 
@@ -234,7 +232,7 @@ def tt2torch_tensor(tt_tensor):
 def pad_by_zero(x: torch.Tensor, device):
     initial_shape = x.shape
     if initial_shape[3] % 32 != 0 or initial_shape[2] % 32 != 0:
-        x = tt_lib.tensor.Tensor(x.contiguous().to(torch.bfloat16))
+        x = tt_lib.tensor.Tensor(x, tt_lib.tensor.DataType.BFLOAT16)
         x = x.pad((initial_shape[0], initial_shape[1], _nearest_32(initial_shape[2]), _nearest_32(initial_shape[3])), (0, 0, 0, 0), 0)
         x = x.to(tt_lib.tensor.Layout.TILE).to(device)
 
@@ -332,7 +330,7 @@ def torch_to_tt_tensor_rm(py_tensor, device, shape=None, put_on_device=True):
             shape.insert(0, 1)
 
     tt_tensor = (
-         tt_lib.tensor.Tensor(py_tensor.contiguous().to(torch.bfloat16).reshape(shape))
+         tt_lib.tensor.Tensor(py_tensor.reshape(shape), tt_lib.tensor.DataType.BFLOAT16)
     )
     if put_on_device:
         tt_tensor = tt_tensor.to(device)
@@ -345,7 +343,7 @@ def torch_to_tt_tensor(py_tensor, device):
         shape.insert(0, 1)
 
     tt_tensor = (
-         tt_lib.tensor.Tensor(py_tensor.contiguous().to(torch.bfloat16).reshape(shape))
+         tt_lib.tensor.Tensor(py_tensor.reshape(shape), tt_lib.tensor.DataType.BFLOAT16)
         .to(tt_lib.tensor.Layout.TILE)     # change memory layout of TT Tensor to TILE (as operation that will use it expects TILE layout)
         .to(device)                         # move TT Tensor from host to TT accelerator device (device is of type tt_lib.device.Device)
     )

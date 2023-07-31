@@ -431,7 +431,7 @@ class ResNet(nn.Module):
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         x = torch.permute(x, (0, 2, 3, 1))
-        x = tt_lib.tensor.Tensor(x.contiguous().to(torch.bfloat16))
+        x = tt_lib.tensor.Tensor(x, tt_lib.tensor.DataType.BFLOAT16)
         x = x.pad((x.shape()[0], x.shape()[1], x.shape()[2], _nearest_32(x.shape()[3])), (0, 0, 0, 0), 0)
         x = x.to(self.device)
         x = self.conv1(x)

@@ -21,15 +21,10 @@ def test_tile_major_reshape():
     C = 5
     H = 64
     W = 96
-    x = torch.randn((N, C, H, W)).to(torch.bfloat16).to(torch.float32)
+    x = torch.randn((N, C, H, W), dtype=torch.float32).bfloat16().float()
 
     xtt = (
-        ttl.tensor.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
-        )
+        ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16)
         .to(ttl.tensor.Layout.TILE)
         .to(device)
     )
@@ -115,13 +110,7 @@ def test_row_major_reshape():
     H = 128
     W = 128
     x = torch.rand(N * C * H * W).reshape(N, C, H, W).bfloat16().float()
-    xtt = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
-        device,
-    )
+    xtt = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(device)
 
     reshaped = ttl.tensor.reshape(xtt, 1, 128, 2, 64)
     reshaped = torch.Tensor(reshaped.cpu().data()).reshape(reshaped.shape())

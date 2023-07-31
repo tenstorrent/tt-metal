@@ -128,7 +128,7 @@ void implement_buffer_protocol(PyType& py_buffer_t) {
         );
 };
 
-Tensor convert_torch_tensor_to_tt_tensor(const py::handle& torch_tensor) {
+Tensor convert_torch_tensor_to_tt_tensor(const py::handle& torch_tensor, std::optional<DataType> optional_data_type = std::nullopt) {
     py::object torch = py::module_::import("torch");
     if (not py::isinstance(torch_tensor, torch.attr("Tensor"))) {
         TT_THROW("The argument must be of type torch.Tensor!");
@@ -137,44 +137,93 @@ Tensor convert_torch_tensor_to_tt_tensor(const py::handle& torch_tensor) {
     auto torch_dtype = torch_tensor.attr("dtype");
     auto shape = py::cast<std::vector<uint32_t>>(torch_tensor.attr("shape"));
 
-    auto on_creation_callback = [torch_tensor] {
-        torch_tensor.inc_ref();
-    };
-
-    auto on_destruction_callback = [torch_tensor] {
-        torch_tensor.dec_ref();
-    };
-
+    // Figure out tt data_type from torch dtype
+    auto buffer_size = volume(shape);
+    DataType data_type;
     if (torch_dtype.equal(torch.attr("float32"))) {
-        auto data_ptr = reinterpret_cast<float*>(py::cast<std::size_t>(torch_tensor.attr("data_ptr")()));
-        auto storage = BorrowedStorage(
-            borrowed_buffer::Buffer(data_ptr, volume(shape)),
-            on_creation_callback,
-            on_destruction_callback
-        );
-        return Tensor(std::move(storage), shape, DataType::FLOAT32, Layout::ROW_MAJOR);
+        data_type = DataType::FLOAT32;
     }
     else if (torch_dtype.equal(torch.attr("bfloat16"))) {
-        auto data_ptr = reinterpret_cast<bfloat16*>(py::cast<std::size_t>(torch_tensor.attr("data_ptr")()));
-        auto storage = BorrowedStorage(
-            borrowed_buffer::Buffer(data_ptr, volume(shape)),
-            on_creation_callback,
-            on_destruction_callback
-        );
-        return Tensor(std::move(storage), shape, DataType::BFLOAT16, Layout::ROW_MAJOR);
+        data_type = DataType::BFLOAT16;
     }
     else if (torch_dtype.equal(torch.attr("int64"))) {
          // TODO(arakhmati): add DataType::INT64
-        auto data_ptr = reinterpret_cast<uint32_t*>(py::cast<std::size_t>(torch_tensor.attr("data_ptr")()));
-        auto storage = BorrowedStorage(
-            borrowed_buffer::Buffer(data_ptr, volume(shape) * 2), // times 2 because INT64 is converted to UINT32
-            on_creation_callback,
-            on_destruction_callback
-        );
-        return Tensor(std::move(storage), shape, DataType::UINT32, Layout::ROW_MAJOR);
-    }
-    else {
+        data_type = DataType::UINT32;
+        buffer_size = volume(shape) * 2; // times 2 because INT64 is converted to UINT32
+    } else {
         TT_THROW(fmt::format("Unsupported DataType: {}", py::repr(torch_dtype)));
+    }
+
+    // Figure out tt data type from torch
+    auto contiguous_torch_tensor = torch_tensor.attr("contiguous")();
+    if (optional_data_type.has_value()) {
+        data_type = optional_data_type.value();
+        switch (data_type) {
+            case DataType::UINT32: {
+                contiguous_torch_tensor = contiguous_torch_tensor.attr("to")(torch.attr("int32"));
+                break;
+            }
+            case DataType::FLOAT32: {
+                contiguous_torch_tensor = contiguous_torch_tensor.attr("to")(torch.attr("float32"));
+                break;
+            }
+            case DataType::BFLOAT16: {
+                contiguous_torch_tensor = contiguous_torch_tensor.attr("to")(torch.attr("bfloat16"));
+                break;
+            }
+            case DataType::BFLOAT8_B: {
+                contiguous_torch_tensor = contiguous_torch_tensor.attr("to")(torch.attr("float32"));
+                break;
+            }
+            default: {
+                TT_THROW(fmt::format("Unsupported DataType: {}", data_type));
+                break;
+            }
+        }
+    }
+
+    auto on_creation_callback = [tensor = contiguous_torch_tensor] {
+        tensor.inc_ref();
+    };
+
+    auto on_destruction_callback = [tensor = contiguous_torch_tensor] {
+        tensor.dec_ref();
+    };
+
+
+    switch (data_type) {
+        case DataType::UINT32: {
+            auto data_ptr = reinterpret_cast<uint32_t*>(py::cast<std::size_t>(contiguous_torch_tensor.attr("data_ptr")()));
+            auto storage = BorrowedStorage(
+                borrowed_buffer::Buffer(data_ptr, buffer_size),
+                on_creation_callback,
+                on_destruction_callback
+            );
+            return Tensor(std::move(storage), shape, data_type, Layout::ROW_MAJOR);
+        }
+        case DataType::BFLOAT8_B:
+        case DataType::FLOAT32: {
+            auto data_ptr = reinterpret_cast<float*>(py::cast<std::size_t>(contiguous_torch_tensor.attr("data_ptr")()));
+            auto storage = BorrowedStorage(
+                borrowed_buffer::Buffer(data_ptr, buffer_size),
+                on_creation_callback,
+                on_destruction_callback
+            );
+            return Tensor(std::move(storage), shape, data_type, Layout::ROW_MAJOR);
+        }
+        case DataType::BFLOAT16: {
+            auto data_ptr = reinterpret_cast<bfloat16*>(py::cast<std::size_t>(contiguous_torch_tensor.attr("data_ptr")()));
+            auto storage = BorrowedStorage(
+                borrowed_buffer::Buffer(data_ptr, buffer_size),
+                on_creation_callback,
+                on_destruction_callback
+            );
+            return Tensor(std::move(storage), shape, data_type, Layout::ROW_MAJOR);
+        }
+        default: {
+            TT_THROW(fmt::format("Unsupported DataType: {}", data_type));
+            break;
+        }
     }
 }
 
@@ -517,8 +566,8 @@ void TensorModule(py::module &m_tensor) {
         )
         .def(
             py::init<>(
-                [](const py::object& torch_tensor) {
-                    return detail::convert_torch_tensor_to_tt_tensor(torch_tensor);
+                [](const py::object& torch_tensor, DataType data_type) {
+                    return detail::convert_torch_tensor_to_tt_tensor(torch_tensor, data_type);
                 }
             ),
             py::return_value_policy::move,
