@@ -59,19 +59,30 @@ def get_atol_rtol_pcc(golden, calculated):
             if golden.dtype == torch.bfloat16:
                 golden = golden.type(torch.float32)
                 calculated = calculated.type(torch.float32)
-            cal_pcc = np.min(
-                np.ma.corrcoef(
-                    np.ma.masked_invalid(
-                        torch.squeeze(golden).detach().numpy()
-                    ).flatten(),
-                    np.ma.masked_invalid(
-                        torch.squeeze(calculated).detach().numpy()
-                    ).flatten(),
-                )
+
+            # Single element case
+            if golden.numel() == 1:
+                return float(torch.equal(golden, calculated))
+
+            # one tensor is constant
+            if torch.max(golden) == torch.min(golden) or torch.max(
+                calculated
+            ) == torch.min(calculated):
+                return float(torch.equal(golden, calculated))
+
+            cal_pcc = np.ma.corrcoef(
+                np.ma.masked_invalid(torch.squeeze(golden).detach().numpy()).flatten(),
+                np.ma.masked_invalid(
+                    torch.squeeze(calculated).detach().numpy()
+                ).flatten(),
             )
+            # Remove correlation coefficient with self (typically always 1.0)
+            mask = np.ones(cal_pcc.shape, dtype=bool)
+            np.fill_diagonal(mask, 0)
+            cal_pcc = np.min(cal_pcc[mask])
 
             if isinstance(cal_pcc, np.ma.core.MaskedConstant):
-                return 1.0
+                return 0.0
 
             return cal_pcc
 
