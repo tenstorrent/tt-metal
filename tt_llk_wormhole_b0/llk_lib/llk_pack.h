@@ -19,7 +19,7 @@ inline void llk_pack_mop_config(const uint32_t output_id) {
     const bool partial_face = get_partial_face(output_id) && IS_BFP_FORMAT((uint)pack_dst_format[output_id]);
 
     addr_mod_pack_t{
-        .y_src = {.incr = untilize ? 0 : 16},
+        .y_src = {.incr = untilize ? 0 : 15}, // 4-bit value so max is 15. incadcxy will increment it by 1
         .y_dst = {.incr = 1},
     }
         .set(ADDR_MOD_0);
@@ -57,7 +57,8 @@ inline void llk_pack_mop_config(const uint32_t output_id) {
         ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 1));
 
         if (partial_face) {
-            tmp.set_loop_op0(TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0)); // Don't close the tile, point to the next face
+            tmp.set_start_op(TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0)); // Don't close the tile, point to the next face
+            tmp.set_loop_op0(TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 1, 0)); // Inc ch0_y+=1 (addr_mod_0 will increment by 15)
             tmp.set_loop_op1(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 1)); // Close the tile
         }
         // Write header to l1
