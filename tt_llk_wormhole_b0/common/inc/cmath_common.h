@@ -211,28 +211,15 @@ inline uint32_t get_operand_id(uint32_t operand)
     return (operand>=INTERMEDIATE_BASE_ID) ? operand - 8 : operand - OPERAND_BASE_ID;
 }
 
-
-inline const uint32_t get_num_faces(const std::uint32_t in_tile_dims[] = default_tile_dims)
+inline constexpr uint32_t get_num_faces(const std::uint32_t operand_id)
 {
-   if ((in_tile_dims[TileDim::R_IDX] <= FACE_R_DIM) && (in_tile_dims[TileDim::C_IDX] <= FACE_C_DIM)) {
-      return 1;
-   } else if ((in_tile_dims[TileDim::R_IDX] == TILE_R_DIM) && (in_tile_dims[TileDim::C_IDX] == TILE_C_DIM)) { 
-      return 4;
-   } else {
-      return 2;
+   return math_tile_num_faces[operand_id];
+}
+
+   inline constexpr uint32_t get_partial_face(const std::uint32_t operand_id)
+   {
+      return math_partial_face[operand_id];
    }
-}
-
-inline const uint32_t get_num_faces(const std::uint32_t operand_id)
-{
-    if ((math_tile_dims[operand_id][TileDim::R_IDX] <= FACE_R_DIM) && (math_tile_dims[operand_id][TileDim::C_IDX] <= FACE_C_DIM)) {
-        return 1;
-    } else if ((math_tile_dims[operand_id][TileDim::R_IDX] == TILE_R_DIM) && (math_tile_dims[operand_id][TileDim::C_IDX] == TILE_C_DIM)) { 
-        return 4;
-    } else {
-        return 2;
-    }
-}
 
 
 } // namespace ckernel::math

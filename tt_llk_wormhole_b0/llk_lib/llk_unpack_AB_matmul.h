@@ -131,7 +131,7 @@ inline void llk_unpack_AB_matmul_hw_configure_disaggregated(
     llk_unpack_AB_matmul_hw_configure<is_fp32_dest_acc_en, srnd_fpu_en>(&unpack_AB_matmul_params);
 }
 
-__attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const std::uint32_t transpose=0, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
+inline void llk_unpack_AB_matmul_init(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const std::uint32_t transpose=0, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
     // In0 -> srcB (supports partial face)
     // In1 -> srcA
     const uint32_t unpA_operand_id = get_operand_id(unpB_operand);
@@ -141,7 +141,7 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(const std::
     const uint32_t unpB_face_r_dim = get_face_r_dim(unpB_operand_id);
 
     const bool reuse_a = ct_dim >= rt_dim; 
-    const bool partial_face = (unpB_face_r_dim < FACE_R_DIM);
+    const bool partial_face = get_partial_face(unpB_operand_id);
 
     const uint32_t unpA_num_faces = get_num_faces(unpA_operand_id);
     const uint32_t unpB_num_faces = partial_face ? 1 : get_num_faces(unpB_operand_id); // if partial face -> unpack face by face
@@ -189,7 +189,7 @@ inline void llk_unpack_AB_matmul(
     const bool reuse_a = ct_dim >= rt_dim; 
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
 
-    const bool partial_face = unpB_face_r_dim < FACE_R_DIM;
+    const bool partial_face = get_partial_face(inputA);
 
     std::uint32_t base_address_a = operands[inputA].f.fifo_rd_ptr;
     std::uint32_t base_address_b = operands[inputB].f.fifo_rd_ptr;

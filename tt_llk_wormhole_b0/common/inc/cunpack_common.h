@@ -179,57 +179,24 @@ namespace ckernel::unpacker
        while (semaphore_read(semaphore::UNPACK_SYNC) > 0) {}
    }
 
-   /*
-   constexpr inline uint32_t get_tile_num_faces(const uint32_t operand) 
+   inline constexpr uint32_t get_num_faces(const std::uint32_t operand_id)
    {
-      if ((operand_tile_dims[operand][TileDim::R_IDX] <= FACE_R_DIM) && (operand_tile_dims[operand][TileDim::C_IDX] <= FACE_C_DIM)) {
-         return 1;
-      } else if ((operand_tile_dims[operand][TileDim::R_IDX] == TILE_R_DIM) && (operand_tile_dims[operand][TileDim::C_IDX] == TILE_C_DIM)) { 
-         return 4;
-      } else {
-         return 2;
-      }   
-   }
-   */
-
-   inline const uint32_t get_face_r_dim(const std::uint32_t in_tile_dims[] = default_tile_dims)
-   {
-      if (in_tile_dims[TileDim::R_IDX] < FACE_R_DIM) {
-         return in_tile_dims[TileDim::R_IDX];
-      } else  {
-         return 16;
-      } 
+      return unpack_tile_num_faces[operand_id];
    }
 
-   inline const uint32_t get_num_faces(const std::uint32_t in_tile_dims[] = default_tile_dims)
+   inline constexpr uint32_t get_face_r_dim(const std::uint32_t operand_id)
    {
-      if ((in_tile_dims[TileDim::R_IDX] <= FACE_R_DIM) && (in_tile_dims[TileDim::C_IDX] <= FACE_C_DIM)) {
-         return 1;
-      } else if ((in_tile_dims[TileDim::R_IDX] == TILE_R_DIM) && (in_tile_dims[TileDim::C_IDX] == TILE_C_DIM)) { 
-         return 4;
-      } else {
-         return 2;
-      }
+      return unpack_tile_face_r_dim[operand_id];
    }
 
-   inline const uint32_t get_num_faces(const std::uint32_t operand_id)
+   inline constexpr uint32_t get_partial_face(const std::uint32_t operand_id)
    {
-      if ((unpack_tile_dims[operand_id][TileDim::R_IDX] <= FACE_R_DIM) && (unpack_tile_dims[operand_id][TileDim::C_IDX] <= FACE_C_DIM)) {
-         return 1;
-      } else if ((unpack_tile_dims[operand_id][TileDim::R_IDX] == TILE_R_DIM) && (unpack_tile_dims[operand_id][TileDim::C_IDX] == TILE_C_DIM)) { 
-         return 4;
-      } else {
-         return 2;
-      }
+      return unpack_partial_face[operand_id];
    }
 
-   inline const uint32_t get_face_r_dim(const std::uint32_t operand_id)
+   inline constexpr uint32_t get_narrow_tile(const std::uint32_t operand_id)
    {
-      if (unpack_tile_dims[operand_id][TileDim::R_IDX] < FACE_R_DIM) {
-         return unpack_tile_dims[operand_id][TileDim::R_IDX];
-      } else {
-         return 16;
-      } 
+      return unpack_narrow_tile[operand_id];
    }
 
    inline void configure_unpack_AB(
@@ -418,4 +385,3 @@ namespace ckernel::unpacker
    }
 
 }
-

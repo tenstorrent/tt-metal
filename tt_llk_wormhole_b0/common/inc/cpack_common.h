@@ -134,29 +134,29 @@ namespace ckernel::packer
    } pack_counters_u;
 
    
-   __attribute__ ((always_inline)) inline const uint32_t get_num_faces(const std::uint32_t output_id) //FIXME: why we have to always inline
+   inline const uint32_t get_num_faces(const std::uint32_t output_id) //FIXME: why we have to always inline
    {
-      if ((pack_tile_dims[output_id][TileDim::R_IDX] <= FACE_R_DIM) && (pack_tile_dims[output_id][TileDim::C_IDX] <= FACE_C_DIM)) {
-         return 1;
-      } else if ((pack_tile_dims[output_id][TileDim::R_IDX] == TILE_R_DIM) && (pack_tile_dims[output_id][TileDim::C_IDX] == TILE_C_DIM)) { 
-         return 4;
-      } else {
-         return 2;
-      }
+      return pack_tile_num_faces[output_id];
    }
 
-    __attribute__ ((always_inline)) inline const uint32_t get_face_r_dim(const std::uint32_t output_id)
+   inline const uint32_t get_face_r_dim(const std::uint32_t output_id)
    {
-      if (pack_tile_dims[output_id][TileDim::R_IDX] < FACE_R_DIM) {
-         return pack_tile_dims[output_id][TileDim::R_IDX];
-      } else {
-         return 16;
-      } 
+      return pack_tile_face_r_dim[output_id];
    }
 
-    __attribute__ ((always_inline)) inline const uint32_t get_tile_c_dim(const std::uint32_t output_id)
+   inline const uint32_t get_tile_c_dim(const std::uint32_t output_id)
    {
       return pack_tile_dims[output_id][TileDim::C_IDX];
+   }
+
+   inline constexpr uint32_t get_partial_face(const std::uint32_t operand_id)
+   {
+      return pack_partial_face[operand_id];
+   }
+
+   inline constexpr uint32_t get_narrow_tile(const std::uint32_t operand_id)
+   {
+      return pack_narrow_tile[operand_id];
    }
 
    // Set unpacker offsets to 0, except for unpacker 0, channel 1, X, which is the tile X dimension
@@ -193,7 +193,7 @@ namespace ckernel::packer
       volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
 
       const uint num_faces = get_num_faces(output_id);
-      const bool partial_face = get_face_r_dim(output_id) < FACE_R_DIM;
+      const bool partial_face = get_partial_face(output_id);
       
       // Set packer config
       pack_config_u config;
@@ -467,7 +467,7 @@ namespace ckernel::packer
 
       const uint face_r_dim = get_face_r_dim(pack_output_id);
       const uint face_dim = face_r_dim * FACE_C_DIM;
-      const bool narrow_tile = get_tile_c_dim(pack_output_id) < TILE_C_DIM;
+      const bool narrow_tile = get_narrow_tile(pack_output_id);
       const uint pack_x_dim = untilize ? (narrow_tile ? face_dim : 16) : face_dim; // Number of datums to pack per row
                                                                                    // To untilize narrow tile (32x16) we just pack 2 faces back to back
       TT_SETADCXX(p_setadc::PAC, pack_x_dim-1, 0x0); 

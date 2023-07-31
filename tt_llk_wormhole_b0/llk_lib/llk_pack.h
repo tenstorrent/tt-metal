@@ -16,7 +16,7 @@ inline void llk_pack_mop_config(const uint32_t output_id) {
 
     const uint num_faces = get_num_faces(output_id);
     const uint face_r_dim = get_face_r_dim(output_id);
-    const bool partial_face = (face_r_dim < FACE_R_DIM) && IS_BFP_FORMAT((uint)pack_dst_format[output_id]);
+    const bool partial_face = get_partial_face(output_id) && IS_BFP_FORMAT((uint)pack_dst_format[output_id]);
 
     addr_mod_pack_t{
         .y_src = {.incr = untilize ? 0 : 16},
@@ -66,7 +66,7 @@ inline void llk_pack_mop_config(const uint32_t output_id) {
 
         tmp.program(instrn_buffer);
     } else {
-        const bool narrow_tile = get_tile_c_dim(output_id) < TILE_C_DIM;
+        const bool narrow_tile = get_narrow_tile(output_id);
         const uint MOP_UNTILIZE_INNER_LOOP = narrow_tile ? 1 : (FaceLayout == DstTileFaceLayout::ColMajor ? 8 : 4);
         const uint MOP_UNTILIZE_OUTER_LOOP = ((face_r_dim == 1) || narrow_tile) ? 1 : face_r_dim / 2;
 

@@ -98,10 +98,11 @@ inline void eltwise_unary_configure_addrmod() {
 }
 
 template <DataCopyType type, BroadcastType bcast_type = BroadcastType::NONE>
-inline void eltwise_unary_configure_mop(uint rows_per_inst, uint total_rows, const uint num_faces) {
+inline void eltwise_unary_configure_mop(uint rows_per_inst, uint total_rows, const uint operand_id) {
     // always move 32x32 tile, packed as 16x16x4
 
     if constexpr (type == A2D) {
+        const std::uint32_t num_faces = get_num_faces(operand_id);
         uint addr_mod = (rows_per_inst == p_mova2d::MOV_1_ROW) ? ADDR_MOD_0 : ADDR_MOD_2;
         uint innerloop = (rows_per_inst == p_mova2d::MOV_1_ROW) ? total_rows : (total_rows >> 3);
         uint outerloop = num_faces;
@@ -155,17 +156,15 @@ inline void eltwise_unary_configure_mop(uint rows_per_inst, uint total_rows, con
 
 template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NONE>
 // within_face_16x16_transpose is used by unpacker, math does not transpose
-inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t transpose_of_faces=0 /*unused*/, const std::uint32_t within_face_16x16_transpose=0 /* unused */, const std::uint32_t operand = 255) {
-    // If operand is 255, it means that it is not passed explicitly, and we should assume default tile tiles
-    // This will be fixed once all hlk inits which translate to this get operand argument
-    const std::uint32_t num_faces = operand != 255 ? get_num_faces(get_operand_id(operand)) : 4;
+inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t transpose_of_faces=0 /*unused*/, const std::uint32_t within_face_16x16_transpose=0 /* unused */, const std::uint32_t operand = 0) {
+    const std::uint32_t operand_id = get_operand_id(operand);
      
     eltwise_unary_configure_addrmod<type, src_b_bcast_type>();
 
     if constexpr (type == A2D) {
-        eltwise_unary_configure_mop<type, src_b_bcast_type>(p_mova2d::MOV_8_ROWS, 16, num_faces);
+        eltwise_unary_configure_mop<type, src_b_bcast_type>(p_mova2d::MOV_8_ROWS, 16, operand_id);
     } else if constexpr (type == B2D) {
-        eltwise_unary_configure_mop<type, src_b_bcast_type>(p_movb2d::MOV_4_ROWS, 16, num_faces);
+        eltwise_unary_configure_mop<type, src_b_bcast_type>(p_movb2d::MOV_4_ROWS, 16, operand_id);
     } else {
         FWASSERT("Unsupported op!", false);
     }
