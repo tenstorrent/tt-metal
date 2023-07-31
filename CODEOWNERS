@@ -89,7 +89,7 @@ tests/scripts/run_performance.sh @ashayestehmanesh @farbabi
 
 # models
 models/ @boris-drazic @ashayestehmanesh @farbabi
-models/conv_on_device_utils*.py @tt-nshanker
+models/conv_on_device_utils*.py @tt-nshanker @ashayestehmanesh
 models/bert_large_performant/ @tt-aho @TT-BrianLiu
 models/metal_BERT_large_15/ @tt-aho @TT-BrianLiu
 
@@ -101,7 +101,7 @@ models/metal_BERT_large_15/ @tt-aho @TT-BrianLiu
 
 # misc
 tests/**/dtx/ @tt-nshanker
-tests/**/*test*conv*.py @tt-nshanker
+tests/**/*test*conv*.py @tt-nshanker @ashayestehmanesh
 # tests/**/module.mk @tenstorrent-metal/developers
 tests/python_api_testing/conv/ @tt-nshanker
 tests/python_api_testing/unit_testing/fallback_ops @tt-aho
