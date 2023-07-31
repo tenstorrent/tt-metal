@@ -62,6 +62,8 @@ env pytest tests/python_api_testing/models/llama -k llama_mlp
 env pytest tests/python_api_testing/models/llama -k llama_attention
 env pytest tests/python_api_testing/models/llama -k llama_decoder
 
+env pytest tests/python_api_testing/models/falcon/tests/test_falcon_causallm.py::test_FalconCausalLM_inference[batch1_seqlen128_layers2]
+
 env pytest tests/python_api_testing/models/lenet -k test_lenet_inference
 env pytest tests/python_api_testing/models/ConvNet_MNIST/tests -k mnist_inference
 env pytest tests/python_api_testing/models/mnist/tests -k mnist_inference
