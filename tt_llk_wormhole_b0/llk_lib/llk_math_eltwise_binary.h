@@ -20,6 +20,7 @@ inline void eltwise_binary_reuse_dest_as_src() {
     }
 }
 
+
 template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType src_b_bcast_type,
@@ -27,9 +28,11 @@ template <
     int NUM_FIDELITY_PHASES = 0,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool is_fp32_dest_acc_en = false>
-inline void llk_math_eltwise_binary(uint dst_index, const bool clear_fp32_dst_acc = true) {
+inline void llk_math_eltwise_binary_impl(const std::uint32_t num_faces_a, const std::uint32_t num_faces_b, uint dst_index, const bool clear_fp32_dst_acc) {
     constexpr bool high_fidelity = (NUM_FIDELITY_PHASES > 0);
     constexpr uint32_t ZERO_ACC_MODE = p_zeroacc::CLR_16;
+
+    // Todo: do something with num_faces_a, num_faces_b
 
     if constexpr ((Dst == DstSync::SyncTile16) || (Dst == DstSync::SyncTile2)) {
         math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(math_sync_tile_dst_index);
@@ -202,6 +205,34 @@ inline void llk_math_eltwise_binary(uint dst_index, const bool clear_fp32_dst_ac
         FWASSERT("Unsupported op!", false);
     }
     math::clear_dst_reg_addr();
+}
+
+template <
+    EltwiseBinaryType eltwise_binary_type,
+    BroadcastType src_b_bcast_type,
+    DstSync Dst = DstSync::SyncFull,
+    int NUM_FIDELITY_PHASES = 0,
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
+    bool is_fp32_dest_acc_en = false>
+inline void llk_math_eltwise_binary(uint dst_index, const bool clear_fp32_dst_acc = true) {
+    llk_math_eltwise_binary_impl<eltwise_binary_type, src_b_bcast_type, Dst, NUM_FIDELITY_PHASES, binary_reuse_dest, is_fp32_dest_acc_en>(4, 4, dst_index, clear_fp32_dst_acc);
+}
+
+template <
+    EltwiseBinaryType eltwise_binary_type,
+    BroadcastType src_b_bcast_type,
+    DstSync Dst = DstSync::SyncFull,
+    int NUM_FIDELITY_PHASES = 0,
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
+    bool is_fp32_dest_acc_en = false>
+inline void llk_math_eltwise_binary(const std::uint32_t operand_A, const std::uint32_t operand_B, uint dst_index, const bool clear_fp32_dst_acc = true) {
+    const std::uint32_t id_A = get_operand_id(operand_A);
+    const std::uint32_t id_B = get_operand_id(operand_B);
+
+    const std::uint32_t num_faces_A = get_num_faces(id_A);
+    const std::uint32_t num_faces_B = get_num_faces(id_B);
+
+    llk_math_eltwise_binary_impl<eltwise_binary_type, src_b_bcast_type, Dst, NUM_FIDELITY_PHASES, binary_reuse_dest, is_fp32_dest_acc_en>(num_faces_A, num_faces_B, dst_index, clear_fp32_dst_acc);
 }
 
 template <EltwiseBinaryType eltwise_binary_type, BroadcastType bcast_type>
