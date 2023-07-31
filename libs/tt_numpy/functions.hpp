@@ -51,10 +51,10 @@ template<typename T>
 static Tensor full(const Shape& shape, const T value, const DataType data_type, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr) {
     switch (data_type) {
         case DataType::UINT32: {
-            return detail::full<uint32_t>(shape, value, layout, device);
+            return detail::full<uint32_t>(shape, uint32_t(value), layout, device);
         }
         case DataType::FLOAT32: {
-            return detail::full<float>(shape, value, layout, device);
+            return detail::full<float>(shape, float(value), layout, device);
         }
         case DataType::BFLOAT16: {
             return detail::full<bfloat16>(shape, bfloat16(value), layout, device);
@@ -65,11 +65,11 @@ static Tensor full(const Shape& shape, const T value, const DataType data_type, 
 }
 
 static Tensor zeros(const Shape& shape, const DataType data_type = DataType::BFLOAT16, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr) {
-    return full(shape, 0, data_type, layout);
+    return full(shape, 0.0f, data_type, layout);
 }
 
 static Tensor ones(const Shape& shape, const DataType data_type = DataType::BFLOAT16, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr) {
-    return full(shape, 1, data_type, layout);
+    return full(shape, 1.0f, data_type, layout);
 }
 
 static Tensor zeros_like(const Tensor& input_tensor, std::optional<DataType> data_type = std::nullopt, const Layout layout = Layout::ROW_MAJOR) {

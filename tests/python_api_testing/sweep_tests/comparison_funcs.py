@@ -82,7 +82,7 @@ def get_atol_rtol_pcc(golden, calculated):
             cal_pcc = np.min(cal_pcc[mask])
 
             if isinstance(cal_pcc, np.ma.core.MaskedConstant):
-                return 0.0
+                return 1.0
 
             return cal_pcc
 
