@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   create-tag:
-    uses: tenstorrent-metal/public-workflow-test/.github/workflows/release-verify-or-create-tag.yaml@main
+    uses: tenstorrent-metal/metal-workflows/.github/workflows/release-verify-or-create-tag.yaml@main
     with:
       bump_each_commit: true
     secrets:
