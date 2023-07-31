@@ -7,7 +7,7 @@
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
 #include "tt_metal/device/tt_memory.h"
-#include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/detail/kernel_cache.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
