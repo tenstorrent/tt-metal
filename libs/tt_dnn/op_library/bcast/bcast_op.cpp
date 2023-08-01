@@ -13,7 +13,7 @@ using namespace tt::tt_metal;
 using namespace tt::constants;
 
 // FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
-const char* get_reader_name(BcastOpDim::Enum bcast_dim, BcastOpParallelizationStrategy::Enum bcast_parallelization_strategy) {
+const char* get_reader_name(BcastOpDim bcast_dim, BcastOpParallelizationStrategy bcast_parallelization_strategy) {
     if (bcast_parallelization_strategy == BcastOpParallelizationStrategy::SINGLE_CORE) {
         if (bcast_dim == BcastOpDim::H) {
             return "tt_metal/kernels/dataflow/reader_bcast_h_8bank.cpp";
@@ -36,7 +36,7 @@ const char* get_reader_name(BcastOpDim::Enum bcast_dim, BcastOpParallelizationSt
     return "";
 }
 
-const char* get_compute_name(BcastOpDim::Enum bcast_dim) {
+const char* get_compute_name(BcastOpDim bcast_dim) {
     switch (bcast_dim) {
         case BcastOpDim::H:  return "tt_metal/kernels/compute/bcast_h.cpp";
         case BcastOpDim::W:  return "tt_metal/kernels/compute/bcast_w.cpp";
@@ -46,7 +46,7 @@ const char* get_compute_name(BcastOpDim::Enum bcast_dim) {
     return "";
 }
 
-std::map<std::string, std::string> get_defines(BcastOpDim::Enum bcast_dim, BcastOpMath::Enum bcast_math)
+std::map<std::string, std::string> get_defines(BcastOpDim bcast_dim, BcastOpMath bcast_math)
 {
     std::map<std::string, std::string> defines;
     const char* math_to_op_define[] = { "add_tiles_bcast", "sub_tiles_bcast", "mul_tiles_bcast" };
@@ -146,7 +146,7 @@ tt::stl::reflection::Attributes EltwiseBinaryBroadcast::attributes() const {
     };
 }
 
-BcastOpParallelizationStrategy::Enum EltwiseBinaryBroadcast::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
+BcastOpParallelizationStrategy EltwiseBinaryBroadcast::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
 
     uint32_t num_tiles = input_tensor_a.volume() / TILE_HW;

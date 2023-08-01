@@ -17,7 +17,7 @@ namespace reduce_op_utils {
 
 using namespace tt::tt_metal;
 
-string dim_to_kernel_name(ReduceOpDim::Enum reduce_dim, ReduceOpMath::Enum reduce_op){
+string dim_to_kernel_name(ReduceOpDim reduce_dim, ReduceOpMath reduce_op){
     string kernel_name;
     switch(reduce_dim){
         case ReduceOpDim::H: kernel_name = "tt_metal/kernels/compute/reduce_h.cpp"; break;
@@ -28,7 +28,7 @@ string dim_to_kernel_name(ReduceOpDim::Enum reduce_dim, ReduceOpMath::Enum reduc
     return kernel_name;
 }
 
-std::map<string, string> get_defines(ReduceOpMath::Enum reduce_op, ReduceOpDim::Enum reduce_dim){
+std::map<string, string> get_defines(ReduceOpMath reduce_op, ReduceOpDim reduce_dim){
     std::map<string, string> defines;
     // TOOD(AP): need a sync with Reduce::Max from HLK headers
     bool do_max = reduce_op == ReduceOpMath::MAX;
@@ -113,7 +113,7 @@ tt::stl::reflection::Attributes Reduce::attributes() const {
     };
 }
 
-ReduceOpParallelizationStrategy::Enum Reduce::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
+ReduceOpParallelizationStrategy Reduce::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
 
     uint32_t num_tiles = input_tensor.volume() / TILE_HW;
@@ -132,7 +132,7 @@ ReduceOpParallelizationStrategy::Enum Reduce::get_parallelization_strategy(const
     }
 }
 
-Tensor reduce(const Tensor &input_tensor, ReduceOpMath::Enum reduce_math, ReduceOpDim::Enum reduce_dim, float scaler, const MemoryConfig& output_mem_config) {
+Tensor reduce(const Tensor &input_tensor, ReduceOpMath reduce_math, ReduceOpDim reduce_dim, float scaler, const MemoryConfig& output_mem_config) {
     auto parallelization_strategy = Reduce{reduce_math, reduce_dim, scaler, output_mem_config}.get_parallelization_strategy({input_tensor});
     auto is_multicore_hw = parallelization_strategy == ReduceOpParallelizationStrategy::MULTI_CORE_HW;
     float pad_value = reduce_math == ReduceOpMath::MAX ? std::numeric_limits<float>::lowest() : 0;

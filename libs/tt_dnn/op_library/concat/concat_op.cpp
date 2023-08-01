@@ -17,7 +17,7 @@ namespace tt {
 
 namespace tt_metal {
 
-ConcatOpParallelizationStrategy::Enum Concat2::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) {
+ConcatOpParallelizationStrategy Concat2::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) {
     // TODO: add multi-code implementation and then pick stratergy based on volume of tensors.
     return ConcatOpParallelizationStrategy::SINGLE_CORE;
 }

@@ -2,6 +2,7 @@
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "constants.hpp"
+#include "third_party/magic_enum/magic_enum.hpp"
 #include <tt_numpy/functions.hpp>
 
 #include <algorithm>
@@ -48,8 +49,8 @@ int main(int argc, char **argv) {
         Tensor a = tt::numpy::random::random(shape).to(Layout::TILE).to(device);
         Tensor b = tt::numpy::zeros(shape, DataType::BFLOAT16).to(Layout::TILE).to(device);
 
-        for (auto bcast_dim: BcastOpDim::all())
-        for (auto bcast_math: BcastOpMath::all()) {
+        for (auto bcast_dim: magic_enum::enum_values<BcastOpDim>())
+        for (auto bcast_math: magic_enum::enum_values<BcastOpMath>()) {
             Tensor c = bcast(a, b, bcast_math, bcast_dim);
             Tensor d = c.cpu();
 

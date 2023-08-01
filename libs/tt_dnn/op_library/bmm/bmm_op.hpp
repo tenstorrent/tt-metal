@@ -10,18 +10,15 @@ namespace tt {
 namespace tt_metal {
 
 // TODO: Accept parallelization
-struct BmmOpParallelizationStrategy {
-    enum Enum {
-        MULTI_CORE = 0,
-        MULTI_CORE_REUSE = 1,
-        MULTI_CORE_REUSE_MCAST = 2,
-        MULTI_CORE_REUSE_GENERALIZED = 3,
-        MULTI_CORE_REUSE_MCAST_GENERALIZED = 4,
-        MULTI_CORE_REUSE_PADDING = 5,
-        MULTI_CORE_REUSE_MCAST_PADDING = 6,
-        SINGLE_CORE = 7
-    };
-    static const auto all() { return magic_enum::enum_values<Enum>(); }
+enum class BmmOpParallelizationStrategy {
+    MULTI_CORE = 0,
+    MULTI_CORE_REUSE = 1,
+    MULTI_CORE_REUSE_MCAST = 2,
+    MULTI_CORE_REUSE_GENERALIZED = 3,
+    MULTI_CORE_REUSE_MCAST_GENERALIZED = 4,
+    MULTI_CORE_REUSE_PADDING = 5,
+    MULTI_CORE_REUSE_MCAST_PADDING = 6,
+    SINGLE_CORE = 7
 };
 
 
@@ -45,7 +42,7 @@ struct Matmul {
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-    BmmOpParallelizationStrategy::Enum get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
+    BmmOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
     tt::stl::reflection::Attributes attributes() const;
 };
 

@@ -382,7 +382,7 @@ operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor
 }
 
 
-operation::ProgramWithCallbacks transpose_single_core(const Tensor &a, Tensor &output, TransposeOpDim::Enum transpose_dim) {
+operation::ProgramWithCallbacks transpose_single_core(const Tensor &a, Tensor &output, TransposeOpDim transpose_dim) {
     if (transpose_dim == TransposeOpDim::WH){
         return transpose_wh_single_core(a, output);
     } else if (transpose_dim == TransposeOpDim::HC) {

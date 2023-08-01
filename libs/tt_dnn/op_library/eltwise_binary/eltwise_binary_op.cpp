@@ -13,7 +13,7 @@ using namespace tt::constants;
 namespace eltwise_binary_op_utils {
 using namespace tt::tt_metal;
 
-std::map<string, string> get_defines(BinaryOpType::Enum op_type, const std::optional<std::vector<UnaryOpType::Enum>> fused_activations) {
+std::map<string, string> get_defines(BinaryOpType op_type, const std::optional<std::vector<UnaryOpType>> fused_activations) {
     std::map<string, string> defines;
     string op_name = "sub_tiles";
     string op_code = "1";
@@ -96,7 +96,7 @@ operation::ProgramWithCallbacks EltwiseBinary::create_program(const std::vector<
 }
 
 
-BinaryOpParallelizationStrategy::Enum EltwiseBinary::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
+BinaryOpParallelizationStrategy EltwiseBinary::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     uint32_t num_tiles = input_tensor_a.volume() / TILE_HW;
     if(num_tiles > 1){

@@ -177,7 +177,7 @@ CoreCoord get_core_range(uint32_t num_blocks_rows, uint32_t num_blocks_cols, uin
     return core_range;
 }
 
-BmmOpParallelizationStrategy::Enum get_parallelization_strategy(const std::vector<Tensor> &input_tensors) {
+BmmOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     const auto& ashape = input_tensor_a.shape(), bshape = input_tensor_b.shape();
@@ -326,7 +326,7 @@ tt::stl::reflection::Attributes Matmul::attributes() const {
     };
 }
 
-BmmOpParallelizationStrategy::Enum Matmul::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
+BmmOpParallelizationStrategy Matmul::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
     return bmm_op_utils::get_parallelization_strategy(input_tensors);
 }
 

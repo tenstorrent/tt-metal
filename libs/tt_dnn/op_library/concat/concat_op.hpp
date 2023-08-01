@@ -7,8 +7,8 @@ namespace tt {
 
 namespace tt_metal {
 
-struct ConcatOpParallelizationStrategy {
-    enum Enum { SINGLE_CORE = 0, MULTIPLE_CORE = 1 };
+enum class ConcatOpParallelizationStrategy {
+    SINGLE_CORE = 0, MULTIPLE_CORE = 1
 };
 
 struct Concat2 {
@@ -20,7 +20,7 @@ struct Concat2 {
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
     tt::stl::reflection::Attributes attributes() const;
-    ConcatOpParallelizationStrategy::Enum get_parallelization_strategy(const std::vector<Tensor> &input_tensors);
+    ConcatOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors);
 };
 
 // Ref: https://pytorch.org/docs/stable/generated/torch.cat.html#torch.cat

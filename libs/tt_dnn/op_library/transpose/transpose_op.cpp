@@ -91,7 +91,7 @@ operation::ProgramWithCallbacks Transpose::create_program(const std::vector<Tens
     }
 }
 
-TransposeOpParallelizationStrategy::Enum Transpose::get_parallelization_strategy(const std::vector<Tensor>& input_tensors) const {
+TransposeOpParallelizationStrategy Transpose::get_parallelization_strategy(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto ashape = input_tensor.shape();
     uint32_t num_tiles = input_tensor.volume() / TILE_HW;
@@ -110,7 +110,7 @@ tt::stl::reflection::Attributes Transpose::attributes() const {
     };
 }
 
-inline Tensor transpose_(const Tensor &a, TransposeOpDim::Enum transpose_dim, const MemoryConfig& output_mem_config) {
+inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const MemoryConfig& output_mem_config) {
 
     bool pad_c = false;
     bool pad_n = false;

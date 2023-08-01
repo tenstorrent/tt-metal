@@ -14,7 +14,7 @@ using tt::tt_metal::ReduceOpMath;
 using tt::tt_metal::ReduceOpDim;
 using tt::tt_metal::Shape;
 
-template<ReduceOpMath::Enum op_math, ReduceOpDim::Enum op_dim>
+template<ReduceOpMath op_math, ReduceOpDim op_dim>
 Tensor device_function(const Tensor& input_tensor, Device* device) {
     return reduce(input_tensor.to(device), op_math, op_dim).cpu();
 }

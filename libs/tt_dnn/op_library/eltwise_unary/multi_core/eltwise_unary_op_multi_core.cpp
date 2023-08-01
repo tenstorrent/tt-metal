@@ -13,7 +13,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks eltwise_unary_multi_core(const Tensor &a, Tensor &output, const std::vector<UnaryOpType::Enum> op_types, const std::vector<std::optional<float>> params) {
+operation::ProgramWithCallbacks eltwise_unary_multi_core(const Tensor &a, Tensor &output, const std::vector<UnaryOpType> op_types, const std::vector<std::optional<float>> params) {
     tt_metal::Program program{};
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());

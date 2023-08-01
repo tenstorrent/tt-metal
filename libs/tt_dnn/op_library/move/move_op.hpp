@@ -14,14 +14,13 @@ namespace tt {
 
 namespace tt_metal {
 
-struct MoveOpParallelizationStrategy {
-    enum Enum { MULTI_CORE = 0, SINGLE_CORE = 1 };
-    static const vector<Enum> all() { return { MULTI_CORE, SINGLE_CORE }; }
+enum class MoveOpParallelizationStrategy {
+    MULTI_CORE = 0, SINGLE_CORE = 1
 };
 
 struct Move {
     const MemoryConfig output_mem_config;
-    const MoveOpParallelizationStrategy::Enum move_op_parallelization_strategy;
+    const MoveOpParallelizationStrategy move_op_parallelization_strategy;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -54,7 +53,7 @@ inline Tensor move(Tensor& input_tensor, std::optional<MemoryConfig>& mem_config
     else
         non_overlap = input_address + output_tensor.buffer()->size() / num_banks <= output_tensor.buffer()->address();
 
-    MoveOpParallelizationStrategy::Enum move_op_parallelization_strategy = MoveOpParallelizationStrategy::SINGLE_CORE;
+    MoveOpParallelizationStrategy move_op_parallelization_strategy = MoveOpParallelizationStrategy::SINGLE_CORE;
     if (num_tiles > 1 and (input_mem_config.buffer_type != output_mem_config.buffer_type or non_overlap)) {
         move_op_parallelization_strategy = MoveOpParallelizationStrategy::MULTI_CORE;
     }

@@ -30,8 +30,7 @@ public:
   }
 };
 
-inline
-std::pair<string, string> get_op_init_and_func_parameterized(UnaryOpType::Enum op_type, float param0, string idst) {
+std::pair<string, string> get_op_init_and_func_parameterized(UnaryOpType op_type, float param0, string idst) {
     std::pair<string, string> op_init_and_name;
     TT_ASSERT( is_parametrized_type(op_type) && "operator should support one parameter" );
 
@@ -50,8 +49,7 @@ std::pair<string, string> get_op_init_and_func_parameterized(UnaryOpType::Enum o
     return op_init_and_name;
 }
 
-inline
-std::pair<string, string> get_op_init_and_func_default(UnaryOpType::Enum op_type, string idst) {
+std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, string idst) {
     std::pair<string, string> op_init_and_name;
     switch (op_type) {
         case UnaryOpType::EXP: op_init_and_name = {"exp_tile_init();", fmt::format("exp_tile({});", idst)}; break;
@@ -107,7 +105,7 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType::Enum op_type
     return op_init_and_name;
 }
 
-bool get_op_approx_mode(UnaryOpType::Enum op_type) {
+bool get_op_approx_mode(UnaryOpType op_type) {
     switch (op_type) {
         default:
             return false;
@@ -115,23 +113,23 @@ bool get_op_approx_mode(UnaryOpType::Enum op_type) {
 }
 
 static
-std::map<string, string> get_defines_impl(UnaryOpType::Enum op_type, std::string op_init, std::string op_func, std::string id){
+std::map<string, string> get_defines_impl(UnaryOpType op_type, std::string op_init, std::string op_func, std::string id){
     return std::map<string, string>{
         {fmt::format("SFPU_OP_INIT_{}", id), op_init},
         {fmt::format("SFPU_OP_FUNC_{}", id), op_func}
     };
 }
 
-std::pair<string, string> get_op_init_and_func(UnaryOpType::Enum op_type, std::optional<float> param0, std::string idst) {
+std::pair<string, string> get_op_init_and_func(UnaryOpType op_type, std::optional<float> param0, std::string idst) {
    return param0.has_value() ? get_op_init_and_func_parameterized(op_type, param0.value(), idst) : get_op_init_and_func_default(op_type, idst);
 }
 
-std::map<string, string> get_defines(UnaryOpType::Enum op_type, std::optional<float> param0, std::string id, std::string idst) {
+std::map<string, string> get_defines(UnaryOpType op_type, std::optional<float> param0, std::string id, std::string idst) {
     std::pair<string, string> op_init_and_name = get_op_init_and_func(op_type, param0, idst);
     return get_defines_impl(op_type, op_init_and_name.first, op_init_and_name.second, id);
 }
 
-std::map<string, string> get_block_defines(const std::vector<UnaryOpType::Enum> op_types, const std::vector<std::optional<float>> params, std::string block_id, std::string idst) {
+std::map<string, string> get_block_defines(const std::vector<UnaryOpType> op_types, const std::vector<std::optional<float>> params, std::string block_id, std::string idst) {
     std::vector<std::pair<string, string>> op_init_and_name;
     std::map<string, string> block_defines;
     std::string block_define = "";
@@ -187,7 +185,7 @@ operation::ProgramWithCallbacks EltwiseUnary::create_program(const std::vector<T
 }
 
 
-UnaryOpParallelizationStrategy::Enum EltwiseUnary::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
+UnaryOpParallelizationStrategy EltwiseUnary::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     uint32_t num_tiles = input_tensor.volume() / TILE_HW;
     if (num_tiles > 1) {
@@ -207,7 +205,7 @@ tt::stl::reflection::Attributes EltwiseUnary::attributes() const {
 }
 
 //unary op version tie
-template<BcastOpMath::Enum OP>
+template<BcastOpMath OP>
 Tensor tie_binop_to_unary(const Tensor& input_tensor, float value) {
   Tensor t_value = mk_scalar(value);
   return bcast(input_tensor,t_value,OP, BcastOpDim::HW);

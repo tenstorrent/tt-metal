@@ -10,7 +10,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks reduce_single_core(const Tensor &a, Tensor& output, ReduceOpMath::Enum reduce_op, ReduceOpDim::Enum reduce_dim, float scaler) {
+operation::ProgramWithCallbacks reduce_single_core(const Tensor &a, Tensor& output, ReduceOpMath reduce_op, ReduceOpDim reduce_dim, float scaler) {
 
     const auto shape = a.shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1]*shape[0];
@@ -114,7 +114,7 @@ operation::ProgramWithCallbacks reduce_single_core(const Tensor &a, Tensor& outp
     };
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
-    TT_ASSERT(int(reduce_dim) >= 0 && int(reduce_dim) <= ReduceOpDim::all().size());
+    TT_ASSERT(int(reduce_dim) >= 0 && int(reduce_dim) <= magic_enum::enum_count<ReduceOpDim>());
 
     string compute_kernel_name = reduce_op_utils::dim_to_kernel_name(reduce_dim, reduce_op);
 

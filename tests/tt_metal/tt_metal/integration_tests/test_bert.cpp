@@ -116,7 +116,7 @@ Tensor qa_head(Tensor&& hidden_states, const Parameters& parameters) {
     hidden_states.deallocate();
 
 
-    return bcast(output, parameters.at("qa_head_bias"), tt::tt_metal::BcastOpMath::Enum::ADD, tt::tt_metal::BcastOpDim::Enum::H, l1_memory_config);
+    return bcast(output, parameters.at("qa_head_bias"), tt::tt_metal::BcastOpMath::ADD, tt::tt_metal::BcastOpDim::H, l1_memory_config);
 }
 
 

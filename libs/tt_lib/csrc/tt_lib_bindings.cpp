@@ -374,92 +374,50 @@ void bind_unary_op_with_param(py::module_ &module, std::string op_name, Func &&f
     );
 }
 
+template <typename E, typename... Extra>
+py::enum_<E> export_enum(const py::handle &scope, std::string name = "", Extra&&... extra) {
+    py::enum_<E> enum_type(scope, name.empty() ? magic_enum::enum_type_name<E>().data() : name.c_str(), std::forward<Extra>(extra)...);
+    for (const auto &[value, name] : magic_enum::enum_entries<E>()) {
+        enum_type.value(name.data(), value);
+    }
+    return enum_type;
+}
 }
 
 void TensorModule(py::module &m_tensor) {
     // ENUM SECTION
 
     // bcast enums
-    py::enum_<BcastOpMath::Enum>(m_tensor, "BcastOpMath")
-        .value("ADD", BcastOpMath::Enum::ADD)
-        .value("SUB", BcastOpMath::Enum::SUB)
-        .value("MUL", BcastOpMath::Enum::MUL);
+    detail::export_enum<BcastOpMath>(m_tensor);
     /** TODO: add these to bcast ops - good to have not required
-        .value("GT", BcastOpMath::Enum::GT)
-        .value("LT", BcastOpMath::Enum::LT)
-        .value("GE", BcastOpMath::Enum::GE)
-        .value("LE", BcastOpMath::Enum::LE)
-        .value("EQ", BcastOpMath::Enum::EQ)
-        .value("NEQ", BcastOpMath::Enum::NE);
+        .value("GT", BcastOpMath::GT)
+        .value("LT", BcastOpMath::LT)
+        .value("GE", BcastOpMath::GE)
+        .value("LE", BcastOpMath::LE)
+        .value("EQ", BcastOpMath::EQ)
+        .value("NEQ", BcastOpMath::NE);
     */
 
-    py::enum_<BcastOpDim::Enum>(m_tensor, "BcastOpDim")
-        .value("H", BcastOpDim::Enum::H)
-        .value("W", BcastOpDim::Enum::W)
-        .value("HW", BcastOpDim::Enum::HW);
+    detail::export_enum<BcastOpDim>(m_tensor);
 
     // reduce enums
-    py::enum_<ReduceOpMath::Enum>(m_tensor, "ReduceOpMath")
-        .value("SUM", ReduceOpMath::Enum::SUM)
-        .value("MAX", ReduceOpMath::Enum::MAX);
+    detail::export_enum<ReduceOpMath>(m_tensor);
 
-    py::enum_<ReduceOpDim::Enum>(m_tensor, "ReduceOpDim")
-        .value("H", ReduceOpDim::Enum::H)
-        .value("W", ReduceOpDim::Enum::W)
-        .value("HW", ReduceOpDim::Enum::HW);
+    detail::export_enum<ReduceOpDim>(m_tensor);
 
-    py::enum_<UnaryOpType::Enum>(m_tensor, "FusibleActivation")
-        .value("EXP", UnaryOpType::Enum::EXP)
-        .value("RECIP", UnaryOpType::Enum::RECIP)
-        .value("GELU", UnaryOpType::Enum::GELU)
-        .value("RELU", UnaryOpType::Enum::RELU)
-        .value("SQRT", UnaryOpType::Enum::SQRT)
-        .value("SIGMOID", UnaryOpType::Enum::SIGMOID)
-        .value("LOG", UnaryOpType::Enum::LOG)
-        .value("TANH", UnaryOpType::Enum::TANH)
-        .value("LOG2", UnaryOpType::Enum::LOG2)
-        .value("LOG10", UnaryOpType::Enum::LOG10)
-        .value("SIN", UnaryOpType::Enum::SIN)
-        .value("COS", UnaryOpType::Enum::COS)
-        .value("ABS", UnaryOpType::Enum::ABS)
-        .value("SIGN", UnaryOpType::Enum::SIGN)
-        .value("SQUARE", UnaryOpType::Enum::SQUARE)
-        .value("EQZ", UnaryOpType::Enum::EQZ)
-        .value("NEZ", UnaryOpType::Enum::NEZ)
-        .value("GTZ", UnaryOpType::Enum::GTZ)
-        .value("LTZ", UnaryOpType::Enum::LTZ)
-        .value("GEZ", UnaryOpType::Enum::GEZ)
-        .value("LEZ", UnaryOpType::Enum::LEZ)
-        .value("RELU6", UnaryOpType::Enum::RELU6);
-        // SFPU Ops with Param currently not supported
-        /*
-        .value("RELU_MAX", UnaryOpType::Enum::RELU_MAX)
-        .value("RELU_MIN", UnaryOpType::Enum::RELU_MIN)
-        .value("POWER", UnaryOpType::Enum::POWER)
-        .value("LEAKY_RELU", UnaryOpType::Enum::LAEKY_RELU)
-        .value("ELU", UnaryOpType::Enum::ELU)
-        */
+    // Fusible Activations
+    detail::export_enum<UnaryOpType>(m_tensor, "FusibleActivation");
 
     // layout enums
-    py::enum_<Layout>(m_tensor, "Layout")
-        .value("ROW_MAJOR", Layout::ROW_MAJOR)
-        .value("TILE", Layout::TILE);
+    detail::export_enum<Layout>(m_tensor);
 
-    py::enum_<DataType>(m_tensor, "DataType")
-        .value("FLOAT32", DataType::FLOAT32)
-        .value("BFLOAT16", DataType::BFLOAT16)
-        .value("UINT32", DataType::UINT32)
-        .value("BFLOAT8_B", DataType::BFLOAT8_B);
+    detail::export_enum<DataType>(m_tensor);
+
+    detail::export_enum<StorageType>(m_tensor);
 
     py::enum_<BufferType>(m_tensor, "BufferType")
         .value("DRAM", BufferType::DRAM)
         .value("L1", BufferType::L1);
-
-    py::enum_<StorageType>(m_tensor, "StorageType")
-        .value("OWNED", StorageType::OWNED)
-        .value("DEVICE", StorageType::DEVICE)
-        .value("BORROWED", StorageType::BORROWED);
-
 
     auto pyMemoryConfig = py::class_<MemoryConfig>(m_tensor, "MemoryConfig", R"doc(
         Class defining memory configuration for storing tensor data on TT Accelerator device.

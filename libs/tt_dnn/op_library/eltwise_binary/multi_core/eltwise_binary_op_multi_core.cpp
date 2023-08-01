@@ -14,7 +14,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const Tensor &b, Tensor& output, BinaryOpType::Enum op_type, const std::optional<std::vector<UnaryOpType::Enum>> fused_activations) {
+operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const Tensor &b, Tensor& output, BinaryOpType op_type, const std::optional<std::vector<UnaryOpType>> fused_activations) {
 
     Program program{};
 

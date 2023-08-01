@@ -28,7 +28,7 @@ void update_sfpu_op_to_hlk_op()
     else if (unary_op_name == "RECIPROCAL") {
         unary_op_name = "RECIP";
     }
-    auto unary_op_type = magic_enum::enum_cast<tt::tt_metal::UnaryOpType::Enum>(unary_op_name).value();
+    auto unary_op_type = magic_enum::enum_cast<tt::tt_metal::UnaryOpType>(unary_op_name).value();
     if ( tt::tt_metal::is_parametrized_type(unary_op_type) ) {
       sfpu_op_to_hlk_op_name[sfpu_op_name]  = eltwise_unary_op_utils::get_block_defines({unary_op_type}, {0.5});
     } else {

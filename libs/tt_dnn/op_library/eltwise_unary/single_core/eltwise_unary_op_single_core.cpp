@@ -10,7 +10,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tensor &output, const std::vector<UnaryOpType::Enum> op_types, const std::vector<std::optional<float>> params) {
+operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tensor &output, const std::vector<UnaryOpType> op_types, const std::vector<std::optional<float>> params) {
     Program program{};
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};

@@ -7,9 +7,8 @@
 namespace tt {
 namespace tt_metal {
 
-struct PoolType {
-    enum Enum { AVG = 0 };
-    static const vector<Enum> all() { return { AVG }; }
+enum class PoolType {
+    AVG = 0
 };
 
 Tensor average_pool_2d(const Tensor& input);

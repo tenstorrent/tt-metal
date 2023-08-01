@@ -11,11 +11,10 @@ namespace tt {
 
 namespace tt_metal {
 
-struct UnaryOpType {
-    enum Enum { EXP = 0, RECIP = 1, GELU = 2, RELU = 3, SQRT = 4, SIGMOID = 5, LOG = 6, TANH = 7, LOG2 = 8, LOG10 = 9, SIN = 10, COS = 11,
-                ABS=12, SIGN=13, SQUARE=14, EQZ = 15, NEZ = 16, GTZ = 17, LTZ = 18, GEZ = 19, LEZ = 20, RELU_MAX = 21, RELU_MIN = 22, POWER = 23, LEAKY_RELU = 24, ELU = 25, EXP2 = 26, HEAVISIDE = 27,
-                EXPM1 = 28, SIGNBIT = 29, ASIN = 30, ACOS = 31, RSQRT = 32, RELU6 = 33, ATAN = 34};
-    static const auto all() { return magic_enum::enum_values<Enum>(); }
+enum class UnaryOpType {
+    EXP = 0, RECIP = 1, GELU = 2, RELU = 3, SQRT = 4, SIGMOID = 5, LOG = 6, TANH = 7, LOG2 = 8, LOG10 = 9, SIN = 10, COS = 11,
+    ABS=12, SIGN=13, SQUARE=14, EQZ = 15, NEZ = 16, GTZ = 17, LTZ = 18, GEZ = 19, LEZ = 20, RELU_MAX = 21, RELU_MIN = 22, POWER = 23, LEAKY_RELU = 24, ELU = 25, EXP2 = 26, HEAVISIDE = 27,
+    EXPM1 = 28, SIGNBIT = 29, ASIN = 30, ACOS = 31, RSQRT = 32, RELU6 = 33, ATAN = 34
 };
 
 template <typename T>
@@ -36,13 +35,12 @@ bool is_parametrized_type(T val) {
     return false;
 }
 
-struct UnaryOpParallelizationStrategy {
-    enum Enum { MULTI_CORE = 0, SINGLE_CORE = 1 };
-    static const auto all() { return magic_enum::enum_values<Enum>(); }
+enum class UnaryOpParallelizationStrategy {
+    MULTI_CORE = 0, SINGLE_CORE = 1
 };
 
 struct EltwiseUnary {
-    const std::vector<UnaryOpType::Enum> op_types;
+    const std::vector<UnaryOpType> op_types;
     const std::vector<std::optional<float>> params;
     const MemoryConfig output_mem_config;
 
@@ -50,29 +48,29 @@ struct EltwiseUnary {
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-    UnaryOpParallelizationStrategy::Enum get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
+    UnaryOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
     tt::stl::reflection::Attributes attributes() const;
 };
 
 Tensor eltwise_unary(const EltwiseUnary& op, const Tensor &input_tensor);
 
-operation::ProgramWithCallbacks eltwise_unary_multi_core(const Tensor &a, Tensor &output, const std::vector<UnaryOpType::Enum> op_types, const std::vector<std::optional<float>> params);
-operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tensor &output, const std::vector<UnaryOpType::Enum> op_types, const std::vector<std::optional<float>> params);
+operation::ProgramWithCallbacks eltwise_unary_multi_core(const Tensor &a, Tensor &output, const std::vector<UnaryOpType> op_types, const std::vector<std::optional<float>> params);
+operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tensor &output, const std::vector<UnaryOpType> op_types, const std::vector<std::optional<float>> params);
 
-inline Tensor run_eltwise_unary(const Tensor& input_tensor, std::vector<UnaryOpType::Enum> unary_op_types, std::vector<std::optional<float>> params, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
+inline Tensor run_eltwise_unary(const Tensor& input_tensor, std::vector<UnaryOpType> unary_op_types, std::vector<std::optional<float>> params, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
     Shape pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.shape());
     FormatParams input_format_params = {.pad_shape=pad_shape, .pad_value=0.0, .target_layout=Layout::TILE};
     return operation::run_with_autoformat(EltwiseUnary{unary_op_types, params, output_mem_config}, {input_tensor}, {input_format_params}, {Layout::TILE}).at(0);
 }
 
-template <UnaryOpType::Enum unary_op_type>
+template <UnaryOpType unary_op_type>
 struct make_eltwise_unary_with_param {
     Tensor operator()(const Tensor& input_tensor, float param, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) const {
         return run_eltwise_unary(input_tensor, {unary_op_type}, {param}, output_mem_config);
     }
 };
 
-template <UnaryOpType::Enum unary_op_type>
+template <UnaryOpType unary_op_type>
 struct make_eltwise_unary {
     Tensor operator()(const Tensor& input_tensor, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) const {
         return run_eltwise_unary(input_tensor, {unary_op_type}, {std::nullopt}, output_mem_config);
@@ -129,7 +127,7 @@ inline Tensor rsqrt(const Tensor &input_tensor, bool fast_and_approx=true, const
 inline Tensor log_sigmoid(const Tensor &input_tensor, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
     return run_eltwise_unary(input_tensor, {UnaryOpType::SIGMOID, UnaryOpType::LOG}, {std::nullopt, std::nullopt}, output_mem_config);
 }
-inline Tensor unary_chain(const Tensor &input_tensor, std::vector<UnaryOpType::Enum> op_types, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
+inline Tensor unary_chain(const Tensor &input_tensor, std::vector<UnaryOpType> op_types, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
     TT_ASSERT(op_types.size() > 0, "At least 1 unary op must be specified");
     std::vector<std::optional<float>> params (op_types.size(), std::nullopt);
     return run_eltwise_unary(input_tensor, op_types, params, output_mem_config);
@@ -169,8 +167,8 @@ inline Tensor add1(const Tensor &input_tensor) { return add_unary(input_tensor, 
 namespace eltwise_unary_op_utils {
 using namespace tt::tt_metal;
 
-bool get_op_approx_mode(UnaryOpType::Enum op_type);
-std::pair<string, string> get_op_init_and_func(UnaryOpType::Enum op_type, std::optional<float> param={}, string idst="0");
-std::map<string, string> get_defines(UnaryOpType::Enum op_type, std::optional<float> param={}, string id="0", string idst="0");
-std::map<string, string> get_block_defines(const std::vector<UnaryOpType::Enum> op_types, const std::vector<std::optional<float>> params, string block_id="0", string idst="0");
+bool get_op_approx_mode(UnaryOpType op_type);
+std::pair<string, string> get_op_init_and_func(UnaryOpType op_type, std::optional<float> param={}, string idst="0");
+std::map<string, string> get_defines(UnaryOpType op_type, std::optional<float> param={}, string id="0", string idst="0");
+std::map<string, string> get_block_defines(const std::vector<UnaryOpType> op_types, const std::vector<std::optional<float>> params, string block_id="0", string idst="0");
 } // namespace eltwise_unary_op_utils

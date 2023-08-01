@@ -12,25 +12,23 @@ namespace tt {
 
 namespace tt_metal {
 
-struct BinaryOpType {
-    enum Enum { ADD = 0, SUB = 1, MUL = 2, GT = 3, LT = 4, LTE = 5, GTE = 6, EQ = 7, NE = 8, SQUARED_DIFFERENCE = 9 };
-    static const auto all() { return magic_enum::enum_values<Enum>(); }
+enum class BinaryOpType {
+    ADD = 0, SUB = 1, MUL = 2, GT = 3, LT = 4, LTE = 5, GTE = 6, EQ = 7, NE = 8, SQUARED_DIFFERENCE = 9
 };
 
-struct BinaryOpParallelizationStrategy {
-    enum Enum { MULTI_CORE = 0, SINGLE_CORE = 1 };
-    static const auto all() { return magic_enum::enum_values<Enum>(); }
+enum class BinaryOpParallelizationStrategy {
+    MULTI_CORE = 0, SINGLE_CORE = 1
 };
 
-operation::ProgramWithCallbacks eltwise_binary_single_core(const Tensor &a, const Tensor &b, Tensor &output_tensor, BinaryOpType::Enum op_type, const std::optional<std::vector<UnaryOpType::Enum>> fused_activations);
-operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const Tensor &b, Tensor &output_tensor, BinaryOpType::Enum op_type, const std::optional<std::vector<UnaryOpType::Enum>> fused_activations);
+operation::ProgramWithCallbacks eltwise_binary_single_core(const Tensor &a, const Tensor &b, Tensor &output_tensor, BinaryOpType op_type, const std::optional<std::vector<UnaryOpType>> fused_activations);
+operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const Tensor &b, Tensor &output_tensor, BinaryOpType op_type, const std::optional<std::vector<UnaryOpType>> fused_activations);
 
 struct EltwiseBinary {
-    const BinaryOpType::Enum op_type;
-    const std::optional<std::vector<UnaryOpType::Enum>> fused_activations;
+    const BinaryOpType op_type;
+    const std::optional<std::vector<UnaryOpType>> fused_activations;
     const MemoryConfig output_mem_config;
 
-    BinaryOpParallelizationStrategy::Enum get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
+    BinaryOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<Shape> compute_output_shapes(
@@ -45,15 +43,15 @@ struct EltwiseBinary {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-template <BinaryOpType::Enum binary_op_type>
+template <BinaryOpType binary_op_type>
 struct make_eltwise_binary {
-     Tensor operator()(const Tensor& input_tensor_a, const Tensor& input_tensor_b, std::optional<std::vector<UnaryOpType::Enum>> fused_activations = std::nullopt, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) const {
+     Tensor operator()(const Tensor& input_tensor_a, const Tensor& input_tensor_b, std::optional<std::vector<UnaryOpType>> fused_activations = std::nullopt, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) const {
          TT_ASSERT(input_tensor_a.shape() == input_tensor_b.shape(), "Input shapes must be the same!");
          return operation::run_with_autoformat(EltwiseBinary{binary_op_type, fused_activations, output_mem_config}, {input_tensor_a, input_tensor_b}).at(0);
      }
  };
 
-inline Tensor add_without_autoformat(const Tensor& input_tensor_a, const Tensor& input_tensor_b, std::optional<std::vector<UnaryOpType::Enum>> fused_activations = std::nullopt, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
+inline Tensor add_without_autoformat(const Tensor& input_tensor_a, const Tensor& input_tensor_b, std::optional<std::vector<UnaryOpType>> fused_activations = std::nullopt, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
     TT_ASSERT(input_tensor_a.shape() == input_tensor_b.shape(), "Input shapes must be the same!");
     return operation::run_without_autoformat(EltwiseBinary{BinaryOpType::ADD, std::nullopt, output_mem_config}, {input_tensor_a, input_tensor_b}).at(0);
 }
@@ -79,6 +77,6 @@ inline Tensor add_without_autoformat(const Tensor& input_tensor_a, const Tensor&
 namespace eltwise_binary_op_utils {
 using namespace tt::tt_metal;
 
-std::map<string, string> get_defines(BinaryOpType::Enum op_type, const std::optional<std::vector<UnaryOpType::Enum>> fused_activations);
+std::map<string, string> get_defines(BinaryOpType op_typee, const std::optional<std::vector<UnaryOpType>> fused_activations);
 
 }  // namespace eltwise_binary_op_utils

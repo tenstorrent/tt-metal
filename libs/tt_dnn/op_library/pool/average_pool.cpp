@@ -5,7 +5,7 @@
 namespace tt {
 namespace tt_metal {
 
-template<PoolType::Enum pool>
+template<PoolType pool>
 Tensor pool_2d(const Tensor& input) {
     TT_ASSERT(input.storage_type() == StorageType::DEVICE, "Input tensor needs to be on device");
     auto input_shape = input.shape();

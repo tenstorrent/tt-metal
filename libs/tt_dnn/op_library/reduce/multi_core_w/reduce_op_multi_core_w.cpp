@@ -13,7 +13,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &a, Tensor& output, ReduceOpMath::Enum reduce_op, ReduceOpDim::Enum reduce_dim, float scaler) {
+operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &a, Tensor& output, ReduceOpMath reduce_op, ReduceOpDim reduce_dim, float scaler) {
 
     TT_ASSERT(reduce_dim == ReduceOpDim::W);
     const auto shape = a.shape();
