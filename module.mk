@@ -139,7 +139,7 @@ endif
 build: $(LIBS_TO_BUILD)
 
 clean: set_up_kernels/clean eager_package/clean
-	find build ! -path "build/python_env" -delete -mindepth 1
+	find build ! -path "build/python_env" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 	rm -rf dist/
 
 nuke: clean python_env/clean
