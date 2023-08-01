@@ -837,7 +837,6 @@ void CommandQueue::finish() {
 
 void CommandQueue::wrap() {
     tt::log_debug(tt::LogDispatch, "EnqueueWrap");
-    // tt::log_assert(false, "Should not be wrapping");
     EnqueueWrapCommand command(this->device, this->sysmem_writer);
     shared_ptr<EnqueueWrapCommand> p = std::make_shared<EnqueueWrapCommand>(std::move(command));
     this->enqueue_command(p, false);
