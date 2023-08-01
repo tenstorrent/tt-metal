@@ -449,5 +449,7 @@ static std::ostream& operator<<(std::ostream& os, const DeviceOperation& op) {
 
 using Operation = std::variant<HostOperation, DeviceOperation>;
 
-}
-}
+
+}  // namespace tt_metal
+
+}  // namespace tt

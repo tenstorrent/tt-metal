@@ -14,6 +14,15 @@ namespace tt {
 
 namespace tt_metal {
 
+#define DECLARE_COMPOSITE_OPERATION(ReturnType, Name, ...) \
+    ReturnType Name(__VA_ARGS__); \
+    namespace composite_operations { \
+        constexpr auto decorated ## Name = DECORATE_AS_COMPOSITE_OPERATION(Name); \
+        constexpr inline ReturnType (*Name)(__VA_ARGS__) = []<typename... Args>(Args... args) { \
+            return decorated ## Name(args...); \
+        }; \
+    }
+
 using unary_tensor_op_t = Tensor (const Tensor& a);
 using binary_tensor_op_t = Tensor (const Tensor& a, const Tensor& b);
 
@@ -54,7 +63,7 @@ Tensor mac_scalar(const Tensor& a, float b, float c);
 // Function SILU
 // use activation Silu[x] = x*Sigmoid[x]
 // Ref: https://pytorch.org/docs/stable/generated/torch.nn.SiLU.html?highlight=silu#torch.nn.SiLU
-Tensor silu(const Tensor& a);
+DECLARE_COMPOSITE_OPERATION(Tensor, silu, const Tensor&);
 
 //log1p 1
 //use transformation y = log(1.0 + x) by broadcast
@@ -76,7 +85,9 @@ Tensor selu(const Tensor& x,const float scale = 1.050700987355480493419334985294
 
 // Function Swish = same as SILU
 //use transformation y = x * sigmoid( x ) by broadcast
-extern std::function<unary_tensor_op_t> swish;
+namespace composite_operations {
+inline auto swish = silu;
+}
 
 //compute polyval by Horner's rule
 Tensor polyval(const Tensor &input_tensor,std::vector<float> coeffs);

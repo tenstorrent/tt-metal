@@ -2031,7 +2031,10 @@ void TensorModule(py::module &m_tensor) {
         +----------+----------------------------+-----------+------------------------------+----------+
     )doc");
 
-    m_tensor.def("swish", swish, R"doc(
+    m_tensor.def(
+        "swish",
+        composite_operations::swish,
+        R"doc(
         Returns tensor with the swish all of elements of the input tensor ``arg0``.
 
         Input tensor must have BFLOAT16 data type.
@@ -2043,9 +2046,13 @@ void TensorModule(py::module &m_tensor) {
         +==========+============================+===========+==============================+==========+
         | arg0     | Tensor swish is applied to | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
         +----------+----------------------------+-----------+------------------------------+----------+
-    )doc");
+        )doc"
+    );
 
-    m_tensor.def("silu", &silu, R"doc(
+    m_tensor.def(
+        "silu",
+        composite_operations::silu,
+        R"doc(
         Returns tensor with the silu all of elements of the input tensor ``arg0``.
 
         Input tensor must have BFLOAT16 data type.
@@ -2057,7 +2064,8 @@ void TensorModule(py::module &m_tensor) {
         +==========+===========================+===========+==============================+==========+
         | arg0     | Tensor silu is applied to | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
         +----------+---------------------------+-----------+------------------------------+----------+
-    )doc");
+        )doc"
+    );
 
     m_tensor.def("eqz", &eqz, R"doc(
         Returns tensor with the result of equal to zero of all of the elements of the input tensor ``arg0``.

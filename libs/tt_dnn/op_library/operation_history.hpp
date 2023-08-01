@@ -24,6 +24,7 @@ struct OperationRecord {
     const std::string opcode;
     const tt::stl::reflection::Attributes attributes;
     const std::vector<TensorRecord> input_tensor_records;
+    const std::vector<const char*> composite_parent_names{};
 };
 
 namespace detail {

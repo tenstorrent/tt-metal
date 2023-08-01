@@ -33,6 +33,7 @@ void OperationHistory::append(OperationRecord&& record) {
 constexpr auto column_names = []{
     return std::array{
         "Opcode",
+        "Composite Parent Names",
         "Attributes",
         "Input Tensor 0 Storage Type",
         "Input Tensor 0 Shape",
@@ -81,6 +82,7 @@ void write_record(std::ofstream& output_file_stream, const OperationRecord& reco
 
     row.push_back(record.opcode);
     row.push_back(fmt::format("{}", record.attributes));
+    row.push_back(fmt::format("{}", record.composite_parent_names));
     for (const auto& tensor_record : record.input_tensor_records) {
         row.push_back(fmt::format("{}", tensor_record.storage_type));
         row.push_back(fmt::format("{}", tensor_record.shape));

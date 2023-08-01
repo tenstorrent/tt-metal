@@ -124,9 +124,6 @@ Tensor selu(const Tensor& x,const float scale, const float alpha) {
 // Theano defins it as,
 // return tensor.switch(x > 0, x, alpha * tensor.expm1(x))
 
-// Function Swish
-//use transformation y = x * sigmoid( x ) by broadcast
-std::function<unary_tensor_op_t> swish = silu;
 
 // Function Clip
 //use clip y = min( max( x, min_value), max_value) by broadcast

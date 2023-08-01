@@ -38,6 +38,82 @@ std::vector<Tensor> generic_create_output_tensors(
     }
 }
 
+
+
+namespace run_operation_state {
+namespace detail {
+struct RunOperationState {
+
+    RunOperationState() {}
+
+    void push_composite_parent_name(const char* parent_name) {
+        this->composite_parent_names.push_back(parent_name);
+    }
+
+    void pop_composite_parent_name() {
+        this->composite_parent_names.pop_back();
+    }
+
+    bool is_composite_operation() const {
+        return not composite_parent_names.empty();
+    }
+
+    const auto& get_composite_parent_names() const {
+        return this->composite_parent_names;
+    }
+
+  private:
+    std::vector<const char*> composite_parent_names{};
+};
+
+inline RunOperationState OPERATION_STATE{};
+
+}  // namespace detail
+
+inline void push_composite_parent_name(const char* parent_name) {
+    detail::OPERATION_STATE.push_composite_parent_name(parent_name);
+}
+
+inline void pop_composite_parent_name() {
+    detail::OPERATION_STATE.pop_composite_parent_name();
+}
+
+inline bool is_composite_operation() {
+    return detail::OPERATION_STATE.is_composite_operation();
+}
+
+inline const auto& get_composite_parent_names() {
+    return detail::OPERATION_STATE.get_composite_parent_names();
+}
+
+}  // namespace run_operation_state
+
+
+namespace detail {
+template<typename FunctionType>
+struct CompositeOperation {
+
+    const char* name;
+    const FunctionType function;
+
+    template<typename... Args>
+    constexpr auto operator()(Args&&... args) const {
+        run_operation_state::push_composite_parent_name(this->name);
+        auto output = this->function(std::forward<Args...>(args...));
+        run_operation_state::pop_composite_parent_name();
+        return output;
+    }
+};
+
+template<typename FunctionType>
+constexpr auto decorate_as_composite_operation(const char* name, FunctionType function) {
+  return CompositeOperation<FunctionType>{name, std::move(function)};
+}
+
+#define DECORATE_AS_COMPOSITE_OPERATION(x) tt::tt_metal::operation::detail::decorate_as_composite_operation(#x, x)
+
+}  // namespace detail
+
 #ifdef DEBUG
 namespace detail {
 
@@ -48,6 +124,10 @@ static void print_operation(
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) {
 
     tt::log_debug(tt::LogOp, "Operation Type: {}", operation.get_type_name());
+
+    if (run_operation_state::is_composite_operation()) {
+        tt::log_debug(tt::LogOp, "Composite Parents: {}", run_operation_state::get_composite_parent_names());
+    }
 
     tt::log_debug(tt::LogOp, "Operation Attributes:");
     for (auto&& [name, value] : operation.attributes()) {
@@ -115,7 +195,14 @@ static void append_operation_to_operation_history(
             input_tensor_records.emplace_back(create_tensor_record(tensor.value()));
         }
     }
-    operation_history::append(operation_history::OperationRecord{operation.get_type_name(), operation.attributes(), input_tensor_records});
+    operation_history::append(
+        operation_history::OperationRecord{
+            operation.get_type_name(),
+            operation.attributes(),
+            input_tensor_records,
+            run_operation_state::get_composite_parent_names()
+        }
+    );
 }
 
 }  // namespace detail
