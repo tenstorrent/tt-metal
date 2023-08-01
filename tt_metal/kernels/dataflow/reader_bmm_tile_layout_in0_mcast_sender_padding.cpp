@@ -64,7 +64,14 @@ void kernel_main() {
 
     uint32_t l1_write_addr_in0;
     uint32_t l1_write_addr_in1;
+
+    // Fill tile with zeros
+    cb_reserve_back(cb_id_in2, 1);
     uint32_t l1_zeros_addr_in2 = get_write_ptr(cb_id_in2);
+    volatile uint32_t* pad_buffer = reinterpret_cast<volatile uint32_t*>(l1_zeros_addr_in2);
+    for (uint32_t i = 0; i < single_tile_size_bytes >> 2; i++) {
+        pad_buffer[i] = 0;
+    }
 
     uint32_t in0_tensor_current_block_start_tile_id = in0_tensor_start_tile_id;
     uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id;
