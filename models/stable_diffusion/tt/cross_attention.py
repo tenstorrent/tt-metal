@@ -8,7 +8,7 @@ import tt_lib as ttl
 from tt_lib.fallback_ops import fallback_ops
 from tests.python_api_testing.fused_ops.softmax import softmax as TtSoftmax
 
-from models.stable_diffusion.tt.utils import make_linear
+from models.stable_diffusion.sd_utils import make_linear
 
 
 class TtCrossAttention(nn.Module):

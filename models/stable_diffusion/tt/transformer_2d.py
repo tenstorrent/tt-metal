@@ -9,7 +9,7 @@ import tt_lib as ttl
 from tt_lib.fallback_ops import fallback_ops
 from models.stable_diffusion.tt.cross_attention import TtCrossAttention
 from models.stable_diffusion.tt.feedforward import TtFeedForward
-from models.stable_diffusion.tt.utils import make_linear
+from models.stable_diffusion.sd_utils import make_linear
 from models.utility_functions import pad_by_zero, torch2tt_tensor, torch_to_tt_tensor_rm
 
 

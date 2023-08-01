@@ -2,7 +2,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch.nn as nn
 
-from models.stable_diffusion.tt.utils import make_linear
+from models.stable_diffusion.sd_utils import make_linear
 from models.stable_diffusion.tt.embeddings import TtTimestepEmbedding as TimestepEmbedding
 from models.stable_diffusion.tt.downblock_2d import TtDownBlock2D as DownBlock2D
 from models.stable_diffusion.tt.upblock_2d import TtUpBlock2D as UpBlock2D

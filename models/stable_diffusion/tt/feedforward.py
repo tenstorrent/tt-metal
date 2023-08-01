@@ -5,7 +5,7 @@ from typing import Optional
 from tt_lib.fallback_ops import fallback_ops
 
 import tt_lib as ttl
-from models.stable_diffusion.tt.utils import make_linear
+from models.stable_diffusion.sd_utils import make_linear
 
 
 class TtGEGLU(nn.Module):

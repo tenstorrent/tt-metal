@@ -91,7 +91,7 @@ def make_tt_unet(state_dict, device):
     (
         (
             108,
-            80,
+            85,
         ),
     ),
 )
