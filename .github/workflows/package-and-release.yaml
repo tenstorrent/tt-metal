@@ -29,7 +29,7 @@ jobs:
     secrets:
       CHECKOUT_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
   # Candidate for breaking up
-  create-and-upload-release:
+  create-and-upload-draft-release:
     needs: [create-tag, build-eager-package]
     strategy:
       matrix:
@@ -50,6 +50,7 @@ jobs:
         with:
           tag_name: ${{ needs.create-tag.outputs.version }}
           name: ${{ needs.create-tag.outputs.version }}
+          draft: true
           files: |
             metal_libs-*+*.whl
             VERSION
