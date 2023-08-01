@@ -34,24 +34,14 @@ def run_move_op(test_id, shape, dtype, in0_mem_config, output_mem_config):
 
     dummy_tensor = torch.randn(dummy_shape)
     tt_dummy_tensor = (
-        ttl.tensor.Tensor(
-            dummy_tensor.flatten().tolist(),
-            dummy_shape,
-            dtype,
-            ttl.tensor.Layout.ROW_MAJOR,
-        )
+        ttl.tensor.Tensor(dummy_tensor, dtype)
         .to(ttl.tensor.Layout.TILE)
         .to(device, in0_mem_config)
     )
 
     torch_tensor = torch.randn(shape)
     tt_tensor = (
-        ttl.tensor.Tensor(
-            torch_tensor.flatten().tolist(),
-            shape,
-            dtype,
-            ttl.tensor.Layout.ROW_MAJOR,
-        )
+        ttl.tensor.Tensor(torch_tensor, dtype)
         .to(ttl.tensor.Layout.TILE)
         .to(device, in0_mem_config)
     )
@@ -62,7 +52,7 @@ def run_move_op(test_id, shape, dtype, in0_mem_config, output_mem_config):
     output = ttl.tensor.move(tt_tensor, output_mem_config)
 
     tt_host_rm = output.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
-    pyt_got_back_rm = torch.Tensor(tt_host_rm.data()).reshape(tt_host_rm.shape())
+    pyt_got_back_rm = tt_host_rm.to_torch()
 
     passing_pcc, output_pcc = comp_pcc(pyt_got_back_rm, torch_tensor, 0.99)
     logger.info(f"Passing={passing_pcc}")

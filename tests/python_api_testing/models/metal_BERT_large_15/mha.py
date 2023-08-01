@@ -52,7 +52,7 @@ def tt2torch_tensor(tt_tensor):
         ttl.tensor.DataType.BFLOAT8_B: torch.float,
     }[tt_tensor.dtype()]
 
-    py_output = torch.frombuffer(tt_output.data(), dtype=dtype).reshape(tt_output.shape())
+    py_output = tt_output.to_torch()
     return py_output
 
 
@@ -312,7 +312,7 @@ def run_mha_inference(
     )
 
     tt_out = tt_mha_model(tt_mha_input, tt_bert_attention_mask).cpu()
-    tt_out1 = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+    tt_out1 = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(
         tt_out.shape()
     )
 

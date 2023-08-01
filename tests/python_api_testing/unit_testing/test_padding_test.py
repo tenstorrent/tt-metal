@@ -32,7 +32,7 @@ def test_run_padding_test(
 
     # Pad inputs on host
     a_pad = a.pad(output_tensor_shape, input_tensor_start, pad_value)
-    a_pt = torch.Tensor(a_pad.data()).reshape(*output_tensor_shape)
+    a_pt = a_pad.to_torch()
 
     # Pytorch reference
     input_tensor_end = tuple(
@@ -82,7 +82,7 @@ def test_run_unpadding_test(input_tensor_shape, output_tensor_start, output_tens
         for i in range(len(input_tensor_shape))
     )
     a_unpad = a.unpad(output_tensor_start, output_tensor_end)
-    a_pt = torch.Tensor(a_unpad.data()).reshape(*output_tensor_shape)
+    a_pt = a_unpad.to_torch()
 
     # Pytorch reference
     a_ref = inp[
@@ -148,7 +148,7 @@ def test_run_padding_and_add_test(
 
     # Unpad out to get result
     out = out_pad.unpad(output_tensor_start, output_tensor_end)
-    out_pt = torch.Tensor(out.data()).reshape(*input_tensor_shape)
+    out_pt = out.to_torch().to(torch.float32)
 
     out_ref = inp + ones
 
@@ -190,7 +190,7 @@ def test_run_tile_padding_test(input_tensor_shape, pad_value):
 
     # Pad inputs on host
     a_pad = a.pad_to_tile(pad_value)
-    a_pt = torch.Tensor(a_pad.data()).reshape(output_tensor_shape)
+    a_pt = a_pad.to_torch()
 
     # Pytorch reference
     input_tensor_end = tuple(
@@ -235,7 +235,7 @@ def test_run_tile_unpadding_test(input_tensor_shape, output_tensor_shape):
 
     # Unpad inputs on host
     a_unpad = a.unpad_from_tile(output_tensor_shape)
-    a_pt = torch.Tensor(a_unpad.data()).reshape(*output_tensor_shape)
+    a_pt = a_unpad.to_torch()
 
     # Pytorch reference
     a_ref = inp[
@@ -292,7 +292,7 @@ def test_run_tile_padding_and_add_test(input_tensor_shape, pad_value):
 
     # Unpad out to get result
     out = out_pad.unpad_from_tile(input_tensor_shape)
-    out_pt = torch.Tensor(out.data()).reshape(*input_tensor_shape)
+    out_pt = out.to_torch().to(torch.float32)
 
     out_ref = inp + ones
 

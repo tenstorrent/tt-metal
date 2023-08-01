@@ -191,7 +191,7 @@ def run_add_and_norm_inference(
     tt_out = tt_add_and_norm_model(tt_add_and_norm_input_a, tt_add_and_norm_input_b).to(
         host
     )
-    tt_out = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+    tt_out = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(
         tt_out.shape()
     )
 

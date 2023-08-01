@@ -84,7 +84,7 @@ def run_add_and_norm_inference(model_version, batch, seq_len, on_weka, pcc, mode
     tt_add_and_norm_input_b = tt_add_and_norm_input_b.to(device)
 
     tt_out = tt_add_and_norm_model(tt_add_and_norm_input_a, tt_add_and_norm_input_b).cpu()
-    tt_out = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(tt_out.shape())
+    tt_out = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
     ttl.device.CloseDevice(device)
 

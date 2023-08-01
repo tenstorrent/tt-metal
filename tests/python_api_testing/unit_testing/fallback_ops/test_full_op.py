@@ -23,9 +23,7 @@ def test_full_fallback(input_shape, fill_value):
 
     t0 = ttl.fallback_ops.full(input_shape, fill_value)
 
-    output = torch.Tensor(t0.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
-        t0.shape()
-    )
+    output = t0.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     comp_pass, _ = comp_pcc(pt_out, output, 0.9999)
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
     logger.info(comp_out)

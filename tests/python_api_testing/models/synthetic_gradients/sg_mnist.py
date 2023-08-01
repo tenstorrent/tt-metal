@@ -145,7 +145,7 @@ class TtMnistModel(nn.Module):
 
         # Make pytorch tensor... since we had to pad the output, we need
         # to only retrieve the 10 values that represent actual classes
-        lin3_out_cpu_pytorch = torch.Tensor(lin3_out_cpu.data()).reshape(lin3_out_cpu.shape())[:, 0, 0, :10]
+        lin3_out_cpu_pytorch = torch.Tensor(lin3_out_cpu.to_torch()).reshape(lin3_out_cpu.shape())[:, 0, 0, :10]
         out = nn.functional.softmax(lin3_out_cpu_pytorch)
 
         return out

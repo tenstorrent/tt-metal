@@ -41,14 +41,7 @@ def tt2torch_tensor(tt_tensor):
     tt_output = tt_tensor.cpu()
     if tt_output.layout() != ttl.tensor.Layout.ROW_MAJOR:
         tt_output = tt_output.to(ttl.tensor.Layout.ROW_MAJOR)
-    dtype = {
-        ttl.tensor.DataType.FLOAT32:   torch.float,
-        ttl.tensor.DataType.BFLOAT16:  torch.bfloat16,
-        ttl.tensor.DataType.BFLOAT8_B: torch.float,
-    }[tt_tensor.dtype()]
-
-    py_output = torch.frombuffer(tt_output.data(), dtype=dtype).reshape(tt_output.shape())
-    return py_output
+    return tt_output.to_torch()
 
 
 def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
@@ -290,7 +283,7 @@ def run_mha_inference(model_version, batch, seq_len, on_weka, pcc, model_locatio
     tt_mha_input = tt_mha_input.to(device)
 
     tt_out = tt_mha_model(tt_mha_input).cpu()
-    tt_out1 = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(tt_out.shape())
+    tt_out1 = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
     ttl.device.CloseDevice(device)
 

@@ -72,7 +72,7 @@ def test_vgg_inference(pcc, PERF_CNT, imagenet_sample_input, imagenet_label_dict
             profiler.end("\nAverage execution time of tt_vgg model")
 
         tt_output = tt_output.cpu()
-        tt_output = torch.Tensor(tt_output.data()).reshape(tt_output.shape())
+        tt_output = torch.Tensor(tt_output.to_torch()).reshape(tt_output.shape())
 
         logger.info(
             f"Correct Output: {class_labels[torch.argmax(torch_output).item()]}"

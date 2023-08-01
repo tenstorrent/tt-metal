@@ -261,7 +261,7 @@ def run_bert_encoder_inference(
 
     tt_out = tt_bert_encoder_model(tt_bert_encoder_input, tt_bert_attention_mask).cpu()
 
-    tt_out = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+    tt_out = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(
         tt_out.shape()
     )
 

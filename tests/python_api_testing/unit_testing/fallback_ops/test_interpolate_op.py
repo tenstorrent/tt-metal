@@ -51,9 +51,7 @@ def test_pad_fallback(
         t0, size, scale_factor, mode, align_corners, recompute_scale_factor, antialias
     )
 
-    output = torch.Tensor(t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
-        t1.shape()
-    )
+    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     comp_pass, _ = comp_pcc(pt_out, output, 0.9999)
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
     logger.info(comp_out)

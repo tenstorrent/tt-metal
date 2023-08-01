@@ -39,7 +39,7 @@ constexpr static DataType get_data_type() {
 template<typename T>
 static Tensor full(const Shape& shape, T value, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr) {
     constexpr DataType data_type = detail::get_data_type<T>();
-    auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::volume(shape));
+    auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(shape));
     std::fill(std::begin(owned_buffer), std::end(owned_buffer), value);
     auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
     if (device != nullptr) {
@@ -120,7 +120,7 @@ template<typename T>
 static Tensor uniform(T low, T high, const Shape& shape, const Layout layout = Layout::ROW_MAJOR) {
     constexpr DataType data_type = detail::get_data_type<T>();
 
-    auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::volume(shape));
+    auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(shape));
 
     if constexpr (std::is_same_v<T, uint32_t> ) {
         auto rand_value = std::bind(std::uniform_int_distribution<T>(low, high), RANDOM_GENERATOR);

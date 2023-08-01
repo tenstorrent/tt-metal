@@ -146,7 +146,7 @@ Tensor Tensor::reshape(int N, int C, int H, int W) {
 }
 
 Tensor Tensor::reshape(const Shape& new_shape) const {
-    TT_ASSERT(this->volume() == tt::tt_metal::volume(new_shape));
+    TT_ASSERT(this->volume() == tt::tt_metal::compute_volume(new_shape));
     if (this->layout() == Layout::TILE) {
         TT_ASSERT(new_shape[2] % TILE_HEIGHT == 0 && new_shape[3] % TILE_WIDTH == 0 && "Expected a multiple of 32 for H, W (or -1 evaluating to such) in Tensor::reshape()!");
     }
@@ -207,7 +207,7 @@ const Storage& Tensor::storage() const {
 
 namespace detail {
 const Shape compute_strides(const Shape& shape) {
-    auto num_elements = volume(shape);
+    auto num_elements = compute_volume(shape);
     std::vector<std::uint32_t> strides;
     for (std::int32_t index = 0; index < shape.rank(); index++) {
         num_elements /= shape[index];
@@ -222,7 +222,7 @@ const Shape Tensor::strides() const {
 }
 
 uint32_t Tensor::volume() const {
-    return tt::tt_metal::volume(this->shape_);
+    return tt::tt_metal::compute_volume(this->shape_);
 }
 
 tt::stl::reflection::Attributes Tensor::attributes() const {
@@ -235,7 +235,7 @@ tt::stl::reflection::Attributes Tensor::attributes() const {
 }
 
 Tensor create_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config) {
-    uint32_t packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, volume(shape));
+    uint32_t packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
     auto device_buffer = tensor_impl::allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config);
     return Tensor(DeviceStorage{device_buffer, device, memory_config}, shape, data_type, layout);
 }

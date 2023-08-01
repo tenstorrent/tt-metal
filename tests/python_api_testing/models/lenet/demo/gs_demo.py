@@ -40,7 +40,7 @@ def test_gs_demo(mnist_sample_input, model_location_generator):
 
         tt_output = tt_lenet(tt_image)
         tt_output = tt_output.cpu()
-        tt_output = torch.Tensor(tt_output.data()).reshape(tt_output.shape())
+        tt_output = tt_output.to_torch()
 
         _, tt_predicted = torch.max(tt_output.data, -1)
 

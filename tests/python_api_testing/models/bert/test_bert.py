@@ -141,7 +141,7 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
     else:
         pytorch_out = hugging_face_reference_model(bert_input)
         tt_out = tt_bert_model(bert_input).cpu()
-    tt_untilized_output = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(batch, 1, seq_len, -1)
+    tt_untilized_output = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(batch, 1, seq_len, -1)
 
     ttl.device.CloseDevice(device)
 

@@ -115,13 +115,6 @@ constexpr inline uint32_t packed_buffer_size_bytes<float>(uint32_t volume_unpack
     return (volume_unpacked_data/num_type_in_u32) * sizeof(uint32_t);
 }
 
-// Specialization for bfloat8_b because tile size is 1088 after being packed
-template <>
-constexpr inline uint32_t packed_buffer_size_bytes<bfloat8_b>(uint32_t volume_unpacked_data) {
-    auto num_tiles = volume_unpacked_data / (32 * 32);
-    return num_tiles * 1088; // TODO: Update to get size from tt_metal::GetTileSize (issue 462)
-}
-
 // ======================================================================================
 //                                  Layout converters
 // ======================================================================================
@@ -246,15 +239,7 @@ std::vector<T> read_data_from_device(const Tensor &tensor, uint32_t size_in_byte
         ReadFromBuffer(*device_buffer, device_data);
     }
 
-    std::vector<T> unpacked_data;
-    if (tensor.dtype() == DataType::BFLOAT8_B) {
-        std::vector<float> float_unpacked_data = unpack_bfp8_tiles_into_float_vec(device_data, /*row_major_output=*/false, /*is_exp_a=*/false);
-        auto float_unpacked_data_view = owned_buffer::create<float>(std::move(float_unpacked_data));
-        unpacked_data = cast_vec<T>(float_unpacked_data_view);
-    } else {
-        unpacked_data = unpack_uint32_vec<T>(device_data);
-    }
-    return unpacked_data;
+    return unpack_uint32_vec<T>(device_data);
 }
 
 template <typename T, template<typename> typename BufferType>
@@ -262,20 +247,14 @@ inline void write_data_to_device_buffer(const BufferType<T>& data_to_write, Devi
     // TODO(arakhmati): can we use generators in this function to go from `data_to_write` to `uint32_data`?
     // And effectively get rid of any additional allocation
 
-    std::vector<uint32_t> uint32_data;
-    if (data_type == DataType::BFLOAT8_B) {
-        std::vector<float> float_data = cast_vec<float>(data_to_write);
-        uint32_data = pack_fp32_vec_as_bfp8_tiles(float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
-    } else if (data_type == DataType::BFLOAT16) {
+    if (data_type == DataType::BFLOAT16) {
         if (memory_config.interleaved) {
             TT_ASSERT(shape[3] % 2 == 0, "Input tensor width must be a multiple of 2 to pack interleaved row major data");
         } else {
-            TT_ASSERT(volume(shape) % 2 == 0, "Input tensor volume must be a multiple of 2 to pack contiguous data");
+            TT_ASSERT(compute_volume(shape) % 2 == 0, "Input tensor volume must be a multiple of 2 to pack contiguous data");
         }
-        uint32_data = pack_vec_into_uint32_vec<T>(data_to_write);
-    } else {
-        uint32_data = pack_vec_into_uint32_vec<T>(data_to_write);
     }
+    auto uint32_data = pack_vec_into_uint32_vec<T>(data_to_write);
 
     const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
     if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
@@ -288,12 +267,7 @@ inline void write_data_to_device_buffer(const BufferType<T>& data_to_write, Devi
 template <typename T, template<typename> typename BufferType>
 inline DeviceBuffer initialize_data_on_device(const BufferType<T>& data_to_write, Device* device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config) {
     TT_ASSERT(device != nullptr);
-    uint32_t packed_size_in_bytes;
-    if (data_type == DataType::BFLOAT8_B) {
-        packed_size_in_bytes = packed_buffer_size_bytes<bfloat8_b>(data_to_write.size());
-    } else {
-        packed_size_in_bytes = packed_buffer_size_bytes<T>(data_to_write.size());
-    }
+    auto packed_size_in_bytes = packed_buffer_size_bytes<T>(data_to_write.size());
     auto device_buffer = allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config);
     write_data_to_device_buffer<T>(data_to_write, device_buffer, shape, data_type, layout, memory_config);
     return device_buffer;
@@ -306,7 +280,10 @@ inline DeviceBuffer to_device_buffer(const Storage& storage, Device* device, con
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
                 auto data_to_write = owned_buffer::get_as<T>(storage.buffer);
-                TT_ASSERT(volume(shape) == data_to_write.size(), "Tensor shape and number of data elements does not match");
+                TT_ASSERT(
+                    compute_buffer_size(shape, data_type) == data_to_write.size(),
+                    fmt::format("Tensor buffer size and number of data elements does not match: {} != {}", compute_buffer_size(shape, data_type), data_to_write.size())
+                );
                 if (layout == Layout::TILE) {
                     TT_ASSERT((shape[2] % tt::constants::TILE_HEIGHT == 0 && shape[3] % tt::constants::TILE_WIDTH == 0), "Tensor shape incompatible for specified layout");
                 }
@@ -318,7 +295,10 @@ inline DeviceBuffer to_device_buffer(const Storage& storage, Device* device, con
             else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
                 if constexpr (std::is_same_v<T, float> or std::is_same_v<T, bfloat16>) {
                     auto data_to_write = borrowed_buffer::get_as<T>(storage.buffer);
-                    TT_ASSERT(volume(shape) == data_to_write.size(), "Tensor shape and number of data elements does not match");
+                    TT_ASSERT(
+                        compute_buffer_size(shape, data_type) == data_to_write.size(),
+                        fmt::format("Tensor buffer size and number of data elements does not match: {} != {}", compute_buffer_size(shape, data_type), data_to_write.size())
+                    );
                     if (layout == Layout::TILE) {
                         TT_ASSERT((shape[2] % tt::constants::TILE_HEIGHT == 0 && shape[3] % tt::constants::TILE_WIDTH == 0), "Tensor shape incompatible for specified layout");
                     }
@@ -429,6 +409,8 @@ inline Tensor to_layout(const Tensor &tensor, Layout target_layout) {
     return Tensor(OwnedStorage{output_buffer}, tensor.shape(), tensor.dtype(), target_layout);
 }
 
+Tensor to_layout_bfloat8_b(const Tensor &tensor, Layout target_layout);
+
 // ======================================================================================
 //                                  .pad() and .unpad()
 // ======================================================================================
@@ -437,9 +419,10 @@ inline Tensor pad(const Tensor &tensor, const Shape& output_tensor_shape, const 
     auto pad_value_ = static_cast<T>(pad_value);
     const auto input_tensor_shape = tensor.shape();
     const auto input_tensor_strides = tensor.strides();
+    const auto input_tensor_data_type = tensor.dtype();
 
     auto pad =
-        [&input_tensor_shape, &input_tensor_strides, &output_tensor_shape, &input_tensor_start, &pad_value_]
+        [&input_tensor_shape, &input_tensor_strides, &input_tensor_data_type, &output_tensor_shape, &input_tensor_start, &pad_value_]
         (const auto& input_buffer) {
         // Check if input tensor fits in output tensor given the input tensor start indices
         TT_ASSERT(input_tensor_shape[0] + input_tensor_start[0] <= output_tensor_shape[0]);
@@ -462,7 +445,7 @@ inline Tensor pad(const Tensor &tensor, const Shape& output_tensor_shape, const 
             1
         };
 
-        auto output_buffer = owned_buffer::create<T>(volume(output_tensor_shape));
+        auto output_buffer = owned_buffer::create<T>(compute_volume(output_tensor_shape));
         auto output_index = 0;
         for(auto i = 0; i < pad_size[0][0] * output_tensor_strides[0]; i++) {
             output_buffer[output_index++] = pad_value_;
@@ -524,6 +507,8 @@ inline Tensor pad(const Tensor &tensor, const Shape& output_tensor_shape, const 
     return Tensor(OwnedStorage{output_buffer}, output_tensor_shape, tensor.dtype(), tensor.layout());
 }
 
+Tensor pad_bfloat8_b(const Tensor &tensor, const Shape& output_tensor_shape, const Shape& input_tensor_start, float pad_value);
+
 template <typename T>
 inline Tensor unpad(const Tensor &tensor, const Shape& output_tensor_start, const Shape& output_tensor_end) {
 
@@ -556,7 +541,7 @@ inline Tensor unpad(const Tensor &tensor, const Shape& output_tensor_start, cons
 
     const Shape input_tensor_strides = tensor.strides();
 
-    auto output_buffer = owned_buffer::create<T>(volume(output_tensor_shape));
+    auto output_buffer = owned_buffer::create<T>(compute_volume(output_tensor_shape));
     auto output_index = 0;
     for(auto dim0 = output_tensor_start[0]; dim0 <= output_tensor_end[0]; dim0++) {
         for(auto dim1 = output_tensor_start[1]; dim1 <= output_tensor_end[1]; dim1++) {
@@ -571,6 +556,9 @@ inline Tensor unpad(const Tensor &tensor, const Shape& output_tensor_start, cons
 
     return Tensor(OwnedStorage{output_buffer}, output_tensor_shape, tensor.dtype(), tensor.layout());
 }
+
+
+Tensor unpad_bfloat8_b(const Tensor &tensor, const Shape& output_tensor_start, const Shape& output_tensor_end);
 
 // ======================================================================================
 //                                         Print

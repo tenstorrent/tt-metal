@@ -218,9 +218,8 @@ if __name__ == "__main__":
     func = Layernorm(ttgamma, ttbeta, epsf, 1, W, device, num_dims=1)
 
     t1 = func(t0, overrideH=H)
-    t2_data = t1.cpu().data()
 
-    tt_got_back = torch.Tensor(t2_data).reshape((1,1,H,W))
+    tt_got_back = t1.cpu().to_torch()
     tt_got_back = untilize(tt_got_back)
 
     print("Layernorm max absdiff=")

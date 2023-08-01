@@ -92,7 +92,7 @@ def test_run_fully_connected(shapes, dtype, has_bias):
     out = out.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
     if out_shape != out_shape_padded:
         out = out.unpad_from_tile(out_shape)
-    out_pytorch = torch.tensor(out.data()).reshape(out_shape)
+    out_pytorch = out.to_torch()
 
     ttl.device.CloseDevice(device)
 

@@ -23,7 +23,7 @@ namespace tt_metal {
             weight_matrix_rows = (uint32_t) std::ceil( (double) weight_matrix_rows / (double) in1_block_h_datums ) * in1_block_h_datums;
         }
         Shape output_shape = {1, 1, weight_matrix_rows, weight_matrix_cols};
-        auto output_buffer = owned_buffer::create<T>(volume(output_shape));
+        auto output_buffer = owned_buffer::create<T>(compute_volume(output_shape));
         for(auto r = 0; r < w_shape[2]; r++) {
             for(auto s = 0; s < w_shape[3]; s++) {
                 for(auto c = 0; c < w_shape[1]; c++) {

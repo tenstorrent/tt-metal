@@ -33,11 +33,4 @@ def tt2torch_tensor(tt_tensor):
     tt_output = tt_tensor.cpu()
     if tt_output.layout() != tt_lib.tensor.Layout.ROW_MAJOR:
         tt_output = tt_output.to(tt_lib.tensor.Layout.ROW_MAJOR)
-    dtype = {
-        tt_lib.tensor.DataType.FLOAT32:   torch.float,
-        tt_lib.tensor.DataType.BFLOAT16:  torch.bfloat16,
-        tt_lib.tensor.DataType.BFLOAT8_B: torch.float,
-    }[tt_tensor.dtype()]
-
-    py_output = torch.frombuffer(tt_output.data(), dtype=dtype).reshape(tt_output.shape())
-    return py_output
+    return tt_output.to_torch()

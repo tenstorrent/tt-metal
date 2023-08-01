@@ -52,11 +52,11 @@ def run_bert_large_create_qkv_heads_from_fused_qkv_test(
     assert v.shape() == [batch, 16, 384, 64]
 
     tt_host_rm_q = q.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
-    pyt_got_back_rm_q = torch.Tensor(tt_host_rm_q.data()).reshape(tt_host_rm_q.shape())
+    pyt_got_back_rm_q = tt_host_rm_q.to_torch()
     tt_host_rm_k = k.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
-    pyt_got_back_rm_k = torch.Tensor(tt_host_rm_k.data()).reshape(tt_host_rm_k.shape())
+    pyt_got_back_rm_k = tt_host_rm_k.to_torch()
     tt_host_rm_v = v.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
-    pyt_got_back_rm_v = torch.Tensor(tt_host_rm_v.data()).reshape(tt_host_rm_v.shape())
+    pyt_got_back_rm_v = tt_host_rm_v.to_torch()
 
     (ref_q, ref_k, ref_v) = torch.split(A, 1024, dim=-1)
 

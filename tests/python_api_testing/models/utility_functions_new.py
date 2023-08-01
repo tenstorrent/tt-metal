@@ -218,15 +218,7 @@ def tt2torch_tensor(tt_tensor):
     tt_output = tt_tensor.cpu()
     if tt_output.layout() != tt_lib.tensor.Layout.ROW_MAJOR:
         tt_output = tt_output.to(tt_lib.tensor.Layout.ROW_MAJOR)
-
-    dtype = {
-        tt_lib.tensor.DataType.FLOAT32:   torch.float,
-        tt_lib.tensor.DataType.BFLOAT16:  torch.bfloat16,
-        tt_lib.tensor.DataType.BFLOAT8_B: torch.float,
-    }[tt_tensor.dtype()]
-
-    py_output = torch.frombuffer(tt_output.data(), dtype=dtype).reshape(tt_output.shape())
-    return py_output
+    return tt_output.to_torch()
 
 
 def pad_by_zero(x: torch.Tensor, device):
@@ -249,13 +241,7 @@ def unpad_from_zero(x, desired_shape):
         if(x.layout() != tt_lib.tensor.Layout.ROW_MAJOR):
             x = x.to(tt_lib.tensor.Layout.ROW_MAJOR)
         x = x.unpad((0, 0, 0, 0), (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1) )
-        dtype = {
-            tt_lib.tensor.DataType.FLOAT32:   torch.float,
-            tt_lib.tensor.DataType.BFLOAT16:  torch.bfloat16,
-            tt_lib.tensor.DataType.BFLOAT8_B: torch.float,
-        }[x.dtype()]
-
-        x = torch.frombuffer(x.data(), dtype=dtype).reshape(x.shape())
+        x = x.to_torch()
     return x
 
 
@@ -308,19 +294,7 @@ profiler = Profiler()
 
 def tt_to_torch_tensor(tt_tensor):
     tt_output = tt_tensor.cpu().to(tt_lib.tensor.Layout.ROW_MAJOR)
-    # create a 1D PyTorch tensor from values in TT Tensor obtained with data() member function
-    # and then reshape PyTorch tensor to shape of TT Tensor
-    # py_tensor = torch.Tensor(tt_tensor.data()).reshape(tt_tensor.shape())
-
-    dtype = {
-        tt_lib.tensor.DataType.FLOAT32:   torch.float,
-        tt_lib.tensor.DataType.BFLOAT16:  torch.bfloat16,
-        tt_lib.tensor.DataType.BFLOAT8_B: torch.float,
-    }[tt_tensor.dtype()]
-
-    py_output = torch.frombuffer(tt_output.data(), dtype=dtype).reshape(tt_output.shape())
-
-    return py_output
+    return tt_output.to_torch()
 
 
 def torch_to_tt_tensor_rm(py_tensor, device, shape=None, put_on_device=True):

@@ -41,7 +41,7 @@ def create_padded_tensor(input_tensors_shape, input_tensor, output_tensor_shape,
         input_tensors_shape.insert(0, 1)
 
     if isinstance(input_tensor, ttm.tensor.Tensor):
-        torch_tensor = torch.Tensor(input_tensor.data()).reshape(input_tensor.shape())
+        torch_tensor = input_tensor.to_torch()
     else:
         torch_tensor = input_tensor
 
@@ -54,7 +54,6 @@ def create_padded_tensor(input_tensors_shape, input_tensor, output_tensor_shape,
     )
     # Pad inputs on host
     a_pad = a.pad(output_tensor_shape, input_tensor_start, pad_value)
-    #a_pt = torch.Tensor(a_pad.data()).reshape(*output_tensor_shape)
     a_dev = a_pad.to(ttm.tensor.Layout.TILE).to(device)
 
     return a_dev
@@ -92,14 +91,7 @@ def tt2torch_tensor(tt_tensor):
     tt_output = tt_tensor.cpu()
     if tt_output.layout() != ttm.tensor.Layout.ROW_MAJOR:
         tt_output = tt_output.to(ttm.tensor.Layout.ROW_MAJOR)
-    dtype = {
-        ttm.tensor.DataType.FLOAT32:   torch.float,
-        ttm.tensor.DataType.BFLOAT16:  torch.bfloat16,
-        ttm.tensor.DataType.BFLOAT8_B: torch.float,
-    }[tt_tensor.dtype()]
-
-    py_output = torch.frombuffer(tt_output.data(), dtype=dtype).reshape(tt_output.shape())
-    return py_output
+    return tt_output.to_torch()
 
 
 def tt_const_tensor(value, shape, device):
@@ -113,7 +105,7 @@ def create_padded_tensor(input_tensors_shape, input_tensor, output_tensor_shape,
         input_tensors_shape.insert(0, 1)
 
     if isinstance(input_tensor, ttm.tensor.Tensor):
-        torch_tensor = torch.Tensor(input_tensor.data()).reshape(input_tensor.shape())
+        torch_tensor = input_tensor.to_torch()
     else:
         torch_tensor = input_tensor
 
@@ -128,7 +120,6 @@ def create_padded_tensor(input_tensors_shape, input_tensor, output_tensor_shape,
     # Pad inputs on host
     a_pad = a.pad(output_tensor_shape, input_tensor_start, pad_value)
 
-    #a_pt = torch.Tensor(a_pad.data()).reshape(*output_tensor_shape)
     a_dev = a_pad.to(ttm.tensor.Layout.TILE).to(device)
 
     return a_dev

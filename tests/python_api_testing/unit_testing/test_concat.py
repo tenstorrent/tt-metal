@@ -64,8 +64,8 @@ def test_tile_simple_concat(memcfg, dtype, nChannels):
 
     tt = ttl.tensor.concat([xtt[0], xtt[1]], dim)
     assert tt.shape() == output_shape
-    xtt_data = tt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()
-    tt_dev = torch.Tensor(xtt_data).reshape(output_shape).to(torch.bfloat16)
+    xtt_data = tt.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
+    tt_dev = xtt_data.to_torch().to(torch.bfloat16)
     # debug_show(output_shape[2],tt_dev,tt_cpu)
     # print_diff_argmax(tt_dev, tt_cpu)
 
@@ -134,8 +134,7 @@ def test_tile_simple_dim3_concat(shape_a_b_dim):
 
     tt = ttl.tensor.concat([xtt[0], xtt[1]], dim)
     assert tt.shape() == output_shape
-    xtt_data = tt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()
-    tt_dev = torch.Tensor(xtt_data).reshape(output_shape).to(torch.bfloat16)
+    tt_dev = tt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
 
     assert torch.equal(tt_cpu, tt_dev)
 

@@ -94,10 +94,8 @@ def ttP(x, count=4, offset=0, stride=1):
     if type(x) == torch.Tensor:
         t1 = x.reshape(-1)
     else:
-
-        shp = x.shape()
         tt_out = x.cpu()
-        torch_out = untilize(torch.Tensor(tt_out.data()).reshape(shp))
+        torch_out = untilize(tt_out.to_torch())
         t1 = torch_out.reshape(-1)
     print("Tensor vals: (", end="")
     for j in range(offset, offset + count * stride, stride):
@@ -264,14 +262,7 @@ def tt2torch_tensor(tt_tensor, tt_host=None):
     tt_output = tt_tensor.cpu()
     if tt_output.layout() != ttl.tensor.Layout.ROW_MAJOR:
         tt_output = tt_output.to(ttl.tensor.Layout.ROW_MAJOR)
-    dtype = {
-        ttl.tensor.DataType.FLOAT32:   torch.float,
-        ttl.tensor.DataType.BFLOAT16:  torch.bfloat16,
-        ttl.tensor.DataType.BFLOAT8_B: torch.float,
-    }[tt_tensor.dtype()]
-
-    py_output = torch.frombuffer(tt_output.data(), dtype=dtype).reshape(tt_output.shape())
-    return py_output
+    return tt_output.to_torch()
 
 
 def pad_by_zero(x: torch.Tensor, device):
@@ -306,13 +297,7 @@ def unpad_from_zero(x, desired_shape, host):
                 desired_shape[3] - 1,
             ),
         )
-        dtype = {
-            ttl.tensor.DataType.FLOAT32:   torch.float,
-            ttl.tensor.DataType.BFLOAT16:  torch.bfloat16,
-            ttl.tensor.DataType.BFLOAT8_B: torch.float,
-        }[x.dtype()]
-
-        x = torch.frombuffer(x.data(), dtype=dtype).reshape(x.shape())
+        x = x.to_torch()
     return x
 
 
@@ -365,10 +350,7 @@ profiler = Profiler()
 
 def tt_to_torch_tensor(tt_tensor):
     tt_tensor = tt_tensor.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
-    # create a 1D PyTorch tensor from values in TT Tensor obtained with data() member function
-    # and then reshape PyTorch tensor to shape of TT Tensor
-    py_tensor = torch.Tensor(tt_tensor.data()).reshape(tt_tensor.shape())
-    return py_tensor
+    return tt_tensor.to_shape()
 
 
 def torch_to_tt_tensor_rm(py_tensor, device, shape=None, put_on_device=True):

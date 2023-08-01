@@ -56,13 +56,11 @@ if __name__ == "__main__":
     t0 = tensor.Tensor(x_t, [1, 1, H, W], tensor.DataType.BFLOAT16, tensor.Layout.TILE, device)
     func = softmax
     t1 = func(t0)
-    t2_data = t1.cpu().data()
 
-    tt_got_back = torch.Tensor(t2_data).reshape((1,1,H,W))
+    tt_got_back = t1.cpu().to_torch()
     tt_got_back = untilize(tt_got_back)
 
     print("Max diff=")
     print_diff_argmax(tt_got_back, ref_sm)
 
-    print(t2_data)
     device.CloseDevice(device)

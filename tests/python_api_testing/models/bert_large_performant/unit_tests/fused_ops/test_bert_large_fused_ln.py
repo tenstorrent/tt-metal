@@ -170,9 +170,7 @@ def run_layernorm_tests(test_id, batch, dtype, in0_mem_config, out_mem_config):
             logger.debug(f"tty is on: {tty.memory_config().buffer_type}")
             logger.debug(f"ttz is on: {ttz.memory_config().buffer_type}")
 
-            t2_data = ttz.cpu().data()
-
-            tt_got_back = torch.Tensor(t2_data).reshape((N, C, H, W))
+            tt_got_back = ttz.cpu().to_torch()
             tt_got_back = untilize(tt_got_back)
 
             # ref_lnorm = ref_layernorm(x, epsf, gammaf, betaf, H, W)

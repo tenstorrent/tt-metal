@@ -242,7 +242,7 @@ def run_ffn_inference(
     )
 
     tt_out = tt_ffn_model(tilized_ffn_input).cpu()
-    tt_out = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+    tt_out = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(
         tt_out.shape()
     )
 

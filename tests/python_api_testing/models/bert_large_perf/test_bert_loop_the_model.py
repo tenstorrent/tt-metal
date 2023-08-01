@@ -145,7 +145,7 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
     print(f"Running BERT model once to fill caches -> disable profiler")
     profiler.disable()
     tt_out = tt_bert_model(**bert_input).cpu()
-    tt_untilized_output = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(batch, 1, seq_len, -1)
+    tt_untilized_output = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(batch, 1, seq_len, -1)
 
     print(f"Enable profiler and enable binary and compile cache")
     profiler.enable()
@@ -163,7 +163,7 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
     profiler.start("processing_output_to_string")
 
     tt_out = tt_out.cpu()
-    tt_untilized_output = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(batch, 1, seq_len, -1)
+    tt_untilized_output = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(batch, 1, seq_len, -1)
 
     tt_start_logits = tt_untilized_output[..., :, 0].squeeze(1)
     tt_end_logits = tt_untilized_output[..., :, 1].squeeze(1)

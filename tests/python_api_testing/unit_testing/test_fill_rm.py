@@ -40,8 +40,7 @@ def test_fill_rm():
     xtt = tt_lib.tensor.fill_ones_rm(N, C, H, W, fillH, fillW, xt)
     assert xtt.shape() == [N, C, H, W]
 
-    xtt_data = xtt.cpu().data()
-    tt_got_back = torch.Tensor(xtt_data).reshape((N, C, H, W))
+    tt_got_back = xtt.cpu().to_torch()
 
     # x[1,1,2,2] = 2.0
     print("reshape() max absdiff=")

@@ -9,7 +9,8 @@ using std::uint32_t;
 
 constexpr uint32_t TILE_HEIGHT = 32;
 constexpr uint32_t TILE_WIDTH = 32;
-constexpr uint32_t TILE_HW = TILE_WIDTH*TILE_HEIGHT;
+constexpr uint32_t TILE_HW = TILE_WIDTH * TILE_HEIGHT;
+constexpr uint32_t BFLOAT8_B_TILE_HW = TILE_HW + 64;
 
 constexpr uint32_t MAX_DST_SIZE = 16;
 

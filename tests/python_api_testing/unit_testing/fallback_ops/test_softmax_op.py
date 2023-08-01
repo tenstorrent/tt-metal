@@ -40,9 +40,7 @@ def test_softmax_fallback(input_shape, dim, on_device):
 
     t1 = ttl.fallback_ops.softmax(t0, dim)
 
-    output = torch.Tensor(t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
-        t1.shape()
-    )
+    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     comp_pass, _ = comp_pcc(pt_out, output, 0.9999)
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
     logger.info(comp_out)

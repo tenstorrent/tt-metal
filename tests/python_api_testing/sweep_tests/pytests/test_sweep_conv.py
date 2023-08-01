@@ -93,7 +93,7 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
     assert(out.layout() == ttl.tensor.Layout.ROW_MAJOR)
 
     # Copy output to host and convert tt tensor to pytorch tensor
-    out_result = torch.tensor(out.data()).reshape(conv_output_shape)
+    out_result = torch.tensor(out.to_torch()).reshape(conv_output_shape)
     out_result = torch.transpose(out_result, 2, 3)
     out_result = torch.transpose(out_result, 1, 2)
 

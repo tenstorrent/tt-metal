@@ -137,7 +137,7 @@ def test_resnet50_convs_with_folded_batch_norm():
             x_on_device = conv_on_device(x_on_device)
             # Copy output to host and convert tt tensor to pytorch tensor
             x_result = x_on_device.cpu()
-            out_result = torch.tensor(x_result.data()).reshape(x_result.shape())
+            out_result = x_result.to_torch()
             out_result = torch.transpose(out_result, 2, 3)
             out_result = torch.transpose(out_result, 1, 2)
 

@@ -26,14 +26,7 @@ def tt2torch_tensor(tt_tensor):
     tt_output = tt_tensor.cpu()
     if tt_output.layout() != tt_lib.tensor.Layout.ROW_MAJOR:
         tt_output = tt_output.to(tt_lib.tensor.Layout.ROW_MAJOR)
-    dtype = {
-        tt_lib.tensor.DataType.FLOAT32:   torch.float,
-        tt_lib.tensor.DataType.BFLOAT16:  torch.bfloat16,
-        tt_lib.tensor.DataType.BFLOAT8_B: torch.float,
-    }[tt_tensor.dtype()]
-
-    py_output = torch.frombuffer(tt_output.data(), dtype=dtype).to(torch.float).reshape(tt_output.shape())
-    return py_output
+    return tt_output.to_torch().to(torch.float)
 
 
 def linear(x, weight, bias=None):
@@ -58,7 +51,7 @@ def create_padded_tensor(
         input_tensors_shape.insert(0, 1)
 
     if isinstance(input_tensor, tt_lib.tensor.Tensor):
-        torch_tensor = torch.Tensor(input_tensor.data()).reshape(input_tensor.shape())
+        torch_tensor = torch.Tensor(input_tensor.to_torch()).reshape(input_tensor.shape())
     else:
         torch_tensor = input_tensor
 
@@ -72,7 +65,6 @@ def create_padded_tensor(
     # Pad inputs on host
     a_pad = a.pad(output_tensor_shape, input_tensor_start, pad_value)
 
-    # a_pt = torch.Tensor(a_pad.data()).reshape(*output_tensor_shape)
     a_dev = a_pad.to(tt_lib.tensor.Layout.TILE).to(device)
 
     return a_dev

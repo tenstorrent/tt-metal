@@ -146,9 +146,7 @@ def test_split_tiled_w(
         logger.debug(f"buff{index} is on: {buff.memory_config().buffer_type}")
         assert buff.shape() == [W, Z, Y, int(X / num_splits)]
         tt_host_rm_buff = buff.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
-        pyt_got_back_rm_buff = torch.Tensor(tt_host_rm_buff.data()).reshape(
-            tt_host_rm_buff.shape()
-        )
+        pyt_got_back_rm_buff = tt_host_rm_buff.to_torch()
         pyt_buff_list.append(pyt_got_back_rm_buff)
 
     golden_buffers = torch.chunk(A, num_splits, dim=-1)

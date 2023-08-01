@@ -37,7 +37,7 @@ def test_run_tilize_test(nb, nc, nh, nw):
         device,
     )
     b = ttl.tensor.tilize(a)
-    c = torch.frombuffer(b.cpu().data(), dtype=torch.bfloat16).to(torch.float32).reshape(shape).numpy()
+    c = b.cpu().to_torch().to(torch.float32).reshape(shape).numpy()
 
     tilized_inp = tilize(inp.reshape(*shape))
 

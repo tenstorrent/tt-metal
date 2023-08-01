@@ -113,9 +113,7 @@ def test_BatchNorm_fallback(
     )
     t1 = tt_nn(t0)
 
-    output = torch.Tensor(t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
-        t1.shape()
-    )
+    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     comp_pass, _ = comp_pcc(pt_out, output, 0.9999)
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
     logger.info(comp_out)

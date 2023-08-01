@@ -120,9 +120,7 @@ def run_groupnorm_tests(test_id, group_size, dtype, in0_mem_config, out_mem_conf
             logger.debug(f"ttx is on: {ttx.memory_config().buffer_type}")
             logger.debug(f"tty is on: {tty.memory_config().buffer_type}")
 
-            t2_data = ttz.cpu().data()
-
-            tt_got_back = torch.Tensor(t2_data).reshape((N, C, H, W))
+            tt_got_back = ttz.cpu().to_torch()
             tt_got_back = untilize(tt_got_back)
 
             torch.isclose(golden, tt_got_back)

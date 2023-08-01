@@ -34,16 +34,16 @@ uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes,
                 case DataType::FLOAT32: {
                     // Float is converted to bfloat16 before being written to device
                     uint32_t size_of_element = element_size_bytes_wrapper(DataType::BFLOAT16);
-                    page_size = 32 * 32 * size_of_element;
+                    page_size = constants::TILE_HW * size_of_element;
                 }
                 break;
                 case DataType::UINT32: {
                     uint32_t size_of_element = element_size_bytes_wrapper(dtype);
-                    page_size = 32 * 32 * size_of_element;
+                    page_size = constants::TILE_HW * size_of_element;
                 }
                 break;
                 case DataType::BFLOAT8_B:  {
-                    page_size = 1088; // (256 * 4) + (16 *4)
+                    page_size = constants::BFLOAT8_B_TILE_HW;
                 }
                 break;
                 default:
@@ -102,6 +102,59 @@ void validate_on_device_dtype_and_layout(Device *device, DataType dtype, Layout 
     };
     supported_dtype();
     supported_layout();
+}
+
+Tensor to_layout_bfloat8_b(const Tensor &tensor, Layout target_layout) {
+    // TODO(arakhmati): do not convert to FLOAT32
+
+    if(tensor.layout() == target_layout) {
+        return tensor;
+    }
+
+    // Convert to FLOAT32 tensor and change layout
+    auto input_packed_data = owned_buffer::get_as<uint32_t>(tensor).get();
+    auto input_float_data = unpack_bfp8_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false);
+    auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
+    auto float_tensor = Tensor(OwnedStorage{input_float_buffer}, tensor.shape(), DataType::FLOAT32, tensor.layout()).to(target_layout);
+
+    // Convert back to BFLOAT8_B
+    auto output_float_data = owned_buffer::get_as<float>(float_tensor).get();
+    auto output_packed_data = pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+    auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
+    return Tensor(std::move(OwnedStorage{std::move(output_uint32_buffer)}), tensor.shape(), DataType::BFLOAT8_B, target_layout);
+}
+
+
+Tensor pad_bfloat8_b(const Tensor &tensor, const Shape& output_tensor_shape, const Shape& input_tensor_start, float pad_value) {
+    // TODO(arakhmati): do not convert to FLOAT32
+
+    // Convert to FLOAT32 tensor and pad
+    auto input_packed_data = owned_buffer::get_as<uint32_t>(tensor).get();
+    auto input_float_data = unpack_bfp8_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false);
+    auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
+    auto float_tensor = Tensor(OwnedStorage{input_float_buffer}, tensor.shape(), DataType::FLOAT32, tensor.layout()).pad(output_tensor_shape, input_tensor_start, pad_value);
+
+    // Convert back to BFLOAT8_B
+    auto output_float_data = owned_buffer::get_as<float>(float_tensor).get();
+    auto output_packed_data = pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+    auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
+    return Tensor(std::move(OwnedStorage{std::move(output_uint32_buffer)}), float_tensor.shape(), DataType::BFLOAT8_B, tensor.layout());
+}
+
+Tensor unpad_bfloat8_b(const Tensor &tensor, const Shape& output_tensor_start, const Shape& output_tensor_end) {
+    // TODO(arakhmati): do not convert to FLOAT32
+
+    // Convert to FLOAT32 tensor and unpad
+    auto input_packed_data = owned_buffer::get_as<uint32_t>(tensor).get();
+    auto input_float_data = unpack_bfp8_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false);
+    auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
+    auto float_tensor = Tensor(OwnedStorage{input_float_buffer}, tensor.shape(), DataType::FLOAT32, tensor.layout()).unpad(output_tensor_start, output_tensor_end);
+
+    // Convert back to BFLOAT8_B
+    auto output_float_data = owned_buffer::get_as<float>(float_tensor).get();
+    auto output_packed_data = pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+    auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
+    return Tensor(std::move(OwnedStorage{std::move(output_uint32_buffer)}), float_tensor.shape(), DataType::BFLOAT8_B, tensor.layout());
 }
 
 

@@ -267,9 +267,7 @@ def run_bert_question_and_answering_inference(
 
     # the first inference pass
     tt_out = tt_out_list[0].cpu()
-    tt_untilized_output = torch.Tensor(
-        tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()
-    ).reshape(batch, 1, seq_len, -1)
+    tt_untilized_output = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(batch, 1, seq_len, -1)
 
     logger.info(f"Enable profiler and enable binary and compile cache")
     profiler.enable()
@@ -288,9 +286,7 @@ def run_bert_question_and_answering_inference(
         profiler.start("processing_output_to_string")
 
         tt_out = tt_out_list[i].cpu()
-        tt_untilized_output = torch.Tensor(
-            tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()
-        ).reshape(batch, 1, seq_len, -1)
+        tt_untilized_output = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(batch, 1, seq_len, -1)
 
         tt_start_logits = tt_untilized_output[..., :, 0].squeeze(1)
         tt_end_logits = tt_untilized_output[..., :, 1].squeeze(1)

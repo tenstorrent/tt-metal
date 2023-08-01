@@ -72,7 +72,7 @@ def test_lenet_perf_inference(
             profiler.end("\nAverage execution time of tt_vgg model")
 
         tt_output = tt_output.cpu()
-        tt_output = torch.Tensor(tt_output.data()).reshape(tt_output.shape())
+        tt_output = tt_output.to_torch()
         _, tt_predicted = torch.max(tt_output.data, -1)
         logger.info(f"Correct Output: {torch_predicted[0][0][0]}")
         logger.info(f"Predicted Output: {tt_predicted[0][0][0]}\n")

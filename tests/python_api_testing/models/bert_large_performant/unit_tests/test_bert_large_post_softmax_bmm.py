@@ -65,7 +65,7 @@ def run_bert_large_post_softmax_bmm_test(
 
     assert t2.shape() == out_shape
     tt_host_rm = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
-    pyt_got_back_rm = torch.Tensor(tt_host_rm.data()).reshape(tt_host_rm.shape())
+    pyt_got_back_rm = tt_host_rm.to_torch()
 
     ref_bmm = torch.matmul(A.reshape([9, 16, 384, 384]), B)
     passing_pcc, output_pcc = comp_pcc(ref_bmm, pyt_got_back_rm, 0.99)

@@ -63,9 +63,7 @@ def run_bert_large_create_qkv_heads_test(
     assert out.shape() == expected_out_shape
 
     tt_host_rm_out = out.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
-    pyt_got_back_rm_out = torch.Tensor(tt_host_rm_out.data()).reshape(
-        tt_host_rm_out.shape()
-    )
+    pyt_got_back_rm_out = tt_host_rm_out.to_torch()
 
     passing_pcc, output_pcc = comp_pcc(pyt_got_back_rm_out, ref_out, 0.99)
     logger.info(f"{which_head_str} passing={passing_pcc}")

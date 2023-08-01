@@ -140,9 +140,7 @@ def test_layer_norm_fallback(
 
     t1 = ttl.fallback_ops.layer_norm(t0, normalized_shape, w0, b0, eps)
 
-    output = torch.Tensor(t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
-        t1.shape()
-    )
+    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     comp_pass, _ = comp_pcc(pt_out, output, 0.9999)
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
     logger.info(comp_out)
@@ -249,9 +247,7 @@ def test_LayerNorm_fallback(
     )
     t1 = tt_nn(t0)
 
-    output = torch.Tensor(t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
-        t1.shape()
-    )
+    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     comp_pass, _ = comp_pcc(pt_out, output, 0.9999)
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
     logger.info(comp_out)

@@ -35,8 +35,7 @@ def test_transpose_hc():
     xtt = ttl.tensor.transpose_hc(xt)
     assert xtt.shape() == [N, H, C, W]
 
-    xtt_data = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()
-    tt_got_back = torch.Tensor(xtt_data).reshape(xtt.shape())
+    tt_got_back = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
     print("reshape() max absdiff=")
     transposed_ref = x.permute(0, 2, 1, 3)

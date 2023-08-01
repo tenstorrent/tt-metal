@@ -82,7 +82,7 @@ def run_bert_large_ff2_matmul_test(
 
     assert t2.shape() == [9, 1, 384, 1024]
     tt_host_rm = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
-    pyt_got_back_rm = torch.Tensor(tt_host_rm.data()).reshape(tt_host_rm.shape())
+    pyt_got_back_rm = tt_host_rm.to_torch()
 
     ref_bmm = torch.matmul(A, B)
     if bias_mem_config is not None:

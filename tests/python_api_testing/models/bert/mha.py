@@ -183,7 +183,7 @@ def run_mha_inference(model_version, batch, seq_len, on_weka, pcc, model_locatio
     tt_mha_input = tt_mha_input.to(device)
 
     tt_out = tt_mha_model(tt_mha_input).cpu()
-    tt_out1 = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(tt_out.shape())
+    tt_out1 = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
     ttl.device.CloseDevice(device)
 

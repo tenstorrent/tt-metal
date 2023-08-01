@@ -35,13 +35,7 @@ def unpad_from_zero(x, desired_shape):
         if(x.layout() != tt_lib.tensor.Layout.ROW_MAJOR):
             x = x.to(tt_lib.tensor.Layout.ROW_MAJOR)
         x = x.unpad((0, 0, 0, 0), (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1) )
-        dtype = {
-            tt_lib.tensor.DataType.FLOAT32:   torch.float,
-            tt_lib.tensor.DataType.BFLOAT16:  torch.bfloat16,
-            tt_lib.tensor.DataType.BFLOAT8_B: torch.float,
-        }[x.dtype()]
-
-        x = torch.frombuffer(x.data(), dtype=dtype).to(torch.float).reshape(x.shape())
+        x = x.to_torch().to(torch.float)
     return x
 
 def compute_conv_output_shape(conv_params, x_shape):

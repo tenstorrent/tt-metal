@@ -44,9 +44,7 @@ def run_bert_large_concat_heads_test(batch, dtype, in0_mem_config, out_mem_confi
 
     assert out.shape() == [batch, 1, 384, 1024]
     tt_host_rm_out = out.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
-    pyt_got_back_rm_out = torch.Tensor(tt_host_rm_out.data()).reshape(
-        tt_host_rm_out.shape()
-    )
+    pyt_got_back_rm_out = tt_host_rm_out.to_torch()
 
     ref_out = torch.transpose(A, -3, -2).reshape([batch, 1, 384, 1024])
     passing_pcc, output_pcc = comp_pcc(pyt_got_back_rm_out, ref_out, 0.99)

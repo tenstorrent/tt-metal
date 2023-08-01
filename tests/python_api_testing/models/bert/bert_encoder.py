@@ -94,7 +94,7 @@ def run_bert_encoder_inference(model_version, batch, seq_len, on_weka, pcc, mode
     tt_bert_encoder_input = tt_bert_encoder_input.to(device)
 
     tt_out = tt_bert_encoder_model(tt_bert_encoder_input).cpu()
-    tt_out = torch.Tensor(tt_out.to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(tt_out.shape())
+    tt_out = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
     ttl.device.CloseDevice(device)
 

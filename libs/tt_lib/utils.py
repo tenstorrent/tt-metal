@@ -247,11 +247,8 @@ def tt2torch(ttx):
     """
     Converts an llbuda tiled tensor to torch tensor.
     """
-    device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
-
-    shp = ttx.shape()
     tt_out = ttx.cpu()
-    torch_out = untilize(torch.Tensor(tt_out.data()).reshape(shp))
+    torch_out = untilize(tt_out.to_torch())
     return torch_out
 
 
@@ -259,11 +256,8 @@ def tt2torch_rm(ttx):
     """
     Converts an llbuda row-major tensor to torch tensor.
     """
-    device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
-
-    shp = ttx.shape()
     tt_out = ttx.cpu()
-    torch_out = torch.Tensor(tt_out.data()).reshape(shp)
+    torch_out = tt_out.to_torch()
     return torch_out
 
 

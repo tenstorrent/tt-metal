@@ -140,8 +140,7 @@ def run_softmax_tests(test_id, batch, dtype, in0_mem_config):
             else:
                 assert False
 
-            t2_data_fused = t1_fused.cpu().data()
-            tt_got_back_fused = torch.Tensor(t2_data_fused).reshape((N, C, H, W))
+            tt_got_back_fused = t1_fused.cpu().to_torch()
             tt_unt = untilize(tt_got_back_fused)
 
             time.sleep(0.33)  # so prints don't overlap with kernel prints

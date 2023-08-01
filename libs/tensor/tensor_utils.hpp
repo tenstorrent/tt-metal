@@ -12,8 +12,20 @@ namespace tt_metal {
     const Shape infer_dims_for_reshape(int N, int C, int H, int W, uint32_t old_volume);
 
     template<typename T>
-    static std::size_t volume(const T& shape) {
-       return std::accumulate(std::begin(shape), std::end(shape), 1, std::multiplies<uint32_t>());
+    static std::size_t compute_volume(const T& shape) {
+        return std::accumulate(std::begin(shape), std::end(shape), 1, std::multiplies<uint32_t>());
+    }
+
+    template<typename T>
+    static std::size_t compute_buffer_size(const T& shape, DataType data_type) {
+        const auto volume = compute_volume(shape);
+        if (data_type == DataType::BFLOAT8_B) {
+            TT_ASSERT(volume % constants::TILE_HW == 0);
+            const auto bfloat8_b_volume = volume / constants::TILE_HW * constants::BFLOAT8_B_TILE_HW;
+            TT_ASSERT(volume % sizeof(std::uint32_t) == 0);
+            return bfloat8_b_volume / sizeof(std::uint32_t);
+        }
+        return volume;
     }
 }
 

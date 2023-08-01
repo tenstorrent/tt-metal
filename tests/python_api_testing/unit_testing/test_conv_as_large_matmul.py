@@ -120,8 +120,7 @@ def test_run_conv_as_large_matmul(use_program_cache, run_conv_with_address_map, 
 
 
         # Copy output to host and convert tt tensor to pytorch tensor
-        conv_output_shape_cl = [1,OH,OW,K]
-        out_result = torch.tensor(out.data()).reshape(conv_output_shape_cl)
+        out_result = out.to_torch()
         out_result = torch.transpose(out_result, 2, 3)
         out_result = torch.transpose(out_result, 1, 2)
 

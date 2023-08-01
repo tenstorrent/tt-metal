@@ -13,7 +13,6 @@ import torch
 import tt_lib as ttl
 from python_api_testing.models.utility_functions import (
     tilize_to_list,
-    tilize,
     untilize,
     comp_pcc,
 )
@@ -149,10 +148,10 @@ def test_run_bmm_single_core_tilize_untilize(a_height_nblocks,
        precision=2, threshold=10000,
        sci_mode=False, edgeitems=80, linewidth=400)
 
-    # tta_pytorch = untilize(torch.tensor(tta.cpu().data()).reshape(a_shape))
+    # tta_pytorch = untilize(tta.to_torch())
     # print(f'a slice: {tta_pytorch[0, 0, 0:32*a_block_height_ntiles*a_height_nblocks:32*a_block_height_ntiles, 0:32*a_width_nblocks*a_block_width_ntiles:1]}')
 
-    # ttb_pytorch = untilize(torch.tensor(ttb.cpu().data()).reshape(b_shape))
+    # ttb_pytorch = untilize(ttb.to_torch())
     # print(f'b slice: {ttb_pytorch[0, 0, 0:32*a_block_width_ntiles*a_width_nblocks:32, 0:32*b_width_nblocks*b_block_width_ntiles:1]}')
 
     ## compute out
@@ -161,12 +160,10 @@ def test_run_bmm_single_core_tilize_untilize(a_height_nblocks,
                                          a_block_height_ntiles, a_block_width_ntiles, b_block_width_ntiles,
                                          out_subblock_height_ntiles, out_subblock_width_ntiles,
                                          tilize_a, untilize_out)
-    out = out.cpu()
+    out = out.cpu().to_torch()
     if not untilize_out:
         ## output is in tiled format
-        out_pytorch = untilize(torch.tensor(out.data()).reshape(out_shape))
-    else:
-        out_pytorch = torch.tensor(out.data()).reshape(out_shape)
+        out = untilize(out)
 
     # print(f'returned output: {out_pytorch[0][0]}')
 
@@ -178,8 +175,8 @@ def test_run_bmm_single_core_tilize_untilize(a_height_nblocks,
     # print("golden out slice:\n", golden_pytorch)
 
     ## test for equivalance
-    assert(out_pytorch.shape == golden_pytorch.shape)
-    passing_pcc, output_pcc = comp_pcc(golden_pytorch, out_pytorch)
+    assert(out.shape == golden_pytorch.shape)
+    passing_pcc, output_pcc = comp_pcc(golden_pytorch, out)
     print(f'Passing PCC = {passing_pcc}')
     print(f'Output PCC = {output_pcc}')
 

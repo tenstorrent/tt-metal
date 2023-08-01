@@ -36,7 +36,7 @@ def test_run_untilize_test(nb, nc, nh, nw):
         device,
     )
     b = ttl.tensor.untilize(a)
-    c = torch.frombuffer(b.cpu().data(), dtype=torch.bfloat16).to(torch.float32).reshape(shape).numpy()
+    c = b.cpu().to_torch().to(torch.float32).reshape(shape).numpy()
 
     untilized_inp = untilize(inp.reshape(*shape))
     assert (

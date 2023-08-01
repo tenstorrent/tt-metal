@@ -104,12 +104,7 @@ def run_bert_large_matmul_test(
 
     if bias_mem_config is not None:
         bias_t = (
-            ttl.tensor.Tensor(
-                BIAS.flatten().tolist(),
-                bias_shape,
-                bias_dtype,
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
+            ttl.tensor.Tensor(BIAS, bias_dtype)
             .pad(bias_pad_shape, [0, 0, 0, 0], 0)
             .to(ttl.tensor.Layout.TILE)
             .to(device, bias_mem_config)
@@ -148,7 +143,7 @@ def run_bert_large_matmul_test(
 
     assert t2.shape() == expected_output_shape
     tt_host_rm = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
-    pyt_got_back_rm = torch.Tensor(tt_host_rm.data()).reshape(tt_host_rm.shape())
+    pyt_got_back_rm = tt_host_rm.to_torch()
 
     ref_bmm = torch.matmul(A, B)
     if bias_mem_config is not None:
@@ -245,7 +240,7 @@ def run_bert_large_bmm_test(
 
     assert t2.shape() == expected_output_shape
     tt_host_rm = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
-    pyt_got_back_rm = torch.Tensor(tt_host_rm.data()).reshape(tt_host_rm.shape())
+    pyt_got_back_rm = tt_host_rm.to_torch()
 
     if bert_large_op == ttl.tensor.bert_large_pre_softmax_bmm:
         ref_bmm = torch.matmul(A, B).reshape(expected_output_shape)

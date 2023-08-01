@@ -43,8 +43,8 @@ def run_tilize_matmul_test(M, K, N):
     )
     t2 = ttl.tensor.matmul(a_t, b_t)
     assert t2.shape() == [1, 1, M, N]
-    tt_host_rm = t2.cpu().data()
-    pyt_got_back = torch.Tensor(tt_host_rm).reshape((1, 1, M, N))
+    tt_host_rm = t2.cpu().to_torch()
+    pyt_got_back = tt_host_rm.reshape((1, 1, M, N))
     pyt_got_back_rm = untilize(pyt_got_back)
 
     ref_bmm = torch.matmul(A.reshape(1, M, K), B.reshape(1, K, N))

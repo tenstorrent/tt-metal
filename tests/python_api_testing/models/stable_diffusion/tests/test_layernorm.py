@@ -61,8 +61,8 @@ def test_layer_norm(input_shape, normalized_shape_hint):
         x, normalized_shape=normalized_shape, eps=eps
     )
 
-    xtt_data = ttl.tensor.layernorm(xt, eps).to(host).to(ttl.tensor.Layout.ROW_MAJOR).data()
-    tt_got_back_rm = torch.Tensor(xtt_data).reshape(input_shape)
+    xtt_data = ttl.tensor.layernorm(xt, eps).to(host).to(ttl.tensor.Layout.ROW_MAJOR)
+    tt_got_back_rm = xtt_data.to_torch()
 
     torch_output = golden
     tt_output = tt_got_back_rm

@@ -29,10 +29,10 @@ def test_tensor_alignment():
 
     t0_h = t0_d.cpu()
 
-    assert torch.equal(a, torch.Tensor(t0_h.data()).reshape(t0_h.shape()))
+    assert torch.equal(a, t0_h.to_torch())
 
     t1_h = t1_d.cpu()
 
-    assert torch.equal(b, torch.Tensor(t1_h.data()).reshape(t1_h.shape()))
+    assert torch.equal(b, t1_h.to_torch())
 
     ttl.device.CloseDevice(device)
