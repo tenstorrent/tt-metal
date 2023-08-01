@@ -288,6 +288,22 @@ Tensor squared_difference(const Tensor& input_a, const Tensor& input_b) {
     return result;
 }
 
+// lerp(input, end, weight) = start + weight * (end - start)
+Tensor lerp(const Tensor& input_a, const Tensor& input_b, float value) {
+    Tensor t_value = mk_scalar(value);
+    Tensor t_diff = sub(input_b, input_a);
+    Tensor t_mul = bcast(t_diff, t_value, BcastOpMath::MUL, BcastOpDim::HW);
+    Tensor result =  add(input_a, t_mul);
+    return result;
+}
+
+// lerp(input, end, weight) = start + weight * (end - start)
+Tensor lerp(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c) {
+    Tensor t_diff = mul(sub(input_b, input_a), input_c);
+    Tensor result = add(input_a, t_diff);
+    return result;
+}
+
 // @tt-aho TODO: Straightforward fuse with binary op once sfpu fusing generalization is implemented
 //logsigmoid(x) = log(sigmoid(x))
 Tensor log_sigmoid(const Tensor& input_a) {

@@ -39,6 +39,8 @@ def custom_compare(*args, **kwargs):
     list(
         product(
             (
+                "lerp_binary",
+                "lerp_ternary",
                 "squared_difference",
                 "addcmul",
                 "addcdiv",
@@ -111,9 +113,9 @@ def test_run_eltwise_composite_test(
         )
     ]
     num_inputs = 1
-    if fn in ["mac", "addcmul", "addcdiv"]:
+    if fn in ["mac", "addcmul", "addcdiv", "lerp_ternary"]:
         num_inputs = 3
-    elif fn in ["hypot", "squared_difference", "min", "max"]:
+    elif fn in ["hypot", "squared_difference", "min", "max", "lerp_binary"]:
         num_inputs = 2
 
     input_shapes = input_shapes * num_inputs
@@ -132,6 +134,8 @@ def test_run_eltwise_composite_test(
         test_args.update({"_lambda": np.random.randint(1, 100)})
     elif fn in ["addcmul", "addcdiv"]:
         test_args.update({"value": np.random.randint(1, 100)})
+    elif fn in ["lerp_binary"]:
+        test_args.update({"weight": np.random.randint(1, 100)})
     run_single_pytorch_test(
         "eltwise-%s" % (fn),
         input_shapes,

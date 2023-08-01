@@ -101,6 +101,12 @@ Tensor addcmul(const Tensor& input_a, const Tensor& input_b, const Tensor& input
 //addcdiv(input,tensor1,tensor2,value)=input+value×tensor1/tensor2
 Tensor addcdiv(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c, float value);
 
+//lerp(input, end, weight) = start + weight * (end - start), weight is float
+Tensor lerp(const Tensor& input_a, const Tensor& input_b, float value);
+
+//lerp(input, end, weight) = start + weight * (end - start), weight is tensor
+Tensor lerp(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c);
+
 //hypot(a,b) = sqrt[ a^2 + b^2 ]
 Tensor hypot(const Tensor &input_a, const Tensor &input_b);
 

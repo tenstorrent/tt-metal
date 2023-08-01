@@ -465,6 +465,8 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.rsqrt
 
+.. autofunction:: tt_lib.tensor.lerp
+
 .. autofunction:: tt_lib.tensor.signbit
 
 .. autofunction:: tt_lib.tensor.atan

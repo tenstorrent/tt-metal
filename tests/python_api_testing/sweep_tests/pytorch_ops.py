@@ -376,7 +376,13 @@ def addcdiv(x, y, z, *args, value, **kwargs):
     return result
 
 
+def lerp_ternary(x, y, z, *args, **kwargs):
+    return torch.lerp(x, y, z)
+
+
 ## Binary Ops
+def lerp_binary(x, y, *args, weight, **kwargs):
+    return torch.lerp(x, y, weight)
 
 
 def lte(x, y, *args, **kwargs):

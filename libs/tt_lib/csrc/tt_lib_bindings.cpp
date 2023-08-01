@@ -1550,6 +1550,44 @@ void TensorModule(py::module &m_tensor) {
         +----------+-----------------------------------+-----------+------------------------------+----------+
     )doc");
 
+    m_tensor.def("lerp", py::overload_cast<const Tensor&, const Tensor&, float>(&lerp), R"doc(
+        Applies the linear interpolation of two tensors ``arg0`` (given by input) and ``arg1`` based on a
+        scalar ``arg2`` and returns the resulting out tensor.
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+---------------------------------+-----------+------------------------------+----------+
+        | Argument | Description                     | Data type | Valid range                  | Required |
+        +==========+=================================+===========+==============================+==========+
+        | arg0     | Input lerp is applied to        | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+---------------------------------+-----------+------------------------------+----------+
+        | arg1     | End value                       | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+---------------------------------+-----------+------------------------------+----------+
+        | arg2     | Weight value                    | float     |         scalar               | Yes      |
+        +----------+---------------------------------+-----------+------------------------------+----------+
+    )doc");
+
+    m_tensor.def("lerp", py::overload_cast<const Tensor&, const Tensor&, const Tensor&>(&lerp), R"doc(
+        Applies the linear interpolation of two tensors ``arg0`` (given by input) and ``arg1`` based on a
+        tensor ``arg2`` and returns the resulting out tensor.
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+---------------------------------+-----------+------------------------------+----------+
+        | Argument | Description                     | Data type | Valid range                  | Required |
+        +==========+=================================+===========+==============================+==========+
+        | arg0     | Input lerp is applied to        | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+---------------------------------+-----------+------------------------------+----------+
+        | arg1     | End value                       | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+---------------------------------+-----------+------------------------------+----------+
+        | arg2     | Weight value                    | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+---------------------------------+-----------+------------------------------+----------+
+    )doc");
+
     m_tensor.def("hardswish", &hardswish,
 		 py::arg().noconvert(), py::arg("scale") = 1.0f/6.0f, py::arg("shift") = 0.5f, R"doc(
         Applies the hard swish function to the elements of the input tensor ``arg0``.
