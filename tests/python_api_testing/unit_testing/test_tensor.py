@@ -63,21 +63,25 @@ def test_tensor_with_owned_storage(shape, tt_dtype):
 
 
 @pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
-@pytest.mark.parametrize("tt_dtype", [tt_lib.tensor.DataType.FLOAT32, tt_lib.tensor.DataType.BFLOAT16])
+@pytest.mark.parametrize("tt_dtype", [tt_lib.tensor.DataType.UINT32, tt_lib.tensor.DataType.FLOAT32, tt_lib.tensor.DataType.BFLOAT16])
 def test_tensor_with_borrowed_storage(shape, tt_dtype):
     # Initialize the device
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
 
     dtype = {
+        tt_lib.tensor.DataType.UINT32:    torch.int32,
         tt_lib.tensor.DataType.FLOAT32:   torch.float,
         tt_lib.tensor.DataType.BFLOAT16:  torch.bfloat16,
         tt_lib.tensor.DataType.BFLOAT8_B: torch.float,
     }[tt_dtype]
 
-    torch_tensor = torch.rand(shape, dtype=dtype)
+    if dtype == torch.int32:
+        torch_tensor = torch.randint(0, 1024, shape, dtype=dtype)
+    else:
+        torch_tensor = torch.rand(shape, dtype=dtype)
 
-    tt_tensor = tt_lib.tensor.Tensor(torch_tensor)
+    tt_tensor = tt_lib.tensor.Tensor(torch_tensor, tt_dtype)
     if tt_dtype in {tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B}:
         tt_tensor = tt_tensor.to(device)
         tt_tensor = tt_tensor.cpu()

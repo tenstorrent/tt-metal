@@ -137,8 +137,10 @@ Tensor convert_torch_tensor_to_tt_tensor(const py::handle& torch_tensor, std::op
     auto torch_dtype = torch_tensor.attr("dtype");
     auto shape = py::cast<std::vector<uint32_t>>(torch_tensor.attr("shape"));
 
+    auto contiguous_torch_tensor = torch_tensor.attr("contiguous")();
+
     // Figure out tt data_type from torch dtype
-    auto buffer_size = volume(shape);
+    const auto buffer_size = volume(shape);
     DataType data_type;
     if (torch_dtype.equal(torch.attr("float32"))) {
         data_type = DataType::FLOAT32;
@@ -147,15 +149,19 @@ Tensor convert_torch_tensor_to_tt_tensor(const py::handle& torch_tensor, std::op
         data_type = DataType::BFLOAT16;
     }
     else if (torch_dtype.equal(torch.attr("int64"))) {
-         // TODO(arakhmati): add DataType::INT64
+        contiguous_torch_tensor = contiguous_torch_tensor.attr("to")(torch.attr("int32"));
+         // TODO(arakhmati): add DataType::INT32
         data_type = DataType::UINT32;
-        buffer_size = volume(shape) * 2; // times 2 because INT64 is converted to UINT32
+    }
+    else if (torch_dtype.equal(torch.attr("int32"))) {
+        contiguous_torch_tensor = contiguous_torch_tensor.attr("to")(torch.attr("int32"));
+         // TODO(arakhmati): add DataType::INT32
+        data_type = DataType::UINT32;
     } else {
         TT_THROW(fmt::format("Unsupported DataType: {}", py::repr(torch_dtype)));
     }
 
     // Figure out tt data type from torch
-    auto contiguous_torch_tensor = torch_tensor.attr("contiguous")();
     if (optional_data_type.has_value()) {
         data_type = optional_data_type.value();
         switch (data_type) {
@@ -182,14 +188,8 @@ Tensor convert_torch_tensor_to_tt_tensor(const py::handle& torch_tensor, std::op
         }
     }
 
-    auto on_creation_callback = [tensor = contiguous_torch_tensor] {
-        tensor.inc_ref();
-    };
-
-    auto on_destruction_callback = [tensor = contiguous_torch_tensor] {
-        tensor.dec_ref();
-    };
-
+    auto on_creation_callback = [tensor = contiguous_torch_tensor] { tensor.inc_ref(); };
+    auto on_destruction_callback = [tensor = contiguous_torch_tensor] { tensor.dec_ref(); };
 
     switch (data_type) {
         case DataType::UINT32: {
@@ -392,6 +392,9 @@ void TensorModule(py::module &m_tensor) {
 
     auto py_owned_buffer_for_bfloat16_t = py::class_<owned_buffer::Buffer<bfloat16>>(m_tensor, "owned_buffer_for_bfloat16_t", py::buffer_protocol());
     detail::implement_buffer_protocol<owned_buffer::Buffer<bfloat16>, bfloat16>(py_owned_buffer_for_bfloat16_t);
+
+    auto py_borrowed_buffer_for_uint32_t = py::class_<borrowed_buffer::Buffer<std::uint32_t>>(m_tensor, "borrowed_buffer_for_uint32_t", py::buffer_protocol());
+    detail::implement_buffer_protocol<borrowed_buffer::Buffer<std::uint32_t>, std::uint32_t>(py_borrowed_buffer_for_uint32_t);
 
     auto py_borrowed_buffer_for_float32_t = py::class_<borrowed_buffer::Buffer<float>>(m_tensor, "borrowed_buffer_for_float32_t", py::buffer_protocol());
     detail::implement_buffer_protocol<borrowed_buffer::Buffer<float>, float>(py_borrowed_buffer_for_float32_t);
