@@ -1371,6 +1371,53 @@ inline void calculate_expm1()
     }
 }
 
+
+#define POLYVAL6(coef5, coef4, coef3, coef2, coef1, coef0, t4)  (t4 * (t4 * (t4 * (t4 * (coef5 * t4 + coef4) + coef3) + coef2) + coef1) + coef0)
+
+template <bool APPROXIMATION_MODE>
+sfpi_inline vFloat sfpu_atan_maclaurin_series(vFloat val)
+{
+    v_if(1 > sfpi::abs(val)){
+        dst_reg[0] = sfpi::abs(val)  ;
+    }
+    v_else{
+        dst_reg[0] =  sfpu_reciprocal<true>(sfpi::abs(val));
+    }
+    v_endif;
+
+    vFloat t1 = dst_reg[0] * dst_reg[0];
+
+    t1 = POLYVAL6(-0.013480470f, 0.057477314f, -0.121239071f, 0.195635925f, -0.332994597f, 0.999995630f, t1);
+
+    t1 = t1 * dst_reg[0];
+
+    v_if (sfpi::abs(val) > 1){
+        t1 = 1.570796327f - t1;
+    }
+    v_endif;
+
+    v_if(val < 0 ){
+        t1 = -t1;
+    }
+    v_endif;
+
+    return t1;
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_atan()
+{
+    // SFPU microcode
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        vFloat val = dst_reg[0];
+        val = sfpu_atan_maclaurin_series<APPROXIMATION_MODE>(val);
+        dst_reg[0] = val;
+        dst_reg++;
+    }
+}
+
+
 template <bool APPROXIMATION_MODE>
 sfpi_inline vFloat sfpu_asine_maclaurin_series(vFloat val)
 {
@@ -1678,6 +1725,9 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
     }
     else if constexpr (operation == SfpuType::acos) {
         calculate_acos<APPROXIMATION_MODE, ITERATIONS>();
+    }
+    else if constexpr (operation == SfpuType::atan) {
+        calculate_atan<APPROXIMATION_MODE, ITERATIONS>();
     }
 }
 

@@ -409,6 +409,17 @@ inline void llk_math_eltwise_unary_sfpu_asin_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::asin, APPROXIMATE>();
 }
 
+//Atan
+template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
+inline void llk_math_eltwise_unary_sfpu_atan(uint dst_index) {
+    llk_math_eltwise_unary_sfpu<SfpuType::atan, APPROXIMATE, dst_sync>(dst_index);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_atan_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::atan, APPROXIMATE>();
+}
+
 //Acos
 template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
 inline void llk_math_eltwise_unary_sfpu_acos(uint dst_index) {

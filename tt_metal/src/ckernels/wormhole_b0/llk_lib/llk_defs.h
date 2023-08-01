@@ -119,6 +119,7 @@ enum SfpuType
   signbit,
   asin,
   acos,
+  atan,
   unused
 };
 

@@ -14,7 +14,7 @@ namespace tt_metal {
 struct UnaryOpType {
     enum Enum { EXP = 0, RECIP = 1, GELU = 2, RELU = 3, SQRT = 4, SIGMOID = 5, LOG = 6, TANH = 7, LOG2 = 8, LOG10 = 9, SIN = 10, COS = 11,
                 ABS=12, SIGN=13, SQUARE=14, EQZ = 15, NEZ = 16, GTZ = 17, LTZ = 18, GEZ = 19, LEZ = 20, RELU_MAX = 21, RELU_MIN = 22, POWER = 23, LEAKY_RELU = 24, ELU = 25, EXP2 = 26, HEAVISIDE = 27,
-                EXPM1 = 28, SIGNBIT = 29, ASIN = 30, ACOS = 31, RSQRT = 32, RELU6 = 33 };
+                EXPM1 = 28, SIGNBIT = 29, ASIN = 30, ACOS = 31, RSQRT = 32, RELU6 = 33, ATAN = 34};
     static const auto all() { return magic_enum::enum_values<Enum>(); }
 };
 
@@ -117,6 +117,7 @@ constexpr auto power = make_eltwise_unary_with_param<UnaryOpType::POWER>{};
 constexpr auto leaky_relu = make_eltwise_unary_with_param<UnaryOpType::LEAKY_RELU>{};
 constexpr auto elu = make_eltwise_unary_with_param<UnaryOpType::ELU>{};
 constexpr auto heaviside = make_eltwise_unary_with_param<UnaryOpType::HEAVISIDE>{};
+constexpr auto atan = make_eltwise_unary<UnaryOpType::ATAN>{};
 inline Tensor gelu(const Tensor &input_tensor, bool fast_and_approx=true, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
     return make_eltwise_unary_with_param<UnaryOpType::GELU>{}(input_tensor, static_cast<float>(fast_and_approx), output_mem_config);
 }

@@ -49,6 +49,29 @@ class TestEltwiseUnary:
             test_args,
         )
 
+    @pytest.mark.parametrize(
+        "fn_kind",
+        ["atan"],
+    )
+    def test_run_eltwise_atan_op(
+        self, input_shapes, fn_kind, pcie_slot, function_level_defaults
+    ):
+        datagen_func = [
+            generation_funcs.gen_func_with_cast(
+                partial(generation_funcs.gen_rand, low=-1e6, high=1e6), torch.bfloat16
+            )
+        ]
+        test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
+        comparison_func = comparison_funcs.comp_pcc
+        run_single_pytorch_test(
+            f"eltwise-{fn_kind}",
+            input_shapes,
+            datagen_func,
+            comparison_func,
+            pcie_slot,
+            test_args,
+        )
+
     @pytest.mark.parametrize("fast_and_appx", [True, False])
     def test_run_eltwise_gelu_op(
         self, input_shapes, fast_and_appx, pcie_slot, function_level_defaults
