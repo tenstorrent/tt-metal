@@ -177,6 +177,13 @@ TEST_F(CommandQueueHarness, TestNon32BAlignedPageSizeForDram2) {
     EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device, *this->cq, config));
 }
 
+TEST_F(CommandQueueHarness, TestArbitrarySizedWrite) {
+    // This test used to fail for one of the bloom activation shapes due to buffer instruction overflow
+    BufferConfig config = {.num_pages = 1024, .page_size = 250880 * 2, .buftype = BufferType::DRAM};
+
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device, *this->cq, config));
+}
+
 TEST_F(CommandQueueHarness, TestWrapHostHugepageOnEnqueueReadBuffer) {
     BufferConfig buf_config = {.num_pages = 524270, .page_size = 2048, .buftype = BufferType::DRAM};
 
