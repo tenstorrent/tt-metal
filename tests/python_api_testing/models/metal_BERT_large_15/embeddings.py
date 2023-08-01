@@ -33,16 +33,13 @@ class TtBertEmbeddings(nn.Module):
     def __init__(
         self,
         config,
-        hugging_face_reference_model,
         state_dict,
         base_address,
         device,
-        host,
         layer_norm_on_dev=True,
     ):
         super().__init__()
         self.device = device
-        self.host = host
 
         self.word_embeddings = nn.Embedding(
             config.vocab_size, config.hidden_size, padding_idx=config.pad_token_id
@@ -179,7 +176,7 @@ class TtBertEmbeddings(nn.Module):
             embeddings = self.TTLayerNorm(tt_embeddings)
 
             # convert back to pytorch
-            embeddings_data = embeddings.to(self.host).data()
+            embeddings_data = embeddings.cpu().data()
             # back to 4d to untilize
             embeddings = torch.Tensor(embeddings_data).reshape(newShape)
             embeddings = tt_lib.utils.untilize(embeddings)
