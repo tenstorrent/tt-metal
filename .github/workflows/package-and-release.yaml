@@ -12,7 +12,7 @@ jobs:
   create-tag:
     uses: tenstorrent-metal/metal-workflows/.github/workflows/release-verify-or-create-tag.yaml@main
     with:
-      bump_each_commit: true
+      bump_each_commit: false
     secrets:
       CHECKOUT_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
   build-eager-package:
