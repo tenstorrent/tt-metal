@@ -16,8 +16,6 @@ run_profiling_test(){
         export PYTHONPATH=$TT_METAL_HOME
 
         TT_METAL_DEVICE_PROFILER=1 pytest $TT_METAL_HOME/tests/tt_metal/tools/profiler/test_device_profiler.py -vvv
-
-        make clean
     fi
 }
 
@@ -40,6 +38,6 @@ if [[ $1 == "PROFILER" ]]; then
 elif [[ $1 == "POST_PROC" ]]; then
     run_post_proc_test
 else
-    run_post_proc_test
     run_profiling_test
+    run_post_proc_test
 fi

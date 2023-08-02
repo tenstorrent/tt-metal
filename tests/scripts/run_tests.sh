@@ -80,7 +80,6 @@ run_frequent_pipeline_tests() {
         exit 1
     fi
 
-    # Need to build again to not be in PROFILER build
     make nuke
     make build
     make tests
