@@ -1852,7 +1852,7 @@ void TensorModule(py::module &m_tensor) {
 
     m_tensor.def(
         "swish",
-        composite_operations::swish,
+        swish,
         R"doc(
         Returns tensor with the swish all of elements of the input tensor ``arg0``.
 
@@ -1870,7 +1870,7 @@ void TensorModule(py::module &m_tensor) {
 
     m_tensor.def(
         "silu",
-        composite_operations::silu,
+        &silu,
         R"doc(
         Returns tensor with the silu all of elements of the input tensor ``arg0``.
 

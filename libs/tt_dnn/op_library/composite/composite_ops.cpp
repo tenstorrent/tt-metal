@@ -23,12 +23,15 @@ Tensor mk_filled_tensor_like(const Tensor& reference_tensor, T val) {
 // Function: softshrink
 // Ref: https://pytorch.org/docs/stable/generated/torch.nn.Softshrink.html
 Tensor softshrink(const Tensor& a, float param) {
-    TT_ASSERT(param >= 0);
-    Tensor t_a_minus_param = sub_unary(a, param);
-    Tensor t_a_plus_param = add_unary(a, param);
-    Tensor t1 = mul( ltz(t_a_plus_param), t_a_plus_param );
-    Tensor t2 = mul( gtz(t_a_minus_param), t_a_minus_param );
-    return add( t1, t2 );
+    auto function = [&]() {
+        TT_ASSERT(param >= 0);
+        Tensor t_a_minus_param = sub_unary(a, param);
+        Tensor t_a_plus_param = add_unary(a, param);
+        Tensor t1 = mul( ltz(t_a_plus_param), t_a_plus_param );
+        Tensor t2 = mul( gtz(t_a_minus_param), t_a_minus_param );
+        return add( t1, t2 );
+    };
+    return operation::decorate_as_composite(__func__, function)();
 }
 
 // Function: hardshrink
@@ -50,18 +53,24 @@ Tensor softsign(const Tensor& a) {
 // use activation Silu[x] = x*Sigmoid[x]
 // Ref: https://pytorch.org/docs/stable/generated/torch.nn.SiLU.html?highlight=silu#torch.nn.SiLU
 Tensor silu(const Tensor& a) {
-    //x / (1.0f + exp(-x))
-    Tensor sigmoid_a = sigmoid(a);
-    Tensor silu_a = mul(a, sigmoid_a);
-    return silu_a;
+    auto function = [&]() {
+        //x / (1.0f + exp(-x))
+        Tensor sigmoid_a = sigmoid(a);
+        Tensor silu_a = mul(a, sigmoid_a);
+        return silu_a;
+    };
+    return operation::decorate_as_composite(__func__, function)();
 }
 
 //log1p 1
 //use transformation y = log(1.0 + x) by broadcast
 Tensor log1p(const Tensor& x) {
-    Tensor x_1 = add1(x);
-    Tensor result_log1p = log(x_1);
-    return result_log1p;
+    auto function = [&]() {
+        Tensor x_1 = add1(x);
+        Tensor result_log1p = log(x_1);
+        return result_log1p;
+    };
+    return operation::decorate_as_composite(__func__, function)();
 }
 
 //softplus[x] = log[1 + exp[x]]

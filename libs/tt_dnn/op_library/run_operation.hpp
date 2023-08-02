@@ -96,23 +96,20 @@ struct CompositeOperation {
     const char* name;
     const FunctionType function;
 
-    template<typename... Args>
-    constexpr auto operator()(Args&&... args) const {
+    constexpr auto operator()() const {
         run_operation_state::push_composite_parent_name(this->name);
-        auto output = this->function(std::forward<Args...>(args...));
+        auto output = this->function();
         run_operation_state::pop_composite_parent_name();
         return output;
     }
 };
 
-template<typename FunctionType>
-constexpr auto decorate_as_composite_operation(const char* name, FunctionType function) {
-  return CompositeOperation<FunctionType>{name, std::move(function)};
-}
-
-#define DECORATE_AS_COMPOSITE_OPERATION(x) tt::tt_metal::operation::detail::decorate_as_composite_operation(#x, x)
-
 }  // namespace detail
+
+template<typename FunctionType>
+constexpr auto decorate_as_composite(const char* name, FunctionType function) {
+  return detail::CompositeOperation<FunctionType>{name, std::move(function)};
+}
 
 #ifdef DEBUG
 namespace detail {
