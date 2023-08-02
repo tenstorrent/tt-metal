@@ -183,7 +183,7 @@ TEST_F(CommandQueueHarness, TestArbiterDoesNotHang) {
     // Add an NCRISC blank manually, but in compile program, the BRISC blank will be
     // added separately
     auto dummy_reader_kernel = CreateDataMovementKernel(
-        program, "tests/tt_metal/tt_metal/gtest_unit_tests/command_queue/test_kernels/arbiter_hang.cpp", cr_set, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
+        program, "tests/tt_metal/tt_metal/gtest_unit_tests/command_queue/test_kernels/arbiter_hang.cpp", cr_set, DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
     CompileProgram(this->device, program);
 
