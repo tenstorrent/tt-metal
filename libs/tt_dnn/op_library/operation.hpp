@@ -9,6 +9,7 @@
 #include <boost/core/demangle.hpp>
 
 #include <experimental/type_traits>
+#include <any>
 
 namespace tt::tt_metal {
 
@@ -143,310 +144,190 @@ constexpr bool implements_get_parallelization_strategy() {
 }
 
 
-class HostOperation {
-    struct Interface {
-        virtual ~Interface() {}
+struct HostOperation {
 
-        virtual void validate(const std::vector<Tensor> &input_tensors) const = 0;
+    const std::any type_erased_operation;
 
-        virtual std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const = 0;
+    // Methods
+    const std::function<const std::string()> get_type_name;
+    const std::function<void(const std::vector<Tensor>&)> validate;
+    const std::function<const std::vector<Shape>(const std::vector<Tensor>&)> compute_output_shapes;
+    const std::function<const std::vector<Tensor>(const std::vector<Tensor>&)> compute_output_tensors;
+    const std::function<const ProfilerInfo(const std::vector<Tensor> &input_tensors)> create_profiler_info;
+    const std::function<const tt::stl::reflection::Attributes()> attributes;
 
-        virtual std::vector<Tensor> compute_output_tensors(const std::vector<Tensor> &input_tensors) const = 0;
-
-        virtual std::string get_type_name() const = 0 ;
-
-        virtual ProfilerInfo create_profiler_info(const std::vector<Tensor> &input_tensors) const = 0;
-
-        virtual std::string to_string() const = 0;
-
-        virtual tt::stl::reflection::Attributes attributes() const = 0;
-    };
-
-    template< typename T >
-    struct Implementation : Interface {
-
-        explicit Implementation(const T& t) : object(t) {}
-
-        void validate(const std::vector<Tensor> &input_tensors) const override {
-            return this->object.validate(input_tensors);
-        }
-
-        std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const override {
-            return this->object.compute_output_shapes(input_tensors);
-        }
-
-        std::vector<Tensor> compute_output_tensors(const std::vector<Tensor> &input_tensors) const override {
-            return this->object.compute_output_tensors(input_tensors);
-        }
-
-        std::string get_type_name() const {
-            return boost::core::demangle(typeid(T).name());
-        }
-
-        ProfilerInfo create_profiler_info(const std::vector<Tensor> &input_tensors) const override {
-            std::optional<std::string> preferred_name = this->get_type_name();
-            std::optional<std::string> parallelization_strategy = std::nullopt;
-            return {
-                .preferred_name = preferred_name,
-                .parallelization_strategy = parallelization_strategy
-            };
-        }
-
-        std::string to_string() const override {
-            return fmt::format("HostOperation({})", this->object);
-        }
-
-        tt::stl::reflection::Attributes attributes() const {
-            return this->object.attributes();
-        }
-
-      private:
-        const T object;
-    };
-
-    std::unique_ptr<const Interface> implementation_;
-
-  public:
     template <typename T>
-    explicit HostOperation(T&& operation): implementation_(std::make_unique<Implementation<T>>(std::forward<T>(operation))) {}
+    explicit HostOperation(const T operation) :
+        // Initialize attributes
+        type_erased_operation(operation),
 
-    void validate(const std::vector<Tensor> &input_tensors) const {
-        return this->implementation_->validate(input_tensors);
-    }
-
-    std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-        return this->implementation_->compute_output_shapes(input_tensors);
-    }
-
-    std::vector<Tensor> compute_output_tensors(const std::vector<Tensor> &input_tensors) const {
-        return this->implementation_->compute_output_tensors(input_tensors);
-    }
-
-    std::string get_type_name() const {
-        return this->implementation_->get_type_name();
-    }
-
-
-    ProfilerInfo create_profiler_info(const std::vector<Tensor> &input_tensors) const {
-        return this->implementation_->create_profiler_info(input_tensors);
-    }
-
-    std::string to_string() const {
-        return this->implementation_->to_string();
-    }
-
-    tt::stl::reflection::Attributes attributes() const {
-        return this->implementation_->attributes();
-    }
+        // Initialize methods
+        get_type_name{
+            [] () -> const std::string {
+                return boost::core::demangle(typeid(T).name());
+            }
+        },
+        validate{
+            [this] (const std::vector<Tensor>& input_tensors) {
+                auto operation = std::any_cast<const T&>(this->type_erased_operation);
+                operation.validate(input_tensors);
+            }
+        },
+        compute_output_shapes{
+            [this] (const std::vector<Tensor>& input_tensors) {
+                auto operation = std::any_cast<const T&>(this->type_erased_operation);
+                return operation.compute_output_shapes(input_tensors);
+            }
+        },
+        compute_output_tensors{
+            [this] (const std::vector<Tensor>& input_tensors) {
+                auto operation = std::any_cast<const T&>(this->type_erased_operation);
+                return operation.compute_output_tensors(input_tensors);
+            }
+        },
+        create_profiler_info{
+            [this] (const std::vector<Tensor>& input_tensors) -> ProfilerInfo {
+                std::optional<std::string> preferred_name = this->get_type_name();
+                std::optional<std::string> parallelization_strategy = std::nullopt;
+                return {
+                    .preferred_name = preferred_name,
+                    .parallelization_strategy = parallelization_strategy
+                };
+            }
+        },
+        attributes{
+            [this] {
+                auto operation = std::any_cast<const T&>(this->type_erased_operation);
+                return operation.attributes();
+            }
+        }
+        {}
 
 };
 
-static std::ostream& operator<<(std::ostream& os, const HostOperation& op) {
-    os << op.to_string();
-    return os;
-}
+struct DeviceOperation {
 
-class DeviceOperation {
-    struct Interface {
-        virtual ~Interface() {}
+    const std::any type_erased_operation;
 
-        virtual void validate(
-            const std::vector<Tensor> &input_tensors,
-            const std::vector<std::optional<const Tensor>> &optional_input_tensors
-        ) const = 0;
+    // Methods
+    const std::function<const std::string()> get_type_name;
+    const std::function<void(const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&)> validate;
+    const std::function<const std::vector<Shape>(const std::vector<Tensor>&)> compute_output_shapes;
+    const std::function<const std::vector<Tensor>(const std::vector<Tensor>&)> create_output_tensors;
+    const std::function<ProgramWithCallbacks(const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&, std::vector<Tensor>&)> create_program;
+    const std::function<const Hash(const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&)> compute_program_hash;
+    const std::function<bool()> supports_program_caching;
+    const std::function<const ProfilerInfo(const std::vector<Tensor> &input_tensors)> create_profiler_info;
+    const std::function<const tt::stl::reflection::Attributes()> attributes;
 
-        virtual std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const = 0;
-
-        virtual std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const = 0;
-
-        virtual ProgramWithCallbacks create_program(
-            const std::vector<Tensor> &input_tensors,
-            const std::vector<std::optional<const Tensor>> &optional_input_tensors,
-            std::vector<Tensor> &output_tensors
-        ) const = 0;
-
-        virtual Hash compute_program_hash(
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors
-        ) const = 0;
-
-        virtual bool supports_program_caching() const = 0;
-        virtual std::string get_type_name() const = 0 ;
-
-        virtual ProfilerInfo create_profiler_info(const std::vector<Tensor> &input_tensors) const = 0;
-
-        virtual std::string to_string() const = 0;
-
-        virtual tt::stl::reflection::Attributes attributes() const = 0;
-    };
-
-    template< typename T >
-    struct Implementation : Interface {
-
-        explicit Implementation(const T& t) : object(t) {}
-
-        void validate(
-            const std::vector<Tensor> &input_tensors,
-            const std::vector<std::optional<const Tensor>> &optional_input_tensors
-        ) const override {
-            if constexpr (detail::implements_validate<T>()) {
-                TT_ASSERT(optional_input_tensors.empty());
-                static_assert(detail::implements_create_program<T>());
-                return this->object.validate(input_tensors);
-            }
-            else if constexpr (detail::implements_validate_with_optional_input_tensors<T>()) {
-                TT_ASSERT(not optional_input_tensors.empty());
-                static_assert(detail::implements_create_program_with_optional_input_tensors<T>());
-                return this->object.validate(input_tensors, optional_input_tensors);
-            }
-            else {
-                static_assert(detail::always_false<T>, "Operation doesn't implement validate");
-            }
-        }
-
-        std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const override {
-            return this->object.compute_output_shapes(input_tensors);
-        }
-
-        std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const override {
-            return this->object.create_output_tensors(input_tensors);
-        }
-
-        ProgramWithCallbacks create_program(
-            const std::vector<Tensor> &input_tensors,
-            const std::vector<std::optional<const Tensor>> &optional_input_tensors,
-            std::vector<Tensor> &output_tensors
-        ) const override {
-            if constexpr (detail::implements_create_program<T>()) {
-                TT_ASSERT(optional_input_tensors.empty());
-                return this->object.create_program(input_tensors, output_tensors);
-            }
-            else if constexpr (detail::implements_create_program_with_optional_input_tensors<T>()) {
-                TT_ASSERT(not optional_input_tensors.empty());
-                return this->object.create_program(input_tensors, optional_input_tensors, output_tensors);
-            }
-            else {
-                static_assert(detail::always_false<T>, "Operation doesn't implement create_program");
-                return {};
-            }
-        }
-
-        Hash compute_program_hash(
-            const std::vector<Tensor> &input_tensors,
-            const std::vector<std::optional<const Tensor>> &optional_input_tensors
-        ) const {
-            if constexpr (detail::implements_compute_program_hash<T>()) {
-                TT_ASSERT(optional_input_tensors.empty());
-                static_assert(detail::implements_create_program<T>());
-                return this->object.compute_program_hash(input_tensors);
-            }
-            else if constexpr (detail::implements_compute_program_hash_with_optional_input_tensors<T>()) {
-                TT_ASSERT(not optional_input_tensors.empty());
-                static_assert(detail::implements_create_program_with_optional_input_tensors<T>());
-                return this->object.compute_program_hash(input_tensors, optional_input_tensors);
-            }
-            else {
-                TT_THROW("Operation doesn't implement compute_program_hash");
-            }
-        }
-
-        bool supports_program_caching() const override {
-            constexpr auto result = detail::implements_compute_program_hash<T>() or detail::implements_compute_program_hash_with_optional_input_tensors<T>();
-            return result;
-        }
-
-        std::string get_type_name() const {
-            return boost::core::demangle(typeid(T).name());
-        }
-
-        ProfilerInfo create_profiler_info(const std::vector<Tensor> &input_tensors) const override {
-            std::optional<std::string> preferred_name = this->get_type_name();
-
-            std::optional<std::string> parallelization_strategy = std::nullopt;
-            if constexpr (detail::implements_get_parallelization_strategy<T>()) {
-                parallelization_strategy = fmt::format("{}", this->object.get_parallelization_strategy(input_tensors));
-            }
-            return {
-                .preferred_name = preferred_name,
-                .parallelization_strategy = parallelization_strategy
-            };
-        }
-
-        std::string to_string() const override {
-            return fmt::format("DeviceOperation({})", this->object);
-        }
-
-        tt::stl::reflection::Attributes attributes() const {
-            return this->object.attributes();
-        }
-
-      private:
-        const T object;
-    };
-
-    std::unique_ptr<const Interface> implementation_;
-
-  public:
     template <typename T>
-    explicit DeviceOperation(T&& operation): implementation_(std::make_unique<Implementation<T>>(std::forward<T>(operation))) {}
+    explicit DeviceOperation(const T operation) :
+        // Initialize attributes
+        type_erased_operation(operation),
 
-    void validate(
-        const std::vector<Tensor> &input_tensors,
-        const std::vector<std::optional<const Tensor>> &optional_input_tensors
-    ) const {
-        return this->implementation_->validate(input_tensors, optional_input_tensors);
-    }
+        // Initialize methods
+        get_type_name{
+            [] () -> const std::string {
+                return boost::core::demangle(typeid(T).name());
+            }
+        },
+        validate{
+            [this] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) {
+                auto operation = std::any_cast<const T&>(this->type_erased_operation);
+                if constexpr (detail::implements_validate<T>()) {
+                    TT_ASSERT(optional_input_tensors.empty());
+                    static_assert(detail::implements_create_program<T>());
+                    return operation.validate(input_tensors);
+                }
+                else if constexpr (detail::implements_validate_with_optional_input_tensors<T>()) {
+                    TT_ASSERT(not optional_input_tensors.empty());
+                    static_assert(detail::implements_create_program_with_optional_input_tensors<T>());
+                    return operation.validate(input_tensors, optional_input_tensors);
+                }
+                else {
+                    static_assert(detail::always_false<T>, "Operation doesn't implement validate");
+                }
+            }
+        },
+        compute_output_shapes{
+            [this] (const std::vector<Tensor>& input_tensors) {
+                auto operation = std::any_cast<const T&>(this->type_erased_operation);
+                return operation.compute_output_shapes(input_tensors);
+            }
+        },
+        create_output_tensors{
+            [this] (const std::vector<Tensor>& input_tensors) {
+                auto operation = std::any_cast<const T&>(this->type_erased_operation);
+                return operation.create_output_tensors(input_tensors);
+            }
+        },
+        create_program{
+            [this] (
+                const std::vector<Tensor>& input_tensors,
+                const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+                std::vector<Tensor>& output_tensors
+            ) {
+                auto operation = std::any_cast<const T&>(this->type_erased_operation);
+                if constexpr (detail::implements_create_program<T>()) {
+                    TT_ASSERT(optional_input_tensors.empty());
+                    return operation.create_program(input_tensors, output_tensors);
+                }
+                else if constexpr (detail::implements_create_program_with_optional_input_tensors<T>()) {
+                    TT_ASSERT(not optional_input_tensors.empty());
+                    return operation.create_program(input_tensors, optional_input_tensors, output_tensors);
+                }
+                else {
+                    static_assert(detail::always_false<T>, "Operation doesn't implement create_program");
+                }
+            }
+        },
+        compute_program_hash{
+            [this] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) -> const std::string {
+                auto operation = std::any_cast<const T&>(this->type_erased_operation);
+                if constexpr (detail::implements_compute_program_hash<T>()) {
+                    TT_ASSERT(optional_input_tensors.empty());
+                    static_assert(detail::implements_create_program<T>());
+                    return operation.compute_program_hash(input_tensors);
+                }
+                else if constexpr (detail::implements_compute_program_hash_with_optional_input_tensors<T>()) {
+                    TT_ASSERT(not optional_input_tensors.empty());
+                    static_assert(detail::implements_create_program_with_optional_input_tensors<T>());
+                    return operation.compute_program_hash(input_tensors, optional_input_tensors);
+                }
+                else {
+                    TT_THROW("Operation doesn't implement compute_program_hash");
+                }
+            }
+        },
+        supports_program_caching{
+            [] {
+                return detail::implements_compute_program_hash<T>() or detail::implements_compute_program_hash_with_optional_input_tensors<T>();
+            }
+        },
+        create_profiler_info{
+            [this] (const std::vector<Tensor>& input_tensors) -> ProfilerInfo {
+                auto operation = std::any_cast<const T&>(this->type_erased_operation);
+                std::optional<std::string> preferred_name = this->get_type_name();
 
-    std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-        return this->implementation_->compute_output_shapes(input_tensors);
-    }
-
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const {
-        return this->implementation_->create_output_tensors(input_tensors);
-    }
-
-    ProgramWithCallbacks create_program(
-        const std::vector<Tensor> &input_tensors,
-        const std::vector<std::optional<const Tensor>> &optional_input_tensors,
-        std::vector<Tensor> &output_tensors
-    ) const {
-        return this->implementation_->create_program(input_tensors, optional_input_tensors, output_tensors);
-    }
-
-    Hash compute_program_hash(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors = {}
-    ) const {
-        return this->implementation_->compute_program_hash(input_tensors, optional_input_tensors);
-    }
-
-    bool supports_program_caching() const {
-        return this->implementation_->supports_program_caching();
-    }
-
-    std::string get_type_name() const {
-        return this->implementation_->get_type_name();
-    }
-
-
-    ProfilerInfo create_profiler_info(const std::vector<Tensor> &input_tensors) const {
-        return this->implementation_->create_profiler_info(input_tensors);
-    }
-
-    std::string to_string() const {
-        return this->implementation_->to_string();
-    }
-
-    tt::stl::reflection::Attributes attributes() const {
-        return this->implementation_->attributes();
-    }
+                std::optional<std::string> parallelization_strategy = std::nullopt;
+                if constexpr (detail::implements_get_parallelization_strategy<T>()) {
+                    parallelization_strategy = fmt::format("{}", operation.get_parallelization_strategy(input_tensors));
+                }
+                return {
+                    .preferred_name = preferred_name,
+                    .parallelization_strategy = parallelization_strategy
+                };
+            }
+        },
+        attributes{
+            [this] {
+                auto operation = std::any_cast<const T&>(this->type_erased_operation);
+                return operation.attributes();
+            }
+        }
+        {}
 
 };
-
-static std::ostream& operator<<(std::ostream& os, const DeviceOperation& op) {
-    os << op.to_string();
-    return os;
-}
 
 using Operation = std::variant<HostOperation, DeviceOperation>;
 

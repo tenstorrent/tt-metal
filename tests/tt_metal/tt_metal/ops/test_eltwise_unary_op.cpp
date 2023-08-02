@@ -73,7 +73,7 @@ void test_operation_infrastructure() {
 
     auto op = operation::DeviceOperation(EltwiseUnary{UnaryOpType::SQRT, std::nullopt, MemoryConfig{.interleaved = true}});
 
-    auto program_hash = op.compute_program_hash({input_tensor});
+    auto program_hash = op.compute_program_hash({input_tensor}, {});
     TT_ASSERT(
         program_hash == "tt::tt_metal::EltwiseUnary(op_type=tt::tt_metal::UnaryOpType::Enum::SQRT, param=std::nullopt, output_mem_config=tt::tt_metal::MemoryConfig(interleaved=true, buffer_type=tt::tt_metal::BufferType::DRAM))_tt::tt_metal::Tensor(storage=tt::tt_metal::OwnedStorage(), shape=tt::tt_metal::Shape(dimensions={1, 1, 32, 32}), dtype=tt::tt_metal::DataType::BFLOAT16, layout=tt::tt_metal::Layout::TILE)",
         fmt::format("Actual value is {}", program_hash)
