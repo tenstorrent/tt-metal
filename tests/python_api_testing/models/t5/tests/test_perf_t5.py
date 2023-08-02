@@ -14,16 +14,7 @@ from tests.python_api_testing.models.utility_functions_new import (
 from models.t5.tt.t5_model import TtT5Model
 
 
-@pytest.mark.parametrize(
-    "expected_inference_time, expected_compile_time",
-    (
-        (
-            0.1,
-            5.1,
-        ),
-    ),
-)
-def test_perf(use_program_cache, expected_inference_time, expected_compile_time):
+def run_perf_t5(expected_inference_time, expected_compile_time):
     profiler = Profiler()
     disable_persistent_kernel_cache()
     comments = "small"
@@ -113,3 +104,31 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time)
 
     assert second_iter_time < expected_inference_time, f"t5 {comments} is too slow"
     assert compile_time < expected_compile_time, "t5 compile time is too slow"
+
+
+@pytest.mark.models_performance_bare_metal
+@pytest.mark.parametrize(
+    "expected_inference_time, expected_compile_time",
+    (
+        (
+            0.1,
+            5.1,
+        ),
+    ),
+)
+def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_compile_time):
+    run_perf_t5(expected_inference_time, expected_compile_time)
+
+
+@pytest.mark.models_performance_virtual_machine
+@pytest.mark.parametrize(
+    "expected_inference_time, expected_compile_time",
+    (
+        (
+            1000,
+            1000,
+        ),
+    ),
+)
+def test_perf_virtual_machine(use_program_cache, expected_inference_time, expected_compile_time):
+    run_perf_t5(expected_inference_time, expected_compile_time)

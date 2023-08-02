@@ -121,7 +121,7 @@ def run_perf_bert15(expected_inference_time, expected_compile_time):
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
-    ([14, 13],),
+    ([1000, 1000],),
 )
 def test_perf_virtual_machine(use_program_cache, expected_inference_time, expected_compile_time):
     run_perf_bert15(expected_inference_time, expected_compile_time)

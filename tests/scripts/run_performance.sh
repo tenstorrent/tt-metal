@@ -10,27 +10,27 @@ fi
 run_perf_models() {
     local pipeline_type=$1
 
-    env pytest tests/python_api_testing/models/vgg/tests/perf_vgg.py
+    env pytest tests/python_api_testing/models/vgg/tests -m $pipeline_type
 
-    env pytest tests/python_api_testing/models/vit/tests/perf_vit.py
+    env pytest tests/python_api_testing/models/vit/tests -m $pipeline_type
 
-    env pytest tests/python_api_testing/models/llama/perf_llama.py
+    env pytest tests/python_api_testing/models/llama -m $pipeline_type
 
-    env pytest tests/python_api_testing/models/roberta/perf_roberta.py
+    env pytest tests/python_api_testing/models/roberta -m $pipeline_type
 
-    env pytest tests/python_api_testing/models/t5/tests/perf_t5.py
+    env pytest tests/python_api_testing/models/t5/tests -m $pipeline_type
 
-    env pytest tests/python_api_testing/models/resnet/tests/perf_resnet.py
+    env pytest tests/python_api_testing/models/resnet/tests -m $pipeline_type
 
-    env pytest tests/python_api_testing/models/bloom/perf_bloom.py
+    env pytest tests/python_api_testing/models/bloom -m $pipeline_type
 
     env pytest tests/python_api_testing/models/metal_BERT_large_15 -m $pipeline_type
 
-    env pytest tests/python_api_testing/models/deit/tests/perf_deit.py
+    env pytest tests/python_api_testing/models/deit/tests -m $pipeline_type
 
-    env pytest tests/python_api_testing/models/stable_diffusion/tests/perf_unbatched_stable_diffusion.py
+    env pytest tests/python_api_testing/models/stable_diffusion/tests -m $pipeline_type
 
-    env pytest tests/python_api_testing/models/whisper/perf_whisper.py
+    env pytest tests/python_api_testing/models/whisper -m $pipeline_type
 
     ## Merge all the generated reports
     env python tests/python_api_testing/models/merge_perf_results.py

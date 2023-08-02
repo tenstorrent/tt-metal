@@ -12,15 +12,7 @@ from tests.python_api_testing.models.vgg.tt.vgg import *
 
 BATCH_SIZE = 1
 
-@pytest.mark.parametrize(
-    "expected_inference_time, expected_compile_time",
-    (
-        (6.2,
-         13.5,
-        ),
-    ),
-)
-def test_perf(use_program_cache, imagenet_sample_input, expected_inference_time, expected_compile_time):
+def run_perf_vgg(imagenet_sample_input, expected_inference_time, expected_compile_time):
     profiler = Profiler()
     disable_persistent_kernel_cache()
     first_key = "first_iter"
@@ -78,3 +70,29 @@ def test_perf(use_program_cache, imagenet_sample_input, expected_inference_time,
 
     assert second_iter_time < expected_inference_time, f"vgg {comments} is too slow"
     assert compile_time < expected_compile_time, f"vgg {comments} compile time is too slow"
+
+
+@pytest.mark.models_performance_bare_metal
+@pytest.mark.parametrize(
+    "expected_inference_time, expected_compile_time",
+    (
+        (6.2,
+         13.5,
+        ),
+    ),
+)
+def test_perf_bare_metal(use_program_cache, imagenet_sample_input, expected_inference_time, expected_compile_time):
+    run_perf_vgg(imagenet_sample_input, expected_inference_time, expected_compile_time)
+
+
+@pytest.mark.models_performance_virtual_machine
+@pytest.mark.parametrize(
+    "expected_inference_time, expected_compile_time",
+    (
+        (1000,
+         1000,
+        ),
+    ),
+)
+def test_perf_virtual_machine(use_program_cache, imagenet_sample_input, expected_inference_time, expected_compile_time):
+    run_perf_vgg(imagenet_sample_input, expected_inference_time, expected_compile_time)

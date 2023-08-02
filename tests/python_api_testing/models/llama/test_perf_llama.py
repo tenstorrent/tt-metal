@@ -27,17 +27,7 @@ from utility_functions_new import prep_report
 BATCH_SIZE = 1
 
 
-@pytest.mark.parametrize(
-    "expected_inference_time, expected_compile_time",
-    (
-        (
-            0.33,
-            9.5
-        ),
-    ),
-)
-def test_perf(
-    use_program_cache,
+def run_perf_llama(
     expected_inference_time,
     expected_compile_time,
             ):
@@ -131,3 +121,39 @@ def test_perf(
 
     assert second_iter_time < expected_inference_time, "llama 7B is too slow"
     assert compile_time < expected_compile_time, "llama 7B compile time is too slow"
+
+
+@pytest.mark.models_performance_bare_metal
+@pytest.mark.parametrize(
+    "expected_inference_time, expected_compile_time",
+    (
+        (
+            0.33,
+            9.5
+        ),
+    ),
+)
+def test_perf_bare_metal(
+    use_program_cache,
+    expected_inference_time,
+    expected_compile_time,
+            ):
+    run_perf_llama(expected_inference_time, expected_compile_time)
+
+
+@pytest.mark.models_performance_virtual_machine
+@pytest.mark.parametrize(
+    "expected_inference_time, expected_compile_time",
+    (
+        (
+            1000,
+            1000
+        ),
+    ),
+)
+def test_perf_virtual_machine(
+    use_program_cache,
+    expected_inference_time,
+    expected_compile_time,
+            ):
+    run_perf_llama(expected_inference_time, expected_compile_time)

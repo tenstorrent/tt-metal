@@ -29,15 +29,8 @@ import python_api_testing.models.bloom.bloom_model as bloom_model
 
 BATCH_SIZE = 1
 
-@pytest.mark.parametrize(
-    "expected_inference_time, expected_compile_time",
-    (
-        (1.8,
-         12,
-        ),
-    ),
-)
-def test_perf(use_program_cache, expected_inference_time, expected_compile_time):
+
+def run_perf_bloom(expected_inference_time, expected_compile_time):
     disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"
@@ -105,3 +98,29 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time)
 
     assert second_iter_time < expected_inference_time, f"bloom {comments} is too slow"
     assert compile_time < expected_compile_time, f"bloom {comments} compile time is too slow"
+
+
+@pytest.mark.models_performance_bare_metal
+@pytest.mark.parametrize(
+    "expected_inference_time, expected_compile_time",
+    (
+        (1.8,
+         12,
+        ),
+    ),
+)
+def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_compile_time):
+    run_perf_bloom(expected_inference_time, expected_compile_time)
+
+
+@pytest.mark.models_performance_virtual_machine
+@pytest.mark.parametrize(
+    "expected_inference_time, expected_compile_time",
+    (
+        (1000,
+         1000,
+        ),
+    ),
+)
+def test_perf_virtual_machine(use_program_cache, expected_inference_time, expected_compile_time):
+    run_perf_bloom(expected_inference_time, expected_compile_time)
