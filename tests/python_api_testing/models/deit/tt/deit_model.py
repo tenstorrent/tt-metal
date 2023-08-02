@@ -1,24 +1,14 @@
-from pathlib import Path
-import sys
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}")
-sys.path.append(f"{f}/../")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-sys.path.append(f"{f}/../../../../..")
-
 from typing import Optional, Set, Tuple, Union
 import torch
 from torch import nn
 
 import tt_lib
-from utility_functions_new import tt_to_torch_tensor, torch_to_tt_tensor_rm
-from deit_config import DeiTConfig
-from deit_embeddings import DeiTEmbeddings
-from deit_patch_embeddings import DeiTPatchEmbeddings
-from deit_encoder import TtDeiTEncoder
-from deit_pooler import TtDeiTPooler
+from models.utility_functions import tt_to_torch_tensor, torch_to_tt_tensor_rm
+from tests.python_api_testing.models.deit.tt.deit_config import DeiTConfig
+from tests.python_api_testing.models.deit.tt.deit_embeddings import DeiTEmbeddings
+from tests.python_api_testing.models.deit.tt.deit_patch_embeddings import DeiTPatchEmbeddings
+from tests.python_api_testing.models.deit.tt.deit_encoder import TtDeiTEncoder
+from tests.python_api_testing.models.deit.tt.deit_pooler import TtDeiTPooler
 from tt_lib.fallback_ops import fallback_ops
 
 class TtDeiTModel(nn.Module):

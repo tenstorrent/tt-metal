@@ -1,22 +1,11 @@
-from pathlib import Path
-import sys
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}")
-sys.path.append(f"{f}/../")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-sys.path.append(f"{f}/../../../../..")
-
-
 from typing import Optional, Set, Tuple, Union
 
 import torch
 from torch import nn
 
 import tt_lib
-from deit_config import DeiTConfig
-from deit_layer import TtDeiTLayer
+from tests.python_api_testing.models.deit.tt.deit_config import DeiTConfig
+from tests.python_api_testing.models.deit.tt.deit_layer import TtDeiTLayer
 
 
 class TtDeiTEncoder(nn.Module):

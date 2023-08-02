@@ -1,23 +1,14 @@
-from pathlib import Path
-import sys
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}")
-sys.path.append(f"{f}/../tt")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-sys.path.append(f"{f}/../../../../..")
-
 import torch
 from torch import nn
 from transformers import AutoImageProcessor, DeiTForImageClassificationWithTeacher
 from loguru import logger
 
 import tt_lib
-from utility_functions_new import torch_to_tt_tensor_rm, tt_to_torch_tensor , comp_pcc, comp_allclose_and_pcc
+from tests.python_api_testing.models.utility_functions_new import  comp_pcc, comp_allclose_and_pcc
+from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 
-from deit_config import DeiTConfig
-from deit_for_image_classification_with_teacher import TtDeiTForImageClassificationWithTeacher
+from tests.python_api_testing.models.deit.tt.deit_config import DeiTConfig
+from tests.python_api_testing.models.deit.tt.deit_for_image_classification_with_teacher import TtDeiTForImageClassificationWithTeacher
 
 
 def test_deit_for_image_classification_with_teacher_inference(hf_cat_image_sample_input, pcc=0.95):

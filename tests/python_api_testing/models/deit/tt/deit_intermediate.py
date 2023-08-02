@@ -1,24 +1,14 @@
-from pathlib import Path
-import sys
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}")
-sys.path.append(f"{f}/../")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-sys.path.append(f"{f}/../../../../..")
-
 from typing import Optional, Set, Tuple, Union
 
 import torch
 from torch import nn
 
-from activations import ACT2FN
-from deit_config import DeiTConfig
-from utility_functions_new import torch_to_tt_tensor_rm
+from tests.python_api_testing.models.deit.tt.activations import ACT2FN
+from tests.python_api_testing.models.deit.tt.deit_config import DeiTConfig
+from models.utility_functions import torch_to_tt_tensor_rm
 
 import tt_lib
-from helper_funcs import Linear as TtLinear
+from models.helper_funcs import Linear as TtLinear
 
 class TtDeiTIntermediate(nn.Module):
     def __init__(self, config: DeiTConfig(), device, state_dict=None, base_address="") -> None:

@@ -1,23 +1,13 @@
-from pathlib import Path
-import sys
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}")
-sys.path.append(f"{f}/../")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-sys.path.append(f"{f}/../../../../..")
-
 from typing import Optional, Set, Tuple, Union
 
 import torch
 from torch import nn
-from deit_config import DeiTConfig
+from tests.python_api_testing.models.deit.tt.deit_config import DeiTConfig
 
 import tt_lib
 from tt_lib.fallback_ops import fallback_ops
 
-from deit_patch_embeddings import DeiTPatchEmbeddings
+from tests.python_api_testing.models.deit.tt.deit_patch_embeddings import DeiTPatchEmbeddings
 
 class DeiTEmbeddings(nn.Module):
 

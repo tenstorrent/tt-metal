@@ -1,20 +1,10 @@
-from pathlib import Path
-import sys
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}")
-sys.path.append(f"{f}/../")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-sys.path.append(f"{f}/../../../../..")
-
 import torch
 from torch import nn
-from deit_config import DeiTConfig
+from tests.python_api_testing.models.deit.tt.deit_config import DeiTConfig
 
 import tt_lib
-from utility_functions_new import torch_to_tt_tensor_rm
-from helper_funcs import Linear as TtLinear
+from models.utility_functions import torch_to_tt_tensor_rm
+from models.helper_funcs import Linear as TtLinear
 
 class TtDeiTSelfOutput(nn.Module):
     """

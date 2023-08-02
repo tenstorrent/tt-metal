@@ -1,20 +1,11 @@
-from pathlib import Path
-import sys
-f = f"{Path(__file__).parent}"
-
-sys.path.append(f"{f}")
-sys.path.append(f"{f}/../tt")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-
 from transformers import AutoImageProcessor, DeiTForImageClassificationWithTeacher
 import torch
 
 from loguru import logger
 
 import tt_lib
-from utility_functions_new import torch_to_tt_tensor_rm, tt_to_torch_tensor
-from deit_for_image_classification_with_teacher import deit_for_image_classification_with_teacher
+from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
+from tests.python_api_testing.models.deit.tt.deit_for_image_classification_with_teacher import deit_for_image_classification_with_teacher
 
 def test_gs_demo(hf_cat_image_sample_input):
     image = hf_cat_image_sample_input

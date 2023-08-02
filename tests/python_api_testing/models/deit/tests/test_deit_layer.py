@@ -1,28 +1,16 @@
-from pathlib import Path
-import sys
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}")
-sys.path.append(f"{f}/../tt")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-sys.path.append(f"{f}/../../../../..")
-
 from typing import Optional, Set, Tuple, Union
 
 import torch
 import torch.utils.checkpoint
 from torch import nn
 from loguru import logger
+from transformers import DeiTModel
 
 import tt_lib
-from utility_functions_new import torch_to_tt_tensor, torch_to_tt_tensor_rm, tt_to_torch_tensor
-from utility_functions_new import comp_pcc, comp_allclose_and_pcc
-
-from deit_config import DeiTConfig
-
-from transformers import DeiTModel
-from deit_layer import TtDeiTLayer
+from models.utility_functions import torch_to_tt_tensor, torch_to_tt_tensor_rm, tt_to_torch_tensor
+from tests.python_api_testing.models.utility_functions_new import comp_pcc, comp_allclose_and_pcc
+from tests.python_api_testing.models.deit.tt.deit_config import DeiTConfig
+from tests.python_api_testing.models.deit.tt.deit_layer import TtDeiTLayer
 
 
 def test_deit_layer_inference(pcc=0.99):

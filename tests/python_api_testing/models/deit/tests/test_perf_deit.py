@@ -1,23 +1,12 @@
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}")
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../tt")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
 from transformers import AutoImageProcessor, DeiTForImageClassificationWithTeacher
 import torch
 from loguru import logger
 import pytest
 import tt_lib
-from utility_functions_new import torch_to_tt_tensor_rm, tt_to_torch_tensor, profiler
-from utility_functions_new import disable_persistent_kernel_cache, enable_persistent_kernel_cache
-from utility_functions_new import prep_report
-from tt.deit_for_image_classification_with_teacher import deit_for_image_classification_with_teacher
+from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, profiler
+from models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache
+from tests.python_api_testing.models.utility_functions_new import prep_report
+from tests.python_api_testing.models.deit.tt.deit_for_image_classification_with_teacher import deit_for_image_classification_with_teacher
 
 BATCH_SIZE = 1
 
