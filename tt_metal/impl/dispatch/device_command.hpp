@@ -22,7 +22,7 @@ static constexpr u32 NUM_DISPATCH_CORES = 108;  // TODO(agrebenisan): Need to fi
 static constexpr u32 DEVICE_COMMAND_DATA_ADDR = 150 * 1024;
 
 static constexpr u32 DEVICE_COMMAND_NUM_ENTRIES = 5632; // 22KB device command
-static constexpr u32 NUM_ENTRIES_PER_BUFFER_RELAY = 12;
+static constexpr u32 NUM_ENTRIES_PER_BUFFER_RELAY = 8;
 static constexpr u32 CONTROL_SECTION_NUM_ENTRIES = 16;
 static constexpr u32 NUM_DATA_MOVEMENT_INSTRUCTIONS = 4;
 static constexpr u32 RELAY_BUFFER_NUM_ENTRIES = NUM_DATA_MOVEMENT_INSTRUCTIONS * NUM_ENTRIES_PER_BUFFER_RELAY;
@@ -70,7 +70,7 @@ class DeviceCommand {
 
     // This magic 16 coming from the fact that we needed to over-allocate the control bit
     // section in order to have the command size be nicely divisble by 32
-    static_assert(CONTROL_SECTION_NUM_ENTRIES + NUM_DISPATCH_CORES + RELAY_BUFFER_NUM_ENTRIES == 172);
+    static_assert(CONTROL_SECTION_NUM_ENTRIES + NUM_DISPATCH_CORES + RELAY_BUFFER_NUM_ENTRIES == 156);
     u32 relay_program_entry_idx = CONTROL_SECTION_NUM_ENTRIES + NUM_DISPATCH_CORES + RELAY_BUFFER_NUM_ENTRIES;
 
     array<u32, DEVICE_COMMAND_NUM_ENTRIES> desc;
