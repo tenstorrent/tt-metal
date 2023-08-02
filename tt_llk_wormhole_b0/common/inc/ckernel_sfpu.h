@@ -3,6 +3,7 @@
 #include "ckernel_defs.h"
 #include "ckernel.h"
 #include "noc_nonblocking_api.h"
+#include <limits>
 
 #include "sfpi.h"
 
@@ -383,28 +384,36 @@ void calculate_exponential(uint16_t exp_base_scale_factor = 0)
         }
         if constexpr (APPROXIMATION_MODE)
         {
-            // * by 1/ln2 and add convert to 7.3 FxP format
-            vFloat vConstLn2Recip = vConstFloatPrgm0;
-            vFloat c23_73 = vConstFloatPrgm1;
-            vInt adj_exp = vConstIntPrgm2;
-            val = val * vConstLn2Recip + c23_73;
+            v_if (val>=89){
+                vFloat val_inf = std::numeric_limits<float>::infinity();
+                dst_reg[0] = val_inf;
+            } v_elseif(val<-42){
+                    dst_reg[0] = 0.0f;
+            } v_else {
+                // * by 1/ln2 and add convert to 7.3 FxP format
+                vFloat vConstLn2Recip = vConstFloatPrgm0;
+                vFloat c23_73 = vConstFloatPrgm1;
+                vInt adj_exp = vConstIntPrgm2;
+                val = val * vConstLn2Recip + c23_73;
 
-            // Remove Exponent of 7 and bias the Mantissa to 127.
-            vInt val_short = adj_exp + reinterpret<vInt>(val);
+                // Remove Exponent of 7 and bias the Mantissa to 127.
+                vInt val_short = adj_exp + reinterpret<vInt>(val);
 
-            // SHL to move integer bits to exponent
-            val_short <<= 10 - p_exp::FRAC_BITS;
-            dst_reg[0] = reinterpret<vFloat>(val_short);
+                // SHL to move integer bits to exponent
+                val_short <<= 10 - p_exp::FRAC_BITS;
+                dst_reg[0] = reinterpret<vFloat>(val_short);
 
-            // Needed for fused kernels such as math_row_softmax_tables which call calculate_exponential()
-            // without using Relu in Packer to clamp -ve Infinity to 0.
-            if constexpr (ZERO_NEGATIVE)
-            {
-                v_if (val_short < 0) {
-                    dst_reg[0] = vConst0;
+                // Needed for fused kernels such as math_row_softmax_tables which call calculate_exponential()
+                // without using Relu in Packer to clamp -ve Infinity to 0.
+                if constexpr (ZERO_NEGATIVE)
+                {
+                    v_if (val_short < 0) {
+                        dst_reg[0] = vConst0;
+                    }
+                    v_endif;
                 }
-                v_endif;
             }
+            v_endif;
         }
         else
         {
