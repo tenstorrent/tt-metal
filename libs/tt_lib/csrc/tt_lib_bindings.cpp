@@ -147,6 +147,9 @@ Tensor convert_torch_tensor_to_tt_tensor(const py::handle& torch_tensor, std::op
     if (torch_dtype.equal(torch.attr("float32"))) {
         data_type = DataType::FLOAT32;
     }
+    else if (torch_dtype.equal(torch.attr("float16"))) {
+        data_type = DataType::BFLOAT16;
+    }
     else if (torch_dtype.equal(torch.attr("bfloat16"))) {
         data_type = DataType::BFLOAT16;
     }
