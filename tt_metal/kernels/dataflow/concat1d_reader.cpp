@@ -7,9 +7,8 @@
 // Expects n provided src_addr, src_noc_x, src_noc_y, and cb_id_in
 void kernel_main() {
     // compile time args
-    DataFormat fmt = static_cast<DataFormat>(get_compile_time_arg_val(0));
-    constexpr bool IS_DRAM_A = static_cast<bool>(get_compile_time_arg_val(1));
-    constexpr bool IS_DRAM_B = static_cast<bool>(get_compile_time_arg_val(2));
+    constexpr bool IS_DRAM_A = static_cast<bool>(get_compile_time_arg_val(0));
+    constexpr bool IS_DRAM_B = static_cast<bool>(get_compile_time_arg_val(1));
 
     // runtime args
     // TODO: This can be generalized to concat on any dim, as long as input is tiled without padding
@@ -24,7 +23,8 @@ void kernel_main() {
 
     // ublocks size defined in tiles
     uint32_t ublock_size_tiles = 1;
-    uint32_t tile_size_bytes = get_tile_size(cb_id_in);
+    const uint32_t tile_size_bytes = get_tile_size(cb_id_in);
+    const DataFormat data_format = get_dataformat(cb_id_in);
 
     InterleavedAddrGenFast<false> l1_src_addr_gens[num_tensors];
     InterleavedAddrGenFast<true> dram_src_addr_gens[num_tensors];
@@ -38,13 +38,13 @@ void kernel_main() {
         dram_src_addr_gens[i] = {
             .bank_base_address = src_addr,
             .page_size = tile_size_bytes,
-            .data_format = fmt
+            .data_format = data_format
         };
 
         l1_src_addr_gens[i] = {
             .bank_base_address = src_addr,
             .page_size = tile_size_bytes,
-            .data_format = fmt
+            .data_format = data_format
         };
         tile_id_per_tensor[i] = 0;
     }

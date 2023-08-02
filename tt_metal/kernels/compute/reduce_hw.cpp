@@ -7,14 +7,10 @@
 namespace NAMESPACE {
 void MAIN {
 
-    uint32_t scaler = get_compile_time_arg_val(0);
-    uint32_t Ht = get_compile_time_arg_val(1);
-    uint32_t Wt = get_compile_time_arg_val(2);
-    uint32_t NC = get_compile_time_arg_val(3);
+    uint32_t Ht = get_compile_time_arg_val(0);
+    uint32_t Wt = get_compile_time_arg_val(1);
+    uint32_t NC = get_compile_time_arg_val(2);
 
-    union { float f; uint32_t u; } u; u.u = scaler;
-
-    //reduce_init(REDUCE_OP, REDUCE_DIM, CB::c_in0, u.f);
     reduce_init_v2<true>(REDUCE_OP, REDUCE_DIM, tt::CB::c_in0, tt::CB::c_in2);
 
     cb_wait_front(tt::CB::c_in2, 1); // scaler tile from the reader
@@ -29,7 +25,6 @@ void MAIN {
             for(uint32_t wt = 0; wt < Wt; ++wt) {
                 cb_wait_front(tt::CB::c_in0, onetile);
                 // REDUCE_OP/DIM is expected to come from add_define
-                //reduce_tile(REDUCE_OP, REDUCE_DIM, CB::c_in0, 0, reduce_dst_idx, scaler);
                 reduce_tile_v2(REDUCE_OP, REDUCE_DIM, tt::CB::c_in0, tt::CB::c_in2, 0, 0, reduce_dst_idx);
                 cb_pop_front(tt::CB::c_in0, onetile);
             }

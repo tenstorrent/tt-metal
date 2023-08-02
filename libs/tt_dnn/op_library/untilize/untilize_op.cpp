@@ -93,7 +93,6 @@ operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& ou
 
     bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
-        static_cast<uint32_t>(cb_data_format),
         (std::uint32_t) src0_is_dram
     };
 
@@ -328,7 +327,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
 
     bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
-        static_cast<uint32_t>(cb_data_format),
         (std::uint32_t) src0_is_dram
     };
 

@@ -54,7 +54,6 @@ void Reduce::validate(const std::vector<Tensor> &input_tensors) const {
     TT_ASSERT(input_tensor.buffer() != nullptr , "Operands to reduce need to be allocated in buffers on device!");
     TT_ASSERT((input_tensor.layout() == Layout::TILE), "Inputs to reduce must be tilized");
     TT_ASSERT(input_tensor.dtype() == DataType::BFLOAT16);
-    TT_ASSERT((input_tensor.buffer()->buffer_type() == BufferType::DRAM));
 }
 
 std::vector<Shape> Reduce::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
@@ -64,16 +63,16 @@ std::vector<Shape> Reduce::compute_output_shapes(const std::vector<Tensor> &inpu
     auto padding = output_shape.padding();
     switch (this->dim){
         case ReduceOpDim::H:
-            output_shape[2] = 32;
+            output_shape[2] = TILE_HEIGHT;
             padding[2] = Padding::PadDimension{0, 31};
             break;
         case ReduceOpDim::W:
-            output_shape[3] = 32;
+            output_shape[3] = TILE_WIDTH;
             padding[3] = Padding::PadDimension{0, 31};
             break;
         case ReduceOpDim::HW:
-            output_shape[2] = 32;
-            output_shape[3] = 32;
+            output_shape[2] = TILE_HEIGHT;
+            output_shape[3] = TILE_WIDTH;
             padding[2] = Padding::PadDimension{0, 31};
             padding[3] = Padding::PadDimension{0, 31};
             break;
@@ -84,7 +83,7 @@ std::vector<Shape> Reduce::compute_output_shapes(const std::vector<Tensor> &inpu
 
 std::vector<Tensor> Reduce::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, MemoryConfig{.interleaved = true});
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks Reduce::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -115,6 +114,7 @@ tt::stl::reflection::Attributes Reduce::attributes() const {
         {"math_op", this->math_op},
         {"dim", this->dim},
         {"scaler", this->scaler},
+        {"output_mem_config", this->output_mem_config},
     };
 }
 
@@ -137,8 +137,8 @@ ReduceOpParallelizationStrategy::Enum Reduce::get_parallelization_strategy(const
     }
 }
 
-Tensor reduce(const Tensor &input_tensor, ReduceOpMath::Enum reduce_math, ReduceOpDim::Enum reduce_dim, float scaler) {
-    auto parallelization_strategy = Reduce{reduce_math, reduce_dim, scaler}.get_parallelization_strategy({input_tensor});
+Tensor reduce(const Tensor &input_tensor, ReduceOpMath::Enum reduce_math, ReduceOpDim::Enum reduce_dim, float scaler, const MemoryConfig& output_mem_config) {
+    auto parallelization_strategy = Reduce{reduce_math, reduce_dim, scaler, output_mem_config}.get_parallelization_strategy({input_tensor});
     auto is_multicore_hw = parallelization_strategy == ReduceOpParallelizationStrategy::MULTI_CORE_HW;
     float pad_value = reduce_math == ReduceOpMath::MAX ? std::numeric_limits<float>::lowest() : 0;
     if (is_multicore_hw) {
@@ -156,10 +156,10 @@ Tensor reduce(const Tensor &input_tensor, ReduceOpMath::Enum reduce_math, Reduce
         if (AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
             formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, pad_value, Layout::TILE);
         }
-        const Tensor output_tensor = operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::W, 1.0}, {formatted_input_tensor}).at(0);
-        return operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::H, scaler}, {output_tensor}).at(0);
+        const Tensor output_tensor = operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::W, 1.0, output_mem_config}, {formatted_input_tensor}).at(0);
+        return operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::H, scaler, output_mem_config}, {output_tensor}).at(0);
     } else {
-        return operation::run_with_autoformat(Reduce{reduce_math, reduce_dim, scaler}, {input_tensor}, {}, pad_value).at(0);
+        return operation::run_with_autoformat(Reduce{reduce_math, reduce_dim, scaler, output_mem_config}, {input_tensor}, {}, pad_value).at(0);
     }
 }
 

@@ -48,14 +48,14 @@ void kernel_main() {
     uint32_t batch                              = get_arg_val<uint32_t>(28);
     uint32_t bcast_B                            = get_arg_val<uint32_t>(29);
 
-    constexpr DataFormat data_format                      = static_cast<DataFormat>(get_compile_time_arg_val(0));
-    constexpr bool in0_is_dram                        = get_compile_time_arg_val(1) == 1;
-    constexpr bool in1_is_dram                        = get_compile_time_arg_val(2) == 1; // not used
+    constexpr bool in0_is_dram                        = get_compile_time_arg_val(0) == 1;
+    constexpr bool in1_is_dram                        = get_compile_time_arg_val(1) == 1; // not used
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
 
-    uint32_t single_tile_size_bytes = get_tile_size(cb_id_in1);
+    const uint32_t single_tile_size_bytes = get_tile_size(cb_id_in0);
+    const DataFormat data_format = get_dataformat(cb_id_in0);
 
     uint32_t l1_write_addr_in0;
 

@@ -31,13 +31,13 @@ void kernel_main() {
     uint32_t padded_subblock_tiles_addr_skip    = get_arg_val<uint32_t>(18);
     uint32_t padded_block_tiles_w_skip          = get_arg_val<uint32_t>(19);
 
-    constexpr DataFormat data_format = static_cast<DataFormat>(get_compile_time_arg_val(0));
-    constexpr bool out_is_dram = get_compile_time_arg_val(1) == 1;
+    constexpr bool out_is_dram = get_compile_time_arg_val(0) == 1;
 
     constexpr uint32_t cb_id_out0 = 16;
 
     // single-tile
-    uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0);
+    const uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0);
+    const DataFormat data_format = get_dataformat(cb_id_out0);
 
     const InterleavedAddrGenFast<out_is_dram> s = {
         .bank_base_address = out_tensor_addr,

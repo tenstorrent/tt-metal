@@ -104,10 +104,10 @@ int main(int argc, char **argv) {
 
         bool src0_is_dram = true;
         bool src1_is_dram = true;
-        std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(tt::DataFormat::Float16_b), (uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
+        std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
 
         bool dst_is_dram = true;
-        std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(tt::DataFormat::Float16_b), (uint32_t)dst_is_dram};
+        std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram};
         auto reader = tt_metal::CreateDataMovementKernel(
             program,
             "tt_metal/kernels/dataflow/reader_bmm_8bank.cpp",

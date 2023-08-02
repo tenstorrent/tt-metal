@@ -393,8 +393,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
             num_blocks_weight_w,
             out_row_size_bytes,
             last_block_row_size_bytes,
-            act_matrix_height_unpadded,
-            static_cast<uint32_t>(out_df)
+            act_matrix_height_unpadded
         };
     } else {
         assert(false && "Tiled output unsupported");
@@ -415,7 +414,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         };
     }
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(cb_data_format), (uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0)};
+    std::vector<uint32_t> reader_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0)};
 
     auto reader_id = tt_metal::CreateDataMovementKernel(
         program,
@@ -1148,8 +1147,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
             num_blocks_weight_w,
             output_channels_padded_to_tile_width*num_bytes_of_df,
             last_block_row_size_bytes,
-            matrix_shape_unpadded[1],
-            static_cast<uint32_t>(out_df)
+            matrix_shape_unpadded[1]
         };
     } else {
         assert(false && "Tiled output unsupported");

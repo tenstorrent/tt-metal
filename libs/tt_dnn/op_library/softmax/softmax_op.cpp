@@ -114,19 +114,16 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
     bool src0_is_dram = src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
-        (std::uint32_t) static_cast<uint32_t>(in0_cb_data_format),
         src0_is_dram,
         block_size
     };
     if (mask.has_value()) {
         bool mask_is_dram = mask.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-        reader_compile_time_args.push_back((std::uint32_t) static_cast<uint32_t>(mask_cb_data_format));
         reader_compile_time_args.push_back(mask_is_dram);
     }
 
     std::vector<uint32_t> writer_compile_time_args = {
         // interleaved accessor args
-        (std::uint32_t) static_cast<uint32_t>(in0_cb_data_format),
         src0_is_dram,
         block_size
     };

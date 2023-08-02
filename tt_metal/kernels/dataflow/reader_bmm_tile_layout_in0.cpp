@@ -41,12 +41,12 @@ void kernel_main() {
 
     // COMPILE TIME ARGS
     // interleaved accessor args
-    constexpr DataFormat in0_data_format        = static_cast<DataFormat>(get_compile_time_arg_val(0));
-    constexpr bool in0_is_dram                  = get_compile_time_arg_val(1) == 1;
+    constexpr bool in0_is_dram                  = get_compile_time_arg_val(0) == 1;
 
     constexpr uint32_t cb_id_in0 = 0;
 
-    uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
+    const uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
+    const DataFormat in0_data_format = get_dataformat(cb_id_in0);
 
     uint32_t l1_write_addr_in0;
 

@@ -18,7 +18,8 @@ void kernel_main() {
     uint32_t val_hi       = get_arg_val<uint32_t>(6);
     uint32_t val_lo       = get_arg_val<uint32_t>(7);
 
-    const InterleavedAddrGen<true> s0 = {
+    constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
+    const InterleavedAddrGen<dst_is_dram> s0 = {
         .bank_base_address = dst_addr,
         .page_size = W<<1
     };

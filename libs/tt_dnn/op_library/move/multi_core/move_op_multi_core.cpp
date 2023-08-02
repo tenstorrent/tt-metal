@@ -60,11 +60,10 @@ operation::ProgramWithCallbacks move_multi_core(const Tensor &input, Tensor &out
     bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
 
-    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(input_cb_data_format), (uint32_t)src_is_dram};
+    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram};
 
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) output_cb_index,
-        static_cast<uint32_t>(output_cb_data_format),
         (std::uint32_t) dst_is_dram
     };
 

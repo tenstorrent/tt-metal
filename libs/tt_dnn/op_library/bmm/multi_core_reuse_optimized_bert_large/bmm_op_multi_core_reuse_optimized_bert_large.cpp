@@ -91,13 +91,10 @@ operation::ProgramWithCallbacks create_program(
     bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
-        (std::uint32_t) static_cast<uint32_t>(in0_data_format),
         (std::uint32_t) in0_is_dram,
     };
     std::vector<uint32_t> reader_writer_compile_time_args = {
         // interleaved accessor args
-        (std::uint32_t) static_cast<uint32_t>(in1_data_format),
-        (std::uint32_t) static_cast<uint32_t>(output_data_format),
         (std::uint32_t) in1_is_dram,
         (std::uint32_t) out_is_dram
     };

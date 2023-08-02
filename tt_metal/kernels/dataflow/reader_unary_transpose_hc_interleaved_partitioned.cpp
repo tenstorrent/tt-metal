@@ -12,44 +12,39 @@ inline u32 TADDR(u32 ti) {
 
 void kernel_main() {
     u32 src0_addr = get_arg_val<uint32_t>(0);
-    u32 src_noc_x = get_arg_val<uint32_t>(1);
-    u32 src_noc_y = get_arg_val<uint32_t>(2);
-    u32 W         = get_arg_val<uint32_t>(3);
-    u32 H         = get_arg_val<uint32_t>(4);
-    u32 C         = get_arg_val<uint32_t>(5);
-    u32 HW        = get_arg_val<uint32_t>(6);
-    u32 N         = get_arg_val<uint32_t>(7);
-    u32 CHW       = get_arg_val<uint32_t>(8);
-    u32 start_id  = get_arg_val<uint32_t>(9);
-    u32 num_tiles = get_arg_val<uint32_t>(10);
+    u32 start_id  = get_arg_val<uint32_t>(1);
+    u32 num_tiles = get_arg_val<uint32_t>(2);
+    u32 batch_addr = get_arg_val<uint32_t>(3);
+    u32 h = get_arg_val<uint32_t>(4);
+    u32 htWT = get_arg_val<uint32_t>(5);
+    u32 ct = get_arg_val<uint32_t>(6);
+    u32 ctoffs = get_arg_val<uint32_t>(7);
+    u32 wt = get_arg_val<uint32_t>(8);
 
-    auto WT = (W >> 5); // number of tiles in W
-    auto HT = (H >> 5); // number of tiles in H
-    auto CT = (C >> 5); // number of tiles in C
-    auto HTWT = (HW >> 10); // product of HT*WT
-    auto HW2 = (HW << 1); // HW stride in bytes
-    auto CHW2 = (CHW << 1); // batch stride in bytes
-    constexpr u32 SUBTILE_LINE_BYTES = (16<<1);
+    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr uint32_t WT = get_compile_time_arg_val(1);
+    constexpr uint32_t H = get_compile_time_arg_val(2);
+    constexpr uint32_t CT = get_compile_time_arg_val(3);
+    constexpr uint32_t HW_bytes = get_compile_time_arg_val(4);
+    constexpr uint32_t CHW_bytes = get_compile_time_arg_val(5);
+    constexpr u32 SUBTILE_LINE_BYTES = get_compile_time_arg_val(6);
+
     constexpr u32 onetile = 1;
-    constexpr u32 operand0 = 0;
+    constexpr uint32_t cb_id_in0 = 0;
 
 
     // The basic idea here is to iterate over output tiles (that will be over CT,WT) and H
     // this will generate a linearly incremented output address in the inner loop
     // we then reverse map this linear dest address to src address
 
-    const InterleavedPow2AddrGen<true> s0 = {
+    const uint32_t tile_bytes = get_tile_size(cb_id_in0);
+    const DataFormat data_format = get_dataformat(cb_id_in0);
+
+    const InterleavedAddrGenFast<src0_is_dram> s0 = {
         .bank_base_address = src0_addr,
-
-
-        .log_base_2_of_page_size = 11
+        .page_size = tile_bytes,
+        .data_format = data_format
     };
-    u32 h = start_id / (CT*WT) % H;
-    u32 htWT = (h >> 5) * WT;
-    u32 ct = start_id / WT % CT;
-    u32 ctoffs = ct * (HW2<<5);
-    u32 wt = start_id % WT;
-    u32 batch_addr = start_id / (CHW>>10) * CHW2;
 
     for (u32 t = 0; t < num_tiles; t++){
         auto h32 = (h&31);
@@ -58,9 +53,9 @@ void kernel_main() {
         // every 32 C's acquire a new output tile address
         //    DPRINT << "8B h=" << h << " ct=" << ct << " wt=" << wt << " W=" << W << " HW2=" << HW2 << ENDL();
 
-        cb_reserve_back(operand0, onetile);
+        cb_reserve_back(cb_id_in0, onetile);
 
-        u32 dest_tr0_l1 = get_write_ptr(operand0);
+        u32 dest_tr0_l1 = get_write_ptr(cb_id_in0);
         // u32 save_dest = dest_tr0_l1;
         u32 cSubtileOffs = 0;
         for (u32 sub = 0; sub < 4; sub++) {
@@ -104,32 +99,32 @@ void kernel_main() {
 
                 // the output address is just linearly incremented
                 dest_tr0_l1 += SUBTILE_LINE_BYTES;
-                c16offs += HW2;
+                c16offs += HW_bytes;
             }
             // subtiles are ordered like this:
             // 0 1
             // 2 3
             // Here we offset C by 16 starting with subtile=2
             if (sub == 1) // after we are done with subtile 1, increment for sub=2
-                cSubtileOffs += (HW2<<4); // 16*HWbytes, which is subtile vertical size
+                cSubtileOffs += (HW_bytes<<4); // 16*HWbytes, which is subtile vertical size
         } // sub<4
 
         // block on all outstanding noc DMA requests to complete
         noc_async_read_barrier();
 
         // notifies the unpacker that the buffer is populated
-        cb_push_back(operand0, onetile);
+        cb_push_back(cb_id_in0, onetile);
         wt++;
         if (wt == WT) { // End of row
             wt = 0;
             ct++;
-            ctoffs += (HW2<<5); // since we increment ct, we need to multiply by 32
+            ctoffs += (HW_bytes<<5); // since we increment ct, we need to multiply by 32
             if (ct == CT) { // End of column
                 ct = 0;
                 ctoffs = 0;
                 h++;
                 if (h == H) { // End of batch
-                    batch_addr += CHW2;
+                    batch_addr += CHW_bytes;
                     h = 0;
                     htWT = 0;
                 }

@@ -32,6 +32,7 @@ struct Reduce {
     const ReduceOpMath::Enum math_op;
     const ReduceOpDim::Enum dim;
     const float scaler;
+    const MemoryConfig& output_mem_config;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -42,7 +43,7 @@ struct Reduce {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-Tensor reduce(const Tensor &input_tensor, ReduceOpMath::Enum reduce_math, ReduceOpDim::Enum reduce_dim, float scaler = 1.0f);
+Tensor reduce(const Tensor &input_tensor, ReduceOpMath::Enum reduce_math, ReduceOpDim::Enum reduce_dim, float scaler = 1.0f, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true});
 Tensor sum(const Tensor &input_tensor, uint dim);
 
 }  // namespace tt_metal

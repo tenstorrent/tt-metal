@@ -22,13 +22,13 @@ void kernel_main() {
     uint32_t MtNt                               = get_arg_val<uint32_t>(11); // if 0
     uint32_t batch                              = get_arg_val<uint32_t>(12);
 
-    constexpr DataFormat data_format = static_cast<DataFormat>(get_compile_time_arg_val(0));
-    constexpr bool out_is_dram = get_compile_time_arg_val(1) == 1;
+    constexpr bool out_is_dram = get_compile_time_arg_val(0)== 1;
 
     constexpr uint32_t cb_id_out0 = 16;
 
     // single-tile
-    uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0);
+    const uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0);
+    const DataFormat data_format = get_dataformat(cb_id_out0);
 
     const InterleavedAddrGenFast<out_is_dram> s = {
         .bank_base_address = out_tensor_addr,

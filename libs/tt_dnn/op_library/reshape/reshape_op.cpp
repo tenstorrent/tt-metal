@@ -23,20 +23,17 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
-    tt_metal::Buffer *src0_dram_buffer = a.buffer();
+    tt_metal::Buffer *src0_buffer = a.buffer();
 
     uint32_t num_tiles = a.volume() / TILE_HW;
-
-    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
 
     Shape output_shape = output.shape();
 
-    tt_metal::Buffer *dst_dram_buffer = output.buffer();
-    TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
+    tt_metal::Buffer *dst_buffer = output.buffer();
+    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
@@ -49,18 +46,20 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
         cb_data_format
     );
 
-    bool dst_is_dram = dst_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t) src0_is_dram};
+
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) src0_cb_index,
-        static_cast<uint32_t>(DataFormat::Float16_b),
         (std::uint32_t) dst_is_dram
     };
 
     tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reshape_8bank.cpp",
+        "tt_metal/kernels/dataflow/reshape_interleaved.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
     tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
@@ -72,7 +71,7 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
         program,
         unary_reader_kernel_id,
         core,
-        {src0_dram_buffer->address(),
+        {src0_buffer->address(),
         a.shape()[3] / TILE_WIDTH,
         (uint32_t) output_shape[0],
         (uint32_t) output_shape[1],
@@ -84,7 +83,7 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
         program,
         unary_writer_kernel_id,
         core,
-        {dst_dram_buffer->address(),
+        {dst_buffer->address(),
         num_tiles, 0 }
     );
 
@@ -94,21 +93,21 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
         const std::vector<Buffer*>& output_buffers
     ) {
 
-        auto src_dram_buffer = input_buffers.at(0);
+        auto src_buffer = input_buffers.at(0);
 
-        auto dst_dram_buffer = output_buffers.at(0);
+        auto dst_buffer = output_buffers.at(0);
 
         CoreCoord core = {0, 0};
 
         {
             auto runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-            runtime_args[0] = src_dram_buffer->address();
+            runtime_args[0] = src_buffer->address();
             SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
         }
 
         {
             auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
-            runtime_args[0] = dst_dram_buffer->address();
+            runtime_args[0] = dst_buffer->address();
             SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
         }
     };
@@ -124,8 +123,8 @@ operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
     Shape output_shape = output.shape();
-    tt_metal::Buffer *src0_dram_buffer = a.buffer();
-    tt_metal::Buffer *dst_dram_buffer = output.buffer();
+    tt_metal::Buffer *src0_buffer = a.buffer();
+    tt_metal::Buffer *dst_buffer = output.buffer();
 
     uint32_t num_old_sticks = a.shape()[0] * a.shape()[1] * a.shape()[2];
     uint32_t num_new_sticks = output_shape[0] * output_shape[1] * output_shape[2];
@@ -186,37 +185,42 @@ operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& 
     );
 
     // Reader compile-time args
+    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool old_stick_size_is_power_of_two = is_power_of_two_at_least_32(old_stick_size);
-    vector<uint32_t> reader_kernel_args = {src0_dram_buffer->address(), num_old_sticks, old_stick_size};
-    std::vector<uint32_t> reader_compile_time_args;
+    vector<uint32_t> reader_kernel_args = {src0_buffer->address(), num_old_sticks, old_stick_size};
+    std::vector<uint32_t> reader_compile_time_args = {src0_is_dram};
     if (old_stick_size_is_power_of_two) {
         reader_kernel_args.push_back(log2(old_stick_size));
 
         // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-        reader_compile_time_args = {1};
+        reader_compile_time_args.push_back(1);
     } else {
-        reader_compile_time_args = {0};
+        reader_compile_time_args.push_back(0);
     }
 
     // Writer compile-time args
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool new_stick_size_is_power_of_two = is_power_of_two_at_least_32(new_stick_size);
-    vector<uint32_t> writer_kernel_args = {dst_dram_buffer->address(), num_new_sticks, new_stick_size};
-    std::vector<uint32_t> writer_compile_time_args;
+    vector<uint32_t> writer_kernel_args = {dst_buffer->address(), num_new_sticks, new_stick_size};
+    std::vector<uint32_t> writer_compile_time_args {dst_is_dram};
     if (new_stick_size_is_power_of_two) {
         writer_kernel_args.push_back(log2(new_stick_size));
+        writer_compile_time_args.push_back(1);
+    } else {
+        writer_compile_time_args.push_back(0);
     }
 
     tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_unary_stick_layout_8bank.cpp",
+        "tt_metal/kernels/dataflow/reader_unary_reshape_stick_layout_interleaved.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
     tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_stick_layout_8bank.cpp",
+        "tt_metal/kernels/dataflow/writer_unary_reshape_stick_layout_interleaved.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
     // No compute required, so using blank kernel
     vector<uint32_t> compute_args = {
@@ -251,21 +255,21 @@ operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& 
         const std::vector<Buffer*>& output_buffers
     ) {
 
-        auto src_dram_buffer = input_buffers.at(0);
+        auto src_buffer = input_buffers.at(0);
 
-        auto dst_dram_buffer = output_buffers.at(0);
+        auto dst_buffer = output_buffers.at(0);
 
         CoreCoord core = {0, 0};
 
         {
             auto runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-            runtime_args[0] = src_dram_buffer->address();
+            runtime_args[0] = src_buffer->address();
             SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
         }
 
         {
             auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
-            runtime_args[0] = dst_dram_buffer->address();
+            runtime_args[0] = dst_buffer->address();
             SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
         }
     };
@@ -305,7 +309,7 @@ std::vector<Shape> Reshape::compute_output_shapes(const std::vector<Tensor> &inp
 
 std::vector<Tensor> Reshape::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor_a.dtype(), input_tensor_a.layout(), MemoryConfig{.interleaved = true});
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor_a.dtype(), input_tensor_a.layout(), this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks Reshape::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -332,10 +336,11 @@ tt::stl::reflection::Attributes Reshape::attributes() const {
         {"C", this->C},
         {"H", this->H},
         {"W", this->W},
+        {"output_mem_config", this->output_mem_config},
     };
 }
 
-Tensor reshape (Tensor &input_tensor_a, int N, int C, int H, int W) {
+Tensor reshape (Tensor &input_tensor_a, int N, int C, int H, int W, const MemoryConfig& output_mem_config) {
     // No-op (Will do a tensor copy)
     auto output_shape = infer_dims_for_reshape(N, C, H, W, input_tensor_a.volume());
     if (
@@ -346,7 +351,7 @@ Tensor reshape (Tensor &input_tensor_a, int N, int C, int H, int W) {
         input_tensor_a = input_tensor_a.reshape(N, C, H, W);
         return input_tensor_a;
     }
-    return operation::run_without_autoformat(Reshape{N, C, H, W}, {input_tensor_a}).at(0);
+    return operation::run_without_autoformat(Reshape{N, C, H, W, output_mem_config}, {input_tensor_a}).at(0);
 }
 
 } // namespace tt_metal

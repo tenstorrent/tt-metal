@@ -266,6 +266,10 @@ inline std::int32_t get_tile_size(const std::int32_t operand) {
     return num_words << 4;
 }
 
+inline DataFormat get_dataformat(const std::int32_t operand) {
+    return static_cast<DataFormat>((uint)unpack_src_format[operand]);
+}
+
 /**
  * Pops a specified number of tiles from the front of the specified CB. This
  * also frees this number of tiles in the circular buffer. This call is used by

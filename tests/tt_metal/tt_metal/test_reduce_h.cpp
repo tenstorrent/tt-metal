@@ -131,12 +131,15 @@ int main(int argc, char **argv) {
         TT_ASSERT(num_tensor_tiles%Ht == 0);
 
         TT_ASSERT(multibank == true);
+        std::vector<uint32_t> reader_compile_args = {(std::uint32_t) true, *reinterpret_cast<uint32_t*>(&scaler)};
+        std::map<string, string> reader_defines;
+        reader_defines["REDUCE_SCALER"] = "1";
         auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            multibank ? "tt_metal/kernels/dataflow/reader_unary_transpose_wh_8bank.cpp"
+            multibank ? "tt_metal/kernels/dataflow/reader_unary_transpose_wh_interleaved.cpp"
                       : "tt_metal/kernels/dataflow/reader_unary_transpose_wh.cpp", // TODO(AP): not ported for reduce with scaler
             core,
-            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_args, .defines = reader_defines});
 
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
@@ -146,7 +149,6 @@ int main(int argc, char **argv) {
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
         vector<uint32_t> compute_kernel_args = {
-            *reinterpret_cast<uint32_t*>(&scaler),
             uint(Ht),
             uint(Wt),
             uint(NC),
@@ -184,10 +186,7 @@ int main(int argc, char **argv) {
             core,
             {
                 dram_buffer_src0_addr,
-                (std::uint32_t)dram_src0_noc_xy.x,
-                (std::uint32_t)dram_src0_noc_xy.y,
-                num_tensor_tiles, N, Ht, Wt, Ht*Wt,
-                *reinterpret_cast<uint32_t*>(&scaler),
+                N, Ht, Wt, Ht*Wt
             }
         );
 

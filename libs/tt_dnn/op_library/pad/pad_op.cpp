@@ -193,7 +193,6 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> compile_time_args_vec = {
         // interleaved accessor args
-        (std::uint32_t) static_cast<uint32_t>(cb_data_format),
         (std::uint32_t) src0_is_dram,
         (std::uint32_t) dst_is_dram
     };

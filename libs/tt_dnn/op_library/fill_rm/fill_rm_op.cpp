@@ -21,8 +21,8 @@ operation::ProgramWithCallbacks fill_rm_single_core(const Tensor& any, Tensor &o
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(any.dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
-    tt_metal::Buffer *dst_dram_buffer = output.buffer();
-    TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
+    tt_metal::Buffer *dst_buffer = output.buffer();
+    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t num_cb_tiles = 16;
     TT_ASSERT(W < 1024*num_cb_tiles); // Limitation for simplifying the kernel
@@ -39,14 +39,17 @@ operation::ProgramWithCallbacks fill_rm_single_core(const Tensor& any, Tensor &o
         num_cb_tiles, num_cb_tiles * single_tile_size,
         cb_data_format);
 
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t) dst_is_dram};
+
     tt_metal::KernelID binary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
-        program, "tt_metal/kernels/dataflow/fill_rm_8bank.cpp",
+        program, "tt_metal/kernels/dataflow/fill_rm_interleaved.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args=reader_compile_time_args});
 
     tt_metal::SetRuntimeArgs(
         program, binary_reader_kernel_id, core,
-        { dst_dram_buffer->address(), u32(N*C), u32(H), u32(W), u32(hFill), u32(wFill), u32(bfloat16(val_hi).to_uint16()), u32(bfloat16(val_lo).to_uint16()) }
+        { dst_buffer->address(), u32(N*C), u32(H), u32(W), u32(hFill), u32(wFill), u32(bfloat16(val_hi).to_uint16()), u32(bfloat16(val_lo).to_uint16()) }
     );
 
     auto override_runtime_args_callback = [kernel_id=binary_reader_kernel_id](
@@ -55,13 +58,13 @@ operation::ProgramWithCallbacks fill_rm_single_core(const Tensor& any, Tensor &o
         const std::vector<Buffer*>& output_buffers
     ) {
 
-        auto dst_dram_buffer = output_buffers.at(0);
+        auto dst_buffer = output_buffers.at(0);
 
         CoreCoord core = {0, 0};
 
         {
             auto runtime_args = GetRuntimeArgs(program, kernel_id, core);
-            runtime_args[0] = dst_dram_buffer->address();
+            runtime_args[0] = dst_buffer->address();
             SetRuntimeArgs(program, kernel_id, core, runtime_args);
         }
     };
@@ -83,7 +86,7 @@ std::vector<Shape> FillRM::compute_output_shapes(const std::vector<Tensor> &inpu
 
 std::vector<Tensor> FillRM::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::ROW_MAJOR, MemoryConfig{.interleaved = true});
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::ROW_MAJOR, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks FillRM::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -108,11 +111,12 @@ tt::stl::reflection::Attributes FillRM::attributes() const {
         {"wFill", this->wFill},
         {"val_hi", this->val_hi},
         {"val_lo", this->val_lo},
+        {"output_mem_config", this->output_mem_config},
     };
 }
 
-tt_metal::Tensor fill_rm(uint32_t N, uint32_t C, uint32_t H, uint32_t W, uint32_t hFill, uint32_t wFill, const tt_metal::Tensor& any, float val_hi, float val_lo) {
-    return operation::run_without_autoformat(FillRM{N, C, H, W, hFill, wFill, val_hi, val_lo}, {any}).at(0);
+tt_metal::Tensor fill_rm(uint32_t N, uint32_t C, uint32_t H, uint32_t W, uint32_t hFill, uint32_t wFill, const tt_metal::Tensor& any, float val_hi, float val_lo, const MemoryConfig& output_mem_config) {
+    return operation::run_without_autoformat(FillRM{N, C, H, W, hFill, wFill, val_hi, val_lo, output_mem_config}, {any}).at(0);
 }
 
 }  // namespace tt_metal

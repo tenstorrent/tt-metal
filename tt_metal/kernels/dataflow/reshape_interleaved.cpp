@@ -18,19 +18,24 @@ void kernel_main() {
     u32 output_Ht    = get_arg_val<uint32_t>(4);
     u32 output_Wt    = get_arg_val<uint32_t>(5);
 
+    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
+
     u32 num_sticks_per_input_tile_row = input_Wt << 5; // Tile height is 32
     u32 num_sticks_per_output_tile_row = output_Wt << 5;
 
     constexpr u32 SUBTILE_LINE_BYTES = (16<<1);
     constexpr u32 onetile = 1;
-    constexpr u32 operand0 = 0;
+    constexpr u32 cb_id_in0 = 0;
 
 
-    const InterleavedPow2AddrGen<true> s0 = {
+    const uint32_t tile_bytes = get_tile_size(cb_id_in0);
+    const DataFormat data_format = get_dataformat(cb_id_in0);
+
+
+    const InterleavedAddrGenFast<src0_is_dram> s0 = {
         .bank_base_address = src0_addr,
-
-
-        .log_base_2_of_page_size = 11
+        .page_size = tile_bytes,
+        .data_format = data_format
     };
 
     // Sticks are a row of elements in a single tile (32 elements)
@@ -43,7 +48,7 @@ void kernel_main() {
                 uint32_t base_tile_stick_id = base_tile_row_stick_id;
                 for (uint32_t w = 0; w < output_Wt; w++) {
                     uint32_t output_stick_id = base_tile_stick_id; // Offset tile id of the current sub tile row
-                    cb_reserve_back(operand0, onetile);
+                    cb_reserve_back(cb_id_in0, onetile);
                     for (uint32_t tile_h = 0; tile_h < 32; tile_h++) {
 
                         uint32_t input_tile_row_to_read = output_stick_id / num_sticks_per_input_tile_row;
@@ -55,7 +60,7 @@ void kernel_main() {
                         banked_addr += (((input_tile_sub_row_to_read >> 4) << 1) << 9); // if intra-tile source h is > 16, add 2*512 to subtile offset
                         banked_addr += ((input_tile_sub_row_to_read & 15) << 5); // 16 * 2 bytes per face row
 
-                        uint32_t dest_tr0_l1 = get_write_ptr(operand0);
+                        uint32_t dest_tr0_l1 = get_write_ptr(cb_id_in0);
                         dest_tr0_l1 += (((tile_h >> 4) << 1) << 9); // if intra-tile source h is > 16, add 2*512 to subtile offset
                         dest_tr0_l1 += ((tile_h & 15) << 5); // 16 * 2 bytes per face row
 
@@ -70,7 +75,7 @@ void kernel_main() {
                     }
                     noc_async_read_barrier();
                     // notifies the unpacker that the buffer is populated
-                    cb_push_back(operand0, onetile);
+                    cb_push_back(cb_id_in0, onetile);
 
                     base_tile_stick_id += 1;
                 }

@@ -47,7 +47,7 @@ struct EltwiseBinaryBroadcast {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-inline Tensor bcast(const Tensor &input_tensor_a, const Tensor &input_tensor_b, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim, const MemoryConfig& mem_config = MemoryConfig{.interleaved = true}) {
+inline Tensor bcast(const Tensor &input_tensor_a, const Tensor &input_tensor_b, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
     using tt::constants::TILE_HEIGHT;
     using tt::constants::TILE_WIDTH;
 
@@ -77,7 +77,7 @@ inline Tensor bcast(const Tensor &input_tensor_a, const Tensor &input_tensor_b, 
             TT_ASSERT((input_tensor_b.shape()[2] == 1 && input_tensor_b.shape()[3] == 1) || (input_tensor_b.shape()[2] == TILE_HEIGHT && input_tensor_b.shape()[3] == TILE_WIDTH));
         }
     }
-    return operation::run_with_autoformat(EltwiseBinaryBroadcast{bcast_op, bcast_dim, mem_config}, {input_tensor_a, input_tensor_b}).at(0);
+    return operation::run_with_autoformat(EltwiseBinaryBroadcast{bcast_op, bcast_dim, output_mem_config}, {input_tensor_a, input_tensor_b}).at(0);
 }
 
 inline Tensor bcast_without_autoformat(const Tensor &input_tensor_a, const Tensor &input_tensor_b, BcastOpMath::Enum bcast_op, BcastOpDim::Enum bcast_dim, const MemoryConfig& mem_config = MemoryConfig{.interleaved = true}) {

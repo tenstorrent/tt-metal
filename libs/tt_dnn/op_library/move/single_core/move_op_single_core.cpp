@@ -59,7 +59,7 @@ operation::ProgramWithCallbacks move_single_core(const Tensor &input, Tensor &ou
     //       If src and dst is not the same, it doesn't matter which way we read.
     bool src_and_dst_is_dram = src_is_dram and dst_is_dram;
 
-    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(input_cb_data_format), (uint32_t)src_is_dram};
+    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram};
     tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         src_and_dst_is_dram ? "tt_metal/kernels/dataflow/reader_unary_interleaved_start_id.cpp" : "tt_metal/kernels/dataflow/reader_unary_backwards_interleaved_start_id.cpp",
@@ -68,7 +68,6 @@ operation::ProgramWithCallbacks move_single_core(const Tensor &input, Tensor &ou
 
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) output_cb_index,
-        static_cast<uint32_t>(output_cb_data_format),
         (uint32_t)dst_is_dram,
     };
     tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(

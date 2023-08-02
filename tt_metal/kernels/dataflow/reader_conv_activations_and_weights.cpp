@@ -69,12 +69,12 @@ void kernel_main() {
     uint32_t src_dram_weight_buffer_size_bytes = get_arg_val<uint32_t>(i); i+=1;
     uint32_t dst_l1_weight_buffer_size_bytes = get_arg_val<uint32_t>(i); i+=1;
 
-    constexpr DataFormat data_format = static_cast<DataFormat>(get_compile_time_arg_val(0));
-    constexpr bool act_in_dram = get_compile_time_arg_val(1) == 1;
+    constexpr bool act_in_dram = get_compile_time_arg_val(0) == 1;
 
     constexpr uint32_t cb_id_act = 0;
     constexpr uint32_t cb_id_weight = 1;
     constexpr uint32_t tile_size_pow2_exponent = 11;
+    const DataFormat data_format = get_dataformat(cb_id_act);
     uint32_t channel_stick_size = conv_act_size_c;
     uint32_t channel_stick_size_bytes = channel_stick_size << 1;
     const InterleavedAddrGen<act_in_dram> s_act = {

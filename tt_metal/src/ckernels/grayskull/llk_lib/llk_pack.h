@@ -206,7 +206,8 @@ inline void llk_pack_reduce_config_v2(uint32_t icb_out) {
     } else {
         //TTI_WRCFG(revert ? 0xFFFFffff : 0x0,    p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC0_mask_ADDR32+0);
         //TTI_WRCFG(revert ? 0xFFFFffff : 0xFFFF, p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC0_mask_ADDR32+1);
-        //cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+0] = revert ? 0xFFFFffff : 0x0;
-        //cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+1] = revert ? 0xFFFFffff : 0x0000ffff;
+        cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+0] = revert ? 0xFFFFffff : 0x0;
+        cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+1] = revert ? 0xFFFFffff : 0x0000ffff;
+        cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32] = revert ? 0xF : 0x1;
     }
 }

@@ -8,16 +8,16 @@ void kernel_main() {
 
     // COMPILE TIME ARGS
     // interleaved accessor args
-    constexpr DataFormat data_format             = static_cast<DataFormat>(get_compile_time_arg_val(0));
-    constexpr uint32_t in0_is_dram               = get_compile_time_arg_val(1);
+    constexpr uint32_t in0_is_dram               = get_compile_time_arg_val(0);
     // READER COMPILE TIME ARGS
-    constexpr uint32_t block_size                = get_compile_time_arg_val(2);
-    constexpr uint32_t out_num_blocks_per_tensor = get_compile_time_arg_val(3);
+    constexpr uint32_t block_size                = get_compile_time_arg_val(1);
+    constexpr uint32_t out_num_blocks_per_tensor = get_compile_time_arg_val(2);
 
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
-    uint32_t single_tile_size_bytes = get_tile_size(cb_id_in0);
+    const uint32_t single_tile_size_bytes = get_tile_size(cb_id_in0);
+    const DataFormat data_format = get_dataformat(cb_id_in0);
 
     constexpr bool in0_is_dram_bool = in0_is_dram == 1;
     const InterleavedAddrGenFast<in0_is_dram_bool> s0 = {

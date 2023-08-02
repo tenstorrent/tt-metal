@@ -41,11 +41,11 @@ void kernel_main() {
     uint32_t output_row_size = get_arg_val<uint32_t>(6);    // output row size bytes
     uint32_t last_block_row_size_unpadded = get_arg_val<uint32_t>(7); // unpadded last block width
     uint32_t num_output_rows_unpadded = get_arg_val<uint32_t>(8);
-    DataFormat out_df = static_cast<DataFormat>(get_arg_val<uint32_t>(9));
 
     // NOTE: Row major layout only supports bfp16
     // TT_ASSERT(out_df != DataFormat::Bfp8_b);
     constexpr uint32_t cb_id_out0 = tt::CB::c_out0;
+    const DataFormat out_df = get_dataformat(cb_id_out0);
 
     constexpr uint32_t TILE_HEIGHT = 32;                    // TODO: use common source of truth
 

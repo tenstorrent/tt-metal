@@ -235,7 +235,7 @@ int main(int argc, char **argv) {
 
         bool src0_is_dram = true;
         bool src1_is_dram = true;
-        std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(tt::DataFormat::Float16_b), (uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
+        std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
 
         const char* reader_name = get_reader_name(multibank, bcast_dim);
         auto binary_reader_kernel = tt_metal::CreateDataMovementKernel(

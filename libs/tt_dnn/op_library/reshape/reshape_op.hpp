@@ -10,6 +10,7 @@ namespace tt_metal {
 struct Reshape {
 
     int N, C, H, W;
+    const MemoryConfig output_mem_config;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -20,7 +21,7 @@ struct Reshape {
 };
 
 // Tensor &a cannot be const, since in some cases we modify in place
-Tensor reshape (Tensor &a, int N, int C, int H, int W);
+Tensor reshape (Tensor &a, int N, int C, int H, int W, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true});
 
 }  // namespace tt_metal
 

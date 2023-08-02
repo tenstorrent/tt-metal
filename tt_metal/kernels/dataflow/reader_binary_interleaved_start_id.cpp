@@ -14,14 +14,14 @@ void kernel_main() {
     uint32_t l1_write_addr_in0;
     uint32_t l1_write_addr_in1;
 
-    constexpr DataFormat src0_data_format = static_cast<DataFormat>(get_compile_time_arg_val(0));
-    constexpr bool src0_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr DataFormat src1_data_format = static_cast<DataFormat>(get_compile_time_arg_val(2));
-    constexpr bool src1_is_dram = get_compile_time_arg_val(3) == 1;
+    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr bool src1_is_dram = get_compile_time_arg_val(1) == 1;
 
     constexpr uint32_t onetile = 1;
     uint32_t src0_tile_bytes = get_tile_size(cb_id_in0);
+    DataFormat src0_data_format = get_dataformat(cb_id_in0);
     uint32_t src1_tile_bytes = get_tile_size(cb_id_in1);
+    DataFormat src1_data_format = get_dataformat(cb_id_in1);
 
     const InterleavedAddrGenFast<src0_is_dram> s0 = {
         .bank_base_address = src0_addr,

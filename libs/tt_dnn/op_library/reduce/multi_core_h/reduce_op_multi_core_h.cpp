@@ -18,15 +18,19 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
     TT_ASSERT(reduce_dim == ReduceOpDim::H);
     const auto shape = a.shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1]*shape[0];
-    uint32_t HW = H*W;
 
     uint32_t Wt = W/TILE_WIDTH;
     uint32_t Ht = H/TILE_HEIGHT;
+    uint32_t HtWt = Ht * Wt;
 
     tt_metal::Program program = tt_metal::Program();
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
+    tt::DataFormat scaler_cb_data_format = DataFormat::Float16_b;
+    uint32_t scaler_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
+    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
 
     uint32_t num_tiles = a.volume()/TILE_HW;
 
@@ -47,8 +51,8 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
         src0_cb_index,
         all_cores,
         num_input_tiles,
-        num_input_tiles * single_tile_size,
-        cb_data_format
+        num_input_tiles * src0_single_tile_size,
+        src0_cb_data_format
     );
 
     auto cb_scaler = tt_metal::CreateCircularBuffers(
@@ -56,8 +60,8 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
         CB::c_in2,
         all_cores,
         num_input_tiles,
-        num_input_tiles * single_tile_size,
-        cb_data_format
+        num_input_tiles * scaler_single_tile_size,
+        scaler_cb_data_format
     );
 
     uint32_t output_cb_index = 16; // output operands start at index 16
@@ -67,23 +71,33 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
         output_cb_index,
         all_cores,
         num_output_tiles,
-        num_output_tiles * single_tile_size,
-        cb_data_format
+        num_output_tiles * dst_single_tile_size,
+        dst_cb_data_format
     );
+
+    tt_metal::Buffer *src0_buffer = a.buffer();
+    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> reader_compile_time_args = {
+        (std::uint32_t) src0_is_dram,
+        Ht,
+        Wt,
+        HtWt,
+        *reinterpret_cast<uint32_t*>(&scaler) // scaler
+    };
 
     tt_metal::Buffer *dst_buffer = output.buffer();
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) output_cb_index,
-        static_cast<uint32_t>(DataFormat::Float16_b),
         (std::uint32_t) dst_is_dram
     };
-
+    std::map<string, string> reader_defines;
+    reader_defines["REDUCE_SCALER"] = "1";
     tt_metal::KernelID reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_unary_transpose_wh_8bank_input_cols_partitioned.cpp",
+        "tt_metal/kernels/dataflow/reader_unary_transpose_wh_interleaved_input_cols_partitioned.cpp",
         all_cores,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args, .defines = reader_defines});
 
     tt_metal::KernelID writer_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
@@ -93,7 +107,6 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
 
     std::map<string, string> reduce_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);
     vector<uint32_t> compute_kernel_args_group_1 = {
-        uint32_t(*reinterpret_cast<uint32_t*>(&scaler)), // scaler
         Ht, // Ht
         num_cols_per_core_group_1, // Wt
         1, // NC
@@ -108,7 +121,6 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
 
     if(!core_group_2.ranges().empty()){
         vector<uint32_t> compute_kernel_args_group_2 = {
-            uint32_t(*reinterpret_cast<uint32_t*>(&scaler)), // scaler
             Ht, // Ht
             num_cols_per_core_group_2, // Wt
             1, // NC
@@ -122,8 +134,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
         );
     }
 
-    uint32_t out_dim_divider = Ht;
-    for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++){
+    for (uint32_t i = 0, num_cols_read = 0; i < num_cores; i++){
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_cols_per_core;
         if (core_group_1.core_coord_in_core_ranges(core)) {
@@ -133,17 +144,13 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
         } else {
             TT_ASSERT(false, "Core not in specified core ranges");
         }
-        uint32_t num_tensor_tiles_per_core = Ht*num_cols_per_core;
         tt_metal::SetRuntimeArgs(
             program, reader_kernel_id, core,
             {
                 a.buffer()->address(),
-                0, // unused by multibank reader
-                0, // unused by multibank reader
-                num_tensor_tiles_per_core, NC, Ht, Wt, Ht*Wt,
-                num_tiles_read, // tile index of column to start reading from
-                (uint32_t)num_tensor_tiles_per_core, // number of tiles to read in column major order (can span across batches)
-                *reinterpret_cast<uint32_t*>(&scaler), // scaler
+                num_cols_read / Wt * HtWt + num_cols_read % Wt,
+                num_cols_read % Wt,
+                num_cols_per_core
             }
         );
 
@@ -151,11 +158,11 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
             program, writer_kernel_id, core,
             {
                 output.buffer()->address(),
-                num_tensor_tiles_per_core / out_dim_divider, // number of tiles to write
-                num_tiles_read / out_dim_divider // output tile start index
+                num_cols_per_core, // number of tiles to write
+                num_cols_read // output tile start index
             }
         );
-        num_tiles_read+=num_tensor_tiles_per_core;
+        num_cols_read += num_cols_per_core;
     }
 
     auto override_runtime_args_callback = [
@@ -171,8 +178,6 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
     ) {
 
         auto src_dram_buffer = input_buffers.at(0);
-        auto src_dram_noc_xy = src_dram_buffer->noc_coordinates();
-
         auto dst_dram_buffer = output_buffers.at(0);
 
         for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++){
@@ -181,8 +186,6 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
             {
                 auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                 runtime_args[0] = src_dram_buffer->address();
-                runtime_args[1] = uint32_t(src_dram_noc_xy.x);
-                runtime_args[2] = uint32_t(src_dram_noc_xy.y);
                 SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
             }
 

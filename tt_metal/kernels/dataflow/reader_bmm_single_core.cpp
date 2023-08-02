@@ -37,15 +37,13 @@ void kernel_main() {
     uint32_t in1_next_block_stride_h = get_arg_val<uint32_t>(20);
     uint32_t in1_next_block_stride_w = get_arg_val<uint32_t>(21);
 
-    DataFormat in0_df = static_cast<DataFormat>(get_arg_val<uint32_t>(22));
-    DataFormat in1_df = static_cast<DataFormat>(get_arg_val<uint32_t>(23));
-
     constexpr uint32_t in0_cb_id = tt::CB::c_in0;
     constexpr uint32_t in1_cb_id = tt::CB::c_in1;
 
-    uint32_t in0_tile_nbytes = get_tile_size(in0_cb_id);
-    uint32_t in1_tile_nbytes = get_tile_size(in1_cb_id);
-
+    const uint32_t in0_tile_nbytes = get_tile_size(in0_cb_id);
+    const uint32_t in1_tile_nbytes = get_tile_size(in1_cb_id);
+    const DataFormat in0_df = get_dataformat(in0_cb_id);
+    const DataFormat in1_df = get_dataformat(in1_cb_id);
     // const InterleavedAddrGenFast<true> s0 = {
     //     .bank_base_address = in0_addr,
     //     .page_size = in0_tile_nbytes,

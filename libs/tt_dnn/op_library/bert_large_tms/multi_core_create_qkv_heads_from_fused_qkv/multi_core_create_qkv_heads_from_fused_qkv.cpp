@@ -90,7 +90,6 @@ operation::ProgramWithCallbacks multi_core_create_qkv_heads_from_fused_qkv(const
     bool out_is_dram = q_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
             // interleaved accessor args
-            (std::uint32_t) static_cast<uint32_t>(cb_data_format),
             (std::uint32_t) in0_is_dram,
 
             // READER COMPILE TIME ARGS
@@ -99,7 +98,6 @@ operation::ProgramWithCallbacks multi_core_create_qkv_heads_from_fused_qkv(const
     };
     std::vector<uint32_t> writer_compile_time_args = {
             // interleaved accessor args
-            (std::uint32_t) static_cast<uint32_t>(cb_data_format),
             (std::uint32_t) out_is_dram,
 
             // WRITER COMPILE TIME ARGS

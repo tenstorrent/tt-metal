@@ -12,21 +12,21 @@ void kernel_main() {
 
     // COMPILE TIME ARGS
     // interleaved accessor args
-    constexpr DataFormat data_format             = static_cast<DataFormat>(get_compile_time_arg_val(0));
-    constexpr uint32_t out_is_dram               = get_compile_time_arg_val(1);
+    constexpr uint32_t out_is_dram               = get_compile_time_arg_val(0);
     // WRITER COMPILE TIME ARGS
-    #define block_size_is_one get_compile_time_arg_val(2) == 1
-    constexpr uint32_t block_size                = get_compile_time_arg_val(3);
-    constexpr uint32_t out_num_blocks_per_tensor = get_compile_time_arg_val(4);
-    constexpr uint32_t out_num_c_per_block       = get_compile_time_arg_val(5);
-    constexpr uint32_t out_w_tiles               = get_compile_time_arg_val(6);
-    constexpr uint32_t out_h_tiles               = get_compile_time_arg_val(7);
-    constexpr uint32_t out_HtWt                  = get_compile_time_arg_val(8);
+    #define block_size_is_one get_compile_time_arg_val(1) == 1
+    constexpr uint32_t block_size                = get_compile_time_arg_val(2);
+    constexpr uint32_t out_num_blocks_per_tensor = get_compile_time_arg_val(3);
+    constexpr uint32_t out_num_c_per_block       = get_compile_time_arg_val(4);
+    constexpr uint32_t out_w_tiles               = get_compile_time_arg_val(5);
+    constexpr uint32_t out_h_tiles               = get_compile_time_arg_val(6);
+    constexpr uint32_t out_HtWt                  = get_compile_time_arg_val(7);
 
 
     constexpr uint32_t cb_id_out0 = 16;
     constexpr uint32_t cb_id_out1 = 1; // same as cb_id_in1
-    uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0);
+    const uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0);
+    const DataFormat data_format = get_dataformat(cb_id_out0);
 
     constexpr bool out_is_dram_bool = out_is_dram == 1;
     const InterleavedAddrGenFast<out_is_dram_bool> sq = {

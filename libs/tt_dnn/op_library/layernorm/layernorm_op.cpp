@@ -156,7 +156,6 @@ operation::ProgramWithCallbacks layernorm_(
 
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
-        (std::uint32_t) static_cast<uint32_t>(cb_data_format),
         (std::uint32_t) is_dram(a),
         (std::uint32_t) is_dram(b),
         (std::uint32_t) is_dram(gamma),
@@ -192,7 +191,6 @@ operation::ProgramWithCallbacks layernorm_(
 
     std::vector<uint32_t> writer_compile_time_args = {
         // interleaved accessor args
-        (std::uint32_t) static_cast<uint32_t>(cb_data_format),
         (std::uint32_t) is_dram(output),
         (std::uint32_t) block_size
     };

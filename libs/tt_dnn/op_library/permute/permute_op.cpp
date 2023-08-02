@@ -5,14 +5,20 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
 
+#include <functional>
+
 using u32 = std::uint32_t;
 using namespace tt::constants;
+using namespace std::placeholders;
 
 namespace tt {
 
 namespace tt_metal {
 
-Tensor permute_(const Tensor &a, uint32_t N, uint32_t C, uint32_t H, uint32_t W) {
+Tensor permute_(const Tensor &a, uint32_t N, uint32_t C, uint32_t H, uint32_t W, const MemoryConfig& output_mem_config) {
+    auto transpose_wh = std::bind(tt::tt_metal::transpose_wh, _1, output_mem_config);
+    auto transpose_hc = std::bind(tt::tt_metal::transpose_hc, _1, output_mem_config);
+    auto transpose_cn = std::bind(tt::tt_metal::transpose_cn, _1, output_mem_config);
     if (N == 0 && C == 1 && H == 2 && W == 3) {
         return a;
     } else if (N == 0 && C == 1 && H == 3 && W == 2) {
@@ -67,7 +73,7 @@ Tensor permute_(const Tensor &a, uint32_t N, uint32_t C, uint32_t H, uint32_t W)
     return a;
 }
 
-Tensor permute(const Tensor &a, uint32_t N, uint32_t C, uint32_t H, uint32_t W) {
+Tensor permute(const Tensor &a, uint32_t N, uint32_t C, uint32_t H, uint32_t W, const MemoryConfig& output_mem_config) {
     Device * device;
 
     // Get the device
@@ -89,7 +95,7 @@ Tensor permute(const Tensor &a, uint32_t N, uint32_t C, uint32_t H, uint32_t W) 
     if (AutoFormat::check_input_tensor_format(a, a_pad_shape)) {
         formatted_input_tensor = AutoFormat::format_input_tensor(a, device, a_pad_shape, 0.0, Layout::TILE);
     }
-    auto output = permute_(formatted_input_tensor, N, C, H, W);
+    auto output = permute_(formatted_input_tensor, N, C, H, W, output_mem_config);
     return AutoFormat::format_output_tensor(output, out_shape, device, Layout::TILE);
 }
 

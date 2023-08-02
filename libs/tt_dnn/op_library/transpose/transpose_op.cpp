@@ -14,7 +14,6 @@ void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operands to transpose need to be on device!");
     TT_ASSERT(input_tensor.buffer() != nullptr , "Operands to transpose need to be allocated in buffers on device!");
-    TT_ASSERT((input_tensor.buffer()->buffer_type() == BufferType::DRAM));
     const auto shape = input_tensor.shape();
     u32 W = shape[3], H = shape[2], C = shape[1], N = shape[0];
     u32 HW = H*W;
@@ -22,12 +21,16 @@ void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
     TT_ASSERT(input_tensor.volume() % TILE_HW == 0);
     if (this->dim == TransposeOpDim::HC) {
         TT_ASSERT(C % TILE_HEIGHT == 0);
+        TT_ASSERT(input_tensor.dtype() == DataType::BFLOAT16);
     } else if (this->dim == TransposeOpDim::CW) {
         TT_ASSERT(C % TILE_WIDTH == 0);
+        TT_ASSERT(input_tensor.dtype() == DataType::BFLOAT16);
     } else if (this->dim == TransposeOpDim::NH) {
         TT_ASSERT(N % TILE_HEIGHT == 0);
+        TT_ASSERT(input_tensor.dtype() == DataType::BFLOAT16);
     } else if (this->dim == TransposeOpDim::NW) {
         TT_ASSERT(N % TILE_WIDTH == 0);
+        TT_ASSERT(input_tensor.dtype() == DataType::BFLOAT16);
     }
 }
 
@@ -67,7 +70,7 @@ std::vector<Shape> Transpose::compute_output_shapes(const std::vector<Tensor> &i
 
 std::vector<Tensor> Transpose::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, MemoryConfig{.interleaved = true});
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks Transpose::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -112,7 +115,7 @@ tt::stl::reflection::Attributes Transpose::attributes() const {
     };
 }
 
-inline Tensor transpose_(const Tensor &a, TransposeOpDim::Enum transpose_dim) {
+inline Tensor transpose_(const Tensor &a, TransposeOpDim::Enum transpose_dim, const MemoryConfig& output_mem_config) {
 
     bool pad_c = false;
     bool pad_n = false;
@@ -159,61 +162,23 @@ inline Tensor transpose_(const Tensor &a, TransposeOpDim::Enum transpose_dim) {
     }
 
     // TODO: Add pad_n to run_with_autoformat when needed
-    return operation::run_with_autoformat(Transpose{transpose_dim}, {a}, {}, 0, pad_c /*, pad_n */).at(0);
-}
-
-// provide access to transposes on a [n,c,h,w] ranked tensor @a
-Tensor transpose_(const Tensor &a,char dim_a, char dim_b) {
-    using txpfn_t = std::function<Tensor(const Tensor&)>;
-
-    std::string value(3,'\0');
-    value[0] = tolower(dim_a);
-    value[1] = tolower(dim_b);
-
-    static std::map<std::string,txpfn_t> txpmap = {
-        {"wh",transpose_wh},
-        {"hw",transpose_wh},
-
-        {"hc",transpose_hc},
-        {"ch",transpose_hc},
-
-        {"cn",transpose_cn},
-        {"nc",transpose_cn},
-
-        {"nh",transpose_nh},
-        {"hn",transpose_nh},
-
-        {"nw",transpose_nw},
-        {"wn",transpose_nw},
-
-        {"cw",transpose_cw},
-        {"wc",transpose_cw},
-    };
-
-    TT_ASSERT( txpmap.find(value) != txpmap.end() && "cannot find a transpose function for chosen dimensions");
-
-    return txpmap[value](a);
-}
-
-Tensor transpose_(const Tensor &a,std::array<uint32_t,2> dim_a_b) {
-    static const char* dims = "NCHW";
-    return transpose_(a,dims[dim_a_b[0]],dims[dim_a_b[1]]);
+    return operation::run_with_autoformat(Transpose{transpose_dim, output_mem_config}, {a}, {}, 0, pad_c /*, pad_n */).at(0);
 }
 
 // TODO: Don't bind transpose as transpose_wh, should explicitly bind like the others
 // Alternatively, bind only 1 transpose function and take 2 dims to transpose
-Tensor transpose(const Tensor &a) { return transpose_(a, TransposeOpDim::WH); }
+Tensor transpose(const Tensor &a, const MemoryConfig& output_mem_config) { return transpose_(a, TransposeOpDim::WH, output_mem_config); }
 // 4 choose 2 = 6 transposes on NCHW rank-4 tensors without order.
 // Unique transposes : ('n', 'c'), ('n', 'h'), ('n', 'w'), ('c', 'h'), ('c', 'w'), ('h', 'w')
-Tensor transpose_wh(const Tensor &a) { return transpose_(a, TransposeOpDim::WH); }
-Tensor transpose_hc(const Tensor &a) { return transpose_(a, TransposeOpDim::HC); }
-Tensor transpose_cn(const Tensor &a) { return transpose_(a, TransposeOpDim::CN); }
+Tensor transpose_wh(const Tensor &a, const MemoryConfig& output_mem_config) { return transpose_(a, TransposeOpDim::WH, output_mem_config); }
+Tensor transpose_hc(const Tensor &a, const MemoryConfig& output_mem_config) { return transpose_(a, TransposeOpDim::HC, output_mem_config); }
+Tensor transpose_cn(const Tensor &a, const MemoryConfig& output_mem_config) { return transpose_(a, TransposeOpDim::CN, output_mem_config); }
 
-Tensor transpose_nh(const Tensor &a) { return permute(a,2,1,0,3); }
-Tensor transpose_nw(const Tensor &a) { return permute(a,3,1,2,0); }
-Tensor transpose_cw(const Tensor &a) { return permute(a,0,3,2,1); }
+Tensor transpose_nh(const Tensor &a, const MemoryConfig& output_mem_config) { return permute(a,2,1,0,3, output_mem_config); }
+Tensor transpose_nw(const Tensor &a, const MemoryConfig& output_mem_config) { return permute(a,3,1,2,0, output_mem_config); }
+Tensor transpose_cw(const Tensor &a, const MemoryConfig& output_mem_config) { return permute(a,0,3,2,1, output_mem_config); }
 
-Tensor transpose(const Tensor &a, uint dim1, uint dim2) {
+Tensor transpose(const Tensor &a, uint dim1, uint dim2, const MemoryConfig& output_mem_config) {
     TT_ASSERT( dim1 <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
     TT_ASSERT( dim2 <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
 
@@ -247,6 +212,28 @@ Tensor transpose(const Tensor &a, uint dim1, uint dim2) {
     }
     TT_ASSERT(false,"unreachable");
     return a;
+}
+
+Tensor transpose(const Tensor &a, std::array<uint32_t,2> dim_a_b, const MemoryConfig& output_mem_config) {
+    return transpose(a, dim_a_b[0], dim_a_b[1], output_mem_config);
+}
+
+// provide access to transposes on a [n,c,h,w] ranked tensor @a
+Tensor transpose(const Tensor &a, char dim_a, char dim_b, const MemoryConfig& output_mem_config) {
+
+    auto char_to_int_dim = [](char &char_dim) {
+        switch(tolower(char_dim)) {
+            case 'w': return 3;
+            case 'h': return 2;
+            case 'c': return 1;
+            case 'n': return 0;
+            default: TT_ASSERT("Unknown dim specified");
+        }
+        return 0;
+    };
+
+    uint32_t dim1 = char_to_int_dim(dim_a), dim2 = char_to_int_dim(dim_b);
+    return transpose(a, dim1, dim2, output_mem_config);
 }
 
 }  // namespace tt_metal

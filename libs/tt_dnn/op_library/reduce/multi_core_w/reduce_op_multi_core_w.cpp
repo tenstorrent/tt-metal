@@ -73,18 +73,17 @@ operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &a, Tensor& out
 
     tt_metal::Buffer *src_buffer = a.buffer();
     bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(DataFormat::Float16_b), (uint32_t)src_is_dram};
+    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram, uint32_t(*reinterpret_cast<uint32_t*>(&scaler))};
     tt_metal::Buffer *dst_buffer = output.buffer();
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) output_cb_index,
-        static_cast<uint32_t>(DataFormat::Float16_b),
         (std::uint32_t) dst_is_dram
     };
 
     tt_metal::KernelID reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_unary_interleaved_start_id_reduce.cpp",
+        "tt_metal/kernels/dataflow/reader_unary_reduce_interleaved_start_id.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
@@ -96,7 +95,6 @@ operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &a, Tensor& out
 
     std::map<string, string> reduce_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);
     vector<uint32_t> compute_kernel_args_group_1 = {
-        uint32_t(*reinterpret_cast<uint32_t*>(&scaler)), // scaler
         num_rows_per_core_group_1, // Ht
         Wt, // Wt
         1, // NC
@@ -111,7 +109,6 @@ operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &a, Tensor& out
 
     if(!core_group_2.ranges().empty()){
         vector<uint32_t> compute_kernel_args_group_2 = {
-            uint32_t(*reinterpret_cast<uint32_t*>(&scaler)), // scaler
             num_rows_per_core_group_2, // Ht
             Wt, // Wt
             1, // NC
@@ -142,8 +139,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &a, Tensor& out
             {
                 a.buffer()->address(),
                 num_tensor_tiles_per_core,
-                num_tiles_read, // tile index of row to start reading from
-                uint32_t(*reinterpret_cast<uint32_t*>(&scaler)), // scaler
+                num_tiles_read // tile index of row to start reading from
             }
         );
 

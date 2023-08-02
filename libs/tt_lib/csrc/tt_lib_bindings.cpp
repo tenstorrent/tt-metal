@@ -265,6 +265,10 @@ void bind_unary_op(py::module_ &module, std::string op_name, Func &&f, std::stri
     std::string docstring = fmt::format(R"doc(
         {0}
 
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
         .. csv-table::
             :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
@@ -2072,41 +2076,44 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     // *** tensor manipulation ***
-    m_tensor.def("concat", py::overload_cast<Tensor&,Tensor&,uint32_t>(&concat), R"doc(
-        Concatennates shape of tensors ``arg0`` and ``arg1`` to new shape ``[W, Z, Y, X]`` along the specified dimension ``arg2``.
+    m_tensor.def("concat", py::overload_cast<Tensor&, Tensor&, uint32_t, const MemoryConfig&>(&concat),
+        py::arg().noconvert(), py::arg().noconvert(), py::arg(), py::arg("output_mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        Concatenates shape of tensors ``arg0`` and ``arg1`` to new shape ``[W, Z, Y, X]`` along the specified dimension ``arg2``.
 
-        Input tensors must be on device, in ROW MAJOR layout, and have BFLOAT16 data type.
-
-        Output tensor will be on device, in same layout, and have BFLOAT16 data type.
-
-        +----------+--------------------------------+------------+--------------------------------------------------------+----------+
-        | Argument | Description                    | Data type  | Valid range                                            | Required |
-        +==========+================================+============+========================================================+==========+
-        | arg0     | Input tensor                   | Tensor     | Tensor of shape [W, Z, Y, X], where Y%32=0 and X%32=0  | Yes      |
-        +----------+--------------------------------+------------+--------------------------------------------------------+----------+
-        | arg1     | Input tensor                   | Tensor     | Tensor of shape [W, Z, Y, X], where Y%32=0 and X%32=0  | Yes      |
-        +----------+--------------------------------+------------+--------------------------------------------------------+----------+
-        | arg2     | dimension of concat            | int        |                                                        | Yes      |
-        +----------+--------------------------------+------------+--------------------------------------------------------+----------+
-    )doc");
-
-    m_tensor.def("concat", py::overload_cast<std::vector<Tensor>&,uint32_t>(&concat), R"doc(
-        Concatennates shape of tensors ``arg0`` and ``arg1`` to new shape ``[W, Z, Y, X]`` along the specified dimension ``arg2``.
-
-        Input tensors must be on device, in ROW MAJOR layout, and have BFLOAT16 data type.
+        Input tensors must be on device, in ROW MAJOR or TILE layout, and have BFLOAT16 data type.
 
         Output tensor will be on device, in same layout, and have BFLOAT16 data type.
 
         +----------+--------------------------------+------------+--------------------------------------------------------+----------+
         | Argument | Description                    | Data type  | Valid range                                            | Required |
         +==========+================================+============+========================================================+==========+
-        | arg0     | List of Input tensors          | Tensor     | Tensor of shape [W, Z, Y, X], where Y%32=0 and X%32=0  | Yes      |
+        | arg0     | Input tensor                   | Tensor     | Tensor of shape [W, Z, Y, X], where concat dim %32=0   | Yes      |
+        +----------+--------------------------------+------------+--------------------------------------------------------+----------+
+        | arg1     | Input tensor                   | Tensor     | Tensor of shape [W, Z, Y, X], where concat dim %32=0   | Yes      |
         +----------+--------------------------------+------------+--------------------------------------------------------+----------+
         | arg2     | dimension of concat            | int        |                                                        | Yes      |
         +----------+--------------------------------+------------+--------------------------------------------------------+----------+
     )doc");
 
-    m_tensor.def("reshape", &reshape, R"doc(
+    m_tensor.def("concat", py::overload_cast<std::vector<Tensor>&, uint32_t, const MemoryConfig&>(&concat),
+        py::arg().noconvert(), py::arg(), py::arg("output_mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        Concatenates shape of tensors ``arg0`` and ``arg1`` to new shape ``[W, Z, Y, X]`` along the specified dimension ``arg1``.
+
+        Input tensors must be on device, in ROW MAJOR or TILE layout, and have BFLOAT16 data type.
+
+        Output tensor will be on device, in same layout, and have BFLOAT16 data type.
+
+        +----------+--------------------------------+------------+--------------------------------------------------------+----------+
+        | Argument | Description                    | Data type  | Valid range                                            | Required |
+        +==========+================================+============+========================================================+==========+
+        | arg0     | List of Input tensors          | Tensor     | Tensor of shape [W, Z, Y, X], where concat dim %32=0   | Yes      |
+        +----------+--------------------------------+------------+--------------------------------------------------------+----------+
+        | arg1     | dimension of concat            | int        |                                                        | Yes      |
+        +----------+--------------------------------+------------+--------------------------------------------------------+----------+
+    )doc");
+
+    m_tensor.def("reshape", &reshape,
+        py::arg("input").noconvert(), py::arg("W"), py::arg("Z"), py::arg("Y"), py::arg("X"), py::arg("output_mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Returns a tensor with the new shape of ``[W, Z, Y, X]``. The X dimension of input and output tensor must have same size.
 
         Input tensor must be on host device, in TILE layout, and have BFLOAT16 data type.
@@ -2116,15 +2123,15 @@ void TensorModule(py::module &m_tensor) {
         +----------+--------------------------------+------------+--------------------------------------------------------+----------+
         | Argument | Description                    | Data type  | Valid range                                            | Required |
         +==========+================================+============+========================================================+==========+
-        | arg0     | Input tensor                   | Tensor     | Tensor of shape [W, Z, Y, X], where Y%32=0 and X%32=0  | Yes      |
+        | input    | Input tensor                   | Tensor     | Tensor of shape [W, Z, Y, X], where Y%32=0 and X%32=0  | Yes      |
         +----------+--------------------------------+------------+--------------------------------------------------------+----------+
-        | arg1     | W dim of output tensor         | int        |                                                        | Yes      |
+        | W        | W dim of output tensor         | int        |                                                        | Yes      |
         +----------+--------------------------------+------------+--------------------------------------------------------+----------+
-        | arg2     | Z dim of output tensor         | int        |                                                        | Yes      |
+        | Z        | Z dim of output tensor         | int        |                                                        | Yes      |
         +----------+--------------------------------+------------+--------------------------------------------------------+----------+
-        | arg3     | Y dim of output tensor         | int        | Y%32=0                                                 | Yes      |
+        | Y        | Y dim of output tensor         | int        | Y%32=0                                                 | Yes      |
         +----------+--------------------------------+------------+--------------------------------------------------------+----------+
-        | arg4     | X dim of output tensor         | int        | X%32=0                                                 | Yes      |
+        | X        | X dim of output tensor         | int        | X%32=0                                                 | Yes      |
         +----------+--------------------------------+------------+--------------------------------------------------------+----------+
     )doc");
 
@@ -2144,126 +2151,44 @@ void TensorModule(py::module &m_tensor) {
         +----------+--------------------------------+------------+-------------------------------+----------+
     )doc");
 
-    m_tensor.def("transpose", py::overload_cast<const Tensor&,uint,uint>(&transpose), R"doc(
+    m_tensor.def("transpose", py::overload_cast<const Tensor&, uint, uint, const MemoryConfig&>(&transpose),
+        py::arg("input").noconvert(), py::arg("dim0"), py::arg("dim1"), py::arg("output_mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``arg1`` and ``arg2`` are swapped.
 
         Input tensor must have BFLOAT16 data type. Second and third input specify the dimensions of tensor to be transposed.
 
         Output tensor will have BFLOAT16 data type.
 
-        +----------+--------------------------------+------------+-------------------------------+----------+
-        | Argument | Description                    | Data type  | Valid range                   | Required |
-        +==========+================================+============+===============================+==========+
-        | arg0     | Input tensor                   | Tensor     | Tensor of shape [W, Z, Y, X]  | Yes      |
-        +----------+--------------------------------+------------+-------------------------------+----------+
-        | arg1     | dimension to transpose         | uint       | 0, 1, 2, or 3                 | Yes      |
-        +----------+--------------------------------+------------+-------------------------------+----------+
-        | arg2     | dimension to transpose         | uint       | 0, 1, 2, or 3                 | Yes      |
-        +----------+--------------------------------+------------+-------------------------------+----------+
+        .. csv-table::
+            :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+            "input", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+            "dim0", "dimension to transpose", "uint", "0, 1, 2, or 3", "Yes"
+            "dim1", "dimension to transpose", "uint", "0, 1, 2, or 3", "Yes"
+            "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
     )doc");
 
     //transpose = transpose_wh
-    m_tensor.def("transpose", py::overload_cast<const Tensor&>(&transpose), R"doc(
-        Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``X`` and ``Y`` are swapped.
+    detail::bind_unary_op(m_tensor, "transpose", py::overload_cast<const Tensor&, const MemoryConfig&>(&transpose), R"doc(Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``X`` and ``Y`` are swapped.)doc");
+    detail::bind_unary_op(m_tensor, "transpose_hc", &transpose_hc, R"doc(Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``Y`` and ``Z`` are swapped.)doc");
+    detail::bind_unary_op(m_tensor, "transpose_cn", &transpose_cn, R"doc(Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``Z`` and ``W`` are swapped.)doc");
+    detail::bind_unary_op(m_tensor, "transpose_nh", &transpose_nh, R"doc(Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``W`` and ``Y`` are swapped.)doc");
+    detail::bind_unary_op(m_tensor, "transpose_cw", &transpose_cw, R"doc(Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``Z`` and ``X`` are swapped.)doc");
+    detail::bind_unary_op(m_tensor, "transpose_nw", &transpose_nw, R"doc(Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``W`` and ``X`` are swapped.)doc");
 
-        Input tensor must have BFLOAT16 data type.
-
-        Output tensor will have BFLOAT16 data type.
-
-        +----------+--------------------------------+------------+-------------------------------+----------+
-        | Argument | Description                    | Data type  | Valid range                   | Required |
-        +==========+================================+============+===============================+==========+
-        | arg0     | Input tensor                   | Tensor     | Tensor of shape [W, Z, Y, X]  | Yes      |
-        +----------+--------------------------------+------------+-------------------------------+----------+
-    )doc");
-
-    m_tensor.def("transpose_hc", &transpose_hc, R"doc(
-        Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``Y`` and ``Z`` are swapped.
-
-        Input tensor must have BFLOAT16 data type.
-
-        Output tensor will have BFLOAT16 data type.
-
-        +----------+--------------------------------+------------+-------------------------------+----------+
-        | Argument | Description                    | Data type  | Valid range                   | Required |
-        +==========+================================+============+===============================+==========+
-        | arg0     | Input tensor                   | Tensor     | Tensor of shape [W, Z, Y, X]  | Yes      |
-        +----------+--------------------------------+------------+-------------------------------+----------+
-    )doc");
-
-    m_tensor.def("transpose_cn", &transpose_cn, R"doc(
-        Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``Z`` and ``W`` are swapped.
-
-        Input tensor must have BFLOAT16 data type.
-
-        Output tensor will have BFLOAT16 data type.
-
-        +----------+--------------------------------+------------+-------------------------------+----------+
-        | Argument | Description                    | Data type  | Valid range                   | Required |
-        +==========+================================+============+===============================+==========+
-        | arg0     | Input tensor                   | Tensor     | Tensor of shape [W, Z, Y, X]  | Yes      |
-        +----------+--------------------------------+------------+-------------------------------+----------+
-    )doc");
-
-
-    m_tensor.def("transpose_nh", &transpose_nh, R"doc(
-        Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``W`` and ``Y`` are swapped.
-
-        Input tensor must have BFLOAT16 data type.
-
-        Output tensor will have BFLOAT16 data type.
-
-        +----------+--------------------------------+------------+-------------------------------+----------+
-        | Argument | Description                    | Data type  | Valid range                   | Required |
-        +==========+================================+============+===============================+==========+
-        | arg0     | Input tensor                   | Tensor     | Tensor of shape [W, Z, Y, X]  | Yes      |
-        +----------+--------------------------------+------------+-------------------------------+----------+
-    )doc");
-
-    m_tensor.def("transpose_cw", &transpose_cw, R"doc(
-        Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``Z`` and ``X`` are swapped.
-
-        Input tensor must have BFLOAT16 data type.
-
-        Output tensor will have BFLOAT16 data type.
-
-        +----------+--------------------------------+------------+-------------------------------+----------+
-        | Argument | Description                    | Data type  | Valid range                   | Required |
-        +==========+================================+============+===============================+==========+
-        | arg0     | Input tensor                   | Tensor     | Tensor of shape [W, Z, Y, X]  | Yes      |
-        +----------+--------------------------------+------------+-------------------------------+----------+
-    )doc");
-
-    m_tensor.def("transpose_nw", &transpose_nw, R"doc(
-        Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``W`` and ``X`` are swapped.
-
-        Input tensor must have BFLOAT16 data type.
-
-        Output tensor will have BFLOAT16 data type.
-
-        +----------+--------------------------------+------------+-------------------------------+----------+
-        | Argument | Description                    | Data type  | Valid range                   | Required |
-        +==========+================================+============+===============================+==========+
-        | arg0     | Input tensor                   | Tensor     | Tensor of shape [W, Z, Y, X]  | Yes      |
-        +----------+--------------------------------+------------+-------------------------------+----------+
-    )doc");
-
-    m_tensor.def("permute", &permute, R"doc(
+    m_tensor.def("permute", &permute,
+        py::arg("input").noconvert(), py::arg("W"), py::arg("Z"), py::arg("Y"), py::arg("X"), py::arg("output_mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Returns a tensor that is input tensor ``arg0`` with its dimensions permuted to new order ``[arg1, arg2, arg3, arg4]``.
 
-        +----------+----------------------+-----------+------------------------------------+----------+
-        | Argument | Description          | Data type | Valid range                        | Required |
-        +==========+======================+===========+====================================+==========+
-        | arg0     | Input tensor         | Tensor    |                                    | Yes      |
-        +----------+----------------------+-----------+------------------------------------+----------+
-        | arg1     | Dim to become W      | int       | Unique value between [0, num dims) | Yes      |
-        +----------+----------------------+-----------+------------------------------------+----------+
-        | arg2     | Dim to become Z      | int       | Unique value between [0, num dims) | Yes      |
-        +----------+----------------------+-----------+------------------------------------+----------+
-        | arg3     | Dim to become Y      | int       | Unique value between [0, num dims) | Yes      |
-        +----------+----------------------+-----------+------------------------------------+----------+
-        | arg4     | Dim to become X      | int       | Unique value between [0, num dims) | Yes      |
-        +----------+----------------------+-----------+------------------------------------+----------+
+        .. csv-table::
+            :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+            "input", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+            "W", "Dim to become W", "int", "Unique value between [0, num dims)", "Yes"
+            "Z", "Dim to become Z", "int", "Unique value between [0, num dims)", "Yes"
+            "Y", "Dim to become Y", "int", "Unique value between [0, num dims)", "Yes"
+            "X", "Dim to become X", "int", "Unique value between [0, num dims)", "Yes"
+            "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
     )doc");
 
     m_tensor.def("tilize", &tilize,
@@ -2421,34 +2346,28 @@ void TensorModule(py::module &m_tensor) {
     // *** broadcast and reduce ***
     m_tensor.def("bcast", &bcast,
         py::arg().noconvert(), py::arg().noconvert(), py::arg("math_op"), py::arg("dim"), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
-        Perform a binary elementwise operation ``arg2`` between tensors ``arg0`` and ``arg1``, where values from tensor ``arg1`` are broadcast.
+        Perform a binary elementwise operation ``math_op`` between tensors ``input`` and ``other``, where values from tensor ``other`` are broadcast.
 
-        Let tensor ``arg0`` have shape ``[W0, Z0, Y0, X0]`` and tensor ``arg1`` shape ``[W1, Z1, Y1, X1]``. ``arg3`` determines the type of broadcast performed.
+        Let tensor ``input`` have shape ``[W0, Z0, Y0, X0]`` and tensor ``other`` shape ``[W1, Z1, Y1, X1]``. ``arg3`` determines the type of broadcast performed.
 
-        For ``arg3=BcastOpDim::W`` broadcast is performed on dimension ``X``. ``Y0`` and ``Y1`` must be the same and either (W1=1 and Z1=1) or (W0=W1 and Z0=Z1).
+        For ``dim=BcastOpDim::W`` broadcast is performed on dimension ``X``. ``Y0`` and ``Y1`` must be the same and either (W1=1 and Z1=1) or (W0=W1 and Z0=Z1).
 
-        For ``arg3=BcastOpDim::H`` broadcast is performed on dimension  ``Y``. ``X0`` and ``X1`` must be the same and either (W1=1 and Z1=1) or (W0=W1 and Z0=Z1).
+        For ``dim=BcastOpDim::H`` broadcast is performed on dimension  ``Y``. ``X0`` and ``X1`` must be the same and either (W1=1 and Z1=1) or (W0=W1 and Z0=Z1).
 
-        For ``arg3=BcastOpDim::HW`` broadcast is performed on dimensions ``X`` and ``Y``. Either (W1=1 and Z1=1) or (W0=W1 and Z0=Z1) must hold for input shapes.
+        For ``dim=BcastOpDim::HW`` broadcast is performed on dimensions ``X`` and ``Y``. Either (W1=1 and Z1=1) or (W0=W1 and Z0=Z1) must hold for input shapes.
 
         Both input tensors must have BFLOAT16 data type.
 
         Output tensor will have BFLOAT16 data type.
 
-        +------------+------------------------------------+--------------+-------------------------------------------------------------+----------+
-        | Argument   | Description                        | Data type    | Valid range                                                 | Required |
-        +============+====================================+==============+=============================================================+==========+
-        | arg0       | Input tensor                       | Tensor       | Tensor of shape [W0, Z0, Y0, X0], where Y0%32=0 and X0%32=0 | Yes      |
-        +------------+------------------------------------+--------------+-------------------------------------------------------------+----------+
-        | arg1       | Input tensor                       | Tensor       | Tensor of shape [W1, Z1, Y1, X1], where Y1%32=0 and X1%32=0 | Yes      |
-        +------------+------------------------------------+--------------+-------------------------------------------------------------+----------+
-        | arg2       | Math operation to perform          | BcastOpMath  | ADD, SUB, MUL                                               | Yes      |
-        +------------+------------------------------------+--------------+-------------------------------------------------------------+----------+
-        | arg3       | Dimension on which to broadcast    | BcastOpDim   | W, H, HW                                                    | Yes      |
-        +------------+------------------------------------+--------------+-------------------------------------------------------------+----------+
-        | mem_config | Layout of tensor in TT Accelerator | MemoryConfig | Default is interleaved in DRAM                              | No       |
-        |            | device memory banks                |              |                                                             |          |
-        +------------+------------------------------------+--------------+-------------------------------------------------------------+----------+
+        .. csv-table::
+            :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+            "input", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+            "other", "Input tensor to broadcast", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+            "math_op", "Aggregating math operation", " BcastOpMath", "ADD, SUB< MUL", "Yes"
+            "dim", "Dimension on which to broadcast", "BcastOpDim", "W, H, HW", "Yes"
+            "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
     )doc");
 
     m_tensor.def("bcast_without_autoformat", &bcast_without_autoformat,
@@ -2485,7 +2404,8 @@ void TensorModule(py::module &m_tensor) {
         +------------+------------------------------------+--------------+-------------------------------------------------------------+----------+
     )doc");
 
-    m_tensor.def("reduce", &reduce, R"doc(
+    m_tensor.def("reduce", &reduce,
+        py::arg("input").noconvert(), py::arg("math_op"), py::arg("dim"), py::arg("scaler"), py::arg("output_mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Perform a reduction of input tensor ``arg0`` using mathematical operation ``arg1`` on dimension ``arg2``.
 
         For ``arg2=ReduceOpDim::W`` reduce is done on dimension X.
@@ -2498,21 +2418,18 @@ void TensorModule(py::module &m_tensor) {
 
         Output tensor will have BFLOAT16 data type.
 
-        +----------+---------------------------------------------------------+---------------+-------------------------------------------------------+----------+
-        | Argument | Description                                             | Data type     | Valid range                                           | Required |
-        +==========+=========================================================+===============+=======================================================+==========+
-        | arg0     | Input tensor                                            | Tensor        | Tensor of shape [W, Z, Y, X], where Y%32=0 and X%32=0 | Yes      |
-        +----------+---------------------------------------------------------+---------------+-------------------------------------------------------+----------+
-        | arg1     | Aggregating math operation                              | ReduceOpMath  | SUM, MAX                                              | Yes      |
-        +----------+---------------------------------------------------------+---------------+-------------------------------------------------------+----------+
-        | arg2     | Dimension on which reduction is performed               | ReduceOpDim   | W, H, HW                                              | Yes      |
-        +----------+---------------------------------------------------------+---------------+-------------------------------------------------------+----------+
-        | arg3     | Scaling factor applied to each element of output tensor | float         | For HW reduction only value 1.0f is supported         | Yes      |
-        +----------+---------------------------------------------------------+---------------+-------------------------------------------------------+----------+
+        .. csv-table::
+            :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+            "input", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+            "math_op", "Aggregating math operation", " ReduceOpMath", "SUM, MAX", "Yes"
+            "dim", "Dimension on which reduction is performed", "ReduceOpDim", "W, H, HW", "Yes"
+            "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
     )doc");
 
     // *** experimental operations ***
-    m_tensor.def("fill_rm", &fill_rm, R"doc(
+    m_tensor.def("fill_rm", &fill_rm,
+        py::arg("N"), py::arg("C"), py::arg("H"), py::arg("W"), py::arg("hOnes"), py::arg("wOnes"), py::arg("any").noconvert(), py::arg("val_hi"), py::arg("val_lo"), py::arg("output_mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Generates an NCHW row-major tensor and fill it with high values up to
         hOnes, wOnes in each HW tile with the rest padded with high values. So
         for H=2, W=3, hFill=1, wFill=2 the following tensor will be generated:
@@ -2554,7 +2471,8 @@ void TensorModule(py::module &m_tensor) {
         | val_lo   | Low value to use                                                      | float                 |                        | Yes      |
         +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
     )doc");
-    m_tensor.def("fill_ones_rm", &fill_ones_rm, R"doc(
+    m_tensor.def("fill_ones_rm", &fill_ones_rm,
+        py::arg("N"), py::arg("C"), py::arg("H"), py::arg("W"), py::arg("hOnes"), py::arg("wOnes"), py::arg("any").noconvert(), py::arg("output_mem_config") = MemoryConfig{.interleaved = true}, R"doc(
         Same as ``fill_rm``, but ``val_hi`` is set to ``1`` and ``val_lo`` is
         ``0``.
 

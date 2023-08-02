@@ -7,12 +7,12 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    constexpr DataFormat data_format = static_cast<DataFormat>(get_compile_time_arg_val(1));
-    constexpr bool dst_is_dram = get_compile_time_arg_val(2) == 1;
+    constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
 
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
-    uint32_t tile_bytes = get_tile_size(cb_id_out);
+    const uint32_t tile_bytes = get_tile_size(cb_id_out);
+    const DataFormat data_format = get_dataformat(cb_id_out);
 
     const InterleavedAddrGenFast<dst_is_dram> s = {
         .bank_base_address = dst_addr,

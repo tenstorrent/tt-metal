@@ -11,17 +11,19 @@ void kernel_main() {
     uint32_t CHtWt = get_arg_val<uint32_t>(6);
     uint32_t NCHtWt = get_arg_val<uint32_t>(7);
 
+    constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
+
     constexpr uint32_t cb_id_in0 = 0;
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
-    uint32_t tile_bytes = get_tile_size(cb_id_in0);
+    const uint32_t tile_bytes = get_tile_size(cb_id_in0);
+    const DataFormat data_format = get_dataformat(cb_id_in0);
 
-    const InterleavedPow2AddrGen<true> s = {
+    const InterleavedAddrGenFast<src_is_dram> s = {
         .bank_base_address = src_addr,
-
-
-        .log_base_2_of_page_size = 11
+        .page_size = tile_bytes,
+        .data_format = data_format
     };
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
@@ -30,10 +32,9 @@ void kernel_main() {
         for (uint32_t n = 0; n < N; n++) {
             for (uint32_t h = 0; h < Ht; h++) {
                 for (uint32_t w = 0; w < Wt; w++) {
-                    uint64_t src_noc_addr = get_noc_addr(i, s);
                     cb_reserve_back(cb_id_in0, onetile);
                     uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-                    noc_async_read(src_noc_addr, l1_write_addr, tile_bytes);
+                    noc_async_read_tile(i, s, l1_write_addr);
                     noc_async_read_barrier();
                     cb_push_back(cb_id_in0, onetile);
                     i++;

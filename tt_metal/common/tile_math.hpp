@@ -12,3 +12,7 @@ inline std::uint32_t divup(std::uint32_t a, std::uint32_t b) {
 inline std::uint32_t roundup(std::uint32_t a, std::uint32_t b) {
     return b*divup(a, b);
 }
+
+inline std::uint32_t rounddown(std::uint32_t a, std::uint32_t b) {
+    return  a / b * b;
+}

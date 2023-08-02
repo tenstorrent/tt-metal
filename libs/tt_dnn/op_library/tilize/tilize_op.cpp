@@ -111,7 +111,6 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
     bool out_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) output_cb_index,
-        static_cast<uint32_t>(DataFormat::Float16_b),
         (std::uint32_t) out_is_dram
     };
 
@@ -233,13 +232,13 @@ tt::stl::reflection::Attributes Tilize::attributes() const {
     };
 }
 
-Tensor tilize(const Tensor &input_tensor_a, const MemoryConfig& mem_config) {
+Tensor tilize(const Tensor &input_tensor_a, const MemoryConfig& output_mem_config) {
     // No-op (Will do a tensor copy)
     if (input_tensor_a.layout() == Layout::TILE) {
         log_warning("Perf warning: tilize called on already tilized tensor.");
         return input_tensor_a;
     }
-    return operation::run_without_autoformat(Tilize{mem_config}, {input_tensor_a}).at(0);
+    return operation::run_without_autoformat(Tilize{output_mem_config}, {input_tensor_a}).at(0);
 }
 
 operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor &a, Tensor& output, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value) {
@@ -378,7 +377,6 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
     bool out_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) output_cb_index,
-        static_cast<uint32_t>(DataFormat::Float16_b),
         (std::uint32_t) out_is_dram
     };
 
@@ -510,7 +508,7 @@ tt::stl::reflection::Attributes TilizeWithValPadding::attributes() const {
     };
 }
 
-Tensor tilize_with_val_padding(const Tensor &input_tensor_a, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value, const MemoryConfig& mem_config) {
+Tensor tilize_with_val_padding(const Tensor &input_tensor_a, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value, const MemoryConfig& output_mem_config) {
     // No-op (Will do a tensor copy)
     // TODO: We need to run asserts before this
     if (input_tensor_a.layout() == Layout::TILE) {
@@ -521,11 +519,11 @@ Tensor tilize_with_val_padding(const Tensor &input_tensor_a, const Shape &output
             TT_ASSERT(false, "Cannot tilize and pad tensor that is already tilized");
         }
     }
-    return operation::run_without_autoformat(TilizeWithValPadding{output_tensor_shape, input_tensor_start, pad_value, mem_config}, {input_tensor_a}).at(0);
+    return operation::run_without_autoformat(TilizeWithValPadding{output_tensor_shape, input_tensor_start, pad_value, output_mem_config}, {input_tensor_a}).at(0);
 
 }
 
-Tensor tilize_with_zero_padding(const Tensor &input_tensor_a, const MemoryConfig& mem_config) {
+Tensor tilize_with_zero_padding(const Tensor &input_tensor_a, const MemoryConfig& output_mem_config) {
     // No-op (Will do a tensor copy)
     if (input_tensor_a.layout() == Layout::TILE) {
         log_warning("Perf warning: tilize called on already tilized tensor.");
@@ -536,7 +534,7 @@ Tensor tilize_with_zero_padding(const Tensor &input_tensor_a, const MemoryConfig
 
     shape[2] = roundup(shape[2], TILE_HEIGHT);
     shape[3] = roundup(shape[3], TILE_WIDTH);
-    return tilize_with_val_padding(input_tensor_a, shape, {0, 0, 0, 0}, 0, mem_config);
+    return tilize_with_val_padding(input_tensor_a, shape, {0, 0, 0, 0}, 0, output_mem_config);
 }
 
 }  // namespace tt_metal

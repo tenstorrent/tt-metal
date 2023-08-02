@@ -66,16 +66,13 @@ operation::ProgramWithCallbacks eltwise_binary_single_core(const Tensor &a, cons
     bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
-        static_cast<uint32_t>(src0_cb_data_format),
         (std::uint32_t) src0_is_dram,
-        static_cast<uint32_t>(src1_cb_data_format),
         (std::uint32_t) src1_is_dram
     };
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) output_cb_index,
-        static_cast<uint32_t>(dst_cb_data_format),
         (std::uint32_t) dst_is_dram
     };
 

@@ -135,10 +135,10 @@ operation::ProgramWithCallbacks create_program(
 
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(cb_data_format), (uint32_t)in0_is_dram, (uint32_t)in1_is_dram};
+    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)in0_is_dram, (uint32_t)in1_is_dram};
 
     bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(cb_data_format), (uint32_t)out_is_dram};
+    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)out_is_dram};
 
     // Create reader and writer kernels per core
     auto mm_reader_kernel_id = tt_metal::CreateDataMovementKernel(

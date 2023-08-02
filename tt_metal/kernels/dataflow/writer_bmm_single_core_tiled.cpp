@@ -13,11 +13,11 @@ void kernel_main() {
     uint32_t out_subblock_tile_count    = get_arg_val<uint32_t>(8);
     uint32_t out_num_subblocks_w        = get_arg_val<uint32_t>(9);
     uint32_t out_num_subblocks_h        = get_arg_val<uint32_t>(10);
-    DataFormat out_df = static_cast<DataFormat>(get_arg_val<uint32_t>(11));
 
     constexpr uint32_t out_cb_id = tt::CB::c_out0;
 
     const uint32_t tile_nbytes = get_tile_size(out_cb_id);
+    const DataFormat out_df = get_dataformat(out_cb_id);
 
     // constexpr uint32_t tile_size_pow2_exponent = 11;    // == 2^11 = 2048 = 2 * 32 * 32 (assuming dtype = 2 bytes)
     // const InterleavedPow2AddrGen<true> s = {

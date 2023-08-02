@@ -23,35 +23,34 @@ void kernel_main() {
 
     // COMPILE TIME ARGS
     // interleaved accessor args
-    constexpr DataFormat output_data_format               = static_cast<DataFormat>(get_compile_time_arg_val(0));
-    constexpr bool out_is_dram                            = get_compile_time_arg_val(1) == 1;
+    constexpr bool out_is_dram                            = get_compile_time_arg_val(0) == 1;
 
     // READER
     // in1 block args
-    constexpr uint32_t in1_block_num_tiles                = get_compile_time_arg_val(2);
+    constexpr uint32_t in1_block_num_tiles                = get_compile_time_arg_val(1);
     // in0/in1 common args
-    constexpr uint32_t num_blocks                         = get_compile_time_arg_val(3);
+    constexpr uint32_t num_blocks                         = get_compile_time_arg_val(2);
     // in1 mcast args
-    constexpr uint32_t in1_mcast_sender_noc_y             = get_compile_time_arg_val(4);
-    constexpr uint32_t in1_mcast_sender_semaphore_addr    = get_compile_time_arg_val(5);
-    constexpr uint32_t in1_mcast_receiver_semaphore_addr  = get_compile_time_arg_val(6);
+    constexpr uint32_t in1_mcast_sender_noc_y             = get_compile_time_arg_val(3);
+    constexpr uint32_t in1_mcast_sender_semaphore_addr    = get_compile_time_arg_val(4);
+    constexpr uint32_t in1_mcast_receiver_semaphore_addr  = get_compile_time_arg_val(5);
     // batch args
-    constexpr uint32_t batch                              = get_compile_time_arg_val(7);
+    constexpr uint32_t batch                              = get_compile_time_arg_val(6);
 
     // WRITER
     // out tensor args
-    constexpr uint32_t out_tensor_stride_w                = get_compile_time_arg_val(8);
-    constexpr uint32_t out_tensor_stride_h                = get_compile_time_arg_val(9);
-    constexpr uint32_t out_tensor_next_subblock_stride_w  = get_compile_time_arg_val(10);
-    constexpr uint32_t out_tensor_next_subblock_stride_h  = get_compile_time_arg_val(11);
+    constexpr uint32_t out_tensor_stride_w                = get_compile_time_arg_val(7);
+    constexpr uint32_t out_tensor_stride_h                = get_compile_time_arg_val(8);
+    constexpr uint32_t out_tensor_next_subblock_stride_w  = get_compile_time_arg_val(9);
+    constexpr uint32_t out_tensor_next_subblock_stride_h  = get_compile_time_arg_val(10);
 
     // out subblock args
-    constexpr uint32_t out_subblock_w                     = get_compile_time_arg_val(12);
-    constexpr uint32_t out_subblock_h                     = get_compile_time_arg_val(13);
-    constexpr uint32_t out_subblock_tile_count            = get_compile_time_arg_val(14);
+    constexpr uint32_t out_subblock_w                     = get_compile_time_arg_val(11);
+    constexpr uint32_t out_subblock_h                     = get_compile_time_arg_val(12);
+    constexpr uint32_t out_subblock_tile_count            = get_compile_time_arg_val(13);
 
     // batch args
-    constexpr uint32_t MtNt                               = get_compile_time_arg_val(15); // if 0
+    constexpr uint32_t MtNt                               = get_compile_time_arg_val(14); // if 0
     // Don't need batch; same as batch from READER args
 
     #ifdef FUSE_BIAS
@@ -59,12 +58,12 @@ void kernel_main() {
         uint32_t in3_mcast_sender_noc_x             = get_arg_val<uint32_t>(10);
 
         // in3 block args
-        constexpr uint32_t in3_block_w                        = get_compile_time_arg_val(16);
+        constexpr uint32_t in3_block_w                        = get_compile_time_arg_val(15);
 
         // in3 mcast args
-        constexpr uint32_t in3_mcast_sender_noc_y             = get_compile_time_arg_val(17);
-        constexpr uint32_t in3_mcast_sender_semaphore_addr    = get_compile_time_arg_val(18);
-        constexpr uint32_t in3_mcast_receiver_semaphore_addr  = get_compile_time_arg_val(19);
+        constexpr uint32_t in3_mcast_sender_noc_y             = get_compile_time_arg_val(16);
+        constexpr uint32_t in3_mcast_sender_semaphore_addr    = get_compile_time_arg_val(17);
+        constexpr uint32_t in3_mcast_receiver_semaphore_addr  = get_compile_time_arg_val(18);
         constexpr uint32_t cb_id_in3 = 3;
         volatile uint32_t* in3_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(in3_mcast_receiver_semaphore_addr);
     #endif
@@ -78,7 +77,8 @@ void kernel_main() {
 
     // WRITER
     // single-tile
-    uint32_t output_single_tile_size_bytes = get_tile_size(cb_id_out0);
+    const uint32_t output_single_tile_size_bytes = get_tile_size(cb_id_out0);
+    const DataFormat output_data_format = get_dataformat(cb_id_out0);
 
     volatile uint32_t* in1_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(in1_mcast_receiver_semaphore_addr);
 

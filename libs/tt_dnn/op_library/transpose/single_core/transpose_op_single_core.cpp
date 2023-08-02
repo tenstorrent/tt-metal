@@ -20,30 +20,28 @@ operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor
     u32 Wt = W/TILE_WIDTH;
     u32 Ht = H/TILE_HEIGHT;
 
-    uint32_t num_tensor_tiles = NC*H*W / TILE_HW;
+    uint32_t num_tensor_tiles = a.volume() / TILE_HW;
 
     tt_metal::Program program = tt_metal::Program();
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
+    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
 
-    tt_metal::Buffer *src0_dram_buffer = a.buffer();
+    tt_metal::Buffer *src0_buffer = a.buffer();
 
     int32_t num_tiles = a.volume()/TILE_HW;
-
-    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
 
     Shape output_shape = output.shape();
 
-    tt_metal::Buffer *dst_dram_buffer = output.buffer();
-    TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
+    tt_metal::Buffer *dst_buffer = output.buffer();
+    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
@@ -52,8 +50,8 @@ operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor
         src0_cb_index,
         core,
         num_input_tiles,
-        num_input_tiles * single_tile_size,
-        cb_data_format
+        num_input_tiles * src0_single_tile_size,
+        src0_cb_data_format
     );
 
     uint32_t output_cb_index = 16; // output operands start at index 16
@@ -63,24 +61,31 @@ operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor
         output_cb_index,
         core,
         num_output_tiles,
-        num_output_tiles * single_tile_size,
-        cb_data_format
+        num_output_tiles * dst_single_tile_size,
+        dst_cb_data_format
     );
 
+    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t) src0_is_dram};
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> writer_compile_time_args = {
+        (std::uint32_t) output_cb_index,
+        (std::uint32_t) dst_is_dram
+    };
     tt_metal::KernelID reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_unary_transpose_wh_8bank.cpp",
+        "tt_metal/kernels/dataflow/reader_unary_transpose_wh_interleaved.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
     tt_metal::KernelID writer_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_8bank.cpp",
+        "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
     vector<uint32_t> compute_args = {
-        Ht*Wt*NC // NHtWt
+        num_tensor_tiles
     };
 
     auto eltwise_binary_kernel_id = tt_metal::CreateComputeKernel(
@@ -95,11 +100,8 @@ operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor
         reader_kernel_id,
         core,
         {
-            src0_dram_buffer->address(),
-            (std::uint32_t)dram_src0_noc_xy.x,
-            (std::uint32_t)dram_src0_noc_xy.y,
-            num_tensor_tiles, NC, Ht, Wt, Ht*Wt,
-            0 /*scaler*/
+            src0_buffer->address(),
+            NC, Ht, Wt, Ht*Wt,
         }
     );
 
@@ -108,10 +110,8 @@ operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor
         writer_kernel_id,
         core,
         {
-            dst_dram_buffer->address(),
-            (std::uint32_t)dram_dst_noc_xy.x,
-            (std::uint32_t)dram_dst_noc_xy.y,
-            num_tensor_tiles
+            dst_buffer->address(),
+            num_tensor_tiles, 0
         }
     );
 
@@ -121,27 +121,21 @@ operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor
         const std::vector<Buffer*>& output_buffers
     ) {
 
-        auto src_dram_buffer = input_buffers.at(0);
-        auto src_dram_noc_xy = src_dram_buffer->noc_coordinates();
+        auto src_buffer = input_buffers.at(0);
 
-        auto dst_dram_buffer = output_buffers.at(0);
-        auto dst_dram_noc_xy = dst_dram_buffer->noc_coordinates();
+        auto dst_buffer = output_buffers.at(0);
 
         CoreCoord core = {0, 0};
 
         {
             auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = src_dram_buffer->address();
-            runtime_args[1] = uint32_t(src_dram_noc_xy.x);
-            runtime_args[2] = uint32_t(src_dram_noc_xy.y);
+            runtime_args[0] = src_buffer->address();
             SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
         }
 
         {
             auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = dst_dram_buffer->address();
-            runtime_args[1] = uint32_t(dst_dram_noc_xy.x);
-            runtime_args[2] = uint32_t(dst_dram_noc_xy.y);
+            runtime_args[0] = dst_buffer->address();
             SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
         }
     };
@@ -151,37 +145,41 @@ operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor
 
 operation::ProgramWithCallbacks transpose_hc_single_core(const Tensor &a, Tensor &output) {
 
-    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
-    TT_ASSERT(a.buffer() != nullptr, "Operand to transpose_hc needs to be allocated in a buffer on device!");
-
     const auto shape = a.shape();
     u32 W = shape[3], H = shape[2], C = shape[1], N = shape[0];
     u32 HW = H*W;
+    u32 HW_bytes = HW * a.element_size();
     u32 CHW = C*H*W;
+    u32 CHW_bytes = CHW * a.element_size();
 
     u32 Wt = W/TILE_WIDTH;
     u32 Ht = H/TILE_HEIGHT;
     u32 Ct = C/TILE_HEIGHT;
+    u32 CtHWt = Ct*H*Wt;
+    u32 CtWt = Ct * Wt;
 
-    uint32_t num_tensor_tiles = N*C*H*W / TILE_HW;
+    // 16 is size of face row
+    u32 sub_tile_line_bytes = 16 * a.element_size();
+
+    uint32_t num_tensor_tiles = a.volume() / TILE_HW;
 
     tt_metal::Program program = tt_metal::Program();
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
-    uint32_t single_tile_size = a.element_size() * TILE_HW;
+    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
 
-    tt_metal::Buffer *src0_dram_buffer = a.buffer();
+    tt_metal::Buffer *src0_buffer = a.buffer();
 
-    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
 
     Shape output_shape = output.shape();
 
-    tt_metal::Buffer *dst_dram_buffer = output.buffer();
-    TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
+    tt_metal::Buffer *dst_buffer = output.buffer();
+    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
@@ -190,23 +188,31 @@ operation::ProgramWithCallbacks transpose_hc_single_core(const Tensor &a, Tensor
         src0_cb_index,
         core,
         num_input_tiles,
-        num_input_tiles * single_tile_size,
-        DataFormat::Float16_b
+        num_input_tiles * src0_single_tile_size,
+        src0_cb_data_format
     );
 
-    // Op not uplifted for L1 yet, but need to provide arg to kernel
-    bool dst_is_dram = true;
+    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> reader_compile_time_args = {
+        (std::uint32_t) src0_is_dram,
+        (std::uint32_t) Wt,
+        (std::uint32_t) H,
+        (std::uint32_t) Ct,
+        (std::uint32_t) HW_bytes,
+        (std::uint32_t) CHW_bytes,
+        (std::uint32_t) sub_tile_line_bytes
+    };
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) src0_cb_index,
-        static_cast<uint32_t>(DataFormat::Float16_b),
         (std::uint32_t) dst_is_dram
     };
 
     tt_metal::KernelID reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/transpose_hc_8bank.cpp",
+        "tt_metal/kernels/dataflow/reader_unary_transpose_hc_interleaved_partitioned.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
     tt_metal::KernelID writer_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
@@ -219,10 +225,9 @@ operation::ProgramWithCallbacks transpose_hc_single_core(const Tensor &a, Tensor
         reader_kernel_id,
         core,
         {
-            src0_dram_buffer->address(),
-            (std::uint32_t)dram_src0_noc_xy.x,
-            (std::uint32_t)dram_src0_noc_xy.y,
-            W, H, C, HW, N, CHW
+            src0_buffer->address(),
+            0, num_tensor_tiles,
+            0, 0, 0, 0, 0, 0
         }
     );
 
@@ -231,7 +236,7 @@ operation::ProgramWithCallbacks transpose_hc_single_core(const Tensor &a, Tensor
         writer_kernel_id,
         core,
         {
-            dst_dram_buffer->address(),
+            dst_buffer->address(),
             num_tensor_tiles, 0
         }
     );
@@ -243,7 +248,6 @@ operation::ProgramWithCallbacks transpose_hc_single_core(const Tensor &a, Tensor
     ) {
 
         auto src_dram_buffer = input_buffers.at(0);
-        auto src_dram_noc_xy = src_dram_buffer->noc_coordinates();
 
         auto dst_dram_buffer = output_buffers.at(0);
 
@@ -252,8 +256,6 @@ operation::ProgramWithCallbacks transpose_hc_single_core(const Tensor &a, Tensor
         {
             auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_dram_buffer->address();
-            runtime_args[1] = uint32_t(src_dram_noc_xy.x);
-            runtime_args[2] = uint32_t(src_dram_noc_xy.y);
             SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
         }
 
@@ -287,19 +289,18 @@ operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
-    uint32_t single_tile_size = a.element_size() * TILE_HW;
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
-    tt_metal::Buffer *src0_dram_buffer = a.buffer();
-
-    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
+    tt_metal::Buffer *src0_buffer = a.buffer();
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
 
     Shape output_shape = output.shape();
 
-    tt_metal::Buffer *dst_dram_buffer = output.buffer();
-    TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
+    tt_metal::Buffer *dst_buffer = output.buffer();
+    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
@@ -309,22 +310,22 @@ operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor
         core,
         num_input_tiles,
         num_input_tiles * single_tile_size,
-        DataFormat::Float16_b
+        cb_data_format
     );
 
-    // Op not uplifted for L1 yet, but need to provide arg to kernel
-    bool dst_is_dram = true;
+    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t) src0_is_dram};
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) src0_cb_index,
-        static_cast<uint32_t>(DataFormat::Float16_b),
         (std::uint32_t) dst_is_dram
     };
 
     tt_metal::KernelID reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/transpose_cn_8bank.cpp",
+        "tt_metal/kernels/dataflow/reader_unary_transpose_cn_interleaved.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
     tt_metal::KernelID writer_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
@@ -337,7 +338,7 @@ operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor
         reader_kernel_id,
         core,
         {
-            src0_dram_buffer->address(),
+            src0_buffer->address(),
             N, C, Ht, Wt, HtWt, CHtWt, NCHtWt
         }
     );
@@ -347,7 +348,7 @@ operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor
         writer_kernel_id,
         core,
         {
-            dst_dram_buffer->address(),
+            dst_buffer->address(),
             num_tensor_tiles, 0
         }
     );

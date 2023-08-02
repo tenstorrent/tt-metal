@@ -350,9 +350,7 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
             in1_block_num_tiles,
             in1_width_ntiles,
             in1_width_ntiles * in1_block_h,
-            in1_block_w,
-            static_cast<uint32_t>(in0_df),
-            static_cast<uint32_t>(in1_df)
+            in1_block_w
         };
     } else {
         // in0 is tiled, in1 is tiled
@@ -381,9 +379,7 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
             in0_width_ntiles * in0_block_h, // in0_next_block_stride_h,
             in0_block_w,                    // in0_next_block_stride_w,
             in1_width_ntiles * in1_block_h, // in1_next_block_stride_h,
-            in1_block_w,                    // in1_next_block_stride_w
-            static_cast<uint32_t>(in0_df),
-            static_cast<uint32_t>(in1_df)
+            in1_block_w                    // in1_next_block_stride_w
         };
     }
     auto reader_id = CreateDataMovementKernel(
@@ -411,8 +407,7 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
             in1_num_blocks_w,
             in1_width * out.element_size(),   // output_row_size
             in1_block_w * constants::TILE_WIDTH * out.element_size(), // last block_row_size (same as block row size)
-            in0_height,
-            static_cast<uint32_t>(out_df)
+            in0_height
         };
     } else {
         // out is tiled
@@ -428,8 +423,7 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
             out_subblock_height_ntiles,                     // out_subblock_h
             out_subblock_ntiles,                            // out_subblock_tile_count
             in1_width_ntiles / out_subblock_width_ntiles,   // out_num_subblocks_w
-            in0_height_ntiles / out_subblock_height_ntiles, // out_num_subblocks_h
-            static_cast<uint32_t>(out_df)
+            in0_height_ntiles / out_subblock_height_ntiles // out_num_subblocks_h
         };
     }
     auto writer_id = CreateDataMovementKernel(
