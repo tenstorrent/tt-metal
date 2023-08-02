@@ -523,7 +523,7 @@ std::vector<Shape> BMMTilizeUntilize::compute_output_shapes(const std::vector<Te
 
 std::vector<Tensor> BMMTilizeUntilize::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     auto output_layout = this->untilize_out_ ? Layout::ROW_MAJOR : Layout::TILE;
-    return operation::generic_create_output_tensors(*this, input_tensors, this->out_dt_, output_layout, MemoryConfig{.interleaved = true});
+    return operation::generic_create_output_tensors(*this, input_tensors, this->out_dt_, output_layout, operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 }
 
 operation::ProgramWithCallbacks BMMTilizeUntilize::create_program(const std::vector<Tensor>& inputs,

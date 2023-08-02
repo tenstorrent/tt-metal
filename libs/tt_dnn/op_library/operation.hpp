@@ -33,6 +33,12 @@ struct ProfilerInfo {
     std::optional<std::string> parallelization_strategy;
 };
 
+inline auto DEFAULT_OUTPUT_MEMORY_CONFIG = MemoryConfig{.interleaved=true, .buffer_type=BufferType::DRAM};
+
+static void set_default_operation_output_memory_config(const MemoryConfig& memory_config) {
+    DEFAULT_OUTPUT_MEMORY_CONFIG = memory_config;
+}
+
 
 namespace detail {
 

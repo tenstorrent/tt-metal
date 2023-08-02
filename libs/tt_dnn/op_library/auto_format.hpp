@@ -2,6 +2,7 @@
 #include "tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
+#include "tt_dnn/op_library/operation.hpp"
 
 #include <optional>
 
@@ -21,7 +22,6 @@ struct FormatParams {
 class AutoFormat {
     private:
         inline static Device* device = nullptr;
-        constexpr static MemoryConfig default_mem_config = {.interleaved = true};
 
         AutoFormat() {}
     public:
@@ -79,7 +79,7 @@ class AutoFormat {
             return false;
         }
 
-        static Tensor move_tensor_to_device(const Tensor &input, Device * device, const std::optional<MemoryConfig>& mem_config = std::nullopt);
+        static Tensor move_tensor_to_device(const Tensor &input, Device * device, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
         static Tensor format_input_tensor(const Tensor &input, Device * device, const Shape& padded_shape, float pad_value, Layout target_layout, std::optional<MemoryConfig> target_mem_config = std::nullopt);
 

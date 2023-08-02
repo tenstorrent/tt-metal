@@ -31,7 +31,7 @@ Tensor groupnorm(
     float eps,
     std::optional<const Tensor> gamma = std::nullopt,
     std::optional<const Tensor> beta = std::nullopt,
-    const MemoryConfig& mem_config = MemoryConfig{.interleaved = true});
+    const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace tt_metal
 }  // namespace tt

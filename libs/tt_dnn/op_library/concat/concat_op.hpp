@@ -25,11 +25,11 @@ struct Concat2 {
 
 // Ref: https://pytorch.org/docs/stable/generated/torch.cat.html#torch.cat
 // Notes: Non-empty tensors provided must have the same shape, except in the cat dimension.
-Tensor concat(std::vector<Tensor> &in_t, uint32_t dim = 3, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true});
+Tensor concat(std::vector<Tensor> &in_t, uint32_t dim = 3, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 // common interface
 // NCHW = [0,1,2,3]
-Tensor concat(Tensor &input_tensor_a,Tensor &input_tensor_b, uint32_t dim = 3, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true});
+Tensor concat(Tensor &input_tensor_a,Tensor &input_tensor_b, uint32_t dim = 3, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace tt_metal
 

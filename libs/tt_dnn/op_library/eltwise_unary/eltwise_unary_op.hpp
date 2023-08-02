@@ -70,27 +70,28 @@ Tensor eltwise_unary(const EltwiseUnary& op, const Tensor &input_tensor);
 operation::ProgramWithCallbacks eltwise_unary_multi_core(const Tensor &a, Tensor &output, const std::vector<UnaryWithParam> op_chain);
 operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tensor &output, const std::vector<UnaryWithParam> op_chain);
 
-inline Tensor run_eltwise_unary(const Tensor& input_tensor, std::vector<UnaryWithParam> unary_op, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
+inline Tensor run_eltwise_unary(const Tensor& input_tensor, std::vector<UnaryWithParam> ops_chain, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+    TT_ASSERT(ops_chain.size() > 0, "At least 1 unary op must be specified");
     Shape pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.shape());
     FormatParams input_format_params = {.pad_shape=pad_shape, .pad_value=0.0, .target_layout=Layout::TILE};
-    return operation::run_with_autoformat(EltwiseUnary{unary_op, output_mem_config}, {input_tensor}, {input_format_params}, {Layout::TILE}).at(0);
+    return operation::run_with_autoformat(EltwiseUnary{ops_chain, output_mem_config}, {input_tensor}, {input_format_params}, {Layout::TILE}).at(0);
 }
 
 template <UnaryOpType unary_op_type>
 struct make_eltwise_unary_with_param {
-    Tensor operator()(const Tensor& input_tensor, float param, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) const {
+    Tensor operator()(const Tensor& input_tensor, float param, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) const {
         return run_eltwise_unary(input_tensor, {UnaryWithParam{.op_type=unary_op_type, .param=param}}, output_mem_config);
     }
 };
 
 template <UnaryOpType unary_op_type>
 struct make_eltwise_unary {
-    Tensor operator()(const Tensor& input_tensor, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) const {
+    Tensor operator()(const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) const {
         return run_eltwise_unary(input_tensor, {UnaryWithParam{.op_type=unary_op_type}}, output_mem_config);
     }
 };
 
-inline Tensor relu_without_autoformat(const Tensor& input_tensor, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
+inline Tensor relu_without_autoformat(const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     return operation::run_without_autoformat(EltwiseUnary{{UnaryWithParam{.op_type=UnaryOpType::RELU}}, output_mem_config}, {input_tensor}).at(0);
 }
 
@@ -136,18 +137,17 @@ inline Tensor erfc(const Tensor &input_tensor, bool fast_and_approx=true, const 
     return make_eltwise_unary_with_param<UnaryOpType::ERFC>{}(input_tensor, static_cast<float>(fast_and_approx), output_mem_config);
 }
 
-inline Tensor gelu(const Tensor &input_tensor, bool fast_and_approx=true, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
+inline Tensor gelu(const Tensor &input_tensor, bool fast_and_approx=true, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     return make_eltwise_unary_with_param<UnaryOpType::GELU>{}(input_tensor, static_cast<float>(fast_and_approx), output_mem_config);
 }
-inline Tensor rsqrt(const Tensor &input_tensor, bool fast_and_approx=true, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
+inline Tensor rsqrt(const Tensor &input_tensor, bool fast_and_approx=true, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     return make_eltwise_unary_with_param<UnaryOpType::RSQRT>{}(input_tensor, static_cast<float>(fast_and_approx), output_mem_config);
 }
 
-inline Tensor log_sigmoid(const Tensor &input_tensor, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
+inline Tensor log_sigmoid(const Tensor &input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     return run_eltwise_unary(input_tensor, {UnaryWithParam{.op_type=UnaryOpType::SIGMOID}, UnaryWithParam{.op_type=UnaryOpType::LOG}}, output_mem_config);
 }
-inline Tensor unary_chain(const Tensor &input_tensor, std::vector<UnaryWithParam> ops_chain, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
-    TT_ASSERT(ops_chain.size() > 0, "At least 1 unary op must be specified");
+inline Tensor unary_chain(const Tensor &input_tensor, std::vector<UnaryWithParam> ops_chain, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     return run_eltwise_unary(input_tensor, ops_chain, output_mem_config);
 }
 

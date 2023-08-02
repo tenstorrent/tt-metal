@@ -16,9 +16,9 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor AutoFormat::move_tensor_to_device(const Tensor &input, Device * device, const std::optional<MemoryConfig>& mem_config) {
+Tensor AutoFormat::move_tensor_to_device(const Tensor &input, Device * device, const MemoryConfig& mem_config) {
     if (input.storage_type() == StorageType::OWNED) {
-        return data_transfer_to_device(input, device, mem_config.has_value() ? mem_config.value() : default_mem_config);
+        return data_transfer_to_device(input, device, mem_config);
     } else {
         return input;
     }
@@ -32,7 +32,7 @@ Tensor AutoFormat::format_input_tensor(const Tensor &input, Device * device, con
         return AutoFormat::move_tensor_to_device(input, device);
     }
 
-    MemoryConfig mem_config = AutoFormat::default_mem_config;
+    MemoryConfig mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
     if (target_mem_config.has_value()) {
         mem_config = target_mem_config.value();
     } else if (input.storage_type() == StorageType::DEVICE) {
@@ -91,7 +91,7 @@ Tensor AutoFormat::format_output_tensor(const Tensor &output, const Shape& shape
     if (!unpad_output && !convert_layout) {
         return output;
     }
-    MemoryConfig mem_config = AutoFormat::default_mem_config;
+    MemoryConfig mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
     if (target_mem_config.has_value()) {
         mem_config = target_mem_config.value();
     } else if (output.storage_type() == StorageType::DEVICE) {

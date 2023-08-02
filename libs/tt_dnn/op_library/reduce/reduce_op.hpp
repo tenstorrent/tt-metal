@@ -39,7 +39,7 @@ struct Reduce {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-Tensor reduce(const Tensor &input_tensor, ReduceOpMath reduce_math, ReduceOpDim reduce_dim, float scaler = 1.0f, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true});
+Tensor reduce(const Tensor &input_tensor, ReduceOpMath reduce_math, ReduceOpDim reduce_dim, float scaler = 1.0f, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 Tensor sum(const Tensor &input_tensor, uint dim);
 
 }  // namespace tt_metal

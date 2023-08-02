@@ -20,7 +20,7 @@ struct Unpad {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-Tensor unpad(const Tensor &input_tensor_a, const Shape &output_tensor_start, const Shape &output_tensor_end, const MemoryConfig& mem_config = MemoryConfig{.interleaved = true});
+Tensor unpad(const Tensor &input_tensor_a, const Shape &output_tensor_start, const Shape &output_tensor_end, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 struct UnpadOnHost {
     const Shape output_tensor_start;
@@ -32,7 +32,7 @@ struct UnpadOnHost {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-Tensor unpad_on_host(const Tensor &input_tensor, const Shape &output_tensor_start, const Shape &output_tensor_end, const MemoryConfig& mem_config = MemoryConfig{.interleaved = true});
+Tensor unpad_on_host(const Tensor &input_tensor, const Shape &output_tensor_start, const Shape &output_tensor_end, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace tt_metal
 

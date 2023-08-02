@@ -20,7 +20,7 @@ struct Pad {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-Tensor pad(const Tensor &input_tensor_a, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value, const MemoryConfig& mem_config = MemoryConfig{.interleaved = true});
+Tensor pad(const Tensor &input_tensor_a, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 struct PadOnHost {
     const Shape output_tensor_shape;

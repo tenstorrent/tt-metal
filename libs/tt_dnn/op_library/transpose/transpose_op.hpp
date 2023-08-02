@@ -29,25 +29,25 @@ struct Transpose {
 };
 
 // TODO: Accept parallelization
-Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim=TransposeOpDim::WH, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true});
+Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim=TransposeOpDim::WH, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 // TODO: Don't bind transpose as transpose_wh, should explicitly bind like the others
 // Alternatively, bind only 1 transpose function and take 2 dims to transpose
-Tensor transpose(const Tensor &a, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true});
+Tensor transpose(const Tensor &a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 // 4 choose 2 = 6 transposes on NCHW rank-4 tensors without order.
 // Unique transposes : ('n', 'c'), ('n', 'h'), ('n', 'w'), ('c', 'h'), ('c', 'w'), ('h', 'w')
-Tensor transpose_wh(const Tensor &a, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true});
-Tensor transpose_hc(const Tensor &a, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true});
-Tensor transpose_cn(const Tensor &a, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true});
-Tensor transpose_nh(const Tensor &a, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true});
-Tensor transpose_nw(const Tensor &a, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true});
-Tensor transpose_cw(const Tensor &a, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true});
+Tensor transpose_wh(const Tensor &a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor transpose_hc(const Tensor &a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor transpose_cn(const Tensor &a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor transpose_nh(const Tensor &a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor transpose_nw(const Tensor &a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor transpose_cw(const Tensor &a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 // transpose with tensor and dimensions
-Tensor transpose(const Tensor &a, uint dim1, uint dim2, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true});
+Tensor transpose(const Tensor &a, uint dim1, uint dim2, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 // provide access to transposes on a [n,c,h,w] ranked tensor @a
-Tensor transpose(const Tensor &a, char dim_a, char dim_b, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true});
-Tensor transpose(const Tensor &a, std::array<uint32_t,2> dim_a_b, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true});
+Tensor transpose(const Tensor &a, char dim_a, char dim_b, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor transpose(const Tensor &a, std::array<uint32_t,2> dim_a_b, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 operation::ProgramWithCallbacks transpose_single_core(const Tensor &a, Tensor &output, TransposeOpDim transpose_dim);
 operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor &output);
