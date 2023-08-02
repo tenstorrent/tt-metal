@@ -7,6 +7,10 @@ constexpr uint8_t ADDR_MOD_0 = 0;
 constexpr uint8_t ADDR_MOD_1 = 1;
 constexpr uint8_t ADDR_MOD_2 = 2;
 constexpr uint8_t ADDR_MOD_3 = 3;
+constexpr uint8_t ADDR_MOD_4 = 4;
+constexpr uint8_t ADDR_MOD_5 = 5;
+constexpr uint8_t ADDR_MOD_6 = 6;
+constexpr uint8_t ADDR_MOD_7 = 7;
 
 constexpr uint32_t SRC_INCR_MASK = 0x3F;
 constexpr uint32_t DEST_INCR_MASK = 0x3FF;
@@ -82,19 +86,33 @@ struct addr_mod_t
         ADDR_MOD_AB_SEC0_SrcAIncr_ADDR32,
         ADDR_MOD_AB_SEC1_SrcAIncr_ADDR32,
         ADDR_MOD_AB_SEC2_SrcAIncr_ADDR32,
-        ADDR_MOD_AB_SEC3_SrcAIncr_ADDR32};
+        ADDR_MOD_AB_SEC3_SrcAIncr_ADDR32,
+        ADDR_MOD_AB_SEC4_SrcAIncr_ADDR32,
+        ADDR_MOD_AB_SEC5_SrcAIncr_ADDR32,
+        ADDR_MOD_AB_SEC6_SrcAIncr_ADDR32,
+        ADDR_MOD_AB_SEC7_SrcAIncr_ADDR32
+    };
 
     constexpr static uint32_t addr_mod_dest_reg_addr[] = {
         ADDR_MOD_DST_SEC0_DestIncr_ADDR32,
         ADDR_MOD_DST_SEC1_DestIncr_ADDR32,
         ADDR_MOD_DST_SEC2_DestIncr_ADDR32,
-        ADDR_MOD_DST_SEC3_DestIncr_ADDR32};
+        ADDR_MOD_DST_SEC3_DestIncr_ADDR32,
+        ADDR_MOD_DST_SEC4_DestIncr_ADDR32,
+        ADDR_MOD_DST_SEC5_DestIncr_ADDR32,
+        ADDR_MOD_DST_SEC6_DestIncr_ADDR32,
+        ADDR_MOD_DST_SEC7_DestIncr_ADDR32
+    };
 
     constexpr static uint32_t addr_mod_bias_reg_addr[] = {
 		ADDR_MOD_BIAS_SEC0_BiasIncr_ADDR32,
 		ADDR_MOD_BIAS_SEC1_BiasIncr_ADDR32,
 		ADDR_MOD_BIAS_SEC2_BiasIncr_ADDR32,
-		ADDR_MOD_BIAS_SEC3_BiasIncr_ADDR32
+		ADDR_MOD_BIAS_SEC3_BiasIncr_ADDR32,
+		ADDR_MOD_BIAS_SEC4_BiasIncr_ADDR32,
+		ADDR_MOD_BIAS_SEC5_BiasIncr_ADDR32,
+		ADDR_MOD_BIAS_SEC6_BiasIncr_ADDR32,
+		ADDR_MOD_BIAS_SEC7_BiasIncr_ADDR32
 	};
 
     constexpr static uint32_t addr_mod_pack_reg_addr[] = {

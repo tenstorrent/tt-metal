@@ -12,25 +12,15 @@ struct p_setrwc
 {
 #ifdef PERF_DUMP
 
-#if SKIP_UNP0 == 1
+#if SKIP_UNP == 1
     constexpr static uint CLR_A        = 0x0;
-    #if SKIP_UNP1 == 1
         constexpr static uint CLR_B        = 0x0;
         constexpr static uint CLR_AB       = 0x0;
-    #else
-        constexpr static uint CLR_B        = 0x2;
-        constexpr static uint CLR_AB       = 0x2;
-    #endif
 #else
     constexpr static uint CLR_A        = 0x1;
-    #if SKIP_UNP1 == 1
-        constexpr static uint CLR_B        = 0x0;
-        constexpr static uint CLR_AB       = 0x1;
-    #else
         constexpr static uint CLR_B        = 0x2;
         constexpr static uint CLR_AB       = 0x3;
     #endif
-#endif
 
 #else
     constexpr static uint CLR_A        = 0x1;
@@ -96,9 +86,11 @@ struct p_unpacr_nop
     constexpr static uint UNP_ZEROSRC            = 0b001;
     constexpr static uint UNP_NEGINFSRC          = 0b101;
 
-    constexpr static uint UNP_RESET_ALL_BANKS    = 0b1000; //default is clear current bank
-    constexpr static uint UNP_STALL_RESET_WR_RDY = 0b10000;
-    constexpr static uint UNP_SET_DVALID         = 0b1000000;
+    constexpr static uint UNP_SET_DVALID         = 0b111;
+
+    constexpr static uint UNP_ZEROSRC_RESET_ALL_BANKS    = 0b1001; //default is clear current bank
+    constexpr static uint UNP_ZEROSRC_STALL_RESET_WR_RDY = 0b10001;
+    constexpr static uint UNP_ZEROSRC_SET_DVALID         = 0b1000001;
 
     constexpr static uint UNP0                  = 0x0;
     constexpr static uint UNP1                  = 0x1;
@@ -114,6 +106,9 @@ struct p_setadc
 {
     constexpr static uint UNP0  = 0b001;
     constexpr static uint UNP1  = 0b010;
+    constexpr static uint UNP_A = 0b001;
+    constexpr static uint UNP_B = 0b010;
+    constexpr static uint UNP_AB = 0b011;
     constexpr static uint PAC   = 0b100;
 
     constexpr static uint SET_X = 0;
@@ -248,8 +243,6 @@ struct p_zeroacc
     constexpr static uint CLR_16       = 0b001;
     constexpr static uint CLR_HALF     = 0b010;
     constexpr static uint CLR_ALL      = 0b011;
-    constexpr static uint CLR_SPECIFIC_32B = 0b100;
-    constexpr static uint CLR_16_32B   = 0b101;
     constexpr static uint CLR_HALF_32B = 0b110;
     constexpr static uint CLR_ALL_32B  = 0b111;
 };
@@ -303,6 +296,11 @@ struct p_elwise
     constexpr static uint SRCB_BCAST_COL    = 0x1;
     constexpr static uint SRCB_BCAST_ROW    = 0x2;
     constexpr static uint SRCB_BCAST_ALL    = 0x3;
+
+    constexpr static uint CLR_A      = 0x1;
+    constexpr static uint CLR_B      = 0x2;
+    constexpr static uint CLR_AB     = 0x3;
+
 };
 
 struct p_sfpu

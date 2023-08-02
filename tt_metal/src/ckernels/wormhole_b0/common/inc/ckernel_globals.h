@@ -2,14 +2,14 @@
 
 #include <cstdint>
 #include "ckernel_structs.h"
+#include "risc_attribs.h"
 #include "tensix_functions.h"
 #include "hostdevcommon/common_runtime_address_map.h"
 
 extern uint32_t cfg_state_id;
 extern uint32_t unp_cfg_context;
-extern uint32_t gl_alu_format_spec_reg;
 
-extern volatile uint32_t l1_buffer[16];
+extern uint32_t volatile tt_l1_ptr l1_buffer[16];
 
 //extern const int32_t unpack_src_format[24];
 //extern const int32_t unpack_dst_format[24];
@@ -32,7 +32,7 @@ extern uint32_t __firmware_start[];
 extern void kernel_init();
 extern void kernel_launch();
 
-inline void l1_to_local_mem_copy(uint32_t *local_mem_addr, uint32_t *l1_addr, int32_t len) {
+inline void l1_to_local_mem_copy(uint32_t *local_mem_addr, uint32_t tt_l1_ptr *l1_addr, int32_t len) {
     // Cover L1 load latency of 6 cycles for the bulk of the copy
     int32_t n = 0;
     while (n < len - 5) {

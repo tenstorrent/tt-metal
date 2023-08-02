@@ -88,15 +88,14 @@ inline void llk_unpack_AB_matmul_init(const std::uint32_t transpose=0) {
     // in large matmul, datacopy will disable the transpose of faces, so we need it turn it back on for matmul.
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW, p_gpr_unpack::TMP0, p_gpr_unpack::TMP1>(transpose);
 }
-
 inline void llk_unpack_AB_matmul(
     std::uint32_t operandA, std::uint32_t operandB, std::uint32_t tile_index_a, std::uint32_t tile_index_b) {
     std::uint32_t inputA = get_operand_id(operandA);
     std::uint32_t inputB = get_operand_id(operandB);
-    std::uint32_t base_address_a = operands[inputA].f.fifo_rd_ptr;
+    std::uint32_t base_address_a = cb_read_interface[inputA].fifo_rd_ptr;
     std::uint32_t offset_address_a = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[inputA], tile_index_a);
     std::uint32_t address_a = base_address_a + offset_address_a;
-    std::uint32_t base_address_b = operands[inputB].f.fifo_rd_ptr;
+    std::uint32_t base_address_b = cb_read_interface[inputB].fifo_rd_ptr;
     std::uint32_t offset_address_b = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[inputB], tile_index_b);
     std::uint32_t address_b = base_address_b + offset_address_b;
 

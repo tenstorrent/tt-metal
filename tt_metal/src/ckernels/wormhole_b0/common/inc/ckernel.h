@@ -1,6 +1,8 @@
 
 #pragma once
 
+#include "risc_attribs.h"
+
 // Compiler hint that a branch is unlikely to be taken
 #define UNLIKELY(condition) __builtin_expect(static_cast<bool>(condition), 0)
 #define UNROLL_LOOP(factor) GCC unroll factor
@@ -49,27 +51,26 @@ constexpr uint RESET_VAL = 0;
 constexpr uint KERNEL_IN_PROGRESS = 15;
 constexpr uint KERNEL_COMPLETE = 1;
 
-extern volatile uint * const reg_base;
-extern volatile uint * const pc_buf_base;
-extern volatile uint * const regfile;
-extern uint *regmem;
-extern volatile uint * const instrn_buffer;
-extern volatile uint *mailbox_base[4];
-extern volatile uint *dbg_event_scratch;
-extern volatile uint * const trisc_run_mailbox;
+extern volatile uint tt_reg_ptr * const reg_base;
+extern volatile uint tt_reg_ptr * const pc_buf_base;
+extern volatile uint tt_reg_ptr * const regfile;
+extern uint tt_reg_ptr * regmem;
+extern volatile uint tt_reg_ptr * const instrn_buffer;
+extern volatile uint tt_reg_ptr *mailbox_base[4];
+extern volatile uint tt_reg_ptr *dbg_event_scratch;
+extern volatile uint tt_reg_ptr * const trisc_run_mailbox;
 extern volatile uint local_mem_barrier;
-extern volatile uint8_t *debug_buffer;
+extern volatile uint8_t tt_l1_ptr *debug_buffer;
 
 extern uint32_t cfg_state_id;
 extern uint32_t dest_offset_id;
 extern uint32_t dbg_event_index;
 extern uint32_t dbg_event_end;
 
-extern volatile uint16_t *debug_mailbox_base;
+extern volatile uint16_t tt_reg_ptr *debug_mailbox_base;
 extern uint8_t mailbox_index;
-extern uint8_t mailbox_end;
+const extern uint8_t mailbox_end;
 extern uint32_t op_info_offset;
-
 // Internal scope to namespace methods only (C++ does not allow namespace private ownership)
 namespace internal {
 }
@@ -154,33 +155,32 @@ inline uint cfg_addr(uint cfg_addr32)
 inline void cfg_write(uint cfg_addr32, uint data)
 {
     // Declared here instead of globally to prevent direct access, which might ignore current state ID
-    volatile uint *cfg_regs = reinterpret_cast<volatile uint *>(TENSIX_CFG_BASE);
+    volatile uint tt_reg_ptr *cfg_regs = reinterpret_cast<volatile uint tt_reg_ptr *>(TENSIX_CFG_BASE);
     cfg_regs[cfg_addr(cfg_addr32)] = data;
 }
 
-//inline uint cfg_read(uint cfg_addr32)
-//{
-//    // Declared here instead of globally to prevent direct access, which might ignore current state ID
-//    volatile uint *cfg_regs = reinterpret_cast<volatile uint *>(TENSIX_CFG_BASE);
-//    return cfg_regs[cfg_addr(cfg_addr32)];
-//}
-
-inline uint cfg_read_barrier(uint cfg_addr32)
+inline uint cfg_read(uint cfg_addr32)
 {
     // Declared here instead of globally to prevent direct access, which might ignore current state ID
     volatile uint *cfg_regs = reinterpret_cast<volatile uint *>(TENSIX_CFG_BASE);
-    uint data = cfg_regs[cfg_addr(cfg_addr32)];
-    local_mem_barrier = data;
-    return data;
+    return cfg_regs[cfg_addr(cfg_addr32)];
 }
 
 // Return pointer to CFG with the right base address for the current state
-inline volatile uint *get_cfg_pointer()
+inline volatile uint * tt_reg_ptr get_cfg_pointer()
 {
     if (cfg_state_id == 0)
-        return reinterpret_cast<volatile uint *>(TENSIX_CFG_BASE);
+        return reinterpret_cast<volatile uint tt_reg_ptr *>(TENSIX_CFG_BASE);
 
-    return reinterpret_cast<volatile uint *>(TENSIX_CFG_BASE + CFG_STATE_SIZE * 16);
+    return reinterpret_cast<volatile uint tt_reg_ptr *>(TENSIX_CFG_BASE + CFG_STATE_SIZE * 16);
+}
+
+inline volatile uint short * tt_reg_ptr get_cfg16_pointer()
+{
+    if (cfg_state_id == 0)
+        return reinterpret_cast<volatile uint short tt_reg_ptr *>(TENSIX_CFG_BASE);
+
+    return reinterpret_cast<volatile uint short tt_reg_ptr *>(TENSIX_CFG_BASE + CFG_STATE_SIZE * 16);
 }
 
 inline void flip_cfg_state_id()
@@ -196,61 +196,36 @@ inline void reset_cfg_state_id()
     cfg_state_id = 0;
 }
 
+inline void reset_dest_offset_id()
+{
+    dest_offset_id = 0;
+}
+
 // MOP run version without zmask
 inline void mop_run(const uint8_t type, const uint8_t count)
 {
     TTI_MOP(type, count - 1, 0); // Run the MOP
 }
 
-inline void mem_barrier(uint32_t data)
+// Register read (workaround for bug
+// https://yyz-gitlab.local.tenstorrent.com/tenstorrent/tensix/issues/976
+// now handled by the compiler)
+// workaround is needed only for GS
+inline uint reg_read(uint32_t addr)
 {
-    local_mem_barrier = data;
-}
-
-// Register read with local barrier (workaround for bug
-// https://yyz-gitlab.local.tenstorrent.com/tenstorrent/tensix/issues/976)
-// Read from register followed by dummy write of readback data to local memory
-// Will flush all prev reads
-inline uint reg_read_barrier(uint32_t addr)
-{
-    volatile uint *p_reg = reinterpret_cast<volatile uint *> (addr);
-    uint data = p_reg[0];
-    local_mem_barrier = data;
-    return data;
-}
-
-
-// Same as above. Input address targets l1
-inline uint32_t l1_read_barrier(volatile uint32_t *addr)
-{
-    uint32_t data = addr[0];
-    local_mem_barrier = data;
-    return data;
-}
-
-inline uint16_t l1_read_barrier(volatile uint16_t *addr)
-{
-    uint16_t data = addr[0];
-    local_mem_barrier = (uint32_t) data;
-    return data;
-}
-
-inline uint8_t l1_read_barrier(volatile uint8_t *addr)
-{
-    uint8_t data = addr[0];
-    local_mem_barrier = (uint32_t) data;
-    return data;
+    volatile uint tt_reg_ptr *p_reg = reinterpret_cast<volatile uint tt_reg_ptr *> (addr);
+    return p_reg[0];
 }
 
 inline void reg_write(uint32_t addr, uint32_t data)
 {
-    volatile uint *p_reg = reinterpret_cast<volatile uint *> (addr);
+    volatile uint tt_reg_ptr *p_reg = reinterpret_cast<volatile uint tt_reg_ptr *> (addr);
     p_reg[0] = data;
 }
 
 inline void wait(uint32_t cycles) {
-    volatile uint * clock_lo = reinterpret_cast<volatile uint * >(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    volatile uint * clock_hi = reinterpret_cast<volatile uint * >(RISCV_DEBUG_REG_WALL_CLOCK_H);
+    volatile uint tt_reg_ptr * clock_lo = reinterpret_cast<volatile uint tt_reg_ptr * >(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    volatile uint tt_reg_ptr * clock_hi = reinterpret_cast<volatile uint tt_reg_ptr * >(RISCV_DEBUG_REG_WALL_CLOCK_H);
     uint64_t wall_clock_timestamp = clock_lo[0] | ((uint64_t)clock_hi[0]<<32);
     uint64_t wall_clock = 0;
     do {
@@ -276,7 +251,7 @@ inline void zerosrc() {
 
 inline void sync_regfile_write(const uint index)
 {
-    volatile uint foo = 0xdeadbeef;
+    volatile uint foo = 0x0;
     volatile uint *fooptr = &foo;
     *fooptr = regfile[index];
 }
@@ -290,7 +265,7 @@ inline void cfg_rmw(uint32_t cfg_addr32, uint32_t cfg_shamt, uint32_t cfg_mask, 
     const uint32_t addr = (cfg_state_id == 0) ? cfg_addr32 : (CFG_STATE_SIZE * 4) + cfg_addr32;
 
     // Declared here instead of globally to prevent direct access, which might ignore current state ID
-    volatile uint *cfg_regs = reinterpret_cast<volatile uint *>(TENSIX_CFG_BASE);
+    volatile uint tt_reg_ptr *cfg_regs = reinterpret_cast<volatile uint tt_reg_ptr *>(TENSIX_CFG_BASE);
     uint32_t cfg_data = cfg_regs[addr];
 
     // Shift and mask wrdata to properly align withn 32-bit DWORD
@@ -313,67 +288,38 @@ inline void cfg_rmw_gpr(uint32_t cfg_addr32, uint32_t cfg_shamt, uint32_t cfg_ma
     cfg_rmw(cfg_addr32, cfg_shamt, cfg_mask, wrdata);
 }
 
-inline void cfg_rmw_tensix(
-    uint32_t cfg_addr32, uint32_t cfg_shamt, uint32_t cfg_mask, uint32_t gpr_index, uint32_t tmp_gpr0, uint32_t tmp_gpr1, uint32_t tmp_gpr2)
-{
-    //Read config reg for RMW (R53 (tmp_gpr0))
-    TTI_RDCFG(tmp_gpr0, cfg_addr32); // R53 = CFG[LOOP_CNT_REG8_LoopCnt_SET0_ADDR32]
-
-    // Set up gpr for mask (R54 (tmp_gpr1))
-    TTI_SETDMAREG(0, (~cfg_mask) & 0xffff, 0, tmp_gpr1 * 2 + 0);         // R54(L) = ~MASK_LO
-    TTI_SETDMAREG(0, (~(cfg_mask >> 16)) & 0xffff, 0, tmp_gpr1 * 2 + 1); // R54(H) = ~MASK_HI
-
-    //Zero out relevant bits in cfg word
-    TTI_BITWOPDMAREG(0, 0, tmp_gpr0, tmp_gpr0, tmp_gpr1);
-
-    // Set up gpr for mask (R54 (tmp_gpr1))
-    TTI_SETDMAREG(0, (cfg_mask) &0xffff, 0, tmp_gpr1 * 2 + 0);           // R54(L) = MASK_LO
-    TTI_SETDMAREG(0, ((cfg_mask >> 16)) & 0xffff, 0, tmp_gpr1 * 2 + 1);  // R54(H) = MASK_HI
-
-    //Setup gpr for shamt (R55 (tmp_gpr2))
-    TTI_SETDMAREG(0, cfg_shamt, 0, tmp_gpr2 * 2 + 0); // R55(L) = SHAMT
-    TTI_SETDMAREG(0, 0, 0, tmp_gpr2 * 2 + 1);         // R55(H) = 0x0000
-
-    //Left shift data to be written to align with cfg bits and re-use shamt gpr for result 		// R55 = R25<<R55
-    TTI_SHIFTDMAREG(0, 0, tmp_gpr2, tmp_gpr2, gpr_index);
-
-    //Apply Mask to ensure only relevant bits are non-zero               // R55 = R55 & R54
-    TTI_BITWOPDMAREG(0, 0, tmp_gpr2, tmp_gpr2, tmp_gpr1);
-
-    //OR with current cfg bits                                           // R55 = R55 | R53
-    TTI_BITWOPDMAREG(0, 1, tmp_gpr2, tmp_gpr2, tmp_gpr0);
-
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-    TTI_WRCFG(tmp_gpr2, p_cfg::WRCFG_32b, cfg_addr32);
-}
-
-template <uint CfgAddr32, uint Shamt, uint Mask, uint TmpGpr0, uint TmpGpr1>
+template <uint CfgAddr32, uint Shamt, uint Mask>
 inline void cfg_reg_rmw_tensix(uint32_t val)
 {
-    uint32_t wr_val = (val << Shamt) & Mask;
+    uint32_t wrdata = val<<Shamt;
+    uint8_t mask_b0 = Mask & 0xff;
 
-    // TmpGpr0 = current GPR value
-    TTI_RDCFG(TmpGpr0, CfgAddr32);
+    if (mask_b0!=0){
+        uint8_t data_b0 = wrdata & 0xff;
+        TT_RMWCIB0(mask_b0, data_b0, CfgAddr32);
+    }
+    wrdata>>=8;
+    uint8_t mask_b1 = (Mask>>8) & 0xff;
 
-    // TmpGpr1 = ~Mask
-    TTI_SETDMAREG(0, (~Mask) & 0xffff, 0, LO_16(TmpGpr1));
-    TTI_SETDMAREG(0, (~(Mask >> 16)) & 0xffff, 0, HI_16(TmpGpr1));
+    if (mask_b1!=0){
+        uint8_t data_b1 = (wrdata) & 0xff;
+        TT_RMWCIB1(mask_b1, data_b1, CfgAddr32);
+    }
 
-    // TmpGpr0 = TmpGpr0 & TmpGpr1
-    TTI_BITWOPDMAREG(0, 0, TmpGpr0, TmpGpr0, TmpGpr1);
+    wrdata>>=8;
+    uint8_t mask_b2 = (Mask>>16) & 0xff;
 
-    // TmpGpr1 = wr_val
-    TT_SETDMAREG(0, (wr_val & 0xffff), 0, LO_16(TmpGpr1));
-    TT_SETDMAREG(0, ((wr_val >> 16) & 0xffff), 0, HI_16(TmpGpr1));
+    if (mask_b2!=0){
+        uint8_t data_b2 = (wrdata) & 0xff;
+        TT_RMWCIB2(mask_b2, data_b2, CfgAddr32);
+    }
 
-    // TmpGpr0 = TmpGpr0 | TmpGpr1
-    TTI_BITWOPDMAREG(0, 1, TmpGpr0, TmpGpr0, TmpGpr1);
-
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-
-    TTI_WRCFG(TmpGpr0, p_cfg::WRCFG_32b, CfgAddr32);
-    TTI_NOP;TTI_NOP;
-
+    wrdata>>=8;
+    uint8_t mask_b3 = (Mask>>24) & 0xff;
+    if (mask_b3!=0){
+        uint8_t data_b3 = (wrdata) & 0xff;
+        TT_RMWCIB3(mask_b3, data_b3, CfgAddr32);
+    }
 }
 
 inline void mailbox_write(const uint8_t thread, const uint32_t data)
@@ -443,25 +389,23 @@ inline void clear_mailbox_values(uint16_t value = 0) {
     debug_mailbox_base[i] = value;
 }
 
-inline void debug_dump(uint8_t *data, uint32_t byte_size) {
-    // TODO(pk) re-implement
+inline uint64_t read_wall_clock()
+{
+   uint32_t timestamp_low = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+   uint32_t timestamp_high = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
+   return ((uint64_t)timestamp_high << 32) | timestamp_low;
 }
 
-inline void llk_get_next_op_info(tt::op_info_t& op_info_struct) {
-
-    uint32_t* op_info_ptr = reinterpret_cast<uint32_t*>(OP_INFO_BASE_ADDR + op_info_offset);
-    static constexpr uint32_t op_info_num_items = 7;
-
-    volatile uint32_t* op_info_struct_ptr = reinterpret_cast<volatile uint32_t*>(&op_info_struct);
-    for (uint32_t i = 0; i < op_info_num_items; i++) {
-        op_info_struct_ptr[i] = op_info_ptr[i];
-    }
-    op_info_offset += 28;
-
-    if (op_info_offset == OP_INFO_SIZE) {
-        op_info_offset = 0; // In case we go out of bounds
-    }
+inline void record_kernel_runtime(uint64_t kernel_runtime) {
+    debug_mailbox_base[mailbox_end - 4] = kernel_runtime & 0xffff;
+    debug_mailbox_base[mailbox_end - 3] = (kernel_runtime >> 16) & 0xffff;
+    debug_mailbox_base[mailbox_end - 2] = (kernel_runtime >> 32) & 0xffff;
+    debug_mailbox_base[mailbox_end - 1] = (kernel_runtime >> 48) & 0xffff;
 }
+
+void debug_dump(const uint8_t *data, uint32_t byte_size);
+void debug_dump_seek(uint8_t offset);
+
 
 inline __attribute__((always_inline)) unsigned int mulsi3 (unsigned int a, unsigned int b)
 {
@@ -560,4 +504,26 @@ inline void mop_sync()
     // Now read -- this read will block until mops are done
     *fooptr = pc_buf_base[2];
 }
+
+inline void llk_get_next_op_info(tt::op_info_t& op_info_struct) {
+
+    uint32_t* op_info_ptr = reinterpret_cast<uint32_t*>(OP_INFO_BASE_ADDR + op_info_offset);
+    static constexpr uint32_t op_info_num_items = 7;
+
+    volatile uint32_t* op_info_struct_ptr = reinterpret_cast<volatile uint32_t*>(&op_info_struct);
+    for (uint32_t i = 0; i < op_info_num_items; i++) {
+        op_info_struct_ptr[i] = op_info_ptr[i];
+    }
+    op_info_offset += 28;
+
+    if (op_info_offset == OP_INFO_SIZE) {
+        op_info_offset = 0; // In case we go out of bounds
+    }
+}
+
+inline void mem_barrier(uint32_t data)
+{
+    local_mem_barrier = data;
+}
+
 }

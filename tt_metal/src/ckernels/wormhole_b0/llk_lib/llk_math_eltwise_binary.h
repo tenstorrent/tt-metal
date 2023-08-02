@@ -1,115 +1,238 @@
 #pragma once
-#include "llk_param_structs.h"
-
 #include "ckernel_include.h"
 #include "ckernel_template.h"
-
 #include "cmath_common.h"
 #include "llk_math_common.h"
+#include "llk_param_structs.h"
 
 using namespace ckernel;
 
 // local function declarations
 inline void eltwise_binary_configure_addrmod();
+inline void eltwise_binary_configure_mop(const std::uint32_t acc_to_dest = 0);
+
+template <EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+inline void eltwise_binary_reuse_dest_as_src() {
+    if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA) {
+        move_d2a_fixed_face(ADDR_MOD_1);
+    } else if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB) {
+        move_d2b_fixed_face(ADDR_MOD_1);
+    }
+}
+
 
 template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType src_b_bcast_type,
     DstSync Dst = DstSync::SyncFull,
     int NUM_FIDELITY_PHASES = 0,
-    bool acc_to_dest =  false,
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool is_fp32_dest_acc_en = false>
-inline void llk_math_eltwise_binary(uint dst_index, bool clear_dest_acc = false) {
+inline void llk_math_eltwise_binary_impl(const std::uint32_t num_faces_a, const std::uint32_t num_faces_b, uint dst_index, const bool clear_fp32_dst_acc) {
     constexpr bool high_fidelity = (NUM_FIDELITY_PHASES > 0);
-    static_assert(!(acc_to_dest && (src_b_bcast_type != BroadcastType::NONE)), "Broadcast ACC_TO_DEST unsupported");
+    constexpr uint32_t ZERO_ACC_MODE = p_zeroacc::CLR_16;
+
+    // Todo: do something with num_faces_a, num_faces_b
 
     if constexpr ((Dst == DstSync::SyncTile16) || (Dst == DstSync::SyncTile2)) {
         math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(math_sync_tile_dst_index);
 
-        if constexpr (Dst == DstSync::SyncTile16) {
-
-            constexpr uint32_t ZERO_ACC_MODE = is_fp32_dest_acc_en ? (p_zeroacc::CLR_16_32B) : (p_zeroacc::CLR_16);
-
             if constexpr (eltwise_binary_type == ELWMUL) {
-                TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, (math_sync_tile_dst_index << 2) + 0);
-                TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, (math_sync_tile_dst_index << 2) + 1);
-                TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, (math_sync_tile_dst_index << 2) + 2);
-                TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, (math_sync_tile_dst_index << 2) + 3);
-            }else if constexpr(acc_to_dest){
-                static_assert(acc_to_dest);
-                if (clear_dest_acc) {
-                    TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, (math_sync_tile_dst_index << 2) + 0);
-                    TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, (math_sync_tile_dst_index << 2) + 1);
-                    TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, (math_sync_tile_dst_index << 2) + 2);
-                    TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, (math_sync_tile_dst_index << 2) + 3);
+            if (is_fp32_dest_acc_en && clear_fp32_dst_acc) {
+                #pragma GCC unroll 0
+                for (std::uint32_t i = 0; i < 8; i++) {
+                    TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, (math_sync_tile_dst_index << 3) + i);
+                }
+            } else {
+                #pragma GCC unroll 0
+                for (std::uint32_t i = 0; i < 4; i++) {
+                    TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, (math_sync_tile_dst_index << 2) + i);
                 }
             }
+        } else if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) {
+            static_assert(
+                !(binary_reuse_dest != EltwiseBinaryReuseDestType::NONE && (Dst == DstSync::SyncTile16) ||
+                  (Dst == DstSync::SyncTile2)),
+                "Dst clear in DstSync::SyncTile16 or DstSync::SyncTile2 dst sync mode is not supported!");
+            /*
+                if (clear_dest_acc) {
+                if constexpr (is_fp32_dest_acc_en) {
+                    #pragma GCC unroll 0
+                    for(std::uint32_t i = 0; i < 8; i++) {
+                        TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, (math_sync_tile_dst_index << 3) + i);
+                    }
+                } else {
+                    #pragma GCC unroll 0
+                    for(std::uint32_t i = 0; i < 4; i++) {
+                        TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, (math_sync_tile_dst_index << 2) + i);
+                    }
+                }
+            }
+            */
         }
-
     } else {
         math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
     }
 
-    if constexpr (acc_to_dest) {
-        static_assert((eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB));
-        // accumulate to dest where srcA <- 0 and dest += (srcA +/- srcB)
-        ckernel_template::run(instrn_buffer);
-    }else if constexpr ((eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB)) {
-        if constexpr (src_b_bcast_type == BroadcastType::SCALAR) {
-            // Manually clear B once mop is done
-            ckernel_template::run(instrn_buffer);
-            TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_D);
-        } else if constexpr (src_b_bcast_type == BroadcastType::COL) {
+    if constexpr ((eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB)) {
+        if constexpr (src_b_bcast_type == BroadcastType::COL) {
             // Mop for col broadcast only does 2 outerloops.  Needs to clear B manually and call twice
+            constexpr uint32_t outerloop = (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) ? 2 : 1;
+#pragma GCC unroll 0
+            for (std::uint32_t n = 0; n < outerloop; n++) {  // N-num faces
+                eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
             ckernel_template::run(instrn_buffer);
+            }
             TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
+#pragma GCC unroll 0
+            for (std::uint32_t n = 0; n < outerloop; n++) {  // N-num faces
+                eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
             ckernel_template::run(instrn_buffer);
+            }
             TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
         } else {
-            // Row and no broadcasted behaves similarly
+            constexpr uint32_t outerloop = (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) ? 4 : 1;
+#pragma GCC unroll 0
+            for (std::uint32_t n = 0; n < outerloop; n++) {  // N-num faces
+                eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
             ckernel_template::run(instrn_buffer);
         }
+            // Manually clear B once mop is done for scaler bcast
+            if constexpr (src_b_bcast_type == BroadcastType::SCALAR) {
+                TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_D);
+            }
+        }
     } else if constexpr (eltwise_binary_type == ELWMUL) {
-        if constexpr (src_b_bcast_type == BroadcastType::SCALAR) {
-            // Manually clear B once mop is done
+        if constexpr (src_b_bcast_type == BroadcastType::COL) {
+            // Mop for col broadcast only does 2 outerloops.  Needs to clear B manually and call twice
+            constexpr uint32_t outerloop = (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) ? 2 : 1;
             if constexpr (high_fidelity) {
-                for (std::uint32_t n = 0; n < 4; n++) {  // N-num faces
+#pragma GCC unroll 0
+                for (std::uint32_t n = 0; n < 2; n++) {  // N-num faces
+                    eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
+                        // fp32 zeroacc can only clear 8x16 datums at a time, need to call twice per 16x16 face
+                        if (is_fp32_dest_acc_en && clear_fp32_dst_acc) {
+                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + (0 +       n*2)); // Clear lower half of faces 0 & 1 (offsets 0, 2)
+                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + (0 + ((n*2)+1))); // Clear upper half of faces 0 & 1 (offsets: 1, 3)
+                        } else {
+                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 2)) + (0 +         n)); // Clear faces 0 & 1
+                        }
                     ckernel_template::run(instrn_buffer);
                 }
             } else {
+#pragma GCC unroll 0
+                for (std::uint32_t n = 0; n < outerloop; n++) {  // N-num faces
+                    eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
+                    if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) {
+                        if (is_fp32_dest_acc_en && clear_fp32_dst_acc) {
+                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + (0 +       n*2)); // Clear lower half of faces 0 & 1
+                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + (0 + ((n*2)+1))); // Clear upper half of faces 0 & 1
+                        } else {
+                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 2)) + (0 +         n)); // Clear faces 0 & 1
+                        }
+                    }
                 ckernel_template::run(instrn_buffer);
             }
-            TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_D);
-        } else if constexpr (src_b_bcast_type == BroadcastType::COL) {
-            // Mop for col broadcast only does 2 outerloops.  Needs to clear B manually and call twice
-            if constexpr (high_fidelity) {
-                ckernel_template::run(instrn_buffer);
-                ckernel_template::run(instrn_buffer);
-            } else {
-                ckernel_template::run(instrn_buffer);
             }
             TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
             if constexpr (high_fidelity) {
+#pragma GCC unroll 0
+                for (std::uint32_t n = 0; n < 2; n++) {  // N-num faces
+                    eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
+                    if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) {
+                        if (is_fp32_dest_acc_en && clear_fp32_dst_acc) {
+                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + (4 +       n*2)); // Clear lower half of faces 2 & 3  (offsets: 4, 6)
+                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + (4 + ((n*2)+1))); // Clear upper half of faces 2 & 3 (offsets: 5, 7)
+                        } else {
+                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 2)) + (2 +         n)); // Clear faces 2 & 3
+                        }
+                    }
                 ckernel_template::run(instrn_buffer);
-                ckernel_template::run(instrn_buffer);
+                }
             } else {
+#pragma GCC unroll 0
+                for (std::uint32_t n = 0; n < outerloop; n++) {  // N-num faces
+                    eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
+                    if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) {
+                        if (is_fp32_dest_acc_en && clear_fp32_dst_acc) {
+                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 3)) +  (4 +       n*2)); // Clear lower half of faces 2 & 3  (offsets: 4, 6)
+                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 3)) +  (4 + ((n*2)+1))); // Clear upper half of faces 2 & 3 (offsets: 5, 7)
+                        } else {
+                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 2)) +  (2 +         n)); // Clear faces 2 & 3
+                        }
+                    }
                 ckernel_template::run(instrn_buffer);
+            }
             }
             TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
         } else {
             // Row and no broadcasted behaves similarly
+            constexpr uint32_t outerloop = (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) ? 4 : 1;
             if constexpr (high_fidelity) {
+#pragma GCC unroll 0
                 for (std::uint32_t n = 0; n < 4; n++) {  // N-num faces
+                    eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
+                    if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) {
+                        if (is_fp32_dest_acc_en && clear_fp32_dst_acc) {
+                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + n*2);
+                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + ((n*2)+1));
+                        } else {
+                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 2)) + n);
+                        }
+                    }
                     ckernel_template::run(instrn_buffer);
                 }
             } else {
+#pragma GCC unroll 0
+                for (std::uint32_t n = 0; n < outerloop; n++) {  // N-num faces
+                    eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
+                    if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) {
+                        if (is_fp32_dest_acc_en && clear_fp32_dst_acc) {
+                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + n*2);
+                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + ((n*2)+1));
+                        } else {
+                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 2)) + n);
+                        }
+                    }
                 ckernel_template::run(instrn_buffer);
+            }
+        }
+            if constexpr (src_b_bcast_type == BroadcastType::SCALAR) {
+                TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_D);
             }
         }
     } else {
         FWASSERT("Unsupported op!", false);
     }
     math::clear_dst_reg_addr();
+}
+
+template <
+    EltwiseBinaryType eltwise_binary_type,
+    BroadcastType src_b_bcast_type,
+    DstSync Dst = DstSync::SyncFull,
+    int NUM_FIDELITY_PHASES = 0,
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
+    bool is_fp32_dest_acc_en = false>
+inline void llk_math_eltwise_binary(uint dst_index, const bool clear_fp32_dst_acc = true) {
+    llk_math_eltwise_binary_impl<eltwise_binary_type, src_b_bcast_type, Dst, NUM_FIDELITY_PHASES, binary_reuse_dest, is_fp32_dest_acc_en>(4, 4, dst_index, clear_fp32_dst_acc);
+}
+
+template <
+    EltwiseBinaryType eltwise_binary_type,
+    BroadcastType src_b_bcast_type,
+    DstSync Dst = DstSync::SyncFull,
+    int NUM_FIDELITY_PHASES = 0,
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
+    bool is_fp32_dest_acc_en = false>
+inline void llk_math_eltwise_binary(const std::uint32_t operand_A, const std::uint32_t operand_B, uint dst_index, const bool clear_fp32_dst_acc = true) {
+    const std::uint32_t id_A = get_operand_id(operand_A);
+    const std::uint32_t id_B = get_operand_id(operand_B);
+
+    const std::uint32_t num_faces_A = get_num_faces(id_A);
+    const std::uint32_t num_faces_B = get_num_faces(id_B);
+
+    llk_math_eltwise_binary_impl<eltwise_binary_type, src_b_bcast_type, Dst, NUM_FIDELITY_PHASES, binary_reuse_dest, is_fp32_dest_acc_en>(num_faces_A, num_faces_B, dst_index, clear_fp32_dst_acc);
 }
 
 template <EltwiseBinaryType eltwise_binary_type, BroadcastType bcast_type>
@@ -155,17 +278,20 @@ inline void eltwise_binary_configure_addrmod() {
     }
 }
 
-template <EltwiseBinaryType eltwise_binary_type, BroadcastType bcast_type, int NUM_FIDELITY_PHASES = 0, bool acc_to_dest = false>
-inline void eltwise_binary_configure_mop() {
+template <
+    EltwiseBinaryType eltwise_binary_type,
+    BroadcastType bcast_type,
+    int NUM_FIDELITY_PHASES = 0,
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+inline void eltwise_binary_configure_mop(const std::uint32_t acc_to_dest = 0, const std::uint32_t operand_id = 0) {
     constexpr bool high_fidelity = (NUM_FIDELITY_PHASES > 0);
-    static_assert(!(acc_to_dest && (BroadcastType::NONE!= bcast_type)));
-
     const uint addr_mod = ADDR_MOD_0;
     constexpr uint innerloop = 16 >> 3;  // 8 rows per eltwise op at a time.
-    // The mop only runs for 2 outer loops and mop is called twice for col broadcast
-    constexpr uint outerloop = (bcast_type == BroadcastType::COL) ? 2 : 4;
+    uint outerloop = get_num_faces(operand_id);
     auto broadcast_type = p_elwise::SRCB_NO_BCAST;
     if constexpr (bcast_type == BroadcastType::COL) {
+        // The mop only runs for 2 outer loops and mop is called twice for col broadcast
+        outerloop = 2;
         broadcast_type = p_elwise::SRCB_BCAST_COL;
     } else if constexpr (bcast_type == BroadcastType::ROW) {
         broadcast_type = p_elwise::SRCB_BCAST_ROW;
@@ -173,16 +299,18 @@ inline void eltwise_binary_configure_mop() {
         broadcast_type = p_elwise::SRCB_BCAST_ALL;
     }
 
+    if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) {
+        outerloop = 1;
+    }
+
     // Scalar and Col broadcast should not Clear B within a mop.  This is controlled outside of MOP.
     if constexpr (bcast_type == BroadcastType::COL || bcast_type == BroadcastType::SCALAR) {
         if constexpr (eltwise_binary_type == ELWADD) {
-            ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, 0, broadcast_type, addr_mod, 0));
-            tmp.set_start_op(TT_OP_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD));
+            ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, acc_to_dest, broadcast_type, addr_mod, 0));
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_A, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));
             tmp.program(instrn_buffer);
         } else if constexpr (eltwise_binary_type == ELWSUB) {
-            ckernel_template tmp(outerloop, innerloop, TT_OP_ELWSUB(0, 0, broadcast_type, addr_mod, 0));
-            tmp.set_start_op(TT_OP_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD));
+            ckernel_template tmp(outerloop, innerloop, TT_OP_ELWSUB(0, acc_to_dest, broadcast_type, addr_mod, 0));
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_A, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));
             tmp.program(instrn_buffer);
         } else if constexpr (eltwise_binary_type == ELWMUL) {
@@ -190,7 +318,6 @@ inline void eltwise_binary_configure_mop() {
                 high_fidelity ? NUM_FIDELITY_PHASES : outerloop,
                 innerloop,
                 TT_OP_ELWMUL(0, 0, broadcast_type, addr_mod, 0));
-            tmp.set_start_op(TT_OP_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD));
             if constexpr (high_fidelity) {
                 tmp.set_last_inner_loop_instr(
                     TT_OP_ELWMUL(0, 0, broadcast_type, ADDR_MOD_2, 0));  // Incr fidelity last inst of inner loop
@@ -202,15 +329,11 @@ inline void eltwise_binary_configure_mop() {
         }
     } else {
         if constexpr (eltwise_binary_type == ELWADD) {
-            constexpr uint32_t ACC_MODE = acc_to_dest ? p_elwise::DEST_ACCUM_EN : p_elwise::DEST_ACCUM_DIS;
-            ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, ACC_MODE, broadcast_type, addr_mod, 0));
-            tmp.set_start_op(TT_OP_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD));
+            ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, acc_to_dest, broadcast_type, addr_mod, 0));
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));
             tmp.program(instrn_buffer);
         } else if constexpr (eltwise_binary_type == ELWSUB) {
-            constexpr uint32_t ACC_MODE = acc_to_dest ? p_elwise::DEST_ACCUM_EN : p_elwise::DEST_ACCUM_DIS;
-            ckernel_template tmp(outerloop, innerloop, TT_OP_ELWSUB(0, ACC_MODE, broadcast_type, addr_mod, 0));
-            tmp.set_start_op(TT_OP_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD));
+            ckernel_template tmp(outerloop, innerloop, TT_OP_ELWSUB(0, acc_to_dest, broadcast_type, addr_mod, 0));
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));
             tmp.program(instrn_buffer);
         } else if constexpr (eltwise_binary_type == ELWMUL) {
@@ -218,7 +341,6 @@ inline void eltwise_binary_configure_mop() {
                 high_fidelity ? NUM_FIDELITY_PHASES : outerloop,
                 innerloop,
                 TT_OP_ELWMUL(0, 0, broadcast_type, addr_mod, 0));
-            tmp.set_start_op(TT_OP_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD));
             if constexpr (high_fidelity) {
                 tmp.set_last_inner_loop_instr(
                     TT_OP_ELWMUL(0, 0, broadcast_type, ADDR_MOD_2, 0));  // Incr fidelity last inst of inner loop
@@ -231,16 +353,44 @@ inline void eltwise_binary_configure_mop() {
     }
 }
 
-template <EltwiseBinaryType eltwise_binary_type, BroadcastType src_b_bcast_type, int NUM_FIDELITY_PHASES = 0, bool acc_to_dest = false>
-inline void llk_math_eltwise_binary_init() {
+template <
+    EltwiseBinaryType eltwise_binary_type,
+    BroadcastType src_b_bcast_type,
+    int NUM_FIDELITY_PHASES = 0,
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+inline void llk_math_eltwise_binary_init_impl(const std::uint32_t operand_id, const std::uint32_t transpose, const std::uint32_t acc_to_dest) {
+    // todo: do something with num_faces
     eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type>();
 
     if constexpr (
         (eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB) || (eltwise_binary_type == ELWMUL)) {
-        eltwise_binary_configure_mop<eltwise_binary_type, src_b_bcast_type, NUM_FIDELITY_PHASES, acc_to_dest>();
+        eltwise_binary_configure_mop<eltwise_binary_type, src_b_bcast_type, NUM_FIDELITY_PHASES, binary_reuse_dest>(acc_to_dest, operand_id);
     } else {
         FWASSERT("Unsupported op!", false);
     }
 
+    TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
+
     math::reset_counters(p_setrwc::SET_ABD_F);
+}
+
+// Version with no operand
+template <
+    EltwiseBinaryType eltwise_binary_type,
+    BroadcastType src_b_bcast_type,
+    int NUM_FIDELITY_PHASES = 0,
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+inline void llk_math_eltwise_binary_init(const std::uint32_t transpose=0, const std::uint32_t acc_to_dest = 0) {
+    llk_math_eltwise_binary_init_impl<eltwise_binary_type, src_b_bcast_type, NUM_FIDELITY_PHASES, binary_reuse_dest>(0, transpose, acc_to_dest);
+}
+
+// Version with operands
+template <
+    EltwiseBinaryType eltwise_binary_type,
+    BroadcastType src_b_bcast_type,
+    int NUM_FIDELITY_PHASES = 0,
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+inline void llk_math_eltwise_binary_init_with_operands(const std::uint32_t operand_A, const std::uint32_t operand_B, const std::uint32_t transpose=0, const std::uint32_t acc_to_dest = 0) {
+    const std::uint32_t operand_id = get_operand_id(operand_A); // operand_id is used to extract tile dim data which is the same for both operands
+    llk_math_eltwise_binary_init_impl<eltwise_binary_type, src_b_bcast_type, NUM_FIDELITY_PHASES, binary_reuse_dest>(operand_id, transpose, acc_to_dest);
 }

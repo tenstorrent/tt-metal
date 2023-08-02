@@ -23,11 +23,11 @@ volatile uint *mailbox_base[4] = {
 volatile uint *dbg_event_scratch = nullptr;
 uint *regmem = reinterpret_cast<uint *>(REGFILE_BASE);
 
-uint32_t cfg_state_id __attribute__((section(".bss"))) = 0;  // Flip between 0 and 1 to keep state between kernel calls
-uint32_t dest_offset_id __attribute__((section(".bss"))) = 0; // Flip between 0 and 1 to keep dest pointer between kernel calls
+uint32_t cfg_state_id __attribute__((used)) = 0;  // Flip between 0 and 1 to keep state between kernel calls
+uint32_t dest_offset_id __attribute__((used)) = 0; // Flip between 0 and 1 to keep dest pointer between kernel calls
 
-uint32_t dbg_event_index __attribute__((section(".bss"))) = 0;
-uint32_t dbg_event_end __attribute__((section(".bss"))) = 0;
+uint32_t dbg_event_index __attribute__((used)) = 0;
+uint32_t dbg_event_end __attribute__((used)) = 0;
 volatile uint16_t *debug_mailbox_base = nullptr;
 uint8_t mailbox_index = 0;
 uint8_t mailbox_end = 32;

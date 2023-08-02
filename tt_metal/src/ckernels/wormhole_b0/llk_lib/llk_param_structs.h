@@ -7,6 +7,8 @@
 //  Unpack LLK param structs
 //***
 
+constexpr std::uint32_t default_tile_dims[2] = {32, 32};
+
 struct llk_unpack_A_params_t {
     std::uint32_t unpA_operand;
 };
@@ -75,31 +77,5 @@ union llk_relu_config_u {
 struct llk_pack_params_t {
     std::uint32_t pack_output;
     llk_relu_config_u relu_config;
+    bool srnd_fpu_en;
 };
-
-struct hlk_pack_shifted_params_t {
-    std::uint32_t pack_output;
-    llk_relu_config_u relu_config;
-    int initial_padding;
-    int row_shift_x;
-    int original_x;
-    int original_y;
-    int stride;
-    int stride_offset;
-    int valid_row_count;
-    int column_number;
-    bool final_iteration;
-    bool relu;
-    bool reserved[2];
-};
-
-struct hlk_pack_shifted_state_t {
-    int current_rd_ptr;
-    int current_x;
-    int current_y;
-    int current_wr_ptr;
-    bool partial_tile;
-    bool reserved[3];
-};
-using llk_pack_shifted_params_t = hlk_pack_shifted_params_t;
-using llk_pack_shifted_state_t = hlk_pack_shifted_state_t;

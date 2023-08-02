@@ -13,10 +13,18 @@ namespace ckernel {
 
 ALWI void mm_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t out_cb_id = 16) {
     UNPACK(( llk_setup_operands() ));
+    #ifdef ARCH_GRAYSKULL
     UNPACK(( llk_unpack_AB_matmul_init() ));
+    #else
+    UNPACK(( llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id) ));
+    #endif
     UNPACK(( llk_unpack_AB_matmul_hw_configure_disaggregated(in0_cb_id, in1_cb_id) ));
 
+    #ifdef ARCH_GRAYSKULL
     MATH(( llk_math_matmul_init<MATH_FIDELITY>() ));
+    #else
+    MATH(( llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id) ));
+    #endif
     MATH(( llk_math_pack_sync_init<SYNC>()  ));
 
     PACK(( llk_pack_init()  ));
@@ -53,15 +61,25 @@ ALWI void matmul_tiles(uint32_t c_in0, uint32_t c_in1, uint32_t itile0, uint32_t
 }
 
 ALWI void mm_init_short_with_dt(uint32_t cbid) {
+    #ifdef ARCH_GRAYSKULL
     UNPACK(( llk_unpack_AB_matmul_init() ));
     UNPACK(( llk_unpack_reconfig_data_format(cbid, 1, 0, 0) ));
     MATH(( llk_math_matmul_init<MATH_FIDELITY>() ));
+    #else
+    UNPACK(( llk_unpack_AB_matmul_init(cbid, 1) ));
+    UNPACK(( llk_unpack_reconfig_data_format(cbid, 1, 0, 0) ));
+    MATH(( llk_math_matmul_init<MATH_FIDELITY>(cbid, 1) ));
+    #endif
 }
 
 ALWI void mm_init_short() {
+    #ifdef ARCH_GRAYSKULL
     MATH(( llk_math_matmul_init<MATH_FIDELITY>(0)  ));
-
     UNPACK(( llk_unpack_AB_matmul_init(0)  ));
+    #else
+    MATH(( llk_math_matmul_init<MATH_FIDELITY>(0, 1, 0)  ));
+    UNPACK(( llk_unpack_AB_matmul_init(0, 1) ));
+    #endif
 }
 
 

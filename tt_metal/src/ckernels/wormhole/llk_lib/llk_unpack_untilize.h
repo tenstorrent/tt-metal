@@ -77,7 +77,7 @@ inline void llk_unpack_untilize_init() { llk_unpack_untilize_mop_config(); }
 template <bool first_pass = true>
 inline void llk_unpack_untilize(std::uint32_t operand, std::uint32_t block_tile_cols) {
     std::uint32_t input = get_operand_id(operand);
-    std::uint32_t base_address = operands[input].f.fifo_rd_ptr;
+    std::uint32_t base_address = cb_read_interface[input].fifo_rd_ptr;
     std::uint32_t rem_blocks_in_row = block_tile_cols;
 
     // Program srcA and srcB base addresses

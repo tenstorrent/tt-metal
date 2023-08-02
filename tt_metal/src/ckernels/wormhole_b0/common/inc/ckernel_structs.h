@@ -12,9 +12,11 @@ struct semaphore
     constexpr static uint32_t MATH_PACK = 1;   // math <-> pack sync on dest register
     constexpr static uint32_t UNPACK_PACK = 2; // pack <-> unpack sync on scratch buffer
     constexpr static uint32_t UNPACK_OPERAND_SYNC = 3; // unpack <-> pack, math sync on operand get/release
-    constexpr static uint32_t PACK_DONE = 4; // Wait for beinning and end of each pack-iteration. For recording perf events.
+    constexpr static uint32_t PACK_DONE = 4; // Wait for beinning and end of each pack-iteration. For recording perf events and inserting delay.
     constexpr static uint32_t UNPACK_SYNC = 5; // trisc <-> unpack sync on hw kernel
-    constexpr static uint32_t PACK_SYNC = 6; // thcon <-> pack sync on tile write to l1
+    // Wait for beinning and end of each unpack or math iteration. For recording perf events and inserting delay.
+    // This semaphore should only be used for either unpack or math. Not both at the same time.
+    constexpr static uint32_t UNPACK_MATH_DONE = 6;
 
     constexpr static uint16_t t6_sem(const uint8_t sem_index)
     {
@@ -47,7 +49,7 @@ typedef struct {
    uint32_t fifo_rd_ptr;
    uint32_t fifo_limit;
    uint16_t tiles_acked;
-   uint16_t reserved_1;
+   uint16_t accumulation_buffer;
    uint32_t words_acked;
    uint32_t fifo_size;
    uint16_t blocks_per_iter; // total number of ublocks popped from interm buffer per input
@@ -55,13 +57,14 @@ typedef struct {
    uint16_t num_iter;  // total number of passes through the interm buffer per input
    uint16_t curr_iter;  // current numer of passes through the interm buffer per input
    uint32_t fifo_rd_base_ptr;
+   uint32_t tile_size_words;
 } operand_t;
 
-static_assert(sizeof(operand_t) == (sizeof(uint32_t) * 8));
+static_assert(sizeof(operand_t) == (sizeof(uint32_t) * 9));
 
 typedef union {
    operand_t f;
-   uint32_t val[8];
+   uint32_t val[9];
 } operand_u;
 
 typedef struct {
@@ -72,13 +75,14 @@ typedef struct {
    uint32_t fifo_wr_base_ptr;
    uint16_t fifo_wr_tile_ptr;
    uint16_t tiles_received;
+   uint32_t dram_output_no_push;
+   uint16_t tile_size_words;
    bool     legacy_pack;
-   uint8_t  reserved_0;
    uint8_t  fork;
    uint8_t  num_fork_streams;
    bool     shared_buffer;  // interm buffer is shared with output
    uint8_t  shared_buffer_operand; //shared buffer output operand
-   uint8_t  reserved_1[2];
+   bool     accumulation_buffer;  // interm buffer used for accumulation
    uint8_t  fork_stream_ids[16];
    union {
       uint16_t ublock_ct;       //ublock ct dim in tiles
@@ -105,11 +109,11 @@ typedef struct {
    };
 } output_t;
 
-static_assert(sizeof(output_t) == (sizeof(uint32_t) * 15));
+static_assert(sizeof(output_t) == (sizeof(uint32_t) * 16));
 
 typedef union {
    output_t f;
-   uint32_t val[15];
+   uint32_t val[16];
 } output_u;
 
 

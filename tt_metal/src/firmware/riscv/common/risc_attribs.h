@@ -1,6 +1,8 @@
 #ifndef _RISC_ATTRIBS_H_
 #define _RISC_ATTRIBS_H_
 
+#include <stdint.h>
+
 union tt_uint64_t {
     uint64_t v;
     struct {
@@ -14,6 +16,15 @@ union tt_uint64_t {
 
 
 inline __attribute__((always_inline)) uint64_t tt_l1_load(tt_uint64_t tt_l1_ptr *p)
+{
+    tt_uint64_t v;
+
+    v.hi = p->hi;
+    v.lo = p->lo;
+    return v.v;
+}
+
+inline __attribute__((always_inline)) uint64_t tt_l1_load(volatile tt_uint64_t * tt_l1_ptr p)
 {
     tt_uint64_t v;
 

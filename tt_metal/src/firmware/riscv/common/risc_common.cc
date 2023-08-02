@@ -47,18 +47,18 @@ void tile_header_buffer_init() {
   const uint32_t TILE_HEADER_BUF_INIT_CHUNK_BYTES = TILE_HEADER_BUF_INIT_CHUNK_WORDS*16;
   const uint32_t NUM_TILE_HEADER_BUF_CHUNKS = MAX_TILES_PER_PHASE / TILE_HEADER_BUF_INIT_CHUNK_WORDS;
   uint32_t header_buf_init_noc = NUM_NOCS-1-loading_noc;
-  volatile uint32_t* l1_tile_size_words_ptr = &(RISC_EPOCH_INFO_PTR->tile_size_words[0]);
+  volatile uint32_t* l1_page_size_ptr = &(RISC_EPOCH_INFO_PTR->page_size[0]);
   volatile uint32_t* l1_tile_size_header_buf_addr_ptr = &(RISC_EPOCH_INFO_PTR->tile_size_header_buf_addr[0]);
   // L1 reads flushed by immediate usage
   uint32_t num_tile_sizes = RISC_EPOCH_INFO_PTR->num_tile_sizes;
   for (uint32_t i = 0; i < num_tile_sizes; i++) {
-    uint32_t tile_size_words = *l1_tile_size_words_ptr;
+    uint32_t page_size = *l1_page_size_ptr;
     uint32_t tile_size_header_buf_addr = *l1_tile_size_header_buf_addr_ptr;
-    l1_tile_size_words_ptr++;
+    l1_page_size_ptr++;
     l1_tile_size_header_buf_addr_ptr++;
     volatile uint32_t* l1_header_buf_tile_size_ptr = (volatile uint32_t*)tile_size_header_buf_addr;
     for (uint32_t j = 0; j < TILE_HEADER_BUF_INIT_CHUNK_WORDS; j++) {
-      l1_header_buf_tile_size_ptr[0] = tile_size_words;
+      l1_header_buf_tile_size_ptr[0] = page_size;
       l1_header_buf_tile_size_ptr += 4;
     }
 

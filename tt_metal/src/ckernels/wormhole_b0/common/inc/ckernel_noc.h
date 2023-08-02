@@ -13,14 +13,14 @@ struct stream_tile_info_t
 namespace ckernel
 {
 
-typedef volatile uint32_t *regp;
+typedef volatile uint32_t tt_reg_ptr *regp;
 
 // Only perform the calculation once, as it's expensive to multiply numbers
 inline regp get_stream_reg(uint32_t stream_id)
 {
     constexpr uint32_t NOC_REGISTER_MMIO_BASE = 0xFFB40000;
     constexpr uint32_t PER_STREAM_REG_SIZE = 0x1000;
-    return (uint32_t volatile *) (NOC_REGISTER_MMIO_BASE + PER_STREAM_REG_SIZE * stream_id);
+    return (regp) (NOC_REGISTER_MMIO_BASE + PER_STREAM_REG_SIZE * stream_id);
 }
 
 inline uint32_t get_stream_reg_addr(uint32_t stream_id, uint32_t index)

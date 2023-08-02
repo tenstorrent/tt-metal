@@ -1,3 +1,4 @@
+
 #include "llk_math_eltwise_unary_sfpu.h"
 
 template <SfpuType sfpu_op, bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>

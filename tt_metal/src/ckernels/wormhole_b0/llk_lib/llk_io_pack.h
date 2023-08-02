@@ -67,7 +67,7 @@ inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32
 
     std::int32_t free_tiles;
     do {
-        std::uint16_t tiles_acked = (std::uint16_t) reg_read_barrier((std::uint32_t)tiles_acked_ptr);
+        std::uint16_t tiles_acked = (std::uint16_t) reg_read((std::uint32_t)tiles_acked_ptr);
         std::uint32_t free_tiles_wrap = cb_interface[output].fifo_num_pages - (tiles_received - tiles_acked);
         free_tiles = (std::int32_t) free_tiles_wrap;
     } while (free_tiles < num_tiles);
@@ -122,4 +122,20 @@ inline void llk_wait_for_free_blocks(const std::int32_t operand, const std::int3
 
 inline void llk_push_blocks(const std::int32_t operand, const std::int32_t num_blocks) {
     llk_push_tiles<true>(operand, num_blocks);
+}
+
+// FIXME-WH-UPLIFT
+// FIXME: FP32 accumulation --> pop tiles in the operand? just change wr_ptr?
+inline void llk_free_tiles(std::uint32_t operand, std::uint32_t num_tiles) {
+    // std::uint32_t output = operand_to_output_index(operand);
+    // if (cb_interface[output].accumulation_buffer) {
+
+    //     std::uint32_t shared_output = operand_to_output_index(cb_interface[output].shared_buffer_operand);
+
+    //     cb_interface[output].f.fifo_wr_ptr = outputs[shared_output].fifo_wr_ptr;
+
+    //     cb_interface[output].f.fifo_wr_base_ptr = outputs[output].fifo_wr_ptr; //inc base ptr
+
+    //     cb_interface[output].curr_iter = 0;
+    // }
 }

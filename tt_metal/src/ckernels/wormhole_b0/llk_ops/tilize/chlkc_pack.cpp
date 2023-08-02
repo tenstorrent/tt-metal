@@ -16,7 +16,7 @@ int32_t per_core_block_tile_cnt; // Block tile count = (1xN)
 void pack_main(const struct hlk_args_t *args,const int outer_loop_cnt)
 {
 int __outer_loop_iter;
-llk_pack_init();
+llk_pack_init(16);
 llk_pack_hw_configure_disaggregated(16);
 llk_setup_outputs();
 llk_pack_dest_init<SyncTile16>();

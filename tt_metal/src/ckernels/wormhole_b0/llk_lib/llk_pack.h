@@ -1,5 +1,4 @@
 #pragma once
-
 #include "llk_io_pack.h"
 #include "llk_defs.h"
 #include "llk_param_structs.h"
@@ -13,9 +12,14 @@ using namespace ckernel;
 using namespace ckernel::packer;
 
 template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
-inline void llk_pack_mop_config() {
+inline void llk_pack_mop_config(const uint32_t output_id) {
+
+    const uint num_faces = get_num_faces(output_id);
+    const uint face_r_dim = get_face_r_dim(output_id);
+    const bool partial_face = get_partial_face(output_id) && IS_BFP_FORMAT((uint)pack_dst_format[output_id]);
+
     addr_mod_pack_t{
-        .y_src = {.incr = untilize ? 0 : 1},
+        .y_src = {.incr = untilize ? 0 : 15}, // 4-bit value so max is 15. incadcxy will increment it by 1
         .y_dst = {.incr = 1},
     }
         .set(ADDR_MOD_0);
@@ -35,90 +39,105 @@ inline void llk_pack_mop_config() {
        .set(ADDR_MOD_1);
     }
 
-
     addr_mod_pack_t{
         .y_src = { .incr = 0, .clr = 0, .cr = 0  },
         .y_dst = { .incr = 0, .clr = 0, .cr = 0  },
     }.set(ADDR_MOD_2);
 
-    const uint MOP_INNER_LOOP = 16;
-    const uint MOP_UNTILIZE_INNER_LOOP = FaceLayout == DstTileFaceLayout::ColMajor ? 8 : 4;
-    const uint MOP_OUTER_LOOP = 1;
-    const uint MOP_UNTILIZE_OUTER_LOOP = 8;
-    const uint PACKCNT = 4;
+    const uint PACKCNT = partial_face ? 1 : num_faces;
     const uint MEGAROW = 1;
     constexpr uint ZERO_OUTPUT_FLAG = zero_output ? p_pacr::P_ZERO_OUTPUT_ENABLED : p_pacr::P_ZERO_OUTPUT_DISABLED;
 
-    ckernel::ckernel_template tmp(
-        untilize ? MOP_UNTILIZE_OUTER_LOOP : MOP_OUTER_LOOP, untilize ? MOP_UNTILIZE_INNER_LOOP : MOP_INNER_LOOP, TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
 
     // Write header to l1
     if constexpr (!untilize) {
-        tmp.set_last_inner_loop_instr(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, 0, 0, 1));
-        tmp.set_last_outer_loop_instr(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, 0, 0, 1));
+        const uint MOP_INNER_LOOP = 1;
+        const uint MOP_OUTER_LOOP = 1;
+
+        ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 1));
+
+        if (partial_face) {
+            tmp.set_start_op(TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0)); // Don't close the tile, point to the next face
+            tmp.set_loop_op0(TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 1, 0)); // Inc ch0_y+=1 (addr_mod_0 will increment by 15)
+            tmp.set_loop_op1(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 1)); // Close the tile
+        }
         // Write header to l1
-        // tmp.set_end_op(TT_OP_STOREIND(
-        //     1, 0, p_ind::LD_16B, LO_16(0), p_ind::INC_NONE, p_gpr_pack::TILE_HEADER, p_gpr_pack::OUTPUT_ADDR));
+        tmp.set_end_op(TT_OP_STOREIND(
+            1, 0, p_ind::LD_16B, LO_16(0), p_ind::INC_NONE, p_gpr_pack::TILE_HEADER, p_gpr_pack::OUTPUT_ADDR));
+
+        tmp.program(instrn_buffer);
     } else {
-        tmp.set_start_op(TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
-        tmp.set_loop_op0(TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 4, 0));
-        tmp.set_end_op(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
-        tmp.set_last_inner_loop_instr(TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 4, 0));
-        tmp.set_last_outer_loop_instr(TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 4, 0));
+        const bool narrow_tile = get_narrow_tile(output_id);
+        const uint MOP_UNTILIZE_INNER_LOOP = narrow_tile ? 1 : (FaceLayout == DstTileFaceLayout::ColMajor ? 8 : 4);
+        const uint MOP_UNTILIZE_OUTER_LOOP = ((face_r_dim == 1) || narrow_tile) ? 1 : face_r_dim / 2;
+
+        ckernel::ckernel_template tmp(MOP_UNTILIZE_OUTER_LOOP, MOP_UNTILIZE_INNER_LOOP, TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
+        if (narrow_tile) {
+            tmp.set_last_inner_loop_instr(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 1)); // Close the tile and clear the counters
+        } else {
+            tmp.set_start_op(TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
+            if (face_r_dim>1) {
+                tmp.set_loop_op0(TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 4, 0)); // If it's narrow tile (32x16) pack rows back to back otherwise jump between faces
+                tmp.set_end_op(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
+            }
+            tmp.set_last_inner_loop_instr(TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 4, 0));
+            tmp.set_last_outer_loop_instr(TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 4, 0));
+        }
+        tmp.program(instrn_buffer);
     }
 
-    tmp.program(instrn_buffer);
 }
 
 template <bool untilize = false, bool is_fp32_dest_acc_en = false>
 inline void llk_pack_hw_configure(const llk_pack_params_t *pack_params) {
-    configure_pack<is_fp32_dest_acc_en>(get_output_id(pack_params->pack_output), pack_params->relu_config.val);
-
-    std::uint32_t output = get_output_id(pack_params->pack_output);
-    if constexpr (untilize) {
-        regfile[p_gpr_pack::ONE_MSG_RECEIVED] =
-            ((1 * GET_L1_HEADERLESS_TILE_SIZE((uint)pack_dst_format[output])) << 12) |
-            1; /*SOURCE_ENDPOINT_NEW_MSGS_TOTAL_SIZE=12*/
-        sync_regfile_write(p_gpr_pack::ONE_MSG_RECEIVED);
-    }
+    configure_pack<is_fp32_dest_acc_en, untilize>(get_output_id(pack_params->pack_output), pack_params->relu_config.val);
 }
 
 template <bool untilize = false, bool is_fp32_dest_acc_en = false, ReluType relu_type = ReluType::NO_RELU, std::uint32_t relu_threshold = 0>
 inline void llk_pack_hw_configure_disaggregated(std::uint32_t pack_output) {
     llk_pack_params_t llk_pack_params = {
-        .pack_output = pack_output, .relu_config = {.f = {.ApplyRelu = (std::uint32_t)relu_type, .Threshold = relu_threshold}}};
+        .pack_output = pack_output, .relu_config = {.f = {.ApplyRelu = (std::uint32_t)relu_type, .Threshold = relu_threshold,}}};
     llk_pack_hw_configure<untilize, is_fp32_dest_acc_en>(&llk_pack_params);
 }
 
 // FIXME: Remove once edge mask spec is defined
 template <bool untilize = false, PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en = false>
 inline void llk_pack_reduce_hw_configure(const llk_pack_params_t *pack_params) {
-    configure_pack<is_fp32_dest_acc_en>(get_output_id(pack_params->pack_output), pack_params->relu_config.val);
-    volatile uint *cfg = get_cfg_pointer();
+    configure_pack<is_fp32_dest_acc_en, untilize>(get_output_id(pack_params->pack_output), pack_params->relu_config.val);
+    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
 
+    ckernel::packer::pck_edge_offset_u pack_edge_offset = {.val = 0};
+    pack_edge_offset.f.mask = 0x0;
     if constexpr (dim == ReduceDim::REDUCE_ROW) {
-        for (uint i = 0; i < 4; i++) cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32 + i] = 0x00000001;
+        cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+1] = 0x0001;
+        if constexpr (untilize) {
+            pack_edge_offset.f.tile_row_set_select_pack0 = 1;
+            pack_edge_offset.f.tile_row_set_select_pack1 = 1;
+            pack_edge_offset.f.tile_row_set_select_pack2 = 1;
+            pack_edge_offset.f.tile_row_set_select_pack3 = 1;
+            cfg[TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32] = 0x11111111; // each packer packs 1x32 row
+        } else {
+            pack_edge_offset.f.tile_row_set_select_pack0 = 1;
+            pack_edge_offset.f.tile_row_set_select_pack2 = 1;
+            cfg[TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32] = 0x55555555; // each packer packs 1x16 row
+        }
+        cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+0] = pack_edge_offset.val;
     } else if constexpr (dim == ReduceDim::REDUCE_SCALAR) {
-        cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+0] = 0x00000000;
-        cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+1] = 0x00000001;
-        cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32] = 0x00000001;
+        pack_edge_offset.f.tile_row_set_select_pack0 = 1;
+        cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+0] = pack_edge_offset.val;
+        cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+1] = 0x0001;
+        cfg[TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32] = 0x00000001;
     } else {
-        cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+0] = 0x00000000;
-        cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+1] = 0x0000ffff;
+        pack_edge_offset.f.tile_row_set_select_pack0 = 1;
+        pack_edge_offset.f.tile_row_set_select_pack1 = 1;
+        cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+0] = pack_edge_offset.val;
+        cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+1] = 0xffff;
 
         if constexpr (untilize) {
-            cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32] = 0x00000005;
+            cfg[TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32] = 0x00000005;// Each packer packs 1x32 row
         } else {
-            cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32] = 0x00000001;
+            cfg[TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32] = 0x00000001;
         }
-    }
-
-    if constexpr (untilize) {
-        std::uint32_t output = get_output_id(pack_params->pack_output);
-        regfile[p_gpr_pack::ONE_MSG_RECEIVED] =
-            ((1 * GET_L1_HEADERLESS_TILE_SIZE((uint)pack_dst_format[output])) << 12) |
-            1; /*SOURCE_ENDPOINT_NEW_MSGS_TOTAL_SIZE=12*/
-        sync_regfile_write(p_gpr_pack::ONE_MSG_RECEIVED);
     }
 }
 
@@ -130,29 +149,76 @@ inline void llk_pack_reduce_hw_configure_disaggregated(std::uint32_t pack_output
 }
 
 template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
-inline void llk_pack_init() {
-    llk_pack_mop_config<untilize, zero_output, FaceLayout>();
+inline void llk_pack_init(const std::uint32_t pack_output = 0) {
+    const std::uint32_t output_id = get_output_id(pack_output);
+    llk_pack_mop_config<untilize, zero_output, FaceLayout>(output_id);
 }
 
-template <bool out_of_order_output = false, DstSync Dst = SyncFull, bool untilize = false, bool is_fp32_dest_acc_en = false, bool pack_l1_acc_en = false>
-inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32_t output_tile_index = 0, bool pack_l1_acc = false) {
-    std::uint8_t output_id = get_output_id(output);
-    constexpr std::uint8_t OUTPUT_BASE_ID = (std::uint8_t) get_output_base_id();
-
-    static_assert((!(untilize && out_of_order_output)) && "untilize out of order packing is not supported!");
+template <bool out_of_order_output, bool untilize>
+inline std::uint32_t get_output_tile_address(std::uint8_t output_id, std::uint32_t output_tile_index) {
 
     std::uint32_t pack_tile_addr;
     if constexpr (out_of_order_output) {
         pack_tile_addr = cb_interface[output_id].fifo_wr_ptr +
-                         MUL_TILE_SIZE_AND_INDEX((std::uint8_t)pack_dst_format[OUTPUT_BASE_ID], (std::uint16_t)output_tile_index);
+                        (std::uint32_t)(cb_interface[output_id].fifo_page_size)*output_tile_index - 1;
     } else {
-        // in-order pack: 1) start with wr_ptr and then increment fifo_wr_tile_ptr tile by tile
-        // note: packer is programmed to automatically skip the tile header
-        // however, since there is no tile header we need to -1 the pack address (in terms of 16B words) to offset packer's +1
-        pack_tile_addr = cb_interface[output_id].fifo_wr_ptr + cb_interface[output_id].fifo_wr_tile_ptr - 1;
+        if constexpr (untilize) {
+            // FIXME: Do we need support for pack untilize?
+            // std::uint16_t out_tile_index = (cb_interface[output_id].ublock_tile_cnt/cb_interface[output_id].ublock_ct)*cb_interface[output_id].row_tile_dim +
+            //                                 cb_interface[output_id].ublock_tile_cnt%cb_interface[output_id].ublock_ct; //FIXME: optimize perf
+            // pack_tile_addr = cb_interface[output_id].fifo_wr_ptr + cb_interface[output_id].fifo_wr_tile_ptr - 1;
+            // pack_tile_addr += out_tile_index*(std::uint32_t)(cb_interface[output_id].fifo_page_size);
 
-        cb_interface[output_id].fifo_wr_tile_ptr += cb_interface[output_id].fifo_page_size;
+            // cb_interface[output_id].ublock_tile_cnt++;
+
+            // if (cb_interface[output_id].ublock_tile_cnt == cb_interface[output_id].ublock_tile_dim) {
+            //    cb_interface[output_id].ublock_tile_cnt=0;
+            //    cb_interface[output_id].fifo_wr_tile_ptr += (std::uint32_t)(cb_interface[output_id].fifo_page_size)*cb_interface[output_id].ublock_ct;
+            // }
+        } else {
+            pack_tile_addr = cb_interface[output_id].fifo_wr_ptr + cb_interface[output_id].fifo_wr_tile_ptr - 1;
+            cb_interface[output_id].fifo_wr_tile_ptr += cb_interface[output_id].fifo_page_size;
+        }
     }
+    return pack_tile_addr;
+}
+
+#if defined(PERF_DUMP) && MATH_PACK_DECOUPLE
+template <bool out_of_order_output = false, DstSync Dst = SyncFull, bool untilize = false, bool is_fp32_dest_acc_en = false, bool pack_l1_acc_en = false>
+inline void llk_pack_decouple(std::uint32_t tile_index, std::uint32_t output, std::uint32_t output_tile_index = 0, bool pack_l1_acc = false) {
+
+    std::uint8_t output_id = get_output_id(output);
+
+    static_assert((!(untilize && out_of_order_output)) && "untilize out of order packing is not supported!");
+
+    std::uint32_t pack_tile_addr = get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
+
+    if (operand_is_intermediate(output)) {
+        return;
+    }
+
+    if constexpr (!untilize) {
+        uint32_t tile_header[4];
+        uint32_t* l1_dest = reinterpret_cast<uint32_t*>(pack_tile_addr << 4);
+        for (int i = 0; i < 4; i++) {
+            tile_header[i] = regfile[p_gpr_pack::TILE_HEADER + i];
+            l1_dest[i] = tile_header[i];
+        }
+    }
+}
+#endif
+
+template <bool out_of_order_output = false, DstSync Dst = SyncFull, bool untilize = false, bool is_fp32_dest_acc_en = false>
+inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32_t output_tile_index = 0) {
+
+    std::uint8_t output_id = get_output_id(output);
+
+    // Access tile dims using the following logic:
+    // pack_tile_dims[output_id]
+
+    static_assert((!(untilize && out_of_order_output)) && "untilize out of order packing is not supported!");
+
+    std::uint32_t pack_tile_addr = get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
 
     constexpr uint32_t DEST_NUM_TILES_SHIFT = is_fp32_dest_acc_en ? (1) : (0);
     constexpr uint32_t DEST_NUM_TILES = DEST_NUM_TILES_FP16 >> DEST_NUM_TILES_SHIFT;
@@ -169,11 +235,7 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
         TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_index);
     }
 
-    program_packer_destination(pack_tile_addr, OUTPUT_BASE_ID);
-
-    if constexpr (pack_l1_acc_en){
-        program_packer_l1_acc(pack_l1_acc);
-    }
+    program_packer_destination(pack_tile_addr, output_id);
 
     mop_run(1, 1);
 
@@ -184,12 +246,12 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
     }
 
 }
-
+// FIXME-WH-UPLIFT
 template <ReduceDim dim, bool at_kernel_start = false, bool revert=false, bool is_fp32_dest_acc_en = false>
 inline void llk_pack_reduce_config_v2(uint32_t icb_out) {
 
     if constexpr (at_kernel_start)
-        configure_pack<is_fp32_dest_acc_en>(get_output_id(icb_out), false);
+        configure_pack<is_fp32_dest_acc_en, false>(get_output_id(icb_out), false);
     else {
         TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::PACK);
         tensix_sync();

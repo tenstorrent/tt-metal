@@ -17,7 +17,11 @@ namespace ckernel {
  */
 ALWI void sub_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst)
 {
+    #ifdef ARCH_GRAYSKULL
     MATH(( llk_math_eltwise_binary<EltwiseBinaryType::ELWSUB, BroadcastType::COL, SyncHalf, MATH_FIDELITY, false>(idst) ));
+    #else
+    MATH(( llk_math_eltwise_binary<EltwiseBinaryType::ELWSUB, BroadcastType::COL, SyncHalf, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst) ));
+    #endif
     UNPACK(( llk_unpack_AB<BroadcastType::COL>(icb0, icb1, itile0, itile1) ));
 }
 
@@ -26,7 +30,11 @@ ALWI void sub_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, ui
  */
 ALWI void mul_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst)
 {
+    #ifdef ARCH_GRAYSKULL
     MATH(( llk_math_eltwise_binary<EltwiseBinaryType::ELWMUL, BroadcastType::COL, SyncHalf, MATH_FIDELITY, false>(idst) ));
+    #else
+    MATH(( llk_math_eltwise_binary<EltwiseBinaryType::ELWMUL, BroadcastType::COL, SyncHalf, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst) ));
+    #endif
     UNPACK(( llk_unpack_AB<BroadcastType::COL>(icb0, icb1, itile0, itile1) ));
 }
 
@@ -35,7 +43,11 @@ ALWI void mul_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, ui
  */
 ALWI void mul_tiles_bcast_rows(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst)
 {
+    #ifdef ARCH_GRAYSKULL
     MATH(( llk_math_eltwise_binary<EltwiseBinaryType::ELWMUL, BroadcastType::ROW, SyncHalf, MATH_FIDELITY, false>(idst) ));
+    #else
+    MATH(( llk_math_eltwise_binary<EltwiseBinaryType::ELWMUL, BroadcastType::ROW, SyncHalf, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst) ));
+    #endif
     UNPACK(( llk_unpack_AB<BroadcastType::ROW>(icb0, icb1, itile0, itile1) ));
 }
 
@@ -44,7 +56,11 @@ ALWI void mul_tiles_bcast_rows(uint32_t icb0, uint32_t icb1, uint32_t itile0, ui
  */
 ALWI void add_tiles_bcast_rows(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst)
 {
+    #ifdef ARCH_GRAYSKULL
     MATH(( llk_math_eltwise_binary<EltwiseBinaryType::ELWADD, BroadcastType::ROW, SyncHalf, MATH_FIDELITY, false>(idst) ));
+    #else
+    MATH(( llk_math_eltwise_binary<EltwiseBinaryType::ELWADD, BroadcastType::ROW, SyncHalf, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst) ));
+    #endif
     UNPACK(( llk_unpack_AB<BroadcastType::ROW>(icb0, icb1, itile0, itile1) ));
 }
 
@@ -53,10 +69,13 @@ ALWI void add_tiles_bcast_rows(uint32_t icb0, uint32_t icb1, uint32_t itile0, ui
  */
 ALWI void add_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst)
 {
+    #ifdef ARCH_GRAYSKULL
     MATH(( llk_math_eltwise_binary<EltwiseBinaryType::ELWADD, BroadcastType::COL, SyncHalf, MATH_FIDELITY, false>(idst) ));
+    #else
+    MATH(( llk_math_eltwise_binary<EltwiseBinaryType::ELWADD, BroadcastType::COL, SyncHalf, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst) ));
+    #endif
     UNPACK(( llk_unpack_AB<BroadcastType::COL>(icb0, icb1, itile0, itile1) ));
 }
-
 
 template<EltwiseBinaryType tBcastOp, BroadcastType tBcastDim>
 void init_bcast(uint32_t icb0, uint32_t icb1)
@@ -67,8 +86,13 @@ void init_bcast(uint32_t icb0, uint32_t icb1)
         MATH(( llk_math_eltwise_binary_init<tBcastOp, tBcastDim>() ));
 
     UNPACK(( llk_setup_operands() ));
+    #ifdef ARCH_GRAYSKULL
     UNPACK(( llk_unpack_AB_init<tBcastDim>() )); // TODO(AP): move out init
     UNPACK(( llk_unpack_AB_hw_configure_disaggregated<tBcastDim>(icb0, icb1) ));
+    #else
+    UNPACK(( llk_unpack_AB_init<tBcastDim>(icb0, icb1) ));
+    UNPACK(( llk_unpack_AB_hw_configure_disaggregated(icb0, icb1) ));
+    #endif
     // TODO(AP): running this specific init after common AB init causes a hang
 
     // clone of general init for AB TODO(AP): commonize
@@ -87,7 +111,12 @@ void init_bcast(uint32_t icb0, uint32_t icb1)
 template<EltwiseBinaryType tBcastOp, BroadcastType tBcastDim>
 ALWI void any_tiles_bcast(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst)
 {
+    #ifdef ARCH_GRAYSKULL
     MATH(( llk_math_eltwise_binary<tBcastOp, tBcastDim, SyncHalf, MATH_FIDELITY, false>(idst) ));
+    #else
+    MATH(( llk_math_eltwise_binary<tBcastOp, tBcastDim, SyncHalf, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst) ));
+    #endif
+
     UNPACK(( llk_unpack_AB<tBcastDim>(icb0, icb1, itile0, itile1) ));
 }
 
@@ -154,7 +183,12 @@ ALWI void mul_tiles_bcast(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_
 ALWI void add_bcast_rows_init_short()
 {
     MATH(( llk_math_eltwise_binary_init<ELWADD, BroadcastType::ROW>() ));
+    #ifdef ARCH_GRAYSKULL
     UNPACK(( llk_unpack_AB_init<BroadcastType::ROW>() ));
+    #else
+    // FIXME: API Update needed in compute kernel?
+    UNPACK(( llk_unpack_AB_init<BroadcastType::ROW>(0, 1) ));
+    #endif
 }
 
 /**
@@ -163,7 +197,12 @@ ALWI void add_bcast_rows_init_short()
 ALWI void add_bcast_cols_init_short()
 {
     MATH(( llk_math_eltwise_binary_init<ELWADD, BroadcastType::COL>() ));
+    #ifdef ARCH_GRAYSKULL
     UNPACK(( llk_unpack_AB_init<BroadcastType::COL>() ));
+    #else
+    // FIXME: API Update needed in compute kernel?
+    UNPACK(( llk_unpack_AB_init<BroadcastType::COL>(0, 1) ));
+    #endif
 }
 
 /**
@@ -172,7 +211,12 @@ ALWI void add_bcast_cols_init_short()
 ALWI void mul_tiles_bcast_scalar_init_short()
 {
     MATH(( llk_math_eltwise_binary_init<ELWMUL, BroadcastType::SCALAR, MATH_FIDELITY>() )); // TODO(AP)
+    #ifdef ARCH_GRAYSKULL
     UNPACK(( llk_unpack_AB_init<BroadcastType::SCALAR>() ));
+    #else
+    // FIXME: API Update needed in compute kernel?
+    UNPACK(( llk_unpack_AB_init<BroadcastType::SCALAR>(0, 1) ));
+    #endif
 }
 
 /**
@@ -180,7 +224,11 @@ ALWI void mul_tiles_bcast_scalar_init_short()
  */
 ALWI void mul_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst)
 {
+    #ifdef ARCH_GRAYSKULL
     MATH(( llk_math_eltwise_binary<ELWMUL, BroadcastType::SCALAR, SyncHalf, MATH_FIDELITY, false>(idst) ));
+    #else
+    MATH(( llk_math_eltwise_binary<ELWMUL, BroadcastType::SCALAR, SyncHalf, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst) ));
+    #endif
     UNPACK(( llk_unpack_AB<BroadcastType::SCALAR>(icb0, icb1, itile0, itile1) ));
 }
 
@@ -191,7 +239,12 @@ ALWI void mul_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, 
 ALWI void mul_bcast_cols_init_short()
 {
     MATH(( llk_math_eltwise_binary_init<ELWMUL, BroadcastType::COL, MATH_FIDELITY>() )); // TODO(AP)
+    #ifdef ARCH_GRAYSKULL
     UNPACK(( llk_unpack_AB_init<BroadcastType::COL>() ));
+    #else
+    // FIXME: API Update needed in compute kernel?
+    UNPACK(( llk_unpack_AB_init<BroadcastType::COL>(0, 1) ));
+    #endif
 }
 
 /**
@@ -200,7 +253,12 @@ ALWI void mul_bcast_cols_init_short()
 ALWI void mul_bcast_rows_init_short()
 {
     MATH(( llk_math_eltwise_binary_init<ELWMUL, BroadcastType::ROW, MATH_FIDELITY>() ));
+    #ifdef ARCH_GRAYSKULL
     UNPACK(( llk_unpack_AB_init<BroadcastType::ROW>() ));
+    #else
+    // FIXME: API Update needed in compute kernel?
+    UNPACK(( llk_unpack_AB_init<BroadcastType::ROW>(0, 1) ));
+    #endif
 }
 
 /**
@@ -209,7 +267,12 @@ ALWI void mul_bcast_rows_init_short()
 ALWI void sub_bcast_cols_init_short()
 {
     MATH(( llk_math_eltwise_binary_init<ELWSUB, BroadcastType::COL, MATH_FIDELITY>() )); // TODO(AP)
+    #ifdef ARCH_GRAYSKULL
     UNPACK(( llk_unpack_AB_init<BroadcastType::COL>() ));
+    #else
+    // FIXME: API Update needed in compute kernel?
+    UNPACK(( llk_unpack_AB_init<BroadcastType::COL>(0, 1) ));
+    #endif
 }
 
 } // namespace ckernel

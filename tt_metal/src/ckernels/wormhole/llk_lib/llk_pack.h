@@ -142,26 +142,26 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
 
     std::uint32_t pack_tile_addr;
     if constexpr (out_of_order_output) {
-        pack_tile_addr = outputs[output_id].f.fifo_wr_ptr +
+        pack_tile_addr = cb_write_interface[output_id].fifo_wr_ptr +
                          MUL_TILE_SIZE_AND_INDEX((std::uint8_t)pack_dst_format[OUTPUT_BASE_ID], (std::uint16_t)output_tile_index);
     } else {
         if constexpr (untilize) {
-            std::uint16_t out_tile_index = (outputs[output_id].f.ublock_tile_cnt/outputs[output_id].f.ublock_ct)*outputs[output_id].f.row_tile_dim +
-                                            outputs[output_id].f.ublock_tile_cnt%outputs[output_id].f.ublock_ct; //FIXME: optimize perf
-            pack_tile_addr = outputs[output_id].f.fifo_wr_ptr + outputs[output_id].f.fifo_wr_tile_ptr - 1;
+            std::uint16_t out_tile_index = (cb_write_interface[output_id].f.ublock_tile_cnt/outputs[output_id].f.ublock_ct)*outputs[output_id].row_tile_dim +
+                                            cb_write_interface[output_id].f.ublock_tile_cnt%outputs[output_id].ublock_ct; //FIXME: optimize perf
+            pack_tile_addr = cb_write_interface[output_id].f.fifo_wr_ptr + outputs[output_id].fifo_wr_tile_ptr - 1;
             pack_tile_addr += out_tile_index*GET_L1_HEADERLESS_TILE_SIZE((std::uint8_t)pack_dst_format[OUTPUT_BASE_ID]);
 
-            //outputs[output_id].f.fifo_wr_tile_ptr += GET_L1_HEADERLESS_TILE_SIZE((std::uint8_t)pack_dst_format[OUTPUT_BASE_ID]);
+            //cb_write_interface[output_id].fifo_wr_tile_ptr += GET_L1_HEADERLESS_TILE_SIZE((std::uint8_t)pack_dst_format[OUTPUT_BASE_ID]);
 
-            outputs[output_id].f.ublock_tile_cnt++;
+            cb_write_interface[output_id].ublock_tile_cnt++;
 
-            if (outputs[output_id].f.ublock_tile_cnt == outputs[output_id].f.ublock_tile_dim) {
-               outputs[output_id].f.ublock_tile_cnt=0;
-               outputs[output_id].f.fifo_wr_tile_ptr += GET_L1_HEADERLESS_TILE_SIZE((std::uint8_t)pack_dst_format[OUTPUT_BASE_ID])*outputs[output_id].f.ublock_ct; //FIXME: optimize perf
+            if (cb_write_interface[output_id].f.ublock_tile_cnt == outputs[output_id].ublock_tile_dim) {
+               cb_write_interface[output_id].ublock_tile_cnt=0;
+               cb_write_interface[output_id].f.fifo_wr_tile_ptr += GET_L1_HEADERLESS_TILE_SIZE((std::uint8_t)pack_dst_format[OUTPUT_BASE_ID])*outputs[output_id].ublock_ct; //FIXME: optimize perf
             }
         } else {
-            pack_tile_addr = outputs[output_id].f.fifo_wr_ptr + outputs[output_id].f.fifo_wr_tile_ptr;
-            outputs[output_id].f.fifo_wr_tile_ptr += GET_L1_TILE_SIZE((std::uint8_t)pack_dst_format[OUTPUT_BASE_ID]);
+            pack_tile_addr = cb_write_interface[output_id].f.fifo_wr_ptr + outputs[output_id].fifo_wr_tile_ptr;
+            cb_write_interface[output_id].fifo_wr_tile_ptr += GET_L1_TILE_SIZE((std::uint8_t)pack_dst_format[OUTPUT_BASE_ID]);
         }
     }
 

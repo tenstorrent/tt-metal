@@ -19,20 +19,20 @@ inline void llk_setup_operands() {
         std::uint32_t fifo_size = stream_get_data_buf_size(stream_id);
         mem_barrier(fifo_size);
         std::uint32_t input = operand_to_input_index(stream_id_to_operand(stream_id));
-        operands[input].f.fifo_rd_ptr = fifo_addr;
-        operands[input].f.fifo_rd_base_ptr = fifo_addr; // used for reads from interm buffers only
-        operands[input].f.fifo_size = fifo_size;
-        operands[input].f.fifo_limit = fifo_addr + fifo_size - 1;  // Check if there is overflow
-        operands[input].f.tiles_acked = 0;
-        operands[input].f.words_acked = 0;
-        operands[input].f.blocks_per_iter = 0; // number of ublocks written per k into interm buffer
-        operands[input].f.curr_block = 0; // current number of ublocks written into interm buffer
-        operands[input].f.num_iter = 0; // number of passes through interm buffer (aka k-1)
-        operands[input].f.curr_iter = 0; // current number of passes through interm buffer
+        cb_read_interface[input].fifo_rd_ptr = fifo_addr;
+        cb_read_interface[input].fifo_rd_base_ptr = fifo_addr; // used for reads from interm buffers only
+        cb_read_interface[input].fifo_size = fifo_size;
+        cb_read_interface[input].fifo_limit = fifo_addr + fifo_size - 1;  // Check if there is overflow
+        cb_read_interface[input].tiles_acked = 0;
+        cb_read_interface[input].words_acked = 0;
+        cb_read_interface[input].blocks_per_iter = 0; // number of ublocks written per k into interm buffer
+        cb_read_interface[input].curr_block = 0; // current number of ublocks written into interm buffer
+        cb_read_interface[input].num_iter = 0; // number of passes through interm buffer (aka k-1)
+        cb_read_interface[input].curr_iter = 0; // current number of passes through interm buffer
         std::uint32_t operand = stream_id_to_operand(stream_id);
         if (operand_is_intermediate(operand)) {
-           operands[input].f.blocks_per_iter = l1_read_barrier(&EPOCH_INFO_PTR->mblock_m) * l1_read_barrier(&EPOCH_INFO_PTR->mblock_n);
-           operands[input].f.num_iter = l1_read_barrier(&EPOCH_INFO_PTR->mblock_k)-1;
+           cb_read_interface[input].blocks_per_iter = l1_read_barrier(&EPOCH_INFO_PTR->mblock_m) * l1_read_barrier(&EPOCH_INFO_PTR->mblock_n);
+           cb_read_interface[input].num_iter = l1_read_barrier(&EPOCH_INFO_PTR->mblock_k)-1;
         }
     }
 }
@@ -45,7 +45,7 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
     std::uint16_t tiles_received;
 #if defined(PERF_DUMP) && PERF_DUMP_LEVEL > 0
     tiles_received = (std::uint16_t) reg_read_barrier((std::uint32_t)tiles_received_ptr);
-    uint16_t num_tiles_recv = tiles_received - operands[input].f.tiles_acked;
+    uint16_t num_tiles_recv = tiles_received - cb_read_interface[input].tiles_acked;
     if (num_tiles_recv < num_tiles_u) {
         if (record_perf_events) {
             uint32_t event_id = perf::get_event_id(
@@ -54,7 +54,7 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
         }
        do {
             tiles_received = (std::uint16_t) reg_read_barrier((std::uint32_t)tiles_received_ptr);
-            uint16_t num_tiles_recv = tiles_received - operands[input].f.tiles_acked;
+            uint16_t num_tiles_recv = tiles_received - cb_read_interface[input].tiles_acked;
 	    if (num_tiles_recv >= num_tiles_u) break;
         } while (1);
         if (record_perf_events) {
@@ -68,15 +68,15 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
 
     do {
         tiles_received = (std::uint16_t) reg_read_barrier((std::uint32_t)tiles_received_ptr);
-        uint16_t num_tiles_recv = tiles_received - operands[input].f.tiles_acked;
+        uint16_t num_tiles_recv = tiles_received - cb_read_interface[input].tiles_acked;
 	if (num_tiles_recv >= num_tiles_u) break;
     } while (1);
 #endif
 
     volatile std::uint32_t* phase_changed_ptr = get_operand_phase_changed_ptr(operand);
     if (reg_read_barrier((std::uint32_t)phase_changed_ptr)) {
-        operands[input].f.fifo_rd_base_ptr = operands[input].f.fifo_limit - operands[input].f.fifo_size + 1;
-        operands[input].f.fifo_rd_ptr = operands[input].f.fifo_rd_base_ptr;
+        cb_read_interface[input].f.fifo_rd_base_ptr = operands[input].f.fifo_limit - operands[input].fifo_size + 1;
+        cb_read_interface[input].f.fifo_rd_ptr = operands[input].fifo_rd_base_ptr;
         *phase_changed_ptr = 0;
     }
 }
@@ -97,28 +97,28 @@ inline void llk_pop_tiles(
         num_words = num_tiles * GET_L1_TILE_SIZE((uint)unpack_src_format[input]);
     }
 
-    operands[input].f.tiles_acked += num_tiles;
-    TT_SETDMAREG(0, operands[input].f.tiles_acked, 0, LO_16(4));
+    cb_read_interface[input].tiles_acked += num_tiles;
+    TT_SETDMAREG(0, cb_read_interface[input].tiles_acked, 0, LO_16(4));
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
     TT_STOREREG(4, (std::uint32_t)&tiles_acked_ptr[0]);
 
-    operands[input].f.fifo_rd_ptr += num_words;
+    cb_read_interface[input].fifo_rd_ptr += num_words;
 
-    if (operands[input].f.fifo_rd_ptr > operands[input].f.fifo_limit) {
-        operands[input].f.fifo_rd_ptr -= operands[input].f.fifo_size;
+    if (cb_read_interface[input].f.fifo_rd_ptr > operands[input].fifo_limit) {
+        cb_read_interface[input].f.fifo_rd_ptr -= operands[input].fifo_size;
     }
 
     if (operand_is_intermediate(operand)) {
-       operands[input].f.curr_block++;
-       if (operands[input].f.curr_block == operands[input].f.blocks_per_iter) {
-          operands[input].f.curr_iter++;
-          if (operands[input].f.curr_iter == operands[input].f.num_iter) {
-             operands[input].f.curr_iter=0;
-             operands[input].f.fifo_rd_base_ptr = operands[input].f.fifo_rd_ptr; //inc base ptr
+       cb_read_interface[input].curr_block++;
+       if (cb_read_interface[input].f.curr_block == operands[input].blocks_per_iter) {
+          cb_read_interface[input].curr_iter++;
+          if (cb_read_interface[input].f.curr_iter == operands[input].num_iter) {
+             cb_read_interface[input].curr_iter=0;
+             cb_read_interface[input].f.fifo_rd_base_ptr = operands[input].fifo_rd_ptr; //inc base ptr
           } else {
-             operands[input].f.fifo_rd_ptr = operands[input].f.fifo_rd_base_ptr; //set rd prt to base ptr
+             cb_read_interface[input].f.fifo_rd_ptr = operands[input].fifo_rd_base_ptr; //set rd prt to base ptr
           }
-          operands[input].f.curr_block=0;
+          cb_read_interface[input].curr_block=0;
        }
     }
 }

@@ -39,7 +39,11 @@ template<bool at_start>
 ALWI void reduce_init_v2(PoolType reduce_op, ReduceDim dim, uint32_t icb, uint32_t icb_scaler)
 {
     UNPACK(( llk_setup_operands() ));
-    UNPACK(( llk_unpack_AB_init() ));
+    #ifdef ARCH_GRAYSKULL
+    UNPACK(( llk_unpack_AB_init<>() ));
+    #else
+    UNPACK(( llk_unpack_AB_init<>(icb, icb_scaler) ));
+    #endif
     UNPACK(( llk_unpack_AB_hw_configure_disaggregated(icb, icb_scaler) ));
 
     MATH(( llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>() ));
@@ -55,7 +59,12 @@ ALWI void reduce_init_v2(PoolType reduce_op, ReduceDim dim, uint32_t icb, uint32
 template<bool at_start>
 ALWI void reduce_init_delta_v2(PoolType reduce_op, ReduceDim dim)
 {
-    UNPACK(( llk_unpack_AB_init() ));
+    #ifdef ARCH_GRAYSKULL
+    UNPACK(( llk_unpack_AB_init<>() ));
+    #else
+    // FIXME: API Update needed in compute kernel?
+    UNPACK(( llk_unpack_AB_init<>(0, 1) ));
+    #endif
 
     MATH(( llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>() ));
 
@@ -101,6 +110,7 @@ ALWI void reduce_tile_v2(PoolType reduce_op, ReduceDim dim, uint32_t icb0, uint3
     UNPACK(( llk_unpack_AB(icb0, icb1, itile0, itile1) ));
 }
 #endif
+
 
 
 

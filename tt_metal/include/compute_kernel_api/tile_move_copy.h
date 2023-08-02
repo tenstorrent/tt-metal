@@ -42,16 +42,26 @@ namespace ckernel {
  * | icb_tile       | The index of the tile in the output CB to copy to | uint32_t | Must be less than the size of the CB                | True     |
  */
 ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t cbid) {
+    #ifdef ARCH_GRAYSKULL
     UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, false>() ));
     UNPACK(( llk_unpack_reconfig_data_format(1, cbid, 0, 0) ));
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, false>() ));
+    #else
+    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()  ));
+    UNPACK(( llk_unpack_reconfig_data_format(1, cbid, 0, 0) ));
+    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0, cbid) ));
+    #endif
 }
 
 ALWI void copy_tile_to_dst_init_short()
 {
+    #ifdef ARCH_GRAYSKULL
     UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, false>()  ));
-
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, false>()  ));
+    #else
+    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()  ));
+    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>()  ));
+    #endif
 }
 
 ALWI void copy_tile_init()
@@ -59,6 +69,7 @@ ALWI void copy_tile_init()
     copy_tile_to_dst_init_short();
     PACK(( llk_init_packer_dest_offset_registers<SyncHalf,DstTileFaceLayout::RowMajor,false>() ));
 }
+
 
 /**
  * Copies a single tile from the specified input CB and writes the result to

@@ -84,7 +84,7 @@ inline void llk_pack_shifted(const llk_pack_shifted_params_t *params, llk_pack_s
 
     std::uint16_t pack_tile_base_addr;
     std::uint16_t pack_tile_offset_addr = 0;
-    pack_tile_base_addr = outputs[output_id].f.fifo_wr_ptr + MUL_TILE_SIZE_AND_INDEX((std::uint8_t)pack_dst_format[OUTPUT_BASE_ID], output_tile_index);
+    pack_tile_base_addr = cb_write_interface[output_id].fifo_wr_ptr + MUL_TILE_SIZE_AND_INDEX((std::uint8_t)pack_dst_format[OUTPUT_BASE_ID], output_tile_index);
 
     int write_row_index = state->current_wr_ptr;
 

@@ -24,15 +24,12 @@ inline void llk_math_eltwise_unary_datacopy(uint dst_index) {
     if constexpr (type == A2D) {
         ckernel_template::run(instrn_buffer);
     } else if constexpr (type == B2D) {
-        static_assert(!is_fp32_dest_acc_en, "B2D FP32 dest unsupported until TF32 input support is added");
         if constexpr (src_b_bcast_type == BroadcastType::SCALAR) {
             // Manually clear B once mop is done
             ckernel_template::run(instrn_buffer);
             TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
         } else if constexpr (src_b_bcast_type == BroadcastType::COL) {
             // Mop for col broadcast only does 2 outerloops.  Needs to clear B manually and call twice
-            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD);
-            TTI_ZEROSRC(0, 1, 0, 1);  // Zero out SrcA current read bank
             ckernel_template::run(instrn_buffer);
             TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
             ckernel_template::run(instrn_buffer);
@@ -100,23 +97,19 @@ inline void eltwise_unary_configure_addrmod() {
     }
 }
 
-template <DataCopyType type, BroadcastType bcast_type = BroadcastType::NONE, bool transpose_xy = false>
-inline void eltwise_unary_configure_mop(uint rows_per_inst, uint total_rows) {
+template <DataCopyType type, BroadcastType bcast_type = BroadcastType::NONE>
+inline void eltwise_unary_configure_mop(uint rows_per_inst, uint total_rows, const uint operand_id) {
     // always move 32x32 tile, packed as 16x16x4
 
     if constexpr (type == A2D) {
-        //In B0, SFPU with fp16 SyncTile16 is supported by HW, but requires src A/B both to have data valid set
-        //otherwise data mismatch is seen due to packer not stalling properly
-        //We implement datacopy as elwadd with 0 that has been zeroed out by unpacker
-        //This assumes no kernel fusion where another op might use src B
-        //Additional benefit of supporting fp32 dest (SyncTile2) regardless of unpack src a/b format
+        const std::uint32_t num_faces = get_num_faces(operand_id);
+        uint addr_mod = (rows_per_inst == p_mova2d::MOV_1_ROW) ? ADDR_MOD_0 : ADDR_MOD_2;
+        uint innerloop = (rows_per_inst == p_mova2d::MOV_1_ROW) ? total_rows : (total_rows >> 3);
+        uint outerloop = num_faces;
 
-        //uint addr_mod = (rows_per_inst == p_mova2d::MOV_1_ROW) ? ADDR_MOD_0 : ADDR_MOD_2;
-        uint innerloop = (total_rows >> 3);
-        uint outerloop = 4;
+        //use elwadd to handle unpacking data into src A as fp16, but dest is in fp32 mode
         ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0));
-        tmp.set_start_op(TT_OP_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD|p_stall::SRCB_VLD));
-        tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_A));
+        tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB));
         tmp.program(instrn_buffer);
     } else if constexpr (type == B2D) {
         uint addr_mod = (rows_per_inst == p_movb2d::MOV_1_ROW) ? ADDR_MOD_0 : ADDR_MOD_2;
@@ -143,40 +136,40 @@ inline void eltwise_unary_configure_mop(uint rows_per_inst, uint total_rows) {
 
         if constexpr (bcast_type == BroadcastType::SCALAR) {
             ckernel_template tmp(outerloop, innerloop, TT_OP_MOVB2D(0, 0, addr_mod, broadcast_type, 0));
-            tmp.set_start_op(TT_OP_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCB_VLD));
             tmp.set_end_op(TT_OP_SETRWC(0, p_setrwc::CR_B, 0, 0, 0, p_setrwc::SET_B));
             tmp.program(instrn_buffer);
         } else if constexpr (bcast_type == BroadcastType::COL) {
             ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, 0, broadcast_type, addr_mod, 0));
-            tmp.set_start_op(TT_OP_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCB_VLD | p_stall::SRCA_VLD));
             tmp.set_end_op(TT_OP_SETRWC(0, p_setrwc::CR_B, 0, 0, 0, p_setrwc::SET_B));
             tmp.program(instrn_buffer);
         } else if constexpr (bcast_type == BroadcastType::ROW) {
             ckernel_template tmp(outerloop, innerloop, TT_OP_MOVB2D(0, 0, addr_mod, broadcast_type, 0));
-            tmp.set_start_op(TT_OP_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCB_VLD));
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_B, p_setrwc::CR_B, 0, 0, 0, p_setrwc::SET_B));
             tmp.program(instrn_buffer);
         } else {
             ckernel_template tmp(outerloop, innerloop, TT_OP_MOVB2D(0, 0, addr_mod, rows_per_inst, 0));
-            tmp.set_start_op(TT_OP_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCB_VLD));
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_B, p_setrwc::CR_B, 0, 0, 0, p_setrwc::SET_B));
             tmp.program(instrn_buffer);
         }
     }
 }
 
-template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool transpose_xy = false>
+template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NONE>
 // within_face_16x16_transpose is used by unpacker, math does not transpose
-inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t within_face_16x16_transpose=0 /* unused */) {
+inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t transpose_of_faces=0 /*unused*/, const std::uint32_t within_face_16x16_transpose=0 /* unused */, const std::uint32_t operand = 0) {
+    const std::uint32_t operand_id = get_operand_id(operand);
+
     eltwise_unary_configure_addrmod<type, src_b_bcast_type>();
 
     if constexpr (type == A2D) {
-        eltwise_unary_configure_mop<type, src_b_bcast_type, transpose_xy>(p_mova2d::MOV_8_ROWS, 16);
+        eltwise_unary_configure_mop<type, src_b_bcast_type>(p_mova2d::MOV_8_ROWS, 16, operand_id);
     } else if constexpr (type == B2D) {
-        eltwise_unary_configure_mop<type, src_b_bcast_type, false>(p_movb2d::MOV_4_ROWS, 16);
+        eltwise_unary_configure_mop<type, src_b_bcast_type>(p_movb2d::MOV_4_ROWS, 16, operand_id);
     } else {
         FWASSERT("Unsupported op!", false);
     }
+
+    TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
