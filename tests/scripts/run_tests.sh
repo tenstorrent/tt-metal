@@ -80,16 +80,6 @@ run_frequent_pipeline_tests() {
         exit 1
     fi
 
-    # Switch to modules only soon
-    make nuke
-    make build
-    make tests
-
-    source build/python_env/bin/activate
-    export PYTHONPATH=$TT_METAL_HOME
-
-    run_post_commit_pipeline_tests "$tt_arch" "$pipeline_type"
-
     # Need to build again to not be in PROFILER build
     make nuke
     make build
@@ -97,9 +87,6 @@ run_frequent_pipeline_tests() {
 
     source build/python_env/bin/activate
     export PYTHONPATH=$TT_METAL_HOME
-
-    # Tests profiler module
-    ./tests/scripts/run_profiler_regressions.sh POST_PROC
 
     # Please put model runs in here from now on - thank you
     ./tests/scripts/run_models.sh

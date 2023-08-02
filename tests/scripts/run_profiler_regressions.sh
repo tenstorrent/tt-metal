@@ -40,6 +40,6 @@ if [[ $1 == "PROFILER" ]]; then
 elif [[ $1 == "POST_PROC" ]]; then
     run_post_proc_test
 else
-    run_profiling_test
     run_post_proc_test
+    run_profiling_test
 fi

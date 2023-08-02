@@ -38,6 +38,7 @@ make html
 
 # Tests profiler module FW side
 # NOTE: Keep this test last as it requires a fresh ENABLE_PROFILER=1 build
+# which is performed inside the script
 echo "Run profiler regression"
 cd $TT_METAL_HOME
-./tests/scripts/run_profiler_regressions.sh PROFILER
+./tests/scripts/run_profiler_regressions.sh
