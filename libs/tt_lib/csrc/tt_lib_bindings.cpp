@@ -1033,6 +1033,15 @@ void TensorModule(py::module &m_tensor) {
             .. code-block:: python
 
                 dtype = tt_tensor.shape_without_padding()
+        )doc")
+        .def("reshape", [](Tensor &self, int N, int C, int H, int W) {
+            return self.reshape(N, C, H, W);
+        }, R"doc(
+            Reshapes TT tensor
+
+            .. code-block:: python
+
+                reshaped_tensor = tt_tensor.reshape(N, C, H, W)
         )doc");
 
     m_tensor.def("where", &where, R"doc(

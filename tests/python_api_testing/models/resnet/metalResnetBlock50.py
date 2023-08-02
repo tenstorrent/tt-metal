@@ -44,6 +44,20 @@ def unpad_from_zero(x, desired_shape):
         x = torch.frombuffer(x.data(), dtype=dtype).to(torch.float).reshape(x.shape())
     return x
 
+def compute_conv_output_shape(conv_params, x_shape):
+    H = x_shape[1]
+    W = x_shape[2]
+    K, C, R, S, U, V, P_H, P_W, dilation, groups = [conv_params[i] for i in range(10)]
+    OH = ((int) ((H - R + 2 * P_H) / U)) + 1
+    OW = ((int) ((W - S + 2 * P_W) / V)) + 1
+    return [x_shape[0],OH,OW,K]
+
+def compute_max_pool_shape(kernel_size, stride, padding, x_shape):
+    H = x_shape[1]
+    W = x_shape[2]
+    OH = ((int) ((H - kernel_size + 2 * padding) / stride)) + 1
+    OW = ((int) ((W - kernel_size + 2 * padding) / stride)) + 1
+    return [x_shape[0],OH,OW,x_shape[3]]
 
 class Bottleneck(nn.Module):
     # Bottleneck in torchvision places the stride for downsampling at 3x3 convolution(self.conv2)
@@ -146,135 +160,23 @@ class Bottleneck(nn.Module):
         else:
             self.conv3 = fallback_ops.Conv2d(conv3_weight, conv3_bias, width, planes * self.expansion, kernel_size=1, stride=1, padding=0)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = format_tensor(x, tt_lib.tensor.Layout.TILE, self.device)
+    def run_forward(self, x: torch.Tensor, x_actual_shape=[]) -> torch.Tensor:
         identity = x
+        # conv1 is 1x1 conv
         out = self.conv1(x)
-        if not self.fold_batchnorm:
-            out = self.bn1(out)
         out = self.relu(out)
         out = format_tensor(out, tt_lib.tensor.Layout.ROW_MAJOR, self.device)
+        out = out.reshape(x_actual_shape[0], x_actual_shape[1], x_actual_shape[2], out.shape()[3])
+        saved_shape = out.shape()
         out = self.conv2(out)
-        if not self.fold_batchnorm:
-            out = self.bn2(out)
-        out = format_tensor(out, tt_lib.tensor.Layout.TILE, self.device)
+        conv_2_output_shape = compute_conv_output_shape(self.conv2_params, saved_shape)
         out = self.relu(out)
-
+        # conv3 is 1x1 conv
         out = self.conv3(out)
-        if not self.fold_batchnorm:
-            out = self.bn3(out)
 
         if self.downsample_conv_on_tt is not None:
             x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device)
-            identity = self.downsample_conv_on_tt(x)
-            assert self.norm_layer_after_downsample_conv_on_tt is not None
-            if not self.fold_batchnorm:
-                identity = self.norm_layer_after_downsample_conv_on_tt(identity)
-        elif self.downsample is not None:
-            identity = self.downsample(x)
-        out = format_tensor(out, tt_lib.tensor.Layout.TILE, self.device)
-        identity = format_tensor(identity, tt_lib.tensor.Layout.TILE, self.device, 0.0)
-        out = tt_lib.tensor.add_without_autoformat(out, identity)
-
-        out = self.relu(out)
-
-        return out
-
-
-class BasicBlock(nn.Module):
-    expansion: int = 1
-
-    def __init__(
-        self,
-        inplanes: int,
-        planes: int,
-        stride: int = 1,
-        downsample: Optional[nn.Module] = None,
-        groups: int = 1,
-        base_width: int = 64,
-        dilation: int = 1,
-        norm_layer: Optional[Callable[..., nn.Module]] = None,
-        device = None,
-        state_dict = None,
-        base_address = None,
-        fold_batchnorm = False,
-        downsample_conv_on_tt = None,
-        norm_layer_after_downsample_conv_on_tt = None,
-    ) -> None:
-        super().__init__()
-        self.device = device
-        self.base_address = base_address
-        self.fold_batchnorm = fold_batchnorm
-        self.downsample_conv_on_tt = downsample_conv_on_tt
-        self.norm_layer_after_downsample_conv_on_tt = norm_layer_after_downsample_conv_on_tt
-        if norm_layer is None:
-            norm_layer = nn.BatchNorm2d
-        if groups != 1 or base_width != 64:
-            raise ValueError("BasicBlock only supports groups=1 and base_width=64")
-        if dilation > 1:
-            raise NotImplementedError("Dilation > 1 not supported in BasicBlock")
-        # Both self.conv1 and self.downsample layers downsample the input when stride != 1
-
-        conv1_weight = state_dict[f"{base_address}.conv1.weight"]
-        conv1_bias = None
-
-        self.bn1 = norm_layer(planes)
-        self.bn1.weight = nn.Parameter(state_dict[f"{self.base_address}.bn1.weight"])
-        self.bn1.bias = nn.Parameter(state_dict[f"{self.base_address}.bn1.bias"])
-        self.bn1.running_mean = nn.Parameter(state_dict[f"{self.base_address}.bn1.running_mean"])
-        self.bn1.running_var = nn.Parameter(state_dict[f"{self.base_address}.bn1.running_var"])
-        self.bn1.num_batches_tracked = nn.Parameter(state_dict[f"{self.base_address}.bn1.num_batches_tracked"], requires_grad=False)
-        self.bn1.eval()
-
-        self.relu = tt_lib.tensor.relu_without_autoformat
-
-        conv2_weight = state_dict[f"{base_address}.conv2.weight"]
-        conv2_bias = None
-
-        self.bn2 = norm_layer(planes)
-
-        self.bn2.weight = nn.Parameter(state_dict[f"{self.base_address}.bn2.weight"])
-        self.bn2.bias = nn.Parameter(state_dict[f"{self.base_address}.bn2.bias"])
-        self.bn2.running_mean = nn.Parameter(state_dict[f"{self.base_address}.bn2.running_mean"])
-        self.bn2.running_var = nn.Parameter(state_dict[f"{self.base_address}.bn2.running_var"])
-        self.bn2.num_batches_tracked = nn.Parameter(state_dict[f"{self.base_address}.bn2.num_batches_tracked"], requires_grad=False)
-        self.bn2.eval()
-
-        if self.fold_batchnorm:
-            conv1_weight, conv1_bias = fold_bn_to_conv_weights_bias(conv1_weight, self.bn1)
-            conv2_weight, conv2_bias = fold_bn_to_conv_weights_bias(conv2_weight, self.bn2)
-            self.bn1 = nn.Identity()
-            self.bn2 = nn.Identity()
-
-        self.conv1_params = [planes, inplanes, 3, 3, stride, stride, 1, 1, dilation, groups]
-        if is_conv_supported_on_device(self.conv1_params):
-            self.conv1 = TtResnetConv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, conv1_bias.tolist() if conv1_bias is not None else None)
-        else:
-            self.conv1 = fallback_ops.Conv2d(conv1_weight, conv1_bias, inplanes, planes, kernel_size=3, stride=1, padding=1)
-
-        self.conv2_params = [planes, planes, 3, 3, 1, 1, 1, 1, dilation, groups]
-        if is_conv_supported_on_device(self.conv2_params):
-            self.conv2 = TtResnetConv(conv2_weight.reshape(-1).tolist(), self.conv2_params, self.device, conv2_bias.tolist() if conv2_bias is not None else None)
-        else:
-            self.conv2 = fallback_ops.Conv2d(conv2_weight, conv2_bias, planes, planes, kernel_size=3, stride=1, padding=1)
-
-        self.downsample = downsample
-        self.stride = stride
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        identity = x
-        x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device)
-        out = self.conv1(x)
-        if not self.fold_batchnorm:
-            out = self.bn1(out)
-        out = format_tensor(out, tt_lib.tensor.Layout.TILE, self.device)
-        out = self.relu(out)
-        out = format_tensor(out, tt_lib.tensor.Layout.ROW_MAJOR, self.device)
-        out = self.conv2(out)
-        if not self.fold_batchnorm:
-            out = self.bn2(out)
-
-        if self.downsample_conv_on_tt is not None:
+            x = x.reshape(x_actual_shape[0], x_actual_shape[1], x_actual_shape[2], x_actual_shape[3])
             identity = self.downsample_conv_on_tt(x)
             assert self.norm_layer_after_downsample_conv_on_tt is not None
             if not self.fold_batchnorm:
@@ -282,19 +184,16 @@ class BasicBlock(nn.Module):
         elif self.downsample is not None:
             identity = self.downsample(x)
 
-        identity = format_tensor(identity, tt_lib.tensor.Layout.TILE, self.device)
-        out = format_tensor(out, tt_lib.tensor.Layout.TILE, self.device)
         out = tt_lib.tensor.add_without_autoformat(out, identity)
-
         out = self.relu(out)
-
-        return out
+        out_actual_shape = [conv_2_output_shape[0], conv_2_output_shape[1], conv_2_output_shape[2], out.shape()[3]]
+        return out, out_actual_shape
 
 
 class ResNet(nn.Module):
     def __init__(
         self,
-        block: Type[Union[BasicBlock, Bottleneck]],
+        block: Bottleneck,
         layers: List[int],
         num_classes: int = 1000,
         zero_init_residual: bool = False,
@@ -352,7 +251,7 @@ class ResNet(nn.Module):
             self.conv1 = fallback_ops.Conv2d(conv1_weight, conv1_bias, 3, self.inplanes, kernel_size=7, stride=2, padding=3)
 
         self.relu = tt_lib.tensor.relu_without_autoformat
-        self.maxpool = fallback_ops.MaxPool2d(kernel_size=3, stride=2, padding=1, channels_last=True)
+        self.maxpool = fallback_ops.MaxPool2d(kernel_size=3, stride=2, padding=1, channels_last=True, reshape_2d=True)
         self.layer1 = self._make_layer(block, 64, layers[0], name="layer1", state_dict=state_dict)
         self.layer2 = self._make_layer(block, 128, layers[1], stride=2, dilate=replace_stride_with_dilation[0], name="layer2", state_dict=state_dict)
         self.layer3 = self._make_layer(block, 256, layers[2], stride=2, dilate=replace_stride_with_dilation[1], name="layer3", state_dict=state_dict)
@@ -370,7 +269,7 @@ class ResNet(nn.Module):
 
     def _make_layer(
         self,
-        block: Type[Union[BasicBlock, Bottleneck]],
+        block: Bottleneck,
         planes: int,
         blocks: int,
         stride: int = 1,
@@ -448,7 +347,7 @@ class ResNet(nn.Module):
                 )
             )
 
-        return nn.Sequential(*layers)
+        return layers
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         x = torch.permute(x, (0, 2, 3, 1))
@@ -458,24 +357,27 @@ class ResNet(nn.Module):
                 tt_lib.tensor.DataType.BFLOAT16,
                 tt_lib.tensor.Layout.ROW_MAJOR)
         x = x.pad((x.shape()[0], x.shape()[1], x.shape()[2], _nearest_32(x.shape()[3])), (0, 0, 0, 0), 0)
-        #x = x.to(self.device)
         x = x.to(self.device, tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1))
+        saved_shape = compute_conv_output_shape(self.conv1_params, x.shape())
         x = self.conv1(x)
-        if not self.fold_batchnorm:
-            x = self.bn1(x)
-
-        x = format_tensor(x, tt_lib.tensor.Layout.TILE, self.device)
+        x = x.reshape(1, 1, x.shape()[0]*x.shape()[1]*x.shape()[2], x.shape()[3]);
         x = self.relu(x)
         x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device)
+        x = x.reshape(saved_shape[0], saved_shape[1], saved_shape[2], saved_shape[3])
         x = self.maxpool(x)
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
+        saved_shape = compute_max_pool_shape(3, 2, 1, saved_shape)
+
+        for layer in self.layer1:
+            x, saved_shape = layer.run_forward(x, saved_shape)
+        for layer in self.layer2:
+            x, saved_shape = layer.run_forward(x, saved_shape)
+        for layer in self.layer3:
+            x, saved_shape = layer.run_forward(x, saved_shape)
+        for layer in self.layer4:
+            x, saved_shape = layer.run_forward(x, saved_shape)
         x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device)
         x = format_tensor(x, tt_lib.tensor.Layout.TILE, self.device)
         x = self.avgpool(x)
-        x = format_tensor(x, tt_lib.tensor.Layout.TILE, self.device)
         x = self.fc(x)
         desired_shape = [x.shape()[0], x.shape()[1], 1, 1000]
         x = unpad_from_zero(x, desired_shape)
