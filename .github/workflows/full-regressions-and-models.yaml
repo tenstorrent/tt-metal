@@ -1,4 +1,4 @@
-name: Scheduled build and run all regressions and models
+name: Scheduled frequent build and run
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
     - cron: "0 1,6 * * *"
 
 jobs:
-  build-and-test-all:
+  build-and-test-frequent:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
