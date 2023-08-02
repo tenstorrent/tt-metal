@@ -11,14 +11,13 @@ from models.llama.llama_utils import (
 )
 from models.utility_functions import (
     tt2torch_tensor,
-    torch2tt_tensor,
 )
 from models.llama.tt.llama import llama_first_half, llama_second_half
 
 from tests.python_api_testing.models.utility_functions_new import (
     Profiler,
-    enable_compile_cache,
-    disable_compile_cache,
+    enable_persistent_kernel_cache,
+    disable_persistent_kernel_cache,
     prep_report,
 )
 
@@ -88,7 +87,7 @@ def call_tt_llama_forward_func(
     is_causallm,
 ):
     # Disable compile cache
-    disable_compile_cache()
+    disable_persistent_kernel_cache()
 
     # Perf tests keys
     first_half_first_key = "first_half_first_iter"
@@ -104,7 +103,6 @@ def call_tt_llama_forward_func(
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
-    host = tt_lib.device.GetHost()
 
     logger.debug(f"The first call of the first half started")
     profiler.start(first_half_first_key)
@@ -125,7 +123,7 @@ def call_tt_llama_forward_func(
     logger.debug(f"The first call of the first half ended")
 
     # enable cache for the second call
-    enable_compile_cache()
+    enable_persistent_kernel_cache()
 
     # The second call of the first half
     logger.debug(f"The second call of the first half started")
@@ -156,7 +154,7 @@ def call_tt_llama_forward_func(
 
     # The second half performance measure ======================================
     # Disable compile cache
-    disable_compile_cache()
+    disable_persistent_kernel_cache()
 
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
@@ -185,7 +183,7 @@ def call_tt_llama_forward_func(
     logger.debug(f"The first call of the second half started ended")
 
     # enable cache for the second call
-    enable_compile_cache()
+    enable_persistent_kernel_cache()
 
     logger.debug("The second call of the second half started")
     profiler.start(second_half_second_key)
@@ -251,13 +249,16 @@ _second_decoder_start = _num_consecutive_decoders
 prompt = "I believe the meaning of life is to"
 
 
-@pytest.mark.parametrize(
-    "prompt",
-    ((prompt),),
-)
-def test_perf(prompt, use_program_cache):
+def run_perf_llama(
+    first_half_expected_inference_time,
+    second_half_expected_inference_time,
+    first_half_expected_compile_time,
+    second_half_expected_compile_time,
+):
     profiler = Profiler()
+    disable_persistent_kernel_cache()
     cpu_key = "ref_key"
+
     comments = "llama model with two loads (halfs)"
 
     # set parameters =================================================================
@@ -309,6 +310,7 @@ def test_perf(prompt, use_program_cache):
             attention_mask=attention_mask_padded,
             position_ids=position_ids_padded,
         )
+        tt_lib.device.Synchronize()
         pytorch_out = pytorch_out.last_hidden_state
         profiler.end(cpu_key)
 
@@ -352,4 +354,65 @@ def test_perf(prompt, use_program_cache):
         second_half_second_iter_time,
         comments,
         cpu_time,
+    )
+
+    first_half_compile_time = first_half_first_iter_time - first_half_second_iter_time
+    second_half_compile_time = (
+        second_half_first_iter_time - second_half_second_iter_time
+    )
+    logger.info(f"LlamaFirstHalf inference time: {first_half_second_iter_time}")
+    logger.info(f"LlamaSecondHalf inference time: {second_half_second_iter_time}")
+    logger.info(f"LlamaFirstHalf compile time: {first_half_compile_time}")
+    logger.info(f"LlamaSecondHalf compile time: {second_half_compile_time}")
+    assert (
+        first_half_second_iter_time < first_half_expected_inference_time
+    ), "LlamaFirstHalf is too slow"
+    assert (
+        second_half_second_iter_time < second_half_expected_inference_time
+    ), "LlamaSecondHalf is too slow"
+    assert (
+        first_half_compile_time < first_half_expected_compile_time
+    ), "LlamaFirstHalf compile time is too slow"
+    assert (
+        second_half_compile_time < second_half_expected_compile_time
+    ), "LlamaSecondHalf compile time is too slow"
+
+
+@pytest.mark.models_performance_bare_metal
+@pytest.mark.parametrize(
+    "first_half_expected_inference_time, second_half_expected_inference_time, first_half_expected_compile_time, second_half_expected_compile_time",
+    ((150, 150, 12, 2),),
+)
+def test_perf_bare_metal(
+    use_program_cache,
+    first_half_expected_inference_time,
+    second_half_expected_inference_time,
+    first_half_expected_compile_time,
+    second_half_expected_compile_time,
+):
+    run_perf_llama(
+        first_half_expected_inference_time,
+        second_half_expected_inference_time,
+        first_half_expected_compile_time,
+        second_half_expected_compile_time,
+    )
+
+
+@pytest.mark.models_performance_virtual_machine
+@pytest.mark.parametrize(
+    "first_half_expected_inference_time, second_half_expected_inference_time, first_half_expected_compile_time, second_half_expected_compile_time",
+    ((150, 150, 12, 2),),
+)
+def test_perf_virtual_machine(
+    use_program_cache,
+    first_half_expected_inference_time,
+    second_half_expected_inference_time,
+    first_half_expected_compile_time,
+    second_half_expected_compile_time,
+):
+    run_perf_llama(
+        first_half_expected_inference_time,
+        second_half_expected_inference_time,
+        first_half_expected_compile_time,
+        second_half_expected_compile_time,
     )

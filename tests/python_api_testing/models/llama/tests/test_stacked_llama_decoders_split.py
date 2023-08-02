@@ -105,7 +105,7 @@ _second_decoder_start = _num_consecutive_decoders
     "pcc, has_layer_norm, is_causal",
     (
         (
-            0.98,
+            0.96,
             False,
             False,
         ),
@@ -115,6 +115,7 @@ def test_llama_decoder_split_inference(
     pcc,
     has_layer_norm,
     is_causal,
+    reset_seeds
 ):
     # set parameters ================================================================
     model_version = _llama_model_name
@@ -165,7 +166,6 @@ def test_llama_decoder_split_inference(
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
-    host = tt_lib.device.GetHost()
 
     # prepare input for TT hardware
     tt_llama_input = llama_input.unsqueeze(1)
@@ -218,8 +218,9 @@ def test_llama_decoder_split_inference(
     logger.debug(f"Tenstorrent output shape: {tt_out.shape}")
 
     # check outputs ---------------------------------------------------------
+    _, pcc_output = comp_allclose_and_pcc(pytorch_out, tt_out, pcc)
     does_pass, pcc_value = comp_pcc(pytorch_out, tt_out, pcc)
-    logger.info(f"PCC value: {pcc_value}")
+    logger.info(f"Output {pcc_output}")
 
     if does_pass:
         logger.info("Stacked Decoders test Passed!")

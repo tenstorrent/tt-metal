@@ -7,10 +7,7 @@ from typing import Optional, Tuple
 from tt_lib.fallback_ops import fallback_ops
 
 from models.helper_funcs import Linear as TTLinear
-from models.utility_functions import (
-    tt2torch_tensor,
-    torch2tt_tensor,
-)
+from models.utility_functions import tt2torch_tensor, torch_to_tt_tensor_rm, pad_by_zero
 
 
 def shape_tt(states, batch_size, seq_len, n_heads, head_dim):
@@ -38,7 +35,7 @@ def test_lamma_shape(device):
 
     pt_out = shape_pt(test_input, seq_len, batch_size)
 
-    test = torch2tt_tensor(test_input, device)
+    test = torch_to_tt_tensor_rm(test_input, device)
     tt_out = shape_tt(test, batch_size, seq_len, n_heads, head_dim)
     tt_out = tt2torch_tensor(tt_out)
 
@@ -139,19 +136,20 @@ class TtLlamaAttention(nn.Module):
                 f" and `num_heads`: {num_heads})."
             )
 
-        self.q_weights = torch2tt_tensor(
+        self.q_weights = torch_to_tt_tensor_rm(
             self.state_dict[f"{base_url}.{layer_num}.self_attn.q_proj.weight"],
             self.device,
+            put_on_device=False,
         )
-        self.k_weights = torch2tt_tensor(
+        self.k_weights = torch_to_tt_tensor_rm(
             self.state_dict[f"{base_url}.{layer_num}.self_attn.k_proj.weight"],
             self.device,
         )
-        self.v_weights = torch2tt_tensor(
+        self.v_weights = torch_to_tt_tensor_rm(
             self.state_dict[f"{base_url}.{layer_num}.self_attn.v_proj.weight"],
             self.device,
         )
-        self.o_weights = torch2tt_tensor(
+        self.o_weights = torch_to_tt_tensor_rm(
             self.state_dict[f"{base_url}.{layer_num}.self_attn.o_proj.weight"],
             self.device,
         )
@@ -173,7 +171,9 @@ class TtLlamaAttention(nn.Module):
             self.o_weights.shape()[-1], self.o_weights.shape()[-2], self.o_weights
         )
 
-        self.scalar = pad_by_zero(torch.Tensor([1/math.sqrt(self.head_dim)]), self.device)[0]
+        self.scalar = pad_by_zero(
+            torch.Tensor([1 / math.sqrt(self.head_dim)]), self.device
+        )[0]
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return (
@@ -246,14 +246,16 @@ class TtLlamaAttention(nn.Module):
 
         # TT implementation for:
         # attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
-        key_states_tt = torch2tt_tensor(key_states, self.device)
-        query_states_tt = torch2tt_tensor(query_states, self.device)
+        key_states_tt = torch_to_tt_tensor_rm(key_states, self.device)
+        query_states_tt = torch_to_tt_tensor_rm(query_states, self.device)
 
         key_states_tt_transposed = tt_lib.tensor.transpose(key_states_tt)
         mul = tt_lib.tensor.bmm(query_states_tt, key_states_tt_transposed)
 
         # TODO: Fuse into softmax
-        attn_weights = tt_lib.tensor.bcast(mul, self.scalar, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.HW)
+        attn_weights = tt_lib.tensor.bcast(
+            mul, self.scalar, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.HW
+        )
 
         if attn_weights.shape() != [bsz, self.num_heads, q_len, kv_seq_len]:
             raise ValueError(
@@ -269,7 +271,7 @@ class TtLlamaAttention(nn.Module):
                 )
             # TT eltwise add operation, expand attention_mask shape
             attention_mask = attention_mask.repeat(1, self.num_heads, 1, 1)
-            attention_mask = torch2tt_tensor(attention_mask, self.device)
+            attention_mask = torch_to_tt_tensor_rm(attention_mask, self.device)
             attn_weights = tt_lib.tensor.add(attn_weights, attention_mask)
             # convert to PyTorch tensor
             attn_weights = tt2torch_tensor(attn_weights)
@@ -283,8 +285,8 @@ class TtLlamaAttention(nn.Module):
         # attn_output = torch.matmul(attn_weights, value_states)
 
         if not isinstance(attn_weights, tt_lib.tensor.Tensor):
-            attn_weights = torch2tt_tensor(attn_weights, self.device)
-        value_states = torch2tt_tensor(value_states, self.device)
+            attn_weights = pad_by_zero(attn_weights, self.device)[0]
+        value_states = torch_to_tt_tensor_rm(value_states, self.device)
 
         # torch softmax
         attn_weights = tt_lib.tensor.softmax_in_place(attn_weights)

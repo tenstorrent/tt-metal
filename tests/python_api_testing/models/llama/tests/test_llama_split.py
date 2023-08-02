@@ -91,7 +91,6 @@ def call_tt_llama_forward_func(
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
-    host = tt_lib.device.GetHost()
 
     first_out = run_llama_split_inference(
         device,

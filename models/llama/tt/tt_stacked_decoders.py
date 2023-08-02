@@ -5,7 +5,7 @@ from torch import nn
 import tt_lib
 from models.utility_functions import (
     tt2torch_tensor,
-    torch2tt_tensor,
+    torch_to_tt_tensor_rm,
 )
 from models.llama.tt.llama_layer_norm import TtLlamaRMSNorm
 from models.llama.tt.llama_decoder import TtLlamaDecoderLayer
@@ -57,7 +57,9 @@ class TtLlamaDecoderModelStacked(torch.nn.Module):
         )
 
         # if it is CausalLM Llama model
-        self.weight = torch2tt_tensor(self.state_dict[f"lm_head.weight"], self.device)
+        self.weight = torch_to_tt_tensor_rm(
+            self.state_dict[f"lm_head.weight"], self.device
+        )
         self.bias = None
 
     def forward(self, x, y, half=1, has_layer_norm=False, is_causal=False):
@@ -71,6 +73,6 @@ class TtLlamaDecoderModelStacked(torch.nn.Module):
                 result = self.final_layernorm(result)
             # add linear
             if is_causal:
-                result = linear(result, self.weight, self.bias)
+                result = linear(result, self.weight, self.bias, self.device)
 
         return result
