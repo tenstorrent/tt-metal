@@ -22,8 +22,7 @@ def model_location_generator():
 
 @pytest.fixture
 def imagenet_label_dict(model_location_generator):
-    imagenet_class_labels_path = "tt_dnn-models/samples/imagenet_class_labels.txt"
-    path = model_location_generator(imagenet_class_labels_path)
+    path = "models/sample_data/imagenet_class_labels.txt"
     with open(path, "r") as file:
         class_labels = ast.literal_eval(file.read())
     return class_labels
@@ -31,8 +30,8 @@ def imagenet_label_dict(model_location_generator):
 
 @pytest.fixture
 def imagenet_sample_input(model_location_generator):
-    sample_path = "tt_dnn-models/samples/ILSVRC2012_val_00048736.JPEG"
-    path = model_location_generator(sample_path)
+    path = "models/sample_data/ILSVRC2012_val_00048736.JPEG"
+
     im = Image.open(path)
     im = im.resize((224, 224))
     return transforms.ToTensor()(im).unsqueeze(0)
@@ -40,23 +39,20 @@ def imagenet_sample_input(model_location_generator):
 
 @pytest.fixture
 def mnist_sample_input(model_location_generator):
-    sample_path = "tt_dnn-models/samples/torchvision_mnist_digit_7.jpg"
-    path = model_location_generator(sample_path)
+    path = "models/sample_data/torchvision_mnist_digit_7.jpg"
     im = Image.open(path)
     return im
 
 
 @pytest.fixture
 def iam_ocr_sample_input(model_location_generator):
-    sample_path = "tt_dnn-models/samples/iam_ocr_image.jpg"
-    path = model_location_generator(sample_path)
+    path = "models/sample_data/iam_ocr_image.jpg"
     im = Image.open(path)
     return im
 
 
 @pytest.fixture
 def hf_cat_image_sample_input(model_location_generator):
-    sample_path = "tt_dnn-models/samples/huggingface_cat_image.jpg"
-    path = model_location_generator(sample_path)
+    path = "models/sample_data/huggingface_cat_image.jpg"
     im = Image.open(path)
     return im
