@@ -13,7 +13,7 @@ sys.path.append(f"{f}/../../../..")
 
 import time
 import tt_lib as ttl
-from python_api_testing.models.metal_BERT_large_15.embeddings import TtEmbeddings
+from python_api_testing.models.metal_BERT_large_15.embeddings import PytorchEmbeddings
 from python_api_testing.models.metal_BERT_large_15.bert_encoder import TtBertEncoder
 from tt_lib.utils import pad_activation, pad_weight
 from utility_functions import (
@@ -45,7 +45,8 @@ class TtBertBatchDram(torch.nn.Module):
         self.tt_attention_mask_list = []
 
         # So far on CPU until we add embeddings support on device
-        self.embeddings = TtEmbeddings(hugging_face_reference_model)
+        self.embeddings = PytorchEmbeddings(hugging_face_reference_model)
+#        self.embeddings.to_csv('embeddings.csv')
         self.get_extended_attention_mask = (
             hugging_face_reference_model.get_extended_attention_mask
         )
