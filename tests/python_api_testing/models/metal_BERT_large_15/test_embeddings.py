@@ -40,6 +40,7 @@ def test_embeddings_inference(
 
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
+    host = tt_lib.device.GetHost()
 
     if on_weka:
         model_name = str(
@@ -76,9 +77,11 @@ def test_embeddings_inference(
     ref_model = PytorchEmbeddings(hugging_face_reference_model)
     tt_model = TtBertEmbeddings(
         hugging_face_reference_model.config,
+        hugging_face_reference_model,
         state_dict,
         base_address,
-        device
+        device,
+        host,
     )
     profiler.start(cpu_key)
     pytorch_out_ref = ref_model(**bert_input)
