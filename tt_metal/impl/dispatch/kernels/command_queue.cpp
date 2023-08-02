@@ -1,4 +1,4 @@
-#include "tt_metal/kernels/dataflow/dispatch/command_queue.hpp"
+#include "tt_metal/impl/dispatch/kernels/command_queue.hpp"
 
 #include "debug_print.h"
 

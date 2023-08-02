@@ -591,7 +591,7 @@ void send_dispatch_kernel_to_device(Device* device) {
     }
     auto dispatch_kernel = tt::tt_metal::CreateDataMovementKernel(
         dispatch_program,
-        "tt_metal/kernels/dataflow/dispatch/command_queue.cpp",
+        "tt_metal/impl/dispatch/kernels/command_queue.cpp",
         dispatch_logical_core,
         tt::tt_metal::DataMovementConfig{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default, .defines = dispatch_defines}
     );
