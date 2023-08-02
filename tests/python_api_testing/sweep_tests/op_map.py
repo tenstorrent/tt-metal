@@ -240,6 +240,14 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_mac,
         "pytorch_op": pytorch_ops.mac,
     },
+    "eltwise-addcmul": {
+        "tt_lib_op": tt_lib_ops.eltwise_addcmul,
+        "pytorch_op": pytorch_ops.addcmul,
+    },
+    "eltwise-addcdiv": {
+        "tt_lib_op": tt_lib_ops.eltwise_addcdiv,
+        "pytorch_op": pytorch_ops.addcdiv,
+    },
     "eltwise-sigmoid": {
         "tt_lib_op": tt_lib_ops.eltwise_sigmoid,
         "pytorch_op": pytorch_ops.sigmoid,

@@ -789,6 +789,94 @@ def eltwise_mac(x, y, z, *args, device, dtype, layout, on_device, **kwargs):
 
 
 @setup_host_and_device
+def eltwise_addcmul(x, y, z, *args, value, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    t1 = ttl.tensor.Tensor(
+        y.reshape(-1).tolist(),
+        y.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t1 = t1.to(layout)
+    if on_device:
+        t1 = t1.to(device)
+
+    t2 = ttl.tensor.Tensor(
+        z.reshape(-1).tolist(),
+        z.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t2 = t2.to(layout)
+    if on_device:
+        t2 = t2.to(device)
+
+    t3 = ttl.tensor.addcmul(t0, t1, t2, value)
+
+    output = torch.Tensor(t3.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t3.shape()
+    )
+
+    return output
+
+
+@setup_host_and_device
+def eltwise_addcdiv(x, y, z, *args, value, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    t1 = ttl.tensor.Tensor(
+        y.reshape(-1).tolist(),
+        y.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t1 = t1.to(layout)
+    if on_device:
+        t1 = t1.to(device)
+
+    t2 = ttl.tensor.Tensor(
+        z.reshape(-1).tolist(),
+        z.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t2 = t2.to(layout)
+    if on_device:
+        t2 = t2.to(device)
+
+    t3 = ttl.tensor.addcdiv(t0, t1, t2, value)
+
+    output = torch.Tensor(t3.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
+        t3.shape()
+    )
+
+    return output
+
+
+@setup_host_and_device
 def eltwise_sigmoid(x, *args, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),

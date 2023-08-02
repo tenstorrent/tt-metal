@@ -362,6 +362,16 @@ def mac(x, y, z, *args, **kwargs):
     return x * y + z
 
 
+def addcmul(x, y, z, *args, value, **kwargs):
+    result = torch.addcmul(x, y, z, value=value)
+    return result
+
+
+def addcdiv(x, y, z, *args, value, **kwargs):
+    result = torch.addcdiv(x, y, z, value=value)
+    return result
+
+
 ## Binary Ops
 
 

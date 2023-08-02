@@ -1750,6 +1750,48 @@ void TensorModule(py::module &m_tensor) {
         +----------+---------------------------+-----------+------------------------------+----------+
     )doc");
 
+     m_tensor.def("addcmul", &addcmul, R"doc(
+        Performs the element-wise multiplication of tensor1 ``arg1`` by tensor2 ``arg2``, multiplies the result
+        by the scalar value ``arg3`` and adds it to input ``arg0``.
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+---------------------------------+-----------+------------------------------+----------+
+        | Argument | Description                     | Data type | Valid range                  | Required |
+        +==========+=================================+===========+==============================+==========+
+        | arg0     | Input addcmul is applied to     | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+---------------------------------+-----------+------------------------------+----------+
+        | arg1     | Tensor 1                        | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+---------------------------------+-----------+------------------------------+----------+
+        | arg2     | Tensor 2                        | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+---------------------------------+-----------+------------------------------+----------+
+        | arg3     | value                           | float     | Scalar                       | Yes      |
+        +----------+---------------------------------+-----------+------------------------------+----------+
+    )doc");
+
+    m_tensor.def("addcdiv", &addcdiv, R"doc(
+        Performs the element-wise division of tensor1 ``arg1`` by tensor2 ``arg2``, multiplies the result
+        by the scalar value ``arg3`` and adds it to input ``arg0``.
+
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+---------------------------------+-----------+------------------------------+----------+
+        | Argument | Description                     | Data type | Valid range                  | Required |
+        +==========+=================================+===========+==============================+==========+
+        | arg0     | Input addcdiv is applied to     | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+---------------------------------+-----------+------------------------------+----------+
+        | arg1     | Tensor 1                        | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+---------------------------------+-----------+------------------------------+----------+
+        | arg2     | Tensor 2                        | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+---------------------------------+-----------+------------------------------+----------+
+        | arg3     | value                           | float     | Scalar                       | Yes      |
+        +----------+---------------------------------+-----------+------------------------------+----------+
+    )doc");
+
     m_tensor.def("softplus", &softplus, R"doc(
         Returns tensor with the softplus activation of elements of the input tensor ``arg0``.
 

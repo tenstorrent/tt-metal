@@ -106,6 +106,12 @@ Tensor tanhshrink(const Tensor &input_a);
 //square difference(x, y) = (x - y) * (x - y)
 Tensor squared_difference(const Tensor &input_a,const Tensor &input_b);
 
+//addcmul(input,tensor1,tensor2,value)=input+value×tensor1×tensor2
+Tensor addcmul(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c, float value);
+
+//addcdiv(input,tensor1,tensor2,value)=input+value×tensor1/tensor2
+Tensor addcdiv(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c, float value);
+
 //hypot(a,b) = sqrt[ a^2 + b^2 ]
 Tensor hypot(const Tensor &input_a, const Tensor &input_b);
 

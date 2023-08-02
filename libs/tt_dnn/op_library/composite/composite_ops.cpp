@@ -287,7 +287,23 @@ Tensor log_sigmoid(const Tensor& input_a) {
     return result;
 }
 
+//addcmul(input,tensor1,tensor2,value)=input+value×tensor1×tensor2
+Tensor addcmul(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c, float value) {
+    Tensor t_value = mk_scalar(value);
+	Tensor t_mul = mul(input_b, input_c);
+    Tensor t_factor = bcast(t_mul, t_value, BcastOpMath::MUL, BcastOpDim::HW);
+    Tensor result = add(input_a, t_factor);
+    return result;
+}
 
+//addcdiv(input,tensor1,tensor2,value)=input+value×tensor1/tensor2
+Tensor addcdiv(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c, float value) {
+    Tensor t_value = mk_scalar(value);
+	Tensor t_div = mul(input_b, recip(input_c));
+    Tensor t_factor = bcast(t_div, t_value, BcastOpMath::MUL, BcastOpDim::HW);
+    Tensor result = add(input_a, t_factor);
+    return result;
+}
 //these ops need more polish - TBD
 #if 0
 /**
