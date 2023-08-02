@@ -20,9 +20,6 @@ class PytorchEmbeddings(torch.nn.Module):
     def forward(self, input_ids, token_type_ids=None):
         return self.embeddings(input_ids=input_ids, token_type_ids=token_type_ids)
 
-    #def to_csv(self, csv_file):
-    #    self.embeddings.to_csv(csv_file)
-
 
 def run_embeddings_inference():
     return
