@@ -1,6 +1,6 @@
 from typing import List, Union, Optional
 from tt_lib import tensor
-
+import tt_lib as ttl
 from loguru import logger
 import tt_lib
 

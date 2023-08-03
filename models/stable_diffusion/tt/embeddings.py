@@ -26,12 +26,15 @@ class TtTimestepEmbedding(nn.Module):
 
         weights = state_dict[f"{base_address}.linear_1.weight"]
         bias = state_dict[f"{base_address}.linear_1.bias"]
+        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
+
         self.linear_1 = make_linear(
             in_features=in_channels,
             out_features=time_embed_dim,
             weights=weights,
             bias=bias,
             device=device,
+            out_mem_config=self.out_mem_config_l1,
         )
         self.act = None
         if act_fn == "silu":
@@ -56,6 +59,7 @@ class TtTimestepEmbedding(nn.Module):
             weights=weights,
             bias=bias,
             device=device,
+            out_mem_config=self.out_mem_config_l1
         )
 
     def forward(self, sample: ttl.tensor.Tensor) -> ttl.tensor.Tensor:

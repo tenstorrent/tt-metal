@@ -55,7 +55,7 @@ def test_cross_attn_inference():
                                     upcast_attention=upcast_attention,
                                     state_dict=state_dict,
                                     device=device,
-                                    host=host,
+                                    # host=host,
                                     base_address=base_address)
     ttl.device.Synchronize()
     tt_input = torch_to_tt_tensor_rm(input, device, put_on_device=False)
