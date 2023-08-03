@@ -324,8 +324,8 @@ def test_perf_bare_metal(
     "expected_inference_time, expected_compile_time",
     (
         (
-            1000,
-            1000,
+            150,
+            140,
         ),
     ),
 )

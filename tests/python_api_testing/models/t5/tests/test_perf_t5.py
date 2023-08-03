@@ -125,8 +125,8 @@ def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_co
     "expected_inference_time, expected_compile_time",
     (
         (
-            1000,
-            1000,
+            0.95,
+            7.5,
         ),
     ),
 )
