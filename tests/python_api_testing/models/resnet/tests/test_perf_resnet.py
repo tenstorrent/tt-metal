@@ -96,7 +96,7 @@ def run_perf_resnet(expected_inference_time, expected_compile_time, hf_cat_image
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (1.2,
+        (1.0,
          32,
         ),
     ),
