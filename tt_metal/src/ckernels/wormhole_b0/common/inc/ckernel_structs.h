@@ -68,7 +68,7 @@ typedef struct {
    uint32_t fifo_wr_ptr;
    uint32_t fifo_limit;
    uint32_t fifo_size;
-   uint32_t fifo_size_tiles;
+   uint32_t fifo_num_pages;
    uint32_t fifo_wr_base_ptr;
    uint16_t fifo_wr_tile_ptr;
    uint16_t tiles_received;

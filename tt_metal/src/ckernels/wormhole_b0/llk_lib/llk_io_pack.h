@@ -22,15 +22,17 @@ inline void llk_setup_cb_interface() {
 
     for (std::uint32_t cb_id = 0; cb_id < NUM_CIRCULAR_BUFFERS; cb_id++) {
 
-        std::uint32_t fifo_addr = circular_buffer_config_addr[0];
-        std::uint32_t fifo_size = circular_buffer_config_addr[1];
-        std::uint32_t fifo_size_tiles = circular_buffer_config_addr[2];
-        write_to_local_mem_barrier(fifo_size_tiles);
+        uint32_t fifo_addr = circular_buffer_config_addr[0];
+        uint32_t fifo_size = circular_buffer_config_addr[1];
+        uint32_t fifo_num_pages = circular_buffer_config_addr[2];
+        uint32_t fifo_page_size = circular_buffer_config_addr[3];
+        write_to_local_mem_barrier(fifo_num_pages);
 
         cb_interface[cb_id].fifo_wr_ptr = fifo_addr;
         cb_interface[cb_id].fifo_limit = fifo_addr + fifo_size - 1;  // Check if there is overflow
         cb_interface[cb_id].fifo_size = fifo_size;
-        cb_interface[cb_id].fifo_size_tiles = fifo_size_tiles;
+        cb_interface[cb_id].fifo_num_pages = fifo_num_pages;
+        cb_interface[cb_id].fifo_page_size = fifo_page_size;
 
         // local copy used by the packer
         cb_interface[cb_id].tiles_received = 0;
@@ -66,7 +68,7 @@ inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32
     std::int32_t free_tiles;
     do {
         std::uint16_t tiles_acked = (std::uint16_t) reg_read_barrier((std::uint32_t)tiles_acked_ptr);
-        std::uint32_t free_tiles_wrap = cb_interface[output].fifo_size_tiles - (tiles_received - tiles_acked);
+        std::uint32_t free_tiles_wrap = cb_interface[output].fifo_num_pages - (tiles_received - tiles_acked);
         free_tiles = (std::int32_t) free_tiles_wrap;
     } while (free_tiles < num_tiles);
 
@@ -102,7 +104,7 @@ template <bool push_blocks = false, bool brisc_pack = false>
 inline void llk_push_tiles(const std::int32_t operand, const std::int32_t num_tiles) {
 
     std::uint32_t output = operand;
-    std::uint32_t num_words = num_tiles * GET_L1_TILE_SIZE((uint)pack_dst_format[output]);
+    std::uint32_t num_words = num_tiles * cb_interface[operand].fifo_page_size;
 
     cb_interface[output].fifo_wr_ptr += num_words;
     cb_interface[output].fifo_wr_tile_ptr = 0;
