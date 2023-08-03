@@ -22,9 +22,11 @@ class GELUActivation(nn.Module):
     def __init__(self):
         super().__init__()
         self.act = tt_lib.tensor.gelu
+        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
+
 
     def forward(self, input: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
-        return self.act(input)
+        return self.act(input, output_mem_config=self.out_mem_config_l1)
 
 
 class ClassInstantier(OrderedDict):

@@ -42,6 +42,8 @@ tt_tensor = tt_lib.tensor.Tensor
 class TtViTOutput(nn.Module):
     def __init__(self, config: ViTConfig, base_address, state_dict, device) -> None:
         super().__init__()
+        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
+
         self.dense = make_linear(
             config.intermediate_size,
             config.hidden_size,
@@ -49,13 +51,14 @@ class TtViTOutput(nn.Module):
             state_dict,
             base_address,
             device,
+            self.out_mem_config_l1
         )
 
     def forward(
         self, hidden_states: tt_lib.tensor.Tensor, input_tensor: tt_lib.tensor.Tensor
     ) -> tt_lib.tensor.Tensor:
         hidden_states = self.dense(hidden_states)
-        hidden_states = tt_lib.tensor.add(hidden_states, input_tensor)
+        hidden_states = tt_lib.tensor.add(hidden_states, input_tensor, self.out_mem_config_l1)
         return hidden_states
 
 
@@ -65,6 +68,8 @@ class TtViTSelfAttention(nn.Module):
     ) -> None:
         super().__init__()
         self.device = device
+        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
+
         if config.hidden_size % config.num_attention_heads != 0 and not hasattr(
             config, "embedding_size"
         ):
@@ -90,6 +95,7 @@ class TtViTSelfAttention(nn.Module):
             state_dict,
             base_address,
             device,
+            self.out_mem_config_l1,
         )
         self.key = make_linear(
             config.hidden_size,
@@ -98,6 +104,7 @@ class TtViTSelfAttention(nn.Module):
             state_dict,
             base_address,
             device,
+            self.out_mem_config_l1,
         )
         self.value = make_linear(
             config.hidden_size,
@@ -106,6 +113,7 @@ class TtViTSelfAttention(nn.Module):
             state_dict,
             base_address,
             device,
+            self.out_mem_config_l1,
         )
 
     def transpose_for_scores(self, x: tt_tensor) -> tt_tensor:
@@ -129,14 +137,15 @@ class TtViTSelfAttention(nn.Module):
         query_layer = self.transpose_for_scores(mixed_query_layer)
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
-        key_layer_T = tt_lib.tensor.transpose(key_layer)
-        attention_scores = tt_lib.tensor.bmm(query_layer, key_layer_T)
+        key_layer_T = tt_lib.tensor.transpose(key_layer, self.out_mem_config_l1)
+        attention_scores = tt_lib.tensor.bmm(query_layer, key_layer_T, self.out_mem_config_l1)
 
         attention_scores = tt_lib.tensor.bcast(
             attention_scores,
             self.recip_sqrt_attention_head_size_tensor,
             tt_lib.tensor.BcastOpMath.MUL,
             tt_lib.tensor.BcastOpDim.HW,
+            self.out_mem_config_l1,
         )
 
         # Normalize the attention scores to probabilities.
@@ -144,7 +153,7 @@ class TtViTSelfAttention(nn.Module):
 
         # Mask heads if we want to
         if head_mask is not None:
-            attention_probs = tt_lib.tensor.mul(attention_probs, head_mask)
+            attention_probs = tt_lib.tensor.mul(attention_probs, head_mask, self.out_mem_config_l1)
 
         context_layer = tt_lib.tensor.bmm(attention_probs, value_layer)
 
@@ -171,6 +180,8 @@ class TtViTSelfOutput(nn.Module):
         self, config: ViTConfig, base_address: str, state_dict: Dict, device
     ) -> None:
         super().__init__()
+        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
+
         self.dense = make_linear(
             config.hidden_size,
             config.hidden_size,
@@ -178,6 +189,7 @@ class TtViTSelfOutput(nn.Module):
             state_dict=state_dict,
             base_address=base_address,
             device=device,
+            mem_config=self.out_mem_config_l1,
         )
 
     def forward(self, hidden_states: tt_tensor, input_tensor: tt_tensor) -> tt_tensor:
@@ -219,6 +231,8 @@ class TtViTIntermediate(nn.Module):
         self, config: ViTConfig, base_address: str, state_dict: Dict, device
     ) -> None:
         super().__init__()
+        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
+
         self.dense = make_linear(
             config.hidden_size,
             config.intermediate_size,
@@ -226,6 +240,7 @@ class TtViTIntermediate(nn.Module):
             state_dict,
             base_address,
             device,
+            self.out_mem_config_l1,
         )
         if isinstance(config.hidden_act, str):
             self.intermediate_act_fn = ACT2FN[config.hidden_act]
@@ -246,6 +261,7 @@ class TtViTLayer(nn.Module):
         self, config: ViTConfig, base_address: str, state_dict: Dict, device
     ) -> None:
         super().__init__()
+        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
         self.chunk_size_feed_forward = config.chunk_size_feed_forward
         self.seq_len_dim = 1
         self.attention = TtViTAttention(
@@ -293,7 +309,7 @@ class TtViTLayer(nn.Module):
         ]  # add self attentions if we output attention weights
 
         # first residual connection
-        hidden_states = tt_lib.tensor.add(attention_output, hidden_states)
+        hidden_states = tt_lib.tensor.add(attention_output, hidden_states, self.out_mem_config_l1)
 
         # in ViT, layernorm is also applied after self-attention
         layer_output = self.layernorm_after(hidden_states)
@@ -660,6 +676,8 @@ class TtViTForImageClassification(nn.Module):
         super().__init__()
         self.config = config
         self.num_labels = config.num_labels
+        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
+
         self.vit = TtViTModel(
             config,
             base_address=make_address(base_address, "vit"),
@@ -677,6 +695,7 @@ class TtViTForImageClassification(nn.Module):
                 state_dict,
                 base_address,
                 device,
+                self.out_mem_config_l1,
             )
             if config.num_labels > 0
             else None

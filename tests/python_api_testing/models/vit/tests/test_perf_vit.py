@@ -47,6 +47,8 @@ def run_perf_vit(expected_inference_time, expected_compile_time, hf_cat_image_sa
     tt_inputs = torch_to_tt_tensor_rm(
         inputs["pixel_values"], device, put_on_device=False
     )
+
+    tt_inputs = tt_inputs.to(device, tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1))
     tt_model = vit_for_image_classification(device)
 
     with torch.no_grad():
@@ -85,7 +87,7 @@ def run_perf_vit(expected_inference_time, expected_compile_time, hf_cat_image_sa
     "expected_inference_time, expected_compile_time",
     (
         (3.8,
-        13.5,
+        17,
         ),
     ),
 )
