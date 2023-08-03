@@ -35,8 +35,8 @@ import pytest
 @torch.no_grad()
 def test_layer_norm(input_shape, normalized_shape_hint):
     # Initialize the device
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
-    tt_lib.device.InitializeDevice(device)
+    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    ttl.device.InitializeDevice(device)
 
 
     pcc = 0.99
@@ -61,7 +61,7 @@ def test_layer_norm(input_shape, normalized_shape_hint):
         x, normalized_shape=normalized_shape, eps=eps
     )
 
-    xtt_data = ttl.tensor.layernorm(xt, eps).to(host).to(ttl.tensor.Layout.ROW_MAJOR)
+    xtt_data = ttl.tensor.layernorm(xt, eps).cpu().to(ttl.tensor.Layout.ROW_MAJOR)
     tt_got_back_rm = xtt_data.to_torch()
 
     torch_output = golden

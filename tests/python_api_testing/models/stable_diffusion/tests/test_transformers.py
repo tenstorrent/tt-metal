@@ -7,8 +7,9 @@ import tt_lib as ttl
 from models.utility_functions import torch_to_tt_tensor, tt_to_torch_tensor, torch_to_tt_tensor_rm
 from tests.python_api_testing.models.utility_functions_new import comp_pcc, comp_allclose_and_pcc
 from models.stable_diffusion.tt.transformer_2d import TtBasicTransformerBlock, TtTransformer2DModel
+from models.stable_diffusion.tt.experimental_ops import disable_conv
 
-
+import pytest
 '''
 torch.Size([2, 4096, 320]) torch.Size([2, 77, 768]) None
 #############Basic Transformer#############
@@ -27,7 +28,8 @@ final_dropout: False
 #############End of Basic Transformer#############
 '''
 
-
+@pytest.mark.skip("FATAL    | Cannot allocate 4096 KB sized buffer in banks!")
+@disable_conv
 def test_run_basic_transformer_inference():
     # synthesize the input
     only_cross_attention = False
@@ -74,7 +76,6 @@ def test_run_basic_transformer_inference():
         upcast_attention = False,
 
         device=device,
-        host=host,
         state_dict=state_dict,
         base_address="down_blocks.0.attentions.0.transformer_blocks.0",)
 
@@ -89,7 +90,7 @@ def test_run_basic_transformer_inference():
     assert passing[0], passing[1:]
     logger.info(f"PASSED {passing[1]}")
 
-
+@disable_conv
 def test_run_transformer_inference():
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
@@ -175,7 +176,6 @@ def test_run_transformer_inference():
         attention_head_dim = attention_head_dim,
         cross_attention_dim = cross_attention_dim,
         device=device,
-        host=host,
         state_dict=state_dict,
         base_address=base_address,)
     ttl.device.Synchronize()

@@ -19,7 +19,7 @@ import tt_lib as ttl
 from models.stable_diffusion.tt.unet_2d_condition import (
     UNet2DConditionModel as tt_unet_condition,
 )
-from models.stable_diffusion.tt.experimental_ops import DEVICE_CONV2D_READY
+from models.stable_diffusion.tt.experimental_ops import UseDeviceConv
 
 
 NUM_INFERENCE_STEPS = 1  # Number of denoising steps
@@ -200,7 +200,7 @@ def test_unbatched_stable_diffusion():
                 unconditioned, t, encoder_hidden_states=uncond_embeddings
             ).sample
         # perform guidance
-        if DEVICE_CONV2D_READY:
+        if UseDeviceConv.READY:
             noise_pred_uncond = noise_pred_uncond[
                 :, :4, :, :
             ]  # unpad for on-device conv
@@ -251,7 +251,7 @@ def test_unbatched_stable_diffusion():
             noise_pred_cond = tt_to_torch_tensor(tt_noise_pred_cond)
             noise_pred_uncond = tt_to_torch_tensor(tt_noise_pred_uncond)
         # perform guidance
-        if DEVICE_CONV2D_READY:
+        if UseDeviceConv.READY:
             noise_pred_uncond = noise_pred_uncond[
                 :, :4, :, :
             ]  # unpad for on-device conv

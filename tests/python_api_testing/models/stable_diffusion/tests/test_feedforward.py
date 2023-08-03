@@ -33,7 +33,7 @@ def test_feedforward_inference():
 
 
     # setup tt model
-    tt_ff = TtFeedForward(dim=dim, dropout=dropout, activation_fn=act, final_dropout=False, state_dict=state_dict, device=device, host=host,)
+    tt_ff = TtFeedForward(dim=dim, dropout=dropout, activation_fn=act, final_dropout=False, state_dict=state_dict, device=device)
     ttl.device.Synchronize()
     tt_input = torch_to_tt_tensor(input, device)
     tt_output = tt_ff(tt_input)

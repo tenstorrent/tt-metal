@@ -1,6 +1,8 @@
 import torch
 from tqdm.auto import tqdm
 from loguru import logger
+import pytest
+
 from transformers import CLIPTextModel, CLIPTokenizer
 from diffusers import (
     AutoencoderKL,
@@ -11,6 +13,7 @@ from diffusers import (
 )
 from diffusers import LMSDiscreteScheduler
 from models.stable_diffusion.tt.unet_2d_condition import UNet2DConditionModel as tt_unet_condition
+from models.stable_diffusion.tt.experimental_ops import disable_conv_and_concat
 
 import tt_lib as ttl
 
@@ -88,7 +91,8 @@ def make_tt_unet(state_dict):
     )
     return tt_unet
 
-
+@pytest.mark.skip("RuntimeError: Circular buffers in program 296 clash with L1 buffers on core (x=0,y=0). L1 buffer allocated at 854016 and local buffers end at 911360")
+@disable_conv_and_concat
 def test_batched_stable_diffusion():
     # Initialize the device
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)

@@ -242,11 +242,16 @@ class TtCrossAttnUpBlock2D(nn.Module):
         attention_mask=None,
     ) -> ttl.tensor.Tensor:
         # TODO(Patrick, William) - attention mask is not used
+        device = ttl.device.GetDefaultDevice()
         for resnet, attn in zip(self.resnets, self.attentions):
             res_hidden_states = res_hidden_states_tuple[-1]
             res_hidden_states_tuple = res_hidden_states_tuple[:-1]
-            hidden_states = concat([hidden_states, res_hidden_states], dim=1)
-
+            if isinstance(res_hidden_states,(ttl.tensor.Tensor,)):
+                on_dev_res_hidden_states = res_hidden_states
+            else:
+                on_dev_res_hidden_states = ttl.tensor.Tensor(res_hidden_states.reshape(-1).tolist(),res_hidden_states.shape,ttl.tensor.DataType.BFLOAT16,ttl.tensor.Layout.ROW_MAJOR).to(device)
+            
+            hidden_states = concat([hidden_states, on_dev_res_hidden_states], dim=1)
             if self.training and self.gradient_checkpointing:
                 assert False, "We do not support Training"
             else:

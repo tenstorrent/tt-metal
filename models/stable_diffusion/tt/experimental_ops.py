@@ -1,14 +1,62 @@
+import copy
 import torch
 import tt_lib as ttl
-
+from contextlib import AbstractContextManager
+from loguru import logger
+from functools import wraps
 from tt_lib.fallback_ops import fallback_ops
 from models.conv_on_device_utils import (
     run_conv_on_device_wrapper,
     is_conv_supported_on_device,
 )
 
-DEVICE_CONV2D_READY = not True  # or goto fallback
-DEVICE_CONCAT_READY = not True
+
+class UseDeviceConcat:
+    READY = True
+
+
+class UseDeviceConv:
+    READY = True
+
+def disable_concat(fn):
+    @wraps(fn)
+    def __wrapper__(*args,**kwargs):
+        with DisableDeviceConvAndConcat(use_concat=False,use_conv=True) as _:
+            values = fn(*args,**kwargs)
+        return values
+    return __wrapper__
+
+def disable_conv(fn):
+    @wraps(fn)
+    def __wrapper__(*args,**kwargs):
+        with DisableDeviceConvAndConcat(use_concat=True,use_conv=False) as _:
+            values = fn(*args,**kwargs)
+        return values
+    return __wrapper__
+
+def disable_conv_and_concat(fn):
+    @wraps(fn)
+    def __wrapper__(*args,**kwargs):
+        with DisableDeviceConvAndConcat() as _:
+            values = fn(*args,**kwargs)
+        return values
+    return __wrapper__
+
+class DisableDeviceConvAndConcat(AbstractContextManager):
+    """useful for testing"""
+
+    def __init__(self,use_conv=False,use_concat=False):
+        self.state = [UseDeviceConcat.READY, UseDeviceConv.READY]
+        UseDeviceConv.READY = use_conv
+        UseDeviceConcat.READY = use_concat
+        logger.debug('Disabled Device Conv, and Concat operators.')
+        
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        UseDeviceConcat.READY = self.state[0]
+        UseDeviceConv.READY = self.state[1]
+        logger.debug('Restored Device Conv, and Concat operators.')
+        del self.state
 
 
 def parse_conv2d_interface(
@@ -67,7 +115,7 @@ def parse_conv2d_interface(
 
 
 def Conv2d(*args, **kwargs):
-    if DEVICE_CONV2D_READY:
+    if UseDeviceConv.READY:
         conv1_weight, conv1_bias, conv1_params = parse_conv2d_interface(*args, **kwargs)
         device = ttl.device.GetDefaultDevice()
         return run_conv_on_device_wrapper(
@@ -82,7 +130,24 @@ def Conv2d(*args, **kwargs):
 
 
 def concat(*args, **kwargs):
-    if DEVICE_CONCAT_READY:
+    device = ttl.device.GetDefaultDevice()        
+    if UseDeviceConcat.READY:
         dim = kwargs.get("dim", 0)
-        return ttl.tensor.concat(*args, dim)
+
+
+        #force move tensor to the Device.        
+        #breakpoint()
+        _args = copy.copy(args[0])
+        for idx,_ in enumerate(args[0]):
+            if not isinstance(_,ttl.tensor.Tensor):
+                #cannot convert torch tensor to device tensor
+                _args[idx] = ttl.tensor.Tensor(_.reshape(-1).tolist(),_.shape,ttl.tensor.Layout.ROW_MAJOR).to(device,ttl.tensor.Layout.ROW_MAJOR) #,ttl.tensor.TILE)
+                #raise ValueError("all tensors need to be on device for concat")
+            _args[idx] = _
+            assert isinstance(_args[idx],ttl.tensor.Tensor)
+            if _args[idx].storage_type() != ttl.tensor.StorageType.DEVICE:
+                _args[idx] = _args[idx].to(device)
+            
+        return ttl.tensor.concat(*_args, dim)
+    
     return fallback_ops.concat(*args, **kwargs)
