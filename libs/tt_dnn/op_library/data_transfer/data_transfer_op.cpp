@@ -62,7 +62,7 @@ tt::stl::reflection::Attributes DataTransferToDevice::attributes() const {
     };
 }
 
-Tensor data_transfer_to_device(const Tensor &input_tensor, Device* device, const MemoryConfig mem_config) {
+Tensor data_transfer_to_device(const Tensor &input_tensor, Device* device, const MemoryConfig &mem_config) {
     return operation::run(DataTransferToDevice{device, mem_config}, {input_tensor}).at(0);
 }
 

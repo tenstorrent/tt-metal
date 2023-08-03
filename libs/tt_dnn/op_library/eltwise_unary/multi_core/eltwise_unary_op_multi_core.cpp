@@ -49,14 +49,14 @@ operation::ProgramWithCallbacks eltwise_unary_multi_core(const Tensor &a, Tensor
         num_output_tiles * single_tile_size,
         cb_data_format
     );
-    auto src_dram_buffer = a.buffer();
+    auto src_buffer = a.buffer();
 
-    auto dst_dram_buffer = output.buffer();
+    auto dst_buffer = output.buffer();
 
     // Op not uplifted for L1 yet, but need to provide arg to kernel
-    bool src_is_dram = src_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram};
-    bool dst_is_dram = dst_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) output_cb_index,
         (std::uint32_t) dst_is_dram
@@ -131,7 +131,7 @@ operation::ProgramWithCallbacks eltwise_unary_multi_core(const Tensor &a, Tensor
             unary_reader_kernel_id,
             core,
             {
-                src_dram_buffer->address(),
+                src_buffer->address(),
                 num_tiles_per_core,
                 num_tiles_written
             }
@@ -142,7 +142,7 @@ operation::ProgramWithCallbacks eltwise_unary_multi_core(const Tensor &a, Tensor
             unary_writer_kernel_id,
             core,
             {
-                dst_dram_buffer->address(),
+                dst_buffer->address(),
                 num_tiles_per_core,
                 num_tiles_written
             }
@@ -162,22 +162,22 @@ operation::ProgramWithCallbacks eltwise_unary_multi_core(const Tensor &a, Tensor
         const std::vector<Buffer*>& output_buffers
     ) {
 
-        auto src_dram_buffer = input_buffers.at(0);
+        auto src_buffer = input_buffers.at(0);
 
-        auto dst_dram_buffer = output_buffers.at(0);
+        auto dst_buffer = output_buffers.at(0);
 
         for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
             {
                 auto runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-                runtime_args[0] = src_dram_buffer->address();
+                runtime_args[0] = src_buffer->address();
                 SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
             }
 
             {
                 auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
-                runtime_args[0] = dst_dram_buffer->address();
+                runtime_args[0] = dst_buffer->address();
                 SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
             }
         }

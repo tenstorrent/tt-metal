@@ -13,9 +13,6 @@ namespace tt_metal {
 
 operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value) {
 
-    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to pad needs to be on device!");
-    TT_ASSERT(a.buffer() != nullptr, "Operand to pad needs to be allocated in a buffer on device!");
-
     tt_metal::Program program{};
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
@@ -114,9 +111,6 @@ operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const Sh
 
 operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value) {
 
-    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to pad needs to be on device!");
-    TT_ASSERT(a.buffer() != nullptr, "Operand to pad needs to be allocated in a buffer on device!");
-
     tt_metal::Program program{};
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
@@ -135,7 +129,7 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
     uint32_t src0_cb_index = 0;
-    uint32_t num_input_tiles = 1;
+    uint32_t num_input_tiles = 2;
 
     auto cb_src0 = tt_metal::CreateCircularBuffers(
         program,
@@ -147,13 +141,13 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
     );
 
     uint32_t src1_cb_index = 1; // For pad buffer
-
+    uint32_t num_pad_tiles = 1;
     auto cb_src1 = tt_metal::CreateCircularBuffers(
         program,
         src1_cb_index,
         core,
-        num_input_tiles,
-        num_input_tiles * single_tile_size,
+        num_pad_tiles,
+        num_pad_tiles * single_tile_size,
         cb_data_format
     );
 
@@ -173,8 +167,13 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
     uint32_t num_total_W = output_shape[0];
     uint32_t num_padded_Wt = (num_total_W - num_unpadded_W) * num_total_Z * num_total_Yt * num_total_Xt;
 
+    uint32_t num_unpadded_tiles = a.volume() / TILE_HW;
+
     vector<uint32_t> reader_kernel_args = {
         src0_buffer->address(),
+        num_unpadded_tiles, 0
+    };
+    vector<uint32_t> writer_kernel_args = {
         dst_buffer->address(),
         num_unpadded_W,
         num_padded_Wt,
@@ -191,17 +190,28 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
     // Data is 32 byte aligned
     bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> compile_time_args_vec = {
+    std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
-        (std::uint32_t) src0_is_dram,
+        (std::uint32_t) src0_is_dram
+    };
+    std::vector<uint32_t> writer_compile_time_args = {
+        // interleaved accessor args
+        (std::uint32_t) src0_cb_index,
+        (std::uint32_t) src1_cb_index,
         (std::uint32_t) dst_is_dram
     };
     // Tilized reader
     tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/pad_dims_interleaved.cpp",
+        "tt_metal/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = compile_time_args_vec});
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
+
+    tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
+        program,
+        "tt_metal/kernels/dataflow/writer_unary_pad_dims_interleaved.cpp",
+        core,
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
     tt_metal::SetRuntimeArgs(
         program,
@@ -210,22 +220,35 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
         reader_kernel_args
     );
 
-    auto override_runtime_args_callback = [kernel_id=unary_reader_kernel_id](
+    tt_metal::SetRuntimeArgs(
+        program,
+        unary_writer_kernel_id,
+        core,
+        writer_kernel_args
+    );
+
+    auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
         const Program &program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
 
-        auto src_buffer = input_buffers.at(0);
-        auto dst_buffer = output_buffers.at(0);
+        auto src_dram_buffer = input_buffers.at(0);
+
+        auto dst_dram_buffer = output_buffers.at(0);
 
         CoreCoord core = {0, 0};
 
         {
-            auto runtime_args = GetRuntimeArgs(program, kernel_id, core);
-            runtime_args[0] = src_buffer->address();
-            runtime_args[1] = dst_buffer->address();
-            SetRuntimeArgs(program, kernel_id, core, runtime_args);
+            auto runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+            runtime_args[0] = src_dram_buffer->address();
+            SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
+        }
+
+        {
+            auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+            runtime_args[0] = dst_dram_buffer->address();
+            SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
         }
     };
 
@@ -235,6 +258,8 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
 
 void Pad::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
+    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to pad needs to be on device!");
+    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to pad needs to be allocated in a buffer on device!");
     TT_ASSERT(input_tensor.layout() == Layout::TILE || input_tensor.layout() == Layout::ROW_MAJOR);
     TT_ASSERT(
         (this->input_tensor_start[0] == 0 && this->input_tensor_start[1] == 0 && this->input_tensor_start[2] == 0 && this->input_tensor_start[3] == 0),

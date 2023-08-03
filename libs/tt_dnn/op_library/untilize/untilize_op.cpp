@@ -32,7 +32,8 @@ operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& ou
 
     uint32_t stick_s = a.shape()[3];
     uint32_t num_tiles_in_row = stick_s / TILE_WIDTH;
-    uint32_t max_l1_size = a.device()->l1_size() - UNRESERVED_BASE;
+    // Ensure we don't intrude into storage space
+    uint32_t max_l1_size = a.device()->l1_size() / 2 - UNRESERVED_BASE;
     uint32_t max_tiles = max_l1_size / (2 * single_tile_size); // 2 CBs
     // Currently need the number of tiles in a row to be divisible by tiles in a block
     uint32_t num_tiles_per_block = 1;
@@ -253,7 +254,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
     constexpr uint32_t alignment = 32;
 
     uint32_t num_tiles_in_row = a.shape()[3] / TILE_WIDTH;
-    uint32_t max_l1_size = a.device()->l1_size() - UNRESERVED_BASE;
+    // Ensure we don't intrude into storage space
+    uint32_t max_l1_size = a.device()->l1_size() / 2 - UNRESERVED_BASE;
     // Memory usage is 2 CBs of width W, plus buffer of size alignment + (W * datum size)
     uint32_t max_X = (max_l1_size - alignment) / (a.element_size() * TILE_HEIGHT * 2 + a.element_size());
     uint32_t max_tiles = max_X / TILE_WIDTH;

@@ -115,21 +115,21 @@ operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tenso
         const std::vector<Buffer*>& output_buffers
     ) {
 
-        auto src_dram_buffer = input_buffers.at(0);
+        auto src_buffer = input_buffers.at(0);
 
-        auto dst_dram_buffer = output_buffers.at(0);
+        auto dst_buffer = output_buffers.at(0);
 
         CoreCoord core = {0, 0};
 
         {
             auto runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-            runtime_args[0] = src_dram_buffer->address();
+            runtime_args[0] = src_buffer->address();
             SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
         }
 
         {
             auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
-            runtime_args[0] = dst_dram_buffer->address();
+            runtime_args[0] = dst_buffer->address();
             SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
         }
     };
