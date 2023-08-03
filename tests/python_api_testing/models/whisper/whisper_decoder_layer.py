@@ -156,7 +156,7 @@ class TtWhisperDecoderLayer(nn.Module):
 
         # TODO: When implement training
         # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
-        hidden_states = tt_lib.tensor.add(hidden_states, residual)
+        hidden_states = tt_lib.tensor.add(hidden_states, residual, self.out_mem_config_l1)
 
         # Cross-Attention Block
         cross_attn_present_key_value = None
@@ -185,7 +185,7 @@ class TtWhisperDecoderLayer(nn.Module):
             # TODO: When implement training
             # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
-            hidden_states = tt_lib.tensor.add(hidden_states, residual)
+            hidden_states = tt_lib.tensor.add(hidden_states, residual, self.out_mem_config_l1)
 
             # concatenation of two tuples
             # add cross-attn to positions 3,4 of present_key_value tuple
@@ -203,7 +203,7 @@ class TtWhisperDecoderLayer(nn.Module):
             torch_hidden_states = torch.nn.functional.gelu(torch_hidden_states)
             hidden_states = torch2tt_tensor(torch_hidden_states, self.device)
         else:
-            hidden_states = tt_lib.tensor.gelu(hidden_states)
+            hidden_states = tt_lib.tensor.gelu(hidden_states, output_mem_config=self.out_mem_config_l1)
 
         # TODO: When implement training
         # hidden_states = nn.functional.dropout(hidden_states, p=self.activation_dropout, training=self.training)
@@ -212,7 +212,7 @@ class TtWhisperDecoderLayer(nn.Module):
         # TODO: When implement training
         # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
-        hidden_states = tt_lib.tensor.add(residual, hidden_states)
+        hidden_states = tt_lib.tensor.add(residual, hidden_states, self.out_mem_config_l1)
         outputs = (hidden_states,)
 
         if output_attentions:

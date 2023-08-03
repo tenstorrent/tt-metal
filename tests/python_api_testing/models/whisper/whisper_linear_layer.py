@@ -19,6 +19,8 @@ def WhisperPaddedLinear(
 
     ``weight`` must be padded inside linear if not divisible by 32.
     """
+    out_mem_config_l1 = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
+
     # Create weight tensor on host
     weight_on_host = tt_lib.tensor.Tensor(
         torch_weight.reshape(-1).tolist(),
@@ -57,7 +59,7 @@ def WhisperPaddedLinear(
 
         if bias is not None:
             output_plus_bias = tt_lib.tensor.bcast(
-                output, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H
+                output, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H, out_mem_config_l1
             )
             return output_plus_bias
 

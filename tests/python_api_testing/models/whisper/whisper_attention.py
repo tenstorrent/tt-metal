@@ -78,7 +78,7 @@ class TtWhisperAttention(nn.Module):
         tt_tensor = fallback_ops.reshape(
             tt_tensor, bsz, seq_len, self.num_heads, self.head_dim
         )
-        tt_tensor = tt_lib.tensor.transpose_hc(tt_tensor, self.out_mem_config_l1)
+        tt_tensor = tt_lib.tensor.transpose_hc(tt_tensor)
         return tt_tensor
 
     def forward(
@@ -266,7 +266,7 @@ class TtWhisperAttention(nn.Module):
         attn_output = tt_lib.tensor.reshape(
             attn_output, bsz, self.num_heads, tgt_len, self.head_dim
         )
-        attn_output = tt_lib.tensor.transpose_hc(attn_output, self.out_mem_config_l1)
+        attn_output = tt_lib.tensor.transpose_hc(attn_output)
 
         attn_output = fallback_ops.reshape(attn_output, 1, bsz, tgt_len, self.embed_dim)
 

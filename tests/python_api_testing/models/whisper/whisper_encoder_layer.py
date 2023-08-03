@@ -32,6 +32,7 @@ class TtWhisperEncoderLayer(nn.Module):
         self.embed_dim = embed_dim
         self.encoder_ffn_dim = encoder_ffn_dim
         self.use_torch_gelu = use_torch_gelu
+        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
 
         self.self_attn = TtWhisperAttention(
             config=config,
@@ -113,7 +114,7 @@ class TtWhisperEncoderLayer(nn.Module):
         # TODO: Do not use dropout for now
         # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
-        hidden_states = tt_lib.tensor.add(hidden_states, residual)
+        hidden_states = tt_lib.tensor.add(hidden_states, residual, self.out_mem_config_l1)
         residual = hidden_states
 
         hidden_states = self.final_layer_norm(hidden_states)
@@ -124,10 +125,10 @@ class TtWhisperEncoderLayer(nn.Module):
             torch_hidden_states = torch.nn.functional.gelu(torch_hidden_states)
             hidden_states = torch2tt_tensor(torch_hidden_states, self.device)
         else:
-            hidden_states = tt_lib.tensor.gelu(hidden_states)
+            hidden_states = tt_lib.tensor.gelu(hidden_states, output_mem_config=self.out_mem_config_l1)
 
         hidden_states = linear(hidden_states, self.fc2_weight, self.fc2_bias)
-        hidden_states = tt_lib.tensor.add(hidden_states, residual)
+        hidden_states = tt_lib.tensor.add(hidden_states, residual, self.out_mem_config_l1)
 
         hidden_states_torch = tt2torch_tensor(hidden_states)
 
