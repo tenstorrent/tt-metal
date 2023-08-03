@@ -2,6 +2,7 @@
 #include "dataflow_api.h"
 #include "debug_print.h"
 
+template <bool DRAM>
 inline void write_tiles_in_block(uint32_t cb_id_out0,
                         uint32_t block_height_ntiles,
                         uint32_t block_width_ntiles,
@@ -10,7 +11,7 @@ inline void write_tiles_in_block(uint32_t cb_id_out0,
                         uint32_t block_row_size,
                         uint32_t block_row_size_unpadded, // to remove padding from the last block in the row
                         uint32_t num_rows_unpadded,
-                        const InterleavedAddrGen<true>& s) {
+                        const InterleavedAddrGen<DRAM>& s) {
     constexpr uint32_t TILE_HEIGHT = 32;  // TODO: use common source of truth
     uint32_t block_row_id = block_start_row_id;
     for (uint32_t tile_row_id = 0; tile_row_id < block_height_ntiles; tile_row_id++) {
@@ -42,6 +43,8 @@ void kernel_main() {
     uint32_t last_block_row_size_unpadded = get_arg_val<uint32_t>(7); // unpadded last block width
     uint32_t num_output_rows_unpadded = get_arg_val<uint32_t>(8);
 
+    constexpr bool out_in_dram = get_compile_time_arg_val(0) == 1;
+
     // NOTE: Row major layout only supports bfp16
     // TT_ASSERT(out_df != DataFormat::Bfp8_b);
     constexpr uint32_t cb_id_out0 = tt::CB::c_out0;
@@ -58,7 +61,7 @@ void kernel_main() {
     //     .page_size = output_row_size,
     //     .data_format = out_df
     // };
-    const InterleavedAddrGen<true> s = {
+    const InterleavedAddrGen<out_in_dram> s = {
         .bank_base_address = dst_addr,
         .page_size = output_row_size
     };

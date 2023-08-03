@@ -3,7 +3,7 @@ from typing import Type, Union, Optional, List, Callable
 import tt_lib
 import torch
 import torch.nn as nn
-
+import math
 from utils import conv3x3, conv1x1, fold_bn_to_conv, fold_bn_to_conv_weights_bias
 from utility_functions_new import pad_by_zero, tt2torch_tensor
 from tt_lib.utils import pad_weight
@@ -14,6 +14,9 @@ from tt_lib.fused_ops.softmax import softmax as TtSoftmax
 from tt_lib.fused_ops.conv import resnet_conv as TtResnetConv
 from conv_on_device_utils import is_conv_supported_on_device, _nearest_32
 from tt_lib.fallback_ops import fallback_ops
+
+def _nearest_y(x, y):
+    return math.ceil(x / y) * y
 
 def format_tensor(x, target_layout, device, pad_value=0.0):
     if x.layout() == target_layout:
@@ -78,6 +81,8 @@ class Bottleneck(nn.Module):
         fold_batchnorm = False,
         downsample_conv_on_tt = None,
         norm_layer_after_downsample_conv_on_tt = None,
+        downsample_params = [],
+        storage_in_dram=True
     ) -> None:
         super().__init__()
         self.device = device
@@ -86,6 +91,12 @@ class Bottleneck(nn.Module):
         self.fold_batchnorm = fold_batchnorm
         self.downsample_conv_on_tt = downsample_conv_on_tt
         self.norm_layer_after_downsample_conv_on_tt = norm_layer_after_downsample_conv_on_tt
+        self.downsample_params = downsample_params
+        self.storage_in_dram = storage_in_dram
+        if self.storage_in_dram:
+            self.memory_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.DRAM)
+        else:
+            self.memory_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
         width = int(planes * (base_width / 64.0)) * groups
@@ -154,23 +165,24 @@ class Bottleneck(nn.Module):
         else:
             self.conv3 = fallback_ops.Conv2d(conv3_weight, conv3_bias, width, planes * self.expansion, kernel_size=1, stride=1, padding=0)
 
-    def run_forward(self, x: torch.Tensor, x_actual_shape=[]) -> torch.Tensor:
+    def run_forward(self, x: torch.Tensor, x_actual_shape=[], output_in_dram=False) -> torch.Tensor:
         identity = x
         # conv1 is 1x1 conv
         out = self.conv1(x)
-        out = self.relu(out)
+        out = self.relu(out, self.memory_config)
         out = format_tensor(out, tt_lib.tensor.Layout.ROW_MAJOR, self.device)
         out = out.reshape(x_actual_shape[0], x_actual_shape[1], x_actual_shape[2], out.shape()[3])
         saved_shape = out.shape()
         out = self.conv2(out)
         conv_2_output_shape = compute_conv_output_shape(self.conv2_params, saved_shape)
-        out = self.relu(out)
+        out = self.relu(out, self.memory_config)
         # conv3 is 1x1 conv
         out = self.conv3(out)
 
         if self.downsample_conv_on_tt is not None:
-            x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device)
-            x = x.reshape(x_actual_shape[0], x_actual_shape[1], x_actual_shape[2], x_actual_shape[3])
+            if(self.downsample_params[2] != 1 or self.downsample_params[4] != 1 or self.downsample_params[6] != 0):
+                x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device)
+                x = x.reshape(x_actual_shape[0], x_actual_shape[1], x_actual_shape[2], x_actual_shape[3])
             identity = self.downsample_conv_on_tt(x)
             assert self.norm_layer_after_downsample_conv_on_tt is not None
             if not self.fold_batchnorm:
@@ -178,8 +190,11 @@ class Bottleneck(nn.Module):
         elif self.downsample is not None:
             identity = self.downsample(x)
 
-        out = tt_lib.tensor.add_without_autoformat(out, identity)
-        out = self.relu(out)
+        out = tt_lib.tensor.add_without_autoformat(out, identity, self.memory_config)
+        if output_in_dram:
+            out = self.relu(out)
+        else:
+            out = self.relu(out, self.memory_config)
         out_actual_shape = [conv_2_output_shape[0], conv_2_output_shape[1], conv_2_output_shape[2], out.shape()[3]]
         return out, out_actual_shape
 
@@ -198,14 +213,19 @@ class ResNet(nn.Module):
         device = None,
         state_dict = None,
         base_address = None,
-        fold_batchnorm = False
+        fold_batchnorm = False,
+        storage_in_dram = True
     ) -> None:
         super().__init__()
         self.device = device
         self.base_address_with_dot = base_address # this is root layer, no dot is needed
         self.state_dict = state_dict
         self.fold_batchnorm = fold_batchnorm
-
+        self.storage_in_dram = storage_in_dram
+        if self.storage_in_dram:
+            self.memory_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.DRAM)
+        else:
+            self.memory_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
         self._norm_layer = norm_layer
@@ -321,7 +341,9 @@ class ResNet(nn.Module):
                 base_address=f"{self.base_address_with_dot}{name}.0",
                 fold_batchnorm=self.fold_batchnorm,
                 downsample_conv_on_tt=self.downsample_conv_on_tt,
-                norm_layer_after_downsample_conv_on_tt=self.norm_layer_after_downsample_conv_on_tt
+                norm_layer_after_downsample_conv_on_tt=self.norm_layer_after_downsample_conv_on_tt,
+                downsample_params=self.downsample_params,
+                storage_in_dram=self.storage_in_dram
             )
         )
         self.inplanes = planes * block.expansion
@@ -338,6 +360,7 @@ class ResNet(nn.Module):
                     state_dict=self.state_dict,
                     base_address=f"{self.base_address_with_dot}{name}.{_}",
                     fold_batchnorm=self.fold_batchnorm,
+                    storage_in_dram=self.storage_in_dram
                 )
             )
 
@@ -350,12 +373,12 @@ class ResNet(nn.Module):
                 x.shape,
                 tt_lib.tensor.DataType.BFLOAT16,
                 tt_lib.tensor.Layout.ROW_MAJOR)
-        x = x.pad((x.shape()[0], x.shape()[1], x.shape()[2], _nearest_32(x.shape()[3])), (0, 0, 0, 0), 0)
-        x = x.to(self.device, tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1))
+        x = x.pad((x.shape()[0], x.shape()[1], x.shape()[2], _nearest_y(x.shape()[3], 32)), (0, 0, 0, 0), 0)
+        x = x.to(self.device, self.memory_config)
         saved_shape = compute_conv_output_shape(self.conv1_params, x.shape())
         x = self.conv1(x)
         x = x.reshape(1, 1, x.shape()[0]*x.shape()[1]*x.shape()[2], x.shape()[3]);
-        x = self.relu(x)
+        x = self.relu(x, self.memory_config)
         x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device)
         x = x.reshape(saved_shape[0], saved_shape[1], saved_shape[2], saved_shape[3])
         x = self.maxpool(x)
@@ -367,8 +390,12 @@ class ResNet(nn.Module):
             x, saved_shape = layer.run_forward(x, saved_shape)
         for layer in self.layer3:
             x, saved_shape = layer.run_forward(x, saved_shape)
-        for layer in self.layer4:
-            x, saved_shape = layer.run_forward(x, saved_shape)
+        for i,layer in enumerate(self.layer4):
+            if i == len(self.layer4) - 1:
+                out_in_dram = True
+            else:
+                out_in_dram = False
+            x, saved_shape = layer.run_forward(x, saved_shape, out_in_dram)
         x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device)
         x = format_tensor(x, tt_lib.tensor.Layout.TILE, self.device)
         x = self.avgpool(x)

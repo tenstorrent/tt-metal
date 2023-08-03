@@ -33,12 +33,13 @@ def test_run_resnet50_inference(fold_batchnorm, imagenet_sample_input):
         torch_resnet50.eval()
 
         state_dict = torch_resnet50.state_dict()
-
+        storage_in_dram = False
         tt_resnet50 = ResNet(Bottleneck, [3, 4, 6, 3],
                         device=device,
                         state_dict=state_dict,
                         base_address="",
-                        fold_batchnorm=fold_batchnorm)
+                        fold_batchnorm=fold_batchnorm,
+                        storage_in_dram=storage_in_dram)
 
 
         torch_output = torch_resnet50(image).unsqueeze(1).unsqueeze(1)

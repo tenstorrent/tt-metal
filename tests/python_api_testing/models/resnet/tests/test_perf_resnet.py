@@ -55,7 +55,8 @@ def run_perf_resnet(expected_inference_time, expected_compile_time, hf_cat_image
                     device=device,
                     state_dict=state_dict,
                     base_address="",
-                    fold_batchnorm=True)
+                    fold_batchnorm=True,
+                    storage_in_dram=False)
 
 
     with torch.no_grad():

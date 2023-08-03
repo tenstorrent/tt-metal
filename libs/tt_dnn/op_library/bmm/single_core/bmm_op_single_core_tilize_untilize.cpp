@@ -426,11 +426,14 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
             in0_height_ntiles / out_subblock_height_ntiles // out_num_subblocks_h
         };
     }
+
+    std::vector<uint32_t> writer_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0)};
+
     auto writer_id = CreateDataMovementKernel(
         program,                        // program
         writer_kernel,                  // file name
         core_range,                     // core
-        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
+        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_compile_time_args}
     );
 
     // Compute kernel

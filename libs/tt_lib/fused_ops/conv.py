@@ -129,12 +129,12 @@ def resnet_conv(weight: List[Union[int, float]], conv_params, device, bias=None)
     def conv_(activation):
         # if conv1x1 stride 1 padding 0, use matmul op
         if use_regular_matmul_op:
-            if(activation.layout() == tensor.Layout.ROW_MAJOR):
-                activation = activation.reshape(1, 1, activation.shape()[0] * activation.shape()[1] * activation.shape()[2], activation.shape()[3])
-                activation_padded_shape = tensor.pad_to_tile_shape(activation.shape(), False, False, True, True)
-                activation = tensor.format_input_tensor(activation, device, activation_padded_shape, 0.0, tensor.Layout.TILE)
+            # if(activation.layout() == tensor.Layout.ROW_MAJOR):
+            #     activation = activation.reshape(1, 1, activation.shape()[0] * activation.shape()[1] * activation.shape()[2], activation.shape()[3])
+            #     activation_padded_shape = tensor.pad_to_tile_shape(activation.shape(), False, False, True, True)
+            #     activation = tensor.format_input_tensor(activation, device, activation_padded_shape, 0.0, tensor.Layout.TILE)
             assert(activation.layout() == tensor.Layout.TILE)
-            output = tensor.matmul(activation, weight_on_device)
+            output = tensor.matmul(activation, weight_on_device, activation.memory_config())
         else:
             assert(activation.layout() == tensor.Layout.ROW_MAJOR)
             output = tensor.conv(activation, weight_on_device, [R,S,U,V,P_H,P_W], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w, K)
@@ -147,7 +147,7 @@ def resnet_conv(weight: List[Union[int, float]], conv_params, device, bias=None)
                 output = output.reshape(1, 1, output.shape()[0] * output.shape()[1] * output.shape()[2], output.shape()[3])
                 output_padded_shape = tensor.pad_to_tile_shape(output.shape(), False, False, True, True)
                 output = tensor.format_input_tensor(output, device, output_padded_shape, 0.0, tensor.Layout.TILE)
-            output_plus_bias = tensor.bcast_without_autoformat(output, bias_on_device, tensor.BcastOpMath.ADD, tensor.BcastOpDim.H)
+            output_plus_bias = tensor.bcast_without_autoformat(output, bias_on_device, tensor.BcastOpMath.ADD, tensor.BcastOpDim.H, output.memory_config())
             return output_plus_bias
 
         return output
