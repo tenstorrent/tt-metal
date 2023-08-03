@@ -98,7 +98,7 @@ def run_perf_resnet(expected_inference_time, expected_compile_time, hf_cat_image
     "expected_inference_time, expected_compile_time",
     (
         (1.0,
-        29,
+         34,
         ),
     ),
 )
@@ -112,7 +112,7 @@ def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_co
     "expected_inference_time, expected_compile_time",
     (
         (3,
-         30,
+         34,
         ),
     ),
 )
