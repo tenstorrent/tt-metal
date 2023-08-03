@@ -204,11 +204,6 @@ operation::ProgramWithCallbacks Untilize::create_program(const std::vector<Tenso
     return {untilize_single_core(input_tensor_a, output_tensor)};
 }
 
-operation::Hash Untilize::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return fmt::format("{}_{}", *this, input_tensor);
-}
-
 tt::stl::reflection::Attributes Untilize::attributes() const {
     return {
         {"output_mem_config", this->output_mem_config},
@@ -462,11 +457,6 @@ operation::ProgramWithCallbacks UntilizeWithUnpadding::create_program(const std:
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     return {untilize_with_unpadding_single_core(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end)};
-}
-
-operation::Hash UntilizeWithUnpadding::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return fmt::format("{}_{}", *this, input_tensor);
 }
 
 tt::stl::reflection::Attributes UntilizeWithUnpadding::attributes() const {

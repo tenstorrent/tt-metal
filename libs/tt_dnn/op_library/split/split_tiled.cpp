@@ -82,11 +82,6 @@ operation::ProgramWithCallbacks SplitTiled::create_program(
     return {};
 }
 
-operation::Hash SplitTiled::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return fmt::format("{}_{}", *this, input_tensor);
-}
-
 tt::stl::reflection::Attributes SplitTiled::attributes() const {
     return {
         {"dim", this->dim},

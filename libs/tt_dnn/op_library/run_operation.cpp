@@ -31,6 +31,32 @@ static Device* get_device(const std::vector<Tensor>& input_tensors, const std::v
     return device;
 }
 
+}  // namespace detail
+
+
+std::vector<Tensor> generic_create_output_tensors(
+    const DeviceOperation& operation,
+    const std::vector<Tensor>& input_tensors,
+    const DataType output_dtype,
+    const Layout output_layout,
+    const MemoryConfig& output_mem_config
+) {
+    const auto& input_tensor = input_tensors.at(0);
+    const auto& output_shapes = operation.compute_output_shapes(input_tensors);
+
+    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE);
+
+    std::vector<Tensor> output_tensors;
+    output_tensors.reserve(output_shapes.size());
+    for (const auto& output_shape : output_shapes) {
+        output_tensors.emplace_back(create_device_tensor(output_shape, output_dtype, output_layout, input_tensor.device(), output_mem_config));
+    }
+    return output_tensors;
+}
+
+
+namespace detail {
+
 void override_runtime_args(
     const OverrideRuntimeArgsCallback& override_runtime_args_callback,
     const Program &program,
@@ -77,12 +103,6 @@ std::vector<Tensor> run_without_program_cache(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) {
 
-    auto profile_scope = op_profiler::OpProfileScope(operation.get_type_name(), op_profiler::OpType::tt_dnn_device);
-    auto do_profile = op_profiler::get_profiler_flag();
-    if (do_profile) { setup_profiler(operation, input_tensors); }
-
-    operation.validate(input_tensors, optional_input_tensors);
-
     auto device = detail::get_device(input_tensors, optional_input_tensors);
     auto output_tensors = operation.create_output_tensors(input_tensors);
 
@@ -102,8 +122,6 @@ std::vector<Tensor> run_without_program_cache(
         LaunchKernels(device, program);
     }
 
-    op_profiler::append_all_tensor_io_data(input_tensors, optional_input_tensors, output_tensors);
-
     return output_tensors;
 }
 
@@ -112,23 +130,17 @@ std::vector<Tensor> run_with_program_cache(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) {
 
-    auto profile_scope = op_profiler::OpProfileScope(operation.get_type_name(), op_profiler::OpType::tt_dnn_device);
-    auto do_profile = op_profiler::get_profiler_flag();
-    if (do_profile) { setup_profiler(operation, input_tensors); }
-
-    operation.validate(input_tensors, optional_input_tensors);
-
     auto device = detail::get_device(input_tensors, optional_input_tensors);
     auto output_tensors = operation.create_output_tensors(input_tensors);
 
     auto& program_with_callbacks = program_cache::get_or_create(
         operation, input_tensors, optional_input_tensors, output_tensors, device
     );
+    TT_ASSERT(program_with_callbacks.supports_program_cache());
 
     auto& program = program_with_callbacks.program;
-
     override_runtime_args(
-        program_with_callbacks.override_runtime_args_callback,
+        program_with_callbacks.override_runtime_args_callback.value(),
         program, input_tensors, optional_input_tensors, output_tensors
     );
 
@@ -144,31 +156,9 @@ std::vector<Tensor> run_with_program_cache(
         LaunchKernels(device, program);
     }
 
-    op_profiler::append_all_tensor_io_data(input_tensors, optional_input_tensors, output_tensors);
-
     return output_tensors;
 }
 
-}
-
-std::vector<Tensor> generic_create_output_tensors(
-    const DeviceOperation& operation,
-    const std::vector<Tensor>& input_tensors,
-    const DataType output_dtype,
-    const Layout output_layout,
-    const MemoryConfig& output_mem_config
-) {
-    const auto& input_tensor = input_tensors.at(0);
-    const auto& output_shapes = operation.compute_output_shapes(input_tensors);
-
-    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE);
-
-    std::vector<Tensor> output_tensors;
-    output_tensors.reserve(output_shapes.size());
-    for (const auto& output_shape : output_shapes) {
-        output_tensors.emplace_back(create_device_tensor(output_shape, output_dtype, output_layout, input_tensor.device(), output_mem_config));
-    }
-    return output_tensors;
 }
 
 std::vector<Tensor> run(
@@ -189,28 +179,30 @@ std::vector<Tensor> run(
     return output_tensors;
 }
 
-namespace detail {
-void print_warning_if_operation_does_not_support_program_cache(const DeviceOperation& operation) {
-#ifdef DEBUG
-    if (program_cache::is_enabled()) {
-        tt::log_warning(tt::LogOp, "Running {} operation without program cache", operation.get_type_name());
-    }
-#endif
-}
-}  // namespace detail
-
 std::vector<Tensor> run(
     const DeviceOperation& operation,
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors
 ) {
+
     log_operation(operation, input_tensors, optional_input_tensors);
-    if (program_cache::is_enabled() and operation.supports_program_caching()) {
-        return detail::run_with_program_cache(operation, input_tensors, optional_input_tensors);
+
+    auto profile_scope = op_profiler::OpProfileScope(operation.get_type_name(), op_profiler::OpType::tt_dnn_device);
+    auto do_profile = op_profiler::get_profiler_flag();
+    if (do_profile) { detail::setup_profiler(operation, input_tensors); }
+
+    operation.validate(input_tensors, optional_input_tensors);
+
+    std::vector<Tensor> output_tensors;
+    if (program_cache::is_enabled()) {
+        output_tensors = detail::run_with_program_cache(operation, input_tensors, optional_input_tensors);
     } else {
-        detail::print_warning_if_operation_does_not_support_program_cache(operation);
-        return detail::run_without_program_cache(operation, input_tensors, optional_input_tensors);
+        output_tensors = detail::run_without_program_cache(operation, input_tensors, optional_input_tensors);
     }
+
+    op_profiler::append_all_tensor_io_data(input_tensors, optional_input_tensors, output_tensors);
+
+    return output_tensors;
 }
 
 std::vector<Tensor> run_without_autoformat(

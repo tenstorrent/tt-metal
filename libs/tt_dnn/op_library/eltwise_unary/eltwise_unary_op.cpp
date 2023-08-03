@@ -165,11 +165,6 @@ operation::ProgramWithCallbacks EltwiseUnary::create_program(const std::vector<T
     }
 }
 
-operation::Hash EltwiseUnary::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return fmt::format("{}_{}", *this, input_tensor);
-}
-
 
 UnaryOpParallelizationStrategy::Enum EltwiseUnary::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);

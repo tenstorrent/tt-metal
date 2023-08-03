@@ -104,11 +104,6 @@ operation::ProgramWithCallbacks Reduce::create_program(const std::vector<Tensor>
 
 }
 
-operation::Hash Reduce::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return fmt::format("{}_{}", *this, input_tensor);
-}
-
 tt::stl::reflection::Attributes Reduce::attributes() const {
     return {
         {"math_op", this->math_op},

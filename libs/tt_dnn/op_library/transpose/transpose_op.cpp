@@ -91,11 +91,6 @@ operation::ProgramWithCallbacks Transpose::create_program(const std::vector<Tens
     }
 }
 
-operation::Hash Transpose::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return fmt::format("{}_{}", *this, input_tensor);
-}
-
 TransposeOpParallelizationStrategy::Enum Transpose::get_parallelization_strategy(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto ashape = input_tensor.shape();

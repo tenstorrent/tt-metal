@@ -385,17 +385,6 @@ operation::ProgramWithCallbacks LayerNorm::create_program(
 
 }
 
-operation::Hash LayerNorm::compute_program_hash(
-    const std::vector<Tensor> &input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors
-) const {
-    const auto& input_tensor = input_tensors.at(0);
-    const auto& b = optional_input_tensors.at(0);
-    const auto& gamma = optional_input_tensors.at(1);
-    const auto& beta = optional_input_tensors.at(2);
-    return fmt::format("{}_{}_{}_{}_{}", *this, input_tensor, b, gamma, beta);
-}
-
 tt::stl::reflection::Attributes LayerNorm::attributes() const {
     return {
         {"eps", this->eps},
@@ -462,17 +451,6 @@ operation::ProgramWithCallbacks BertLargeLayerNorm::create_program(
 
 }
 
-operation::Hash BertLargeLayerNorm::compute_program_hash(
-    const std::vector<Tensor> &input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors
-) const {
-    const auto& input_tensor = input_tensors.at(0);
-    const auto& b = optional_input_tensors.at(0);
-    const auto& gamma = optional_input_tensors.at(1);
-    const auto& beta = optional_input_tensors.at(2);
-    return fmt::format("{}_{}_{}_{}_{}", *this, input_tensor, b, gamma, beta);
-}
-
 tt::stl::reflection::Attributes BertLargeLayerNorm::attributes() const {
     return {
         {"eps", this->eps},
@@ -535,17 +513,6 @@ operation::ProgramWithCallbacks RMSNorm::create_program(
     auto& output_tensor = output_tensors.at(0);
     return layernorm_(a, b, gamma, beta, output_tensor, this->eps, false, true);
 
-}
-
-operation::Hash RMSNorm::compute_program_hash(
-    const std::vector<Tensor> &input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors
-) const {
-    const auto& input_tensor = input_tensors.at(0);
-    const auto& b = optional_input_tensors.at(0);
-    const auto& gamma = optional_input_tensors.at(1);
-    const auto& beta = optional_input_tensors.at(2);
-    return fmt::format("{}_{}_{}_{}_{}", *this, input_tensor, b, gamma, beta);
 }
 
 tt::stl::reflection::Attributes RMSNorm::attributes() const {

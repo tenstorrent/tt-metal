@@ -319,12 +319,6 @@ operation::ProgramWithCallbacks Matmul::create_program(const std::vector<Tensor>
 
 }
 
-operation::Hash Matmul::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
-    const auto& input_tensor_b = input_tensors.at(1);
-    return fmt::format("{}_{}_{}", *this, input_tensor_a, input_tensor_b);
-}
-
 tt::stl::reflection::Attributes Matmul::attributes() const {
     return {
         {"bcast_batch", this->bcast_batch},
@@ -517,16 +511,6 @@ operation::ProgramWithCallbacks BertLargeMatmul::create_program(
             TT_ASSERT(false, "Unknown bert large matmul op in create_program!");
     }
     return {};
-}
-
-operation::Hash BertLargeMatmul::compute_program_hash(
-    const std::vector<Tensor> &input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors
-) const {
-    const auto& input_tensor_a = input_tensors.at(0);
-    const auto& input_tensor_b = input_tensors.at(1);
-    const auto& bias_tensor = optional_input_tensors.at(0);
-    return fmt::format("{}_{}_{}_{}", *this, input_tensor_a, input_tensor_b, bias_tensor);
 }
 
 tt::stl::reflection::Attributes BertLargeMatmul::attributes() const {

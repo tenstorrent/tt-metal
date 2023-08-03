@@ -21,7 +21,11 @@ using OverrideRuntimeArgsCallback = std::function<void(const Program &program, c
 
 struct ProgramWithCallbacks {
     Program program{};
-    OverrideRuntimeArgsCallback override_runtime_args_callback = [](auto&& ... args) {};
+    std::optional<OverrideRuntimeArgsCallback> override_runtime_args_callback = std::nullopt;
+
+    bool supports_program_cache() const {
+        return this->override_runtime_args_callback.has_value();
+    }
 };
 
 struct ProfilerInfo {
@@ -61,31 +65,6 @@ template<class T>
 constexpr bool implements_validate_with_optional_input_tensors() {
     return std::experimental::is_detected<
         has_validate_with_optional_input_tensors_t,
-        T,
-        const std::vector<Tensor>&,
-        const std::vector<std::optional<const Tensor>>&
-    >{};
-}
-
-template<class T, class... Args>
-using has_compute_program_hash_t = decltype(std::declval<T>().compute_program_hash(std::declval<Args>()...));
-
-template<class T>
-constexpr bool implements_compute_program_hash() {
-    return std::experimental::is_detected<
-        has_compute_program_hash_t,
-        T,
-        const std::vector<Tensor>&
-    >{};
-}
-
-template<class T, class... Args>
-using has_compute_program_hash_with_optional_input_tensors_t = decltype(std::declval<T>().compute_program_hash(std::declval<Args>()...));
-
-template<class T>
-constexpr bool implements_compute_program_hash_with_optional_input_tensors() {
-    return std::experimental::is_detected<
-        has_compute_program_hash_with_optional_input_tensors_t,
         T,
         const std::vector<Tensor>&,
         const std::vector<std::optional<const Tensor>>&
@@ -216,7 +195,6 @@ struct DeviceOperation {
     const std::function<const std::vector<Tensor>(const std::vector<Tensor>&)> create_output_tensors;
     const std::function<ProgramWithCallbacks(const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&, std::vector<Tensor>&)> create_program;
     const std::function<const Hash(const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&)> compute_program_hash;
-    const std::function<bool()> supports_program_caching;
     const std::function<const ProfilerInfo(const std::vector<Tensor> &input_tensors)> create_profiler_info;
     const std::function<const tt::stl::reflection::Attributes()> attributes;
 
@@ -284,24 +262,27 @@ struct DeviceOperation {
         compute_program_hash{
             [this] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) -> const std::string {
                 auto operation = std::any_cast<const T&>(this->type_erased_operation);
-                if constexpr (detail::implements_compute_program_hash<T>()) {
+                if constexpr (detail::implements_create_program<T>()) {
                     TT_ASSERT(optional_input_tensors.empty());
-                    static_assert(detail::implements_create_program<T>());
-                    return operation.compute_program_hash(input_tensors);
+                    return fmt::format(
+                        "{}_{}",
+                        operation,
+                        fmt::join(std::begin(input_tensors), std::end(input_tensors), "_")
+                    );
+
                 }
-                else if constexpr (detail::implements_compute_program_hash_with_optional_input_tensors<T>()) {
+                else if constexpr (detail::implements_create_program_with_optional_input_tensors<T>()) {
                     TT_ASSERT(not optional_input_tensors.empty());
-                    static_assert(detail::implements_create_program_with_optional_input_tensors<T>());
-                    return operation.compute_program_hash(input_tensors, optional_input_tensors);
+                    return fmt::format(
+                        "{}_{}_{}",
+                        operation,
+                        fmt::join(std::begin(input_tensors), std::end(input_tensors), "_"),
+                        fmt::join(std::begin(optional_input_tensors), std::end(optional_input_tensors), "_")
+                    );
                 }
                 else {
-                    TT_THROW("Operation doesn't implement compute_program_hash");
+                    static_assert(detail::always_false<T>, "Operation doesn't implement create_program");
                 }
-            }
-        },
-        supports_program_caching{
-            [] {
-                return detail::implements_compute_program_hash<T>() or detail::implements_compute_program_hash_with_optional_input_tensors<T>();
             }
         },
         create_profiler_info{

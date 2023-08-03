@@ -311,11 +311,6 @@ operation::ProgramWithCallbacks Unpad::create_program(const std::vector<Tensor>&
     }
 }
 
-operation::Hash Unpad::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return fmt::format("{}_{}", *this, input_tensor);
-}
-
 tt::stl::reflection::Attributes Unpad::attributes() const {
     return {
         {"output_tensor_start", this->output_tensor_start},

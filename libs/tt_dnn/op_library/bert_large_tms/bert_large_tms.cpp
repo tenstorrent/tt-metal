@@ -99,11 +99,6 @@ operation::ProgramWithCallbacks BertLargeTM::create_program(const std::vector<Te
     return {};
 }
 
-operation::Hash BertLargeTM::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return fmt::format("{}_{}", *this, input_tensor);
-}
-
 tt::stl::reflection::Attributes BertLargeTM::attributes() const {
     return {
         {"bert_large_tm_op_type", this->bert_large_tm_op_type},

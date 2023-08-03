@@ -96,9 +96,6 @@ In order for an op to be cachable, it needs to implement the following:
     struct <NewOperation> {
        // Mandatory methods
 
-        // Implement `compute_program_hash` method
-        operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
-
         // Return type of `create_program` needs to implement override_runtime_args_callback
         // i.e.:
         operation::ProgramWithCallbacks create_program(const std::vector<Tensor> &input_tensors) const {

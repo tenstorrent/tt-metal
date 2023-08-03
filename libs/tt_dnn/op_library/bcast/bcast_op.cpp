@@ -138,12 +138,6 @@ operation::ProgramWithCallbacks EltwiseBinaryBroadcast::create_program(const std
     }
 }
 
-operation::Hash EltwiseBinaryBroadcast::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
-    const auto& input_tensor_b = input_tensors.at(1);
-    return fmt::format("{}_{}_{}", *this, input_tensor_a, input_tensor_b);
-}
-
 tt::stl::reflection::Attributes EltwiseBinaryBroadcast::attributes() const {
     return {
         {"math_op", this->math_op},

@@ -192,13 +192,6 @@ std::vector<Tensor> Concat2::create_output_tensors(const std::vector<Tensor> &in
     return operation::generic_create_output_tensors(*this, input_tensors, ref_in_tensor.dtype(), Layout::TILE, this->output_mem_config);
 }
 
-
-operation::Hash Concat2::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
-    const auto& input_tensor_b = input_tensors.at(1);
-    return fmt::format("{}_{}_{}", *this, input_tensor_a, input_tensor_b);
-}
-
 tt::stl::reflection::Attributes Concat2::attributes() const {
     return {
         {"dim", this->dim},

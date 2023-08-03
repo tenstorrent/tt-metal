@@ -312,11 +312,6 @@ operation::ProgramWithCallbacks Pad::create_program(const std::vector<Tensor>& i
     }
 }
 
-operation::Hash Pad::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return fmt::format("{}_{}", *this, input_tensor);
-}
-
 tt::stl::reflection::Attributes Pad::attributes() const {
     return {
         {"output_tensor_shape", this->output_tensor_shape},

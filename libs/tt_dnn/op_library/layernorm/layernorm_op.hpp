@@ -24,9 +24,6 @@ struct LayerNorm {
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor> &output_tensors
     ) const;
-    operation::Hash compute_program_hash(
-        const std::vector<Tensor> &input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     tt::stl::reflection::Attributes attributes() const;
 };
 
@@ -42,9 +39,6 @@ struct RMSNorm {
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor> &output_tensors
     ) const;
-    operation::Hash compute_program_hash(
-        const std::vector<Tensor> &input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     tt::stl::reflection::Attributes attributes() const;
 };
 
@@ -60,9 +54,6 @@ struct BertLargeLayerNorm {
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor> &output_tensors
     ) const;
-    operation::Hash compute_program_hash(
-        const std::vector<Tensor> &input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     tt::stl::reflection::Attributes attributes() const;
 };
 

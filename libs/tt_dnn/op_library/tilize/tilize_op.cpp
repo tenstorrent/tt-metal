@@ -222,11 +222,6 @@ operation::ProgramWithCallbacks Tilize::create_program(const std::vector<Tensor>
     return tilize_single_core(input_tensor_a, output_tensor);
 }
 
-operation::Hash Tilize::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return fmt::format("{}_{}", *this, input_tensor);
-}
-
 tt::stl::reflection::Attributes Tilize::attributes() const {
     return {
         {"output_mem_config", this->output_mem_config},
@@ -494,11 +489,6 @@ operation::ProgramWithCallbacks TilizeWithValPadding::create_program(const std::
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     return tilize_with_val_padding_single_core(input_tensor_a, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
-}
-
-operation::Hash TilizeWithValPadding::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return fmt::format("{}_{}", *this, input_tensor);
 }
 
 tt::stl::reflection::Attributes TilizeWithValPadding::attributes() const {

@@ -99,12 +99,6 @@ operation::ProgramWithCallbacks EltwiseBinary::create_program(const std::vector<
     }
 }
 
-operation::Hash EltwiseBinary::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
-    const auto& input_tensor_b = input_tensors.at(1);
-    return fmt::format("{}_{}_{}", *this, input_tensor_a, input_tensor_b);
-}
-
 
 BinaryOpParallelizationStrategy::Enum EltwiseBinary::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);

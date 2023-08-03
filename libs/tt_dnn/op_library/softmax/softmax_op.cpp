@@ -271,15 +271,6 @@ operation::ProgramWithCallbacks AttentionSoftmaxInPlace::create_program(
 
 }
 
-operation::Hash AttentionSoftmaxInPlace::compute_program_hash(
-    const std::vector<Tensor> &input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors
-) const {
-    const auto& input_tensor = input_tensors.at(0);
-    const auto& mask = optional_input_tensors.at(0);
-    return fmt::format("{}_{}_{}", *this, input_tensor, mask);
-}
-
 tt::stl::reflection::Attributes AttentionSoftmaxInPlace::attributes() const {
     return {
         {"scale", this->scale},
