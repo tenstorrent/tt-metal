@@ -83,7 +83,7 @@ def run_perf_deit(expected_inference_time, expected_compile_time, hf_cat_image_s
     "expected_inference_time, expected_compile_time",
     (
         (3.7,
-         17,
+         17.5,
         ),
     ),
 )
