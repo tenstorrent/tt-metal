@@ -19,8 +19,8 @@ void DumpDeviceProfileResults(Device *device, const Program &program) {
     {
         ProfileTTMetalScope profile_this = ProfileTTMetalScope("DumpDeviceProfileResults");
         //TODO: (MO) This global is temporary need to update once the new interface is in
-        if (HACK_CQ) {
-            Finish(*HACK_CQ);
+        if (GLOBAL_CQ) {
+            Finish(*GLOBAL_CQ);
         }
         TT_ASSERT(tt_is_print_server_running() == false, "Debug print server is running, cannot dump device profiler data");
         auto worker_cores_used_in_program =\

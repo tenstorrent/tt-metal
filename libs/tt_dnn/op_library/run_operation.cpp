@@ -92,7 +92,7 @@ std::vector<Tensor> run_without_program_cache(
     CompileProgram(device, program);
     const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
     if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
-        EnqueueProgram(*::detail::HACK_CQ, program, false);
+        EnqueueProgram(*::detail::GLOBAL_CQ, program, false);
         // Only need to dump device data when in dispatch mode
         // LaunchKernel automatically dumps device data
         op_profiler::dump_device_profiler_results(device, program);
@@ -134,7 +134,7 @@ std::vector<Tensor> run_with_program_cache(
 
     const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
     if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
-        EnqueueProgram(*::detail::HACK_CQ, program, false);
+        EnqueueProgram(*::detail::GLOBAL_CQ, program, false);
         // Only need to dump device data when in dispatch mode
         // LaunchKernel automatically dumps device data
         op_profiler::dump_device_profiler_results(device, program);

@@ -241,7 +241,7 @@ std::vector<T> read_data_from_device(const Tensor &tensor, uint32_t size_in_byte
     std::vector<uint32_t> device_data;
     const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
     if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
-        EnqueueReadBuffer(*tt::tt_metal::detail::HACK_CQ, *device_buffer, device_data, true);
+        EnqueueReadBuffer(*tt::tt_metal::detail::GLOBAL_CQ, *device_buffer, device_data, true);
     } else {
         ReadFromBuffer(*device_buffer, device_data);
     }
@@ -279,7 +279,7 @@ inline void write_data_to_device_buffer(const BufferType<T>& data_to_write, Devi
 
     const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
     if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
-        EnqueueWriteBuffer(*tt::tt_metal::detail::HACK_CQ, *buffer, uint32_data, false);
+        EnqueueWriteBuffer(*tt::tt_metal::detail::GLOBAL_CQ, *buffer, uint32_data, false);
     } else {
         WriteToBuffer(*buffer, uint32_data);
     }

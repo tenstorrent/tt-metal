@@ -121,7 +121,7 @@ std::optional<uint32_t> get_semaphore_address(const Program &program, const Core
 Device *CreateDevice(tt::ARCH arch, int pcie_slot) { return new Device(arch, pcie_slot); }
 
 bool InitializeDevice(Device *device) {
-    TT_ASSERT(not detail::HACK_CQ, "HACK_CQ should not be initialized prior to InitializeDevice!");
+    TT_ASSERT(not detail::GLOBAL_CQ, "GLOBAL_CQ should not be initialized prior to InitializeDevice!");
 
     bool init;
     if (device->initialize()) {
@@ -179,16 +179,16 @@ bool InitializeDevice(Device *device) {
 
     const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
     if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
-        detail::HACK_CQ = std::make_unique<CommandQueue>(device);
+        detail::GLOBAL_CQ = std::make_unique<CommandQueue>(device);
     }
 
     return init;
 }
 
 bool CloseDevice(Device *device) {
-    // Needed to ensure that HACK_CQ doesn't contain a closed device
-    if (detail::HACK_CQ) {
-        detail::HACK_CQ.reset(nullptr);
+    // Needed to ensure that GLOBAL_CQ doesn't contain a closed device
+    if (detail::GLOBAL_CQ) {
+        detail::GLOBAL_CQ.reset(nullptr);
     }
 
     return device->close();
