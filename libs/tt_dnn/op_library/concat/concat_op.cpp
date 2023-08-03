@@ -64,15 +64,15 @@ inline operation::ProgramWithCallbacks concat2_dim3_single_core(const Tensor &a,
         std::uint32_t num_tiles = num_tiles_A + num_tiles_B;
 
         const std::uint32_t cb_num_tiles = 2;
-        const std::uint32_t cb_tile_size = cb_num_tiles * tile_size;
+        const std::uint32_t cb_size = cb_num_tiles * tile_size;
         constexpr std::uint32_t cb_id_0 = 0;
         constexpr std::uint32_t cb_id_out_0 = 16;
 
         const CircularBuffer &cb0 = tt_metal::CreateCircularBuffers(
-            program, cb_id_0, cs, cb_num_tiles, cb_num_tiles * cb_tile_size, src0_cb_data_format);
+            program, cb_id_0, cs, cb_num_tiles, cb_size, src0_cb_data_format);
 
         const CircularBuffer &cb_out0 = tt_metal::CreateCircularBuffers(
-            program, cb_id_out_0, cs, cb_num_tiles, cb_num_tiles * cb_tile_size, src0_cb_data_format);
+            program, cb_id_out_0, cs, cb_num_tiles, cb_size, src0_cb_data_format);
 
         std::vector<uint32_t> reader_compile_time_args = {
             (std::uint32_t) is_srcA_dram, //are tensors on DRAM or in L1 memory ?
