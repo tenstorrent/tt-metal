@@ -92,6 +92,7 @@ from typing import Optional
 
 class TtBloomForQuestionAnswering:
     def __init__(self, config, state_dict, device):
+        self.mem_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
         self.transformer = bloom_model.TtBloomModel(
             config, state_dict, "transformer", device
         )
@@ -146,12 +147,13 @@ class TtBloomForQuestionAnswering:
 
         sequence_output = outputs[0]
 
-        logits = tt_lib.tensor.matmul(sequence_output, self.qa_outputs_weight)
+        logits = tt_lib.tensor.matmul(sequence_output, self.qa_outputs_weight, output_mem_config = self.mem_config)
         logits = tt_lib.tensor.bcast(
             logits,
             self.qa_outputs_bias,
             tt_lib.tensor.BcastOpMath.ADD,
             tt_lib.tensor.BcastOpDim.H,
+            self.mem_config
         )
         logits = bloom_utils.tt2torch_tensor(logits)
 

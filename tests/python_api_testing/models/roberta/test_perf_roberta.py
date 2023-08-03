@@ -75,6 +75,7 @@ def run_perf_roberta(expected_inference_time, expected_compile_time):
         tt_attention_mask = torch2tt_tensor(tt_attention_mask, device)
 
         profiler.start(first_key)
+
         tt_output = tt_model(inputs.input_ids, tt_attention_mask).logits
         tt_lib.device.Synchronize()
         profiler.end(first_key)

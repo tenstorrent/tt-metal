@@ -13,6 +13,10 @@ sys.path.append(f"{f}/../..")
 sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
+from models.utility_functions import (
+    torch2tt_tensor,
+    tt2torch_tensor,
+)
 from python_api_testing.models.roberta.roberta_common import (
     torch2tt_tensor,
     tt2torch_tensor,

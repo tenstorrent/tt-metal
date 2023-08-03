@@ -11,6 +11,8 @@ import python_api_testing.models.bloom.baddbmm as baddbmm
 from typing import Optional, Tuple, Union
 from models.utility_functions import pad_by_zero
 
+
+
 def split_heads(
     fused_qkv: torch.Tensor, num_heads, head_dim
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -197,7 +199,7 @@ def merge_heads(x: torch.Tensor, num_heads, head_dim) -> torch.Tensor:
 class TtBloomAttention(torch.nn.Module):
     def __init__(self, config, state_dict, base_address, device):
         super().__init__()
-
+        self.mem_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
         self.device = device
         self.hidden_size = config.hidden_size
         self.num_heads = config.n_head
@@ -266,6 +268,7 @@ class TtBloomAttention(torch.nn.Module):
             self.bias_q,
             tt_lib.tensor.BcastOpMath.ADD,
             tt_lib.tensor.BcastOpDim.H,
+            self.mem_config
         )
         fused_qkv = bloom_utils.tt2torch_tensor(fused_qkv)
 
@@ -360,11 +363,12 @@ class TtBloomAttention(torch.nn.Module):
             self.bias_d,
             tt_lib.tensor.BcastOpMath.ADD,
             tt_lib.tensor.BcastOpDim.H,
+            self.mem_config
         )
 
         # Dropout is used in training only
         # output_tensor = F.dropout(output_tensor, p=self.hidden_dropout, training=False)
-        output_tensor = tt_lib.tensor.add(residual, output_tensor)
+        output_tensor = tt_lib.tensor.add(residual, output_tensor, output_mem_config = self.mem_config)
 
         outputs = (output_tensor, present)
 

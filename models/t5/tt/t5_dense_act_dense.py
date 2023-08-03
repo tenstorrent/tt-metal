@@ -39,6 +39,8 @@ class TtT5DenseActDense(nn.Module):
         d_model = config["d_model"]
         d_ff = config["d_ff"]
         dropout_rate = config["dropout_rate"]
+        self.mem_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
+
         # dense_act_fn = config["dense_act_fn"]
 
         self.out_proj_wi = torch2tt_tensor(
@@ -57,7 +59,7 @@ class TtT5DenseActDense(nn.Module):
 
     def forward(self, hidden_states):
         hidden_states = tt_lib.tensor.matmul(hidden_states, self.out_proj_wi)
-        hidden_states = self.act(hidden_states)
+        hidden_states = self.act(hidden_states, output_mem_config = self.mem_config)
         # hidden_states = self.dropout(hidden_states)
-        hidden_states = tt_lib.tensor.matmul(hidden_states, self.out_proj_w0)
+        hidden_states = tt_lib.tensor.matmul(hidden_states, self.out_proj_w0, mem_config = self.mem_config)
         return hidden_states

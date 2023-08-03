@@ -30,6 +30,7 @@ class TtRobertaClassificationHead(nn.Module):
     def __init__(self, config, state_dict, base_address, device):
         super().__init__()
         self.device = device
+        self.mem_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
 
         self.dense_weight = pad_by_zero(
             state_dict[f"{base_address}.dense.weight"], self.device
@@ -65,9 +66,9 @@ class TtRobertaClassificationHead(nn.Module):
 
     def linear(self, x, weight, bias):
         weight = tt_lib.tensor.transpose(weight)
-        x = tt_lib.tensor.matmul(x, weight)
+        x = tt_lib.tensor.matmul(x, weight, output_mem_config = self.mem_config)
         x = tt_lib.tensor.bcast(
-            x, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H
+            x, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H, output_mem_config=self.mem_config
         )
         return x
 
@@ -78,7 +79,7 @@ class TtRobertaClassificationHead(nn.Module):
         x = torch2tt_tensor(torch_x, self.device)
         # x = self.dropout(x)
         x = self.dense_linear(x)
-        x = tt_lib.tensor.tanh(x)
+        x = tt_lib.tensor.tanh(x, output_mem_config = self.mem_config)
         # x = torch.tanh(x)
 
         # x = self.dropout(x)

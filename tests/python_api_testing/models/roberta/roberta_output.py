@@ -34,6 +34,7 @@ class TtRobertaOutput(nn.Module):
         device,
     ):
         super().__init__()
+        self.mem_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
         self.device = device
 
         self.dense_weight = pad_by_zero(
@@ -63,9 +64,9 @@ class TtRobertaOutput(nn.Module):
 
     def linear(self, x, weight, bias):
         weight = tt_lib.tensor.transpose(weight)
-        x = tt_lib.tensor.matmul(x, weight)
+        x = tt_lib.tensor.matmul(x, weight, output_mem_config = self.mem_config)
         x = tt_lib.tensor.bcast(
-            x, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H
+            x, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H, output_mem_config = self.mem_config
         )
         return x
 
@@ -75,6 +76,6 @@ class TtRobertaOutput(nn.Module):
         hidden_states = self.dense_linear(hidden_states)
         # TODO: Add dropout when supported
         # hidden_states = self.dropout(hidden_states)
-        hidden_states = tt_lib.tensor.add(hidden_states, input_tensor)
+        hidden_states = tt_lib.tensor.add(hidden_states, input_tensor, output_mem_config = self.mem_config)
         hidden_states = self.LayerNorm(hidden_states)
         return hidden_states

@@ -6,6 +6,7 @@ import python_api_testing.models.bloom.bloom_utils as bloom_utils
 import python_api_testing.models.bloom.bloom_gelu_forward as bloom_gelu_forward
 from models.utility_functions import pad_by_zero
 
+
 # class BloomMLP(nn.Module):
 #     def __init__(self, config: BloomConfig):
 #         super().__init__()
@@ -40,7 +41,7 @@ from models.utility_functions import pad_by_zero
 class TtBloomMLP(torch.nn.Module):
     def __init__(self, config, state_dict, base_address, device):
         super().__init__()
-
+        self.mem_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
         self.hidden_size = config.hidden_size
         self.hidden_dropout = config.hidden_dropout
         self.training = False
@@ -81,6 +82,7 @@ class TtBloomMLP(torch.nn.Module):
             self.tt_bias_mlp_h4h,
             tt_lib.tensor.BcastOpMath.ADD,
             tt_lib.tensor.BcastOpDim.H,
+            self.mem_config
         )
 
         if self.use_tt_gelu:
@@ -98,10 +100,11 @@ class TtBloomMLP(torch.nn.Module):
             self.tt_bias_mlp_4hh,
             tt_lib.tensor.BcastOpMath.ADD,
             tt_lib.tensor.BcastOpDim.H,
+            self.mem_config
         )
 
         # Dropout is used in training only
         # intermediate_output = F.dropout(intermediate_output, p=self.hidden_dropout, training=self.training)
-        output = tt_lib.tensor.add(residual, intermediate_output)
+        output = tt_lib.tensor.add(residual, intermediate_output, output_mem_config = self.mem_config)
 
         return output

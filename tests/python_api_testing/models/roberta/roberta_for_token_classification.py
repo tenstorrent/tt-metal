@@ -24,7 +24,6 @@ from tt_lib.fallback_ops import fallback_ops
 
 from dataclasses import dataclass
 
-
 @dataclass
 class TtTokenClassifierOutput:
     loss: tt_lib.tensor.Tensor = None
@@ -36,6 +35,7 @@ class TtTokenClassifierOutput:
 class TtRobertaForTokenClassification(nn.Module):
     def __init__(self, config, state_dict, base_address, device, reference_model):
         super().__init__()
+        self.mem_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
         self.config = config
         self.device = device
         self.num_labels = config.num_labels
@@ -64,10 +64,10 @@ class TtRobertaForTokenClassification(nn.Module):
 
     def linear(self, x, weight, bias):
         weight = tt_lib.tensor.transpose(weight)
-        x = tt_lib.tensor.matmul(x, weight)
+        x = tt_lib.tensor.matmul(x, weight, self.mem_config)
         if bias is not None:
             x = tt_lib.tensor.bcast(
-                x, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H
+                x, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H, self.mem_config
             )
         return x
 

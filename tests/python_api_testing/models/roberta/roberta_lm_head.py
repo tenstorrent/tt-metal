@@ -24,6 +24,7 @@ from tt_lib.fallback_ops import fallback_ops
 from transformers import RobertaForMaskedLM
 from transformers import AutoTokenizer
 
+mem_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
 
 class TtRobertaLMHead(nn.Module):
     """Roberta Head for masked language modeling."""
@@ -77,9 +78,9 @@ class TtRobertaLMHead(nn.Module):
 
     def linear(self, x, weight, bias):
         weight = tt_lib.tensor.transpose(weight)
-        x = tt_lib.tensor.matmul(x, weight)
+        x = tt_lib.tensor.matmul(x, weight, output_mem_config = mem_config)
         x = tt_lib.tensor.bcast(
-            x, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H
+            x, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H, output_mem_config = mem_config
         )
         return x
 

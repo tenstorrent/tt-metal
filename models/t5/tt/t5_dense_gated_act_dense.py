@@ -30,6 +30,8 @@ class TtT5DenseGatedActDense(torch.nn.Module):
         super().__init__()
 
         self.device = device
+        self.mem_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
+
         enc_dec = "decoder" if config["is_decoder"] else "encoder"
 
         self.wi_0_weights = torch2tt_tensor(
@@ -51,10 +53,10 @@ class TtT5DenseGatedActDense(torch.nn.Module):
 
     def forward(self, hidden_states):
         hidden_gelu = self.act(
-            tt_lib.tensor.matmul(hidden_states, self.wi_0_weights), self.device
+            tt_lib.tensor.matmul(hidden_states, self.wi_0_weights), self.device, output_mem_config = self.mem_config
         )
-        hidden_linear = tt_lib.tensor.matmul(hidden_states, self.wi_1_weights)
-        hidden_states = tt_lib.tensor.mul(hidden_gelu, hidden_linear)
+        hidden_linear = tt_lib.tensor.matmul(hidden_states, self.wi_1_weights, mem_config = self.mem_config)
+        hidden_states = tt_lib.tensor.mul(hidden_gelu, hidden_linear, output_mem_config = self.mem_config)
         # hidden_states = self.dropout(hidden_states)
 
         # To make 8bit quantization work for google/flan-t5-xxl, self.wo is kept in float32.
@@ -67,5 +69,5 @@ class TtT5DenseGatedActDense(torch.nn.Module):
         # ):
         #    hidden_states = hidden_states.to(self.wo.weight.dtype)
 
-        hidden_states = tt_lib.tensor.matmul(hidden_states, self.wo_weights)
+        hidden_states = tt_lib.tensor.matmul(hidden_states, self.wo_weights, mem_config = self.mem_config)
         return hidden_states

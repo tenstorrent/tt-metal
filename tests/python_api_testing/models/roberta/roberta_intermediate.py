@@ -31,6 +31,7 @@ class TtRobertaIntermediate(nn.Module):
         self, config, state_dict, base_address, device, fall_back_to_torch_gelu=True
     ):
         super().__init__()
+        self.mem_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
         self.device = device
 
         self.fall_back_to_torch_gelu = fall_back_to_torch_gelu
@@ -50,9 +51,9 @@ class TtRobertaIntermediate(nn.Module):
 
     def linear(self, x, weight, bias):
         weight = tt_lib.tensor.transpose(weight)
-        x = tt_lib.tensor.matmul(x, weight)
+        x = tt_lib.tensor.matmul(x, weight, output_mem_config = self.mem_config)
         x = tt_lib.tensor.bcast(
-            x, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H
+            x, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H, output_mem_config = self.mem_config
         )
         return x
 
@@ -63,5 +64,5 @@ class TtRobertaIntermediate(nn.Module):
             torch_hidden_states = torch.nn.functional.gelu(torch_hidden_states)
             hidden_states = torch2tt_tensor(torch_hidden_states, self.device)
         else:
-            hidden_states = tt_lib.tensor.gelu(hidden_states)
+            hidden_states = tt_lib.tensor.gelu(hidden_states, output_mem_config = self.mem_config)
         return hidden_states

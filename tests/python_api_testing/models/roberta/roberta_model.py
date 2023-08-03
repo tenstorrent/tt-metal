@@ -26,7 +26,6 @@ from tt_lib.fallback_ops import fallback_ops
 
 from dataclasses import dataclass
 
-
 @dataclass
 class TtBaseModelOutputWithPoolingAndCrossAttentions:
     last_hidden_state: tt_lib.tensor.Tensor = None
@@ -64,6 +63,7 @@ class TtRobertaModel(nn.Module):
         add_pooling_layer=True,
     ):
         super().__init__()
+        self.mem_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
         self.config = config
         self.device = device
 
@@ -190,11 +190,11 @@ class TtRobertaModel(nn.Module):
             extended_attention_mask.shape(), self.dtype_min_const
         )
         extended_attention_mask = tt_lib.tensor.sub(
-            self.ones_const, extended_attention_mask
+            self.ones_const, extended_attention_mask, output_mem_config = self.mem_config
         )
 
         extended_attention_mask = tt_lib.tensor.mul(
-            extended_attention_mask, self.mul_const
+            extended_attention_mask, self.mul_const, output_mem_config =self.mem_config
         )
         return extended_attention_mask
 
@@ -233,10 +233,10 @@ class TtRobertaModel(nn.Module):
         )
 
         encoder_extended_attention_mask = tt_lib.tensor.sub(
-            self.ones_const, encoder_extended_attention_mask
+            self.ones_const, encoder_extended_attention_mask, output_mem_config = self.mem_config
         ).to(self.device)
         encoder_extended_attention_mask = tt_lib.tensor.mul(
-            encoder_extended_attention_mask, self.mul_const
+            encoder_extended_attention_mask, self.mul_const, output_mem_config = self.mem_config
         )
 
         return encoder_extended_attention_mask

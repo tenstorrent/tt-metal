@@ -44,6 +44,7 @@ class TtRobertaForQuestionAnswering(nn.Module):
         reference_model,
     ):
         super().__init__()
+        self.mem_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
         self.config = config
         self.device = device
         self.num_labels = config.num_labels
@@ -67,9 +68,9 @@ class TtRobertaForQuestionAnswering(nn.Module):
 
     def linear(self, x, weight, bias):
         weight = tt_lib.tensor.transpose(weight)
-        x = tt_lib.tensor.matmul(x, weight)
+        x = tt_lib.tensor.matmul(x, weight, output_mem_config = self.mem_config)
         x = tt_lib.tensor.bcast(
-            x, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H
+            x, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H, output_mem_config = self.mem_config
         )
         return x
 

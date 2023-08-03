@@ -22,7 +22,6 @@ from models.utility_functions import pad_by_zero
 import tt_lib
 from tt_lib.fallback_ops import fallback_ops
 
-
 # Copied from transformers.models.bert.modeling_bert.BertPooler
 class TtRobertaPooler(nn.Module):
     def __init__(
@@ -33,6 +32,7 @@ class TtRobertaPooler(nn.Module):
         device,
     ):
         super().__init__()
+        self.mem_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
         self.device = device
 
         self.dense_weight = pad_by_zero(
@@ -50,9 +50,9 @@ class TtRobertaPooler(nn.Module):
 
     def linear(self, x, weight, bias):
         weight = tt_lib.tensor.transpose(weight)
-        x = tt_lib.tensor.matmul(x, weight)
+        x = tt_lib.tensor.matmul(x, weight, self.mem_config)
         x = tt_lib.tensor.bcast(
-            x, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H
+            x, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H, self.mem_config
         )
         return x
 
@@ -67,5 +67,5 @@ class TtRobertaPooler(nn.Module):
         tt_first_token_tensor = torch2tt_tensor(first_token_tensor, self.device)
 
         pooled_output = self.dense_linear(tt_first_token_tensor)
-        pooled_output = tt_lib.tensor.tanh(pooled_output)
+        pooled_output = tt_lib.tensor.tanh(pooled_output, self.mem_config)
         return pooled_output
