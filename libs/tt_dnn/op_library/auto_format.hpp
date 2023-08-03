@@ -80,9 +80,9 @@ class AutoFormat {
 
         static Tensor move_tensor_to_device(const Tensor &input, Device * device, const std::optional<MemoryConfig>& mem_config = std::nullopt);
 
-        static Tensor format_input_tensor(const Tensor &input, Device * device, const Shape& padded_shape, float pad_value, Layout target_layout);
+        static Tensor format_input_tensor(const Tensor &input, Device * device, const Shape& padded_shape, float pad_value, Layout target_layout, std::optional<MemoryConfig> target_mem_config = std::nullopt);
 
-        static Tensor format_output_tensor(const Tensor &output, const Shape& shape, Device* device, Layout target_layout);
+        static Tensor format_output_tensor(const Tensor &output, const Shape& shape, Device* device, Layout target_layout, std::optional<MemoryConfig> target_mem_config = std::nullopt);
 };
 
 

@@ -24,7 +24,7 @@ Tensor AutoFormat::move_tensor_to_device(const Tensor &input, Device * device, c
     }
 }
 
-Tensor AutoFormat::format_input_tensor(const Tensor &input, Device * device, const Shape& padded_shape, float pad_value, Layout target_layout) {
+Tensor AutoFormat::format_input_tensor(const Tensor &input, Device * device, const Shape& padded_shape, float pad_value, Layout target_layout, std::optional<MemoryConfig> target_mem_config) {
     bool pad_input = input.shape() != padded_shape;
     bool convert_layout = input.layout() != target_layout;
 
@@ -32,8 +32,10 @@ Tensor AutoFormat::format_input_tensor(const Tensor &input, Device * device, con
         return AutoFormat::move_tensor_to_device(input, device);
     }
 
-    MemoryConfig mem_config = default_mem_config;
-    if (input.storage_type() == StorageType::DEVICE) {
+    MemoryConfig mem_config = AutoFormat::default_mem_config;
+    if (target_mem_config.has_value()) {
+        mem_config = target_mem_config.value();
+    } else if (input.storage_type() == StorageType::DEVICE) {
         mem_config = input.memory_config();
     }
 
@@ -82,15 +84,17 @@ Tensor AutoFormat::format_input_tensor(const Tensor &input, Device * device, con
 }
 
 
-Tensor AutoFormat::format_output_tensor(const Tensor &output, const Shape& shape, Device* device, Layout target_layout) {
+Tensor AutoFormat::format_output_tensor(const Tensor &output, const Shape& shape, Device* device, Layout target_layout, std::optional<MemoryConfig> target_mem_config) {
     bool unpad_output = output.shape() != shape;
     bool convert_layout = output.layout() != target_layout;
 
     if (!unpad_output && !convert_layout) {
         return output;
     }
-    MemoryConfig mem_config = default_mem_config;
-    if (output.storage_type() == StorageType::DEVICE) {
+    MemoryConfig mem_config = AutoFormat::default_mem_config;
+    if (target_mem_config.has_value()) {
+        mem_config = target_mem_config.value();
+    } else if (output.storage_type() == StorageType::DEVICE) {
         mem_config = output.memory_config();
     }
 

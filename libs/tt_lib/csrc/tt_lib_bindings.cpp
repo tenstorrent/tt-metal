@@ -2754,17 +2754,21 @@ void TensorModule(py::module &m_tensor) {
     );
     m_tensor.def(
         "format_input_tensor",
-        [] (const Tensor &input, Device * device, const std::array<uint32_t, 4>& padded_shape, float pad_value, Layout target_layout) {
-            return AutoFormat::format_input_tensor(input, device, padded_shape, pad_value, target_layout);
-        }, R"doc(
+        [] (const Tensor &input, Device * device, const std::array<uint32_t, 4>& padded_shape, float pad_value, Layout target_layout, std::optional<MemoryConfig> target_mem_config = std::nullopt) {
+            return AutoFormat::format_input_tensor(input, device, padded_shape, pad_value, target_layout, target_mem_config);
+        },
+        py::arg("input").noconvert(), py::arg("device").noconvert(), py::arg("padded_shape"), py::arg("pad_value"), py::arg("target_layout").noconvert(), py::arg("target_mem_config") = std::nullopt,
+        R"doc(
             Formats tensor to target layout and pads to padded shape
         )doc"
     );
     m_tensor.def(
         "format_output_tensor",
-        [] (const Tensor &output, const std::array<uint32_t, 4>& shape, Device* device, Layout target_layout) {
-            return AutoFormat::format_output_tensor(output, shape, device, target_layout);
-        }, R"doc(
+        [] (const Tensor &output, const std::array<uint32_t, 4>& shape, Device* device, Layout target_layout, std::optional<MemoryConfig> target_mem_config = std::nullopt) {
+            return AutoFormat::format_output_tensor(output, shape, device, target_layout, target_mem_config);
+        },
+        py::arg("output").noconvert(), py::arg("shape"), py::arg("device").noconvert(), py::arg("target_layout").noconvert(), py::arg("target_mem_config") = std::nullopt,
+        R"doc(
             Formats tensor to target layout and unpads to shape
         )doc"
     );
