@@ -90,15 +90,15 @@ inline const auto& get_composite_parent_names() {
 
 
 namespace detail {
-template<typename FunctionType>
+template<typename ReturnType, typename... Args>
 struct CompositeOperation {
 
     const char* name;
-    const FunctionType function;
+    std::function<ReturnType(Args...)> function;
 
-    constexpr auto operator()() const {
+    constexpr ReturnType operator()(Args... args) const {
         run_operation_state::push_composite_parent_name(this->name);
-        auto output = this->function();
+        ReturnType output = this->function(args...);
         run_operation_state::pop_composite_parent_name();
         return output;
     }
@@ -106,9 +106,14 @@ struct CompositeOperation {
 
 }  // namespace detail
 
+template<typename ReturnType, typename... Args>
+constexpr auto decorate_as_composite(const char* name, std::function<ReturnType(Args...)>&& function) {
+  return detail::CompositeOperation<ReturnType, Args...>{.name=name, .function=function};
+}
+
 template<typename FunctionType>
 constexpr auto decorate_as_composite(const char* name, FunctionType function) {
-  return detail::CompositeOperation<FunctionType>{name, std::move(function)};
+  return decorate_as_composite(name, std::function(function));
 }
 
 #ifdef DEBUG
