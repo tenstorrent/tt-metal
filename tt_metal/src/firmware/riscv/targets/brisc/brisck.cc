@@ -17,8 +17,7 @@
 
 #include "debug_print.h"
 
-CBWriteInterface cb_write_interface[NUM_CIRCULAR_BUFFERS];
-CBReadInterface cb_read_interface[NUM_CIRCULAR_BUFFERS];
+CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
 CQReadInterface cq_read_interface;
 
 #ifdef NOC_INDEX

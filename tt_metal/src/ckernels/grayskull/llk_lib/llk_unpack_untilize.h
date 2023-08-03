@@ -102,7 +102,7 @@ inline void llk_unpack_untilize_uninit(uint32_t operand) {
 template <bool first_pass = true>
 inline void llk_unpack_untilize_(std::uint32_t operand, std::uint32_t block_c_tiles) {
     std::uint32_t input = get_operand_id(operand);
-    std::uint32_t base_address = cb_read_interface[input].fifo_rd_ptr - 1; // Remove header size added by descriptor
+    std::uint32_t base_address = cb_interface[input].fifo_rd_ptr - 1; // Remove header size added by descriptor
     std::uint32_t rem_blocks_in_row = block_c_tiles;
 
     // Program srcA and srcB base addresses

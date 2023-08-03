@@ -152,14 +152,14 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
 
     std::uint16_t pack_tile_addr;
     if constexpr (out_of_order_output) {
-        pack_tile_addr = cb_write_interface[output_id].fifo_wr_ptr +
+        pack_tile_addr = cb_interface[output_id].fifo_wr_ptr +
                          MUL_TILE_SIZE_AND_INDEX((std::uint8_t)pack_dst_format[OUTPUT_BASE_ID], (std::uint16_t)output_tile_index);
     } else {
         // in-order pack: 1) start with wr_ptr and then increment fifo_wr_tile_ptr tile by tile
         // note: packer is programmed to automatically skip the tile header
         // however, since there is no tile header we need to -1 the pack address (in terms of 16B words) to offset packer's +1
-        pack_tile_addr = cb_write_interface[output_id].fifo_wr_ptr + cb_write_interface[output_id].fifo_wr_tile_ptr - 1;
-        cb_write_interface[output_id].fifo_wr_tile_ptr += GET_L1_TILE_SIZE((std::uint8_t)pack_dst_format[OUTPUT_BASE_ID]);
+        pack_tile_addr = cb_interface[output_id].fifo_wr_ptr + cb_interface[output_id].fifo_wr_tile_ptr - 1;
+        cb_interface[output_id].fifo_wr_tile_ptr += GET_L1_TILE_SIZE((std::uint8_t)pack_dst_format[OUTPUT_BASE_ID]);
     }
 
     if constexpr (Dst == DstSync::SyncTile16) {

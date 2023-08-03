@@ -23,10 +23,10 @@ inline void llk_zero_operand(std::uint32_t operand) {
     TT_SETDMAREG(0, 0, 0, LO_16(p_gpr_unpack::OPERAND_OFFSET_ADDR));
     TT_SETDMAREG(0, 0, 0, HI_16(p_gpr_unpack::OPERAND_OFFSET_ADDR));
 
-    std::uint32_t fifo_base_addr = (cb_read_interface[input].fifo_limit + 1) - cb_read_interface[input].fifo_size;
+    std::uint32_t fifo_base_addr = (cb_interface[input].fifo_limit + 1) - cb_interface[input].fifo_size;
     TT_SETDMAREG(0, fifo_base_addr, 0, LO_16(p_gpr_unpack::p_gpr_unpack::OPERAND_BASE_ADDR));
 
-    for (std::uint32_t i = 0; i < cb_read_interface[input].fifo_size; i++) {
+    for (std::uint32_t i = 0; i < cb_interface[input].fifo_size; i++) {
         TTI_STOREIND(
             1,
             0,
@@ -41,7 +41,7 @@ inline void llk_zero_operand(std::uint32_t operand) {
 template <bool mail2math=true, bool mail2pack=true>
 inline void llk_unpack_get_tile(std::uint32_t operand, std::uint32_t tile_index, std::uint32_t *p_tile) {
     std::uint32_t input = get_operand_id(operand);
-    std::uint32_t base_address = cb_read_interface[input].fifo_rd_ptr;
+    std::uint32_t base_address = cb_interface[input].fifo_rd_ptr;
     std::uint32_t offset_address = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[input], tile_index);
     std::uint32_t byte_address = (base_address + offset_address + TILE_HEADER_SIZE)<<4;
 

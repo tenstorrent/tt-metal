@@ -19,8 +19,7 @@ extern volatile uint32_t l1_buffer[16];
 extern uint32_t pack_sync_tile_dst_ptr;
 extern uint32_t math_sync_tile_dst_index;
 
-extern CBReadInterface cb_read_interface[NUM_CIRCULAR_BUFFERS];
-extern CBWriteInterface cb_write_interface[NUM_CIRCULAR_BUFFERS];
+extern CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
 
 extern uint32_t __ldm_bss_start[];
 extern uint32_t __ldm_bss_end[];

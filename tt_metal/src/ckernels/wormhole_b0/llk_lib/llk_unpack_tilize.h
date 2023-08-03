@@ -79,7 +79,7 @@ inline void llk_unpack_tilize_init(const uint32_t unpA_operand, const uint32_t u
 inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c_tiles) {
     std::uint32_t input = get_operand_id(operand);
     for (std::uint32_t tile_index = 0; tile_index < block_c_tiles; tile_index++) {
-        std::uint32_t base_address = cb_read_interface[input].fifo_rd_ptr - 1;  // Remove header size added by descriptor
+        std::uint32_t base_address = cb_interface[input].fifo_rd_ptr - 1;  // Remove header size added by descriptor
         std::uint32_t top_face_offset_address = SCALE_DATUM_SIZE((uint)unpack_src_format[input], tile_index)
                                                 << 1;  // Each iteration unpacks 2 16x16 faces (1st 0,1 2nd 2,3)
                                                        // Offset address is in 16B words

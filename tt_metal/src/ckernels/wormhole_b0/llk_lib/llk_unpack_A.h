@@ -201,7 +201,7 @@ inline void llk_unpack_A_init(const std::uint32_t within_face_16x16_transpose=0)
 template <BroadcastType BType = BroadcastType::NONE, bool transpose_xy = false, bool acc_to_dest = false>
 inline void llk_unpack_A(std::uint32_t operand, std::uint32_t tile_index) {
     std::uint32_t input = get_operand_id(operand);
-    std::uint32_t base_address = cb_read_interface[input].fifo_rd_ptr;
+    std::uint32_t base_address = cb_interface[input].fifo_rd_ptr;
     std::uint32_t offset_address = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[input], tile_index);
     // note: unpacker is programmed to automatically skip the tile header (+1)
     // since there is no tile header, we need to -1 the address (in terms of 16B words), to offet unpacker's automatic +1

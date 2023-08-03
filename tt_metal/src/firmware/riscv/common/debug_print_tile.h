@@ -54,9 +54,9 @@ struct TileSlice : TileSliceHostDev<MAXCOUNT> {
         this->count_ = 0; // for math thread which doesn't have access to CBs
         volatile Tile* t;
         #if defined(TRISC_PACK) || defined(COMPILE_FOR_NCRISC)
-            this->ptr_ = cb_write_interface[cb].fifo_wr_ptr<<4;
+            this->ptr_ = cb_interface[cb].fifo_wr_ptr<<4;
         #elif defined(TRISC_UNPACK) || defined(COMPILE_FOR_BRISC)
-            this->ptr_ = cb_read_interface[cb].fifo_rd_ptr<<4;
+            this->ptr_ = cb_interface[cb].fifo_rd_ptr<<4;
         #else
             this->ptr_ = 0;
         #endif
@@ -95,9 +95,9 @@ template DebugPrinter operator<< <TSLICE8>(DebugPrinter, TSLICE8 val);
 template DebugPrinter operator<< <TSLICE32>(DebugPrinter, TSLICE32 val);
 
 // Macros for printing circular buffer internals
-#define CB_RD_PTR(id) (cb_read_interface[id].fifo_rd_ptr<<4) // only valid in unpacker thread
-#define CB_RD_LIM(id) (cb_read_interface[id].fifo_limit<<4)
-#define CB_RD_SZ(id) (cb_read_interface[id].fifo_size<<4)
+#define CB_RD_PTR(id) (cb_interface[id].fifo_rd_ptr<<4) // only valid in unpacker thread
+#define CB_RD_LIM(id) (cb_interface[id].fifo_limit<<4)
+#define CB_RD_SZ(id) (cb_interface[id].fifo_size<<4)
 
-#define CB_WR_PTR(id) (cb_write_interface[id].fifo_wr_ptr<<4) // only valid in packer thread
-#define CB_WR_TILES(id) (cb_write_interface[output].fifo_num_pages)
+#define CB_WR_PTR(id) (cb_interface[id].fifo_wr_ptr<<4) // only valid in packer thread
+#define CB_WR_TILES(id) (cb_interface[output].fifo_num_pages)

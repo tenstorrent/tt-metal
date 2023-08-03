@@ -16,7 +16,7 @@ void write_to_local_mem_barrier(uint32_t data) {
     local_mem_barrier = data;
 }
 
-inline void llk_setup_cb_write_interface() {
+inline void llk_setup_cb_interface() {
 
     volatile std::uint32_t* circular_buffer_config_addr = (volatile uint32_t*)(CIRCULAR_BUFFER_CONFIG_BASE);
 
@@ -27,15 +27,15 @@ inline void llk_setup_cb_write_interface() {
         std::uint32_t fifo_size_tiles = circular_buffer_config_addr[2];
         write_to_local_mem_barrier(fifo_size_tiles);
 
-        cb_write_interface[cb_id].fifo_wr_ptr = fifo_addr;
-        cb_write_interface[cb_id].fifo_limit = fifo_addr + fifo_size - 1;  // Check if there is overflow
-        cb_write_interface[cb_id].fifo_size = fifo_size;
-        cb_write_interface[cb_id].fifo_size_tiles = fifo_size_tiles;
+        cb_interface[cb_id].fifo_wr_ptr = fifo_addr;
+        cb_interface[cb_id].fifo_limit = fifo_addr + fifo_size - 1;  // Check if there is overflow
+        cb_interface[cb_id].fifo_size = fifo_size;
+        cb_interface[cb_id].fifo_size_tiles = fifo_size_tiles;
 
         // local copy used by the packer
-        cb_write_interface[cb_id].tiles_received = 0;
+        cb_interface[cb_id].tiles_received = 0;
         // this is currently used for in-order packing (the default mode)
-        cb_write_interface[cb_id].fifo_wr_tile_ptr = 0;
+        cb_interface[cb_id].fifo_wr_tile_ptr = 0;
 
         circular_buffer_config_addr += UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG; // move by 3 uint32's
     }
@@ -43,7 +43,7 @@ inline void llk_setup_cb_write_interface() {
 
 // "llk_setup_outputs" is the old function name that HLKC emits
 inline void llk_setup_outputs() {
-    llk_setup_cb_write_interface();
+    llk_setup_cb_interface();
 }
 
 // Blocking call to wait for free space needed to pack N tiles
@@ -61,12 +61,12 @@ inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32
     // here we don't synchronize with packer, so if we use tiles_received_ptr could case a data race
     // alternatively we could sync with packer, but that's slower and more complex code
     // that is, don't do this: uint32_t tiles_received = tiles_received_ptr[0];
-    uint32_t tiles_received = cb_write_interface[output].tiles_received;
+    uint32_t tiles_received = cb_interface[output].tiles_received;
 
     std::int32_t free_tiles;
     do {
         std::uint16_t tiles_acked = (std::uint16_t) reg_read_barrier((std::uint32_t)tiles_acked_ptr);
-        std::uint32_t free_tiles_wrap = cb_write_interface[output].fifo_size_tiles - (tiles_received - tiles_acked);
+        std::uint32_t free_tiles_wrap = cb_interface[output].fifo_size_tiles - (tiles_received - tiles_acked);
         free_tiles = (std::int32_t) free_tiles_wrap;
     } while (free_tiles < num_tiles);
 
@@ -81,12 +81,12 @@ inline void llk_push_to_brisc(const std::int32_t operand, const std::int32_t num
     volatile std::uint32_t* tiles_received_ptr_tensix =
         (volatile std::uint32_t*)((((volatile std::uint32_t)get_cb_tiles_received_ptr(operand)) >> 2) & 0x3ffff);
 
-    // cb_write_interface[output].tiles_received is used only by the TRISC2 (the one driving packer)
+    // cb_interface[output].tiles_received is used only by the TRISC2 (the one driving packer)
     // we need it becasue tiles_received_ptr is updated by the packer, and in cb_reserve_back func (see above) we want to avoid synchronization with packer
     // cb_reserve_back must used the most recent value of tiles_received (cannot use stale or delayed), otherwise it would think there's less tiles in the CB than there actually are
-    // so we use cb_write_interface[output].tiles_received instead of tiles_received_ptr, because it is updated by TRISC2 and no additional synchronization is needed
-    cb_write_interface[output].tiles_received += num_tiles;
-    uint16_t tiles_received_new = cb_write_interface[output].tiles_received;
+    // so we use cb_interface[output].tiles_received instead of tiles_received_ptr, because it is updated by TRISC2 and no additional synchronization is needed
+    cb_interface[output].tiles_received += num_tiles;
+    uint16_t tiles_received_new = cb_interface[output].tiles_received;
 
     // Update the value at tiles_received_ptr with tiles_received_new only after the packer has finished packing
     // We need to use a Tensix instruction to do the update, which runs only after STALLWAIT has finished
@@ -104,11 +104,11 @@ inline void llk_push_tiles(const std::int32_t operand, const std::int32_t num_ti
     std::uint32_t output = operand;
     std::uint32_t num_words = num_tiles * GET_L1_TILE_SIZE((uint)pack_dst_format[output]);
 
-    cb_write_interface[output].fifo_wr_ptr += num_words;
-    cb_write_interface[output].fifo_wr_tile_ptr = 0;
+    cb_interface[output].fifo_wr_ptr += num_words;
+    cb_interface[output].fifo_wr_tile_ptr = 0;
 
-    if (cb_write_interface[output].fifo_wr_ptr > cb_write_interface[output].fifo_limit) {
-        cb_write_interface[output].fifo_wr_ptr -= cb_write_interface[output].fifo_size;
+    if (cb_interface[output].fifo_wr_ptr > cb_interface[output].fifo_limit) {
+        cb_interface[output].fifo_wr_ptr -= cb_interface[output].fifo_size;
     }
 
     llk_push_to_brisc(operand, num_tiles, num_words);

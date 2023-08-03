@@ -83,9 +83,9 @@ inline void llk_unpack_AB_matmul(
     std::uint32_t inputA = get_operand_id(operandA);
     std::uint32_t inputB = get_operand_id(operandB);
 
-    std::uint32_t base_address_a = cb_read_interface[inputA].fifo_rd_ptr;
+    std::uint32_t base_address_a = cb_interface[inputA].fifo_rd_ptr;
     std::uint32_t offset_address_a = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[inputA], tile_index_a);
-    std::uint32_t base_address_b = cb_read_interface[inputB].fifo_rd_ptr;
+    std::uint32_t base_address_b = cb_interface[inputB].fifo_rd_ptr;
     std::uint32_t offset_address_b = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[inputB], tile_index_b);
 
     // note: unpacker is programmed to automatically skip the tile header (+1)

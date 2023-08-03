@@ -38,8 +38,7 @@ extern uint8_t loading_noc;
 /**
  * \private
  */
-extern CBWriteInterface cb_write_interface[NUM_CIRCULAR_BUFFERS];
-extern CBReadInterface cb_read_interface[NUM_CIRCULAR_BUFFERS];
+extern CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
 
 extern CQReadInterface cq_read_interface;
 
@@ -126,18 +125,12 @@ void setup_cb_read_write_interfaces() {
         uint32_t fifo_limit = fifo_addr + fifo_size - 1;
         write_to_local_mem_barrier(fifo_num_pages);
 
-        // Write interface
-        cb_write_interface[cb_id].fifo_limit = fifo_limit;  // to check if we need to wrap
-        cb_write_interface[cb_id].fifo_wr_ptr = fifo_addr;
-        cb_write_interface[cb_id].fifo_size = fifo_size;
-        cb_write_interface[cb_id].fifo_num_pages = fifo_num_pages;
-        cb_write_interface[cb_id].fifo_page_size = fifo_page_size;
-
-        // Read interface
-        cb_read_interface[cb_id].fifo_limit = fifo_limit;
-        cb_read_interface[cb_id].fifo_rd_ptr = fifo_addr;
-        cb_read_interface[cb_id].fifo_size = fifo_size;
-        cb_read_interface[cb_id].fifo_page_size = fifo_page_size;
+        cb_interface[cb_id].fifo_limit = fifo_limit;  // to check if we need to wrap
+        cb_interface[cb_id].fifo_wr_ptr = fifo_addr;
+        cb_interface[cb_id].fifo_rd_ptr = fifo_addr;
+        cb_interface[cb_id].fifo_size = fifo_size;
+        cb_interface[cb_id].fifo_num_pages = fifo_num_pages;
+        cb_interface[cb_id].fifo_page_size = fifo_page_size;
 
         circular_buffer_config_addr += UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG;
     }
@@ -210,18 +203,18 @@ inline __attribute__((always_inline)) constexpr static std::uint32_t MUL_WITH_TI
 FORCE_INLINE
 void cb_push_back(const uint32_t operand, const int32_t num_pages) {
 
-    uint32_t num_words = mulsi3(num_pages, cb_write_interface[operand].fifo_page_size);
+    uint32_t num_words = num_pages * cb_interface[operand].fifo_page_size;
 
     volatile uint32_t* pages_received_ptr = get_cb_tiles_received_ptr(operand);
     pages_received_ptr[0] += num_pages;
 
-    cb_write_interface[operand].fifo_wr_ptr += num_words;
+    cb_interface[operand].fifo_wr_ptr += num_words;
 
     // this will basically reset fifo_wr_ptr to fifo_addr -- no other wrap is legal
     // producer always writes into contiguous memory, it cannot wrap
-    if (cb_write_interface[operand].fifo_wr_ptr > cb_write_interface[operand].fifo_limit) {
+    if (cb_interface[operand].fifo_wr_ptr > cb_interface[operand].fifo_limit) {
         // TODO: change this to fifo_wr_ptr
-        cb_write_interface[operand].fifo_wr_ptr -= cb_write_interface[operand].fifo_size;
+        cb_interface[operand].fifo_wr_ptr -= cb_interface[operand].fifo_size;
     }
 }
 
@@ -253,15 +246,15 @@ void cb_pop_front(uint32_t operand, uint32_t num_pages) {
     volatile uint32_t* pages_acked_ptr = get_cb_tiles_acked_ptr(operand);
     pages_acked_ptr[0] += num_pages;
 
-    uint32_t num_words = mulsi3(num_pages, cb_read_interface[operand].fifo_page_size);
+    uint32_t num_words = num_pages * cb_interface[operand].fifo_page_size;
 
-    cb_read_interface[operand].fifo_rd_ptr += num_words;
+    cb_interface[operand].fifo_rd_ptr += num_words;
 
     // this will basically reset fifo_rd_ptr to fifo_addr -- no other wrap is legal
     // consumer always reads from contiguous memory, it cannot wrap
-    if (cb_read_interface[operand].fifo_rd_ptr > cb_read_interface[operand].fifo_limit) {
+    if (cb_interface[operand].fifo_rd_ptr > cb_interface[operand].fifo_limit) {
         // TODO: change this to fifo_wr_ptr
-        cb_read_interface[operand].fifo_rd_ptr -= cb_read_interface[operand].fifo_size;
+        cb_interface[operand].fifo_rd_ptr -= cb_interface[operand].fifo_size;
     }
 }
 
@@ -302,7 +295,7 @@ inline DataFormat get_dataformat(const std::int32_t operand) {
  */
 inline __attribute__((always_inline)) uint32_t get_write_ptr(uint32_t operand) {
     // return byte address (fifo_wr_ptr is 16B address)
-    uint32_t wr_ptr_bytes = cb_write_interface[operand].fifo_wr_ptr << 4;
+    uint32_t wr_ptr_bytes = cb_interface[operand].fifo_wr_ptr << 4;
     return wr_ptr_bytes;
 }
 
@@ -321,7 +314,7 @@ inline __attribute__((always_inline)) uint32_t get_write_ptr(uint32_t operand) {
 inline __attribute__((always_inline)) uint32_t get_read_ptr(uint32_t operand) {
 
     // return byte address (fifo_rd_ptr is 16B address)
-    uint32_t rd_ptr_bytes = cb_read_interface[operand].fifo_rd_ptr << 4;
+    uint32_t rd_ptr_bytes = cb_interface[operand].fifo_rd_ptr << 4;
     return rd_ptr_bytes;
 }
 
@@ -361,7 +354,7 @@ void cb_reserve_back(uint32_t operand, int32_t num_pages) {
         // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
         uint16_t pages_acked = (uint16_t)reg_read_barrier(pages_acked_ptr);
         uint16_t free_space_pages_wrap =
-            cb_write_interface[operand].fifo_num_pages - (pages_received - pages_acked);
+            cb_interface[operand].fifo_num_pages - (pages_received - pages_acked);
         free_space_pages = (int32_t)free_space_pages_wrap;
     } while (free_space_pages < num_pages);
 }
