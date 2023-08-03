@@ -261,7 +261,7 @@ py::object convert_tt_tensor_to_torch_tensor(const Tensor& tt_tensor) {
                 return storage.buffer;
             }
             else if constexpr (std::is_same_v<T, DeviceStorage>) {
-                TT_THROW("Device storage doesn't support data method");
+                TT_THROW("Device tensor cannot be converted to torch");
             }
             else if constexpr (std::is_same_v<T, BorrowedStorage>) {
                 return storage.buffer;
