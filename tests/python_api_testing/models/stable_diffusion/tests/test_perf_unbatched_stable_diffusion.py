@@ -234,6 +234,9 @@ def run_perf_unbatched_stable_diffusion(expected_inference_time, expected_compil
         tt_unconditioned = torch_to_tt_tensor_rm(
             tt_unconditioned, device, put_on_device=False
         )
+        tt_conditioned = tt_conditioned.to(device, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1))
+        tt_unconditioned = tt_unconditioned.to(device, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1))
+
         tt_text_embeddings = torch_to_tt_tensor_rm(
             text_embeddings, device, put_on_device=False
         )

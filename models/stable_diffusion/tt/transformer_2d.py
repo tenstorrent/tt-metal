@@ -534,7 +534,7 @@ class TtTransformer2DModel(nn.Module):
                 )
                 hidden_states = ttl.tensor.permute(hidden_states, 0, 3, 1, 2)
 
-            output = ttl.tensor.add(hidden_states, residual, out_mem_config)
+            output = ttl.tensor.add(hidden_states, residual, self.out_mem_config_l1)
 
         if not return_dict:
             return (output,)
