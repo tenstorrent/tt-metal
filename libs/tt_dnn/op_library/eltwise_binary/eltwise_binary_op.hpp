@@ -20,12 +20,12 @@ enum class BinaryOpParallelizationStrategy {
     MULTI_CORE = 0, SINGLE_CORE = 1
 };
 
-operation::ProgramWithCallbacks eltwise_binary_single_core(const Tensor &a, const Tensor &b, Tensor &output_tensor, BinaryOpType op_type, const std::optional<std::vector<UnaryOpType>> fused_activations);
-operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const Tensor &b, Tensor &output_tensor, BinaryOpType op_type, const std::optional<std::vector<UnaryOpType>> fused_activations);
+operation::ProgramWithCallbacks eltwise_binary_single_core(const Tensor &a, const Tensor &b, Tensor &output_tensor, BinaryOpType op_type, const std::optional<std::vector<UnaryWithParam>> fused_activations);
+operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const Tensor &b, Tensor &output_tensor, BinaryOpType op_type, const std::optional<std::vector<UnaryWithParam>> fused_activations);
 
 struct EltwiseBinary {
     const BinaryOpType op_type;
-    const std::optional<std::vector<UnaryOpType>> fused_activations;
+    const std::optional<std::vector<UnaryWithParam>> fused_activations;
     const MemoryConfig output_mem_config;
 
     BinaryOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
@@ -45,13 +45,13 @@ struct EltwiseBinary {
 
 template <BinaryOpType binary_op_type>
 struct make_eltwise_binary {
-     Tensor operator()(const Tensor& input_tensor_a, const Tensor& input_tensor_b, std::optional<std::vector<UnaryOpType>> fused_activations = std::nullopt, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) const {
+     Tensor operator()(const Tensor& input_tensor_a, const Tensor& input_tensor_b, std::optional<std::vector<UnaryWithParam>> fused_activations = std::nullopt, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) const {
          TT_ASSERT(input_tensor_a.shape() == input_tensor_b.shape(), "Input shapes must be the same!");
          return operation::run_with_autoformat(EltwiseBinary{binary_op_type, fused_activations, output_mem_config}, {input_tensor_a, input_tensor_b}).at(0);
      }
  };
 
-inline Tensor add_without_autoformat(const Tensor& input_tensor_a, const Tensor& input_tensor_b, std::optional<std::vector<UnaryOpType>> fused_activations = std::nullopt, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
+inline Tensor add_without_autoformat(const Tensor& input_tensor_a, const Tensor& input_tensor_b, std::optional<std::vector<UnaryWithParam>> fused_activations = std::nullopt, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
     TT_ASSERT(input_tensor_a.shape() == input_tensor_b.shape(), "Input shapes must be the same!");
     return operation::run_without_autoformat(EltwiseBinary{BinaryOpType::ADD, std::nullopt, output_mem_config}, {input_tensor_a, input_tensor_b}).at(0);
 }
@@ -77,6 +77,6 @@ inline Tensor add_without_autoformat(const Tensor& input_tensor_a, const Tensor&
 namespace eltwise_binary_op_utils {
 using namespace tt::tt_metal;
 
-std::map<string, string> get_defines(BinaryOpType op_typee, const std::optional<std::vector<UnaryOpType>> fused_activations);
+std::map<string, string> get_defines(BinaryOpType op_typee, const std::optional<std::vector<UnaryWithParam>> fused_activations);
 
 }  // namespace eltwise_binary_op_utils

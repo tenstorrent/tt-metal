@@ -30,8 +30,8 @@ void MAIN {
             SFPU_OP_FUNC_0
             #endif
 
-            #ifdef SFPU_OP_BLOCK_0
-            SFPU_OP_BLOCK_0
+            #ifdef SFPU_OP_CHAIN_0
+            SFPU_OP_CHAIN_0
             #endif
 
 

@@ -19,8 +19,8 @@ void MAIN {
 
             copy_tile(tt::CB::c_in0, 0, 0);
 
-            #ifdef SFPU_OP_BLOCK_0
-            SFPU_OP_BLOCK_0
+            #ifdef SFPU_OP_CHAIN_0
+            SFPU_OP_CHAIN_0
             #endif
 
             pack_tile(0, tt::CB::c_out0);

@@ -13,7 +13,7 @@ using namespace tt::constants;
 namespace eltwise_binary_op_utils {
 using namespace tt::tt_metal;
 
-std::map<string, string> get_defines(BinaryOpType op_type, const std::optional<std::vector<UnaryOpType>> fused_activations) {
+std::map<string, string> get_defines(BinaryOpType op_type, const std::optional<std::vector<UnaryWithParam>> fused_activations) {
     std::map<string, string> defines;
     string op_name = "sub_tiles";
     string op_code = "1";
@@ -42,8 +42,7 @@ std::map<string, string> get_defines(BinaryOpType op_type, const std::optional<s
     defines["ELTWISE_OP"] = op_name.c_str();
     defines["ELTWISE_OP_CODE"] = op_code.c_str();
     if (fused_activations.has_value()) {
-        const std::vector<std::optional<float>> params (fused_activations.value().size(), std::nullopt);
-        defines.merge(eltwise_unary_op_utils::get_block_defines(fused_activations.value(), params));
+        defines.merge(eltwise_unary_op_utils::get_block_defines(fused_activations.value()));
     }
     return defines;
 }

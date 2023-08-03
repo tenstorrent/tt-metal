@@ -257,7 +257,7 @@ class TtBasicTransformerBlock(nn.Module):
                 False
             ), "AdaLayerNormZero not supported and not used in stable diffusion"
 
-        hidden_states = ttl.tensor.add(attn_output, hidden_states, self.out_mem_config_l1)
+        hidden_states = ttl.tensor.add(attn_output, hidden_states, output_mem_config=self.out_mem_config_l1)
         if self.attn2 is not None:
             norm_hidden_states = (
                 self.norm2(hidden_states, timestep)
@@ -272,7 +272,7 @@ class TtBasicTransformerBlock(nn.Module):
                 **cross_attention_kwargs,
             )
 
-            hidden_states = ttl.tensor.add(attn_output, hidden_states, self.out_mem_config_l1)
+            hidden_states = ttl.tensor.add(attn_output, hidden_states, output_mem_config=self.out_mem_config_l1)
 
         # 3. Feed-forward
         norm_hidden_states = self.norm3(hidden_states)
@@ -287,7 +287,7 @@ class TtBasicTransformerBlock(nn.Module):
                 False
             ), "AdaLayerNormZero not supported and not used in stable diffusion"
 
-        hidden_states = ttl.tensor.add(ff_output, hidden_states, self.out_mem_config_l1)
+        hidden_states = ttl.tensor.add(ff_output, hidden_states, output_mem_config=self.out_mem_config_l1)
         return hidden_states
 
 
@@ -534,7 +534,7 @@ class TtTransformer2DModel(nn.Module):
                 )
                 hidden_states = ttl.tensor.permute(hidden_states, 0, 3, 1, 2)
 
-            output = ttl.tensor.add(hidden_states, residual, self.out_mem_config_l1)
+            output = ttl.tensor.add(hidden_states, residual, output_mem_config=self.out_mem_config_l1)
 
         if not return_dict:
             return (output,)

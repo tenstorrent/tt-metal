@@ -114,7 +114,7 @@ class TtWhisperAttention(nn.Module):
             self.cached_q_proj_shape = q_proj_shape
             q_proj_mul_const = self.q_proj_mul_const
 
-        query_states = tt_lib.tensor.mul(q_proj_output, q_proj_mul_const, self.out_mem_config_l1)
+        query_states = tt_lib.tensor.mul(q_proj_output, q_proj_mul_const, output_mem_config=self.out_mem_config_l1)
 
         if (
             is_cross_attention

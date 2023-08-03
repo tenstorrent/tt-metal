@@ -312,14 +312,14 @@ void bind_binary_op(py::module_ &module, std::string op_name, Func &&f, std::str
 
             "{2}", "First tensor to {1}", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
             "{3}", "Second tensor to {1}", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-            "{4}", "Fused sfpu activations after binary computation", "Vector<FusibleActivation>", "Default is None", "No"
+            "{4}", "Fused activations after binary computation", "Vector<FusibleActivation>", "Default is None", "No"
             "{5}", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
     )doc", op_desc, op_name, arg_name[0], arg_name[1], arg_name[2], arg_name[3]);
 
     module.def(op_name.c_str(), f,
         py::arg(arg_name[0].c_str()).noconvert(),
         py::arg(arg_name[1].c_str()).noconvert(),
-        py::arg(arg_name[2].c_str()).noconvert() = std::nullopt,
+        py::arg(arg_name[2].c_str()) = std::nullopt,
         py::arg(arg_name[3].c_str()) = MemoryConfig{.interleaved = true},
         docstring.c_str()
     );
@@ -405,9 +405,6 @@ void TensorModule(py::module &m_tensor) {
 
     detail::export_enum<ReduceOpDim>(m_tensor);
 
-    // Fusible Activations
-    detail::export_enum<UnaryOpType>(m_tensor, "FusibleActivation");
-
     // layout enums
     detail::export_enum<Layout>(m_tensor);
 
@@ -418,6 +415,23 @@ void TensorModule(py::module &m_tensor) {
     py::enum_<BufferType>(m_tensor, "BufferType")
         .value("DRAM", BufferType::DRAM)
         .value("L1", BufferType::L1);
+
+    // Fusible Activations
+    detail::export_enum<UnaryOpType>(m_tensor, "FusibleActivation");
+    py::class_<UnaryWithParam>(m_tensor, "FusibleActivationWithParam")
+        .def(py::init<UnaryOpType>())
+        .def(py::init<UnaryOpType, float>())
+        .def(py::init<>(
+            [](std::pair<UnaryOpType, float> arg) {
+                return UnaryWithParam{.op_type=arg.first, .param=arg.second};
+            }
+        ));
+    // Allow implicit construction of UnaryWithParam object without user explicitly creating it
+    // Can take in just the op type, or sequence container of op type and param value
+    py::implicitly_convertible<UnaryOpType, UnaryWithParam>();
+    py::implicitly_convertible<std::pair<UnaryOpType, float>, UnaryWithParam>();
+    py::implicitly_convertible<std::pair<UnaryOpType, int>, UnaryWithParam>();
+    py::implicitly_convertible<std::pair<UnaryOpType, bool>, UnaryWithParam>();
 
     auto pyMemoryConfig = py::class_<MemoryConfig>(m_tensor, "MemoryConfig", R"doc(
         Class defining memory configuration for storing tensor data on TT Accelerator device.

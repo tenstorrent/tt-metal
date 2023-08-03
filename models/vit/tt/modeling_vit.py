@@ -58,7 +58,7 @@ class TtViTOutput(nn.Module):
         self, hidden_states: tt_lib.tensor.Tensor, input_tensor: tt_lib.tensor.Tensor
     ) -> tt_lib.tensor.Tensor:
         hidden_states = self.dense(hidden_states)
-        hidden_states = tt_lib.tensor.add(hidden_states, input_tensor, self.out_mem_config_l1)
+        hidden_states = tt_lib.tensor.add(hidden_states, input_tensor, output_mem_config=self.out_mem_config_l1)
         return hidden_states
 
 
@@ -153,7 +153,7 @@ class TtViTSelfAttention(nn.Module):
 
         # Mask heads if we want to
         if head_mask is not None:
-            attention_probs = tt_lib.tensor.mul(attention_probs, head_mask, self.out_mem_config_l1)
+            attention_probs = tt_lib.tensor.mul(attention_probs, head_mask, output_mem_config=self.out_mem_config_l1)
 
         context_layer = tt_lib.tensor.bmm(attention_probs, value_layer)
 
@@ -309,7 +309,7 @@ class TtViTLayer(nn.Module):
         ]  # add self attentions if we output attention weights
 
         # first residual connection
-        hidden_states = tt_lib.tensor.add(attention_output, hidden_states, self.out_mem_config_l1)
+        hidden_states = tt_lib.tensor.add(attention_output, hidden_states, output_mem_config=self.out_mem_config_l1)
 
         # in ViT, layernorm is also applied after self-attention
         layer_output = self.layernorm_after(hidden_states)

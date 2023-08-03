@@ -190,7 +190,7 @@ class Bottleneck(nn.Module):
         elif self.downsample is not None:
             identity = self.downsample(x)
 
-        out = tt_lib.tensor.add_without_autoformat(out, identity, self.memory_config)
+        out = tt_lib.tensor.add_without_autoformat(out, identity, output_mem_config=self.memory_config)
         if output_in_dram:
             out = self.relu(out)
         else:

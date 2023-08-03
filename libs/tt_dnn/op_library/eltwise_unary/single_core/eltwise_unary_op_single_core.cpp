@@ -10,7 +10,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tensor &output, const std::vector<UnaryOpType> op_types, const std::vector<std::optional<float>> params) {
+operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tensor &output, const std::vector<UnaryWithParam> op_chain) {
     Program program{};
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
@@ -75,7 +75,8 @@ operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tenso
     };
 
     bool fp32_dest_acc_en = false;
-    bool math_approx_mode = std::all_of(op_types.begin(), op_types.end(), eltwise_unary_op_utils::get_op_approx_mode);
+    bool math_approx_mode = std::all_of(op_chain.begin(), op_chain.end(), [](const auto& u) {return eltwise_unary_op_utils::get_op_approx_mode(u.op_type);});
+    std::map<string, string> unary_defines = eltwise_unary_op_utils::get_block_defines(op_chain);
     auto eltwise_unary_kernel_id = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/eltwise_sfpu.cpp",
@@ -85,7 +86,7 @@ operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tenso
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
-            .defines = eltwise_unary_op_utils::get_block_defines(op_types, params)
+            .defines = eltwise_unary_op_utils::get_block_defines(op_chain)
         }
     );
 

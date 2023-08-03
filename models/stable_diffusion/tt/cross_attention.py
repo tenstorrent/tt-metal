@@ -149,10 +149,10 @@ class TtCrossAttention(nn.Module):
         #                                 self.scale)
 
         scale_tensor = fallback_ops.full(temp.shape(), self.scale)
-        attention_scores = ttl.tensor.mul(scale_tensor, temp, self.out_mem_config_l1)
+        attention_scores = ttl.tensor.mul(scale_tensor, temp, output_mem_config=self.out_mem_config_l1)
 
         if attention_mask is not None:
-            attention_scores = ttl.tensor.add(attention_scores, attention_mask, self.out_mem_config_l1)
+            attention_scores = ttl.tensor.add(attention_scores, attention_mask, output_mem_config=self.out_mem_config_l1)
 
         attention_probs = TtSoftmax(attention_scores)
 

@@ -24,14 +24,14 @@ namespace unit_tests::sfpu_util {
 
 const map<string, std::map<string, string>> sfpu_op_to_op_name = {
     // FIXME: #1157
-    {"relu", {{"SFPU_OP_BLOCK_0", "relu_min_tile_init(); relu_min_tile(0,0x0);"}}},
-    {"exponential", {{"SFPU_OP_BLOCK_0", "exp_tile_init(); exp_tile(0);"}}},
-    {"reciprocal", {{"SFPU_OP_BLOCK_0", "recip_tile_init(); recip_tile(0);"}}},
-    {"gelu", {{"SFPU_OP_BLOCK_0", "gelu_tile_init(); gelu_tile(0);"}}},
-    {"sqrt", {{"SFPU_OP_BLOCK_0", "sqrt_tile_init(); sqrt_tile(0);"}}},
-    {"sigmoid", {{"SFPU_OP_BLOCK_0", "sigmoid_tile_init(); sigmoid_tile(0);"}}},
-    {"log", {{"SFPU_OP_BLOCK_0", "log_tile_init(); log_tile(0);"}}},
-    {"tanh", {{"SFPU_OP_BLOCK_0", "tanh_tile_init(); tanh_tile(0);"}}},
+    {"relu", {{"SFPU_OP_CHAIN_0", "relu_min_tile_init(); relu_min_tile(0,0x0);"}}},
+    {"exponential", {{"SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);"}}},
+    {"reciprocal", {{"SFPU_OP_CHAIN_0", "recip_tile_init(); recip_tile(0);"}}},
+    {"gelu", {{"SFPU_OP_CHAIN_0", "gelu_tile_init(); gelu_tile(0);"}}},
+    {"sqrt", {{"SFPU_OP_CHAIN_0", "sqrt_tile_init(); sqrt_tile(0);"}}},
+    {"sigmoid", {{"SFPU_OP_CHAIN_0", "sigmoid_tile_init(); sigmoid_tile(0);"}}},
+    {"log", {{"SFPU_OP_CHAIN_0", "log_tile_init(); log_tile(0);"}}},
+    {"tanh", {{"SFPU_OP_CHAIN_0", "tanh_tile_init(); tanh_tile(0);"}}},
 };
 
 bfloat16 sfpu_function(const string& op_name, const bfloat16& input) {
@@ -197,7 +197,7 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
             "tt_metal/kernels/dataflow/writer_unary.cpp",
             test_config.cores,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .defines = writer_defines});
-        
+
         std::map<string, string> sfpu_defines = sfpu_util::sfpu_op_to_op_name.at(test_config.sfpu_op);
         auto sfpu_kernel = tt_metal::CreateComputeKernel(
             program,

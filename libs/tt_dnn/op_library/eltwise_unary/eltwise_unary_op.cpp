@@ -53,7 +53,6 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, stri
     std::pair<string, string> op_init_and_name;
     switch (op_type) {
         case UnaryOpType::EXP: op_init_and_name = {"exp_tile_init();", fmt::format("exp_tile({});", idst)}; break;
-        case UnaryOpType::GELU: op_init_and_name = {"gelu_tile_init();", fmt::format("gelu_tile({});", idst)}; break;
         case UnaryOpType::RECIP: op_init_and_name = {"recip_tile_init();", fmt::format("recip_tile({});", idst)}; break;
         case UnaryOpType::RELU: op_init_and_name = {"relu_min_tile_init();", fmt::format("relu_min_tile({}, 0x0u);", idst)}; break;
         case UnaryOpType::SQRT: op_init_and_name = {"sqrt_tile_init();", fmt::format("sqrt_tile({});", idst)}; break;
@@ -100,7 +99,7 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, stri
             op_init_and_name = {"atan_tile_init();", fmt::format("atan_tile({});", idst)}; break;
         case UnaryOpType::RELU6:
             op_init_and_name = {"relu_max_tile_init();", fmt::format("relu_max_tile({}, 0x40c00000u);", idst)}; break;
-        default: TT_ASSERT(false && "Undefined op type");
+        default: TT_ASSERT(false && "Undefined non-parametrized op type");
     }
     return op_init_and_name;
 }
@@ -113,10 +112,10 @@ bool get_op_approx_mode(UnaryOpType op_type) {
 }
 
 static
-std::map<string, string> get_defines_impl(UnaryOpType op_type, std::string op_init, std::string op_func, std::string id){
+std::map<string, string> get_defines_impl(std::string init_def, std::string func_def, std::string op_init, std::string op_func){
     return std::map<string, string>{
-        {fmt::format("SFPU_OP_INIT_{}", id), op_init},
-        {fmt::format("SFPU_OP_FUNC_{}", id), op_func}
+        {init_def, op_init},
+        {func_def, op_func}
     };
 }
 
@@ -126,21 +125,23 @@ std::pair<string, string> get_op_init_and_func(UnaryOpType op_type, std::optiona
 
 std::map<string, string> get_defines(UnaryOpType op_type, std::optional<float> param0, std::string id, std::string idst) {
     std::pair<string, string> op_init_and_name = get_op_init_and_func(op_type, param0, idst);
-    return get_defines_impl(op_type, op_init_and_name.first, op_init_and_name.second, id);
+    std::string init_def = fmt::format("SFPU_OP_INIT_{}", id);
+    std::string func_def = fmt::format("SFPU_OP_FUNC_{}", id);
+    return get_defines_impl(init_def, func_def, op_init_and_name.first, op_init_and_name.second);
 }
 
-std::map<string, string> get_block_defines(const std::vector<UnaryOpType> op_types, const std::vector<std::optional<float>> params, std::string block_id, std::string idst) {
+std::map<string, string> get_block_defines(const std::vector<UnaryWithParam> op_chain, std::string block_id, std::string idst) {
     std::vector<std::pair<string, string>> op_init_and_name;
     std::map<string, string> block_defines;
     std::string block_define = "";
-    for (uint32_t i = 0; i<op_types.size(); i++) {
-        block_define += fmt::format(" SFPU_OP_BLOCK_{}_INIT_{}", block_id, i);
-        block_define += fmt::format(" SFPU_OP_BLOCK_{}_FUNC_{}", block_id, i);
-        auto op_init_and_name = get_op_init_and_func(op_types[i], params[i], idst);
-        block_defines[fmt::format("SFPU_OP_BLOCK_{}_INIT_{}", block_id, i)] = op_init_and_name.first;
-        block_defines[fmt::format("SFPU_OP_BLOCK_{}_FUNC_{}", block_id, i)] = op_init_and_name.second;
+    for (uint32_t i = 0; i<op_chain.size(); i++) {
+        std::string init_def = fmt::format("SFPU_OP_CHAIN_{}_INIT_{}", block_id, i);
+        std::string func_def = fmt::format("SFPU_OP_CHAIN_{}_FUNC_{}", block_id, i);
+        block_define += init_def + " " + func_def + " ";
+        auto op_init_and_name = get_op_init_and_func(op_chain[i].op_type, op_chain[i].param, idst);
+        block_defines.merge(get_defines_impl(init_def, func_def, op_init_and_name.first, op_init_and_name.second));
     }
-    block_defines[fmt::format("SFPU_OP_BLOCK_{}", block_id)] = block_define;
+    block_defines[fmt::format("SFPU_OP_CHAIN_{}", block_id)] = block_define;
     return block_defines;
 }
 
@@ -176,11 +177,11 @@ operation::ProgramWithCallbacks EltwiseUnary::create_program(const std::vector<T
     auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
     switch (parallelization_strategy){
         case UnaryOpParallelizationStrategy::MULTI_CORE:
-            return eltwise_unary_multi_core(input_tensor, output_tensor, this->op_types, this->params);
+            return eltwise_unary_multi_core(input_tensor, output_tensor, this->op_chain);
             break;
         case UnaryOpParallelizationStrategy::SINGLE_CORE:
         default:
-            return eltwise_unary_single_core(input_tensor, output_tensor, this->op_types, this->params);
+            return eltwise_unary_single_core(input_tensor, output_tensor, this->op_chain);
     }
 }
 
@@ -198,8 +199,7 @@ UnaryOpParallelizationStrategy EltwiseUnary::get_parallelization_strategy(const 
 
 tt::stl::reflection::Attributes EltwiseUnary::attributes() const {
     return {
-        {"op_types", this->op_types},
-        {"params", this->params},
+        {"op_chain", this->op_chain},
         {"output_mem_config", this->output_mem_config},
     };
 }

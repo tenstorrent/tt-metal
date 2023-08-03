@@ -1,0 +1,112 @@
+from pathlib import Path
+import sys
+
+f = f"{Path(__file__).parent}"
+sys.path.append(f"{f}/../..")
+
+import torch
+
+import tt_lib as ttl
+from python_api_testing.models.utility_functions import comp_pcc
+from loguru import logger
+
+
+def test_eltwise_unary_chain():
+    # Initialize the device
+    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    ttl.device.InitializeDevice(device)
+
+    N = 1
+    C = 2
+    H = 32
+    W = 32
+    x = torch.randn((N, C, H, W)).bfloat16().float()
+
+    xt = (
+        ttl.tensor.Tensor(
+            x.reshape(-1).tolist(),
+            x.shape,
+            ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.Layout.ROW_MAJOR,
+        )
+        .to(ttl.tensor.Layout.TILE)
+        .to(device)
+    )
+
+    xtt = ttl.tensor.unary_chain(
+        xt,
+        [
+            ttl.tensor.FusibleActivation.RELU,
+            ttl.tensor.FusibleActivation.EXP,
+            [ttl.tensor.FusibleActivation.POWER, 2],
+        ],
+    )
+    assert xtt.shape() == [N, C, H, W]
+
+    xtt_data = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()
+    tt_got_back = torch.Tensor(xtt_data).reshape(xtt.shape())
+
+    pt_ref = torch.pow(torch.exp(torch.nn.functional.relu(x)), 2)
+
+    passing, out = comp_pcc(pt_ref, tt_got_back)
+    logger.info(out)
+    assert passing
+    del xtt
+
+    ttl.device.CloseDevice(device)
+
+
+def test_eltwise_binary_fused():
+    # Initialize the device
+    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    ttl.device.InitializeDevice(device)
+
+    N = 1
+    C = 2
+    H = 32
+    W = 32
+    x = torch.randn((N, C, H, W)).bfloat16().float()
+    y = torch.randn((N, C, H, W)).bfloat16().float()
+
+    xt = (
+        ttl.tensor.Tensor(
+            x.reshape(-1).tolist(),
+            x.shape,
+            ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.Layout.ROW_MAJOR,
+        )
+        .to(ttl.tensor.Layout.TILE)
+        .to(device)
+    )
+    yt = (
+        ttl.tensor.Tensor(
+            y.reshape(-1).tolist(),
+            y.shape,
+            ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.Layout.ROW_MAJOR,
+        )
+        .to(ttl.tensor.Layout.TILE)
+        .to(device)
+    )
+
+    xtt = ttl.tensor.add(
+        xt,
+        yt,
+        fused_activations=[
+            ttl.tensor.FusibleActivation.RELU,
+            [ttl.tensor.FusibleActivation.POWER, 2],
+        ],
+    )
+    assert xtt.shape() == [N, C, H, W]
+
+    xtt_data = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()
+    tt_got_back = torch.Tensor(xtt_data).reshape(xtt.shape())
+
+    pt_ref = torch.pow(torch.nn.functional.relu(x + y), 2)
+
+    passing, out = comp_pcc(pt_ref, tt_got_back)
+    logger.info(out)
+    assert passing
+    del xtt
+
+    ttl.device.CloseDevice(device)
