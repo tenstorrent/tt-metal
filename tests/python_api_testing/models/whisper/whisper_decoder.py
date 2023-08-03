@@ -10,12 +10,12 @@ from typing import Optional, Tuple, Union
 
 from transformers import WhisperConfig
 
-from python_api_testing.models.whisper.whisper_common import (
+from tests.python_api_testing.models.whisper.whisper_common import (
     torch2tt_tensor,
     tt2torch_tensor,
     linear,
 )
-from python_api_testing.models.whisper.whisper_decoder_layer import (
+from tests.python_api_testing.models.whisper.whisper_decoder_layer import (
     TtWhisperDecoderLayer,
 )
 from tt_lib.fallback_ops import fallback_ops

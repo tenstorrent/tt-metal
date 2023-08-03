@@ -5,14 +5,14 @@ from typing import Optional, Tuple, Union
 
 from transformers import WhisperConfig
 
-from python_api_testing.models.whisper.whisper_common import (
+from tests.python_api_testing.models.whisper.whisper_common import (
     torch2tt_tensor,
     tt2torch_tensor,
     linear,
 )
 
 from tt_lib.fallback_ops import fallback_ops
-from python_api_testing.models.whisper.whisper_attention import TtWhisperAttention
+from tests.python_api_testing.models.whisper.whisper_attention import TtWhisperAttention
 
 
 class TtWhisperDecoderLayer(nn.Module):
@@ -36,6 +36,8 @@ class TtWhisperDecoderLayer(nn.Module):
 
         self.embed_dim = embed_dim
         self.decoder_ffn_dim = decoder_ffn_dim
+        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
+
         # Do not use dropout for now
         # self.dropout = config.dropout
 

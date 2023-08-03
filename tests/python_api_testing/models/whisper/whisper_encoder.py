@@ -8,11 +8,11 @@ from typing import Optional, Tuple, Union
 from transformers import WhisperConfig
 from dataclasses import dataclass
 
-from python_api_testing.models.whisper.whisper_common import (
+from tests.python_api_testing.models.whisper.whisper_common import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
-from python_api_testing.models.whisper.whisper_encoder_layer import (
+from tests.python_api_testing.models.whisper.whisper_encoder_layer import (
     TtWhisperEncoderLayer,
 )
 from tt_lib.fallback_ops import fallback_ops

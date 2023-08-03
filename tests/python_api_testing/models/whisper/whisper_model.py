@@ -8,15 +8,16 @@ from loguru import logger
 
 from transformers import WhisperConfig
 
-from python_api_testing.models.whisper.whisper_common import (
+from tests.python_api_testing.models.whisper.whisper_common import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
-from python_api_testing.models.whisper.whisper_encoder import (
+
+from tests.python_api_testing.models.whisper.whisper_encoder import (
     TtWhisperEncoder,
     TtWhisperEncoderOutput,
 )
-from python_api_testing.models.whisper.whisper_decoder import TtWhisperDecoder
+from tests.python_api_testing.models.whisper.whisper_decoder import TtWhisperDecoder
 
 from tt_lib.fallback_ops import fallback_ops
 

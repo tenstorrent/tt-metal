@@ -2,8 +2,9 @@ import torch
 import torch.nn as nn
 import tt_lib
 from typing import Optional, Tuple, Union
+from loguru import logger
 
-from python_api_testing.models.whisper.whisper_common import (
+from tests.python_api_testing.models.whisper.whisper_common import (
     torch2tt_tensor,
     tt2torch_tensor,
     linear,
@@ -38,6 +39,7 @@ class TtWhisperAttention(nn.Module):
         self.base_address = base_address
         self.scaling = self.head_dim**-0.5
         self.is_decoder = is_decoder
+        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
 
         if (self.head_dim * num_heads) != self.embed_dim:
             raise ValueError(
@@ -76,7 +78,7 @@ class TtWhisperAttention(nn.Module):
         tt_tensor = fallback_ops.reshape(
             tt_tensor, bsz, seq_len, self.num_heads, self.head_dim
         )
-        tt_tensor = tt_lib.tensor.transpose_hc(tt_tensor)
+        tt_tensor = tt_lib.tensor.transpose_hc(tt_tensor, self.out_mem_config_l1)
         return tt_tensor
 
     def forward(
@@ -112,7 +114,7 @@ class TtWhisperAttention(nn.Module):
             self.cached_q_proj_shape = q_proj_shape
             q_proj_mul_const = self.q_proj_mul_const
 
-        query_states = tt_lib.tensor.mul(q_proj_output, q_proj_mul_const)
+        query_states = tt_lib.tensor.mul(q_proj_output, q_proj_mul_const, self.out_mem_config_l1)
 
         if (
             is_cross_attention
@@ -174,8 +176,10 @@ class TtWhisperAttention(nn.Module):
         value_states = fallback_ops.reshape(value_states, *proj_shape)
 
         key_states_transposed = tt_lib.tensor.transpose(key_states)
+        # logger.info(f"key_states_transposed: {key_states_transposed.shape()}")
         src_len = key_states.shape()[-2]
         attn_weights = tt_lib.tensor.bmm(query_states, key_states_transposed)
+        # logger.info(f"attn_weights {attn_weights.shape()}")
 
         if attn_weights.shape() != [1, bsz * self.num_heads, tgt_len, src_len]:
             raise ValueError(
@@ -221,6 +225,7 @@ class TtWhisperAttention(nn.Module):
                 layer_head_mask_reshaped,
                 tt_lib.tensor.BcastOpMath.MUL,
                 tt_lib.tensor.BcastOpDim.HW,
+                self.out_mem_config_l1
             )
             attn_weights = fallback_ops.reshape(
                 attn_weights, 1, bsz * self.num_heads, tgt_len, src_len
@@ -251,17 +256,17 @@ class TtWhisperAttention(nn.Module):
         attn_probs = attn_weights
 
         attn_output = tt_lib.tensor.bmm(attn_probs, value_states)
+        value_states.deallocate()
 
         if attn_output.shape() != [1, bsz * self.num_heads, tgt_len, self.head_dim]:
             raise ValueError(
                 f"`attn_output` should be of size {(bsz * self.num_heads, tgt_len, self.head_dim)}, but is"
                 f" {attn_output.shape()}"
             )
-
         attn_output = tt_lib.tensor.reshape(
             attn_output, bsz, self.num_heads, tgt_len, self.head_dim
         )
-        attn_output = tt_lib.tensor.transpose_hc(attn_output)
+        attn_output = tt_lib.tensor.transpose_hc(attn_output, self.out_mem_config_l1)
 
         attn_output = fallback_ops.reshape(attn_output, 1, bsz, tgt_len, self.embed_dim)
 

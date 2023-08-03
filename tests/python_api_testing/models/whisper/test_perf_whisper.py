@@ -1,14 +1,3 @@
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}")
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../tt")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
 from transformers import WhisperModel, AutoFeatureExtractor
 import torch
 from datasets import load_dataset
@@ -16,12 +5,12 @@ from loguru import logger
 import pytest
 
 import tt_lib
-from utility_functions_new import torch_to_tt_tensor_rm, tt_to_torch_tensor, Profiler
-from utility_functions_new import disable_persistent_kernel_cache, enable_persistent_kernel_cache
-from utility_functions_new import prep_report
-from python_api_testing.models.whisper.whisper_model import TtWhisperModel
 
-from python_api_testing.models.whisper.whisper_common import (
+from models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache
+from tests.python_api_testing.models.utility_functions_new import prep_report, Profiler
+from tests.python_api_testing.models.whisper.whisper_model import TtWhisperModel
+
+from tests.python_api_testing.models.whisper.whisper_common import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
@@ -84,7 +73,7 @@ def run_perf_whisper(expected_inference_time, expected_compile_time):
 
     with torch.no_grad():
         input_features = torch2tt_tensor(input_features, device)
-
+        input_features = input_features.to(device, tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1))
         profiler.start(first_key)
         ttm_output = tt_whisper(
             input_features=input_features, decoder_input_ids=decoder_input_ids

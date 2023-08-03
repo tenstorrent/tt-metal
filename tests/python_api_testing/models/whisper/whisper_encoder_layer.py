@@ -3,13 +3,13 @@ import torch
 import torch.nn as nn
 
 from transformers import WhisperConfig
-from python_api_testing.models.whisper.whisper_common import (
+from tests.python_api_testing.models.whisper.whisper_common import (
     torch2tt_tensor,
     tt2torch_tensor,
     linear,
 )
 from tt_lib.fallback_ops import fallback_ops
-from python_api_testing.models.whisper.whisper_attention import TtWhisperAttention
+from tests.python_api_testing.models.whisper.whisper_attention import TtWhisperAttention
 
 
 class TtWhisperEncoderLayer(nn.Module):

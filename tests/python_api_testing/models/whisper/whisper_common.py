@@ -1,7 +1,6 @@
 import torch
 import tt_lib
 
-
 def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
     size = list(py_tensor.size())
 
@@ -30,11 +29,13 @@ def tt2torch_tensor(tt_tensor):
 
 
 def linear(x, weight, bias=None):
+    out_mem_config_l1 = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
+
     weight = tt_lib.tensor.transpose(weight)
     x = tt_lib.tensor.matmul(x, weight)
     if bias is not None:
         x = tt_lib.tensor.bcast(
-            x, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H
+            x, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H, out_mem_config_l1
         )
     return x
 
