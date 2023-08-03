@@ -144,12 +144,15 @@ void set_config_for_circular_buffer(
     uint32_t circular_buffer_index,
     uint32_t addr_in_bytes,
     uint32_t size_in_bytes,
-    uint32_t size_in_tiles) {
+    uint32_t num_pages) {
+
+    uint32_t page_size = size_in_bytes / num_pages;
     circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * circular_buffer_index) =
         addr_in_bytes >> 4;  // convert to addr in 16B words
     circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * circular_buffer_index + 1) =
         size_in_bytes >> 4;  // convert to addr in 16B words
-    circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * circular_buffer_index + 2) = size_in_tiles;
+    circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * circular_buffer_index + 2) = num_pages;
+    circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * circular_buffer_index + 3) = page_size >> 4;
 }
 
 void write_circular_buffer_config_vector_to_core(

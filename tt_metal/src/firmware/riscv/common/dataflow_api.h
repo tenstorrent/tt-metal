@@ -114,38 +114,32 @@ void init_l1_bank_to_noc_coord_lookup_tables() {
 
 // can be used on NCRICS and/or BRISC, as both can act as tile producers into Tensix
 void setup_cb_read_write_interfaces() {
-    volatile std::uint32_t* circular_buffer_config_addr = (volatile uint32_t*)(CIRCULAR_BUFFER_CONFIG_BASE);
+    volatile uint32_t* circular_buffer_config_addr = (volatile uint32_t*)(CIRCULAR_BUFFER_CONFIG_BASE);
 
     for (uint32_t cb_id = 0; cb_id < NUM_CIRCULAR_BUFFERS; cb_id++) {
         // write_to_local_mem_barrier are needed on GS because of the RTL bug
         // NOTE: fifo_addr, fifo_size and fifo_limit in 16B words!
-        std::uint32_t fifo_addr = circular_buffer_config_addr[0];
-        std::uint32_t fifo_size = circular_buffer_config_addr[1];
-        std::uint32_t fifo_size_tiles = circular_buffer_config_addr[2];
-        write_to_local_mem_barrier(fifo_size_tiles);
+        uint32_t fifo_addr = circular_buffer_config_addr[0];
+        uint32_t fifo_size = circular_buffer_config_addr[1];
+        uint32_t fifo_num_pages = circular_buffer_config_addr[2];
+        uint32_t fifo_page_size = circular_buffer_config_addr[3];
+        uint32_t fifo_limit = fifo_addr + fifo_size - 1;
+        write_to_local_mem_barrier(fifo_num_pages);
 
-        cb_write_interface[cb_id].fifo_limit = fifo_addr + fifo_size - 1;  // to check if we need to wrap
+        // Write interface
+        cb_write_interface[cb_id].fifo_limit = fifo_limit;  // to check if we need to wrap
         cb_write_interface[cb_id].fifo_wr_ptr = fifo_addr;
         cb_write_interface[cb_id].fifo_size = fifo_size;
-        cb_write_interface[cb_id].fifo_size_tiles = fifo_size_tiles;
+        cb_write_interface[cb_id].fifo_num_pages = fifo_num_pages;
+        cb_write_interface[cb_id].fifo_page_size = fifo_page_size;
 
-        circular_buffer_config_addr += UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG;  // move by 3 uint32's
-    }
-
-    circular_buffer_config_addr = (volatile uint32_t*)(CIRCULAR_BUFFER_CONFIG_BASE);
-
-    for (uint32_t cb_id = 0; cb_id < NUM_CIRCULAR_BUFFERS; cb_id++) {
-        // NOTE: fifo_addr, fifo_size and fifo_limit in 16B words!
-        std::uint32_t fifo_addr = circular_buffer_config_addr[0];
-        std::uint32_t fifo_size = circular_buffer_config_addr[1];
-        // std::uint32_t fifo_size_tiles = circular_buffer_config_addr[2]; // unused
-        write_to_local_mem_barrier(fifo_size);
-
-        cb_read_interface[cb_id].fifo_limit = fifo_addr + fifo_size - 1;  // to check if we need to wrap
+        // Read interface
+        cb_read_interface[cb_id].fifo_limit = fifo_limit;
         cb_read_interface[cb_id].fifo_rd_ptr = fifo_addr;
         cb_read_interface[cb_id].fifo_size = fifo_size;
+        cb_read_interface[cb_id].fifo_page_size = fifo_page_size;
 
-        circular_buffer_config_addr += UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG;  // move by 3 uint32's
+        circular_buffer_config_addr += UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG;
     }
 }
 
@@ -191,7 +185,6 @@ inline __attribute__((always_inline)) constexpr static std::uint32_t MUL_WITH_TI
     };
 }
 
-#ifdef DATA_FORMATS_DEFINED
 /**
  * Pushes a given number of tiles in the back of the specified CB’s queue.
  * Decreases the available space in the circular buffer by this number of
@@ -211,63 +204,25 @@ inline __attribute__((always_inline)) constexpr static std::uint32_t MUL_WITH_TI
  *
  * | Argument  | Description                          | Type     | Valid Range | Required |
  * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
- * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31 | True     | | num_tiles | The number of
- * tiles to be pushed     | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that
- * fit into the CB) | True     |
+ * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31     | True     |
+ * | num_tiles | The number of tiles to be pushed     | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  */
 FORCE_INLINE
-void cb_push_back(const std::int32_t operand, const std::int32_t num_tiles) {
-    const std::uint32_t input = operand;
-    std::uint32_t num_words;
+void cb_push_back(const uint32_t operand, const int32_t num_pages) {
 
-// FIXME: indexing into the array via "input" var doesn't work, it seems only this function is broken
-// on NCRISC, it may work on BRISC (tbd by running the reader on BRISC)
-// However, indexing via constants 0,1,2 works
-#if 1
-    // TODO: this was fixed on NCRISC but may still be broken on BRISC
-    num_words = num_tiles * GET_L1_TILE_SIZE((uint)unpack_src_format[input]);  // this doesn't work
-#else
-    // temp workaround for input=0,1,2 (likely low-perf due to conditionals)
-    if (input == 0) {
-        num_words = num_tiles * GET_L1_TILE_SIZE((uint)unpack_src_format[0]);
-    } else if (input == 1) {
-        num_words = num_tiles * GET_L1_TILE_SIZE((uint)unpack_src_format[1]);
-    } else if (input == 2) {
-        num_words = num_tiles * GET_L1_TILE_SIZE((uint)unpack_src_format[2]);
-    } else {
-        // fallback to the format of input 0 for inputs > 2
-        num_words = num_tiles * GET_L1_TILE_SIZE((uint)unpack_src_format[0]);
-    }
-#endif
+    uint32_t num_words = mulsi3(num_pages, cb_write_interface[operand].fifo_page_size);
 
-    volatile std::uint32_t* tiles_received_ptr = get_cb_tiles_received_ptr(operand);
-    tiles_received_ptr[0] += num_tiles;
+    volatile uint32_t* pages_received_ptr = get_cb_tiles_received_ptr(operand);
+    pages_received_ptr[0] += num_pages;
 
-    cb_write_interface[input].fifo_wr_ptr += num_words;
+    cb_write_interface[operand].fifo_wr_ptr += num_words;
 
     // this will basically reset fifo_wr_ptr to fifo_addr -- no other wrap is legal
     // producer always writes into contiguous memory, it cannot wrap
-    if (cb_write_interface[input].fifo_wr_ptr > cb_write_interface[input].fifo_limit) {
+    if (cb_write_interface[operand].fifo_wr_ptr > cb_write_interface[operand].fifo_limit) {
         // TODO: change this to fifo_wr_ptr
-        cb_write_interface[input].fifo_wr_ptr -= cb_write_interface[input].fifo_size;
+        cb_write_interface[operand].fifo_wr_ptr -= cb_write_interface[operand].fifo_size;
     }
-}
-
-// this API is used by both the reader and writer side of the CB
-// it uses unpack_src_format, but because unpack_src_format == pack_dst_format, we can use either
-// TODO: this can be made constexpr?
-inline std::int32_t get_tile_size(const std::int32_t operand) {
-    std::uint32_t input = operand;
-
-    // L1 16B words
-    std::uint32_t num_words = GET_L1_TILE_SIZE((uint)unpack_src_format[input]);
-
-    // return bytes
-    return num_words << 4;
-}
-
-inline DataFormat get_dataformat(const std::int32_t operand) {
-    return static_cast<DataFormat>((uint)unpack_src_format[operand]);
 }
 
 /**
@@ -294,23 +249,41 @@ inline DataFormat get_dataformat(const std::int32_t operand) {
  * fit into the CB) | True     |
  */
 FORCE_INLINE
-void cb_pop_front(std::int32_t operand, std::int32_t num_tiles) {
-    volatile std::uint32_t* tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
-    tiles_acked_ptr[0] += num_tiles;
+void cb_pop_front(uint32_t operand, uint32_t num_pages) {
+    volatile uint32_t* pages_acked_ptr = get_cb_tiles_acked_ptr(operand);
+    pages_acked_ptr[0] += num_pages;
 
-    std::uint32_t output = operand;
+    uint32_t num_words = mulsi3(num_pages, cb_read_interface[operand].fifo_page_size);
 
-    std::uint32_t num_words = num_tiles * GET_L1_TILE_SIZE((uint)pack_dst_format[output]);
-
-    cb_read_interface[output].fifo_rd_ptr += num_words;
+    cb_read_interface[operand].fifo_rd_ptr += num_words;
 
     // this will basically reset fifo_rd_ptr to fifo_addr -- no other wrap is legal
     // consumer always reads from contiguous memory, it cannot wrap
-    if (cb_read_interface[output].fifo_rd_ptr > cb_read_interface[output].fifo_limit) {
+    if (cb_read_interface[operand].fifo_rd_ptr > cb_read_interface[operand].fifo_limit) {
         // TODO: change this to fifo_wr_ptr
-        cb_read_interface[output].fifo_rd_ptr -= cb_read_interface[output].fifo_size;
+        cb_read_interface[operand].fifo_rd_ptr -= cb_read_interface[operand].fifo_size;
     }
 }
+
+#ifdef DATA_FORMATS_DEFINED
+
+// this API is used by both the reader and writer side of the CB
+// it uses unpack_src_format, but because unpack_src_format == pack_dst_format, we can use either
+// TODO: this can be made constexpr?
+inline std::int32_t get_tile_size(const std::int32_t operand) {
+    std::uint32_t input = operand;
+
+    // L1 16B words
+    std::uint32_t num_words = GET_L1_TILE_SIZE((uint)unpack_src_format[input]);
+
+    // return bytes
+    return num_words << 4;
+}
+
+inline DataFormat get_dataformat(const std::int32_t operand) {
+    return static_cast<DataFormat>((uint)unpack_src_format[operand]);
+}
+
 #endif
 
 /**
@@ -325,12 +298,11 @@ void cb_pop_front(std::int32_t operand, std::int32_t num_tiles) {
  *
  * | Argument  | Description                          | Type     | Valid Range | Required |
  * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
- * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31 | True     |
+ * | operand   | The index of the cirular buffer (CB) | uint32_t | 0 to 31     | True     |
  */
-inline __attribute__((always_inline)) uint32_t get_write_ptr(std::int32_t operand) {
-    std::uint32_t input = operand;
+inline __attribute__((always_inline)) uint32_t get_write_ptr(uint32_t operand) {
     // return byte address (fifo_wr_ptr is 16B address)
-    std::uint32_t wr_ptr_bytes = cb_write_interface[input].fifo_wr_ptr << 4;
+    uint32_t wr_ptr_bytes = cb_write_interface[operand].fifo_wr_ptr << 4;
     return wr_ptr_bytes;
 }
 
@@ -344,19 +316,18 @@ inline __attribute__((always_inline)) uint32_t get_write_ptr(std::int32_t operan
  *
  * | Argument  | Description                          | Type     | Valid Range | Required |
  * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
- * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31 | True     |
+ * | operand   | The index of the cirular buffer (CB) | uint32_t | 0 to 31     | True     |
  */
-inline __attribute__((always_inline)) uint32_t get_read_ptr(std::int32_t operand) {
-    std::uint32_t output = operand;
+inline __attribute__((always_inline)) uint32_t get_read_ptr(uint32_t operand) {
 
     // return byte address (fifo_rd_ptr is 16B address)
-    std::uint32_t rd_ptr_bytes = cb_read_interface[output].fifo_rd_ptr << 4;
+    uint32_t rd_ptr_bytes = cb_read_interface[operand].fifo_rd_ptr << 4;
     return rd_ptr_bytes;
 }
 
-inline void wait_for_sync_register_value(std::uint32_t addr, std::int32_t val) {
-    volatile std::uint32_t* reg_ptr = (volatile std::uint32_t*)addr;
-    std::int32_t reg_value;
+inline void wait_for_sync_register_value(uint32_t addr, int32_t val) {
+    volatile uint32_t* reg_ptr = (volatile uint32_t*)addr;
+    int32_t reg_value;
     do {
         reg_value = reg_ptr[0];
     } while (reg_value != val);
@@ -377,25 +348,22 @@ inline void wait_for_sync_register_value(std::uint32_t addr, std::int32_t val) {
  * into the CB) |          |
  */
 FORCE_INLINE
-void cb_reserve_back(std::int32_t operand, std::int32_t num_tiles) {
-    std::uint32_t input = operand;
-
-    volatile std::uint32_t* tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
-    volatile std::uint32_t* tiles_received_ptr = get_cb_tiles_received_ptr(operand);
+void cb_reserve_back(uint32_t operand, int32_t num_pages) {
+    uint32_t pages_acked_ptr = (uint32_t) get_cb_tiles_acked_ptr(operand);
 
     // while the producer (write-side interface) is waiting for space to free up "tiles_pushed" is not changing
     // "tiles_pushed" is updated by the producer only when the tiles are pushed
-    uint32_t tiles_received = tiles_received_ptr[0];
+    uint32_t pages_received = get_cb_tiles_received_ptr(operand)[0];
 
-    std::int32_t free_space_tiles;
+    int32_t free_space_pages;
     do {
         // uint16_t's here because Tensix updates the val at tiles_acked_ptr as uint16 in llk_pop_tiles
         // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
-        std::uint16_t tiles_acked = (std::uint16_t)reg_read_barrier((std::uint32_t)tiles_acked_ptr);
-        std::uint16_t free_space_tiles_wrap =
-            cb_write_interface[input].fifo_size_tiles - (tiles_received - tiles_acked);
-        free_space_tiles = (std::int32_t)free_space_tiles_wrap;
-    } while (free_space_tiles < num_tiles);
+        uint16_t pages_acked = (uint16_t)reg_read_barrier(pages_acked_ptr);
+        uint16_t free_space_pages_wrap =
+            cb_write_interface[operand].fifo_num_pages - (pages_received - pages_acked);
+        free_space_pages = (int32_t)free_space_pages_wrap;
+    } while (free_space_pages < num_pages);
 }
 
 /**
@@ -417,29 +385,19 @@ void cb_reserve_back(std::int32_t operand, std::int32_t num_tiles) {
  *
  * | Argument  | Description                          | Type     | Valid Range | Required |
  * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
- * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31 | True     | | num_tiles | The number of
- * tiles to wait for      | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that
- * fit into the CB) |          |
+ * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31     | True     |
+ * | num_tiles | The number of tiles to wait for      | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) |          |
  * */
 FORCE_INLINE
-void cb_wait_front(std::int32_t operand, std::int32_t num_tiles) {
-    // std::uint32_t output = operand_to_output_index(operand);
-    std::uint32_t output = operand;
+void cb_wait_front(uint32_t operand, uint16_t num_pages) {
+    uint32_t pages_acked = get_cb_tiles_acked_ptr(operand)[0];
+    uint32_t pages_received_ptr = (uint32_t) get_cb_tiles_received_ptr(operand);
 
-    volatile std::uint32_t* tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
-    volatile std::uint32_t* tiles_received_ptr = get_cb_tiles_received_ptr(operand);
-
-    // "tiles_poppped" doesn't change while we wait for tiles to be pushed to CB
-    std::uint16_t tiles_acked = tiles_acked_ptr[0];
-
-    std::uint16_t num_tiles_u = (std::uint16_t)num_tiles;
-    std::uint16_t tiles_received;
-    std::uint16_t num_tiles_recv;
+    uint16_t pages_received;
 
     do {
-        tiles_received = (std::uint16_t)reg_read_barrier((std::uint32_t)tiles_received_ptr);
-        num_tiles_recv = tiles_received - tiles_acked;
-    } while (num_tiles_recv < num_tiles_u);
+        pages_received = ((uint16_t)reg_read_barrier(pages_received_ptr)) - pages_acked;
+    } while (pages_received < num_pages);
 }
 
 // NOC transfers

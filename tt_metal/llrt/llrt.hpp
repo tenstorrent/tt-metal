@@ -109,7 +109,7 @@ void set_config_for_circular_buffer(
     uint32_t circular_buffer_index,
     uint32_t addr_in_bytes,
     uint32_t size_in_bytes,
-    uint32_t size_in_tiles);
+    uint32_t num_pages);
 
 void write_circular_buffer_config_vector_to_core(
     tt_cluster *cluster, int chip, const CoreCoord &core, CircularBufferConfigVec circular_buffer_config_vec);

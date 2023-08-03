@@ -100,4 +100,4 @@ template DebugPrinter operator<< <TSLICE32>(DebugPrinter, TSLICE32 val);
 #define CB_RD_SZ(id) (cb_read_interface[id].fifo_size<<4)
 
 #define CB_WR_PTR(id) (cb_write_interface[id].fifo_wr_ptr<<4) // only valid in packer thread
-#define CB_WR_TILES(id) (cb_write_interface[output].fifo_size_tiles)
+#define CB_WR_TILES(id) (cb_write_interface[output].fifo_num_pages)

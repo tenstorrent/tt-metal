@@ -151,7 +151,9 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
         program_vector.push_back(cb.address() >> 4);
         program_vector.push_back(cb.size() >> 4);
         program_vector.push_back(cb.num_tiles());
-        program_vector.push_back(0);  // Padding
+
+        u32 page_size = cb.size() / cb.num_tiles();
+        program_vector.push_back(page_size >> 4);  // Padding
 
         if (DISPATCH_MAP_DUMP != nullptr) {
             vector<u32> cb_config = {cb.address() >> 4, cb.size() >> 4, cb.num_tiles()};
@@ -176,8 +178,7 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
                         CIRCULAR_BUFFER_CONFIG_BASE +
                             buffer_index * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(u32),
                         start_in_bytes,
-                        12,  // Only 3 of the UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG actually represent CB config data,
-                             // the last one just used for 16B alignment... need some constant for this somewhere
+                        16,
                         noc_multicast_encoding,
                         core_range.size()));
             }
