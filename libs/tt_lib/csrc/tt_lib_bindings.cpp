@@ -23,6 +23,7 @@
 #include "tt_dnn/op_library/unpad/unpad_op.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_dnn/op_library/bert_large_tms/bert_large_tms.hpp"
+#include "tt_dnn/op_library/nlp_tms/nlp_tms.hpp"
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
 #include "tt_dnn/op_library/move/move_op.hpp"
@@ -2417,6 +2418,14 @@ void TensorModule(py::module &m_tensor) {
     m_tensor.def("bert_large_add_layernorm", &bert_large_add_layernorm,
         py::arg("a").noconvert(), py::arg("b").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         "Performs a bert_large_layernorm(a+b)*gamma + beta operation."
+    )doc");
+
+    // Custom Generic NLP TMs
+    // TODO: Uplift nlp_create_qkv_heads to support generic qkv num_heads and head_dim
+    // This op should support arbitrary B and S divisible by 32 on DRAM; on L1, might error out due to space
+    m_tensor.def("nlp_create_qkv_heads", &nlp_create_qkv_heads,
+        py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        Shuffles [B, 1, S, 4672] fused qkv matrix into 3 heads with shapes [B, 71, S, 64], [B, 1, S, 64], and [B, 1, S, 64].
     )doc");
 
     // softmax

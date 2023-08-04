@@ -62,6 +62,8 @@ TT_DNN_SRCS = \
 	libs/tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.cpp \
 	libs/tt_dnn/op_library/operation_history.cpp \
 	libs/tt_dnn/op_library/concat/concat_op.cpp \
+	libs/tt_dnn/op_library/nlp_tms/nlp_tms.cpp \
+	libs/tt_dnn/op_library/nlp_tms/nlp_create_qkv_heads.cpp \
 
 
 TT_DNN_LIB = $(LIBDIR)/libtt_dnn.a
