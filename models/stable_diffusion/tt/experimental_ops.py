@@ -7,8 +7,8 @@ from models.conv_on_device_utils import (
     is_conv_supported_on_device,
 )
 
-DEVICE_CONV2D_READY = True  # or goto fallback
-DEVICE_CONCAT_READY = True
+DEVICE_CONV2D_READY = not True  # or goto fallback
+DEVICE_CONCAT_READY = not True
 
 
 def parse_conv2d_interface(
