@@ -1749,6 +1749,7 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
     else if constexpr (operation == SfpuType::atan) {
         calculate_atan<APPROXIMATION_MODE, ITERATIONS>();
     }
+    //erf, erfc are dispatched directly.
 }
 
 } // namespace sfpu

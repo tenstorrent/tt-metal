@@ -272,6 +272,14 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_heaviside,
         "pytorch_op": pytorch_ops.heaviside,
     },
+    "eltwise-erf": {
+        "tt_lib_op": tt_lib_ops.eltwise_erf,
+        "pytorch_op": pytorch_ops.erf,
+    },
+    "eltwise-erfc": {
+        "tt_lib_op": tt_lib_ops.eltwise_erfc,
+        "pytorch_op": pytorch_ops.erfc,
+    },
     "eltwise-hardsigmoid": {
         "tt_lib_op": tt_lib_ops.eltwise_hardsigmoid,
         "pytorch_op": pytorch_ops.hardsigmoid,

@@ -43,6 +43,8 @@ std::pair<string, string> get_op_init_and_func_parameterized(UnaryOpType op_type
         case UnaryOpType::GELU: op_init_and_name = {"gelu_tile_init();", fmt::format("gelu_tile({}, {}u);", idst, std::to_string((uint32_t)param0))}; break;
         case UnaryOpType::RSQRT: op_init_and_name = {"rsqrt_tile_init();",  fmt::format("rsqrt_tile({}, {}u);", idst, std::to_string((uint32_t)param0))}; break;
         case UnaryOpType::HEAVISIDE: op_init_and_name = {"heaviside_tile_init();", fmt::format("heaviside_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
+        case UnaryOpType::ERF: op_init_and_name = {"erf_tile_init();", fmt::format("erf_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
+        case UnaryOpType::ERFC: op_init_and_name = {"erfc_tile_init();", fmt::format("erfc_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
         default:
         TT_ASSERT( false && "unexpected parameterized type");
     };
@@ -111,23 +113,32 @@ bool get_op_approx_mode(UnaryOpType op_type) {
     }
 }
 
-static
-std::map<string, string> get_defines_impl(std::string init_def, std::string func_def, std::string op_init, std::string op_func){
-    return std::map<string, string>{
-        {init_def, op_init},
-        {func_def, op_func}
-    };
-}
 
-std::pair<string, string> get_op_init_and_func(UnaryOpType op_type, std::optional<float> param0, std::string idst) {
-   return param0.has_value() ? get_op_init_and_func_parameterized(op_type, param0.value(), idst) : get_op_init_and_func_default(op_type, idst);
+static
+std::map<string, string> get_defines_impl(std::string init_def, std::string func_def, std::string op_init, std::string op_func) {
+    std::map<string, string> defines = {
+        {init_def, op_init},
+        {func_def, op_func},
+        {"SFPU_OP_ERF_ERFC_INCLUDE","0"} //include guards for split eltwise ops
+    };
+    return defines;
 }
 
 std::map<string, string> get_defines(UnaryOpType op_type, std::optional<float> param0, std::string id, std::string idst) {
     std::pair<string, string> op_init_and_name = get_op_init_and_func(op_type, param0, idst);
     std::string init_def = fmt::format("SFPU_OP_INIT_{}", id);
     std::string func_def = fmt::format("SFPU_OP_FUNC_{}", id);
-    return get_defines_impl(init_def, func_def, op_init_and_name.first, op_init_and_name.second);
+    std::map<std::string,std::string> defines = get_defines_impl(init_def, func_def, op_init_and_name.first, op_init_and_name.second);
+    // update split eltwise ops include macros
+    if ( op_type == UnaryOpType::ERFC 
+            || op_type == UnaryOpType::ERF ) {
+            defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
+    }
+    return defines;
+}
+
+std::pair<string, string> get_op_init_and_func(UnaryOpType op_type, std::optional<float> param0, std::string idst) {
+   return param0.has_value() ? get_op_init_and_func_parameterized(op_type, param0.value(), idst) : get_op_init_and_func_default(op_type, idst);
 }
 
 std::map<string, string> get_block_defines(const std::vector<UnaryWithParam> op_chain, std::string block_id, std::string idst) {
@@ -140,6 +151,15 @@ std::map<string, string> get_block_defines(const std::vector<UnaryWithParam> op_
         block_define += init_def + " " + func_def + " ";
         auto op_init_and_name = get_op_init_and_func(op_chain[i].op_type, op_chain[i].param, idst);
         block_defines.merge(get_defines_impl(init_def, func_def, op_init_and_name.first, op_init_and_name.second));
+    }
+    for (uint32_t i = 0; i<op_chain.size(); i++) {    
+        auto op_type = op_chain[i].op_type;
+        // update split eltwise ops include macros
+        if ( op_type == UnaryOpType::ERFC 
+            || op_type == UnaryOpType::ERF ) {
+            block_defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
+            break;
+        }
     }
     block_defines[fmt::format("SFPU_OP_CHAIN_{}", block_id)] = block_define;
     return block_defines;

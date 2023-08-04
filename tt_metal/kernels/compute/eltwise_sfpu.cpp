@@ -2,6 +2,10 @@
 
 #include "compute_kernel_api.h"
 
+#if SFPU_OP_ERF_ERFC_INCLUDE
+#include "compute_kernel_api/eltwise_unary/erf_erfc.h"
+#endif
+
 namespace NAMESPACE {
 void MAIN {
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);

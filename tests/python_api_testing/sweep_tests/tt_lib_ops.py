@@ -113,6 +113,43 @@ def eltwise_bitwise_complement(x, *args, device, dtype, layout, on_device, **kwa
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     return output
 
+@setup_host_and_device
+def eltwise_erf(x, *args, fast_and_appx, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    t1 = ttl.tensor.erf(t0,fast_and_appx)
+
+    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    return output
+
+
+@setup_host_and_device
+def eltwise_erfc(x, *args, fast_and_appx, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    t1 = ttl.tensor.erfc(t0, fast_and_appx)
+
+    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    return output
+
 
 @setup_host_and_device
 def eltwise_logical_not(x, *args, device, dtype, layout, on_device, **kwargs):

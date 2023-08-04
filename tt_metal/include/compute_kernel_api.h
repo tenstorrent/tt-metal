@@ -446,6 +446,12 @@ ALWI void rsqrt_tile(uint32_t idst,bool fast_and_approx=true) {
   }
 }
 
+//for these files include eltwise_uanry/erf_erfc.h
+//ALWI void erf_tile_init() {
+//ALWI void erf_tile(uint32_t idst,bool fast_and_approx=true) {
+//ALWI void erfc_tile_init() {
+//ALWI void erfc_tile(uint32_t idst,bool fast_and_approx=true) {
+
 ALWI void recip_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_reciprocal_init<APPROX>() ));
 }
