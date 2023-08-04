@@ -20,7 +20,7 @@ def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
     if dilation != 1 or groups != 1:
         return None
     weights_shape = [K, C, R, S]
-    weights_channels_padded_shape = [_nearest_32(K), _nearest_32(C), R, S]
+    weights_channels_padded_shape = [_nearest_32(K), _nearest_y(C,  16), R, S]
     weight_untiled = tensor.Tensor(
         weight, weights_shape, tensor.DataType.BFLOAT16, tensor.Layout.ROW_MAJOR
     ).pad(weights_channels_padded_shape, (0, 0, 0, 0), 0)
@@ -95,7 +95,7 @@ def resnet_conv(weight: List[Union[int, float]], conv_params, device, bias=None)
     assert dilation == 1 and groups == 1
 
     weights_shape = [K, C, R, S]
-    weights_channels_padded_shape = [_nearest_32(K), _nearest_32(C), R, S]
+    weights_channels_padded_shape = [_nearest_32(K), _nearest_y(C, 16), R, S]
     weight_untiled = tensor.Tensor(
         weight, weights_shape, tensor.DataType.BFLOAT16, tensor.Layout.ROW_MAJOR
     ).pad(weights_channels_padded_shape, (0, 0, 0, 0), 0)

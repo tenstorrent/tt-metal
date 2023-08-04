@@ -373,7 +373,7 @@ class ResNet(nn.Module):
                 x.shape,
                 tt_lib.tensor.DataType.BFLOAT16,
                 tt_lib.tensor.Layout.ROW_MAJOR)
-        x = x.pad((x.shape()[0], x.shape()[1], x.shape()[2], _nearest_y(x.shape()[3], 32)), (0, 0, 0, 0), 0)
+        x = x.pad((x.shape()[0], x.shape()[1], x.shape()[2], _nearest_y(x.shape()[3], 16)), (0, 0, 0, 0), 0)
         x = x.to(self.device, self.memory_config)
         saved_shape = compute_conv_output_shape(self.conv1_params, x.shape())
         x = self.conv1(x)

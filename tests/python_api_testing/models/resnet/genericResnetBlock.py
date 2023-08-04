@@ -3,7 +3,7 @@ from typing import Type, Union, Optional, List, Callable
 import tt_lib
 import torch
 import torch.nn as nn
-
+import math
 from utils import conv3x3, conv1x1, fold_bn_to_conv, fold_bn_to_conv_weights_bias
 from utility_functions_new import pad_by_zero, tt2torch_tensor
 from tt_lib.utils import pad_weight
@@ -13,6 +13,10 @@ from tt_lib.fused_ops.linear import Linear as TtLinear
 from tt_lib.fused_ops.conv import conv as TtConv
 from conv_on_device_utils import is_conv_supported_on_device, _nearest_32
 from tt_lib.fallback_ops import fallback_ops
+
+def _nearest_y(x, y):
+    return math.ceil(x / y) * y
+
 # Local copy of unpad_from_zero to always set output to
 def unpad_from_zero(x, desired_shape):
     if x.shape()[-1] == desired_shape[-1] and x.shape()[-2] == desired_shape[-2] :
@@ -426,7 +430,7 @@ class ResNet(nn.Module):
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         x = torch.permute(x, (0, 2, 3, 1))
         x = tt_lib.tensor.Tensor(x, tt_lib.tensor.DataType.BFLOAT16)
-        x = x.pad((x.shape()[0], x.shape()[1], x.shape()[2], _nearest_32(x.shape()[3])), (0, 0, 0, 0), 0)
+        x = x.pad((x.shape()[0], x.shape()[1], x.shape()[2], _nearest_y(x.shape()[3], 16)), (0, 0, 0, 0), 0)
         x = x.to(self.device)
         x = self.conv1(x)
         if not self.fold_batchnorm:

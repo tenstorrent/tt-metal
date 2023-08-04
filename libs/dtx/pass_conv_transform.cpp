@@ -112,6 +112,7 @@ vector<uint32_t> conv_act_transform(vector<int> activation_shape, vector<int> co
     std::vector<uint32_t> address_map = generate_address_map(combined, true, num_bytes_of_df);
 
     // validate dram reads are 32 byte aligned (i.e. dram src address, and l1 dst address % 32 == 0)
+    uint32_t byte_alignment = 16 * num_bytes_of_df;
     // validate padding boolean values in address map
     uint32_t address_map_index = 0;
     uint32_t num_groups = address_map[address_map_index];
@@ -123,9 +124,9 @@ vector<uint32_t> conv_act_transform(vector<int> activation_shape, vector<int> co
         address_map_index++;
         assert(address_map.size() >= address_map_index+address_map_this_group_size);
         for(uint32_t i = 0; i < address_map_this_group_size; i+=4) {
-            assert(address_map[address_map_index] % 32 == 0); // src address
-            assert(address_map[address_map_index+1] % 32 == 0); // dst address
-            assert(address_map[address_map_index+2] % 32 == 0); // size
+            assert(address_map[address_map_index] % byte_alignment == 0); // src address
+            assert(address_map[address_map_index+1] % byte_alignment == 0); // dst address
+            assert(address_map[address_map_index+2] % byte_alignment == 0); // size
             assert(address_map[address_map_index+3] == 0 || address_map[address_map_index+3] == 1); // pad
             address_map_index += 4;
         }

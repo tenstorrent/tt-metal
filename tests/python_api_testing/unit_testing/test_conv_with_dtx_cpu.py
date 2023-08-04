@@ -67,13 +67,13 @@ def test_run_conv_as_large_matmul_cpu(K, C, H, W, R, S, stride_h, stride_w, pad_
     weight_block_width_datums = weight_block_w * 32
     matrix_activation_h_tiles = (int) (_nearest_y(OH*OW, act_block_height_datums) / 32)
     matrix_weight_w_tiles = (int) (_nearest_y(K, weight_block_width_datums) / 32)
-    matrix_activation_w_tiles = (int) (_nearest_y(_nearest_32(C)*R*S,act_block_width_datums)/32)
+    matrix_activation_w_tiles = (int) (_nearest_y(_nearest_y(C, 16)*R*S,act_block_width_datums)/32)
 
     num_blocks_act_w = (int) (matrix_activation_w_tiles / act_block_w)
     num_blocks_act_h = (int) (matrix_activation_h_tiles / act_block_h)
     num_blocks_weight_w = (int) (matrix_weight_w_tiles / weight_block_w)
-    (act_address_map,weight_address_map) = ttl.dtx.conv_transform([_nearest_32(C),H,W],
-                            [_nearest_y(K, weight_block_width_datums), _nearest_32(C),R,S],
+    (act_address_map,weight_address_map) = ttl.dtx.conv_transform([_nearest_y(C, 16),H,W],
+                            [_nearest_y(K, weight_block_width_datums), _nearest_y(C, 16),R,S],
                             [R,S,stride_h,stride_w,pad_h,pad_w],
                             act_block_height_datums,
                             act_block_width_datums,
