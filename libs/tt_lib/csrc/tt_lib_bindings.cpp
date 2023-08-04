@@ -1076,7 +1076,7 @@ void TensorModule(py::module &m_tensor) {
                 data = tt_tensor.cpu().to_torch() # move TT Tensor to host and convert it to torch tensor
 
         )doc")
-        .def("data", [](const Tensor &self) -> std::variant<OwnedBuffer, BorrowedBuffer> {
+        .def("buffer", [](const Tensor &self) -> std::variant<OwnedBuffer, BorrowedBuffer> {
             return std::visit(
                 [] (auto&& storage) -> std::variant<OwnedBuffer, BorrowedBuffer> {
                     using T = std::decay_t<decltype(storage)>;
@@ -1084,7 +1084,7 @@ void TensorModule(py::module &m_tensor) {
                         return storage.buffer;
                     }
                     else if constexpr (std::is_same_v<T, DeviceStorage>) {
-                        TT_THROW("Device storage doesn't support data method");
+                        TT_THROW("Device storage doesn't support buffer method");
                     }
                     else if constexpr (std::is_same_v<T, BorrowedStorage>) {
                         return storage.buffer;
@@ -1096,13 +1096,13 @@ void TensorModule(py::module &m_tensor) {
                 self.storage()
             );
         }, R"doc(
-            Get data in the tensor as a list of numbers.
+            Get the underlying buffer.
 
-            The tensor must be on host when calling this function.
+            The tensor must be on the cpu when calling this function.
 
             .. code-block:: python
 
-                data = tt_tensor.cpu().data() # move TT Tensor to host and get values stored in it
+                buffer = tt_tensor.cpu().buffer() # move TT Tensor to host and get the buffer
 
         )doc")
         .def("layout", [](const Tensor &self) {

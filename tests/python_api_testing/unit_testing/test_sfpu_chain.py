@@ -43,8 +43,7 @@ def test_eltwise_unary_chain():
     )
     assert xtt.shape() == [N, C, H, W]
 
-    xtt_data = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()
-    tt_got_back = torch.Tensor(xtt_data).reshape(xtt.shape())
+    tt_got_back = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
     pt_ref = torch.pow(torch.exp(torch.nn.functional.relu(x)), 2)
 
@@ -99,8 +98,7 @@ def test_eltwise_binary_fused():
     )
     assert xtt.shape() == [N, C, H, W]
 
-    xtt_data = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()
-    tt_got_back = torch.Tensor(xtt_data).reshape(xtt.shape())
+    tt_got_back = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
     pt_ref = torch.pow(torch.nn.functional.relu(x + y), 2)
 

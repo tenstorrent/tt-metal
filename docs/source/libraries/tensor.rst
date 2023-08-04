@@ -74,7 +74,7 @@ Tensor API
 ==========
 
 .. autoclass:: tt_lib.tensor.Tensor
-    :members: to, data, storage_type, device, layout, dtype, print, pretty_print, shape, pad, unpad, pad_to_tile, unpad_from_tile
+    :members: to, buffer, storage_type, device, layout, dtype, print, pretty_print, shape, pad, unpad, pad_to_tile, unpad_from_tile
     :special-members: __init__
 
 MemoryConfig
@@ -96,13 +96,7 @@ The created tensor will be in ROW_MAJOR layout and stored on TT accelerator devi
 .. code-block:: python
 
     py_tensor = torch.randn((1, 1, 32, 32))
-    tt_tensor = tt_lib.tensor.Tensor(
-        py_tensor.reshape(-1).tolist(),  # PyTorch tensor flatten into a list of floats
-        py_tensor.size(),                # shape of TT Tensor that will be created
-        tt_lib.tensor.DataType.BFLOAT16, # data type that will be used in created TT Tensor
-        tt_lib.tensor.Layout.ROW_MAJOR,  # memory layout that will be used in created TT Tensor
-        tt_device                           # move TT Tensor from host to TT accelerator device (device is of type tt_lib.device.Device)
-    )
+    tt_tensor = tt_lib.tensor.Tensor(py_tensor, tt_lib.tensor.DataType.BFLOAT16).to(tt_device)
 
 Converting a TT Tensor to a PyTorch Tensor
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -114,11 +108,5 @@ This example shows how to move a TT Tensor ``output`` from device to host and ho
     # move TT Tensor output from TT accelerator device to host
     tt_output = tt_output.cpu()
 
-    # create a 1D PyTorch tensor from values in TT Tensor obtained with data() member function
-    # and then reshape PyTorch tensor to shape of TT Tensor
-    # This will copy the buffer of tt_lib.tensor.Tensor to create the buffer of torch.Tensor
-    py_output = torch.Tensor(tt_output.data()).reshape(tt_output.shape())
-
-    # Alternatively, torch tensor can be created using `torch.frombuffer` function
-    # This won't make a copy. Instead, both torch.Tensor and tt_lib.tensor.Tensor will share the same buffer
-    py_output = torch.frombuffer(tt_output.data(), dtype).reshape(tt_output.shape())
+    # create PyTorch tensor from TT Tensor using to_torch() member function
+    py_output = tt_output.to_torch()

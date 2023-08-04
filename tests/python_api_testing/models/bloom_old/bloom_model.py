@@ -301,8 +301,8 @@ class TtBloomModel(torch.nn.Module):
         self.word_embeddings_layernorm_weight = bloom_utils.tt_load_layer_weights(f"{base_address}.word_embeddings_layernorm.weight", state_dict)
 
         self.word_embeddings_layernorm = TtLayernorm(
-            self.word_embeddings_layernorm_weight.data(),
-            self.word_embeddings_layernorm_bias.data(),
+            self.word_embeddings_layernorm_weight,
+            self.word_embeddings_layernorm_bias,
             config.layer_norm_epsilon,
             config.hidden_size,
             config.hidden_size,
@@ -323,7 +323,7 @@ class TtBloomModel(torch.nn.Module):
         self.ln_f_weight = bloom_utils.tt_load_layer_weights(f"{base_address}.ln_f.weight", state_dict)
 
         # Final Layer Norm
-        self.ln_f = TtLayernorm(self.ln_f_weight.data(), self.ln_f_bias.data(), config.layer_norm_epsilon, config.hidden_size, config.hidden_size, device, 1)
+        self.ln_f = TtLayernorm(self.ln_f_weight, self.ln_f_bias, config.layer_norm_epsilon, config.hidden_size, config.hidden_size, device, 1)
 
     def build_alibi_tensor(self, attention_mask: torch.Tensor, num_heads: int, dtype: torch.dtype) -> torch.Tensor:
         return build_alibi_tensor(attention_mask, num_heads, dtype)

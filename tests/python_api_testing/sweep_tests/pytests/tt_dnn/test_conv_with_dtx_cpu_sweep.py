@@ -58,12 +58,10 @@ def run_conv_as_large_matmul_dtx_cpu(conv_op_test_params, pytorch_inputs_and_gol
 
     # Prepare activations
     A_cl = create_conv_act_tensor(A_pyt, 1, C, H, W)
-    A_cl_data = A_cl.data()
     # Prepare weights
-    B_tiled_ = create_conv_weight_tensor(
+    B_tiled = create_conv_weight_tensor(
         B_pyt, K, C, R, S, weight_block_h, weight_block_w
     )
-    B_tiled_data = B_tiled_.data()
 
     if conv_op_test_params.test_level == TestLevel.INPUT_TENSOR_CREATE:
         return True
@@ -97,8 +95,8 @@ def run_conv_as_large_matmul_dtx_cpu(conv_op_test_params, pytorch_inputs_and_gol
 
     # Run host side CPU function
     out_pytorch = blocked_mm_with_conv_act(
-        A_cl_data,
-        B_tiled_data,
+        A_cl.buffer(),
+        B_tiled.buffer(),
         act_address_map,
         weight_address_map,
         num_blocks_act_h,

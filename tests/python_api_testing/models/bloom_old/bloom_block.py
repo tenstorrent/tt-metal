@@ -100,7 +100,7 @@ class TtBloomBlock(torch.nn.Module):
 
         self.tt_beta = bloom_utils.tt_load_layer_weights(f"{base_address}.input_layernorm.bias", state_dict)
         self.tt_gamma = bloom_utils.tt_load_layer_weights(f"{base_address}.input_layernorm.weight", state_dict)
-        self.input_layernorm = TtLayernorm(self.tt_gamma.data(), self.tt_beta.data(), self.layer_norm_epsilon, self.hidden_size, self.hidden_size, device, 1)
+        self.input_layernorm = TtLayernorm(self.tt_gamma, self.tt_beta, self.layer_norm_epsilon, self.hidden_size, self.hidden_size, device, 1)
 
         # self.input_layernorm = LayerNorm(self.hidden_size, eps=config.layer_norm_epsilon)
         # self.input_layernorm.bias = torch.nn.Parameter(state_dict[f"{base_address}.input_layernorm.bias"])
@@ -110,7 +110,7 @@ class TtBloomBlock(torch.nn.Module):
 
         self.tt_beta_2 = bloom_utils.tt_load_layer_weights(f"{base_address}.post_attention_layernorm.bias", state_dict)
         self.tt_gamma_2 = bloom_utils.tt_load_layer_weights(f"{base_address}.post_attention_layernorm.weight", state_dict)
-        self.post_attention_layernorm = TtLayernorm(self.tt_gamma_2.data(), self.tt_beta_2.data(), self.layer_norm_epsilon, self.hidden_size, self.hidden_size, device, 1)
+        self.post_attention_layernorm = TtLayernorm(self.tt_gamma_2, self.tt_beta_2, self.layer_norm_epsilon, self.hidden_size, self.hidden_size, device, 1)
 
         # self.post_attention_layernorm = LayerNorm(self.hidden_size, eps=config.layer_norm_epsilon)
         # self.post_attention_layernorm.bias = torch.nn.Parameter(state_dict[f"{base_address}.post_attention_layernorm.bias"])

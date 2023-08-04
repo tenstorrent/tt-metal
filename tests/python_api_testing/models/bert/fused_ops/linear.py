@@ -8,25 +8,11 @@ def Linear(in_features: int, out_features: int, weight: tensor.Tensor, bias: Opt
     ``weight`` must be the weight as a tilized list of values.
     """
     assert weight.shape() == [1, 1, out_features, in_features]
-    # weight = tensor.Tensor(
-    #     weight,
-    #     [1, 1, out_features, in_features],
-    #     tensor.DataType.BFLOAT16,
-    #     tensor.Layout.TILE,
-    #     device
-    # )
 
     if bias is None:
         bias = None
     else:
         assert bias.shape() == [1, 1, 32, out_features]
-        # bias = tensor.Tensor(
-        #     bias,
-        #     [1, 1, 32, out_features],
-        #     tensor.DataType.BFLOAT16,
-        #     tensor.Layout.TILE,
-        #     device
-        # )
 
     def linear_(activation):
         weight_T = tensor.transpose(weight)

@@ -56,10 +56,8 @@ def test_run_conv_as_large_matmul_cpu(K, C, H, W, R, S, stride_h, stride_w, pad_
 
     # Prepare activations
     A_cl = create_conv_act_tensor(A_pyt, 1, C, H, W)
-    A_cl_data = A_cl.data()
     # Prepare weights
-    B_tiled_ = create_conv_weight_tensor(B_pyt, K, C, R, S, weight_block_h, weight_block_w)
-    B_tiled_data = B_tiled_.data()
+    B_tiled = create_conv_weight_tensor(B_pyt, K, C, R, S, weight_block_h, weight_block_w)
 
     # Call DTX pass to transform A
     act_block_width_datums = act_block_w * 32
@@ -84,7 +82,7 @@ def test_run_conv_as_large_matmul_cpu(K, C, H, W, R, S, stride_h, stride_w, pad_
                             False)
 
     # Run host side CPU function
-    out_pytorch = blocked_mm_with_conv_act(A_cl_data, B_tiled_data, act_address_map, weight_address_map, num_blocks_act_h, num_blocks_act_w,
+    out_pytorch = blocked_mm_with_conv_act(A_cl.buffer(), B_tiled.buffer(), act_address_map, weight_address_map, num_blocks_act_h, num_blocks_act_w,
                                     num_blocks_weight_w, act_block_h, act_block_w, weight_block_w)
     assert(list(out_pytorch.shape) == mm_output_shape)
     out_pytorch = out_pytorch[:, :, 0 : (OH * OW), 0 : K]

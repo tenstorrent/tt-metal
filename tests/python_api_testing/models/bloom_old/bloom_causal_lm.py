@@ -161,7 +161,7 @@ class TtBloomForCausalLM():
         self.transformer = bloom_model.TtBloomModel(config, state_dict, f"transformer", device)
 
         self.lm_head_weight = bloom_utils.tt_load_layer_weights("lm_head.weight", state_dict)
-        self.lm_head= TtLinear(config.hidden_size, config.vocab_size, self.lm_head_weight.data(), None, device)
+        self.lm_head= TtLinear(config.hidden_size, config.vocab_size, self.lm_head_weight, None, device)
 
     def get_output_embeddings(self):
         return self.lm_head

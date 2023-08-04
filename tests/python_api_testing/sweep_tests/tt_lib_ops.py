@@ -524,9 +524,7 @@ def eltwise_lerp_binary(
 
     t2 = ttl.tensor.lerp(t0, t1, weight)
 
-    output = torch.Tensor(t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
-        t2.shape()
-    )
+    output = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
     return output
 
@@ -568,9 +566,7 @@ def eltwise_lerp_ternary(x, y, z, *args, device, dtype, layout, on_device, **kwa
 
     t3 = ttl.tensor.lerp(t0, t1, t2)
 
-    output = torch.Tensor(t3.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
-        t3.shape()
-    )
+    output = tt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
     return output
 
