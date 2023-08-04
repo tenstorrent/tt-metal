@@ -101,6 +101,9 @@ TT_METAL_TEST_ENTRIES = (
     # Compile unit tests
     TestEntry("tt_metal/tests/test_compile_sets_kernel_binaries", "test_compile_sets_kernel_binaries"),
     TestEntry("tt_metal/tests/test_compile_program", "test_compile_program"),
+
+    # Integration tests
+    TestEntry("tt_metal/tests/integration_tests/test_bert", "integration_tests/test_bert"),
 )
 
 

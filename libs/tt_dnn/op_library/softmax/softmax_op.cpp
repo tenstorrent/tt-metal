@@ -28,7 +28,7 @@ inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DR
 operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, const std::optional<const Tensor> mask, float scale) {
 
     const auto shape = input_tensor.shape();
-    u32 W = shape[3], H = shape[2], NC = shape[1]*shape[0];
+    u32 W = shape[3], H = shape[2] * shape[1], NC = shape[0];
     u32 HW = H*W;
 
     u32 Wt = W/TILE_WIDTH;

@@ -38,6 +38,7 @@
 #include "tensor/tensor_utils.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_lib_bindings.hpp"
+#include "operations.hpp"
 #include "type_caster.hpp"
 
 namespace py = pybind11;
@@ -2856,4 +2857,7 @@ PYBIND11_MODULE(_C, m) {
 
     py::module_ m_program_cache = m.def_submodule("program_cache", "Submodule for caching operations");
     tt::tt_metal::ProgramCacheModule(m_program_cache);
+
+    py::module_ m_operations = m.def_submodule("operations", "Submodule for operations");
+    tt::operations::py_module(m_operations);
 }

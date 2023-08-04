@@ -6,6 +6,7 @@ TT_LIB_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
 
 TT_LIB_SRCS = \
 	libs/tt_lib/csrc/tt_lib_bindings.cpp \
+	libs/tt_lib/csrc/operations.cpp \
 	libs/tt_lib/csrc/type_caster.cpp \
 
 TT_LIB_OBJS = $(addprefix $(OBJDIR)/, $(TT_LIB_SRCS:.cpp=.o))

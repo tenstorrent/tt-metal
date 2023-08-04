@@ -173,16 +173,16 @@ def run_bert_large_bmm_test(
         b_shape = [batch, 16, 64, 384]
         expected_output_shape = [
             batch,
-            1,
-            16 * 384,
+            16,
+            384,
             384,
         ]  # No-op reshape from [batch, 16, 384, 384] in pre_softmax_bmm
 
     elif bert_large_op == ttl.tensor.bert_large_post_softmax_bmm:
         a_shape = [
             batch,
-            1,
-            16 * 384,
+            16,
+            384,
             384,
         ]  # No-op reshape to [batch, 16, 384, 384] in post_softmax_bmm
         b_shape = [batch, 16, 384, 64]

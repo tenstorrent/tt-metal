@@ -5,9 +5,3 @@
 #include "tensor/tensor.hpp"
 
 namespace py = pybind11;
-
-namespace tt {
-
-void PyTensor(py::module &tensor);
-
-}

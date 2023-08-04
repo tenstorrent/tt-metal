@@ -80,8 +80,17 @@ def run_bert_large_ff1_matmul_test(
     else:
         bias_t = None
 
-    t2 = ttl.tensor.bert_large_ff1_matmul(
-        a_t, b_t, bias_t, gelu_activation, out_mem_config
+    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size = (12, a_t.shape()[0]),
+        in0_block_w = 4,
+        out_subblock_h = 6,
+        out_subblock_w = 1,
+        per_core_M = 12,
+        per_core_N = 11,
+        fuse_gelu_activation=gelu_activation,
+    )
+    t2 = ttl.operations.primary.matmul(
+        a_t, b_t, bias=bias_t, program_config=program_config, output_mem_config=out_mem_config,
     )
     # Check memory of inputs and outputs
     assert a_t.memory_config().buffer_type == in0_mem_config.buffer_type

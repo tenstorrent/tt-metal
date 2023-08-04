@@ -22,8 +22,8 @@ def run_bert_large_post_softmax_bmm_test(
     ttl.device.InitializeDevice(device)
     a_shape = [
         9,
-        1,
-        16 * 384,
+        16,
+        384,
         384,
     ]  # No-op reshape to [9, 16, 384, 384] in post_softmax_bmm
     b_shape = [9, 16, 384, 64]
