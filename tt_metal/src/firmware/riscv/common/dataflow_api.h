@@ -201,7 +201,7 @@ inline __attribute__((always_inline)) constexpr static std::uint32_t MUL_WITH_TI
  * | num_tiles | The number of tiles to be pushed     | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  */
 FORCE_INLINE
-void cb_push_back(const uint32_t operand, const int32_t num_pages) {
+void cb_push_back(const int32_t operand, const int32_t num_pages) {
 
     uint32_t num_words = num_pages * cb_interface[operand].fifo_page_size;
 
@@ -242,7 +242,7 @@ void cb_push_back(const uint32_t operand, const int32_t num_pages) {
  * fit into the CB) | True     |
  */
 FORCE_INLINE
-void cb_pop_front(uint32_t operand, uint32_t num_pages) {
+void cb_pop_front(int32_t operand, int32_t num_pages) {
     volatile uint32_t* pages_acked_ptr = get_cb_tiles_acked_ptr(operand);
     pages_acked_ptr[0] += num_pages;
 
@@ -341,7 +341,7 @@ inline void wait_for_sync_register_value(uint32_t addr, int32_t val) {
  * into the CB) |          |
  */
 FORCE_INLINE
-void cb_reserve_back(uint32_t operand, int32_t num_pages) {
+void cb_reserve_back(int32_t operand, int32_t num_pages) {
     uint32_t pages_acked_ptr = (uint32_t) get_cb_tiles_acked_ptr(operand);
 
     // while the producer (write-side interface) is waiting for space to free up "tiles_pushed" is not changing
@@ -382,7 +382,7 @@ void cb_reserve_back(uint32_t operand, int32_t num_pages) {
  * | num_tiles | The number of tiles to wait for      | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) |          |
  * */
 FORCE_INLINE
-void cb_wait_front(uint32_t operand, uint16_t num_pages) {
+void cb_wait_front(int32_t operand, int32_t num_pages) {
     uint32_t pages_acked = get_cb_tiles_acked_ptr(operand)[0];
     uint32_t pages_received_ptr = (uint32_t) get_cb_tiles_received_ptr(operand);
 
