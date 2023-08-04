@@ -247,14 +247,6 @@ def heaviside(x, *args, **kwargs):
     return result
 
 
-def erf(x, *args, **kwargs):
-    return torch.erf(x)
-
-
-def erfc(x, *args, **kwargs):
-    return torch.erfc(x)
-
-
 def hardsigmoid(x, *args, **kwargs):
     return torch.nn.functional.hardsigmoid(x)
 

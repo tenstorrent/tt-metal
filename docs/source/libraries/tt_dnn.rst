@@ -459,10 +459,6 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.sum
 
-.. autofunction:: tt_lib.tensor.erf
-
-.. autofunction:: tt_lib.tensor.erfc
-
 .. autofunction:: tt_lib.tensor.log_sigmoid
 
 .. autofunction:: tt_lib.tensor.expm1

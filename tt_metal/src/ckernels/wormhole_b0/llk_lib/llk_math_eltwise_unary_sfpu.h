@@ -343,27 +343,6 @@ inline void llk_math_eltwise_unary_sfpu_power_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::power, APPROXIMATE>();
 }
 
-template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_erf(uint dst_index) {
-    llk_math_eltwise_unary_sfpu<SfpuType::erf, APPROXIMATE, dst_sync>(dst_index);
-}
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_erf_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::erf, APPROXIMATE>();
-}
-
-
-template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_erfc(uint dst_index) {
-    llk_math_eltwise_unary_sfpu<SfpuType::erfc, APPROXIMATE, dst_sync>(dst_index);
-}
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_erfc_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::erfc, APPROXIMATE>();
-}
-
 //Leaky Relu
 template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
 inline void llk_math_eltwise_unary_sfpu_leaky_relu(uint dst_index,uint param0) {

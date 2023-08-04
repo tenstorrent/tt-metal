@@ -103,27 +103,6 @@ inline void llk_math_eltwise_unary_sfpu_sqrt_init() {
 }
 
 template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_erf(uint dst_index, int vector_mode = Dim::RC) {
-    llk_math_eltwise_unary_sfpu<SfpuType::erf, APPROXIMATE, dst_sync>(dst_index, vector_mode);
-}
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_erf_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::erf, APPROXIMATE>();
-}
-
-
-template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_erfc(uint dst_index, int vector_mode = Dim::RC) {
-    llk_math_eltwise_unary_sfpu<SfpuType::erfc, APPROXIMATE, dst_sync>(dst_index, vector_mode);
-}
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_erfc_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::erfc, APPROXIMATE>();
-}
-
-template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
 inline void llk_math_eltwise_unary_sfpu_gelu(uint dst_index, int vector_mode = Dim::RC) {
     llk_math_eltwise_unary_sfpu<SfpuType::gelu, APPROXIMATE, dst_sync>(dst_index, vector_mode);
 }

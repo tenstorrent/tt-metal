@@ -120,8 +120,6 @@ enum SfpuType
   asin,
   acos,
   atan,
-  erf,
-  erfc,
   unused
 };
 
