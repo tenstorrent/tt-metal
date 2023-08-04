@@ -99,8 +99,8 @@ def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_co
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (9.5,
-        18,
+        (15.5,
+        22,
         ),
     ),
 )

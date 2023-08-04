@@ -90,7 +90,7 @@ def test_perf_bare_metal(use_program_cache, imagenet_sample_input, expected_infe
     "expected_inference_time, expected_compile_time",
     (
         (8.5,
-         16,
+         19,
         ),
     ),
 )

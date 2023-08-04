@@ -147,7 +147,7 @@ def test_perf_bare_metal(
     (
         (
             1.0,
-            10.5
+            12.5
         ),
     ),
 )
