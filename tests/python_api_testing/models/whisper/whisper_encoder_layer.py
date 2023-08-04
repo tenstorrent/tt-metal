@@ -114,7 +114,7 @@ class TtWhisperEncoderLayer(nn.Module):
         # TODO: Do not use dropout for now
         # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
-        hidden_states = tt_lib.tensor.add(hidden_states, residual, output_mem_config=self.out_mem_config_l1)
+        hidden_states = tt_lib.tensor.add(hidden_states, residual)
         residual = hidden_states
 
         hidden_states = self.final_layer_norm(hidden_states)
@@ -125,10 +125,10 @@ class TtWhisperEncoderLayer(nn.Module):
             torch_hidden_states = torch.nn.functional.gelu(torch_hidden_states)
             hidden_states = torch2tt_tensor(torch_hidden_states, self.device)
         else:
-            hidden_states = tt_lib.tensor.gelu(hidden_states, output_mem_config=self.out_mem_config_l1)
+            hidden_states = tt_lib.tensor.gelu(hidden_states)
 
         hidden_states = linear(hidden_states, self.fc2_weight, self.fc2_bias)
-        hidden_states = tt_lib.tensor.add(hidden_states, residual, output_mem_config=self.out_mem_config_l1)
+        hidden_states = tt_lib.tensor.add(hidden_states, residual)
 
         hidden_states_torch = tt2torch_tensor(hidden_states)
 

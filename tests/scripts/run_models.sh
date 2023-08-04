@@ -16,6 +16,15 @@ if [[ ! -z "$FAST_DISPATCH" ]]; then
     export TT_METAL_DEVICE_DISPATCH_MODE=1
 fi
 
+env pytest tests/python_api_testing/models/whisper -k whisper_attention
+env pytest tests/python_api_testing/models/whisper -k WhipserEncoderLayer_inference
+env pytest tests/python_api_testing/models/whisper -k WhipserEncoder_inference
+env pytest tests/python_api_testing/models/whisper -k WhipserDecoderLayer_inference
+env pytest tests/python_api_testing/models/whisper -k WhipserDecoder_inference
+env pytest tests/python_api_testing/models/whisper -k whisper_model
+env pytest tests/python_api_testing/models/whisper -k whisper_for_audio_classification
+env pytest tests/python_api_testing/models/whisper -k whisper_for_conditional_generation
+
 env pytest tests/python_api_testing/models/stable_diffusion/tests/test_embedding.py
 env pytest tests/python_api_testing/models/stable_diffusion/tests/test_cross_attn_down_block.py -k test_run_cross_attn_down_block_real_input_inference
 env pytest tests/python_api_testing/models/stable_diffusion/tests/test_cross_attn_up_block.py -k test_run_cross_attn_up_block_real_input_inference
@@ -50,15 +59,6 @@ env pytest tests/python_api_testing/models/llama -k llama_layer_norm
 env pytest tests/python_api_testing/models/llama -k llama_mlp
 env pytest tests/python_api_testing/models/llama -k llama_attention
 env pytest tests/python_api_testing/models/llama -k llama_decoder
-
-env pytest tests/python_api_testing/models/whisper -k whisper_attention
-env pytest tests/python_api_testing/models/whisper -k WhipserEncoderLayer_inference
-env pytest tests/python_api_testing/models/whisper -k WhipserEncoder_inference
-env pytest tests/python_api_testing/models/whisper -k WhipserDecoderLayer_inference
-env pytest tests/python_api_testing/models/whisper -k WhipserDecoder_inference
-env pytest tests/python_api_testing/models/whisper -k whisper_model
-env pytest tests/python_api_testing/models/whisper -k whisper_for_audio_classification
-env pytest tests/python_api_testing/models/whisper -k whisper_for_conditional_generation
 
 env pytest tests/python_api_testing/models/lenet -k test_lenet_inference
 env pytest tests/python_api_testing/models/ConvNet_MNIST/tests -k mnist_inference

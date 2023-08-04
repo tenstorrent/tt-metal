@@ -39,7 +39,7 @@ class TtWhisperAttention(nn.Module):
         self.base_address = base_address
         self.scaling = self.head_dim**-0.5
         self.is_decoder = is_decoder
-        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
+
 
         if (self.head_dim * num_heads) != self.embed_dim:
             raise ValueError(
@@ -114,7 +114,7 @@ class TtWhisperAttention(nn.Module):
             self.cached_q_proj_shape = q_proj_shape
             q_proj_mul_const = self.q_proj_mul_const
 
-        query_states = tt_lib.tensor.mul(q_proj_output, q_proj_mul_const, output_mem_config=self.out_mem_config_l1)
+        query_states = tt_lib.tensor.mul(q_proj_output, q_proj_mul_const)
 
         if (
             is_cross_attention
@@ -225,7 +225,6 @@ class TtWhisperAttention(nn.Module):
                 layer_head_mask_reshaped,
                 tt_lib.tensor.BcastOpMath.MUL,
                 tt_lib.tensor.BcastOpDim.HW,
-                self.out_mem_config_l1
             )
             attn_weights = fallback_ops.reshape(
                 attn_weights, 1, bsz * self.num_heads, tgt_len, src_len

@@ -59,7 +59,7 @@ def WhisperPaddedLinear(
 
         if bias is not None:
             output_plus_bias = tt_lib.tensor.bcast(
-                output, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H, out_mem_config_l1
+                output, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H
             )
             return output_plus_bias
 
