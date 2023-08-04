@@ -27,7 +27,7 @@ from python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytor
 @pytest.mark.parametrize("output_mem_config", generation_funcs.supported_mem_configs)
 @pytest.mark.parametrize("pcie_slot", [0])
 class TestEltwiseBinary:
-    @pytest.mark.parametrize("fn_kind", ["add", "sub", "mul"])
+    @pytest.mark.parametrize("fn_kind", ["add", "sub", "mul", "squared_difference"])
     def test_run_eltwise_binary_ops(
         self, input_shapes, fn_kind, input_mem_config, output_mem_config, pcie_slot, function_level_defaults
     ):

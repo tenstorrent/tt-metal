@@ -107,7 +107,7 @@ def test_run_eltwise_composite_test(
     num_inputs = 1
     if fn in ["mac", "addcmul", "addcdiv", "lerp_ternary"]:
         num_inputs = 3
-    elif fn in ["hypot", "squared_difference", "min", "max", "lerp_binary"]:
+    elif fn in ["hypot", "min", "max", "lerp_binary"]:
         num_inputs = 2
 
     input_shapes = input_shapes * num_inputs
