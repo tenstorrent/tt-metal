@@ -9,6 +9,8 @@ from utility_functions_new import pad_by_zero, tt2torch_tensor
 from tt_lib.utils import pad_weight
 
 from tt_lib.fused_ops.average_pool import run_avg_pool_on_device_wrapper as TtAvgPool
+from tt_lib.fused_ops.max_pool import run_max_pool_on_device_wrapper as TtMaxPool
+from tt_lib.fused_ops.max_pool import compute_max_pool_shape
 from tt_lib.fused_ops.linear import Linear as TtLinear
 from tt_lib.fused_ops.softmax import softmax as TtSoftmax
 from tt_lib.fused_ops.conv import resnet_conv as TtResnetConv
@@ -48,13 +50,6 @@ def compute_conv_output_shape(conv_params, x_shape):
     OH = ((int) ((H - R + 2 * P_H) / U)) + 1
     OW = ((int) ((W - S + 2 * P_W) / V)) + 1
     return [x_shape[0],OH,OW,K]
-
-def compute_max_pool_shape(kernel_size, stride, padding, x_shape):
-    H = x_shape[1]
-    W = x_shape[2]
-    OH = ((int) ((H - kernel_size + 2 * padding) / stride)) + 1
-    OW = ((int) ((W - kernel_size + 2 * padding) / stride)) + 1
-    return [x_shape[0],OH,OW,x_shape[3]]
 
 class Bottleneck(nn.Module):
     # Bottleneck in torchvision places the stride for downsampling at 3x3 convolution(self.conv2)
@@ -265,7 +260,8 @@ class ResNet(nn.Module):
             self.conv1 = fallback_ops.Conv2d(conv1_weight, conv1_bias, 3, self.inplanes, kernel_size=7, stride=2, padding=3)
 
         self.relu = tt_lib.tensor.relu_without_autoformat
-        self.maxpool = fallback_ops.MaxPool2d(kernel_size=3, stride=2, padding=1, channels_last=True, reshape_2d=True)
+        # self.maxpool = fallback_ops.MaxPool2d(kernel_size=3, stride=2, padding=1, channels_last=True, reshape_2d=True)
+        self.maxpool = TtMaxPool(self.device, kernel_size=3, stride=2, padding=1, channels_last=True, reshape_2d=True)
         self.layer1 = self._make_layer(block, 64, layers[0], name="layer1", state_dict=state_dict)
         self.layer2 = self._make_layer(block, 128, layers[1], stride=2, dilate=replace_stride_with_dilation[0], name="layer2", state_dict=state_dict)
         self.layer3 = self._make_layer(block, 256, layers[2], stride=2, dilate=replace_stride_with_dilation[1], name="layer3", state_dict=state_dict)
@@ -382,6 +378,7 @@ class ResNet(nn.Module):
         x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device)
         x = x.reshape(saved_shape[0], saved_shape[1], saved_shape[2], saved_shape[3])
         x = self.maxpool(x)
+        x = format_tensor(x, tt_lib.tensor.Layout.TILE, self.device)
         saved_shape = compute_max_pool_shape(3, 2, 1, saved_shape)
 
         for layer in self.layer1:

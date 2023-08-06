@@ -10,6 +10,7 @@
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
 #include "tt_dnn/op_library/groupnorm/groupnorm_op.hpp"
 #include "tt_dnn/op_library/pool/average_pool.hpp"
+#include "tt_dnn/op_library/pool/max_pool.hpp"
 #include "tt_dnn/op_library/fully_connected/fully_connected_op.hpp"
 #include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
 #include "tt_dnn/op_library/transpose/transpose_op.hpp"
@@ -2466,6 +2467,32 @@ void TensorModule(py::module &m_tensor) {
         +==========+============================+============+===============================+==========+
         | act      | Input activations tensor   | Tensor     |                               | Yes      |
         +----------+----------------------------+------------+-------------------------------+----------+
+    )doc");
+    m_tensor.def("max_pool2d", &max_pool2d,
+        py::arg("input").noconvert(),
+        py::arg("in_h").noconvert(), py::arg("in_w").noconvert(),
+        py::arg("kernel_h").noconvert(), py::arg("kernel_w").noconvert(),
+        py::arg("stride_h") = 1, py::arg("stride_w") = 1,
+        py::arg("pad_h") = 0, py::arg("pad_w") = 0,
+        py::arg("dilation_h") = 1, py::arg("dilation_w") = 1,
+        py::arg("out_mem_config") = MemoryConfig{.interleaved = true, .buffer_type = BufferType::DRAM}, R"doc(
+        Max Pool 2D
+        +-------------------+-------------------------------+---------------+-------------+----------+
+        | Argument          | Description                   | Data type     | Valid range | Required |
+        +===================+===============================+===============+=============+==========+
+        | input             | Input activations tensor      | Tensor        |             | Yes      |
+        | in_h              | Input height                  | Tensor        |             | Yes      |
+        | in_w              | Input width                   | Tensor        |             | Yes      |
+        | kernel_h          | kernel window height          | uint32_t      |             | Yes      |
+        | kernel_w          | kernel window width           | uint32_t      |             | Yes      |
+        | stride_h          | stride in height dim          | uint32_t      |             | No       |
+        | stride_w          | stride in width dim           | uint32_t      |             | No       |
+        | pad_h             | padding in height dim         | uint32_t      |             | No       |
+        | pad_w             | padding in width dim          | uint32_t      |             | No       |
+        | dilation_h        | kernel dilation in height dim | uint32_t      |             | No       |
+        | dilation_w        | kernel dilation in width dim  | uint32_t      |             | No       |
+        | out_mem_config    | output tensor memory config   | MemoryConfig  |             | No       |
+        +-------------------+-------------------------------+---------------+-------------+----------+
     )doc");
 
     // TMs

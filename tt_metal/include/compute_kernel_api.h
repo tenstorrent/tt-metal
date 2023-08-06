@@ -6,6 +6,8 @@
 #include "ckernel_include.h"
 #include "hostdevcommon/kernel_structs.h"
 
+#include "debug_macros.h"
+
 #define SYNC SyncHalf
 
 #if __DOXYGEN__
@@ -895,7 +897,7 @@ ALWI void reduce_init(PoolType reduce_op, ReduceDim dim, uint32_t icb, float sca
 
 // TODO(AP): v2 is based on fusion-friendly implementation of reduce, keeping the original version around for now
 template<bool at_start>
-ALWI void reduce_init_v2(PoolType reduce_op, ReduceDim dim, uint32_t icb, uint32_t icb_scaler)
+ALWI void reduce_init_v2(PoolType reduce_op, ReduceDim dim, uint32_t icb, uint32_t icb_scaler, uint32_t ocb = 16)
 {
     UNPACK(( llk_setup_operands() ));
     UNPACK(( llk_unpack_AB_init() ));
@@ -905,14 +907,20 @@ ALWI void reduce_init_v2(PoolType reduce_op, ReduceDim dim, uint32_t icb, uint32
     MATH(( llk_math_pack_sync_init<SYNC>() ));
 
     PACK(( llk_pack_init() ));
-    PACK(( llk_pack_reduce_config_v2<REDUCE_DIM, at_start>(16) ));
+    PACK(( llk_pack_reduce_config_v2<REDUCE_DIM, at_start>(ocb) ));
     PACK(( llk_setup_outputs() ));
     PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::RowMajor, false>() ));
 }
 
+ALWI void reduce_init_short_v2(PoolType reduce_op, ReduceDim dim, uint32_t icb, uint32_t icb_scaler, uint32_t ocb = 16) {
+    UNPACK(( llk_unpack_AB_init() ));
+    MATH(( llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>() ));
+    PACK(( llk_pack_reduce_config_v2<REDUCE_DIM, false>(ocb) ));
+}
+
 // Delta from binary_op_init_common
 template<bool at_start>
-ALWI void reduce_init_delta_v2(PoolType reduce_op, ReduceDim dim)
+ALWI void reduce_init_delta_v2(PoolType reduce_op, ReduceDim dim, uint32_t ocb = 16)
 {
     UNPACK(( llk_unpack_AB_init() ));
 
@@ -921,9 +929,9 @@ ALWI void reduce_init_delta_v2(PoolType reduce_op, ReduceDim dim)
     PACK(( llk_pack_reduce_config_v2<REDUCE_DIM, at_start>(16) ));
 }
 
-ALWI void reduce_revert_delta_v2()
+ALWI void reduce_revert_delta_v2(uint32_t ocb = 16)
 {
-    PACK(( llk_pack_reduce_config_v2<REDUCE_DIM, false, true>(16) ));
+    PACK(( llk_pack_reduce_config_v2<REDUCE_DIM, false, true>(ocb) ));
 }
 
 /**
@@ -999,13 +1007,13 @@ ALWI void transpose_wh_tile(uint32_t icb, uint32_t itile, uint32_t idst)
     MATH(( llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, SyncHalf>(idst) ));
 }
 
-ALWI void tilize_init(uint32_t icb, uint32_t block)
+ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb = 16)
 {
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, false>() ));
     MATH(( llk_math_pack_sync_init<SyncHalf>() ));
 
     PACK(( llk_pack_init() ));
-    PACK(( llk_pack_hw_configure_disaggregated<false>(16) ));
+    PACK(( llk_pack_hw_configure_disaggregated<false>(ocb) ));
     PACK(( llk_setup_outputs() ));
     PACK(( llk_pack_dest_init<SyncHalf, DstTileFaceLayout::RowMajor, false>() ));
 
@@ -1047,13 +1055,13 @@ ALWI void tilize_uninit()
     UNPACK(( llk_unpack_tilize_uninit() ));
 }
 
-ALWI void untilize_init(uint32_t icb)
+ALWI void untilize_init(uint32_t icb, uint32_t ocb = 16)
 {
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, false>() ));
     MATH(( llk_math_pack_sync_init<SyncHalf>() ));
 
     PACK(( llk_pack_init() ));
-    PACK(( llk_pack_hw_configure_disaggregated<false>(16) ));
+    PACK(( llk_pack_hw_configure_disaggregated<false>(ocb) ));
     PACK(( llk_setup_outputs() ));
     PACK(( llk_pack_dest_init<SyncHalf, DstTileFaceLayout::RowMajor, false>() ));
 
