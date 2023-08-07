@@ -16,8 +16,8 @@ namespace tt_metal {
 
 const uint32_t act_cb                                   = 0;
 const uint32_t weight_cb                                = 1;
-const uint32_t tilize_mode_tilized_act_cb               = 24;
-const uint32_t matmul_partials_cb                       = 25;
+const uint32_t matmul_partials_cb                       = 24;
+const uint32_t tilize_mode_tilized_act_cb               = 25;
 const uint32_t untilize_mode_final_matmul_partials_cb   = 26;
 const uint32_t untilize_mode_reblock_cb                 = 27;
 const uint32_t out0_cb                                  = 16;
@@ -26,7 +26,7 @@ pair<uint32_t, uint32_t> compute_conv_output_face_shape(uint32_t conv_activation
     uint32_t conv_output_w = ((conv_activation_w - filter_w + (2 * pad_w)) / stride_w) + 1;
     return {conv_output_h, conv_output_w};
 }
-pair<vector<uint32_t>, vector<uint32_t>> compute_conv_activation_as_mm_shape(Shape conv_activation_shape, vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles) {
+pair<vector<uint32_t>, vector<uint32_t>> compute_conv_activation_as_mm_shape(Shape conv_activation_shape, vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, bool use_fast_reader) {
     uint32_t filter_h = (uint32_t) conv_params[0];
     uint32_t filter_w = (uint32_t) conv_params[1];
     uint32_t stride_h = (uint32_t) conv_params[2];
@@ -41,6 +41,10 @@ pair<vector<uint32_t>, vector<uint32_t>> compute_conv_activation_as_mm_shape(Sha
     uint32_t num_cols = conv_activation_shape[3] * filter_h * filter_w;
     uint32_t act_block_w_datums = act_block_w_ntiles * TILE_WIDTH;
     uint32_t num_cols_padded = (uint32_t) (ceil((double) num_cols / (double) act_block_w_datums ) * act_block_w_datums);
+    if(use_fast_reader) {
+        assert(act_block_w_datums >= conv_activation_shape[3] * filter_w);
+        num_cols_padded = act_block_w_datums * filter_h;
+    }
     return {{1, num_rows_padded, num_cols_padded}, {1, num_rows, num_cols}};
 }
 
@@ -146,7 +150,7 @@ void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program &program,
 
 operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<int> conv_params,
                                        uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
-                                       uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, Tensor &output) {
+                                       uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool use_fast_reader, Tensor &output) {
     bool pass = true;
     bool untilize_out = true;
     tt_metal::Device *device = a.device();
@@ -156,7 +160,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
     TT_ASSERT(output_channels <= b.shape()[3], "Invalid weight shape. Incorrect weight tensor.");
     uint32_t num_bytes_of_df = 2; // 2 bytes for bfloat16
     // Compute the 2d matrix shape
-    auto [act_matrix_shape, act_matrix_shape_unpadded] = compute_conv_activation_as_mm_shape(a.shape(), conv_params, act_block_h_ntiles, act_block_w_ntiles);
+    auto [act_matrix_shape, act_matrix_shape_unpadded] = compute_conv_activation_as_mm_shape(a.shape(), conv_params, act_block_h_ntiles, act_block_w_ntiles, use_fast_reader);
     assert(act_matrix_shape.size() == 3);
     assert(act_matrix_shape[0] == 1);
     uint32_t act_matrix_height = (uint32_t) act_matrix_shape[1];
@@ -271,7 +275,14 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
     uint32_t pad_w = (uint32_t) conv_params[5];
     uint32_t conv_output_size_h = ((conv_act_size_h - weight_size_h + (2 * pad_h)) / stride_h) + 1;
     uint32_t conv_output_size_w = ((conv_act_size_w - weight_size_w + (2 * pad_w)) / stride_w) + 1;
-
+    std::map<string, string> reader_defines;
+    if (use_fast_reader) {
+        if(conv_act_size_c * weight_size_w != act_block_w_datums) {
+            assert(act_block_w_datums > conv_act_size_c * weight_size_w);
+            uint32_t conv_act_block_width_padding_bytes = (act_block_w_datums - (conv_act_size_c * weight_size_w)) * num_bytes_of_df;
+            reader_defines["ACT_BLOCK_WIDTH_PADDING_BYTES"] = to_string(conv_act_block_width_padding_bytes);
+        }
+    }
     uint32_t act_matrix_height_unpadded = conv_output_size_h * conv_output_size_w;
     uint32_t act_matrix_width_unpadded = conv_act_size_c * weight_size_h * weight_size_w;
     uint32_t src_dram_act_buffer_size_bytes = src0_dram_buffer->size();
@@ -328,7 +339,11 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
 
     string reader_kernel;
     vector<uint32_t> reader_rt_args;
-    reader_kernel = "tt_metal/kernels/dataflow/reader_conv_activations.cpp";
+    if (use_fast_reader) {
+        reader_kernel = "tt_metal/kernels/dataflow/reader_conv_activations_fast.cpp";
+    } else {
+        reader_kernel = "tt_metal/kernels/dataflow/reader_conv_activations.cpp";
+    }
     reader_rt_args = {
         // arguments for act
         act_dram_addr,
@@ -417,7 +432,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         program,
         reader_kernel,
         core,
-        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
+        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_compile_time_args, .defines = reader_defines});
 
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0), out0_cb, weight_cb};
 
@@ -500,76 +515,6 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
 
     return {std::move(program), override_runtime_args_callback};
 
-}
-
-Tensor conv(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
-             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels) {
-    TT_ASSERT(b.layout() == Layout::TILE); // Weights should already be formatted
-    auto padded_a_shape = Shape({a.shape()[0], a.shape()[1], a.shape()[2], round_up(a.shape()[3], 16)});
-    FormatParams input_a_format_params = {.pad_shape=padded_a_shape, .pad_value=0.0, .target_layout=Layout::ROW_MAJOR};
-    FormatParams input_b_format_params = {.pad_shape=b.shape(), .pad_value=0.0, .target_layout=Layout::TILE};
-    return operation::run_with_autoformat(
-        Conv(act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, conv_params, output_channels),
-        {a, b},
-        {input_a_format_params, input_b_format_params},
-        {Layout::ROW_MAJOR}).at(0);
-}
-
-operation::ProgramWithCallbacks conv_single_core(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
-             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, Tensor &output) {
-    return conv_as_large_bmm_single_core_(a, b, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, output);
-}
-
-void Conv::validate(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
-    const auto& input_tensor_b = input_tensors.at(1);
-    // TODO: ...
-}
-
-std::vector<Shape> Conv::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
-    uint32_t conv_activation_h = input_tensor_a.shape()[1];
-    uint32_t conv_activation_w = input_tensor_a.shape()[2];
-    // TODO: clean up here
-    uint32_t filter_h = (uint32_t) conv_params[0];
-    uint32_t filter_w = (uint32_t) conv_params[1];
-    uint32_t stride_h = (uint32_t) conv_params[2];
-    uint32_t stride_w = (uint32_t) conv_params[3];
-    uint32_t pad_h = (uint32_t) conv_params[4];
-    uint32_t pad_w = (uint32_t) conv_params[5];
-    auto [conv_output_h, conv_output_w] = compute_conv_output_face_shape(conv_activation_h, conv_activation_w, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w);
-
-    // pad the output channels to TILE_WIDTH as conv writer kernel does not remove padding for tile
-    auto output_channels = round_up(this->output_channels, TILE_WIDTH);
-
-    // TODO: Update batch size below
-    Shape output_tensor_shape = {1, conv_output_h, conv_output_w, output_channels};
-    return {output_tensor_shape};
-}
-
-std::vector<Tensor> Conv::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::ROW_MAJOR, input_tensor.memory_config());
-}
-
-operation::ProgramWithCallbacks Conv::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
-    const auto& input_tensor_b = input_tensors.at(1);
-    auto& output_tensor = output_tensors.at(0);
-
-    return {conv_single_core(input_tensor_a, input_tensor_b, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, output_tensor)};
-}
-
-tt::stl::reflection::Attributes Conv::attributes() const {
-    return {
-        {"conv_params", this->conv_params},
-        {"act_block_h_ntiles", this->act_block_h_ntiles},
-        {"act_block_w_ntiles", this->act_block_w_ntiles},
-        {"weight_block_w_ntiles", this->weight_block_w_ntiles},
-        {"out_subblock_h_ntiles", this->out_subblock_h_ntiles},
-        {"out_subblock_w_ntiles", this->out_subblock_w_ntiles},
-        {"output_channels", this->output_channels},
-    };
 }
 
 // generates address map for reader kernel which reads from dram buffer (tiled layout) into l1 buffer
@@ -845,7 +790,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
 
     uint32_t num_bytes_of_df = 2; // 2 bytes for bfloat16
     // Compute the 2d matrix shape
-    auto [matrix_shape, matrix_shape_unpadded] = compute_conv_activation_as_mm_shape(a.shape(), conv_params, act_block_h_ntiles, act_block_w_ntiles);
+    auto [matrix_shape, matrix_shape_unpadded] = compute_conv_activation_as_mm_shape(a.shape(), conv_params, act_block_h_ntiles, act_block_w_ntiles, false);
     assert(matrix_shape.size() == 3);
     assert(matrix_shape[0] == 1);
     uint32_t num_rows = (uint32_t) matrix_shape[1];
@@ -1165,12 +1110,12 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
         reader_kernel,
         core,
         tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-
+    std::vector<uint32_t> writer_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0)};
     auto writer_id = tt_metal::CreateDataMovementKernel(
         program,
         writer_kernel,
         core,
-        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
     vector<uint32_t> compute_kernel_args = {
         act_block_w_ntiles,
@@ -1253,17 +1198,37 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
     return {std::move(program), override_runtime_args_callback};
 }
 
-Tensor conv_with_address_map(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
-             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels) {
+inline Tensor conv_(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
+             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool use_address_map, bool use_fast_reader) {
     TT_ASSERT(b.layout() == Layout::TILE); // Weights should already be formatted
-    auto padded_a_shape = AutoFormat::pad_to_tile_shape(a.shape(), false, false, false, true);
+    auto padded_a_shape = Shape({a.shape()[0], a.shape()[1], a.shape()[2], round_up(a.shape()[3], 16)});
     FormatParams input_a_format_params = {.pad_shape=padded_a_shape, .pad_value=0.0, .target_layout=Layout::ROW_MAJOR};
     FormatParams input_b_format_params = {.pad_shape=b.shape(), .pad_value=0.0, .target_layout=Layout::TILE};
     return operation::run_with_autoformat(
-        ConvWithAddressMap(act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, conv_params, output_channels),
+        Conv(act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, conv_params, output_channels, use_address_map, use_fast_reader),
         {a, b},
         {input_a_format_params, input_b_format_params},
         {Layout::ROW_MAJOR}).at(0);
+}
+
+Tensor conv(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
+             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels) {
+    return conv_(a, b, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, false, false);
+}
+
+Tensor conv_with_fast_reader(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
+             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels) {
+    return conv_(a, b, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, false, true);
+}
+
+Tensor conv_with_address_map(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
+             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels) {
+    return conv_(a, b, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, true, false);
+}
+
+operation::ProgramWithCallbacks conv_single_core(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
+             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool use_fast_reader, Tensor &output) {
+    return conv_as_large_bmm_single_core_(a, b, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, use_fast_reader, output);
 }
 
 operation::ProgramWithCallbacks conv_with_address_map_single_core(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
@@ -1271,13 +1236,13 @@ operation::ProgramWithCallbacks conv_with_address_map_single_core(const Tensor& 
     return conv_as_large_bmm_with_address_map_single_core_(a, b, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, output);
 }
 
-void ConvWithAddressMap::validate(const std::vector<Tensor>& input_tensors) const {
+void Conv::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     // TODO: ...
 }
 
-std::vector<Shape> ConvWithAddressMap::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<Shape> Conv::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     uint32_t conv_activation_h = input_tensor_a.shape()[1];
     uint32_t conv_activation_w = input_tensor_a.shape()[2];
@@ -1298,20 +1263,23 @@ std::vector<Shape> ConvWithAddressMap::compute_output_shapes(const std::vector<T
     return {output_tensor_shape};
 }
 
-std::vector<Tensor> ConvWithAddressMap::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+std::vector<Tensor> Conv::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::ROW_MAJOR, operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::ROW_MAJOR, input_tensor.memory_config());
 }
 
-operation::ProgramWithCallbacks ConvWithAddressMap::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+operation::ProgramWithCallbacks Conv::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     auto& output_tensor = output_tensors.at(0);
-
-    return {conv_with_address_map_single_core(input_tensor_a, input_tensor_b, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, output_tensor)};
+    if(use_address_map) {
+        return {conv_with_address_map_single_core(input_tensor_a, input_tensor_b, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, output_tensor)};
+    } else {
+        return {conv_single_core(input_tensor_a, input_tensor_b, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, use_fast_reader, output_tensor)};
+    }
 }
 
-tt::stl::reflection::Attributes ConvWithAddressMap::attributes() const {
+tt::stl::reflection::Attributes Conv::attributes() const {
     return {
         {"conv_params", this->conv_params},
         {"act_block_h_ntiles", this->act_block_h_ntiles},
@@ -1320,6 +1288,8 @@ tt::stl::reflection::Attributes ConvWithAddressMap::attributes() const {
         {"out_subblock_h_ntiles", this->out_subblock_h_ntiles},
         {"out_subblock_w_ntiles", this->out_subblock_w_ntiles},
         {"output_channels", this->output_channels},
+        {"use_address_map", this->use_address_map},
+        {"use_fast_reader", this->use_fast_reader},
     };
 }
 

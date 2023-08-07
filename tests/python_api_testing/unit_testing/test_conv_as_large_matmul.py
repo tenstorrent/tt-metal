@@ -10,7 +10,7 @@ import numpy as np
 import tt_lib as ttl
 from tt_lib.utils import tilize_to_list, tilize, untilize, _nearest_32, _nearest_y, convert_weights_2d_matrix
 from python_api_testing.models.utility_functions import print_diff_argmax, is_close, comp_pcc
-from tests.python_api_testing.conv.conv_unit_test_utils import create_conv_act_tensor, create_conv_weight_tensor
+from tests.python_api_testing.conv.conv_unit_test_utils import create_conv_act_tensor, create_conv_weight_tensor, create_conv_weight_tensor_special_padding
 import torch
 
 @pytest.mark.parametrize("run_conv_with_address_map", (False, ))
@@ -63,6 +63,8 @@ import torch
         (64, 64, 8, 8, 1, 1, 1, 1, 0, 0),
         # Hat = 8, Wat = 8, Wbt = 8
         (8*32, 8*32, 16, 16, 1, 1, 1, 1, 0, 0),
+        # resnet50 first conv
+        (64, 3, 224, 224, 7, 7, 2, 2, 3, 3),
     ),
 )
 def test_run_conv_as_large_matmul(use_program_cache, run_conv_with_address_map, K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w):
@@ -83,7 +85,7 @@ def test_run_conv_as_large_matmul(use_program_cache, run_conv_with_address_map, 
 
         # Parameters to define block dims
         act_block_h = 4
-        act_block_w = 4
+        act_block_w = (int)((_nearest_32(_nearest_y(C,16)*S))/32)
         weight_block_h = act_block_w
         weight_block_w = 4
         out_subblock_h = 4
@@ -101,7 +103,7 @@ def test_run_conv_as_large_matmul(use_program_cache, run_conv_with_address_map, 
             A = A_cl_host.to(device)
 
         # Prepare weights
-        B_tiled_host = create_conv_weight_tensor(B_pyt, K, C, R, S, weight_block_h, weight_block_w)
+        B_tiled_host = create_conv_weight_tensor_special_padding(B_pyt, K, C, R, S, weight_block_h, weight_block_w)
         if run_conv_with_address_map:
             B_tiled = B_tiled_host.to(device, ttl.tensor.MemoryConfig(False))
         else:
@@ -113,7 +115,7 @@ def test_run_conv_as_large_matmul(use_program_cache, run_conv_with_address_map, 
         if(run_conv_with_address_map):
             out = ttl.tensor.conv_with_address_map(A, B_tiled, [R,S,stride_h,stride_w,pad_h,pad_w], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w, K)
         else:
-            out = ttl.tensor.conv(A, B_tiled, [R,S,stride_h,stride_w,pad_h,pad_w], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w, K)
+            out = ttl.tensor.conv_with_fast_reader(A, B_tiled, [R,S,stride_h,stride_w,pad_h,pad_w], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w, K)
         out = out.cpu()
         assert(out.shape() == conv_output_shape)
         assert(out.layout() == ttl.tensor.Layout.ROW_MAJOR)

@@ -6,19 +6,55 @@ namespace tt {
 
 namespace tt_metal {
 
+
+    template <typename T>
+    Tensor to_weight_special_padding_tile_layout(const Tensor& conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w) {
+        auto w_shape = conv_weight_tensor.shape();
+        auto input_buffer = owned_buffer::get_as<T>(conv_weight_tensor);
+        uint32_t in1_block_h_datums = in1_block_h * constants::TILE_HEIGHT;
+        uint32_t in1_block_w_datums = in1_block_w * constants::TILE_WIDTH;
+        auto weight_matrix_cols = w_shape[0];
+        // width padding
+        if(weight_matrix_cols%in1_block_w_datums != 0) {
+            weight_matrix_cols = (uint32_t) std::ceil( (double) weight_matrix_cols / (double) in1_block_w_datums ) * in1_block_w_datums;
+        }
+        // height padding
+        assert(in1_block_h_datums >= w_shape[1]*w_shape[3]);
+        uint32_t block_height_padding = in1_block_h_datums - (w_shape[1]*w_shape[3]);
+        auto weight_matrix_rows = ((w_shape[1]*w_shape[3]) + block_height_padding)*w_shape[2];
+        Shape output_shape = {1, 1, weight_matrix_rows, weight_matrix_cols};
+        auto output_buffer = owned_buffer::create<T>(compute_volume(output_shape));
+        for(auto r = 0; r < w_shape[2]; r++) {
+            for(auto s = 0; s < w_shape[3]; s++) {
+                for(auto c = 0; c < w_shape[1]; c++) {
+                    for(auto k = 0; k < weight_matrix_cols; k++) {
+                        auto matrix_idx = k + c * weight_matrix_cols + s * w_shape[1] * weight_matrix_cols + r * ((w_shape[3] * w_shape[1]) + block_height_padding) * weight_matrix_cols;
+                        if (k < w_shape[0]) {
+                            auto idx = k * w_shape[1] * w_shape[2] * w_shape[3] + c * w_shape[2] * w_shape[3] + r * w_shape[3] + s;
+                            output_buffer[matrix_idx] = input_buffer[idx];
+                        }
+                    }
+                }
+            }
+        }
+        auto rm_tensor = Tensor(OwnedStorage{output_buffer}, output_shape, conv_weight_tensor.dtype(), Layout::ROW_MAJOR);
+        return rm_tensor.to(Layout::TILE);
+    }
+
+
     template <typename T>
     Tensor to_weight_tile_layout(const Tensor& conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w) {
         auto w_shape = conv_weight_tensor.shape();
         auto input_buffer = owned_buffer::get_as<T>(conv_weight_tensor);
         auto weight_matrix_cols = w_shape[0];
         // width padding
-        uint32_t in1_block_w_datums = in1_block_w * 32;
+        uint32_t in1_block_w_datums = in1_block_w * constants::TILE_WIDTH;
         if(weight_matrix_cols%in1_block_w_datums != 0) {
             weight_matrix_cols = (uint32_t) std::ceil( (double) weight_matrix_cols / (double) in1_block_w_datums ) * in1_block_w_datums;
         }
         // height padding
         auto weight_matrix_rows = w_shape[1]*w_shape[2]*w_shape[3];
-        uint32_t in1_block_h_datums = in1_block_h * 32;
+        uint32_t in1_block_h_datums = in1_block_h * constants::TILE_HEIGHT;
         if (weight_matrix_rows % in1_block_h_datums != 0) {
             weight_matrix_rows = (uint32_t) std::ceil( (double) weight_matrix_rows / (double) in1_block_h_datums ) * in1_block_h_datums;
         }
@@ -49,6 +85,18 @@ namespace tt_metal {
             {DataType::BFLOAT16, &to_weight_tile_layout<bfloat16>},
             {DataType::FLOAT32, &to_weight_tile_layout<float>},
             {DataType::UINT32, &to_weight_tile_layout<uint32_t>}
+        };
+        return to_w_tile_layout_map.at(conv_weight_tensor.dtype())(conv_weight_tensor, in1_block_h, in1_block_w);
+    }
+
+    // Converts convolution weights to tilized 2d matrix layout.
+    // Returns a new tensor with layout=Tile
+    Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(Tensor conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w) {
+        TT_ASSERT(conv_weight_tensor.layout() == Layout::ROW_MAJOR && "Convolution weights should be in row major layout for conversion to tilized layout.");
+        const static std::map<DataType, std::function<Tensor(const Tensor &, uint32_t in1_block_h, uint32_t in1_block_w)>> to_w_tile_layout_map = {
+            {DataType::BFLOAT16, &to_weight_special_padding_tile_layout<bfloat16>},
+            {DataType::FLOAT32, &to_weight_special_padding_tile_layout<float>},
+            {DataType::UINT32, &to_weight_special_padding_tile_layout<uint32_t>}
         };
         return to_w_tile_layout_map.at(conv_weight_tensor.dtype())(conv_weight_tensor, in1_block_h, in1_block_w);
     }

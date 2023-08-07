@@ -2323,6 +2323,21 @@ void TensorModule(py::module &m_tensor) {
         +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
     )doc");
 
+    m_tensor.def("conv_with_fast_reader", &conv_with_fast_reader, R"doc(
+        Perform a conv ``A x B`` with two tensors
+        This op tilizes tensor A and untilizes the output
+
+        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
+        | Argument     | Description                                                                                | Data type | Valid range | Required |
+        +==============+============================================================================================+===========+=============+==========+
+        | a            | Conv activation TT tensor (CHANNELS LAST                                                   | Tensor    |             | Yes      |
+        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
+        | b            | Conv weight TT tensor (TILED)                                                              | Tensor    |             | Yes      |
+        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
+        | conv_params  | Conv parameters list: kernel size H, kernel size W ,stride H,stride W,pad H,pad W          |Vector<int>|             | Yes      |
+        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
+    )doc");
+
     m_tensor.def("conv_with_address_map", &conv_with_address_map, R"doc(
         Perform a conv ``A x B`` with two tensors
         This op tilizes tensor A and untilizes the output
@@ -2466,6 +2481,17 @@ void TensorModule(py::module &m_tensor) {
     )doc");
     m_tensor.def("convert_conv_weight_tensor_to_tiled_layout", &convert_conv_weight_tensor_to_tiled_layout, R"doc(
        Converts convolution weights to 2d matrix tiled layout on host
+       Returns a new tensor with the converted layout.
+
+        +----------+----------------------+-----------+-------------+----------+
+        | Argument | Description          | Data type | Valid range | Required |
+        +==========+======================+===========+=============+==========+
+        | a        | Input tensor         | Tensor    |             | Yes      |
+        +----------+----------------------+-----------+-------------+----------+
+    )doc");
+
+    m_tensor.def("convert_conv_weight_tensor_to_special_padding_tiled_layout", &convert_conv_weight_tensor_to_special_padding_tiled_layout, R"doc(
+       Converts convolution weights to 2d matrix tiled layout on host with special block height padding
        Returns a new tensor with the converted layout.
 
         +----------+----------------------+-----------+-------------+----------+
@@ -2759,8 +2785,8 @@ void DTXModule(py::module &m_dtx) {
     m_dtx.def("conv_transform", [](vector<int> activation_shape,
                                         vector<int> weight_shape,
                                         vector<int> conv_params,
-                                        uint32_t in0_block_w,
                                         uint32_t in0_block_h,
+                                        uint32_t in0_block_w,
                                         uint32_t in1_block_w,
                                         uint32_t num_blocks_in0_h,
                                         uint32_t num_blocks_in1_w,

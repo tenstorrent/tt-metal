@@ -83,10 +83,14 @@ def resnet_conv(weight: List[Union[int, float]], conv_params, device, bias=None)
     if R == S and R == 1 and P_H == P_W and P_H == 0 and U == V and U == 1:
         # use regular matmul op
         use_regular_matmul_op = True
-
+    use_fast_reader = True
+    if (C >= 512):
+        use_fast_reader = False
     # Hardcode block shapes for conv op
     act_block_h = 4
-    act_block_w = 4
+    act_block_w = (int)((_nearest_32(_nearest_y(C,16)*S))/32)
+    if not use_fast_reader:
+        act_block_w = 4
     weight_block_h = act_block_w
     weight_block_w = 4
     out_subblock_h = 4
@@ -107,9 +111,14 @@ def resnet_conv(weight: List[Union[int, float]], conv_params, device, bias=None)
         )
     else:
         # for conv op, pad the weights to block shape
-        weight_tiled_ = tensor.convert_conv_weight_tensor_to_tiled_layout(
-            weight_untiled, weight_block_h, weight_block_w
-        )
+        if use_fast_reader:
+            weight_tiled_ = tensor.convert_conv_weight_tensor_to_special_padding_tiled_layout(
+                weight_untiled, weight_block_h, weight_block_w
+            )
+        else:
+            weight_tiled_ = tensor.convert_conv_weight_tensor_to_tiled_layout(
+                weight_untiled, weight_block_h, weight_block_w
+            )
     weight_on_device = weight_tiled_.to(device)
 
     if bias is None:
@@ -137,7 +146,10 @@ def resnet_conv(weight: List[Union[int, float]], conv_params, device, bias=None)
             output = tensor.matmul(activation, weight_on_device, activation.memory_config())
         else:
             assert(activation.layout() == tensor.Layout.ROW_MAJOR)
-            output = tensor.conv(activation, weight_on_device, [R,S,U,V,P_H,P_W], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w, K)
+            if use_fast_reader:
+                output = tensor.conv_with_fast_reader(activation, weight_on_device, [R,S,U,V,P_H,P_W], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w, K)
+            else:
+                output = tensor.conv(activation, weight_on_device, [R,S,U,V,P_H,P_W], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w, K)
             assert(output.layout() == tensor.Layout.ROW_MAJOR)
         assert(output.storage_type() == tensor.StorageType.DEVICE)
 
