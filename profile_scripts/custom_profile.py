@@ -7,17 +7,17 @@ def print_relative_cycles(file_name):
 
     start = 0
     for line in lines:
-        if "BRISC, 1" in line:
+        if "0, 0, 0, BRISC, 1" in line:
             start = int(line.split(",")[-1])
             break
 
     stop_flag = 0   # Keep the first iteration (Addition) in Eltwise_binary and filter out the second iteration (Multiplication)
 
     for line in lines:
-        if "BRISC" in line:
-            stop_flag = 1
-        if "NCRISC" in line and stop_flag:
-            break
+        # if "BRISC" in line:
+        #     stop_flag = 1
+        # if "NCRISC" in line and stop_flag:
+        #     break
         lst = line.split(",")
         # print(int(lst[-1])-start)
         print(lst[:-1], int(lst[-1])-start)

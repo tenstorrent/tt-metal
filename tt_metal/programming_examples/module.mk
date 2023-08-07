@@ -6,6 +6,8 @@ PROGRAMMING_EXAMPLES_LDFLAGS = -ltt_metal_impl -ltt_metal -lllrt -ltt_gdb -ldevi
 
 include $(TT_METAL_HOME)/tt_metal/programming_examples/loopback/module.mk
 include $(TT_METAL_HOME)/tt_metal/programming_examples/eltwise_binary/module.mk
+include $(TT_METAL_HOME)/tt_metal/programming_examples/loopback_eltwise_binary/module.mk
+include $(TT_METAL_HOME)/tt_metal/programming_examples/loopback_bmm_tilize_untilize/module.mk
 include $(TT_METAL_HOME)/tt_metal/programming_examples/profiler/device/grayskull/module.mk
 
 
@@ -16,8 +18,12 @@ PROFILER_TESTS += \
 
 programming_examples: programming_examples/loopback \
                       programming_examples/eltwise_binary \
+                      programming_examples/loopback_eltwise_binary \
+                      programming_examples/loopback_bmm_tilize_untilize \
 		      $(PROFILER_TESTS)
 
 programming_examples/loopback: $(PROGRAMMING_EXAMPLES_TESTDIR)/loopback;
 programming_examples/eltwise_binary: $(PROGRAMMING_EXAMPLES_TESTDIR)/eltwise_binary;
+programming_examples/loopback_eltwise_binary: $(PROGRAMMING_EXAMPLES_TESTDIR)/loopback_eltwise_binary;
+programming_examples/loopback_bmm_tilize_untilize: $(PROGRAMMING_EXAMPLES_TESTDIR)/loopback_bmm_tilize_untilize;
 programming_examples/profiler/device/grayskull/%: $(PROGRAMMING_EXAMPLES_TESTDIR)/profiler/device/grayskull/%;

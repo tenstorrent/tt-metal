@@ -1,0 +1,15 @@
+LOOPBACK_ELTWISE_BINARY_EXAMPLE_SRC = $(TT_METAL_HOME)/tt_metal/programming_examples/loopback_eltwise_binary/loopback_eltwise_binary.cpp
+
+LOOPBACK_ELTWISE_BINARY_EXAMPLES_DEPS = $(PROGRAMMING_EXAMPLES_OBJDIR)/loopback_eltwise_binary.d
+
+-include $(LOOPBACK_ELTWISE_BINARY_EXAMPLES_DEPS)
+
+.PRECIOUS: $(PROGRAMMING_EXAMPLES_TESTDIR)/loopback_eltwise_binary
+$(PROGRAMMING_EXAMPLES_TESTDIR)/loopback_eltwise_binary: $(PROGRAMMING_EXAMPLES_OBJDIR)/loopback_eltwise_binary.o $(BACKEND_LIB) $(TT_METAL_LIB) $(VERIF_LIB)
+	@mkdir -p $(@D)
+	$(CXX) $(CFLAGS) $(CXXFLAGS) $(PROGRAMMING_EXAMPLES_INCLUDES) -o $@ $^ $(LDFLAGS) $(PROGRAMMING_EXAMPLES_LDFLAGS)
+
+.PRECIOUS: $(PROGRAMMING_EXAMPLES_OBJDIR)/loopback_eltwise_binary.o
+$(PROGRAMMING_EXAMPLES_OBJDIR)/loopback_eltwise_binary.o: $(LOOPBACK_ELTWISE_BINARY_EXAMPLE_SRC)
+	@mkdir -p $(@D)
+	$(CXX) $(CFLAGS) $(CXXFLAGS) $(PROGRAMMING_EXAMPLES_INCLUDES) -c -o $@ $<
