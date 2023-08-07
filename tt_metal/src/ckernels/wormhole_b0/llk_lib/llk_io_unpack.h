@@ -17,15 +17,15 @@ void write_to_local_mem_barrier(uint32_t data) {
 
 inline void llk_setup_cb_interface() {
 
-    volatile std::uint32_t* buffer_config_addr = (volatile uint32_t*)(CIRCULAR_BUFFER_CONFIG_BASE);
+    volatile std::uint32_t* circular_buffer_config_addr = (volatile uint32_t*)(CIRCULAR_BUFFER_CONFIG_BASE);
 
     for (uint32_t cb_id = 0; cb_id < NUM_CIRCULAR_BUFFERS; cb_id++) {
 
         // write_to_local_mem_barrier are needed on GS because of the RTL bug
         // NOTE: fifo_addr, fifo_size and fifo_limit in 16B words!
-        uint32_t fifo_addr = buffer_config_addr[0];
-        uint32_t fifo_size = buffer_config_addr[1];
-        uint32_t fifo_num_pages = buffer_config_addr[2]; // not used atm
+        uint32_t fifo_addr = circular_buffer_config_addr[0];
+        uint32_t fifo_size = circular_buffer_config_addr[1];
+        uint32_t fifo_num_pages = circular_buffer_config_addr[2]; // not used atm
         uint32_t fifo_page_size = circular_buffer_config_addr[3];
         write_to_local_mem_barrier(fifo_num_pages);
 
@@ -36,7 +36,7 @@ inline void llk_setup_cb_interface() {
         cb_interface[cb_id].fifo_page_size = fifo_page_size;
         //cb_interface[cb_id].tiles_acked1 = 0;
 
-        buffer_config_addr += UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG; // move by 3 uint32's
+        circular_buffer_config_addr += UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG; // move by 3 uint32's
     }
 }
 

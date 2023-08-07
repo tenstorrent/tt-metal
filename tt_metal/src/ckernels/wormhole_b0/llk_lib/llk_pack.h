@@ -151,7 +151,7 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
         // however, since there is no tile header we need to -1 the pack address (in terms of 16B words) to offset packer's +1
         pack_tile_addr = cb_interface[output_id].fifo_wr_ptr + cb_interface[output_id].fifo_wr_tile_ptr - 1;
 
-        cb_interface[output_id].fifo_wr_tile_ptr += cb_interface[operand].fifo_page_size;
+        cb_interface[output_id].fifo_wr_tile_ptr += cb_interface[output_id].fifo_page_size;
     }
 
     constexpr uint32_t DEST_NUM_TILES_SHIFT = is_fp32_dest_acc_en ? (1) : (0);
