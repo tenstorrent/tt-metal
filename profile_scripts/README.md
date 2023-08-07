@@ -57,3 +57,15 @@ Use `Elewise_binary` programming example to profile the profiler marker overhead
 ```
 bash profile_scripts/profile_all_risc_overhead.sh
 ```
+
+## Element-wise binary load from/store to Tensix
+
+```
+bash loopback_eltwise_binary.sh
+```
+
+## Bmm_tilize_untilize load from/store to Tensix
+
+```
+bash loopback_bmm_tilize_untilize.sh
+```

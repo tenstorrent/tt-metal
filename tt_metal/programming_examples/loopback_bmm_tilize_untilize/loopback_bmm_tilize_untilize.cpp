@@ -58,8 +58,8 @@ int main(int argc, char **argv) {
         */
         Program program = Program();
 
-        constexpr CoreCoord compute_core = {0, 1};
-        constexpr CoreCoord jump_core = {0, 0};
+        constexpr CoreCoord compute_core = {0, 0};
+        constexpr CoreCoord jump_core = {0, 1};
 
         uint32_t single_tile_size = stoi(argv[2]);
         uint32_t num_tiles = stoi(argv[1]);
@@ -80,17 +80,114 @@ int main(int argc, char **argv) {
          * Use circular buffers to set input and output buffers that the
          * compute engine will use.
          */
+
+
+        uint32_t in0_block_h = 1;
+        uint32_t in0_block_w = num_tiles;
+        uint32_t in1_block_w = 1;
+        uint32_t in0_num_blocks_h = 1;
+        uint32_t in0_num_blocks_w = 1;
+        uint32_t in1_num_blocks_w = 1;
+        uint32_t in1_block_h = in0_block_w;
+        uint32_t in0_block_num_tiles = in0_block_h * in0_block_w;
+        uint32_t out_subblock_height_ntiles = 1;
+        uint32_t out_subblock_width_ntiles = 1;
+        uint32_t out_subblock_ntiles = out_subblock_height_ntiles * out_subblock_width_ntiles;
+        uint32_t in0_subblock_h = out_subblock_height_ntiles;
+        uint32_t in0_num_subblocks = in0_block_h / in0_subblock_h;
+        uint32_t in1_num_subblocks = in1_block_w / out_subblock_width_ntiles;
+        uint32_t in0_subblock_num_tiles = in0_subblock_h * in0_block_w;
+        uint32_t in1_block_num_tiles = in1_block_w * in1_block_h;
+        const uint32_t tile_size_bytes = 2 * constants::TILE_HW;
+
         constexpr uint32_t src0_cb_index = CB::c_in0;
-        constexpr uint32_t num_input_tiles = 2;
-        CircularBuffer *compute_cb_src0 = CreateCircularBuffer(
+        uint32_t in0_cb                                 = CB::c_in0;
+        uint32_t in1_cb                                 = CB::c_in1;
+        uint32_t tilize_mode_tilized_in0_cb             = CB::c_intermed0;
+        uint32_t matmul_partials_cb                     = CB::c_intermed1;
+        uint32_t untilize_mode_final_matmul_partials_cb = CB::c_intermed2;
+        uint32_t untilize_mode_reblock_cb               = CB::c_intermed3;
+        uint32_t out0_cb                                = CB::c_out0;
+
+        const uint32_t cb0_ntiles = in0_block_h * in0_block_w * 2;  // double buffer
+        CircularBuffer *compute_cb_in0 = CreateCircularBuffer(
             program,
             device,
-            src0_cb_index,
+            in0_cb,
             compute_core,
-            num_input_tiles,
-            num_input_tiles * single_tile_size,
+            cb0_ntiles,
+            cb0_ntiles * tile_size_bytes,
             tt::DataFormat::Float16_b
         );
+        const uint32_t cb1_ntiles = in0_block_w * in1_block_w * 2;   // double buffer
+        CircularBuffer *compute_cb_in1 = CreateCircularBuffer(
+            program,
+            device,
+            in1_cb,
+            compute_core,
+            cb1_ntiles,
+            cb1_ntiles * tile_size_bytes,
+            tt::DataFormat::Float16_b
+        );
+        const uint32_t out_ntiles = in0_block_h * in1_block_w;
+        CircularBuffer *compute_cb_output = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            out0_cb,
+            compute_core,
+            out_ntiles,
+            out_ntiles * tile_size_bytes,
+            tt::DataFormat::Float16_b
+        );
+        CircularBuffer *compute_cb_src0_tilized = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            tilize_mode_tilized_in0_cb,
+            compute_core,
+            cb0_ntiles,
+            cb0_ntiles * tile_size_bytes,
+            tt::DataFormat::Float16_b
+        );
+        CircularBuffer *compute_cb_matmul_partials = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            matmul_partials_cb,
+            compute_core,
+            out_ntiles,
+            out_ntiles * tile_size_bytes,
+            tt::DataFormat::Float16_b
+        );
+        // Shares same address space as matmul partials
+        CircularBuffer *compute_cb_final_matmul_partials = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            untilize_mode_final_matmul_partials_cb,
+            compute_core,
+            out_ntiles,
+            out_ntiles * tile_size_bytes,
+            tt::DataFormat::Float16_b
+        );
+        // CB responsible for reorganizing output blocks to fill the whole "per compute_core output block width"
+        CircularBuffer *compute_cb_reblock = tt_metal::CreateCircularBuffer(
+            program,
+            device,
+            untilize_mode_reblock_cb,
+            compute_core,
+            in1_block_w,                    // a single row of tiles
+            in1_block_w * tile_size_bytes,
+            tt::DataFormat::Float16_b
+        );
+
+        constexpr uint32_t num_input_tiles = 2;
+        // CircularBuffer *compute_cb_src0 = CreateCircularBuffer(
+        //     program,
+        //     device,
+        //     src0_cb_index,
+        //     compute_core,
+        //     num_input_tiles,
+        //     num_input_tiles * single_tile_size,
+        //     tt::DataFormat::Float16_b
+        // );
         CircularBuffer *jump_cb_src0 = CreateCircularBuffer(
             program,
             device,
@@ -102,15 +199,15 @@ int main(int argc, char **argv) {
         );
 
         constexpr uint32_t src1_cb_index = CB::c_in1;
-        CircularBuffer *compute_cb_src1 = CreateCircularBuffer(
-            program,
-            device,
-            src1_cb_index,
-            compute_core,
-            num_input_tiles,
-            num_input_tiles * single_tile_size,
-            tt::DataFormat::Float16_b
-        );
+        // CircularBuffer *compute_cb_src1 = CreateCircularBuffer(
+        //     program,
+        //     device,
+        //     src1_cb_index,
+        //     compute_core,
+        //     num_input_tiles,
+        //     num_input_tiles * single_tile_size,
+        //     tt::DataFormat::Float16_b
+        // );
         CircularBuffer *jump_cb_src1 = CreateCircularBuffer(
             program,
             device,
@@ -123,15 +220,15 @@ int main(int argc, char **argv) {
 
         constexpr uint32_t output_cb_index = CB::c_out0;
         constexpr uint32_t num_output_tiles = 2;
-        CircularBuffer *compute_cb_output = CreateCircularBuffer(
-            program,
-            device,
-            output_cb_index,
-            compute_core,
-            num_output_tiles,
-            num_output_tiles * single_tile_size,
-            tt::DataFormat::Float16_b
-        );
+        // CircularBuffer *compute_cb_output = CreateCircularBuffer(
+        //     program,
+        //     device,
+        //     output_cb_index,
+        //     compute_core,
+        //     num_output_tiles,
+        //     num_output_tiles * single_tile_size,
+        //     tt::DataFormat::Float16_b
+        // );
         CircularBuffer *jump_cb_output = CreateCircularBuffer(
             program,
             device,
@@ -187,16 +284,16 @@ int main(int argc, char **argv) {
          * Use the add_tiles operation available in the eltwise_binary
          * compute kernel.
          */
-        ComputeKernel *compute_eltwise_binary_kernel = CreateComputeKernel(
-            program,
-            "tt_metal/kernels/compute/eltwise_binary.cpp",
-            compute_core,
-            compute_kernel_args,
-            MathFidelity::HiFi4,
-            fp32_dest_acc_en,
-            math_approx_mode
-        );
-        add_defines(compute_eltwise_binary_kernel, BinaryOpType::ADD);
+        // ComputeKernel *compute_eltwise_binary_kernel = CreateComputeKernel(
+        //     program,
+        //     "tt_metal/kernels/compute/eltwise_binary.cpp",
+        //     compute_core,
+        //     compute_kernel_args,
+        //     MathFidelity::HiFi4,
+        //     fp32_dest_acc_en,
+        //     math_approx_mode
+        // );
+        // add_defines(compute_eltwise_binary_kernel, BinaryOpType::ADD);
         ComputeKernel *jump_eltwise_binary_kernel = CreateComputeKernel(
             program,
             "tt_metal/kernels/compute/eltwise_binary.cpp",
@@ -207,6 +304,33 @@ int main(int argc, char **argv) {
             math_approx_mode
         );
         add_defines(jump_eltwise_binary_kernel, BinaryOpType::MUL);
+
+        std::string compute_kernel = "tt_metal/kernels/compute/bmm_tilize_untilize.cpp";
+        std::vector<uint32_t> compute_comptime_args = {
+            in0_block_w,
+            in0_num_subblocks,
+            in0_block_num_tiles,
+            in0_subblock_num_tiles,
+            in0_subblock_h,
+            in1_num_subblocks,
+            in1_block_num_tiles,
+            in1_block_w,
+            in0_num_blocks_h,
+            in0_num_blocks_w,
+            in1_num_blocks_w,
+            out_subblock_height_ntiles,
+            out_subblock_width_ntiles,
+            out_subblock_ntiles
+        };
+        auto compute_bmm_compute = CreateComputeKernel(
+            program,
+            compute_kernel,
+            compute_core,
+            compute_comptime_args,
+            MathFidelity::HiFi4,
+            false,  // fp32_dest_acc_en
+            false   // math_approx_mode
+        );
 
         /*
         * Compile kernels used during execution

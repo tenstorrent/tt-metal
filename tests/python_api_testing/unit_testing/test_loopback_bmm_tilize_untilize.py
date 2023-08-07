@@ -46,7 +46,7 @@ TILE_HEIGHT = TILE_WIDTH = 32
 #                       a_block_height_ntiles, a_block_width_ntiles, b_block_width_ntiles,
 #                       out_subblock_height_ntiles, out_subblock_width_ntiles)
 # )
-def test_run_bmm_single_core_tilize_untilize(a_height_nblocks,
+def test_run_bmm_single_core_loopback_tilize_untilize(a_height_nblocks,
                                              a_width_nblocks,
                                              b_width_nblocks,
                                              a_block_height_ntiles,
@@ -106,7 +106,7 @@ def test_run_bmm_single_core_tilize_untilize(a_height_nblocks,
     # print("b slice:\n", ttb_pytorch[0, 0, 1:2*a_width_nblocks:1, 0:32*b_width_nblocks:1])
 
     ## compute out
-    out = ttl.tensor.bmm_tilize_untilize(tta, ttb,
+    out = ttl.tensor.loopback_bmm_tilize_untilize(tta, ttb,
                                          a_height_nblocks, a_width_nblocks, b_width_nblocks,
                                          a_block_height_ntiles, a_block_width_ntiles, b_block_width_ntiles,
                                          out_subblock_height_ntiles, out_subblock_width_ntiles)
@@ -145,7 +145,7 @@ def get_args():
 
 args = get_args()
 
-test_run_bmm_single_core_tilize_untilize(args.a_height_nblocks,
+test_run_bmm_single_core_loopback_tilize_untilize(args.a_height_nblocks,
                                              args.a_width_nblocks,
                                              args.b_width_nblocks,
                                              args.a_block_height_ntiles,

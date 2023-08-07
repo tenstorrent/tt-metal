@@ -31,19 +31,19 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
         uint64_t dst_noc_addr = get_noc_addr(dst_noc_x, dst_noc_y, dst_addr);
 
-            kernel_profiler::mark_time(5);
+            // kernel_profiler::mark_time(5);
         cb_wait_front(cb_id_out0, ublock_size_tiles);
         uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
 
-            kernel_profiler::mark_time(6);
+            // kernel_profiler::mark_time(6);
         noc_async_write(l1_read_addr, dst_noc_addr, ublock_size_bytes);
 
-            kernel_profiler::mark_time(7);
+            // kernel_profiler::mark_time(7);
         noc_async_write_barrier();
 
-            kernel_profiler::mark_time(8);
+            // kernel_profiler::mark_time(8);
         cb_pop_front(cb_id_out0, ublock_size_tiles);
-            kernel_profiler::mark_time(9);
+            // kernel_profiler::mark_time(9);
         dst_addr += ublock_size_bytes;
     }
 

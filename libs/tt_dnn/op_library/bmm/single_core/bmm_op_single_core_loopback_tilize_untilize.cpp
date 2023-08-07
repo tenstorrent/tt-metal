@@ -11,7 +11,8 @@ namespace tt_metal {
 
 void create_cb_bmm_single_core_loopback_tilize_untilize(Program &program,
                                                 Device* device,
-                                                CoreCoord core,
+                                                CoreCoord compute_core,
+                                                CoreCoord jump_core,
                                                 uint32_t in0_block_w,
                                                 uint32_t in0_block_h,
                                                 uint32_t in1_block_w,
@@ -31,22 +32,41 @@ void create_cb_bmm_single_core_loopback_tilize_untilize(Program &program,
 
     // in0 (RM)
     const uint32_t cb0_ntiles = in0_block_h * in0_block_w * 2;  // double buffer
-    auto cb_in0 = CreateCircularBuffer(
+    auto compute_cb_in0 = CreateCircularBuffer(
         program,
         device,
         in0_cb,
-        core,
+        compute_core,
         cb0_ntiles,
         cb0_ntiles * tile_size_bytes,
         DataFormat::Float16_b
     );
+    auto jump_cb_in0 = CreateCircularBuffer(
+        program,
+        device,
+        in0_cb,
+        jump_core,
+        cb0_ntiles,
+        cb0_ntiles * tile_size_bytes,
+        DataFormat::Float16_b
+    );
+
     // in1
     const uint32_t cb1_ntiles = in0_block_w * in1_block_w * 2;   // double buffer
-    auto cb_in1 = CreateCircularBuffer(
+    auto compute_cb_in1 = CreateCircularBuffer(
         program,
         device,
         in1_cb,
-        core,
+        compute_core,
+        cb1_ntiles,
+        cb1_ntiles * tile_size_bytes,
+        DataFormat::Float16_b
+    );
+    auto jump_cb_in1 = CreateCircularBuffer(
+        program,
+        device,
+        in1_cb,
+        jump_core,
         cb1_ntiles,
         cb1_ntiles * tile_size_bytes,
         DataFormat::Float16_b
@@ -55,11 +75,20 @@ void create_cb_bmm_single_core_loopback_tilize_untilize(Program &program,
     // output
 
     const uint32_t out_ntiles = in0_block_h * in1_block_w;
-    auto cb_output = tt_metal::CreateCircularBuffer(
+    auto compute_cb_output = tt_metal::CreateCircularBuffer(
         program,
         device,
         out0_cb,
-        core,
+        compute_core,
+        out_ntiles,
+        out_ntiles * tile_size_bytes,
+        tt::DataFormat::Float16_b
+    );
+    auto jump_cb_output = tt_metal::CreateCircularBuffer(
+        program,
+        device,
+        out0_cb,
+        jump_core,
         out_ntiles,
         out_ntiles * tile_size_bytes,
         tt::DataFormat::Float16_b
@@ -68,40 +97,78 @@ void create_cb_bmm_single_core_loopback_tilize_untilize(Program &program,
     // intermediates
 
     // in0 (TM)
-    auto cb_src0_tilized = tt_metal::CreateCircularBuffer(
+    auto compute_cb_src0_tilized = tt_metal::CreateCircularBuffer(
         program,
         device,
         tilize_mode_tilized_in0_cb,
-        core,
+        compute_core,
         cb0_ntiles,
         cb0_ntiles * tile_size_bytes,
         DataFormat::Float16_b
     );
-    auto cb_matmul_partials = tt_metal::CreateCircularBuffer(
+    auto compute_cb_matmul_partials = tt_metal::CreateCircularBuffer(
         program,
         device,
         matmul_partials_cb,
-        core,
+        compute_core,
         out_ntiles,
         out_ntiles * tile_size_bytes,
         DataFormat::Float16_b
     );
     // Shares same address space as matmul partials
-    auto cb_final_matmul_partials = tt_metal::CreateCircularBuffer(
+    auto compute_cb_final_matmul_partials = tt_metal::CreateCircularBuffer(
         program,
         device,
         untilize_mode_final_matmul_partials_cb,
-        core,
+        compute_core,
         out_ntiles,
         out_ntiles * tile_size_bytes,
         DataFormat::Float16_b
     );
-    // CB responsible for reorganizing output blocks to fill the whole "per core output block width"
-    auto cb_reblock = tt_metal::CreateCircularBuffer(
+    // CB responsible for reorganizing output blocks to fill the whole "per compute_core output block width"
+    auto compute_cb_reblock = tt_metal::CreateCircularBuffer(
         program,
         device,
         untilize_mode_reblock_cb,
-        core,
+        compute_core,
+        in1_block_w,                    // a single row of tiles
+        in1_block_w * tile_size_bytes,
+        tt::DataFormat::Float16_b
+    );
+    auto jump_cb_src0_tilized = tt_metal::CreateCircularBuffer(
+        program,
+        device,
+        tilize_mode_tilized_in0_cb,
+        jump_core,
+        cb0_ntiles,
+        cb0_ntiles * tile_size_bytes,
+        DataFormat::Float16_b
+    );
+    auto jump_cb_matmul_partials = tt_metal::CreateCircularBuffer(
+        program,
+        device,
+        matmul_partials_cb,
+        jump_core,
+        out_ntiles,
+        out_ntiles * tile_size_bytes,
+        DataFormat::Float16_b
+    );
+    // Shares same address space as matmul partials
+    auto jump_cb_final_matmul_partials = tt_metal::CreateCircularBuffer(
+        program,
+        device,
+        untilize_mode_final_matmul_partials_cb,
+        jump_core,
+        out_ntiles,
+        out_ntiles * tile_size_bytes,
+        DataFormat::Float16_b
+    );
+    // CB responsible for reorganizing output blocks to fill the whole "per compute_core output block width"
+    auto jump_cb_reblock = tt_metal::CreateCircularBuffer(
+        program,
+        device,
+        untilize_mode_reblock_cb,
+        jump_core,
         in1_block_w,                    // a single row of tiles
         in1_block_w * tile_size_bytes,
         tt::DataFormat::Float16_b
@@ -150,7 +217,8 @@ Tensor bmm_single_core_loopback_tilize_untilize(const Tensor &in0,
     TT_ASSERT(src0_dram_buffer->size() % tile_size_bytes == 0, "Buffer size of tensor in0 must be divisible by tile_size_bytes");
     TT_ASSERT(src1_dram_buffer->size() % tile_size_bytes == 0, "Buffer size of tensor in1 must be divisible by tile_size_bytes");
 
-    CoreCoord core = {0, 0};
+    CoreCoord compute_core = {1, 0};
+    CoreCoord jump_core = {0, 0};
     CoreCoord debug_core = {1, 1};
     Program program = Program();
     Device *device = in0.device();
@@ -242,20 +310,179 @@ Tensor bmm_single_core_loopback_tilize_untilize(const Tensor &in0,
         log_debug("out_subblock_ntiles: {}", out_subblock_ntiles);
     }
 
-    create_cb_bmm_single_core_loopback_tilize_untilize(
+    // create_cb_bmm_single_core_loopback_tilize_untilize(
+    //     program,
+    //     in0.device(),
+    //     compute_core,
+    //     jump_core,
+    //     in0_block_w,
+    //     in0_block_h,
+    //     in1_block_w,
+    //     dtype_nbytes);
+
+    // buffer indices
+    uint32_t in0_cb                                 = CB::c_in0;
+    uint32_t in1_cb                                 = CB::c_in1;
+    uint32_t tilize_mode_tilized_in0_cb             = CB::c_intermed0;
+    uint32_t matmul_partials_cb                     = CB::c_intermed1;
+    uint32_t untilize_mode_final_matmul_partials_cb = CB::c_intermed2;
+    uint32_t untilize_mode_reblock_cb               = CB::c_intermed3;
+    uint32_t out0_cb                                = CB::c_out0;
+
+    // inputs
+
+    // in0 (RM)
+    const uint32_t cb0_ntiles = in0_block_h * in0_block_w * 2;  // double buffer
+    auto compute_cb_in0 = CreateCircularBuffer(
         program,
-        in0.device(),
-        core,
-        in0_block_w,
-        in0_block_h,
-        in1_block_w,
-        dtype_nbytes);
+        device,
+        in0_cb,
+        compute_core,
+        cb0_ntiles,
+        cb0_ntiles * tile_size_bytes,
+        DataFormat::Float16_b
+    );
+    CircularBuffer *jump_cb_in0 = CreateCircularBuffer(
+        program,
+        device,
+        in0_cb,
+        jump_core,
+        cb0_ntiles,
+        cb0_ntiles * tile_size_bytes,
+        DataFormat::Float16_b
+    );
+
+    // in1
+    const uint32_t cb1_ntiles = in0_block_w * in1_block_w * 2;   // double buffer
+    auto compute_cb_in1 = CreateCircularBuffer(
+        program,
+        device,
+        in1_cb,
+        compute_core,
+        cb1_ntiles,
+        cb1_ntiles * tile_size_bytes,
+        DataFormat::Float16_b
+    );
+    // auto jump_cb_in1 = CreateCircularBuffer(
+    //     program,
+    //     device,
+    //     in1_cb,
+    //     jump_core,
+    //     cb1_ntiles,
+    //     cb1_ntiles * tile_size_bytes,
+    //     DataFormat::Float16_b
+    // );
+
+    // output
+
+    const uint32_t out_ntiles = in0_block_h * in1_block_w;
+    auto compute_cb_output = tt_metal::CreateCircularBuffer(
+        program,
+        device,
+        out0_cb,
+        compute_core,
+        out_ntiles,
+        out_ntiles * tile_size_bytes,
+        tt::DataFormat::Float16_b
+    );
+    CircularBuffer *jump_cb_output = tt_metal::CreateCircularBuffer(
+        program,
+        device,
+        out0_cb,
+        jump_core,
+        out_ntiles,
+        out_ntiles * tile_size_bytes,
+        tt::DataFormat::Float16_b
+    );
+
+    // intermediates
+
+    // in0 (TM)
+    auto compute_cb_src0_tilized = tt_metal::CreateCircularBuffer(
+        program,
+        device,
+        tilize_mode_tilized_in0_cb,
+        compute_core,
+        cb0_ntiles,
+        cb0_ntiles * tile_size_bytes,
+        DataFormat::Float16_b
+    );
+    auto compute_cb_matmul_partials = tt_metal::CreateCircularBuffer(
+        program,
+        device,
+        matmul_partials_cb,
+        compute_core,
+        out_ntiles,
+        out_ntiles * tile_size_bytes,
+        DataFormat::Float16_b
+    );
+    // Shares same address space as matmul partials
+    auto compute_cb_final_matmul_partials = tt_metal::CreateCircularBuffer(
+        program,
+        device,
+        untilize_mode_final_matmul_partials_cb,
+        compute_core,
+        out_ntiles,
+        out_ntiles * tile_size_bytes,
+        DataFormat::Float16_b
+    );
+    // CB responsible for reorganizing output blocks to fill the whole "per compute_core output block width"
+    auto compute_cb_reblock = tt_metal::CreateCircularBuffer(
+        program,
+        device,
+        untilize_mode_reblock_cb,
+        compute_core,
+        in1_block_w,                    // a single row of tiles
+        in1_block_w * tile_size_bytes,
+        tt::DataFormat::Float16_b
+    );
+    // auto jump_cb_src0_tilized = tt_metal::CreateCircularBuffer(
+    //     program,
+    //     device,
+    //     tilize_mode_tilized_in0_cb,
+    //     jump_core,
+    //     cb0_ntiles,
+    //     cb0_ntiles * tile_size_bytes,
+    //     DataFormat::Float16_b
+    // );
+    // auto jump_cb_matmul_partials = tt_metal::CreateCircularBuffer(
+    //     program,
+    //     device,
+    //     matmul_partials_cb,
+    //     jump_core,
+    //     out_ntiles,
+    //     out_ntiles * tile_size_bytes,
+    //     DataFormat::Float16_b
+    // );
+    // // Shares same address space as matmul partials
+    // auto jump_cb_final_matmul_partials = tt_metal::CreateCircularBuffer(
+    //     program,
+    //     device,
+    //     untilize_mode_final_matmul_partials_cb,
+    //     jump_core,
+    //     out_ntiles,
+    //     out_ntiles * tile_size_bytes,
+    //     DataFormat::Float16_b
+    // );
+    // // CB responsible for reorganizing output blocks to fill the whole "per compute_core output block width"
+    // auto jump_cb_reblock = tt_metal::CreateCircularBuffer(
+    //     program,
+    //     device,
+    //     untilize_mode_reblock_cb,
+    //     jump_core,
+    //     in1_block_w,                    // a single row of tiles
+    //     in1_block_w * tile_size_bytes,
+    //     tt::DataFormat::Float16_b
+    // );
+
+
 
     // Reader kernel
     std::string reader_kernel = "tt_metal/kernels/dataflow/reader_bmm_single_core_loopback_tilize_untilize.cpp";
-    std::vector<uint32_t> reader_rt_args = {
+    std::vector<uint32_t> compute_reader_rt_args = {
         // in0
-        in0_dram_addr,
+        jump_cb_in0->address(),
+        // in0_dram_addr,
         in0_block_h,
         in0_num_blocks_h,
         in0_num_blocks_w,
@@ -265,29 +492,60 @@ Tensor bmm_single_core_loopback_tilize_untilize(const Tensor &in0,
         in0_width * dtype_nbytes,                           // size of an in0 row
         in0_block_w * constants::TILE_WIDTH * dtype_nbytes, // size of partial row to fit within a block width
         // in1
-        in1_dram_addr,
+        jump_cb_in0->address(),
+        // in1_dram_addr,
         in1_block_h,
         in1_block_w,
         in1_num_blocks_w,
         in1_block_num_tiles,
         in1_width_ntiles,
         in1_width_ntiles * in1_block_h,
-        in1_block_w
+        in1_block_w,
+        static_cast<uint32_t>(jump_core.x),
+        static_cast<uint32_t>(jump_core.y)
     };
-    auto reader = CreateDataMovementKernel(
+    auto compute_reader = CreateDataMovementKernel(
         program,
         reader_kernel,
-        core,
+        compute_core,
         DataMovementProcessor::RISCV_1,
         NOC::RISCV_1_default);
+
+    // std::vector<uint32_t> jump_reader_rt_args = {
+    //     // in0
+    //     in0_dram_addr,
+    //     in0_block_h,
+    //     in0_num_blocks_h,
+    //     in0_num_blocks_w,
+    //     in0_block_num_tiles,
+    //     in0_block_h * constants::TILE_HEIGHT,               // in0_block_nrows,
+    //     0,                                                  // start row id
+    //     in0_width * dtype_nbytes,                           // size of an in0 row
+    //     in0_block_w * constants::TILE_WIDTH * dtype_nbytes, // size of partial row to fit within a block width
+    //     // in1
+    //     in1_dram_addr,
+    //     in1_block_h,
+    //     in1_block_w,
+    //     in1_num_blocks_w,
+    //     in1_block_num_tiles,
+    //     in1_width_ntiles,
+    //     in1_width_ntiles * in1_block_h,
+    //     in1_block_w
+    // };
+    // auto jump_reader = CreateDataMovementKernel(
+    //     program,
+    //     reader_kernel,
+    //     jump_core,
+    //     DataMovementProcessor::RISCV_1,
+    //     NOC::RISCV_1_default);
 
     // number of data elements along height of an in0 block
     uint32_t in0_block_h_data = in0_height / in0_num_blocks_h;
 
     // Writer kernel
     std::string writer_kernel = "tt_metal/kernels/dataflow/writer_unary_stick_layout_8bank_blocks.cpp";
-    vector<uint32_t> writer_rt_args = {
-        out_dram_addr,
+    vector<uint32_t> compute_writer_rt_args = {
+        jump_cb_output->address(),
         in0_block_h_data,
         in1_block_w * constants::TILE_WIDTH * dtype_nbytes,
         1,
@@ -295,12 +553,28 @@ Tensor bmm_single_core_loopback_tilize_untilize(const Tensor &in0,
         in1_num_blocks_w,
         in1_width * dtype_nbytes
     };
-    auto writer = CreateDataMovementKernel(
+    auto compute_writer = CreateDataMovementKernel(
         program,
         writer_kernel,
-        core,
+        compute_core,
         DataMovementProcessor::RISCV_0,
         NOC::RISCV_0_default);
+
+    // vector<uint32_t> jump_writer_rt_args = {
+    //     out_dram_addr,
+    //     in0_block_h_data,
+    //     in1_block_w * constants::TILE_WIDTH * dtype_nbytes,
+    //     1,
+    //     in0_num_blocks_h,
+    //     in1_num_blocks_w,
+    //     in1_width * dtype_nbytes
+    // };
+    // auto jump_writer = CreateDataMovementKernel(
+    //     program,
+    //     writer_kernel,
+    //     jump_core,
+    //     DataMovementProcessor::RISCV_0,
+    //     NOC::RISCV_0_default);
 
     // Compute kernel
     std::string compute_kernel = "tt_metal/kernels/compute/bmm_tilize_untilize.cpp";
@@ -320,20 +594,35 @@ Tensor bmm_single_core_loopback_tilize_untilize(const Tensor &in0,
         out_subblock_width_ntiles,
         out_subblock_ntiles
     };
-    auto bmm_compute = CreateComputeKernel(
+    auto compute_bmm_compute = CreateComputeKernel(
         program,
         compute_kernel,
-        core,
+        compute_core,
         compute_comptime_args,
         MathFidelity::HiFi4,
         false,  // fp32_dest_acc_en
         false   // math_approx_mode
     );
 
+    // auto jump_bmm_compute = CreateComputeKernel(
+    //     program,
+    //     compute_kernel,
+    //     jump_core,
+    //     compute_comptime_args,
+    //     MathFidelity::HiFi4,
+    //     false,  // fp32_dest_acc_en
+    //     false   // math_approx_mode
+    // );
+
     // Reader rt args
-    WriteRuntimeArgsToDevice(device, reader, core, reader_rt_args);
+    WriteRuntimeArgsToDevice(device, compute_reader, compute_core, compute_reader_rt_args);
     // Writer rt args
-    WriteRuntimeArgsToDevice(device, writer, core, writer_rt_args);
+    WriteRuntimeArgsToDevice(device, compute_writer, compute_core, compute_writer_rt_args);
+
+    // // Reader rt args
+    // WriteRuntimeArgsToDevice(device, jump_reader, jump_core, jump_reader_rt_args);
+    // // Writer rt args
+    // WriteRuntimeArgsToDevice(device, jump_writer, jump_core, jump_writer_rt_args);
 
     // Compile and launch
     constexpr bool profiler_kernel = true;
