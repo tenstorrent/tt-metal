@@ -13,6 +13,14 @@ using namespace tt::constants;
 namespace tt {
 
 namespace tt_metal {
+
+const uint32_t act_cb                                   = 0;
+const uint32_t weight_cb                                = 1;
+const uint32_t tilize_mode_tilized_act_cb               = 24;
+const uint32_t matmul_partials_cb                       = 25;
+const uint32_t untilize_mode_final_matmul_partials_cb   = 26;
+const uint32_t untilize_mode_reblock_cb                 = 27;
+const uint32_t out0_cb                                  = 16;
 pair<uint32_t, uint32_t> compute_conv_output_face_shape(uint32_t conv_activation_h, uint32_t conv_activation_w, uint32_t filter_h, uint32_t filter_w, uint32_t stride_h, uint32_t stride_w, uint32_t pad_h, uint32_t pad_w) {
     uint32_t conv_output_h = ((conv_activation_h - filter_h + (2 * pad_h)) / stride_h) + 1;
     uint32_t conv_output_w = ((conv_activation_w - filter_w + (2 * pad_w)) / stride_w) + 1;
@@ -46,13 +54,6 @@ void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program &program,
                                 uint32_t reblock_size,
                                 uint32_t num_bytes_for_df,
                                 bool untilize_out) {
-    uint32_t act_cb                                   = 0;
-    uint32_t weight_cb                                   = 1;
-    uint32_t tilize_mode_tilized_act_cb               = 24;
-    uint32_t matmul_partials_cb                       = 25;
-    uint32_t untilize_mode_final_matmul_partials_cb   = 26;
-    uint32_t untilize_mode_reblock_cb                 = 27;
-    uint32_t out0_cb                                  = 16;
 
     uint32_t single_tile_size = num_bytes_for_df * 1024;
 
@@ -327,16 +328,13 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
 
     string reader_kernel;
     vector<uint32_t> reader_rt_args;
-    reader_kernel = "tt_metal/kernels/dataflow/reader_conv_activations_and_weights.cpp";
+    reader_kernel = "tt_metal/kernels/dataflow/reader_conv_activations.cpp";
     reader_rt_args = {
         // arguments for act
         act_dram_addr,
         act_noc_x,
         act_noc_y,
 
-        weight_dram_addr,
-        weight_noc_x,
-        weight_noc_y,
         conv_act_size_w,
         conv_act_size_h,
         conv_act_size_c,
@@ -365,25 +363,14 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         act_block_w_ntiles,
         act_block_num_tiles,
 
-        weight_matrix_height,
-        weight_matrix_width,
-        weight_matrix_height_ntiles,
-        weight_matrix_width_ntiles,
-        weight_block_w_datums,
-        weight_block_h_ntiles,
-        weight_block_w_ntiles,
-        weight_block_num_tiles,
-
         src_dram_act_buffer_size_bytes,
         dst_l1_act_buffer_size_bytes,
-        src_dram_weight_buffer_size_bytes,
-        dst_l1_weight_buffer_size_bytes,
     };
 
     string writer_kernel;
     vector<uint32_t> writer_rt_args;
     if (untilize_out) {
-        writer_kernel = "tt_metal/kernels/dataflow/writer_unary_stick_layout_8bank_blocks.cpp";
+        writer_kernel = "tt_metal/kernels/dataflow/writer_unary_stick_layout_8bank_blocks_reader_weight_tile_layout.cpp";
         writer_rt_args = {
             out_dram_addr,
             act_block_h_datums,
@@ -393,7 +380,17 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
             num_blocks_weight_w,
             out_row_size_bytes,
             last_block_row_size_bytes,
-            act_matrix_height_unpadded
+            act_matrix_height_unpadded,
+
+            weight_dram_addr,
+            num_blocks_act_w, // = number of blocks of weight in height dim
+            weight_block_num_tiles,
+            weight_block_h_ntiles,
+            weight_block_w_ntiles,
+            weight_matrix_width_ntiles, // weight_stride_h
+            weight_matrix_width_ntiles * weight_block_h_ntiles, // weight_next_block_stride_h,
+            weight_block_w_ntiles, // weight_next_block_stride_w
+
         };
     } else {
         assert(false && "Tiled output unsupported");
@@ -422,7 +419,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         core,
         tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    std::vector<uint32_t> writer_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0)};
+    std::vector<uint32_t> writer_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0), out0_cb, weight_cb};
 
     auto writer_id = tt_metal::CreateDataMovementKernel(
         program,
@@ -490,13 +487,13 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         {
             auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_dram_buffer_a->address();
-            runtime_args[3] = src_dram_buffer_b->address();
             SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
         }
 
         {
             auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = dst_dram_buffer->address();
+            runtime_args[9] = src_dram_buffer_b->address();
             SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
         }
     };
