@@ -7,6 +7,7 @@
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "llrt/tt_debug_print_server.hpp"
+#include "tt_metal/third_party/umd/device/util.hpp"
 
 #include "common/utils.hpp"
 #include "llrt/llrt.hpp"
@@ -21,15 +22,19 @@ size_t Device::detect_num_available_devices(const TargetDevice target_type) {
 void Device::initialize_cluster() {
     ZoneScoped;
     std::set<chip_id_t> target_device_ids = {pcie_slot_};
+    if (pcie_slot_ == 1) {
+        target_device_ids.insert(0);
+    }
     tt_device_params default_params;
     if (getenv("TT_METAL_VERSIM_DUMP_CORES")) {
         std::string dump_cores_string = getenv("TT_METAL_VERSIM_DUMP_CORES");
         default_params.vcd_dump_cores = tt::utils::strsplit(dump_cores_string, ',');
     }
     const std::string sdesc_file = get_soc_description_file(arch_, target_type_);
+    const std::string ndesc_path = (this->arch_ == tt::ARCH::WORMHOLE_B0) ? GetClusterDescYAML().string() : "";
 
     this->cluster_ = new tt_cluster();
-    this->cluster_->open_device(arch_, target_type_, target_device_ids, sdesc_file);
+    this->cluster_->open_device(arch_, target_type_, target_device_ids, sdesc_file, ndesc_path);
     this->cluster_->start_device(default_params);
 
     this->clear_l1_state();
@@ -37,7 +42,7 @@ void Device::initialize_cluster() {
     this->cluster_->initialize_l1_barrier(pcie_slot_);
 
     llrt::utils::log_current_ai_clk(cluster_);
-    llrt::assert_reset_for_all_chips(cluster_);
+    this->cluster_->assert_risc_reset(pcie_slot_);
 }
 
 void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
@@ -137,22 +142,26 @@ void Device::initialize_harvesting_information() {
                 .x = static_cast<size_t>(soc_desc.worker_log_to_routing_x.at(logical_coord.x)),
                 .y = static_cast<size_t>(soc_desc.worker_log_to_routing_y.at(logical_coord.y)),
             });
-            if (noc_row_harvested[noc_routing_coord.y]) {
-                if (c == 0) {
-                    row_offset++;
+            CoreCoord translated_coord = noc_routing_coord;
+            if (this->arch_ == tt::ARCH::GRAYSKULL) {
+                if (noc_row_harvested[noc_routing_coord.y]) {
+                    if (c == 0) {
+                        row_offset++;
+                    }
                 }
+                noc_routing_coord.y += row_offset;
+                while (not soc_desc.is_worker_core(noc_routing_coord)) {
+                    noc_routing_coord.y++;
+                }
+                CoreCoord post_harvesting_noc_routing_coord({
+                    .x = noc_routing_coord.x,
+                    .y = noc_routing_coord.y,
+                });
+                translated_coord = post_harvesting_noc_routing_coord;
             }
-            noc_routing_coord.y += row_offset;
-            while (not soc_desc.is_worker_core(noc_routing_coord)) {
-                noc_routing_coord.y++;
-            }
-            CoreCoord post_harvesting_noc_routing_coord({
-                .x = noc_routing_coord.x,
-                .y = noc_routing_coord.y,
-            });
             this->logical_to_routing_coord_lookup_table_.insert({
                 logical_coord,
-                post_harvesting_noc_routing_coord
+                translated_coord
             });
         }
     }
@@ -188,9 +197,10 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
 }
 
 bool Device::close() {
+    log_info(tt::LogMetal, "Resetting and closing device {}", pcie_slot_);
     TT_ASSERT(this->initialized_, "Cannot close device {} that has not been initialized!", this->pcie_slot_);
     tt_stop_debug_print_server(this->cluster());
-    llrt::assert_reset_for_all_chips(cluster_);
+    this->cluster_->assert_risc_reset(pcie_slot_);
     this->clear_l1_state();
     this->cluster_->close_device();
     allocator::clear(*this->allocator_);

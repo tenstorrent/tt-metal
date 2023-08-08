@@ -1,5 +1,6 @@
 # Every variable in subdir must be prefixed with subdir (emulating a namespace)
 
+include $(UMD_HOME)/device/module.mk
 include $(TT_METAL_HOME)/tt_metal/tracy.mk
 
 COMMON_INCLUDES = $(BASE_INCLUDES)
@@ -7,22 +8,22 @@ COMMON_INCLUDES = $(BASE_INCLUDES)
 ifeq ("$(ARCH_NAME)", "wormhole_b0")
   COMMON_INCLUDES+= -Isrc/firmware/riscv/wormhole
   COMMON_INCLUDES+= -Isrc/firmware/riscv/wormhole/wormhole_b0_defines
-  COMMON_INCLUDES+= -I$(TT_METAL_HOME)/tt_metal/device/wormhole/.
+  COMMON_INCLUDES+= -I$(TT_METAL_HOME)/tt_metal/third_party/umd/device/wormhole/.
 else
   COMMON_INCLUDES+= -Isrc/firmware/riscv/$(ARCH_NAME)
-  COMMON_INCLUDES+= -I$(TT_METAL_HOME)/tt_metal/device/$(ARCH_NAME)/.
+  COMMON_INCLUDES+= -I$(TT_METAL_HOME)/tt_metal/third_party/umd/device/$(ARCH_NAME)/.
 endif
 
 ifeq ("$(ARCH_NAME)", "wormhole")
   COMMON_INCLUDES+= -Isrc/firmware/riscv/wormhole
   COMMON_INCLUDES+= -Isrc/firmware/riscv/wormhole/wormhole_a0_defines
-  COMMON_INCLUDES+= -I$(TT_METAL_HOME)/tt_metal/device/wormhole/.
+  COMMON_INCLUDES+= -I$(TT_METAL_HOME)/tt_metal/third_party/umd/device/wormhole/.
 endif
 
 COMMON_LIB = $(LIBDIR)/libcommon.a
 COMMON_DEFINES =
 COMMON_INCLUDES += -I$(TT_METAL_HOME)/tt_metal/common/.
-COMMON_LDFLAGS = -lyaml-cpp
+COMMON_LDFLAGS = -lyaml-cpp -ldevice
 COMMON_CFLAGS = $(CFLAGS) -Werror
 
 COMMON_SRCS += \
@@ -36,7 +37,7 @@ COMMON_DEPS = $(addprefix $(OBJDIR)/, $(COMMON_SRCS:.cpp=.d))
 # Each module has a top level target as the entrypoint which must match the subdir name
 common: $(COMMON_LIB)
 
-$(COMMON_LIB): $(TRACY_LIB) $(COMMON_OBJS)
+$(COMMON_LIB): umd_device $(TRACY_LIB) $(COMMON_OBJS)
 	@mkdir -p $(@D)
 	ar rcs -o $@ $(COMMON_OBJS) $(TRACY_LIB)
 

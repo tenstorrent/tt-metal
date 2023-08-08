@@ -15,3 +15,6 @@
 [submodule "tt_metal/third_party/tracy"]
 	path = tt_metal/third_party/tracy
 	url = git@github.com:tenstorrent-metal/tracy.git
+[submodule "tt_metal/third_party/umd"]
+	path = tt_metal/third_party/umd
+	url = git@github.com:tenstorrent-metal/umd.git

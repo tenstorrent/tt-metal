@@ -21,10 +21,10 @@ std::vector<memory::word_t> read_contiguous_hex_file(std::istream& input);
 // Reads a contiguous hex file (see above), passing each element to the callback.
 // The address passed to the callback is the data index + base. Data is passed in increasing address order.
 // The return value is the highest address passed to the callback + 1.
-void read_contiguous_hex_file(
+memory::address_t read_contiguous_hex_file(
     std::istream&, const std::function<void(memory::address_t, memory::word_t)>& callback, memory::address_t base = 0);
 
-void read_discontiguous_hex_file(
+memory::address_t read_discontiguous_hex_file(
     std::istream& input, const std::function<void(memory::address_t, memory::word_t)>& callback);
 
 // A discontiguous hex file has @address lines that set the address for the next line.

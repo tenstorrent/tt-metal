@@ -7,6 +7,8 @@
 #include "debug_print.h"
 
 void kernel_main() {
+    constexpr u32 tensix_soft_reset_addr = get_compile_time_arg_val(0);
+
     InterleavedAddrGen<true> dram_addr_gen;
     InterleavedAddrGen<false> l1_addr_gen;
     // Read command from host command queue... l1 read addr since
@@ -66,7 +68,7 @@ void kernel_main() {
         write_program(num_program_writes, command_ptr);
 
         command_ptr = reinterpret_cast<volatile u32*>(command_start_addr + (CONTROL_SECTION_NUM_ENTRIES) * sizeof(u32));
-        launch_program(num_workers, num_multicast_messages, command_ptr);
+        launch_program(num_workers, num_multicast_messages, command_ptr, tensix_soft_reset_addr);
 
         finish_program(finish);
 

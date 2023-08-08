@@ -103,6 +103,7 @@ struct CompileState {
                 "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch),
                 "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch) + "/" + get_string_lowercase(arch) + "_defines",
                 "tt_metal",
+                "tt_metal/third_party/umd/device/" + get_string_aliased_arch_lowercase(arch),
                 "build/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch) + "/noc", // TODO(AP): this looks wrong, but nonetheless matches the old makefile for TRISCS
                 "build/src/ckernels/gen/out", // TODO(AP): same as above - point into build where there's no src/
                 "build/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch),
@@ -123,7 +124,8 @@ struct CompileState {
                 "build/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch) + "/" + get_string_lowercase(arch) + "_defines",
                 "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch) + "/noc",
                 "tt_metal/src/firmware/riscv/targets/brisc",
-                "tt_metal"}
+                "tt_metal",
+                "tt_metal/third_party/umd/device/" + get_string_aliased_arch_lowercase(arch)}
             ));
             includes_abs.push_back(kernel_subdir_ + "/brisc");
         } else {
@@ -138,7 +140,8 @@ struct CompileState {
                 "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch) + "/" + get_string_lowercase(arch) + "_defines",
                 "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch) + "/noc",
                 "tt_metal/src/firmware/riscv/targets/ncrisc",
-                "tt_metal"}
+                "tt_metal",
+                "tt_metal/third_party/umd/device/" + get_string_aliased_arch_lowercase(arch)}
             ));
             includes_abs.push_back(kernel_subdir_ + "/ncrisc");
         }

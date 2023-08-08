@@ -18,7 +18,7 @@
 #include <vector>
 #include <iostream>
 #include <sstream>
-#include "common/tt_soc_descriptor.h"
+#include "common/metal_soc_descriptor.h"
 
 // Needed for TargetDevice enum
 #include "common/base.hpp"

@@ -3,9 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_cluster.hpp"
-#include "eth_interface.h"
-#include "device/tt_silicon_driver_common.hpp"
-#include "dev_mem_map.h"
+#include "third_party/umd/device/tt_silicon_driver_common.hpp"
+#include "device_data.hpp"
 #include <immintrin.h>
 #include <string>
 #include <iomanip>
@@ -18,6 +17,17 @@
 using std::to_string;
 using std::cout;
 using std::endl;
+
+#ifdef ARCH_GRAYSKULL
+static constexpr uint32_t DYNAMIC_TLB_COUNT = 16;
+static constexpr unsigned int MEM_SMALL_READ_WRITE_TLB  = DEVICE_DATA.TLB_BASE_INDEX_2M + 1;
+static constexpr unsigned int DYNAMIC_TLB_BASE_INDEX    = DEVICE_DATA.MEM_LARGE_READ_TLB + 1;
+
+#else
+static constexpr uint32_t DYNAMIC_TLB_COUNT = 16;
+static constexpr unsigned int MEM_SMALL_READ_WRITE_TLB  = DEVICE_DATA.TLB_BASE_INDEX_2M + 1;
+static constexpr uint32_t DYNAMIC_TLB_BASE_INDEX = DEVICE_DATA.MEM_LARGE_READ_TLB + 1;
+#endif
 
 
 std::chrono::seconds tt_cluster::get_device_timeout() {
@@ -42,6 +52,10 @@ int tt_cluster::get_num_chips() {
 
 std::unordered_set<chip_id_t> tt_cluster::get_all_chips() {
     return ndesc->get_all_chips();
+}
+
+std::set<chip_id_t> tt_cluster::get_all_mmio_chips() {
+    return device->get_target_mmio_device_ids();
 }
 
 void tt_cluster::dump_wall_clock_mailbox(std::string output_dir) {
@@ -137,6 +151,14 @@ int extract_chip_id_from_sdesc_path(std::filesystem::path sdesc_path) {
     return atoi(file.substr(0, file.find(".")).c_str());
 }
 
+std::unordered_map<chip_id_t, metal_SocDescriptor> get_metal_desc_from_tt_desc(const std::unordered_map<chip_id_t, tt_SocDescriptor>& input) {
+    std::unordered_map<chip_id_t, metal_SocDescriptor> rval = {};
+    for(const auto it : input) {
+        rval.emplace(it.first, metal_SocDescriptor(it.second));
+    }
+    return rval;
+}
+
 void tt_cluster::open_device(
     const tt::ARCH &arch,
     const TargetDevice &target_type,
@@ -152,19 +174,6 @@ void tt_cluster::open_device(
 #endif
     target_device_ids = target_devices;
 
-    if (!std::filesystem::is_directory(sdesc_path)) {
-        tt_SocDescriptor sdesc = *load_soc_descriptor_from_file(arch, sdesc_path);
-        for(auto it : target_devices) {
-            sdesc_per_chip[it] = sdesc;
-        }
-        tt::log_info(tt::LogDevice, "SOC descriptors loaded {}", sdesc_path);
-    }
-    else {
-        for (const auto& entry: std::filesystem::directory_iterator(sdesc_path)) {
-            sdesc_per_chip[extract_chip_id_from_sdesc_path(entry.path())] = *load_soc_descriptor_from_file(arch, entry.path());
-        }
-    }
-
     if (ndesc_path == "") {
         ndesc = tt_cluster_description::create_for_grayskull_cluster(target_devices);
     } else {
@@ -172,60 +181,37 @@ void tt_cluster::open_device(
     }
     tt::log_info(tt::LogDevice, "Network descriptor loaded {}", ndesc_path);
 
-    TT_ASSERT(sdesc_per_chip.size());
+    // TT_ASSERT(sdesc_per_chip.size());
     TT_ASSERT(ndesc != nullptr);
 
     if (target_type == TargetDevice::Silicon) {
-        // For silicon driver, filter mmio devices to use only mmio chips required by netlist workload, to allow sharing
-        // of resource (reservation/virtualization) like GS where cluster desc only contains netlist workload devices.
-        std::unordered_set<chip_id_t> mmio_chips;
-        for (auto &d: target_devices){
-            if (ndesc->is_chip_mmio_capable(d)){
-                mmio_chips.insert(d);
-            }
-        }
+        // This is the target/desired number of mem channels per arch/device. Silicon driver will attempt to open
+        // this many hugepages as channels, and assert if workload uses more than available.
+        uint32_t num_host_mem_ch_per_mmio_device = 1;
+        std::unordered_map<std::string, std::int32_t> dynamic_tlb_config = {};
+        // This will remove harvested rows from the soc descriptor
+        const bool perform_harvesting = true;
 
-        device = std::make_unique<tt_SiliconDevice>(this->sdesc_per_chip, mmio_chips, skip_driver_allocs);
-        if(!std::filesystem::is_directory(sdesc_path)) {
-            if (arch == tt::ARCH::WORMHOLE_B0 or arch == tt::ARCH::WORMHOLE) {
-                for(auto chip_id = target_devices.begin(); chip_id != target_devices.end(); chip_id++){
-                    harvested_rows_per_target[*chip_id] =  device->get_harvested_noc_rows(*mmio_chips.begin()); // The harvesting mask is shared across all devices in the cluster for WH.
-                    if(harvested_rows_per_target[*chip_id]) {
-                        performed_harvesting = true;
-                    }
-                }
-            } else if (arch == tt::ARCH::GRAYSKULL) {
-                // Multichip harvesting is supported for GS.
-                for(auto chip_id = target_devices.begin(); chip_id != target_devices.end(); chip_id++){
-                    harvested_rows_per_target[*chip_id] =  device->get_harvested_noc_rows(*chip_id);
-                    if(harvested_rows_per_target[*chip_id]) {
-                        performed_harvesting = true;
-                    }
-                }
-            }
-        }
+        device = std::make_unique<tt_SiliconDevice>(sdesc_path, ndesc_path, target_device_ids, num_host_mem_ch_per_mmio_device, dynamic_tlb_config, skip_driver_allocs, perform_harvesting);
+
+        device->set_driver_host_address_params(host_address_params);
+        device->set_driver_eth_interface_params(eth_interface_params);
     } else if (target_type == TargetDevice::Versim) {
-        device = std::make_unique<tt_VersimDevice>(this->sdesc_per_chip.at(0));
-        for(auto chip_id = target_devices.begin(); chip_id != target_devices.end(); chip_id++){
-            harvested_rows_per_target[*chip_id] = 0;
-        }
+        device = std::make_unique<tt_VersimDevice>(sdesc_path, ndesc_path);
     }
-
+    device->set_device_l1_address_params(l1_fw_params);
     type = target_type;
     TT_ASSERT(type == TargetDevice::Versim or type == TargetDevice::Silicon);
+    sdesc_per_chip = get_metal_desc_from_tt_desc(device->get_virtual_soc_descriptors());
 
     if (device) {
-        // device->assert_risc_reset();
-        if (get_num_chips() != tt::MAX_AVAILABLE_CHIPS) {
-            if (arch == tt::ARCH::WORMHOLE || arch == tt::ARCH::WORMHOLE_B0) {
-                // TODO: device->get_number_of_chips() currently does not account for non-MMIO chips, if device api is
-                // updated to include these chips we can use the same device count check for WH/WH_B0 Have to trust
-                // cluster descriptor to specify correct number of chips
-                TT_ASSERT(device->get_number_of_chips() >= 1, "Must have at least one detected chip available on device!");
-            } else {
-                //TT_ASSERT(get_num_chips() <= device->get_number_of_chips(), "Requested number of chips through machine descriptor is bigger than number of chips available on device!");
-            }
-        }
+        // if (get_num_chips() != tt::MAX_AVAILABLE_CHIPS) {
+        //     if (arch == tt::ARCH::WORMHOLE || arch == tt::ARCH::WORMHOLE_B0) {
+        //         TT_ASSERT(device->get_number_of_chips_in_cluster() >= 1, "Must have at least one detected chip available on device!");
+        //     } else {
+        //         //TT_ASSERT(get_num_chips() <= device->get_number_of_chips_in_cluster(), "Requested number of chips through machine descriptor is bigger than number of chips available on device!");
+        //     }
+        // }
     }
 }
 
@@ -240,24 +226,12 @@ int tt_cluster::get_device_aiclk(const chip_id_t &chip_id) {
     return 0;
 }
 
-void tt_cluster::set_device_aiclk() {
-    if (target_ai_clk != 0) {
-        tt::log_info(tt::LogLLRuntime, "Setting the device AICLK to {}", target_ai_clk);
-        device->set_device_aiclk(target_ai_clk);
-    }
-}
-
-void tt_cluster::reset_device_aiclk() {
-    tt::log_info(tt::LogLLRuntime, "Resetting device AICLK");
-    device->reset_device_aiclk();
-}
-
-void tt_cluster::set_power_state(tt_DevicePowerState device_state) {
-    std::stringstream ss;
-    ss << "Setting silicon device power state to " << device_state;
-    tt::log_info("{}", ss.str());
-    device->set_power_state(device_state);
-}
+// void tt_cluster::set_power_state(tt_DevicePowerState device_state) {
+//     std::stringstream ss;
+//     ss << "Setting silicon device power state to " << device_state;
+//     tt::log_info("{}", ss.str());
+//     device->set_power_state(device_state);
+// }
 
 void tt_cluster::reset_debug_print_server_buffers() {
     for (const int device_id : this->target_device_ids) {
@@ -283,24 +257,106 @@ void tt_cluster::reset_debug_print_server_buffers() {
     }
 }
 
+#ifdef ARCH_WORMHOLE
+std::int32_t get_static_tlb_index(CoreCoord target) {
+    bool is_eth_location = std::find(std::cbegin(DEVICE_DATA.ETH_LOCATIONS), std::cend(DEVICE_DATA.ETH_LOCATIONS), target) != std::cend(DEVICE_DATA.ETH_LOCATIONS);
+    bool is_tensix_location = std::find(std::cbegin(DEVICE_DATA.T6_X_LOCATIONS), std::cend(DEVICE_DATA.T6_X_LOCATIONS), target.x) != std::cend(DEVICE_DATA.T6_X_LOCATIONS) &&
+                              std::find(std::cbegin(DEVICE_DATA.T6_Y_LOCATIONS), std::cend(DEVICE_DATA.T6_Y_LOCATIONS), target.y) != std::cend(DEVICE_DATA.T6_Y_LOCATIONS);
+    // implementation migrated from wormhole.py in `src/t6ifc/t6py/packages/tenstorrent/chip/wormhole.py` from tensix repo (t6py-wormhole-bringup branch)
+
+    // Special handling for DRAM TLBs : return a 2MB TLB pointing to the start of the Epoch Cmd Queue Table
+    // The default 1MB TLB is not used for DRAM cores
+    // auto DRAM_TLB_IDX = std::find(DEVICE_DATA.DRAM_LOCATIONS.begin(), DEVICE_DATA.DRAM_LOCATIONS.end(), target);
+    // if (DRAM_TLB_IDX != DEVICE_DATA.DRAM_LOCATIONS.end()) {
+    //     return EPOCH_CMD_QUEUE_TLBS.at(DRAM_TLB_IDX - DEVICE_DATA.DRAM_LOCATIONS.begin());
+    // }
+
+    if (is_eth_location) {
+        if (target.y == 6) {
+            target.y = 1;
+        }
+
+        if (target.x >= 5) {
+            target.x -= 1;
+        }
+        target.x -= 1;
+
+        int flat_index = target.y * 8 + target.x;
+        int tlb_index = flat_index;
+        return tlb_index;
+
+    } else if (is_tensix_location) {
+        if (target.x >= 5) {
+            target.x -= 1;
+        }
+        target.x -= 1;
+
+        if (target.y >= 6) {
+            target.y -= 1;
+        }
+        target.y -= 1;
+
+        int flat_index = target.y * 8 + target.x;
+
+        // All 80 get single 1MB TLB.
+        int tlb_index = DEVICE_DATA.ETH_LOCATIONS.size() + flat_index;
+
+        return tlb_index;
+    } else {
+        return -1;
+    }
+}
+#endif
+
+#ifdef ARCH_GRAYSKULL
+std::int32_t get_static_tlb_index(CoreCoord target) {
+    // Special handling for DRAM TLBs : return a 2MB TLB pointing to the start of the Epoch Cmd Queue Table
+    // The default 1MB TLB is not used for DRAM cores
+    // auto DRAM_TLB_IDX = std::find(DEVICE_DATA.DRAM_LOCATIONS.begin(), DEVICE_DATA.DRAM_LOCATIONS.end(), target);
+    // if (DRAM_TLB_IDX != DEVICE_DATA.DRAM_LOCATIONS.end()) {
+    //     return EPOCH_CMD_QUEUE_TLBS.at(DRAM_TLB_IDX - DEVICE_DATA.DRAM_LOCATIONS.begin());
+    // }
+    int flat_index = target.y * DEVICE_DATA.GRID_SIZE_X + target.x;
+    if (flat_index == 0) {
+        return -1;
+    }
+    return flat_index;
+}
+#endif
+
+void tt_cluster::configure_static_tlbs(const std::uint32_t& chip) {
+    auto sdesc = get_soc_desc(chip);
+    auto statically_mapped_cores = sdesc.workers;
+    statically_mapped_cores.insert(statically_mapped_cores.end(), sdesc.ethernet_cores.begin(), sdesc.ethernet_cores.end());
+    std::int32_t address = 0;
+
+    // Setup static TLBs for all worker cores
+    for(auto& core : statically_mapped_cores) {
+        auto tlb_index = get_static_tlb_index(core);
+        device->configure_tlb(chip, core, tlb_index, address);
+    }
+    // Setup static TLBs for MMIO mapped data space
+    uint64_t peer_dram_offset = DEVICE_DATA.DRAM_CHANNEL_0_PEER2PEER_REGION_START;
+    for (uint32_t tlb_id = DYNAMIC_TLB_BASE_INDEX; tlb_id < DYNAMIC_TLB_BASE_INDEX + DYNAMIC_TLB_COUNT; tlb_id++) {
+        device->configure_tlb(chip, CoreCoord(DEVICE_DATA.DRAM_CHANNEL_0_X, DEVICE_DATA.DRAM_CHANNEL_0_Y), tlb_id, peer_dram_offset);
+        // Align address space of 16MB TLB to 16MB boundary
+        peer_dram_offset += DEVICE_DATA.DYNAMIC_TLB_16M_SIZE;
+    }
+    device->setup_core_to_tlb_map([] (CoreCoord core) {return get_static_tlb_index(core);});
+}
+
 void tt_cluster::start_device(const tt_device_params &device_params) {
     TT_ASSERT(sdesc_per_chip.size(), "Descriptor must be loaded. Try open_device()");
     TT_ASSERT(device != nullptr ,  "Device not initialized, make sure compile is done before running!");
 
-    if (device_params.init_device) {
-        device->init_system(device_params, get_soc_desc(*target_device_ids.begin()).grid_size); //pass in the same grid size for all (first one)
-        set_device_aiclk();
-        if (ndesc != nullptr) {
-            const std::set<chip_id_t> &all_chips = target_device_ids;
-            for (const chip_id_t &chip : all_chips) {
-                if (!ndesc->is_chip_mmio_capable(chip)) {
-                    reset_remote_chip(chip);
-                }
-            }
+    if(type == TargetDevice::Silicon && device_params.init_device) {
+        for(auto& device_id : device->get_target_mmio_device_ids()) {
+            configure_static_tlbs(device_id);
         }
-    } else {
-        device->start(device_params.expand_plusargs(), {}, false, false, device_params.skip_driver_allocs);
+        //tt::tlb_config::activate_static_tlbs(device);
     }
+
+    device->start_device(device_params);
 
     device_reset_time = high_resolution_clock::now();
 }
@@ -314,20 +370,11 @@ void tt_cluster::close_device() {
         cb(this, 0);
     }
 
-    reset_device_aiclk();
-    set_power_state(tt_DevicePowerState::LONG_IDLE);
     if (device) {
-        device->shutdown_system();
-        const std::set<chip_id_t> &all_chips = target_device_ids;
-        for (const chip_id_t &chip : all_chips) {
-            if (!ndesc->is_chip_mmio_capable(chip)) {
-                stop_remote_chip(chip);
-            }
-        }
+        device->close_device();
         device.reset();
     }
     sdesc_per_chip.clear();
-    ndesc.reset();
 }
 
 // Returns 0 if everything was OK
@@ -408,55 +455,8 @@ int tt_cluster::remote_arc_msg(const chip_id_t &chip, uint32_t msg_code, bool wa
     return exit_code;
 }
 
-void tt_cluster::enable_ethernet_queue(const chip_id_t &chip, int timeout) {
-    const uint32_t MSG_ERROR_REPLY = 0xffffffff;
-
-    if (type == TargetDevice::Silicon) {
-        for (const chip_id_t &chip : target_device_ids) {
-            auto arch = get_soc_desc(chip).arch;
-            switch (arch) {
-                case tt::ARCH::WORMHOLE:
-                case tt::ARCH::WORMHOLE_B0: {
-                    if (ndesc->is_chip_mmio_capable(chip)) {
-                        device->enable_ethernet_queue(chip, timeout);
-                    } else {
-                        uint32_t msg_success = 0x0;
-                        auto timeout_seconds = std::chrono::seconds(timeout);
-                        auto start = std::chrono::system_clock::now();
-                        while (msg_success != 1) {
-                            if (std::chrono::system_clock::now() - start > timeout_seconds) {
-                                throw std::runtime_error("Timed out after waiting " + std::to_string(timeout) + " seconds for DRAM to finish training");
-                            }
-
-                            int msg_rt = remote_arc_msg(chip, 0xaa58, true, 0xFFFF, 0xFFFF, 1, &msg_success, NULL);
-                            if (msg_rt == MSG_ERROR_REPLY) {
-                                break;
-                            }
-                        }
-                    }
-
-                    break;
-                }
-                default: {
-                    break;
-                }
-            }
-        }
-    }
-}
-
-void tt_cluster::broadcast_remote_tensix_risc_reset(const chip_id_t &chip, const TensixSoftResetOptions &soft_resets) {
-
-    if (type == TargetDevice::Silicon) {
-        auto valid = soft_resets & ALL_TENSIX_SOFT_RESET;
-
-        for (const CoreCoord &worker_core : sdesc_per_chip.at(chip).workers) {
-            set_remote_tensix_risc_reset(tt_cxy_pair(chip, worker_core), valid);
-        }
-    } else {
-        // Not running silicon multichip test
-        device->assert_risc_reset();
-    }
+void tt_cluster::assert_risc_reset(const chip_id_t &chip) {
+    device->assert_risc_reset(chip);
 }
 
 void tt_cluster::set_remote_tensix_risc_reset(const tt_cxy_pair &core, const TensixSoftResetOptions &soft_resets) {
@@ -475,40 +475,27 @@ void tt_cluster::set_remote_tensix_risc_reset(const tt_cxy_pair &core, const Ten
     }
 }
 
-void tt_cluster::deassert_risc_reset(bool start_stagger) {
+void tt_cluster::deassert_risc_reset(const chip_id_t &target_device_id, bool start_stagger) {
     if (type == TargetDevice::Versim) {
         // Not running silicon multichip test
-        device->deassert_risc_reset();
+        device->deassert_risc_reset(*this->target_device_ids.begin());
     } else if (type == TargetDevice::Silicon) {
         // On silicon, we might have num_mmio_chips < total_chips, in this case we manually write data to all the worker
         // cores on remote chips
         // TODO: for now assume that chip ids for MMIO chips are 0 ~ (num_mmio_chips-1)
         // Need to change m_pci_device object in silicon driver to support a generic subset of chip ids with MMIO
         log_debug(tt::LogLLRuntime, "Stagger start : {}", start_stagger);
-        device->deassert_risc_reset(start_stagger);
-        const std::unordered_set<chip_id_t> &all_chips = ndesc->get_all_chips();
-        for (const chip_id_t &chip : all_chips) {
-            if (!ndesc->is_chip_mmio_capable(chip)) {
-                deassert_risc_reset_remote_chip(chip, start_stagger);
-            }
-        }
+        TT_ASSERT(not start_stagger, "UMD currently does not support staggered deassert of RISC reset");
+        device->deassert_risc_reset(target_device_id);
     }
     device_reset_time = high_resolution_clock::now();
     deasserted_risc_reset = false;
 }
 
-void tt_cluster::deassert_risc_reset_remote_chip(const chip_id_t &chip, bool start_stagger) {
-    if (start_stagger){
-        broadcast_remote_tensix_risc_reset(chip, TENSIX_DEASSERT_SOFT_RESET);
-    }else{
-        broadcast_remote_tensix_risc_reset(chip, TENSIX_DEASSERT_SOFT_RESET_NO_STAGGER);
-    }
-}
-
 void tt_cluster::reset_remote_chip(const chip_id_t &chip) {
     constexpr uint64_t DEASSERT_ARC_WRITE_ADDR = 0x880030040;
 
-    broadcast_remote_tensix_risc_reset(chip, TENSIX_ASSERT_SOFT_RESET);
+    assert_risc_reset(chip);
 
     // NOTE(drosen): In wormhole this write should not be done as it can trigger a timing violation.
     //               It remains for backwards compatibility until the new reset sequence is finallized
@@ -536,7 +523,7 @@ void tt_cluster::stop_remote_chip(const chip_id_t &chip) {
         }
         case tt::ARCH::WORMHOLE:
         case tt::ARCH::WORMHOLE_B0: {
-            broadcast_remote_tensix_risc_reset(chip, TENSIX_ASSERT_SOFT_RESET);
+            assert_risc_reset(chip);
             break;
         }
         case tt::ARCH::Invalid: {
@@ -611,219 +598,11 @@ inline uint64_t get_sys_addr(uint32_t chip_x, uint32_t chip_y, uint32_t noc_x, u
     return result;
 }
 
-void tt_cluster::write_to_non_mmio_device(const uint32_t *mem_ptr, uint32_t len, tt_cxy_pair core, uint64_t address) {
-    using data_word_t = uint32_t;
-    constexpr int DATA_WORD_SIZE = sizeof(data_word_t);
-    constexpr int COMMAND_QUEUE_SIZE = sizeof(cmd_q_t);
-    constexpr uint32_t REQUEST_CMD_QUEUE_BASE = ETH_ROUTING_STRUCT_ADDR;
-    constexpr uint32_t REQUEST_ROUTING_CMD_QUEUE_BASE = REQUEST_CMD_QUEUE_BASE + sizeof(remote_update_ptr_t) + sizeof(remote_update_ptr_t);
-    constexpr uint32_t RESPONSE_CMD_QUEUE_BASE = ETH_ROUTING_STRUCT_ADDR + sizeof(cmd_q_t);
-
-    const chip_id_t &mmio_capable_chip = ndesc->get_closest_mmio_capable_chip(core.chip);
-    const tt_cxy_pair remote_transfer_ethernet_core = tt_cxy_pair(mmio_capable_chip, get_soc_desc(core.chip).ethernet_cores.at(0).x, get_soc_desc(core.chip).ethernet_cores.at(0).y);
-    const CoreCoord target_chip = ndesc->get_chip_locations().at(core.chip);
-    // tt::log_debug(tt::LogDevice, "Writing to non-mmio device {}: tt_cxy_pair {}, addr {}", target_chip.str(), core.str(), address);
-
-    std::vector<std::uint32_t> erisc_req_q;
-    std::vector<std::uint32_t> erisc_resp_q;
-    std::vector<std::uint32_t> erisc_command;
-    std::vector<std::uint32_t> erisc_q_ptr;
-    std::vector<std::uint32_t> data_block;
-
-    cmd_q_t *request_command_q;
-    cmd_q_t *response_command_q;
-
-    uint32_t size_in_bytes = len * DATA_WORD_SIZE;
-
-    device->read_vector(erisc_req_q, remote_transfer_ethernet_core, ETH_ROUTING_STRUCT_ADDR, COMMAND_QUEUE_SIZE);
-    device->read_vector(erisc_resp_q, remote_transfer_ethernet_core, ETH_ROUTING_STRUCT_ADDR + COMMAND_QUEUE_SIZE, COMMAND_QUEUE_SIZE);
-    request_command_q = (cmd_q_t *)&erisc_req_q[0];
-    response_command_q = (cmd_q_t *)&erisc_resp_q[0];
-
-    uint32_t offset = 0;
-    uint32_t block_size;
-    while (offset < size_in_bytes) {
-        uint32_t req_wr_ptr = request_command_q->wrptr.ptr & CMD_BUF_SIZE_MASK;
-        if ((address + offset) & 0x1F) { // address not 32-byte aligned
-            block_size = DATA_WORD_SIZE;
-        } else {
-            block_size = offset + MAX_BLOCK_SIZE > size_in_bytes ? size_in_bytes - offset : MAX_BLOCK_SIZE;
-        }
-        uint32_t req_flags = block_size > DATA_WORD_SIZE ? (CMD_DATA_BLOCK | CMD_WR_REQ) : CMD_WR_REQ;
-        uint32_t resp_flags = block_size > DATA_WORD_SIZE ? (CMD_DATA_BLOCK | CMD_WR_ACK) : CMD_WR_ACK;
-        if (req_flags & CMD_DATA_BLOCK) {
-            uint32_t buf_address = ETH_ROUTING_DATA_BUFFER_ADDR + req_wr_ptr * MAX_BLOCK_SIZE;
-            data_block.resize(block_size/DATA_WORD_SIZE);
-            memcpy(&data_block[0], mem_ptr + offset/DATA_WORD_SIZE, block_size);
-            device->write_vector (
-                data_block,
-                remote_transfer_ethernet_core,
-                buf_address
-            );
-            _mm_sfence();
-      }
-        // Send the read request
-        TT_ASSERT((req_flags == CMD_WR_REQ) || (((address + offset) & 0x1F) == 0)); // Block mode address must be 32-byte aligned.
-        request_command_q->cmd[req_wr_ptr].sys_addr =
-            get_sys_addr(target_chip.x, target_chip.y, core.x, core.y, address + offset);
-        request_command_q->cmd[req_wr_ptr].data = req_flags & CMD_DATA_BLOCK ? block_size : *(mem_ptr + offset/DATA_WORD_SIZE);
-        request_command_q->cmd[req_wr_ptr].flags = req_flags;
-
-        erisc_command.resize(sizeof(routing_cmd_t)/DATA_WORD_SIZE);
-        memcpy(&erisc_command[0], &request_command_q->cmd[req_wr_ptr], sizeof(routing_cmd_t));
-
-        device->write_vector (
-            erisc_command,
-            remote_transfer_ethernet_core,
-            REQUEST_ROUTING_CMD_QUEUE_BASE + (sizeof(routing_cmd_t) * req_wr_ptr)
-        );
-        _mm_sfence();
-        request_command_q->wrptr.ptr = (request_command_q->wrptr.ptr + 1) & CMD_BUF_PTR_MASK;
-        erisc_q_ptr.resize(sizeof(remote_update_ptr_t)/DATA_WORD_SIZE);
-        memcpy(&erisc_q_ptr[0], &request_command_q->wrptr, sizeof(remote_update_ptr_t));
-        device->write_vector (
-            erisc_q_ptr,
-            remote_transfer_ethernet_core,
-            REQUEST_CMD_QUEUE_BASE
-        );
-        _mm_sfence();
-
-        // Wait for read request completion and extract the data into the `ptr`
-        uint32_t resp_rd_ptr;
-        do {
-            device->read_vector (
-                erisc_resp_q,
-                remote_transfer_ethernet_core,
-                RESPONSE_CMD_QUEUE_BASE,
-                sizeof(cmd_q_t)
-            );
-            response_command_q = (cmd_q_t *)&erisc_resp_q[0];
-            resp_rd_ptr = response_command_q->rdptr.ptr & CMD_BUF_SIZE_MASK;
-        } while (response_command_q->cmd[resp_rd_ptr].flags != resp_flags);
-
-        // Finally increment the rdptr for the response command q
-        response_command_q->rdptr.ptr = (response_command_q->rdptr.ptr + 1) & CMD_BUF_PTR_MASK;
-        erisc_q_ptr.resize(sizeof(remote_update_ptr_t)/DATA_WORD_SIZE);
-        memcpy(&erisc_q_ptr[0], &response_command_q->rdptr, sizeof(remote_update_ptr_t));
-        device->write_vector (
-            erisc_q_ptr,
-            remote_transfer_ethernet_core,
-            RESPONSE_CMD_QUEUE_BASE + sizeof(remote_update_ptr_t)
-        );
-        _mm_sfence();
-
-        offset += block_size;
-    }
-}
-
-void tt_cluster::read_from_non_mmio_device(uint32_t *mem_ptr, tt_cxy_pair core, uint64_t address, uint32_t size_in_bytes) {
-    using data_word_t = uint32_t;
-    constexpr int DATA_WORD_SIZE = sizeof(data_word_t);
-    constexpr int COMMAND_QUEUE_SIZE = sizeof(cmd_q_t);
-    constexpr uint32_t REQUEST_CMD_QUEUE_BASE = ETH_ROUTING_STRUCT_ADDR;
-    constexpr uint32_t REQUEST_ROUTING_CMD_QUEUE_BASE = REQUEST_CMD_QUEUE_BASE + sizeof(remote_update_ptr_t) + sizeof(remote_update_ptr_t);
-    constexpr uint32_t RESPONSE_CMD_QUEUE_BASE = ETH_ROUTING_STRUCT_ADDR + sizeof(cmd_q_t);
-
-    const chip_id_t &mmio_capable_chip = ndesc->get_closest_mmio_capable_chip(core.chip);
-    const tt_cxy_pair remote_transfer_ethernet_core = tt_cxy_pair(mmio_capable_chip, get_soc_desc(core.chip).ethernet_cores.at(0).x, get_soc_desc(core.chip).ethernet_cores.at(0).y);
-    const CoreCoord target_chip = ndesc->get_chip_locations().at(core.chip);
-    // tt::log_debug(tt::LogDevice, "Reading from non-mmio device {}: tt_cxy_pair {}, addr {}", target_chip.str(), core.str(), address);
-
-    std::vector<std::uint32_t> erisc_req_q;
-    std::vector<std::uint32_t> erisc_resp_q;
-    std::vector<std::uint32_t> erisc_command;
-    std::vector<std::uint32_t> erisc_q_ptr;
-    std::vector<std::uint32_t> data_block;
-
-    cmd_q_t *request_command_q;
-    cmd_q_t *response_command_q;
-
-    device->read_vector(erisc_req_q, remote_transfer_ethernet_core, ETH_ROUTING_STRUCT_ADDR, COMMAND_QUEUE_SIZE);
-    device->read_vector(erisc_resp_q, remote_transfer_ethernet_core, ETH_ROUTING_STRUCT_ADDR + COMMAND_QUEUE_SIZE, COMMAND_QUEUE_SIZE);
-    request_command_q = (cmd_q_t *)&erisc_req_q[0];
-    response_command_q = (cmd_q_t *)&erisc_resp_q[0];
-
-
-    uint32_t offset = 0;
-    uint32_t block_size;
-    while (offset < size_in_bytes) {
-        uint32_t req_wr_ptr = request_command_q->wrptr.ptr & CMD_BUF_SIZE_MASK;
-        if ((address + offset) & 0x1F) { // address not 32-byte aligned
-            block_size = DATA_WORD_SIZE;
-        } else {
-            block_size = offset + MAX_BLOCK_SIZE > size_in_bytes ? size_in_bytes - offset : MAX_BLOCK_SIZE;
-        }
-
-        uint32_t req_flags = block_size > DATA_WORD_SIZE ? (CMD_DATA_BLOCK | CMD_RD_REQ) : CMD_RD_REQ;
-        uint32_t resp_flags = block_size > DATA_WORD_SIZE ? (CMD_DATA_BLOCK | CMD_RD_DATA) : CMD_RD_DATA;
-        // Send the read request
-        TT_ASSERT((req_flags == CMD_RD_REQ) || (((address + offset) & 0x1F) == 0)); // Block mode offset must be 32-byte aligned.
-        request_command_q->cmd[req_wr_ptr].sys_addr =
-            get_sys_addr(target_chip.x, target_chip.y, core.x, core.y, address + offset);
-        request_command_q->cmd[req_wr_ptr].data = block_size;
-        request_command_q->cmd[req_wr_ptr].flags = req_flags;
-
-        erisc_command.resize(sizeof(routing_cmd_t)/DATA_WORD_SIZE);
-        memcpy(&erisc_command[0], &request_command_q->cmd[req_wr_ptr], sizeof(routing_cmd_t));
-
-        device->write_vector (
-            erisc_command,
-            remote_transfer_ethernet_core,
-            REQUEST_ROUTING_CMD_QUEUE_BASE + (sizeof(routing_cmd_t) * req_wr_ptr)
-        );
-        _mm_sfence();
-
-        request_command_q->wrptr.ptr = (request_command_q->wrptr.ptr + 1) & CMD_BUF_PTR_MASK;
-        erisc_q_ptr.resize(sizeof(remote_update_ptr_t)/DATA_WORD_SIZE);
-        memcpy(&erisc_q_ptr[0], &request_command_q->wrptr, sizeof(remote_update_ptr_t));
-
-        device->write_vector (
-            erisc_q_ptr,
-            remote_transfer_ethernet_core,
-            REQUEST_CMD_QUEUE_BASE
-        );
-        _mm_sfence();
-        // Wait for read request completion and extract the data into the `mem_ptr`
-        uint32_t resp_rd_ptr;
-        do {
-            device->read_vector (
-                erisc_resp_q,
-                remote_transfer_ethernet_core,
-                RESPONSE_CMD_QUEUE_BASE,
-                sizeof(cmd_q_t)
-            );
-            response_command_q = (cmd_q_t *)&erisc_resp_q[0];
-            resp_rd_ptr = response_command_q->rdptr.ptr & CMD_BUF_SIZE_MASK;
-        } while (response_command_q->cmd[resp_rd_ptr].flags != resp_flags);
-        if (block_size == DATA_WORD_SIZE) {
-            mem_ptr[offset/DATA_WORD_SIZE] = response_command_q->cmd[resp_rd_ptr].data;
-        } else {
-            uint32_t buf_address = ETH_ROUTING_DATA_BUFFER_ADDR + resp_rd_ptr * MAX_BLOCK_SIZE;
-            device->read_vector(data_block, remote_transfer_ethernet_core, buf_address, block_size);
-            memcpy(&mem_ptr[offset/DATA_WORD_SIZE], data_block.data(), block_size);
-        }
-
-        // Finally increment the rdptr for the response command q
-        response_command_q->rdptr.ptr = (response_command_q->rdptr.ptr + 1) & CMD_BUF_PTR_MASK;
-        erisc_q_ptr.resize(sizeof(remote_update_ptr_t)/DATA_WORD_SIZE);
-        memcpy(&erisc_q_ptr[0], &response_command_q->rdptr, sizeof(remote_update_ptr_t));
-        device->write_vector (
-            erisc_q_ptr,
-            remote_transfer_ethernet_core,
-            RESPONSE_CMD_QUEUE_BASE + sizeof(remote_update_ptr_t)
-        );
-        _mm_sfence();
-
-        offset += block_size;
-
-    }
-}
-
 void tt_cluster::write_dram_vec(vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, bool small_access)
 {
     int chip_id, d_chan, d_subchannel;
     std::tie(chip_id, d_chan, d_subchannel) = dram;
-    tt_SocDescriptor& desc_to_use = get_soc_desc(chip_id);
+    metal_SocDescriptor& desc_to_use = get_soc_desc(chip_id);
     tt::log_assert(
         d_chan < desc_to_use.dram_cores.size(),
         "Bounds-Error -- dram_channel={} is outside of num_dram_channels={}",
@@ -840,7 +619,7 @@ void tt_cluster::read_dram_vec(vector<uint32_t> &vec, tt_target_dram dram, uint6
 {
     int chip_id, d_chan, d_subchannel;
     std::tie(chip_id, d_chan, d_subchannel) = dram;
-    tt_SocDescriptor& desc_to_use = get_soc_desc(chip_id);
+    metal_SocDescriptor& desc_to_use = get_soc_desc(chip_id);
     tt::log_assert(
         d_chan < desc_to_use.dram_cores.size(),
         "Bounds-Error -- dram_channel={} is outside of num_dram_channels={}",
@@ -856,18 +635,12 @@ void tt_cluster::read_dram_vec(vector<uint32_t> &vec, tt_target_dram dram, uint6
 void tt_cluster::write_dram_vec(const std::uint32_t *mem_ptr, uint32_t len, tt_cxy_pair dram_core, uint64_t addr, bool small_access)
 {
     int chip_id = dram_core.chip;
-    bool target_is_mmio_capable = ndesc->is_chip_mmio_capable(dram_core.chip);
-
     if (tt::llrt::OptionsG.get_watcher_enabled()) {
         tt::llrt::watcher_sanitize_host_noc_write(get_soc_desc(chip_id), {dram_core.x, dram_core.y}, addr, len * sizeof(uint32_t));
     }
-
-    if (target_is_mmio_capable) {
-        constexpr bool host_resident = false;
-        device->write_vector(mem_ptr, len, dram_core, addr, host_resident, small_access);
-    } else {
-        TT_ASSERT((get_soc_desc(chip_id).ethernet_cores).size() > 0 && get_num_chips() > 1);
-        write_to_non_mmio_device(mem_ptr, len, dram_core, addr);
+    device->write_to_device(mem_ptr, len, dram_core, addr, "LARGE_WRITE_TLB");
+    if (device->get_target_remote_device_ids().find(dram_core.chip) != device->get_target_remote_device_ids().end()) {
+        device->wait_for_non_mmio_flush();
     }
 }
 
@@ -879,19 +652,11 @@ void tt_cluster::write_dram_vec(vector<uint32_t> &vec, tt_cxy_pair dram_core, ui
 void tt_cluster::read_dram_vec(std::uint32_t *mem_ptr, tt_cxy_pair dram_core, uint64_t addr, uint32_t size_in_bytes, bool small_access)
 {
     int chip_id = dram_core.chip;
-    bool target_is_mmio_capable = ndesc->is_chip_mmio_capable(dram_core.chip);
 
     if (tt::llrt::OptionsG.get_watcher_enabled()) {
         tt::llrt::watcher_sanitize_host_noc_read(get_soc_desc(chip_id), {dram_core.x, dram_core.y}, addr, size_in_bytes);
     }
-
-    if (target_is_mmio_capable || type == TargetDevice::Versim) {
-        constexpr bool host_resident = false;
-        device->read_vector(mem_ptr, dram_core, addr, size_in_bytes, host_resident, small_access);
-    } else {
-        TT_ASSERT((get_soc_desc(chip_id).ethernet_cores).size() > 0 && get_num_chips() > 1);
-        read_from_non_mmio_device(mem_ptr, dram_core, addr, size_in_bytes);
-    }
+    device->read_from_device(mem_ptr, dram_core, addr, size_in_bytes, "LARGE_READ_TLB");
 }
 
 void tt_cluster::read_dram_vec(vector<uint32_t> &vec, tt_cxy_pair dram_core, uint64_t addr, uint32_t size_in_bytes, bool small_access)
@@ -902,16 +667,16 @@ void tt_cluster::read_dram_vec(vector<uint32_t> &vec, tt_cxy_pair dram_core, uin
 
 void tt_cluster::write_sysmem_vec(vector<uint32_t> &vec, uint64_t addr, chip_id_t src_device_id)
 {
-    constexpr bool host_resident = true;
-    constexpr bool small_access = false;
-    device->write_vector(vec, {}, addr, host_resident, small_access, src_device_id);
+    // TODO: Uplift
+    constexpr uint16_t channel = 0;
+    device->write_to_sysmem(vec, addr, channel, src_device_id);
 }
 
 void tt_cluster::read_sysmem_vec(vector<uint32_t> &vec, uint64_t addr, uint32_t size, chip_id_t src_device_id)
 {
-    constexpr bool host_resident = true;
-    constexpr bool small_access = false;
-    device->read_vector(vec, {}, addr, size, host_resident, small_access, src_device_id);
+    // TODO: Uplift
+    constexpr uint16_t channel = 0;
+    device->read_from_sysmem(vec, addr, channel, size, src_device_id);
 }
 
 void *tt_cluster::channel_0_address(std::uint32_t offset, std::uint32_t device_id) const {
@@ -919,9 +684,9 @@ void *tt_cluster::channel_0_address(std::uint32_t offset, std::uint32_t device_i
     return device->channel_0_address(offset, device_id);
 }
 
-void *tt_cluster::host_dma_address(std::uint64_t offset, chip_id_t src_device_id) const {
-    return device->host_dma_address(offset, src_device_id);
-}
+// void *tt_cluster::host_dma_address(std::uint64_t offset, chip_id_t src_device_id) const {
+//     return device->host_dma_address(offset, src_device_id);
+// }
 
 void tt_cluster::verify_sw_fw_versions(
     int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions) {
@@ -944,11 +709,6 @@ void tt_cluster::verify_sw_fw_versions(
 std::ostream &operator<<(std::ostream &os, tt_target_dram const &dram) {
     os << "Target DRAM chip = " << std::get<0>(dram) << ", chan = " << std::get<1>(dram) << ", subchan = " << std::get<2>(dram);
     return os;
-}
-
-std::unique_ptr<tt_soc_description> load_soc_descriptor_from_file(const tt::ARCH &arch, std::string file_path) {
-    TT_ASSERT(file_path != "", "soc-descriptor file path must be populated");
-    return load_soc_descriptor_from_yaml(file_path);
 }
 
 bool check_dram_core_exists(const std::vector<std::vector<CoreCoord>> &all_dram_cores, CoreCoord target_core) {

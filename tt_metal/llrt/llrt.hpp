@@ -14,8 +14,10 @@
 
 #include "llrt/tt_cluster.hpp"
 #include "tensix.h"
-#include "device/device_api.h"
+#include "tt_metal/third_party/umd/device/device_api.h"
+#include "tt_metal/third_party/umd/device/tt_xy_pair.h"
 #include "llrt_common/tiles.hpp"
+#include "llrt/tt_memory.h"
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "build_kernels_for_riscv/build_kernels_for_riscv.hpp"
 
@@ -90,7 +92,7 @@ ll_api::memory get_risc_binary(string path, int chip_id, bool fw_build);
 // a) load dummy BRISC FW to unused cores, and keep using the function that de-asserts all BRISCs (easier, we can load
 // blank kernel and disable NCRISC loading) b) de-assert reset only for used BRISCs (needs a new deassert function w/ a
 // list of core to de-assert) (harder)
-void deassert_brisc_reset_for_all_chips_all_cores(tt_cluster *cluster, bool stagger_start = false);
+// void deassert_brisc_reset_for_all_chips_all_cores(tt_cluster *cluster, bool stagger_start = false);
 
 // TODO: try using "stop" method from device instead, it's the proper way of asserting reset
 void assert_reset_for_all_chips(tt_cluster *cluster);

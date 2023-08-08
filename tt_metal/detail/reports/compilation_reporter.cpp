@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <atomic>
 #include "tt_metal/detail/reports/compilation_reporter.hpp"
 #include "tt_metal/detail/reports/report_utils.hpp"
 #include "tt_metal/detail/program.hpp"

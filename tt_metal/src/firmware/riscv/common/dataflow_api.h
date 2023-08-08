@@ -22,6 +22,7 @@
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/common_values.hpp"
 #include "src/firmware/riscv/common/risc_attribs.h"
+#include "third_party/umd/device/tt_silicon_driver_common.hpp"
 
 #include "debug_status.h"
 #include "debug_sanitize.h"

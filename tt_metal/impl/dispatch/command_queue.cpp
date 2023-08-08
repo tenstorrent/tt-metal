@@ -3,11 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "debug_tools.hpp"
+#include "device_data.hpp"
 #include "tt_metal/detail/program.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_metal/third_party/umd/device/tt_xy_pair.h"
 
 namespace tt::tt_metal {
 
@@ -595,11 +597,17 @@ void send_dispatch_kernel_to_device(Device* device) {
     if (DISPATCH_MAP_DUMP) {
         dispatch_defines["TT_METAL_DISPATCH_MAP_DUMP"] = "";
     }
+    std::vector<uint32_t> dispatch_compile_args = {DEVICE_DATA.TENSIX_SOFT_RESET_ADDR};
     auto dispatch_kernel = tt::tt_metal::CreateDataMovementKernel(
         dispatch_program,
         "tt_metal/impl/dispatch/kernels/command_queue.cpp",
         dispatch_logical_core,
-        tt::tt_metal::DataMovementConfig{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default, .defines = dispatch_defines}
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .compile_args = dispatch_compile_args,
+            .defines = dispatch_defines
+        }
     );
 
     CompileProgram(device, dispatch_program);

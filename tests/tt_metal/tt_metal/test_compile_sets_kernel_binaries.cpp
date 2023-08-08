@@ -8,7 +8,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
-#include "tt_metal/device/tt_memory.h"
+#include "tt_metal/llrt/tt_memory.h"
 #include "tt_metal/llrt/llrt.hpp"
 #include "tt_metal/detail/program.hpp"
 

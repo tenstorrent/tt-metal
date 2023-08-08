@@ -56,6 +56,15 @@ TESTDIR     = $(OUT)/test
 DOCSDIR     = $(OUT)/docs
 TOOLS = $(OUT)/tools
 
+UMD_HOME = $(TT_METAL_HOME)/tt_metal/third_party/umd
+UMD_VERSIM_HEADERS = $(TT_METAL_VERSIM_ROOT)/versim/
+UMD_USER_ROOT = $(TT_METAL_HOME)
+ifdef $(TT_METAL_VERSIM_ROOT)
+	UMD_VERSIM_STUB = 0
+else
+	UMD_VERSIM_STUB = 1
+endif
+
 # Top level flags, compiler, defines etc.
 
 ifeq ("$(ARCH_NAME)", "wormhole_b0")
@@ -67,7 +76,7 @@ else
 endif
 
 # TODO: rk reduce this to one later
-BASE_INCLUDES+=-I./ -I./tt_metal/
+BASE_INCLUDES+=-I./ -I./tt_metal/ -I$(UMD_HOME)/
 
 #WARNINGS ?= -Wall -Wextra
 WARNINGS ?= -Wdelete-non-virtual-dtor -Wreturn-type -Wswitch -Wuninitialized -Wno-unused-parameter
@@ -75,7 +84,8 @@ CC ?= gcc
 CXX ?= g++
 CFLAGS ?= -MMD $(WARNINGS) -I. $(CONFIG_CFLAGS) -mavx2 -DBUILD_DIR=\"$(OUT)\"
 CXXFLAGS ?= --std=c++17 -fvisibility-inlines-hidden -Werror
-LDFLAGS ?= $(CONFIG_LDFLAGS) -Wl,-rpath,$(PREFIX)/lib -L$(LIBDIR)/tools -L$(LIBDIR) \
+
+LDFLAGS ?= $(CONFIG_LDFLAGS) -Wl,-rpath,$(PREFIX)/lib:$(UMD_HOME)/build/lib -L$(LIBDIR)/tools -L$(LIBDIR) -L$(UMD_HOME)/build/lib \
 	-ldl \
 	-lz \
 	-lboost_thread \
@@ -118,7 +128,7 @@ LIBS_TO_BUILD = \
 	common \
 	build_kernels_for_riscv \
 	set_up_kernels \
-	device \
+	umd_device \
 	llrt \
 	tools \
 	tt_metal \
@@ -145,7 +155,7 @@ endif
 
 build: $(LIBS_TO_BUILD)
 
-clean: set_up_kernels/clean eager_package/clean
+clean: set_up_kernels/clean eager_package/clean clean_umd_device
 	find build ! -path "build/python_env" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 	rm -rf dist/
 

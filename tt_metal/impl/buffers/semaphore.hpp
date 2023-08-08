@@ -8,6 +8,7 @@
 
 #include "common/tt_backend_api_types.hpp"
 #include "common/core_coord.h"
+#include "hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/device/device.hpp"
 

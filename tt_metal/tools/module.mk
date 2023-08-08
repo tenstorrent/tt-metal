@@ -19,7 +19,7 @@ TOOLS_DEPS = $(addprefix $(OBJDIR)/, $(TOOLS_SRCS:.cpp=.d))
 tools: $(OBJDIR)/tt_metal/tools/memset tools/profiler tools/tt_gdb
 
 .PRECIOUS: $(OBJDIR)/tools/%
-$(OBJDIR)/tt_metal/tools/memset: $(OBJDIR)/tt_metal/tools/memset.o $(DEVICE_LIB) $(COMMON_LIB) $(LLRT_LIB)
+$(OBJDIR)/tt_metal/tools/memset: $(OBJDIR)/tt_metal/tools/memset.o $(COMMON_LIB) $(LLRT_LIB)
 	@mkdir -p $(@D)
 	$(CXX) $(CFLAGS) $(CXXFLAGS) $(TOOLS_INCLUDES) -o $@ $(OBJDIR)/tt_metal/tools/memset.o $(TOOLS_LDFLAGS)
 

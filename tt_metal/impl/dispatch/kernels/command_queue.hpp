@@ -204,7 +204,7 @@ FORCE_INLINE void write_program(u32 num_program_relays, volatile tt_l1_ptr u32*&
 #endif
 }
 
-FORCE_INLINE void launch_program(u32 num_workers, u32 num_multicast_messages, volatile tt_l1_ptr u32*& command_ptr) {
+FORCE_INLINE void launch_program(u32 num_workers, u32 num_multicast_messages, volatile tt_l1_ptr u32*& command_ptr, u32 tensix_soft_reset_addr) {
 // Never launch a program when this tool is used.
 #ifdef TT_METAL_DISPATCH_MAP_DUMP
     return;
@@ -218,7 +218,7 @@ FORCE_INLINE void launch_program(u32 num_workers, u32 num_multicast_messages, vo
     for (u32 i = 0; i < num_multicast_messages * 2; i += 2) {
         u64 worker_core_noc_coord = u64(command_ptr[i]) << 32;
         u32 num_messages = command_ptr[i + 1];
-        u64 deassert_addr = worker_core_noc_coord | TENSIX_SOFT_RESET_ADDR;
+        u64 deassert_addr = worker_core_noc_coord | tensix_soft_reset_addr;
         noc_semaphore_set_multicast(DEASSERT_RESET_SRC_L1_ADDR, deassert_addr, num_messages);
     }
 
@@ -232,7 +232,7 @@ FORCE_INLINE void launch_program(u32 num_workers, u32 num_multicast_messages, vo
     for (u32 i = 0; i < num_multicast_messages * 2; i += 2) {
         u64 worker_core_noc_coord = u64(command_ptr[i]) << 32;
         u32 num_messages = command_ptr[i + 1];
-        u64 assert_addr = worker_core_noc_coord | TENSIX_SOFT_RESET_ADDR;
+        u64 assert_addr = worker_core_noc_coord | tensix_soft_reset_addr;
 
         noc_semaphore_set_multicast(ASSERT_RESET_SRC_L1_ADDR, assert_addr, num_messages);
     }

@@ -60,5 +60,7 @@ namespace utils
         static const std::string outpath = get_root_dir() + "/.reports/";
         return outpath;
     }
-}
-}
+
+}   // namespace utils
+
+}   // namespace tt

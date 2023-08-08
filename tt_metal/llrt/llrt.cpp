@@ -88,10 +88,10 @@ ll_api::memory get_risc_binary(string path, int chip_id, bool fw_build) {
 // Every core gets valid FW (blank kernel if nothing is running on the core) before being taken out ot reset
 // This avoids the issue of cores running garbahe out of their L1
 // TODO: deassert reset only for used BRISCs (needs a new deassert function w/ a list of core to de-assert)
-void deassert_brisc_reset_for_all_chips_all_cores(tt_cluster *cluster, bool stagger_start) {
-    cluster->deassert_risc_reset(stagger_start);
-    log_debug(tt::LogLLRuntime, "deasserted reset for all BRISCs");
-}
+// void deassert_brisc_reset_for_all_chips_all_cores(tt_cluster *cluster, bool stagger_start) {
+//     cluster->deassert_risc_reset(stagger_start);
+//     log_debug(tt::LogLLRuntime, "deasserted reset for all BRISCs");
+// }
 
 // TODO: try using "stop" method from device instead, it's the proper way of asserting reset
 void assert_reset_for_all_chips(tt_cluster *cluster) {
@@ -100,7 +100,7 @@ void assert_reset_for_all_chips(tt_cluster *cluster) {
     if (cluster->type == tt::TargetDevice::Silicon) {
         log_debug(tt::LogLLRuntime, "Starting resets for {} chips", cluster->get_num_chips());
         for (const chip_id_t &chip_id : cluster->get_all_chips()) {
-            cluster->broadcast_remote_tensix_risc_reset(chip_id, TENSIX_ASSERT_SOFT_RESET);
+            cluster->assert_risc_reset(chip_id);
         }
     }
 }
@@ -322,7 +322,7 @@ CoreCoord get_core_for_dram_channel(tt_cluster *cluster, int dram_channel_id, ch
 namespace utils {
 void log_current_ai_clk(tt_cluster *cluster) {
     if (cluster->type == tt::TargetDevice::Silicon) {
-        for (const chip_id_t &chip_id : cluster->get_all_chips()) {
+        for (const chip_id_t &chip_id : cluster->get_all_mmio_chips()) {
             int ai_clk = cluster->get_device_aiclk(chip_id);
             log_info(tt::LogLLRuntime, "AI CLK for device {} is:   {} MHz", chip_id, ai_clk);
         }

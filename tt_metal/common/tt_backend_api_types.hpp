@@ -12,6 +12,7 @@
 #include <functional>
 #include <string>
 #include <vector>
+#include "tt_metal/third_party/umd/device/tt_arch_types.h"
 
 namespace tt {
 
@@ -117,16 +118,6 @@ inline constexpr static uint32_t tile_size(const DataFormat &format) {
  * @brief Device Enums
  */
 enum class DEVICE {
-    JAWBRIDGE = 0,
-    GRAYSKULL = 1,
-    WORMHOLE = 2,
-    WORMHOLE_B0 = 3,
-    Invalid = 0xFF,
-};
-
-//! Arch Enumeration - Chip Generations
-/*! Denotes Chip Generations */
-enum class ARCH {
     JAWBRIDGE = 0,
     GRAYSKULL = 1,
     WORMHOLE = 2,

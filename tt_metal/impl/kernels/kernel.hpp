@@ -16,6 +16,7 @@
 #include "common/base_types.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/kernels/kernel_types.hpp"
+#include "tt_metal/llrt/tt_memory.h"
 
 namespace tt {
 

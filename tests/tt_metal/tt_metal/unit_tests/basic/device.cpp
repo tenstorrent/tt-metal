@@ -39,6 +39,7 @@ bool l1_ping(
             tt_metal::detail::WriteToDeviceL1(device, dest_core, l1_byte_address, inputs);
         }
     }
+
     for (int y = 0; y < grid_size.y; y++) {
         for (int x = 0; x < grid_size.x; x++) {
             CoreCoord dest_core({.x = static_cast<size_t>(x), .y = static_cast<size_t>(y)});
@@ -69,6 +70,7 @@ bool dram_ping(
     for (unsigned int channel = 0; channel < num_channels; channel++) {
         tt_metal::detail::WriteToDeviceDRAMChannel(device, channel, dram_byte_address, inputs);
     }
+
     for (unsigned int channel = 0; channel < num_channels; channel++) {
         std::vector<uint32_t> dest_channel_data;
         tt_metal::detail::ReadFromDeviceDRAMChannel(device, channel, dram_byte_address, byte_size, dest_channel_data);
@@ -274,6 +276,7 @@ TEST_F(BasicFixture, SingleDeviceLoadBlankKernels) {
     const unsigned int pcie_id = 0;
     device = tt::tt_metal::CreateDevice(arch, pcie_id);
     ASSERT_TRUE(tt::tt_metal::InitializeDevice(device));
+    unit_tests::basic::device::load_all_blank_kernels(device);
     ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
 }
 TEST_F(SingleDeviceFixture, PingAllLegalDramChannels) {
