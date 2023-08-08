@@ -18,7 +18,6 @@ from models.utility_functions import (
 )
 from tests.python_api_testing.models.utility_functions_new import prep_report, Profiler
 import tt_lib as ttl
-from models.stable_diffusion.tt.experimental_ops import disable_conv
 from models.stable_diffusion.tt.unet_2d_condition import (
     UNet2DConditionModel as tt_unet_condition,
 )
@@ -314,7 +313,6 @@ def run_perf_unbatched_stable_diffusion(expected_inference_time, expected_compil
         ),
     ),
 )
-@disable_conv
 def test_perf_bare_metal(
     use_program_cache, expected_inference_time, expected_compile_time
 ):
@@ -331,7 +329,6 @@ def test_perf_bare_metal(
         ),
     ),
 )
-@disable_conv
 def test_perf_virtual_machine(
     use_program_cache, expected_inference_time, expected_compile_time
 ):
