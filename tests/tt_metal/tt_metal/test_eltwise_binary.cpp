@@ -7,6 +7,8 @@
 #include "test_gold_impls.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
+
 using namespace tt;
 using namespace tt::tt_metal;
 
@@ -41,7 +43,7 @@ int main(int argc, char** argv) {
 
     pass &= tt_metal::InitializeDevice(device);
     tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}, {1, 11}});
-    CommandQueue cq(device);
+    CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
 
     Program programs[] = {tt_metal::Program(), tt_metal::Program(), tt_metal::Program()};
 
@@ -133,13 +135,12 @@ int main(int argc, char** argv) {
                 core,
                 tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
-            std::map<string, string> writer_defines = {{"TT_METAL_DEVICE_DISPATCH_MODE", "1"}};
             auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
                 program,
                 multibank ? "tt_metal/kernels/dataflow/writer_unary_8bank.cpp"
                           : "tt_metal/kernels/dataflow/writer_unary.cpp",
                 core,
-                tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .defines = writer_defines});
+                tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
             vector<uint32_t> compute_kernel_args = {
                 2048,  // per_core_block_cnt

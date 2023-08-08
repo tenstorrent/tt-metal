@@ -259,6 +259,10 @@ void create_CBs_for_fused_matmul(tt_metal::Program &program, tt_metal::Device* d
 bool test_matmul_large_block(const tt::ARCH& arch, bool activations_rm, bool output_rm) {
     bool pass = true;
 
+    // Once this test is uplifted to use fast dispatch, this can be removed.
+    char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+    putenv(env);
+
     try {
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup

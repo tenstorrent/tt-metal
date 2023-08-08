@@ -9,6 +9,11 @@ class MultiDeviceFixture {
    public:
     MultiDeviceFixture() {
         auto arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        if (arch_ != tt::ARCH::GRAYSKULL) {
+            // Once this test is uplifted to use fast dispatch, this can be removed.
+            char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+            putenv(env);
+        }
         num_devices_ = tt::tt_metal::Device::detect_num_available_devices(); // FIXME: Is this too greedy?
 
         for (unsigned int id = 0; id < num_devices_; id++) {

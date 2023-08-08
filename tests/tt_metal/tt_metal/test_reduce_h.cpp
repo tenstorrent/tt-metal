@@ -27,6 +27,10 @@ int main(int argc, char **argv) {
     bool pass = true;
     bool multibank = true;
 
+    // Once this test is uplifted to use fast dispatch, this can be removed.
+    char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+    putenv(env);
+
     for (int do_max = 0; do_max <= 1; do_max++) {
     log_info(LogTest, "Running reduce test for max={}", do_max);
     try {

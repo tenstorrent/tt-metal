@@ -10,6 +10,12 @@ fi
 run_perf_models() {
     local pipeline_type=$1
 
+    if [[ ! -z "$FAST_DISPATCH" ]]; then
+        echo "Running performance models in fast dispatch mode"
+    else
+        export TT_METAL_SLOW_DISPATCH_MODE=1
+    fi
+
     env pytest tests/python_api_testing/models/vgg/tests -m $pipeline_type
 
     env pytest tests/python_api_testing/models/vit/tests -m $pipeline_type

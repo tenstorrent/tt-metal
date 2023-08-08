@@ -60,6 +60,11 @@ void check_semaphores_are_initialized(tt_metal::Device *device, const CoreRangeS
 }
 
 bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_metal::Program &program, const CoreRangeSet &core_range_set) {
+
+    // Once this test is uplifted to use fast dispatch, this can be removed.
+    char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+    putenv(env);
+
     bool pass = true;
     uint32_t single_tile_size = 2 * 1024;
     uint32_t num_tiles = 4;

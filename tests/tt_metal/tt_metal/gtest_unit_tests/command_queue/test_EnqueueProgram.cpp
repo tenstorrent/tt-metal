@@ -24,14 +24,13 @@ struct DummyProgramConfig {
 namespace local_test_functions {
 
 void initialize_dummy_kernels(Program& program, const CoreRangeSet& cr_set) {
-    std::map<string, string> defines = {{"TT_METAL_DEVICE_DISPATCH_MODE", "1"}};
     auto dummy_reader_kernel = CreateDataMovementKernel(
         program, "tt_metal/kernels/dataflow/blank.cpp", cr_set,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
     auto dummy_writer_kernel = CreateDataMovementKernel(
         program, "tt_metal/kernels/dataflow/blank.cpp", cr_set,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     auto dummy_compute_kernel = CreateComputeKernel(program, "tt_metal/kernels/compute/blank.cpp", cr_set);
 }
@@ -181,7 +180,7 @@ TEST_F(CommandQueueHarness, TestSingleCbConfigCorrectlySentSingleCore) {
 
     DummyProgramConfig config = {.cr_set = cr_set, .cb_config = cb_config, .num_cbs = 1, .first_cb_start = 500 * 1024};
 
-    EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(this->device, *this->cq, config));
+    EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(this->device, *tt::tt_metal::detail::GLOBAL_CQ, config));
 }
 
 TEST_F(CommandQueueHarness, TestSingleSemaphoreConfigCorrectlySentSingleCore) {
@@ -190,12 +189,10 @@ TEST_F(CommandQueueHarness, TestSingleSemaphoreConfigCorrectlySentSingleCore) {
 
     DummyProgramConfig config = {.cr_set = cr_set, .num_sems = 1};
 
-    EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_sems(this->device, *this->cq, config));
+    EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_sems(this->device, *tt::tt_metal::detail::GLOBAL_CQ, config));
 }
 
 TEST_F(CommandQueueHarness, TestAutoInsertedBlankBriscKernelInDeviceDispatchMode) {
-    char env[] = "TT_METAL_DEVICE_DISPATCH_MODE=1";
-    putenv(env);
     Program program;
 
     CoreRange cr = {.start = {0, 0}, .end = {0, 0}};
@@ -208,8 +205,8 @@ TEST_F(CommandQueueHarness, TestAutoInsertedBlankBriscKernelInDeviceDispatchMode
 
     CompileProgram(this->device, program);
 
-    EnqueueProgram(*this->cq, program, false);
-    Finish(*this->cq);
+    EnqueueProgram(*tt::tt_metal::detail::GLOBAL_CQ, program, false);
+    Finish(*tt::tt_metal::detail::GLOBAL_CQ);
 }
 
 }  // end namespace single_core_tests
@@ -226,7 +223,7 @@ TEST_F(CommandQueueHarness, TestAllCbConfigsCorrectlySentMultiCore) {
     DummyProgramConfig config = {
         .cr_set = cr_set, .cb_config = cb_config, .num_cbs = NUM_CIRCULAR_BUFFERS, .first_cb_start = 500 * 1024};
 
-    EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(this->device, *this->cq, config));
+    EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(this->device, *tt::tt_metal::detail::GLOBAL_CQ, config));
 }
 
 TEST_F(CommandQueueHarness, TestAllSemConfigsCorrectlySentMultiCore) {
@@ -237,7 +234,7 @@ TEST_F(CommandQueueHarness, TestAllSemConfigsCorrectlySentMultiCore) {
 
     DummyProgramConfig config = {.cr_set = cr_set, .num_sems = NUM_SEMAPHORES};
 
-    EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_sems(this->device, *this->cq, config));
+    EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_sems(this->device, *tt::tt_metal::detail::GLOBAL_CQ, config));
 }
 
 }  // end namespace multicore_tests

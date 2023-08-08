@@ -326,6 +326,10 @@ bool move_tiles_to_dram(tt_metal::Device *device, std::vector<uint32_t> tensor, 
 int main(int argc, char **argv) {
     bool pass = true;
 
+    // Once this test is uplifted to use fast dispatch, this can be removed.
+    char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+    putenv(env);
+
     try {
         int num_cores_r = 10;
         int num_cores_c = 12;

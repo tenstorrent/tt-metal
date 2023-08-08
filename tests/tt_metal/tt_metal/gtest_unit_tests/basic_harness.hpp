@@ -8,7 +8,6 @@ class CommandQueueHarness : public ::testing::Test {
    protected:
     tt::ARCH arch;
     Device* device;
-    std::unique_ptr<CommandQueue> cq;
     u32 pcie_id;
 
     void SetUp() override {
@@ -21,7 +20,6 @@ class CommandQueueHarness : public ::testing::Test {
         const int pci_express_slot = 0;
         this->device = tt::tt_metal::CreateDevice(arch, pci_express_slot);
         tt::tt_metal::InitializeDevice(this->device);
-        this->cq = std::make_unique<CommandQueue>(this->device);
 
         this->pcie_id = 0;
     }
@@ -45,6 +43,11 @@ class DeviceHarness : public ::testing::Test {
         const int pci_express_slot = 0;
         this->pcie_id = pci_express_slot;
         this->device = tt::tt_metal::CreateDevice(arch, pci_express_slot);
+
+        // Once this test is uplifted to use fast dispatch, this can be removed.
+        char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+        putenv(env);
+
         tt::tt_metal::InitializeDevice(this->device);
     }
 

@@ -1,6 +1,8 @@
 #include "tt_metal/common/bfloat16.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
+
 using namespace tt;
 using namespace tt::tt_metal;
 u32 NUM_TILES = 2048;
@@ -55,12 +57,11 @@ tt_metal::Program generate_eltwise_unary_program(Device *device) {
         tt::DataFormat::Float16_b,
         output_cb_addr);
 
-    std::map<string, string> defines = {{"TT_METAL_DEVICE_DISPATCH_MODE", "1"}};
     auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary_8bank.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .defines = defines});
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
@@ -98,7 +99,7 @@ void test_enqueue_program(std::function<tt_metal::Program(tt_metal::Device *devi
 
     vector<u32> out_vec;
     {
-        CommandQueue cq(device);
+        CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
 
         // Enqueue program inputs
         Buffer buf(device, NUM_TILES * 2048, 0, 2048, BufferType::DRAM);

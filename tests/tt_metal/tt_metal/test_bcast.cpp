@@ -57,6 +57,11 @@ const char* get_compute_name(BcastDim::Enum bcast_dim) {
 // Tests reduce_h kernel in H dimension (NCHW->NC1W)
 //////////////////////////////////////////////////////////////////////////////////////////
 int main(int argc, char **argv) {
+
+    // Once this test is uplifted to use fast dispatch, this can be removed.
+    char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+    putenv(env);
+
     bool pass = true;
 
     const char* bdim_to_log_string[] = { "", "BCAST_H", "BCAST_W", "", "BCAST_HW" };

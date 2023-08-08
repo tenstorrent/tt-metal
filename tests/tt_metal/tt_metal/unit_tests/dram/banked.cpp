@@ -10,6 +10,7 @@
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -32,6 +33,12 @@ struct BankedDramConfig {
 /// @return
 bool dram_reader_cb_writer_dram(
     tt_metal::Device* device, const BankedDramConfig& cfg, const bool banked_reader, const bool banked_writer) {
+
+    // Once this test is uplifted to use fast dispatch, this can be removed.
+    tt::tt_metal::detail::GLOBAL_CQ.reset();
+    char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+    putenv(env);
+
     bool pass = true;
 
     const uint32_t cb_id = 0;

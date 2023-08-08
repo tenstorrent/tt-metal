@@ -112,8 +112,8 @@ std::vector<Tensor> run_without_program_cache(
     auto& program = program_with_callbacks.program;
 
     CompileProgram(device, program);
-    const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
-    if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
+    const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
         EnqueueProgram(*::detail::GLOBAL_CQ, program, false);
         // Only need to dump device data when in dispatch mode
         // LaunchKernel automatically dumps device data
@@ -147,8 +147,8 @@ std::vector<Tensor> run_with_program_cache(
         program, input_tensors, optional_input_tensors, output_tensors
     );
 
-    const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
-    if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
+    const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
         EnqueueProgram(*::detail::GLOBAL_CQ, program, false);
         // Only need to dump device data when in dispatch mode
         // LaunchKernel automatically dumps device data

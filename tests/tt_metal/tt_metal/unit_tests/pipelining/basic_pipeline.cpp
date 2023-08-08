@@ -7,6 +7,7 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 
 #include "common/bfloat16.hpp"
 
@@ -19,7 +20,7 @@ namespace unit_tests::create_pipeline {
 
 
 void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
-    CommandQueue cq(device);
+    CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
 
     tt_metal::Program program = tt_metal::Program();
 
@@ -113,12 +114,11 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
             sender_kernel_name = "tt_metal/kernels/dataflow/sender_intermediate_stage.cpp";
         }
         std::vector<u32> sender_kernel_compile_time_args = {cb_index, block_size_tiles};
-        std::map<string, string> sender_defines = {{"TT_METAL_DEVICE_DISPATCH_MODE", "1"}};
         sender_kernels.push_back(tt_metal::CreateDataMovementKernel(
             program,
             sender_kernel_name,
             cores[core_id],
-            DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = sender_kernel_compile_time_args, .defines = sender_defines}));
+            DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = sender_kernel_compile_time_args}));
 
         // Add blank compute kernel
         tt_metal::CreateComputeKernel(

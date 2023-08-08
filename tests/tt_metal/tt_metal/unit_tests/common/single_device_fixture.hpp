@@ -10,6 +10,12 @@ class SingleDeviceFixture {
     SingleDeviceFixture() {
         arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
         const int pci_express_slot = 0;
+
+        if (arch_ != tt::ARCH::GRAYSKULL) {
+            // Once this test is uplifted to use fast dispatch, this can be removed.
+            char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+            putenv(env);
+        }
         device_ = tt::tt_metal::CreateDevice(arch_, pci_express_slot);
         tt::tt_metal::InitializeDevice(device_);
     }

@@ -7,6 +7,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -154,9 +155,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID> create_pro
         program,
         "tt_metal/kernels/dataflow/writer_matmul_tile_layout.cpp",
         all_cores,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .defines = {
-            {"TT_METAL_DEVICE_DISPATCH_MODE", "1"}
-        }});
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     int num_blocks = (K / in0_block_w);
 
@@ -409,8 +408,7 @@ int main(int argc, char **argv) {
         pass &= tt_metal::CompileProgram(device, program);
         tt::log_assert(program.get_worker_core_range_set().ranges().size() >= 1, "Invalid core range set");
 
-
-        CommandQueue cq(device);
+        CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application

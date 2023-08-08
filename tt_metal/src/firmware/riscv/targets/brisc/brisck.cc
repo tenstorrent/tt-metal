@@ -80,11 +80,11 @@ void kernel_launch() {
     // FW needs to notify device dispatcher when we are done
     // Some information needed is known here, pass it back
     kernel_noc_id_var = loading_noc;
-#if defined(TT_METAL_DEVICE_DISPATCH_MODE)
+#if defined(TT_METAL_SLOW_DISPATCH_MODE)
+    dispatch_addr = 0;
+#else
     dispatch_addr = (my_x[loading_noc] == NOC_X(1) && my_y[loading_noc] == NOC_Y(11)) ?
         0 :
         get_noc_addr(1, 11, DISPATCH_MESSAGE_ADDR);
-#else
-    dispatch_addr = 0;
 #endif
 }

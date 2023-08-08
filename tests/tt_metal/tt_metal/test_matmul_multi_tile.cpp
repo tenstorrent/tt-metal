@@ -84,6 +84,10 @@ std::vector<std::uint32_t> transpose_tiles(std::vector<std::uint32_t> data, int 
 
 bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
     bool pass = true;
+
+    // Once this test is uplifted to use fast dispatch, this can be removed.
+    char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+    putenv(env);
     try {
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup

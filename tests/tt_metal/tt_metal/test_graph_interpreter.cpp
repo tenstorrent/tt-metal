@@ -105,6 +105,10 @@ const map<string, std::function<float(float, float)>> binary_op_to_function = {
 // graph interpreter since there is no branching
 bool run_chained_sfpu_test(const tt::ARCH& arch, int chain_length) {
 
+    // Once this test is uplifted to use fast dispatch, this can be removed.
+    char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+    putenv(env);
+
     TT_ASSERT(chain_length > 0 && chain_length <= 10, "Cannot have a graph of more than 10 ops in L1");
 
     bool pass = true;
@@ -338,6 +342,10 @@ bool run_chained_sfpu_test(const tt::ARCH& arch, int chain_length) {
 
 // This test just runs an add followed by gelu
 bool run_binary_add_and_then_eltwise_gelu_test(const tt::ARCH& arch) {
+
+    // Once this test is uplifted to use fast dispatch, this can be removed.
+    char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+    putenv(env);
 
     uint32_t chain_length = 2;
     bool pass = true;
@@ -597,6 +605,10 @@ bool run_binary_add_and_then_eltwise_gelu_test(const tt::ARCH& arch) {
 // This test just runs a chain of eltwise binary ops, with branching
 // This runs a specific hardcoded graph
 bool run_forked_binary_test(const tt::ARCH& arch) {
+
+    // Once this test is uplifted to use fast dispatch, this can be removed.
+    char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+    putenv(env);
 
     int chain_length = 10;
 

@@ -13,6 +13,7 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -187,16 +188,12 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
             test_config.cores,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
-        std::map<string, string> writer_defines;
         // Enqueue apis only supported on gs so far
-        if (device->arch() == tt::ARCH::GRAYSKULL) {
-            writer_defines["TT_METAL_DEVICE_DISPATCH_MODE"] = "1";
-        }
         auto writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
             "tt_metal/kernels/dataflow/writer_unary.cpp",
             test_config.cores,
-            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .defines = writer_defines});
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
         std::map<string, string> sfpu_defines = sfpu_util::sfpu_op_to_op_name.at(test_config.sfpu_op);
         auto sfpu_kernel = tt_metal::CreateComputeKernel(
@@ -226,7 +223,7 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
 
     std::vector<u32> dest_buffer_data;
     if (device->arch() == tt::ARCH::GRAYSKULL) {
-        CommandQueue cq(device);
+        CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
         EnqueueWriteBuffer(cq, input_dram_buffer, packed_input, false);
 
         EnqueueProgram(cq, program, false);

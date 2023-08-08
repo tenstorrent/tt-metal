@@ -23,6 +23,11 @@ using std::vector;
 // tests reduce kernel in W dimension (NCHW->NCH1)
 //////////////////////////////////////////////////////////////////////////////////////////
 int main(int argc, char **argv) {
+
+    // Once this test is uplifted to use fast dispatch, this can be removed.
+    char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+    putenv(env);
+
     bool pass = true;
     bool multibank = true;
 

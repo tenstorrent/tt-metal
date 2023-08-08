@@ -107,6 +107,11 @@ TEST_SUITE(
         REQUIRE(num_devices > 0);
         std::vector<tt::tt_metal::Device*> devices;
 
+        if (arch != tt::ARCH::GRAYSKULL) {
+            // Once this test is uplifted to use fast dispatch, this can be removed.
+            char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+            putenv(env);
+        }
         for (unsigned int id = 0; id < num_devices; id++) {
             devices.push_back(tt::tt_metal::CreateDevice(arch, id));
             REQUIRE(tt::tt_metal::InitializeDevice(devices.at(id)));
@@ -120,6 +125,12 @@ TEST_SUITE(
         const size_t num_devices = tt::tt_metal::Device::detect_num_available_devices();
         REQUIRE(num_devices > 0);
         std::vector<tt::tt_metal::Device*> devices;
+
+        if (arch != tt::ARCH::GRAYSKULL) {
+            // Once this test is uplifted to use fast dispatch, this can be removed.
+            char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+            putenv(env);
+        }
 
         for (unsigned int id = 0; id < num_devices; id++) {
             devices.push_back(tt::tt_metal::CreateDevice(arch, id));
@@ -223,6 +234,11 @@ TEST_SUITE(
         tt::tt_metal::Device* device;
         const unsigned int pcie_id = 0;
         device = tt::tt_metal::CreateDevice(arch, pcie_id);
+        if (arch != tt::ARCH::GRAYSKULL) {
+            // Once this test is uplifted to use fast dispatch, this can be removed.
+            char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+            putenv(env);
+        }
         REQUIRE(tt::tt_metal::InitializeDevice(device));
         REQUIRE(tt::tt_metal::CloseDevice(device));
     }
@@ -231,6 +247,11 @@ TEST_SUITE(
         tt::tt_metal::Device* device;
         const unsigned int pcie_id = 0;
         device = tt::tt_metal::CreateDevice(arch, pcie_id);
+        if (arch != tt::ARCH::GRAYSKULL) {
+            // Once this test is uplifted to use fast dispatch, this can be removed.
+            char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+            putenv(env);
+        }
         REQUIRE(tt::tt_metal::InitializeDevice(device));
         CoreCoord unharvested_logical_grid_size = {.x=12, .y = 10};
         if (arch == tt::ARCH::WORMHOLE_B0) {
@@ -267,6 +288,11 @@ TEST_SUITE(
         tt::tt_metal::Device* device;
         const unsigned int pcie_id = 0;
         device = tt::tt_metal::CreateDevice(arch, pcie_id);
+        if (arch != tt::ARCH::GRAYSKULL) {
+            // Once this test is uplifted to use fast dispatch, this can be removed.
+            char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+            putenv(env);
+        }
         REQUIRE(tt::tt_metal::InitializeDevice(device));
         REQUIRE(tt::tt_metal::CloseDevice(device));
     }

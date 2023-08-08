@@ -1,6 +1,6 @@
 Environment Variables
 #########################
 
-TT_METAL_DEVICE_DISPATCH_MODE
+TT_METAL_SLOW_DISPATCH_MODE
 ****************************************
-If set, this enables the use of command queue in ops.
+If set, this disables running with a command queue and uses host "slow" dispatch.

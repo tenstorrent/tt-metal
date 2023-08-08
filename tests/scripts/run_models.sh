@@ -13,7 +13,9 @@ export PYTHONPATH=$TT_METAL_HOME
 
 # Turning on fast dispatch for the remaining models
 if [[ ! -z "$FAST_DISPATCH" ]]; then
-    export TT_METAL_DEVICE_DISPATCH_MODE=1
+    echo "Running models in fast dispatch mode"
+else
+    export TT_METAL_SLOW_DISPATCH_MODE=1
 fi
 
 env pytest tests/python_api_testing/models/whisper -k whisper_attention

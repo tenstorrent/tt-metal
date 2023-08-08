@@ -187,6 +187,7 @@ void write_unique_writer_runtime_args_to_device(
 }
 
 bool test_multi_core_kernel_same_runtime_args(tt_metal::Device *device) {
+
     bool pass = true;
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Buffer Setup
@@ -244,6 +245,7 @@ bool test_multi_core_kernel_same_runtime_args(tt_metal::Device *device) {
 }
 
 bool test_multi_core_kernel_unique_runtime_args(tt_metal::Device *device) {
+
     bool pass = true;
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Buffer Setup
@@ -320,6 +322,11 @@ bool test_multi_core_kernel_unique_runtime_args(tt_metal::Device *device) {
 
 int main(int argc, char **argv) {
     bool pass = true;
+
+
+    // Once this test is uplifted to use fast dispatch, this can be removed.
+    char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+    putenv(env);
 
     try {
 

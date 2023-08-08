@@ -182,8 +182,8 @@ bool InitializeDevice(Device *device) {
         init = false;
     }
 
-    const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
-    if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
+    const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
         detail::GLOBAL_CQ = std::make_unique<CommandQueue>(device);
     }
 
@@ -207,10 +207,10 @@ void StartDebugPrintServer(Device *device, const std::vector<CoreCoord> & cores)
 KernelID CreateDataMovementKernel(Program &program, const std::string &file_name, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::optional<DataMovementConfig> &config) {
     CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
     auto dm_config = detail::GetDataMovementConfig(program, file_name, core_ranges, config);
-    const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
-    if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
-        // This triggers the firmware to do logic only needed for fast dispatch
-        dm_config.defines["TT_METAL_DEVICE_DISPATCH_MODE"]  = "1";
+    const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
+        // This triggers the firmware to do logic only needed for slow dispatch
+        dm_config.defines["TT_METAL_SLOW_DISPATCH_MODE"] = "1";
     }
     auto kernel = new DataMovementKernel(file_name, core_ranges, dm_config);
     detail::AddKernel(program, kernel);
@@ -220,10 +220,10 @@ KernelID CreateDataMovementKernel(Program &program, const std::string &file_name
 KernelID CreateComputeKernel(Program &program, const std::string &file_name, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::optional<ComputeConfig> &config) {
     CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
     auto compute_config = config.has_value() ? config.value() : ComputeConfig{};
-    const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
-    if (TT_METAL_DEVICE_DISPATCH_MODE != nullptr) {
+    const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
         // This triggers the firmware to do logic only needed for fast dispatch
-        compute_config.defines["TT_METAL_DEVICE_DISPATCH_MODE"]  = "1";
+        compute_config.defines["TT_METAL_SLOW_DISPATCH_MODE"] = "1";
     }
     auto kernel = new ComputeKernel(file_name, core_ranges, compute_config);
     detail::AddKernel(program, kernel);
@@ -556,7 +556,6 @@ bool CompileProgram(Device *device, Program &program) {
         "dependent on information that is set during device initialization.",
         program.get_id());
 
-    const char *TT_METAL_DEVICE_DISPATCH_MODE = std::getenv("TT_METAL_DEVICE_DISPATCH_MODE");
     tt::tt_metal::detail::CompileBlankKernel(device);
 
     bool pass = true;

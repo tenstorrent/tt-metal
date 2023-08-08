@@ -43,6 +43,7 @@ void update_sfpu_op_to_hlk_op()
 using namespace tt;
 
 bool run_sfpu_test(const tt::ARCH& arch, string sfpu_name) {
+
     bool multibank = true;
     bool pass = true;
     try {
@@ -219,6 +220,10 @@ bool run_sfpu_test(const tt::ARCH& arch, string sfpu_name) {
 }
 
 int main(int argc, char **argv) {
+
+    // Once this test is uplifted to use fast dispatch, this can be removed.
+    char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+    putenv(env);
 
     bool pass = true;
     ////////////////////////////////////////////////////////////////////////////

@@ -27,6 +27,12 @@ bool reader_only(
     const size_t& dram_byte_address,
     const size_t& l1_byte_address,
     const CoreCoord& reader_core) {
+
+    // Once this test is uplifted to use fast dispatch, this can be removed.
+    tt::tt_metal::detail::GLOBAL_CQ.reset();
+    char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+    putenv(env);
+
     bool pass = true;
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -89,6 +95,12 @@ bool writer_only(
     const size_t& dram_byte_address,
     const size_t& l1_byte_address,
     const CoreCoord& writer_core) {
+
+    // Once this test is uplifted to use fast dispatch, this can be removed.
+    tt::tt_metal::detail::GLOBAL_CQ.reset();
+    char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+    putenv(env);
+
     bool pass = true;
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -156,6 +168,11 @@ struct ReaderWriterConfig {
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_config) {
+    // Once this test is uplifted to use fast dispatch, this can be removed.
+    tt::tt_metal::detail::GLOBAL_CQ.reset();
+    char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+    putenv(env);
+
     bool pass = true;
 
     const uint32_t cb_index = 0;
@@ -258,6 +275,11 @@ struct ReaderDatacopyWriterConfig {
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriterConfig& test_config) {
+    // Once this test is uplifted to use fast dispatch, this can be removed.
+    tt::tt_metal::detail::GLOBAL_CQ.reset();
+    char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+    putenv(env);
+
     bool pass = true;
 
     const uint32_t input0_cb_index = 0;

@@ -63,6 +63,11 @@ inline vector<uint32_t> gold_standard_untilize(std::vector<uint32_t> src_vec, ve
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
 int main(int argc, char **argv) {
+
+    // Once this test is uplifted to use fast dispatch, this can be removed.
+    char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+    putenv(env);
+
     bool pass = true;
     bool multibank = true;
 

@@ -27,6 +27,10 @@ uint32_t l1_alloc(uint32_t size_in_bytes) {
 int main(int argc, char **argv) {
     bool pass = true;
 
+    // Once this test is uplifted to use fast dispatch, this can be removed.
+    char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+    putenv(env);
+
     try {
         std::string env_var = "TT_PCI_DMA_BUF_SIZE=1048576";
         int result = putenv(const_cast<char*>(env_var.c_str()));
