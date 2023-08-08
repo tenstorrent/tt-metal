@@ -68,13 +68,12 @@ dispatch_and_banking:
     l1_bank_size:
       524288
 
-    compute_and_storage_cores:
-      [
-        1-1
-      ]
+    compute_with_storage_grid_range: # Logical only start and end [x, y]
+      start: [0, 0]
+      end: [0, 0]
 
     storage_cores: # Logical Only
-      [[1, -1]]
+      []
 
     dispatch_cores: # Logical Only
-      [[0, -1]]
+      []
