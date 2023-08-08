@@ -49,6 +49,8 @@ jobs:
       matrix:
         os: [ubuntu-20.04]
         arch: [grayskull, wormhole_b0]
+    # May accidentally create two releases without restricting to 1 job
+    concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
