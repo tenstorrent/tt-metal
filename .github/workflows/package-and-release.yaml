@@ -12,18 +12,21 @@ permissions:
 jobs:
   get-params:
     runs-on: ubuntu-latest
+    outputs:
+      is-release-candidate: ${{ steps.get-is-release-candidate.outputs.is-release-candidate }}
     steps:
       - name: Get is-release-candidate
+        id: get-is-release-candidate
         run: |
-          isReleaseCandidate=${{ github.ref_type == "branch" && github.event_name == "push" }}
+          isReleaseCandidate=${{ github.ref_type == 'branch' && github.event_name == 'push' }}
           echo "is-release-candidate=$isReleaseCandidate" >> "$GITHUB_OUTPUT"
   create-tag:
-    needs: get-params
+    needs: [get-params]
     uses: tenstorrent-metal/metal-workflows/.github/workflows/release-verify-or-create-tag.yaml@main
     with:
       fetch_depth: 0
       bump_each_commit: false
-      release_candidate_suffix: ${{ fromJSON(needs.get-params.outputs.is-release-candidate) }}
+      release_candidate_suffix: ${{ needs.get-params.outputs.is-release-candidate && fromJSON(needs.get-params.outputs.is-release-candidate) }}
     secrets:
       CHECKOUT_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
   build-eager-package:
