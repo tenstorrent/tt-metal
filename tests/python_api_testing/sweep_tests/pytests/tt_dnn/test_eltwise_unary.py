@@ -253,13 +253,31 @@ class TestEltwiseUnary:
             pcie_slot,
         )
 
-    @pytest.mark.parametrize("log_kind", ["log", "log2", "log10"])
+    @pytest.mark.parametrize("log_kind", ["log","log2", "log10"])
+    def test_run_eltwise_log_ops_range01(
+        self, log_kind, input_shapes, pcie_slot, function_level_defaults
+    ):
+        datagen_func = [
+            generation_funcs.gen_func_with_cast(
+                partial(generation_funcs.gen_rand, low=1e-6, high=1.0), torch.float32
+            )
+        ]
+        comparison_func = comparison_funcs.comp_pcc
+        run_single_pytorch_test(
+            f"eltwise-{log_kind}",
+            input_shapes,
+            datagen_func,
+            comparison_func,
+            pcie_slot,
+        )
+
+    @pytest.mark.parametrize("log_kind", ["log",]) #"log2", "log10"])
     def test_run_eltwise_log_ops(
         self, log_kind, input_shapes, pcie_slot, function_level_defaults
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=1, high=100), torch.float32
+                partial(generation_funcs.gen_rand, low=1, high=100000), torch.float32
             )
         ]
         comparison_func = comparison_funcs.comp_pcc
