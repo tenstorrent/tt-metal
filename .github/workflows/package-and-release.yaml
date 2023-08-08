@@ -3,16 +3,27 @@ name: Package and release
 on:
   push:
     branches: ["release"]
+  workflow_dispatch:
 
 permissions:
   contents: write
   packages: write
 
 jobs:
+  get-params:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get is-release-candidate
+        run: |
+          isReleaseCandidate=${{ github.ref_type == "branch" && github.event_name == "push" }}
+          echo "is-release-candidate=$isReleaseCandidate" >> "$GITHUB_OUTPUT"
   create-tag:
+    needs: get-params
     uses: tenstorrent-metal/metal-workflows/.github/workflows/release-verify-or-create-tag.yaml@main
     with:
+      fetch_depth: 0
       bump_each_commit: false
+      release_candidate_suffix: ${{ fromJSON(needs.get-params.outputs.is-release-candidate) }}
     secrets:
       CHECKOUT_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
   build-eager-package:
