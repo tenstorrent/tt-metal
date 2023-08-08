@@ -2014,7 +2014,7 @@ void TensorModule(py::module &m_tensor) {
     );
 
 
-    m_tensor.def("mac", &mac, R"doc(
+    m_tensor.def("mac", py::overload_cast<const Tensor&, const Tensor&, const Tensor&>(&mac), R"doc(
         Returns tensor with the multiply and accumulation of all of elements of the input tensors ``arg0, arg1, arg2``.
         Output is ```arg0 x arg1 + arg2``` elementwise operator.
         Input tensor must have BFLOAT16 data type.
@@ -2029,6 +2029,24 @@ void TensorModule(py::module &m_tensor) {
         | arg2     | tensor 2                  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
         +----------+---------------------------+-----------+------------------------------+----------+
         | arg3     | tensor 3                  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+---------------------------+-----------+------------------------------+----------+
+    )doc");
+
+    m_tensor.def("mac", py::overload_cast<const Tensor&, float, float>(&mac), R"doc(
+        Returns tensor with the multiply and accumulation of all of elements of the input tensors ``arg0, arg1, arg2``.
+        Output is ```arg0 x arg1 + arg2``` elementwise operator.
+        Input tensor must have BFLOAT16 data type.
+
+        Output tensor will have BFLOAT16 data type.
+
+        +----------+---------------------------+-----------+------------------------------+----------+
+        | Argument | Description               | Data type | Valid range                  | Required |
+        +==========+===========================+===========+==============================+==========+
+        | arg0     | tensor 1                  | Tensor    | Tensor of shape [W, Z, Y, X] | Yes      |
+        +----------+---------------------------+-----------+------------------------------+----------+
+        | arg2     | float 2                   | float     | scalar                       | Yes      |
+        +----------+---------------------------+-----------+------------------------------+----------+
+        | arg3     | float 3                   | float     | scalar                       | Yes      |
         +----------+---------------------------+-----------+------------------------------+----------+
     )doc");
 

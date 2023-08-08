@@ -44,7 +44,7 @@ Tensor softsign(const Tensor& a);
 // compute multiply-accumulate: y = a * b + c,  over various 8 combinations of a, b, c
 // being a scalar or tensor
 Tensor mac(const Tensor& a, const Tensor& b, const Tensor & c);
-Tensor mac_scalar(const Tensor& a, float b, float c);
+Tensor mac(const Tensor& a, float b, float c);
 
 //Function sign
 //compute sgn(x) = (x>=0) - (x<=0);

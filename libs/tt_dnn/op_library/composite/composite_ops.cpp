@@ -20,6 +20,13 @@ Tensor mk_filled_tensor_like(const Tensor& reference_tensor, T val) {
     return result;
 }
 
+Tensor mk_zero_tensor_like(const Tensor& reference_tensor) {
+    //Tensor zero_like = bcast(reference_tensor, , BcastOpMath::MUL, BcastOpDim::HW);
+    static const Tensor zero = mk_scalar(0.0f);
+    Tensor zero_like = bcast(reference_tensor, zero, BcastOpMath::MUL, BcastOpDim::HW);
+    return zero_like;
+}
+
 // Function: softshrink
 // Ref: https://pytorch.org/docs/stable/generated/torch.nn.Softshrink.html
 Tensor _softshrink(const Tensor& a, float param) {
@@ -36,17 +43,23 @@ Tensor softshrink(const Tensor& a, float param) {
 
 // Function: hardshrink
 // Ref: https://pytorch.org/docs/stable/generated/torch.nn.Hardshrink.html
-Tensor hardshrink(const Tensor& a, float param) {
+Tensor _hardshrink(const Tensor& a, float param) {
     TT_ASSERT(param >= 0);
     Tensor t1 = mul( ltz(add_unary(a, param)), a );
     Tensor t2 = mul( gtz(sub_unary(a, param)), a );
     return add( t1, t2 );
 }
+Tensor hardshrink(const Tensor& a, float param) {
+    return operation::decorate_as_composite(__func__, _hardshrink)(a, param);
+}
 
 // Function: softsign
 // Ref: https://pytorch.org/docs/stable/generated/torch.nn.Softsign.html
-Tensor softsign(const Tensor& a) {
+Tensor _softsign(const Tensor& a) {
     return mul(a, recip(add1(abs(a))));
+}
+Tensor softsign(const Tensor& a) {
+    return operation::decorate_as_composite(__func__, _softsign)(a);
 }
 
 // Function SILU (same as Swish)
@@ -75,27 +88,36 @@ Tensor log1p(const Tensor& x) {
 
 //softplus[x] = log[1 + exp[x]]
 //use transformation y = log[1+exp[x]] by broadcast
-Tensor softplus(const Tensor& x) {
+Tensor _softplus(const Tensor& x) {
     Tensor exp_x = exp(x);
     Tensor result_log1p = log1p(exp_x);
     return result_log1p;
 }
+Tensor softplus(const Tensor& a) {
+    return operation::decorate_as_composite(__func__, _softplus)(a);
+}
 
 //tanhshrink(x) = x - tanh(x)
-Tensor tanhshrink(const Tensor& x) {
+Tensor _tanhshrink(const Tensor& x) {
     Tensor tan_x = tanh(x);
     Tensor result = sub(x, tan_x);
     return result;
+}
+Tensor tanhshrink(const Tensor& a) {
+    return operation::decorate_as_composite(__func__, _tanhshrink)(a);
 }
 
 //mish[x] = x*tanh[softplus[x]]
 //use transformation y = x*tanh[softplus[x]] by broadcast
 //Ref: https://krutikabapat.github.io/Swish-Vs-Mish-Latest-Activation-Functions/
-Tensor mish(const Tensor& x) {
+Tensor _mish(const Tensor& x) {
     Tensor sp_x = softplus(x);
     Tensor tanh_x = tanh(sp_x);
     Tensor mish_x = mul(x, tanh_x);
     return mish_x;
+}
+Tensor mish(const Tensor& a) {
+    return operation::decorate_as_composite(__func__, _mish)(a);
 }
 
 
@@ -110,7 +132,7 @@ Tensor mish(const Tensor& x) {
 // Function Selu - scaled exponential linear
 //use transformation y = scale *(max(0,x)) + min(0,alpha * (exp(X)-1)) by broadcast
 //Ref: https://pytorch.org/docs/stable/generated/torch.nn.SELU.html
-Tensor selu(const Tensor& x,const float scale, const float alpha) {
+Tensor _selu(const Tensor& x,const float scale, const float alpha) {
     // term 2
     Tensor t_alpha = mk_scalar(alpha);
     Tensor x_Exp = exp(x);
@@ -128,6 +150,9 @@ Tensor selu(const Tensor& x,const float scale, const float alpha) {
 
     return result_selu;
 }
+Tensor selu(const Tensor& x,const float scale, const float alpha) {
+    return operation::decorate_as_composite(__func__, _selu)(x,scale,alpha);
+}
 
 //ELU :
 // Theano defins it as,
@@ -137,12 +162,15 @@ Tensor selu(const Tensor& x,const float scale, const float alpha) {
 // Function Clip
 //use clip y = min( max( x, min_value), max_value) by broadcast
 //Ref: https://pytorch.org/docs/stable/generated/torch.clamp.html#torch.clamp
-Tensor clip(const Tensor& a,float low, float high) {
+Tensor _clip(const Tensor& a,float low, float high) {
     const Tensor h_const = full_like(a,high);
     const Tensor l_const = full_like(a,low);
     Tensor a_max = tt::tt_metal::min(a, h_const);
     Tensor a_clip = ( low == 0.0f ) ? relu(a_max) : tt::tt_metal::max(a_max, l_const);
     return a_clip;
+}
+Tensor clip(const Tensor& a,float low, float high) {
+    return operation::decorate_as_composite(__func__, _clip)(a,low,high);
 }
 
 // Function Hard Sigmoid
@@ -156,33 +184,30 @@ Tensor clip(const Tensor& a,float low, float high) {
 //
 // PyTorch version:
 // hard sigmoid(x) = { x <= -3: 0, x >= +3: +3, x/6 + 0.5 otherwise}
-Tensor hardsigmoid(const Tensor& a,float scale,float shift) {
-    Tensor a_mac = mac_scalar(a,scale, shift); // multiply and add.
+Tensor _hardsigmoid(const Tensor& a,float scale,float shift) {
+    Tensor a_mac = mac(a,scale, shift); // multiply and add.
     Tensor a_clip = relu_max(a_mac, 1.0f);
     return a_clip;
+}
+Tensor hardsigmoid(const Tensor& a,float scale,float shift) {
+    return operation::decorate_as_composite(__func__, _hardsigmoid)(a,scale,shift);
 }
 
 // Function @hard_swish
 //use transformation y = x * hardsigmoid( x ) by broadcast
 //Ref: PyTorch
 //hard swish(x) = x*hardsigmoid(x,scale,shift)
-Tensor hardswish(const Tensor& a,float scale,float shift) {
+Tensor _hardswish(const Tensor& a,float scale,float shift) {
     Tensor a_sigmoid = hardsigmoid(a, scale, shift);
     Tensor result_sq = mul(a_sigmoid, a);
     return result_sq;
 }
-
-//use transformation min = - max( -a, -b)
-//Tensor min(const Tensor &a, const Tensor &b) {
-//    Tensor aneg( neg(a) );
-//    Tensor bneg( neg(b) );
-//    Tensor maxneg = tt::tt_metal::max(aneg,bneg);
-//    return  neg(maxneg) );
-//}
-
+Tensor hardswish(const Tensor& a,float scale,float shift) {
+    return operation::decorate_as_composite(__func__, _hardswish)(a,scale,shift);
+}
 
 //compute polyval by Horner's rule
-Tensor polyval(const Tensor &input_tensor,std::vector<float> coeffs) {
+Tensor _polyval(const Tensor &input_tensor,std::vector<float> coeffs) {
     TT_ASSERT( coeffs.size() != 0 && "coeffs should be 1 or more coefficients");
     if ( coeffs.size() == 1 ) {
       return  mk_filled_tensor_like( input_tensor, coeffs[0] );
@@ -194,11 +219,14 @@ Tensor polyval(const Tensor &input_tensor,std::vector<float> coeffs) {
     }
     return bcast(result, mk_scalar(coeffs.back()), BcastOpMath::ADD, BcastOpDim::HW );
 }
+Tensor polyval(const Tensor& input_tensor,std::vector<float> coeffs) {
+    return operation::decorate_as_composite(__func__, _polyval)(input_tensor,coeffs);
+}
 
 // Function: MAC
 // compute multiply-accumulate: y = a * b + c,  over various 8 combinations of a, b, c
 // being a scalar or tensor
-Tensor mac(const Tensor& a, const Tensor& b, const Tensor & c) {
+Tensor _mac(const Tensor& a, const Tensor& b, const Tensor & c) {
     bool a_is_scalar = a.volume() == 1;
     bool b_is_scalar = b.volume() == 1;
     bool c_is_scalar = c.volume() == 1;
@@ -232,100 +260,121 @@ Tensor mac(const Tensor& a, const Tensor& b, const Tensor & c) {
     TT_ASSERT( a_is_scalar && b_is_scalar && c_is_scalar);
     return add(mul(a, b), c);
 }
+Tensor mac(const Tensor& a, const Tensor& b, const Tensor& c )
+{
+    return operation::decorate_as_composite(__func__, _mac)(a,b,c);
+}
 
-
-Tensor mac_scalar(const Tensor& a, float b, float c) {
+Tensor _mac_overload(const Tensor& a, float b, float c) {
     Tensor t_b = mk_scalar(b);
     Tensor t_c = mk_scalar(c);
     return  mac(a, t_b, t_c);
 }
-
-Tensor mk_zero_tensor_like(const Tensor& reference_tensor) {
-    static const Tensor zero = mk_scalar(0.0f);
-    Tensor zero_like = bcast(reference_tensor, zero, BcastOpMath::MUL, BcastOpDim::HW);
-    return zero_like;
+Tensor mac(const Tensor& input_a, float b, float c )
+{
+    return operation::decorate_as_composite(__func__, _mac_overload)(input_a,b,c);
 }
 
-
 //min(a,b) = a - (a - b > 0 )*(a-b)
-Tensor min(const Tensor &input_a, const Tensor &input_b)
+Tensor _min(const Tensor &input_a, const Tensor &input_b)
 {
     Tensor t_diff = sub(input_a, input_b);
     Tensor result = where(t_diff, input_b, input_a);
     return result;
 }
+Tensor min(const Tensor &input_a, const Tensor &input_b)
+{
+    return operation::decorate_as_composite(__func__, _min)(input_a,input_b);
+}
 
 //max(a,b) = a + (b - a > 0 )*(b-a)
-Tensor max(const Tensor &input_a, const Tensor &input_b)
+Tensor _max(const Tensor &input_a, const Tensor &input_b)
 {
     Tensor t_diff = sub(input_b, input_a);
     Tensor result = where(t_diff, input_b, input_a);
     return result;
 }
-
+Tensor max(const Tensor &input_a, const Tensor &input_b)
+{
+    return operation::decorate_as_composite(__func__, _max)(input_a,input_b);
+}
 
 //sinh[x] = (exp[x] - exp[-x])/2
-Tensor sinh(const Tensor& input_a) {
+Tensor _sinh(const Tensor& input_a) {
     Tensor e_pos_x = exp(input_a);
     Tensor e_neg_x = exp(neg(input_a));
     Tensor nr_term = sub(e_pos_x,e_neg_x);
     return bcast(nr_term ,mk_scalar(0.5f),BcastOpMath::MUL, BcastOpDim::HW);
 }
+Tensor sinh(const Tensor &input_a)
+{
+    return operation::decorate_as_composite(__func__, _sinh)(input_a);
+}
 
 //cosh[x] = (exp[x] + exp[-x])/2
-Tensor cosh(const Tensor& input_a) {
+Tensor _cosh(const Tensor& input_a) {
     Tensor e_pos_x = exp(input_a);
     Tensor e_neg_x = exp(neg(input_a));
     Tensor nr_term = add(e_pos_x,e_neg_x);
     return bcast(nr_term ,mk_scalar(0.5f),BcastOpMath::MUL, BcastOpDim::HW);
 }
+Tensor cosh(const Tensor &input_a)
+{
+    return operation::decorate_as_composite(__func__, _cosh)(input_a);
+}
 
 // lerp(input, end, weight) = start + weight * (end - start)
-Tensor lerp(const Tensor& input_a, const Tensor& input_b, float value) {
+Tensor _lerp(const Tensor& input_a, const Tensor& input_b, float value) {
     Tensor t_value = mk_scalar(value);
     Tensor t_diff = sub(input_b, input_a);
     Tensor t_mul = bcast(t_diff, t_value, BcastOpMath::MUL, BcastOpDim::HW);
     Tensor result =  add(input_a, t_mul);
     return result;
 }
+Tensor lerp(const Tensor& input_a, const Tensor& input_b, float value)
+{
+    return operation::decorate_as_composite(__func__, _lerp)(input_a,input_b,value);
+}
 
 // lerp(input, end, weight) = start + weight * (end - start)
-Tensor lerp(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c) {
+Tensor _lerp_overload(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c) {
     Tensor t_diff = mul(sub(input_b, input_a), input_c);
     Tensor result = add(input_a, t_diff);
     return result;
 }
+Tensor lerp(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c)
+{
+    return operation::decorate_as_composite(__func__, _lerp_overload)(input_a,input_b,input_c);
+}
 
 //addcmul(input,tensor1,tensor2,value)=input+value×tensor1×tensor2
-Tensor addcmul(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c, float value) {
+Tensor _addcmul(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c, float value) {
     Tensor t_value = mk_scalar(value);
 	Tensor t_mul = mul(input_b, input_c);
     Tensor t_factor = bcast(t_mul, t_value, BcastOpMath::MUL, BcastOpDim::HW);
     Tensor result = add(input_a, t_factor);
     return result;
 }
+Tensor addcmul(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c, float value)
+{
+    return operation::decorate_as_composite(__func__, _addcmul)(input_a,input_b,input_c,value);
+}
 
 //addcdiv(input,tensor1,tensor2,value)=input+value×tensor1/tensor2
-Tensor addcdiv(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c, float value) {
+Tensor _addcdiv(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c, float value) {
     Tensor t_value = mk_scalar(value);
 	Tensor t_div = mul(input_b, recip(input_c));
     Tensor t_factor = bcast(t_div, t_value, BcastOpMath::MUL, BcastOpDim::HW);
     Tensor result = add(input_a, t_factor);
     return result;
 }
-//these ops need more polish - TBD
-#if 0
-/**
-    This is just reduce sum. Need to verify what kind of summation is needed
-    Reduce sum also returns a 32x32 tensor where the result is the first value. So this assert would fail.
-*/
-Tensor sum(const Tensor& y) {
-    Tensor sum_y = reduce(y, ReduceOpMath::SUM, ReduceOpDim::HW);
-    TT_ASSERT( sum_y.volume()%32 == 0, "reduce sum should return a scalar sized tensor");
-    return sum_y;
+Tensor addcdiv(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c, float value)
+{
+    return operation::decorate_as_composite(__func__, _addcdiv)(input_a,input_b,input_c,value);
 }
 
-
+//these ops need more polish - TBD
+#if 0
 //Function std
 //compute standard deviation of tensor y = sqrt( E((y-<y>)^2)/ y.volume() )
 // Ref: torch.std
@@ -378,15 +427,20 @@ Tensor std(const Tensor& y) {
 #endif
 
 //hypot(a,b) = sqrt[ a^2 + b^2 ]
-Tensor hypot(const Tensor &input_a, const Tensor &input_b) {
+Tensor _hypot(const Tensor &input_a, const Tensor &input_b) {
     Tensor a_sq = square(input_a);
     Tensor b_sq = square(input_b);
     Tensor c_sq = add(a_sq, b_sq);
     return  sqrt( c_sq );
 }
+Tensor hypot(const Tensor& input_a, const Tensor& input_b)
+{
+    return operation::decorate_as_composite(__func__, _hypot)(input_a,input_b);
+}
+
 
 //threshold(a,t,v) = (a <= t)*v + (a > t)*a
-Tensor threshold(const Tensor &input_a, float threshold, float value) {
+Tensor _threshold(const Tensor &input_a, float threshold, float value) {
     Tensor t_value = mk_scalar(value);
     Tensor t_threshold = mk_scalar(threshold);
     Tensor t0 = bcast(input_a, t_threshold, BcastOpMath::SUB, BcastOpDim::HW);
@@ -394,10 +448,14 @@ Tensor threshold(const Tensor &input_a, float threshold, float value) {
     Tensor t2 = mul(gtz(t0), input_a);
     return add(t1, t2);
 }
+Tensor threshold(const Tensor& input_a, float threshold, float value)
+{
+    return operation::decorate_as_composite(__func__, _threshold)(input_a,threshold,value);
+}
 
 //cbrt(a) = pow(a,1/3) or (cbrt(a))**3 = a.
 //        = exp[ (1/3)*log[a] ]
-Tensor cbrt(const Tensor &input_a) {
+Tensor _cbrt(const Tensor &input_a) {
     constexpr float scale = (float)(1.0/3.0);
     Tensor t_scale = mk_scalar(scale);
     Tensor t_ln_input = log(abs(input_a)); //negative log is not useful here
@@ -406,33 +464,44 @@ Tensor cbrt(const Tensor &input_a) {
     Tensor t3 = mul(t2, sign(input_a));
     return t3;
 }
+Tensor cbrt(const Tensor& input_a)
+{
+    return operation::decorate_as_composite(__func__, _cbrt)(input_a);
+}
 
 //where - ternary operator y = (predicate) ? value_true : value_false; elementwise
 //           y = (predicate >= 0)*value_true + (predicate < 0)*value_false
-Tensor where(const Tensor& predicate, const Tensor& value_true, const Tensor& value_false) {
+Tensor _where(const Tensor& predicate, const Tensor& value_true, const Tensor& value_false) {
     Tensor t2 = mul(gtz(predicate), value_true);
     Tensor t1 = mul(lez(predicate), value_false);
     return add(t2, t1);
 }
+Tensor where(const Tensor& predicate, const Tensor& value_true, const Tensor& value_false)
+{
+    return operation::decorate_as_composite(__func__, _where)(predicate,value_true,value_false);
+}
 
 //on-device tensor creation 0s like @reference_tensor
 Tensor zeros_like(const Tensor& reference_tensor) {
-    return full_like(reference_tensor, 0.0f);
+    return mk_zero_tensor_like(reference_tensor);
 }
 
 //on-device tensor creation 1s like @reference_tensor
 Tensor ones_like(const Tensor& reference_tensor) {
-    return full_like(reference_tensor, 1.0f);
+    return mk_filled_tensor_like(reference_tensor,1.0f);
 }
 
 //on-device tensor creation with value like @reference_tensor
 Tensor full_like(const Tensor& reference_tensor,float value) {
-    return mac_scalar(reference_tensor, 0.0f, value);
+    return mk_filled_tensor_like(reference_tensor,value);
 }
 
 //hardtanh
-Tensor hardtanh(const Tensor& a,float low /* = -1.0f */, float high /* = +1.0f */) {
+Tensor _hardtanh(const Tensor& a,float low /* = -1.0f */, float high /* = +1.0f */) {
     return  clip(a, low, high);
+}
+Tensor hardtanh(const Tensor& a,float low /* = -1.0f */, float high /* = +1.0f */) {
+    return operation::decorate_as_composite(__func__, _hardtanh)(a, low, high);
 }
 
 //clamp
@@ -464,7 +533,7 @@ Tensor arange(int32_t start, int32_t end, int32_t step, Device * device) {
  * - implementation supports any 1D "squeezable tensor" at input operands
  *   by running reshape.
  */
-Tensor outer(Tensor& a, Tensor& b) {
+Tensor _outer(Tensor& a, Tensor& b) {
     const Shape s_a = a.shape();
     const Shape s_b = b.shape();
 
@@ -497,7 +566,11 @@ Tensor outer(Tensor& a, Tensor& b) {
         return matmul(a_slim, b_slim);
     }
 }
+Tensor outer(Tensor& a, Tensor& b) {
+    return operation::decorate_as_composite(__func__, _outer)(a,b);
+}
+
 
 }//namespace tt_metal
 
-} //namespace tt
+}//namespace tt
