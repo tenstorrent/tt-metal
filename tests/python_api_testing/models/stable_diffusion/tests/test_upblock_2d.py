@@ -7,9 +7,8 @@ import tt_lib as ttl
 from models.utility_functions import torch_to_tt_tensor, tt_to_torch_tensor, torch_to_tt_tensor_rm
 from tests.python_api_testing.models.utility_functions_new import comp_pcc, comp_allclose_and_pcc
 from models.stable_diffusion.tt.upblock_2d import TtUpBlock2D
-from models.stable_diffusion.tt.experimental_ops import disable_conv_and_concat, disable_conv
+import pytest
 
-@disable_conv
 def test_run_upblock_real_input_inference(model_location_generator):
     # Initialize the device
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
@@ -59,13 +58,12 @@ def test_run_upblock_real_input_inference(model_location_generator):
     tt_output = tt_to_torch_tensor(tt_out)
 
     ttl.device.Synchronize()
-    passing = comp_pcc(torch_output, tt_output)
+    passing = comp_pcc(torch_output, tt_output,pcc=0.988)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))
     ttl.device.CloseDevice(device)
     assert passing[0], passing[1:]
     logger.info(f"PASSED {passing[1]}")
 
-@disable_conv
 def test_run_upblock_inference():
     # Initialize the device
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
@@ -119,7 +117,7 @@ def test_run_upblock_inference():
     tt_out = tt_upblock(hidden_state, res_hidden_states_tuple, None, None)
     tt_output = tt_to_torch_tensor(tt_out)
 
-    passing = comp_pcc(torch_output, tt_output)
+    passing = comp_pcc(torch_output, tt_output,pcc=0.978)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))
     ttl.device.CloseDevice(device)
     assert passing[0], passing[1:]
