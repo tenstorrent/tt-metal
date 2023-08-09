@@ -6,8 +6,6 @@
 #include "ckernel_include.h"
 #include "hostdevcommon/kernel_structs.h"
 
-#include "debug_macros.h"
-
 #define SYNC SyncHalf
 
 #if __DOXYGEN__
