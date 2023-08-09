@@ -217,8 +217,8 @@ Tensor bmm_single_core_loopback_tilize_untilize(const Tensor &in0,
     TT_ASSERT(src0_dram_buffer->size() % tile_size_bytes == 0, "Buffer size of tensor in0 must be divisible by tile_size_bytes");
     TT_ASSERT(src1_dram_buffer->size() % tile_size_bytes == 0, "Buffer size of tensor in1 must be divisible by tile_size_bytes");
 
-    CoreCoord compute_core = {1, 0};
-    CoreCoord jump_core = {0, 0};
+    CoreCoord compute_core = {0, 0};
+    CoreCoord jump_core = {0, 1};
     CoreCoord debug_core = {1, 1};
     Program program = Program();
     Device *device = in0.device();
@@ -478,31 +478,46 @@ Tensor bmm_single_core_loopback_tilize_untilize(const Tensor &in0,
 
 
     // Reader kernel
-    std::string reader_kernel = "tt_metal/kernels/dataflow/reader_bmm_single_core_loopback_tilize_untilize.cpp";
+    // std::string reader_kernel = "tt_metal/kernels/dataflow/reader_bmm_single_core_loopback_tilize_untilize.cpp";
+    // std::vector<uint32_t> compute_reader_rt_args = {
+    //     // in0
+    //     jump_cb_in0->address(),
+    //     // in0_dram_addr,
+    //     in0_block_h,
+    //     in0_num_blocks_h,
+    //     in0_num_blocks_w,
+    //     in0_block_num_tiles,
+    //     in0_block_h * constants::TILE_HEIGHT,               // in0_block_nrows,
+    //     0,                                                  // start row id
+    //     in0_width * dtype_nbytes,                           // size of an in0 row
+    //     in0_block_w * constants::TILE_WIDTH * dtype_nbytes, // size of partial row to fit within a block width
+    //     // in1
+    //     jump_cb_in0->address(),
+    //     // in1_dram_addr,
+    //     in1_block_h,
+    //     in1_block_w,
+    //     in1_num_blocks_w,
+    //     in1_block_num_tiles,
+    //     in1_width_ntiles,
+    //     in1_width_ntiles * in1_block_h,
+    //     in1_block_w,
+    //     static_cast<uint32_t>(jump_core.x),
+    //     static_cast<uint32_t>(jump_core.y)
+    // };
+    std::string reader_kernel = "tt_metal/kernels/dataflow/reader_binary_bmm_tilize_untilize.cpp";
     std::vector<uint32_t> compute_reader_rt_args = {
         // in0
         jump_cb_in0->address(),
         // in0_dram_addr,
-        in0_block_h,
-        in0_num_blocks_h,
-        in0_num_blocks_w,
-        in0_block_num_tiles,
-        in0_block_h * constants::TILE_HEIGHT,               // in0_block_nrows,
-        0,                                                  // start row id
-        in0_width * dtype_nbytes,                           // size of an in0 row
-        in0_block_w * constants::TILE_WIDTH * dtype_nbytes, // size of partial row to fit within a block width
+        static_cast<uint32_t>(jump_core.x),
+        static_cast<uint32_t>(jump_core.y),
+        in0_num_blocks_w * in0_num_blocks_h,
         // in1
         jump_cb_in0->address(),
         // in1_dram_addr,
-        in1_block_h,
-        in1_block_w,
-        in1_num_blocks_w,
-        in1_block_num_tiles,
-        in1_width_ntiles,
-        in1_width_ntiles * in1_block_h,
-        in1_block_w,
         static_cast<uint32_t>(jump_core.x),
-        static_cast<uint32_t>(jump_core.y)
+        static_cast<uint32_t>(jump_core.y),
+        in1_num_blocks_w * in1_num_blocks_h,
     };
     auto compute_reader = CreateDataMovementKernel(
         program,
@@ -543,15 +558,23 @@ Tensor bmm_single_core_loopback_tilize_untilize(const Tensor &in0,
     uint32_t in0_block_h_data = in0_height / in0_num_blocks_h;
 
     // Writer kernel
-    std::string writer_kernel = "tt_metal/kernels/dataflow/writer_unary_stick_layout_8bank_blocks.cpp";
+    // std::string writer_kernel = "tt_metal/kernels/dataflow/writer_unary_stick_layout_8bank_blocks.cpp";
+    // vector<uint32_t> compute_writer_rt_args = {
+    //     jump_cb_output->address(),
+    //     in0_block_h_data,
+    //     in1_block_w * constants::TILE_WIDTH * dtype_nbytes,
+    //     1,
+    //     in0_num_blocks_h,
+    //     in1_num_blocks_w,
+    //     in1_width * dtype_nbytes
+    // };
+
+    std::string writer_kernel = "tt_metal/kernels/dataflow/writer_unary_bmm_tilize_untilize.cpp";
     vector<uint32_t> compute_writer_rt_args = {
         jump_cb_output->address(),
-        in0_block_h_data,
-        in1_block_w * constants::TILE_WIDTH * dtype_nbytes,
-        1,
-        in0_num_blocks_h,
-        in1_num_blocks_w,
-        in1_width * dtype_nbytes
+        static_cast<uint32_t>(jump_core.x),
+        static_cast<uint32_t>(jump_core.y),
+        in0_num_blocks_h * in1_num_blocks_w
     };
     auto compute_writer = CreateDataMovementKernel(
         program,

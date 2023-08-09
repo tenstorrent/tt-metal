@@ -5,6 +5,7 @@
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
 
+#include "llrt/tt_debug_print_server.hpp"
 using namespace tt;
 using namespace tt::tt_metal;
 
@@ -51,7 +52,7 @@ int main(int argc, char **argv) {
         Device *device =
             CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
 
-        pass &= InitializeDevice(device);;
+        pass &= InitializeDevice(device);
 
         /*
         * Setup program to execute along with its buffers and kernels to use
@@ -61,9 +62,17 @@ int main(int argc, char **argv) {
         constexpr CoreCoord compute_core = {0, 0};
         constexpr CoreCoord jump_core = {0, 1};
 
-        uint32_t single_tile_size = stoi(argv[2]);
-        uint32_t num_tiles = stoi(argv[1]);
-        uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+        constexpr bool profiler_debugBar = true;
+
+        if (!profiler_debugBar) {
+            CoreCoord debug_core = {1, 1};
+            tt_start_debug_print_server(device->cluster(), {0}, {debug_core});
+        }
+
+        uint32_t num_blocks = stoi(argv[1]);
+        uint32_t num_tiles = stoi(argv[2]);
+        uint32_t single_tile_size = stoi(argv[3]);
+        uint32_t dram_buffer_size = single_tile_size * num_tiles * num_blocks; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
         constexpr uint32_t dram_buffer_src0_addr = 0;
         constexpr int dram_src0_channel_id = 0;
@@ -86,7 +95,7 @@ int main(int argc, char **argv) {
         uint32_t in0_block_w = num_tiles;
         uint32_t in1_block_w = 1;
         uint32_t in0_num_blocks_h = 1;
-        uint32_t in0_num_blocks_w = 1;
+        uint32_t in0_num_blocks_w = num_blocks;
         uint32_t in1_num_blocks_w = 1;
         uint32_t in1_block_h = in0_block_w;
         uint32_t in0_block_num_tiles = in0_block_h * in0_block_w;
@@ -100,7 +109,6 @@ int main(int argc, char **argv) {
         uint32_t in1_block_num_tiles = in1_block_w * in1_block_h;
         const uint32_t tile_size_bytes = 2 * constants::TILE_HW;
 
-        constexpr uint32_t src0_cb_index = CB::c_in0;
         uint32_t in0_cb                                 = CB::c_in0;
         uint32_t in1_cb                                 = CB::c_in1;
         uint32_t tilize_mode_tilized_in0_cb             = CB::c_intermed0;
@@ -119,7 +127,7 @@ int main(int argc, char **argv) {
             cb0_ntiles * tile_size_bytes,
             tt::DataFormat::Float16_b
         );
-        const uint32_t cb1_ntiles = in0_block_w * in1_block_w * 2;   // double buffer
+        const uint32_t cb1_ntiles = in1_block_h * in1_block_w * 2;   // double buffer
         CircularBuffer *compute_cb_in1 = CreateCircularBuffer(
             program,
             device,
@@ -130,7 +138,7 @@ int main(int argc, char **argv) {
             tt::DataFormat::Float16_b
         );
         const uint32_t out_ntiles = in0_block_h * in1_block_w;
-        CircularBuffer *compute_cb_output = tt_metal::CreateCircularBuffer(
+        CircularBuffer *compute_cb_output = CreateCircularBuffer(
             program,
             device,
             out0_cb,
@@ -139,7 +147,7 @@ int main(int argc, char **argv) {
             out_ntiles * tile_size_bytes,
             tt::DataFormat::Float16_b
         );
-        CircularBuffer *compute_cb_src0_tilized = tt_metal::CreateCircularBuffer(
+        CircularBuffer *compute_cb_src0_tilized = CreateCircularBuffer(
             program,
             device,
             tilize_mode_tilized_in0_cb,
@@ -148,7 +156,7 @@ int main(int argc, char **argv) {
             cb0_ntiles * tile_size_bytes,
             tt::DataFormat::Float16_b
         );
-        CircularBuffer *compute_cb_matmul_partials = tt_metal::CreateCircularBuffer(
+        CircularBuffer *compute_cb_matmul_partials = CreateCircularBuffer(
             program,
             device,
             matmul_partials_cb,
@@ -158,7 +166,7 @@ int main(int argc, char **argv) {
             tt::DataFormat::Float16_b
         );
         // Shares same address space as matmul partials
-        CircularBuffer *compute_cb_final_matmul_partials = tt_metal::CreateCircularBuffer(
+        CircularBuffer *compute_cb_final_matmul_partials = CreateCircularBuffer(
             program,
             device,
             untilize_mode_final_matmul_partials_cb,
@@ -168,7 +176,7 @@ int main(int argc, char **argv) {
             tt::DataFormat::Float16_b
         );
         // CB responsible for reorganizing output blocks to fill the whole "per compute_core output block width"
-        CircularBuffer *compute_cb_reblock = tt_metal::CreateCircularBuffer(
+        CircularBuffer *compute_cb_reblock = CreateCircularBuffer(
             program,
             device,
             untilize_mode_reblock_cb,
@@ -178,16 +186,8 @@ int main(int argc, char **argv) {
             tt::DataFormat::Float16_b
         );
 
-        constexpr uint32_t num_input_tiles = 2;
-        // CircularBuffer *compute_cb_src0 = CreateCircularBuffer(
-        //     program,
-        //     device,
-        //     src0_cb_index,
-        //     compute_core,
-        //     num_input_tiles,
-        //     num_input_tiles * single_tile_size,
-        //     tt::DataFormat::Float16_b
-        // );
+        constexpr uint32_t src0_cb_index = CB::c_in0;
+        const uint32_t num_input_tiles = num_tiles * 2;
         CircularBuffer *jump_cb_src0 = CreateCircularBuffer(
             program,
             device,
@@ -199,15 +199,6 @@ int main(int argc, char **argv) {
         );
 
         constexpr uint32_t src1_cb_index = CB::c_in1;
-        // CircularBuffer *compute_cb_src1 = CreateCircularBuffer(
-        //     program,
-        //     device,
-        //     src1_cb_index,
-        //     compute_core,
-        //     num_input_tiles,
-        //     num_input_tiles * single_tile_size,
-        //     tt::DataFormat::Float16_b
-        // );
         CircularBuffer *jump_cb_src1 = CreateCircularBuffer(
             program,
             device,
@@ -219,16 +210,7 @@ int main(int argc, char **argv) {
         );
 
         constexpr uint32_t output_cb_index = CB::c_out0;
-        constexpr uint32_t num_output_tiles = 2;
-        // CircularBuffer *compute_cb_output = CreateCircularBuffer(
-        //     program,
-        //     device,
-        //     output_cb_index,
-        //     compute_core,
-        //     num_output_tiles,
-        //     num_output_tiles * single_tile_size,
-        //     tt::DataFormat::Float16_b
-        // );
+        const uint32_t num_output_tiles = num_tiles * 2;
         CircularBuffer *jump_cb_output = CreateCircularBuffer(
             program,
             device,
@@ -245,26 +227,26 @@ int main(int argc, char **argv) {
          */
         DataMovementKernel *compute_binary_reader_kernel = CreateDataMovementKernel(
             program,
-            "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp",
+            "tt_metal/kernels/dataflow/reader_binary_bmm_tilize_untilize.cpp",
             compute_core,
             DataMovementProcessor::RISCV_1,
             NOC::RISCV_1_default);
         DataMovementKernel *jump_binary_reader_kernel = CreateDataMovementKernel(
             program,
-            "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp",
+            "tt_metal/kernels/dataflow/reader_binary_bmm_tilize_untilize.cpp",
             jump_core,
             DataMovementProcessor::RISCV_1,
             NOC::RISCV_1_default);
 
         DataMovementKernel *compute_unary_writer_kernel = CreateDataMovementKernel(
             program,
-            "tt_metal/kernels/dataflow/writer_unary.cpp",
+            "tt_metal/kernels/dataflow/writer_unary_bmm_tilize_untilize.cpp",
             compute_core,
             DataMovementProcessor::RISCV_0,
             NOC::RISCV_0_default);
         DataMovementKernel *jump_unary_writer_kernel = CreateDataMovementKernel(
             program,
-            "tt_metal/kernels/dataflow/writer_unary.cpp",
+            "tt_metal/kernels/dataflow/reader_binary_bmm_tilize_untilize.cpp",
             jump_core,
             DataMovementProcessor::RISCV_0,
             NOC::RISCV_0_default);
@@ -273,7 +255,7 @@ int main(int argc, char **argv) {
          * Set the parameters that the compute kernel will use.
          */
         vector<uint32_t> compute_kernel_args = {
-            num_tiles, // per_core_block_cnt
+            num_blocks, // per_core_block_cnt
             1 // per_core_block_size
         };
 
@@ -335,8 +317,7 @@ int main(int argc, char **argv) {
         /*
         * Compile kernels used during execution
         */
-        constexpr bool profiler_kernel = true;
-        pass &= CompileProgram(device, program, profiler_kernel);
+        pass &= CompileProgram(device, program, profiler_debugBar);
 
         /*
          * Create source data and write to DRAM.
@@ -361,15 +342,17 @@ int main(int argc, char **argv) {
             compute_binary_reader_kernel,
             compute_core,
             {
-                jump_cb_output->address(),
+                // jump_cb_output->address(),
+                src0_dram_buffer.address(),
                 static_cast<uint32_t>(jump_core.x),
                 static_cast<uint32_t>(jump_core.y),
-                num_tiles,
-                jump_cb_output->address(),
+                num_blocks,
+                // jump_cb_output->address(),
+                src1_dram_buffer.address(),
                 static_cast<uint32_t>(jump_core.x),
                 static_cast<uint32_t>(jump_core.y),
-                num_tiles,
-                0
+                num_blocks
+                // num_tiles
             }
         );
         WriteRuntimeArgsToDevice(
@@ -380,12 +363,12 @@ int main(int argc, char **argv) {
                 src0_dram_buffer.address(),
                 static_cast<uint32_t>(src0_dram_buffer.noc_coordinates().x),
                 static_cast<uint32_t>(src0_dram_buffer.noc_coordinates().y),
-                num_tiles,
+                num_blocks,
                 src1_dram_buffer.address(),
                 static_cast<uint32_t>(src1_dram_buffer.noc_coordinates().x),
                 static_cast<uint32_t>(src1_dram_buffer.noc_coordinates().y),
-                num_tiles,
-                0
+                num_blocks
+                // num_tiles
             }
         );
 
@@ -394,10 +377,12 @@ int main(int argc, char **argv) {
             compute_unary_writer_kernel,
             compute_core,
             {
-                jump_cb_src0->address(),
+                // jump_cb_src0->address(),
+                dst_dram_buffer.address(),
                 static_cast<uint32_t>(jump_core.x),
                 static_cast<uint32_t>(jump_core.y),
-                num_tiles
+                1
+                // num_tiles
             }
         );
         WriteRuntimeArgsToDevice(
@@ -408,12 +393,13 @@ int main(int argc, char **argv) {
                 dst_dram_buffer.address(),
                 static_cast<uint32_t>(dst_dram_buffer.noc_coordinates().x),
                 static_cast<uint32_t>(dst_dram_buffer.noc_coordinates().y),
-                num_tiles
+                1
+                // num_tiles
             }
         );
 
         pass &= LaunchKernels(device, program);
-        if (profiler_kernel) tt_metal::DumpDeviceProfileResults(device, program);
+        if (profiler_debugBar) tt_metal::DumpDeviceProfileResults(device, program);
 
         /*
          * Read in result into a host vector.

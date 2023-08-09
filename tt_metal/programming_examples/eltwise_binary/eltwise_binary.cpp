@@ -54,14 +54,20 @@ int main(int argc, char **argv) {
 
         pass &= InitializeDevice(device);;
 
-        tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}});
-
         /*
         * Setup program to execute along with its buffers and kernels to use
         */
         Program program = Program();
 
         constexpr CoreCoord core = {0, 0};
+
+        constexpr bool profiler_debugBar = false;
+
+        if (!profiler_debugBar) {
+            CoreCoord debug_core = {1, 1};
+            tt_start_debug_print_server(device->cluster(), {0}, {debug_core});
+        }
+
 
         uint32_t single_tile_size = stoi(argv[2]);
         uint32_t num_tiles = stoi(argv[1]);
@@ -164,8 +170,7 @@ int main(int argc, char **argv) {
         /*
         * Compile kernels used during execution
         */
-        constexpr bool profiler_kernel = false;
-        pass &= CompileProgram(device, program, profiler_kernel);
+        pass &= CompileProgram(device, program, profiler_debugBar);
 
         /*
          * Create source data and write to DRAM.
@@ -215,7 +220,7 @@ int main(int argc, char **argv) {
         );
 
         pass &= LaunchKernels(device, program);
-        if (profiler_kernel) tt_metal::DumpDeviceProfileResults(device, program);
+        if (profiler_debugBar) tt_metal::DumpDeviceProfileResults(device, program);
 
         /*
          * Read in result into a host vector.
@@ -295,7 +300,7 @@ int main(int argc, char **argv) {
         /*
          * Compile kernels.
          */
-        pass &= CompileProgram(device, program_mul, profiler_kernel);
+        pass &= CompileProgram(device, program_mul, profiler_debugBar);
 
         /*
          * Send new input data.
@@ -346,7 +351,7 @@ int main(int argc, char **argv) {
          * Execute.
          */
         pass &= LaunchKernels(device, program_mul);
-        if (profiler_kernel) tt_metal::DumpDeviceProfileResults(device, program);
+        if (profiler_debugBar) tt_metal::DumpDeviceProfileResults(device, program);
 
         /*
          * Read the result and compare to a golden result. Record pass/fail

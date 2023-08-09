@@ -4,6 +4,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
+#include "llrt/tt_debug_print_server.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -58,8 +59,15 @@ int main(int argc, char **argv) {
         */
         Program program = Program();
 
-        constexpr CoreCoord compute_core = {9, 9};
-        constexpr CoreCoord jump_core = {0, 0};
+        constexpr CoreCoord compute_core = {0, 0};
+        constexpr CoreCoord jump_core = {0, 1};
+
+        constexpr bool profiler_debugBar = true;
+
+        if (!profiler_debugBar) {
+            CoreCoord debug_core = {1, 1};
+            tt_start_debug_print_server(device->cluster(), {0}, {debug_core});
+        }
 
         uint32_t single_tile_size = stoi(argv[2]);
         uint32_t num_tiles = stoi(argv[1]);
@@ -149,12 +157,14 @@ int main(int argc, char **argv) {
         DataMovementKernel *compute_binary_reader_kernel = CreateDataMovementKernel(
             program,
             "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp",
+            // "tt_metal/kernels/dataflow/reader_binary_bmm_tilize_untilize.cpp",
             compute_core,
             DataMovementProcessor::RISCV_1,
             NOC::RISCV_1_default);
         DataMovementKernel *jump_binary_reader_kernel = CreateDataMovementKernel(
             program,
             "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp",
+            // "tt_metal/kernels/dataflow/reader_binary_bmm_tilize_untilize.cpp",
             jump_core,
             DataMovementProcessor::RISCV_1,
             NOC::RISCV_1_default);
@@ -162,12 +172,14 @@ int main(int argc, char **argv) {
         DataMovementKernel *compute_unary_writer_kernel = CreateDataMovementKernel(
             program,
             "tt_metal/kernels/dataflow/writer_unary.cpp",
+            // "tt_metal/kernels/dataflow/writer_unary_bmm_tilize_untilize.cpp",
             compute_core,
             DataMovementProcessor::RISCV_0,
             NOC::RISCV_0_default);
         DataMovementKernel *jump_unary_writer_kernel = CreateDataMovementKernel(
             program,
             "tt_metal/kernels/dataflow/writer_unary.cpp",
+            // "tt_metal/kernels/dataflow/writer_unary_bmm_tilize_untilize.cpp",
             jump_core,
             DataMovementProcessor::RISCV_0,
             NOC::RISCV_0_default);
@@ -211,8 +223,7 @@ int main(int argc, char **argv) {
         /*
         * Compile kernels used during execution
         */
-        constexpr bool profiler_kernel = true;
-        pass &= CompileProgram(device, program, profiler_kernel);
+        pass &= CompileProgram(device, program, profiler_debugBar);
 
         /*
          * Create source data and write to DRAM.
@@ -289,7 +300,7 @@ int main(int argc, char **argv) {
         );
 
         pass &= LaunchKernels(device, program);
-        if (profiler_kernel) tt_metal::DumpDeviceProfileResults(device, program);
+        if (profiler_debugBar) tt_metal::DumpDeviceProfileResults(device, program);
 
         /*
          * Read in result into a host vector.

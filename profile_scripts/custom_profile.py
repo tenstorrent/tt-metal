@@ -276,7 +276,7 @@ def profile_Elewise_binary_multi_tile(file_name):
     prefix_write = "0, 0, 0, BRISC"
 
     read_function = {"5-6": "read kernel"}
-    write_function = {"5-6": "write kernel"}
+    write_function = {"5-6": "write kernel", "6-7": "last write"}
 
 
     for line in lines:
