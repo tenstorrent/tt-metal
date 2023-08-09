@@ -45,6 +45,43 @@ def run_conv_on_device_wrapper(
 
     def run_conv_on_device(x):
         [N, C, H, W] = x.shape()
+        if N == 1:
+            return run_conv_on_device_batch_one(x)
+        # need to move on CPU
+        if isinstance(x, ttl.tensor.Tensor):
+            xx = x.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+        else:
+            xx = x
+
+        def to_device(_):
+            assert isinstance(_, torch.Tensor)
+            return ttl.tensor.Tensor(
+                _.reshape(-1).tolist(),
+                [1, C, H, W],
+                x.dtype(),
+                ttl.tensor.Layout.ROW_MAJOR,
+            )
+
+        partial_convs = [
+            run_conv_on_device_batch_one(to_device(xx[batch_idx, :, :, :]))
+            for batch_idx in range(N)
+        ]
+        conv_concat_cpu = torch.concat(
+            [x.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch() for x in partial_convs],
+            0,
+        )
+        _, cC, cH, cW = partial_convs[0].shape()
+        # return ttl.tensor.concat(partial_convs,0) # hit problem with autoformat for non-32 size N
+        # concat on CPU for batch-size > 1
+        return ttl.tensor.Tensor(
+            conv_concat_cpu.reshape(-1).tolist(),
+            [N, cC, cH, cW],
+            x.dtype(),
+            ttl.tensor.Layout.ROW_MAJOR,
+        )
+
+    def run_conv_on_device_batch_one(x):
+        [N, C, H, W] = x.shape()
         if channel_transpose:
             # n c h w -> n h w c
             x = ttl.tensor.transpose_hc(x)
