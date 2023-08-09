@@ -50,7 +50,7 @@ class DisableDeviceConvAndConcat(AbstractContextManager):
         UseDeviceConv.READY = use_conv
         UseDeviceConcat.READY = use_concat
         logger.debug('Disabled Device Conv, and Concat operators.')
-        
+
 
     def __exit__(self, exc_type, exc_value, traceback):
         UseDeviceConcat.READY = self.state[0]
@@ -130,24 +130,24 @@ def Conv2d(*args, **kwargs):
 
 
 def concat(*args, **kwargs):
-    device = ttl.device.GetDefaultDevice()        
+    device = ttl.device.GetDefaultDevice()
     if UseDeviceConcat.READY:
         dim = kwargs.get("dim", 0)
 
 
-        #force move tensor to the Device.        
+        #force move tensor to the Device.
         #breakpoint()
         _args = copy.copy(args[0])
         for idx,_ in enumerate(args[0]):
             if not isinstance(_,ttl.tensor.Tensor):
                 #cannot convert torch tensor to device tensor
-                _args[idx] = ttl.tensor.Tensor(_.reshape(-1).tolist(),_.shape,ttl.tensor.Layout.ROW_MAJOR).to(device,ttl.tensor.Layout.ROW_MAJOR) #,ttl.tensor.TILE)
+                _args[idx] = ttl.tensor.Tensor(_.reshape(-1).tolist(),_.shape,ttl.tensor.Layout.ROW_MAJOR).to(device) #,ttl.tensor.TILE)
                 #raise ValueError("all tensors need to be on device for concat")
             _args[idx] = _
             assert isinstance(_args[idx],ttl.tensor.Tensor)
             if _args[idx].storage_type() != ttl.tensor.StorageType.DEVICE:
                 _args[idx] = _args[idx].to(device)
-            
+
         return ttl.tensor.concat(*_args, dim)
-    
+
     return fallback_ops.concat(*args, **kwargs)

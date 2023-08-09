@@ -304,7 +304,7 @@ void bind_op_with_mem_config(py::module_ &module, std::string op_name, Func &&f,
             mem_config_name, operation::DEFAULT_OUTPUT_MEMORY_CONFIG.interleaved ? "interleaved" : "non-interleaved", magic_enum::enum_name(operation::DEFAULT_OUTPUT_MEMORY_CONFIG.buffer_type)
         );
         module.def(op_name.c_str(), f,
-            std::forward<Extra>(extra)..., py::arg(mem_config_name.c_str()) = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, docstring.c_str()
+            std::forward<Extra>(extra)..., py::arg(mem_config_name.c_str()).noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, docstring.c_str()
         );
     } else {
         module.def(op_name.c_str(), f,
@@ -706,7 +706,7 @@ void TensorModule(py::module &m_tensor) {
         )
         .def("to", [](const Tensor &self, Device *device, const MemoryConfig &mem_config) {
             return self.to(device, mem_config);
-        }, py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, py::keep_alive<0, 2>(), R"doc(
+        }, py::arg().noconvert(), py::arg("mem_config").noconvert() = MemoryConfig{.interleaved = true}, py::keep_alive<0, 2>(), R"doc(
             Move TT Tensor from host device to TT accelerator device.
 
             Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B (in TILE layout) are supported on device.
@@ -1157,7 +1157,7 @@ void TensorModule(py::module &m_tensor) {
         )doc");
 
     m_tensor.def("where", &where,
-        py::arg("predicate"), py::arg("true_value"), py::arg("false_value"), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("predicate"), py::arg("true_value"), py::arg("false_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Perform an ternary where operation on two tensors based on third @predicate.
 
         where(predicate, true_value, false_value) implements (predicate) ? true_value : false_value.
@@ -1397,7 +1397,7 @@ void TensorModule(py::module &m_tensor) {
     );
 
     m_tensor.def("add_unary", py::overload_cast<float, const Tensor&, const MemoryConfig&>(&add_unary),
-        py::arg("scalar"), py::arg("input"), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("scalar"), py::arg("input"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Perform an eltwise-binary add on one tensor and one scalar.
 
         Both inputs, the tensor and scalar, must have BFLOAT16 data type.
@@ -1413,7 +1413,7 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     m_tensor.def("sub_unary", py::overload_cast<float, const Tensor&, const MemoryConfig&>(&sub_unary),
-        py::arg("scalar"), py::arg("input"), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("scalar"), py::arg("input"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Perform an eltwise-binary sub on one tensor and one scalar.
 
         Both inputs, the tensor and scalar, must have BFLOAT16 data type.
@@ -1430,7 +1430,7 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     m_tensor.def("mul_unary", py::overload_cast<float, const Tensor&, const MemoryConfig&>(&mul_unary),
-        py::arg("scalar"), py::arg("input"), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("scalar"), py::arg("input"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Perform an eltwise-binary mul on one tensor and one scalar.
 
         Both inputs, the tensor and scalar, must have BFLOAT16 data type.
@@ -1447,7 +1447,7 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     m_tensor.def("div_unary", py::overload_cast<float, const Tensor&, const MemoryConfig&>(&div_unary),
-        py::arg("scalar"), py::arg("input"), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("scalar"), py::arg("input"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Perform an eltwise-binary div on one tensor and one scalar.
 
         Both inputs, the tensor and scalar, must have BFLOAT16 data type.
@@ -1464,7 +1464,7 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     m_tensor.def("hardtanh", &hardtanh,
-        py::arg("input").noconvert(), py::arg("low") = -1.0f, py::arg("high") = +1.0f, py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("low") = -1.0f, py::arg("high") = +1.0f, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Applies the hard tanh function to the elements of the input tensor ``input``.
 
         Input tensor must have BFLOAT16 data type.
@@ -1481,7 +1481,7 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     m_tensor.def("clip", &clip,
-        py::arg("input").noconvert(), py::arg("low"), py::arg("high"), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("low"), py::arg("high"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Applies the clip function to the elements of the input tensor ``input`` between limits ``low`` low and
         the ``high`` high limits.
 
@@ -1500,7 +1500,7 @@ void TensorModule(py::module &m_tensor) {
 
 
     m_tensor.def("hardsigmoid", &hardsigmoid,
-        py::arg("input").noconvert(), py::arg("scale") = 1.0f/6.0f, py::arg("shift") = 0.5f, py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("scale") = 1.0f/6.0f, py::arg("shift") = 0.5f, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Applies the hardsigmoid function to the elements of the input tensor ``input``.
 
         Input tensor must have BFLOAT16 data type.
@@ -1517,7 +1517,7 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     m_tensor.def("lerp", py::overload_cast<const Tensor&, const Tensor&, float, const MemoryConfig&>(&lerp),
-        py::arg("input").noconvert(), py::arg("end").noconvert(), py::arg("weight"), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,R"doc(
+        py::arg("input").noconvert(), py::arg("end").noconvert(), py::arg("weight"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,R"doc(
         Applies the linear interpolation of two tensors ``arg0`` (given by input) and ``arg1`` based on a
         scalar ``arg2`` and returns the resulting out tensor.
 
@@ -1535,7 +1535,7 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     m_tensor.def("lerp", py::overload_cast<const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&>(&lerp),
-        py::arg("input").noconvert(), py::arg("end").noconvert(), py::arg("weight").noconvert(), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("end").noconvert(), py::arg("weight").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Applies the linear interpolation of two tensors ``arg0`` (given by input) and ``arg1`` based on a
         tensor ``arg2`` and returns the resulting out tensor.
 
@@ -1553,7 +1553,7 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     m_tensor.def("hardswish", &hardswish,
-        py::arg("input").noconvert(), py::arg("scale") = 1.0f/6.0f, py::arg("shift") = 0.5f, py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("scale") = 1.0f/6.0f, py::arg("shift") = 0.5f, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Applies the hard swish function to the elements of the input tensor ``input``.
 
         Input tensor must have BFLOAT16 data type.
@@ -1570,7 +1570,7 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     m_tensor.def("full_like", &full_like,
-        py::arg("input").noconvert(), py::arg("fill_value"), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("fill_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Returns a new tensor filled with the scalar value shaped like reference tensor ``arg0``.
 
         Input tensor must have BFLOAT16 data type.
@@ -1586,7 +1586,7 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     m_tensor.def("zeros_like", &zeros_like,
-        py::arg("input").noconvert(), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Returns a new tensor filled with zeros shaped like reference tensor ``input``.
 
         Input tensor must have BFLOAT16 data type.
@@ -1602,7 +1602,7 @@ void TensorModule(py::module &m_tensor) {
 
 
     m_tensor.def("ones_like", &ones_like,
-        py::arg("input").noconvert(), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Returns a new tensor filled with ones shaped like reference tensor ``arg0``.
 
         Input tensor must have BFLOAT16 data type.
@@ -1620,7 +1620,7 @@ void TensorModule(py::module &m_tensor) {
         [] (const std::array<uint32_t, 4> shape, Layout layout, Device * device, const MemoryConfig& output_mem_config) {
             return zeros(shape, layout, device, output_mem_config);
         },
-        py::arg("shape"), py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device") = nullptr, py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("shape"), py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device") = nullptr, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Returns a new tensor filled with zeros in shape specified by input ``shape``.
 
         Input shape is specified as a list of 4 integer elements
@@ -1640,7 +1640,7 @@ void TensorModule(py::module &m_tensor) {
         [] (const std::array<uint32_t, 4> shape, Layout layout, Device * device, const MemoryConfig& output_mem_config) {
             return ones(shape, layout, device, output_mem_config);
         },
-        py::arg("shape"), py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device") = nullptr, py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("shape"), py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device") = nullptr, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Returns a new tensor filled with ones in shape specified by input ``shape``.
 
         Input shape is specified as a list of 4 integer elements
@@ -1660,7 +1660,7 @@ void TensorModule(py::module &m_tensor) {
         [] (const std::array<uint32_t, 4> shape, float value, Layout layout, Device * device, const MemoryConfig& output_mem_config) {
             return full(shape, value, layout, device, output_mem_config);
         },
-        py::arg("shape"), py::arg("fill_value"), py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device") = nullptr, py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("shape"), py::arg("fill_value"), py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device") = nullptr, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Returns a new tensor filled with the scalar value in shape specified by input ``shape``.
 
         Input shape is specified as a list of 4 integer elements
@@ -1678,7 +1678,7 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     m_tensor.def("arange", &arange,
-        py::arg("start"), py::arg("end"), py::arg("step"), py::arg("device") = nullptr, py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("start"), py::arg("end"), py::arg("step"), py::arg("device") = nullptr, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Returns a new 1D tensor with the incremented values in size specified by inputs ``start``, ``end`` and ``step``.
 
         Inpute scalars are integers specifying start, end, and step sizes.
@@ -1773,7 +1773,7 @@ void TensorModule(py::module &m_tensor) {
 #endif
 
      m_tensor.def("addcmul", &addcmul,
-        py::arg("input").noconvert(), py::arg("tensor1").noconvert(), py::arg("tensor2").noconvert(), py::arg("value"), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("tensor1").noconvert(), py::arg("tensor2").noconvert(), py::arg("value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Performs the element-wise multiplication of tensor1 ``tensor1`` by tensor2 ``tensor2``, multiplies the result
         by the scalar value ``value`` and adds it to input ``input``.
 
@@ -1792,7 +1792,7 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     m_tensor.def("addcdiv", &addcdiv,
-        py::arg("input").noconvert(), py::arg("tensor1").noconvert(), py::arg("tensor2").noconvert(), py::arg("value"), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("tensor1").noconvert(), py::arg("tensor2").noconvert(), py::arg("value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Performs the element-wise division of tensor1 ``tensor1`` by tensor2 ``tensor2``, multiplies the result
         by the scalar value ``value`` and adds it to input ``input``.
 
@@ -1813,7 +1813,7 @@ void TensorModule(py::module &m_tensor) {
 
 
     m_tensor.def("mac", py::overload_cast<const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&>(&mac),
-        py::arg("input").noconvert(), py::arg("tensor1").noconvert(), py::arg("tensor2").noconvert(), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("tensor1").noconvert(), py::arg("tensor2").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Returns tensor with the multiply and accumulation of all of elements of the input tensors ``input, tensor1, tensor2``.
         Output is ``input x tensor1 + tensor2`` elementwise operator.
         Input tensor must have BFLOAT16 data type.
@@ -1830,7 +1830,7 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     m_tensor.def("mac", py::overload_cast<const Tensor&, float, float, const MemoryConfig&>(&mac),
-        py::arg("input").noconvert(), py::arg("float1"), py::arg("float2"), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("float1"), py::arg("float2"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Returns tensor with the multiply and accumulation of all of elements of the input tensor ``input11 with``float1, float2``.
         Output is ``tensor1 x float1 + float2`` elementwise operator.
         Input tensor must have BFLOAT16 data type.
@@ -1847,7 +1847,7 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
      m_tensor.def("threshold", &threshold,
-        py::arg("input").noconvert(), py::arg("threshold"), py::arg("value"), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("threshold"), py::arg("value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Returns tensor with the threshold activation on elements of the input tensors ``arg0`` at threshold ``threshold``,
         and value ``value``.
 
@@ -1866,7 +1866,7 @@ void TensorModule(py::module &m_tensor) {
 
     // *** matrix multiplication ***
     m_tensor.def("matmul", &matmul,
-        py::arg("input").noconvert(), py::arg("other").noconvert(), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("other").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Perform a non-batched matrix multiplication ``arg0 x arg1`` with two tensors.
 
         Both input tensors must have BFLOAT16 data type.
@@ -1882,7 +1882,7 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     m_tensor.def("outer", &outer,
-        py::arg("input").noconvert(), py::arg("other").noconvert(), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("other").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Perform a non-batched outer product multiplication ``arg0 x arg1`` with two tensors.
 
         Both input tensors must have BFLOAT16 data type but shape [1,1,N,1] and [1,1,1,M] respectively
@@ -1899,7 +1899,7 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     m_tensor.def("bmm", &bmm,
-        py::arg("input").noconvert(), py::arg("other").noconvert(), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("other").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Perform a batched matmul ``arg0 x arg1`` with two tensors, where batch dims match.
 
         Both input tensors must have BFLOAT16 data type.
@@ -1916,7 +1916,7 @@ void TensorModule(py::module &m_tensor) {
 
     // *** tensor manipulation ***
     m_tensor.def("concat", py::overload_cast<Tensor&, Tensor&, uint32_t, const MemoryConfig&>(&concat),
-        py::arg("input").noconvert(), py::arg("other").noconvert(), py::arg("dim"), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("other").noconvert(), py::arg("dim"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Concatenates shape of tensors ``arg0`` and ``arg1`` to new shape ``[W, Z, Y, X]`` along the specified dimension ``arg2``.
 
         Input tensors must be on device, in ROW MAJOR or TILE layout, and have BFLOAT16 data type.
@@ -1933,7 +1933,7 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     m_tensor.def("concat", py::overload_cast<std::vector<Tensor>&, uint32_t, const MemoryConfig&>(&concat),
-        py::arg("input_tensors").noconvert(), py::arg("dim"), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input_tensors").noconvert(), py::arg("dim"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Concatenates shape of tensors ``arg0`` and ``arg1`` to new shape ``[W, Z, Y, X]`` along the specified dimension ``arg1``.
 
         Input tensors must be on device, in ROW MAJOR or TILE layout, and have BFLOAT16 data type.
@@ -1949,7 +1949,7 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     m_tensor.def("reshape", &reshape,
-        py::arg("input").noconvert(), py::arg("W"), py::arg("Z"), py::arg("Y"), py::arg("X"), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("W"), py::arg("Z"), py::arg("Y"), py::arg("X"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Returns a tensor with the new shape of ``[W, Z, Y, X]``. The X dimension of input and output tensor must have same size.
 
         Input tensor must be on host device, in TILE layout, and have BFLOAT16 data type.
@@ -1975,7 +1975,7 @@ void TensorModule(py::module &m_tensor) {
     );
 
     m_tensor.def("transpose", py::overload_cast<const Tensor&, uint, uint, const MemoryConfig&>(&transpose),
-        py::arg("input").noconvert(), py::arg("dim0"), py::arg("dim1"), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("dim0"), py::arg("dim1"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``arg1`` and ``arg2`` are swapped.
 
         Input tensor must have BFLOAT16 data type. Second and third input specify the dimensions of tensor to be transposed.
@@ -2000,7 +2000,7 @@ void TensorModule(py::module &m_tensor) {
     detail::bind_unary_op(m_tensor, "transpose_nw", &transpose_nw, R"doc(Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``W`` and ``X`` are swapped.)doc");
 
     m_tensor.def("permute", &permute,
-        py::arg("input").noconvert(), py::arg("W"), py::arg("Z"), py::arg("Y"), py::arg("X"), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("W"), py::arg("Z"), py::arg("Y"), py::arg("X"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Returns a tensor that is input tensor ``arg0`` with its dimensions permuted to new order ``[arg1, arg2, arg3, arg4]``.
 
         .. csv-table::
@@ -2015,7 +2015,7 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     m_tensor.def("tilize", &tilize,
-        py::arg("input").noconvert(), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Changes data layout of input tensor to TILE.
 
         Input tensor must be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type.
@@ -2030,7 +2030,7 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     m_tensor.def("tilize_with_zero_padding", &tilize_with_zero_padding,
-        py::arg("input").noconvert(), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Tilizes a given tensor across memory on device. Pads zeroes height-wise and width-wise if required.
 
         .. csv-table::
@@ -2044,7 +2044,7 @@ void TensorModule(py::module &m_tensor) {
         [] (const Tensor &tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value, const MemoryConfig& mem_config) {
             return tilize_with_val_padding(tensor, output_tensor_shape, input_tensor_start, pad_value, mem_config);
         },
-        py::arg("input").noconvert(), py::arg("output_tensor_shape").noconvert(), py::arg("input_tensor_start"), py::arg("pad_value"), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("output_tensor_shape").noconvert(), py::arg("input_tensor_start"), py::arg("pad_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Tilizes a given tensor across memory on device. Pads to specified shape before tilizing.
 
         .. csv-table::
@@ -2058,7 +2058,7 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     m_tensor.def("untilize", &untilize,
-        py::arg("input").noconvert(), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Changes data layout of input tensor to ROW_MAJOR.
 
         Input tensor must be on TT accelerator device, in TILE, and have BFLOAT16 data type.
@@ -2076,7 +2076,7 @@ void TensorModule(py::module &m_tensor) {
         [] (const Tensor &tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, const MemoryConfig& mem_config) {
             return untilize_with_unpadding(tensor, output_tensor_shape, input_tensor_start, mem_config);
         },
-        py::arg("input").noconvert(), py::arg("output_tensor_start").noconvert(), py::arg("output_tensor_end"), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("output_tensor_start").noconvert(), py::arg("output_tensor_end"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Changes data layout of input tensor to ROW_MAJOR and unpads/removes elements from the tensor.
 
         Input tensor must be on TT accelerator device, in TILE, and have BFLOAT16 data type.
@@ -2097,7 +2097,7 @@ void TensorModule(py::module &m_tensor) {
         [] (const Tensor &input_tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value, const MemoryConfig& mem_config) {
             return pad(input_tensor, output_tensor_shape, input_tensor_start, pad_value, mem_config);
         },
-        py::arg("input").noconvert(), py::arg("output_tensor_shape").noconvert(), py::arg("input_tensor_start"), py::arg("pad_value"), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("output_tensor_shape").noconvert(), py::arg("input_tensor_start"), py::arg("pad_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Pad TT Tensor with given pad value ``arg2``.
 
         The input tensor must be in ROW_MAJOR or TILE layout.
@@ -2118,7 +2118,7 @@ void TensorModule(py::module &m_tensor) {
         [] (const Tensor &input_tensor, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end, const MemoryConfig& mem_config) {
             return unpad(input_tensor, output_tensor_start, output_tensor_end, mem_config);
         },
-        py::arg("input").noconvert(), py::arg("output_tensor_start").noconvert(), py::arg("output_tensor_end"), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("output_tensor_start").noconvert(), py::arg("output_tensor_end"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Unpad TT Tensor.
 
         Returns an output tensor from output tensor start indices ``arg1`` to output tensor end indices ``arg2`` (inclusive) of the input tensor.
@@ -2135,7 +2135,7 @@ void TensorModule(py::module &m_tensor) {
 
     // *** broadcast and reduce ***
     m_tensor.def("bcast", &bcast,
-        py::arg().noconvert(), py::arg().noconvert(), py::arg("math_op"), py::arg("dim"), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("math_op"), py::arg("dim"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Perform a binary elementwise operation ``math_op`` between tensors ``input`` and ``other``, where values from tensor ``other`` are broadcast.
 
         Let tensor ``input`` have shape ``[W0, Z0, Y0, X0]`` and tensor ``other`` shape ``[W1, Z1, Y1, X1]``. ``arg3`` determines the type of broadcast performed.
@@ -2161,7 +2161,7 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     m_tensor.def("bcast_without_autoformat", &bcast_without_autoformat,
-        py::arg().noconvert(), py::arg().noconvert(), py::arg("math_op"), py::arg("dim"), py::arg("mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("math_op"), py::arg("dim"), py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Perform a binary elementwise operation ``arg2`` between tensors ``arg0`` and ``arg1``, where values from tensor ``arg1`` are broadcast.
 
         Let tensor ``arg0`` have shape ``[W0, Z0, Y0, X0]`` and tensor ``arg1`` shape ``[W1, Z1, Y1, X1]``. ``arg3`` determines the type of broadcast performed.
@@ -2189,7 +2189,7 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     m_tensor.def("reduce", &reduce,
-        py::arg("input").noconvert(), py::arg("math_op"), py::arg("dim"), py::arg("scaler"), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("math_op"), py::arg("dim"), py::arg("scaler"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Perform a reduction of input tensor ``arg0`` using mathematical operation ``arg1`` on dimension ``arg2``.
 
         For ``arg2=ReduceOpDim::W`` reduce is done on dimension X.
@@ -2213,7 +2213,7 @@ void TensorModule(py::module &m_tensor) {
 
     // *** experimental operations ***
     m_tensor.def("fill_rm", &fill_rm,
-        py::arg("N"), py::arg("C"), py::arg("H"), py::arg("W"), py::arg("hOnes"), py::arg("wOnes"), py::arg("any").noconvert(), py::arg("val_hi"), py::arg("val_lo"), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("N"), py::arg("C"), py::arg("H"), py::arg("W"), py::arg("hOnes"), py::arg("wOnes"), py::arg("any").noconvert(), py::arg("val_hi"), py::arg("val_lo"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Generates an NCHW row-major tensor and fill it with high values up to
         hOnes, wOnes in each HW tile with the rest padded with high values. So
         for H=2, W=3, hFill=1, wFill=2 the following tensor will be generated:
@@ -2256,7 +2256,7 @@ void TensorModule(py::module &m_tensor) {
         +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
     )doc");
     m_tensor.def("fill_ones_rm", &fill_ones_rm,
-        py::arg("N"), py::arg("C"), py::arg("H"), py::arg("W"), py::arg("hOnes"), py::arg("wOnes"), py::arg("any").noconvert(), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("N"), py::arg("C"), py::arg("H"), py::arg("W"), py::arg("hOnes"), py::arg("wOnes"), py::arg("any").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Same as ``fill_rm``, but ``val_hi`` is set to ``1`` and ``val_lo`` is
         ``0``.
 
@@ -2341,63 +2341,63 @@ void TensorModule(py::module &m_tensor) {
 
     // Custom BERT TMs
     m_tensor.def("bert_large_create_qkv_heads", &bert_large_create_qkv_heads,
-        py::arg().noconvert(), py::arg("mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg().noconvert(), py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Splits [9, 1, 384, 3072] fused qkv matrix into 3 heads with shapes [9, 16, 384, 64], [9, 16, 64, 384], and [9, 16, 384, 64].
     )doc");
     m_tensor.def("bert_large_split_fused_qkv", &bert_large_split_fused_qkv,
-        py::arg().noconvert(), py::arg("mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg().noconvert(), py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Splits [9, 1, 384, 3072] fused qkv matrix into 3 heads with shape [9, 1, 384, 1024].
     )doc");
     m_tensor.def("bert_large_create_q_head", &bert_large_create_q_head,
-        py::arg().noconvert(), py::arg("mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg().noconvert(), py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Reshuffles [9, 1, 384, 1024] tensor into tensor with shape [9, 16, 384, 64].
     )doc");
     m_tensor.def("bert_large_create_k_head", &bert_large_create_k_head,
-        py::arg().noconvert(), py::arg("mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg().noconvert(), py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Reshuffles [9, 1, 384, 1024] tensor into tensor with shape [9, 16, 64, 384].
     )doc");
     m_tensor.def("bert_large_create_v_head", &bert_large_create_v_head,
-        py::arg().noconvert(), py::arg("mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg().noconvert(), py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Reshuffles [9, 1, 384, 1024] tensor into tensor with shape [9, 16, 384, 64].
     )doc");
     m_tensor.def("bert_large_concat_heads", &bert_large_concat_heads,
-        py::arg().noconvert(), py::arg("mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg().noconvert(), py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Reshuffles [9, 16, 384, 64] tensor into tensor with shape [9, 1, 384, 1024].
     )doc");
 
     // Custom BERT matmuls/bmms
     m_tensor.def("bert_large_fused_qkv_matmul", &bert_large_fused_qkv_matmul,
-        py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("out_dtype").noconvert() = std::nullopt, R"doc(
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("out_dtype").noconvert() = std::nullopt, R"doc(
         Perform a bert_large_fused_qkv non-batched matmul ``A x B`` with two tensors.
     )doc");
     m_tensor.def("bert_large_ff1_matmul", &bert_large_ff1_matmul,
-        py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("fuse_gelu_activation") = false, py::arg("mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("out_dtype").noconvert() = std::nullopt, R"doc(
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("fuse_gelu_activation") = false, py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("out_dtype").noconvert() = std::nullopt, R"doc(
         Perform a bert_large_ff1 non-batched matmul ``A x B`` with two tensors.
     )doc");
     m_tensor.def("bert_large_ff2_matmul", &bert_large_ff2_matmul,
-        py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("out_dtype").noconvert() = std::nullopt, R"doc(
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("out_dtype").noconvert() = std::nullopt, R"doc(
         Perform a bert_large_ff2 non-batched matmul ``A x B`` with two tensors.
     )doc");
     m_tensor.def("bert_large_selfout_matmul", &bert_large_selfout_matmul,
-        py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("out_dtype").noconvert() = std::nullopt, R"doc(
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("out_dtype").noconvert() = std::nullopt, R"doc(
         Perform a bert_large_selfout non-batched matmul ``A x B`` with two tensors.
     )doc");
     m_tensor.def("bert_large_pre_softmax_bmm", &bert_large_pre_softmax_bmm,
-        py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("out_dtype").noconvert() = std::nullopt, R"doc(
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("out_dtype").noconvert() = std::nullopt, R"doc(
         Perform a bert_large_pre_softmax_bmm batched matmul ``[9, 16, 384, 64] x [9, 16, 64, 384]`` with two tensors and returns a reshaped output of [9, 1, 6144, 384].
     )doc");
     m_tensor.def("bert_large_post_softmax_bmm", &bert_large_post_softmax_bmm,
-        py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("out_dtype").noconvert() = std::nullopt, R"doc(
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("out_dtype").noconvert() = std::nullopt, R"doc(
         Perform a bert_large_post_softmax_bmm batched matmul by reshaping tensor A to [9, 16, 384, 384] first, then returning ``[9, 16, 384, 384] x [9, 16, 384, 64]``.
     )doc");
 
     // Custom BERT Layernorm
     m_tensor.def("bert_large_layernorm", &bert_large_layernorm,
-        py::arg("input").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         "Performs a bert_large_layernorm operation on the last tensor dimension with optional fused with post-multiplication and addition via W-bcast.
     )doc");
     m_tensor.def("bert_large_add_layernorm", &bert_large_add_layernorm,
-        py::arg("a").noconvert(), py::arg("b").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("a").noconvert(), py::arg("b").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         "Performs a bert_large_layernorm(a+b)*gamma + beta operation."
     )doc");
 
@@ -2409,27 +2409,27 @@ void TensorModule(py::module &m_tensor) {
 
     // groupnorm
     m_tensor.def("groupnorm", &groupnorm,
-        py::arg("input").noconvert(), py::arg("group_size").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("group_size").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         "Performs a groupnorm operation on the channel dimension grouped per group_size, with optional fused with post-multiplication and addition via W-bcast.
     )doc");
 
     // layernorm
     m_tensor.def("layernorm", &layernorm,
-        py::arg("input").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         "Performs a layernorm operation on the last tensor dimension with optional fused with post-multiplication and addition via W-bcast.
     )doc");
     m_tensor.def("add_layernorm", &add_layernorm,
-        py::arg("a").noconvert(), py::arg("b").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("a").noconvert(), py::arg("b").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         "Performs a layernorm(a+b)*gamma + beta operation."
     )doc");
     m_tensor.def("rmsnorm", &rmsnorm,
-        py::arg("input").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         "Performs a rmsnorm operation on the last tensor dimension with optional fused with post-multiplication and addition via W-bcast.
     )doc");
 
     // FC
     m_tensor.def("fully_connected", &fully_connected,
-        py::arg("act").noconvert(), py::arg("weights").noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("act").noconvert(), py::arg("weights").noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Fully connected layer (linear.)
 
         .. csv-table::
@@ -2454,7 +2454,7 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     // TMs
-    m_tensor.def("split_last_dim_two_chunks_tiled", &split_last_dim_two_chunks_tiled, py::arg("input").noconvert(), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+    m_tensor.def("split_last_dim_two_chunks_tiled", &split_last_dim_two_chunks_tiled, py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Splits a tensor's last dimension in two equal sized chunks. This assumes the last dim is tile sized.
 
         .. csv-table::
@@ -2533,7 +2533,7 @@ void TensorModule(py::module &m_tensor) {
         [] (const Tensor &input, Device * device, const std::array<uint32_t, 4>& padded_shape, float pad_value, Layout target_layout, std::optional<MemoryConfig> target_mem_config = std::nullopt) {
             return AutoFormat::format_input_tensor(input, device, padded_shape, pad_value, target_layout, target_mem_config);
         },
-        py::arg("input").noconvert(), py::arg("device").noconvert(), py::arg("padded_shape"), py::arg("pad_value"), py::arg("target_layout").noconvert(), py::arg("target_mem_config") = std::nullopt,
+        py::arg("input").noconvert(), py::arg("device").noconvert(), py::arg("padded_shape"), py::arg("pad_value"), py::arg("target_layout").noconvert(), py::arg("target_mem_config").noconvert() = std::nullopt,
         R"doc(
             Formats tensor to target layout and pads to padded shape
         )doc"
@@ -2543,7 +2543,7 @@ void TensorModule(py::module &m_tensor) {
         [] (const Tensor &output, const std::array<uint32_t, 4>& shape, Device* device, Layout target_layout, std::optional<MemoryConfig> target_mem_config = std::nullopt) {
             return AutoFormat::format_output_tensor(output, shape, device, target_layout, target_mem_config);
         },
-        py::arg("output").noconvert(), py::arg("shape"), py::arg("device").noconvert(), py::arg("target_layout").noconvert(), py::arg("target_mem_config") = std::nullopt,
+        py::arg("output").noconvert(), py::arg("shape"), py::arg("device").noconvert(), py::arg("target_layout").noconvert(), py::arg("target_mem_config").noconvert() = std::nullopt,
         R"doc(
             Formats tensor to target layout and unpads to shape
         )doc"
