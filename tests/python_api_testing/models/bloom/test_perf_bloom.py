@@ -104,7 +104,7 @@ def run_perf_bloom(expected_inference_time, expected_compile_time):
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (1.8,
+        (1.4,
          12,
         ),
     ),

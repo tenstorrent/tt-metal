@@ -111,7 +111,7 @@ def run_perf_whisper(expected_inference_time, expected_compile_time):
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (13.5,
+        (5.6,
          26.5,
         ),
     ),

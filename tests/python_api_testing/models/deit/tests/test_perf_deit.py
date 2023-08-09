@@ -82,7 +82,7 @@ def run_perf_deit(expected_inference_time, expected_compile_time, hf_cat_image_s
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (3.7,
+        (2.1,
          17.5,
         ),
     ),

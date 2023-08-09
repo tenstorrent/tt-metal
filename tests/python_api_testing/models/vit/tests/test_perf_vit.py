@@ -86,7 +86,7 @@ def run_perf_vit(expected_inference_time, expected_compile_time, hf_cat_image_sa
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (3.8,
+        (2.25,
         16,
         ),
     ),

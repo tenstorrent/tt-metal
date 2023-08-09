@@ -128,7 +128,7 @@ def run_perf_llama(
     "expected_inference_time, expected_compile_time",
     (
         (
-            0.27,
+            0.25,
             9
         ),
     ),
