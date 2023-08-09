@@ -22,6 +22,23 @@ op_map = {
         "tt_lib_op": tt_lib_ops.arange,
         "pytorch_op": pytorch_ops.arange,
     },
+    # stats
+     "stats-var_hw": {
+        "tt_lib_op": tt_lib_ops.var_hw,
+        "pytorch_op": pytorch_ops.var_hw,
+    },
+     "stats-std_hw": {
+        "tt_lib_op": tt_lib_ops.std_hw,
+        "pytorch_op": pytorch_ops.std_hw,
+    },
+    "stats-mean_hw": {
+        "tt_lib_op": tt_lib_ops.mean_hw,
+        "pytorch_op": pytorch_ops.mean_hw,
+    },
+    "stats-normalize_hw": {
+        "tt_lib_op": tt_lib_ops.normalize_hw,
+        "pytorch_op": pytorch_ops.normalize_hw,
+    },
     # Eltwise unary
     "eltwise-hardtanh": {
         "tt_lib_op": tt_lib_ops.hardtanh,

@@ -474,59 +474,57 @@ Tensor xlogy(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& o
     return operation::decorate_as_composite(__func__, _xlogy)(input_a, input_b, output_mem_config);
 }
 
-//these ops need more polish - TBD
-#if 0
+Tensor _variance_impl(const Tensor& y,const Tensor& mean_y,Tensor& y_minus_mean_y,const MemoryConfig& output_mem_config) {
+    constexpr float correction = 0.0f;
+    auto shape_wh = y.shape();
+    float scale = 1.0f/((float)(shape_wh[3]*shape_wh[2])-correction);
+    Tensor sqr_y_minus_mean_y = square(y_minus_mean_y,output_mem_config);
+    Tensor sum_sqr_y_minus_mean_y = reduce(sqr_y_minus_mean_y, ReduceOpMath::SUM, ReduceOpDim::HW,scale,output_mem_config);
+    return sum_sqr_y_minus_mean_y; //var
+}
+Tensor _variance_impl(const Tensor& y,const Tensor& mean_y,const MemoryConfig& output_mem_config) {
+    Tensor y_minus_mean_y = bcast(y,mean_y,BcastOpMath::SUB, BcastOpDim::HW);
+    return _variance_impl(y,mean_y,y_minus_mean_y,output_mem_config);
+}
+Tensor _variance(const Tensor& y,const MemoryConfig& output_mem_config) {
+    Tensor mean_y = mean_hw(y);
+    return _variance_impl(y,mean_y,output_mem_config);
+}
+Tensor var_hw(const Tensor& y,const MemoryConfig& output_mem_config) {
+   return operation::decorate_as_composite(__func__, _variance)(y,output_mem_config);
+}
+
 //Function std
 //compute standard deviation of tensor y = sqrt( E((y-<y>)^2)/ y.volume() )
 // Ref: torch.std
-Tensor std(const Tensor& y);
-
-// Function mean
-//use transformation y = (y - mean(y))/std(y) by broadcast
-// Ref: torch.mean
-Tensor mean(const Tensor& y);
-
-// Function normalize
-//use transformation y = (y - mean(y))/std(y) by broadcast
-Tensor normalize(const Tensor& a);
-
-
-Tensor mean(const Tensor& y) {
-    Tensor sum_y = sum(y);
-    const float val = 1.0f/(float)y.volume();
-    Tensor recip_size = mk_scalar(val);
-    Tensor mean_y = bcast(sum_y,recip_size,BcastOpMath::MUL, BcastOpDim::HW);
-    return mean_y;
+Tensor _std(const Tensor& y,const Tensor& mean_y,const MemoryConfig& output_mem_config) {
+    return sqrt(_variance_impl(y,mean_y,output_mem_config));
+}
+Tensor _std(const Tensor& y,const Tensor& mean_y,Tensor& y_minus_mean_y,const MemoryConfig& output_mem_config) {
+    return sqrt(_variance_impl(y,mean_y,y_minus_mean_y,output_mem_config));
+}
+Tensor _std_overload(const Tensor& y,const MemoryConfig& output_mem_config) {
+    return sqrt(_variance(y,output_mem_config));
+}
+Tensor std_hw(const Tensor& y,const MemoryConfig& output_mem_config ) {
+   return operation::decorate_as_composite(__func__, tt::tt_metal::_std_overload)(y,output_mem_config);
 }
 
-
 // Function normalize
 //use transformation y = (y - mean(y))/std(y) by broadcast
-Tensor normalize(const Tensor& y) {
-    Tensor mean_y = mean(y);
+Tensor _normalize(const Tensor& y,const MemoryConfig& output_mem_config) {
+    Tensor mean_y = mean_hw(y);
     Tensor y_minus_mean_y = bcast(y,mean_y,BcastOpMath::SUB, BcastOpDim::HW);
-    Tensor sqr_y_minus_mean_y = square(y_minus_mean_y);
-    float scale = 1.0f/(float)y.volume();
-    Tensor recip_size = mk_scalar(scale);
-    Tensor var_y = bcast(sqr_y_minus_mean_y,recip_size,BcastOpMath::MUL, BcastOpDim::HW);
-    Tensor std_y = sqrt(var_y);
-    Tensor recip_std_y = recip(std_y);
+    Tensor std_y = tt::tt_metal::_std(y,mean_y,y_minus_mean_y,output_mem_config);
+    Tensor recip_std_y = recip(std_y,output_mem_config);
     Tensor z = bcast(y_minus_mean_y,recip_std_y,BcastOpMath::MUL, BcastOpDim::HW);
     return z;
 }
-
-Tensor std(const Tensor& y) {
-    Tensor mean_y = mean(y);
-    Tensor y_minus_mean_y = bcast(y,mean_y,BcastOpMath::SUB, BcastOpDim::HW);
-    Tensor sqr_y_minus_mean_y = square(y_minus_mean_y);
-    float scale = 1.0f/(float)y.volume();
-    Tensor recip_size = mk_scalar(scale);
-    Tensor var_y = bcast(sqr_y_minus_mean_y,recip_size,BcastOpMath::MUL, BcastOpDim::HW);
-    Tensor std_y = sqrt(var_y);
-    return std_y;
+Tensor normalize_hw(const Tensor& y,const MemoryConfig& output_mem_config) {
+   return operation::decorate_as_composite(__func__, _normalize)(y,output_mem_config);
 }
-#endif
 
+//TODO: can be a fused binop
 //hypot(a,b) = sqrt[ a^2 + b^2 ]
 Tensor _hypot(const Tensor &input_a, const Tensor &input_b, const MemoryConfig& output_mem_config) {
     Tensor a_sq = square(input_a, output_mem_config);
@@ -540,7 +538,6 @@ Tensor hypot(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& o
 {
     return operation::decorate_as_composite(__func__, _hypot)(input_a, input_b, output_mem_config);
 }
-
 
 //threshold(a,t,v) = (a <= t)*v + (a > t)*a
 Tensor _threshold(const Tensor &input_a, float threshold, float value, const MemoryConfig& output_mem_config) {

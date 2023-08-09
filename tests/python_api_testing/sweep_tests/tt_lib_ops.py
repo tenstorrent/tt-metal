@@ -350,6 +350,89 @@ def eltwise_relu_max(x, *args, upper_limit, device, dtype, layout, on_device, **
     return output
 
 
+# stats ops
+@setup_host_and_device
+def std_hw(x, *args, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    t1 = ttl.tensor.std_hw(t0)
+
+    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    output = output.max(2, True)[0].max(3, True)[0]
+
+    return output
+
+
+@setup_host_and_device
+def var_hw(x, *args, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    t1 = ttl.tensor.var_hw(t0)
+
+    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    output = output.max(2, True)[0].max(3, True)[0]
+
+    return output
+
+
+@setup_host_and_device
+def mean_hw(x, *args, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    t1 = ttl.tensor.mean_hw(t0)
+
+    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    output = output.max(2, True)[0].max(3, True)[0]
+
+    return output
+
+
+@setup_host_and_device
+def normalize_hw(x, *args, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    t1 = ttl.tensor.normalize_hw(t0)
+
+    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    return output
+
+
 @setup_host_and_device
 def eltwise_polyval(x, *args, coeffs, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(

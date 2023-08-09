@@ -1215,6 +1215,11 @@ void TensorModule(py::module &m_tensor) {
         Auto formatting is disabled. Both input tensors must have TILE layout. Output tensor will have TILE layout.)doc"
     );
 
+    detail::bind_unary_op(m_tensor, "mean_hw", tt::tt_metal::mean_hw, R"doc(  Returns a new tensor with the variance of the input tensor ``{0}`` on H,W axes.)doc");
+    detail::bind_unary_op(m_tensor, "var_hw", tt::tt_metal::var_hw, R"doc(  Returns a new tensor with the variance of the input tensor ``{0}`` on H,W axes.)doc");
+    detail::bind_unary_op(m_tensor, "std_hw", tt::tt_metal::std_hw, R"doc(Returns a new tensor with the standard deviation of the input tensor ``{0}`` on H,W axes.)doc");
+    detail::bind_unary_op(m_tensor, "normalize_hw", tt::tt_metal::normalize_hw, R"doc(Returns a new tensor with the Gaussian normalize of the elements of the input tensor ``{0}`` on H,W axes.)doc");
+
     // *** eltwise unary ***
     m_tensor.def("move", &move,
         py::arg().noconvert(), py::arg("output_mem_config").noconvert() = std::nullopt, R"doc(

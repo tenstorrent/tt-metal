@@ -26,6 +26,28 @@ def move(x, *args, **kwargs):
     return x
 
 
+# Stats Ops
+def var_hw(x, *args, **kwargs):
+    return torch.var(x, [2, 3], keepdim=True)
+
+
+def std_hw(x, *args, **kwargs):
+    return torch.std(x, [2, 3], keepdim=True)
+
+
+def mean_hw(x, *args, **kwargs):
+    return torch.mean(x, [2, 3], keepdim=True)
+
+
+def normalize_hw(x, *args, **kwargs):
+    mx = mean_hw(x)
+    sx = std_hw(x)
+    for i in range(x.shape[0]):
+        for j in range(x.shape[1]):
+            x[i, j, :, :] = (x[i, j, :, :] - mx[i, j, :, :]) / sx[i, j, :, :]
+    return x
+
+
 # Ternary Ops
 def sum(x, *args, dim, **kwargs):
     return torch.sum(x, dim=dim, keepdim=True)

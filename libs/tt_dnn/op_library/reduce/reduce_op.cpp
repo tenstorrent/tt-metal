@@ -3,7 +3,8 @@
 #include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
-
+#include "tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 
@@ -156,6 +157,13 @@ Tensor reduce(const Tensor &input_tensor, ReduceOpMath reduce_math, ReduceOpDim 
     } else {
         return operation::run_with_autoformat(Reduce{reduce_math, reduce_dim, scaler, output_mem_config}, {input_tensor}, {}, pad_value).at(0);
     }
+}
+
+Tensor mean_hw(const Tensor& input_tensor,const MemoryConfig& output_mem_config) {
+    auto shape = input_tensor.shape();
+    float inv_scale_hw = 1.0f/(shape[3]*shape[2]);
+    Tensor scaled_sum_hw = reduce(input_tensor,ReduceOpMath::SUM,ReduceOpDim::HW,inv_scale_hw,output_mem_config);
+    return scaled_sum_hw;
 }
 
 Tensor sum(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_config) {

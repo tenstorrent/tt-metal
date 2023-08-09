@@ -2,16 +2,10 @@
 
 #include <optional>
 
-#include "libs/tt_dnn/op_library/layernorm/layernorm_op.hpp"
-#include "libs/tt_dnn/op_library/transpose/transpose_op.hpp"
 #include "libs/tt_dnn/op_library/work_split.hpp"
-#include "third_party/magic_enum/magic_enum.hpp"
-#include "tt_dnn/op_library/math.hpp"
-#include "tt_dnn/op_library/run_operation.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/host_api.hpp"
+#include "libs/tt_dnn/op_library/reshape/reshape_op.hpp"
+#include "libs/tt_dnn/op_library/composite/composite_ops.hpp"
 
-using u32 = std::uint32_t;
 using namespace tt::constants;
 using namespace std;
 using namespace tt::tt_metal;
@@ -26,7 +20,7 @@ Tensor groupnorm(
     float eps,
     std::optional<const Tensor> gamma,
     std::optional<const Tensor> beta,
-    const MemoryConfig& mem_config) {
+    const MemoryConfig& output_mem_config) {
     TT_ASSERT(a.shape()[3] % TILE_WIDTH == 0, "Normalizing on last dim cannot be padded");
     if (gamma.has_value()) {
         TT_ASSERT(gamma.value().shape()[3] == a.shape()[3], "Gamma width must be equal to input width");
@@ -39,9 +33,20 @@ Tensor groupnorm(
     /**
      * shortcut when group size = 1 we use layernorm with transpose and non-transpose
      */
-    Tensor a_cw_tx = transpose_cw(a);
-    Tensor layer_norm_tx = layernorm(a_cw_tx, eps, gamma, beta, mem_config);
-    Tensor output = transpose_cw(layer_norm_tx);
+
+    Shape shape = a.shape();
+    Tensor ar = reshape(const_cast<Tensor&>(a),shape[0],1,shape[1]*shape[2],shape[3],output_mem_config);
+    Tensor group_norm_1 = normalize_hw(ar,output_mem_config);
+    Tensor output = reshape (group_norm_1,shape[0],shape[1],shape[2],shape[3],output_mem_config);
+    if (gamma.has_value() && beta.has_value()) {
+        output = mac(output,gamma.value(),beta.value(),output_mem_config);
+    } else {
+        if (gamma.has_value()) {
+            output = mul(output,gamma.value()); //gamma_t);
+        } else if (beta.has_value()) {
+            output = add(output,beta.value());
+        }
+    }
     return output;
 }
 

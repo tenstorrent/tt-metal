@@ -138,12 +138,7 @@ def comp_using_plot(tname, input, golden, calculated):
         calculated = calculated.type(torch.float32)
         input = input.type(torch.float32)
     shape = "x".join(list(map(str, list(input.size()))))
-    plot_name = (
-        "plot_"
-        + tname
-        + "_"
-        + shape + ".png"
-    )
+    plot_name = "plot_" + tname + "_" + shape + ".png"
     input = input.flatten()
     golden = golden.flatten()
     calculated = calculated.flatten()

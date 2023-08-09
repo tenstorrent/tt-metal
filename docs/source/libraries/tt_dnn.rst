@@ -518,3 +518,11 @@ Other Operations
 .. autofunction:: tt_lib.tensor.addcmul
 
 .. autofunction:: tt_lib.tensor.addcdiv
+
+.. autofunction:: tt_lib.tensor.mean_hw
+
+.. autofunction:: tt_lib.tensor.var_hw
+
+.. autofunction:: tt_lib.tensor.std_hw
+
+.. autofunction:: tt_lib.tensor.normalize_hw
