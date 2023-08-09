@@ -14,6 +14,7 @@
 using namespace ckernel;
 
 inline void llk_setup_outputs() {
+    TT_LLK_DUMP("llk_setup_outputs()");
     while (EPOCH_INFO_PTR->all_streams_ready == 0)
         ;
     for (std::uint32_t n = 0; n < EPOCH_INFO_PTR->num_outputs; n++) {
@@ -154,6 +155,7 @@ void stream_wait_for_free_tiles(std::uint32_t operand, std::uint32_t stream_id, 
 template <bool skip_sync = false, bool wait_for_blocks = false, bool brisc_pack = false>
 inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32_t num_tiles) {
 
+    TT_LLK_DUMP("llk_wait_for_free_tiles<{}, {}, {}>({}, {})", skip_sync, wait_for_blocks, brisc_pack, operand, num_tiles);
     std::uint32_t output = operand_to_output_index(operand);
     std::uint32_t num_words = num_tiles * (std::uint32_t)outputs[output].f.tile_size_words;
     bool legacy_pack = false;
@@ -409,6 +411,7 @@ inline void llk_push_to_output(
 template <bool push_blocks = false, bool brisc_pack = false>
 inline void llk_push_tiles(const std::int32_t operand, const std::int32_t num_tiles) {
 
+    TT_LLK_DUMP("llk_push_tiles<{}, {}>({}, {})", push_blocks, brisc_pack, operand, num_tiles);
     std::uint32_t output = operand_to_output_index(operand);
     std::uint32_t num_words = num_tiles * (std::uint32_t)outputs[output].f.tile_size_words;
     std::uint32_t num_tiles_in_block = 0;
@@ -495,6 +498,7 @@ inline void llk_push_blocks(const std::int32_t operand, const std::int32_t num_b
 }
 
 inline void llk_free_tiles(std::uint32_t operand, std::uint32_t num_tiles) {
+    TT_LLK_DUMP("llk_free_tiles({}, {})", operand, num_tiles);
     std::uint32_t output = operand_to_output_index(operand);
     if (outputs[output].f.accumulation_buffer) {
 

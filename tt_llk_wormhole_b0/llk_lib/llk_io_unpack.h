@@ -12,6 +12,7 @@
 using namespace ckernel;
 
 inline void llk_setup_operands() {
+    TT_LLK_DUMP("llk_setup_operands()");
     while (EPOCH_INFO_PTR->all_streams_ready == 0)
         ;
     for (std::uint32_t n = 0; n < EPOCH_INFO_PTR->num_inputs; n++) {
@@ -51,6 +52,7 @@ inline void llk_setup_operands() {
 // Wait for N tiles available in the incoming stream
 inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
     
+    TT_LLK_DUMP("llk_wait_tiles({}, {})", operand, num_tiles);
     std::uint32_t input = operand_to_input_index(operand);
     volatile std::uint32_t tt_reg_ptr * tiles_received_ptr = get_operand_tiles_received_ptr(operand);
     std::uint16_t num_tiles_u = (std::uint16_t)num_tiles;
@@ -120,6 +122,7 @@ template <bool pop_blocks = false>
 inline void llk_pop_tiles(
     const std::int32_t operand, const std::int32_t num_tiles) {
 
+    TT_LLK_DUMP("llk_pop_tiles<{}>({}, {})", pop_blocks, operand, num_tiles);
     std::uint32_t input = operand_to_input_index(operand);
     std::uint32_t num_words;
 
@@ -174,6 +177,7 @@ inline void llk_pop_tiles(
 }
 
 inline void llk_clear_tiles(std::uint32_t operand, std::uint32_t num_tiles) {
+    TT_LLK_DUMP("llk_clear_tiles({}, {})", operand, num_tiles);
     std::uint32_t input = operand_to_input_index(operand);
     if (operands[input].f.accumulation_buffer) {
         std::uint32_t num_words = num_tiles * operands[input].f.tile_size_words;

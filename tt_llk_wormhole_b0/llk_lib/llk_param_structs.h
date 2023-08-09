@@ -63,16 +63,10 @@ struct llk_math_reduce_params_t {
 //  Pack LLK param structs
 //***
 
-struct llk_relu_config_t {
-    std::uint32_t
-        ApplyRelu : 16;  // 0 ? no relu, 1 ? val<0=>val=0, 2 ? val<threshold=>val=0, 3 - val>threshold=>val=threshold
-    std::uint32_t Threshold : 16;  // fp16
-};
-
-union llk_relu_config_u {
-    llk_relu_config_t f;
-    std::uint32_t val;
-};
+using llk_relu_config_t = hlk_relu_config_t;
+using llk_relu_config_u = hlk_relu_config_u; 
+using llk_pack_shifted_params_t = hlk_pack_shifted_params_t;
+using llk_pack_shifted_state_t = hlk_pack_shifted_state_t;
 
 struct llk_pack_params_t {
     std::uint32_t pack_output;

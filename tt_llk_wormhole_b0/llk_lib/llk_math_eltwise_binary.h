@@ -29,6 +29,8 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool is_fp32_dest_acc_en = false>
 inline void llk_math_eltwise_binary_impl(const std::uint32_t num_faces_a, const std::uint32_t num_faces_b, uint dst_index, const bool clear_fp32_dst_acc) {
+    TT_LLK_DUMP("llk_math_eltwise_binary_impl<{}, {}, {}, {}, {}, {}>({}, {}, {}, {})", eltwise_binary_type, src_b_bcast_type, Dst, NUM_FIDELITY_PHASES, binary_reuse_dest, is_fp32_dest_acc_en, num_faces_a, num_faces_b, dst_index, clear_fp32_dst_acc);
+
     constexpr bool high_fidelity = (NUM_FIDELITY_PHASES > 0);
     constexpr uint32_t ZERO_ACC_MODE = p_zeroacc::CLR_16;
 
@@ -360,6 +362,8 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void llk_math_eltwise_binary_init_impl(const std::uint32_t operand_id, const std::uint32_t transpose, const std::uint32_t acc_to_dest) {
     // todo: do something with num_faces
+    TT_LLK_DUMP("llk_math_eltwise_binary_init_impl<{}, {}, {}, {}>({}, {}, {})", eltwise_binary_type, src_b_bcast_type, NUM_FIDELITY_PHASES, binary_reuse_dest, operand_id, transpose, acc_to_dest);
+
     eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type>();
 
     if constexpr (

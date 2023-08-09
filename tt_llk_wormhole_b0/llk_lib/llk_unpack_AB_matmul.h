@@ -126,12 +126,15 @@ inline void llk_unpack_AB_matmul_hw_configure(const llk_unpack_AB_matmul_params_
 template<bool is_fp32_dest_acc_en = false, bool srnd_fpu_en = false>
 inline void llk_unpack_AB_matmul_hw_configure_disaggregated(
     const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const std::uint32_t transpose_xy_srca = 0) {
+    TT_LLK_DUMP("llk_unpack_AB_matmul_hw_configure_disaggregated<{}, {}>({}, {}, {})", is_fp32_dest_acc_en, srnd_fpu_en, unpA_operand, unpB_operand, transpose_xy_srca);
     const llk_unpack_AB_matmul_params_t unpack_AB_matmul_params = {
         .unpA_operand = unpA_operand, .unpB_operand = unpB_operand, .transpose_xy_srca = transpose_xy_srca };
     llk_unpack_AB_matmul_hw_configure<is_fp32_dest_acc_en, srnd_fpu_en>(&unpack_AB_matmul_params);
 }
 
-inline void llk_unpack_AB_matmul_init(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const std::uint32_t transpose=0, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
+__attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const std::uint32_t transpose=0, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
+    TT_LLK_DUMP("llk_unpack_AB_matmul_init({}, {}, {}, {}, {}, {})", unpA_operand, unpB_operand, transpose, ct_dim, rt_dim, kt_dim);
+
     // In0 -> srcB (supports partial face)
     // In1 -> srcA
     const uint32_t unpA_operand_id = get_operand_id(unpB_operand);
@@ -176,6 +179,7 @@ inline void llk_unpack_AB_matmul_init(const std::uint32_t unpA_operand, const st
 
 inline void llk_unpack_AB_matmul(
     const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t tile_index_a, const std::uint32_t tile_index_b, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
+    TT_LLK_DUMP("llk_unpack_AB_matmul({}, {}, {}, {}, {}, {, {})", operandA, operandB, tile_index_a, tile_index_b, ct_dim, rt_dim, kt_dim);
     // In0/InA -> srcB (supports partial face)
     // In1/InB -> srcA
 

@@ -12,6 +12,7 @@ using namespace ckernel::math;
 
 template <DstSync Dst>
 inline void llk_math_wait_for_dest_available() {
+    TT_LLK_DUMP("llk_math_wait_for_dest_available<{}>()", Dst);
     // These liteweight functions for sync with packer imply
     // no mode change - entire epoch is either double buffer or single buffer
 #ifdef PERF_DUMP
@@ -25,6 +26,7 @@ inline void llk_math_wait_for_dest_available() {
 
 template <DstSync Dst = SyncFull, bool is_fp32_dest_acc_en = false>
 inline void llk_math_dest_section_done() {
+    TT_LLK_DUMP("llk_math_dest_section_done<{}, {}>()", Dst, is_fp32_dest_acc_en);
 #ifdef PERF_DUMP
     if constexpr(MATH_PACK_DECOUPLE) {
         return;
@@ -46,6 +48,7 @@ inline void llk_math_dest_section_done() {
 
 template <DstSync Dst, bool is_fp32_dest_acc_en = false>
 inline void llk_math_pack_sync_init() {
+    TT_LLK_DUMP("llk_math_pack_sync_init<{}, {}>()", Dst, is_fp32_dest_acc_en);
 #ifdef PERF_DUMP
     if constexpr(MATH_PACK_DECOUPLE) {
         return;
@@ -83,6 +86,7 @@ inline void llk_math_pack_sync_init() {
 
 template <bool mail2math=true, bool mail2pack=true>
 inline void llk_math_get_tile(std::uint32_t operand, std::uint32_t tile_index, std::uint32_t* p_tile) {
+    TT_LLK_DUMP("llk_math_get_tile<{}, {}>({}, {}, tile_pointer)", mail2math, mail2pack, operand, tile_index);
     if constexpr (mail2math) {
        *p_tile = mailbox_read(ThreadId::UnpackThreadId);
     } else {
@@ -93,12 +97,14 @@ inline void llk_math_get_tile(std::uint32_t operand, std::uint32_t tile_index, s
 
 template <bool mail2math=true, bool mail2pack=true>
 inline void llk_math_release_tile(std::uint32_t operand) {
+    TT_LLK_DUMP("llk_math_release_tile<{}, {}>({})", mail2math, mail2pack, operand);
     if constexpr (mail2math) {
        semaphore_get(semaphore::UNPACK_OPERAND_SYNC);
     }   
 }
 
 inline void llk_math_debug_dump(std::uint8_t *data, std::uint32_t byte_size) {
+    TT_LLK_DUMP("llk_math_debug_dump(ptr, {})", byte_size);
     debug_dump(data, byte_size);
 }
 
@@ -106,7 +112,8 @@ inline void llk_math_debug_dump_seek(std::uint8_t offset) {
     debug_dump_seek(offset);
 }
 
-inline void llk_math_reconfig_data_format(const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand, const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {    
+inline void llk_math_reconfig_data_format(const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand, const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
+    TT_LLK_DUMP("llk_math_reconfig_data_format({}, {}, {}, {})", srca_old_operand, srca_new_operand, srcb_old_operand, srcb_new_operand);
     std::uint32_t old_srca_operand_id = get_operand_id(srca_old_operand);
     std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
     std::uint32_t old_srcb_operand_id = get_operand_id(srcb_old_operand);
@@ -124,7 +131,9 @@ inline void llk_math_reconfig_data_format(const std::uint32_t srca_old_operand, 
     }
 }
 
-inline void llk_math_reconfig_data_format(const std::uint32_t srca_new_operand, const std::uint32_t srcb_new_operand) {    
+inline void llk_math_reconfig_data_format(const std::uint32_t srca_new_operand, const std::uint32_t srcb_new_operand) {
+    TT_LLK_DUMP("llk_math_reconfig_data_format({}, {})", srca_new_operand, srcb_new_operand);
+
     std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
     std::uint32_t new_srcb_operand_id = get_operand_id(srcb_new_operand);
 
@@ -134,6 +143,7 @@ inline void llk_math_reconfig_data_format(const std::uint32_t srca_new_operand, 
 }
 
 inline void llk_math_reconfig_data_format_srca(const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {
+    TT_LLK_DUMP("llk_math_reconfig_data_format_srca({}, {})", srca_old_operand, srca_new_operand);
     std::uint32_t old_srca_operand_id = get_operand_id(srca_old_operand);
     std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
 
@@ -143,11 +153,13 @@ inline void llk_math_reconfig_data_format_srca(const std::uint32_t srca_old_oper
 }
 
 inline void llk_math_reconfig_data_format_srca(const std::uint32_t srca_new_operand) {
+    TT_LLK_DUMP("llk_math_reconfig_data_format_srca({})", srca_new_operand);
     std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>((uint)unpack_dst_format[new_srca_operand_id]);
 }
 
 inline void llk_math_reconfig_data_format_srcb(const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
+    TT_LLK_DUMP("llk_math_reconfig_data_format_srcb({}, {})", srcb_old_operand, srcb_new_operand);
     std::uint32_t old_srcb_operand_id = get_operand_id(srcb_old_operand);
     std::uint32_t new_srcb_operand_id = get_operand_id(srcb_new_operand);
 
@@ -157,6 +169,7 @@ inline void llk_math_reconfig_data_format_srcb(const std::uint32_t srcb_old_oper
 }
 
 inline void llk_math_reconfig_data_format_srcb(const std::uint32_t srcb_new_operand) {
+    TT_LLK_DUMP("llk_math_reconfig_data_format_srcb({})", srcb_new_operand);
     std::uint32_t new_srcb_operand_id = get_operand_id(srcb_new_operand);
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG1_SrcB_RMW>((uint)unpack_dst_format[new_srcb_operand_id]);
 }

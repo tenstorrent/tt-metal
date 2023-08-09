@@ -16,6 +16,7 @@ using namespace ckernel::packer;
 
 // wait until math is done and has produced something to pack
 inline void llk_packer_wait_for_math_done() {
+    TT_LLK_DUMP("llk_packer_wait_for_math_done()");
 #ifdef PERF_DUMP
     if constexpr (MATH_PACK_DECOUPLE == 0) {
         TTI_SEMWAIT(p_stall::STALL_TDMA, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_ZERO);
@@ -36,6 +37,7 @@ inline void llk_packer_set_math_semaphore() {
 // Clear dest
 template <DstSync Dst, bool is_fp32_dest_acc_en = false>
 inline void llk_pack_dest_section_done() {
+    TT_LLK_DUMP("llk_pack_dest_section_done<{}, {}>()", Dst, is_fp32_dest_acc_en);
 #ifdef PERF_DUMP
     if constexpr (MATH_PACK_DECOUPLE) {
         return;
@@ -73,6 +75,7 @@ inline void llk_pack_dest_section_done() {
 
 template <DstSync Dst, DstTileFaceLayout FaceLayout = RowMajor, bool untilize = false, bool is_fp32_dest_acc_en = false>
 inline void llk_pack_dest_init() {
+    TT_LLK_DUMP("llk_pack_dest_init<{}, {}, {}, {}>()", Dst, FaceLayout, untilize, is_fp32_dest_acc_en);
     tensix_sync();
     reset_dest_offset_id();
     init_packer_dest_offset_registers<FaceLayout, untilize, is_fp32_dest_acc_en>();
@@ -84,6 +87,7 @@ inline void llk_pack_dest_init() {
 template <DstSync Dst, DstTileFaceLayout FaceLayout, bool untilize = false>
 inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_output) {
     // Todo: get tile dims based on pack_output
+    TT_LLK_DUMP("llk_init_packer_dest_offset_registers<{}, {}, {}>({})", Dst, FaceLayout, untilize, pack_output);
     TTI_STALLWAIT(p_stall::STALL_TDMA|p_stall::STALL_THCON, p_stall::PACK);  // wait for pack to finish
     if constexpr (untilize) {
        if constexpr (FaceLayout == ColMajor) {
@@ -139,6 +143,7 @@ inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_outpu
 
 template <bool mail2math=true, bool mail2pack=true>
 inline void llk_pack_get_tile(std::uint32_t operand, std::uint32_t tile_index, std::uint32_t *p_tile) {
+    TT_LLK_DUMP("llk_pack_get_tile<{}, {}>({}, {}, tile_pointer)", mail2math, mail2pack, operand, tile_index);
     if constexpr (mail2pack) {
        *p_tile = mailbox_read(ThreadId::UnpackThreadId);
     } else {
@@ -149,12 +154,14 @@ inline void llk_pack_get_tile(std::uint32_t operand, std::uint32_t tile_index, s
 
 template <bool mail2math=true, bool mail2pack=true>
 inline void llk_pack_release_tile(std::uint32_t operand) {
+    TT_LLK_DUMP("llk_pack_release_tile<{}, {}>({})", mail2math, mail2pack, operand);
     if constexpr (mail2pack) {
        semaphore_get(semaphore::UNPACK_OPERAND_SYNC);
     }   
 }
 
 inline void llk_pack_debug_dump(std::uint8_t *data, std::uint32_t byte_size) {
+    TT_LLK_DUMP("llk_pack_debug_dump(ptr, {})", byte_size);
     debug_dump(data, byte_size);
 }
 
@@ -164,11 +171,13 @@ inline void llk_pack_debug_dump_seek(std::uint8_t offset) {
 
 template <bool is_fp32_dest_acc_en = false>
 inline void llk_pack_reconfig_data_format(const std::uint32_t new_operand) {
+    TT_LLK_DUMP("llk_pack_reconfig_data_format<{}>({})", is_fp32_dest_acc_en, new_operand);
     reconfig_packer_data_format<is_fp32_dest_acc_en>(get_output_id(new_operand));
 }
 
 template <bool is_fp32_dest_acc_en = false>
 inline void llk_pack_reconfig_data_format(const std::uint32_t old_operand, const std::uint32_t new_operand) {
+    TT_LLK_DUMP("llk_pack_reconfig_data_format<{}>({}, {})",is_fp32_dest_acc_en, old_operand, new_operand);
     std::uint32_t old_operand_id = get_output_id(old_operand);
     std::uint32_t new_operand_id = get_output_id(new_operand);
 
@@ -179,7 +188,8 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t old_operand, const
     }
 }
 
-inline void llk_pack_relu_config(std::uint32_t config) {
+TT_ALWAYS_INLINE void llk_pack_relu_config(std::uint32_t config) {
+    TT_LLK_DUMP("llk_pack_relu_config({})", config);
     ReluType mode = (config&0xf) == 0 ? ReluType::NO_RELU : ((config&0xf) == 3 ? ReluType::MAX_THRESHOLD_RELU : ReluType::MIN_THRESHOLD_RELU);
     uint32_t val = ((config>>16) << STACC_RELU_ReluThreshold_SHAMT) | (((uint32_t)mode) << STACC_RELU_ApplyRelu_SHAMT);
     TTI_SETDMAREG(0, val&0xffff, 0, LO_16(p_gpr_pack::TMP0));
@@ -191,11 +201,13 @@ inline void llk_pack_relu_config(std::uint32_t config) {
 
 inline void llk_pack_reconfig_l1_acc(const std::uint32_t enable)
 {
+    TT_LLK_DUMP("llk_pack_reconfig_l1_acc({})", enable);
     reconfigure_packer_l1_acc(enable);
 }
 
 template <bool untilize = false, ReduceDim dim>
 inline void llk_pack_reduce_mask_config() {
+    TT_LLK_DUMP("llk_pack_reduce_mask_config<{}, {}>()", untilize, dim);
     ckernel::packer::pck_edge_offset_u pack_edge_offset = {.val = 0};
 
     // We initialize PCK_EDGE_OFFSET_SEC0 mask to clear out all the datums in the row
@@ -257,6 +269,7 @@ inline void llk_pack_reduce_mask_config() {
 }
 
 inline void llk_pack_reduce_mask_clear() {
+    TT_LLK_DUMP("llk_pack_reduce_mask_clear()");
     // By default, all packers are set to use TILE_ROW_SET_MAPPING_0 and
     // mask is configured to pass through all the datums
     pck_edge_offset_u pack_edge_offset = {.val = 0};

@@ -431,8 +431,9 @@ inline void record_kernel_runtime(uint64_t kernel_runtime) {
 void debug_dump(const uint8_t *data, uint32_t byte_size);
 void debug_dump_seek(uint8_t offset);
 
-#if DELAY_EN > 0
 inline void stall_kernel(uint32_t num_cycles) {
+#if DELAY_EN > 0
+    TT_LLK_DUMP("stall_kernel({})", num_cycles);
     uint32_t start_clk_l = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
     uint32_t elapsed_time = 0;
     while (elapsed_time <= num_cycles) {
@@ -443,12 +444,12 @@ inline void stall_kernel(uint32_t num_cycles) {
             elapsed_time = 0xffffffff - (start_clk_l - current_clk_l);
         }
     }
-}
 #endif
+}
 
 #if defined(PERF_DUMP) || DELAY_EN > 0
-
 extern bool record_perf_events;
+#endif
 
 // This api is inserted in the beginning of each input loop
 // Wait for all instructions of previous loop to finish before starting the next loop
@@ -456,58 +457,59 @@ extern bool record_perf_events;
 // If PERF_DUMP is enabled, and delay is not, no need to insert these apis for unpack and math
 template<int thread_id>
 inline void serialize_input_loop_start() {
-    if constexpr (thread_id == 0) {
-#if DELAY_EN > 0
-        t6_semaphore_post(semaphore::UNPACK_MATH_DONE);
-        while (semaphore_read(semaphore::UNPACK_MATH_DONE) == 0) {}
-#endif
+    #if defined(PERF_DUMP) || DELAY_EN > 0
+        TT_LLK_DUMP("serialize_input_loop_start<{}>()", thread_id);
+        if constexpr (thread_id == 0) {
+    #if DELAY_EN > 0
+            t6_semaphore_post(semaphore::UNPACK_MATH_DONE);
+            while (semaphore_read(semaphore::UNPACK_MATH_DONE) == 0) {}
+    #endif
 
-    } else if (thread_id == 1) {
-#if DELAY_EN > 0
-        t6_semaphore_post(semaphore::UNPACK_MATH_DONE);
-        while (semaphore_read(semaphore::UNPACK_MATH_DONE) == 0) {}
-#endif
+        } else if (thread_id == 1) {
+    #if DELAY_EN > 0
+            t6_semaphore_post(semaphore::UNPACK_MATH_DONE);
+            while (semaphore_read(semaphore::UNPACK_MATH_DONE) == 0) {}
+    #endif
 
-    } else if (thread_id == 2) {
-#if DELAY_EN == 0
-        if (record_perf_events) {
-#endif
-        t6_semaphore_post(semaphore::PACK_DONE);
-        while (semaphore_read(semaphore::PACK_DONE) == 0) {}
-#if DELAY_EN == 0
+        } else if (thread_id == 2) {
+    #if DELAY_EN == 0
+            if (record_perf_events) {
+    #endif
+            t6_semaphore_post(semaphore::PACK_DONE);
+            while (semaphore_read(semaphore::PACK_DONE) == 0) {}
+    #if DELAY_EN == 0
+            }
+    #endif
         }
-#endif
-    }
+    #endif
 }
 
 template<int thread_id>
 inline void serialize_input_loop_end() {
+    #if defined(PERF_DUMP) || DELAY_EN > 0
+        TT_LLK_DUMP("serialize_input_loop_end<{}>()", thread_id);
+        if constexpr (thread_id == 0) {
+        #if DELAY_EN > 0
+                t6_semaphore_get<p_stall::UNPACK>(semaphore::UNPACK_MATH_DONE);
+                while (semaphore_read(semaphore::UNPACK_MATH_DONE) > 0) {}
+        #endif
 
-    if constexpr (thread_id == 0) {
-#if DELAY_EN > 0
-        t6_semaphore_get<p_stall::UNPACK>(semaphore::UNPACK_MATH_DONE);
-        while (semaphore_read(semaphore::UNPACK_MATH_DONE) > 0) {}
-#endif
+            } else if (thread_id == 1) {
+        #if DELAY_EN > 0
+                t6_semaphore_get<p_stall::MATH>(semaphore::UNPACK_MATH_DONE);
+                while (semaphore_read(semaphore::UNPACK_MATH_DONE) > 0) {}
+        #endif
 
-    } else if (thread_id == 1) {
-#if DELAY_EN > 0
-        t6_semaphore_get<p_stall::MATH>(semaphore::UNPACK_MATH_DONE);
-        while (semaphore_read(semaphore::UNPACK_MATH_DONE) > 0) {}
-#endif
-
-    } else if (thread_id == 2) {
-#if DELAY_EN == 0
-        if (record_perf_events) {
-#endif
-        t6_semaphore_get<p_stall::PACK>(semaphore::PACK_DONE);
-        while (semaphore_read(semaphore::PACK_DONE) > 0) {}
-#if DELAY_EN == 0
-        }
-#endif
+            } else if (thread_id == 2) {
+        #if DELAY_EN == 0
+                if (record_perf_events) {
+        #endif
+                t6_semaphore_get<p_stall::PACK>(semaphore::PACK_DONE);
+                while (semaphore_read(semaphore::PACK_DONE) > 0) {}
+        #if DELAY_EN == 0
+                }
+        #endif
+            }
+    #endif
     }
-
-}
-
-#endif
-
 }

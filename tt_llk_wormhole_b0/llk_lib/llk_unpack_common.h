@@ -37,6 +37,7 @@ void llk_zero_operand(std::uint32_t operand) {
 
 template <bool mail2math=true, bool mail2pack=true>
 inline void llk_unpack_get_tile(std::uint32_t operand, std::uint32_t tile_index, std::uint32_t *p_tile) {
+    TT_LLK_DUMP("llk_unpack_get_tile<{}, {}>({}, {}, tile_pointer)", mail2math, mail2pack, operand, tile_index);
     std::uint32_t input = get_operand_id(operand);
     std::uint32_t base_address = operands[input].f.fifo_rd_ptr;
     std::uint32_t offset_address = operands[input].f.tile_size_words * tile_index;
@@ -57,10 +58,12 @@ inline void llk_unpack_get_tile(std::uint32_t operand, std::uint32_t tile_index,
 
 template <bool mail2math=true, bool mail2pack=true>
 inline void llk_unpack_release_tile(std::uint32_t operand) {
+    TT_LLK_DUMP("llk_unpack_release_tile<{}, {}>({})", mail2math, mail2pack, operand);
     while (semaphore_read(semaphore::UNPACK_OPERAND_SYNC) > 0);
 }
 
 inline void llk_unpack_debug_dump(std::uint8_t *data, std::uint32_t byte_size) {
+    TT_LLK_DUMP("llk_unpack_debug_dump(ptr, {})", byte_size);
     debug_dump(data, byte_size);
 }
 
@@ -83,14 +86,17 @@ inline void llk_unpack_reconfig_data_format_srcb_impl(std::uint32_t srcb_operand
 }
 
 inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_new_operand) {
+    TT_LLK_DUMP("llk_unpack_reconfig_data_format_srca({})", srca_new_operand);
     llk_unpack_reconfig_data_format_srca_impl(get_operand_id(srca_new_operand));
 }
 
 inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_new_operand) {
+    TT_LLK_DUMP("llk_unpack_reconfig_data_format_srcb({})", srcb_new_operand);
     llk_unpack_reconfig_data_format_srcb_impl(get_operand_id(srcb_new_operand));
 }
 
 inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {
+    TT_LLK_DUMP("llk_unpack_reconfig_data_format_srca({}, {})", srca_old_operand, srca_new_operand);
     std::uint32_t old_srca_operand_id = get_operand_id(srca_old_operand);
     std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
 
@@ -100,6 +106,7 @@ inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_old_op
 }
 
 inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
+    TT_LLK_DUMP("llk_unpack_reconfig_data_format_srcb({}, {})", srcb_old_operand, srcb_new_operand);
     std::uint32_t old_srcb_operand_id = get_operand_id(srcb_old_operand);
     std::uint32_t new_srcb_operand_id = get_operand_id(srcb_new_operand);
 
@@ -109,16 +116,19 @@ inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_old_op
 }
 
 inline void llk_unpack_reconfig_data_format(const std::uint32_t srca_new_operand, const std::uint32_t srcb_new_operand) {
+    TT_LLK_DUMP("llk_unpack_reconfig_data_format({}, {})", srca_new_operand, srcb_new_operand);
     llk_unpack_reconfig_data_format_srca(srca_new_operand);
     llk_unpack_reconfig_data_format_srcb(srcb_new_operand);
 }
 
 inline void llk_unpack_reconfig_data_format(const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand, const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
+    TT_LLK_DUMP("llk_unpack_reconfig_data_format({}, {}, {}, {})", srca_old_operand, srca_new_operand, srcb_old_operand, srcb_new_operand);
     llk_unpack_reconfig_data_format_srca(srca_old_operand, srca_new_operand);
     llk_unpack_reconfig_data_format_srcb(srcb_old_operand, srcb_new_operand);
 }
 
 inline void llk_unpack_dbg_feature_disable(){
+    TT_LLK_DUMP("llk_unpack_dbg_feature_disable()");
     reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1<<11); // Set debug feature disable bit 11
                                                            // workaround for bug tenstorrent/budabackend#1372
 }
