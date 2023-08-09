@@ -13,10 +13,12 @@ namespace tt {
 namespace numpy {
 
 using tt_metal::Tensor;
+using tt_metal::MemoryConfig;
 using tt_metal::DataType;
 using tt_metal::Layout;
 using tt_metal::Shape;
 using tt_metal::Device;
+using tt_metal::StorageType;
 using tt_metal::OwnedStorage;
 namespace detail
 {
@@ -38,13 +40,13 @@ constexpr static DataType get_data_type() {
 }
 
 template<typename T>
-static Tensor full(const Shape& shape, T value, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr) {
+static Tensor full(const Shape& shape, T value, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
     constexpr DataType data_type = detail::get_data_type<T>();
     auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(shape));
     std::fill(std::begin(owned_buffer), std::end(owned_buffer), value);
     auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
     if (device != nullptr) {
-        output = output.to(device);
+        output = output.to(device, output_mem_config);
     }
     return output;
 }
@@ -52,41 +54,61 @@ static Tensor full(const Shape& shape, T value, const Layout layout = Layout::RO
 } // namespace detail
 
 template<typename T>
-static Tensor full(const Shape& shape, const T value, const DataType data_type, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr) {
+static Tensor full(const Shape& shape, const T value, const DataType data_type, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
     switch (data_type) {
         case DataType::UINT32: {
-            return detail::full<uint32_t>(shape, uint32_t(value), layout, device);
+            return detail::full<uint32_t>(shape, uint32_t(value), layout, device, output_mem_config);
         }
         case DataType::FLOAT32: {
-            return detail::full<float>(shape, float(value), layout, device);
+            return detail::full<float>(shape, float(value), layout, device, output_mem_config);
         }
         case DataType::BFLOAT16: {
-            return detail::full<bfloat16>(shape, bfloat16(value), layout, device);
+            return detail::full<bfloat16>(shape, bfloat16(value), layout, device, output_mem_config);
         }
         default:
             TT_THROW("Unsupported DataType!");
     }
 }
 
-static Tensor zeros(const Shape& shape, const DataType data_type = DataType::BFLOAT16, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr) {
-    return full(shape, 0.0f, data_type, layout);
+static Tensor zeros(const Shape& shape, const DataType data_type = DataType::BFLOAT16, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
+    return full(shape, 0.0f, data_type, layout, device, output_mem_config);
 }
 
-static Tensor ones(const Shape& shape, const DataType data_type = DataType::BFLOAT16, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr) {
-    return full(shape, 1.0f, data_type, layout);
+static Tensor ones(const Shape& shape, const DataType data_type = DataType::BFLOAT16, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
+    return full(shape, 1.0f, data_type, layout, device, output_mem_config);
 }
 
-static Tensor zeros_like(const Tensor& input_tensor, std::optional<DataType> data_type = std::nullopt, const Layout layout = Layout::ROW_MAJOR) {
+template<typename T>
+static Tensor full_like(const Tensor& input_tensor, const T value, std::optional<DataType> data_type = std::nullopt, std::optional<Layout> layout = std::nullopt, std::optional<MemoryConfig> output_mem_config = std::nullopt) {
     DataType data_type_to_use = input_tensor.dtype();
     if (data_type.has_value()) {
         data_type_to_use = data_type.value();
     }
-    auto output_tensor = zeros(input_tensor.shape(), data_type_to_use, layout, input_tensor.device());
-    return output_tensor;
+    Layout layout_to_use = input_tensor.layout();
+    if (layout.has_value()) {
+        layout_to_use = layout.value();
+    }
+    if (input_tensor.storage_type() == StorageType::DEVICE) {
+        MemoryConfig output_mem_config_to_use = input_tensor.memory_config();
+        if (output_mem_config.has_value()) {
+            output_mem_config_to_use = output_mem_config.value();
+        }
+        return full(input_tensor.shape(), value, data_type_to_use, layout_to_use, input_tensor.device(), output_mem_config_to_use);
+    } else {
+        return full(input_tensor.shape(), value, data_type_to_use, layout_to_use);
+    }
+}
+
+static Tensor zeros_like(const Tensor& input_tensor, std::optional<DataType> data_type = std::nullopt, std::optional<Layout> layout = std::nullopt, std::optional<MemoryConfig> output_mem_config = std::nullopt) {
+    return full_like(input_tensor, 0.0f, data_type, layout, output_mem_config);
+}
+
+static Tensor ones_like(const Tensor& input_tensor, std::optional<DataType> data_type = std::nullopt, std::optional<Layout> layout = std::nullopt, std::optional<MemoryConfig> output_mem_config = std::nullopt) {
+    return full_like(input_tensor, 1.0f, data_type, layout, output_mem_config);
 }
 
 template<typename T>
-static Tensor arange(int64_t start, int64_t stop, int64_t step, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr) {
+static Tensor arange(int64_t start, int64_t stop, int64_t step, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
     constexpr DataType data_type = detail::get_data_type<T>();
     // Current implementation restrictions
     TT_ASSERT(step > 0, "Step must be greater than 0");
@@ -104,7 +126,7 @@ static Tensor arange(int64_t start, int64_t stop, int64_t step, const Layout lay
     }
     auto output = Tensor(OwnedStorage{owned_buffer}, {1, 1, 1, static_cast<uint32_t>(size)}, data_type, layout);
     if (device != nullptr) {
-        output = output.to(device);
+        output = output.to(device, output_mem_config);
     }
     return output;
 }

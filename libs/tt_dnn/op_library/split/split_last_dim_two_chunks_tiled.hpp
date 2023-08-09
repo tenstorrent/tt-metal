@@ -17,7 +17,7 @@ struct SplitLastDimTwoChunksTiled : public SplitTiled {
         std::vector<Tensor> &output_tensors) const;
 };
 
-std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor &a, const MemoryConfig& mem_config);
+std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor &a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace tt_metal
 

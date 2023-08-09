@@ -113,6 +113,7 @@ def eltwise_bitwise_complement(x, *args, device, dtype, layout, on_device, **kwa
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     return output
 
+
 @setup_host_and_device
 def eltwise_erf(x, *args, fast_and_appx, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
@@ -126,7 +127,7 @@ def eltwise_erf(x, *args, fast_and_appx, device, dtype, layout, on_device, **kwa
     if on_device:
         t0 = t0.to(device)
 
-    t1 = ttl.tensor.erf(t0,fast_and_appx)
+    t1 = ttl.tensor.erf(t0, fast_and_appx)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     return output
@@ -165,44 +166,6 @@ def eltwise_logical_not(x, *args, device, dtype, layout, on_device, **kwargs):
         t0 = t0.to(device)
 
     t1 = ttl.tensor.logical_not(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-    return output
-
-
-@setup_host_and_device
-def eltwise_cosh(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.cosh(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-    return output
-
-
-@setup_host_and_device
-def eltwise_sinh(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.sinh(t0)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     return output
@@ -289,44 +252,6 @@ def eltwise_softshrink(x, *args, _lambda, device, dtype, layout, on_device, **kw
 
 
 @setup_host_and_device
-def eltwise_softsign(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.softsign(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-    return output
-
-
-@setup_host_and_device
-def eltwise_relu6(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.relu6(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-    return output
-
-
-@setup_host_and_device
 def eltwise_elu(x, *args, alpha, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
@@ -342,255 +267,6 @@ def eltwise_elu(x, *args, alpha, device, dtype, layout, on_device, **kwargs):
     t1 = ttl.tensor.elu(t0, alpha)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-    return output
-
-
-@setup_host_and_device
-def eltwise_hypot(x, y, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.Tensor(
-        y.reshape(-1).tolist(),
-        y.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t1 = t1.to(layout)
-    if on_device:
-        t1 = t1.to(device)
-
-    t2 = ttl.tensor.hypot(t0, t1)
-
-    output = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_cbrt(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.cbrt(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-    return output
-
-
-@setup_host_and_device
-def eltwise_rad2deg(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.rad2deg(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_deg2rad(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.deg2rad(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_sign(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.sign(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_abs(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.abs(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-    return output
-
-
-@setup_host_and_device
-def eltwise_exp(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.exp(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_expm1(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.expm1(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_neg(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.neg(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_exp2(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.exp2(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_recip(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.recip(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_sqrt(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.sqrt(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
@@ -628,26 +304,6 @@ def eltwise_rsqrt(x, *args, fast_and_appx, device, dtype, layout, on_device, **k
         t0 = t0.to(device)
 
     t1 = ttl.tensor.rsqrt(t0, fast_and_appx)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_relu(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.relu(t0)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
@@ -920,7 +576,7 @@ def eltwise_lerp_ternary(x, y, z, *args, device, dtype, layout, on_device, **kwa
 
 
 @setup_host_and_device
-def eltwise_sigmoid(x, *args, device, dtype, layout, on_device, **kwargs):
+def eltwise_heaviside(x, *args, value, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -932,336 +588,9 @@ def eltwise_sigmoid(x, *args, device, dtype, layout, on_device, **kwargs):
     if on_device:
         t0 = t0.to(device)
 
-    t1 = ttl.tensor.sigmoid(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_log_sigmoid(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.log_sigmoid(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_heaviside(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    value = kwargs.pop("value")
     t1 = ttl.tensor.heaviside(t0, value)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-    return output
-
-
-def eltwise_log_common(log_kind, x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = getattr(ttl.tensor, log_kind)(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_log(x, *args, device, dtype, layout, on_device, **kwargs):
-    output = eltwise_log_common(
-        "log",
-        x,
-        *args,
-        device=device,
-        dtype=dtype,
-        layout=layout,
-        on_device=on_device,
-        **kwargs,
-    )
-    return output
-
-
-@setup_host_and_device
-def eltwise_log2(x, *args, device, dtype, layout, on_device, **kwargs):
-    output = eltwise_log_common(
-        "log2",
-        x,
-        *args,
-        device=device,
-        dtype=dtype,
-        layout=layout,
-        on_device=on_device,
-        **kwargs,
-    )
-    return output
-
-
-@setup_host_and_device
-def eltwise_log10(x, *args, device, dtype, layout, on_device, **kwargs):
-    output = eltwise_log_common(
-        "log10",
-        x,
-        *args,
-        device=device,
-        dtype=dtype,
-        layout=layout,
-        on_device=on_device,
-        **kwargs,
-    )
-    return output
-
-
-@setup_host_and_device
-def eltwise_tanh(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.tanh(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_signbit(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.signbit(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_tanhshrink(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.tanhshrink(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_sin(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.sin(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_cos(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.cos(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_asin(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.asin(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_atan(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.atan(t0)
-
-    output = torch.Tensor(t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).data()).reshape(
-        t1.shape()
-    )
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_acos(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.acos(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_swish(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.swish(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_add1(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.add1(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_log1p(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.log1p(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
@@ -1353,25 +682,6 @@ def full(x, *args, scalar, device, dtype, layout, on_device, **kwargs):
 def arange(x, *args, start, end, step=1, device, dtype, layout, on_device, **kwargs):
     t1 = ttl.tensor.arange(start, end, step)
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-    return output
-
-
-@setup_host_and_device
-def hardtanh(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.hardtanh(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
@@ -1507,336 +817,6 @@ def eltwise_add_unary(x, *args, scalar, device, dtype, layout, on_device, **kwar
     t1 = ttl.tensor.add_unary(t0, scalar)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_softplus(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.softplus(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_mish(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.mish(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_hardswish(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.hardswish(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_hardsigmoid(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.hardsigmoid(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_square(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.square(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_silu(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.silu(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_ltz(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.ltz(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_gtz(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.gtz(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_lez(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.lez(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_gez(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.gez(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_nez(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.nez(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_eqz(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.eqz(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_min(x, y, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-    t1 = ttl.tensor.Tensor(
-        y.reshape(-1).tolist(),
-        y.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t1 = t1.to(layout)
-    if on_device:
-        t1 = t1.to(device)
-
-    t2 = ttl.tensor.min(t0, t1)
-
-    output = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_max(x, y, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-    t1 = ttl.tensor.Tensor(
-        y.reshape(-1).tolist(),
-        y.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t1 = t1.to(layout)
-    if on_device:
-        t1 = t1.to(device)
-
-    t2 = ttl.tensor.max(t0, t1)
-
-    output = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def eltwise_squared_difference(x, y, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-    t1 = ttl.tensor.Tensor(
-        y.reshape(-1).tolist(),
-        y.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t1 = t1.to(layout)
-    if on_device:
-        t1 = t1.to(device)
-
-    t2 = ttl.tensor.squared_difference(t0, t1)
-
-    output = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
     return output
 
@@ -2672,6 +1652,82 @@ def eltwise_power(x, *args, exponent, device, dtype, layout, on_device, **kwargs
     return output
 
 
+def make_eltwise_unary_op(ttl_tensor_unop):
+    @setup_host_and_device
+    def eltwise_unary_op(
+        x,
+        *args,
+        device,
+        dtype,
+        layout,
+        on_device,
+        input_mem_config=ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+        output_mem_config=ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+        **kwargs,
+    ):
+        t0 = ttl.tensor.Tensor(x, dtype)
+
+        t0 = t0.to(layout)
+        if on_device:
+            t0 = t0.to(device, input_mem_config)
+
+        t1 = ttl_tensor_unop(t0, output_mem_config=output_mem_config)
+
+        output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+
+        return output
+
+    return eltwise_unary_op
+
+
+eltwise_cos = make_eltwise_unary_op(ttl.tensor.cos)
+eltwise_sin = make_eltwise_unary_op(ttl.tensor.sin)
+eltwise_acos = make_eltwise_unary_op(ttl.tensor.acos)
+eltwise_asin = make_eltwise_unary_op(ttl.tensor.asin)
+eltwise_atan = make_eltwise_unary_op(ttl.tensor.atan)
+eltwise_cosh = make_eltwise_unary_op(ttl.tensor.cosh)
+eltwise_sinh = make_eltwise_unary_op(ttl.tensor.sinh)
+eltwise_tanh = make_eltwise_unary_op(ttl.tensor.tanh)
+eltwise_tanhshrink = make_eltwise_unary_op(ttl.tensor.tanhshrink)
+eltwise_softsign = make_eltwise_unary_op(ttl.tensor.softsign)
+eltwise_relu = make_eltwise_unary_op(ttl.tensor.relu)
+eltwise_relu6 = make_eltwise_unary_op(ttl.tensor.relu6)
+eltwise_sqrt = make_eltwise_unary_op(ttl.tensor.sqrt)
+eltwise_cbrt = make_eltwise_unary_op(ttl.tensor.cbrt)
+eltwise_rad2deg = make_eltwise_unary_op(ttl.tensor.rad2deg)
+eltwise_deg2rad = make_eltwise_unary_op(ttl.tensor.deg2rad)
+eltwise_sign = make_eltwise_unary_op(ttl.tensor.sign)
+eltwise_signbit = make_eltwise_unary_op(ttl.tensor.signbit)
+eltwise_abs = make_eltwise_unary_op(ttl.tensor.abs)
+eltwise_exp = make_eltwise_unary_op(ttl.tensor.exp)
+eltwise_exp2 = make_eltwise_unary_op(ttl.tensor.exp2)
+eltwise_expm1 = make_eltwise_unary_op(ttl.tensor.expm1)
+eltwise_neg = make_eltwise_unary_op(ttl.tensor.neg)
+eltwise_recip = make_eltwise_unary_op(ttl.tensor.recip)
+eltwise_sigmoid = make_eltwise_unary_op(ttl.tensor.sigmoid)
+eltwise_log_sigmoid = make_eltwise_unary_op(ttl.tensor.log_sigmoid)
+eltwise_log = make_eltwise_unary_op(ttl.tensor.log)
+eltwise_log2 = make_eltwise_unary_op(ttl.tensor.log2)
+eltwise_log10 = make_eltwise_unary_op(ttl.tensor.log10)
+eltwise_swish = make_eltwise_unary_op(ttl.tensor.swish)
+eltwise_add1 = make_eltwise_unary_op(ttl.tensor.add1)
+eltwise_log1p = make_eltwise_unary_op(ttl.tensor.log1p)
+eltwise_softplus = make_eltwise_unary_op(ttl.tensor.softplus)
+eltwise_mish = make_eltwise_unary_op(ttl.tensor.mish)
+eltwise_hardswish = make_eltwise_unary_op(ttl.tensor.hardswish)
+eltwise_hardsigmoid = make_eltwise_unary_op(ttl.tensor.hardsigmoid)
+eltwise_silu = make_eltwise_unary_op(ttl.tensor.silu)
+eltwise_square = make_eltwise_unary_op(ttl.tensor.square)
+eltwise_ltz = make_eltwise_unary_op(ttl.tensor.ltz)
+eltwise_gtz = make_eltwise_unary_op(ttl.tensor.gtz)
+eltwise_lez = make_eltwise_unary_op(ttl.tensor.lez)
+eltwise_gez = make_eltwise_unary_op(ttl.tensor.gez)
+eltwise_nez = make_eltwise_unary_op(ttl.tensor.nez)
+eltwise_eqz = make_eltwise_unary_op(ttl.tensor.eqz)
+
+hardtanh = make_eltwise_unary_op(ttl.tensor.hardtanh) # hardtanh can take args
+
+
 def make_eltwise_binary_op(ttl_tensor_binop):
     @setup_host_and_device
     def eltwise_binary_op(
@@ -2686,23 +1742,13 @@ def make_eltwise_binary_op(ttl_tensor_binop):
         output_mem_config=ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
         **kwargs,
     ):
-        t0 = ttl.tensor.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            dtype,
-            ttl.tensor.Layout.ROW_MAJOR,
-        )
+        t0 = ttl.tensor.Tensor(x, dtype)
 
         t0 = t0.to(layout)
         if on_device:
             t0 = t0.to(device, input_mem_config)
 
-        t1 = ttl.tensor.Tensor(
-            y.reshape(-1).tolist(),
-            y.shape,
-            dtype,
-            ttl.tensor.Layout.ROW_MAJOR,
-        )
+        t1 = ttl.tensor.Tensor(y, dtype)
 
         t1 = t1.to(layout)
         if on_device:
@@ -2720,6 +1766,10 @@ def make_eltwise_binary_op(ttl_tensor_binop):
 eltwise_add = make_eltwise_binary_op(ttl.tensor.add)
 eltwise_sub = make_eltwise_binary_op(ttl.tensor.sub)
 eltwise_mul = make_eltwise_binary_op(ttl.tensor.mul)
+eltwise_squared_difference = make_eltwise_binary_op(ttl.tensor.squared_difference)
+eltwise_hypot = make_eltwise_binary_op(ttl.tensor.hypot)
+eltwise_min = make_eltwise_binary_op(ttl.tensor.min)
+eltwise_max = make_eltwise_binary_op(ttl.tensor.max)
 eltwise_ne = make_eltwise_binary_op(ttl.tensor.ne)
 eltwise_eq = make_eltwise_binary_op(ttl.tensor.eq)
 eltwise_gt = make_eltwise_binary_op(ttl.tensor.gt)

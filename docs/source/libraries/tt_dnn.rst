@@ -168,16 +168,12 @@ Enums
 -----
 
 .. autoclass:: tt_lib.tensor.BcastOpMath
-    :members: ADD, SUB, MUL
 
 .. autoclass:: tt_lib.tensor.BcastOpDim
-    :members: H, W, HW
 
 .. autoclass:: tt_lib.tensor.ReduceOpMath
-    :members: SUM, MAX
 
 .. autoclass:: tt_lib.tensor.ReduceOpDim
-    :members: H, W, HW
 
 Tensor elementwise operations
 -----------------------------

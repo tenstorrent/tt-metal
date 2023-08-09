@@ -130,7 +130,7 @@ std::map<string, string> get_defines(UnaryOpType op_type, std::optional<float> p
     std::string func_def = fmt::format("SFPU_OP_FUNC_{}", id);
     std::map<std::string,std::string> defines = get_defines_impl(init_def, func_def, op_init_and_name.first, op_init_and_name.second);
     // update split eltwise ops include macros
-    if ( op_type == UnaryOpType::ERFC 
+    if ( op_type == UnaryOpType::ERFC
             || op_type == UnaryOpType::ERF ) {
             defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
     }
@@ -152,10 +152,10 @@ std::map<string, string> get_block_defines(const std::vector<UnaryWithParam> op_
         auto op_init_and_name = get_op_init_and_func(op_chain[i].op_type, op_chain[i].param, idst);
         block_defines.merge(get_defines_impl(init_def, func_def, op_init_and_name.first, op_init_and_name.second));
     }
-    for (uint32_t i = 0; i<op_chain.size(); i++) {    
+    for (uint32_t i = 0; i<op_chain.size(); i++) {
         auto op_type = op_chain[i].op_type;
         // update split eltwise ops include macros
-        if ( op_type == UnaryOpType::ERFC 
+        if ( op_type == UnaryOpType::ERFC
             || op_type == UnaryOpType::ERF ) {
             block_defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
             break;
@@ -226,44 +226,44 @@ tt::stl::reflection::Attributes EltwiseUnary::attributes() const {
 
 //unary op version tie
 template<BcastOpMath OP>
-Tensor tie_binop_to_unary(const Tensor& input_tensor, float value) {
-  Tensor t_value = mk_scalar(value);
-  return bcast(input_tensor,t_value,OP, BcastOpDim::HW);
+Tensor tie_binop_to_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config) {
+  Tensor t_value = mk_tiled_scalar(value);
+  return bcast(input_tensor, t_value, OP, BcastOpDim::HW);
 }
 
-Tensor div_unary(const Tensor& input_tensor, float value) {
-    return tie_binop_to_unary<BcastOpMath::MUL>(input_tensor,1.0f/value);
+Tensor div_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config) {
+    return tie_binop_to_unary<BcastOpMath::MUL>(input_tensor, 1.0f/value, output_mem_config);
 }
 
-Tensor div_unary(float value,const Tensor& input_tensor) {
-    Tensor inv = tie_binop_to_unary<BcastOpMath::MUL>(input_tensor,value);
+Tensor div_unary(float value,const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
+    Tensor inv = tie_binop_to_unary<BcastOpMath::MUL>(input_tensor, value, output_mem_config);
     return recip(inv);
 }
 
 
-Tensor mul_unary(const Tensor& input_tensor,float value) {
-    return tie_binop_to_unary<BcastOpMath::MUL>(input_tensor,value);
+Tensor mul_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config) {
+    return tie_binop_to_unary<BcastOpMath::MUL>(input_tensor, value, output_mem_config);
 }
 
-Tensor sub_unary(const Tensor& input_tensor,float value) {
-    return tie_binop_to_unary<BcastOpMath::SUB>(input_tensor,value);
+Tensor sub_unary(const Tensor& input_tensor,float value, const MemoryConfig& output_mem_config) {
+    return tie_binop_to_unary<BcastOpMath::SUB>(input_tensor, value, output_mem_config);
 }
 
-Tensor sub_unary(float value, const Tensor& input_tensor) {
-  return add_unary(value,neg(input_tensor));
+Tensor sub_unary(float value, const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
+  return add_unary(value, neg(input_tensor, output_mem_config), output_mem_config);
 }
 
-Tensor add_unary(const Tensor& input_tensor,float value) {
-    return tie_binop_to_unary<BcastOpMath::ADD>(input_tensor,value);
+Tensor add_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config) {
+    return tie_binop_to_unary<BcastOpMath::ADD>(input_tensor, value, output_mem_config);
 }
 
 // symmetric
-Tensor add_unary(float value, const Tensor& input_tensor) {
-    return add_unary(input_tensor,value);
+Tensor add_unary(float value, const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
+    return add_unary(input_tensor, value, output_mem_config);
 }
 
-Tensor mul_unary(float value, const Tensor& input_tensor) {
-    return mul_unary(input_tensor,value);
+Tensor mul_unary(float value, const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
+    return mul_unary(input_tensor, value, output_mem_config);
 }
 
 }  // namespace tt_metal

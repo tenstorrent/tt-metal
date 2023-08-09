@@ -16,64 +16,6 @@ namespace tt {
 namespace tt_metal {
 
 Tensor permute_(const Tensor &a, uint32_t N, uint32_t C, uint32_t H, uint32_t W, const MemoryConfig& output_mem_config) {
-    auto transpose_wh = std::bind(tt::tt_metal::transpose_wh, _1, output_mem_config);
-    auto transpose_hc = std::bind(tt::tt_metal::transpose_hc, _1, output_mem_config);
-    auto transpose_cn = std::bind(tt::tt_metal::transpose_cn, _1, output_mem_config);
-    if (N == 0 && C == 1 && H == 2 && W == 3) {
-        return a;
-    } else if (N == 0 && C == 1 && H == 3 && W == 2) {
-        return transpose_wh(a);
-    } else if (N == 0 && C == 2 && H == 1 && W == 3) {
-        return transpose_hc(a);
-    } else if (N == 0 && C == 2 && H == 3 && W == 1) {
-        return transpose_wh(transpose_hc(a));
-    } else if (N == 0 && C == 3 && H == 1 && W == 2) {
-        return transpose_hc(transpose_wh(a));
-    } else if (N == 0 && C == 3 && H == 2 && W == 1) {
-        return transpose_wh(transpose_hc(transpose_wh(a)));
-    } else if (N == 1 && C == 0 && H == 2 && W == 3) {
-        return transpose_cn(a);
-    } else if (N == 1 && C == 0 && H == 3 && W == 2) {
-        return transpose_wh(transpose_cn(a));
-    } else if (N == 1 && C == 2 && H == 0 && W == 3) {
-        return transpose_hc(transpose_cn(a));
-    } else if (N == 1 && C == 2 && H == 3 && W == 0) {
-        return transpose_wh(transpose_hc(transpose_cn(a)));
-    } else if (N == 1 && C == 3 && H == 0 && W == 2) {
-        return transpose_hc(transpose_wh(transpose_cn(a)));
-    } else if (N == 1 && C == 3 && H == 2 && W == 0) {
-        return transpose_wh(transpose_hc(transpose_wh(transpose_cn(a))));
-    } else if (N == 2 && C == 0 && H == 1 && W == 3) {
-        return transpose_cn(transpose_hc(a));
-    } else if (N == 2 && C == 0 && H == 3 && W == 1) {
-        return transpose_wh(transpose_cn(transpose_hc(a)));
-    } else if (N == 2 && C == 1 && H == 0 && W == 3) {
-        return transpose_cn(transpose_hc(transpose_cn(a)));
-    } else if (N == 2 && C == 1 && H == 3 && W == 0) {
-        return transpose_wh(transpose_cn(transpose_hc(transpose_cn(a))));
-    } else if (N == 2 && C == 3 && H == 0 && W == 1) {
-        return transpose_hc(transpose_wh(transpose_cn(transpose_hc(a))));
-    } else if (N == 2 && C == 3 && H == 1 && W == 0) {
-        return transpose_wh(transpose_hc(transpose_wh(transpose_cn(transpose_hc(a)))));
-    } else if (N == 3 && C == 0 && H == 1 && W == 2) {
-        return transpose_cn(transpose_hc(transpose_wh(a)));
-    } else if (N == 3 && C == 0 && H == 2 && W == 1) {
-        return transpose_wh(transpose_cn(transpose_hc(transpose_wh(a))));
-    } else if (N == 3 && C == 1 && H == 0 && W == 2) {
-        return transpose_cn(transpose_hc(transpose_cn(transpose_wh(a))));
-    } else if (N == 3 && C == 1 && H == 2 && W == 0) {
-        return transpose_wh(transpose_cn(transpose_hc(transpose_cn(transpose_wh(a)))));
-    } else if (N == 3 && C == 2 && H == 0 && W == 1) {
-        return transpose_hc(transpose_wh(transpose_cn(transpose_hc(transpose_wh(a)))));
-    } else if (N == 3 && C == 2 && H == 1 && W == 0) {
-        return transpose_wh(transpose_hc(transpose_wh(transpose_cn(transpose_hc(transpose_wh(a))))));
-    } else {
-        TT_ASSERT(false, "Illegal permute args");
-    }
-    return a;
-}
-
-Tensor permute(const Tensor &a, uint32_t N, uint32_t C, uint32_t H, uint32_t W, const MemoryConfig& output_mem_config) {
     Device * device;
 
     // Get the device
@@ -95,8 +37,66 @@ Tensor permute(const Tensor &a, uint32_t N, uint32_t C, uint32_t H, uint32_t W, 
     if (AutoFormat::check_input_tensor_format(a, a_pad_shape)) {
         formatted_input_tensor = AutoFormat::format_input_tensor(a, device, a_pad_shape, 0.0, Layout::TILE);
     }
-    auto output = permute_(formatted_input_tensor, N, C, H, W, output_mem_config);
+    auto output = formatted_input_tensor;
+    auto transpose_wh = std::bind(tt::tt_metal::transpose_wh, _1, output_mem_config);
+    auto transpose_hc = std::bind(tt::tt_metal::transpose_hc, _1, output_mem_config);
+    auto transpose_cn = std::bind(tt::tt_metal::transpose_cn, _1, output_mem_config);
+    if (N == 0 && C == 1 && H == 2 && W == 3) {
+        output = formatted_input_tensor;
+    } else if (N == 0 && C == 1 && H == 3 && W == 2) {
+        output = transpose_wh(formatted_input_tensor);
+    } else if (N == 0 && C == 2 && H == 1 && W == 3) {
+        output = transpose_hc(formatted_input_tensor);
+    } else if (N == 0 && C == 2 && H == 3 && W == 1) {
+        output = transpose_wh(transpose_hc(formatted_input_tensor));
+    } else if (N == 0 && C == 3 && H == 1 && W == 2) {
+        output = transpose_hc(transpose_wh(formatted_input_tensor));
+    } else if (N == 0 && C == 3 && H == 2 && W == 1) {
+        output = transpose_wh(transpose_hc(transpose_wh(formatted_input_tensor)));
+    } else if (N == 1 && C == 0 && H == 2 && W == 3) {
+        output = transpose_cn(formatted_input_tensor);
+    } else if (N == 1 && C == 0 && H == 3 && W == 2) {
+        output = transpose_wh(transpose_cn(formatted_input_tensor));
+    } else if (N == 1 && C == 2 && H == 0 && W == 3) {
+        output = transpose_hc(transpose_cn(formatted_input_tensor));
+    } else if (N == 1 && C == 2 && H == 3 && W == 0) {
+        output = transpose_wh(transpose_hc(transpose_cn(formatted_input_tensor)));
+    } else if (N == 1 && C == 3 && H == 0 && W == 2) {
+        output = transpose_hc(transpose_wh(transpose_cn(formatted_input_tensor)));
+    } else if (N == 1 && C == 3 && H == 2 && W == 0) {
+        output = transpose_wh(transpose_hc(transpose_wh(transpose_cn(formatted_input_tensor))));
+    } else if (N == 2 && C == 0 && H == 1 && W == 3) {
+        output = transpose_cn(transpose_hc(formatted_input_tensor));
+    } else if (N == 2 && C == 0 && H == 3 && W == 1) {
+        output = transpose_wh(transpose_cn(transpose_hc(formatted_input_tensor)));
+    } else if (N == 2 && C == 1 && H == 0 && W == 3) {
+        output = transpose_cn(transpose_hc(transpose_cn(formatted_input_tensor)));
+    } else if (N == 2 && C == 1 && H == 3 && W == 0) {
+        output = transpose_wh(transpose_cn(transpose_hc(transpose_cn(formatted_input_tensor))));
+    } else if (N == 2 && C == 3 && H == 0 && W == 1) {
+        output = transpose_hc(transpose_wh(transpose_cn(transpose_hc(formatted_input_tensor))));
+    } else if (N == 2 && C == 3 && H == 1 && W == 0) {
+        output = transpose_wh(transpose_hc(transpose_wh(transpose_cn(transpose_hc(formatted_input_tensor)))));
+    } else if (N == 3 && C == 0 && H == 1 && W == 2) {
+        output = transpose_cn(transpose_hc(transpose_wh(formatted_input_tensor)));
+    } else if (N == 3 && C == 0 && H == 2 && W == 1) {
+        output = transpose_wh(transpose_cn(transpose_hc(transpose_wh(formatted_input_tensor))));
+    } else if (N == 3 && C == 1 && H == 0 && W == 2) {
+        output = transpose_cn(transpose_hc(transpose_cn(transpose_wh(formatted_input_tensor))));
+    } else if (N == 3 && C == 1 && H == 2 && W == 0) {
+        output = transpose_wh(transpose_cn(transpose_hc(transpose_cn(transpose_wh(formatted_input_tensor)))));
+    } else if (N == 3 && C == 2 && H == 0 && W == 1) {
+        output = transpose_hc(transpose_wh(transpose_cn(transpose_hc(transpose_wh(formatted_input_tensor)))));
+    } else if (N == 3 && C == 2 && H == 1 && W == 0) {
+        output = transpose_wh(transpose_hc(transpose_wh(transpose_cn(transpose_hc(transpose_wh(formatted_input_tensor))))));
+    } else {
+        TT_ASSERT(false, "Illegal permute args");
+    }
     return AutoFormat::format_output_tensor(output, out_shape, device, Layout::TILE);
+}
+
+Tensor permute(const Tensor &a, uint32_t N, uint32_t C, uint32_t H, uint32_t W, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, permute_)(a, N, C, H, W, output_mem_config);
 }
 
 }  // namespace tt_metal

@@ -28,23 +28,34 @@ Tensor mk_scalar(T value) {
     return scalar;
 }
 
+template<typename T>
+Tensor mk_tiled_scalar(T value) {
+    assert(std::is_scalar<T>::value && "T should be scalar");
+    std::array<unsigned int,4> shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
+    std::vector<bfloat16> buffer_vec(TILE_HW, bfloat16(0));
+    buffer_vec[0] = bfloat16(value);
+    auto buffer = owned_buffer::create(std::move(buffer_vec));
+    Tensor scalar = Tensor(OwnedStorage{buffer}, shape, DataType::BFLOAT16, Layout::TILE);
+    return scalar;
+}
+
 // Function: softshrink
 // Ref: https://pytorch.org/docs/stable/generated/torch.nn.Softshrink.html
-Tensor softshrink(const Tensor& a,float param);
+Tensor softshrink(const Tensor& a, float param, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 // Function: hardshrink
 // Ref: https://pytorch.org/docs/stable/generated/torch.nn.Hardshrink.html
-Tensor hardshrink(const Tensor& a,float param);
+Tensor hardshrink(const Tensor& a, float param, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 // Function: softsign
 // Ref: https://pytorch.org/docs/stable/generated/torch.nn.Softsign.html
-Tensor softsign(const Tensor& a);
+Tensor softsign(const Tensor& a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 // Function: MAC
 // compute multiply-accumulate: y = a * b + c,  over various 8 combinations of a, b, c
 // being a scalar or tensor
-Tensor mac(const Tensor& a, const Tensor& b, const Tensor & c);
-Tensor mac(const Tensor& a, float b, float c);
+Tensor mac(const Tensor& a, const Tensor& b, const Tensor & c, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor mac(const Tensor& a, float b, float c, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //Function sign
 //compute sgn(x) = (x>=0) - (x<=0);
@@ -54,111 +65,111 @@ Tensor mac(const Tensor& a, float b, float c);
 // Function SILU
 // use activation Silu[x] = x*Sigmoid[x]
 // Ref: https://pytorch.org/docs/stable/generated/torch.nn.SiLU.html?highlight=silu#torch.nn.SiLU
-Tensor silu(const Tensor& a);
+Tensor silu(const Tensor& a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //log1p 1
 //use transformation y = log(1.0 + x) by broadcast
-Tensor log1p(const Tensor& x);
+Tensor log1p(const Tensor& x, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //softplus[x] = log[1 + exp[x]]
 //use transformation y = log[1+exp[x]] by broadcast
-Tensor softplus(const Tensor& x);
+Tensor softplus(const Tensor& x, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //mish[x] = x*tanh[softplus[x]]
 //use transformation y = x*tanh[softplus[x]] by broadcast
 //Ref: https://krutikabapat.github.io/Swish-Vs-Mish-Latest-Activation-Functions/
-Tensor mish(const Tensor& x);
+Tensor mish(const Tensor& x, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 // Function Selu - scaled exponential linear
 //use transformation y = scale * alpha * (exp(X)-1) by broadcast
 //Ref: https://pytorch.org/docs/stable/generated/torch.nn.SELU.html
-Tensor selu(const Tensor& x,const float scale = 1.0507009873554804934193349852946, const float alpha = 1.6732632423543772848170429916717);
+Tensor selu(const Tensor& x, const float scale = 1.0507009873554804934193349852946, const float alpha = 1.6732632423543772848170429916717, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 // Function Swish = same as SILU
 //use transformation y = x * sigmoid( x ) by broadcast
-inline std::function<unary_tensor_op_t> swish = silu;
+Tensor swish(const Tensor& a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //compute polyval by Horner's rule
-Tensor polyval(const Tensor &input_tensor,std::vector<float> coeffs);
+Tensor polyval(const Tensor &input_tensor, std::vector<float> coeffs, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //min(a,b)
-Tensor min(const Tensor &input_a,const Tensor &input_b);
+Tensor min(const Tensor &input_a,const Tensor &input_b, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //max(a,b)
-Tensor max(const Tensor &input_a,const Tensor &input_b);
+Tensor max(const Tensor &input_a,const Tensor &input_b, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //tanhshrink = x - tanh(x)
-Tensor tanhshrink(const Tensor &input_a);
+Tensor tanhshrink(const Tensor &input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //addcmul(input,tensor1,tensor2,value)=input+value×tensor1×tensor2
-Tensor addcmul(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c, float value);
+Tensor addcmul(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c, float value, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //addcdiv(input,tensor1,tensor2,value)=input+value×tensor1/tensor2
-Tensor addcdiv(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c, float value);
+Tensor addcdiv(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c, float value, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //lerp(input, end, weight) = start + weight * (end - start), weight is float
-Tensor lerp(const Tensor& input_a, const Tensor& input_b, float value);
+Tensor lerp(const Tensor& input_a, const Tensor& input_b, float value, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //lerp(input, end, weight) = start + weight * (end - start), weight is tensor
-Tensor lerp(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c);
+Tensor lerp(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //hypot(a,b) = sqrt[ a^2 + b^2 ]
-Tensor hypot(const Tensor &input_a, const Tensor &input_b);
+Tensor hypot(const Tensor &input_a, const Tensor &input_b, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //threshold(a,t,v) = (a < t)*v + (a > t)*a
-Tensor threshold(const Tensor &input_a,float threshold, float value);
+Tensor threshold(const Tensor &input_a,float threshold, float value, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //cbrt(a) = pow(a,1/3) or (cbrt(a))**3 = a.
-Tensor cbrt(const Tensor &input_a);
+Tensor cbrt(const Tensor &input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //PyTorch version:
 //hard sigmoid(x) = { x <= -3: 0, x >= +3: +3, x/6 + 0.5 otherwise}
 //
 //for Theano version use scale = 1.0/5.0f = 0.2f with shift = 0.5f.
-Tensor hardsigmoid(const Tensor& tensor_a,float scale = 1.0f/6.0f,float shift = 0.5f);
+Tensor hardsigmoid(const Tensor& tensor_a, float scale = 1.0f/6.0f, float shift = 0.5f, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //hard swish(x) = x*hardsigmoid(x,scale,shift)
-Tensor hardswish(const Tensor& a,float scale = 1.0f/6.0f,float shift = 0.5f);
+Tensor hardswish(const Tensor& a, float scale = 1.0f/6.0f, float shift = 0.5f, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //where - ternary operator y = (predicate) ? value_true : value_false; elementwise
-Tensor where(const Tensor& predicate, const Tensor& value_true, const Tensor& value_false);
+Tensor where(const Tensor& predicate, const Tensor& value_true, const Tensor& value_false, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //on-device tensor creation 0s like @reference_tensor
-Tensor zeros_like(const Tensor& reference_tensor);
+Tensor zeros_like(const Tensor& reference_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //on-device tensor creation 1s like @reference_tensor
-Tensor ones_like(const Tensor& reference_tensor);
+Tensor ones_like(const Tensor& reference_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //on-device tensor creation with value like @reference_tensor
-Tensor full_like(const Tensor& reference_tensor,float value);
+Tensor full_like(const Tensor& reference_tensor, float value, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //on-device tensor creation 0s with shape
-Tensor zeros(const Shape shape, Layout layout = Layout::ROW_MAJOR, Device * device = nullptr);
+Tensor zeros(const Shape shape, Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //on-device tensor creation 1s with shape
-Tensor ones(const Shape shape, Layout layout = Layout::ROW_MAJOR, Device * device = nullptr);
+Tensor ones(const Shape shape, Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-Tensor arange(int32_t start, int32_t end, int32_t step = 1, Device * device = nullptr);
+Tensor arange(int32_t start, int32_t end, int32_t step = 1, Device * device = nullptr, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //on-device tensor creation with shape and filled with value
-Tensor full(const Shape shape, float value, Layout layout = Layout::ROW_MAJOR, Device * device = nullptr);
+Tensor full(const Shape shape, float value, Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 
 //clip
-Tensor clip(const Tensor& a,float low, float high);
+Tensor clip(const Tensor& a,float low, float high, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //hardtanh
-Tensor hardtanh(const Tensor& a,float low = -1.0f, float high = +1.0f);
+Tensor hardtanh(const Tensor& a,float low = -1.0f, float high = +1.0f, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //clamp
-extern std::function<Tensor(const Tensor& a,float low, float high)> clamp;
+Tensor clamp(const Tensor& a,float low, float high, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 /** hyperbolic operations **/
 //sinh(x) = (exp(x) - exp(-x))/2
-Tensor sinh(const Tensor& input_a);
+Tensor sinh(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //cosh(x) = (exp(x) + exp(-x))/2
-Tensor cosh(const Tensor& input_a);
+Tensor cosh(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 /**
  * outer product = matrix multiply when a = [1,1,N,1] and b = [1,1,1,M]
@@ -166,7 +177,7 @@ Tensor cosh(const Tensor& input_a);
  * - implementation supports any 1D "squeezable tensor" at input operands
  *   by running reshape.
  */
-Tensor outer(Tensor& a, Tensor& b);
+Tensor outer(Tensor& a, Tensor& b, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 } //namespace tt_metal
 

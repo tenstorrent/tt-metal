@@ -130,10 +130,10 @@ constexpr auto leaky_relu = make_eltwise_unary_with_param<UnaryOpType::LEAKY_REL
 constexpr auto elu = make_eltwise_unary_with_param<UnaryOpType::ELU>{};
 constexpr auto heaviside = make_eltwise_unary_with_param<UnaryOpType::HEAVISIDE>{};
 
-inline Tensor erf(const Tensor &input_tensor, bool fast_and_approx=true, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
+inline Tensor erf(const Tensor &input_tensor, bool fast_and_approx=true, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     return make_eltwise_unary_with_param<UnaryOpType::ERF>{}(input_tensor, static_cast<float>(fast_and_approx), output_mem_config);
 }
-inline Tensor erfc(const Tensor &input_tensor, bool fast_and_approx=true, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
+inline Tensor erfc(const Tensor &input_tensor, bool fast_and_approx=true, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     return make_eltwise_unary_with_param<UnaryOpType::ERFC>{}(input_tensor, static_cast<float>(fast_and_approx), output_mem_config);
 }
 
@@ -151,32 +151,32 @@ inline Tensor unary_chain(const Tensor &input_tensor, std::vector<UnaryWithParam
     return run_eltwise_unary(input_tensor, ops_chain, output_mem_config);
 }
 
-// binop with tied inputs.
-Tensor sub_unary(const Tensor& input_tensor, float value);
-Tensor sub_unary(float value, const Tensor& input_tensor);
+Tensor sub_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor sub_unary(float value, const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-Tensor add_unary(const Tensor& input_tensor, float value);
-Tensor add_unary(float value, const Tensor& input_tensor);
+Tensor add_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor add_unary(float value, const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-Tensor mul_unary(const Tensor& input_tensor, float value);
-Tensor mul_unary(float value, const Tensor& input_tensor);
+Tensor mul_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor mul_unary(float value, const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-Tensor div_unary(const Tensor& input_tensor, float value);
-Tensor div_unary(float value, const Tensor& input_tensor);
+Tensor div_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor div_unary(float value, const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //deg2rad(a) using scale pi/180.
-inline Tensor deg2rad(const Tensor &input_tensor) { return mul_unary(input_tensor, (float)(M_PI/180.0)); }
+inline Tensor deg2rad(const Tensor &input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) { return mul_unary(input_tensor, (float)(M_PI/180.0), output_mem_config); }
 
 //rad2deg(a) using scale 180/pi.
-inline Tensor rad2deg(const Tensor &input_tensor) { return mul_unary(input_tensor, (float)(180.0/M_PI)); }
+inline Tensor rad2deg(const Tensor &input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) { return mul_unary(input_tensor, (float)(180.0/M_PI), output_mem_config); }
 
 // Function neg
 //use transformation y = -1 * x by broadcast
-inline Tensor neg(const Tensor &input_tensor) { return mul_unary(input_tensor, -1.0f); }
+inline Tensor neg(const Tensor &input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) { return mul_unary(input_tensor, -1.0f, output_mem_config); }
 
 //add 1
 //use transformation y = 1.0 + x by broadcast
-inline Tensor add1(const Tensor &input_tensor) { return add_unary(input_tensor, 1.0f); }
+inline Tensor add1(const Tensor &input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) { return add_unary(input_tensor, 1.0f, output_mem_config); }
+
 
 }  // namespace tt_metal
 
