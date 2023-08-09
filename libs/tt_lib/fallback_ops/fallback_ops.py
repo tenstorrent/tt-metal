@@ -359,20 +359,6 @@ def concat(tensors: List[ttl_tensor.Tensor], dim: int = 0) -> ttl_tensor.Tensor:
 
 
 @convert_tt_tensors_wrapper
-def sigmoid(input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
-    r"""
-    Computes the logitistic sigmoid on the elements of ``input``.
-
-    +------------------+-------------------------------------------+------------------+------------------------------+----------+
-    | Argument         | Description                               | Data type        | Valid range                  | Required |
-    +==================+===========================================+==================+==============================+==========+
-    | input            | Input tensor                              | Tensor           |                              | Yes      |
-    +------------------+-------------------------------------------+------------------+------------------------------+----------+
-    """
-    return torch.sigmoid(input)
-
-
-@convert_tt_tensors_wrapper
 def silu(input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
     r"""
     Applies the Sigmoid Linear Unit (SiLU) function, element-wise.

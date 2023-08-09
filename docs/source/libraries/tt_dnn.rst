@@ -413,8 +413,6 @@ These operations are currently not supported on TT accelerator device and will e
 
 .. autofunction:: tt_lib.fallback_ops.concat
 
-.. autofunction:: tt_lib.fallback_ops.sigmoid
-
 .. autofunction:: tt_lib.fallback_ops.silu
 
 .. autofunction:: tt_lib.fallback_ops.softmax
