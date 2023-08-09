@@ -566,7 +566,7 @@ def eltwise_lerp_ternary(x, y, z, *args, device, dtype, layout, on_device, **kwa
 
     t3 = ttl.tensor.lerp(t0, t1, t2)
 
-    output = tt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    output = t3.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
     return output
 
