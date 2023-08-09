@@ -29,6 +29,7 @@
 #include "tt_dnn/op_library/move/move_op.hpp"
 #include "tt_dnn/op_library/rotate_half/rotate_half_op.hpp"
 #include "tt_dnn/op_library/rotary_embedding/rotary_embedding_op.hpp"
+#include "tt_dnn/op_library/embeddings/embeddings_op.hpp"
 #include "tt_dnn/op_library/program_cache.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -2477,6 +2478,21 @@ void TensorModule(py::module &m_tensor) {
     m_tensor.def("rotary_embedding", &rotary_embedding,
         py::arg("input").noconvert(), py::arg("cos").noconvert(), py::arg("sin").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         "Performs rotary embedding with a given input, cos, and sin tensors. Sequence length is inferred as the second last dim of the input tensor.
+    )doc");
+
+
+    // input embeddings
+    m_tensor.def("embeddings", &embeddings,
+        py::arg("input").noconvert(), py::arg("weights").noconvert(),
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        Returns specific indices of the embedding table specified by the input tensor
+        +----------------+-------------------------------------+------------+-------------------------------+----------+
+        | Argument       | Description                         | Data type  | Valid range                   | Required |
+        +================+=====================================+============+===============================+==========+
+        | num_embeddings | Number of rows in embedding table   | uint32     |                               | Yes      |
+        | input          | Tensor containing rows we want      | Tensor     |                               | Yes      |
+        | weights        | Entire Embedding Table              | Tensor     |                               | Yes      |
+        +----------------+-------------------------------------+------------+-------------------------------+----------+
     )doc");
 
 

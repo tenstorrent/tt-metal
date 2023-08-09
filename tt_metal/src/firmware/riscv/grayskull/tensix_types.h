@@ -236,6 +236,7 @@ enum class DataFormat : std::uint8_t
   Lf8       = 10,
   UInt16    = 12,
   Int8      = 14,
+  UInt32    = 8,
   Tf32      = 0xff,
   Invalid   = 0xff
 };

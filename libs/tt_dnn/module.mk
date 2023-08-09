@@ -70,6 +70,7 @@ TT_DNN_SRCS = \
 	libs/tt_dnn/op_library/rotary_embedding/multi_core/rotary_embedding_op_multi_core.cpp \
 	libs/tt_dnn/op_library/rotary_embedding/single_core/rotary_embedding_op_single_core.cpp \
 	libs/tt_dnn/op_library/rotary_embedding/rotary_embedding_op.cpp \
+	libs/tt_dnn/op_library/embeddings/embeddings_op.cpp \
 
 
 TT_DNN_LIB = $(LIBDIR)/libtt_dnn.a

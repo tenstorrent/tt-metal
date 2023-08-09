@@ -296,7 +296,7 @@ inline DeviceBuffer to_device_buffer(const Storage& storage, Device* device, con
                 TT_THROW("Device storage doesn't support to_device_buffer");
             }
             else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
-                if constexpr (std::is_same_v<T, float> or std::is_same_v<T, bfloat16>) {
+                if constexpr (std::is_same_v<T, float> or std::is_same_v<T, bfloat16> or std::is_same_v<T,uint32_t>) {
                     auto data_to_write = borrowed_buffer::get_as<T>(storage.buffer);
                     TT_ASSERT(
                         compute_buffer_size(shape, data_type) == data_to_write.size(),
