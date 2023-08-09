@@ -85,7 +85,7 @@ tests/scripts/run_performance.sh @ashayestehmanesh @farbabi
 # eager - python api
 # **/tt_lib/
 **/tt_lib/csrc/tt_lib_bindings.cpp @tt-nshanker @TT-BrianLiu @tt-aho @arakhmati @mywoodstock
-**/tt_lib/fallback_ops @tt-aho
+**/tt_lib/fallback_ops @tt-aho @arakhmati
 
 # models
 models/ @boris-drazic @ashayestehmanesh @farbabi
@@ -107,4 +107,4 @@ tests/**/dtx/ @tt-nshanker
 tests/**/*test*conv*.py @tt-nshanker @ashayestehmanesh
 # tests/**/module.mk @tenstorrent-metal/developers
 tests/python_api_testing/conv/ @tt-nshanker
-tests/python_api_testing/unit_testing/fallback_ops @tt-aho
+tests/python_api_testing/unit_testing/fallback_ops @tt-aho @arakhmati
