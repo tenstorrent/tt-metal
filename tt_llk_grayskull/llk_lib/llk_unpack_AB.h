@@ -80,8 +80,11 @@ inline void llk_unpack_AB_hw_configure(const llk_unpack_AB_params_t *unpack_AB_p
     configure_unpack_AB(get_operand_id(unpack_AB_params->unpA_operand), get_operand_id(unpack_AB_params->unpB_operand));
 }
 
+template <bool is_fp32_dest_acc_en = false /* unused */, bool srnd_fpu_en = false /* unused */>
 inline void llk_unpack_AB_hw_configure_disaggregated(
     const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const int within_face_16x16_transpose = 0 /*not used*/) {
+    TT_LLK_DUMP("llk_unpack_AB_hw_configure_disaggregated<{}, {}>({}, {}, {})", is_fp32_dest_acc_en, srnd_fpu_en, unpA_operand, unpB_operand, within_face_16x16_transpose);
+
     const llk_unpack_AB_params_t unpack_AB_params = {.unpA_operand = unpA_operand, .unpB_operand = unpB_operand};
     llk_unpack_AB_hw_configure(&unpack_AB_params);
 }
@@ -89,6 +92,7 @@ inline void llk_unpack_AB_hw_configure_disaggregated(
 template <BroadcastType BType = BroadcastType::NONE>
 // within_face_16x16_transpose is used on WH but not used for GS, this transpose is done in math on GS
 inline void llk_unpack_AB_init(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const std::uint32_t transpose=0, const std::uint32_t acc_to_dest=0) {
+    TT_LLK_DUMP("llk_unpack_AB_init<{}>({}, {}, {}, {})", BType, unpA_operand, unpB_operand, transpose, acc_to_dest);
     llk_unpack_AB_mop_config<BType>();
 }
 
@@ -96,6 +100,7 @@ template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB(
     const std::uint32_t operandA, const std::uint32_t operandB, 
     const std::uint32_t tile_index_a, const std::uint32_t tile_index_b, const bool transpose_of_faces = 0 /*not used*/) {
+    TT_LLK_DUMP("llk_unpack_AB<{}>({}, {}, {}, {}, {}, {})", BType, operandA, operandB, tile_index_a, tile_index_b, transpose_of_faces);
     std::uint32_t inputA = get_operand_id(operandA);
     std::uint32_t inputB = get_operand_id(operandB);
     std::uint32_t base_address_a = operands[inputA].f.fifo_rd_ptr;

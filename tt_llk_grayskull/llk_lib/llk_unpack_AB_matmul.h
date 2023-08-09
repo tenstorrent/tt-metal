@@ -66,14 +66,18 @@ inline void llk_unpack_AB_matmul_hw_configure(const llk_unpack_AB_matmul_params_
         get_operand_id(unpack_AB_params->unpB_operand), get_operand_id(unpack_AB_params->unpA_operand), 16, 16);
 }
 
+template<bool is_fp32_dest_acc_en = false /* unused */, bool srnd_fpu_en = false /* unused */>
 inline void llk_unpack_AB_matmul_hw_configure_disaggregated(
     const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const std::uint32_t transpose_xy_srca = 0) {
+    TT_LLK_DUMP("llk_unpack_AB_matmul_hw_configure_disaggregated<{}, {}>({}, {}, {})", is_fp32_dest_acc_en, srnd_fpu_en, unpA_operand, unpB_operand, transpose_xy_srca);
+
     const llk_unpack_AB_matmul_params_t unpack_AB_matmul_params = {
         .unpA_operand = unpA_operand, .unpB_operand = unpB_operand, .transpose_xy_srca = transpose_xy_srca};
     llk_unpack_AB_matmul_hw_configure(&unpack_AB_matmul_params);
 }
 
 inline void llk_unpack_AB_matmul_init(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const std::uint32_t transpose=0, const std::uint32_t ct_dim=0, const std::uint32_t rt_dim=0, const std::uint32_t kt_dim=0) {
+    TT_LLK_DUMP("llk_unpack_AB_matmul_init({}, {}, {}, {}, {}, {})", unpA_operand, unpB_operand, transpose, ct_dim, rt_dim, kt_dim);
     // TODO: figure out tile dims based on unpA and unpB operands
     llk_unpack_AB_matmul_mop_config(transpose>0);
 }
@@ -81,7 +85,7 @@ inline void llk_unpack_AB_matmul_init(const std::uint32_t unpA_operand, const st
 inline void llk_unpack_AB_matmul(
     const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t tile_index_a,
     const std::uint32_t tile_index_b, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
-
+    TT_LLK_DUMP("llk_unpack_AB_matmul({}, {}, {}, {}, {}, {}, {})", operandA, operandB, tile_index_a, tile_index_b, ct_dim, rt_dim, kt_dim);
 
     // Todo: do something with tile dim flags
 

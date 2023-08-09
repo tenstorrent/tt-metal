@@ -13,8 +13,9 @@ using namespace ckernel;
 // local function declarations
 inline void eltwise_unary_configure_addrmod();
 
-template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NONE, DstSync Dst = DstSync::SyncFull>
+template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NONE, DstSync Dst = DstSync::SyncFull, bool is_fp32_dest_acc_en = false /* unused */>
 inline void llk_math_eltwise_unary_datacopy(uint dst_index) {
+    TT_LLK_DUMP("llk_math_eltwise_unary_datacopy<{}, {}, {}, {}>({})", type, src_b_bcast_type, Dst, is_fp32_dest_acc_en, dst_index);
     if constexpr ((Dst == DstSync::SyncTile16) || (Dst == DstSync::SyncTile2)) {
         math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(math_sync_tile_dst_index);
     } else {
@@ -166,6 +167,8 @@ template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NON
 // On GS, transpose_of_faces is not used, within_face_16x16_transpose is used
 // On WH, transpose_of_faces is used in unpacker (not math)
 inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t transpose_of_faces=0 /* unused */, const std::uint32_t within_face_16x16_transpose=0, const std::uint32_t operand = 255) {
+    TT_LLK_DUMP("llk_math_eltwise_unary_datacopy_init<{}, {}>({}, {}, {})", type, src_b_bcast_type, transpose_of_faces, within_face_16x16_transpose, operand);
+
     // Todo: figure out tile dims based on operand
     // If operand has default value (255), it means that it has not been passed in, and we should assume default tile dims.
     

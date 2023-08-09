@@ -16,8 +16,9 @@ inline void reduce_configure_addrmod();
 template <ReduceDim dim, int num_fidelity_phases>
 inline void reduce_configure_mop();
 
-template <PoolType type, ReduceDim dim, int num_fidelity_phases = 0>
+template <PoolType type, ReduceDim dim, int num_fidelity_phases = 0, bool is_fp32_dest_acc_en = false /* unused */>
 inline void llk_math_reduce(uint dst_index) {
+    TT_LLK_DUMP("llk_math_reduce<{}, {}, {}, {}>({})", type, dim, num_fidelity_phases, is_fp32_dest_acc_en, dst_index);
     constexpr bool high_fidelity = num_fidelity_phases > 0 && num_fidelity_phases <= 4;
     math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
     if constexpr (dim == ReduceDim::REDUCE_ROW) {
@@ -253,7 +254,7 @@ inline void reduce_configure_mop() {
 template <PoolType type, ReduceDim dim, int num_fidelity_phases = 0>
 // within_face_16x16_transpose is used on WH but not used for GS, this transpose is done in math on GS
 inline void llk_math_reduce_init(const std::uint32_t within_face_16x16_transpose=0) {
-    
+    TT_LLK_DUMP("llk_math_reduce_init<{}, {}, {}>({})", type, dim, num_fidelity_phases, within_face_16x16_transpose);
     constexpr bool high_fidelity = num_fidelity_phases > 0 && num_fidelity_phases <= 4;
     
     reduce_configure_addrmod<type, high_fidelity>();

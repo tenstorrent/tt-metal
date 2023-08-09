@@ -26,9 +26,11 @@ inline void llk_unpack_transpose_yz_mop_config() {
     tmp.program(instrn_buffer);
 }
 inline void llk_unpack_transpose_yz_init(uint32_t within_face_16x16_transpose=0) {
+    TT_LLK_DUMP("llk_unpack_transpose_yz_init({})", within_face_16x16_transpose);
     llk_unpack_transpose_yz_mop_config();
 }
 inline void llk_unpack_transpose_yz(std::uint32_t operand, std::uint32_t tile_index, std::uint32_t phase) {
+    TT_LLK_DUMP("llk_unpack_transpose_yz({}, {}, {})", operand, tile_index, phase);
     std::uint32_t input = get_operand_id(operand);
     std::uint32_t base_address = operands[input].f.fifo_rd_ptr;
     std::uint32_t offset_address = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[input], tile_index);

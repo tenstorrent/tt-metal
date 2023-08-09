@@ -162,8 +162,10 @@ inline void llk_unpack_A_hw_configure(const llk_unpack_A_params_t *unpack_A_para
         get_operand_id(unpack_A_params->unpA_operand), get_operand_id(unpack_A_params->unpA_operand));
 }
 
+template <bool is_fp32_dest_acc_en = false /* unused */, bool srnd_fpu_en = false /* unused */>
 inline void llk_unpack_A_hw_configure_disaggregated(const std::uint32_t unpA_operand, const int within_face_16x16_transpose) {
-    
+    TT_LLK_DUMP("llk_unpack_A_hw_configure_disaggregated<{}, {}>({}, {})", is_fp32_dest_acc_en, srnd_fpu_en, unpA_operand, within_face_16x16_transpose);
+
     const llk_unpack_A_params_t unpack_A_params = {
         .unpA_operand = unpA_operand,
     };
@@ -172,7 +174,8 @@ inline void llk_unpack_A_hw_configure_disaggregated(const std::uint32_t unpA_ope
 
 template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 // within_face_16x16_transpose is used on WH but not used for GS, this transpose is done in math on GS
-inline void llk_unpack_A_init(const std::uint32_t transpose_of_faces=0, const std::uint32_t within_face_16x16_transpose=0, const std::uint32_t operand = 255) {    
+inline void llk_unpack_A_init(const std::uint32_t transpose_of_faces=0, const std::uint32_t within_face_16x16_transpose=0, const std::uint32_t operand = 255) {
+    TT_LLK_DUMP("llk_unpack_A_init<{}, {}, {}>({}, {}, {})", BType, acc_to_dest, binary_reuse_dest, transpose_of_faces, within_face_16x16_transpose, operand);   
     // Todo: figure out tile dims.
     // If passed in operand is default (255), it means that it has not been passed by llk, and we should assume default tile dims.
     llk_unpack_A_mop_config<BType, acc_to_dest>(transpose_of_faces);
@@ -180,6 +183,7 @@ inline void llk_unpack_A_init(const std::uint32_t transpose_of_faces=0, const st
 
 template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index, const int transpose_of_faces = 0) {
+    TT_LLK_DUMP("llk_unpack_A<{}, {}, {}>({}, {}, {})", BType, acc_to_dest, binary_reuse_dest, operand, tile_index, transpose_of_faces);
     std::uint32_t input = get_operand_id(operand);
     std::uint32_t base_address = operands[input].f.fifo_rd_ptr;
     std::uint32_t offset_address = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[input], tile_index);

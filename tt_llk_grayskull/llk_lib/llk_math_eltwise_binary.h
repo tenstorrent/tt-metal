@@ -24,11 +24,13 @@ template <
     BroadcastType src_b_bcast_type,
     DstSync Dst = DstSync::SyncFull,
     int NUM_FIDELITY_PHASES = 0,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
+    bool is_fp32_dest_acc_en = false>
 inline void llk_math_eltwise_binary_impl(const std::uint32_t num_faces_A, const std::uint32_t num_faces_B, uint dst_index, const bool clear_fp32_dst_acc/*not used*/) {
+    TT_LLK_DUMP("llk_math_eltwise_binary_impl<{}, {}, {}, {}, {}, {}>({}, {}, {}, {})", eltwise_binary_type, src_b_bcast_type, Dst, NUM_FIDELITY_PHASES, binary_reuse_dest, is_fp32_dest_acc_en, num_faces_A, num_faces_B, dst_index, clear_fp32_dst_acc);
+
     if constexpr ((Dst == DstSync::SyncTile16) || (Dst == DstSync::SyncTile2)) {
         math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(math_sync_tile_dst_index);
-
         if constexpr (eltwise_binary_type == ELWMUL) {
             TT_ZEROACC(p_zeroacc::CLR_16, ADDR_MOD_1, (math_sync_tile_dst_index << 2) + 0);
             TT_ZEROACC(p_zeroacc::CLR_16, ADDR_MOD_1, (math_sync_tile_dst_index << 2) + 1);
@@ -167,9 +169,10 @@ template <
     BroadcastType src_b_bcast_type,
     DstSync Dst = DstSync::SyncFull,
     int NUM_FIDELITY_PHASES = 0,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
+    bool is_fp32_dest_acc_en = false /* unused */>
 inline void llk_math_eltwise_binary(uint dst_index, const bool clear_fp32_dst_acc = true /*not used*/) {
-    llk_math_eltwise_binary_impl<eltwise_binary_type, src_b_bcast_type, Dst, NUM_FIDELITY_PHASES, binary_reuse_dest>(4, 4, dst_index, clear_fp32_dst_acc);
+    llk_math_eltwise_binary_impl<eltwise_binary_type, src_b_bcast_type, Dst, NUM_FIDELITY_PHASES, binary_reuse_dest, is_fp32_dest_acc_en>(4, 4, dst_index, clear_fp32_dst_acc);
 }
 
 template <
@@ -177,10 +180,11 @@ template <
     BroadcastType src_b_bcast_type,
     DstSync Dst = DstSync::SyncFull,
     int NUM_FIDELITY_PHASES = 0,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
+    bool is_fp32_dest_acc_en = false /* unused */>
 inline void llk_math_eltwise_binary(const std::uint32_t operand_A, const std::uint32_t operand_B, uint dst_index, const bool clear_fp32_dst_acc = true /*not used*/) {
     // Todo: get num faces based on operand A, and operand B
-    llk_math_eltwise_binary_impl<eltwise_binary_type, src_b_bcast_type, Dst, NUM_FIDELITY_PHASES, binary_reuse_dest>(4, 4, dst_index, clear_fp32_dst_acc);
+    llk_math_eltwise_binary_impl<eltwise_binary_type, src_b_bcast_type, Dst, NUM_FIDELITY_PHASES, binary_reuse_dest, is_fp32_dest_acc_en>(4, 4, dst_index, clear_fp32_dst_acc);
 }
 
 template <EltwiseBinaryType eltwise_binary_type, BroadcastType bcast_type>
@@ -306,6 +310,7 @@ template <
     int NUM_FIDELITY_PHASES = 0,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void llk_math_eltwise_binary_init(const std::uint32_t transpose=0, const std::uint32_t acc_to_dest = 0) {
+    TT_LLK_DUMP("llk_math_eltwise_binary_init<{}, {}, {}, {}>({}, {})", eltwise_binary_type, src_b_bcast_type, NUM_FIDELITY_PHASES, binary_reuse_dest, transpose, acc_to_dest);
     eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type>();
 
     if constexpr (
@@ -324,6 +329,8 @@ template <
     int NUM_FIDELITY_PHASES = 0,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void llk_math_eltwise_binary_init_with_operands(const std::uint32_t operand_A, const std::uint32_t operand_B, const std::uint32_t transpose = 0, const std::uint32_t acc_to_dest = 0) {
+    TT_LLK_DUMP("llk_math_eltwise_binary_init_with_operands<{}, {}, {}, {}>({}, {}, {}, {})", eltwise_binary_type, src_b_bcast_type, NUM_FIDELITY_PHASES, binary_reuse_dest, operand_A, operand_B, transpose, acc_to_dest);
+
     // Todo: get num faces based on operand_A and operand_B
     llk_math_eltwise_binary_init<eltwise_binary_type, src_b_bcast_type, NUM_FIDELITY_PHASES, binary_reuse_dest>(transpose, acc_to_dest);
 }

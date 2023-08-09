@@ -64,47 +64,13 @@ struct llk_math_reduce_params_t {
 //  Pack LLK param structs
 //***
 
-struct llk_relu_config_t {
-    std::uint32_t
-        ApplyRelu : 16;  // 0 ? no relu, 1 ? val<0=>val=0, 2 ? val<threshold=>val=0, 3 - val>threshold=>val=threshold
-    std::uint32_t Threshold : 16;  // fp16
-};
-
-union llk_relu_config_u {
-    llk_relu_config_t f;
-    std::uint32_t val;
-};
+using llk_relu_config_t = hlk_relu_config_t;
+using llk_relu_config_u = hlk_relu_config_u; 
+using llk_pack_shifted_params_t = hlk_pack_shifted_params_t;
+using llk_pack_shifted_state_t = hlk_pack_shifted_state_t;
 
 struct llk_pack_params_t {
     std::uint32_t pack_output;
     llk_relu_config_u relu_config;
 };
 
-// TODO: nsmith move this to a common place where the hlk can include it
-struct hlk_pack_shifted_params_t {
-    std::uint32_t pack_output;
-    llk_relu_config_u relu_config;
-    int initial_padding;
-    int row_shift_x;
-    int original_x;
-    int original_y;
-    int stride;
-    int stride_offset;
-    int valid_row_count;
-    int column_number;
-    bool final_iteration;
-    bool relu;
-    bool reserved[2];
-};
-
-struct hlk_pack_shifted_state_t {
-    int current_rd_ptr;
-    int current_x;
-    int current_y;
-    int current_wr_ptr;
-    bool partial_tile;
-    bool reserved[3];
-};
-
-using llk_pack_shifted_params_t = hlk_pack_shifted_params_t;
-using llk_pack_shifted_state_t = hlk_pack_shifted_state_t;

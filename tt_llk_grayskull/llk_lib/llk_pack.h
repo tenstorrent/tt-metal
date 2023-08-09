@@ -78,8 +78,9 @@ inline void llk_pack_hw_configure(const llk_pack_params_t *pack_params) {
     }
 }
 
-template <bool untilize = false, ReluType relu_type=ReluType::NO_RELU, std::uint32_t relu_threshold=0>
+template <bool untilize = false, bool is_fp32_dest_acc_en = false /* unused */, ReluType relu_type=ReluType::NO_RELU, std::uint32_t relu_threshold=0>
 inline void llk_pack_hw_configure_disaggregated(std::uint32_t pack_output) {
+    TT_LLK_DUMP("llk_pack_hw_configure_disaggregated<{}, {}, {}, {}>({})", untilize, is_fp32_dest_acc_en, relu_type, relu_threshold, pack_output);
     llk_pack_params_t llk_pack_params = {
         .pack_output = pack_output, .relu_config = {.f = {.ApplyRelu = (std::uint32_t)relu_type, .Threshold = relu_threshold}}};
     llk_pack_hw_configure<untilize>(&llk_pack_params);
@@ -116,8 +117,9 @@ inline void llk_pack_reduce_hw_configure(const llk_pack_params_t *pack_params) {
     }
 }
 
-template <bool untilize = false, PoolType type, ReduceDim dim, ReluType relu_type=ReluType::NO_RELU, std::uint32_t relu_threshold=0>
+template <bool untilize = false, PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en = false /* unused */, ReluType relu_type=ReluType::NO_RELU, std::uint32_t relu_threshold=0>
 inline void llk_pack_reduce_hw_configure_disaggregated(std::uint32_t pack_output) {
+    TT_LLK_DUMP("llk_pack_reduce_hw_configure_disaggregated<{}, {}, {}, {}, {}, {}>({})", untilize, type, dim, is_fp32_dest_acc_en, relu_type, relu_threshold, pack_output);
     llk_pack_params_t llk_pack_params = {
         .pack_output = pack_output, .relu_config = {.f = {.ApplyRelu = (std::uint32_t)relu_type, .Threshold = relu_threshold}}};
     llk_pack_reduce_hw_configure<untilize, type, dim>(&llk_pack_params);
@@ -125,6 +127,7 @@ inline void llk_pack_reduce_hw_configure_disaggregated(std::uint32_t pack_output
 
 template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
 inline void llk_pack_init(const uint32_t pack_output) {
+    TT_LLK_DUMP("llk_pack_init<{}, {}, {}>({})", untilize, zero_output, FaceLayout, pack_output);
     // Figure out tile dims based on pack_output
     llk_pack_mop_config<untilize, zero_output, FaceLayout>();
 }
@@ -159,10 +162,10 @@ inline std::uint16_t get_output_tile_address(std::uint8_t output_id, std::uint32
     return pack_tile_addr;
 }
 
+template <bool out_of_order_output = false, DstSync Dst = SyncFull, bool untilize = false, bool is_fp32_dest_acc_en = false /* unused */, bool pack_l1_acc_en = false /* unused*/>
+inline void llk_pack_decouple(std::uint32_t tile_index, std::uint32_t output, std::uint32_t output_tile_index = 0, bool pack_l1_acc = false /* unused */) {
 #if defined(PERF_DUMP) && MATH_PACK_DECOUPLE
-template <bool out_of_order_output = false, DstSync Dst = SyncFull, bool untilize = false>
-inline void llk_pack_decouple(std::uint32_t tile_index, std::uint32_t output, std::uint32_t output_tile_index = 0) {
-
+    TT_LLK_DUMP("llk_pack_decouple<{}, {}, {}, {}, {}>({}, {}, {}, {})", out_of_order_output, Dst, untilize, is_fp32_dest_acc_en, pack_l1_acc_en, tile_index, output, output_tile_index, pack_l1_acc);
     std::uint8_t output_id = get_output_id(output);
 
     static_assert((!(untilize && out_of_order_output)) && "untilize out of order packing is not supported!");
@@ -181,12 +184,12 @@ inline void llk_pack_decouple(std::uint32_t tile_index, std::uint32_t output, st
             l1_dest[i] = tile_header[i];
         }
     }
-}
 #endif
+}
 
-template <bool out_of_order_output = false, DstSync Dst = SyncFull, bool untilize = false>
+template <bool out_of_order_output = false, DstSync Dst = SyncFull, bool untilize = false, bool is_fp32_dest_acc_en = false /* unused*/>
 inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32_t output_tile_index = 0) {
-    
+    TT_LLK_DUMP("llk_pack<{}, {}, {}, {}>({}, {}, {})", out_of_order_output, Dst, untilize, is_fp32_dest_acc_en, tile_index, output, output_tile_index);
     // Todo: figure out tile dims based on output
     std::uint8_t output_id = get_output_id(output);
 

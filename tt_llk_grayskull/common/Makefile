@@ -34,6 +34,7 @@ FIRMWARE_RISCV_INC_DIR = $(BUDA_HOME)/build/src/firmware/riscv
 ifdef HLKC_INC
 # if HLKC_INC is defined, we have detected the HLKC flow
 # these are the includes for the HLKC auto-generated flow
+DEFINES += -DHLKC_PIPELINE_ENABLED
 INCLUDES = \
 	-I$(CKERNEL_DIR)/$(ARCH_NAME)/common/inc \
 	-I$(HLKC_INC) \
@@ -42,6 +43,19 @@ INCLUDES = \
 	-I$(FIRMWARE_RISCV_INC_DIR)/$(ARCH_NAME)/noc \
 	-I$(BUDA_HOME)/perf_lib/ \
 	-I$(CKERNEL_INC_DIR)/gen/out # needed for ckernel_ops.h
+else ifdef HLK_INC
+# if HLK_INC is defined, we have detected the HLK compilation flow
+# these are the includes for the HLK auto-generated flow
+# todo.pp line 57 (-I$(CKERNEL_INC_DIR)/gen/out \) might not be needed
+INCLUDES = \
+	-I$(CKERNEL_DIR)/$(ARCH_NAME)/common/inc \
+	-I$(HLK_INC) \
+	-I$(CKERNEL_DIR)/$(ARCH_NAME)/llk_lib/ \
+	-I$(FIRMWARE_RISCV_INC_DIR)/$(ARCH_NAME)/ \
+	-I$(FIRMWARE_RISCV_INC_DIR)/$(ARCH_NAME)/noc \
+	-I$(BUDA_HOME)/perf_lib/ \
+	-I$(CKERNEL_INC_DIR)/gen/out \
+	-I$(CKERNEL_DIR)/$(ARCH_NAME)/hlk_defs/
 else
 # these are the includes for the TB LLK flow
 INCLUDES = \

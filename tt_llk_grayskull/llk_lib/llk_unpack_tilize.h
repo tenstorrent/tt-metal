@@ -42,8 +42,10 @@ inline void llk_unpack_tilize_hw_configure(const llk_unpack_tilize_params_t *unp
     cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32] = 16 | (16 << 16);
 }
 
+template <bool is_fp32_dest_acc_en = false /* unused */>
 inline void llk_unpack_tilize_hw_configure_disaggregated(
     const std::uint32_t unpA_operand, const std::uint32_t unpA_block_ct_dim) {
+    TT_LLK_DUMP("llk_unpack_tilize_hw_configure_disaggregated<{}>({}, {})", is_fp32_dest_acc_en, unpA_operand, unpA_block_ct_dim);
     const llk_unpack_tilize_params_t unpack_tilize_params = {
         .unpA_operand = unpA_operand,
         .unpA_block_c_dim = unpA_block_ct_dim*TILE_WIDTH,
@@ -51,11 +53,13 @@ inline void llk_unpack_tilize_hw_configure_disaggregated(
     llk_unpack_tilize_hw_configure(&unpack_tilize_params);
 }
 
-inline void llk_unpack_tilize_init() { 
+inline void llk_unpack_tilize_init() {
+    TT_LLK_DUMP("llk_unpack_tilize_init()");
     llk_unpack_tilize_mop_config(); 
 }
 
 inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index, std::uint32_t block_ct_dim) {
+    TT_LLK_DUMP("llk_unpack_tilize({}, {}, {})", operand, tile_index, block_ct_dim);
     std::uint32_t input = get_operand_id(operand);
     std::uint32_t base_address = operands[input].f.fifo_rd_ptr - 1;  // Remove header size added by descriptor
     std::uint32_t top_face_offset_address = SCALE_DATUM_SIZE((uint)unpack_src_format[input], tile_index)

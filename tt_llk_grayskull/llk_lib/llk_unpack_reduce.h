@@ -57,8 +57,9 @@ inline void llk_unpack_reduce_hw_configure(
     }    
 }
 
-template <PoolType type, ReduceDim dim>
+template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en = false /* unused */, bool srnd_fpu_en = false /* unused */>
 inline void llk_unpack_reduce_hw_configure_disaggregated(const std::uint32_t unpA_operand, const float mult) {
+    TT_LLK_DUMP("llk_unpack_reduce_hw_configure_disaggregated<{}, {}, {}, {}>({}, {})", type, dim, is_fp32_dest_acc_en, srnd_fpu_en, unpA_operand, mult);
     const llk_unpack_reduce_params_t unpack_reduce_params = {.unpA_operand = unpA_operand};
     llk_unpack_reduce_hw_configure<type, dim>(&unpack_reduce_params, mult);
 }
@@ -66,6 +67,7 @@ inline void llk_unpack_reduce_hw_configure_disaggregated(const std::uint32_t unp
 template <PoolType type, ReduceDim dim>
 // within_face_16x16_transpose is used on WH but not used for GS, this transpose is done in math on GS
 inline void llk_unpack_reduce_init(const std::uint32_t within_face_16x16_transpose=0) {
+    TT_LLK_DUMP("llk_unpack_reduce_init<{}, {}>({})", type, dim, within_face_16x16_transpose);
     llk_unpack_reduce_mop_config<type, dim>();
     
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
@@ -101,6 +103,7 @@ inline void llk_unpack_reduce_init(const std::uint32_t within_face_16x16_transpo
 
 template <PoolType type, ReduceDim dim>
 inline void llk_unpack_reduce(const std::uint32_t operand, const std::uint32_t tile_index) {
+    TT_LLK_DUMP("llk_unpack_reduce<{}, {}>({}, {})", type, dim, operand, tile_index);
     std::uint32_t input = get_operand_id(operand);
     std::uint32_t base_address = operands[input].f.fifo_rd_ptr;
     std::uint32_t offset_address = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[input], tile_index);
