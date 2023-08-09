@@ -174,7 +174,7 @@ class TtRobertaSelfAttention(nn.Module):
         # Take the dot product between "query" and "key" to get the raw attention scores.
         key_layer_transposed = tt_lib.tensor.transpose(key_layer)
 
-        attention_scores = tt_lib.tensor.bmm(query_layer, key_layer_transposed, mem_config = self.mem_config)
+        attention_scores = tt_lib.tensor.bmm(query_layer, key_layer_transposed, output_mem_config = self.mem_config)
 
         if (
             self.position_embedding_type == "relative_key"
