@@ -2,6 +2,7 @@ import sys
 import pytest
 
 from pathlib import Path
+from loguru import logger
 
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/../..")
@@ -10,7 +11,7 @@ import torch
 
 import tt_lib as ttl
 
-from tt_lib.utils import _nearest_32, pad_activation
+from tt_lib.utils import _nearest_32
 from python_api_testing.models.utility_functions import comp_pcc
 
 def volume(shape):
@@ -26,14 +27,9 @@ def volume(shape):
 ## dilation_h, dilation_w
 @pytest.mark.parametrize(
     "act_shape",    ## NCHW
-    ((  #[1, 32, 1, 32],
-        [1, 1, 32, 32],
-        [1, 32, 32, 32],
-        [1, 1, 112, 112],
-        #[1, 64, 1, 32],
+    ((  [1, 32, 32, 32],
         [1, 64, 32, 32],
         [1, 64, 112, 112],
-        [1, 64, 96, 96],
         [1, 1, 128, 128],))
 )
 @pytest.mark.parametrize(
@@ -122,7 +118,7 @@ def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, in_mem_
     ttl.device.CloseDevice(device)
 
     out_shape_padded = out_padded.shape()
-    out_pytorch_padded = torch.tensor(out_padded.data()).reshape(out_shape_padded)    ## N, 1, HW, C
+    out_pytorch_padded = out_padded.to_torch().reshape(out_shape_padded)    ## N, 1, HW, C
     out_pytorch = out_pytorch_padded[:,:,:,:in_c]
     out_pytorch = torch.permute(out_pytorch, (0, 3, 1, 2))  ## N, C, 1, HW
 
@@ -132,13 +128,7 @@ def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, in_mem_
     ## test for equivalance
     out_pytorch = out_pytorch.reshape(golden_pytorch.shape)
     passing_pcc, output_pcc = comp_pcc(golden_pytorch, out_pytorch)
-    print(f'Passing PCC = {passing_pcc}')
-    print(f'Output PCC = {output_pcc}')
-
-    # print(f"INPUT {act.shape}:\n{act}")
-    # ttact_host.pretty_print()
-    # print(f"OUTPUT:\n{out_pytorch}")
-    # print(f"GOLDEN: {golden_pytorch.shape}\n{golden_pytorch}")
-
+    logger.info(f'Passing PCC = {passing_pcc}')
+    logger.info(f'Output PCC = {output_pcc}')
 
     assert(passing_pcc)

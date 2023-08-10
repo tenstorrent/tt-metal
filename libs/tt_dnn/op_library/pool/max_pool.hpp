@@ -19,7 +19,6 @@ struct MaxPool {
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-    operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
     tt::stl::reflection::Attributes attributes() const;
 };
 
@@ -29,7 +28,7 @@ Tensor max_pool2d(const Tensor &input,
                   uint32_t stride_h = 1, uint32_t stride_w = 1,
                   uint32_t pad_h = 0, uint32_t pad_w = 0,               // default: no padding
                   uint32_t dilation_h = 1, uint32_t dilation_w = 1,
-                  const MemoryConfig& out_mem_config = MemoryConfig{.interleaved = true, .buffer_type = BufferType::DRAM});
+                  const MemoryConfig& out_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace tt_metal
 }  // namespace tt

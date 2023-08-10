@@ -2475,7 +2475,7 @@ void TensorModule(py::module &m_tensor) {
         py::arg("stride_h") = 1, py::arg("stride_w") = 1,
         py::arg("pad_h") = 0, py::arg("pad_w") = 0,
         py::arg("dilation_h") = 1, py::arg("dilation_w") = 1,
-        py::arg("out_mem_config") = MemoryConfig{.interleaved = true, .buffer_type = BufferType::DRAM}, R"doc(
+        py::arg("out_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Max Pool 2D
         +-------------------+-------------------------------+---------------+-------------+----------+
         | Argument          | Description                   | Data type     | Valid range | Required |

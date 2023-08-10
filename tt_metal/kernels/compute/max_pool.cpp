@@ -79,7 +79,6 @@ void MAIN {
     const uint32_t window_hw_padded = get_compile_time_arg_val(3);
     const uint32_t out_h = get_compile_time_arg_val(4);
     const uint32_t out_w = get_compile_time_arg_val(5);
-    const uint32_t out_ntiles_hw = get_compile_time_arg_val(6);
     const uint32_t out_ntiles_c = get_compile_time_arg_val(7);
 
     tilize_init(in_cb_id, in_ntiles_hwc, in_tiled_cb_id);

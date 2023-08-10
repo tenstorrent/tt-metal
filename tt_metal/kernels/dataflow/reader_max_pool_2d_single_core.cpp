@@ -1,5 +1,4 @@
 #include <cstdint>
-#include <algorithm>
 #include "dataflow_api.h"
 // #include "debug_print.h"
 
@@ -25,7 +24,6 @@ void kernel_main() {
     kernel_profiler::mark_time(7);
 
     const uint32_t in_addr = get_arg_val<uint32_t>(0);
-    const uint32_t out_addr = get_arg_val<uint32_t>(1);
     const uint32_t window_h = get_arg_val<uint32_t>(2);
     const uint32_t window_w = get_arg_val<uint32_t>(3);
     const uint32_t window_hw = get_arg_val<uint32_t>(4);
@@ -36,17 +34,12 @@ void kernel_main() {
     const int32_t pad_w = get_arg_val<int32_t>(9);
     const int32_t out_h = get_arg_val<int32_t>(10);
     const int32_t out_w = get_arg_val<int32_t>(11);
-    const int32_t out_hw = get_arg_val<int32_t>(12);
-    const int32_t out_c = get_arg_val<int32_t>(13);
     const uint32_t in_nbytes_c = get_arg_val<uint32_t>(14);
-    const uint32_t out_nbytes_c = get_arg_val<uint32_t>(15);
     const int32_t in_h = get_arg_val<int32_t>(16);
     const int32_t in_w = get_arg_val<int32_t>(17);
-    const int32_t in_hw = get_arg_val<int32_t>(18);
     const int32_t in_c = get_arg_val<int32_t>(19);
     const uint32_t bf16_one_u32 = get_arg_val<uint32_t>(22);
     constexpr bool is_in_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool is_out_dram = get_compile_time_arg_val(1) == 1;
 
     constexpr uint32_t in_cb_id = tt::CB::c_in0;
     constexpr uint32_t in_scalar_cb_id = tt::CB::c_in1;

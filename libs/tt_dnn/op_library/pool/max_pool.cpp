@@ -287,11 +287,6 @@ operation::ProgramWithCallbacks MaxPool::create_program(const std::vector<Tensor
                                     out_mem_config_)};
 }
 
-operation::Hash MaxPool::compute_program_hash(const std::vector<Tensor> &inputs) const {
-    const auto& input = inputs.at(0);
-    return fmt::format("{}_{}", *this, input);
-}
-
 tt::stl::reflection::Attributes MaxPool::attributes() const {
     return {
         {"in_h", in_h_},    // input height
