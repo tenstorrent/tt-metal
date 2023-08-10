@@ -58,7 +58,7 @@ class TtBasicTransformerBlock(nn.Module):
         self.host = host
         self.only_cross_attention = only_cross_attention
         self.base_address = base_address
-        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
+        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
 
         self.use_ada_layer_norm_zero = (
             num_embeds_ada_norm is not None
@@ -257,7 +257,7 @@ class TtBasicTransformerBlock(nn.Module):
                 False
             ), "AdaLayerNormZero not supported and not used in stable diffusion"
 
-        hidden_states = ttl.tensor.add(attn_output, hidden_states, output_mem_config=self.out_mem_config_l1)
+        hidden_states = ttl.tensor.add(attn_output, hidden_states,)
         if self.attn2 is not None:
             norm_hidden_states = (
                 self.norm2(hidden_states, timestep)
@@ -272,7 +272,7 @@ class TtBasicTransformerBlock(nn.Module):
                 **cross_attention_kwargs,
             )
 
-            hidden_states = ttl.tensor.add(attn_output, hidden_states, output_mem_config=self.out_mem_config_l1)
+            hidden_states = ttl.tensor.add(attn_output, hidden_states,)
 
         # 3. Feed-forward
         norm_hidden_states = self.norm3(hidden_states)
@@ -287,7 +287,7 @@ class TtBasicTransformerBlock(nn.Module):
                 False
             ), "AdaLayerNormZero not supported and not used in stable diffusion"
 
-        hidden_states = ttl.tensor.add(ff_output, hidden_states, output_mem_config=self.out_mem_config_l1)
+        hidden_states = ttl.tensor.add(ff_output, hidden_states,)
         return hidden_states
 
 
@@ -325,7 +325,7 @@ class TtTransformer2DModel(nn.Module):
         self.use_linear_projection = use_linear_projection
         self.num_attention_heads = num_attention_heads
         self.attention_head_dim = attention_head_dim
-        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
+        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
 
         inner_dim = num_attention_heads * attention_head_dim
 
@@ -377,7 +377,6 @@ class TtTransformer2DModel(nn.Module):
                     weights=proj_in_weights,
                     bias=proj_in_bias,
                     device=self.device,
-                    out_mem_config=self.out_mem_config_l1
                 )
             else:
                 proj_in_weights = state_dict[f"{base_address}.proj_in.weight"]
@@ -433,7 +432,6 @@ class TtTransformer2DModel(nn.Module):
                     out_features=inner_dim,
                     weight=proj_out_weights,
                     bias=proj_out_bias,
-                    out_mem_config=self.out_mem_config_l1
                 )
             else:
                 proj_out_weights = state_dict[f"{base_address}.proj_out.weight"]
@@ -534,7 +532,7 @@ class TtTransformer2DModel(nn.Module):
                 )
                 hidden_states = ttl.tensor.permute(hidden_states, 0, 3, 1, 2)
 
-            output = ttl.tensor.add(hidden_states, residual, output_mem_config=self.out_mem_config_l1)
+            output = ttl.tensor.add(hidden_states, residual,)
 
         if not return_dict:
             return (output,)
