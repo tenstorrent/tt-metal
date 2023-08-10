@@ -268,7 +268,7 @@ class TtRobertaSelfAttention(nn.Module):
         if head_mask is not None:
             attention_probs = tt_lib.tensor.mul(attention_probs, head_mask, output_mem_config = self.mem_config)
 
-        context_layer = tt_lib.tensor.bmm(attention_probs, value_layer, mem_config = self.mem_config)
+        context_layer = tt_lib.tensor.bmm(attention_probs, value_layer, self.mem_config)
         context_layer = tt_lib.tensor.permute(context_layer, 0, 2, 1, 3)
 
         # TODO left here. Finish porting and re-test everything. See other TODO s
