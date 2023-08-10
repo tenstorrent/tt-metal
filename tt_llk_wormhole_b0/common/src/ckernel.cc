@@ -35,7 +35,6 @@ uint32_t dbg_event_end __attribute__((section(".bss"))) = 0;
 volatile uint16_t tt_reg_ptr *debug_mailbox_base = nullptr;
 uint8_t mailbox_index = 0;
 const uint8_t mailbox_end = 32;
-const uint8_t mailbox_reserved_regs = 4;
 volatile uint8_t tt_l1_ptr *debug_buffer = nullptr;
 volatile uint8_t tt_l1_ptr *debug_buffer_start = nullptr;
 uint8_t thread_id __attribute__((section(".bss"))) = 0;
@@ -232,7 +231,6 @@ int main(int argc, char *argv[])
 #endif
 #endif
   
-    uint64_t kernel_start_timestamp = read_wall_clock();
     //while (ready_for_next_epoch())
     {
         run_kernel();
@@ -240,7 +238,6 @@ int main(int argc, char *argv[])
 
     // Signal completion
     tensix_sync();
-    uint64_t kernel_end_timestamp = read_wall_clock();
 #ifdef PERF_DUMP
 #if (BRISC_TRISC_SYNC == 1) && (OVERLAY_OUTPUT_DECOUPLE == 1)
     if (thread_id == 2) {
@@ -252,8 +249,6 @@ int main(int argc, char *argv[])
     last_trisc_perf_dump_to_dram();
     tensix_sync();
 #endif
-    uint64_t kernel_runtime = kernel_end_timestamp - kernel_start_timestamp;
-    record_kernel_runtime(kernel_runtime);
 
     trisc_l1_mailbox_write(KERNEL_COMPLETE);
 

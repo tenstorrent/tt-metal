@@ -95,7 +95,6 @@ extern uint32_t dbg_event_end;
 extern volatile uint16_t tt_reg_ptr *debug_mailbox_base;
 extern uint8_t mailbox_index;
 const extern uint8_t mailbox_end;
-const extern uint8_t mailbox_reserved_regs;
 // Internal scope to namespace methods only (C++ does not allow namespace private ownership)
 namespace internal {
 }
@@ -396,14 +395,14 @@ inline std::uint32_t memory_cast(T *object_ptr)
 }
 
 inline void record_mailbox_value(uint16_t event_value) {
-  if (mailbox_index < mailbox_end - mailbox_reserved_regs) {
+  if (mailbox_index < mailbox_end) {
     debug_mailbox_base[mailbox_index] = event_value;
     mailbox_index++;
   }
 }
 
 inline void record_mailbox_value_with_index(uint8_t index, uint16_t event_value) {
-  if (index < mailbox_end - mailbox_reserved_regs) {
+  if (index < mailbox_end) {
     debug_mailbox_base[index] = event_value;
   }
 }
