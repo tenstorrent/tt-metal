@@ -914,6 +914,7 @@ def bcast_add_h(x, y, *args, device, dtype, layout, on_device, **kwargs):
     t0 = t0.to(layout)
     if on_device:
         t0 = t0.to(device)
+    t1 = y
     if layout == ttl.tensor.Layout.TILE:
         t1 = torch.nn.functional.pad(y, (0, 0, 0, 32 - y.shape[2]))
     t1 = ttl.tensor.Tensor(t1, dtype)
@@ -935,6 +936,7 @@ def bcast_add_w(x, y, *args, device, dtype, layout, on_device, **kwargs):
     t0 = t0.to(layout)
     if on_device:
         t0 = t0.to(device)
+    t1 = y
     if layout == ttl.tensor.Layout.TILE or (
         on_device and layout == ttl.tensor.Layout.ROW_MAJOR
     ):
@@ -963,6 +965,8 @@ def bcast_add_hw(x, y, *args, device, dtype, layout, on_device, **kwargs):
         t1 = torch.nn.functional.pad(y, (0, 32 - y.shape[3], 0, 32 - y.shape[2]))
     elif on_device and layout == ttl.tensor.Layout.ROW_MAJOR:
         t1 = torch.nn.functional.pad(y, (0, 32 - y.shape[3]))
+    else:
+        t1 = y
     t1 = ttl.tensor.Tensor(t1, dtype)
     t1 = t1.to(layout)
     if on_device:
@@ -982,6 +986,7 @@ def bcast_sub_h(x, y, *args, device, dtype, layout, on_device, **kwargs):
     t0 = t0.to(layout)
     if on_device:
         t0 = t0.to(device)
+    t1 = y
     if layout == ttl.tensor.Layout.TILE:
         t1 = torch.nn.functional.pad(y, (0, 0, 0, 32 - y.shape[2]))
     t1 = ttl.tensor.Tensor(t1, dtype)
@@ -1003,6 +1008,7 @@ def bcast_sub_w(x, y, *args, device, dtype, layout, on_device, **kwargs):
     t0 = t0.to(layout)
     if on_device:
         t0 = t0.to(device)
+    t1 = y
     if layout == ttl.tensor.Layout.TILE or (
         on_device and layout == ttl.tensor.Layout.ROW_MAJOR
     ):
@@ -1031,6 +1037,8 @@ def bcast_sub_hw(x, y, *args, device, dtype, layout, on_device, **kwargs):
         t1 = torch.nn.functional.pad(y, (0, 32 - y.shape[3], 0, 32 - y.shape[2]))
     elif on_device and layout == ttl.tensor.Layout.ROW_MAJOR:
         t1 = torch.nn.functional.pad(y, (0, 32 - y.shape[3]))
+    else:
+        t1 = y
     t1 = ttl.tensor.Tensor(t1, dtype)
     t1 = t1.to(layout)
     if on_device:
@@ -1050,6 +1058,7 @@ def bcast_mul_h(x, y, *args, device, dtype, layout, on_device, **kwargs):
     t0 = t0.to(layout)
     if on_device:
         t0 = t0.to(device)
+    t1 = y
     if layout == ttl.tensor.Layout.TILE:
         t1 = torch.nn.functional.pad(y, (0, 0, 0, 32 - y.shape[2]))
     t1 = ttl.tensor.Tensor(t1, dtype)
@@ -1099,6 +1108,9 @@ def bcast_mul_hw(x, y, *args, device, dtype, layout, on_device, **kwargs):
         t1 = torch.nn.functional.pad(y, (0, 32 - y.shape[3], 0, 32 - y.shape[2]))
     elif on_device and layout == ttl.tensor.Layout.ROW_MAJOR:
         t1 = torch.nn.functional.pad(y, (0, 32 - y.shape[3]))
+    else:
+        t1 = y
+
     t1 = ttl.tensor.Tensor(t1, dtype)
     t1 = t1.to(layout)
     if on_device:
