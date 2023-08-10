@@ -343,7 +343,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
 
     if (use_fast_reader) {
         reader_kernel = "tt_metal/kernels/dataflow/reader_conv_activations_fast.cpp";
-        reader_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0), (uint32_t) stride_h, (uint32_t) stride_w};
+        reader_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0), (uint32_t) stride_h, (uint32_t) stride_w, (uint32_t) conv_act_size_w};
     } else {
         reader_kernel = "tt_metal/kernels/dataflow/reader_conv_activations.cpp";
         reader_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0)};

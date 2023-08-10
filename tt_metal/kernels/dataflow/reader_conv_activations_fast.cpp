@@ -25,7 +25,7 @@ void kernel_main() {
     uint32_t act_dram_noc_x = get_arg_val<uint32_t>(i); i+=1;
     uint32_t act_dram_noc_y = get_arg_val<uint32_t>(i); i+=1;
 
-    uint32_t conv_act_size_w = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t conv_act_size_w_ = get_arg_val<uint32_t>(i); i+=1;
     uint32_t conv_act_size_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t conv_act_size_c = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_size_h = get_arg_val<uint32_t>(i); i+=1;
@@ -58,6 +58,7 @@ void kernel_main() {
     constexpr bool act_in_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t stride_h = get_compile_time_arg_val(1);
     constexpr uint32_t stride_w = get_compile_time_arg_val(2);
+    constexpr uint32_t conv_act_size_w = get_compile_time_arg_val(3);
     //constexpr uint32_t act_block_width_padding_bytes = get_compile_time_arg_val(1);
 
     constexpr uint32_t cb_id_act = 0;
@@ -104,7 +105,7 @@ void kernel_main() {
                             uint32_t in_h = in_h_offset + in_h_offset_within_kernel_window;
                             uint32_t in_w = in_w_offset + in_w_offset_within_kernel_window;
 
-                            if(in_h < pad_h || in_w < pad_w || in_h >= (conv_act_size_h + pad_h) || in_w >= (conv_act_size_w + pad_w)) {
+                            if(in_h < pad_h || in_w < pad_w || in_h >= (conv_act_size_h + pad_h) || in_w >= (conv_act_size_w_ + pad_w)) {
                                 // pad 0s in l1
                                 uint32_t dst_addr = l1_write_addr_act + l1_addr_offset;
                                 uint32_t pad_size_bytes = read_size_bytes;
