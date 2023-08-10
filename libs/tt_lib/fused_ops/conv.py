@@ -84,17 +84,16 @@ def resnet_conv(weight: List[Union[int, float]], conv_params, device, bias=None)
         # use regular matmul op
         use_regular_matmul_op = True
     use_fast_reader = True
-    if (C >= 512):
-        use_fast_reader = False
     # Hardcode block shapes for conv op
     act_block_h = 4
     act_block_w = (int)((_nearest_32(_nearest_y(C,16)*S))/32)
-    if not use_fast_reader:
-        act_block_w = 4
     weight_block_h = act_block_w
     weight_block_w = 4
     out_subblock_h = 4
     out_subblock_w = 2
+    if (C >= 512):
+        act_block_h = 2
+        out_subblock_h = 2
 
     assert dilation == 1 and groups == 1
 
