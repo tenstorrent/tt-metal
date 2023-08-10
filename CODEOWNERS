@@ -81,6 +81,7 @@ tests/scripts/run_performance.sh @ashayestehmanesh @farbabi
 # **/tt_dnn/op_library/conv/**/module.mk @tt-rkim @tt-nshanker @arakhmati
 # **/tt_dnn/op_library/bmm/ @mywoodstock @TT-BrianLiu @tt-aho
 # **/tt_dnn/op_library/bmm/**/module.mk @tt-rkim @mywoodstock @TT-BrianLiu @tt-aho
+libs/tt_dnn/op_library/composite/ @muthutt
 
 # eager - python api
 # **/tt_lib/
@@ -108,3 +109,5 @@ tests/**/*test*conv*.py @tt-nshanker @ashayestehmanesh
 # tests/**/module.mk @tenstorrent-metal/developers
 tests/python_api_testing/conv/ @tt-nshanker
 tests/python_api_testing/unit_testing/fallback_ops @tt-aho @arakhmati
+tests/python_api_testing/sweep_tests/pytests/tt_dnn/test_composite.py @muthutt
+
