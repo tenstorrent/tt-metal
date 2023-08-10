@@ -38,5 +38,9 @@ void MAIN {
         cb_push_back(tt::CB::c_out0, onetile);
     } } }
 
+    // #ifdef BCAST_SCALAR
+    // cb_pop_front(tt::CB::c_in1, onetile);
+    // #endif
+
 }
 } // NAMESPACE

@@ -27,6 +27,7 @@
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
 #include "tt_dnn/op_library/move/move_op.hpp"
+#include "tt_dnn/op_library/rotate_half/rotate_half_op.hpp"
 #include "tt_dnn/op_library/program_cache.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -2458,6 +2459,10 @@ void TensorModule(py::module &m_tensor) {
     m_tensor.def("rmsnorm", &rmsnorm,
         py::arg("input").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         "Performs a rmsnorm operation on the last tensor dimension with optional fused with post-multiplication and addition via W-bcast.
+    )doc");
+    m_tensor.def("rotate_half", &rotate_half,
+        py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        "Performs a rotate half operation used by RotaryEmbedding.
     )doc");
 
     // FC
