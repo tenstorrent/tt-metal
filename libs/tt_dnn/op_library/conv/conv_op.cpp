@@ -339,10 +339,14 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
 
     string reader_kernel;
     vector<uint32_t> reader_rt_args;
+    std::vector<uint32_t> reader_compile_time_args;
+
     if (use_fast_reader) {
         reader_kernel = "tt_metal/kernels/dataflow/reader_conv_activations_fast.cpp";
+        reader_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0), (uint32_t) stride_h, (uint32_t) stride_w};
     } else {
         reader_kernel = "tt_metal/kernels/dataflow/reader_conv_activations.cpp";
+        reader_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0)};
     }
     reader_rt_args = {
         // arguments for act
@@ -426,7 +430,6 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         };
     }
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0)};
 
     auto reader_id = tt_metal::CreateDataMovementKernel(
         program,

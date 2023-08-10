@@ -30,8 +30,8 @@ void kernel_main() {
     uint32_t conv_act_size_c = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_size_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_size_w = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t stride_h = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t stride_w = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t stride_h_ = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t stride_w_ = get_arg_val<uint32_t>(i); i+=1;
     uint32_t pad_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t pad_w = get_arg_val<uint32_t>(i); i+=1;
     uint32_t conv_output_size_h = get_arg_val<uint32_t>(i); i+=1;
@@ -56,6 +56,8 @@ void kernel_main() {
     uint32_t dst_l1_act_buffer_size_bytes = get_arg_val<uint32_t>(i); i+=1;
 
     constexpr bool act_in_dram = get_compile_time_arg_val(0) == 1;
+    constexpr uint32_t stride_h = get_compile_time_arg_val(1);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(2);
     //constexpr uint32_t act_block_width_padding_bytes = get_compile_time_arg_val(1);
 
     constexpr uint32_t cb_id_act = 0;
