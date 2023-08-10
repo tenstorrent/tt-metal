@@ -21,7 +21,7 @@ import tt_lib as ttl
 from models.stable_diffusion.tt.unet_2d_condition import (
     UNet2DConditionModel as tt_unet_condition,
 )
-from models.stable_diffusion.tt.experimental_ops import UseDeviceConv
+from models.stable_diffusion.tt.experimental_ops import UseDeviceConv, disable_conv
 
 NUM_INFERENCE_STEPS = 2  # Number of denoising steps
 BATCH_SIZE = 1
@@ -302,7 +302,7 @@ def run_perf_unbatched_stable_diffusion(expected_inference_time, expected_compil
         compile_time < expected_compile_time
     ), f"Unabtched Stable Diffusion {comments} compile time is too slow"
 
-
+@disable_conv
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
