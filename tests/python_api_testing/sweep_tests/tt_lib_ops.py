@@ -986,7 +986,7 @@ def bcast_sub_h(x, y, *args, device, dtype, layout, on_device, **kwargs):
     t0 = t0.to(layout)
     if on_device:
         t0 = t0.to(device)
-    t1 = y
+    #t1 = y
     if layout == ttl.tensor.Layout.TILE:
         t1 = torch.nn.functional.pad(y, (0, 0, 0, 32 - y.shape[2]))
     t1 = ttl.tensor.Tensor(t1, dtype)
