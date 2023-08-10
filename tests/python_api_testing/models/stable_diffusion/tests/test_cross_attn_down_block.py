@@ -19,11 +19,10 @@ from tests.python_api_testing.models.utility_functions_new import (
     comp_allclose_and_pcc,
 )
 from models.stable_diffusion.tt.unet_2d_blocks import TtCrossAttnDownBlock2D
-from models.stable_diffusion.tt.experimental_ops import disable_conv_and_concat
+from models.stable_diffusion.tt.experimental_ops import UseDeviceConv
 
 
 
-@disable_conv_and_concat
 @pytest.mark.parametrize("index", [1]) #FIXME: failing 0, 2 with L1 error.
 def test_run_cross_attn_down_block_real_input_inference(
     index, model_location_generator
@@ -108,8 +107,6 @@ def test_run_cross_attn_down_block_real_input_inference(
     logger.info(f"PASSED {passing[1]}")
 
 
-@pytest.mark.skip("RuntimeError: Cannot allocate 4096 KB sized buffer in banks!")
-@disable_conv_and_concat
 def test_run_cross_attn_down_block_inference():
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained(

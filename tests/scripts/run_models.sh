@@ -34,6 +34,7 @@ env pytest tests/python_api_testing/models/stable_diffusion/tests/test_downblock
 env pytest tests/python_api_testing/models/stable_diffusion/tests/test_unet_mid_block.py -k test_run_unet_mid_block_real_input_inference
 env pytest tests/python_api_testing/models/stable_diffusion/tests/test_upblock_2d.py -k test_run_upblock_real_input_inference
 env pytest tests/python_api_testing/models/stable_diffusion/tests -k test_unbatched_stable_diffusion
+env pytest tests/python_api_testing/models/stable_diffusion/tests/perf_batched_stable_diffusion.py -k test_perf
 
 env pytest tests/python_api_testing/models/deit/tests/test_deit_for_image_classification_with_teacher.py -k test_deit_for_image_classification_with_teacher_inference
 
