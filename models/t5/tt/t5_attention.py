@@ -466,12 +466,12 @@ class TtT5Attention(nn.Module):
             if key_value_states is None:
                 # self-attn
                 # (batch_size, n_heads, seq_length, dim_per_head)
-                hidden_states = shape(tt_lib.tensor.matmul(hidden_states, proj_weights, mem_config = self.mem_config))
+                hidden_states = shape(tt_lib.tensor.matmul(hidden_states, proj_weights, self.mem_config))
             elif past_key_value is None:
                 # cross-attn
                 # (batch_size, n_heads, seq_length, dim_per_head)
                 hidden_states = shape(
-                    tt_lib.tensor.matmul(key_value_states, proj_weights, mem_config = self.mem_config)
+                    tt_lib.tensor.matmul(key_value_states, proj_weights, self.mem_config)
                 )
 
             if past_key_value is not None:
@@ -487,7 +487,7 @@ class TtT5Attention(nn.Module):
                     # cross-attn
                     # (batch_size, n_heads, seq_length, dim_per_head)
                     hidden_states = shape(
-                        tt_lib.tensor.matmul(key_value_states, proj_weights, mem_config = self.mem_config)
+                        tt_lib.tensor.matmul(key_value_states, proj_weights, self.mem_config)
                     )
                 else:
                     # cross-attn
@@ -496,7 +496,7 @@ class TtT5Attention(nn.Module):
 
         # get query states
         query_states = shape(
-            tt_lib.tensor.matmul(hidden_states, self.q_weights, mem_config = self.mem_config)
+            tt_lib.tensor.matmul(hidden_states, self.q_weights, self.mem_config)
             # self.q(hidden_states)
         )  # (batch_size, n_heads, seq_length, dim_per_head)
 
@@ -518,7 +518,7 @@ class TtT5Attention(nn.Module):
         # scores = torch.matmul(query_states, key_states.transpose(3, 2))
         # equivalent of torch.einsum("bnqd,bnkd->bnqk", query_states, key_states), compatible with onnx op>9
         transposed_key_states = tt_lib.tensor.transpose(key_states)
-        scores = tt_lib.tensor.bmm(query_states, transposed_key_states, mem_config = self.mem_config)
+        scores = tt_lib.tensor.bmm(query_states, transposed_key_states, self.mem_config)
 
         if (
             position_bias is None
@@ -575,11 +575,11 @@ class TtT5Attention(nn.Module):
 
         # Mask heads if we want to
         if layer_head_mask is not None:
-            attn_weights = tt_lib.tensor.mul(attn_weights, layer_head_mask, output_mem_config = self.mem_config)
+            attn_weights = tt_lib.tensor.mul(attn_weights, layer_head_mask, self.mem_config)
 
-        attn_output = tt_lib.tensor.bmm(attn_weights, value_states, mem_config = self.mem_config)
+        attn_output = tt_lib.tensor.bmm(attn_weights, value_states, self.mem_config)
         attn_output = unshape(attn_output)  # (batch_size, seq_length, dim)
-        attn_output = tt_lib.tensor.matmul(attn_output, self.o_weights, mem_config = self.mem_config)
+        attn_output = tt_lib.tensor.matmul(attn_output, self.o_weights, self.mem_config)
 
         present_key_value_state = (
             (key_states, value_states) if (self.is_decoder and use_cache) else None

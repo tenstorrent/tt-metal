@@ -61,5 +61,5 @@ class TtT5DenseActDense(nn.Module):
         hidden_states = tt_lib.tensor.matmul(hidden_states, self.out_proj_wi)
         hidden_states = self.act(hidden_states, output_mem_config = self.mem_config)
         # hidden_states = self.dropout(hidden_states)
-        hidden_states = tt_lib.tensor.matmul(hidden_states, self.out_proj_w0, mem_config = self.mem_config)
+        hidden_states = tt_lib.tensor.matmul(hidden_states, self.out_proj_w0, self.mem_config)
         return hidden_states

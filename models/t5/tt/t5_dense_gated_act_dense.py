@@ -55,7 +55,7 @@ class TtT5DenseGatedActDense(torch.nn.Module):
         hidden_gelu = self.act(
             tt_lib.tensor.matmul(hidden_states, self.wi_0_weights), self.device, output_mem_config = self.mem_config
         )
-        hidden_linear = tt_lib.tensor.matmul(hidden_states, self.wi_1_weights, mem_config = self.mem_config)
+        hidden_linear = tt_lib.tensor.matmul(hidden_states, self.wi_1_weights, output_mem_config = self.mem_config)
         hidden_states = tt_lib.tensor.mul(hidden_gelu, hidden_linear, output_mem_config = self.mem_config)
         # hidden_states = self.dropout(hidden_states)
 
@@ -69,5 +69,5 @@ class TtT5DenseGatedActDense(torch.nn.Module):
         # ):
         #    hidden_states = hidden_states.to(self.wo.weight.dtype)
 
-        hidden_states = tt_lib.tensor.matmul(hidden_states, self.wo_weights, mem_config = self.mem_config)
+        hidden_states = tt_lib.tensor.matmul(hidden_states, self.wo_weights, output_mem_config =  self.mem_config)
         return hidden_states
