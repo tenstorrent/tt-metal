@@ -32,7 +32,7 @@ class TtGEGLU(nn.Module):
 
         weights = state_dict[f"{base_address}.proj.weight"]
         bias = state_dict[f"{base_address}.proj.bias"]
-        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
+        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
 
         self.proj = make_linear(
             in_features=dim_in,
@@ -40,17 +40,18 @@ class TtGEGLU(nn.Module):
             weights=weights,
             bias=bias,
             device=device,
+            out_mem_config=self.out_mem_config_l1
         )
 
     def gelu(self, gate: ttl.tensor.Tensor) -> ttl.tensor.Tensor:
-        return ttl.tensor.gelu(gate)
+        return ttl.tensor.gelu(gate, output_mem_config=self.out_mem_config_l1)
 
     def forward(self, hidden_states: ttl.tensor.Tensor) -> ttl.tensor.Tensor:
         hidden_states = self.proj(hidden_states)
         # hidden_states, gate = fallback_ops.chunk(hidden_states, 2, -1)
-        hidden_states, gate = ttl.tensor.split_last_dim_two_chunks_tiled(hidden_states)
+        hidden_states, gate = ttl.tensor.split_last_dim_two_chunks_tiled(hidden_states, self.out_mem_config_l1)
         act = self.gelu(gate)
-        return ttl.tensor.mul(hidden_states, act)
+        return ttl.tensor.mul(hidden_states, act, output_mem_config=self.out_mem_config_l1)
 
 
 class TtFeedForward(nn.Module):
@@ -87,7 +88,7 @@ class TtFeedForward(nn.Module):
         ), "except GEGLU, other activation functions are not supported."
         inner_dim = int(dim * mult)
         dim_out = dim_out if dim_out is not None else dim
-        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
+        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
 
         if activation_fn == "geglu":
             act_fn = TtGEGLU(
@@ -111,6 +112,7 @@ class TtFeedForward(nn.Module):
             weights=weights,
             bias=bias,
             device=device,
+            out_mem_config=self.out_mem_config_l1,
         )
 
     def forward(self, hidden_states: ttl.tensor.Tensor) -> ttl.tensor.Tensor:

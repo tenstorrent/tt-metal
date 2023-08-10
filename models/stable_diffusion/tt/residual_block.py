@@ -48,7 +48,7 @@ class TtResnetBlock2D(nn.Module):
         self.output_scale_factor = output_scale_factor
         self.device = device
         self.host = host
-        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
+        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
 
         if groups_out is None:
             groups_out = groups
@@ -94,6 +94,7 @@ class TtResnetBlock2D(nn.Module):
                 weights=time_emb_proj_weights,
                 bias=time_emb_proj_bias,
                 device=self.device,
+                out_mem_config=self.out_mem_config_l1,
             )
 
         else:
@@ -163,7 +164,7 @@ class TtResnetBlock2D(nn.Module):
             )
 
     def forward(self, input_tensor: ttl.tensor.Tensor, temb: ttl.tensor.Tensor) -> ttl.tensor.Tensor:
-        out_mem_config_l1 = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
+        out_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
         hidden_states = input_tensor
         hidden_states = self.norm1(hidden_states)
         hidden_states = self.nonlinearity(hidden_states, )
@@ -187,6 +188,7 @@ class TtResnetBlock2D(nn.Module):
                 temb,
                 ttl.tensor.BcastOpMath.ADD,
                 ttl.tensor.BcastOpDim.HW,
+                out_mem_config
             )
 
         hidden_states = self.norm2(hidden_states)
@@ -203,7 +205,7 @@ class TtResnetBlock2D(nn.Module):
         # create a tensor of size output_scale_factor
         output_sc_recip = 1 / self.output_scale_factor
         output_sc_recip = fallback_ops.full(input_tensor.shape(), output_sc_recip)
-        output_tensor = ttl.tensor.add(input_tensor, hidden_states)
-        output_tensor = ttl.tensor.mul(output_tensor, output_sc_recip)
+        output_tensor = ttl.tensor.add(input_tensor, hidden_states, output_mem_config=out_mem_config)
+        output_tensor = ttl.tensor.mul(output_tensor, output_sc_recip, output_mem_config=out_mem_config)
 
         return output_tensor
