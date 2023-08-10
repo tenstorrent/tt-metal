@@ -1191,6 +1191,7 @@ void TensorModule(py::module &m_tensor) {
     detail::bind_binary_op<false, true>(m_tensor, "max", &tt::tt_metal::max, R"doc(Perform an eltwise-binary max on two tensors.)doc");
     detail::bind_binary_op<false, true>(m_tensor, "min", &tt::tt_metal::min, R"doc(Perform an eltwise-binary min on two tensors.)doc");
     detail::bind_binary_op<false, true>(m_tensor, "hypot", &hypot, R"doc(Returns tensor with the hypot activation on elements of the input tensors ``{0}`` and ``{1}``.)doc");
+    detail::bind_binary_op<false, true>(m_tensor, "xlogy", &xlogy, R"doc(Performs eltwise-binary xlogy (``{0} * log( {1} )``) on two tensors.)doc");
 
     detail::bind_binary_op(m_tensor, "add_without_autoformat", add_without_autoformat,
         R"doc(Perform an eltwise-binary add (``{0} + {1}``) on two tensors.

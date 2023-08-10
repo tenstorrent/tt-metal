@@ -393,6 +393,10 @@ def lerp_binary(x, y, *args, weight, **kwargs):
     return torch.lerp(x, y, weight)
 
 
+def xlogy(x, y, *args, **kwargs):
+    return torch.xlogy(x, y)
+
+
 def lte(x, y, *args, **kwargs):
     return x <= y
 

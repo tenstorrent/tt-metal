@@ -400,6 +400,27 @@ Tensor addcdiv(const Tensor& input_a, const Tensor& input_b, const Tensor& input
     return operation::decorate_as_composite(__func__, _addcdiv)(input_a, input_b, input_c, value, output_mem_config);
 }
 
+//xlogy(x,y))=x*log(y)
+Tensor _xlogy(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
+    Tensor t_value = mk_tiled_scalar(std::nanf(""));
+    Tensor t_nan   = bcast(ltz(input_b, output_mem_config), t_value, BcastOpMath::MUL, BcastOpDim::HW, output_mem_config);
+    t_value.deallocate();
+    Tensor t_temp  = add(eqz(input_b, output_mem_config), t_nan, std::nullopt, output_mem_config);
+    Tensor t_gtz   = mul(gtz(input_b, output_mem_config), input_b, std::nullopt, output_mem_config);
+    t_temp = add(t_gtz, t_temp, std::nullopt, output_mem_config);
+    t_gtz.deallocate();
+    Tensor t_log  = log(t_temp, output_mem_config);
+    t_temp.deallocate();
+    Tensor result = mac(input_a, t_log, t_nan, output_mem_config);
+    t_log.deallocate();
+    t_nan.deallocate();
+    return result;
+}
+Tensor xlogy(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _xlogy)(input_a, input_b, output_mem_config);
+}
+
 //these ops need more polish - TBD
 #if 0
 //Function std
