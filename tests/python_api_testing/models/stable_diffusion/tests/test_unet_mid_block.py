@@ -5,9 +5,10 @@ import tt_lib as ttl
 from models.utility_functions import torch_to_tt_tensor, tt_to_torch_tensor, torch_to_tt_tensor_rm
 from tests.python_api_testing.models.utility_functions_new import comp_pcc, comp_allclose_and_pcc
 from models.stable_diffusion.tt.unet_2d_blocks import TtUNetMidBlock2DCrossAttn
+from models.stable_diffusion.tt.experimental_ops import disable_conv
 from loguru import logger
-import pytest
 
+@disable_conv
 def test_run_unet_mid_block_real_input_inference(model_location_generator):
     # Initialize the device
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
@@ -77,7 +78,8 @@ def test_run_unet_mid_block_real_input_inference(model_location_generator):
     assert passing[0], passing[1:]
     logger.info(f"PASSED {passing[1]}")
 
-#lower PCC: 0.9890321746745357")
+
+@disable_conv
 def test_run_unet_mid_block_inference():
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
@@ -153,7 +155,7 @@ def test_run_unet_mid_block_inference():
 
     tt_output = tt_to_torch_tensor(tt_output)
 
-    passing = comp_pcc(torch_output, tt_output, pcc=0.98)
+    passing = comp_pcc(torch_output, tt_output)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))
     ttl.device.CloseDevice(device)
     assert passing[0], passing[1:]

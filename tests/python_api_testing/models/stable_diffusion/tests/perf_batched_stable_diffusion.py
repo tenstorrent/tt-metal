@@ -15,7 +15,7 @@ from models.utility_functions import (
 from tests.python_api_testing.models.utility_functions_new import prep_report, Profiler
 import tt_lib as ttl
 from models.stable_diffusion.tt.unet_2d_condition import UNet2DConditionModel as tt_unet_condition
-from models.stable_diffusion.tt.experimental_ops import UseDeviceConv
+
 
 NUM_INFERENCE_STEPS = 2  # Number of denoising steps
 BATCH_SIZE = 1
@@ -90,8 +90,8 @@ def make_tt_unet(state_dict, device):
     "expected_inference_time, expected_compile_time",
     (
         (
-            135,#was 108s before
-            135,#was 85s before
+            108,
+            85,
         ),
     ),
 )
@@ -245,9 +245,6 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time)
         # perform guidance
         noise_pred = guide(noise_pred, guidance_scale, t)
         # compute the previous noisy sample x_t -> x_t-1
-        if UseDeviceConv.READY:
-            # force unpad noise_pred
-            noise_pred = noise_pred[:, :4, :, :]
         tt_latents = tt_scheduler.step(noise_pred, t, tt_latents).prev_sample
         profiler.end(profiler_key)
         profiler_key = second_key

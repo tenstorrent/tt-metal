@@ -13,6 +13,7 @@ from tests.python_api_testing.models.utility_functions_new import (
 )
 from models.stable_diffusion.tt.upsample_2d import TtUpsample2D
 
+
 def test_run_upsample2d_inference():
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)

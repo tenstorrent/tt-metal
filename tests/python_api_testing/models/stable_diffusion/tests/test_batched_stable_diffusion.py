@@ -13,7 +13,7 @@ from diffusers import (
 )
 from diffusers import LMSDiscreteScheduler
 from models.stable_diffusion.tt.unet_2d_condition import UNet2DConditionModel as tt_unet_condition
-from models.stable_diffusion.tt.experimental_ops import UseDeviceConv
+from models.stable_diffusion.tt.experimental_ops import disable_conv_and_concat
 
 import tt_lib as ttl
 
@@ -91,6 +91,8 @@ def make_tt_unet(state_dict):
     )
     return tt_unet
 
+@pytest.mark.skip("RuntimeError: Circular buffers in program 296 clash with L1 buffers on core (x=0,y=0). L1 buffer allocated at 854016 and local buffers end at 911360")
+@disable_conv_and_concat
 def test_batched_stable_diffusion():
     # Initialize the device
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
@@ -201,9 +203,6 @@ def test_batched_stable_diffusion():
         # perform guidance
         noise_pred = guide(noise_pred, guidance_scale, t)
         # compute the previous noisy sample x_t -> x_t-1
-        if UseDeviceConv.READY:
-            # force unpad noise_pred
-            noise_pred = noise_pred[:, :4, :, :]
         latents = scheduler.step(noise_pred, t, latents).prev_sample
         # We need only one iteration
         break

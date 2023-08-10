@@ -51,7 +51,7 @@ class TtCrossAttention(nn.Module):
         self.upcast_softmax = upcast_softmax
         self.device = device
         self.host = host
-        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
+        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
 
         self.scale = dim_head**-0.5
 
@@ -170,7 +170,7 @@ class TtCrossAttention(nn.Module):
 
 
 def CrossAttnProcessor(attn: TtCrossAttention, hidden_states: ttl.tensor.Tensor, encoder_hidden_states=None, attention_mask=None) -> ttl.tensor.Tensor:
-    out_mem_config_l1 = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
+    out_mem_config_l1 = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
 
     _, batch_size, sequence_length, _ = hidden_states.shape()
     attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length)
