@@ -82,7 +82,7 @@ void record_pack_input_end_timestamp() {
          uint32_t event_id = perf::get_event_id(0, 0, perf::EventType::PACK_EACH_INPUT, current_outer_loop_iter);
          record_timestamp_64b(event_id);
          if (perf_events_target_idx == 1) {
-            uint32_t event_id_num_tiles_pack = perf::get_event_id(0, 0, perf::EventType::NUM_TILES_PACK, 0);
+            uint32_t event_id_num_tiles_pack = perf::get_event_id(0, 0, perf::EventType::NUM_TILES_PACK, current_outer_loop_iter);
             uint16_t num_tiles = regfile[p_gpr_pack::PERF_PACK_NUM_TILES] & 0xffff;
             record_perf_value_and_check_overflow(event_id_num_tiles_pack, num_tiles, 0);
          }
@@ -133,7 +133,7 @@ void record_unpack_num_tiles() {
                num_tiles = regfile[regfile_base_idx] & 0xffff;
             }
             if (num_tiles != 0) {
-               uint32_t event_id_num_tiles_unpack = perf::get_event_id(operand, 0, perf::EventType::NUM_TILES_UNPACK, 0);
+               uint32_t event_id_num_tiles_unpack = perf::get_event_id(operand, 0, perf::EventType::NUM_TILES_UNPACK, current_outer_loop_iter);
                record_perf_value_and_check_overflow(event_id_num_tiles_unpack, num_tiles, 0);
             }
          }
