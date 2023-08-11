@@ -21,4 +21,4 @@ class TtConcat(nn.Module):
         self.d = dimension
 
     def forward(self, x):
-        return fallback_ops.concat(x, self.d)
+        return tt_lib.tensor.concat(x, self.d)

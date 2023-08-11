@@ -67,10 +67,7 @@ def run_conv_on_device_wrapper(
             run_conv_on_device_batch_one(to_device(xx[batch_idx, :, :, :]))
             for batch_idx in range(N)
         ]
-        conv_concat_cpu = fallback_ops.concat(
-            [x.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch() for x in partial_convs],
-            0,
-        )
+        conv_concat_cpu = fallback_ops.concat(partial_convs,0)
         # return ttl.tensor.concat(partial_convs,0) # hit problem with autoformat for non-32 size N
         # concat on CPU for batch-size > 1
         return conv_concat_cpu

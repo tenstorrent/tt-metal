@@ -223,9 +223,6 @@ Tensor concat(std::vector<Tensor> &in_t, uint32_t dim, const MemoryConfig& outpu
     TT_ASSERT(in_t.size() > 0, "need 1 or more tensors");
     Tensor result(in_t.at(0));
     for (int idx = 1; idx < in_t.size(); idx++) {
-        TT_ASSERT((in_t.at(0).layout() == in_t.at(idx).layout()) && "Layout of all input tensors should be identical.");
-    }
-    for (int idx = 1; idx < in_t.size(); idx++) {
         result = concat(result, in_t.at(idx), dim, output_mem_config);
     }
     return result;
