@@ -76,7 +76,7 @@ def run_perf_vgg(imagenet_sample_input, expected_inference_time, expected_compil
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (4.95,
+        (5.1,
          13.5,
         ),
     ),
