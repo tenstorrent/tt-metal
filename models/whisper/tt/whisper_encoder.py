@@ -1,3 +1,4 @@
+from functools import partial
 import math
 import tt_lib
 import torch
@@ -8,14 +9,16 @@ from typing import Optional, Tuple, Union
 from transformers import WhisperConfig
 from dataclasses import dataclass
 
-from tests.python_api_testing.models.whisper.whisper_common import (
+from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
-from tests.python_api_testing.models.whisper.whisper_encoder_layer import (
+from models.whisper.tt.whisper_encoder_layer import (
     TtWhisperEncoderLayer,
 )
-from tt_lib.fallback_ops import fallback_ops
+
+# from tt_lib.fallback_ops import fallback_ops
+import tt_lib.fallback_ops as fallback_ops
 
 
 @dataclass
@@ -81,13 +84,17 @@ class TtWhisperEncoder(nn.Module):
         )
 
         gamma = torch2tt_tensor(
-            self.state_dict[f"{base_address}.layer_norm.weight"], self.device
+            self.state_dict[f"{base_address}.layer_norm.weight"],
+            self.device,
+            tt_lib.tensor.Layout.ROW_MAJOR,
         )
         beta = torch2tt_tensor(
-            self.state_dict[f"{base_address}.layer_norm.bias"], self.device
+            self.state_dict[f"{base_address}.layer_norm.bias"],
+            self.device,
+            tt_lib.tensor.Layout.ROW_MAJOR,
         )
-        self.layer_norm = fallback_ops.LayerNorm(
-            gamma, beta, eps=1e-05, normalized_shape=config.d_model
+        self.layer_norm = partial(
+            tt_lib.tensor.layernorm, gamma=gamma, beta=beta, eps=1e-05
         )
 
         self.gradient_checkpointing = False
@@ -111,7 +118,7 @@ class TtWhisperEncoder(nn.Module):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-    ):
+    ) -> Union[Tuple[tt_lib.tensor.Tensor], TtWhisperEncoderOutput]:
         """
         Args:
             input_features (`torch.LongTensor` of shape `(batch_size, feature_size, sequence_length)`):
@@ -151,7 +158,7 @@ class TtWhisperEncoder(nn.Module):
             return_dict if return_dict is not None else self.config.use_return_dict
         )
 
-        input_features = tt2torch_tensor(input_features)
+        input_features = tt2torch_tensor(input_features).to(torch.float)
         input_features = torch.squeeze(input_features, 0)
         """PyTorch implementation start"""
         inputs_embeds = nn.functional.gelu(self.conv1(input_features))
@@ -164,7 +171,9 @@ class TtWhisperEncoder(nn.Module):
         """PyTorch implementation end"""
 
         """TT implementation"""
-        hidden_states = torch2tt_tensor(hidden_states, self.device)
+        hidden_states = torch2tt_tensor(
+            hidden_states, self.device, tt_lib.tensor.Layout.ROW_MAJOR
+        )
 
         # TODO: Not suppporting dropout at moment
         # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
@@ -211,7 +220,11 @@ class TtWhisperEncoder(nn.Module):
                         hidden_states,
                         None,
                         layer_head_mask=(
-                            torch2tt_tensor(head_mask[idx], self.device)
+                            torch2tt_tensor(
+                                head_mask[idx],
+                                self.device,
+                                tt_lib.tensor.Layout.ROW_MAJOR,
+                            )
                             if head_mask is not None
                             else None
                         ),

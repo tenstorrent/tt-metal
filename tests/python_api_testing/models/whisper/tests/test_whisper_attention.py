@@ -1,25 +1,19 @@
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
 import tt_lib
 import torch
 import torch.nn as nn
 from loguru import logger
 
 from transformers import WhisperModel, WhisperForAudioClassification
-from python_api_testing.models.whisper.whisper_common import (
+from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
 
-from python_api_testing.models.whisper.whisper_attention import TtWhisperAttention
-from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from models.whisper.tt.whisper_attention import TtWhisperAttention
+from tests.python_api_testing.models.utility_functions_new import (
+    comp_allclose,
+    comp_pcc,
+)
 
 
 class PytorchWhisperAttention(nn.Module):
@@ -61,7 +55,7 @@ def run_whisper_attention(
 
     state_dict = model.state_dict()
     configuration = model.config
-    logger.info(configuration.output_attentions)
+    logger.info(f"output attentions: {configuration.output_attentions}")
 
     IND = layer
     DECODER = decoder
@@ -96,22 +90,32 @@ def run_whisper_attention(
         # Encoder inputs
         logger.info("Making inputs ready for encoder")
         hidden_state_input_tensor = torch.rand(1, BATCH, embd_dim)
-        ttm_tensor_hidden_state = torch2tt_tensor(hidden_state_input_tensor, device)
+        ttm_tensor_hidden_state = torch2tt_tensor(
+            hidden_state_input_tensor, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
+        )
     else:
         # Decoder inputs
         hidden_state_input_tensor = torch.rand(1, 32, embd_dim)
-        ttm_tensor_hidden_state = torch2tt_tensor(hidden_state_input_tensor, device)
+        ttm_tensor_hidden_state = torch2tt_tensor(
+            hidden_state_input_tensor, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
+        )
 
         if not is_self_attn:
             key_value_states = torch.rand(1, BATCH, embd_dim)
-            ttm_tensor_key_value_states = torch2tt_tensor(key_value_states, device)
+            ttm_tensor_key_value_states = torch2tt_tensor(
+                key_value_states, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
+            )
 
     if decoder and is_self_attn:
         # Decoder self attention
         attention_mask_input_tensor = (
             torch.rand(size=(1, 1, 32, 32)) < 0.25
         ).int().float() * -3.4028e38
-        ttm_tensor_attention_mask = torch2tt_tensor(attention_mask_input_tensor, device)
+        ttm_tensor_attention_mask = torch2tt_tensor(
+            attention_mask_input_tensor,
+            device,
+            tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
+        )
     else:
         # Decoder encoder attention
         attention_mask_input_tensor = None
@@ -126,7 +130,7 @@ def run_whisper_attention(
             output_attentions=configuration.output_attentions,
         )
 
-    logger.info(f"Running tt whisper attention")
+    logger.info(f"Making tt whisper attention object")
 
     tt_whisper_attention_model = TtWhisperAttention(
         config=model.config,
@@ -137,6 +141,8 @@ def run_whisper_attention(
         num_heads=num_heads,
         is_decoder=DECODER,
     )
+
+    logger.info(f"Running tt whisper attention")
 
     with torch.no_grad():
         (
@@ -149,6 +155,8 @@ def run_whisper_attention(
             attention_mask=ttm_tensor_attention_mask,
             output_attentions=configuration.output_attentions,
         )
+
+    logger.info(f"Finish running tt whisper attention")
 
     tt_attn_output_to_torch = tt2torch_tensor(tt_attn_output)
     tt_attn_output_to_torch = tt_attn_output_to_torch.squeeze(0)
@@ -264,10 +272,3 @@ def test_WhisperEncoderForAudioClassificationAttention_inference():
         decoder=False, layer=0, device=device, for_audio_classification=True
     )
     tt_lib.device.CloseDevice(device)
-
-
-if __name__ == "__main__":
-    test_WhisperEncoderAttention_inference()
-    test_WhisperDecoderSelfAttention_inference()
-    test_WhisperDecoderEncoderAttention_inference()
-    test_WhisperEncoderForAudioClassificationAttention_inference()

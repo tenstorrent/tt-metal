@@ -14,14 +14,11 @@ from transformers import (
 )
 from datasets import load_dataset
 
-from python_api_testing.models.whisper.whisper_common import (
-    torch2tt_tensor,
-    tt2torch_tensor,
-    linear,
-)
-from python_api_testing.models.whisper.whisper_model import TtWhisperModel
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
-from tt_lib.fallback_ops import fallback_ops
+from models.whisper.tt.whisper_common import linear
+
+from models.whisper.tt.whisper_model import TtWhisperModel
 
 
 def shift_tokens_right(
@@ -71,7 +68,7 @@ class TtWhisperForConditionalGeneration(nn.Module):
         )
 
         self.proj_out_weight = torch2tt_tensor(
-            state_dict[f"proj_out.weight"], self.device
+            state_dict[f"proj_out.weight"], self.device, tt_lib.tensor.Layout.ROW_MAJOR
         )
 
     def get_encoder(self):

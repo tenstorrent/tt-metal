@@ -1,23 +1,17 @@
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
 import tt_lib
 import torch
 from loguru import logger
 from transformers import WhisperModel, WhisperConfig
 
-from python_api_testing.models.whisper.whisper_common import (
+from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
-from python_api_testing.models.whisper.whisper_decoder import TtWhisperDecoder
-from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from models.whisper.tt.whisper_decoder import TtWhisperDecoder
+from tests.python_api_testing.models.utility_functions_new import (
+    comp_allclose,
+    comp_pcc,
+)
 
 
 def run_whisper_decoder(device):
@@ -69,7 +63,9 @@ def run_whisper_decoder(device):
     )
     tt_whisper_decoder.eval()
 
-    ttm_encoder_hidden_states = torch2tt_tensor(encoder_hidden_states, device)
+    ttm_encoder_hidden_states = torch2tt_tensor(
+        encoder_hidden_states, device, tt_lib.tensor.Layout.ROW_MAJOR
+    )
     with torch.no_grad():
         ttm_output = tt_whisper_decoder(
             input_ids=decoder_input_ids,
@@ -101,7 +97,3 @@ def test_WhipserDecoder_inference():
     tt_lib.device.InitializeDevice(device)
     run_whisper_decoder(device=device)
     tt_lib.device.CloseDevice(device)
-
-
-if __name__ == "__main__":
-    test_WhipserDecoder_inference()

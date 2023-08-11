@@ -1,12 +1,3 @@
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
 import tt_lib
 import torch
 from loguru import logger
@@ -18,15 +9,18 @@ from transformers import (
 )
 from datasets import load_dataset
 
-from python_api_testing.models.whisper.whisper_common import (
+from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
-from python_api_testing.models.whisper.whisper_encoder import (
+from models.whisper.tt.whisper_encoder import (
     TtWhisperEncoder,
     TtWhisperEncoderOutput,
 )
-from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tests.python_api_testing.models.utility_functions_new import (
+    comp_allclose,
+    comp_pcc,
+)
 
 
 def run_whisper_encoder(device, for_audio_classification=False, encoder_layers=1):
@@ -92,7 +86,9 @@ def run_whisper_encoder(device, for_audio_classification=False, encoder_layers=1
         )
         tt_whisper_encoder.eval()
 
-        input_features = torch2tt_tensor(input_features, device)
+        input_features = torch2tt_tensor(
+            input_features, device, tt_lib.tensor.Layout.ROW_MAJOR
+        )
         ttm_output = tt_whisper_encoder(
             input_features=input_features,
             head_mask=head_mask,
@@ -159,11 +155,3 @@ def test_WhipserEncoderForAudioClassification_three_layers_inference():
     tt_lib.device.InitializeDevice(device)
     run_whisper_encoder(device=device, for_audio_classification=True, encoder_layers=3)
     tt_lib.device.CloseDevice(device)
-
-
-if __name__ == "__main__":
-    test_WhipserEncoder_inference()
-    test_WhipserEncoderForAudioClassification_one_layer_inference()
-    test_WhipserEncoderForAudioClassification_two_layers_inference()
-    test_WhipserEncoderForAudioClassification_three_layers_inference()
-    test_WhipserEncoderForAudioClassification_inference()

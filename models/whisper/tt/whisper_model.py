@@ -1,25 +1,17 @@
-import tt_lib
 import torch
 import torch.nn as nn
 from dataclasses import dataclass
-
 from typing import Optional, Tuple, Union
 from loguru import logger
 
 from transformers import WhisperConfig
 
-from tests.python_api_testing.models.whisper.whisper_common import (
-    torch2tt_tensor,
-    tt2torch_tensor,
-)
-
-from tests.python_api_testing.models.whisper.whisper_encoder import (
+import tt_lib
+from models.whisper.tt.whisper_encoder import (
     TtWhisperEncoder,
     TtWhisperEncoderOutput,
 )
-from tests.python_api_testing.models.whisper.whisper_decoder import TtWhisperDecoder
-
-from tt_lib.fallback_ops import fallback_ops
+from models.whisper.tt.whisper_decoder import TtWhisperDecoder
 
 
 @dataclass

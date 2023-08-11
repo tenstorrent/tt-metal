@@ -1,12 +1,3 @@
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
 import tt_lib
 import torch
 from datasets import load_dataset
@@ -14,12 +5,15 @@ from loguru import logger
 
 from transformers import WhisperModel, AutoFeatureExtractor
 
-from python_api_testing.models.whisper.whisper_common import (
+from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
-from python_api_testing.models.whisper.whisper_model import TtWhisperModel
-from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from models.whisper.tt.whisper_model import TtWhisperModel
+from tests.python_api_testing.models.utility_functions_new import (
+    comp_allclose,
+    comp_pcc,
+)
 
 
 def run_whisper_model(device):
@@ -84,7 +78,9 @@ def run_whisper_model(device):
     tt_whisper.eval()
 
     with torch.no_grad():
-        input_features = torch2tt_tensor(input_features, device)
+        input_features = torch2tt_tensor(
+            input_features, device, tt_lib.tensor.Layout.ROW_MAJOR
+        )
 
         ttm_output = tt_whisper(
             input_features=input_features, decoder_input_ids=decoder_input_ids
@@ -113,7 +109,3 @@ def test_WhipserModel_inference():
     tt_lib.device.InitializeDevice(device)
     run_whisper_model(device=device)
     tt_lib.device.CloseDevice(device)
-
-
-if __name__ == "__main__":
-    test_WhipserModel_inference()

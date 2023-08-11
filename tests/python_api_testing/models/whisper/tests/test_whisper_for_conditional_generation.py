@@ -1,12 +1,3 @@
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
 import tt_lib
 import torch
 from datasets import load_dataset
@@ -14,20 +5,19 @@ from datasets import load_dataset
 from loguru import logger
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-from python_api_testing.models.whisper.whisper_common import (
-    torch2tt_tensor,
-    tt2torch_tensor,
-    create_unpadded_tensor,
-)
-from python_api_testing.models.whisper.whisper_for_conditional_generation import (
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+
+from models.whisper.tt.whisper_common import create_unpadded_tensor
+from models.whisper.tt.whisper_for_conditional_generation import (
     TtWhisperForConditionalGeneration,
 )
-from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tests.python_api_testing.models.utility_functions_new import (
+    comp_allclose,
+    comp_pcc,
+)
 
 from transformers import AutoProcessor, WhisperForConditionalGeneration
 from transformers.generation.configuration_utils import GenerationConfig
-from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
-
 
 from transformers.generation.logits_process import (
     EncoderNoRepeatNGramLogitsProcessor,
@@ -422,7 +412,9 @@ def run_generate(sample, device):
         tt_model_kwargs["output_hidden_states"] = generation_config.output_hidden_states
         tt_model_kwargs["use_cache"] = generation_config.use_cache
 
-        tt_input_features = torch2tt_tensor(input_features, device)
+        tt_input_features = torch2tt_tensor(
+            input_features, device, tt_lib.tensor.Layout.ROW_MAJOR
+        )
         # Prepare model args for tt model
         tt_model_kwargs = _prepare_encoder_decoder_kwargs_for_generation(
             tt_model, tt_input_features, tt_model_kwargs, "input_features"
@@ -568,7 +560,3 @@ def test_WhipserForConditionalGeneration_inference():
     logger.info(correct_transcription)
 
     assert tt_transcription == correct_transcription
-
-
-if __name__ == "__main__":
-    test_WhipserForConditionalGeneration_inference()

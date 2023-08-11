@@ -1,12 +1,3 @@
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
 import tt_lib
 import torch
 from typing import Tuple
@@ -14,16 +5,19 @@ from loguru import logger
 
 from transformers import WhisperModel, WhisperForAudioClassification
 
-from python_api_testing.models.whisper.whisper_common import (
-    torch2tt_tensor,
-    tt2torch_tensor,
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+
+from models.whisper.tt.whisper_common import (
     create_padded_tensor,
     create_unpadded_tensor,
 )
-from python_api_testing.models.whisper.whisper_encoder_layer import (
+from models.whisper.tt.whisper_encoder_layer import (
     TtWhisperEncoderLayer,
 )
-from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tests.python_api_testing.models.utility_functions_new import (
+    comp_allclose,
+    comp_pcc,
+)
 
 
 def run_whisper_encoder_layer(layer, device, for_audio_classification=False):
@@ -49,7 +43,9 @@ def run_whisper_encoder_layer(layer, device, for_audio_classification=False):
 
     hidden_state_input_tensor = torch.rand(1, 1500, embed_dim)
     attention_mask_input_tensor = None
-    ttm_tensor_hidden_state = torch2tt_tensor(hidden_state_input_tensor, device)
+    ttm_tensor_hidden_state = torch2tt_tensor(
+        hidden_state_input_tensor, device, tt_lib.tensor.Layout.ROW_MAJOR
+    )
     ttm_tensor_attention_mask = None
     layer_head_mask_input_tensor = None
 
@@ -121,8 +117,3 @@ def test_WhisperEncoderLayerForAudioClassification_inference():
     tt_lib.device.InitializeDevice(device)
     run_whisper_encoder_layer(layer=0, device=device, for_audio_classification=True)
     tt_lib.device.CloseDevice(device)
-
-
-if __name__ == "__main__":
-    test_WhipserEncoderLayer_inference()
-    test_WhisperEncoderLayerForAudioClassification_inference()

@@ -6,11 +6,14 @@ import pytest
 
 import tt_lib
 
-from models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache
+from models.utility_functions import (
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+)
 from tests.python_api_testing.models.utility_functions_new import prep_report, Profiler
-from tests.python_api_testing.models.whisper.whisper_model import TtWhisperModel
+from models.whisper.tt.whisper_model import TtWhisperModel
 
-from tests.python_api_testing.models.whisper.whisper_common import (
+from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
@@ -30,7 +33,6 @@ def run_perf_whisper(expected_inference_time, expected_compile_time):
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
-
 
     pytorch_model = WhisperModel.from_pretrained("openai/whisper-tiny.en")
     configuration = pytorch_model.config
@@ -72,8 +74,12 @@ def run_perf_whisper(expected_inference_time, expected_compile_time):
     tt_whisper.eval()
 
     with torch.no_grad():
-        input_features = torch2tt_tensor(input_features, device)
-        input_features = input_features.to(device, tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1))
+        input_features = torch2tt_tensor(
+            input_features, device, tt_lib.tensor.Layout.ROW_MAJOR
+        )
+        input_features = input_features.to(
+            device, tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
+        )
         profiler.start(first_key)
         ttm_output = tt_whisper(
             input_features=input_features, decoder_input_ids=decoder_input_ids
@@ -96,7 +102,6 @@ def run_perf_whisper(expected_inference_time, expected_compile_time):
     compile_time = first_iter_time - second_iter_time
     tt_lib.device.CloseDevice(device)
 
-
     prep_report(
         "whisper", BATCH_SIZE, first_iter_time, second_iter_time, comments, cpu_time
     )
@@ -104,19 +109,24 @@ def run_perf_whisper(expected_inference_time, expected_compile_time):
     logger.info(f"whisper compile time: {compile_time}")
 
     assert second_iter_time < expected_inference_time, f"whisper {comments} is too slow"
-    assert compile_time < expected_compile_time, f"whisper {comments} compile time is too slow"
+    assert (
+        compile_time < expected_compile_time
+    ), f"whisper {comments} compile time is too slow"
 
 
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (5.6,
-         26.5,
+        (
+            5.6,
+            26.5,
         ),
     ),
 )
-def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_compile_time):
+def test_perf_bare_metal(
+    use_program_cache, expected_inference_time, expected_compile_time
+):
     run_perf_whisper(expected_inference_time, expected_compile_time)
 
 
@@ -124,10 +134,13 @@ def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_co
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (36,
-         31,
+        (
+            36,
+            31,
         ),
     ),
 )
-def test_perf_virtual_machine(use_program_cache, expected_inference_time, expected_compile_time):
+def test_perf_virtual_machine(
+    use_program_cache, expected_inference_time, expected_compile_time
+):
     run_perf_whisper(expected_inference_time, expected_compile_time)

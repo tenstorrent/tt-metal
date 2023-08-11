@@ -1,12 +1,3 @@
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
 import tt_lib
 import torch
 from loguru import logger
@@ -14,14 +5,17 @@ from loguru import logger
 from transformers import WhisperForAudioClassification, AutoFeatureExtractor
 from datasets import load_dataset
 
-from python_api_testing.models.whisper.whisper_common import (
+from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
-from python_api_testing.models.whisper.whisper_for_audio_classification import (
+from models.whisper.tt.whisper_for_audio_classification import (
     TtWhisperForAudioClassification,
 )
-from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tests.python_api_testing.models.utility_functions_new import (
+    comp_allclose,
+    comp_pcc,
+)
 
 
 def run_whisper_for_audio_classification(device):
@@ -67,7 +61,9 @@ def run_whisper_for_audio_classification(device):
     tt_whisper_model.eval()
 
     with torch.no_grad():
-        input_features = torch2tt_tensor(input_features, device)
+        input_features = torch2tt_tensor(
+            input_features, device, tt_lib.tensor.Layout.ROW_MAJOR
+        )
         ttm_logits = tt_whisper_model(
             input_features=input_features,
         ).logits
@@ -100,7 +96,3 @@ def test_WhipserForAudioClassification_inference():
     tt_lib.device.InitializeDevice(device)
     run_whisper_for_audio_classification(device=device)
     tt_lib.device.CloseDevice(device)
-
-
-if __name__ == "__main__":
-    test_WhipserForAudioClassification_inference()

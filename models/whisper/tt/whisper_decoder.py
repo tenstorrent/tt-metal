@@ -1,4 +1,5 @@
 import math
+from functools import partial
 import tt_lib
 import torch
 import torch.nn as nn
@@ -10,15 +11,9 @@ from typing import Optional, Tuple, Union
 
 from transformers import WhisperConfig
 
-from tests.python_api_testing.models.whisper.whisper_common import (
-    torch2tt_tensor,
-    tt2torch_tensor,
-    linear,
-)
-from tests.python_api_testing.models.whisper.whisper_decoder_layer import (
-    TtWhisperDecoderLayer,
-)
-from tt_lib.fallback_ops import fallback_ops
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+from models.whisper.tt.whisper_common import linear
+from models.whisper.tt.whisper_decoder_layer import TtWhisperDecoderLayer
 
 
 class WhisperPositionalEmbedding(nn.Embedding):
@@ -115,13 +110,17 @@ class TtWhisperDecoder(nn.Module):
         )
 
         gamma = torch2tt_tensor(
-            self.state_dict[f"{base_address}.layer_norm.weight"], self.device
+            self.state_dict[f"{base_address}.layer_norm.weight"],
+            self.device,
+            tt_lib.tensor.Layout.ROW_MAJOR,
         )
         beta = torch2tt_tensor(
-            self.state_dict[f"{base_address}.layer_norm.bias"], self.device
+            self.state_dict[f"{base_address}.layer_norm.bias"],
+            self.device,
+            tt_lib.tensor.Layout.ROW_MAJOR,
         )
-        self.layer_norm = fallback_ops.LayerNorm(
-            gamma, beta, eps=1e-05, normalized_shape=config.d_model
+        self.layer_norm = partial(
+            tt_lib.tensor.layernorm, gamma=gamma, beta=beta, eps=1e-05
         )
 
         self.gradient_checkpointing = False
@@ -376,8 +375,12 @@ class TtWhisperDecoder(nn.Module):
 
         """TT implementation"""
 
-        hidden_states = torch2tt_tensor(hidden_states, self.device)
-        attention_mask = torch2tt_tensor(attention_mask, self.device)
+        hidden_states = torch2tt_tensor(
+            hidden_states, self.device, tt_lib.tensor.Layout.ROW_MAJOR
+        )
+        attention_mask = torch2tt_tensor(
+            attention_mask, self.device, tt_lib.tensor.Layout.ROW_MAJOR
+        )
 
         # TODO: Dropout not supported for not
         # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)

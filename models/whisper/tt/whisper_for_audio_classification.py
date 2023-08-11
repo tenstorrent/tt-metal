@@ -4,13 +4,14 @@ import torch.nn as nn
 from dataclasses import dataclass
 from typing import Optional, Tuple, Union
 
-from python_api_testing.models.whisper.whisper_common import (
-    torch2tt_tensor,
-    tt2torch_tensor,
-    linear,
-)
-from python_api_testing.models.whisper.whisper_encoder import TtWhisperEncoder
-from tt_lib.fallback_ops import fallback_ops
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+
+from models.whisper.tt.whisper_common import linear
+
+from models.whisper.tt.whisper_encoder import TtWhisperEncoder
+
+# from tt_lib.fallback_ops import fallback_ops
+import tt_lib.fallback_ops as fallback_ops
 
 
 @dataclass
@@ -48,17 +49,19 @@ class TtWhisperForAudioClassification(nn.Module):
             )
 
         self.projector_weight = torch2tt_tensor(
-            state_dict[f"projector.weight"], self.device
+            state_dict[f"projector.weight"], self.device, tt_lib.tensor.Layout.ROW_MAJOR
         )
         self.projector_bias = torch2tt_tensor(
-            state_dict[f"projector.bias"], self.device
+            state_dict[f"projector.bias"], self.device, tt_lib.tensor.Layout.ROW_MAJOR
         )
 
         self.classifier_weight = torch2tt_tensor(
-            state_dict[f"classifier.weight"], self.device
+            state_dict[f"classifier.weight"],
+            self.device,
+            tt_lib.tensor.Layout.ROW_MAJOR,
         )
         self.classifier_bias = torch2tt_tensor(
-            state_dict[f"classifier.bias"], self.device
+            state_dict[f"classifier.bias"], self.device, tt_lib.tensor.Layout.ROW_MAJOR
         )
 
     def freeze_encoder(self):
@@ -165,7 +168,9 @@ class TtWhisperForAudioClassification(nn.Module):
         torch_hidden_states = tt2torch_tensor(hidden_states)
         torch_pooled_output = torch_hidden_states.mean(dim=-2)
         # If something changes these dimension -2 should always work
-        pooled_output = torch2tt_tensor(torch_pooled_output, self.device)
+        pooled_output = torch2tt_tensor(
+            torch_pooled_output, self.device, tt_lib.tensor.Layout.ROW_MAJOR
+        )
 
         # Apply classifier layer
         logits = linear(pooled_output, self.classifier_weight, self.classifier_bias)

@@ -1,32 +1,6 @@
 import torch
 import tt_lib
 
-def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
-    size = list(py_tensor.size())
-
-    while len(size) < 4:
-        size.insert(0, 1)
-
-    tt_tensor = tt_lib.tensor.Tensor(
-        py_tensor.reshape(-1).tolist(),
-        size,
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.ROW_MAJOR,
-    )
-
-    if size[-1] % 2 == 0:
-        tt_tensor = tt_tensor.to(tt_device)
-
-    return tt_tensor
-
-
-def tt2torch_tensor(tt_tensor):
-
-    tt_output = tt_tensor.cpu()
-    if tt_output.layout() != tt_lib.tensor.Layout.ROW_MAJOR:
-        tt_output = tt_output.to(tt_lib.tensor.Layout.ROW_MAJOR)
-    return tt_output.to_torch().to(torch.float)
-
 
 def linear(x, weight, bias=None):
     out_mem_config_l1 = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
@@ -52,7 +26,9 @@ def create_padded_tensor(
         input_tensors_shape.insert(0, 1)
 
     if isinstance(input_tensor, tt_lib.tensor.Tensor):
-        torch_tensor = torch.Tensor(input_tensor.to_torch()).reshape(input_tensor.shape())
+        torch_tensor = torch.Tensor(input_tensor.to_torch()).reshape(
+            input_tensor.shape()
+        )
     else:
         torch_tensor = input_tensor
 

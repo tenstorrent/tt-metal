@@ -2,15 +2,15 @@ import torch
 import torch.nn as nn
 import tt_lib
 from typing import Optional, Tuple, Union
-from loguru import logger
 
-from tests.python_api_testing.models.whisper.whisper_common import (
-    torch2tt_tensor,
-    tt2torch_tensor,
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+
+from models.whisper.tt.whisper_common import (
     linear,
 )
 
-from tt_lib.fallback_ops import fallback_ops
+# from tt_lib.fallback_ops import fallback_ops
+import tt_lib.fallback_ops as fallback_ops
 
 
 class TtWhisperAttention(nn.Module):
@@ -40,7 +40,6 @@ class TtWhisperAttention(nn.Module):
         self.scaling = self.head_dim**-0.5
         self.is_decoder = is_decoder
 
-
         if (self.head_dim * num_heads) != self.embed_dim:
             raise ValueError(
                 f"embed_dim must be divisible by num_heads (got `embed_dim`: {self.embed_dim}"
@@ -55,19 +54,29 @@ class TtWhisperAttention(nn.Module):
             state_dict[f"{base_address}.v_proj.weight"], self.device
         )
         self.v_proj_bias = torch2tt_tensor(
-            state_dict[f"{base_address}.v_proj.bias"], self.device
+            state_dict[f"{base_address}.v_proj.bias"],
+            self.device,
+            tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
         )
         self.q_proj_weight = torch2tt_tensor(
-            state_dict[f"{base_address}.q_proj.weight"], self.device
+            state_dict[f"{base_address}.q_proj.weight"],
+            self.device,
+            tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
         )
         self.q_proj_bias = torch2tt_tensor(
-            state_dict[f"{base_address}.q_proj.bias"], self.device
+            state_dict[f"{base_address}.q_proj.bias"],
+            self.device,
+            tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
         )
         self.out_proj_weight = torch2tt_tensor(
-            state_dict[f"{base_address}.out_proj.weight"], self.device
+            state_dict[f"{base_address}.out_proj.weight"],
+            self.device,
+            tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
         )
         self.out_proj_bias = torch2tt_tensor(
-            state_dict[f"{base_address}.out_proj.bias"], self.device
+            state_dict[f"{base_address}.out_proj.bias"],
+            self.device,
+            tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
         )
 
         self.cached_q_proj_shape = None
@@ -105,6 +114,7 @@ class TtWhisperAttention(nn.Module):
         ) = hidden_states.shape()
 
         q_proj_output = linear(hidden_states, self.q_proj_weight, self.q_proj_bias)
+
         q_proj_shape = q_proj_output.shape()
 
         if q_proj_shape == self.cached_q_proj_shape:
@@ -176,10 +186,8 @@ class TtWhisperAttention(nn.Module):
         value_states = fallback_ops.reshape(value_states, *proj_shape)
 
         key_states_transposed = tt_lib.tensor.transpose(key_states)
-        # logger.info(f"key_states_transposed: {key_states_transposed.shape()}")
         src_len = key_states.shape()[-2]
         attn_weights = tt_lib.tensor.bmm(query_states, key_states_transposed)
-        # logger.info(f"attn_weights {attn_weights.shape()}")
 
         if attn_weights.shape() != [1, bsz * self.num_heads, tgt_len, src_len]:
             raise ValueError(
@@ -204,7 +212,6 @@ class TtWhisperAttention(nn.Module):
                 bsz * self.num_heads, tgt_len, src_len
             )
             attn_weights = torch2tt_tensor(torch_attn_weights, self.device)
-
         attn_weights = fallback_ops.softmax(attn_weights, dim=-1)
 
         if layer_head_mask is not None:
