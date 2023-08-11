@@ -2424,8 +2424,14 @@ void TensorModule(py::module &m_tensor) {
     // TODO: Uplift nlp_create_qkv_heads to support generic qkv num_heads and head_dim
     // This op should support arbitrary B and S divisible by 32 on DRAM; on L1, might error out due to space
     m_tensor.def("nlp_create_qkv_heads", &nlp_create_qkv_heads,
-        py::arg().noconvert(), py::arg("mem_config") = MemoryConfig{.interleaved = true}, R"doc(
+        py::arg().noconvert(), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Shuffles [B, 1, S, 4672] fused qkv matrix into 3 heads with shapes [B, 71, S, 64], [B, 1, S, 64], and [B, 1, S, 64].
+    )doc");
+    // TODO: Uplift nlp_concat_heads to support generic num_heads and head_dim
+    // This op should support arbitrary B and S divisible by 32 on DRAM; on L1, might error out due to space
+    m_tensor.def("nlp_concat_heads", &nlp_concat_heads,
+        py::arg().noconvert(), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        Shuffles [B, 71, S, 64] tensor into tensor with shape [B, 1, S, 4544].
     )doc");
 
     // softmax

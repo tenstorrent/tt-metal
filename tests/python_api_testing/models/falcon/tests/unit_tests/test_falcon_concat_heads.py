@@ -1,0 +1,104 @@
+import pytest
+from loguru import logger
+
+import tt_lib as ttl
+from tests.python_api_testing.models.utility_functions import comp_pcc
+from models.utility_functions import tt2torch_tensor
+import torch
+
+
+def run_nlp_concat_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_config):
+    torch.manual_seed(1234)
+    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    ttl.device.InitializeDevice(device)
+    num_heads = 71
+    head_dim = 64
+    in0_shape = [batch, num_heads, seq_len, head_dim]
+
+    A = torch.randn(in0_shape)
+
+    in0_t = (
+        ttl.tensor.Tensor(A, dtype)
+        .to(ttl.tensor.Layout.TILE)
+        .to(device, in0_mem_config)
+    )
+
+    out = ttl.tensor.nlp_concat_heads(in0_t, out_mem_config)
+
+    # Check memory of inputs and outputs
+    assert in0_t.memory_config().buffer_type == in0_mem_config.buffer_type
+    assert out.memory_config().buffer_type == out_mem_config.buffer_type
+    logger.debug(f"in0: {in0_t.memory_config().buffer_type} and {in0_t.dtype()}")
+    logger.debug(f"out: {out.memory_config().buffer_type} and {out.dtype()}")
+
+    assert out.shape() == [batch, 1, seq_len, num_heads * head_dim]
+
+    pyt_got_back_rm_out = tt2torch_tensor(out)
+
+    ref_out = torch.transpose(A, -3, -2).reshape(
+        [batch, 1, seq_len, num_heads * head_dim]
+    )
+
+    if dtype == ttl.tensor.DataType.BFLOAT8_B:
+        pcc = 0.99
+    else:
+        pcc = 1.0
+
+    passing_pcc, output_pcc = comp_pcc(pyt_got_back_rm_out, ref_out, pcc)
+    logger.info(f"passing={passing_pcc}")
+    logger.info(f"output pcc={output_pcc}")
+    assert passing_pcc
+
+    ttl.device.CloseDevice(device)
+
+
+@pytest.mark.parametrize(
+    "out_mem_config",
+    (
+        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
+    ),
+    ids=["out_DRAM", "out_L1"],
+)
+@pytest.mark.parametrize(
+    "in0_mem_config",
+    (
+        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
+    ),
+    ids=["in0_DRAM", "in0_L1"],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),
+    ids=["BFLOAT8_B", "BFLOAT16"],
+)
+@pytest.mark.parametrize(
+    "batch, seq_len",
+    ((1, 32), (1, 64), (1, 128)),
+    ids=[
+        "batch1_seq32",
+        "batch1_seq64",
+        "batch1_seq128",
+    ],
+)
+def test_nlp_concat_heads_test(
+    batch, seq_len, dtype, in0_mem_config, out_mem_config, request
+):
+    ttl.profiler.set_profiler_location(
+        f"tt_metal/tools/profiler/logs/nlp_concat_heads_tm_{request.node.callspec.id}"
+    )
+    run_nlp_concat_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_config)
+
+
+def test_nlp_concat_heads_with_program_cache(use_program_cache):
+    dtype = ttl.tensor.DataType.BFLOAT8_B
+    dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
+    for _ in range(2):
+        run_nlp_concat_heads_test(1, 32, dtype, dram_mem_config, dram_mem_config)
+
+    dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
+    for _ in range(2):
+        run_nlp_concat_heads_test(1, 32, dtype, dram_mem_config, dram_mem_config)
+
+    assert ttl.program_cache.num_entries() == 2

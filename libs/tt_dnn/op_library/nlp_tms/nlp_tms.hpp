@@ -10,9 +10,11 @@ namespace tt_metal {
 
 enum class NlpTMOpType {
     CREATE_QKV_HEADS = 0,
+    CONCAT_HEADS = 1,
 };
 
 operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads(const Tensor &input_tensor_a, std::vector<Tensor> &output, CoreCoord compute_with_storage_grid_size);
+operation::ProgramWithCallbacks multi_core_nlp_concat_heads(const Tensor &input_tensor_a, Tensor &output, CoreCoord compute_with_storage_grid_size);
 
 struct NlpTM {
     NlpTMOpType nlp_tm_op_type;
@@ -28,6 +30,10 @@ struct NlpTM {
 inline std::vector<Tensor> nlp_create_qkv_heads(const Tensor &input_tensor_a, const MemoryConfig& mem_config) {
     // TODO: Uplift to support generic qkv num_heads and head_dim; currently, hard-coded for falcon-7b
     return operation::run(NlpTM{NlpTMOpType::CREATE_QKV_HEADS, mem_config}, {input_tensor_a});
+}
+inline Tensor nlp_concat_heads(const Tensor &input_tensor_a, const MemoryConfig& mem_config) {
+    // TODO: Uplift to support generic num_heads and head_dim; currently, hard-coded for falcon-7b
+    return operation::run(NlpTM{NlpTMOpType::CONCAT_HEADS, mem_config}, {input_tensor_a}).at(0);
 }
 
 }  // namespace tt_metal

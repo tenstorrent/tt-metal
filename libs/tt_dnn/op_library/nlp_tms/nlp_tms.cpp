@@ -20,7 +20,11 @@ void NlpTM::validate(const std::vector<Tensor>& input_tensors) const {
     switch (this->nlp_tm_op_type) {
         case NlpTMOpType::CREATE_QKV_HEADS:
             TT_ASSERT(input_shape[2] % TILE_HEIGHT == 0);
-            TT_ASSERT((input_tensor.shape() == Shape({input_shape[0], 1, input_shape[2], 4672})), "Unsupported input shape");
+            TT_ASSERT((input_shape == Shape({input_shape[0], 1, input_shape[2], 4672})), "Unsupported input shape");
+            break;
+        case NlpTMOpType::CONCAT_HEADS:
+            TT_ASSERT(input_shape[2] % TILE_HEIGHT == 0);
+            TT_ASSERT(input_shape[3] == 64, "Head dim must be 64!");
             break;
         default:
             TT_ASSERT(false, "Unknown nlp tm op in validate!");
@@ -34,6 +38,9 @@ std::vector<Shape> NlpTM::compute_output_shapes(const std::vector<Tensor>& input
     switch (this->nlp_tm_op_type) {
         case NlpTMOpType::CREATE_QKV_HEADS:
             output_shape_vec = {(Shape) {input_shape[0], 71, input_shape[2], 64}, (Shape) {input_shape[0], 1, input_shape[2], 64}, (Shape) {input_shape[0], 1, input_shape[2], 64}};
+            break;
+        case NlpTMOpType::CONCAT_HEADS:
+            output_shape_vec = {(Shape) {input_shape[0], 1, input_shape[2], input_shape[1] * input_shape[3]}};
             break;
         default:
             TT_ASSERT(false, "Unknown nlp tm op in compute_output_shapes!");
@@ -55,6 +62,8 @@ operation::ProgramWithCallbacks NlpTM::create_program(const std::vector<Tensor>&
     switch (this->nlp_tm_op_type) {
         case NlpTMOpType::CREATE_QKV_HEADS:
             return  multi_core_nlp_create_qkv_heads(input_tensor, output_tensors, compute_with_storage_grid_size);
+        case NlpTMOpType::CONCAT_HEADS:
+            return  multi_core_nlp_concat_heads(input_tensor, output_tensor, compute_with_storage_grid_size);
         default:
             TT_ASSERT(false, "Unknown nlp tm op in create_program!");
     }
