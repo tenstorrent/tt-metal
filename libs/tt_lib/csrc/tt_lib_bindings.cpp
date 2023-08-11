@@ -28,6 +28,7 @@
 #include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
 #include "tt_dnn/op_library/move/move_op.hpp"
 #include "tt_dnn/op_library/rotate_half/rotate_half_op.hpp"
+#include "tt_dnn/op_library/rotary_embedding/rotary_embedding_op.hpp"
 #include "tt_dnn/op_library/program_cache.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -2464,6 +2465,11 @@ void TensorModule(py::module &m_tensor) {
         py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         "Performs a rotate half operation used by RotaryEmbedding.
     )doc");
+    m_tensor.def("rotary_embedding", &rotary_embedding,
+        py::arg("input").noconvert(), py::arg("cos").noconvert(), py::arg("sin").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        "Performs rotary embedding with a given input, cos, and sin tensors. Sequence length is inferred as the second last dim of the input tensor.
+    )doc");
+
 
     // FC
     m_tensor.def("fully_connected", &fully_connected,
