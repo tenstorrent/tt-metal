@@ -1343,6 +1343,15 @@ void TensorModule(py::module &m_tensor) {
     detail::bind_unary_op(m_tensor, "swish", swish, R"doc(Returns tensor with the swish all of elements of the input tensor ``{0}``.)doc");
     detail::bind_unary_op(m_tensor, "mish", &mish, R"doc(Returns tensor with the mish activation of elements of the input tensor ``{0}``.)doc");
     detail::bind_unary_op(m_tensor, "cbrt", &cbrt, R"doc(Returns tensor with the cbrt activation of elements of the input tensor ``{0}``.)doc");
+    detail::bind_unary_op(m_tensor, "asinh", &asinh, R"doc(Returns tensor with the inverse hyperbolic sine of elements of the input tensor ``{0}`` in range [-1e-6, 1e6].
+        for +input , output = asinh(input)
+        for -input , output = -asinh(input))doc"
+    );
+    detail::bind_unary_op(m_tensor, "acosh", &acosh, R"doc(Returns tensor with the inverse hyperbolic cosine of elements of the input tensor ``{0}`` in range [-1e-6, 1e6].
+        for  input > 1, output = acosh(input)
+        for  input ==1, ouptut = 0
+        for  input < 1, output =  nan)doc"
+    );
     detail::bind_unary_op(m_tensor, "tanhshrink", &tanhshrink,
         R"doc(Applies tanh on the input tensor ``{0}`` and subtracted from the input tensor.
 

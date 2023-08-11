@@ -307,6 +307,14 @@ def cos(x, *args, **kwargs):
     return torch.cos(x)
 
 
+def asinh(x, *args, **kwargs):
+    return torch.asinh(x)
+
+
+def acosh(x, *args, **kwargs):
+    return torch.acosh(x)
+
+
 def elu(x, *args, alpha, **kwargs):
     return torch.nn.functional.elu(x, alpha)
 

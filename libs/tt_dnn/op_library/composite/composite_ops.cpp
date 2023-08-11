@@ -346,6 +346,59 @@ Tensor cosh(const Tensor &input_a, const MemoryConfig& output_mem_config)
     return operation::decorate_as_composite(__func__, _cosh)(input_a, output_mem_config);
 }
 
+// asinh(x) = log(x + sqrt(x^2 + 1))
+Tensor _asinh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
+    Tensor ln_res(input_a);
+    {
+         Tensor x_abs   = abs(input_a, output_mem_config);
+         Tensor x_sq_p1(input_a);
+          {
+                Tensor x_sq    = square(input_a, output_mem_config);
+                x_sq_p1  = add_unary(x_sq, 1.0f, output_mem_config);
+          }
+         ln_res  = log(add(x_abs, sqrt(x_sq_p1, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
+     }
+     //input is negative, output is -asinh(input)
+    Tensor result  = where(input_a, ln_res, neg(ln_res, output_mem_config), output_mem_config);
+    return result;
+}
+Tensor asinh(const Tensor& input_a, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _asinh)(input_a, output_mem_config);
+}
+
+// acosh(x) = log(x + sqrt(x^2 - 1))
+Tensor _acosh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
+    Tensor t_one   = ones_like(input_a, output_mem_config);
+    Tensor t_result(input_a);
+    {
+        Tensor ln_res(input_a);
+        {
+            Tensor x_abs   = abs(input_a, output_mem_config);
+            Tensor x_sq_m1(input_a);
+            {
+                Tensor x_sq    = square(x_abs, output_mem_config);
+                x_sq_m1 = sub_unary(x_sq, 1.0f, output_mem_config);
+            }
+            ln_res  = log(add(x_abs, sqrt(x_sq_m1, output_mem_config), std::nullopt, output_mem_config), output_mem_config);
+        }
+        // To handle inputs <= 1
+        // input < 1, output is nan
+        // input > 1, output is acosh(input)
+        Tensor nan_res = bcast(lte(input_a, t_one, std::nullopt, output_mem_config), mk_tiled_scalar(std::nanf("")),BcastOpMath::MUL, BcastOpDim::HW, output_mem_config);
+        t_result    = mul(gt(input_a, t_one, std::nullopt, output_mem_config), ln_res, std::nullopt, output_mem_config);
+        t_result    = add(nan_res, t_result, std::nullopt, output_mem_config);
+    }
+    // input == 1, output is 0
+    Tensor t_zero  = zeros_like(input_a, output_mem_config);
+    Tensor result  = where(eq(input_a, t_one, std::nullopt, output_mem_config), t_zero, t_result, output_mem_config);
+    return result;
+}
+Tensor acosh(const Tensor& input_a, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _acosh)(input_a, output_mem_config);
+}
+
 // lerp(input, end, weight) = start + weight * (end - start)
 Tensor _lerp(const Tensor& input_a, const Tensor& input_b, float value, const MemoryConfig& output_mem_config) {
     Tensor t_value = mk_tiled_scalar(value);

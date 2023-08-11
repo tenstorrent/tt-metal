@@ -457,6 +457,10 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.expm1
 
+.. autofunction:: tt_lib.tensor.asinh
+
+.. autofunction:: tt_lib.tensor.acosh
+
 .. autofunction:: tt_lib.tensor.erf
 
 .. autofunction:: tt_lib.tensor.erfc

@@ -174,6 +174,13 @@ Tensor sinh(const Tensor& input_a, const MemoryConfig& output_mem_config = opera
 //cosh(x) = (exp(x) + exp(-x))/2
 Tensor cosh(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+/** Inverse hyperbolic operations **/
+//asinh(x) = log(x + sqrt(x^2 + 1))
+Tensor asinh(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+//acosh(x) = log(x + sqrt(x^2 - 1))
+Tensor acosh(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 /**
  * outer product = matrix multiply when a = [1,1,N,1] and b = [1,1,1,M]
  * and result is of size [1,1,N,M].

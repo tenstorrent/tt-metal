@@ -69,6 +69,8 @@ def custom_compare(*args, **kwargs):
                 "cosh",
                 "tanhshrink",
                 "xlogy",
+                "asinh",
+                "acosh",
             ),
             ([[1, 1, 32, 32]], [[1, 3, 320, 64]]),
             (0,),
@@ -96,6 +98,8 @@ def test_run_eltwise_composite_test(
     options["sinh"] = (-9, 9)
     options["tanhshrink"] = (-100, 100)
     options["cosh"] = options["sinh"]
+    options["asinh"] = (-100, 100)
+    options["acosh"] = (1, 100)
 
     generator = generation_funcs.gen_rand
 
