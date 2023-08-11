@@ -3,6 +3,7 @@ import tt_lib as ttl
 from loguru import logger
 from models.utility_functions import unpad_from_zero, torch2tt_tensor, _nearest_32
 from tt_lib.fused_ops.conv import conv as TtConv
+from tt_lib.fallback_ops import fallback_ops
 
 
 def is_conv_supported_on_device(conv_params):
@@ -66,20 +67,14 @@ def run_conv_on_device_wrapper(
             run_conv_on_device_batch_one(to_device(xx[batch_idx, :, :, :]))
             for batch_idx in range(N)
         ]
-        conv_concat_cpu = torch.concat(
+        conv_concat_cpu = fallback_ops.concat(
             [x.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch() for x in partial_convs],
             0,
         )
-        _, cC, cH, cW = partial_convs[0].shape()
         # return ttl.tensor.concat(partial_convs,0) # hit problem with autoformat for non-32 size N
         # concat on CPU for batch-size > 1
-        return ttl.tensor.Tensor(
-            conv_concat_cpu.reshape(-1).tolist(),
-            [N, cC, cH, cW],
-            x.dtype(),
-            ttl.tensor.Layout.ROW_MAJOR,
-        )
-
+        return conv_concat_cpu
+    
     def run_conv_on_device_batch_one(x):
         [N, C, H, W] = x.shape()
         if channel_transpose:
