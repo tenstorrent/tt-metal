@@ -187,8 +187,8 @@ TEST_F(CommandQueueHarness, TestArbiterDoesNotHang) {
 
     CompileProgram(this->device, program);
 
-    EnqueueProgram(*this->cq, program, false);
-    Finish(*this->cq);
+    EnqueueProgram(*::detail::GLOBAL_CQ, program, false);
+    Finish(*::detail::GLOBAL_CQ);
 }
 
 }
