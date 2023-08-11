@@ -1203,7 +1203,7 @@ void TensorModule(py::module &m_tensor) {
 
     // *** eltwise unary ***
     m_tensor.def("move", &move,
-        py::arg().noconvert(), py::arg("mem_config").noconvert() = std::nullopt, R"doc(
+        py::arg().noconvert(), py::arg("output_mem_config").noconvert() = std::nullopt, R"doc(
         Moves the elements of the input tensor ``arg0`` to a location in memory with specified memory layout.
 
         If no memory layout is specified, output memory will be the same as the input tensor memory config.
@@ -2045,8 +2045,8 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     m_tensor.def("tilize_with_val_padding",
-        [] (const Tensor &tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value, const MemoryConfig& mem_config) {
-            return tilize_with_val_padding(tensor, output_tensor_shape, input_tensor_start, pad_value, mem_config);
+        [] (const Tensor &tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value, const MemoryConfig& output_mem_config) {
+            return tilize_with_val_padding(tensor, output_tensor_shape, input_tensor_start, pad_value, output_mem_config);
         },
         py::arg("input").noconvert(), py::arg("output_tensor_shape").noconvert(), py::arg("input_tensor_start"), py::arg("pad_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Tilizes a given tensor across memory on device. Pads to specified shape before tilizing.
@@ -2077,8 +2077,8 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     m_tensor.def("untilize_with_unpadding",
-        [] (const Tensor &tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, const MemoryConfig& mem_config) {
-            return untilize_with_unpadding(tensor, output_tensor_shape, input_tensor_start, mem_config);
+        [] (const Tensor &tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, const MemoryConfig& output_mem_config) {
+            return untilize_with_unpadding(tensor, output_tensor_shape, input_tensor_start, output_mem_config);
         },
         py::arg("input").noconvert(), py::arg("output_tensor_start").noconvert(), py::arg("output_tensor_end"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Changes data layout of input tensor to ROW_MAJOR and unpads/removes elements from the tensor.
@@ -2098,8 +2098,8 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     m_tensor.def("pad",
-        [] (const Tensor &input_tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value, const MemoryConfig& mem_config) {
-            return pad(input_tensor, output_tensor_shape, input_tensor_start, pad_value, mem_config);
+        [] (const Tensor &input_tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value, const MemoryConfig& output_mem_config) {
+            return pad(input_tensor, output_tensor_shape, input_tensor_start, pad_value, output_mem_config);
         },
         py::arg("input").noconvert(), py::arg("output_tensor_shape").noconvert(), py::arg("input_tensor_start"), py::arg("pad_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Pad TT Tensor with given pad value ``arg2``.
@@ -2119,8 +2119,8 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     m_tensor.def("unpad",
-        [] (const Tensor &input_tensor, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end, const MemoryConfig& mem_config) {
-            return unpad(input_tensor, output_tensor_start, output_tensor_end, mem_config);
+        [] (const Tensor &input_tensor, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end, const MemoryConfig& output_mem_config) {
+            return unpad(input_tensor, output_tensor_start, output_tensor_end, output_mem_config);
         },
         py::arg("input").noconvert(), py::arg("output_tensor_start").noconvert(), py::arg("output_tensor_end"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Unpad TT Tensor.
@@ -2165,7 +2165,7 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     m_tensor.def("bcast_without_autoformat", &bcast_without_autoformat,
-        py::arg().noconvert(), py::arg().noconvert(), py::arg("math_op"), py::arg("dim"), py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("math_op"), py::arg("dim"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Perform a binary elementwise operation ``arg2`` between tensors ``arg0`` and ``arg1``, where values from tensor ``arg1`` are broadcast.
 
         Let tensor ``arg0`` have shape ``[W0, Z0, Y0, X0]`` and tensor ``arg1`` shape ``[W1, Z1, Y1, X1]``. ``arg3`` determines the type of broadcast performed.
@@ -2360,63 +2360,63 @@ void TensorModule(py::module &m_tensor) {
 
     // Custom BERT TMs
     m_tensor.def("bert_large_create_qkv_heads", &bert_large_create_qkv_heads,
-        py::arg().noconvert(), py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg().noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Splits [9, 1, 384, 3072] fused qkv matrix into 3 heads with shapes [9, 16, 384, 64], [9, 16, 64, 384], and [9, 16, 384, 64].
     )doc");
     m_tensor.def("bert_large_split_fused_qkv", &bert_large_split_fused_qkv,
-        py::arg().noconvert(), py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg().noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Splits [9, 1, 384, 3072] fused qkv matrix into 3 heads with shape [9, 1, 384, 1024].
     )doc");
     m_tensor.def("bert_large_create_q_head", &bert_large_create_q_head,
-        py::arg().noconvert(), py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg().noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Reshuffles [9, 1, 384, 1024] tensor into tensor with shape [9, 16, 384, 64].
     )doc");
     m_tensor.def("bert_large_create_k_head", &bert_large_create_k_head,
-        py::arg().noconvert(), py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg().noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Reshuffles [9, 1, 384, 1024] tensor into tensor with shape [9, 16, 64, 384].
     )doc");
     m_tensor.def("bert_large_create_v_head", &bert_large_create_v_head,
-        py::arg().noconvert(), py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg().noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Reshuffles [9, 1, 384, 1024] tensor into tensor with shape [9, 16, 384, 64].
     )doc");
     m_tensor.def("bert_large_concat_heads", &bert_large_concat_heads,
-        py::arg().noconvert(), py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg().noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Reshuffles [9, 16, 384, 64] tensor into tensor with shape [9, 1, 384, 1024].
     )doc");
 
     // Custom BERT matmuls/bmms
     m_tensor.def("bert_large_fused_qkv_matmul", &bert_large_fused_qkv_matmul,
-        py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("out_dtype").noconvert() = std::nullopt, R"doc(
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("out_dtype").noconvert() = std::nullopt, R"doc(
         Perform a bert_large_fused_qkv non-batched matmul ``A x B`` with two tensors.
     )doc");
     m_tensor.def("bert_large_ff1_matmul", &bert_large_ff1_matmul,
-        py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("fuse_gelu_activation") = false, py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("out_dtype").noconvert() = std::nullopt, R"doc(
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("fuse_gelu_activation") = false, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("out_dtype").noconvert() = std::nullopt, R"doc(
         Perform a bert_large_ff1 non-batched matmul ``A x B`` with two tensors.
     )doc");
     m_tensor.def("bert_large_ff2_matmul", &bert_large_ff2_matmul,
-        py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("out_dtype").noconvert() = std::nullopt, R"doc(
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("out_dtype").noconvert() = std::nullopt, R"doc(
         Perform a bert_large_ff2 non-batched matmul ``A x B`` with two tensors.
     )doc");
     m_tensor.def("bert_large_selfout_matmul", &bert_large_selfout_matmul,
-        py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("out_dtype").noconvert() = std::nullopt, R"doc(
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("out_dtype").noconvert() = std::nullopt, R"doc(
         Perform a bert_large_selfout non-batched matmul ``A x B`` with two tensors.
     )doc");
     m_tensor.def("bert_large_pre_softmax_bmm", &bert_large_pre_softmax_bmm,
-        py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("out_dtype").noconvert() = std::nullopt, R"doc(
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("out_dtype").noconvert() = std::nullopt, R"doc(
         Perform a bert_large_pre_softmax_bmm batched matmul ``[9, 16, 384, 64] x [9, 16, 64, 384]`` with two tensors and returns a reshaped output of [9, 1, 6144, 384].
     )doc");
     m_tensor.def("bert_large_post_softmax_bmm", &bert_large_post_softmax_bmm,
-        py::arg().noconvert(), py::arg().noconvert(), py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("out_dtype").noconvert() = std::nullopt, R"doc(
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("out_dtype").noconvert() = std::nullopt, R"doc(
         Perform a bert_large_post_softmax_bmm batched matmul by reshaping tensor A to [9, 16, 384, 384] first, then returning ``[9, 16, 384, 384] x [9, 16, 384, 64]``.
     )doc");
 
     // Custom BERT Layernorm
     m_tensor.def("bert_large_layernorm", &bert_large_layernorm,
-        py::arg("input").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         "Performs a bert_large_layernorm operation on the last tensor dimension with optional fused with post-multiplication and addition via W-bcast.
     )doc");
     m_tensor.def("bert_large_add_layernorm", &bert_large_add_layernorm,
-        py::arg("a").noconvert(), py::arg("b").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("a").noconvert(), py::arg("b").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         "Performs a bert_large_layernorm(a+b)*gamma + beta operation."
     )doc");
 
@@ -2442,21 +2442,21 @@ void TensorModule(py::module &m_tensor) {
 
     // groupnorm
     m_tensor.def("groupnorm", &groupnorm,
-        py::arg("input").noconvert(), py::arg("group_size").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("group_size").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         "Performs a groupnorm operation on the channel dimension grouped per group_size, with optional fused with post-multiplication and addition via W-bcast.
     )doc");
 
     // layernorm
     m_tensor.def("layernorm", &layernorm,
-        py::arg("input").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         "Performs a layernorm operation on the last tensor dimension with optional fused with post-multiplication and addition via W-bcast.
     )doc");
     m_tensor.def("add_layernorm", &add_layernorm,
-        py::arg("a").noconvert(), py::arg("b").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("a").noconvert(), py::arg("b").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         "Performs a layernorm(a+b)*gamma + beta operation."
     )doc");
     m_tensor.def("rmsnorm", &rmsnorm,
-        py::arg("input").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         "Performs a rmsnorm operation on the last tensor dimension with optional fused with post-multiplication and addition via W-bcast.
     )doc");
 
@@ -2492,7 +2492,7 @@ void TensorModule(py::module &m_tensor) {
         py::arg("stride_h") = 1, py::arg("stride_w") = 1,
         py::arg("pad_h") = 0, py::arg("pad_w") = 0,
         py::arg("dilation_h") = 1, py::arg("dilation_w") = 1,
-        py::arg("out_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Max Pool 2D
         +-------------------+-------------------------------+---------------+-------------+----------+
         | Argument          | Description                   | Data type     | Valid range | Required |
@@ -2508,7 +2508,7 @@ void TensorModule(py::module &m_tensor) {
         | pad_w             | padding in width dim          | uint32_t      |             | No       |
         | dilation_h        | kernel dilation in height dim | uint32_t      |             | No       |
         | dilation_w        | kernel dilation in width dim  | uint32_t      |             | No       |
-        | out_mem_config    | output tensor memory config   | MemoryConfig  |             | No       |
+        | output_mem_config | output tensor memory config   | MemoryConfig  |             | No       |
         +-------------------+-------------------------------+---------------+-------------+----------+
     )doc");
 

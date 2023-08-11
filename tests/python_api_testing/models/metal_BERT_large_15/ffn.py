@@ -42,7 +42,7 @@ def feed_forward(
             ff1_weighta,
             ff1_biasa,
             True,
-            mem_config=model_config["OP13_FF1_MM_OUTPUT_MEMCFG"],
+            output_mem_config=model_config["OP13_FF1_MM_OUTPUT_MEMCFG"],
             out_dtype=model_config["OP13_FF1_MM_OUTPUT_DTYPE"],
         )
         # profiler.end("___op13_MM_bias_gelu")
@@ -58,7 +58,7 @@ def feed_forward(
             activation,
             ff2_weighta,
             ff2_biasa,
-            mem_config=model_config["OP14_FF2_MM_OUTPUT_MEMCFG"],
+            output_mem_config=model_config["OP14_FF2_MM_OUTPUT_MEMCFG"],
             out_dtype=model_config["OP14_FF2_MM_OUTPUT_DTYPE"],
         )
         # profiler.end("___op14_MM_bias")

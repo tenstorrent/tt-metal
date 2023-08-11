@@ -96,12 +96,12 @@ def run_groupnorm_tests(test_id, group_size, dtype, in0_mem_config, out_mem_conf
 
             if test_id == 0:
                 logger.info("Running LN_NOGB")
-                ttz = tensor.groupnorm(ttx, group_size, epsf, mem_config=out_mem_config)
+                ttz = tensor.groupnorm(ttx, group_size, epsf, output_mem_config=out_mem_config)
                 golden = ref_groupnorm(x, group_size, epsf)
             elif test_id == 1:
                 logger.info("Running LN_G")
                 ttz = tensor.groupnorm(
-                    ttx, group_size, epsf, ttgamma, mem_config=out_mem_config
+                    ttx, group_size, epsf, ttgamma, output_mem_config=out_mem_config
                 )
                 golden = ref_groupnorm(x, group_size, epsf, gamma=ttgamma)
             elif test_id == 2:

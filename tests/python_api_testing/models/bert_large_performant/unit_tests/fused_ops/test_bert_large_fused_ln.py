@@ -144,10 +144,10 @@ def run_layernorm_tests(test_id, batch, dtype, in0_mem_config, out_mem_config):
 
             if test_id == 0:
                 logger.info("Running LN_NOGB")
-                ttz = tensor.bert_large_layernorm(ttx, epsf, mem_config=out_mem_config)
+                ttz = tensor.bert_large_layernorm(ttx, epsf, output_mem_config=out_mem_config)
             elif test_id == 1:
                 logger.info("Running LN_G")
-                ttz = tensor.bert_large_layernorm(ttx, epsf, ttgamma, mem_config=out_mem_config)
+                ttz = tensor.bert_large_layernorm(ttx, epsf, ttgamma, output_mem_config=out_mem_config)
             elif test_id == 2:
                 logger.info("Running LN_GB")
                 ttz = tensor.bert_large_layernorm(

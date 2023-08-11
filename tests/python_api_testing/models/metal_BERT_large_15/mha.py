@@ -89,7 +89,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, model_config):
             activation,
             qkv_weight,
             qkv_bias,
-            mem_config=model_config["OP1_FUSED_QKV_MM_OUTPUT_MEMCFG"],
+            output_mem_config=model_config["OP1_FUSED_QKV_MM_OUTPUT_MEMCFG"],
             out_dtype=model_config["OP1_FUSED_QKV_MM_OUTPUT_DTYPE"],
         )
         # profiler.end("___op1_qkv_fused")
@@ -99,7 +99,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, model_config):
     def op2to6_create_qkv_heads(qkv):
         # profiler.start("___op2to6_create_qkv_heads")
         q_heads, kt_heads, v_heads = ttl.tensor.bert_large_create_qkv_heads(
-            qkv, mem_config=model_config["OP2TO6_CREATE_QKV_HEADS_OUTPUT_MEMCFG"]
+            qkv, output_mem_config=model_config["OP2TO6_CREATE_QKV_HEADS_OUTPUT_MEMCFG"]
         )
         # profiler.end("___op2to6_create_qkv_heads")
 
@@ -110,7 +110,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, model_config):
         qkt = ttl.tensor.bert_large_pre_softmax_bmm(
             Q_heads,
             K_T_heads,
-            mem_config=model_config["OP7_PRE_SOFTMAX_BMM_OUTPUT_MEMCFG"],
+            output_mem_config=model_config["OP7_PRE_SOFTMAX_BMM_OUTPUT_MEMCFG"],
             out_dtype=model_config["OP7_PRE_SOFTMAX_BMM_OUTPUT_DTYPE"],
         )
         # profiler.end("___op7_bmm")
@@ -141,7 +141,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, model_config):
         weighted_activation = ttl.tensor.bert_large_post_softmax_bmm(
             attention_scores,
             V_heads,
-            mem_config=model_config["OP9_POST_SOFTMAX_BMM_OUTPUT_MEMCFG"],
+            output_mem_config=model_config["OP9_POST_SOFTMAX_BMM_OUTPUT_MEMCFG"],
             out_dtype=model_config["OP9_POST_SOFTMAX_BMM_OUTPUT_DTYPE"],
         )
         # profiler.end("___op9_bmm")
@@ -156,7 +156,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, model_config):
         else:
             # profiler.start("___op10_unmake_attention_heads")
             retval = ttl.tensor.bert_large_concat_heads(
-                x, mem_config=model_config["OP10_CONCAT_ATTENTION_HEADS_OUTPUT_MEMCFG"]
+                x, output_mem_config=model_config["OP10_CONCAT_ATTENTION_HEADS_OUTPUT_MEMCFG"]
             )
             # profiler.end("___op10_unmake_attention_heads")
 

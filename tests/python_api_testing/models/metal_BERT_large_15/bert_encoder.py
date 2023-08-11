@@ -123,7 +123,7 @@ class TtBertEncoder(torch.nn.Module):
             mha_res,
             attention_output_weight,
             attention_output_bias,
-            mem_config=self.model_config["OP11_SELFOUT_OUTPUT_MEMCFG"],
+            output_mem_config=self.model_config["OP11_SELFOUT_OUTPUT_MEMCFG"],
             out_dtype=self.model_config["OP11_SELFOUT_OUTPUT_DTYPE"],
         )
         # profiler.end("__op11_mm_plus_bias")
@@ -138,7 +138,7 @@ class TtBertEncoder(torch.nn.Module):
             self.layer_norm_eps,
             self.mha_gamma,
             self.mha_beta,
-            mem_config=self.model_config["OP12_LAYERNORM_OUTPUT_MEMCFG"],
+            output_mem_config=self.model_config["OP12_LAYERNORM_OUTPUT_MEMCFG"],
         )
         # profiler.end("__op12_add_layernorm")
 
@@ -152,7 +152,7 @@ class TtBertEncoder(torch.nn.Module):
             self.layer_norm_eps,
             self.ffn_gamma,
             self.ffn_beta,
-            mem_config=self.model_config["OP15_LAYERNORM_OUTPUT_MEMCFG"],
+            output_mem_config=self.model_config["OP15_LAYERNORM_OUTPUT_MEMCFG"],
         )
         # profiler.end("__op15_add_layernorm")
 

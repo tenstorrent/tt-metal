@@ -144,10 +144,10 @@ def run_layernorm_tests(test_id, dtype, in0_mem_config, out_mem_config):
 
             if test_id == 0:
                 logger.info("Running LN_NOGB")
-                ttz = tensor.layernorm(ttx, epsf, mem_config=out_mem_config)
+                ttz = tensor.layernorm(ttx, epsf, output_mem_config=out_mem_config)
             elif test_id == 1:
                 logger.info("Running LN_G")
-                ttz = tensor.layernorm(ttx, epsf, ttgamma, mem_config=out_mem_config)
+                ttz = tensor.layernorm(ttx, epsf, ttgamma, output_mem_config=out_mem_config)
             elif test_id == 2:
                 logger.info("Running LN_GB")
                 ttz = tensor.layernorm(
