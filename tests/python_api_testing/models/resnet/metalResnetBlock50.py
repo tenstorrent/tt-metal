@@ -77,7 +77,8 @@ class Bottleneck(nn.Module):
         downsample_conv_on_tt = None,
         norm_layer_after_downsample_conv_on_tt = None,
         downsample_params = [],
-        storage_in_dram=True
+        storage_in_dram=True,
+        input_shape = []
     ) -> None:
         super().__init__()
         self.device = device
@@ -144,23 +145,52 @@ class Bottleneck(nn.Module):
 
         self.conv1_params = [width, inplanes, 1, 1, 1, 1, 0, 0, dilation, groups]
         if is_conv_supported_on_device(self.conv1_params):
-            self.conv1 = TtResnetConv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, conv1_bias.tolist() if conv1_bias is not None else None)
+            # 1x1 conv with stride 1 padding 0 is run using regular matmul
+            self.conv1 = TtResnetConv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, [1, 1], [1, 1], [1, 1], conv1_bias.tolist() if conv1_bias is not None else None)
         else:
             self.conv1 = fallback_ops.Conv2d(conv1_weight, conv1_bias, inplanes, width, kernel_size=1, stride=1, padding=0)
 
+        # With single buffered input CB, these shapes work -
+        # hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv2 = {
+        #     (3136, 64) : [256, 64, 128, 64] ,
+        #     (800, 128) : [256, 128, 128, 64] ,
+        #     (224, 256) : [128, 128, 128, 64],
+        #     (64, 512) : [64, 128, 64, 128] ,
+        # }
+
+        # With double buffered input CB, these shapes work -
+        # hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv2 = {
+        #     (3136, 64) : [256, 64, 128, 64] ,
+        #     (800, 128) : [128, 128, 128, 64] ,
+        #     (224, 256) : [64, 128, 64, 128],
+        #     (64, 512) : [32, 64, 32, 64] ,
+        # }
+        hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv2 = {
+            (3136, 64) : [128, 64, 128, 64] ,
+            (800, 128) : [128, 128, 128, 64] ,
+            (224, 256) : [64, 128, 64, 128],
+            (64, 512) : [32, 64, 32, 64] ,
+        }
+        self.conv1_output_shape = compute_conv_output_shape(self.conv1_params, input_shape)
         self.conv2_params = [width, width, 3, 3, stride, stride, 1, 1, dilation, groups]
+        self.conv2_output_shape = compute_conv_output_shape(self.conv2_params, self.conv1_output_shape)
+        conv2_output_padded_face_size = _nearest_32(self.conv2_output_shape[1] * self.conv2_output_shape[2])
+        assert (conv2_output_padded_face_size, width) in hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv2
+        [act_block_h_datums, weight_block_w_datums, out_subblock_h_datums, out_subblock_w_datums] = hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv2[(conv2_output_padded_face_size, width)]
         if is_conv_supported_on_device(self.conv2_params):
-            self.conv2 = TtResnetConv(conv2_weight.reshape(-1).tolist(), self.conv2_params, self.device, conv2_bias.tolist() if conv2_bias is not None else None)
+            self.conv2 = TtResnetConv(conv2_weight.reshape(-1).tolist(), self.conv2_params, self.device, [act_block_h_datums, width*3], [width*3, weight_block_w_datums], [out_subblock_h_datums, out_subblock_w_datums], conv2_bias.tolist() if conv2_bias is not None else None)
         else:
             self.conv2 = fallback_ops.Conv2d(conv2_weight, conv2_bias, width, width, kernel_size=3, stride=1, padding=1)
 
         self.conv3_params = [planes * self.expansion, width, 1, 1, 1, 1, 0, 0, dilation, groups]
         if is_conv_supported_on_device(self.conv3_params):
-            self.conv3 = TtResnetConv(conv3_weight.reshape(-1).tolist(), self.conv3_params, self.device, conv3_bias.tolist() if conv3_bias is not None else None)
+            # 1x1 conv with stride 1 padding 0 is run using regular matmul
+            self.conv3 = TtResnetConv(conv3_weight.reshape(-1).tolist(), self.conv3_params, self.device, [1, 1], [1, 1], [1, 1], conv3_bias.tolist() if conv3_bias is not None else None)
         else:
             self.conv3 = fallback_ops.Conv2d(conv3_weight, conv3_bias, width, planes * self.expansion, kernel_size=1, stride=1, padding=0)
+        self.conv3_output_shape = compute_conv_output_shape(self.conv3_params, self.conv2_output_shape)
 
-    def run_forward(self, x: torch.Tensor, x_actual_shape=[], output_in_dram=False) -> torch.Tensor:
+    def run_forward(self, x: torch.Tensor, x_actual_shape=[], output_in_dram=False):
         identity = x
         # conv1 is 1x1 conv
         out = self.conv1(x)
@@ -209,7 +239,8 @@ class ResNet(nn.Module):
         state_dict = None,
         base_address = None,
         fold_batchnorm = False,
-        storage_in_dram = True
+        storage_in_dram = True,
+        conv_input_face_shape_hw = [224,224]
     ) -> None:
         super().__init__()
         self.device = device
@@ -217,6 +248,7 @@ class ResNet(nn.Module):
         self.state_dict = state_dict
         self.fold_batchnorm = fold_batchnorm
         self.storage_in_dram = storage_in_dram
+        self.conv_input_face_shape_hw = conv_input_face_shape_hw
         if self.storage_in_dram:
             self.memory_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.DRAM)
         else:
@@ -255,17 +287,18 @@ class ResNet(nn.Module):
 
         self.conv1_params = [self.inplanes, 3, 7, 7, 2, 2, 3, 3, 1, groups]
         if is_conv_supported_on_device(self.conv1_params):
-            self.conv1 = TtResnetConv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, conv1_bias.tolist() if conv1_bias is not None else None)
+            self.conv1 = TtResnetConv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, [128, 128], [128, 64], [128, 64], conv1_bias.tolist() if conv1_bias is not None else None)
         else:
             self.conv1 = fallback_ops.Conv2d(conv1_weight, conv1_bias, 3, self.inplanes, kernel_size=7, stride=2, padding=3)
-
+        self.conv1_output_shape = compute_conv_output_shape(self.conv1_params, [1, self.conv_input_face_shape_hw[0], self.conv_input_face_shape_hw[1], self.inplanes])
         self.relu = tt_lib.tensor.relu_without_autoformat
         # self.maxpool = fallback_ops.MaxPool2d(kernel_size=3, stride=2, padding=1, channels_last=True, reshape_2d=True)
         self.maxpool = TtMaxPool(self.device, kernel_size=3, stride=2, padding=1, channels_last=True, reshape_2d=True)
-        self.layer1 = self._make_layer(block, 64, layers[0], name="layer1", state_dict=state_dict)
-        self.layer2 = self._make_layer(block, 128, layers[1], stride=2, dilate=replace_stride_with_dilation[0], name="layer2", state_dict=state_dict)
-        self.layer3 = self._make_layer(block, 256, layers[2], stride=2, dilate=replace_stride_with_dilation[1], name="layer3", state_dict=state_dict)
-        self.layer4 = self._make_layer(block, 512, layers[3], stride=2, dilate=replace_stride_with_dilation[2], name="layer4", state_dict=state_dict)
+        self.maxpool_output_shape = compute_max_pool_shape(3, 2, 1, self.conv1_output_shape)
+        self.layer1, self.layer1_output_shape = self._make_layer(block, 64, layers[0], name="layer1", state_dict=state_dict, layer_input_shape=self.maxpool_output_shape)
+        self.layer2, self.layer2_output_shape = self._make_layer(block, 128, layers[1], stride=2, dilate=replace_stride_with_dilation[0], name="layer2", state_dict=state_dict, layer_input_shape=self.layer1_output_shape)
+        self.layer3, self.layer3_output_shape = self._make_layer(block, 256, layers[2], stride=2, dilate=replace_stride_with_dilation[1], name="layer3", state_dict=state_dict, layer_input_shape=self.layer2_output_shape)
+        self.layer4, self.layer4_output_shape = self._make_layer(block, 512, layers[3], stride=2, dilate=replace_stride_with_dilation[2], name="layer4", state_dict=state_dict, layer_input_shape=self.layer3_output_shape)
         self.avgpool = TtAvgPool(self.device)
 
         fc_weight = pad_weight(state_dict[f"{self.base_address_with_dot}fc.weight"])
@@ -285,8 +318,9 @@ class ResNet(nn.Module):
         stride: int = 1,
         dilate: bool = False,
         name: str = None,
-        state_dict = None
-    ) -> nn.Sequential:
+        state_dict = None,
+        layer_input_shape = []
+    ):
         norm_layer = self._norm_layer
         downsample = None
         previous_dilation = self.dilation
@@ -310,9 +344,29 @@ class ResNet(nn.Module):
                 downsample_conv_weight, downsample_conv_bias = fold_bn_to_conv_weights_bias(downsample_conv_weight, nl)
                 nl = nn.Identity()
 
-            self.downsample_params = [planes * block.expansion, self.inplanes, 1, 1, stride, stride, 0, 0, self.dilation, 1]
+            # With single buffered input CB, these shapes work -
+            # hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_downsample_conv = {
+            #     (3136, 256) : [128, 128, 128, 64] ,
+            #     (800, 512) : [128, 128, 128, 64] ,
+            #     (224, 1024) : [64, 128, 64, 64],
+            #     (64, 2048) : [64, 128, 64, 64] ,
+            # }
+
+            # With double buffered input CB, these shapes work -
+            hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_downsample_conv = {
+                (3136, 256) : [128, 64, 128, 64] ,
+                (800, 512) : [128, 64, 128, 64] ,
+                (224, 1024) : [64, 128, 64, 64],
+                (64, 2048) : [64, 128, 64, 64] ,
+            }
+            downsample_output_channels = planes * block.expansion
+            self.downsample_params = [downsample_output_channels, self.inplanes, 1, 1, stride, stride, 0, 0, self.dilation, 1]
+            self.downsample_conv_output_shape = compute_conv_output_shape(self.downsample_params, layer_input_shape)
+            downsample_output_padded_face_size = _nearest_32(self.downsample_conv_output_shape[1] * self.downsample_conv_output_shape[2])
+            assert (downsample_output_padded_face_size, downsample_output_channels) in hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_downsample_conv
+            [act_block_h_datums, weight_block_w_datums, out_subblock_h_datums, out_subblock_w_datums] = hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_downsample_conv[(downsample_output_padded_face_size, downsample_output_channels)]
             if is_conv_supported_on_device(self.downsample_params):
-                self.downsample_conv_on_tt = TtResnetConv(downsample_conv_weight.reshape(-1).tolist(), self.downsample_params, self.device, downsample_conv_bias.tolist() if downsample_conv_bias is not None else None)
+                self.downsample_conv_on_tt = TtResnetConv(downsample_conv_weight.reshape(-1).tolist(), self.downsample_params, self.device, [act_block_h_datums, self.inplanes], [self.inplanes, weight_block_w_datums], [out_subblock_h_datums, out_subblock_w_datums], downsample_conv_bias.tolist() if downsample_conv_bias is not None else None)
                 self.norm_layer_after_downsample_conv_on_tt = nl
             else:
                 downsample_conv = fallback_ops.Conv2d(downsample_conv_weight, downsample_conv_bias, self.inplanes, planes * block.expansion, kernel_size=1, stride=stride, padding=0)
@@ -320,6 +374,7 @@ class ResNet(nn.Module):
                     downsample_conv,
                     nl,
                 )
+
 
         layers = []
         layers.append(
@@ -339,11 +394,13 @@ class ResNet(nn.Module):
                 downsample_conv_on_tt=self.downsample_conv_on_tt,
                 norm_layer_after_downsample_conv_on_tt=self.norm_layer_after_downsample_conv_on_tt,
                 downsample_params=self.downsample_params,
-                storage_in_dram=self.storage_in_dram
+                storage_in_dram=self.storage_in_dram,
+                input_shape=layer_input_shape
             )
         )
         self.inplanes = planes * block.expansion
         for _ in range(1, blocks):
+            previous_layer = layers[-1]
             layers.append(
                 block(
                     self.inplanes,
@@ -356,13 +413,15 @@ class ResNet(nn.Module):
                     state_dict=self.state_dict,
                     base_address=f"{self.base_address_with_dot}{name}.{_}",
                     fold_batchnorm=self.fold_batchnorm,
-                    storage_in_dram=self.storage_in_dram
+                    storage_in_dram=self.storage_in_dram,
+                    input_shape=previous_layer.conv3_output_shape
                 )
             )
-
-        return layers
+        last_layer_shape = layers[-1].conv3_output_shape
+        return layers, last_layer_shape
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
+        #assert x.shape[3] == 224 and x.shape[2] == 224
         x = torch.permute(x, (0, 2, 3, 1))
         x = tt_lib.tensor.Tensor(
                 x.reshape(-1).tolist(),

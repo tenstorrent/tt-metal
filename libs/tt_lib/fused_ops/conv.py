@@ -71,7 +71,7 @@ def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
     return conv_
 
 
-def resnet_conv(weight: List[Union[int, float]], conv_params, device, bias=None):
+def resnet_conv(weight: List[Union[int, float]], conv_params, device, act_block_shape_hw, weight_block_shape_hw, outsubblock_shape_hw, bias=None):
     """
     Returns a function that performs a Convolution.
     For bias, it calls bcast op without autoformatting
@@ -84,16 +84,23 @@ def resnet_conv(weight: List[Union[int, float]], conv_params, device, bias=None)
         # use regular matmul op
         use_regular_matmul_op = True
     use_fast_reader = True
-    # Hardcode block shapes for conv op
-    act_block_h = 4
-    act_block_w = (int)((_nearest_32(_nearest_y(C,16)*S))/32)
-    weight_block_h = act_block_w
-    weight_block_w = 4
-    out_subblock_h = 4
-    out_subblock_w = 2
-    if (C >= 512):
-        act_block_h = 2
-        out_subblock_h = 2
+
+    if not use_regular_matmul_op:
+        assert len(act_block_shape_hw) == 2
+        assert len(weight_block_shape_hw) == 2
+        assert len(outsubblock_shape_hw) == 2
+        assert act_block_shape_hw[1] == weight_block_shape_hw[0]
+        assert act_block_shape_hw[0] % 32 == 0
+        assert act_block_shape_hw[1] % 32 == 0
+
+        act_block_h = (int) (act_block_shape_hw[0]/32)
+        act_block_w =(int) (act_block_shape_hw[1]/32)
+        weight_block_h = act_block_w
+        weight_block_w = (int) (weight_block_shape_hw[1]/32)
+        out_subblock_h = (int) (outsubblock_shape_hw[0]/32)
+        out_subblock_w = (int) (outsubblock_shape_hw[1]/32)
+        assert out_subblock_h * out_subblock_w <= 8
+
 
     assert dilation == 1 and groups == 1
 
@@ -137,10 +144,6 @@ def resnet_conv(weight: List[Union[int, float]], conv_params, device, bias=None)
     def conv_(activation):
         # if conv1x1 stride 1 padding 0, use matmul op
         if use_regular_matmul_op:
-            # if(activation.layout() == tensor.Layout.ROW_MAJOR):
-            #     activation = activation.reshape(1, 1, activation.shape()[0] * activation.shape()[1] * activation.shape()[2], activation.shape()[3])
-            #     activation_padded_shape = tensor.pad_to_tile_shape(activation.shape(), False, False, True, True)
-            #     activation = tensor.format_input_tensor(activation, device, activation_padded_shape, 0.0, tensor.Layout.TILE)
             assert(activation.layout() == tensor.Layout.TILE)
             output = tensor.matmul(activation, weight_on_device, activation.memory_config())
         else:

@@ -65,6 +65,8 @@ import torch
         (8*32, 8*32, 16, 16, 1, 1, 1, 1, 0, 0),
         # resnet50 first conv
         (64, 3, 224, 224, 7, 7, 2, 2, 3, 3),
+        # num blocks weight w = 4, num blocks act h = 4, num blocks act w = 3
+        (16*32, 32, 24, 24, 3, 3, 1, 1, 0, 0),
     ),
 )
 def test_run_conv_as_large_matmul(use_program_cache, run_conv_with_address_map, K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w):

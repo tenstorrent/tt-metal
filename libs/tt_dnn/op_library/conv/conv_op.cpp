@@ -64,7 +64,7 @@ void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program &program,
     uint32_t num_output_tiles = output_block_size;
 
     // Invariants
-    uint32_t cb0_tiles = act_block_size;
+    uint32_t cb0_tiles = act_block_size * 2; // double buffered
     auto cb_act = tt_metal::CreateCircularBuffers(
         program,
         act_cb,
@@ -89,7 +89,7 @@ void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program &program,
         program,
         tilize_mode_tilized_act_cb,
         core,
-        cb0_tiles,
+        cb0_tiles, // double buffering input CB
         cb0_tiles * single_tile_size,
         tt::DataFormat::Float16_b
     );
@@ -129,8 +129,8 @@ void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program &program,
             program,
             out0_cb,
             core,
-            num_output_tiles,
-            num_output_tiles * single_tile_size,
+            num_output_tiles * 2, // double bufferring output cb
+            num_output_tiles * 2 * single_tile_size,
             tt::DataFormat::Float16_b
         );
     }
@@ -241,7 +241,6 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
     uint32_t out_dram_addr = dst_dram_buffer->address();
     uint32_t out_row_size = weight_matrix_width * num_bytes_of_df;
     uint32_t out_subblock_num_tiles = out_subblock_h_ntiles * out_subblock_w_ntiles;
-
     TT_ASSERT(out_subblock_num_tiles <= 8, "Need to ensure that matmul partials fit in dst");
 
     // act
