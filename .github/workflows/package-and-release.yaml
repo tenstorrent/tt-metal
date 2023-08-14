@@ -29,6 +29,24 @@ jobs:
       release_candidate_suffix: ${{ needs.get-params.outputs.is-release-candidate && fromJSON(needs.get-params.outputs.is-release-candidate) }}
     secrets:
       CHECKOUT_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
+  create-changelog:
+    needs: create-tag
+    runs-on: ubuntu-latest
+    outputs:
+      changelog: ${{ steps.output-changelog.outputs.changelog }}
+    steps:
+      - name: Create changelog
+        id: create-changelog
+        uses: mikepenz/release-changelog-builder-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ignorePreReleases: true
+          failOnError: true
+      - name: Output changelog
+        id: output-changelog
+        run: |
+          echo "${{ steps.create-changelog.outputs.changelog }}"
+          echo "changelog=${{ steps.create-changelog.outputs.changelog }}" >> "$GITHUB_OUTPUT"
   build-eager-package:
     needs: create-tag
     strategy:
@@ -44,7 +62,7 @@ jobs:
       CHECKOUT_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
   # Candidate for breaking up
   create-and-upload-draft-release:
-    needs: [create-tag, build-eager-package]
+    needs: [create-tag, create-changelog, build-eager-package]
     strategy:
       matrix:
         os: [ubuntu-20.04]
@@ -61,13 +79,17 @@ jobs:
           name: eager-dist-${{ matrix.os }}-${{ matrix.arch }}
       - name: Create VERSION
         run: echo ${{ needs.create-tag.outputs.version }} > VERSION
+      - name : Create CHANGELOG.txt
+        run: echo "${{ needs.create-changelog.outputs.changelog }}" >> CHANGELOG.txt
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ needs.create-tag.outputs.version }}
           name: ${{ needs.create-tag.outputs.version }}
           draft: true
+          body_path: CHANGELOG.txt
           files: |
             metal_libs-*+*.whl
             VERSION
+            CHANGELOG.txt
           fail_on_unmatched_files: true
