@@ -23,43 +23,81 @@ constexpr auto dram_memory_config = tt::tt_metal::MemoryConfig{.interleaved=true
 
 Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Parameters& parameters, std::size_t encoder_index, const std::uint32_t head_size) {
 
-    auto bert_large_fused_qkv_matmul_output = bert_large_fused_qkv_matmul(
+    auto batch_size = hidden_states.shape()[0];
+
+    auto fused_qkv_matmul_program_config = tt::operations::primary::MatmulMultiCoreReuseMultiCastProgramConfig{
+        .compute_with_storage_grid_size = {12, batch_size},
+        .in0_block_w = 4,
+        .out_subblock_h = 4,
+        .out_subblock_w = 2,
+        .per_core_M = 12,
+        .per_core_N = 8,
+        .fuse_gelu_activation=false,
+    };
+    auto fused_qkv_matmul_output = tt::operations::primary::matmul(
         hidden_states,
         parameters.at(fmt::format("fused_qkv_weight_{}", encoder_index)),
         parameters.at(fmt::format("fused_qkv_bias_{}", encoder_index)),
+        fused_qkv_matmul_program_config,
         l1_memory_config
     );
 
 
-    auto bert_large_create_qkv_heads_output = bert_large_create_qkv_heads(bert_large_fused_qkv_matmul_output, l1_memory_config);
+    auto bert_large_create_qkv_heads_output = bert_large_create_qkv_heads(fused_qkv_matmul_output, l1_memory_config);
     auto query = bert_large_create_qkv_heads_output[0];
     auto key = bert_large_create_qkv_heads_output[1];
     auto value = bert_large_create_qkv_heads_output[2];
-    bert_large_fused_qkv_matmul_output.deallocate();
+    fused_qkv_matmul_output.deallocate();
     bert_large_create_qkv_heads_output.clear();
 
 
-    auto bert_large_pre_softmax_bmm_output = bert_large_pre_softmax_bmm(query, key, dram_memory_config);
+    auto pre_softmax_bmm_program_config = tt::operations::primary::MatmulMultiCoreReuseProgramConfig{
+        .compute_with_storage_grid_size = {12, batch_size},
+        .in0_block_w = 1,
+        .out_subblock_h = 4,
+        .out_subblock_w = 2,
+        .per_core_M = 12,
+        .per_core_N = 12,
+    };
+    auto pre_softmax_bmm_matmul = tt::operations::primary::matmul(query, key, pre_softmax_bmm_program_config, dram_memory_config);
     query.deallocate();
     key.deallocate();
 
 
-    bert_large_pre_softmax_bmm_output = scale_mask_softmax_in_place(1.0f / std::sqrt(head_size), attention_mask, bert_large_pre_softmax_bmm_output);
+    pre_softmax_bmm_matmul = scale_mask_softmax_in_place(1.0f / std::sqrt(head_size), attention_mask, pre_softmax_bmm_matmul);
 
 
-    auto bert_large_post_softmax_bmm_output = bert_large_post_softmax_bmm(bert_large_pre_softmax_bmm_output, value, l1_memory_config);
-    bert_large_pre_softmax_bmm_output.deallocate();
+    auto post_softmax_bmm_program_config = tt::operations::primary::MatmulMultiCoreReuseProgramConfig{
+        .compute_with_storage_grid_size = {12, batch_size},
+        .in0_block_w = 2,
+        .out_subblock_h = 4,
+        .out_subblock_w = 2,
+        .per_core_M = 12,
+        .per_core_N = 2,
+    };
+    auto post_softmax_bmm_output = tt::operations::primary::matmul(pre_softmax_bmm_matmul, value, post_softmax_bmm_program_config, l1_memory_config);
+    pre_softmax_bmm_matmul.deallocate();
     value.deallocate();
 
 
-    auto bert_large_concat_heads_output = bert_large_concat_heads(bert_large_post_softmax_bmm_output, l1_memory_config);
-    bert_large_post_softmax_bmm_output.deallocate();
+    auto bert_large_concat_heads_output = bert_large_concat_heads(post_softmax_bmm_output, l1_memory_config);
+    post_softmax_bmm_output.deallocate();
 
 
-    auto bert_large_selfout_bmm_output = bert_large_selfout_matmul(
+    auto selfout_bmm_program_config = tt::operations::primary::MatmulMultiCoreReuseMultiCastProgramConfig{
+        .compute_with_storage_grid_size = {12, batch_size},
+        .in0_block_w = 4,
+        .out_subblock_h = 6,
+        .out_subblock_w = 1,
+        .per_core_M = 12,
+        .per_core_N = 3,
+        .fuse_gelu_activation=false,
+    };
+    auto selfout_bmm_output = tt::operations::primary::matmul(
         bert_large_concat_heads_output,
         parameters.at(fmt::format("selfout_weight_{}", encoder_index)),
         parameters.at(fmt::format("selfout_bias_{}", encoder_index)),
+        selfout_bmm_program_config,
         l1_memory_config
     );
     bert_large_concat_heads_output.deallocate();
@@ -67,44 +105,63 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
 
     auto attention_layernorm_output = bert_large_add_layernorm(
         hidden_states,
-        bert_large_selfout_bmm_output,
+        selfout_bmm_output,
         1e-12,
         parameters.at(fmt::format("attention_layernorm_weight_{}", encoder_index)),
         parameters.at(fmt::format("attention_layernorm_bias_{}", encoder_index)),
         l1_memory_config
     );
     hidden_states.deallocate();
-    bert_large_selfout_bmm_output.deallocate();
+    selfout_bmm_output.deallocate();
 
 
-    auto bert_large_ff1_matmul_output = bert_large_ff1_matmul(
+    auto ff1_matmul_program_config = tt::operations::primary::MatmulMultiCoreReuseMultiCastProgramConfig{
+        .compute_with_storage_grid_size = {12, batch_size},
+        .in0_block_w = 4,
+        .out_subblock_h = 6,
+        .out_subblock_w = 1,
+        .per_core_M = 12,
+        .per_core_N = 11,
+        .fuse_gelu_activation=true,
+    };
+    auto ff1_matmul_output = tt::operations::primary::matmul(
         attention_layernorm_output,
         parameters.at(fmt::format("ff1_weight_{}", encoder_index)),
         parameters.at(fmt::format("ff1_bias_{}", encoder_index)),
-        true,
+        ff1_matmul_program_config,
         dram_memory_config
     );
 
 
-    auto bert_large_ff2_matmul_output = bert_large_ff2_matmul(
-        bert_large_ff1_matmul_output,
+    auto ff2_matmul_program_config = tt::operations::primary::MatmulMultiCoreReuseMultiCastProgramConfig{
+        .compute_with_storage_grid_size = {12, batch_size},
+        .in0_block_w = 4,
+        .out_subblock_h = 6,
+        .out_subblock_w = 1,
+        .per_core_M = 12,
+        .per_core_N = 3,
+        .fuse_gelu_activation=false,
+    };
+    auto ff2_matmul_output = tt::operations::primary::matmul(
+        ff1_matmul_output,
         parameters.at(fmt::format("ff2_weight_{}", encoder_index)),
         parameters.at(fmt::format("ff2_bias_{}", encoder_index)),
+        ff2_matmul_program_config,
         l1_memory_config
     );
-    bert_large_ff1_matmul_output.deallocate();
+    ff1_matmul_output.deallocate();
 
 
     auto feedforward_layernorm_output = bert_large_add_layernorm(
         attention_layernorm_output,
-        bert_large_ff2_matmul_output,
+        ff2_matmul_output,
         1e-12,
         parameters.at(fmt::format("feedforward_layernorm_weight_{}", encoder_index)),
         parameters.at(fmt::format("feedforward_layernorm_bias_{}", encoder_index)),
         l1_memory_config
     );
     attention_layernorm_output.deallocate();
-    bert_large_ff2_matmul_output.deallocate();
+    ff2_matmul_output.deallocate();
 
 
     return feedforward_layernorm_output;
