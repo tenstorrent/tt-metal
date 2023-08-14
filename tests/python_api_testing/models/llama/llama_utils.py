@@ -6,7 +6,6 @@ import numpy as np
 from loguru import logger
 import json
 import tt_lib
-from tt_lib.fallback_ops import fallback_ops
 
 
 def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
@@ -36,8 +35,9 @@ def tt2torch_tensor(tt_tensor):
 
 
 def tt_const_tensor(value, shape, device):
-    pytorch_const = tt_lib.fallback_ops.full(shape, value)
-    return pytorch_const
+    pytorch_const = torch.full(shape, value)
+    tt_const = torch2tt_tensor(pytorch_const, device)
+    return tt_const
 
 
 def linear(x, weight, bias=None):

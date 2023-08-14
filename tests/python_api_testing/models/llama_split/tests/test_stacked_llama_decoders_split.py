@@ -19,14 +19,110 @@ from typing import List, Optional, Tuple, Union
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from python_api_testing.models.llama.llama_utils import *
+from python_api_testing.models.llama.llama_mlp import TtLlamaMLP
+from python_api_testing.models.llama.llama_attention import TtLlamaAttention
+from python_api_testing.models.llama.llama_layer_norm import TtLlamaRMSNorm
+from python_api_testing.models.llama.llama_decoder import TtLlamaDecoderLayer
 from utility_functions_new import comp_pcc
 from python_api_testing.models.llama_split.llama_split_utils import gen_position_ids
-from python_api_testing.models.llama_split.tt.stacked_decoders import (
-    TtLlamaDecoderModelStacked,
-)
-from python_api_testing.models.llama_split.reference.cpu_stacked_decoders import (
-    PytorchLlamaDecoderModelStacked,
-)
+
+
+class TtLlamaDecoderModelStacked(torch.nn.Module):
+    def __init__(
+        self,
+        device,
+        state_dict,
+        base_url,
+        max_position_embeddings,
+        config,
+        start,
+        count,
+    ):
+        super().__init__()
+        self.device = device
+        self.state_dict = state_dict
+        self.base_url = base_url
+        self.max_position_embeddings = max_position_embeddings
+        self.config = config
+
+        self.decoder_list = torch.nn.Sequential(
+            *[
+                TtLlamaDecoderLayer(
+                    self.device,
+                    self.state_dict,
+                    self.base_url,
+                    decoder_idx,
+                    self.max_position_embeddings,
+                    self.config,
+                )
+                for decoder_idx in range(start, start + count)
+            ]
+        )
+
+        # add final normalization layer
+        self.layer_num = None
+        self.layer_position = "norm"
+        self.final_layernorm = TtLlamaRMSNorm(
+            self.device,
+            state_dict=self.state_dict,
+            base_url=self.base_url,
+            layer_num=self.layer_num,
+            layer_position=self.layer_position,
+            hidden_size=self.config.hidden_size,
+            eps=self.config.rms_norm_eps,
+        )
+
+        # if it is CausalLM Llama model
+        self.weight = torch2tt_tensor(self.state_dict[f"lm_head.weight"], self.device)
+        self.bias = None
+
+    def forward(self, x, y, half=1, has_layer_norm=False, is_causal=False):
+        result = x
+        for idx, decoder_layer in enumerate(self.decoder_list):
+            result = decoder_layer(hidden_states=result, position_ids=y)[0]
+
+        if half == 2:
+            # add norm layer
+            if has_layer_norm:
+                result = self.final_layernorm(result)
+            # add linear
+            if is_causal:
+                result = linear(result, self.weight, self.bias)
+
+        return result
+
+
+class PytorchLlamaDecoderModelStacked(torch.nn.Module):
+    def __init__(self, hf_reference_model, decoder_ids):
+        super().__init__()
+        self.decoder_list = torch.nn.Sequential(
+            *[
+                hf_reference_model.model.layers[decoder_idx]
+                for decoder_idx in decoder_ids
+            ]
+        )
+        # get final norm layer
+        self.final_layer_norm = hf_reference_model.model.norm
+        # Disable dropout
+        self.final_layer_norm.eval()
+
+        # get linear layer
+        self.linear_layer = hf_reference_model.lm_head
+        self.linear_layer.eval()
+
+    def forward(self, x, y, has_layer_norm=False, is_causal=False):
+        result = x
+        for idx, decoder_layer in enumerate(self.decoder_list):
+            result = decoder_layer(hidden_states=result, position_ids=y)[0]
+
+        # layer norm is always present in HF pytorch model
+        if has_layer_norm:
+            result = self.final_layer_norm(result)
+
+        if is_causal:
+            result = self.linear_layer(result)
+
+        return result
 
 
 def run_test_llama_decoder_split_inference(
