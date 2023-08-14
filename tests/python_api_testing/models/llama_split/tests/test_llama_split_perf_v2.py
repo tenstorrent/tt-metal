@@ -56,7 +56,7 @@ def run_llama_split_inference(
     is_causallm=False,
 ):
     if half == 1:
-        logger.debug("First half of the TT model is invoked!")
+        logger.debug("First pass through TT model")
         tt_llama_model = llama_first_half(
             device,
             state_dict,
@@ -70,7 +70,7 @@ def run_llama_split_inference(
             input_ids=x_inputs, attention_mask=att_mask, position_ids=position_ids
         )
     else:
-        logger.debug("Second half of the TT model is invoked!")
+        logger.debug("Second pass through TT model")
         tt_llama_model = llama_second_half(
             device,
             state_dict,
@@ -108,23 +108,20 @@ def call_tt_llama_forward_func(
     disable_compile_cache()
 
     # Perf tests keys
-    first_half_first_key = "first_half_first_iter"
-    first_half_second_key = "first_half_second_iter"
-    second_half_first_key = "second_half_first_iter"
-    second_half_second_key = "second_half_second_iter"
+    first_key = "first_iter"
+    second_key = "second_iter"
 
     input_ids_padded = input_ids
     attention_mask_padded = attention_mask
     position_ids_padded = gen_position_ids(input_ids_padded)
 
-    # The first half performance measure ----------------------------------------
+    logger.debug(f"The first call of the first half started")
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
     host = tt_lib.device.GetHost()
 
-    logger.debug(f"The first call of the first half started")
-    profiler.start(first_half_first_key)
+    profiler.start(first_key)
     first_out = run_llama_split_inference(
         device,
         state_dict,
@@ -138,15 +135,13 @@ def call_tt_llama_forward_func(
         position_ids=position_ids_padded,
         half=1,
     )
-    profiler.end(first_half_first_key)
+    profiler.start(first_key)
     logger.debug(f"The first call of the first half ended")
-
-    # enable cache for the second call
-    enable_compile_cache()
 
     # The second call of the first half
     logger.debug(f"The second call of the first half started")
-    profiler.start(first_half_second_key)
+    enable_compile_cache()
+    profiler.start(second_key)
     first_out = run_llama_split_inference(
         device,
         state_dict,
@@ -160,21 +155,16 @@ def call_tt_llama_forward_func(
         position_ids=position_ids_padded,
         half=1,
     )
-    profiler.end(first_half_second_key)
+    profiler.start(second_key)
     logger.debug(f"The second call of the first half ended")
 
-    first_half_first_iter_time = profiler.get(first_half_first_key)
-    first_half_second_iter_time = profiler.get(first_half_second_key)
-    logger.info(f"First call of the first half: {first_half_first_iter_time}")
-    logger.info(f"Second call of the first half: {first_half_second_iter_time}")
+    print(f"The first compile time: {profiler.print()}")
 
     tt_lib.device.CloseDevice(device)
     logger.debug(f"The first call ended")
 
-    # The second half performance measure ------------------------------------
-    # Disable compile cache
-    disable_compile_cache()
-
+    # The second call -------------------------------------------------------
+    logger.debug(f"The second call started")
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
@@ -182,8 +172,6 @@ def call_tt_llama_forward_func(
     # send input tensor from host to tt device
     tt_input = first_out
 
-    logger.debug("The first call of the second half started")
-    profiler.start(second_half_first_key)
     tt_out = run_llama_split_inference(
         device,
         state_dict,
@@ -198,45 +186,15 @@ def call_tt_llama_forward_func(
         half=2,
         is_causallm=is_causallm,
     )
-    profiler.end(second_half_first_key)
-    logger.debug(f"The first call of the second half started ended")
+    logger.debug(f"The second call ended")
 
-    # enable cache for the second call
-    enable_compile_cache()
-
-    logger.debug("The second call of the second half started")
-    profiler.start(second_half_second_key)
-    tt_out = run_llama_split_inference(
-        device,
-        state_dict,
-        base_url,
-        max_position_embeddings,
-        configuration,
-        num_decoders_start=second_decoder_start,
-        num_decoders=num_consecutive_decoders,
-        x_inputs=tt_input,
-        att_mask=attention_mask_padded,
-        position_ids=position_ids_padded,
-        half=2,
-        is_causallm=is_causallm,
-    )
-    profiler.end(second_half_second_key)
-    logger.debug(f"The second call of the second half started ended")
-
-    second_half_first_iter_time = profiler.get(second_half_first_key)
-    second_half_second_iter_time = profiler.get(second_half_second_key)
-    logger.info(f"First call of the second half: {second_half_first_iter_time}")
-    logger.info(f"Second call of the second half: {second_half_second_iter_time}")
+    # squeeze output
+    tt_out = tt_out.squeeze(1)
 
     tt_lib.device.CloseDevice(device)
     device = None
 
-    return (
-        first_half_first_iter_time,
-        first_half_second_iter_time,
-        second_half_first_iter_time,
-        second_half_second_iter_time,
-    )
+    return tt_out
 
 
 # parameters --------------------------------------------------
@@ -251,7 +209,7 @@ BATCH_SIZE = 1
 # how many decoders to use
 # number of decoders to be stacked started from the selected id in the original llama model
 # e.g. stack 16 consecutive decoders
-_num_consecutive_decoders = 16
+_num_consecutive_decoders = 1
 
 # decoder id from which decoder stacking starts (the first half of the model)
 # e.g. start from 0 add use 3 decoders (0, 1, and 2)
@@ -332,12 +290,8 @@ def test_llama_pcc(prompt):
         profiler.end(cpu_key)
 
         # The first TT model call
-        (
-            first_half_first_iter_time,
-            first_half_second_iter_time,
-            second_half_first_iter_time,
-            second_half_second_iter_time,
-        ) = call_tt_llama_forward_func(
+        # profiler.start(first_key)
+        tt_output = call_tt_llama_forward_func(
             configuration,
             state_dict,
             base_url,
@@ -351,14 +305,34 @@ def test_llama_pcc(prompt):
             num_consecutive_decoders,
             is_causallm,
         )
+        # profiler.end(first_key)
 
+        # enable_compile_cache()
+
+        # The second TT model call
+        # profiler.start(second_key)
+        tt_output = call_tt_llama_forward_func(
+            configuration,
+            state_dict,
+            base_url,
+            max_position_embeddings,
+            logits_processor,
+            tokenizer,
+            input_ids_padded,
+            attention_mask_padded,
+            first_decoder_start,
+            second_decoder_start,
+            num_consecutive_decoders,
+            is_causallm,
+        )
+        # profiler.end(second_key)
+
+    # first_iter_time = profiler.get(first_key)
+    # second_iter_time = profiler.get(second_key)
+    first_iter_time = 0
+    second_iter_time = 0
     cpu_time = profiler.get(cpu_key)
 
     prep_report(
-        "lamma",
-        BATCH_SIZE,
-        first_half_first_iter_time + second_half_first_iter_time,
-        first_half_second_iter_time + second_half_second_iter_time,
-        comments,
-        cpu_time,
+        "lamma", BATCH_SIZE, first_iter_time, second_iter_time, comments, cpu_time
     )
