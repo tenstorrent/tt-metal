@@ -33,8 +33,6 @@ jobs:
     permissions: read-all
     needs: create-tag
     runs-on: ubuntu-latest
-    outputs:
-      changelog: ${{ steps.output-changelog.outputs.changelog }}
     steps:
       - name: Create changelog
         id: create-changelog
@@ -43,13 +41,15 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           ignorePreReleases: true
           failOnError: true
-      - name: Output changelog to console
+      - name: Output changelog
         run: |
           echo "${{ steps.create-changelog.outputs.changelog }}" > CHANGELOG.txt
           cat CHANGELOG.txt
-      - name: Output changelog
-        id: output-changelog
-        run: echo "changelog=${{ steps.create-changelog.outputs.changelog }}" >> "$GITHUB_OUTPUT"
+      - name: Upload changelog as artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: changelog
+          path: CHANGELOG.txt
   build-eager-package:
     needs: create-tag
     strategy:
@@ -82,8 +82,10 @@ jobs:
           name: eager-dist-${{ matrix.os }}-${{ matrix.arch }}
       - name: Create VERSION
         run: echo ${{ needs.create-tag.outputs.version }} > VERSION
-      - name : Create CHANGELOG.txt
-        run: echo "${{ needs.create-changelog.outputs.changelog }}" >> CHANGELOG.txt
+      - name : Download changelog
+        uses: actions/download-artifact@v3
+        with:
+          name: changelog
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
