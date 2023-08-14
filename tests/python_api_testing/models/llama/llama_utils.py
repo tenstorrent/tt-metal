@@ -34,12 +34,6 @@ def tt2torch_tensor(tt_tensor):
     return tt_output.to_torch()
 
 
-def tt_const_tensor(value, shape, device):
-    pytorch_const = torch.full(shape, value)
-    tt_const = torch2tt_tensor(pytorch_const, device)
-    return tt_const
-
-
 def linear(x, weight, bias=None):
     weight = tt_lib.tensor.transpose(weight)
     x = tt_lib.tensor.matmul(x, weight)

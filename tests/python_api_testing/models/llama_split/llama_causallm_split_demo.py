@@ -433,17 +433,21 @@ if __name__ == "__main__":
         logger.info(f"TT out shape: {tt_out.shape}")
 
         # check outputs -----------------------------------------------------------
-        # pcc = 0.98
-        # logger.info(comp_allclose(pytorch_out.logits, tt_out))
+        pcc = 0.98
+        logger.info(comp_allclose(pytorch_out.logits, tt_out))
 
-        # does_pass, pcc_value = comp_pcc(pytorch_out.logits, tt_out, pcc)
-        # logger.info(f"PCC value: {pcc_value}")
+        does_pass, pcc_value = comp_pcc(pytorch_out.logits, tt_out, pcc)
+        logger.info(f"PCC value: {pcc_value}")
 
-        # if does_pass:
-        #     logger.info("Llama Model Passed!")
-        # else:
-        #     logger.warning("Llama Model Failed!")
-        #     assert does_pass, f"PCC value is lower than {pcc}"
+        if does_pass:
+            logger.info("Llama Model Passed!")
+        else:
+            logger.warning("Llama Model Failed!")
+            assert does_pass, f"PCC value is lower than {pcc}"
+
+        import sys
+
+        sys.exit(0)
 
         # update the inputs
         next_token_logits = tt_out
