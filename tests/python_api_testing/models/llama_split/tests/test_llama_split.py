@@ -178,7 +178,7 @@ _first_decoder_start = 0
 
 # decoder id from which decoder stacking starts (the second half of the model)
 # e.g. start from 16 add use 3 decoders (16, 17, and 18)
-_second_decoder_start = _num_consecutive_decoders
+_second_decoder_start = 16
 # parameters --------------------------------------------------
 
 # promp = """Author-contribution statements and acknowledgements in research papers should state clearly and specifically whether, and to what extent, the authors used AI technologies such as ChatGPT in the preparation of their manuscript and analysis.

@@ -37,7 +37,7 @@ from utility_functions_new import (
     profiler,
     enable_compile_cache,
     disable_compile_cache,
-    prep_report,
+    comp_pcc,
 )
 
 
@@ -171,7 +171,6 @@ _llama_model_name = "huggyllama/llama-7b"
 _base_url = "model.layers"
 _max_position_embeddings = 2048
 _is_causallm = False
-BATCH_SIZE = 1
 
 # how many decoders to use
 # number of decoders to be stacked started from the selected id in the original llama model
@@ -184,7 +183,7 @@ _first_decoder_start = 0
 
 # decoder id from which decoder stacking starts (the second half of the model)
 # e.g. start from 16 add use 3 decoders (16, 17, and 18)
-_second_decoder_start = _num_consecutive_decoders
+_second_decoder_start = 16
 # parameters --------------------------------------------------
 
 # prompt = """Author-contribution statements and acknowledgements in research papers should state clearly and specifically whether, and to what extent, the authors used AI technologies such as ChatGPT in the preparation of their manuscript and analysis.
@@ -194,16 +193,10 @@ prompt = "I believe the meaning of life is to"
 
 
 @pytest.mark.parametrize(
-    "prompt",
-    ((prompt),),
+    "PERF_CNT, prompt, pcc",
+    ((2, prompt, 0.9),),
 )
-def test_llama_pcc(prompt):
-    disable_compile_cache()
-    first_key = "first_iter"
-    second_key = "second_iter"
-    cpu_key = "ref_key"
-    comments = "llama model with two loads (halfs)"
-
+def test_llama_pcc(PERF_CNT, prompt, pcc):
     # set parameters =================================================================
     tokenizer_name = _tokenizer_name
     llama_model_name = _llama_model_name
@@ -227,6 +220,8 @@ def test_llama_pcc(prompt):
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
 
+    profiler.enable()
+
     # generate real input =====================================================
     inputs = tokenizer(prompt, return_tensors="pt")
     input_ids = inputs.input_ids
@@ -243,61 +238,63 @@ def test_llama_pcc(prompt):
 
     # PyTorch output ===========================================================
     hugging_face_reference_model = hugging_face_reference_model.get_decoder()
+    profiler.start("\nExec time of reference model")
+    pytorch_out = hugging_face_reference_model(
+        input_ids=input_ids_padded,
+        attention_mask=attention_mask_padded,
+        position_ids=position_ids_padded,
+    )
+    profiler.end("\nExec time of reference model")
+    pytorch_out = pytorch_out.last_hidden_state
 
     # TT output: call forward() function several times ========================
-    with torch.no_grad():
-        # call huggingface model
-        profiler.start(cpu_key)
-        pytorch_out = hugging_face_reference_model(
-            input_ids=input_ids_padded,
-            attention_mask=attention_mask_padded,
-            position_ids=position_ids_padded,
-        )
-        pytorch_out = pytorch_out.last_hidden_state
-        profiler.end(cpu_key)
-
-        # The first TT model call
-        profiler.start(first_key)
-        tt_output = call_tt_llama_forward_func(
-            configuration,
-            state_dict,
-            base_url,
-            max_position_embeddings,
-            logits_processor,
-            tokenizer,
-            input_ids_padded,
-            attention_mask_padded,
-            first_decoder_start,
-            second_decoder_start,
-            num_consecutive_decoders,
-            is_causallm,
-        )
-        profiler.end(first_key)
-
-        enable_compile_cache()
-
-        # The second TT model call
-        profiler.start(second_key)
-        tt_output = call_tt_llama_forward_func(
-            configuration,
-            state_dict,
-            base_url,
-            max_position_embeddings,
-            logits_processor,
-            tokenizer,
-            input_ids_padded,
-            attention_mask_padded,
-            first_decoder_start,
-            second_decoder_start,
-            num_consecutive_decoders,
-            is_causallm,
-        )
-        profiler.end(second_key)
-
-    first_iter_time = profiler.get(first_key)
-    second_iter_time = profiler.get(second_key)
-    cpu_time = profiler.get(cpu_key)
-
-    prep_report(
-        "lamma", BATCH_SIZE, first_iter_time, second_iter_time, comments, cpu_time
+    profiler.start("\nExecution time of tt_llama first run")
+    tt_out = call_tt_llama_forward_func(
+        configuration,
+        state_dict,
+        base_url,
+        max_position_embeddings,
+        logits_processor,
+        tokenizer,
+        input_ids_padded,
+        attention_mask_padded,
+        first_decoder_start,
+        second_decoder_start,
+        num_consecutive_decoders,
+        is_causallm,
     )
+    profiler.end("\nExecution time of tt_llama first run")
+
+    enable_compile_cache()
+
+    logger.info(f"\nRunning the tt_llama model for {PERF_CNT} iterations . . . ")
+
+    for i in range(PERF_CNT):
+        profiler.start("\nAverage execution time of tt_llama model")
+        tt_out = call_tt_llama_forward_func(
+            configuration,
+            state_dict,
+            base_url,
+            max_position_embeddings,
+            logits_processor,
+            tokenizer,
+            input_ids_padded,
+            attention_mask_padded,
+            first_decoder_start,
+            second_decoder_start,
+            num_consecutive_decoders,
+            is_causallm,
+        )
+        profiler.end("\nAverage execution time of tt_llama model")
+
+    profiler.print()
+
+    # check outputs ================================================================
+    does_pass, pcc_value = comp_pcc(pytorch_out, tt_out, pcc)
+    logger.info(f"{pcc_value}")
+
+    if does_pass:
+        logger.info("Llama Model Passed!")
+    else:
+        logger.warning("Llama Model Failed!")
+        assert does_pass, f"PCC value ({pcc_value}) is lower than {pcc}."
