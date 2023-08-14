@@ -12,6 +12,77 @@ import struct
 def _nearest_32(x):
     return math.ceil(x / 32) * 32
 
+def _nearest_y(x, y):
+    return math.ceil(x / y) * y
+
+
+def divup(a, b):
+    return (a+b-1)//b
+
+
+def roundup(a, b):
+    result = divup(a, b)*b
+    return result
+
+
+def roundup32(a):
+    return roundup(a, 32)
+
+
+def float_to_bits(x):
+    s = struct.pack('>f', x)
+    return struct.unpack('>l', s)[0]
+
+
+### Profiling ###
+class Profiler:
+    def __init__(self):
+        self.start_times = dict()
+        self.times = dict()
+        self.disabled = False
+
+    def enable(self):
+        self.disabled = False
+
+    def disable(self):
+        self.disabled = True
+
+    def start(self, key, force_enable=False):
+        if self.disabled and not force_enable:
+            return
+
+        self.start_times[key] = time.time()
+
+    def end(self, key, PERF_CNT=1, force_enable=False):
+        if self.disabled and not force_enable:
+            return
+
+        if key not in self.start_times:
+            return
+
+        diff = time.time() - self.start_times[key]
+
+        if key not in self.times:
+            self.times[key] = []
+
+        self.times[key].append(diff / PERF_CNT)
+
+    def get(self, key):
+        if key not in self.times:
+            return 0
+
+        return sum(self.times[key]) / len(self.times[key])
+
+    def print(self):
+        for key in self.times:
+            average = self.get(key)
+            print(f"{key}: {average:.3f}s")
+
+
+profiler = Profiler()
+
+
+### Turn flags on/off ###
 def enable_persistent_kernel_cache():
     """
     Enables persistent compiled kernel caching - disables recompiling the kernels for the duration of running process if built_kernels/.../hash directory with kernel binaries is present.
