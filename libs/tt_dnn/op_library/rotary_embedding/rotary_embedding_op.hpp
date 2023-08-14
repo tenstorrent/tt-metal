@@ -42,9 +42,9 @@ inline Tensor rotary_embedding(const Tensor& input_tensor, const Tensor& cos, co
     uint32_t seq_len = input_tensor.shape()[-2];
     uint32_t B = input_tensor.shape()[0];
     uint32_t X = input_tensor.shape()[-1];
+    TT_ASSERT(cos.shape() == sin.shape(), "Cos and Sin dims must match");
     TT_ASSERT(cos.shape()[0] == B && cos.shape()[1] == 1 && cos.shape()[-2] >= seq_len && cos.shape()[-1] == X, "Cos dims must match input dims");
-    TT_ASSERT(sin.shape()[0] == B && sin.shape()[1] == 1 && sin.shape()[-2] >= seq_len && sin.shape()[-1] == X, "Sin dims must match input dims");
-    TT_ASSERT(cos.shape() == sin.shape());
+
     Shape input_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.shape());
     FormatParams input_format_params = {.pad_shape=input_pad_shape, .pad_value=0.0, .target_layout=Layout::TILE};
     Shape cos_pad_shape = AutoFormat::pad_to_tile_shape(cos.shape());

@@ -15,9 +15,23 @@ namespace tt_metal {
 
 void RotaryEmbedding::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operands to rotary embedding need to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operands to rotary embedding need to be allocated in buffers on device!");
-    TT_ASSERT((input_tensor.layout() == Layout::TILE), "Inputs to rotary embedding must be tilized");
+    const auto& cos = input_tensors.at(1);
+    const auto& sin = input_tensors.at(2);
+    TT_ASSERT(input_tensors.size() == 3);
+    auto ref_device = input_tensor.device();
+    for (const auto& input : input_tensors) {
+        TT_ASSERT(input.storage_type() == StorageType::DEVICE, "Operands to rotary embedding need to be on device!");
+        TT_ASSERT(input.buffer() != nullptr, "Operands to rotary embedding need to be allocated in buffers on device!");
+        TT_ASSERT(input.device() == ref_device, "Operands to rotary embedding need to be on same device!");
+        TT_ASSERT((input.layout() == Layout::TILE), "Inputs to rotary embedding must be tilized");
+    }
+
+    TT_ASSERT(input_tensor.shape()[-1] % (TILE_WIDTH * 2) == 0, "Input X dim must be divisible into tiles");
+    uint32_t seq_len = input_tensor.shape()[-2];
+    uint32_t B = input_tensor.shape()[0];
+    uint32_t X = input_tensor.shape()[-1];
+    TT_ASSERT(cos.shape() == sin.shape(), "Cos and Sin dims must match");
+    TT_ASSERT(cos.shape()[0] == B && cos.shape()[1] == 1 && cos.shape()[-2] >= seq_len && cos.shape()[-1] == X, "Cos dims must match input dims");
 }
 
 std::vector<Shape> RotaryEmbedding::compute_output_shapes(
@@ -55,10 +69,10 @@ operation::ProgramWithCallbacks RotaryEmbedding::create_program(const std::vecto
 RotaryEmbeddingOpParallelizationStrategy RotaryEmbedding::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     uint32_t num_rows = input_tensor.volume() / input_tensor.shape()[-1] / TILE_HEIGHT;
-    if(num_rows > 1){
+    if(num_rows > 1) {
            return RotaryEmbeddingOpParallelizationStrategy::MULTI_CORE;
     }
-    else{
+    else {
        return RotaryEmbeddingOpParallelizationStrategy::SINGLE_CORE;
     }
 }
