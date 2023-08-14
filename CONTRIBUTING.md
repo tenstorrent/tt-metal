@@ -143,7 +143,7 @@ on model tests.
 If you are using a machine with virtual machine specs, please use
 
 ```
-./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline_type models_performance_virtual_machine
+./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type models_performance_virtual_machine
 ```
 
 If you are using a machine with bare metal machine specs, please use
