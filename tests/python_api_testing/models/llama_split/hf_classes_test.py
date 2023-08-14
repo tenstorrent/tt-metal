@@ -183,6 +183,7 @@ class TtLlamaModelFirstHFModel(torch.nn.Module):
                 "You cannot specify both decoder_input_ids and decoder_inputs_embeds at the same time"
             )
         elif input_ids is not None:
+            print(f"F In ids shape: {input_ids.shape}")
             batch_size, seq_length = input_ids.shape
         elif inputs_embeds is not None:
             batch_size, seq_length, _ = inputs_embeds.shape
@@ -198,6 +199,8 @@ class TtLlamaModelFirstHFModel(torch.nn.Module):
             past_key_values_length = past_key_values[0][0].shape[2]
             seq_length_with_past = seq_length_with_past + past_key_values_length
 
+        print(f"past_key_values_length: {past_key_values_length}")
+        print(f"Seq len: {seq_length + past_key_values_length}")
         if position_ids is None:
             device = input_ids.device if input_ids is not None else inputs_embeds.device
             position_ids = torch.arange(
@@ -239,6 +242,7 @@ class TtLlamaModelFirstHFModel(torch.nn.Module):
         next_decoder_cache = () if use_cache else None
 
         for idx, decoder_layer in enumerate(self.decoders_first):
+            print(f"First dec: {idx}")
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
@@ -405,6 +409,8 @@ class TtLlamaModelSecondHFModel(torch.nn.Module):
             past_key_values_length = past_key_values[0][0].shape[2]
             seq_length_with_past = seq_length_with_past + past_key_values_length
 
+        print(f"Sec past_key_values_length: {past_key_values_length}")
+        print(f"Sec Seq len: {seq_length + past_key_values_length}")
         if position_ids is None:
             device = input_ids.device if input_ids is not None else inputs_embeds.device
             position_ids = torch.arange(
@@ -442,6 +448,7 @@ class TtLlamaModelSecondHFModel(torch.nn.Module):
         next_decoder_cache = () if use_cache else None
 
         for idx, decoder_layer in enumerate(self.decoders_second):
+            print(f"Second dec: {idx}")
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 

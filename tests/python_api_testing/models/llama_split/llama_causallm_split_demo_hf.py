@@ -19,13 +19,9 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedModel
 from typing import List, Optional, Tuple, Union
 from python_api_testing.models.llama.llama_layer_norm import TtLlamaRMSNorm
 from python_api_testing.models.llama.llama_decoder import TtLlamaDecoderLayer
-from python_api_testing.models.llama.llama_utils import *
-from python_api_testing.models.llama_split.llama_model_split import (
-    TtLlamaModelFirstHalf,
-    build_decoders,
-)
-from python_api_testing.models.llama_split.llama_causal_model_split import (
-    TtLlamaCausalModelSecondHalf,
+from python_api_testing.models.llama_split.hf_classes_test import (
+    TtLlamaModelFirstHFModel,
+    TtLlamaModelSecondHFModel,
 )
 
 from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
@@ -277,12 +273,12 @@ def run_llama_split_inference(
     num_decoders_start,
     num_decoders,
     x_inputs=None,
-    attention_mask=None,
+    position_ids=None,
     half=1,
 ):
     if half == 1:
         logger.info("First pass throught TT model")
-        tt_llama_model = TtLlamaModelFirstHalf(
+        tt_llama_model = TtLlamaModelFirstHFModel(
             device,
             state_dict,
             base_url,
@@ -291,10 +287,10 @@ def run_llama_split_inference(
             num_decoders_start,
             num_decoders,
         )
-        tt_out = tt_llama_model(x_inputs, attention_mask)
+        tt_out = tt_llama_model(input_ids=x_inputs, position_ids=position_ids)
     else:
         logger.info("Second pass throught TT model")
-        tt_llama_model = TtLlamaCausalModelSecondHalf(
+        tt_llama_model = TtLlamaModelSecondHFModel(
             device,
             state_dict,
             base_url,
@@ -303,9 +299,10 @@ def run_llama_split_inference(
             num_decoders_start,
             num_decoders,
         )
-        tt_out = tt_llama_model(x_inputs, attention_mask)
+        tt_out = tt_llama_model(input_ids=x_inputs, position_ids=position_ids)
 
-    tt_output = tt2torch_tensor(tt_out)
+    # returned type from the model is tuple
+    tt_output = tt2torch_tensor(tt_out[0])
     return tt_output
 
 
@@ -330,8 +327,6 @@ if __name__ == "__main__":
     hugging_face_reference_model.eval()
     # get configurations
     configuration = hugging_face_reference_model.config
-    # generation_config = hugging_face_reference_model.generation_config
-    # generation_config.pad_token_id = configuration.pad_token_id
     state_dict = hugging_face_reference_model.state_dict()
 
     # generate real input ============================================================
@@ -346,6 +341,18 @@ if __name__ == "__main__":
     )[0]
     logger.info(f"PyTorch response: {output}")
 
+    # get positions_ids values
+    past_key_values_length = 0
+    seq_length = inputs.input_ids.shape[1]
+
+    position_ids = torch.arange(
+        past_key_values_length,
+        seq_length + past_key_values_length,
+        dtype=torch.long,
+        device=None,
+    )
+    position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
+
     # ================================================================================
     device = None
 
@@ -354,9 +361,9 @@ if __name__ == "__main__":
 
         # add padding
         input_ids = pad_input_32(text_input_ids, configuration.pad_token_id)
-        # attention_mask = pad_input_32(inputs.attention_mask, 0)
-        attention_mask = None
-        print("1 ===============================")
+        attention_mask = pad_input_32(inputs.attention_mask, 0)
+        position_ids = pad_input_32(position_ids, 0)
+
         logits_processor = get_logits_processor(
             input_ids, hugging_face_reference_model.config
         )
@@ -366,7 +373,7 @@ if __name__ == "__main__":
         tt_lib.device.InitializeDevice(device)
         tt_lib.device.SetDefaultDevice(device)
         host = tt_lib.device.GetHost()
-        print("2 ===============================")
+
         first_out = run_llama_split_inference(
             state_dict,
             base_url,
@@ -375,10 +382,9 @@ if __name__ == "__main__":
             num_decoders_start=first_decoder_start,
             num_decoders=num_consecutive_decoders,
             x_inputs=input_ids,
-            attention_mask=attention_mask,
+            position_ids=position_ids,
             half=1,
         )
-        print("3 ===============================")
         tt_lib.device.CloseDevice(device)
         logger.info(f"The first call ended: loop {i+1}")
 
@@ -387,8 +393,10 @@ if __name__ == "__main__":
         device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
         tt_lib.device.InitializeDevice(device)
         tt_lib.device.SetDefaultDevice(device)
+
         # send input tensor from host to tt device
-        tt_input = torch2tt_tensor(first_out, device)
+        # tt_input = torch2tt_tensor(first_out, device)
+        tt_input = first_out
 
         tt_out = run_llama_split_inference(
             state_dict,
@@ -398,7 +406,7 @@ if __name__ == "__main__":
             num_decoders_start=second_decoder_start,
             num_decoders=num_consecutive_decoders,
             x_inputs=tt_input,
-            attention_mask=attention_mask,
+            position_ids=position_ids,
             half=2,
         )
         logger.info(f"The second call ended: loop {i+1}")
