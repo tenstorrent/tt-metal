@@ -26,7 +26,7 @@ from python_api_testing.models.llama.llama_mlp import TtLlamaMLP
 from python_api_testing.models.llama.llama_attention import TtLlamaAttention
 from python_api_testing.models.llama.llama_layer_norm import TtLlamaRMSNorm
 from python_api_testing.models.llama.llama_decoder import TtLlamaDecoderLayer
-from utility_functions_new import comp_pcc
+from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 
 class TtLlamaDecoderModelStacked(torch.nn.Module):
@@ -80,29 +80,37 @@ class PytorchLlamaDecoderModelStacked(torch.nn.Module):
         return result
 
 
-def run_test_llama_decoder_inference(
-    device,
-    llama_input,
-    model_version,
-    tokenizer_version,
-    base_url,
-    batch,
-    seq_len,
-    max_position_embeddings,
-    num_decoders,
-    on_weka,
-    pcc,
+def run_test_LlamaDecoder_inference(
+    device, model_version, tokenizer_version, batch, seq_len, num_decoders, on_weka, pcc
 ):
-    # stack decoders
+    # Prepare input ========================================================================
+    torch.manual_seed(0)
+    llama_input = (torch.rand(batch, seq_len, 4096) * 2) - 1
+    base_url = "model.layers"
+    # max_position_embeddings parameter should be in the config file,
+    # but the used pretrained model doesn't consist this parameter
+    max_position_embeddings = 2048
     decoder_stack_list = [i for i in range(num_decoders + 1)]
 
     # get positions_ids values
-    position_ids = gen_position_ids(llama_input)
+    past_key_values_length = 0
+    seq_length = llama_input.shape[1]
+
+    position_ids = torch.arange(
+        past_key_values_length,
+        seq_length + past_key_values_length,
+        dtype=torch.long,
+        device=None,
+    )
+    position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
 
     # Load Pytorch model ===================================================================
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_version)
+    model_name = model_version
+    tokenizer_name = tokenizer_version
+
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
     hugging_face_reference_model = AutoModelForCausalLM.from_pretrained(
-        model_version, torch_dtype=torch.float32
+        model_name, torch_dtype=torch.float32
     )
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
@@ -135,6 +143,8 @@ def run_test_llama_decoder_inference(
     tt_out = tt_out.squeeze(1)
 
     # check outputs =========================================================================
+    pcc = 0.98
+
     does_pass, pcc_value = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"PCC value: {pcc_value}")
 
@@ -145,53 +155,27 @@ def run_test_llama_decoder_inference(
         assert does_pass, f"PCC value is lower than {pcc}"
 
 
-# parameters --------------------------------------------------
-_tokenizer_name = "huggyllama/llama-7b"
-_llama_model_name = "huggyllama/llama-7b"
-# base url from the model state dictionary
-_base_url = "model.layers"
-_batch = 1
-_seq_len = 32
-_max_position_embeddings = 2048
-_on_weka = False
-# num_decoders - number of consecutive decoders
-# parameters --------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "num_decoders, pcc",
-    ((8, 0.98),),
-)
-def test_llama_decoder_inference(
-    num_decoders,
-    pcc,
-):
-    # set parameters ================================================================
-    model_version = _llama_model_name
-    tokenizer_version = _tokenizer_name
-    base_url = _base_url
-    batch = _batch
-    seq_len = _seq_len
-    max_position_embeddings = _max_position_embeddings
-    on_weka = _on_weka
-
-    # Prepare input ========================================================================
-    llama_input = (torch.rand(batch, seq_len, 4096) * 2) - 1
+if __name__ == "__main__":
+    # input parameters
+    model_version = "decapoda-research/llama-7b-hf"
+    tokenizer_version = "hf-internal-testing/llama-tokenizer"
+    batch = 1
+    seq_len = 128
+    num_decoders = 4
+    on_weka = False
+    pcc = 0.98
 
     # Initialize the device
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
 
-    run_test_llama_decoder_inference(
+    run_test_LlamaDecoder_inference(
         device,
-        llama_input,
         model_version,
         tokenizer_version,
-        base_url,
         batch,
         seq_len,
-        max_position_embeddings,
         num_decoders,
         on_weka,
         pcc,
