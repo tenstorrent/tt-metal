@@ -93,15 +93,17 @@ def run_perf_roberta(expected_inference_time, expected_compile_time):
     second_iter_time = profiler.get(second_key)
     cpu_time = profiler.get(cpu_key)
     tt_lib.device.CloseDevice(device)
-
     prep_report(
-        "roberta",
-        BATCH_SIZE,
-        first_iter_time,
-        second_iter_time,
-        comments,
-        cpu_time,
+        model_name="roberta",
+        batch_size=BATCH_SIZE,
+        inference_and_compile_time=first_iter_time,
+        inference_time=second_iter_time,
+        expected_compile_time=expected_compile_time,
+        expected_inference_time=expected_inference_time,
+        comments=comments,
+        inference_time_cpu=cpu_time
     )
+
     compile_time = first_iter_time - second_iter_time
 
     logger.info(f"roberta {comments} inference time: {second_iter_time}")

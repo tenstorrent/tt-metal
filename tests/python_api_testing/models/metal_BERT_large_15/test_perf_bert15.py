@@ -109,7 +109,14 @@ def run_perf_bert15(expected_inference_time, expected_compile_time):
     ttl.device.CloseDevice(device)
 
     prep_report(
-        "bert15", BATCH_SIZE, first_iter_time, second_iter_time, comments, cpu_time
+        model_name="bert15",
+        batch_size=BATCH_SIZE,
+        inference_and_compile_time=first_iter_time,
+        inference_time=second_iter_time,
+        expected_compile_time=expected_compile_time,
+        expected_inference_time=expected_inference_time,
+        comments=comments,
+        inference_time_cpu=cpu_time
     )
     compile_time = first_iter_time - second_iter_time
     logger.info(f"bert15 inference time: {second_iter_time}")

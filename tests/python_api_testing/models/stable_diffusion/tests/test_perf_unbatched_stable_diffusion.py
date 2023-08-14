@@ -282,13 +282,17 @@ def run_perf_unbatched_stable_diffusion(expected_inference_time, expected_compil
     comments = f"image size: {height}x{width} - v1.4"
 
     prep_report(
-        "unbatched_stable_diffusion",
-        BATCH_SIZE,
-        first_iter_time,
-        second_iter_time,
-        comments,
-        cpu_time,
+        model_name="unbatched_stable_diffusion",
+        batch_size=BATCH_SIZE,
+        inference_and_compile_time=first_iter_time,
+        inference_time=second_iter_time,
+        expected_compile_time=expected_compile_time,
+        expected_inference_time=expected_inference_time,
+        comments=comments,
+        inference_time_cpu=cpu_time
     )
+
+
     logger.info(
         f"Unbatched Stable Diffusion {comments} inference time: {second_iter_time}"
     )

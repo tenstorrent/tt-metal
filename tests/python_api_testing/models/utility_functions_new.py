@@ -324,7 +324,7 @@ def torch_to_tt_tensor(py_tensor, device):
 
     return tt_tensor
 
-def prep_report(model_name: str, batch_size: int, inference_and_compile_time: float, inference_time: float, comments: str, inference_time_cpu: float=None):
+def prep_report(model_name: str, batch_size: int, inference_and_compile_time: float, inference_time: float, expected_compile_time: float, expected_inference_time: float, comments: str, inference_time_cpu: float=None):
     today = time.strftime("%Y_%m_%d")
 
     def write_dict_to_file(csv_path, dict_res):
@@ -349,7 +349,9 @@ def prep_report(model_name: str, batch_size: int, inference_and_compile_time: fl
         "First Run (sec)": "{:.2f}".format(inference_and_compile_time),
         "Second Run (sec)":  "{:.2f}".format(inference_time),
         "Compile Time (sec)": "{:.2f}".format(compile_time),
+        "Expected Compile Time (sec)": "{:.2f}".format(expected_compile_time),
         "Inference Time GS (sec)": "{:.4f}".format(inference_time),
+        "Expected Inference Time GS (sec)": "{:.4f}".format(expected_inference_time),
         "Throughput GS (batch*inf/sec)": gs_throughput,
         "Inference Time CPU (sec)": "{:.4f}".format(inference_time_cpu),
         "Throughput CPU (batch*inf/sec)": cpu_throughput,

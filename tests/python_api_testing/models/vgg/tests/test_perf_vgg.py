@@ -64,7 +64,17 @@ def run_perf_vgg(imagenet_sample_input, expected_inference_time, expected_compil
     cpu_time = profiler.get(cpu_key)
     compile_time = first_iter_time - second_iter_time
 
-    prep_report("vgg", BATCH_SIZE, first_iter_time, second_iter_time, comments, cpu_time)
+    prep_report(
+        model_name="VGG",
+        batch_size=BATCH_SIZE,
+        inference_and_compile_time=first_iter_time,
+        inference_time=second_iter_time,
+        expected_compile_time=expected_compile_time,
+        expected_inference_time=expected_inference_time,
+        comments=comments,
+        inference_time_cpu=cpu_time
+    )
+
     logger.info(f"vgg inference time: {second_iter_time}")
     logger.info(f"vgg compile time: {compile_time}")
 

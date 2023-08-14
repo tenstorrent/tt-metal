@@ -72,9 +72,18 @@ def run_perf_vit(expected_inference_time, expected_compile_time, hf_cat_image_sa
     second_iter_time = profiler.get(second_key)
     cpu_time = profiler.get(cpu_key)
     tt_lib.device.CloseDevice(device)
+
     prep_report(
-        "vit", BATCH_SIZE, first_iter_time, second_iter_time, "base-patch16", cpu_time
+        model_name="vit",
+        batch_size=BATCH_SIZE,
+        inference_and_compile_time=first_iter_time,
+        inference_time=second_iter_time,
+        expected_compile_time=expected_compile_time,
+        expected_inference_time=expected_inference_time,
+        comments="base-patch16",
+        inference_time_cpu=cpu_time
     )
+
     compile_time = first_iter_time - second_iter_time
     logger.info(f"vit inference time: {second_iter_time}")
     logger.info(f"vit compile time: {compile_time}")

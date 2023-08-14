@@ -103,8 +103,17 @@ def run_perf_whisper(expected_inference_time, expected_compile_time):
     tt_lib.device.CloseDevice(device)
 
     prep_report(
-        "whisper", BATCH_SIZE, first_iter_time, second_iter_time, comments, cpu_time
+        model_name="whisper",
+        batch_size=BATCH_SIZE,
+        inference_and_compile_time=first_iter_time,
+        inference_time=second_iter_time,
+        expected_compile_time=expected_compile_time,
+        expected_inference_time=expected_inference_time,
+        comments=comments,
+        inference_time_cpu=cpu_time
     )
+
+
     logger.info(f"whisper tiny inference time: {second_iter_time}")
     logger.info(f"whisper compile time: {compile_time}")
 

@@ -83,8 +83,16 @@ def run_perf_resnet(expected_inference_time, expected_compile_time, hf_cat_image
 
     cpu_time = profiler.get(cpu_key)
     compile_time = first_iter_time - second_iter_time
-
-    prep_report("resnet50", BATCH_SIZE, first_iter_time, second_iter_time, comments, cpu_time)
+    prep_report(
+        model_name="resnet50",
+        batch_size=BATCH_SIZE,
+        inference_and_compile_time=first_iter_time,
+        inference_time=second_iter_time,
+        expected_compile_time=expected_compile_time,
+        expected_inference_time=expected_inference_time,
+        comments=comments,
+        inference_time_cpu=cpu_time
+    )
 
     logger.info(f"resnet50 {comments} inference time: {second_iter_time}")
     logger.info(f"resnet50 compile time: {compile_time}")

@@ -91,8 +91,17 @@ def run_perf_bloom(expected_inference_time, expected_compile_time):
 
     cpu_time = profiler.get(cpu_key)
     compile_time = first_iter_time - second_iter_time
+    prep_report(
+        model_name="bloom",
+        batch_size=BATCH_SIZE,
+        inference_and_compile_time=first_iter_time,
+        inference_time=second_iter_time,
+        expected_compile_time=expected_compile_time,
+        expected_inference_time=expected_inference_time,
+        comments=comments,
+        inference_time_cpu=cpu_time
+    )
 
-    prep_report("bloom", BATCH_SIZE, first_iter_time, second_iter_time, comments, cpu_time)
     logger.info(f"bloom {comments} inference time: {second_iter_time}")
     logger.info(f"bloom {comments} compile time: {compile_time}")
 
