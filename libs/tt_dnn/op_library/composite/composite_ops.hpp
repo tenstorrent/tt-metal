@@ -212,6 +212,7 @@ Tensor atanh(const Tensor& input_a, const MemoryConfig& output_mem_config = oper
  */
 Tensor outer(Tensor& a, Tensor& b, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+
 //Function variance of whole tensor.
 //Tensor variance(const Tensor& y,const Tensor& mean_y);
 Tensor var_hw(const Tensor& y, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
@@ -225,6 +226,10 @@ Tensor std_hw(const Tensor& y, const MemoryConfig& output_mem_config = operation
 // Function normalize
 //use transformation y = (y - mean(y))/std(y) by broadcast
 Tensor normalize_hw(const Tensor& y, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+
+//logaddexp(a,b)
+Tensor logaddexp(const Tensor &input_a, const Tensor &input_b, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 } //namespace tt_metal
 
