@@ -4,13 +4,13 @@ In order to use HuggingFace Llama model we need a development version of Transfo
 
 # Use pretrained weights
 
-The weights used in the tests are downloaded from: https://huggingface.co/huggyllama/llama-7b
+The weights used in the tests are downloaded from: https://huggingface.co/decapoda-research/llama-7b-hf
 
 How to use the weights:
     ```
     from transformers import AutoTokenizer, AutoModelForCausalLM
-    tokenizer = AutoTokenizer.from_pretrained("huggyllama/llama-7b")
-    model = AutoModelForCausalLM.from_pretrained("huggyllama/llama-7b")
+    tokenizer = AutoTokenizer.from_pretrained("decapoda-research/llama-7b-hf")
+    model = AutoModelForCausalLM.from_pretrained("decapoda-research/llama-7b-hf")
     ```
 
 An issue which probably will appear is:
@@ -19,7 +19,3 @@ An issue which probably will appear is:
 
 To solve it please use this thread: https://github.com/huggingface/transformers/issues/22222#issuecomment-1477171703
 Change the LLaMATokenizer in tokenizer_config.json into lowercase LlamaTokenizer and it works.
-
- # Stacked decoders tests
-
- Tests in which only Llama Decoders are stacked are needed because it has been observed that as their number increases, the PCC value drops. Please check the spreedsheet/Llama card

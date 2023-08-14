@@ -1,23 +1,37 @@
+import math
+from pathlib import Path
+import sys
+
+f = f"{Path(__file__).parent}"
+sys.path.append(f"{f}/..")
+sys.path.append(f"{f}/../..")
+sys.path.append(f"{f}/../../..")
+sys.path.append(f"{f}/../../../..")
+
 import pytest
 from loguru import logger
 import torch
-from torch import nn
+import numpy as np
+from torch import nn, Tensor
+from torch.nn import CrossEntropyLoss
+from torch.utils.checkpoint import checkpoint
 import tt_lib
+from typing import List, Optional, Tuple, Union
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
+from collections import OrderedDict
 
-from models.utility_functions import (
-    tt2torch_tensor,
-    torch2tt_tensor,
-)
-from models.llama.llama_utils import gen_position_ids
-from tests.python_api_testing.models.utility_functions_new import (
-    comp_pcc,
-    comp_allclose_and_pcc,
-)
+from python_api_testing.models.llama.llama_utils import *
+from python_api_testing.models.llama.llama_mlp import TtLlamaMLP
+from python_api_testing.models.llama.llama_attention import TtLlamaAttention
+from python_api_testing.models.llama.llama_layer_norm import TtLlamaRMSNorm
+from python_api_testing.models.llama.llama_decoder import TtLlamaDecoderLayer
+from utility_functions_new import comp_pcc
 
-from models.llama.tt.tt_stacked_decoders import TtLlamaDecoderModelStacked
-from tests.python_api_testing.models.llama.reference.cpu_stacked_decoders import (
+from python_api_testing.models.llama_split.tt.stacked_decoders import (
+    TtLlamaDecoderModelStacked,
+)
+from python_api_testing.models.llama_split.reference.cpu_stacked_decoders import (
     PytorchLlamaDecoderModelStacked,
 )
 

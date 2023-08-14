@@ -3,32 +3,8 @@ from loguru import logger
 from transformers.generation.configuration_utils import GenerationConfig
 from transformers.generation.logits_process import LogitsProcessorList
 from typing import List, Optional, Tuple, Union
-import tt_lib
-
-
-def linear(x, weight, bias=None):
-    weight = tt_lib.tensor.transpose(weight)
-    x = tt_lib.tensor.matmul(x, weight)
-    if bias is not None:
-        x = tt_lib.tensor.bcast(
-            x, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H
-        )
-    return x
-
-
-def gen_position_ids(input_ids):
-    # get positions_ids values
-    past_key_values_length = 0
-    seq_length = input_ids.shape[1]
-    position_ids = torch.arange(
-        past_key_values_length,
-        seq_length + past_key_values_length,
-        dtype=torch.long,
-        device=None,
-    )
-
-    position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
-    return position_ids
+from python_api_testing.models.llama.llama_utils import gen_position_ids
+from python_api_testing.models.llama.llama_decoder import TtLlamaDecoderLayer
 
 
 def _merge_criteria_processor_list(
@@ -323,8 +299,28 @@ def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] 
     )
 
 
-def shape_tt(states, batch_size, seq_len, n_heads, head_dim):
-    tt_out = tt_lib.tensor.reshape(states, batch_size, seq_len, n_heads, head_dim)
-    tt_out = tt_lib.tensor.transpose_hc(tt_out)
-
-    return tt_out
+def build_decoders(
+    device,
+    state_dict,
+    base_url,
+    max_position_embeddings,
+    config,
+    num_decoder_start,
+    num_decoders,
+):
+    decoder_list = torch.nn.Sequential(
+        *[
+            TtLlamaDecoderLayer(
+                device,
+                state_dict,
+                base_url,
+                decoder_idx,
+                max_position_embeddings,
+                config,
+            )
+            for decoder_idx in range(
+                num_decoder_start, num_decoder_start + num_decoders
+            )
+        ]
+    )
+    return decoder_list

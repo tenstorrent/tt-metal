@@ -1,14 +1,13 @@
 from loguru import logger
 import torch
 import numpy as np
-from torch import nn
+from torch import nn, Tensor
 import tt_lib
-from models.utility_functions import (
-    tt2torch_tensor,
-    torch2tt_tensor,
-)
-from models.llama.tt.llama_layer_norm import TtLlamaRMSNorm
-from models.llama.tt.llama_decoder import TtLlamaDecoderLayer
+
+from python_api_testing.models.llama.llama_decoder import TtLlamaDecoderLayer
+from python_api_testing.models.llama.llama_attention import TtLlamaAttention
+from python_api_testing.models.llama.llama_layer_norm import TtLlamaRMSNorm
+from python_api_testing.models.llama.llama_utils import *
 
 
 class TtLlamaDecoderModelStacked(torch.nn.Module):

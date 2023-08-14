@@ -19,3 +19,7 @@ class PytorchEmbeddings(torch.nn.Module):
 
     def forward(self, x):
         return self.embeddings(x)
+
+
+def run_embeddings_inference():
+    return

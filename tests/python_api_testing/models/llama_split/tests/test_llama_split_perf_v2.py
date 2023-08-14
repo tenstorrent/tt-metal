@@ -1,21 +1,39 @@
+import math
+from pathlib import Path
+import sys
+
+f = f"{Path(__file__).parent}"
+sys.path.append(f"{f}/..")
+sys.path.append(f"{f}/../..")
+sys.path.append(f"{f}/../../..")
+sys.path.append(f"{f}/../../../..")
+
+import math
+import time
 import torch
 import pytest
 from torch import nn
 import tt_lib
 from loguru import logger
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from models.llama.llama_utils import (
-    prepare_llama_input,
-    gen_position_ids,
-    get_logits_processor,
-)
-from models.utility_functions import (
+from python_api_testing.models.llama.llama_utils import (
     tt2torch_tensor,
-    torch2tt_tensor,
+    gen_position_ids,
 )
-from models.llama.tt.llama import llama_first_half, llama_second_half
-
-from tests.python_api_testing.models.utility_functions_new import (
+from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedModel
+from typing import List, Optional, Tuple, Union
+from python_api_testing.models.llama.llama_layer_norm import TtLlamaRMSNorm
+from python_api_testing.models.llama.llama_decoder import TtLlamaDecoderLayer
+from python_api_testing.models.llama_split.llama_split_utils import (
+    pad_input_32_left,
+    prepare_llama_input,
+    get_next_llama_output_token,
+)
+from python_api_testing.models.llama_split.tt.llama import (
+    llama_first_half,
+    llama_second_half,
+)
+from llama_split_utils import get_logits_processor
+from utility_functions_new import (
     profiler,
     enable_compile_cache,
     disable_compile_cache,
@@ -255,6 +273,9 @@ prompt = "I believe the meaning of life is to"
     ((prompt),),
 )
 def test_llama_pcc(prompt):
+    # disable_compile_cache()
+    # first_key = "first_iter"
+    # second_key = "second_iter"
     cpu_key = "ref_key"
     comments = "llama model with two loads (halfs)"
 

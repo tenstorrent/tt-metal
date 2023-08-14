@@ -1,19 +1,32 @@
+import math
+from pathlib import Path
+import sys
+
+f = f"{Path(__file__).parent}"
+sys.path.append(f"{f}/..")
+sys.path.append(f"{f}/../..")
+sys.path.append(f"{f}/../../..")
+sys.path.append(f"{f}/../../../..")
+
 import pytest
-import torch
-from torch import nn
-import tt_lib
 from loguru import logger
+import torch
+import numpy as np
+from torch import nn, Tensor
+from torch.nn import CrossEntropyLoss
+from torch.utils.checkpoint import checkpoint
+import tt_lib
+from typing import List, Optional, Tuple, Union
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from models.utility_functions import (
-    tt2torch_tensor,
-    torch2tt_tensor,
-)
-from tests.python_api_testing.models.utility_functions_new import (
-    comp_pcc,
-    comp_allclose_and_pcc,
-)
-from models.llama.tt.llama_decoder import TtLlamaDecoderLayer
+from collections import OrderedDict
+
+from python_api_testing.models.llama.llama_utils import *
+from python_api_testing.models.llama.llama_mlp import TtLlamaMLP
+from python_api_testing.models.llama.llama_attention import TtLlamaAttention
+from python_api_testing.models.llama.llama_layer_norm import TtLlamaRMSNorm
+from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from python_api_testing.models.llama.llama_decoder import TtLlamaDecoderLayer
 
 
 class PytorchLlamaDecoderModel(torch.nn.Module):
@@ -92,10 +105,10 @@ def run_test_LlamaDecoder_inference(
     tt_out = tt_out.squeeze(1)
 
     # check outputs ----------------------------------------------------------------------
-    _, pcc_output = comp_allclose_and_pcc(pytorch_out, tt_out, pcc)
-    does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
+    logger.info(comp_allclose(pytorch_out, tt_out))
 
-    logger.info(f"Output {pcc_output}")
+    does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
+    logger.info(f"PCC value: {output_pcc}")
 
     if does_pass:
         logger.info("Llama Decoder output Passed!")
@@ -108,8 +121,8 @@ def run_test_LlamaDecoder_inference(
     "model_version, tokenizer_version, batch, seq_len, decoder_id, on_weka, pcc",
     (
         (
-            "huggyllama/llama-7b",
-            "huggyllama/llama-7b",
+            "decapoda-research/llama-7b-hf",
+            "hf-internal-testing/llama-tokenizer",
             1,
             128,
             5,

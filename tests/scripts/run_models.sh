@@ -57,7 +57,7 @@ env pytest tests/python_api_testing/models/synthetic_gradients -k linear_test
 env pytest tests/python_api_testing/models/synthetic_gradients -k block_test
 env pytest tests/python_api_testing/models/synthetic_gradients -k full_inference
 
-env pytest tests/python_api_testing/models/llama/tests -k llama_causallm
+env pytest tests/python_api_testing/models/llama_split/tests -k llama_causallm
 
 env pytest tests/python_api_testing/models/falcon/tests/test_falcon_causallm.py::test_FalconCausalLM_inference[batch1_seqlen128_layers2]
 

@@ -1,7 +1,19 @@
+from pathlib import Path
 import sys
+
+f = f"{Path(__file__).parent}"
+sys.path.append(f"{f}")
+sys.path.append(f"{f}/..")
+sys.path.append(f"{f}/../..")
+sys.path.append(f"{f}/../../..")
+sys.path.append(f"{f}/../../../..")
+
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from models.llama.llama_utils import get_logits_processor
+from torch import nn
+from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedModel
+from transformers.generation.configuration_utils import GenerationConfig
+from transformers.generation.logits_process import LogitsProcessorList
+from llama_split_utils import get_logits_processor
 from loguru import logger
 import pytest
 
@@ -62,5 +74,5 @@ def test_cpu_demo(prompt, num_words):
     tokens = tokenizer.tokenize(output)
 
     # print pytorch generated reponse ================================================
-    logger.debug(f"CPU's generated tokens: {tokens}")
-    logger.info(f"CPU's predicted Output: {output}")
+    logger.info(f"PyTorch generated response: {output}")
+    logger.debug(f"PyTorch generated tokens: {tokens}")

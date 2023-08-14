@@ -1,11 +1,13 @@
 import torch
+from python_api_testing.models.llama.llama_layer_norm import TtLlamaRMSNorm
+from python_api_testing.models.llama.llama_decoder import TtLlamaDecoderLayer
+from python_api_testing.models.llama.llama_utils import *
 from typing import List, Optional, Tuple, Union
 from loguru import logger
-
-from models.llama.tt.llama_first_half import (
+from python_api_testing.models.llama_split.tt.llama_first_half import (
     TtLlamaModelFirstHFModel,
 )
-from models.llama.tt.llama_second_half import (
+from python_api_testing.models.llama_split.tt.llama_second_half import (
     TtLlamaModelSecondHFModel,
 )
 
