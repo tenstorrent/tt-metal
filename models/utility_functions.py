@@ -101,6 +101,18 @@ def torch_to_tt_tensor_rm(py_tensor, device, shape=None, put_on_device=True):
         tt_tensor = tt_tensor.to(device)
     return tt_tensor
 
+def torch_to_tt_tensor(py_tensor, device):
+    shape = list(py_tensor.size())
+    while len(shape) < 4:
+        shape.insert(0, 1)
+
+    tt_tensor = (
+        tt_lib.tensor.Tensor(py_tensor.reshape(shape), tt_lib.tensor.DataType.BFLOAT16)
+        .to(tt_lib.tensor.Layout.TILE)     # change memory layout of TT Tensor to TILE (as operation that will use it expects TILE layout)
+        .to(device)                         # move TT Tensor from host to TT accelerator device (device is of type tt_lib.device.Device)
+    )
+
+    return tt_tensor
 
 ### Padding / Unpadding ###
 def pad_by_zero(x: torch.Tensor, device):
