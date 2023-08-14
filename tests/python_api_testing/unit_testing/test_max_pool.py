@@ -1,5 +1,6 @@
 import sys
 import pytest
+import math
 
 from pathlib import Path
 from loguru import logger
@@ -27,8 +28,10 @@ def volume(shape):
 ## dilation_h, dilation_w
 @pytest.mark.parametrize(
     "act_shape",    ## NCHW
-    ((  [1, 32, 32, 32],
-        [1, 64, 32, 32],
+    ((  #[1, 1, 32, 32],
+        [1, 32, 32, 32],
+        #[1, 32, 64, 64],
+        [1, 64, 64, 64],
         [1, 64, 112, 112],
         [1, 1, 128, 128],))
 )
@@ -63,7 +66,12 @@ def volume(shape):
         ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),),
     ids=["out_DRAM", "out_L1"],
 )
-def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, in_mem_config, out_mem_config):
+@pytest.mark.parametrize(
+    "nblocks",
+    (1,     ## default
+     8,)
+)
+def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, in_mem_config, out_mem_config, nblocks):
     in_n, in_c, in_h, in_w = act_shape
     kernel_h, kernel_w = kernel_size
     pad_h, pad_w = padding
@@ -72,6 +80,12 @@ def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, in_mem_
 
     if 2 * pad_h > kernel_h or 2 * pad_w > kernel_w:
         print('Invalid case')
+        pytest.skip()
+
+    out_h = math.floor((in_h + 2 * pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
+    out_w = math.floor((in_w + 2 * pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
+    if out_w % nblocks != 0:
+        print(f'Unsupported case when out_w ({out_w}) % nblocks ({nblocks}) != 0')
         pytest.skip()
 
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
@@ -85,6 +99,10 @@ def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, in_mem_
     # act = torch.zeros(act_shape, dtype=torch.bfloat16).float()
     # act = torch.ones(act_shape, dtype=torch.bfloat16).float()
     # act = torch.arange(0, volume(act_shape), dtype=torch.bfloat16).reshape(act_shape).float()
+    # for c in range(act_shape[1]):
+    #     for h in range(act_shape[2]):
+    #         for w in range(act_shape[3]):
+    #             act[0, c, h, w] = c + h + w
 
     ## this op expects input tensor as { N, 1, H * W, C }, so rearrange and reshape tensor
     ## but before that, make sure in_c is multiple of tile width
@@ -109,7 +127,8 @@ def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, in_mem_
                                            stride_h, stride_w,
                                            pad_h, pad_w,
                                            dilation_h, dilation_w,
-                                           out_mem_config)
+                                           out_mem_config,
+                                           nblocks)
         out_padded = out_padded.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
     except Exception as e:
         ttl.device.CloseDevice(device)
@@ -130,5 +149,7 @@ def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, in_mem_
     passing_pcc, output_pcc = comp_pcc(golden_pytorch, out_pytorch)
     logger.info(f'Passing PCC = {passing_pcc}')
     logger.info(f'Output PCC = {output_pcc}')
+    # print(f'OUTPUT: {out_pytorch}')
+    # print(f'GOLDEN: {golden_pytorch}')
 
     assert(passing_pcc)

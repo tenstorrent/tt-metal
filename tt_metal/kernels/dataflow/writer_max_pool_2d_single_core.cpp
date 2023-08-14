@@ -1,8 +1,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
+
 // #include "debug_print.h"
-
-
 // SliceRange srt = SliceRange{ .h0 = 0, .h1 = 32, .hs = 8, .w0 = 0, .w1 = 32, .ws = 8 };
 // SliceRange srr = SliceRange{ .h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1 = 64, .ws = 2 };
 // SliceRange srr2 = SliceRange{ .h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1 = 64, .ws = 2 };
@@ -15,7 +14,11 @@ void kernel_main() {
     const int32_t out_h = get_arg_val<int32_t>(10);
     const int32_t out_w = get_arg_val<int32_t>(11);
     const uint32_t out_nbytes_c = get_arg_val<uint32_t>(15);
+    const uint32_t out_cb_pagesize = get_arg_val<uint32_t>(23);
+    const uint32_t out_w_loop_count = get_arg_val<uint32_t>(25);
+
     constexpr bool is_out_dram = get_compile_time_arg_val(1) == 1;
+    constexpr uint32_t out_nelems = get_compile_time_arg_val(3);
 
     constexpr uint32_t out_cb_id = tt::CB::c_out0;
 
@@ -28,14 +31,20 @@ void kernel_main() {
     uint32_t out_row_id = 0;
     // for every output pixel
     for (int32_t out_h_i = 0; out_h_i < out_h; ++ out_h_i) {
-        for (int32_t out_w_i = 0; out_w_i < out_w; ++ out_w_i) {
-            cb_wait_front(out_cb_id, 1);
+        for (uint32_t out_w_i = 0; out_w_i < out_w_loop_count; ++ out_w_i) {
+            cb_wait_front(out_cb_id, out_nelems);
+            // kernel_profiler::mark_time(13);
             uint32_t out_l1_read_addr = get_read_ptr(out_cb_id);
-            uint64_t out_noc_addr = get_noc_addr(out_row_id, s_out);
-            noc_async_write(out_l1_read_addr, out_noc_addr, out_nbytes_c);
+            for (uint32_t out_elem_i = 0; out_elem_i < out_nelems; ++ out_elem_i) {
+                // TODO [AS]: skip OOB indices when out_nelems is not multiple of out_w
+                uint64_t out_noc_addr = get_noc_addr(out_row_id, s_out);
+                noc_async_write(out_l1_read_addr, out_noc_addr, out_nbytes_c);
+                ++ out_row_id;
+                out_l1_read_addr += out_cb_pagesize;
+            }
             noc_async_write_barrier();
-            cb_pop_front(out_cb_id, 1);
-            ++ out_row_id;
+            // kernel_profiler::mark_time(14);
+            cb_pop_front(out_cb_id, out_nelems);
         }
     }
 } // kernel_main()

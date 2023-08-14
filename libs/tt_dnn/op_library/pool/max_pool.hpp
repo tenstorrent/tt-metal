@@ -14,6 +14,7 @@ struct MaxPool {
     uint32_t pad_h_, pad_w_;
     uint32_t dilation_h_, dilation_w_;
     MemoryConfig out_mem_config_;
+    uint32_t nblocks_;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -28,7 +29,8 @@ Tensor max_pool2d(const Tensor &input,
                   uint32_t stride_h = 1, uint32_t stride_w = 1,
                   uint32_t pad_h = 0, uint32_t pad_w = 0,               // default: no padding
                   uint32_t dilation_h = 1, uint32_t dilation_w = 1,
-                  const MemoryConfig& out_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+                  const MemoryConfig& out_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+                  uint32_t nblocks = 1);
 
 }  // namespace tt_metal
 }  // namespace tt

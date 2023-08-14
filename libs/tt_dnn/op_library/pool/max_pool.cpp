@@ -7,7 +7,11 @@
 #include "tensor/tensor_utils.hpp"
 #include "detail/util.hpp"
 
-// #include "tt_metal/llrt/tt_debug_print_server.hpp"
+#define DEBUG_SERVER 0
+
+#if DEBUG_SERVER == 1
+    #include "tt_metal/llrt/tt_debug_print_server.hpp"
+#endif
 
 uint32_t ceil_multiple_of(uint32_t n, uint32_t m) {
     return (uint32_t) ceil((float) n / m) * m;
@@ -23,7 +27,8 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                                         uint32_t stride_h, uint32_t stride_w,
                                                         uint32_t pad_h, uint32_t pad_w,
                                                         uint32_t dilation_h, uint32_t dilation_w,
-                                                        const MemoryConfig& out_mem_config) {
+                                                        const MemoryConfig& out_mem_config,
+                                                        uint32_t nblocks) {
     Program program = Program();
     CoreRange cores = {.start={0, 0}, .end={0, 0}};
 
@@ -35,10 +40,12 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
     Shape input_shape = input.shape();
     Shape output_shape = output.shape();
 
-    // log_debug("SHAPES: input = {}, output = {}", input_shape, output_shape);
+    log_debug("SHAPES: input = {}, output = {}", input_shape, output_shape);
 
-    // // start debug server
-    // tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}});
+    #if DEBUG_SERVER == 1
+        // start debug server
+        tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}});
+    #endif
 
     // NOTE: input is assumed to be in {N, 1, H * W, C }
 
@@ -57,19 +64,22 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
     uint32_t out_ntiles_hw = (uint32_t) ceil((float) output_shape[2] / constants::TILE_HEIGHT);
     uint32_t out_ntiles_c = (uint32_t) ceil((float) output_shape[3] / constants::TILE_WIDTH);
 
-    // CBs
+    uint32_t out_nelems = nblocks;     // TODO [AS]: Remove hard coding after identifying optimal param val
+    uint32_t out_w_loop_count = ceil((float) out_w / out_nelems);
 
-    uint32_t in_cb_id = CB::c_in0;          // input rows
-    uint32_t in_cb_pagesize = ceil_multiple_of(in_nbytes_c * kernel_size_hw_padded, constants::TILE_HW);  // TODO: pad to TILE_WIDTH boundary
-    uint32_t in_cb_npages = 1;
+    // CBs
+    uint32_t multi_buffering_factor = 2;
+
+    uint32_t in_cb_id = CB::c_in0;          // input rows for "multiple (out_nelems)" output pixels
+    uint32_t in_cb_page_nelems_padded = ceil_multiple_of(input_shape[3] * kernel_size_hw_padded, constants::TILE_HW);    // NOTE: ceil to tile size since triscs work with tilesize instead of pagesize
+    uint32_t in_cb_pagesize = in_nbytes * in_cb_page_nelems_padded;
+    uint32_t in_cb_npages = multi_buffering_factor * out_nelems;
     auto in_cb = CreateCircularBuffers(program,
                                        in_cb_id,
                                        cores,
                                        in_cb_npages,
                                        in_cb_npages * in_cb_pagesize,
                                        in_df);
-    // log_debug("in_cb :: PS = {}, NP = {}", in_cb_pagesize, in_cb_npages);
-
     uint32_t in_scalar_cb_id = CB::c_in1;
     uint32_t in_scalar_cb_pagesize = tile_size(in_df);
     uint32_t in_scalar_cb_npages = 1;
@@ -79,48 +89,43 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                               in_scalar_cb_npages,
                                               in_scalar_cb_npages * in_scalar_cb_pagesize,
                                               in_df);
-    // log_debug("in_scalar_cb :: PS = {}, NP = {}", in_scalar_cb_pagesize, in_scalar_cb_npages);
-
     uint32_t in_tiled_cb_id = CB::c_intermed0;  // tiled input
     uint32_t in_tiled_cb_pagesize = tile_size(in_df);
-    uint32_t in_tiled_cb_npages = in_ntiles_c * in_ntiles_hw;
+    uint32_t in_tiled_cb_npages = in_ntiles_c * in_ntiles_hw * out_nelems;
     auto in_tiled_cb = CreateCircularBuffers(program,
                                              in_tiled_cb_id,
                                              cores,
                                              in_tiled_cb_npages,
                                              in_tiled_cb_npages * in_tiled_cb_pagesize,
                                              in_df);
-    // log_debug("in_tiled_cb :: PS = {}, NP = {}", in_tiled_cb_pagesize, in_tiled_cb_npages);
-
     uint32_t out_tiled_cb_id = CB::c_intermed1; // tiled output
     uint32_t out_tiled_cb_pagesize = tile_size(out_df);
-    uint32_t out_tiled_cb_npages = out_ntiles_c;
+    uint32_t out_tiled_cb_npages = out_ntiles_c * out_nelems;
     auto out_tiled_cb = CreateCircularBuffers(program,
                                               out_tiled_cb_id,
                                               cores,
                                               out_tiled_cb_npages,
                                               out_tiled_cb_npages * out_tiled_cb_pagesize,
                                               out_df);
-    // log_debug("out_tiled_cb :: PS = {}, NP = {}", out_tiled_cb_pagesize, out_tiled_cb_npages);
-
-    uint32_t out_cb_id = CB::c_out0;            // output rows
+    uint32_t out_cb_id = CB::c_out0;            // output rows in RM
     uint32_t out_cb_pagesize = ceil_multiple_of(out_nbytes_c, constants::TILE_HW * out_nbytes);    // pad to tile size
-    uint32_t out_cb_npages = 1;                 // there is just one row of channels after reduction
+    uint32_t out_cb_npages = multi_buffering_factor * out_nelems;    // there is just one row of channels after reduction
     auto cb_out = CreateCircularBuffers(program,
                                         out_cb_id,
                                         cores,
                                         out_cb_npages,
                                         out_cb_npages * out_cb_pagesize,
                                         out_df);
-    // log_debug("out_cb :: PS = {}, NP = {}", out_cb_pagesize, out_cb_npages);
 
     /**
      * Reader Kernel: input rows -> input cb
      */
-    std::vector<uint32_t> reader_ct_args = {(input.memory_config().buffer_type == BufferType::DRAM) ? (uint) 1 : (uint) 0,
-                                            (out_mem_config.buffer_type == BufferType::DRAM) ? (uint) 1 : (uint) 0};
     float one = 1.;
     uint32_t bf16_one_u32 = *reinterpret_cast<uint32_t*>(&one);
+    std::vector<uint32_t> reader_ct_args = {input.memory_config().buffer_type == BufferType::DRAM ? (uint) 1 : (uint) 0,
+                                            out_mem_config.buffer_type == BufferType::DRAM ? (uint) 1 : (uint) 0,
+                                            bf16_one_u32,
+                                            out_nelems};
     std::vector<uint32_t> reader_rt_args = {src_dram_buffer->address(),
                                             dst_dram_buffer->address(),
                                             kernel_size_h, kernel_size_w, kernel_size_hw, kernel_size_hw_padded,
@@ -130,7 +135,8 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                             in_nbytes_c, out_nbytes_c,
                                             in_h, in_w, input_shape[2], input_shape[3],
                                             out_ntiles_hw, out_ntiles_c,
-                                            bf16_one_u32};
+                                            in_cb_pagesize, out_cb_pagesize,
+                                            in_cb_page_nelems_padded, out_w_loop_count};
     auto reader_config = DataMovementConfig{.processor = DataMovementProcessor::RISCV_1,
                                             .noc = NOC::RISCV_1_default,
                                             .compile_args = reader_ct_args};
@@ -141,30 +147,40 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                                   reader_config);
     SetRuntimeArgs(program, reader_kernel, cores, reader_rt_args);
 
-    // {   // debug
-    //     log_debug("in_addr: {}", src_dram_buffer->address());
-    //     log_debug("out_addr: {}", dst_dram_buffer->address());
-    //     log_debug("kernel_size_h: {}", kernel_size_h);
-    //     log_debug("kernel_size_w: {}", kernel_size_w);
-    //     log_debug("kernel_size_hw: {}", kernel_size_hw);
-    //     log_debug("kernel_size_hw_padded: {}", kernel_size_hw_padded);
-    //     log_debug("stride_h: {}", stride_h);
-    //     log_debug("stride_w: {}", stride_w);
-    //     log_debug("pad_h: {}", pad_h);
-    //     log_debug("pad_w: {}", pad_w);
-    //     log_debug("out_h: {}", out_h);
-    //     log_debug("out_w: {}", out_w);
-    //     log_debug("out_hw: {}", output_shape[2]);
-    //     log_debug("out_c: {}", output_shape[3]);
-    //     log_debug("in_nbytes_c: {}", in_nbytes_c);
-    //     log_debug("out_nbytes_c: {}", out_nbytes_c);
-    //     log_debug("in_h: {}", in_h);
-    //     log_debug("in_w: {}", in_w);
-    //     log_debug("in_hw: {}", input_shape[2]);
-    //     log_debug("in_c: {}", input_shape[3]);
-    //     log_debug("out_ntiles_hw: {}", out_ntiles_hw);
-    //     log_debug("out_ntiles_c: {}", out_ntiles_c);
-    // }
+    #if 0
+    {   // debug
+        log_debug("in_cb :: PS = {}, NP = {}", in_cb_pagesize, in_cb_npages);
+        log_debug("in_scalar_cb :: PS = {}, NP = {}", in_scalar_cb_pagesize, in_scalar_cb_npages);
+        log_debug("in_tiled_cb :: PS = {}, NP = {}", in_tiled_cb_pagesize, in_tiled_cb_npages);
+        log_debug("out_tiled_cb :: PS = {}, NP = {}", out_tiled_cb_pagesize, out_tiled_cb_npages);
+        log_debug("out_cb :: PS = {}, NP = {}", out_cb_pagesize, out_cb_npages);
+
+        log_debug("in_addr: {}", src_dram_buffer->address());
+        log_debug("out_addr: {}", dst_dram_buffer->address());
+        log_debug("kernel_size_h: {}", kernel_size_h);
+        log_debug("kernel_size_w: {}", kernel_size_w);
+        log_debug("kernel_size_hw: {}", kernel_size_hw);
+        log_debug("kernel_size_hw_padded: {}", kernel_size_hw_padded);
+        log_debug("stride_h: {}", stride_h);
+        log_debug("stride_w: {}", stride_w);
+        log_debug("pad_h: {}", pad_h);
+        log_debug("pad_w: {}", pad_w);
+        log_debug("out_h: {}", out_h);
+        log_debug("out_w: {}", out_w);
+        log_debug("out_hw: {}", output_shape[2]);
+        log_debug("out_c: {}", output_shape[3]);
+        log_debug("in_nbytes_c: {}", in_nbytes_c);
+        log_debug("out_nbytes_c: {}", out_nbytes_c);
+        log_debug("in_h: {}", in_h);
+        log_debug("in_w: {}", in_w);
+        log_debug("in_hw: {}", input_shape[2]);
+        log_debug("in_c: {}", input_shape[3]);
+        log_debug("out_ntiles_hw: {}", out_ntiles_hw);
+        log_debug("out_ntiles_c: {}", out_ntiles_c);
+        log_debug("out_nelems: {}", out_nelems);
+        log_debug("out_w_loop_count: {}", out_w_loop_count);
+    }
+    #endif
 
     /**
      * Writer Kernel: output cb -> output rows
@@ -196,7 +212,8 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                                          out_h,
                                                          out_w,
                                                          (uint32_t) ceil((float) output_shape[2] / constants::TILE_HEIGHT),
-                                                         (uint32_t) ceil((float) output_shape[3] / constants::TILE_WIDTH)},
+                                                         (uint32_t) ceil((float) output_shape[3] / constants::TILE_WIDTH),
+                                                         out_nelems, out_w_loop_count},
                                         .defines = reduce_op_utils::get_defines(reduce_op, reduce_dim)};
     std::string compute_kernel_fname("tt_metal/kernels/compute/max_pool.cpp");
     auto compute_kernel = CreateComputeKernel(program,
@@ -236,6 +253,7 @@ void MaxPool::validate(const std::vector<Tensor> &input_tensors) const {
 
     TT_ASSERT(2 * pad_h_ < kernel_size_h_ && 2 * pad_w_ < kernel_size_w_,
               "Total padding along a dim should be less than kernel/window size along same dim");
+    TT_ASSERT(out_w_ % nblocks_ == 0, "Make sure out_w is divisible by nblocks for now.");
 }
 
 std::vector<Shape> MaxPool::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
@@ -284,7 +302,8 @@ operation::ProgramWithCallbacks MaxPool::create_program(const std::vector<Tensor
                                     stride_h_, stride_w_,
                                     pad_h_, pad_w_,
                                     dilation_h_, dilation_w_,
-                                    out_mem_config_)};
+                                    out_mem_config_,
+                                    nblocks_)};
 }
 
 tt::stl::reflection::Attributes MaxPool::attributes() const {
@@ -308,7 +327,8 @@ Tensor max_pool2d(const Tensor &input,
                   uint32_t stride_h, uint32_t stride_w,
                   uint32_t pad_h, uint32_t pad_w,
                   uint32_t dilation_h, uint32_t dilation_w,
-                  const MemoryConfig& out_mem_config) {
+                  const MemoryConfig& out_mem_config,
+                  uint32_t nblocks) {
     TT_ASSERT(dilation_h == 1 && dilation_w == 1 && "Dilation not yet supported in max_pool2d.");
     TT_ASSERT(pad_h < 2 && pad_w < 2 && "Padding > 1 not yet supported.");
     TT_ASSERT(stride_h == stride_w && "Stride should be equal for both H and W for now.");
@@ -320,7 +340,8 @@ Tensor max_pool2d(const Tensor &input,
                                                      stride_h, stride_w,
                                                      pad_h, pad_w,
                                                      dilation_h, dilation_w,
-                                                     out_mem_config},
+                                                     out_mem_config,
+                                                     nblocks},
                                              {input}).at(0);
 }
 
