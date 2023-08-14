@@ -50,21 +50,6 @@ def linear(x, weight, bias=None):
     return x
 
 
-def gen_position_ids(input_ids):
-    # get positions_ids values
-    past_key_values_length = 0
-    seq_length = input_ids.shape[1]
-    position_ids = torch.arange(
-        past_key_values_length,
-        seq_length + past_key_values_length,
-        dtype=torch.long,
-        device=None,
-    )
-
-    position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
-    return position_ids
-
-
 def read_model_config(json_file):
     # read file
     with open(json_file, "r") as myfile:
