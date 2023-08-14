@@ -189,6 +189,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_atan,
         "pytorch_op": pytorch_ops.atan,
     },
+    "eltwise-atanh": {
+        "tt_lib_op": tt_lib_ops.eltwise_atanh,
+        "pytorch_op": pytorch_ops.atanh,
+    },
     "eltwise-acos": {
         "tt_lib_op": tt_lib_ops.eltwise_acos,
         "pytorch_op": pytorch_ops.acos,

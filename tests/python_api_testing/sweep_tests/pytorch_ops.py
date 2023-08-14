@@ -321,6 +321,10 @@ def atan(x, *args, **kwargs):
     return torch.atan(x)
 
 
+def atanh(x, *args, **kwargs):
+    return torch.atanh(x)
+
+
 def acos(x, *args, **kwargs):
     return torch.acos(x)
 

@@ -346,6 +346,7 @@ Tensor cosh(const Tensor &input_a, const MemoryConfig& output_mem_config)
     return operation::decorate_as_composite(__func__, _cosh)(input_a, output_mem_config);
 }
 
+
 // asinh(x) = log(x + sqrt(x^2 + 1))
 Tensor _asinh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
     Tensor ln_res(input_a);
@@ -397,6 +398,31 @@ Tensor _acosh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
 Tensor acosh(const Tensor& input_a, const MemoryConfig& output_mem_config)
 {
     return operation::decorate_as_composite(__func__, _acosh)(input_a, output_mem_config);
+}
+
+//atanh[x] = 0.5 * ln((1 + x) / (1 - x))
+Tensor _atanh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
+    Tensor comp_result(input_a);
+    {
+        Tensor nr_term(input_a);
+        {
+        Tensor pos_x = add_unary(input_a, 1.0f, output_mem_config);
+        Tensor neg_x = sub_unary(input_a, 1.0f, output_mem_config);
+        nr_term  = log(mul(pos_x,recip(neg(neg_x, output_mem_config), output_mem_config), std::nullopt, output_mem_config), output_mem_config);
+        }
+        comp_result = mul_unary(nr_term, 0.5f, output_mem_config);
+     }
+    // Input is -1 > value > 1, output is nan
+    // Input is -1 < value < 1, output is atanh(input)
+    Tensor t_nan = mul_unary(comp_result, std::nanf(""), output_mem_config);
+    Tensor abs_temp = sub_unary(abs(input_a, output_mem_config), 1.0f, output_mem_config);
+    Tensor result = where(ltz(abs_temp, output_mem_config), comp_result, t_nan, output_mem_config);
+    return result;
+}
+Tensor atanh(const Tensor &input_a, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _atanh)(input_a, output_mem_config);
+>>>>>>> 07b5bfef1... #2057: add a nan test for the specific out of domain value of atanh
 }
 
 // lerp(input, end, weight) = start + weight * (end - start)

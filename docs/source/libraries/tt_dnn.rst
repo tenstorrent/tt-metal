@@ -489,6 +489,8 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.atan
 
+.. autofunction:: tt_lib.tensor.atanh
+
 .. autofunction:: tt_lib.tensor.fill_rm
 
 .. autofunction:: tt_lib.tensor.fill_ones_rm
