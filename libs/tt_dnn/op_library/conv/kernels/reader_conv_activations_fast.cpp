@@ -59,6 +59,7 @@ void kernel_main() {
     constexpr uint32_t stride_h = get_compile_time_arg_val(1);
     constexpr uint32_t stride_w = get_compile_time_arg_val(2);
     constexpr uint32_t conv_act_size_w = get_compile_time_arg_val(3);
+    constexpr uint32_t conv_output_w_last_index = get_compile_time_arg_val(4) - 1;
     //constexpr uint32_t act_block_width_padding_bytes = get_compile_time_arg_val(1);
 
     constexpr uint32_t cb_id_act = 0;
@@ -85,7 +86,7 @@ void kernel_main() {
     uint32_t out_w = 0;
     uint32_t out_h_start = 0;
     uint32_t out_w_start = 0;
-    DPRINT << "Running new conv reader" << ENDL();
+    //DPRINT << "Running new conv reader" << ENDL();
     for(uint32_t nbh = 0; nbh < num_blocks_act_h; nbh++) {
         for(uint32_t nbr = 0; nbr < num_blocks_weight_w; nbr++) {
             uint32_t in_h_offset_within_kernel_window = 0;

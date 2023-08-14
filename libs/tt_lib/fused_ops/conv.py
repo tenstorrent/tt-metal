@@ -71,7 +71,7 @@ def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
     return conv_
 
 
-def resnet_conv(weight: List[Union[int, float]], conv_params, device, act_block_shape_hw, weight_block_shape_hw, outsubblock_shape_hw, bias=None):
+def resnet_conv(weight: List[Union[int, float]], conv_params, device, act_block_shape_hw, weight_block_shape_hw, outsubblock_shape_hw, bias=None, padded_filter_window_width=0, pre_pad_conv=False):
     """
     Returns a function that performs a Convolution.
     For bias, it calls bcast op without autoformatting
@@ -105,7 +105,10 @@ def resnet_conv(weight: List[Union[int, float]], conv_params, device, act_block_
     assert dilation == 1 and groups == 1
 
     weights_shape = [K, C, R, S]
-    weights_channels_padded_shape = [_nearest_32(K), _nearest_y(C, 16), R, S]
+    if padded_filter_window_width == 0:
+        padded_filter_window_width = S
+    assert padded_filter_window_width >= S
+    weights_channels_padded_shape = [_nearest_32(K), _nearest_y(C, 16), R, padded_filter_window_width]
     weight_untiled = tensor.Tensor(
         weight, weights_shape, tensor.DataType.BFLOAT16, tensor.Layout.ROW_MAJOR
     ).pad(weights_channels_padded_shape, (0, 0, 0, 0), 0)
@@ -141,6 +144,9 @@ def resnet_conv(weight: List[Union[int, float]], conv_params, device, act_block_
         )
         bias_on_device = bias_.to(device)
 
+    if pre_pad_conv:
+        P_H = 0
+        P_W = 0
     def conv_(activation):
         # if conv1x1 stride 1 padding 0, use matmul op
         if use_regular_matmul_op:
@@ -149,7 +155,7 @@ def resnet_conv(weight: List[Union[int, float]], conv_params, device, act_block_
         else:
             assert(activation.layout() == tensor.Layout.ROW_MAJOR)
             if use_fast_reader:
-                output = tensor.conv_with_fast_reader(activation, weight_on_device, [R,S,U,V,P_H,P_W], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w, K)
+                output = tensor.conv_with_fast_reader(activation, weight_on_device, [R,padded_filter_window_width,U,V,P_H,P_W], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w, K)
             else:
                 output = tensor.conv(activation, weight_on_device, [R,S,U,V,P_H,P_W], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w, K)
             assert(output.layout() == tensor.Layout.ROW_MAJOR)
