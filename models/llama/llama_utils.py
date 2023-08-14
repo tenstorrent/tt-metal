@@ -4,17 +4,11 @@ from transformers.generation.configuration_utils import GenerationConfig
 from transformers.generation.logits_process import LogitsProcessorList
 from typing import List, Optional, Tuple, Union
 import tt_lib
-from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
-def linear(x, weight, bias, device):
-    weight = tt_to_torch_tensor(weight)
-    x = tt_to_torch_tensor(x)
-
-    weight = torch.transpose(weight, 3, 2)
-    x = torch.matmul(x, weight)
-    x = torch_to_tt_tensor_rm(x, device, put_on_device=False)
-
+def linear(x, weight, bias=None):
+    weight = tt_lib.tensor.transpose(weight)
+    x = tt_lib.tensor.matmul(x, weight)
     if bias is not None:
         x = tt_lib.tensor.bcast(
             x, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H

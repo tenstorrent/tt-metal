@@ -9,7 +9,7 @@ from models.llama.llama_utils import (
 
 from models.utility_functions import (
     tt2torch_tensor,
-    torch_to_tt_tensor_rm,
+    torch2tt_tensor,
 )
 
 from models.llama.tt.llama_decoder import TtLlamaDecoderLayer
@@ -193,7 +193,7 @@ class TtLlamaModelFirstHFModel(torch.nn.Module):
         )
 
         # make the first hidden states tensor
-        hidden_states = torch_to_tt_tensor_rm(inputs_embeds, self.device)
+        hidden_states = torch2tt_tensor(inputs_embeds, self.device)
 
         # decoder layers
         all_hidden_states = () if output_hidden_states else None

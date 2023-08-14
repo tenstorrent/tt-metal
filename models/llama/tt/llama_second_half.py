@@ -6,7 +6,7 @@ from models.llama.llama_utils import _make_causal_mask, _expand_mask, linear
 
 from models.utility_functions import (
     tt2torch_tensor,
-    torch_to_tt_tensor_rm,
+    torch2tt_tensor,
 )
 
 from models.llama.tt.llama_decoder import TtLlamaDecoderLayer
@@ -90,9 +90,7 @@ class TtLlamaModelSecondHFModel(torch.nn.Module):
         )
 
         # get weights for linear layer
-        self.weight = torch_to_tt_tensor_rm(
-            self.state_dict["lm_head.weight"], self.device
-        )
+        self.weight = torch2tt_tensor(self.state_dict["lm_head.weight"], self.device)
         self.bias = None
 
     def _prepare_decoder_attention_mask(
@@ -202,7 +200,7 @@ class TtLlamaModelSecondHFModel(torch.nn.Module):
             past_key_values_length,
         )
 
-        hidden_states = torch_to_tt_tensor_rm(inputs_embeds, self.device)
+        hidden_states = torch2tt_tensor(inputs_embeds, self.device)
 
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
@@ -235,7 +233,7 @@ class TtLlamaModelSecondHFModel(torch.nn.Module):
 
         # apply linear layer for causallm model
         if self.is_causallm:
-            hidden_states = linear(hidden_states, self.weight, self.bias, self.device)
+            hidden_states = linear(hidden_states, self.weight, self.bias)
 
         # add hidden states from the last decoder layer
         if output_hidden_states:

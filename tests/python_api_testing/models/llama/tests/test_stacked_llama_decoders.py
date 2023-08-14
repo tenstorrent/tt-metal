@@ -79,9 +79,8 @@ def run_test_llama_decoder_inference(
     tt_out = tt_out.squeeze(1)
 
     # check outputs =========================================================================
-    _, pcc_output = comp_allclose_and_pcc(pytorch_out, tt_out, pcc)
     does_pass, pcc_value = comp_pcc(pytorch_out, tt_out, pcc)
-    logger.info(f"Output {pcc_output}")
+    logger.info(f"PCC value: {pcc_value}")
 
     if does_pass:
         logger.info("Test for stacked decoders passed!")
@@ -110,7 +109,6 @@ _num_decoders = 4
 )
 def test_llama_decoder_inference(
     pcc,
-    reset_seeds
 ):
     # set parameters ================================================================
     model_version = _llama_model_name
