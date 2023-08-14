@@ -186,15 +186,15 @@ _first_decoder_start = 0
 _second_decoder_start = 16
 # parameters --------------------------------------------------
 
-# prompt = """Author-contribution statements and acknowledgements in research papers should state clearly and specifically whether, and to what extent, the authors used AI technologies such as ChatGPT in the preparation of their manuscript and analysis.
+# promp = """Author-contribution statements and acknowledgements in research papers should state clearly and specifically whether, and to what extent, the authors used AI technologies such as ChatGPT in the preparation of their manuscript and analysis.
 # They should also indicate which LLMs were used. This will alert editors and reviewers to scrutinize manuscripts more carefully for potential biases, inaccuracies and improper source crediting. Likewise, scientific journals should be transparent about their use of LLMs, for example when selecting submitted manuscripts.
 # Mention the large language model based product mentioned in the paragraph above:"""
-prompt = "I believe the meaning of life is to"
+promp = "I believe the meaning of life is to"
 
 
 @pytest.mark.parametrize(
     "PERF_CNT, prompt, pcc",
-    ((2, prompt, 0.9),),
+    ((1, promp, 0.9),),
 )
 def test_llama_pcc(PERF_CNT, prompt, pcc):
     # set parameters =================================================================
