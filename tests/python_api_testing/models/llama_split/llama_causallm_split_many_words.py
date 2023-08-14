@@ -294,140 +294,7 @@ def gen_position_ids(input_ids):
     return position_ids
 
 
-def get_next_llama_output_token(input_ids, out_tensor, order, model="Pytorch"):
-    next_token_logits = out_tensor[:, -1, :]
-    # pre-process distribution
-    next_tokens_scores = logits_processor(input_ids, next_token_logits)
-
-    # argmax
-    next_tokens = torch.argmax(next_tokens_scores, dim=-1)
-    logger.info(f"{model} forward {order+1}-th generated id: {next_tokens}")
-
-    return next_tokens
-
-
-def call_hf_llama_forward_func(
-    hugging_face_reference_model,
-    logits_processor,
-    input_ids,
-    attention_mask,
-    num_words=2,
-):
-    # generate next words by using huggingface llama forward function
-    for i in range(num_words):
-        # pad input tensors
-        input_ids_padded = pad_input_32_left(input_ids, configuration.pad_token_id)
-        attention_mask_padded = pad_input_32_left(attention_mask, -1)
-        position_ids_padded = gen_position_ids(input_ids_padded)
-
-        pytorch_out = hugging_face_reference_model(
-            input_ids=input_ids_padded,
-            attention_mask=attention_mask_padded,
-            position_ids=position_ids_padded,
-        )
-
-        # get next token
-        next_tokens = get_next_llama_output_token(
-            input_ids_padded, pytorch_out.logits, i
-        )
-
-        # update input ids
-        input_ids = torch.cat([input_ids, next_tokens[:, None]], dim=-1)
-        attention_mask = torch.cat([attention_mask, torch.full((1, 1), 1)], dim=-1)
-        position_ids = gen_position_ids(input_ids)
-
-
-def call_tt_llama_forward_func(
-    initial_prompt,
-    logits_processor,
-    input_ids,
-    attention_mask,
-    first_decoder_start,
-    second_decoder_start,
-    num_consecutive_decoders,
-    num_words=2,
-):
-    tt_generated_text = initial_prompt
-    for i in range(num_words):
-        # pad input tensors
-        input_ids_padded = pad_input_32_left(input_ids, configuration.pad_token_id)
-        attention_mask_padded = pad_input_32_left(
-            attention_mask, configuration.pad_token_id
-        )
-        position_ids_padded = gen_position_ids(input_ids_padded)
-
-        logger.debug(f"The first call started: loop {i+1}")
-        device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
-        tt_lib.device.InitializeDevice(device)
-        tt_lib.device.SetDefaultDevice(device)
-        host = tt_lib.device.GetHost()
-
-        first_out = run_llama_split_inference(
-            device,
-            state_dict,
-            base_url,
-            max_position_embeddings,
-            configuration,
-            num_decoders_start=first_decoder_start,
-            num_decoders=num_consecutive_decoders,
-            x_inputs=input_ids_padded,
-            att_mask=attention_mask_padded,
-            position_ids=position_ids_padded,
-            half=1,
-        )
-        tt_lib.device.CloseDevice(device)
-        logger.debug(f"The first call ended: loop {i+1}")
-
-        # The second call -------------------------------------------------------
-        logger.debug(f"The second call started: loop {i+1}")
-        device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
-        tt_lib.device.InitializeDevice(device)
-        tt_lib.device.SetDefaultDevice(device)
-
-        # send input tensor from host to tt device
-        tt_input = first_out
-
-        tt_out = run_llama_split_inference(
-            device,
-            state_dict,
-            base_url,
-            max_position_embeddings,
-            configuration,
-            num_decoders_start=second_decoder_start,
-            num_decoders=num_consecutive_decoders,
-            x_inputs=tt_input,
-            att_mask=attention_mask_padded,
-            position_ids=position_ids_padded,
-            half=2,
-        )
-        logger.debug(f"The second call ended: loop {i+1}")
-
-        # squeeze
-        tt_out = tt_out.squeeze(1)
-
-        # Get next token
-        next_tokens = get_next_llama_output_token(
-            input_ids_padded, tt_out, i, "Tenstorrent"
-        )
-
-        # save output words
-        s = tokenizer.decode(next_tokens.item(), skip_special_tokens=True)
-        logger.info(f"TT {i+1}-th generated word: {s}")
-        tt_generated_text = tt_generated_text + " " + s
-
-        # update input ids
-        input_ids = torch.cat([input_ids, next_tokens[:, None]], dim=-1)
-        attention_mask = torch.cat([attention_mask, torch.full((1, 1), 1)], dim=-1)
-        position_ids = gen_position_ids(input_ids)
-
-        tt_lib.device.CloseDevice(device)
-        device = None
-
-    return tt_generated_text
-
-
 def run_llama_split_inference(
-    device,
     state_dict,
     base_url,
     max_position_embeddings,
@@ -475,25 +342,23 @@ def run_llama_split_inference(
 
 if __name__ == "__main__":
     torch.manual_seed(1234)
-
-    # parameters --------------------------------------------------
-    base_url = "model.layers"
-    max_position_embeddings = 2048
-    tokenizer_name = "huggyllama/llama-7b"
-    llama_model_name = "huggyllama/llama-7b"
-    # tokenizer_name = "hf-internal-testing/llama-tokenizer"
-    # llama_model_name = "decapoda-research/llama-7b-hf"
-
-    # how many decoders to use
     first_decoder_start = 0
     second_decoder_start = 16
     num_consecutive_decoders = 16
 
-    # how many words to generate
-    num_words = 10
-    # parameters --------------------------------------------------
+    # parameters
+    base_url = "model.layers"
+    max_position_embeddings = 2048
+    tokenizer_name = "huggyllama/llama-7b"
+    llama_model_name = "huggyllama/llama-7b"
 
-    # load llama pytorch model =======================================
+    # tokenizer_name = "hf-internal-testing/llama-tokenizer"
+    # llama_model_name = "decapoda-research/llama-7b-hf"
+
+    # how many words to generate
+    num_words = 5
+
+    # create llama pytorch model =====================================================
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
     hugging_face_reference_model = AutoModelForCausalLM.from_pretrained(
         llama_model_name
@@ -505,15 +370,19 @@ if __name__ == "__main__":
     state_dict = hugging_face_reference_model.state_dict()
 
     # generate real input ============================================================
-    # prompt_1 = "I believe the meaning of life is"
-    prompt = "Hey, are you conscious? Can you talk to me?"
+    # prompt size equal to 32
+    # prompt = "The odd numbers in this group add up to an even number: 15, 32, 5, 13, 4."
+
+    # prompt size less than 32 (8 in this case)
+    prompt = "I believe the meaning of life is"
 
     inputs = tokenizer(prompt, return_tensors="pt")
     input_ids = inputs.input_ids
+
     attention_mask = inputs.attention_mask
 
     logger.info(f"Initial prompt: {prompt}")
-    logger.debug(f"Initial prompt ids: {input_ids}")
+    logger.info(f"Initial prompt ids: {input_ids}")
 
     # get position_ids values
     seq_length = input_ids.shape[1]
@@ -523,7 +392,7 @@ if __name__ == "__main__":
         input_ids, hugging_face_reference_model.config
     )
 
-    # generate Pytorch output of num_words with generate function ========================================================
+    # generate Pytorch output of num_words with generate function ============================================================
     generate_ids = hugging_face_reference_model.generate(
         input_ids, logits_processor=logits_processor, max_length=seq_length + num_words
     )
@@ -532,28 +401,129 @@ if __name__ == "__main__":
         generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
     )[0]
     logger.info(f"PyTorch generated response: {output}")
-    logger.debug(f"PyTorch generated ids: {generate_ids}")
 
-    # generate Pytorch output: call forward() function several times ======================================================
-    call_hf_llama_forward_func(
-        hugging_face_reference_model,
-        logits_processor,
-        input_ids,
-        attention_mask,
-        num_words,
+    # generate Pytorch output: call forward() function several times ========================================================
+    # save the input ids
+    # pt_input_ids = input_ids.detach().clone()
+
+    logits_processor = get_logits_processor(
+        input_ids, hugging_face_reference_model.config
     )
 
-    # TT output: call forward() function several times ====================================================================
-    tt_generated_text = call_tt_llama_forward_func(
-        prompt,
-        logits_processor,
-        input_ids,
-        attention_mask,
-        first_decoder_start,
-        second_decoder_start,
-        num_consecutive_decoders,
-        num_words,
+    for i in range(num_words):
+        # pad input tensors
+        input_ids_padded = pad_input_32_left(input_ids, configuration.pad_token_id)
+        attention_mask_padded = pad_input_32_left(attention_mask, -1)
+        position_ids_padded = gen_position_ids(input_ids_padded)
+
+        pytorch_out = hugging_face_reference_model(
+            input_ids=input_ids_padded,
+            attention_mask=attention_mask_padded,
+            position_ids=position_ids_padded,
+        )
+        next_token_logits = pytorch_out.logits[:, -1, :]
+
+        # pre-process distribution
+        next_tokens_scores = logits_processor(input_ids_padded, next_token_logits)
+
+        # argmax
+        next_tokens = torch.argmax(next_tokens_scores, dim=-1)
+        logger.info(f"Pytorch {i+1}-th forward pass - next token: {next_tokens}")
+
+        # update input ids
+        input_ids = torch.cat([input_ids, next_tokens[:, None]], dim=-1)
+        attention_mask = torch.cat([attention_mask, torch.full((1, 1), 1)], dim=-1)
+        position_ids = gen_position_ids(input_ids)
+
+    # input_ids = pt_input_ids.detach().clone()
+
+    # TT output: call forward function several times ====================================================================
+    inputs = tokenizer(prompt, return_tensors="pt")
+    input_ids = inputs.input_ids
+    logits_processor = get_logits_processor(
+        input_ids, hugging_face_reference_model.config
     )
+
+    # Many TT forward passes
+    for i in range(num_words):
+        # pad input tensors
+        input_ids_padded = pad_input_32_left(input_ids, configuration.pad_token_id)
+        attention_mask_padded = pad_input_32_left(
+            attention_mask, configuration.pad_token_id
+        )
+        position_ids_padded = gen_position_ids(input_ids_padded)
+
+        logger.info(f"The first call started: loop {i+1}")
+        device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+        tt_lib.device.InitializeDevice(device)
+        tt_lib.device.SetDefaultDevice(device)
+        host = tt_lib.device.GetHost()
+
+        first_out = run_llama_split_inference(
+            state_dict,
+            base_url,
+            max_position_embeddings,
+            configuration,
+            num_decoders_start=first_decoder_start,
+            num_decoders=num_consecutive_decoders,
+            x_inputs=input_ids_padded,
+            att_mask=attention_mask_padded,
+            position_ids=position_ids_padded,
+            half=1,
+        )
+        tt_lib.device.CloseDevice(device)
+        logger.info(f"The first call ended: loop {i+1}")
+
+        # The second call -------------------------------------------------------
+        logger.info(f"The second call started: loop {i+1}")
+        device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+        tt_lib.device.InitializeDevice(device)
+        tt_lib.device.SetDefaultDevice(device)
+
+        # send input tensor from host to tt device
+        tt_input = first_out
+
+        tt_out = run_llama_split_inference(
+            state_dict,
+            base_url,
+            max_position_embeddings,
+            configuration,
+            num_decoders_start=second_decoder_start,
+            num_decoders=num_consecutive_decoders,
+            x_inputs=tt_input,
+            att_mask=attention_mask_padded,
+            position_ids=position_ids_padded,
+            half=2,
+        )
+        logger.info(f"The second call ended: loop {i+1}")
+
+        # squeeze
+        tt_out = tt_out.squeeze(1)
+        print(f"TT out shape: {tt_out.shape}")
+
+        # Generate token --------------------------------------------------------------
+        next_token_logits = tt_out[:, -1, :]
+        # pre-process distribution
+        next_tokens_scores = logits_processor(input_ids, next_token_logits)
+
+        # argmax
+        next_tokens = torch.argmax(next_tokens_scores, dim=-1)
+        logger.info(f"TT {i+1}-th generated id: {next_tokens}")
+
+        if next_tokens.item() == configuration.eos_token_id:
+            break
+
+        s = tokenizer.decode(next_tokens.item(), skip_special_tokens=True)
+        logger.info(f"TT {i+1}-th generated word: {s}")
+        prompt = prompt + " " + s
+
+        # update input ids
+        input_ids = torch.cat([input_ids, next_tokens[:, None]], dim=-1)
+        attention_mask = torch.cat([attention_mask, torch.full((1, 1), 1)], dim=-1)
+        position_ids = gen_position_ids(input_ids)
+
+        tt_lib.device.CloseDevice(device)
+        device = None
 
     logger.info(f"PyTorch generated response: {output}")
-    logger.info(f"Tenstorrent generated output: {tt_generated_text}")
+    logger.info(f"TT generated output: {prompt}")

@@ -265,7 +265,7 @@ class TtLlamaModelFirstHFModel(torch.nn.Module):
         next_decoder_cache = () if use_cache else None
 
         for idx, decoder_layer in enumerate(self.decoders_first):
-            logger.debug(f"First decoder id: {idx}")
+            print(f"First dec id: {idx}")
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
@@ -471,7 +471,7 @@ class TtLlamaModelSecondHFModel(torch.nn.Module):
         next_decoder_cache = () if use_cache else None
 
         for idx, decoder_layer in enumerate(self.decoders_second):
-            logger.debug(f"Second decoder id: {idx}")
+            print(f"Second dec id: {idx}")
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
