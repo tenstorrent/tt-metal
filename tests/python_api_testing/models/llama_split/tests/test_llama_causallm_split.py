@@ -53,7 +53,7 @@ def call_tt_llama_forward_func(
     tt_lib.device.SetDefaultDevice(device)
     host = tt_lib.device.GetHost()
 
-    first_out = run_test_llama_causallm_split_inference(
+    first_out = run_test_llama_split_inference(
         device,
         state_dict,
         base_url,
@@ -78,7 +78,7 @@ def call_tt_llama_forward_func(
     # send input tensor from host to tt device
     tt_input = first_out
 
-    tt_out = run_test_llama_causallm_split_inference(
+    tt_out = run_test_llama_split_inference(
         device,
         state_dict,
         base_url,
@@ -99,7 +99,7 @@ def call_tt_llama_forward_func(
     return tt_out
 
 
-def run_test_llama_causallm_split_inference(
+def run_test_llama_split_inference(
     device,
     state_dict,
     base_url,
@@ -116,6 +116,15 @@ def run_test_llama_causallm_split_inference(
     if half == 1:
         logger.debug("First pass throught TT model")
         first_model_create_start = time.time()
+        # tt_llama_model = TtLlamaModelFirstHFModel(
+        #     device,
+        #     state_dict,
+        #     base_url,
+        #     max_position_embeddings,
+        #     configuration,
+        #     num_decoders_start,
+        #     num_decoders,
+        # )
         tt_llama_model = llama_first_half(
             device,
             state_dict,
@@ -138,6 +147,16 @@ def run_test_llama_causallm_split_inference(
     else:
         logger.debug("Second pass throught TT model")
         second_model_create_start = time.time()
+        # tt_llama_model = TtLlamaModelSecondHFModel(
+        #     device,
+        #     state_dict,
+        #     base_url,
+        #     max_position_embeddings,
+        #     configuration,
+        #     num_decoders_start,
+        #     num_decoders,
+        #     is_causallm,
+        # )
         tt_llama_model = llama_second_half(
             device,
             state_dict,
@@ -196,7 +215,7 @@ _second_decoder_start = 16
     "pcc",
     ((0.98),),
 )
-def test_llama_causallm_split_inference(
+def test_llama_split_inference(
     pcc,
 ):
     # set parameters ================================================================

@@ -55,7 +55,7 @@ def call_tt_llama_forward_func(
     tt_lib.device.SetDefaultDevice(device)
     host = tt_lib.device.GetHost()
 
-    first_out = run_test_llama_split_perf(
+    first_out = run_test_llama_split_inference(
         device,
         state_dict,
         base_url,
@@ -80,7 +80,7 @@ def call_tt_llama_forward_func(
     # send input tensor from host to tt device
     tt_input = first_out
 
-    tt_out = run_test_llama_split_perf(
+    tt_out = run_test_llama_split_inference(
         device,
         state_dict,
         base_url,
@@ -101,7 +101,7 @@ def call_tt_llama_forward_func(
     return tt_out
 
 
-def run_test_llama_split_perf(
+def run_test_llama_split_inference(
     device,
     state_dict,
     base_url,
@@ -196,9 +196,9 @@ _second_decoder_start = 16
 
 @pytest.mark.parametrize(
     "PERF_CNT, pcc",
-    ((2, 0.90),),
+    ((1, 0.98),),
 )
-def test_llama_split_perf(PERF_CNT, pcc):
+def test_llama_split_inference(PERF_CNT, pcc):
     # set parameters ================================================================
     model_version = _llama_model_name
     tokenizer_version = _tokenizer_name
