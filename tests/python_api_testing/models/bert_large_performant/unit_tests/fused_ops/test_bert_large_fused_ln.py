@@ -144,18 +144,18 @@ def run_layernorm_tests(test_id, batch, dtype, in0_mem_config, out_mem_config):
 
             if test_id == 0:
                 logger.info("Running LN_NOGB")
-                ttz = tensor.bert_large_layernorm(ttx, epsf, output_mem_config=out_mem_config)
+                ttz = ttl.operations.primary.layernorm(ttx, epsf, None, None, output_mem_config=out_mem_config)
             elif test_id == 1:
                 logger.info("Running LN_G")
-                ttz = tensor.bert_large_layernorm(ttx, epsf, ttgamma, output_mem_config=out_mem_config)
+                ttz = ttl.operations.primary.layernorm(ttx, epsf, ttgamma, None, output_mem_config=out_mem_config)
             elif test_id == 2:
                 logger.info("Running LN_GB")
-                ttz = tensor.bert_large_layernorm(
+                ttz = ttl.operations.primary.layernorm(
                     ttx, epsf, ttgamma, ttbeta, out_mem_config
                 )
             elif test_id == 3:
                 logger.info("Running add_LN_GB")
-                ttz = tensor.bert_large_add_layernorm(
+                ttz = ttl.operations.primary.add_layernorm(
                     ttx, tty, epsf, ttgamma, ttbeta, out_mem_config
                 )
             else:
@@ -221,7 +221,7 @@ import pytest
     (0, 1, 2, 3),
     ids=["LN", "LN_G", "LN_GB", "add_LN_GB"],
 )
-def test_bert_large_layernorm_test(
+def test_layernorm_test(
     test_id, batch, dtype, in0_mem_config, out_mem_config, request
 ):
     ttl.profiler.set_profiler_location(

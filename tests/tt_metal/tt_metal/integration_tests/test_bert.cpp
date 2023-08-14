@@ -103,7 +103,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
     bert_large_concat_heads_output.deallocate();
 
 
-    auto attention_layernorm_output = bert_large_add_layernorm(
+    auto attention_layernorm_output = tt::operations::primary::add_layernorm(
         hidden_states,
         selfout_bmm_output,
         1e-12,
@@ -152,7 +152,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
     ff1_matmul_output.deallocate();
 
 
-    auto feedforward_layernorm_output = bert_large_add_layernorm(
+    auto feedforward_layernorm_output = tt::operations::primary::add_layernorm(
         attention_layernorm_output,
         ff2_matmul_output,
         1e-12,

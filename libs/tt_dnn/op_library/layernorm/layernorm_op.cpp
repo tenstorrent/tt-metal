@@ -35,7 +35,6 @@ operation::ProgramWithCallbacks layernorm_(
     const std::optional<const Tensor> beta,
     Tensor& output,
     float eps,
-    bool rm_gb = false,
     bool rms_norm = false
 ) {
 
@@ -67,8 +66,10 @@ operation::ProgramWithCallbacks layernorm_(
     uint32_t num_beta_tiles = beta.has_value() ? beta.value().volume()/TILE_HW : 0;
 
     // For bert, tensor is packed as RM with width 32
-    if (rm_gb) {
+    if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
         num_gamma_tiles = gamma.has_value() ? gamma.value().volume()/TILE_WIDTH : 0;
+    }
+    if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
         num_beta_tiles = beta.has_value() ? beta.value().volume()/TILE_WIDTH : 0;
     }
 
@@ -162,31 +163,30 @@ operation::ProgramWithCallbacks layernorm_(
         (std::uint32_t) is_dram(beta),
         (std::uint32_t) block_size
     };
-    if (rm_gb) {
-        if (gamma.has_value()) {
-            auto gamma_stick_size = gamma.value().shape()[3] * gamma.value().element_size();
-            bool gamma_stick_size_is_power_of_two = is_power_of_two_at_least_32(gamma_stick_size);
-            reader_compile_time_args.push_back((std::uint32_t) gamma_stick_size_is_power_of_two);
-            if (gamma_stick_size_is_power_of_two) {
-                uint32_t gamma_log2_stick_size = gamma_stick_size_is_power_of_two ? (std::uint32_t)log2(gamma_stick_size) : 0;
-                reader_compile_time_args.push_back((std::uint32_t) gamma_log2_stick_size);
-            } else {
-                reader_compile_time_args.push_back(gamma_stick_size);
-            }
-        } else if (beta.has_value()) {
-            auto beta_stick_size = beta.value().shape()[3] * beta.value().element_size();
-            bool beta_stick_size_is_power_of_two = is_power_of_two_at_least_32(beta_stick_size);
-            reader_compile_time_args.push_back((std::uint32_t) beta_stick_size_is_power_of_two);
-            if (beta_stick_size_is_power_of_two) {
-                uint32_t beta_log2_stick_size = beta_stick_size_is_power_of_two ? (std::uint32_t)log2(beta_stick_size) : 0;
-                reader_compile_time_args.push_back((std::uint32_t) beta_log2_stick_size);
-            } else {
-                reader_compile_time_args.push_back(beta_stick_size);
-            }
+
+    if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
+        auto gamma_stick_size = gamma.value().shape()[3] * gamma.value().element_size();
+        bool gamma_stick_size_is_power_of_two = is_power_of_two_at_least_32(gamma_stick_size);
+        reader_compile_time_args.push_back((std::uint32_t) gamma_stick_size_is_power_of_two);
+        if (gamma_stick_size_is_power_of_two) {
+            uint32_t gamma_log2_stick_size = gamma_stick_size_is_power_of_two ? (std::uint32_t)log2(gamma_stick_size) : 0;
+            reader_compile_time_args.push_back((std::uint32_t) gamma_log2_stick_size);
         } else {
-            reader_compile_time_args.push_back(0);
-            reader_compile_time_args.push_back(0);
+            reader_compile_time_args.push_back(gamma_stick_size);
         }
+    } else if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
+        auto beta_stick_size = beta.value().shape()[3] * beta.value().element_size();
+        bool beta_stick_size_is_power_of_two = is_power_of_two_at_least_32(beta_stick_size);
+        reader_compile_time_args.push_back((std::uint32_t) beta_stick_size_is_power_of_two);
+        if (beta_stick_size_is_power_of_two) {
+            uint32_t beta_log2_stick_size = beta_stick_size_is_power_of_two ? (std::uint32_t)log2(beta_stick_size) : 0;
+            reader_compile_time_args.push_back((std::uint32_t) beta_log2_stick_size);
+        } else {
+            reader_compile_time_args.push_back(beta_stick_size);
+        }
+    } else {
+        reader_compile_time_args.push_back(0);
+        reader_compile_time_args.push_back(0);
     }
 
     std::vector<uint32_t> writer_compile_time_args = {
@@ -213,7 +213,7 @@ operation::ProgramWithCallbacks layernorm_(
     }
     auto reader_kernels_id = CreateDataMovementKernel(
         program,
-        rm_gb ? "tt_metal/kernels/dataflow/reader_unary_interleaved_ln_rm_gb.cpp" : "tt_metal/kernels/dataflow/reader_unary_interleaved_ln.cpp",
+        gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR ? "tt_metal/kernels/dataflow/reader_unary_interleaved_ln_rm_gb.cpp" : "tt_metal/kernels/dataflow/reader_unary_interleaved_ln.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_compile_time_args, .defines = reader_defines}
     );
@@ -252,10 +252,10 @@ operation::ProgramWithCallbacks layernorm_(
         CreateCircularBuffers( program, CB::c_intermed5, all_cores, im5_t,  im5_t*single_tile_size,  cb_data_format );
     }
     if (gamma.has_value()) {
-        CreateCircularBuffers( program, CB::c_in5,       all_cores, in5_t,  in5_t*(rm_gb ? bfloat16_tile_size : single_tile_size),  rm_gb ? DataFormat::Float16_b : cb_data_format );
+        CreateCircularBuffers( program, CB::c_in5,       all_cores, in5_t,  in5_t*(gamma.value().layout() == Layout::ROW_MAJOR ? bfloat16_tile_size : single_tile_size), gamma.value().layout() == Layout::ROW_MAJOR ? DataFormat::Float16_b : cb_data_format );
     }
     if (beta.has_value()) {
-        CreateCircularBuffers( program, CB::c_in6,       all_cores, in6_t,  in6_t*(rm_gb ? bfloat16_tile_size : single_tile_size),  rm_gb ? DataFormat::Float16_b : cb_data_format );
+        CreateCircularBuffers( program, CB::c_in6,       all_cores, in6_t,  in6_t*(beta.value().layout() == Layout::ROW_MAJOR ? bfloat16_tile_size : single_tile_size), beta.value().layout() == Layout::ROW_MAJOR ? DataFormat::Float16_b : cb_data_format );
     }
     if (b) {
         // x = a+b in this notation
@@ -329,6 +329,7 @@ operation::ProgramWithCallbacks layernorm_(
 }
 
 void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
+
     TT_ASSERT(input_tensors.size() == 1 and optional_input_tensors.size() <= 3, "Must have between 1 to 4 input tensors");
     auto& a = input_tensors.at(0);
     const auto& b = optional_input_tensors.at(0);
@@ -338,25 +339,42 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
     TT_ASSERT(a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B);
     TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
     TT_ASSERT(a.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+
     if (b.has_value()) {
         TT_ASSERT(b.value().layout() == Layout::TILE);
         TT_ASSERT(a.shape() == b.value().shape());
         TT_ASSERT(a.device() == b.value().device());
         TT_ASSERT(b.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
     }
+
     if (gamma.has_value()) {
-        TT_ASSERT(gamma.value().layout() == Layout::TILE);
-        TT_ASSERT(a.shape()[3] == gamma.value().shape()[3]);
-        TT_ASSERT(a.device() == gamma.value().device());
-        TT_ASSERT(gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-        TT_ASSERT(gamma.value().shape()[2] == TILE_HEIGHT);
+        if (gamma.value().layout() == Layout::TILE) {
+            TT_ASSERT(a.shape()[3] == gamma.value().shape()[3], fmt::format("{} != {}", a.shape()[3], gamma.value().shape()[3]));
+            TT_ASSERT(a.device() == gamma.value().device());
+            TT_ASSERT(gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+            TT_ASSERT(gamma.value().shape()[2] == TILE_HEIGHT);
+        } else {
+            TT_ASSERT(gamma.value().layout() == Layout::ROW_MAJOR);
+            TT_ASSERT((gamma.value().shape()[3] == TILE_WIDTH && gamma.value().volume() / TILE_WIDTH == a.shape()[3] / TILE_WIDTH));
+            TT_ASSERT(a.device() == gamma.value().device());
+            TT_ASSERT(gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+            TT_ASSERT(gamma.value().dtype() == DataType::BFLOAT16);
+        }
     }
+
     if (beta.has_value()) {
-        TT_ASSERT(beta.value().layout() == Layout::TILE);
-        TT_ASSERT(a.shape()[3] == beta.value().shape()[3]);
-        TT_ASSERT(a.device() == beta.value().device());
-        TT_ASSERT(beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-        TT_ASSERT(beta.value().shape()[2] == TILE_HEIGHT);
+        if (beta.value().layout() == Layout::TILE) {
+            TT_ASSERT(a.shape()[3] == beta.value().shape()[3]);
+            TT_ASSERT(a.device() == beta.value().device());
+            TT_ASSERT(beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+            TT_ASSERT(beta.value().shape()[2] == TILE_HEIGHT);
+        } else {
+            TT_ASSERT(beta.value().layout() == Layout::ROW_MAJOR);
+            TT_ASSERT((beta.value().shape()[3] == TILE_WIDTH && beta.value().volume() / TILE_WIDTH == a.shape()[3] / TILE_WIDTH));
+            TT_ASSERT(a.device() == beta.value().device());
+            TT_ASSERT(beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+            TT_ASSERT(beta.value().dtype() == DataType::BFLOAT16);
+        }
     }
 
 }
@@ -392,71 +410,6 @@ tt::stl::reflection::Attributes LayerNorm::attributes() const {
     };
 }
 
-
-void BertLargeLayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
-    TT_ASSERT(input_tensors.size() == 1 and optional_input_tensors.size() <= 3, "Must have between 1 to 4 input tensors");
-    auto& a = input_tensors.at(0);
-    const auto& b = optional_input_tensors.at(0);
-    const auto& gamma = optional_input_tensors.at(1);
-    const auto& beta = optional_input_tensors.at(2);
-    TT_ASSERT(a.layout() == Layout::TILE);
-    TT_ASSERT(a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B);
-    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
-    TT_ASSERT(a.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-    if (b.has_value()) {
-        TT_ASSERT(b.value().layout() == Layout::TILE);
-        TT_ASSERT(a.shape() == b.value().shape());
-        TT_ASSERT(a.device() == b.value().device());
-        TT_ASSERT(b.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-    }
-    if (gamma.has_value()) {
-        TT_ASSERT(gamma.value().layout() == Layout::ROW_MAJOR);
-        TT_ASSERT((gamma.value().shape()[3] == TILE_WIDTH && gamma.value().volume() / TILE_WIDTH == a.shape()[3] / TILE_WIDTH));
-        TT_ASSERT(a.device() == gamma.value().device());
-        TT_ASSERT(gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-        TT_ASSERT(gamma.value().dtype() == DataType::BFLOAT16);
-    }
-    if (beta.has_value()) {
-        TT_ASSERT(beta.value().layout() == Layout::ROW_MAJOR);
-        TT_ASSERT((beta.value().shape()[3] == TILE_WIDTH && beta.value().volume() / TILE_WIDTH == a.shape()[3] / TILE_WIDTH));
-        TT_ASSERT(a.device() == beta.value().device());
-        TT_ASSERT(beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-        TT_ASSERT(beta.value().dtype() == DataType::BFLOAT16);
-    }
-
-}
-
-std::vector<Shape> BertLargeLayerNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor.shape()};
-}
-
-std::vector<Tensor> BertLargeLayerNorm::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
-}
-
-
-operation::ProgramWithCallbacks BertLargeLayerNorm::create_program(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    std::vector<Tensor> &output_tensors
-) const {
-    const auto& a = input_tensors.at(0);
-    const auto& b = optional_input_tensors.at(0);
-    const auto& gamma = optional_input_tensors.at(1);
-    const auto& beta = optional_input_tensors.at(2);
-    auto& output_tensor = output_tensors.at(0);
-    return layernorm_(a, b, gamma, beta, output_tensor, this->eps, true);
-
-}
-
-tt::stl::reflection::Attributes BertLargeLayerNorm::attributes() const {
-    return {
-        {"eps", this->eps},
-        {"output_mem_config", this->output_mem_config},
-    };
-}
 
 void RMSNorm::validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     TT_ASSERT(input_tensors.size() == 1 and optional_input_tensors.size() <= 3, "Must have between 1 to 4 input tensors");
@@ -511,7 +464,7 @@ operation::ProgramWithCallbacks RMSNorm::create_program(
     const auto& gamma = optional_input_tensors.at(1);
     const auto& beta = optional_input_tensors.at(2);
     auto& output_tensor = output_tensors.at(0);
-    return layernorm_(a, b, gamma, beta, output_tensor, this->eps, false, true);
+    return layernorm_(a, b, gamma, beta, output_tensor, this->eps, true);
 
 }
 

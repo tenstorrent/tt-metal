@@ -1,4 +1,5 @@
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
+#include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
 
 #include "operations.hpp"
 
@@ -90,11 +91,10 @@ void py_module(py::module& m_primary) {
             .. csv-table::
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
-                "input_tensor_a", "First tensor to multiply", "Tensor", "Tensor of shape [B_a, C_a, M, K]", "Yes"
-                "input_tensor_b", "Second tensor to multiply", "Tensor", "Tensor of shape [B_b, C_b, K, N]", "Yes"
-                "program_config", "", "", ""
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_dtype", "Output Data Type", "DataType", "By default it will be set to the data type of `input_tensor_a`", "No"
+                "input_tensor_a",    "First tensor to multiply",                               "Tensor",                                     "Tensor of shape [B_a, C_a, M, K]",                               "Yes"
+                "input_tensor_b",    "Second tensor to multiply",                              "Tensor",                                     "Tensor of shape [B_b, C_b, K, N]",                               "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig",                               "Default is interleaved in DRAM",                                 "No"
+                "output_dtype",      "Output Data Type",                                       "DataType",                                   "By default it will be set to the data type of `input_tensor_a`", "No"
         )doc"
     );
 
@@ -115,11 +115,11 @@ void py_module(py::module& m_primary) {
             .. csv-table::
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
-                "input_tensor_a", "First tensor to multiply", "Tensor", "Tensor of shape [B_a, C_a, M, K]", "Yes"
-                "input_tensor_b", "Second tensor to multiply", "Tensor", "Tensor of shape [B_b, C_b, K, N]", "Yes"
-                "program_config", "", "MatmulMultiCoreReuseProgramConfig", "", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_dtype", "Output Data Type", "DataType", "By default it will be set to the data type of `input_tensor_a`", "No"
+                "input_tensor_a",    "First tensor to multiply",                               "Tensor",                                     "Tensor of shape [B_a, C_a, M, K]",                               "Yes"
+                "input_tensor_b",    "Second tensor to multiply",                              "Tensor",                                     "Tensor of shape [B_b, C_b, K, N]",                               "Yes"
+                "program_config",    "",                                                       "MatmulMultiCoreReuseProgramConfig",          "",                                                               "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig",                               "Default is interleaved in DRAM",                                 "No"
+                "output_dtype",      "Output Data Type",                                       "DataType",                                   "By default it will be set to the data type of `input_tensor_a`", "No"
         )doc"
     );
 
@@ -141,12 +141,40 @@ void py_module(py::module& m_primary) {
             .. csv-table::
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
-                "input_tensor_a", "First tensor to multiply", "Tensor", "Tensor of shape [B_a, C_a, M, K]", "Yes"
-                "input_tensor_b", "Second tensor to multiply", "Tensor", "Tensor of shape [B_b, C_b, K, N]", "Yes"
-                "bias", "Bias to add", "Tensor", "Tensor of shape [1, 1, 1, N]", "Yes"
-                "program_config", "", "MatmulMultiCoreReuseMultiCastProgramConfig", "", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_dtype", "Output Data Type", "DataType", "By default it will be set to the data type of `input_tensor_a`", "No"
+                "input_tensor_a",    "First tensor to multiply",                               "Tensor",                                     "Tensor of shape [B_a, C_a, M, K]",                               "Yes"
+                "input_tensor_b",    "Second tensor to multiply",                              "Tensor",                                     "Tensor of shape [B_b, C_b, K, N]",                               "Yes"
+                "bias",              "Bias to add",                                            "Tensor",                                     "Tensor of shape [1, 1, 1, N]",                                   "Yes"
+                "program_config",    "",                                                       "MatmulMultiCoreReuseMultiCastProgramConfig", "",                                                               "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig",                               "Default is interleaved in DRAM",                                 "No"
+                "output_dtype",      "Output Data Type",                                       "DataType",                                   "By default it will be set to the data type of `input_tensor_a`", "No"
+        )doc"
+    );
+
+
+    m_primary.def(
+        "layernorm",
+        &layernorm,
+        py::arg("input").noconvert(),
+        py::arg("eps").noconvert(),
+        py::arg("gamma").noconvert() = std::nullopt,
+        py::arg("beta").noconvert() = std::nullopt,
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        R"doc(
+            Performs a layernorm operation on the last tensor dimension with optional fused with post-multiplication and addition via W-bcast.
+        )doc"
+    );
+
+    m_primary.def(
+        "add_layernorm",
+        &add_layernorm,
+        py::arg("a").noconvert(),
+        py::arg("b").noconvert(),
+        py::arg("eps").noconvert(),
+        py::arg("gamma").noconvert() = std::nullopt,
+        py::arg("beta").noconvert() = std::nullopt,
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        R"doc(
+            Performs a layernorm(a+b)*gamma + beta operation.
         )doc"
     );
 
@@ -154,9 +182,19 @@ void py_module(py::module& m_primary) {
 
 }  // namespace primary
 
+namespace fused {
+
+void py_module(py::module& m_fused) {
+}
+
+}  // namespace fused
+
 void py_module(py::module& m_operations) {
-    py::module_ m_primary = m_operations.def_submodule("primary", "Primary operations");
+    auto m_primary = m_operations.def_submodule("primary", "Primary operations");
     primary::py_module(m_primary);
+
+    auto m_fused = m_operations.def_submodule("fused", "Fused operations");
+    fused::py_module(m_fused);
 }
 
 }  // namespace operations

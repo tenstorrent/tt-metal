@@ -132,7 +132,7 @@ class TtBertEncoder(torch.nn.Module):
 
     def op12_add_layernorm(self, activation, mha_out):
         # profiler.start("__op12_add_layernorm")
-        mha_out_add_and_norm = ttl.tensor.bert_large_add_layernorm(
+        mha_out_add_and_norm = ttl.operations.primary.add_layernorm(
             activation,
             mha_out,
             self.layer_norm_eps,
@@ -146,7 +146,7 @@ class TtBertEncoder(torch.nn.Module):
 
     def op15_add_layernorm(self, mha_out_add_and_norm, ffn_out):
         # profiler.start("__op15_add_layernorm")
-        ffn_out_add_and_norm = ttl.tensor.bert_large_add_layernorm(
+        ffn_out_add_and_norm = ttl.operations.primary.add_layernorm(
             mha_out_add_and_norm,
             ffn_out,
             self.layer_norm_eps,

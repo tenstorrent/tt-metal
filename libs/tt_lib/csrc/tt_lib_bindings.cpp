@@ -2423,16 +2423,6 @@ void TensorModule(py::module &m_tensor) {
         Perform a bert_large_post_softmax_bmm batched matmul by reshaping tensor A to [9, 16, 384, 384] first, then returning ``[9, 16, 384, 384] x [9, 16, 384, 64]``.
     )doc");
 
-    // Custom BERT Layernorm
-    m_tensor.def("bert_large_layernorm", &bert_large_layernorm,
-        py::arg("input").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-        "Performs a bert_large_layernorm operation on the last tensor dimension with optional fused with post-multiplication and addition via W-bcast.
-    )doc");
-    m_tensor.def("bert_large_add_layernorm", &bert_large_add_layernorm,
-        py::arg("a").noconvert(), py::arg("b").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-        "Performs a bert_large_layernorm(a+b)*gamma + beta operation."
-    )doc");
-
     // Custom Falcon matmuls/bmms
     m_tensor.def("falcon_fused_qkv_matmul", &falcon_fused_qkv_matmul,
         py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, R"doc(

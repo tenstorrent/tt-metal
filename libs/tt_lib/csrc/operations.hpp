@@ -6,11 +6,19 @@ namespace py = pybind11;
 
 namespace tt {
 namespace operations {
+
+
+// Primary operations
 namespace primary {
-
 void py_module(py::module& m_primary);
-
 }  // namespace primary
+
+
+// Fused operations
+namespace fused {
+void py_module(py::module& m_fused);
+}  // namespace fused
+
 
 void py_module(py::module& m_operations);
 

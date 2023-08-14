@@ -164,6 +164,16 @@ If `OPERATION_HISTORY_CSV=<csv_file_path>` environment variable is set, then the
 tt-DNN API through ``tt_lib``
 =============================
 
+Primary Operations
+------------------
+
+autofunction:: tt_lib.operations.primary.matmul
+
+.. autofunction:: tt_lib.operations.primary.layernorm
+
+.. autofunction:: tt_lib.operations.primary.add_layernorm
+
+
 Enums
 -----
 
@@ -492,10 +502,6 @@ Other Operations
 .. autofunction:: tt_lib.tensor.bert_large_pre_softmax_bmm
 
 .. autofunction:: tt_lib.tensor.bert_large_post_softmax_bmm
-
-.. autofunction:: tt_lib.tensor.bert_large_layernorm
-
-.. autofunction:: tt_lib.tensor.bert_large_add_layernorm
 
 .. autofunction:: tt_lib.tensor.softmax_in_place
 
