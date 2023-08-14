@@ -8,6 +8,7 @@
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/detail/program.hpp"
+#include "tt_metal/llrt/watcher.hpp"
 
 using std::unique_lock;
 using std::mutex;

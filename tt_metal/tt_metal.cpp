@@ -130,6 +130,8 @@ bool InitializeDevice(Device *device) {
 
     bool init;
     if (device->initialize()) {
+        tt::llrt::watcher_init(device);
+
         static std::mutex build_mutex;
         static bool global_init_complete = false;
 
@@ -177,6 +179,7 @@ bool InitializeDevice(Device *device) {
             }
         }
 
+        tt::llrt::watcher_attach(device);
         init = true;
     } else {
         init = false;
@@ -191,6 +194,8 @@ bool InitializeDevice(Device *device) {
 }
 
 bool CloseDevice(Device *device) {
+    tt::llrt::watcher_detach(device);
+
     // Needed to ensure that GLOBAL_CQ doesn't contain a closed device
     if (detail::GLOBAL_CQ) {
         detail::GLOBAL_CQ.reset(nullptr);

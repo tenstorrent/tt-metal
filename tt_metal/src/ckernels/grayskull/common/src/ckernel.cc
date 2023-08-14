@@ -5,6 +5,9 @@
 
 #include "tools/profiler/kernel_profiler.hpp"
 
+#include "debug_status.h"
+#include "debug_print.h"
+
 namespace kernel_profiler {
 uint32_t wIndex __attribute__((used));
 }
@@ -67,6 +70,8 @@ inline void profiler_mark_time(uint32_t timer_id)
 
 int main(int argc, char *argv[])
 {
+    DEBUG_STATUS('I');
+
     uint *local_l1_start_addr = (uint *)PREPROCESSOR_EXPAND(MEM_TRISC, COMPILE_FOR_TRISC, _INIT_LOCAL_L1_BASE);
     int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
     l1_to_local_mem_copy((uint*)__ldm_data_start, local_l1_start_addr, num_words);
@@ -98,6 +103,7 @@ int main(int argc, char *argv[])
     //while (ready_for_next_epoch())
     {
         profiler_mark_time(CC_KERNEL_MAIN_START);
+        DEBUG_STATUS('R');
         kernel_init();
         profiler_mark_time(CC_KERNEL_MAIN_END);
     }
@@ -106,5 +112,6 @@ int main(int argc, char *argv[])
     tensix_sync();
     trisc_run_mailbox_write(KERNEL_COMPLETE);
 
+    DEBUG_STATUS('D');
     profiler_mark_time(CC_MAIN_END);
 }

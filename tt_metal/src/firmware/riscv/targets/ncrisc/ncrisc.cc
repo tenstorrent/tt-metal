@@ -9,6 +9,7 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "tt_metal/src/firmware/riscv/common/risc_attribs.h"
 
+#include "debug_status.h"
 
 volatile uint32_t local_mem_barrier __attribute__((used));
 volatile tt_l1_ptr uint32_t* const run_mailbox_address = (volatile tt_l1_ptr uint32_t*)(MEM_RUN_MAILBOX_ADDRESS + MEM_MAILBOX_NCRISC_OFFSET);
@@ -65,6 +66,9 @@ inline void profiler_mark_time(uint32_t timer_id)
 }
 
 int main(int argc, char *argv[]) {
+
+  DEBUG_STATUS('I');
+
   int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
   l1_to_local_mem_copy((uint*)__ldm_data_start, (uint*)MEM_NCRISC_INIT_LOCAL_L1_BASE, num_words);
 
@@ -75,6 +79,7 @@ int main(int argc, char *argv[]) {
 
   risc_init();
 
+  DEBUG_STATUS('R');
   profiler_mark_time(CC_KERNEL_MAIN_START);
   kernel_init();
   profiler_mark_time(CC_KERNEL_MAIN_END);
@@ -82,6 +87,8 @@ int main(int argc, char *argv[]) {
   *run_mailbox_address = 0x1;
 
   profiler_mark_time(CC_MAIN_END);
+
+  DEBUG_STATUS('D');
 
   while (true);
   return 0;

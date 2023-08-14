@@ -2,6 +2,7 @@
 
 #include "dataflow_api.h"
 #include "debug_print.h"
+#include "debug_status.h"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 
 template <typename T>
@@ -218,8 +219,10 @@ FORCE_INLINE void launch_program(u32 num_workers, u32 num_multicast_messages, vo
     noc_async_write_barrier();
 
     // Wait on worker cores to notify me that they have completed
+    DEBUG_STATUS('Q', 'W');
     while (reinterpret_cast<volatile tt_l1_ptr u32*>(DISPATCH_MESSAGE_ADDR)[0] != num_workers)
         ;
+    DEBUG_STATUS('Q', 'D');
     for (u32 i = 0; i < num_multicast_messages * 2; i += 2) {
         u64 worker_core_noc_coord = u64(command_ptr[i]) << 32;
         u32 num_messages = command_ptr[i + 1];

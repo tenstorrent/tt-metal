@@ -192,3 +192,20 @@ For instance, the signal id could be computed as ``core_idx*5+thread_id`` to cre
 Not all types are by default supported by ``DPRINT << variable;`` syntax. However the code framework was designed with ease of extensibility in mind.
 To add a new type, on the device you'll need to add a new ID to debug_print_common.h, then add a template instantiation DebugPrintTypeToId in debug_print.h.
 On the host you'll need to modify tt_debug_print_server.cpp, look for the switch statement that parses, for instance, DEBUG_PRINT_TYPEID_FLOAT32, and add a new switch branch.
+
+Watcher
+*******
+
+The Watcher is a thread that monitors the status of the TT device to help with debug.  It is enabled with:
+- ``export TT_METAL_WATCHER=<n>``
+where <n> is the number of seconds between status updates, use 0 for the default.  The output is logged to the file ``/tmp/metal_watcher.txt``.  The file is re-written each time a new TT device is initialized; optionally, set:
+- ``export TT)_METAL_WATCHER_APPEND=1``
+to append to the end of the file instead (useful for tests which construct/destruct devices in a loop).
+
+Use:
+- ``export TT_METAL_WATCHER_DOPE_L1=<val>``
+to set all of L1 across all cores to a known value during device init.
+
+The output file contains a legend to help with deciphering the results.  The contents contain the last waypoint of each of the 5 riscvs encountered as a string of up to 4 characters.  These way points can be inserted into kernel/firmware code with the following, eg:
+- ``DEBUG_STATUS('I');``
+- ``DEBUG_STATUS('D', 'E', 'A', 'D');``

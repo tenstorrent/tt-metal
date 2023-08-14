@@ -272,6 +272,9 @@ struct CompileState {
         if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
             result += " -DTT_METAL_SLOW_DISPATCH_MODE=1";
         }
+        if (std::getenv("TT_METAL_WATCHER") != nullptr) {
+            result += " -DWATCHER_ENABLED";
+        }
 
         result += " -DLOCAL_MEM_EN=0 ";
         return result;

@@ -13,6 +13,7 @@
 #include "ckernel_globals.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
+#include "debug_status.h"
 #include "debug_print.h"
 #include "tt_metal/src/firmware/riscv/common/risc_attribs.h"
 
@@ -267,6 +268,8 @@ inline void profiler_mark_time(uint32_t timer_id)
 
 int main() {
 
+    DEBUG_STATUS('I');
+
     int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
     l1_to_local_mem_copy((uint*)__ldm_data_start, (uint*)MEM_BRISC_INIT_LOCAL_L1_BASE, num_words);
 
@@ -299,12 +302,15 @@ int main() {
         deassert_trisc_reset();
     }
 
+    DEBUG_STATUS('R');
     profiler_mark_time(CC_KERNEL_MAIN_START);
     // Run the BRISC kernel
     kernel_init();
 
     profiler_mark_time(CC_KERNEL_MAIN_END);
+
     if (*use_triscs) {
+        DEBUG_STATUS('T', 'W');
         while (
             !(*trisc_run_mailbox_addresses[0] == 1 &&
               *trisc_run_mailbox_addresses[1] == 1 &&
@@ -317,6 +323,7 @@ int main() {
 
     volatile tt_l1_ptr uint32_t* use_ncrisc = (volatile tt_l1_ptr uint32_t*)(MEM_ENABLE_NCRISC_MAILBOX_ADDRESS);
     if (*use_ncrisc) {
+        DEBUG_STATUS('N', 'W');
         while (*ncrisc_run_mailbox_address != 1);
     }
 
@@ -328,6 +335,8 @@ int main() {
     if (dispatch_addr != 0) {
         noc_fast_atomic_increment(kernel_noc_id_var, NCRISC_AT_CMD_BUF, dispatch_addr, 1, 31 /*wrap*/, false /*linked*/);
     }
+
+    DEBUG_STATUS('D');
 
     while (true);
     return 0;
