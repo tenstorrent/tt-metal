@@ -43,11 +43,13 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           ignorePreReleases: true
           failOnError: true
+      - name: Output changelog to console
+        run: |
+          echo "${{ steps.create-changelog.outputs.changelog }}" > CHANGELOG.txt
+          cat CHANGELOG.txt
       - name: Output changelog
         id: output-changelog
-        run: |
-          echo "${{ steps.create-changelog.outputs.changelog }}"
-          echo "changelog=${{ steps.create-changelog.outputs.changelog }}" >> "$GITHUB_OUTPUT"
+        run: echo "changelog=${{ steps.create-changelog.outputs.changelog }}" >> "$GITHUB_OUTPUT"
   build-eager-package:
     needs: create-tag
     strategy:
