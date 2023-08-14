@@ -1,5 +1,5 @@
 import torch
-from loguru import logger
+
 from transformers.generation.configuration_utils import GenerationConfig
 from transformers.generation.logits_process import LogitsProcessorList
 from typing import List, Optional, Tuple, Union
@@ -230,17 +230,3 @@ def prepare_llama_input(prompt, tokenizer, configuration, is_padded=False):
         position_ids = gen_position_ids(input_ids)
 
     return input_ids, attention_mask, position_ids
-
-
-def get_next_llama_output_token(
-    logits_processor, input_ids, out_tensor, order, model="Pytorch"
-):
-    next_token_logits = out_tensor[:, -1, :]
-    # pre-process distribution
-    next_tokens_scores = logits_processor(input_ids, next_token_logits)
-
-    # argmax
-    next_tokens = torch.argmax(next_tokens_scores, dim=-1)
-    logger.debug(f"{model} forward {order+1}-th generated id: {next_tokens}")
-
-    return next_tokens

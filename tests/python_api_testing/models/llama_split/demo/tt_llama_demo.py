@@ -27,13 +27,26 @@ from python_api_testing.models.llama.llama_decoder import TtLlamaDecoderLayer
 from python_api_testing.models.llama_split.llama_split_utils import (
     pad_input_32_left,
     prepare_llama_input,
-    get_next_llama_output_token,
 )
 from python_api_testing.models.llama_split.tt.llama import (
     llama_first_half,
     llama_second_half,
 )
 from llama_split_utils import get_logits_processor
+
+
+def get_next_llama_output_token(
+    logits_processor, input_ids, out_tensor, order, model="Pytorch"
+):
+    next_token_logits = out_tensor[:, -1, :]
+    # pre-process distribution
+    next_tokens_scores = logits_processor(input_ids, next_token_logits)
+
+    # argmax
+    next_tokens = torch.argmax(next_tokens_scores, dim=-1)
+    logger.debug(f"{model} forward {order+1}-th generated id: {next_tokens}")
+
+    return next_tokens
 
 
 def run_llama_split_inference(
@@ -199,10 +212,9 @@ _first_decoder_start = 0
 _second_decoder_start = 16
 # parameters --------------------------------------------------
 
-# promp = """Author-contribution statements and acknowledgements in research papers should state clearly and specifically whether, and to what extent, the authors used AI technologies such as ChatGPT in the preparation of their manuscript and analysis.
-# They should also indicate which LLMs were used. This will alert editors and reviewers to scrutinize manuscripts more carefully for potential biases, inaccuracies and improper source crediting. Likewise, scientific journals should be transparent about their use of LLMs, for example when selecting submitted manuscripts.
-# Mention the large language model based product mentioned in the paragraph above:"""
-promp = "I believe the meaning of life is to"
+promp = """Author-contribution statements and acknowledgements in research papers should state clearly and specifically whether, and to what extent, the authors used AI technologies such as ChatGPT in the preparation of their manuscript and analysis.
+They should also indicate which LLMs were used. This will alert editors and reviewers to scrutinize manuscripts more carefully for potential biases, inaccuracies and improper source crediting. Likewise, scientific journals should be transparent about their use of LLMs, for example when selecting submitted manuscripts.
+Mention the large language model based product mentioned in the paragraph above:"""
 
 
 @pytest.mark.parametrize(
