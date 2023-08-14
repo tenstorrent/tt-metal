@@ -30,6 +30,7 @@ jobs:
     secrets:
       CHECKOUT_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
   create-changelog:
+    permissions: read-all
     needs: create-tag
     runs-on: ubuntu-latest
     outputs:
