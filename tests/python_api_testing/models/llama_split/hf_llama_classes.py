@@ -24,6 +24,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedModel
 from typing import List, Optional, Tuple, Union
 from python_api_testing.models.llama.llama_layer_norm import TtLlamaRMSNorm
 from python_api_testing.models.llama.llama_decoder import TtLlamaDecoderLayer
+from python_api_testing.models.llama_split.llama_model_split import build_decoders
 from sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 
@@ -77,33 +78,6 @@ def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] 
     return inverted_mask.masked_fill(
         inverted_mask.to(torch.bool), torch.finfo(dtype).min
     )
-
-
-def build_decoders(
-    device,
-    state_dict,
-    base_url,
-    max_position_embeddings,
-    config,
-    num_decoder_start,
-    num_decoders,
-):
-    decoder_list = torch.nn.Sequential(
-        *[
-            TtLlamaDecoderLayer(
-                device,
-                state_dict,
-                base_url,
-                decoder_idx,
-                max_position_embeddings,
-                config,
-            )
-            for decoder_idx in range(
-                num_decoder_start, num_decoder_start + num_decoders
-            )
-        ]
-    )
-    return decoder_list
 
 
 class TtLlamaModelFirstHFModel(torch.nn.Module):
