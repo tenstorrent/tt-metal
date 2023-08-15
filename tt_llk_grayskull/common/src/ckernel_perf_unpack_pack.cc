@@ -182,7 +182,7 @@ void increment_pack_tiles(uint num_tiles) {
    }
 }
 
-#if (BRISC_TRISC_SYNC == 1) && (OVERLAY_OUTPUT_DECOUPLE == 1)
+#if OVERLAY_DECOUPLE == 1
 
 // This runs prior to set_perf_dump_flag_for_input so perf_end has to be adjusted
 void record_overlay_decoupled_output_bw_start(uint32_t num_tiles) {
