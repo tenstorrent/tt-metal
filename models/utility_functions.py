@@ -12,6 +12,9 @@ import struct
 def _nearest_32(x):
     return math.ceil(x / 32) * 32
 
+def nearest_32(x):    # needs refctorin; to match alias called in some scripts (test_padding_test in unit tests)
+    return math.ceil(x / 32) * 32
+
 def _nearest_y(x, y):
     return math.ceil(x / y) * y
 
