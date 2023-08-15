@@ -53,11 +53,9 @@ TT_DNN_SRCS = \
 	libs/tt_dnn/op_library/reshape/reshape_op.cpp \
 	libs/tt_dnn/op_library/permute/permute_op.cpp \
 	libs/tt_dnn/op_library/composite/composite_ops.cpp\
-	libs/tt_dnn/op_library/bert_large_tms/bert_large_tms.cpp \
-	libs/tt_dnn/op_library/bert_large_tms/multi_core_create_qkv_heads_from_fused_qkv/multi_core_create_qkv_heads_from_fused_qkv.cpp \
-	libs/tt_dnn/op_library/bert_large_tms/multi_core_split_fused_qkv/multi_core_split_fused_qkv.cpp \
-	libs/tt_dnn/op_library/bert_large_tms/multi_core_create_qkv_heads/multi_core_create_qkv_heads.cpp \
-	libs/tt_dnn/op_library/bert_large_tms/multi_core_concat_heads/multi_core_concat_heads.cpp \
+	libs/tt_dnn/op_library/transformer_tms/transformer_tms.cpp \
+	libs/tt_dnn/op_library/transformer_tms/multi_core_split_fused_qkv_and_split_heads/multi_core_split_fused_qkv_and_split_heads.cpp \
+	libs/tt_dnn/op_library/transformer_tms/multi_core_concatenate_heads/multi_core_concatenate_heads.cpp \
 	libs/tt_dnn/op_library/run_operation.cpp \
 	libs/tt_dnn/op_library/split/split_tiled.cpp \
 	libs/tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.cpp \

@@ -129,13 +129,13 @@ def run_softmax_tests(test_id, batch, dtype, in0_mem_config):
                 torch_attn_mask, tt_attn_mask = generate_attn_mask(
                     N, C, W, dev, -4.2 * 1, dtype, in0_mem_config
                 )
-                t1_fused = tensor.scale_mask_softmax_in_place(
-                    tt_scale, tt_attn_mask, t0
+                t1_fused = ttl.operations.primary.transformers.scale_mask_softmax_in_place(
+                    t0, tt_scale, tt_attn_mask
                 )
                 ref_sm = ref_scale_mask_softmax(torch_scale, torch_attn_mask, x)
             elif test_id == 1:
                 logger.info("Running softmax")
-                t1_fused = tensor.softmax_in_place(t0)
+                t1_fused = ttl.operations.primary.softmax_in_place(t0)
                 ref_sm = ref_stable_softmax(x)
             else:
                 assert False

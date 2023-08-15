@@ -14,7 +14,7 @@ from models.utility_functions import (
 import torch
 
 
-def run_bert_large_create_qkv_heads_from_fused_qkv_test(
+def run_split_fused_qkv_and_split_heads_test(
     batch, dtype, in0_mem_config, out_mem_config
 ):
     torch.manual_seed(1234)
@@ -35,7 +35,7 @@ def run_bert_large_create_qkv_heads_from_fused_qkv_test(
         .to(device, in0_mem_config)
     )
 
-    q, k, v = ttl.tensor.bert_large_create_qkv_heads(a_t, out_mem_config)
+    q, k, v = ttl.operations.primary.transformers.split_fused_qkv_and_split_heads(a_t, ttl.tensor.CoreCoord(12, 9), out_mem_config)
 
     # Check memory of inputs and outputs
     assert a_t.memory_config().buffer_type == in0_mem_config.buffer_type
@@ -113,30 +113,30 @@ import pytest
         "batch_7",
     ],
 )
-def test_bert_large_create_qkv_heads_from_fused_qkv_test(
+def test_split_fused_qkv_and_split_heads_test(
     batch, dtype, in0_mem_config, out_mem_config, request
 ):
     ttl.profiler.set_profiler_location(
         f"tt_metal/tools/profiler/logs/BERT_large_create_qvk_heads_tm_{request.node.callspec.id}"
     )
-    run_bert_large_create_qkv_heads_from_fused_qkv_test(
+    run_split_fused_qkv_and_split_heads_test(
         batch, dtype, in0_mem_config, out_mem_config
     )
 
 
-def test_bert_large_create_qkv_heads_from_fused_qkv_with_program_cache(
+def test_split_fused_qkv_and_split_heads_with_program_cache(
     use_program_cache,
 ):
     dtype = ttl.tensor.DataType.BFLOAT8_B
     dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
     for _ in range(2):
-        run_bert_large_create_qkv_heads_from_fused_qkv_test(
+        run_split_fused_qkv_and_split_heads_test(
             9, dtype, dram_mem_config, dram_mem_config
         )
 
     dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
     for _ in range(2):
-        run_bert_large_create_qkv_heads_from_fused_qkv_test(
+        run_split_fused_qkv_and_split_heads_test(
             9, dtype, dram_mem_config, dram_mem_config
         )
 

@@ -267,7 +267,7 @@ class TtFalconAttention(nn.Module):
         # TT implementation for:
         # PyTorch: upcast attention to fp32
         # attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_layer.dtype)
-        attn_weights = tt_lib.tensor.softmax_in_place(attn_weights)
+        attn_weights = tt_lib.operations.primary.softmax_in_place(attn_weights)
 
         ########################
         ### POST-SOFTMAX BMM ###

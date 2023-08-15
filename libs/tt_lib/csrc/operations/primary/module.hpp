@@ -1,14 +1,26 @@
+#pragma once
+
+#include "transformers/module.hpp"
+
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
+#include "tt_dnn/op_library/softmax/softmax_op.hpp"
 
-#include "operations.hpp"
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 
+namespace py = pybind11;
 
 namespace tt {
 namespace operations {
 namespace primary {
 
 void py_module(py::module& m_primary) {
+
+
+    auto m_transformers = m_primary.def_submodule("transformers", "Primary transformers operations");
+    transformers::py_module(m_transformers);
+
     py::class_<MatmulMultiCoreReuseProgramConfig>(m_primary, "MatmulMultiCoreReuseProgramConfig")
         .def(
             py::init<>(
@@ -178,25 +190,12 @@ void py_module(py::module& m_primary) {
         )doc"
     );
 
+    // softmax
+    m_primary.def("softmax_in_place", &softmax_in_place,
+        "Performs a softmax operation on the last tensor dimension. Returns a reference to the input tensor modified in place.");
+
 }
 
 }  // namespace primary
-
-namespace fused {
-
-void py_module(py::module& m_fused) {
-}
-
-}  // namespace fused
-
-void py_module(py::module& m_operations) {
-    auto m_primary = m_operations.def_submodule("primary", "Primary operations");
-    primary::py_module(m_primary);
-
-    auto m_fused = m_operations.def_submodule("fused", "Fused operations");
-    fused::py_module(m_fused);
-}
-
 }  // namespace operations
-
 }  // namespace tt

@@ -22,7 +22,6 @@
 #include "tt_dnn/op_library/pad/pad_op.hpp"
 #include "tt_dnn/op_library/unpad/unpad_op.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
-#include "tt_dnn/op_library/bert_large_tms/bert_large_tms.hpp"
 #include "tt_dnn/op_library/nlp_tms/nlp_tms.hpp"
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
@@ -43,7 +42,7 @@
 #include "tensor/serialization.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_lib_bindings.hpp"
-#include "operations.hpp"
+#include "operations/module.hpp"
 #include "type_caster.hpp"
 
 namespace py = pybind11;
@@ -467,6 +466,17 @@ void TensorModule(py::module &m_tensor) {
     py::implicitly_convertible<std::pair<UnaryOpType, float>, UnaryWithParam>();
     py::implicitly_convertible<std::pair<UnaryOpType, int>, UnaryWithParam>();
     py::implicitly_convertible<std::pair<UnaryOpType, bool>, UnaryWithParam>();
+
+    auto py_core_coord = py::class_<CoreCoord>(m_tensor, "CoreCoord", R"doc(
+        Class defining core coordinate
+    )doc");
+
+    py_core_coord
+        .def(py::init<std::size_t, std::size_t>())
+        .def("__repr__", [](const CoreCoord& self) -> std::string {
+            return self.str();
+        }
+        );
 
     auto pyMemoryConfig = py::class_<MemoryConfig>(m_tensor, "MemoryConfig", R"doc(
         Class defining memory configuration for storing tensor data on TT Accelerator device.
@@ -2371,32 +2381,6 @@ void TensorModule(py::module &m_tensor) {
         +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
     )doc");
 
-    // Custom BERT TMs
-    m_tensor.def("bert_large_create_qkv_heads", &bert_large_create_qkv_heads,
-        py::arg().noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-        Splits [9, 1, 384, 3072] fused qkv matrix into 3 heads with shapes [9, 16, 384, 64], [9, 16, 64, 384], and [9, 16, 384, 64].
-    )doc");
-    m_tensor.def("bert_large_split_fused_qkv", &bert_large_split_fused_qkv,
-        py::arg().noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-        Splits [9, 1, 384, 3072] fused qkv matrix into 3 heads with shape [9, 1, 384, 1024].
-    )doc");
-    m_tensor.def("bert_large_create_q_head", &bert_large_create_q_head,
-        py::arg().noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-        Reshuffles [9, 1, 384, 1024] tensor into tensor with shape [9, 16, 384, 64].
-    )doc");
-    m_tensor.def("bert_large_create_k_head", &bert_large_create_k_head,
-        py::arg().noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-        Reshuffles [9, 1, 384, 1024] tensor into tensor with shape [9, 16, 64, 384].
-    )doc");
-    m_tensor.def("bert_large_create_v_head", &bert_large_create_v_head,
-        py::arg().noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-        Reshuffles [9, 1, 384, 1024] tensor into tensor with shape [9, 16, 384, 64].
-    )doc");
-    m_tensor.def("bert_large_concat_heads", &bert_large_concat_heads,
-        py::arg().noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-        Reshuffles [9, 16, 384, 64] tensor into tensor with shape [9, 1, 384, 1024].
-    )doc");
-
     // Custom BERT matmuls/bmms
     m_tensor.def("bert_large_fused_qkv_matmul", &bert_large_fused_qkv_matmul,
         py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, R"doc(
@@ -2459,12 +2443,6 @@ void TensorModule(py::module &m_tensor) {
         py::arg().noconvert(), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Shuffles [B, 71, S, 64] tensor into tensor with shape [B, 1, S, 4544].
     )doc");
-
-    // softmax
-    m_tensor.def("softmax_in_place", &softmax_in_place,
-        "Performs a softmax operation on the last tensor dimension. Returns a reference to the input tensor modified in place.");
-    m_tensor.def("scale_mask_softmax_in_place", &scale_mask_softmax_in_place,
-        "Performs a fused scale->attention_mask->softmax operation. Returns a reference to the input tensor modified in place.");
 
     // groupnorm
     m_tensor.def("groupnorm", &groupnorm,

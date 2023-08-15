@@ -20,10 +20,8 @@ pytest tests/python_api_testing/models/bert_large_performant/unit_tests -k test_
 pytest tests/python_api_testing/models/bert_large_performant/unit_tests -k test_bert_large_post_softmax_bmm_test[BFLOAT8_B-in0_L1-in1_L1-out_L1]
 
 # TMs
-pytest tests/python_api_testing/models/bert_large_performant/unit_tests -k test_bert_large_split_fused_qkv_test[BFLOAT8_B-in0_L1-out_L1]
-pytest tests/python_api_testing/models/bert_large_performant/unit_tests -k test_bert_large_create_qkv_heads_test[BFLOAT8_B-in0_L1-out_L1-Q_V_head]
-pytest tests/python_api_testing/models/bert_large_performant/unit_tests -k test_bert_large_create_qkv_heads_test[BFLOAT8_B-in0_L1-out_L1-K_head]
-pytest tests/python_api_testing/models/bert_large_performant/unit_tests -k test_bert_large_concat_heads_test[BFLOAT8_B-in0_L1-out_L1]
+pytest tests/python_api_testing/models/bert_large_performant/unit_tests -k test_bert_large_split_fused_qkv_and_split_heads
+pytest tests/python_api_testing/models/bert_large_performant/unit_tests -k test_bert_large_concatenate_heads_test[BFLOAT8_B-in0_L1-out_L1]
 
 # Fused ops
 pytest tests/python_api_testing/models/bert_large_performant/unit_tests -k test_bert_large_layernorm_test[add_LN_GB-BFLOAT16-in0_L1-out_L1]

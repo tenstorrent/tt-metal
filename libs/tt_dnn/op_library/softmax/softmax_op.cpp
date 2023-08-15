@@ -15,8 +15,8 @@ using namespace std;
 using namespace tt::tt_metal;
 
 namespace tt {
-
-namespace tt_metal {
+namespace operations {
+namespace primary {
 
 inline bool is_dram(const Tensor& input_tensor) { return input_tensor.memory_config().buffer_type == BufferType::DRAM; }
 inline bool is_dram(const std::optional<const Tensor> input_tensor) {
@@ -25,7 +25,7 @@ inline bool is_dram(const std::optional<const Tensor> input_tensor) {
 inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DRAM; }
 
 // implementation of softmax with optional scale/mask (see the header for input_tensor more detailed description)
-operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, const std::optional<const Tensor> mask, float scale) {
+operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, const std::optional<const Tensor> mask, std::optional<float> scale) {
 
     const auto shape = input_tensor.shape();
     u32 W = shape[3], H = shape[2] * shape[1], NC = shape[0];
@@ -128,7 +128,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
         block_size
     };
     std::map<string, string> softmax_defines;
-    if (scale != 0.0f) {
+    if (scale.has_value()) {
         softmax_defines["FUSED_SCALE_MASK"] = "1";
     }
     auto reader_kernels_id = CreateDataMovementKernel(
@@ -185,7 +185,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
         auto core = grid.wrap_core(icore);
 
         uint32_t tile_offset = wtpc*Wt*icore;
-        union { float f; uint32_t u; } s; s.f = scale; // scale for fused scale-mask-softmax
+        union { float f; uint32_t u; } s; s.f = scale.value_or(0.0f); // scale for fused scale-mask-softmax
         // always in-place
         //                                                              0  1    2       3            4   5       6          7           8
         SetRuntimeArgs(program, reader_kernels_id, core, { src_addr, 0, s.u, wtpc*Wt, tile_offset, partHt, Wt, mask_addr, 0x3f800000 }); // [8]=1.0f is scaler
@@ -232,7 +232,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
 } // scale_mask_softmax_
 
 
-void AttentionSoftmaxInPlace::validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
+void SoftmaxInPlace::validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     TT_ASSERT(input_tensors.size() == 1 and optional_input_tensors.size() <= 1, "Must have 1 or 2 input tensors");
     auto& input_tensor = input_tensors.at(0);
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
@@ -250,17 +250,17 @@ void AttentionSoftmaxInPlace::validate(const std::vector<Tensor> &input_tensors,
 
 }
 
-std::vector<Shape> AttentionSoftmaxInPlace::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<Shape> SoftmaxInPlace::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     // Do nothing because it's an in-place operation
     return {};
 }
 
-std::vector<Tensor> AttentionSoftmaxInPlace::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
+std::vector<Tensor> SoftmaxInPlace::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     // Do nothing because it's an in-place operation
     return {};
 }
 
-operation::ProgramWithCallbacks AttentionSoftmaxInPlace::create_program(
+operation::ProgramWithCallbacks SoftmaxInPlace::create_program(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor> &output_tensors
@@ -271,22 +271,23 @@ operation::ProgramWithCallbacks AttentionSoftmaxInPlace::create_program(
 
 }
 
-tt::stl::reflection::Attributes AttentionSoftmaxInPlace::attributes() const {
+tt::stl::reflection::Attributes SoftmaxInPlace::attributes() const {
     return {
         {"scale", this->scale},
     };
 }
 
-Tensor scale_mask_softmax_in_place(float scale, std::optional<const Tensor> mask, Tensor& input_tensor) {
-    operation::run(AttentionSoftmaxInPlace{.scale=scale}, {input_tensor}, {mask});
+Tensor softmax_in_place(Tensor& input_tensor) {
+    return transformers::scale_mask_softmax_in_place(input_tensor, std::nullopt, std::nullopt);
+}
+
+namespace transformers {
+Tensor scale_mask_softmax_in_place(Tensor& input_tensor, std::optional<float> scale, std::optional<const Tensor> mask) {
+    operation::run(SoftmaxInPlace{.scale=scale}, {input_tensor}, {mask});
     return input_tensor;
 }
 
-Tensor softmax_in_place(Tensor& input_tensor) {
-    return scale_mask_softmax_in_place(0.0f, std::nullopt, input_tensor); // 0.0f means unused scale
-}
-
-
-} // namespace tt_metal
-
+}  // namespace transformers
+}  // namespace primary
+}  // namespace operations
 }  // namespace tt

@@ -4,20 +4,14 @@
 
 #include "tt_dnn/op_library/operation.hpp"
 
-namespace tt { namespace tt_metal {
+namespace tt {
+namespace operations {
+namespace primary {
 
-// const ref prevents in-place
-Tensor softmax_in_place(Tensor& input_tensor);
+using namespace tt_metal;
 
-// computes
-// tmp1 = bcast_hw_mul(scale, x)  ; shape of scale is [1,1,32,32]
-// tmp2 = bcast_add_w->h(tmp1, mask) ; shape of attn mask is [1,N,32,W]
-// y = softmax(tmp2)              ; r=result
-// If scale == 0.0f then just y = softmax(x) is computed
-Tensor scale_mask_softmax_in_place(float scale, std::optional<const Tensor> mask, Tensor& input_tensor);
-
-struct AttentionSoftmaxInPlace {
-    const float scale;
+struct SoftmaxInPlace {
+    const std::optional<float> scale;
 
     void validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -30,4 +24,18 @@ struct AttentionSoftmaxInPlace {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-} }  // namespace tt::tt_metal
+// const ref prevents in-place
+Tensor softmax_in_place(Tensor& input_tensor);
+
+namespace transformers {
+// computes
+// tmp1 = bcast_hw_mul(scale, x)  ; shape of scale is [1,1,32,32]
+// tmp2 = bcast_add_w->h(tmp1, mask) ; shape of attn mask is [1,N,32,W]
+// y = softmax(tmp2)              ; r=result
+// If scale == 0.0f then just y = softmax(x) is computed
+Tensor scale_mask_softmax_in_place(Tensor& input_tensor, std::optional<float> scale, std::optional<const Tensor> mask);
+}  // namespace transformers
+
+}  // namespace primary
+}  // namespace operations
+}  // namespace tt

@@ -14,7 +14,9 @@ from models.utility_functions import (
 import torch
 
 
-def run_bert_large_split_fused_qkv_test(batch, dtype, in0_mem_config, out_mem_config):
+def run_split_fused_qkv_and_split_heads_test(
+    batch, dtype, in0_mem_config, out_mem_config
+):
     torch.manual_seed(1234)
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
@@ -33,7 +35,7 @@ def run_bert_large_split_fused_qkv_test(batch, dtype, in0_mem_config, out_mem_co
         .to(device, in0_mem_config)
     )
 
-    q, k, v = ttl.tensor.bert_large_split_fused_qkv(a_t, out_mem_config)
+    q, k, v = ttl.operations.primary.transformers.split_fused_qkv_and_split_heads(a_t, ttl.tensor.CoreCoord(12, 9), out_mem_config)
 
     # Check memory of inputs and outputs
     assert a_t.memory_config().buffer_type == in0_mem_config.buffer_type
@@ -45,9 +47,9 @@ def run_bert_large_split_fused_qkv_test(batch, dtype, in0_mem_config, out_mem_co
     logger.debug(f"k: {k.memory_config().buffer_type} and {k.dtype()}")
     logger.debug(f"v: {v.memory_config().buffer_type} and {v.dtype()}")
 
-    assert q.shape() == [batch, 1, 384, 1024]
-    assert k.shape() == [batch, 1, 384, 1024]
-    assert v.shape() == [batch, 1, 384, 1024]
+    assert q.shape() == [batch, 16, 384, 64]
+    assert k.shape() == [batch, 16, 64, 384]
+    assert v.shape() == [batch, 16, 384, 64]
 
     tt_host_rm_q = q.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
     pyt_got_back_rm_q = tt_host_rm_q.to_torch()
@@ -57,6 +59,10 @@ def run_bert_large_split_fused_qkv_test(batch, dtype, in0_mem_config, out_mem_co
     pyt_got_back_rm_v = tt_host_rm_v.to_torch()
 
     (ref_q, ref_k, ref_v) = torch.split(A, 1024, dim=-1)
+
+    ref_q = ref_q.reshape([batch, 384, 16, 64]).transpose(-3, -2)
+    ref_k = ref_k.reshape([batch, 384, 16, 64]).transpose(-3, -2).transpose(-2, -1)
+    ref_v = ref_v.reshape([batch, 384, 16, 64]).transpose(-3, -2)
 
     passing_pcc_q, output_pcc_q = comp_pcc(pyt_got_back_rm_q, ref_q, 0.99)
     logger.info(f"Q passing={passing_pcc_q}")
@@ -107,23 +113,31 @@ import pytest
         "batch_7",
     ],
 )
-def test_bert_large_split_fused_qkv_test(
+def test_split_fused_qkv_and_split_heads(
     batch, dtype, in0_mem_config, out_mem_config, request
 ):
     ttl.profiler.set_profiler_location(
-        f"tt_metal/tools/profiler/logs/BERT_large_split_fused_qkv_tm_{request.node.callspec.id}"
+        f"tt_metal/tools/profiler/logs/BERT_large_create_qvk_heads_tm_{request.node.callspec.id}"
     )
-    run_bert_large_split_fused_qkv_test(batch, dtype, in0_mem_config, out_mem_config)
+    run_split_fused_qkv_and_split_heads_test(
+        batch, dtype, in0_mem_config, out_mem_config
+    )
 
 
-def test_bert_large_split_fused_qkv_with_program_cache(use_program_cache):
+def test_split_fused_qkv_and_split_heads_with_program_cache(
+    use_program_cache,
+):
     dtype = ttl.tensor.DataType.BFLOAT8_B
     dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
     for _ in range(2):
-        run_bert_large_split_fused_qkv_test(9, dtype, dram_mem_config, dram_mem_config)
+        run_split_fused_qkv_and_split_heads_test(
+            9, dtype, dram_mem_config, dram_mem_config
+        )
 
     dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
     for _ in range(2):
-        run_bert_large_split_fused_qkv_test(9, dtype, dram_mem_config, dram_mem_config)
+        run_split_fused_qkv_and_split_heads_test(
+            9, dtype, dram_mem_config, dram_mem_config
+        )
 
     assert ttl.program_cache.num_entries() == 2

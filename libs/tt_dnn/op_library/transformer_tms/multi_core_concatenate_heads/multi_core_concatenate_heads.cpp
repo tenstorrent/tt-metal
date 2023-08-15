@@ -1,4 +1,4 @@
-#include "tt_dnn/op_library/bert_large_tms/bert_large_tms.hpp"
+#include "tt_dnn/op_library/transformer_tms/transformer_tms.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
@@ -7,10 +7,11 @@ using namespace tt::constants;
 using namespace tt;
 
 namespace tt {
+namespace operations {
+namespace primary {
+namespace transformers {
 
-namespace tt_metal {
-
-operation::ProgramWithCallbacks multi_core_create_qkv_heads(const Tensor &a, Tensor& output, CoreCoord compute_with_storage_grid_size, bool transpose_hw) {
+operation::ProgramWithCallbacks multi_core_concat_heads(const Tensor &a, Tensor& output, CoreCoord compute_with_storage_grid_size) {
 
     const auto& ashape = a.shape();
 
@@ -26,16 +27,16 @@ operation::ProgramWithCallbacks multi_core_create_qkv_heads(const Tensor &a, Ten
     ////////////////////////////////////////////////////////////////////////////
     //                      TM Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    // Output shape is: [B, 16, 384, 64] (transpose_hw=false) or [B, 16, 64, 384] (transpose_hw=true)
-    // For transpose_hw=true, we write "w_dim" to h_dim instead, but keep nomenclature the same
-    uint32_t per_core_tiles = ashape[3] / TILE_WIDTH;
-    uint32_t out_h_tiles = ashape[2] / TILE_HEIGHT;
+    // Output shape is: [B, 1, 384, 1024]
+    uint32_t per_core_tiles = (ashape[1] * ashape[3]) / TILE_WIDTH;
+    uint32_t in0_h_tiles = ashape[2] / TILE_HEIGHT;
 
-    uint32_t out_w = 64;
-    uint32_t out_w_tiles = out_w / TILE_WIDTH;
-    uint32_t out_c = per_core_tiles / out_w_tiles;
-    uint32_t out_HtWt = out_h_tiles * out_w_tiles;
-    uint32_t out_CHtWt = out_c * out_HtWt;
+    // These parameters are identical to out_* in multi_core_create_qkv_heads
+    uint32_t in0_w = 64;
+    uint32_t in0_w_tiles = in0_w / TILE_WIDTH;
+    uint32_t in0_c = per_core_tiles / in0_w_tiles;
+    uint32_t in0_HtWt = in0_h_tiles * in0_w_tiles;
+    uint32_t in0_CHtWt = in0_c * in0_HtWt;
 
     // Parallelize ashape[2] (384 / 32 = 12 tiles) across columns
     // Parallelize ashape[0] (B) across rows
@@ -77,8 +78,9 @@ operation::ProgramWithCallbacks multi_core_create_qkv_heads(const Tensor &a, Ten
             (std::uint32_t) in0_is_dram,
 
             // READER COMPILE TIME ARGS
-            (std::uint32_t) out_w_tiles, // out_w_tiles
-            (std::uint32_t) out_c, // out_c
+            (std::uint32_t) in0_w_tiles, // in0_w_tiles
+            (std::uint32_t) in0_c, // in0_c
+            (std::uint32_t) in0_HtWt, // in0_HtWt
     };
     std::vector<uint32_t> writer_compile_time_args = {
             // interleaved accessor args
@@ -86,51 +88,33 @@ operation::ProgramWithCallbacks multi_core_create_qkv_heads(const Tensor &a, Ten
             (std::uint32_t) out_is_dram,
 
             // WRITER COMPILE TIME ARGS
-            (std::uint32_t) out_w_tiles, // out_w_tiles
-            (std::uint32_t) out_h_tiles, // out_h_tiles
-            (std::uint32_t) out_c, // out_c
-            (std::uint32_t) out_HtWt, // out_HtWt
-            (std::uint32_t) transpose_hw, // transpose_hw
+            (std::uint32_t) in0_w_tiles, // in0_w_tiles
+            (std::uint32_t) in0_c, // in0_c
     };
 
     auto reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_tm_tile_layout_create_head.cpp",
+        "tt_metal/kernels/dataflow/reader_tm_tile_layout_concat_heads.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = reader_compile_time_args});
     auto writer_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_tm_tile_layout_create_head.cpp",
+        "tt_metal/kernels/dataflow/writer_tm_tile_layout_concat_heads.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = writer_compile_time_args});
 
-    // Compute kernel
-    // For transpose_hw=false, write and read from cb 0 without compute
-    // For transpose_hw=true, write to cb 0, compute, then read from cb 16
-    if (transpose_hw) {
-        std::vector<uint32_t> compute_args = {per_core_tiles};
-        auto compute_kernel_id = tt_metal::CreateComputeKernel(
-            program,
-            "tt_metal/kernels/compute/transpose_wh.cpp",
-            all_cores,
-            ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .compile_args = compute_args}  // TODO: LoFi faster?
-        );
-    }
-    else {
-        std::vector<uint32_t> compute_args = {0}; // dummy
-        auto compute_kernel_id = tt_metal::CreateComputeKernel(
-            program,
-            "tt_metal/kernels/compute/blank.cpp",
-            all_cores,
-            ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .compile_args = compute_args}  // TODO: LoFi faster?
-        );
-    }
+    // Dummy compute kernel
+    std::vector<uint32_t> compute_args = {0}; // dummy
+    auto compute_kernel_id = tt_metal::CreateComputeKernel(
+        program,
+        "tt_metal/kernels/compute/blank.cpp",
+        all_cores,
+        tt_metal::ComputeConfig{.compile_args = compute_args}
+    );
 
     // Create circular buffers
     uint32_t src0_cb_index = 0;
     uint32_t cb0_tiles = per_core_tiles * 2; // double buffer
-    uint32_t out_cb_index = 16;
-    uint32_t out_cb_tiles = per_core_tiles;
     auto cb_src0 = tt_metal::CreateCircularBuffers(
         program,
         src0_cb_index,
@@ -140,33 +124,18 @@ operation::ProgramWithCallbacks multi_core_create_qkv_heads(const Tensor &a, Ten
         cb_data_format
     );
 
-    if (transpose_hw) {
-        auto cb_out = tt_metal::CreateCircularBuffers(
-            program,
-            out_cb_index,
-            all_cores,
-            out_cb_tiles,
-            out_cb_tiles * single_tile_size,
-            cb_data_format
-        );
-    }
-
     for (int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
-            uint32_t out_tensor_tile_id = core_idx_x * out_w_tiles + core_idx_y * out_CHtWt;
-
-            if (transpose_hw) {
-                out_tensor_tile_id = core_idx_x + core_idx_y * out_CHtWt;
-            }
+            uint32_t in0_tensor_tile_id = core_idx_x * in0_w_tiles + core_idx_y * in0_CHtWt;
 
             std::vector<uint32_t> reader_runtime_args = {
-                (std::uint32_t) in0_buffer->address(), // in0_tensor_addr,
-                (core_idx_x + core_idx_y * num_cores_c) * per_core_tiles, // in0_tensor_tile_id
+                (std::uint32_t) in0_buffer->address(), // in0_tensor_addr
+                in0_tensor_tile_id, // in0_tensor_tile_id
             };
             std::vector<uint32_t> writer_runtime_args = {
                 (std::uint32_t) out_buffer->address(), // out_tensor_addr
-                out_tensor_tile_id, // out_tensor_tile_id
+                (core_idx_x + core_idx_y * num_cores_c) * per_core_tiles, // out_tensor_tile_id
             };
 
             tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
@@ -214,6 +183,7 @@ operation::ProgramWithCallbacks multi_core_create_qkv_heads(const Tensor &a, Ten
     return {std::move(program), override_runtime_args_callback};
 }
 
-} // namespace tt_metal
-
-} // namespace tt
+}  // namespace transformers
+}  // namespace primary
+}  // namespace operations
+}  // namespace tt

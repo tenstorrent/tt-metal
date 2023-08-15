@@ -10,7 +10,7 @@
 
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "tt_dnn/op_library/bert_large_tms/bert_large_tms.hpp"
+#include "tt_dnn/op_library/transformer_tms/transformer_tms.hpp"
 #include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
 
@@ -43,12 +43,8 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
     );
 
 
-    auto bert_large_create_qkv_heads_output = bert_large_create_qkv_heads(fused_qkv_matmul_output, l1_memory_config);
-    auto query = bert_large_create_qkv_heads_output[0];
-    auto key = bert_large_create_qkv_heads_output[1];
-    auto value = bert_large_create_qkv_heads_output[2];
+    auto&& [query, key, value] = tt::operations::primary::transformers::split_fused_qkv_and_split_heads(fused_qkv_matmul_output, CoreCoord{12, batch_size}, l1_memory_config);
     fused_qkv_matmul_output.deallocate();
-    bert_large_create_qkv_heads_output.clear();
 
 
     auto pre_softmax_bmm_program_config = tt::operations::primary::MatmulMultiCoreReuseProgramConfig{
@@ -64,7 +60,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
     key.deallocate();
 
 
-    pre_softmax_bmm_matmul = scale_mask_softmax_in_place(1.0f / std::sqrt(head_size), attention_mask, pre_softmax_bmm_matmul);
+    pre_softmax_bmm_matmul = tt::operations::primary::transformers::scale_mask_softmax_in_place(pre_softmax_bmm_matmul, 1.0f / std::sqrt(head_size), attention_mask);
 
 
     auto post_softmax_bmm_program_config = tt::operations::primary::MatmulMultiCoreReuseProgramConfig{
@@ -80,7 +76,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
     value.deallocate();
 
 
-    auto bert_large_concat_heads_output = bert_large_concat_heads(post_softmax_bmm_output, l1_memory_config);
+    auto concat_heads_output = tt::operations::primary::transformers::concatenate_heads(post_softmax_bmm_output, CoreCoord{12, batch_size}, l1_memory_config);
     post_softmax_bmm_output.deallocate();
 
 
@@ -94,13 +90,13 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
         .fuse_gelu_activation=false,
     };
     auto selfout_bmm_output = tt::operations::primary::matmul(
-        bert_large_concat_heads_output,
+        concat_heads_output,
         parameters.at(fmt::format("selfout_weight_{}", encoder_index)),
         parameters.at(fmt::format("selfout_bias_{}", encoder_index)),
         selfout_bmm_program_config,
         l1_memory_config
     );
-    bert_large_concat_heads_output.deallocate();
+    concat_heads_output.deallocate();
 
 
     auto attention_layernorm_output = tt::operations::primary::add_layernorm(

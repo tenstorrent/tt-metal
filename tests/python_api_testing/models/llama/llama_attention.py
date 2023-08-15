@@ -282,7 +282,7 @@ class TtLlamaAttention(nn.Module):
         value_states = torch2tt_tensor(value_states, self.device)
 
         # torch softmax
-        attn_weights = tt_lib.tensor.softmax_in_place(attn_weights)
+        attn_weights = tt_lib.operations.primary.softmax_in_place(attn_weights)
         attn_output = tt_lib.tensor.bmm(attn_weights, value_states)
 
         if attn_output.shape() != [bsz, self.num_heads, q_len, self.head_dim]:

@@ -173,6 +173,10 @@ autofunction:: tt_lib.operations.primary.matmul
 
 .. autofunction:: tt_lib.operations.primary.add_layernorm
 
+.. autofunction:: tt_lib.operations.primary.softmax_in_place
+
+.. autofunction:: tt_lib.operations.primary.transformers.scale_mask_softmax_in_place
+
 
 Enums
 -----
@@ -502,10 +506,6 @@ Other Operations
 .. autofunction:: tt_lib.tensor.bert_large_pre_softmax_bmm
 
 .. autofunction:: tt_lib.tensor.bert_large_post_softmax_bmm
-
-.. autofunction:: tt_lib.tensor.softmax_in_place
-
-.. autofunction:: tt_lib.tensor.scale_mask_softmax_in_place
 
 .. autofunction:: tt_lib.tensor.layernorm
 

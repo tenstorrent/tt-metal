@@ -41,7 +41,7 @@ int main(int argc, char **argv) {
     tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}});
     Shape shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
     Tensor a = tt::numpy::random::random(shape).to(Layout::TILE).to(device);
-    Tensor c = softmax_in_place(a);
+    Tensor c = tt::operations::primary::softmax_in_place(a);
     Tensor d = c.cpu();
     Tensor host_a = a.cpu(); // Move tensor a to host to validate
     pass &= CloseDevice(device);

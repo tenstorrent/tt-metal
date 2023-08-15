@@ -14,13 +14,11 @@ from models.utility_functions import (
 import torch
 
 
-def run_bert_large_create_qkv_heads_test(
-    batch, dtype, in0_mem_config, out_mem_config, transpose_hw
-):
+def run_bert_large_concatenate_heads_test(batch, dtype, in0_mem_config, out_mem_config):
     torch.manual_seed(1234)
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
-    a_shape = [batch, 1, 384, 1024]
+    a_shape = [batch, 16, 384, 64]
 
     A = torch.randn(a_shape)
 
@@ -35,39 +33,23 @@ def run_bert_large_create_qkv_heads_test(
         .to(device, in0_mem_config)
     )
 
-    if transpose_hw:
-        out = ttl.tensor.bert_large_create_k_head(a_t, out_mem_config)
-    else:
-        # bert_large_create_v_head is same op as bert_large_create_q_head
-        out = ttl.tensor.bert_large_create_q_head(a_t, out_mem_config)
+    out = ttl.operations.primary.transformers.concatenate_heads(a_t, ttl.tensor.CoreCoord(12, 9), out_mem_config)
 
     # Check memory of inputs and outputs
     assert a_t.memory_config().buffer_type == in0_mem_config.buffer_type
     assert out.memory_config().buffer_type == out_mem_config.buffer_type
 
-    which_head_str = "K head" if transpose_hw else "Q/V head"
     logger.debug(f"in0: {a_t.memory_config().buffer_type} and {a_t.dtype()}")
-    logger.debug(
-        f"out ({which_head_str}): {out.memory_config().buffer_type} and {out.dtype()}"
-    )
+    logger.debug(f"out: {out.memory_config().buffer_type} and {out.dtype()}")
 
-    if transpose_hw:
-        expected_out_shape = [batch, 16, 64, 384]
-        ref_out = (
-            torch.reshape(A, [batch, 384, 16, 64]).transpose(-3, -2).transpose(-2, -1)
-        )
-    else:
-        expected_out_shape = [batch, 16, 384, 64]
-        ref_out = torch.reshape(A, [batch, 384, 16, 64]).transpose(-3, -2)
-
-    assert out.shape() == expected_out_shape
-
+    assert out.shape() == [batch, 1, 384, 1024]
     tt_host_rm_out = out.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
     pyt_got_back_rm_out = tt_host_rm_out.to_torch()
 
+    ref_out = torch.transpose(A, -3, -2).reshape([batch, 1, 384, 1024])
     passing_pcc, output_pcc = comp_pcc(pyt_got_back_rm_out, ref_out, 0.99)
-    logger.info(f"{which_head_str} passing={passing_pcc}")
-    logger.info(f"{which_head_str} output pcc={output_pcc}")
+    logger.info(f"passing={passing_pcc}")
+    logger.info(f"output pcc={output_pcc}")
     assert passing_pcc
 
     ttl.device.CloseDevice(device)
@@ -76,11 +58,6 @@ def run_bert_large_create_qkv_heads_test(
 import pytest
 
 
-@pytest.mark.parametrize(
-    "transpose_hw",
-    (False, True),
-    ids=["Q_V_head", "K_head"],
-)
 @pytest.mark.parametrize(
     "out_mem_config",
     (
@@ -111,29 +88,23 @@ import pytest
         "batch_7",
     ],
 )
-def test_bert_large_create_qkv_heads_test(
-    batch, dtype, in0_mem_config, out_mem_config, transpose_hw, request
+def test_bert_large_concatenate_heads_test(
+    batch, dtype, in0_mem_config, out_mem_config, request
 ):
     ttl.profiler.set_profiler_location(
-        f"tt_metal/tools/profiler/logs/BERT_large_create_heads_tm_{request.node.callspec.id}"
+        f"tt_metal/tools/profiler/logs/BERT_large_concat_heads_tm_{request.node.callspec.id}"
     )
-    run_bert_large_create_qkv_heads_test(
-        batch, dtype, in0_mem_config, out_mem_config, transpose_hw
-    )
+    run_bert_large_concatenate_heads_test(batch, dtype, in0_mem_config, out_mem_config)
 
 
-def test_bert_large_create_qkv_heads_with_program_cache(use_program_cache):
+def test_bert_large_concatenate_heads_with_program_cache(use_program_cache):
     dtype = ttl.tensor.DataType.BFLOAT8_B
     dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
     for _ in range(2):
-        run_bert_large_create_qkv_heads_test(
-            9, dtype, dram_mem_config, dram_mem_config, transpose_hw=True
-        )
+        run_bert_large_concatenate_heads_test(9, dtype, dram_mem_config, dram_mem_config)
 
     dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
     for _ in range(2):
-        run_bert_large_create_qkv_heads_test(
-            9, dtype, dram_mem_config, dram_mem_config, transpose_hw=False
-        )
+        run_bert_large_concatenate_heads_test(9, dtype, dram_mem_config, dram_mem_config)
 
     assert ttl.program_cache.num_entries() == 2
