@@ -17,8 +17,12 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
 
     const auto& ashape = a.shape(), bshape = b.shape();
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());
+    tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
+    uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
+    uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_data_format);
     MathFidelity math_fidelity = MathFidelity::HiFi4;
 
     tt_metal::Buffer *src0_buffer = a.buffer();
@@ -58,8 +62,8 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
         src0_cb_index,
         all_cores,
         num_input_tiles,
-        num_input_tiles * single_tile_size,
-        cb_data_format
+        num_input_tiles * in0_single_tile_size,
+        in0_data_format
     );
 
     uint32_t src1_cb_index = 1;
@@ -68,8 +72,8 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
         src1_cb_index,
         all_cores,
         num_input_tiles,
-        num_input_tiles * single_tile_size,
-        cb_data_format
+        num_input_tiles * in1_single_tile_size,
+        in1_data_format
     );
 
     uint32_t output_cb_index = 16; // output operands start at index 16
@@ -79,8 +83,8 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
         output_cb_index,
         all_cores,
         num_output_tiles,
-        num_output_tiles * single_tile_size,
-        cb_data_format
+        num_output_tiles * output_single_tile_size,
+        output_data_format
     );
     bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;

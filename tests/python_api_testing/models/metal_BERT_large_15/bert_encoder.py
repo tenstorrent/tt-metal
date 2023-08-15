@@ -124,7 +124,7 @@ class TtBertEncoder(torch.nn.Module):
             attention_output_weight,
             attention_output_bias,
             output_mem_config=self.model_config["OP11_SELFOUT_OUTPUT_MEMCFG"],
-            out_dtype=self.model_config["OP11_SELFOUT_OUTPUT_DTYPE"],
+            output_dtype=self.model_config["OP11_SELFOUT_OUTPUT_DTYPE"],
         )
         # profiler.end("__op11_mm_plus_bias")
 

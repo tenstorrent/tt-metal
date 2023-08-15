@@ -90,7 +90,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, model_config):
             qkv_weight,
             qkv_bias,
             output_mem_config=model_config["OP1_FUSED_QKV_MM_OUTPUT_MEMCFG"],
-            out_dtype=model_config["OP1_FUSED_QKV_MM_OUTPUT_DTYPE"],
+            output_dtype=model_config["OP1_FUSED_QKV_MM_OUTPUT_DTYPE"],
         )
         # profiler.end("___op1_qkv_fused")
 
@@ -111,7 +111,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, model_config):
             Q_heads,
             K_T_heads,
             output_mem_config=model_config["OP7_PRE_SOFTMAX_BMM_OUTPUT_MEMCFG"],
-            out_dtype=model_config["OP7_PRE_SOFTMAX_BMM_OUTPUT_DTYPE"],
+            output_dtype=model_config["OP7_PRE_SOFTMAX_BMM_OUTPUT_DTYPE"],
         )
         # profiler.end("___op7_bmm")
 
@@ -142,7 +142,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, model_config):
             attention_scores,
             V_heads,
             output_mem_config=model_config["OP9_POST_SOFTMAX_BMM_OUTPUT_MEMCFG"],
-            out_dtype=model_config["OP9_POST_SOFTMAX_BMM_OUTPUT_DTYPE"],
+            output_dtype=model_config["OP9_POST_SOFTMAX_BMM_OUTPUT_DTYPE"],
         )
         # profiler.end("___op9_bmm")
 

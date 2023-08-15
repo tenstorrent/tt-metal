@@ -34,9 +34,52 @@ def run_falcon_matmul_test(
         b_shape = [1, 1, 18176, 4544]
         expected_output_shape = [1, 1, seq_len, 4544]
 
-        if seq_len == 2048:
+        if (
+            seq_len == 1024
+            and in0_dtype == in1_dtype == out_dtype == ttl.tensor.DataType.BFLOAT16
+        ) or (
+            seq_len == 2048
+            and (
+                in0_dtype == ttl.tensor.DataType.BFLOAT16
+                or in1_dtype == ttl.tensor.DataType.BFLOAT16
+                or out_dtype == ttl.tensor.DataType.BFLOAT16
+            )
+        ):
             logger.warning(
-                "For seq_len 2048, only all bfp8_b dataformats run with L1 (weights in DRAM). Running with in0, in1, and out on DRAM instead!"
+                f"For seq_len: {seq_len}, in0_dtype: {in0_dtype}, in1_dtype: {in1_dtype}, and out_dtype: {out_dtype}, L1 space is not enough. Running with in0, in1, and out on DRAM instead!"
+            )
+            in0_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
+            in1_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
+            out_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
+    elif falcon_op == ttl.tensor.falcon_dense_h_to_4h_matmul:
+        a_shape = [1, 1, seq_len, 4544]
+        b_shape = [1, 1, 4544, 18176]
+        expected_output_shape = [1, 1, seq_len, 18176]
+
+        if seq_len == 2048 and out_dtype == ttl.tensor.DataType.BFLOAT16:
+            logger.warning(
+                f"For seq_len: {seq_len}, in0_dtype: {in0_dtype}, in1_dtype: {in1_dtype}, and out_dtype: {out_dtype}, L1 space is not enough. Running with in0, in1, and out on DRAM instead!"
+            )
+            in0_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
+            in1_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
+            out_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
+    elif falcon_op == ttl.tensor.falcon_lm_head_matmul:
+        a_shape = [1, 1, seq_len, 4544]
+        b_shape = [1, 1, 4544, 65024]
+        expected_output_shape = [1, 1, seq_len, 65024]
+
+        if (
+            seq_len == 512
+            and (
+                in0_dtype == ttl.tensor.DataType.BFLOAT16
+                or in1_dtype == ttl.tensor.DataType.BFLOAT16
+                or out_dtype == ttl.tensor.DataType.BFLOAT16
+            )
+            or seq_len == 1024
+            or seq_len == 2048
+        ):
+            logger.warning(
+                f"For seq_len: {seq_len}, in0_dtype: {in0_dtype}, in1_dtype: {in1_dtype}, and out_dtype: {out_dtype}, L1 space is not enough. Running with in0, in1, and out on DRAM instead!"
             )
             in0_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
             in1_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
@@ -127,8 +170,10 @@ def run_falcon_matmul_test(
         ttl.tensor.falcon_fused_qkv_matmul,
         ttl.tensor.falcon_selfout_matmul,
         ttl.tensor.falcon_dense_4h_to_h_matmul,
+        ttl.tensor.falcon_dense_h_to_4h_matmul,
+        ttl.tensor.falcon_lm_head_matmul,
     ),
-    ids=["fused_qkv", "selfout", "dense_4h_to_h"],
+    ids=["fused_qkv", "selfout", "dense_4h_to_h", "dense_h_to_4h", "lm_head"],
 )
 @pytest.mark.parametrize(
     "seq_len",
