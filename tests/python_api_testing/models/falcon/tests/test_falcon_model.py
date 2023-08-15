@@ -96,17 +96,24 @@ def run_test_FalconModel_inference(
 
 
 @pytest.mark.parametrize(
-    "model_version, batch, seq_len, num_layers, on_weka, pcc",
+    "batch, seq_len",
+    ((1, 128),),
+    ids=["batch1_seqlen128"],
+)
+@pytest.mark.parametrize(
+    "num_layers, pcc",
+    ((2, 0.98), (32, 0.98)),
+    ids=["layers_2", "layers_32"],
+)
+@pytest.mark.parametrize(
+    "model_version, on_weka",
     (
         (
             "tiiuae/falcon-7b-instruct",
-            1,
-            128,
-            2,
             False,
-            0.98,
         ),
     ),
+    ids=["falcon_7b"],
 )
 def test_FalconModel_inference(
     model_version,

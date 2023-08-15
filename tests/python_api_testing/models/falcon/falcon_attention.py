@@ -147,32 +147,29 @@ class TtFalconAttention(nn.Module):
                 f" and `num_heads`: {num_heads})."
             )
 
-        self.query_key_value_weights = torch2tt_tensor(
-            self.state_dict[
-                f"{base_url}.{layer_num}.self_attention.query_key_value.weight"
-            ],
-            self.device,
+        # TODO: Take in model_config instead of hardcoding dtypes/mem_configs
+        self.query_key_value_weights = tt_lib.tensor.transpose(
+            torch2tt_tensor(
+                self.state_dict[
+                    f"{base_url}.{layer_num}.self_attention.query_key_value.weight"
+                ],
+                self.device,
+                tt_dtype=tt_lib.tensor.DataType.BFLOAT8_B,
+            )
         )
-        self.dense_weights = torch2tt_tensor(
-            self.state_dict[f"{base_url}.{layer_num}.self_attention.dense.weight"],
-            self.device,
+
+        self.dense_weights = tt_lib.tensor.transpose(
+            torch2tt_tensor(
+                self.state_dict[f"{base_url}.{layer_num}.self_attention.dense.weight"],
+                self.device,
+                tt_dtype=tt_lib.tensor.DataType.BFLOAT8_B,
+            )
         )
 
         self.rotary_embedding = TtFalconRotaryEmbedding(
             self.device,
             self.head_dim,
             max_position_embeddings=self.max_position_embeddings,
-        )
-
-        self.query_key_value_linear = TTLinear(
-            self.query_key_value_weights.shape()[-1],
-            self.query_key_value_weights.shape()[-2],
-            self.query_key_value_weights,
-        )
-        self.dense_linear = TTLinear(
-            self.dense_weights.shape()[-1],
-            self.dense_weights.shape()[-2],
-            self.dense_weights,
         )
 
         self.scalar = pad_by_zero(
@@ -200,8 +197,8 @@ class TtFalconAttention(nn.Module):
         #################
         ### FUSED QKV ###
         #################
-        fused_query_key_value = self.query_key_value_linear(
-            hidden_states
+        fused_query_key_value = tt_lib.tensor.falcon_fused_qkv_matmul(
+            hidden_states, self.query_key_value_weights
         )  # b, 1, seq_len, 73 * head_dim
 
         ###########
@@ -277,6 +274,8 @@ class TtFalconAttention(nn.Module):
         ### ATTENTION SELFOUT ###
         #########################
         attn_output = tt_lib.tensor.nlp_concat_heads(attn_output)
-        attn_output = self.dense_linear(attn_output)
+        attn_output = tt_lib.tensor.falcon_selfout_matmul(
+            attn_output, self.dense_weights
+        )
 
         return attn_output, past_key_value

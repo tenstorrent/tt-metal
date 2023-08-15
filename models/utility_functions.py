@@ -7,7 +7,6 @@ from tt_lib.utils import _nearest_32
 from os import environ
 
 
-
 def enable_persistent_kernel_cache():
     """
     Enables persistent compiled kernel caching - disables recompiling the kernels for the duration of running process if built_kernels/.../hash directory with kernel binaries is present.
@@ -55,13 +54,14 @@ def torch2tt_tensor(
     tt_device,
     tt_layout=tt_lib.tensor.Layout.TILE,
     tt_memory_config=tt_lib.tensor.MemoryConfig(True),
+    tt_dtype=tt_lib.tensor.DataType.BFLOAT16,
 ):
     size = list(py_tensor.size())
 
     while len(size) < 4:
         size.insert(0, 1)
 
-    tt_tensor = tt_lib.tensor.Tensor(py_tensor.reshape(size), tt_lib.tensor.DataType.BFLOAT16)
+    tt_tensor = tt_lib.tensor.Tensor(py_tensor.reshape(size), tt_dtype)
     tt_tensor = tt_tensor.to(tt_layout)
 
     if tt_device is not None:
@@ -73,7 +73,6 @@ def torch2tt_tensor(
 
 
 def tt2torch_tensor(tt_tensor, tt_host=None):
-
     tt_output = tt_tensor.cpu()
     if tt_output.layout() != tt_lib.tensor.Layout.ROW_MAJOR:
         tt_output = tt_output.to(tt_lib.tensor.Layout.ROW_MAJOR)
@@ -86,8 +85,19 @@ def pad_by_zero(x: torch.Tensor, device):
     while len(pad_shape) < 4:
         pad_shape.insert(0, 1)
     if pad_shape[3] % 32 != 0 or pad_shape[2] % 32 != 0:
-        tt_tensor = tt_lib.tensor.Tensor(x.reshape(pad_shape), tt_lib.tensor.DataType.BFLOAT16)
-        x = tt_tensor.pad((pad_shape[0], pad_shape[1], _nearest_32(pad_shape[2]), _nearest_32(pad_shape[3])), (0, 0, 0, 0), 0)
+        tt_tensor = tt_lib.tensor.Tensor(
+            x.reshape(pad_shape), tt_lib.tensor.DataType.BFLOAT16
+        )
+        x = tt_tensor.pad(
+            (
+                pad_shape[0],
+                pad_shape[1],
+                _nearest_32(pad_shape[2]),
+                _nearest_32(pad_shape[3]),
+            ),
+            (0, 0, 0, 0),
+            0,
+        )
         x = x.to(tt_lib.tensor.Layout.TILE).to(device)
 
     else:
@@ -96,11 +106,11 @@ def pad_by_zero(x: torch.Tensor, device):
 
 
 def unpad_from_zero(x, desired_shape):
-    if x.shape()[-1] == desired_shape[-1] and x.shape()[-2] == desired_shape[-2] :
+    if x.shape()[-1] == desired_shape[-1] and x.shape()[-2] == desired_shape[-2]:
         x = tt2torch_tensor(x)
     else:
         x = x.cpu()
-        if(x.layout() != tt_lib.tensor.Layout.ROW_MAJOR):
+        if x.layout() != tt_lib.tensor.Layout.ROW_MAJOR:
             x = x.to(tt_lib.tensor.Layout.ROW_MAJOR)
         x = x.unpad(
             (0, 0, 0, 0),
@@ -127,8 +137,8 @@ def torch_to_tt_tensor_rm(py_tensor, device, shape=None, put_on_device=True):
         while len(shape) < 4:
             shape.insert(0, 1)
 
-    tt_tensor = (
-         tt_lib.tensor.Tensor(py_tensor.reshape(shape), tt_lib.tensor.DataType.BFLOAT16)
+    tt_tensor = tt_lib.tensor.Tensor(
+        py_tensor.reshape(shape), tt_lib.tensor.DataType.BFLOAT16
     )
     if put_on_device:
         tt_tensor = tt_tensor.to(device)
@@ -142,8 +152,12 @@ def torch_to_tt_tensor(py_tensor, device):
 
     tt_tensor = (
         tt_lib.tensor.Tensor(py_tensor.reshape(shape), tt_lib.tensor.DataType.BFLOAT16)
-        .to(tt_lib.tensor.Layout.TILE)     # change memory layout of TT Tensor to TILE (as operation that will use it expects TILE layout)
-        .to(device)                         # move TT Tensor from host to TT accelerator device (device is of type tt_lib.device.Device)
+        .to(
+            tt_lib.tensor.Layout.TILE
+        )  # change memory layout of TT Tensor to TILE (as operation that will use it expects TILE layout)
+        .to(
+            device
+        )  # move TT Tensor from host to TT accelerator device (device is of type tt_lib.device.Device)
     )
 
     return tt_tensor
