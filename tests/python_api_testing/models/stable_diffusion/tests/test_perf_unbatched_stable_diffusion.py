@@ -311,8 +311,8 @@ def run_perf_unbatched_stable_diffusion(expected_inference_time, expected_compil
     "expected_inference_time, expected_compile_time",
     (
         (
-            45,
-            135,
+            40.5,
+            75,
         ),
     ),
 )
@@ -327,8 +327,8 @@ def test_perf_bare_metal(
     "expected_inference_time, expected_compile_time",
     (
         (
-            150,
-            170,
+            43,
+            110,
         ),
     ),
 )

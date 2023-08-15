@@ -122,8 +122,8 @@ def run_perf_t5(expected_inference_time, expected_compile_time):
     "expected_inference_time, expected_compile_time",
     (
         (
-            0.091,
-            6.0,
+            0.071,
+            5.5,
         ),
     ),
 )
@@ -136,8 +136,8 @@ def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_co
     "expected_inference_time, expected_compile_time",
     (
         (
-            0.95,
-            9,
+            0.12,
+            7,
         ),
     ),
 )

@@ -105,8 +105,8 @@ def run_perf_resnet(expected_inference_time, expected_compile_time, hf_cat_image
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (0.85,
-         34,
+        (0.225,
+         27.5,
         ),
     ),
 )
@@ -119,8 +119,8 @@ def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_co
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (3,
-         38,
+        (0.3,
+         36,
         ),
     ),
 )

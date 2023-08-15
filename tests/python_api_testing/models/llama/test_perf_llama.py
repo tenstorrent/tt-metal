@@ -138,8 +138,8 @@ def run_perf_llama(
     "expected_inference_time, expected_compile_time",
     (
         (
-            0.25,
-            9
+            0.205,
+            7
         ),
     ),
 )
@@ -156,8 +156,8 @@ def test_perf_bare_metal(
     "expected_inference_time, expected_compile_time",
     (
         (
-            1.0,
-            12.5
+            0.3,
+            10.5
         ),
     ),
 )

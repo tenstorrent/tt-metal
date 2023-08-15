@@ -114,7 +114,7 @@ def run_perf_bloom(expected_inference_time, expected_compile_time):
     "expected_inference_time, expected_compile_time",
     (
         (1.4,
-         16,
+         13,
         ),
     ),
 )
@@ -126,7 +126,7 @@ def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_co
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (8,
+        (1.75,
          17,
         ),
     ),

@@ -128,8 +128,8 @@ def run_perf_whisper(expected_inference_time, expected_compile_time):
     "expected_inference_time, expected_compile_time",
     (
         (
-            5.6,
-            26.5,
+            4.25,
+            20,
         ),
     ),
 )
@@ -144,8 +144,8 @@ def test_perf_bare_metal(
     "expected_inference_time, expected_compile_time",
     (
         (
-            36,
-            31,
+            5,
+            27,
         ),
     ),
 )

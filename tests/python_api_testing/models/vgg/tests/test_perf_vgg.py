@@ -86,8 +86,8 @@ def run_perf_vgg(imagenet_sample_input, expected_inference_time, expected_compil
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (5.1,
-         13.5,
+        (5.2,
+         14,
         ),
     ),
 )
@@ -99,8 +99,8 @@ def test_perf_bare_metal(use_program_cache, imagenet_sample_input, expected_infe
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (8.5,
-         19,
+        (4.5,
+         15,
         ),
     ),
 )

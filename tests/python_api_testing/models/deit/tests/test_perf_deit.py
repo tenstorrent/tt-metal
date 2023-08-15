@@ -92,7 +92,7 @@ def run_perf_deit(expected_inference_time, expected_compile_time, hf_cat_image_s
     "expected_inference_time, expected_compile_time",
     (
         (2.1,
-         17.5,
+         14,
         ),
     ),
 )
@@ -104,8 +104,8 @@ def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_co
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (10.5,
-         23,
+        (2.6,
+         19.5,
         ),
     ),
 )

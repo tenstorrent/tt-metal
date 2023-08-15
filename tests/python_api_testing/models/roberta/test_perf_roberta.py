@@ -118,7 +118,7 @@ def run_perf_roberta(expected_inference_time, expected_compile_time):
     "expected_inference_time, expected_compile_time",
     (
         (0.48,
-         16.0,
+         13,
         ),
     ),
 )
@@ -130,8 +130,8 @@ def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_co
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (2.6,
-         22,
+        (0.75,
+         17.5,
         ),
     ),
 )
