@@ -18,7 +18,7 @@ def merge_perf_files():
     merge_res.write(f"branch: {repo.active_branch} \n")
     merge_res.write(f"hash: {repo.head.object.hexsha} \n")
     merge_res.write(
-        "Model, Setting, Batch, First Run (sec), Second Run (sec), Compiler Time (sec), Inference Time GS (sec), Throughput GS (Batch*inf/sec), Inference Time CPU (sec), Throughput CPU (Batch*inf/sec) \n"
+        "Model, Setting, Batch, First Run (sec), Second Run (sec), Compiler Time (sec),  Expected Compile Time (sec), Inference Time GS (sec), Expected Inference Time GS (sec), Throughput GS (Batch*inf/sec), Inference Time CPU (sec), Throughput CPU (Batch*inf/sec) \n"
     )
 
     csvfiles.sort()
