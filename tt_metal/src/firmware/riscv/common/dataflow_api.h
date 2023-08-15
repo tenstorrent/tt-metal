@@ -111,12 +111,14 @@ void setup_cb_read_write_interfaces() {
         uint32_t fifo_num_pages = circular_buffer_config_addr[2];
         uint32_t fifo_page_size = circular_buffer_config_addr[3];
         uint32_t fifo_limit = fifo_addr + fifo_size - 1;
-        write_to_local_mem_barrier(fifo_num_pages);
+        write_to_local_mem_barrier(fifo_limit);
 
         cb_interface[cb_id].fifo_limit = fifo_limit;  // to check if we need to wrap
         cb_interface[cb_id].fifo_wr_ptr = fifo_addr;
         cb_interface[cb_id].fifo_rd_ptr = fifo_addr;
         cb_interface[cb_id].fifo_size = fifo_size;
+        cb_interface[cb_id].tiles_acked = 0;
+        cb_interface[cb_id].tiles_received = 0;
         cb_interface[cb_id].fifo_num_pages = fifo_num_pages;
         cb_interface[cb_id].fifo_page_size = fifo_page_size;
 

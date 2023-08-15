@@ -17,7 +17,7 @@ void write_to_local_mem_barrier(uint32_t data) {
 
 inline void llk_setup_cb_interface() {
 
-    volatile std::uint32_t* circular_buffer_config_addr = (volatile uint32_t*)(CIRCULAR_BUFFER_CONFIG_BASE);
+    volatile tt_l1_ptr std::uint32_t* circular_buffer_config_addr = (volatile uint32_t*)(CIRCULAR_BUFFER_CONFIG_BASE);
 
     for (uint32_t cb_id = 0; cb_id < NUM_CIRCULAR_BUFFERS; cb_id++) {
 
@@ -27,7 +27,7 @@ inline void llk_setup_cb_interface() {
         uint32_t fifo_size = circular_buffer_config_addr[1];
         uint32_t fifo_num_pages = circular_buffer_config_addr[2]; // not used atm
         uint32_t fifo_page_size = circular_buffer_config_addr[3];
-        write_to_local_mem_barrier(fifo_num_pages);
+        write_to_local_mem_barrier(fifo_page_size);
 
         cb_interface[cb_id].fifo_rd_ptr = fifo_addr;
         cb_interface[cb_id].fifo_size = fifo_size;
@@ -49,7 +49,7 @@ inline void llk_setup_operands() {
 inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
 
     std::uint32_t input = operand;
-    volatile std::uint32_t* tiles_received_ptr = get_cb_tiles_received_ptr(operand);
+    volatile tt_l1_ptr std::uint32_t * tiles_received_ptr = get_cb_tiles_received_ptr(operand);
     std::uint16_t num_tiles_u = (std::uint16_t)num_tiles;
 
     std::uint16_t tiles_received;
@@ -67,7 +67,7 @@ inline void llk_pop_tiles(
     const std::int32_t operand, const std::int32_t num_tiles, const std::int32_t block_c_dim = 0) {
 
     std::uint32_t input = operand;
-    volatile std::uint32_t* tiles_acked_ptr =
+    volatile tt_reg_ptr std::uint32_t* tiles_acked_ptr =
         (volatile std::uint32_t*)((((volatile std::uint32_t)get_cb_tiles_acked_ptr(operand)) >> 2) & 0x3ffff);
     std::uint32_t num_words = num_tiles * cb_interface[operand].fifo_page_size;
 
