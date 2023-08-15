@@ -11,7 +11,7 @@
 using namespace tt::constants;
 using namespace tt;
 
-namespace reuse_mcast_optimized_bert_large_helpers {
+namespace reuse_mcast_optimized_helpers {
 using namespace tt::constants;
 using namespace tt;
 using namespace tt_metal;
@@ -49,7 +49,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     // Dummy cb to store one tile of zeros for padding
     uint32_t in2_CB_tiles = 1; // No double buffer
-    uint32_t in2_CB_size = in2_CB_tiles * in0_single_tile_size;
 
     uint32_t in3_block_tiles = per_core_N;
     uint32_t in3_CB_tiles = in3_block_tiles; // No double buffer
@@ -68,6 +67,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     CoreRange all_cores{
         .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
         .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
+
+    CoreRange top_left_corner{
+        .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
+        .end={(std::size_t) start_core_x, (std::size_t) start_core_y}};
 
     CoreRange left_column{
         .start={(std::size_t) start_core_x, (std::size_t) start_core_y},
@@ -447,16 +450,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         in1_data_format
     );
 
-    uint32_t src2_cb_index = 2;
-    auto cb_src2 = tt_metal::CreateCircularBuffers(
-        program,
-        src2_cb_index,
-        all_cores,
-        in2_CB_tiles,
-        in2_CB_size,
-        in0_data_format // cb for padding; shouldn't matter?
-    );
-
     uint32_t output_cb_index = 16; // output operands start at index 16
     uint32_t interm0_cb_index = 24;
     auto cb_output = tt_metal::CreateCircularBuffers(
@@ -468,6 +461,36 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         output_data_format
     );
 
+    // CB for padding; only need these in the senders
+    // NOTE: For first core, initialize cb to the larger tile size to prevent accidentally writing 0 to L1 space during cb init in the kernels
+    uint32_t src2_cb_index = 2;
+    auto dummy_single_tile_size = in0_single_tile_size > in1_single_tile_size ? in0_single_tile_size : in1_single_tile_size;
+    auto in0_in1_sender_cb_src2 = tt_metal::CreateCircularBuffers(
+        program,
+        src2_cb_index,
+        top_left_corner,
+        in2_CB_tiles,
+        in2_CB_tiles * dummy_single_tile_size,
+        in0_data_format // This doesn't matter
+    );
+    auto in0_sender_cb_src2 = tt_metal::CreateCircularBuffers(
+        program,
+        src2_cb_index,
+        in0_sender_in1_receiver,
+        in2_CB_tiles,
+        in2_CB_tiles * in0_single_tile_size,
+        in0_data_format
+    );
+    auto in1_sender_cb_src2 = tt_metal::CreateCircularBuffers(
+        program,
+        src2_cb_index,
+        in0_receiver_in1_sender,
+        in2_CB_tiles,
+        in2_CB_tiles * in1_single_tile_size,
+        in1_data_format
+    );
+
+    // CB for bias
     if (bias_buffer != nullptr) {
         uint32_t src3_cb_index = 3;
         auto cb_src3 = tt_metal::CreateCircularBuffers(
@@ -497,7 +520,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t last_block_num_nonzero_subblocks_w = (last_block_w  - 1) / out_subblock_w + 1;
     uint32_t last_subblock_of_last_block_h = last_block_h % out_subblock_h == 0 ? out_subblock_h : last_block_h % out_subblock_h;
     uint32_t last_subblock_of_last_block_w = last_block_w % out_subblock_w == 0 ? out_subblock_w : last_block_w % out_subblock_w;
-    uint32_t last_block_padded_subblock_tiles_addr_skip = in0_single_tile_size * (out_subblock_w - last_subblock_of_last_block_w);
+    uint32_t last_block_padded_subblock_tiles_addr_skip = output_single_tile_size * (out_subblock_w - last_subblock_of_last_block_w);
     uint32_t last_block_padded_block_tiles_w_skip =  (out_subblock_w * out_subblock_h) * (per_core_N / out_subblock_w - last_block_num_nonzero_subblocks_w);
     uint32_t last_block_padded_block_tiles_h_skip = (per_core_M / out_subblock_h - last_block_num_nonzero_subblocks_h) * (per_core_N * out_subblock_h);
 
@@ -882,7 +905,7 @@ namespace tt {
 namespace tt_metal {
 
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_optimized_bert_large_(const Tensor &a, const Tensor &b, const std::optional<const Tensor> bias, Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool fuse_gelu_activation) {
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(const Tensor &a, const Tensor &b, const std::optional<const Tensor> bias, Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool fuse_gelu_activation) {
 
     const auto& ashape = a.shape(), bshape = b.shape();
 
@@ -964,7 +987,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_optimized_bert_lar
     ////////////////////////////////////////////////////////////////////////////
 
     if (core_range.x > 1 && core_range.y > 1) {
-        return reuse_mcast_optimized_bert_large_helpers::create_program_mcast_in0_in1(
+        return reuse_mcast_optimized_helpers::create_program_mcast_in0_in1(
             device,
             math_fidelity,
             core_range,
@@ -988,8 +1011,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_optimized_bert_lar
     return {};
 }
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_optimized_bert_large(const Tensor& a, const Tensor& b, const std::optional<const Tensor> bias, Tensor& output_tensor, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool fuse_gelu_activation) {
-    return matmul_multi_core_reuse_mcast_optimized_bert_large_(a, b, bias, output_tensor, true, compute_with_storage_grid_size, output_dtype, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch, fuse_gelu_activation);
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(const Tensor& a, const Tensor& b, const std::optional<const Tensor> bias, Tensor& output_tensor, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool fuse_gelu_activation) {
+    return matmul_multi_core_reuse_mcast_2d_optimized_(a, b, bias, output_tensor, true, compute_with_storage_grid_size, output_dtype, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch, fuse_gelu_activation);
 }
 
 }  // namespace tt_metal

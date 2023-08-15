@@ -10,7 +10,7 @@ using namespace tt::constants;
 using namespace tt;
 
 
-namespace reuse_optimized_bert_large_helpers {
+namespace reuse_optimized_helpers {
 using namespace tt::constants;
 using namespace tt;
 using namespace tt_metal;
@@ -412,7 +412,7 @@ namespace tt {
 namespace tt_metal {
 
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_bert_large_(const Tensor &a, const Tensor &b, const Shape &ashape, const Shape &bshape, Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
+operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor &a, const Tensor &b, const Shape &ashape, const Shape &bshape, Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
 
     // Pass in a and b shapes instead
 
@@ -455,6 +455,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_bert_large_(co
     uint32_t Kt = ashape[3]/TILE_WIDTH;
     uint32_t Nt = bshape[3]/TILE_WIDTH;
 
+    // TODO: Generalize
     TT_ASSERT(fuse_batch, "Only fuse_batch=true is supported for bert large optimized bmm!");
     TT_ASSERT(Kt % in0_block_w == 0);
 
@@ -480,7 +481,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_bert_large_(co
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    return reuse_optimized_bert_large_helpers::create_program(
+    return reuse_optimized_helpers::create_program(
         device,
         math_fidelity,
         core_range,
@@ -494,8 +495,9 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_bert_large_(co
     );
 }
 
+// TODO: Get rid of no-op reshapes when we generalize
 // matmul_multi_core_reuse_optimized_bert_large not used
-operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized_bert_large(const Tensor& a, const Tensor& b, const Shape& ashape, const Shape& bshape, Tensor& output, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
+operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(const Tensor& a, const Tensor& b, const Shape& ashape, const Shape& bshape, Tensor& output, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
     /*
      * For pre-softmax and post-softmax bmm, do an additional no-op reshape by changing cshape and ashape
      * - pre-softmax: [9, 16, 384, 64] x [9, 16, 64, 384] = ([9, 16, 384, 384] -> [9, 1, 6144, 384])
@@ -503,7 +505,7 @@ operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized_bert_large(const 
      * NOTE: Only need to pass in the right cshape and ashape for these no-op reshapes.
      * The actual bmm op works on [9, 16, 384, 64] x [9, 16, 64, 384] and [9, 16, 384, 384] x [9, 16, 384, 64].
     */
-    return matmul_multi_core_reuse_optimized_bert_large_(a, b, ashape, bshape, output, false, compute_with_storage_grid_size, output_dtype, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
+    return matmul_multi_core_reuse_optimized_(a, b, ashape, bshape, output, false, compute_with_storage_grid_size, output_dtype, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
 }
 
 }  // namespace tt_metal

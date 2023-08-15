@@ -2432,6 +2432,21 @@ void TensorModule(py::module &m_tensor) {
         "Performs a bert_large_layernorm(a+b)*gamma + beta operation."
     )doc");
 
+    // Custom Falcon matmuls/bmms
+    m_tensor.def("falcon_fused_qkv_matmul", &falcon_fused_qkv_matmul,
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("out_dtype").noconvert() = std::nullopt, R"doc(
+        Perform a falcon_fused_qkv non-batched matmul ``A x B`` with two tensors.
+    )doc");
+    m_tensor.def("falcon_selfout_matmul", &falcon_selfout_matmul,
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("out_dtype").noconvert() = std::nullopt, R"doc(
+        Perform a falcon_selfout non-batched matmul ``A x B`` with two tensors.
+    )doc");
+    m_tensor.def("falcon_dense_4h_to_h_matmul", &falcon_dense_4h_to_h_matmul,
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("out_dtype").noconvert() = std::nullopt, R"doc(
+        Perform a falcon_dense_4h_to_h non-batched matmul ``A x B`` with two tensors.
+    )doc");
+
+
     // Custom Generic NLP TMs
     // TODO: Uplift nlp_create_qkv_heads to support generic qkv num_heads and head_dim
     // This op should support arbitrary B and S divisible by 32 on DRAM; on L1, might error out due to space
