@@ -79,13 +79,13 @@ def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, in_mem_
     dilation_h, dilation_w = dilation
 
     if 2 * pad_h > kernel_h or 2 * pad_w > kernel_w:
-        print('Invalid case')
+        logger.info('Invalid case')
         pytest.skip()
 
     out_h = math.floor((in_h + 2 * pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
     out_w = math.floor((in_w + 2 * pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
     if out_w % nblocks != 0:
-        print(f'Unsupported case when out_w ({out_w}) % nblocks ({nblocks}) != 0')
+        logger.info(f'Unsupported case when out_w ({out_w}) % nblocks ({nblocks}) != 0')
         pytest.skip()
 
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
