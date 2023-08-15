@@ -258,28 +258,36 @@ namespace tt_metal {
 Tensor matmul_(const Tensor& a, const Tensor& b) {
     switch (bmm_op_utils::get_parallelization_strategy(a, b)){
         case BmmOpParallelizationStrategy::MULTI_CORE:
+        std::cout << "MULTI_CORE" << std::endl;
             return matmul_multi_core(a, b);
             break;
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE:
+        std::cout << "MULTI_CORE_REUSE" << std::endl;
             return matmul_multi_core_reuse(a, b);
             break;
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST:
+        std::cout << "MULTI_CORE_REUSE_MCAST" << std::endl;
             return matmul_multi_core_reuse_mcast(a, b);
             break;
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_GENERALIZED:
+        std::cout << "MULTI_CORE_REUSE_GENERALIZED" << std::endl;
             return matmul_multi_core_reuse_generalized(a, b);
             break;
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST_GENERALIZED:
+        std::cout << "MULTI_CORE_REUSE_MCAST_GENERALIZED" << std::endl;
             return matmul_multi_core_reuse_mcast_generalized(a, b);
             break;
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_PADDING:
+        std::cout << "MULTI_CORE_REUSE_PADDING" << std::endl;
             return matmul_multi_core_reuse_padding(a, b);
             break;
         case BmmOpParallelizationStrategy::MULTI_CORE_REUSE_MCAST_PADDING:
+        std::cout << "MULTI_CORE_REUSE_MCAST_PADDING" << std::endl;
             return matmul_multi_core_reuse_mcast_padding(a, b);
             break;
         case BmmOpParallelizationStrategy::SINGLE_CORE:
         default:
+        std::cout << "SINGLE_CORE" << std::endl;
             return matmul_single_core(a, b);
     }
 }

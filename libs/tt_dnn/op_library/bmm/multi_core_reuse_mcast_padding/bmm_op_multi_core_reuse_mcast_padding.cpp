@@ -80,6 +80,13 @@ tt_metal::Program create_program_mcast_in0_in1(
         reader_writer_compile_time_args = {0, 0};
     }
 
+    std::cout << "in0_sender_in1_sender: " << in0_sender_in1_sender.str() << std::endl;
+    std::cout << "in0_sender_in1_receiver: " << in0_sender_in1_receiver.str() << std::endl;
+    std::cout << "in0_receiver_in1_sender: " << in0_receiver_in1_sender.str() << std::endl;
+    std::cout << "in0_receiver_in1_receiver: " << in0_receiver_in1_receiver.str() << std::endl;
+    std::cout << "all_except_left_column: " << all_except_left_column.str() << std::endl;
+    std::cout << "left_column: " << left_column.str() << std::endl;
+
     auto mm_reader_kernel_in0_sender_in1_sender = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_sender.cpp",
@@ -491,6 +498,10 @@ tt_metal::Program create_program_mcast_in0(
         reader_writer_compile_time_args = {0, 0};
     }
 
+    std::cout << "mcast_senders: " << mcast_senders.str() <<std::endl;
+    std::cout << "mcast_receivers: " << mcast_receivers.str() <<std::endl;
+    std::cout << "all_cores: " << all_cores.str() <<std::endl;
+
     auto mm_reader_kernel_sender = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_mcast_sender_padding.cpp",
@@ -782,6 +793,10 @@ tt_metal::Program create_program_mcast_in1(
     CoreRange mcast_receivers{
         .start={(std::size_t) start_core_x, (std::size_t) start_core_y + 1},
         .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
+
+    std::cout << "mcast_senders: " << mcast_senders.str() << std::endl;
+    std::cout << "mcast_receivers: " << mcast_receivers.str() << std::endl;
+    std::cout << "all_cores: " << all_cores.str() << std::endl;
 
     bool tile_size_is_power_of_two = (ceil(log2(single_tile_size)) == floor(log2(single_tile_size)));
     std::vector<uint32_t> reader_writer_compile_time_args;
@@ -1130,6 +1145,7 @@ Tensor matmul_multi_core_reuse_mcast_padding_(const Tensor &a, const Tensor &b, 
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program;
     if (core_range.x > 1 && core_range.y > 1) {
+        std::cout << "create_program_mcast_in0_in1" << std::endl;
         program = mcast_reuse_padding_helpers::create_program_mcast_in0_in1(
             device,
             cb_data_format,
@@ -1144,6 +1160,7 @@ Tensor matmul_multi_core_reuse_mcast_padding_(const Tensor &a, const Tensor &b, 
             in0_dram_addr, in1_dram_addr, out_dram_addr
         );
     } else if (core_range.x > 1) {
+        std::cout << "create_program_mcast_in0" << std::endl;
         program = mcast_reuse_padding_helpers::create_program_mcast_in0(
             device,
             cb_data_format,
@@ -1158,6 +1175,7 @@ Tensor matmul_multi_core_reuse_mcast_padding_(const Tensor &a, const Tensor &b, 
             in0_dram_addr, in1_dram_addr, out_dram_addr
         );
     } else {
+        std::cout << "create_program_mcast_in1" << std::endl;
         program = mcast_reuse_padding_helpers::create_program_mcast_in1(
             device,
             cb_data_format,

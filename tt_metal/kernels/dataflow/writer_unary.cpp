@@ -35,7 +35,7 @@ void kernel_main() {
         cb_wait_front(cb_id_out0, ublock_size_tiles);
         uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
 
-            // kernel_profiler::mark_time(6);
+            kernel_profiler::mark_time(7);
         noc_async_write(l1_read_addr, dst_noc_addr, ublock_size_bytes);
 
             // kernel_profiler::mark_time(7);

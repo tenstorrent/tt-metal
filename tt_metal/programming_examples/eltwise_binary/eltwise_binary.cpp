@@ -61,7 +61,7 @@ int main(int argc, char **argv) {
 
         constexpr CoreCoord core = {0, 0};
 
-        constexpr bool profiler_debugBar = false;
+        constexpr bool profiler_debugBar = true;
 
         if (!profiler_debugBar) {
             CoreCoord debug_core = {1, 1};

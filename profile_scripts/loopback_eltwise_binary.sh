@@ -24,4 +24,4 @@ python3 profile_scripts/custom_profile.py --file-name tt_metal/tools/profiler/lo
 done
 done
 
-python3 profile_scripts/script.py --file-name log/loopback_eltwise_binary_multi_tile.log --profile-target Print_Elewise_Binary_Multi_Tile --num-repetitions 100 --range 13
+python3 profile_scripts/script.py --file-name log/loopback_eltwise_binary_multi_tile.log --profile-target Print_Elewise_Binary_Multi_Tile --num-repetitions 100 --range 4

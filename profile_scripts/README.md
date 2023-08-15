@@ -34,10 +34,6 @@ Similar to previous issue and barrier profiling, but add more profiler markers `
 bash profile_scripts/Tensix2Tensix_fine_grain.sh
 ```
 
-## Analytical Model
-
-The analytical model is implemented in the `analytical_model.py`. The parameters in the analytical model refer to the `get_args()` function in the sourse code. The scripts in the `perf_model.sh` iterate different non NIU programming latency of both Tensix2Tensix read and write with transcation size < 8k. The scripts model the issue and barrier latency for both read and write under different buffer sizes and trasaction sizes, as well as the NOC utiilization in each case.
-
 ## DRAM to Tensix read/write speed
 
 Measuring read and write requires 1 test. The src code to measure read speed between DRAM and tensix cores is `tests/tt_metal/llrt/test_run_risc_rw_read_speed_banked_dram.cpp`. Compile all tests src codes by `make tests`. The compiled binary is `./build/test/llrt/test_run_risc_rw_speed_banked_dram`, which will be executed by host machine. But before executing this binary, we need to build the corresponding kernels (under `built_kernel` directory) by executing `./build/test/build_kernels_for_riscv/test_build_kernel_risc_rw_speed_banked_dram`. Kernel binaries will be sent to and executed by Tensix baby-riscv cores. In the script `profile_scripts/DRAM2Tensix.sh`, adjust DRAM channels by specify `DRAM_channel_pow_2`.
@@ -60,12 +56,21 @@ bash profile_scripts/profile_all_risc_overhead.sh
 
 ## Element-wise binary load from/store to Tensix
 
+The original Element-wise binary example load from/store to data between the Tensix core and DRAM. The NOC latency is larger than compute latency. This programming exmple allocate CB on another neighboring Tensix core and instead load from/store to data between the Tensix core and CBs on the neighboring core. However, the modified kernel is still NOC bound because the element-wise computation is fast. The kernel is added to `tt-metal/programming_examples/loopback_eltwise_binary/loopback_eltwise_binary.cpp` and the relative Makefile is also modified to enable the compilation.
+
 ```
-bash loopback_eltwise_binary.sh
+bash profile_scripts/loopback_eltwise_binary.sh
 ```
 
 ## Bmm_tilize_untilize load from/store to Tensix
 
+Similar to the modification of the Element-wise example above, the bmm_tilize_untilize also load from/store to data between the Tensix core and CBs on the neighboring core. This example realizes a compute bound case. The new kernel locates in `libs/tt_dnn/op_library/bmm/single_core/bmm_op_single_core_loopback_tilize_untilize.cpp` and the new test is in `tests/python_api_testing/unit_testing/test_loopback_bmm_tilize_untilize.py`.
+
 ```
-bash loopback_bmm_tilize_untilize.sh
+bash profile_scripts/loopback_bmm_tilize_untilize.sh
 ```
+
+
+# Analytical Model Document
+
+The analytical model is implemented in the `analytical_model.py`. The parameters in the analytical model refer to the `get_args()` function in the sourse code. The scripts in the `perf_model.sh` iterate different non NIU programming latency of both Tensix2Tensix read and write with transcation size < 8k. The scripts model the issue and barrier latency for both read and write under different buffer sizes and trasaction sizes, as well as the NOC utiilization in each case. `compute_perf_model.sh` shows an example of the single core bmm operation test. By configuring the read/write issue latency and round trip latency, the data movement latency could be calculated. By specifying the circular buffer synchronization latency as well as the compute latency, the entire bmm latency could be calculated.

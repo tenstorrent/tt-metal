@@ -41,15 +41,29 @@ rm log/Elewise_binary_multi_tile.log
 
 
 
-./build/programming_examples/eltwise_binary 1 2048
-# python3 profile_scripts/custom_profile.py --file-name tt_metal/tools/profiler/logs/profile_log_device.csv --profile-target profile_Elewise_binary_fine_grain
+# ./build/programming_examples/eltwise_binary 1 2048
+# # python3 profile_scripts/custom_profile.py --file-name tt_metal/tools/profiler/logs/profile_log_device.csv --profile-target profile_Elewise_binary_fine_grain
 
-python3 profile_scripts/custom_profile.py --file-name tt_metal/tools/profiler/logs/profile_log_device.csv --profile-target profile_elewise_binary
+# python3 profile_scripts/custom_profile.py --file-name tt_metal/tools/profiler/logs/profile_log_device.csv --profile-target profile_elewise_binary
 
 
 
-# ~/tt-metal/tt_metal/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-objdump -S ~/tt-metal/built_kernels/eltwise_binary_writer_unary_reader_binary_diff_lengths/15724778220131602173/tensix_thread0/tensix_thread0.elf > ~/tt-metal/built_kernels/eltwise_binary_writer_unary_reader_binary_diff_lengths/15724778220131602173/tensix_thread0/tensix_thread0.asm
+# ~/tt-metal/tt_metal/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-objdump -S ~/tt-metal/built_kernels/eltwise_binary_writer_unary_reader_binary_diff_lengths/6609962546718064731/brisc/brisc.elf > ~/tt-metal/built_kernels/eltwise_binary_writer_unary_reader_binary_diff_lengths/6609962546718064731/brisc/brisc.asm
 
-# ~/tt-metal/tt_metal/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-objdump -S ~/tt-metal/built_kernels/eltwise_binary_writer_unary_reader_binary_diff_lengths/15724778220131602173/tensix_thread1/tensix_thread1.elf > ~/tt-metal/built_kernels/eltwise_binary_writer_unary_reader_binary_diff_lengths/15724778220131602173/tensix_thread1/tensix_thread1.asm
+# ~/tt-metal/tt_metal/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-objdump -S ~/tt-metal/built_kernels/eltwise_binary_writer_unary_reader_binary_diff_lengths/6609962546718064731/brisc/brisc.elf > ~/tt-metal/reader_binary_diff_lengths_start_end_profile_whisper_traces.asm
 
-# ~/tt-metal/tt_metal/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-objdump -S ~/tt-metal/built_kernels/eltwise_binary_writer_unary_reader_binary_diff_lengths/15724778220131602173/tensix_thread2/tensix_thread2.elf > ~/tt-metal/built_kernels/eltwise_binary_writer_unary_reader_binary_diff_lengths/15724778220131602173/tensix_thread2/tensix_thread2.asm
+# ~/tt-metal/tt_metal/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-objdump -S ~/tt-metal/built_kernels/eltwise_binary_writer_unary_reader_binary_diff_lengths/5086620033119610385/brisc/brisc.elf > ~/tt-metal/reader_binary_diff_lengths_start_end_profile_whisper_traces_2_tiles.asm
+
+rm log/eltwise_binary_multi_tile.log
+
+for num_repetitions in {1..10}
+do
+for num_tiles in {0..12}
+do
+./build/programming_examples/eltwise_binary $(power_of_2 $num_tiles) 2048
+# ./build/programming_examples/eltwise_binary $num_tiles 2048
+python3 profile_scripts/custom_profile.py --file-name tt_metal/tools/profiler/logs/profile_log_device.csv --profile-target profile_Elewise_binary_multi_tile >> log/eltwise_binary_multi_tile.log
+done
+done
+
+python3 profile_scripts/script.py --file-name log/eltwise_binary_multi_tile.log --profile-target Print_Elewise_Binary_Multi_Tile --num-repetitions 10 --range 13
