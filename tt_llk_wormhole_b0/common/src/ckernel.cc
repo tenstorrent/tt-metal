@@ -51,28 +51,19 @@ int32_t dram_dump_req_local;
 bool first_unpack_recorded __attribute__((section(".bss"))) = 0;
 volatile uint *ncrisc_ack_addr = nullptr;
 uint32_t header;
-#if BRISC_TRISC_SYNC == 1
-uint32_t trisc_epoch_id __attribute__((section(".bss"))) = 0;
+#if OVERLAY_DECOUPLE == 1
+uint8_t overlay_output_decouple_mask = 0;
 inline void update_overlay_decoupling_mailbox() {
-    if (thread_id == 2) {
-        trisc_epoch_id = *PERF_RISC_MAILBOX_TRISC_EPOCH_ID_PTR;
-        while (*PERF_RISC_MAILBOX_BRISC_EPOCH_ID_PTR != trisc_epoch_id) {}
-        PERF_RISC_MAILBOX_INPUT_DECOUPLE_MASK_PTR[0] = overlay_input_decouple_mask;
-        PERF_RISC_MAILBOX_OUTPUT_DECOUPLE_MASK_PTR[0] = overlay_output_decouple_mask;
-        trisc_epoch_id++;
-        PERF_RISC_MAILBOX_TRISC_EPOCH_ID_PTR[0] = trisc_epoch_id;
-    }
-#if (OVERLAY_OUTPUT_DECOUPLE == 1)
+    overlay_output_decouple_mask = PERF_RISC_MAILBOX_OUTPUT_DECOUPLE_MASK_PTR[0] & 0xff;
     if (thread_id == 0 || thread_id == 1) {
         while(semaphore_read(semaphore::UNPACK_MATH_DONE) == 0) {}
     }
-#endif
 }
-#if (OVERLAY_OUTPUT_DECOUPLE == 1)
 inline void reset_unpack_pack_sync() {
-    semaphore_get(semaphore::UNPACK_MATH_DONE);
+    if (thread_id == 2) {
+        semaphore_get(semaphore::UNPACK_MATH_DONE);
+    }
 }
-#endif
 #endif
 #endif
 
@@ -226,7 +217,7 @@ int main(int argc, char *argv[])
     allocate_perf_buffer();
     setup_fpu_perf_cnt();
     record_dummy_math_event();
-#if BRISC_TRISC_SYNC == 1
+#if OVERLAY_DECOUPLE == 1
     update_overlay_decoupling_mailbox();
 #endif
 #endif
@@ -239,10 +230,8 @@ int main(int argc, char *argv[])
     // Signal completion
     tensix_sync();
 #ifdef PERF_DUMP
-#if (BRISC_TRISC_SYNC == 1) && (OVERLAY_OUTPUT_DECOUPLE == 1)
-    if (thread_id == 2) {
-        reset_unpack_pack_sync();
-    }
+#if OVERLAY_DECOUPLE == 1
+    reset_unpack_pack_sync();
 #endif
     record_perf_dump_end_and_check_overflow();
     // There has to be a tensix_sync() before this last pass.

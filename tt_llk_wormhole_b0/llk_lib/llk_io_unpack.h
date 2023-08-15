@@ -59,7 +59,7 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
     std::uint16_t tiles_received;
 
 #if defined(PERF_DUMP)
-#if OVERLAY_INPUT_DECOUPLE == 1
+#if OVERLAY_DECOUPLE == 1
     bool wait_for_tile_en = !is_input_operand_decoupled(operand); //operand_is_intermediate(operand);
 #else
     bool wait_for_tile_en = !(DECOUPLINGS_EN && operand_is_intermediate(operand));
@@ -142,7 +142,7 @@ inline void llk_pop_tiles(
             operands[input].f.tiles_acked += num_tiles;
             tiles_acked_ptr[0] = operands[input].f.tiles_acked & 0xffff;
         }
-    #elif OVERLAY_INPUT_DECOUPLE == 1
+    #elif OVERLAY_DECOUPLE == 1
         if (!is_input_operand_decoupled(operand)) {
             update_tiles_acked_ptr(operand, num_tiles, input);
         }

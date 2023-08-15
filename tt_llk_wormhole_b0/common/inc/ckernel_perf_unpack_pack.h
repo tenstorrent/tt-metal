@@ -39,7 +39,9 @@ extern uint32_t perf_events_target_idx;
 extern bool first_unpack_recorded;
 extern volatile uint * ncrisc_ack_addr;
 extern uint16_t current_outer_loop_iter;
-extern uint32_t trisc_epoch_id;
+#if OVERLAY_DECOUPLE == 1
+extern uint8_t overlay_output_decouple_mask;
+#endif
 
 void allocate_perf_buffer();
 
@@ -55,11 +57,6 @@ void last_trisc_perf_dump_to_dram();
 // The two following functions are separated to avoid inline recursive function calls.
 // TODO: Check the behaviour of the compiler if the two following functions were merged into a template function.
 inline void record_perf_value(uint32_t event_id, uint32_t event_value_lo_32b, uint32_t event_value_hi_32b) {
-   // In l1 mode always reserve the last event for PERF_DUMP_END_SIGNAL.
-   int reserve_space_for_trisc_end_signal = 1;
-   if constexpr (INTERMED_DUMP || PERF_DUMP_CONCURRENT) {
-      reserve_space_for_trisc_end_signal = 0;
-   }
    perf_buf_base[perf_buf_base_id][perf_index] = event_id;
    perf_buf_base[perf_buf_base_id][perf_index + 1] = event_value_hi_32b;
    perf_buf_base[perf_buf_base_id][perf_index + 2] = event_value_lo_32b;
@@ -143,7 +140,7 @@ inline void record_latest_wait_for_tile() {
 
 void increment_unpack_tiles(uint operand_idx, uint num_tiles);
 void increment_pack_tiles(uint num_tiles);
-#if (BRISC_TRISC_SYNC == 1) && (OVERLAY_OUTPUT_DECOUPLE == 1)
+#if OVERLAY_DECOUPLE == 1
 inline uint32_t get_active_stream_idx(uint32_t stream_id) {
     std::uint32_t active_stream_idx;
     for (uint32_t active_streams_idx = 0; active_streams_idx < NOC_NUM_STREAMS; active_streams_idx++) {
