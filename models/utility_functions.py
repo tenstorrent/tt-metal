@@ -12,7 +12,7 @@ import struct
 def _nearest_32(x):
     return math.ceil(x / 32) * 32
 
-def nearest_32(x):    # needs refctorin; to match alias called in some scripts (test_padding_test in unit tests)
+def nearest_32(x):    # needs refctoring; to match alias called in some scripts (e.g. test_padding_test in unit tests)
     return math.ceil(x / 32) * 32
 
 def _nearest_y(x, y):
@@ -650,7 +650,6 @@ def prep_report(model_name: str, batch_size: int, inference_and_compile_time: fl
 
     def write_dict_to_file(csv_path, dict_res):
         columns = ", ".join([str(d) for d in dict_res.keys()])
-        # values = ", ".join([("{:.2f}".format(d) if isinstance(d, float) else str(d)) for d in dict_res.values()])
         values = ", ".join([d for d in dict_res.values()])
 
         with open(csv_path, "w") as csvfile:
@@ -682,7 +681,7 @@ def prep_report(model_name: str, batch_size: int, inference_and_compile_time: fl
     write_dict_to_file(csv_file, dict_res)
 
 
-### Conv related operations ###
+### Conv related helpers ###
 def read_conv_act_into_mm_act_block(conv_act, act_address_map_index, address_map, address_map_this_block_size, act_block_h, act_block_w):
     mm_act_block_shape = [1,1,act_block_h*32, act_block_w*32]
     mm_act_block_size = act_block_h*act_block_w*1024
