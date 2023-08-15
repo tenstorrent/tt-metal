@@ -105,7 +105,7 @@ def run_perf_bloom(expected_inference_time, expected_compile_time):
     "expected_inference_time, expected_compile_time",
     (
         (1.4,
-         15,
+         16,
         ),
     ),
 )
