@@ -7,10 +7,6 @@ from transformers import WhisperModel, WhisperForAudioClassification
 
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
-from models.whisper.tt.whisper_common import (
-    create_padded_tensor,
-    create_unpadded_tensor,
-)
 from models.whisper.tt.whisper_encoder_layer import (
     TtWhisperEncoderLayer,
 )

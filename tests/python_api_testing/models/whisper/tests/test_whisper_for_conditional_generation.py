@@ -7,7 +7,6 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
-from models.whisper.tt.whisper_common import create_unpadded_tensor
 from models.whisper.tt.whisper_for_conditional_generation import (
     TtWhisperForConditionalGeneration,
 )
