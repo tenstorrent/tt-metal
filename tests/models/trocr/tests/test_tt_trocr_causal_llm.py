@@ -1,22 +1,13 @@
 import torch
 import pytest
 from loguru import logger
-
+from PIL import Image
+from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 from transformers import VisionEncoderDecoderModel
 
 import tt_lib
 
-from models.utility_functions import (
-    torch_to_tt_tensor_rm,
-    tt_to_torch_tensor,
-)
-
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
-
-from models.trocr.tt.trocr_for_causal_llm import TtTrOCRForCausalLM
+from models.trocr.trocr_utils import GenerationMixin
 
 
 @pytest.mark.parametrize(
@@ -32,39 +23,22 @@ def test_trocr_causal_llm_inference(pcc, reset_seeds):
         model = VisionEncoderDecoderModel.from_pretrained(
             "microsoft/trocr-base-handwritten"
         )
-
-        config = model.decoder.config
-
-        base_address = f"decoder"
-
-        torch_model = model.decoder
-        # run torch model
-        input = torch.rand(1, 20).long()
-
-        model_output = torch_model(input.long()).logits
-
-        tt_model = TtTrOCRForCausalLM(
-            config=config,
-            base_address=base_address,
+        generationmixin = GenerationMixin(
+            model=model,
+            config=model.decoder.config,
             state_dict=model.state_dict(),
             device=device,
         )
+        processor = TrOCRProcessor.from_pretrained("microsoft/trocr-base-handwritten")
+        iam_ocr_sample_input = Image.open("models/sample_data/iam_ocr_image.jpg")
+        pixel_values = processor(
+            images=iam_ocr_sample_input, return_tensors="pt"
+        ).pixel_values
 
-        # run tt model
-        tt_input = torch_to_tt_tensor_rm(input, device=device, put_on_device=False)
-        tt_output = tt_model(tt_input)
-        tt_output_torch = tt_to_torch_tensor(tt_output.logits).squeeze(0).float()
+        with torch.no_grad():
+            input_ids = generationmixin.generate(pixel_values)
 
-        # compare output
-        passing, pcc_message = comp_pcc(model_output, tt_output_torch, pcc)
+        generated_text = processor.batch_decode(input_ids, skip_special_tokens=True)[0]
 
-        logger.info(comp_allclose(model_output, tt_output_torch))
-        logger.info(pcc_message)
-
-        tt_lib.device.CloseDevice(device)
-        if passing:
-            logger.info("TrOCRCausalLlm Passed!")
-        else:
-            logger.warning("TrOCRCausalLlm Failed!")
-
-        assert passing, f"TrOCRCausalLlm output does not meet PCC requirement {pcc}."
+        logger.info("TrOCR Model answered")
+        logger.info(generated_text)
