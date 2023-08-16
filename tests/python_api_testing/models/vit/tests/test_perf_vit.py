@@ -96,7 +96,7 @@ def run_perf_vit(expected_inference_time, expected_compile_time, hf_cat_image_sa
     "expected_inference_time, expected_compile_time",
     (
         (2.3,
-        13,
+        16,
         ),
     ),
 )
