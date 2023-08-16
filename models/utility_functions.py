@@ -3,7 +3,6 @@ import tt_lib
 import torch
 import numpy as np
 from loguru import logger
-# from tt_lib.utils import _nearest_32
 from os import environ
 import math
 import struct
@@ -502,14 +501,6 @@ def comp_pcc(golden, calculated, pcc=0.99):
     if golden.dtype != calculated.dtype:
         calculated = calculated.type(golden.dtype)
 
-    tt_tensor = (
-        tt_lib.tensor.Tensor(py_tensor.reshape(shape), tt_lib.tensor.DataType.BFLOAT16)
-        .to(
-            tt_lib.tensor.Layout.TILE
-        )  # change memory layout of TT Tensor to TILE (as operation that will use it expects TILE layout)
-        .to(
-            device
-        )  # move TT Tensor from host to TT accelerator device (device is of type tt_lib.device.Device)
     if torch.all(torch.isnan(golden)) and torch.all(torch.isnan(calculated)):
         logger.warning("Both tensors are 'nan'")
         return True, f"PCC: {1.0}"
