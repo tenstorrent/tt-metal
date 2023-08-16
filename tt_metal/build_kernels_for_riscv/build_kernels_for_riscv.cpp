@@ -268,6 +268,11 @@ struct CompileState {
             result += " -DNOC_INDEX=" + to_string(noc_index);
         if (firmware)
             result += " -DTENSIX_FIRMWARE";
+        const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
+            result += " -DTT_METAL_SLOW_DISPATCH_MODE=1";
+        }
+
         result += " -DLOCAL_MEM_EN=0 ";
         return result;
     }
