@@ -9,7 +9,7 @@ from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
-from tests.python_api_testing.models.utility_functions_new import comp_pcc
+from models.utility_functions import comp_pcc
 from models.t5.tt.t5_attention import (
     TtT5Attention,
     t5_unshape_pt,

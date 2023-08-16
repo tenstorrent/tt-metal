@@ -11,7 +11,7 @@ from models.utility_functions import (
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
 )
-from tests.python_api_testing.models.utility_functions_new import (
+from models.utility_functions import (
     comp_pcc,
     comp_allclose_and_pcc,
 )

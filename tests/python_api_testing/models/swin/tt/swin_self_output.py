@@ -2,7 +2,7 @@ from typing import Optional, Tuple, Union
 import torch
 import torch.nn as nn
 
-from python_api_testing.models.utility_functions_new import (
+from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
 from python_api_testing.models.swin.swin_helper_funcs import linear as TtLinear

@@ -11,7 +11,7 @@ import numpy as np
 import torch
 
 import tt_lib as ttl
-from python_api_testing.models.utility_functions import (
+from models.utility_functions import (
     tilize_to_list,
     untilize,
     comp_pcc,

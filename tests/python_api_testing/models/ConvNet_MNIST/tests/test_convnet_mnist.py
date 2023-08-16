@@ -2,7 +2,7 @@ import torch
 from loguru import logger
 import tt_lib
 
-from tests.python_api_testing.models.utility_functions_new import (
+from models.utility_functions import (
     comp_pcc,
     tt2torch_tensor,
     torch2tt_tensor,

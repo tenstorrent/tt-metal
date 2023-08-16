@@ -3,7 +3,7 @@ from diffusers import StableDiffusionPipeline
 from loguru import logger
 
 from models.utility_functions import torch_to_tt_tensor, tt_to_torch_tensor
-from tests.python_api_testing.models.utility_functions_new import comp_pcc, comp_allclose_and_pcc
+from models.utility_functions import comp_pcc, comp_allclose_and_pcc
 
 import tt_lib as ttl
 from models.stable_diffusion.tt.feedforward import TtFeedForward

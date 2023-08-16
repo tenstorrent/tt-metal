@@ -28,7 +28,7 @@ from python_api_testing.models.yolov3.reference.utils.torch_utils import (
     select_device,
     time_sync,
 )
-from utility_functions_new import torch2tt_tensor, tt2torch_tensor
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 
 def parse_model(

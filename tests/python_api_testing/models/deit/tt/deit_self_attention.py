@@ -1,12 +1,22 @@
+from pathlib import Path
+import sys
+f = f"{Path(__file__).parent}"
+sys.path.append(f"{f}")
+sys.path.append(f"{f}/../")
+sys.path.append(f"{f}/../..")
+sys.path.append(f"{f}/../../..")
+sys.path.append(f"{f}/../../../..")
+sys.path.append(f"{f}/../../../../..")
+
 import torch
 from torch import nn
-from tests.python_api_testing.models.deit.tt.deit_config import DeiTConfig
+from deit_config import DeiTConfig
 from typing import Union, Optional, Tuple, Dict, Set, List
 
 import tt_lib
 from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import torch_to_tt_tensor_rm
-from models.helper_funcs import Linear as TtLinear
+from helper_funcs import Linear as TtLinear
 
 
 class TtDeiTSelfAttention(nn.Module):

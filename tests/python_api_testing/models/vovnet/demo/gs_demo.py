@@ -11,7 +11,7 @@ sys.path.append(f"{f}/../../../")
 import tt_lib
 from loguru import logger
 
-from models.utility_functions_new import (
+from models.utility_functions import (
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
 )

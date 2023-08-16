@@ -1,6 +1,6 @@
 import torch
 import tt_lib as ttl
-from tests.python_api_testing.models.utility_functions_new import (
+from models.utility_functions import (
     comp_allclose_and_pcc,
     comp_pcc,
 )

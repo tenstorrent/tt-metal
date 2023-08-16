@@ -6,7 +6,7 @@ import pytest
 import tt_lib
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 from models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache
-from tests.python_api_testing.models.utility_functions_new import prep_report, Profiler
+from models.utility_functions import prep_report, Profiler
 
 from tests.python_api_testing.models.vgg.tt.vgg import *
 

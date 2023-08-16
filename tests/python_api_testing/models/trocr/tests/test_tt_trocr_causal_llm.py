@@ -11,7 +11,7 @@ from models.utility_functions import (
     tt_to_torch_tensor,
 )
 
-from tests.python_api_testing.models.utility_functions_new import (
+from models.utility_functions import (
     comp_pcc,
     comp_allclose,
 )

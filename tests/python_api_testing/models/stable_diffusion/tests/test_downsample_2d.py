@@ -6,7 +6,7 @@ from loguru import logger
 
 import tt_lib as ttl
 from models.utility_functions import torch_to_tt_tensor, tt_to_torch_tensor
-from tests.python_api_testing.models.utility_functions_new import comp_allclose_and_pcc, comp_pcc
+from models.utility_functions import comp_allclose_and_pcc, comp_pcc
 
 from models.stable_diffusion.tt.downsample_2d import TtDownsample2D
 

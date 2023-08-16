@@ -12,7 +12,7 @@ from models.utility_functions import (
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
 )
-from tests.python_api_testing.models.utility_functions_new import prep_report, Profiler
+from models.utility_functions import prep_report, Profiler
 import tt_lib as ttl
 from models.stable_diffusion.tt.unet_2d_condition import UNet2DConditionModel as tt_unet_condition
 from models.stable_diffusion.tt.experimental_ops import UseDeviceConv

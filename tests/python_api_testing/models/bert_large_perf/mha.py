@@ -17,7 +17,7 @@ from tests.python_api_testing.models.conftest import model_location_generator_
 import tt_lib as ttl
 from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from tt_lib.fused_ops.softmax import softmax
-from utility_functions import enable_persistent_kernel_cache, comp_pcc, comp_allclose, profiler
+from models.utility_functions import enable_persistent_kernel_cache, comp_pcc, comp_allclose, profiler
 
 
 def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):

@@ -5,7 +5,7 @@ from torchvision.models.detection import (
     SSDLite320_MobileNet_V3_Large_Weights,
     ssdlite320_mobilenet_v3_large as pretrained,
 )
-from tests.python_api_testing.models.utility_functions_new import comp_pcc
+from models.utility_functions import comp_pcc
 from tests.python_api_testing.models.ssd.reference.ssd_head import (
     ssdlite320_mobilenet_v3_large,
 )

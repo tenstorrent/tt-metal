@@ -8,7 +8,7 @@ from models.vovnet.tt.select_adaptive_pool2d import (
     TtSelectAdaptivePool2d,
 )
 
-from models.utility_functions_new import (
+from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
 

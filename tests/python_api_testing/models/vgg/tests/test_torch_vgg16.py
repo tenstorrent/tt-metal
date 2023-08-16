@@ -15,7 +15,7 @@ from torchvision import models
 from loguru import logger
 import pytest
 
-from utility_functions_new import comp_allclose_and_pcc, comp_pcc
+from models.utility_functions import comp_allclose_and_pcc, comp_pcc
 from reference.vgg import vgg16
 
 _batch_size = 1

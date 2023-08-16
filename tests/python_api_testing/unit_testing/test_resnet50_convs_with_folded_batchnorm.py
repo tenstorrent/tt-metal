@@ -9,10 +9,10 @@ import numpy as np
 
 import tt_lib as ttl
 from tt_lib.utils import tilize_to_list, tilize, untilize, _nearest_32, _nearest_y, convert_weights_2d_matrix
-from python_api_testing.models.utility_functions import print_diff_argmax, is_close, comp_pcc
+from models.utility_functions import print_diff_argmax, is_close, comp_pcc
 from tests.python_api_testing.conv.conv_unit_test_utils import create_conv_act_tensor, create_conv_weight_tensor
 from python_api_testing.models.resnet.utils import conv3x3, conv1x1, fold_bn_to_conv, fold_bn_to_conv_weights_bias
-from python_api_testing.models.conv_on_device_utils import is_conv_supported_on_device, run_conv_on_device_wrapper
+from models.utility_functions import is_conv_supported_on_device, run_conv_on_device_wrapper
 import torch
 import torch.nn as nn
 from torchvision import models

@@ -8,7 +8,7 @@ sys.path.append(f"{f}/../..")
 import torch.nn as nn
 import torch.nn.functional as F
 
-from utility_functions_new import (
+from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
 from vovnet_utils import create_batchnorm

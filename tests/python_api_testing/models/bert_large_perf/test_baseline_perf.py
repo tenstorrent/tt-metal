@@ -15,9 +15,9 @@ from python_api_testing.models.bert.embeddings import PytorchEmbeddings
 from python_api_testing.models.bert.bert_encoder import TtBertEncoder
 from python_api_testing.models.bert.fused_ops.linear import Linear
 from tt_lib.utils import pad_activation, pad_weight
-from utility_functions import enable_persistent_kernel_cache, comp_pcc, comp_allclose
-from utility_functions import profiler
-from utility_functions import disable_persistent_kernel_cache
+from models.utility_functions import enable_persistent_kernel_cache, comp_pcc, comp_allclose
+from models.utility_functions import profiler
+from models.utility_functions import disable_persistent_kernel_cache
 
 
 class TtBertForQuestionAnswering(torch.nn.Module):

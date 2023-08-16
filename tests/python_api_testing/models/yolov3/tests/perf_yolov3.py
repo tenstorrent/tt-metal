@@ -16,15 +16,14 @@ from python_api_testing.models.yolov3.tt.yolov3_detection_model import TtDetecti
 from python_api_testing.models.yolov3.reference.models.common import autopad
 from python_api_testing.models.yolov3.reference.utils.dataloaders import LoadImages
 from python_api_testing.models.yolov3.reference.utils.general import check_img_size
-from utility_functions_new import (
+from models.utility_functions import (
     comp_allclose_and_pcc,
     comp_pcc,
     torch2tt_tensor,
     tt2torch_tensor,
 )
-from utility_functions_new import torch_to_tt_tensor_rm, tt_to_torch_tensor, profiler
-from utility_functions_new import disable_compile_cache, enable_compile_cache
-from utility_functions_new import prep_report
+from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, profiler, \
+    disable_compile_cache, enable_compile_cache, prep_report
 
 BATCH_SIZE = 1
 

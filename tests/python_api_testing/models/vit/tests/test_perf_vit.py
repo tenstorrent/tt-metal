@@ -15,9 +15,8 @@ import pytest
 
 import tt_lib
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
-from tests.python_api_testing.models.utility_functions_new import Profiler
-from models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache
-from tests.python_api_testing.models.utility_functions_new import prep_report
+from models.utility_functions import Profiler
+from models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache, prep_report
 from models.vit.tt.modeling_vit import vit_for_image_classification
 
 BATCH_SIZE = 1

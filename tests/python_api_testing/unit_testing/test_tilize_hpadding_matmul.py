@@ -14,7 +14,7 @@ from tt_lib.utils import (
     _nearest_32,
     pad_activation,
 )
-from python_api_testing.models.utility_functions import (
+from models.utility_functions import (
     print_diff_argmax,
     is_close,
     comp_pcc,

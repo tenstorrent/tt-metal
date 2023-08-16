@@ -10,7 +10,7 @@ from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 from models.whisper.tt.whisper_encoder_layer import (
     TtWhisperEncoderLayer,
 )
-from tests.python_api_testing.models.utility_functions_new import (
+from models.utility_functions import (
     comp_allclose,
     comp_pcc,
 )

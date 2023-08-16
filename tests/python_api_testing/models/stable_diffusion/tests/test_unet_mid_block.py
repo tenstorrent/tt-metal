@@ -3,7 +3,7 @@ from diffusers import StableDiffusionPipeline
 
 import tt_lib as ttl
 from models.utility_functions import torch_to_tt_tensor, tt_to_torch_tensor, torch_to_tt_tensor_rm
-from tests.python_api_testing.models.utility_functions_new import comp_pcc, comp_allclose_and_pcc
+from models.utility_functions import comp_pcc, comp_allclose_and_pcc
 from models.stable_diffusion.tt.unet_2d_blocks import TtUNetMidBlock2DCrossAttn
 from loguru import logger
 import pytest

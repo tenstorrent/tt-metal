@@ -12,7 +12,7 @@ from models.utility_functions import (
     enable_persistent_kernel_cache,
 )
 
-from tests.python_api_testing.models.utility_functions_new import profiler, prep_report
+from models.utility_functions import profiler, prep_report
 
 
 @pytest.mark.parametrize(

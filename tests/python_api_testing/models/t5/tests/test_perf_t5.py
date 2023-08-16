@@ -5,7 +5,7 @@ import pytest
 import tt_lib
 from loguru import logger
 
-from tests.python_api_testing.models.utility_functions_new import (
+from models.utility_functions import (
     Profiler,
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,

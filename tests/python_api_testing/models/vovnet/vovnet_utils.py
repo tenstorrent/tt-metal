@@ -1,7 +1,7 @@
 import torch.nn as nn
 from typing import Union, Type, Tuple
 
-from utility_functions_new import (
+from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
 

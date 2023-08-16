@@ -13,15 +13,15 @@ from loguru import logger
 import pytest
 import tt_lib
 
-from utility_functions_new import (
+from models.utility_functions import (
     profiler,
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
     comp_pcc,
+    torch2tt_tensor
 )
 from tt.lenet import lenet5
 from lenet_utils import load_torch_lenet, prepare_image
-from utility_functions_new import torch2tt_tensor
 
 
 @pytest.mark.parametrize(

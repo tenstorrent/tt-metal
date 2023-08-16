@@ -10,7 +10,7 @@ sys.path.append(f"{f}/..")
 import numpy as np
 
 import tt_lib as ttl
-from tests.python_api_testing.models.utility_functions import tilize
+from models.utility_functions import tilize
 
 
 @pytest.mark.parametrize(

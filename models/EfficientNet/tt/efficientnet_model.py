@@ -7,7 +7,7 @@ import torchvision
 from functools import partial
 from loguru import logger
 
-from tests.python_api_testing.models.utility_functions_new import (
+from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
 )

@@ -12,7 +12,7 @@ import timm
 import pytest
 import tt_lib
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, disable_persistent_kernel_cache, enable_persistent_kernel_cache
-from utility_functions_new import Profiler, prep_report
+from models.utility_functions import Profiler, prep_report
 
 from hrnet.tt.hrnet_model import hrnet_w18_small
 

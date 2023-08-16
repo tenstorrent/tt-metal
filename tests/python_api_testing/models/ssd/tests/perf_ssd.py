@@ -6,7 +6,7 @@ from models.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
 )
-from tests.python_api_testing.models.utility_functions_new import Profiler, prep_report
+from models.utility_functions import Profiler, prep_report
 from models.ssd.tt.ssd_lite import ssd_for_object_detection
 import pytest
 

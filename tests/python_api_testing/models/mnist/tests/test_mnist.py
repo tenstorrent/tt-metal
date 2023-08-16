@@ -4,11 +4,9 @@ from torchvision import transforms, datasets
 from loguru import logger
 import tt_lib
 
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor
-from tests.python_api_testing.models.utility_functions_new import (
-    comp_pcc,
-    get_oom_of_float,
-)
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor, \
+    comp_pcc, \
+    get_oom_of_float
 from models.mnist.tt.mnist_model import mnist_model
 
 

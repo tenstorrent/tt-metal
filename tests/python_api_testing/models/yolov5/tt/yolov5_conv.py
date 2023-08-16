@@ -4,12 +4,12 @@ import tt_lib
 from loguru import logger
 from tt_lib.fallback_ops import fallback_ops
 
-from python_api_testing.models.utility_functions_new import (
+from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
 
-from python_api_testing.models.conv_on_device_utils_new import (
+from models.utility_functions import (
     run_conv_on_device_wrapper,
     is_conv_supported_on_device,
 )

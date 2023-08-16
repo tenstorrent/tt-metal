@@ -12,8 +12,8 @@ sys.path.append(f"{f}/../..")
 import tt_lib as ttl
 
 # TODO: need to use old utility_functions until the
-# rest of the unit tests use utility_functions_new
-from python_api_testing.models.utility_functions import (
+# rest of the unit tests use utility_functions
+from models.utility_functions import (
     comp_pcc,
 )
 import torch

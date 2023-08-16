@@ -8,7 +8,7 @@ import numpy as np
 
 import tt_lib as ttl
 
-from python_api_testing.models.utility_functions import (
+from models.utility_functions import (
     untilize,
     tilize_to_list,
     comp_pcc,

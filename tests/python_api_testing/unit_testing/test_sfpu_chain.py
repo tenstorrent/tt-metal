@@ -7,7 +7,7 @@ sys.path.append(f"{f}/../..")
 import torch
 
 import tt_lib as ttl
-from python_api_testing.models.utility_functions import comp_pcc
+from models.utility_functions import comp_pcc
 from loguru import logger
 
 

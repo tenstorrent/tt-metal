@@ -26,7 +26,7 @@ from python_api_testing.models.yolov5.tt.yolov5_detection_model import (
     yolov5s_detection_model,
 )
 
-from python_api_testing.models.utility_functions_new import (
+from models.utility_functions import (
     torch2tt_tensor,
     comp_pcc,
 )

@@ -18,12 +18,12 @@ from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 from tests.python_api_testing.models.conftest import model_location_generator_
 import pytest
 import tt_lib as ttl
-from utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
+from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 from test_bert_batch_dram import TtBertBatchDram
 
 from python_api_testing.models.metal_BERT_large_15.model_config import get_model_config
 
-from utility_functions import (
+from models.utility_functions import (
     enable_persistent_kernel_cache,
     enable_compilation_reports,
     enable_memory_reports,
@@ -33,7 +33,7 @@ from utility_functions import (
     disable_persistent_kernel_cache,
     profiler,
 )
-from utility_functions_new import prep_report
+from models.utility_functions import prep_report
 import pytest
 from loguru import logger
 

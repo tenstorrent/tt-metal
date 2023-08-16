@@ -11,7 +11,7 @@ from models.utility_functions import (
     tt_to_torch_tensor,
 )
 
-from tests.python_api_testing.models.utility_functions_new import comp_pcc, comp_allclose_and_pcc
+from models.utility_functions import comp_pcc, comp_allclose_and_pcc
 
 
 def test_vit_encoder(hf_cat_image_sample_input, pcc=0.92):

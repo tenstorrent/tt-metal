@@ -16,7 +16,7 @@ import tt_lib as ttl
 from python_api_testing.models.metal_BERT_large_15.embeddings import PytorchEmbeddings
 from python_api_testing.models.metal_BERT_large_15.bert_encoder import TtBertEncoder
 from tt_lib.utils import pad_activation, pad_weight
-from utility_functions import (
+from models.utility_functions import (
     enable_persistent_kernel_cache,
     enable_compilation_reports,
     disable_compilation_reports,
@@ -26,7 +26,7 @@ from utility_functions import (
     comp_allclose,
     disable_persistent_kernel_cache,
 )
-from utility_functions import profiler
+from models.utility_functions import profiler
 
 from python_api_testing.models.metal_BERT_large_15.model_config import get_model_config
 

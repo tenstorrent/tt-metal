@@ -10,7 +10,7 @@ from models.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
 )
-from tests.python_api_testing.models.utility_functions_new import prep_report, Profiler
+from models.utility_functions import prep_report, Profiler
 from models.whisper.tt.whisper_model import TtWhisperModel
 
 from models.utility_functions import (

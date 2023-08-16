@@ -23,8 +23,8 @@ from diffusers import AutoencoderKL, UNet2DConditionModel, PNDMScheduler, HeunDi
 from diffusers import LMSDiscreteScheduler
 from tqdm.auto import tqdm
 
-from utility_functions_new import torch_to_tt_tensor, torch_to_tt_tensor_rm, tt_to_torch_tensor, comp_pcc, comp_allclose_and_pcc, Profiler
-from utility_functions_new import enable_persistent_kernel_cache, disable_persistent_kernel_cache
+from models.utility_functions import torch_to_tt_tensor, torch_to_tt_tensor_rm, tt_to_torch_tensor, comp_pcc, comp_allclose_and_pcc, Profiler
+from models.utility_functions import enable_persistent_kernel_cache, disable_persistent_kernel_cache
 
 import tt_lib as ttl
 from unet_2d_condition import UNet2DConditionModel as tt_unet_condition

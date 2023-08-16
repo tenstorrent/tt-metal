@@ -4,7 +4,7 @@ from torchvision import transforms, datasets
 
 import tt_lib as ttl
 
-from tests.python_api_testing.models.utility_functions import tilize_to_list, untilize, comp_allclose_and_pcc
+from models.utility_functions import tilize_to_list, untilize, comp_allclose_and_pcc
 
 epsilon = 1e-5
 
