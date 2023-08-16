@@ -72,6 +72,7 @@ def custom_compare(*args, **kwargs):
                 "asinh",
                 "acosh",
                 "atanh",
+                "atan2",
             ),
             ([[1, 1, 32, 32]], [[1, 3, 320, 64]]),
             (0,),
@@ -88,6 +89,7 @@ def test_run_eltwise_composite_test(
     options["deg2rad"] = (-180, 180)
     options["rad2deg"] = (0, 2 * pi)
     options["hypot"] = (1, 100)
+    options["atan2"] = (-100, 100)
     options["cbrt"] = (-1000, 1000)
     options["hardsigmoid"] = (-100, 100)
     options["hardswish"] = (-100, 100)
@@ -114,7 +116,7 @@ def test_run_eltwise_composite_test(
     num_inputs = 1
     if fn in ["mac", "addcmul", "addcdiv", "lerp_ternary"]:
         num_inputs = 3
-    elif fn in ["hypot", "min", "max", "lerp_binary", "xlogy"]:
+    elif fn in ["hypot", "min", "max", "lerp_binary", "xlogy","atan2"]:
         num_inputs = 2
 
     input_shapes = input_shapes * num_inputs

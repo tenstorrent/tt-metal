@@ -438,6 +438,36 @@ Tensor lerp(const Tensor& input_a, const Tensor& input_b, float value, const Mem
     return operation::decorate_as_composite(__func__, _lerp)(input_a, input_b, value, output_mem_config);
 }
 
+Tensor _atan2(const Tensor &input_a, const Tensor &input_b, const MemoryConfig& output_mem_config)
+{
+    Tensor result(input_a);
+    {
+    Tensor atan_input = mul(abs(input_b, output_mem_config), recip(abs(input_a, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+    result = atan(atan_input, output_mem_config);
+    }
+    Tensor res(result);
+    {
+    Tensor ib_gtz = gtz(input_b, output_mem_config);
+    Tensor t_zero   = zeros_like(input_a, output_mem_config);
+    Tensor ib_gt = gt(input_b, t_zero, std::nullopt, output_mem_config);
+    Tensor ib_lt = lt(input_b, t_zero, std::nullopt, output_mem_config);
+    Tensor pi_2 = add_unary(t_zero, M_PI_2, output_mem_config);
+    Tensor neg_result = neg(result, output_mem_config);
+
+    res = where(gt(input_a, t_zero, std::nullopt, output_mem_config),
+    where(ib_gtz, result, neg_result, output_mem_config),
+    where(lt(input_a, t_zero, std::nullopt, output_mem_config),
+    where(ib_gt, add_unary(neg_result, M_PI, output_mem_config),
+    where(ib_lt, sub_unary(result, M_PI, output_mem_config), add_unary(t_zero, M_PI, output_mem_config), output_mem_config), output_mem_config),
+    where(ib_gt, pi_2, where(ib_lt, neg(pi_2, output_mem_config), t_zero, output_mem_config), output_mem_config), output_mem_config));
+    }
+    return res;
+}
+Tensor atan2(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _atan2)(input_a, input_b, output_mem_config);
+}
+
 // lerp(input, end, weight) = start + weight * (end - start)
 Tensor _lerp_overload(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c, const MemoryConfig& output_mem_config) {
     Tensor t_diff = mul(sub(input_b, input_a, std::nullopt, output_mem_config), input_c, std::nullopt, output_mem_config);

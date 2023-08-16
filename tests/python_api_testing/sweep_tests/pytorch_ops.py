@@ -423,6 +423,10 @@ def lerp_ternary(x, y, z, *args, **kwargs):
 
 
 ## Binary Ops
+def atan2(x, y, *args, **kwargs):
+    return torch.atan2(y, x)
+
+
 def lerp_binary(x, y, *args, weight, **kwargs):
     return torch.lerp(x, y, weight)
 

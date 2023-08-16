@@ -236,6 +236,9 @@ op_map = {
     "eltwise-xlogy": {
         "tt_lib_op": tt_lib_ops.eltwise_xlogy,
         "pytorch_op": pytorch_ops.xlogy,
+    "eltwise-atan2": {
+        "tt_lib_op": tt_lib_ops.eltwise_atan2,
+        "pytorch_op": pytorch_ops.atan2,
     },
     "eltwise-lerp_binary": {
         "tt_lib_op": tt_lib_ops.eltwise_lerp_binary,
