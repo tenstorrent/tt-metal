@@ -70,7 +70,6 @@ def run_whisper_model(device):
             input_features=input_features, decoder_input_ids=decoder_input_ids
         )
 
-    logger.info("Running tt whisper model")
 
     tt_whisper = TtWhisperModel(
         state_dict=state_dict, device=device, config=pytorch_model.config
@@ -81,6 +80,7 @@ def run_whisper_model(device):
         input_features = torch2tt_tensor(
             input_features, device, tt_lib.tensor.Layout.ROW_MAJOR
         )
+        logger.info("Running tt whisper model")
 
         ttm_output = tt_whisper(
             input_features=input_features, decoder_input_ids=decoder_input_ids
