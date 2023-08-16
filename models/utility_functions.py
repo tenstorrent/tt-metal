@@ -135,7 +135,6 @@ def disable_memory_reports():
 def torch2tt_tensor(
     py_tensor: torch.Tensor,
     tt_device,
-    tt_dtype=tt_lib.tensor.DataType.BFLOAT16,
     tt_layout=tt_lib.tensor.Layout.TILE,
     tt_memory_config=tt_lib.tensor.MemoryConfig(True),
     tt_dtype=tt_lib.tensor.DataType.BFLOAT16,

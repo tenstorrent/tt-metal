@@ -128,7 +128,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
         block_size
     };
     std::map<string, string> softmax_defines;
-    if (scale.has_value()) {
+    if (mask.has_value()) {
         softmax_defines["FUSED_SCALE_MASK"] = "1";
     }
     auto reader_kernels_id = CreateDataMovementKernel(
@@ -185,7 +185,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
         auto core = grid.wrap_core(icore);
 
         uint32_t tile_offset = wtpc*Wt*icore;
-        union { float f; uint32_t u; } s; s.f = scale.value_or(0.0f); // scale for fused scale-mask-softmax
+        union { float f; uint32_t u; } s; s.f = scale.value_or(1.0f); // scale for fused scale-mask-softmax
         // always in-place
         //                                                              0  1    2       3            4   5       6          7           8
         SetRuntimeArgs(program, reader_kernels_id, core, { src_addr, 0, s.u, wtpc*Wt, tile_offset, partHt, Wt, mask_addr, 0x3f800000 }); // [8]=1.0f is scaler
@@ -245,8 +245,13 @@ void SoftmaxInPlace::validate(const std::vector<Tensor> &input_tensors, const st
             TT_ASSERT(mask.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
             TT_ASSERT(input_tensor.device() == mask.device());
             TT_ASSERT(input_tensor.dtype() == mask.dtype());
+        } else {
+            TT_ASSERT(not this->scale.has_value());
         }
+    } else {
+        TT_ASSERT(not this->scale.has_value());
     }
+
 
 }
 

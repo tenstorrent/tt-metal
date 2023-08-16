@@ -20,7 +20,7 @@ def test_softmax(shape):
         .to(ttl.tensor.Layout.TILE)
         .to(device)
     )
-    xtt = ttl.tensor.softmax_in_place(xt)
+    xtt = ttl.operations.primary.softmax_in_place(xt)
 
     tt_got_back = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 

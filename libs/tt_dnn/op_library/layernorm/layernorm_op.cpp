@@ -211,9 +211,11 @@ operation::ProgramWithCallbacks layernorm_(
     if (beta.has_value()) {
         reader_defines["FUSE_BETA"] = "1";
     }
+
+    auto use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
     auto reader_kernels_id = CreateDataMovementKernel(
         program,
-        gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR ? "tt_metal/kernels/dataflow/reader_unary_interleaved_ln_rm_gb.cpp" : "tt_metal/kernels/dataflow/reader_unary_interleaved_ln.cpp",
+        use_row_major_kernel ? "tt_metal/kernels/dataflow/reader_unary_interleaved_ln_rm_gb.cpp" : "tt_metal/kernels/dataflow/reader_unary_interleaved_ln.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_compile_time_args, .defines = reader_defines}
     );
@@ -345,6 +347,7 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
         TT_ASSERT(a.shape() == b.value().shape());
         TT_ASSERT(a.device() == b.value().device());
         TT_ASSERT(b.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+        TT_ASSERT(gamma.value().layout() == beta.value().layout(), "Gamma and beta must have the same layout!");
     }
 
     if (gamma.has_value()) {

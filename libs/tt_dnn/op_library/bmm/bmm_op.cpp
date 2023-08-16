@@ -632,7 +632,31 @@ operation::ProgramWithCallbacks Matmul::create_program(
     return std::visit(
         [&](const auto& program_config) -> operation::ProgramWithCallbacks {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
-            if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig>) {
+            if constexpr (std::is_same_v<ProgramConfigType, MatmulDefaultProgramConfig>) {
+                auto parallelization_strategy = bmm_op_utils::get_parallelization_strategy(input_tensors);
+
+                auto broadcast_batch = input_tensor_b.shape()[0] * input_tensor_b.shape()[1] == 1;
+                switch (parallelization_strategy){
+                    case MatmulParallelizationStrategy::MULTI_CORE:
+                        return matmul_multi_core(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
+                    case MatmulParallelizationStrategy::MULTI_CORE_REUSE:
+                        return matmul_multi_core_reuse(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
+                    case MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST:
+                        return matmul_multi_core_reuse_mcast(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
+                    case MatmulParallelizationStrategy::MULTI_CORE_REUSE_GENERALIZED:
+                        return matmul_multi_core_reuse_generalized(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
+                    case MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_GENERALIZED:
+                        return matmul_multi_core_reuse_mcast_generalized(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
+                    case MatmulParallelizationStrategy::MULTI_CORE_REUSE_PADDING:
+                        return matmul_multi_core_reuse_padding(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
+                    case MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_PADDING:
+                        return matmul_multi_core_reuse_mcast_padding(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
+                    case MatmulParallelizationStrategy::SINGLE_CORE:
+                    default:
+                        return matmul_single_core(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
+                }
+            }
+            else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig>) {
                 return bmm_multi_core_reuse_optimized(
                     input_tensor_a, input_tensor_b, input_tensor_a.shape(), input_tensor_b.shape(), output_tensor,
                     program_config.compute_with_storage_grid_size,
