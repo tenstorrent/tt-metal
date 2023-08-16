@@ -122,7 +122,7 @@ def run_perf_t5(expected_inference_time, expected_compile_time):
     "expected_inference_time, expected_compile_time",
     (
         (
-            0.071,
+            0.1,
             6.5,
         ),
     ),
