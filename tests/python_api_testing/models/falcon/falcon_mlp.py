@@ -22,28 +22,31 @@ class TtFalconMLP(nn.Module):
         self.hidden_size = hidden_size
 
         # TODO: Take in model_config instead of hardcoding dtypes/mem_configs
-        self.dense_h_to_4h_weights = tt_lib.tensor.transpose(
-            torch2tt_tensor(
+        self.dense_h_to_4h_weights = torch2tt_tensor(
+            torch.transpose(
                 self.state_dict[f"{base_url}.{layer_num}.mlp.dense_h_to_4h.weight"],
-                self.device,
-                tt_dtype=tt_lib.tensor.DataType.BFLOAT8_B,
-            )
+                -2,
+                -1,
+            ),
+            self.device,
+            tt_dtype=tt_lib.tensor.DataType.BFLOAT8_B,
         )
-        self.dense_4h_to_h_weights = tt_lib.tensor.transpose(
-            torch2tt_tensor(
+        self.dense_4h_to_h_weights = torch2tt_tensor(
+            torch.transpose(
                 self.state_dict[f"{base_url}.{layer_num}.mlp.dense_4h_to_h.weight"],
-                self.device,
-                tt_dtype=tt_lib.tensor.DataType.BFLOAT8_B,
-            )
+                -2,
+                -1,
+            ),
+            self.device,
+            tt_dtype=tt_lib.tensor.DataType.BFLOAT8_B,
         )
 
         self.act_fn = tt_lib.tensor.gelu
 
     def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
-        x = tt_lib.tensor.falcon_dense_h_to_4h_matmul(x, self.dense_h_to_4h_weights)
-
-        # apply gelu activation function
-        x = self.act_fn(x)
+        x = tt_lib.tensor.falcon_dense_h_to_4h_matmul(
+            x, self.dense_h_to_4h_weights, fuse_gelu_activation=True
+        )
 
         hidden_states = tt_lib.tensor.falcon_dense_4h_to_h_matmul(
             x, self.dense_4h_to_h_weights

@@ -106,7 +106,7 @@ def run_falcon_matmul_test(
     )
     bias_t = None
 
-    out = falcon_op(a_t, b_t, bias_t, out_mem_config, out_dtype)
+    out = falcon_op(a_t, b_t, bias_t, output_mem_config=out_mem_config, output_dtype=out_dtype)
 
     # Check memory and dtype of inputs and outputs
     assert a_t.memory_config().buffer_type == in0_mem_config.buffer_type

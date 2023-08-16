@@ -7,6 +7,7 @@
 #include "third_party/magic_enum/magic_enum.hpp"
 
 #include <optional>
+#include <algorithm>
 
 using namespace tt::constants;
 
@@ -58,6 +59,7 @@ uint32_t _get_maximum_block_dim(int32_t block_dim, int32_t in0_block_w) {
 }
 
 namespace bmm_op_utils {
+using namespace tt;
 using namespace tt::tt_metal;
 
 
@@ -89,16 +91,6 @@ tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_params(uint32_t M
 
     uint32_t Mpc = Mpc_min;
     uint32_t Npc = Npc_min;
-    vector<tuple<uint32_t, uint32_t>> SUBBLOCK_HW_CHOICES = {
-        {4, 2}, {2, 4}, {8, 1}, {1, 8},
-        {7, 1}, {1, 7},
-        {3, 2}, {2, 3}, {6, 1}, {1, 6},
-        {5, 1}, {1, 5},
-        {2, 2}, {4, 1}, {1, 4},
-        {3, 1}, {1, 3},
-        {2, 1}, {1, 2},
-        {1, 1},
-    };
     if (Mpc_min > 1) {
         auto Npc_choices = _get_possible_products(Nt_fac);
         auto Npc_max = _get_maximum_block_dim(Mpc_min, in0_block_w);
@@ -252,6 +244,36 @@ MatmulParallelizationStrategy get_parallelization_strategy(const std::vector<Ten
     else {
         return MatmulParallelizationStrategy::SINGLE_CORE;
     }
+}
+
+tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool fuse_batch, bool fuse_gelu_activation) {
+    auto device = input_tensor_a.device();
+    auto grid_size = device->compute_with_storage_grid_size();
+    uint32_t M = fuse_batch ? input_tensor_a.shape()[0] * input_tensor_a.shape()[1] * input_tensor_a.shape()[-2] : input_tensor_a.shape()[-2];
+    uint32_t per_core_M = M / TILE_HEIGHT;
+    uint32_t per_core_N = div_up(div_up(input_tensor_b.shape()[-1], grid_size.x * grid_size.y), TILE_WIDTH);
+    uint32_t out_subblock_h, out_subblock_w;
+    bool params_found = false;
+    for (auto &subblock_hw : bmm_op_utils::SUBBLOCK_HW_CHOICES) {
+        out_subblock_h = std::get<0>(subblock_hw);
+        out_subblock_w = std::get<1>(subblock_hw);
+        if (per_core_M % out_subblock_h == 0 and per_core_N % out_subblock_w == 0) {
+            params_found = true;
+            break;
+        }
+    }
+    TT_ASSERT(params_found, "Matmul parameters could not be determined for given input shapes");
+
+    return tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig{
+        .compute_with_storage_grid_size = grid_size,
+        .in0_block_w = 2,
+        .out_subblock_h = out_subblock_h,
+        .out_subblock_w = out_subblock_w,
+        .per_core_M = per_core_M,
+        .per_core_N = per_core_N,
+        .fuse_batch = fuse_batch,
+        .fuse_gelu_activation = fuse_gelu_activation,
+    };
 }
 
 }
@@ -448,101 +470,49 @@ Tensor bert_large_post_softmax_bmm(const Tensor &input_tensor_a, const Tensor &i
  * Falcon matmuls using operations::primary::matmul + program_config
  */
 Tensor falcon_fused_qkv_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype) {
-    auto batch_size = input_tensor_a.shape()[0];
-    auto seq_len = input_tensor_a.shape()[2];
-
-    // TODO: Check support for seq_len == 128, 256, 512, ..., 2048
-    TT_ASSERT(seq_len % TILE_HEIGHT == 0, "Falcon mm's seq_len must be a multiple of 32!");
-    TT_ASSERT(seq_len >=  128, "Falcon mm's seq_len must be greater than 128!");
-    TT_ASSERT((input_tensor_a.shape() == Shape({batch_size, 1, seq_len, 4544})), "Unsupported input shape");
-    TT_ASSERT((input_tensor_b.shape() == Shape({1, 1, 4544, 4672})), "Unsupported input shape");
-
-    CoreCoord compute_with_storage_grid_size = {12, 9};
-    uint32_t per_core_M = (seq_len / TILE_HEIGHT - 1) / compute_with_storage_grid_size.y + 1;
-    auto program_config = operations::primary::MatmulMultiCoreReuseMultiCastProgramConfig{
-        .compute_with_storage_grid_size = compute_with_storage_grid_size,
-        .in0_block_w = 2,
-        .out_subblock_h = 1,
-        .out_subblock_w = 7,
-        .per_core_M = per_core_M,
-        .per_core_N = 14,
-        .fuse_gelu_activation=false,
-    };
-    return operations::primary::matmul(input_tensor_a, input_tensor_b, bias, program_config, mem_config, output_dtype);
+    auto program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, true);
+    return operations::primary::matmul_1d(input_tensor_a, input_tensor_b, bias, program_config, mem_config, output_dtype);
 }
 
 Tensor falcon_selfout_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype) {
-    auto seq_len = input_tensor_a.shape()[2];
-
-    // TODO: Check support for seq_len == 128, 256, 512, ..., 2048
-    TT_ASSERT(seq_len % TILE_HEIGHT == 0, "Falcon mm's seq_len must be a multiple of 32!");
-    TT_ASSERT(seq_len >=  128, "Falcon mm's seq_len must be greater than 128!");
-    TT_ASSERT((input_tensor_a.shape() == Shape({1, 1, seq_len, 4544})), "Unsupported input shape");
-    TT_ASSERT((input_tensor_b.shape() == Shape({1, 1, 4544, 4544})), "Unsupported input shape");
-
-    CoreCoord compute_with_storage_grid_size = {12, 9};
-    uint32_t per_core_M = (seq_len / TILE_HEIGHT - 1) / compute_with_storage_grid_size.y + 1;
-    uint32_t out_subblock_h = per_core_M % 2 == 0 ? 2 : 1;
-    uint32_t out_subblock_w = out_subblock_h == 2 ? 4 : 6;
-    auto program_config = operations::primary::MatmulMultiCoreReuseMultiCastProgramConfig{
-        .compute_with_storage_grid_size = compute_with_storage_grid_size,
-        .in0_block_w = 2,
-        .out_subblock_h = out_subblock_h,
-        .out_subblock_w = out_subblock_w,
-        .per_core_M = per_core_M,
-        .per_core_N = 12,
-        .fuse_gelu_activation=false,
-    };
-    return operations::primary::matmul(input_tensor_a, input_tensor_b, bias, program_config, mem_config, output_dtype);
+    auto program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, true);
+    return operations::primary::matmul_1d(input_tensor_a, input_tensor_b, bias, program_config, mem_config, output_dtype);
 }
 
 Tensor falcon_dense_4h_to_h_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype) {
-    auto seq_len = input_tensor_a.shape()[2];
-
-    // TODO: Check support for seq_len == 128, 256, 512, ..., 2048
-    TT_ASSERT(seq_len % TILE_HEIGHT == 0, "Falcon mm's seq_len must be a multiple of 32!");
-    TT_ASSERT(seq_len >=  128, "Falcon mm's seq_len must be greater than 128!");
-    TT_ASSERT((input_tensor_a.shape() == Shape({1, 1, seq_len, 18176})), "Unsupported input shape");
-    TT_ASSERT((input_tensor_b.shape() == Shape({1, 1, 18176, 4544})), "Unsupported input shape");
-
-    CoreCoord compute_with_storage_grid_size = {12, 9};
-    uint32_t per_core_M = (seq_len / TILE_HEIGHT - 1) / compute_with_storage_grid_size.y + 1;
-    uint32_t out_subblock_h = per_core_M % 2 == 0 ? 2 : 1;
-    uint32_t out_subblock_w = out_subblock_h == 2 ? 4 : 6;
-    auto program_config = operations::primary::MatmulMultiCoreReuseMultiCastProgramConfig{
-        .compute_with_storage_grid_size = compute_with_storage_grid_size,
-        .in0_block_w = 8,
-        .out_subblock_h = out_subblock_h,
-        .out_subblock_w = out_subblock_w,
-        .per_core_M = per_core_M,
-        .per_core_N = 12,
-        .fuse_gelu_activation=false,
-    };
-    return operations::primary::matmul(input_tensor_a, input_tensor_b, bias, program_config, mem_config, output_dtype);
+    auto program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, true);
+    return operations::primary::matmul_1d(input_tensor_a, input_tensor_b, bias, program_config, mem_config, output_dtype);
 }
 
-Tensor falcon_dense_h_to_4h_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype) {
+Tensor falcon_dense_h_to_4h_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, bool fuse_gelu_activation, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype) {
     auto seq_len = input_tensor_a.shape()[2];
-
-    // TODO: Check support for seq_len == 128, 256, 512, ..., 2048
-    TT_ASSERT(seq_len % TILE_HEIGHT == 0, "Falcon mm's seq_len must be a multiple of 32!");
-    TT_ASSERT(seq_len >=  128, "Falcon mm's seq_len must be greater than 128!");
-    TT_ASSERT((input_tensor_a.shape() == Shape({1, 1, seq_len, 4544})), "Unsupported input shape");
-    TT_ASSERT((input_tensor_b.shape() == Shape({1, 1, 4544, 18176})), "Unsupported input shape");
-
-    return operation::run_with_autoformat(Matmul{.bcast_batch=true, .output_mem_config=mem_config, .output_dtype=output_dtype.value_or(input_tensor_a.dtype())}, {input_tensor_a, input_tensor_b}).at(0);
+    if (seq_len > 1024) {
+        // TODO: Check support for seq_len == 128, 256, 512, ..., 2048
+        TT_ASSERT(seq_len % TILE_HEIGHT == 0, "Falcon mm's seq_len must be a multiple of 32!");
+        TT_ASSERT(seq_len >=  128, "Falcon mm's seq_len must be greater than 128!");
+        TT_ASSERT((input_tensor_a.shape() == Shape({1, 1, seq_len, 4544})), "Unsupported input shape");
+        TT_ASSERT((input_tensor_b.shape() == Shape({1, 1, 4544, 18176})), "Unsupported input shape");
+        return operation::run_with_autoformat(Matmul{.bcast_batch=true, .output_mem_config=mem_config, .output_dtype=output_dtype.value_or(input_tensor_a.dtype())}, {input_tensor_a, input_tensor_b}).at(0);
+    } else {
+        auto program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, true, fuse_gelu_activation);
+        return operations::primary::matmul_1d(input_tensor_a, input_tensor_b, bias, program_config, mem_config, output_dtype);
+    }
 }
 
 Tensor falcon_lm_head_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype) {
     auto seq_len = input_tensor_a.shape()[2];
 
-    // TODO: Check support for seq_len == 128, 256, 512, ..., 2048
-    TT_ASSERT(seq_len % TILE_HEIGHT == 0, "Falcon mm's seq_len must be a multiple of 32!");
-    TT_ASSERT(seq_len >=  128, "Falcon mm's seq_len must be greater than 128!");
-    TT_ASSERT((input_tensor_a.shape() == Shape({1, 1, seq_len, 4544})), "Unsupported input shape");
-    TT_ASSERT((input_tensor_b.shape() == Shape({1, 1, 4544, 65024})), "Unsupported input shape");
-
-    return operation::run_with_autoformat(Matmul{.bcast_batch=true, .output_mem_config=mem_config, .output_dtype=output_dtype.value_or(input_tensor_a.dtype())}, {input_tensor_a, input_tensor_b}).at(0);
+    if (seq_len > 512) {
+        // TODO: Check support for seq_len == 128, 256, 512, ..., 2048
+        TT_ASSERT(seq_len % TILE_HEIGHT == 0, "Falcon mm's seq_len must be a multiple of 32!");
+        TT_ASSERT(seq_len >=  128, "Falcon mm's seq_len must be greater than 128!");
+        TT_ASSERT((input_tensor_a.shape() == Shape({1, 1, seq_len, 4544})), "Unsupported input shape");
+        TT_ASSERT((input_tensor_b.shape() == Shape({1, 1, 4544, 65024})), "Unsupported input shape");
+        return operation::run_with_autoformat(Matmul{.bcast_batch=true, .output_mem_config=mem_config, .output_dtype=output_dtype.value_or(input_tensor_a.dtype())}, {input_tensor_a, input_tensor_b}).at(0);
+    } else {
+        auto program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, true);
+        return operations::primary::matmul_1d(input_tensor_a, input_tensor_b, bias, program_config, mem_config, output_dtype);
+    }
 }
 
 }  // namespace tt_metal
@@ -577,6 +547,19 @@ tt::stl::reflection::Attributes MatmulMultiCoreReuseMultiCastProgramConfig::attr
     };
 }
 
+tt::stl::reflection::Attributes MatmulMultiCoreReuseMultiCast1DProgramConfig::attributes() const {
+    return {
+        {"compute_with_storage_grid_size",  this->compute_with_storage_grid_size.str()},
+        {"in0_block_w",  this->in0_block_w},
+        {"out_subblock_h",  this->out_subblock_h},
+        {"out_subblock_w",  this->out_subblock_w},
+        {"per_core_M",  this->per_core_M},
+        {"per_core_N",  this->per_core_N},
+        {"fuse_batch",  this->fuse_batch},
+        {"fuse_gelu_activation",  this->fuse_gelu_activation},
+    };
+}
+
 void Matmul::validate(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors
@@ -601,6 +584,23 @@ void Matmul::validate(
         TT_ASSERT(bias.layout() == Layout::TILE, "Unsupported input layout");
         TT_ASSERT(bias.shape() == Shape({1, 1, TILE_HEIGHT, input_tensor_b.shape()[3]}), "Unsupported bias shape");
     }
+
+    std::visit(
+        [&](const auto& program_config) {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if constexpr (
+                std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig> ||
+                std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig> ||
+                std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>
+            ) {
+                TT_ASSERT((input_tensor_a.shape()[-1] / TILE_WIDTH) % program_config.in0_block_w == 0, "Kt must be divisible by in0_block_w");
+                TT_ASSERT(program_config.per_core_M % program_config.out_subblock_h == 0, "per_core_M must be divisible by out_subblock_h");
+                TT_ASSERT(program_config.per_core_N % program_config.out_subblock_w == 0, "per_core_N must be divisible by out_subblock_w");
+            }
+        },
+        this->program_config
+    );
+
 }
 
 std::vector<Shape> Matmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
@@ -649,6 +649,15 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.in0_block_w, program_config.out_subblock_h, program_config.out_subblock_w,
                     program_config.per_core_M, program_config.per_core_N, fuse_batch, program_config.fuse_gelu_activation
                 );
+            }
+            else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                return matmul_multi_core_reuse_mcast_1d_optimized(
+                    input_tensor_a, input_tensor_b, bias, output_tensor,
+                    program_config.compute_with_storage_grid_size,
+                    output_dtype, math_fidelity,
+                    program_config.in0_block_w, program_config.out_subblock_h, program_config.out_subblock_w,
+                    program_config.per_core_M, program_config.per_core_N, program_config.fuse_batch, program_config.fuse_gelu_activation
+                );
             } else {
                 TT_THROW("Unrecognized Config");
             }
@@ -663,6 +672,13 @@ tt::stl::reflection::Attributes Matmul::attributes() const {
         {"output_mem_config",  this->output_mem_config},
         {"output_dtype", this->output_dtype},
     };
+}
+
+Tensor matmul_1d(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, std::optional<MatmulMultiCoreReuseMultiCast1DProgramConfig> program_config, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype) {
+    if (!program_config.has_value()) {
+        program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b);
+    }
+    return operations::primary::matmul(input_tensor_a, input_tensor_b, bias, program_config.value(), mem_config, output_dtype);
 }
 
 }  // namespace primary

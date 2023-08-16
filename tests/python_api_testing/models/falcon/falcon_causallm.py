@@ -30,12 +30,10 @@ class TtFalconCausalLM(TtFalconModelShared):
             max_position_embeddings=max_position_embeddings,
         )
 
-        self.lm_head_weights = tt_lib.tensor.transpose(
-            torch2tt_tensor(
-                self.state_dict[f"lm_head.weight"],
-                self.device,
-                tt_dtype=tt_lib.tensor.DataType.BFLOAT8_B,
-            )
+        self.lm_head_weights = torch2tt_tensor(
+            torch.transpose(self.state_dict[f"lm_head.weight"], -2, -1),
+            self.device,
+            tt_dtype=tt_lib.tensor.DataType.BFLOAT8_B,
         )
 
     def forward(
@@ -44,6 +42,8 @@ class TtFalconCausalLM(TtFalconModelShared):
         attention_mask: tt_lib.tensor.Tensor = None,
     ) -> tt_lib.tensor.Tensor:
         hidden_states = super().forward(input_embeddings, attention_mask)
-        lm_logits = tt_lib.tensor.falcon_lm_head_matmul(hidden_states, self.lm_head_weights)
+        lm_logits = tt_lib.tensor.falcon_lm_head_matmul(
+            hidden_states, self.lm_head_weights
+        )
 
         return lm_logits

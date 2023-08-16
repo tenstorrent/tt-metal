@@ -148,22 +148,26 @@ class TtFalconAttention(nn.Module):
             )
 
         # TODO: Take in model_config instead of hardcoding dtypes/mem_configs
-        self.query_key_value_weights = tt_lib.tensor.transpose(
-            torch2tt_tensor(
+        self.query_key_value_weights = torch2tt_tensor(
+            torch.transpose(
                 self.state_dict[
                     f"{base_url}.{layer_num}.self_attention.query_key_value.weight"
                 ],
-                self.device,
-                tt_dtype=tt_lib.tensor.DataType.BFLOAT8_B,
-            )
+                -2,
+                -1,
+            ),
+            self.device,
+            tt_dtype=tt_lib.tensor.DataType.BFLOAT8_B,
         )
 
-        self.dense_weights = tt_lib.tensor.transpose(
-            torch2tt_tensor(
+        self.dense_weights = torch2tt_tensor(
+            torch.transpose(
                 self.state_dict[f"{base_url}.{layer_num}.self_attention.dense.weight"],
-                self.device,
-                tt_dtype=tt_lib.tensor.DataType.BFLOAT8_B,
-            )
+                -2,
+                -1,
+            ),
+            self.device,
+            tt_dtype=tt_lib.tensor.DataType.BFLOAT8_B,
         )
 
         self.rotary_embedding = TtFalconRotaryEmbedding(

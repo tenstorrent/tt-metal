@@ -88,8 +88,10 @@ void kernel_main() {
         const DataFormat bias_data_format = get_dataformat(cb_id_in3);
 
         uint32_t l1_write_addr_in3;
+        #ifndef SKIP_MCAST
         volatile tt_l1_ptr uint32_t* in3_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in3_mcast_receiver_semaphore_addr);
         volatile tt_l1_ptr uint32_t* in3_mcast_sender_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in3_mcast_sender_semaphore_addr);
+        #endif
     #endif
 
     constexpr uint32_t cb_id_in1 = 1;
@@ -113,14 +115,14 @@ void kernel_main() {
         pad_buffer[i] = 0;
     }
 
-
+    #ifndef SKIP_MCAST
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
     volatile tt_l1_ptr uint32_t* in1_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_mcast_receiver_semaphore_addr);
     *(in1_mcast_receiver_semaphore_addr_ptr) = VALID;
     // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
     // to receive the mcast
     volatile tt_l1_ptr uint32_t* in1_mcast_sender_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_mcast_sender_semaphore_addr);
-
+    #endif
     const InterleavedAddrGenFast<in1_is_dram> s1 = {
         .bank_base_address = in1_tensor_addr,
         .page_size = in1_single_tile_size_bytes,
@@ -139,7 +141,6 @@ void kernel_main() {
         .page_size = output_single_tile_size_bytes,
         .data_format = output_data_format
     };
-
 
     for (uint32_t b = 0; b < batch; b++) {
         uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id;
@@ -171,6 +172,7 @@ void kernel_main() {
 
             // Barrier! make sure the reads are done
             noc_async_read_barrier();
+            #ifndef SKIP_MCAST
 
             // wait until all in1 mcast destinations have atomically incremented the in1 semaphore_addr (i.e. its value should be in0_mcast_num_dests), then reset
             // the semaphore_addr value back to zero for the next block
@@ -200,6 +202,8 @@ void kernel_main() {
             // num_dests must not include source, since we are NOT really doing a local copy!
             noc_semaphore_set_multicast(in1_mcast_receiver_semaphore_addr, in1_mcast_receiver_semaphore_noc_addr, in1_mcast_num_dests);
 
+            #endif
+
             cb_push_back(cb_id_in1, in1_block_num_tiles);
         }
         #ifdef FUSE_BIAS
@@ -228,6 +232,8 @@ void kernel_main() {
                 // Barrier! make sure the reads are done
                 noc_async_read_barrier();
 
+                #ifndef SKIP_MCAST
+
                 // wait until all in1 mcast destinations have atomically incremented the in1 semaphore_addr (i.e. its value should be in0_mcast_num_dests), then reset
                 // the semaphore_addr value back to zero for the next block
                 noc_semaphore_wait(in3_mcast_sender_semaphore_addr_ptr, in3_mcast_num_dests);
@@ -255,6 +261,8 @@ void kernel_main() {
                 in3_mcast_receiver_semaphore_addr);
                 // num_dests must not include source, since we are NOT really doing a local copy!
                 noc_semaphore_set_multicast(in3_mcast_receiver_semaphore_addr, in3_mcast_receiver_semaphore_noc_addr, in3_mcast_num_dests);
+
+                #endif
 
                 cb_push_back(cb_id_in3, in1_block_w);
             }
