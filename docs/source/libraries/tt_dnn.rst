@@ -489,6 +489,8 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.logaddexp
 
+.. autofunction:: tt_lib.tensor.logaddexp2
+
 .. autofunction:: tt_lib.tensor.signbit
 
 .. autofunction:: tt_lib.tensor.atan

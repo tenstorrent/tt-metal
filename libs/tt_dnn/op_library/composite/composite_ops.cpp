@@ -442,6 +442,25 @@ Tensor logaddexp(const Tensor& input_a, const Tensor& input_b, const MemoryConfi
     return operation::decorate_as_composite(__func__, _logaddexp)(input_a, input_b, output_mem_config);
 }
 
+// logaddexp2(a, b) = log2(2^a + 2^b)
+// 2^a = exp(log(2) * a) = exp(0.6931471805599453 * a)
+// logaddexp2(a, b) = log2(exp(0.6931471805599453 * a) + exp(0.6931471805599453 * b))
+Tensor _logaddexp2(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
+    TT_ASSERT( (input_a.shape() == input_b.shape()) , "Both the inputs shape should be same");
+    Tensor add_res(input_a);
+    {
+        Tensor exp_a   = exp(mul_unary(input_a, M_LN2, output_mem_config), output_mem_config);
+        Tensor exp_b   = exp(mul_unary(input_b, M_LN2, output_mem_config), output_mem_config);
+        add_res        = add(exp_a, exp_b, std::nullopt, output_mem_config);
+    }
+    Tensor result  = log2(add_res, output_mem_config);
+    return result;
+}
+Tensor logaddexp2(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _logaddexp2)(input_a, input_b, output_mem_config);
+}
+
 // lerp(input, end, weight) = start + weight * (end - start)
 Tensor _lerp(const Tensor& input_a, const Tensor& input_b, float value, const MemoryConfig& output_mem_config) {
     Tensor t_value = mk_tiled_scalar(value);

@@ -484,6 +484,10 @@ def logaddexp(x, y, *args, **kwargs):
     return torch.logaddexp(x, y)
 
 
+def logaddexp2(x, y, *args, **kwargs):
+    return torch.logaddexp2(x, y)
+
+
 def add(x, y, *args, **kwargs):
     return torch.add(x, y)
 
