@@ -40,6 +40,7 @@
 #include "tensor/borrowed_buffer.hpp"
 #include "tensor/tensor_impl.hpp"
 #include "tensor/tensor_utils.hpp"
+#include "tensor/serialization.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_lib_bindings.hpp"
 #include "operations.hpp"
@@ -2687,6 +2688,22 @@ void TensorModule(py::module &m_tensor) {
             return padded_shape;
         }, R"doc(
             Returns shape padded to tile shape
+        )doc"
+    );
+
+    m_tensor.def(
+        "dump_tensor",
+        &dump_tensor,
+        R"doc(
+            Dump tensor to file
+        )doc"
+    );
+
+    m_tensor.def(
+        "load_tensor",
+        &load_tensor,
+        R"doc(
+            Load tensor to file
         )doc"
     );
 }

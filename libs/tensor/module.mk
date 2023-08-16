@@ -4,6 +4,7 @@ TENSOR_SRCS = \
 	libs/tensor/tensor.cpp \
 	libs/tensor/types.cpp \
 	libs/tensor/tensor_utils.cpp \
+	libs/tensor/serialization.cpp \
 
 TENSOR_LIB = $(LIBDIR)/libtensor.a
 TENSOR_DEFINES =
