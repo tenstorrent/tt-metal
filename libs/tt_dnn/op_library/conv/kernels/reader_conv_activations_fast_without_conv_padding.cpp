@@ -27,7 +27,7 @@ void kernel_main() {
 
     uint32_t conv_act_size_w_ = get_arg_val<uint32_t>(i); i+=1;
     uint32_t conv_act_size_h = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t conv_act_size_c = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t conv_act_size_c_ = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_size_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_size_w = get_arg_val<uint32_t>(i); i+=1;
     uint32_t stride_h_ = get_arg_val<uint32_t>(i); i+=1;
@@ -60,16 +60,15 @@ void kernel_main() {
     constexpr uint32_t stride_w = get_compile_time_arg_val(2);
     constexpr uint32_t conv_act_size_w = get_compile_time_arg_val(3);
     constexpr uint32_t conv_output_w_last_index = get_compile_time_arg_val(4) - 1;
-    //constexpr uint32_t act_block_width_padding_bytes = get_compile_time_arg_val(1);
+    constexpr uint32_t conv_act_size_c_bytes = get_compile_time_arg_val(5);
+    constexpr uint32_t log_base_2_of_conv_act_size_c_bytes = get_compile_time_arg_val(6);
 
     constexpr uint32_t cb_id_act = 0;
     constexpr uint32_t tile_size_pow2_exponent = 11;
     const DataFormat data_format = get_dataformat(cb_id_act);
-    uint32_t channel_stick_size = conv_act_size_c;
-    uint32_t channel_stick_size_bytes = channel_stick_size << 1;
-    const InterleavedAddrGen<act_in_dram> s_act = {
+    const InterleavedPow2AddrGenFast<act_in_dram> s_act = {
         .bank_base_address = act_addr_dram_base,
-        .page_size = channel_stick_size_bytes
+        .log_base_2_of_page_size = log_base_2_of_conv_act_size_c_bytes
     };
 
     // Assumptions. Must be true. Validate on host.
@@ -101,7 +100,7 @@ void kernel_main() {
                     uint32_t in_w_offset = out_w * stride_w; // expect stride 1 or 2.. make this compile time args - also conv input width
                     uint32_t in_w_offset_within_kernel_window = 0;
                     for(uint32_t bw = 0; bw < weight_size_w; bw++) {
-                        uint32_t read_size_bytes = channel_stick_size_bytes;
+                        uint32_t read_size_bytes = conv_act_size_c_bytes;
                         #ifdef ACT_BLOCK_HEIGHT_PADDING
                         if (out_h < conv_output_size_h) {
                         #endif
@@ -111,8 +110,7 @@ void kernel_main() {
                         // read one channel from dram multi bank - row_id = channel_id
                         uint32_t channel_id = (in_h * conv_act_size_w) + in_w;
                         uint32_t dst_addr = l1_write_addr_act + l1_addr_offset;
-                        uint64_t act_noc_addr = get_noc_addr(channel_id, s_act);
-                        noc_async_read(act_noc_addr, dst_addr, read_size_bytes);
+                        s_act.noc_async_read_page(channel_id, dst_addr);
                         #ifdef ACT_BLOCK_HEIGHT_PADDING
                         } // else { do nothing. let garbage rows be in l1 }
                         #endif

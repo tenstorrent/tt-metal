@@ -2,23 +2,6 @@
 #include "dataflow_api.h"
 #include "debug_print.h"
 
-inline void pad_l1_buffer_with_zeroes(uint32_t l1_addr, uint32_t pad_size_bytes) {
-    volatile std::uint32_t* dst = reinterpret_cast<volatile std::uint32_t*>(l1_addr);
-    volatile std::uint32_t* end_dst = dst + (pad_size_bytes >> 2);  // Divide by 4 using right shift
-
-    while (dst < end_dst) {
-        *dst++ = 0;
-    }
-
-    uint32_t remainder = pad_size_bytes & 0x3;  // Get the remainder using bitwise AND
-    if (remainder != 0) {
-        volatile std::uint8_t* byte_dst = reinterpret_cast<volatile std::uint8_t*>(dst);
-        for (uint32_t i = 0; i < remainder; ++i) {
-            *byte_dst++ = 0;
-        }
-    }
-}
-
 void kernel_main() {
     uint32_t i = 0;
     uint32_t act_addr_dram_base  = get_arg_val<uint32_t>(i); i+=1;
@@ -67,9 +50,10 @@ void kernel_main() {
     const DataFormat data_format = get_dataformat(cb_id_act);
     uint32_t channel_stick_size = conv_act_size_c;
     uint32_t channel_stick_size_bytes = channel_stick_size << 1;
-    const InterleavedAddrGen<act_in_dram> s_act = {
+
+    const InterleavedPow2AddrGenFast<act_in_dram> s_act = {
         .bank_base_address = act_addr_dram_base,
-        .page_size = channel_stick_size_bytes
+        .log_base_2_of_page_size = 5 // TODO: send as a compile-time arg, currently C=16 in FP16_B (so 32 B)
     };
 
     // Assumptions. Must be true. Validate on host.
@@ -82,61 +66,50 @@ void kernel_main() {
     // assert(act_block_w_ntiles == act_block_w_datums/32)
     // assert(act_block_num_tiles == (act_block_h_datums * act_block_w_datums)/1024)
 
-    uint32_t out_h = 0;
     uint32_t out_w = 0;
-    uint32_t out_h_start = 0;
     uint32_t out_w_start = 0;
+    uint32_t first_c_id_in_2d_row = 0;
+    uint32_t first_c_id_in_2d_row_at_out_w_0 = 0;
+    uint32_t first_c_id_in_2d_row_start = 0;
+    uint32_t first_c_id_in_2d_row_at_out_w_0_start = 0;
     //DPRINT << "Running new conv reader" << ENDL();
     for(uint32_t nbh = 0; nbh < num_blocks_act_h; nbh++) {
-        uint32_t in_h_offset_within_kernel_window = 0;
+        uint32_t c_id_offset_inter_block_col = 0;
         for (uint32_t nbw = 0; nbw < num_blocks_act_w; nbw++) {
-            out_h = out_h_start;
             out_w = out_w_start;
+            first_c_id_in_2d_row = first_c_id_in_2d_row_start;
+            first_c_id_in_2d_row_at_out_w_0 = first_c_id_in_2d_row_at_out_w_0_start;
             cb_reserve_back(cb_id_act, act_block_num_tiles);
             uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
             uint32_t l1_addr_offset = 0;
             for(uint32_t bh = 0; bh < act_block_h_datums; bh++) {
-                uint32_t in_h_offset = out_h * stride_h;
-                uint32_t in_w_offset = out_w * stride_w; // expect stride 1 or 2.. make this compile time args - also conv input width
-                uint32_t in_w_offset_within_kernel_window = 0;
+                uint32_t c_id_offset_inra_block_col = 0;
                 for(uint32_t bw = 0; bw < weight_size_w; bw++) {
                     uint32_t read_size_bytes = channel_stick_size_bytes;
-                    //#ifdef ACT_BLOCK_HEIGHT_PADDING
-                    if (out_h < conv_output_size_h) {
-                    //#endif
-                    uint32_t in_h = in_h_offset + in_h_offset_within_kernel_window;
-                    uint32_t in_w = in_w_offset + in_w_offset_within_kernel_window;
 
-                    // read one channel from dram multi bank - row_id = channel_id
-                    uint32_t channel_id = (in_h * conv_act_size_w) + in_w; // TODO: remove multiply op.. incremental offset for channel id
+                    // read one channel
+                    uint32_t channel_id = first_c_id_in_2d_row + c_id_offset_inter_block_col + c_id_offset_inra_block_col;
                     uint32_t dst_addr = l1_write_addr_act + l1_addr_offset;
-                    uint64_t act_noc_addr = get_noc_addr(channel_id, s_act);
-                    noc_async_read(act_noc_addr, dst_addr, read_size_bytes); // change to noc_async_read_page. Measure this change first.
-                    //#ifdef ACT_BLOCK_HEIGHT_PADDING
-                    } // else { do nothing. let garbage rows be in l1 }
-                    //#endif
+                    s_act.noc_async_read_page(channel_id, dst_addr);
+
                     l1_addr_offset += read_size_bytes;
-                    in_w_offset_within_kernel_window += 1;
+                    c_id_offset_inra_block_col += 1;
                 } // for block width
-                // pad 0s for block padding on the right side of block.. only first conv since C%32 != 0.. ifdef with compile time define
-                #ifdef ACT_BLOCK_WIDTH_PADDING_BYTES
-                    // pad 0s in l1
-                    uint32_t dst_addr = l1_write_addr_act + l1_addr_offset;
-                    pad_l1_buffer_with_zeroes(dst_addr, (uint32_t) ACT_BLOCK_WIDTH_PADDING_BYTES);
-                    l1_addr_offset += (uint32_t) ACT_BLOCK_WIDTH_PADDING_BYTES;
-                #endif
                 if(out_w < conv_output_size_w - 1) {
                     out_w += 1;
+                    first_c_id_in_2d_row += 2; // channel id stride in the w dimension
                 } else {
-                    out_h += 1;
                     out_w = 0;
+                    first_c_id_in_2d_row_at_out_w_0 += 462; // channel id stride in the h dimension
+                    first_c_id_in_2d_row = first_c_id_in_2d_row_at_out_w_0;
                 }
             } // for block height
-            in_h_offset_within_kernel_window += 1;
+            c_id_offset_inter_block_col += 231;
             noc_async_read_barrier();
             cb_push_back(cb_id_act, act_block_num_tiles);
         } // for num of act blocks in inner width dim
-        out_h_start = out_h;
         out_w_start = out_w;
+        first_c_id_in_2d_row_start  = first_c_id_in_2d_row;
+        first_c_id_in_2d_row_at_out_w_0_start = first_c_id_in_2d_row_at_out_w_0;
     } // for num of act blocks in height dim
 }
