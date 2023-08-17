@@ -203,7 +203,7 @@ class Bottleneck(nn.Module):
         out = self.relu(out, self.memory_config)
         # conv3 is 1x1 conv
         out = self.conv3(out)
-
+        
         if self.downsample_conv_on_tt is not None:
             if(self.downsample_params[2] != 1 or self.downsample_params[4] != 1 or self.downsample_params[6] != 0):
                 x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device)
@@ -214,7 +214,6 @@ class Bottleneck(nn.Module):
                 identity = self.norm_layer_after_downsample_conv_on_tt(identity)
         elif self.downsample is not None:
             identity = self.downsample(x)
-
         out = tt_lib.tensor.add_without_autoformat(out, identity, output_mem_config=self.memory_config)
         if output_in_dram:
             out = self.relu(out)
@@ -287,7 +286,7 @@ class ResNet(nn.Module):
 
         self.conv1_params = [self.inplanes, 3, 7, 7, 2, 2, 3, 3, 1, groups]
         if is_conv_supported_on_device(self.conv1_params):
-            self.conv1 = TtResnetConv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, [128, 128], [128, 64], [128, 64], conv1_bias.tolist() if conv1_bias is not None else None, 8, True)
+            self.conv1 = TtResnetConv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, [128, 128], [128, 64], [128, 64], conv1_bias.tolist() if conv1_bias is not None else None, 8, True, True)
         else:
             self.conv1 = fallback_ops.Conv2d(conv1_weight, conv1_bias, 3, self.inplanes, kernel_size=7, stride=2, padding=3)
         self.conv1_output_shape = compute_conv_output_shape(self.conv1_params, [1, self.conv_input_face_shape_hw[0], self.conv_input_face_shape_hw[1], self.inplanes])
@@ -435,7 +434,7 @@ class ResNet(nn.Module):
         x = x.to(self.device, self.memory_config)
         saved_shape = compute_conv_output_shape(self.conv1_params, [1, 224, 224, 16])
         x = self.conv1(x)
-        x = x.reshape(1, 1, x.shape()[0]*x.shape()[1]*x.shape()[2], x.shape()[3]);
+        #x = x.reshape(1, 1, x.shape()[0]*x.shape()[1]*x.shape()[2], x.shape()[3]);
         x = self.relu(x, self.memory_config)
         x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device)
         x = x.reshape(saved_shape[0], saved_shape[1], saved_shape[2], saved_shape[3])
