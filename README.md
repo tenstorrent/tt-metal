@@ -22,13 +22,17 @@ Table of Contents generated with
 
 ## Installing
 
+**Note**: Currently, all features are only fully tested on Grayskull E150
+accelerators. We are currently working on functionality for other Tenstorrent
+architectures.
+
 ### From source - Tenstorrent machine
 
 Currently, the best way to use our software is through a
 Tenstorrent-provisioned cloud machine and building from source.
 
 You can provision your own machine on the Tenstorrent cloud using documentation
-[here](https://github.com/tenstorrent-metal/metal-internal-workflows/wiki/Creating-a-TT-Cloud-VM-for-Metal-development).
+[here](https://github.com/tenstorrent-metal/metal-internal-workflows/wiki/Installing-Metal-development-dependencies-on-a-TT-Cloud-VM).
 
 0. SSH into the cloud machine.
 
@@ -41,10 +45,13 @@ ssh-keygen
 2. Add the key to your Github profile. Please refer to [SSH keys on
    Github](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/adding-a-new-ssh-key-to-your-github-account).
 
-3. Clone the repo.
+3. Clone the repo. If you're using a release, please use ``--branch
+   <VERSION_NUMBER>``.
+
+Otherwise, use ``main``.
 
 ```
-git clone git@github.com:tenstorrent-metal/tt-metal.git --recurse-submodules
+git clone git@github.com:tenstorrent-metal/tt-metal.git --recurse-submodules --branch <VERSION_NUMBER>
 cd tt-metal
 ```
 
@@ -88,12 +95,14 @@ We assume that you have the following accelerator-level dependencies:
 
 For Grayskull:
 
+- At least 1 unharvested E150 attached to a PCIe x16 slot
 - TTKMD (Tenstorrent kernel-mode driver) v1.20.1
 - ``tt-flash`` 2023-06-28
 - ``tt-smi`` tt-smi_2023-06-16-0283a02404487eea or above
 
 For Wormhole B0:
 
+- At least 1 N150 or N300 attached via PCIe
 - TTKMD (Tenstorrent kernel-mode driver) v1.20.1
 - ``tt-flash`` 2023-03-29
 - ``tt-smi`` tt-smi-wh-8.4.0.0_2023-06-29-96bed10da092442c or above
@@ -183,6 +192,9 @@ source build/python_env/bin/activate
 After installing, please refer to our [Getting Started
 page](https://tenstorrent-metal.github.io/tt-metal/latest/get_started/get_started.html)
 in our documentation.
+
+Note that example programs are only available through source installation at
+this time.
 
 ## Documentation
 
