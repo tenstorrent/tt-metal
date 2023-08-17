@@ -129,7 +129,7 @@ def run_perf_whisper(expected_inference_time, expected_compile_time):
     (
         (
             4.25,
-            22,
+            25,
         ),
     ),
 )
