@@ -82,7 +82,9 @@ this project.
 
 ### From a release wheel
 
-This section is under construction.
+**NOTE**: The wheel is not a fully-tested software artifact and most features
+do not work right now through the wheel. As of this moment, we encourage users
+to try metal through source. Therefore, this section is under construction.
 
 Wheel files are available through the
 [releases](https://github.com/tenstorrent-metal/tt-metal/releases) page.
