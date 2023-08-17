@@ -18,13 +18,14 @@ namespace tt {
 
 namespace tt_metal {
 
-const uint32_t act_cb                                   = 0;
-const uint32_t weight_cb                                = 1;
-const uint32_t matmul_partials_cb                       = 24;
-const uint32_t tilize_mode_tilized_act_cb               = 25;
-const uint32_t untilize_mode_final_matmul_partials_cb   = 26;
-const uint32_t untilize_mode_reblock_cb                 = 27;
-const uint32_t out0_cb                                  = 16;
+const uint32_t act_cb                                 = CB::c_in0;
+const uint32_t weight_cb                              = CB::c_in1;
+const uint32_t matmul_partials_cb                     = CB::c_intermed0;
+const uint32_t tilize_mode_tilized_act_cb             = CB::c_intermed1;
+const uint32_t untilize_mode_final_matmul_partials_cb = CB::c_intermed2;
+const uint32_t untilize_mode_reblock_cb               = CB::c_intermed3;
+const uint32_t out0_cb                                 = CB::c_out0;
+
 pair<uint32_t, uint32_t> compute_conv_output_face_shape(uint32_t conv_activation_h, uint32_t conv_activation_w, uint32_t filter_h, uint32_t filter_w, uint32_t stride_h, uint32_t stride_w, uint32_t pad_h, uint32_t pad_w) {
     uint32_t conv_output_h = ((conv_activation_h - filter_h + (2 * pad_h)) / stride_h) + 1;
     uint32_t conv_output_w = ((conv_activation_w - filter_w + (2 * pad_w)) / stride_w) + 1;
@@ -151,9 +152,8 @@ void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program &program,
 
 operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, vector<int> conv_params,
                                        uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
-                                       uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool use_fast_reader, Tensor &output) {
+                                       uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool use_fast_reader, bool untilize_out, Tensor &output) {
     bool pass = true;
-    bool untilize_out = true;
     tt_metal::Device *device = a.device();
     TT_ASSERT(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     uint32_t act_batch_size = a.shape()[0];
@@ -217,6 +217,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
     // it removes the padding done for block width but it doesn't remove padding done for tiled width
     uint32_t output_channels_padded_to_tile_width = round_up(output_channels, TILE_WIDTH);
     assert(output_channels_padded_to_tile_width <= weight_matrix_width);
+    uint32_t output_width_num_tiles = output_channels_padded_to_tile_width / TILE_WIDTH;
     uint32_t num_blocks_output_w = (uint32_t) ceil((double) output_channels_padded_to_tile_width / (double) weight_block_w_datums);
     uint32_t last_block_width_datums = (output_channels_padded_to_tile_width % weight_block_w_datums == 0) ? weight_block_w_datums : (output_channels_padded_to_tile_width % weight_block_w_datums);
     assert(last_block_width_datums % TILE_WIDTH == 0);
@@ -286,6 +287,10 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
             reader_defines["ACT_BLOCK_HEIGHT_PADDING"] = "1";
         }
     }
+    uint32_t output_height_padded_to_tile_height = round_up(conv_output_size_h*conv_output_size_w, TILE_HEIGHT);
+    uint32_t output_height_num_tiles = output_height_padded_to_tile_height / TILE_HEIGHT;
+    assert(output_height_num_tiles <= act_matrix_height_ntiles);
+
     uint32_t act_matrix_height_unpadded = conv_output_size_h * conv_output_size_w;
     uint32_t act_matrix_width_unpadded = conv_act_size_c * weight_size_h * weight_size_w;
     uint32_t src_dram_act_buffer_size_bytes = src0_dram_buffer->size();
@@ -362,17 +367,14 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         TT_ASSERT(!(out_row_size_bytes & (out_row_size_bytes - 1))); // output channels power of 2 is supported only
         if (pad_h == 0 && pad_w == 0) {
             if(rn50_first_conv) {
-                reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast_resnet50_first_conv.cpp";
-                writer_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_and_reader_weights_resnet50_first_conv.cpp";
-                compute_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/bmm_tilize_untilize_all_weights_in_l1_single_output_block_width_dim.cpp";
+                reader_kernel = "libs/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast_resnet50_first_conv.cpp";
+                compute_kernel = "libs/tt_dnn/op_library/conv/kernels/bmm_tilize_untilize_all_weights_in_l1_single_output_block_width_dim.cpp";
             } else {
-                reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast_without_conv_padding.cpp";
-                writer_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_unary_stick_8bank_blocks_reader_weight_tile_with_pow2_addr_gen_fast.cpp";
+                reader_kernel = "libs/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast_without_conv_padding.cpp";
                 compute_kernel = "tt_metal/kernels/compute/bmm_tilize_untilize.cpp";
             }
         } else {
-            reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast.cpp";
-            writer_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_unary_stick_8bank_blocks_reader_weight_tile_with_pow2_addr_gen_fast.cpp";
+            reader_kernel = "libs/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast.cpp";
             compute_kernel = "tt_metal/kernels/compute/bmm_tilize_untilize.cpp";
         }
         reader_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
@@ -381,7 +383,6 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
     } else {
         reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations.cpp";
         reader_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0)};
-        writer_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_unary_stick_layout_8bank_blocks_reader_weight_tile_layout.cpp";
         compute_kernel = "tt_metal/kernels/compute/bmm_tilize_untilize.cpp";
     }
     reader_rt_args = {
@@ -423,7 +424,16 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
     };
 
     vector<uint32_t> writer_rt_args;
+    std::vector<uint32_t> writer_compile_time_args;
     if (untilize_out) {
+        if (rn50_first_conv) {
+            writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_and_reader_weights_resnet50_first_conv.cpp";
+        } else if (use_fast_reader) {
+            writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_unary_stick_8bank_blocks_reader_weight_tile_with_pow2_addr_gen_fast.cpp";
+        } else {
+            writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_unary_stick_layout_8bank_blocks_reader_weight_tile_layout.cpp";
+        }
+        writer_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0), out0_cb, weight_cb, (uint32_t) log2(out_row_size_bytes)};
         writer_rt_args = {
             out_dram_addr,
             act_block_h_datums,
@@ -446,32 +456,44 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
 
         };
     } else {
-        assert(false && "Tiled output unsupported");
-        writer_kernel = "tt_metal/kernels/dataflow/writer_matmul_tile_layout.cpp";
+        writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_tiled_out_reader_conv_weights_tiled.cpp";
+        writer_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0), out0_cb, weight_cb};
         writer_rt_args = {
             out_dram_addr,
-            0,
-            1,
-            weight_matrix_width_ntiles,
-            out_subblock_w_ntiles,
-            out_subblock_h_ntiles * weight_matrix_width_ntiles,
-
-            out_subblock_w_ntiles,
+            output_width_num_tiles, // out_next_tile_stride_h
+            1, // out_next_tile_stride_w
+            out_subblock_h_ntiles * output_width_num_tiles, // out_next_subblock_stride_h
+            out_subblock_w_ntiles, // out_next_subblock_stride_w
+            act_block_h_ntiles * output_width_num_tiles, // out_next_block_stride_h
+            weight_block_w_ntiles, // out_next_block_stride_w
             out_subblock_h_ntiles,
-            out_subblock_w_ntiles * out_subblock_h_ntiles,
-            weight_matrix_width_ntiles / out_subblock_w_ntiles,
-            act_matrix_height_ntiles / out_subblock_h_ntiles
+            out_subblock_w_ntiles,
+            out_subblock_num_tiles,
+            act_block_h_ntiles / out_subblock_h_ntiles, // out_num_subblocks_h
+            weight_block_w_ntiles / out_subblock_w_ntiles,   // out_num_subblocks_w
+            num_blocks_act_h, // out_num_blocks_h
+            num_blocks_weight_w, // out_num_blocks_w
+            act_block_h_ntiles, // out_block_height_num_tiles
+            output_height_num_tiles, // out_height_num_tiles without block shape padding
+            output_width_num_tiles, // out_width_num_tiles withoug block shape padding
+
+            weight_dram_addr,
+            num_blocks_act_w, // = number of blocks of weight in height dim
+            weight_block_num_tiles,
+            weight_block_h_ntiles,
+            weight_block_w_ntiles,
+            weight_matrix_width_ntiles, // weight_stride_h
+            weight_matrix_width_ntiles * weight_block_h_ntiles, // weight_next_block_stride_h,
+            weight_block_w_ntiles, // weight_next_block_stride_w
+
         };
     }
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-
     auto reader_id = tt_metal::CreateDataMovementKernel(
         program,
         reader_kernel,
         core,
         tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_compile_time_args, .defines = reader_defines});
-
-    std::vector<uint32_t> writer_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0), out0_cb, weight_cb, (uint32_t) log2(out_row_size_bytes)};
 
     auto writer_id = tt_metal::CreateDataMovementKernel(
         program,
@@ -521,7 +543,8 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
 
     auto override_runtime_args_callback = [
         reader_kernel_id=reader_id,
-        writer_kernel_id=writer_id
+        writer_kernel_id=writer_id,
+        untilize_out=untilize_out
     ]
     (
         const Program &program,
@@ -545,7 +568,11 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         {
             auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = dst_dram_buffer->address();
-            runtime_args[9] = src_dram_buffer_b->address();
+            if (untilize_out) {
+                runtime_args[9] = src_dram_buffer_b->address();
+            } else {
+                runtime_args[17] = src_dram_buffer_b->address();
+            }
             SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
         }
     };
@@ -817,9 +844,9 @@ std::pair<vector<uint32_t>, vector<uint32_t>> populate_address_map_vectors_for_r
 
 operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(const Tensor& a, const Tensor &b, vector<int> conv_params,
                                        uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
-                                       uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, Tensor &output) {
+                                       uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool untilize_out, Tensor &output) {
     bool pass = true;
-    bool untilize_out = true;
+    assert(untilize_out == true);
     tt_metal::Device *device = a.device();
     TT_ASSERT(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_ASSERT(a.shape()[0] == 1, "Only batch size 1 supported.");
@@ -1238,44 +1265,42 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
 }
 
 inline Tensor conv_(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
-             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool use_address_map, bool use_fast_reader) {
+             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool use_address_map, bool use_fast_reader, bool untilize_out) {
     TT_ASSERT(b.layout() == Layout::TILE); // Weights should already be formatted
     auto padded_a_shape = Shape({a.shape()[0], a.shape()[1], a.shape()[2], round_up(a.shape()[3], 16)});
     FormatParams input_a_format_params = {.pad_shape=padded_a_shape, .pad_value=0.0, .target_layout=Layout::ROW_MAJOR};
     FormatParams input_b_format_params = {.pad_shape=b.shape(), .pad_value=0.0, .target_layout=Layout::TILE};
+    auto output_layout = untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
     return operation::run_with_autoformat(
-        Conv(act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, conv_params, output_channels, use_address_map, use_fast_reader),
+        Conv(act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, conv_params, output_channels, use_address_map, use_fast_reader, untilize_out),
         {a, b},
         {input_a_format_params, input_b_format_params},
-        {Layout::ROW_MAJOR}).at(0);
+        {output_layout}).at(0);
 }
 
 Tensor conv(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
              uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels) {
-    TT_ASSERT(false, "Conv disabled");
-    return conv_(a, b, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, false, false);
+    return conv_(a, b, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, false, false, true);
 }
 
 Tensor conv_with_fast_reader(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
-             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels) {
-    TT_ASSERT(false, "Conv disabled");
-    return conv_(a, b, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, false, true);
+             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool untilize_out) {
+    return conv_(a, b, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, false, true, untilize_out);
 }
 
 Tensor conv_with_address_map(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
              uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels) {
-    TT_ASSERT(false, "Conv disabled");
-    return conv_(a, b, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, true, false);
+    return conv_(a, b, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, true, false, true);
 }
 
 operation::ProgramWithCallbacks conv_single_core(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
-             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool use_fast_reader, Tensor &output) {
-    return conv_as_large_bmm_single_core_(a, b, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, use_fast_reader, output);
+             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool use_fast_reader, bool untilize_out, Tensor &output) {
+    return conv_as_large_bmm_single_core_(a, b, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, use_fast_reader, untilize_out, output);
 }
 
 operation::ProgramWithCallbacks conv_with_address_map_single_core(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
-             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, Tensor &output) {
-    return conv_as_large_bmm_with_address_map_single_core_(a, b, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, output);
+             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool untilize_out, Tensor &output) {
+    return conv_as_large_bmm_with_address_map_single_core_(a, b, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, untilize_out, output);
 }
 
 void Conv::validate(const std::vector<Tensor>& input_tensors) const {
@@ -1297,17 +1322,30 @@ std::vector<Shape> Conv::compute_output_shapes(const std::vector<Tensor>& input_
     uint32_t pad_w = (uint32_t) conv_params[5];
     auto [conv_output_h, conv_output_w] = compute_conv_output_face_shape(conv_activation_h, conv_activation_w, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w);
 
-    // pad the output channels to TILE_WIDTH as conv writer kernel does not remove padding for tile
-    auto output_channels = round_up(this->output_channels, TILE_WIDTH);
-
-    // TODO: Update batch size below
-    Shape output_tensor_shape = {1, conv_output_h, conv_output_w, output_channels};
-    return {output_tensor_shape};
+    if (untilize_out) {
+        // TODO: Update batch size below
+        // RM output has unpadded output height and padded output width to 32.
+        // pad the output channels to TILE_WIDTH as conv writer kernel does not remove padding for tile
+        // TODO (nshanker): specify padding explicitly here with "Padding" object and add unit test
+        auto output_channels = round_up(this->output_channels, TILE_WIDTH);
+        Shape output_tensor_shape = {1, conv_output_h, conv_output_w, output_channels};
+        return {output_tensor_shape};
+    } else {
+        // Tiled output shape is padded shape. Padded to tile shape.
+        auto shape_w = conv_output_h*conv_output_w;
+        auto shape_c = output_channels;
+        auto padded_shape_w = round_up(shape_w, TILE_HEIGHT);
+        auto padded_shape_c = round_up(this->output_channels, TILE_WIDTH);
+        auto output_padding = Padding({{0, 0}, {0, 0}, {0, (padded_shape_w - shape_w)}, {0, (padded_shape_c - shape_c)}}, Padding::PadValue::Any);
+        auto output_tensor_shape = Shape({1, 1, padded_shape_w, padded_shape_c}, output_padding);
+        return {output_tensor_shape};
+    }
 }
 
 std::vector<Tensor> Conv::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::ROW_MAJOR, input_tensor.memory_config());
+    auto output_layout = this->untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), output_layout, input_tensor.memory_config());
 }
 
 operation::ProgramWithCallbacks Conv::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
@@ -1315,9 +1353,9 @@ operation::ProgramWithCallbacks Conv::create_program(const std::vector<Tensor>& 
     const auto& input_tensor_b = input_tensors.at(1);
     auto& output_tensor = output_tensors.at(0);
     if(use_address_map) {
-        return {conv_with_address_map_single_core(input_tensor_a, input_tensor_b, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, output_tensor)};
+        return {conv_with_address_map_single_core(input_tensor_a, input_tensor_b, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, untilize_out, output_tensor)};
     } else {
-        return {conv_single_core(input_tensor_a, input_tensor_b, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, use_fast_reader, output_tensor)};
+        return {conv_single_core(input_tensor_a, input_tensor_b, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, use_fast_reader, untilize_out, output_tensor)};
     }
 }
 
@@ -1332,6 +1370,7 @@ tt::stl::reflection::Attributes Conv::attributes() const {
         {"output_channels", this->output_channels},
         {"use_address_map", this->use_address_map},
         {"use_fast_reader", this->use_fast_reader},
+        {"untilize_out", this->untilize_out},
     };
 }
 

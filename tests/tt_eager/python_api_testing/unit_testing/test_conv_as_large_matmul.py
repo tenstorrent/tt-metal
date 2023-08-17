@@ -32,6 +32,7 @@ import torch
 
 
 @pytest.mark.parametrize("run_conv_with_address_map", (False,))
+@pytest.mark.parametrize("untilize_out", (True, False))
 @pytest.mark.parametrize(
     "K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w",
     (
@@ -99,7 +100,7 @@ def test_run_conv_as_large_matmul(
     stride_h,
     stride_w,
     pad_h,
-    pad_w,
+    pad_w, untilize_out,
     device,
 ):
     num_iterations = 1
@@ -117,10 +118,10 @@ def test_run_conv_as_large_matmul(
 
         # Parameters to define block dims
         act_block_h = 4
-        act_block_w = (int)((_nearest_32(_nearest_y(C, 16) * S)) / 32)
+        act_block_w = (int)((_nearest_32(_nearest_y(C, 16) * S))/32)
         weight_block_h = act_block_w
-        weight_block_w = 4
-        out_subblock_h = 4
+        weight_block_w = 2
+        out_subblock_h = 2
         out_subblock_w = 2
 
         OH = ((int)((H - R + 2 * pad_h) / stride_h)) + 1
@@ -149,6 +150,7 @@ def test_run_conv_as_large_matmul(
 
         # Run TT metal OP
         if run_conv_with_address_map:
+            untilize_out = True
             out = ttl.tensor.conv_with_address_map(
                 A,
                 B_tiled,
@@ -171,7 +173,12 @@ def test_run_conv_as_large_matmul(
                 out_subblock_h,
                 out_subblock_w,
                 K,
-            )
+                untilize_out)
+        if not untilize_out:
+           out_unpadded_shape = [1, 1, OH*OW, K]
+           assert out_unpadded_shape == out.shape_without_padding()
+           out = ttl.tensor.format_output_tensor(out, out.shape_without_padding(), device, ttl.tensor.Layout.ROW_MAJOR)
+           out = out.reshape(conv_output_shape[0], conv_output_shape[1], conv_output_shape[2], conv_output_shape[3])
         out = out.cpu()
         assert out.shape() == conv_output_shape
         assert out.layout() == ttl.tensor.Layout.ROW_MAJOR

@@ -22,8 +22,8 @@ struct Conv {
      // additional parameters
     const std::vector<int> conv_params;
     const uint32_t act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels;
-    bool use_address_map, use_fast_reader;
-    Conv(uint32_t act_bh, uint32_t act_bw, uint32_t weight_bw, uint32_t out_sh, uint32_t out_sw, const std::vector<int>&c_params, uint32_t output_channels, bool address_map, bool fast_reader)
+    bool use_address_map, use_fast_reader, untilize_out;
+    Conv(uint32_t act_bh, uint32_t act_bw, uint32_t weight_bw, uint32_t out_sh, uint32_t out_sw, const std::vector<int>&c_params, uint32_t output_channels, bool address_map, bool fast_reader, bool untile_out)
         : act_block_h_ntiles(act_bh),
           act_block_w_ntiles(act_bw),
           weight_block_w_ntiles(weight_bw),
@@ -32,7 +32,8 @@ struct Conv {
           output_channels(output_channels),
           conv_params(c_params),
           use_address_map(address_map),
-          use_fast_reader(fast_reader) {}
+          use_fast_reader(fast_reader),
+          untilize_out(untile_out) {}
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
@@ -45,7 +46,7 @@ Tensor conv(const Tensor& a, const Tensor &b, const vector<int> conv_params, uin
              uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels);
 
 Tensor conv_with_fast_reader(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
-             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels);
+             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool untilize_out);
 
 operation::ProgramWithCallbacks conv_single_core(const Tensor& A, const Tensor& B, vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
              uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, Tensor& output); // Tilizes a, untilizes b

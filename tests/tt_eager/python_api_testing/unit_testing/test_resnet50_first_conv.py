@@ -97,6 +97,7 @@ def test_resnet50_first_conv_as_large_blocked_matmul(use_program_cache, device):
             out_subblock_h,
             out_subblock_w,
             K,
+            True
         )
         out = out.cpu()
         assert out.shape() == conv_output_shape
