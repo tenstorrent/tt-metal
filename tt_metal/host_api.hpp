@@ -11,6 +11,8 @@
 #include "tt_metal/impl/program/program.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 
+#include "tt_metal/impl/dispatch/event.hpp"
+
 /** @file */
 
 /** \mainpage tt-metal Internal C++ Documentation
@@ -33,6 +35,7 @@ class Device;
 class CommandQueue;
 class CircularBuffer;
 
+using Event = std::future<void>;
 // ==================================================
 //                  HOST API: Device management
 // ==================================================
@@ -345,6 +348,27 @@ void Finish(CommandQueue& cq);
  * */
 void DumpDeviceProfileResults(Device *device, const Program &program);
 
+
+
+// Proposed new APIs and changes to existing APIs -----
+
+Event CreateEvent (  ..  , .. )
+void WaitForEvents(const std::vector< std::reference_wrapper<const Event> > & events);
+
+Event EnqueueMarkerWithWaitList(CommandQueue & command_queue,
+                                 const std::vector< std::reference_wrapper<const Event> > & events);
+
+
+Event EnqueueProgramAsync(CommandQueue& cq, Program& program);
+
+void EnqueueProgram(CommandQueue& cq, Program& program);
+
+Event EnqueueWriteBufferAsync(CommandQueue& cq, Buffer& buffer, vector<u32>& src);
+
+void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& src);
+
+Event EnqueueReadBufferAsync(CommandQueue& cq, Buffer& buffer, vector<u32>& dst);
+void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& dst);
 
 }  // namespace tt_metal
 
