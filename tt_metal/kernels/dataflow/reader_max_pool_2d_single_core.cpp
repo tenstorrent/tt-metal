@@ -58,10 +58,12 @@ void kernel_main() {
     const int32_t in_cb_pagesize = get_arg_val<int32_t>(22);
     const int32_t in_cb_page_nelems_padded = get_arg_val<int32_t>(24);
     const int32_t out_w_loop_count = get_arg_val<int32_t>(25);
+    const uint32_t in_log_base_2_of_page_size = get_arg_val<uint32_t>(26);
 
     constexpr bool is_in_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(2);
     constexpr uint32_t out_nelems = get_compile_time_arg_val(3);
+    constexpr bool use_pow2 = get_compile_time_arg_val(4) == 1;
 
     constexpr uint32_t in_cb_id = tt::CB::c_in0;
     constexpr uint32_t in_scalar_cb_id = tt::CB::c_in1;
@@ -69,10 +71,15 @@ void kernel_main() {
     constexpr uint32_t TILE_HW = 1024;
 
     // ROW_MAJOR input
-    const InterleavedAddrGen<is_in_dram> s_in = {
+    const InterleavedPow2AddrGenFast<is_in_dram> s_in = {
         .bank_base_address = in_addr,
-        .page_size = in_nbytes_c
+        .log_base_2_of_page_size = in_log_base_2_of_page_size
     };
+    // const InterleavedAddrGen<is_in_dram> s_in = {
+    //     .bank_base_address = in_addr,
+    //     .page_size = in_nbytes_c
+    // };
+
 
     // Reduce scalar = 1
     cb_reserve_back(in_scalar_cb_id, 1);
@@ -122,8 +129,9 @@ void kernel_main() {
                 for (int32_t h = start_h_max; h < end_h_min; ++ h) {
                     for (int32_t w = start_w_max; w < end_w_min; ++ w) {
                         uint32_t in_hw_row_id = in_hw_row_id_base + w;
-                        uint64_t in_noc_addr = get_noc_addr(in_hw_row_id, s_in);
-                        noc_async_read(in_noc_addr, curr_in_l1_write_addr, in_nbytes_c);
+                        // uint64_t in_noc_addr = get_noc_addr(in_hw_row_id, s_in);
+                        // noc_async_read(in_noc_addr, curr_in_l1_write_addr, in_nbytes_c);
+                        s_in.noc_async_read_page(in_hw_row_id, curr_in_l1_write_addr);
                         curr_in_l1_write_addr += in_nbytes_c;
                         ++ read_rows;
                     }

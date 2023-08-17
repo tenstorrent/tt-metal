@@ -125,7 +125,9 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
     std::vector<uint32_t> reader_ct_args = {input.memory_config().buffer_type == BufferType::DRAM ? (uint) 1 : (uint) 0,
                                             out_mem_config.buffer_type == BufferType::DRAM ? (uint) 1 : (uint) 0,
                                             bf16_one_u32,
-                                            out_nelems};
+                                            out_nelems,
+                                            static_cast<uint32_t>(((in_nbytes_c & (in_nbytes_c - 1)) == 0) ? 1 : 0)};  // in_nbytes_c is power of 2
+    uint32_t in_log_base_2_of_page_size = (uint32_t) log2((float) in_nbytes_c);
     std::vector<uint32_t> reader_rt_args = {src_dram_buffer->address(),
                                             dst_dram_buffer->address(),
                                             kernel_size_h, kernel_size_w, kernel_size_hw, kernel_size_hw_padded,
@@ -136,7 +138,8 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                             in_h, in_w, input_shape[2], input_shape[3],
                                             out_ntiles_hw, out_ntiles_c,
                                             in_cb_pagesize, out_cb_pagesize,
-                                            in_cb_page_nelems_padded, out_w_loop_count};
+                                            in_cb_page_nelems_padded, out_w_loop_count,
+                                            in_log_base_2_of_page_size};
     auto reader_config = DataMovementConfig{.processor = DataMovementProcessor::RISCV_1,
                                             .noc = NOC::RISCV_1_default,
                                             .compile_args = reader_ct_args};
@@ -250,6 +253,11 @@ void MaxPool::validate(const std::vector<Tensor> &input_tensors) const {
     TT_ASSERT(input.buffer() != nullptr , "Operands to reshape need to be allocated in buffers on device!");
     TT_ASSERT(input.dtype() == DataType::BFLOAT16, "Only BFLOAT16 supported for now");
     TT_ASSERT(input.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR supported for now");
+
+    // NOTE: This is not a hard requirement. If need to support non-power-of-2, simply change the address generator in reader to generic one.
+    uint32_t in_nbytes_c = (input.shape()[3]) * (input.dtype() == DataType::BFLOAT16 ? 2 : 1);
+    bool is_pow2 = (in_nbytes_c & (in_nbytes_c - 1)) == 0;
+    TT_ASSERT(is_pow2, "Row size (nchannels * bytes = {}) should be power of 2 ({}).", in_nbytes_c, is_pow2);
 
     TT_ASSERT(2 * pad_h_ < kernel_size_h_ && 2 * pad_w_ < kernel_size_w_,
               "Total padding along a dim should be less than kernel/window size along same dim");
