@@ -316,6 +316,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_erfc,
         "pytorch_op": pytorch_ops.erfc,
     },
+    "eltwise-subalpha": {
+        "tt_lib_op": tt_lib_ops.eltwise_subalpha,
+        "pytorch_op": pytorch_ops.subalpha,
+    },
     "eltwise-hardsigmoid": {
         "tt_lib_op": tt_lib_ops.eltwise_hardsigmoid,
         "pytorch_op": pytorch_ops.hardsigmoid,

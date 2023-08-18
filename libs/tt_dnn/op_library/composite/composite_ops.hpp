@@ -127,6 +127,9 @@ atan2(y, x) =   x < 0 and y < 0 atan(y/x) - pi
 */
 Tensor atan2(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+//subalpha(input,other,alpha)=input-alpha*other
+Tensor subalpha(const Tensor& input_a, const Tensor& input_b, float alpha, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 //lerp(input, end, weight) = start + weight * (end - start), weight is float
 Tensor lerp(const Tensor& input_a, const Tensor& input_b, float value, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 

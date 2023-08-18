@@ -521,6 +521,8 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.xlogy
 
+.. autofunction:: tt_lib.tensor.subalpha
+
 .. autofunction:: tt_lib.tensor.addcmul
 
 .. autofunction:: tt_lib.tensor.addcdiv

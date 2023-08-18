@@ -655,6 +655,37 @@ def eltwise_lerp_ternary(x, y, z, *args, device, dtype, layout, on_device, **kwa
 
 
 @setup_host_and_device
+def eltwise_subalpha(x, y, *args, alpha, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    t1 = ttl.tensor.Tensor(
+        y.reshape(-1).tolist(),
+        y.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t1 = t1.to(layout)
+    if on_device:
+        t1 = t1.to(device)
+
+    t2 = ttl.tensor.subalpha(t0, t1, alpha)
+
+    output = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+
+    return output
+
+
+@setup_host_and_device
 def eltwise_heaviside(x, *args, value, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),

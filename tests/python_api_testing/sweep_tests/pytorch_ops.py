@@ -439,6 +439,10 @@ def ldexp(x, y, *args, **kwargs):
     return torch.ldexp(x, y)
 
 
+def subalpha(x, y, *args, alpha, **kwargs):
+    return torch.sub(x, y, alpha=alpha)
+
+
 def lte(x, y, *args, **kwargs):
     return x <= y
 

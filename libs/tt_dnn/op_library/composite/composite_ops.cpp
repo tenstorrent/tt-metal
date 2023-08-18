@@ -489,6 +489,16 @@ Tensor ldexp(const Tensor &input_a, const Tensor &input_b, const MemoryConfig& o
     return operation::decorate_as_composite(__func__, _ldexp)(input_a, input_b, output_mem_config);
 }
 
+//subalpha(input,other,alpha)=input-alpha*other
+Tensor _subalpha(const Tensor& input_a, const Tensor& input_b, float alpha, const MemoryConfig& output_mem_config) {
+    Tensor result = mac(input_b, neg(full_like(input_b, alpha), output_mem_config), input_a, output_mem_config);
+    return result;
+}
+Tensor subalpha(const Tensor& input_a, const Tensor& input_b, float alpha, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _subalpha)(input_a, input_b, alpha, output_mem_config);
+}
+
 //addcmul(input,tensor1,tensor2,value)=input+value×tensor1×tensor2
 Tensor _addcmul(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c, float value, const MemoryConfig& output_mem_config) {
     Tensor t_value = mk_tiled_scalar(value);

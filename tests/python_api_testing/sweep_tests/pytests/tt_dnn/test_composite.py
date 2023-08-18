@@ -74,6 +74,7 @@ def custom_compare(*args, **kwargs):
                 "atanh",
                 "atan2",
                 "ldexp",
+                "subalpha",
             ),
             ([[1, 1, 32, 32]], [[1, 3, 320, 64]]),
             (0,),
@@ -118,7 +119,7 @@ def test_run_eltwise_composite_test(
     num_inputs = 1
     if fn in ["mac", "addcmul", "addcdiv", "lerp_ternary"]:
         num_inputs = 3
-    elif fn in ["hypot", "min", "max", "lerp_binary", "xlogy", "atan2", "lerp_binary", "atan2", "ldexp"]:
+    elif fn in ["hypot", "min", "max", "lerp_binary", "xlogy", "atan2", "lerp_binary", "atan2", "ldexp", "subalpha"]:
         num_inputs = 2
 
     input_shapes = input_shapes * num_inputs
@@ -137,6 +138,8 @@ def test_run_eltwise_composite_test(
         test_args.update({"value": np.random.randint(1, 100)})
     elif fn in ["lerp_binary"]:
         test_args.update({"weight": np.random.randint(1, 100)})
+    elif fn in ["subalpha"]:
+        test_args.update({"alpha": np.random.randint(1, 100)})
     run_single_pytorch_test(
         "eltwise-%s" % (fn),
         input_shapes,
