@@ -92,6 +92,8 @@ void kernel_main() {
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
     constexpr uint32_t cb_id_weight = get_compile_time_arg_val(2);
     constexpr uint32_t log_2_of_output_row_size = get_compile_time_arg_val(3);
+
+    //DPRINT << "cb id weight " << cb_id_weight << ENDL();
     // NOTE: Row major layout only supports bfp16
     // TT_ASSERT(out_df != DataFormat::Bfp8_b);
     const DataFormat out_df = get_dataformat(cb_id_out0);
@@ -106,41 +108,51 @@ void kernel_main() {
         .bank_base_address = dst_addr,
         .log_base_2_of_page_size = log_2_of_output_row_size
     };
+
     const uint32_t weight_tile_nbytes = get_tile_size(cb_id_weight);
     constexpr uint32_t tile_size_pow2_exponent = 11;
     const InterleavedPow2AddrGen<true> s_weight = {
         .bank_base_address = weight_addr_dram_base,
         .log_base_2_of_page_size = tile_size_pow2_exponent
     };
-    //DPRINT << "Going to read all weights " << ENDL();
-    uint32_t weight_start_tile_id = 0;
-    // read weight blocks inner dim
-    read_weight_blocks_inner_h_dim(cb_id_weight,
-            num_blocks_weight_h,
-            weight_block_num_tiles,
-            weight_start_tile_id,
-            weight_block_height_ntiles,
-            weight_block_width_ntiles,
-            s_weight,
-            weight_tile_nbytes,
-            weight_stride_h,
-            weight_next_block_stride_h);
-    //DPRINT << "Read all weights " << ENDL();
 
+    for(uint32_t b = 0; b < batch; ++b) {
+        for(uint32_t block_h = 0; block_h < num_blocks_h; block_h++) {
+            uint32_t block_row_offset = 0;
+            // Reset weight start tile index
+            uint32_t weight_start_tile_id = 0;
+            for(uint32_t block_w = 0; block_w < num_blocks_w; block_w++) {
 
-    for(uint32_t block_h = 0; block_h < num_blocks_h; block_h++) { // num_blocks_w == 1
-        uint32_t block_row_offset = 0;
-        uint32_t current_block_row_size_unpadded = block_row_size;
-        write_tiles_in_output_block(cb_id_out0,
-                block_height_ntiles,
-                block_width_ntiles,
-                block_start_row_id,
-                block_row_offset,
-                block_row_size,
-                current_block_row_size_unpadded, // padding is only in the last block
-                num_output_rows_unpadded,
-                s);
-        block_row_offset += block_row_size;
-        block_start_row_id += num_rows_block;
-    } // for num_blocks_h
+                // read weight blocks inner dim
+                read_weight_blocks_inner_h_dim(cb_id_weight,
+                        num_blocks_weight_h,
+                        weight_block_num_tiles,
+                        weight_start_tile_id,
+                        weight_block_height_ntiles,
+                        weight_block_width_ntiles,
+                        s_weight,
+                        weight_tile_nbytes,
+                        weight_stride_h,
+                        weight_next_block_stride_h);
+                // Increment weight start tile id for next block in width dim
+                weight_start_tile_id += weight_next_block_stride_w;
+
+                uint32_t current_block_row_size_unpadded = block_row_size;
+                if(block_w == (num_blocks_w - 1)) {
+                    current_block_row_size_unpadded = last_block_row_size_unpadded;
+                }
+                write_tiles_in_output_block(cb_id_out0,
+                        block_height_ntiles,
+                        block_width_ntiles,
+                        block_start_row_id,
+                        block_row_offset,
+                        block_row_size,
+                        current_block_row_size_unpadded, // padding is only in the last block
+                        num_output_rows_unpadded,
+                        s);
+                block_row_offset += block_row_size;
+            } // for num_blocks_w
+            block_start_row_id += num_rows_block;
+        } // for num_blocks_h
+    } // for batch
 }

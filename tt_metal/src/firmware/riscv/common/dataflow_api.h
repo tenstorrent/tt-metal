@@ -666,6 +666,47 @@ struct InterleavedPow2AddrGenFast {
         NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_RD_CMD_BUF, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
         noc_reads_num_issued[loading_noc] += 1;
     }
+
+    FORCE_INLINE
+    void noc_async_write_page(const uint32_t id, uint32_t src_addr, const uint32_t write_size_bytes, const uint32_t offset = 0) const {
+        uint32_t dest_addr;
+        uint32_t dest_noc_xy;
+
+        if constexpr (DRAM) {
+#ifdef IS_NOT_POW2_NUM_DRAM_BANKS
+            uint32_t bank_id = umodsi3_const_divisor<NUM_DRAM_BANKS>(id);
+            dest_addr = (udivsi3_const_divisor<NUM_DRAM_BANKS>(id) << this->log_base_2_of_page_size) + this->bank_base_address + offset;
+            dest_addr += bank_to_dram_offset[bank_id];
+            dest_noc_xy = dram_bank_to_noc_xy[bank_id];
+#else
+            uint32_t bank_id = id & (NUM_DRAM_BANKS - 1);
+            dest_addr = ((id >> LOG_BASE_2_OF_NUM_DRAM_BANKS) << this->log_base_2_of_page_size) + this->bank_base_address + offset;
+            dest_addr += bank_to_dram_offset[bank_id];
+            dest_noc_xy = dram_bank_to_noc_xy[bank_id];
+#endif
+        } else {
+            uint32_t bank_id = id & (NUM_L1_BANKS - 1);
+            dest_addr = ((id >> LOG_BASE_2_OF_NUM_L1_BANKS) << this->log_base_2_of_page_size) + this->bank_base_address + offset;
+            dest_addr += bank_to_l1_offset[bank_id];
+            dest_noc_xy = l1_bank_to_noc_xy[bank_id];
+        }
+
+        while (!ncrisc_noc_fast_write_ok(loading_noc, NCRISC_WR_REG_CMD_BUF))
+            ;
+        uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC |
+                                 NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) | 0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
+                                 0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
+                                 NOC_CMD_RESP_MARKED;
+
+        NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_WR_REG_CMD_BUF, NOC_CTRL, noc_cmd_field);
+        NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_WR_REG_CMD_BUF, NOC_TARG_ADDR_LO, src_addr);
+        NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_WR_REG_CMD_BUF, NOC_RET_ADDR_LO, dest_addr);  // (uint32_t)dest_addr
+        NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_WR_REG_CMD_BUF, NOC_RET_ADDR_MID, dest_noc_xy);   // dest_addr >> 32
+        NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_WR_REG_CMD_BUF, NOC_AT_LEN_BE,  write_size_bytes);  // len_bytes
+        NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_WR_REG_CMD_BUF, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+        noc_nonposted_writes_num_issued[loading_noc] += 1;
+        noc_nonposted_writes_acked[loading_noc] += 1;  // num_dests
+    }
 };
 
 template <bool DRAM>
