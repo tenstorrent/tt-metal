@@ -47,3 +47,4 @@ pytest $TT_METAL_HOME/tests/python_api_testing/models/resnet/test_resnet18.py
 # Falcon tests
 pytest $TT_METAL_HOME/tests/python_api_testing/models/falcon/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py -k "seq_len_128 and in0_BFLOAT16-in1_BFLOAT8_B-out_BFLOAT16-weights_DRAM"
 pytest $TT_METAL_HOME/tests/python_api_testing/models/falcon/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py -k "seq_len_512 and in0_BFLOAT16-in1_BFLOAT8_B-out_BFLOAT16-weights_DRAM"
+pytest $TT_METAL_HOME/tests/python_api_testing/models/falcon/tests/unit_tests/test_falcon_attn_matmul.py

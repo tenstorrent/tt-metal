@@ -56,6 +56,7 @@ TT_DNN_SRCS = \
 	libs/tt_dnn/op_library/transformer_tms/transformer_tms.cpp \
 	libs/tt_dnn/op_library/transformer_tms/multi_core_split_fused_qkv_and_split_heads/multi_core_split_fused_qkv_and_split_heads.cpp \
 	libs/tt_dnn/op_library/transformer_tms/multi_core_concatenate_heads/multi_core_concatenate_heads.cpp \
+	libs/tt_dnn/op_library/transformer_tms/multi_core_attn_matmul/multi_core_attn_matmul.cpp \
 	libs/tt_dnn/op_library/run_operation.cpp \
 	libs/tt_dnn/op_library/split/split_tiled.cpp \
 	libs/tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.cpp \

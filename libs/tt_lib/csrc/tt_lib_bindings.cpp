@@ -2463,7 +2463,6 @@ void TensorModule(py::module &m_tensor) {
         Perform a falcon_lm_head non-batched matmul ``A x B`` with two tensors. This invokes the MULTI_CORE matmul parallelization. This parallelization does not support bias option yet.
     )doc");
 
-
     // Custom Generic NLP TMs
     // TODO: Uplift nlp_create_qkv_heads to support generic qkv num_heads and head_dim
     // This op should support arbitrary B and S divisible by 32 on DRAM; on L1, might error out due to space
