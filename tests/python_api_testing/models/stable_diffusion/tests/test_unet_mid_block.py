@@ -25,7 +25,7 @@ def test_run_unet_mid_block_real_input_inference(model_location_generator):
     # synthesize the input
     base_address = 'down_blocks.3'
 
-    dir_path = model_location_generator("tt_dnn-models/StableDiffusion/tensor_files")
+    dir_path = model_location_generator("tensor_files", model_subdir="StableDiffusion")
     attention_mask_path = f"{dir_path}/UNetMidBlock2DCrossAttn_inp__attention_mask.pt"
     emb_path = f"{dir_path}/UNetMidBlock2DCrossAttn_inp__emb.pt"
     sample_path = f"{dir_path}/UNetMidBlock2DCrossAttn_inp__sample.pt"

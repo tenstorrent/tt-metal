@@ -8,7 +8,6 @@ f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
-from tests.python_api_testing.models.conftest import model_location_generator_
 import time
 import tt_lib as ttl
 from python_api_testing.models.bert.embeddings import PytorchEmbeddings
@@ -80,20 +79,15 @@ class TtBertForQuestionAnswering(torch.nn.Module):
 
         return hidden_states
 
-def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc, model_location_generator, PERF_CNT):
+def run_bert_question_and_answering_inference(model_version, batch, seq_len, real_input, attention_mask, token_type_ids, pcc, model_location_generator, PERF_CNT):
 
     torch.manual_seed(1234)
 
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
 
-
-    if on_weka:
-        model_name = str(model_location_generator("tt_dnn-models/Bert/BertForQuestionAnswering/models/") / model_version)
-        tokenizer_name = str(model_location_generator("tt_dnn-models/Bert/BertForQuestionAnswering/tokenizers/") / model_version)
-    else:
-        model_name = model_version
-        tokenizer_name = model_version
+    model_name = str(model_location_generator(model_version, model_subdir = "Bert"))
+    tokenizer_name = str(model_location_generator(model_version, model_subdir = "Bert"))
 
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
     hugging_face_reference_model.eval()
@@ -215,22 +209,17 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
     assert profiler.get("whole_model") < 61.0
     assert passing_start and passing_end, f"At least one start or end logits don't meet PCC requirement {pcc}"
 
-def test_bert_large_loop_the_model():
+def test_bert_large_loop_the_model(model_location_generator):
 
     model_version = "phiyodr/bert-large-finetuned-squad2"
     batch = 1
     seq_len = 384
-    on_weka = True
     real_input = True
     attention_mask = True
     token_type_ids = True
     pcc = 0.98
-    model_location_generator = model_location_generator_
     PERF_CNT = 20
 
     disable_persistent_kernel_cache()
 
-    run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc, model_location_generator, PERF_CNT)
-
-if __name__ == "__main__":
-    test_bert_large_loop_the_model()
+    run_bert_question_and_answering_inference(model_version, batch, seq_len, real_input, attention_mask, token_type_ids, pcc, model_location_generator, PERF_CNT)

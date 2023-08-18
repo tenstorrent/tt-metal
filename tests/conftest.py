@@ -29,14 +29,22 @@ def function_level_defaults(reset_seeds):
 
 @pytest.fixture(scope="session")
 def model_location_generator():
-    def model_location_generator_(rel_path):
-        internal_weka_path = Path("/mnt/MLPerf")
-        has_internal_weka = (internal_weka_path / "bit_error_tests").exists()
-
+    def model_location_generator_(model_version, model_subdir=""):
+        model_folder = Path("tt_dnn-models") / model_subdir
+        internal_weka_path = (
+            Path("/mnt/MLPerf") / model_folder / model_version
+        )
+        has_internal_weka = internal_weka_path.exists()
+        internal_cache_path = (
+            Path("/opt/tt-metal-models") / model_folder / model_version
+        )
+        has_internal_cache = internal_cache_path.exists()
         if has_internal_weka:
-            return Path("/mnt/MLPerf") / rel_path
+            return internal_weka_path
+        elif has_internal_cache:
+            return internal_cache_path
         else:
-            return Path("/opt/tt-metal-models") / rel_path
+            return model_version
 
     return model_location_generator_
 
@@ -196,13 +204,9 @@ def reset_tensix(request, silicon_arch_name):
     if test_failed:
         logger.debug("Test failed - resetting with smi")
         if silicon_arch_name == "grayskull":
-            result = run_process_and_get_result(
-                "tt-smi -tr all"
-            )
+            result = run_process_and_get_result("tt-smi -tr all")
         elif silicon_arch_name == "wormhole_b0":
-            result = run_process_and_get_result(
-                "tt-smi -wr all"
-            )
+            result = run_process_and_get_result("tt-smi -wr all")
         else:
             raise Exception(f"Unrecognized arch for tensix-reset: {silicon_arch_name}")
         assert result.returncode == 0, "Tensix reset script raised error"
@@ -222,6 +226,7 @@ def clear_compile_cache():
     import tt_lib as ttl
 
     ttl.device.DisablePersistentKernelCache()
+
 
 @pytest.fixture(autouse=True)
 def reset_default_device():

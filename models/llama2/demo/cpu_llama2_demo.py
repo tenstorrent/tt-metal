@@ -2,7 +2,6 @@ import sys
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from models.llama2.llama2_utils import get_logits_processor
-from tests.python_api_testing.models.conftest import model_location_generator_
 
 from loguru import logger
 import pytest
@@ -16,9 +15,9 @@ Mention the large language model based product mentioned in the paragraph above:
     "prompt, num_words",
     ((prompt, 30),),
 )
-def test_cpu_demo(prompt, num_words):
+def test_cpu_demo(prompt, num_words, model_location_generator):
     # set parameters =================================================================
-    llama2_path = str(model_location_generator_("tt_dnn-models/llama-2/llama-2-7b"))
+    llama2_path = str(model_location_generator("llama-2-7b", model_subdir="llama-2"))
 
     # load llama pytorch model =======================================================
     tokenizer = AutoTokenizer.from_pretrained(llama2_path)

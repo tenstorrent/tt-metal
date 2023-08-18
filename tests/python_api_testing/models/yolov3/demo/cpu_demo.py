@@ -31,8 +31,8 @@ def test_cpu_demo(model_location_generator):
     torch.manual_seed(1234)
 
     # Get data and model weights
-    model_path = model_location_generator("tt_dnn-models/Yolo/models/")
-    data_path = model_location_generator("tt_dnn-models/Yolo/data/")
+    model_path = model_location_generator("models", model_subdir = "Yolo")
+    data_path = model_location_generator("data", model_subdir = "Yolo")
 
     data_image_path = str(data_path / "images")
     data_coco = str(data_path / "coco128.yaml")

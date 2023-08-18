@@ -15,7 +15,6 @@ from loguru import logger
 from torchvision import models
 from transformers import AutoImageProcessor
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
-from tests.python_api_testing.models.conftest import model_location_generator_
 import pytest
 import tt_lib as ttl
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
@@ -38,19 +37,19 @@ import pytest
 from loguru import logger
 
 BATCH_SIZE = 8
-model_name = "phiyodr/bert-large-finetuned-squad2"
-tokenizer_name = "phiyodr/bert-large-finetuned-squad2"
+model_version = "phiyodr/bert-large-finetuned-squad2"
 comments = "Large"
 seq_len = 384
 real_input = True
 attention_mask = True
 token_type_ids = True
 model_config_str = "MIXED_PRECISION_BATCH8"
-model_location_generator = model_location_generator_
 
 
-def run_perf_bert15(expected_inference_time, expected_compile_time):
+def run_perf_bert15(expected_inference_time, expected_compile_time, model_location_generator):
     model_config = get_model_config(model_config_str)
+    model_name = str(model_location_generator(model_version, model_subdir = "Bert"))
+    tokenizer_name = str(model_location_generator(model_version, model_subdir = "Bert"))
 
     disable_persistent_kernel_cache()
     first_key = "first_iter"
@@ -130,8 +129,8 @@ def run_perf_bert15(expected_inference_time, expected_compile_time):
     "expected_inference_time, expected_compile_time",
     ([0.15, 10],),
 )
-def test_perf_virtual_machine(use_program_cache, expected_inference_time, expected_compile_time):
-    run_perf_bert15(expected_inference_time, expected_compile_time)
+def test_perf_virtual_machine(use_program_cache, expected_inference_time, expected_compile_time, model_location_generator):
+    run_perf_bert15(expected_inference_time, expected_compile_time, model_location_generator)
 
 
 @pytest.mark.models_performance_bare_metal
@@ -139,5 +138,5 @@ def test_perf_virtual_machine(use_program_cache, expected_inference_time, expect
     "expected_inference_time, expected_compile_time",
     ([0.08, 8.5],),
 )
-def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_compile_time):
-    run_perf_bert15(expected_inference_time, expected_compile_time)
+def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_compile_time, model_location_generator):
+    run_perf_bert15(expected_inference_time, expected_compile_time, model_location_generator)

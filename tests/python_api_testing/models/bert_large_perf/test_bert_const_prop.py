@@ -163,7 +163,6 @@ def run_bert_question_and_answering_inference(
     model_version,
     batch,
     seq_len,
-    on_weka,
     real_input,
     attention_mask,
     token_type_ids,
@@ -177,22 +176,8 @@ def run_bert_question_and_answering_inference(
     ttl.device.InitializeDevice(device)
 
 
-    if on_weka:
-        model_name = str(
-            model_location_generator(
-                "tt_dnn-models/Bert/BertForQuestionAnswering/models/"
-            )
-            / model_version
-        )
-        tokenizer_name = str(
-            model_location_generator(
-                "tt_dnn-models/Bert/BertForQuestionAnswering/tokenizers/"
-            )
-            / model_version
-        )
-    else:
-        model_name = model_version
-        tokenizer_name = model_version
+    model_name = str(model_location_generator(model_version, model_subdir = "Bert"))
+    tokenizer_name = str(model_location_generator(model_version, model_subdir = "Bert"))
 
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(
         model_name, torchscript=False
@@ -350,7 +335,6 @@ def test_bert_constant_prop(model_location_generator):
     model_version = "phiyodr/bert-large-finetuned-squad2"
     batch = 1
     seq_len = 384
-    on_weka = True
     real_input = True
     attention_mask = True
     token_type_ids = True
@@ -363,7 +347,6 @@ def test_bert_constant_prop(model_location_generator):
         model_version,
         batch,
         seq_len,
-        on_weka,
         real_input,
         attention_mask,
         token_type_ids,

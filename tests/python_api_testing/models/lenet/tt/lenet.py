@@ -174,7 +174,7 @@ def _lenet5(num_classes, device, state_dict) -> TtLeNet5:
 
 
 def lenet5(num_classes, device, model_location_generator) -> TtLeNet5:
-    pt_model_path = model_location_generator("tt_dnn-models/LeNet/model.pt")
+    pt_model_path = model_location_generator("model.pt", model_subdir = "LeNet")
     _, state_dict = load_torch_lenet(pt_model_path, num_classes)
     model = _lenet5(num_classes, device, state_dict)
     return model

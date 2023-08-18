@@ -21,7 +21,7 @@ def test_run_cross_attn_up_block_real_input_inference(index, model_location_gene
     unet.eval()
     state_dict = unet.state_dict()
 
-    dir_path = model_location_generator("tt_dnn-models/StableDiffusion/tensor_files")
+    dir_path = model_location_generator("tensor_files", model_subdir="StableDiffusion")
     attr_path = f"{dir_path}/CrossAttnUpBlock2D_inp__attr__block_{index}.pt"
     attention_mask_path = f"{dir_path}/CrossAttnUpBlock2D_inp__attention_mask__block_{index}.pt"
     cross_attn_kwargs_path = f"{dir_path}/CrossAttnUpBlock2D_inp__cross_attention_kwargs__block_{index}.pt"

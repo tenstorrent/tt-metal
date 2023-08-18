@@ -170,7 +170,6 @@ def run_bert_question_and_answering_inference(
     model_version,
     batch,
     seq_len,
-    on_weka,
     real_input,
     attention_mask,
     token_type_ids,
@@ -184,22 +183,8 @@ def run_bert_question_and_answering_inference(
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
 
-    if on_weka:
-        model_name = str(
-            model_location_generator(
-                "tt_dnn-models/Bert/BertForQuestionAnswering/models/"
-            )
-            / model_version
-        )
-        tokenizer_name = str(
-            model_location_generator(
-                "tt_dnn-models/Bert/BertForQuestionAnswering/tokenizers/"
-            )
-            / model_version
-        )
-    else:
-        model_name = model_version
-        tokenizer_name = model_version
+    model_name = str(model_location_generator(model_version, model_subdir = "Bert"))
+    tokenizer_name = str(model_location_generator(model_version, model_subdir = "Bert"))
 
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(
         model_name, torchscript=False
@@ -389,12 +374,11 @@ def run_bert_question_and_answering_inference(
     ],
 )
 @pytest.mark.parametrize(
-    "model_version, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc",
+    "model_version, seq_len, real_input, attention_mask, token_type_ids, pcc",
     (
         (
             "phiyodr/bert-large-finetuned-squad2",
             384,
-            True,
             True,
             True,
             True,
@@ -407,7 +391,6 @@ def test_bert_batch_dram(
     model_version,
     batch,
     seq_len,
-    on_weka,
     real_input,
     attention_mask,
     token_type_ids,
@@ -434,7 +417,6 @@ def test_bert_batch_dram(
         model_version,
         batch,
         seq_len,
-        on_weka,
         real_input,
         attention_mask,
         token_type_ids,
@@ -465,12 +447,11 @@ def test_bert_batch_dram(
     ],
 )
 @pytest.mark.parametrize(
-    "model_version, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc",
+    "model_version, seq_len, real_input, attention_mask, token_type_ids, pcc",
     (
         (
             "phiyodr/bert-large-finetuned-squad2",
             384,
-            True,
             True,
             True,
             True,
@@ -484,7 +465,6 @@ def test_bert_batch_dram_with_program_cache(
     model_version,
     batch,
     seq_len,
-    on_weka,
     real_input,
     attention_mask,
     token_type_ids,
@@ -511,7 +491,6 @@ def test_bert_batch_dram_with_program_cache(
         model_version,
         batch,
         seq_len,
-        on_weka,
         real_input,
         attention_mask,
         token_type_ids,

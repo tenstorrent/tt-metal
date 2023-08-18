@@ -29,7 +29,7 @@ def test_gs_demo(mnist_sample_input, model_location_generator):
         tt_lib.device.SetDefaultDevice(device)
 
 
-        tt_lenet = lenet5(num_classes, device, host, model_location_generator)
+        tt_lenet = lenet5(num_classes, device, model_location_generator)
 
         tt_image = tt_lib.tensor.Tensor(
             image.reshape(-1).tolist(),

@@ -26,7 +26,7 @@ def test_run_upblock_real_input_inference(model_location_generator):
        # synthesize the input
     base_address = 'up_blocks.0'
 
-    dir_path = model_location_generator("tt_dnn-models/StableDiffusion/tensor_files")
+    dir_path = model_location_generator("tensor_files", model_subdir="StableDiffusion")
 
     attr_path = f"{dir_path}/UpBlock2D_inp__attr.pt"
     emb_path = f"{dir_path}/UpBlock2D_inp__emb.pt"

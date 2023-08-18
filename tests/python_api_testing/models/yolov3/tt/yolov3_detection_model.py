@@ -379,8 +379,8 @@ def _yolov3_fused_model(cfg_path, state_dict, base_address, device) -> TtDetecti
 
 def yolov3_fused_model(device, model_location_generator) -> TtDetectionModel:
     # Load yolo
-    model_path = model_location_generator("tt_dnn-models/Yolo/models/")
-    data_path = model_location_generator("tt_dnn-models/Yolo/data/")
+    model_path = model_location_generator("models", model_subdir = "Yolo")
+    data_path = model_location_generator("data", model_subdir = "Yolo")
     cfg_path = str(data_path / "yolov3.yaml")
     data_coco = str(data_path / "coco128.yaml")
     weights_loc = str(model_path / "yolov3.pt")

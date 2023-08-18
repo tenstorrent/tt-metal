@@ -76,20 +76,16 @@ class TtBertForQuestionAnswering(TtBertShared):
         encoder_output = super().forward(input_ids, attention_mask, token_type_ids)
         return self.qa_linear(encoder_output)
 
-def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc, model_location_generator):
+def run_bert_question_and_answering_inference(model_version, batch, seq_len, real_input, attention_mask, token_type_ids, pcc, model_location_generator):
 
     torch.manual_seed(1234)
 
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     ttl.device.InitializeDevice(device)
 
+    model_name = str(model_location_generator(model_version, model_subdir = "Bert"))
+    tokenizer_name = str(model_location_generator(model_version, model_subdir = "Bert"))
 
-    if on_weka:
-        model_name = str(model_location_generator("tt_dnn-models/Bert/BertForQuestionAnswering/models/") / model_version)
-        tokenizer_name = str(model_location_generator("tt_dnn-models/Bert/BertForQuestionAnswering/tokenizers/") / model_version)
-    else:
-        model_name = model_version
-        tokenizer_name = model_version
 
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
     hugging_face_reference_model.eval()
@@ -205,19 +201,14 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, on_
     # assert start_logit_match and end_logit_match, "At least one of start or end logits don't match to an absolute difference of 0.1"
 
 @pytest.mark.parametrize(
-    "model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc",
+    "model_version, batch, seq_len, real_input, attention_mask, token_type_ids, pcc",
     (
-        ("mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, True, True, True, 0.99),
-        ("phiyodr/bert-base-finetuned-squad2", 1, 128, True, True, True, True, 0.99),
-        ("phiyodr/bert-large-finetuned-squad2", 1, 384, True, True, True, True, 0.98) # Placeholder PCC until issues are resolved
+        ("mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, True, True, 0.99),
+        ("phiyodr/bert-base-finetuned-squad2", 1, 128, True, True, True, 0.99),
+        ("phiyodr/bert-large-finetuned-squad2", 1, 384, True, True, True, 0.98) # Placeholder PCC until issues are resolved
     ),
 )
-def test_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc, model_location_generator):
+def test_bert_question_and_answering_inference(model_version, batch, seq_len, real_input, attention_mask, token_type_ids, pcc, model_location_generator):
 
     # enable_persistent_kernel_cache()
-    run_bert_question_and_answering_inference(model_version, batch, seq_len, on_weka, real_input, attention_mask, token_type_ids, pcc, model_location_generator)
-
-if __name__ == "__main__":
-    # enable_persistent_kernel_cache()
-    #run_bert_question_and_answering_inference("mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, True, 0.99)
-    run_bert_question_and_answering_inference("phiyodr/bert-large-finetuned-squad2", 1, 128, True, True, 0.85) # Placeholder PCC until issues are resolved
+    run_bert_question_and_answering_inference(model_version, batch, seq_len, real_input, attention_mask, token_type_ids, pcc, model_location_generator)

@@ -15,7 +15,7 @@ from python_api_testing.models.yolov7.reference.models.experimental import attem
 
 def get_yolov7_fused_cpu_model(model_location_generator):
     # Get model weights
-    model_path = model_location_generator("tt_dnn-models/Yolo/models/")
+    model_path = model_location_generator("models", model_subdir = "Yolo")
     weights = str(model_path / "yolov7.pt")
 
     # Load model

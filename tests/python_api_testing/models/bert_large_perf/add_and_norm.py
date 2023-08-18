@@ -53,17 +53,14 @@ class PytorchAddAndNormModel(torch.nn.Module):
         out = self.layernorm(a + b)
         return out
 
-def run_add_and_norm_inference(model_version, batch, seq_len, on_weka, pcc, model_location_generator):
+def run_add_and_norm_inference(model_version, batch, seq_len, pcc, model_location_generator):
 
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     # Initialize the device
     ttl.device.InitializeDevice(device)
 
 
-    if on_weka:
-        model_name = str(model_location_generator("tt_dnn-models/Bert/BertForQuestionAnswering/models/") / model_version)
-    else:
-        model_name = model_version
+    model_name = str(model_location_generator(model_version, model_subdir = "Bert"))
 
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
     config = hugging_face_reference_model.config
@@ -100,17 +97,13 @@ def run_add_and_norm_inference(model_version, batch, seq_len, on_weka, pcc, mode
     # assert np.allclose(pytorch_out.detach().numpy(), tt_out.numpy(), 1e-5, 0.17)
 
 @pytest.mark.parametrize(
-    "model_version, batch, seq_len, on_weka,  pcc",
+    "model_version, batch, seq_len, pcc",
     (
-        ("mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, 0.99),
-        ("phiyodr/bert-base-finetuned-squad2", 1, 128, True, 0.99),
-        ("phiyodr/bert-large-finetuned-squad2", 1, 384, True, 0.99)
+        ("mrm8488/bert-tiny-finetuned-squadv2", 1, 128, 0.99),
+        ("phiyodr/bert-base-finetuned-squad2", 1, 128, 0.99),
+        ("phiyodr/bert-large-finetuned-squad2", 1, 384, 0.99)
     ),
 )
-def test_add_and_norm_inference(model_version, batch, seq_len, on_weka, pcc, model_location_generator):
+def test_add_and_norm_inference(model_version, batch, seq_len, pcc, model_location_generator):
 
-    run_add_and_norm_inference(model_version, batch, seq_len, on_weka, pcc, model_location_generator)
-
-
-if __name__ == "__main__":
-    run_add_and_norm_inference("mrm8488/bert-tiny-finetuned-squadv2", 1, 128, True, 0.99)
+    run_add_and_norm_inference(model_version, batch, seq_len, pcc, model_location_generator)

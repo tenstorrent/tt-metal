@@ -194,21 +194,13 @@ class PytorchBertEncoder(torch.nn.Module):
 
 
 def run_bert_encoder_inference(
-    model_version, batch, seq_len, on_weka, pcc, model_config, model_location_generator
+    model_version, batch, seq_len, pcc, model_config, model_location_generator
 ):
     device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
     # Initialize the device
     ttl.device.InitializeDevice(device)
 
-    if on_weka:
-        model_name = str(
-            model_location_generator(
-                "tt_dnn-models/Bert/BertForQuestionAnswering/models/"
-            )
-            / model_version
-        )
-    else:
-        model_name = model_version
+    model_name = str(model_location_generator(model_version, model_subdir = "Bert"))
 
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(
         model_name, torchscript=False
@@ -304,15 +296,14 @@ def run_bert_encoder_inference(
     ],
 )
 @pytest.mark.parametrize(
-    "model_version, seq_len, on_weka, pcc",
-    (("phiyodr/bert-large-finetuned-squad2", 384, True, 0.99),),
+    "model_version, seq_len, pcc",
+    (("phiyodr/bert-large-finetuned-squad2", 384, 0.99),),
     ids=["BERT_LARGE"],
 )
 def test_bert_encoder_inference(
     model_version,
     batch,
     seq_len,
-    on_weka,
     pcc,
     model_config_str,
     model_location_generator,
@@ -329,7 +320,6 @@ def test_bert_encoder_inference(
         model_version,
         batch,
         seq_len,
-        on_weka,
         pcc,
         model_config,
         model_location_generator,

@@ -34,7 +34,7 @@ def test_lenet_inference(
 
 
         # Initialize Torch model
-        pt_model_path = model_location_generator("tt_dnn-models/LeNet/model.pt")
+        pt_model_path = model_location_generator("model.pt", model_subdir = "LeNet")
         torch_LeNet, _ = load_torch_lenet(pt_model_path, num_classes)
 
         # Initialize TT model

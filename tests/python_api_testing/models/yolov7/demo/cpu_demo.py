@@ -42,7 +42,7 @@ def test_cpu_demo(model_location_generator):
     torch.manual_seed(1234)
     logger.info(file_path)
     # Get data
-    data_path = model_location_generator("tt_dnn-models/Yolo/data/")
+    data_path = model_location_generator("data", model_subdir = "Yolo")
 
     data_image_path = str(data_path / "images/horses.jpg")
     data_coco = str(data_path / "coco128.yaml")
@@ -55,7 +55,7 @@ def test_cpu_demo(model_location_generator):
     set_logging()
 
     # Load model
-    model_path = model_location_generator("tt_dnn-models/Yolo/models/")
+    model_path = model_location_generator("models", model_subdir = "Yolo")
     weights = str(model_path / "yolov7.pt")
 
     # Load model

@@ -28,7 +28,7 @@ def test_run_downblock_real_input_inference(model_location_generator):
     # synthesize the input
     base_address = 'down_blocks.3'
 
-    dir_path = model_location_generator("tt_dnn-models/StableDiffusion/tensor_files")
+    dir_path = model_location_generator("tensor_files", model_subdir="StableDiffusion")
     attr_path = f"{dir_path}/DownBlock2D_inp__attr.pt"
     emb_path = f"{dir_path}/DownBlock2D_inp__emb.pt"
     sample_path = f"{dir_path}/DownBlock2D_inp__sample.pt"

@@ -35,7 +35,7 @@ def test_run_cross_attn_down_block_real_input_inference(
     state_dict = unet.state_dict()
 
     dir_path = model_location_generator(
-        "tt_dnn-models/StableDiffusion/tensor_files"
+        "tensor_files", model_subdir="StableDiffusion"
     )
     attr_path = f"{dir_path}/CrossAttnDownBlock2D_inp__attr__block_{index}.pt"
     attention_mask_path = (
