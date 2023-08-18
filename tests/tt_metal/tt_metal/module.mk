@@ -42,6 +42,7 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/test_matmul_multi_tile \
 		 tests/tt_metal/test_matmul_large_block \
 		 tests/tt_metal/test_matmul_single_core \
+		 tests/tt_metal/test_matmul_single_core_small \
 		 tests/tt_metal/test_matmul_multi_core_single_dram \
 		 tests/tt_metal/test_matmul_multi_core_multi_dram \
 		 tests/tt_metal/test_matmul_multi_core_multi_dram_in0_mcast \

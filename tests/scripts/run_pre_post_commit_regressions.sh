@@ -24,9 +24,11 @@ else
   ./build/test/tt_metal/test_reduce_hw --arch $ARCH_NAME
   ./build/test/tt_metal/test_reduce_w --arch $ARCH_NAME
   ./build/test/tt_metal/test_reduce_h --arch $ARCH_NAME
+  ./build/test/tt_metal/test_unpack_tilize --arch $ARCH_NAME
+  ./build/test/tt_metal/test_matmul_single_core_small --arch $ARCH_NAME
 fi
 
-./build/test/tt_metal/unit_tests
+./build/test/tt_metal/unit_tests # Runs both on WH/GS on CI
 ./build/test/tt_metal/gtest_unit_tests
 
 echo "Checking docs build..."
