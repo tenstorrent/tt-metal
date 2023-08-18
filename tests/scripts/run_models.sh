@@ -62,7 +62,7 @@ env pytest tests/python_api_testing/models/llama -k llama_mlp
 env pytest tests/python_api_testing/models/llama -k llama_attention
 env pytest tests/python_api_testing/models/llama -k llama_decoder
 
-env pytest tests/python_api_testing/models/falcon/tests/test_falcon_causallm.py::test_FalconCausalLM_inference[falcon_7b-layers_2-batch1_seqlen128]
+env pytest tests/python_api_testing/models/falcon/tests/test_falcon_causallm.py::test_FalconCausalLM_inference[BFLOAT16-DRAM-falcon_7b-layers_32-batch1_seqlen128]
 
 env pytest tests/python_api_testing/models/lenet -k test_lenet_inference
 env pytest tests/python_api_testing/models/ConvNet_MNIST/tests -k mnist_inference

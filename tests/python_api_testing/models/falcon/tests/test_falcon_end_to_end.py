@@ -1,6 +1,7 @@
 import torch
 import pytest
 from loguru import logger
+from pathlib import Path
 
 import tt_lib
 from tests.python_api_testing.models.falcon.reference.hf_falcon_model import (
@@ -13,11 +14,18 @@ from tests.python_api_testing.models.falcon.tests.test_falcon_causallm import (
     PytorchFalconCausalLM,
 )
 
+from tests.python_api_testing.models.falcon.model_config import (
+    get_model_config,
+    get_tt_cache_path,
+)
+
 from tests.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
 )
-from models.utility_functions import (torch2tt_tensor, tt2torch_tensor
+from models.utility_functions import (
+    torch2tt_tensor,
+    tt2torch_tensor,
     profiler,
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
@@ -32,13 +40,22 @@ def run_test_FalconCausalLM_end_to_end(
     batch,
     seq_len,
     num_layers,
-    on_weka,
     pcc,
+    model_config,
+    tt_cache_path,
+    model_location_generator,
 ):
-    hugging_face_reference_model = RWForCausalLM.from_pretrained(model_version)
+    model_name = model_location_generator(model_version, model_subdir="Falcon")
+
+    profiler.start("hugging_face_model_setup")
+    hugging_face_reference_model = RWForCausalLM.from_pretrained(model_name)
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
+    pytorch_FalconCausalLM = PytorchFalconCausalLM(
+        hugging_face_reference_model, num_layers
+    )
+    profiler.end("hugging_face_model_setup")
 
     # Prepare input ========================================================================
     torch.manual_seed(0)
@@ -54,9 +71,6 @@ def run_test_FalconCausalLM_end_to_end(
         )
 
     # PyTorch output =======================================================================
-    pytorch_FalconCausalLM = PytorchFalconCausalLM(
-        hugging_face_reference_model, num_layers
-    )
     profiler.start("hugging_face_reference_model")
     pytorch_out = pytorch_FalconCausalLM(input_ids=model_input)
     profiler.end("hugging_face_reference_model")
@@ -73,6 +87,8 @@ def run_test_FalconCausalLM_end_to_end(
         num_layers,
         configuration,
         max_position_embeddings,
+        model_config,
+        tt_cache_path,
     )
     profiler.end("TtFalcon_model_setup")
 
@@ -100,7 +116,9 @@ def run_test_FalconCausalLM_end_to_end(
     logger.info(f"Enable profiler and enable binary and compile cache")
     profiler.enable()
     enable_persistent_kernel_cache()
-
+    tt_embeddings, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
+        model_input
+    )
     profiler.start(f"model_run_for_inference")
     tt_out = tt_FalconCausalLM(
         input_embeddings=tt_embeddings, attention_mask=tt_attention_mask
@@ -135,25 +153,25 @@ def run_test_FalconCausalLM_end_to_end(
     ids=["layers_2", "layers_32"],
 )
 @pytest.mark.parametrize(
-    "model_version, on_weka",
-    (
-        (
-            "tiiuae/falcon-7b-instruct",
-            False,
-        ),
-    ),
+    "model_version",
+    ("tiiuae/falcon-7b-instruct",),
     ids=["falcon_7b"],
 )
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
 def test_FalconCausalLM_end_to_end_with_program_cache(
     use_program_cache,
     model_version,
     batch,
     seq_len,
     num_layers,
-    on_weka,
     pcc,
     request,
+    model_config_str,
+    model_location_generator,
 ):
+    model_config = get_model_config(model_config_str)
+    tt_cache_path = get_tt_cache_path(model_version)
+
     disable_persistent_kernel_cache()
     disable_compilation_reports()
 
@@ -172,7 +190,9 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
         batch,
         seq_len,
         num_layers,
-        on_weka,
         pcc,
+        model_config,
+        tt_cache_path,
+        model_location_generator,
     )
     tt_lib.device.CloseDevice(device)

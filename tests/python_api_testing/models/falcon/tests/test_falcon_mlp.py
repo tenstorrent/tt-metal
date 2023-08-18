@@ -7,7 +7,10 @@ from tests.python_api_testing.models.falcon.reference.hf_falcon_model import (
     RWForCausalLM,
 )
 from tests.python_api_testing.models.falcon.falcon_mlp import TtFalconMLP
-
+from tests.python_api_testing.models.falcon.model_config import (
+    get_model_config,
+    get_tt_cache_path,
+)
 from tests.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
@@ -28,9 +31,19 @@ class PytorchFalconMLPModel(torch.nn.Module):
         return result
 
 
-def run_test_FalconMLP_inference(device, model_version, batch, seq_len, on_weka, pcc):
-    # torch.bfloat16 input hangs in first Linear for MLP in hf reference model
-    hugging_face_reference_model = RWForCausalLM.from_pretrained(model_version)
+def run_test_FalconMLP_inference(
+    device,
+    model_version,
+    batch,
+    seq_len,
+    pcc,
+    model_config,
+    tt_cache_path,
+    model_location_generator,
+):
+    model_name = model_location_generator(model_version, model_subdir="Falcon")
+
+    hugging_face_reference_model = RWForCausalLM.from_pretrained(model_name)
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
@@ -54,6 +67,8 @@ def run_test_FalconMLP_inference(device, model_version, batch, seq_len, on_weka,
         base_url,
         layer_num,
         configuration.hidden_size,
+        model_config,
+        tt_cache_path,
     )
 
     tt_mlp_input = torch2tt_tensor(mlp_input, device)
@@ -75,22 +90,40 @@ def run_test_FalconMLP_inference(device, model_version, batch, seq_len, on_weka,
 
 
 @pytest.mark.parametrize(
-    "model_version, batch, seq_len, on_weka, pcc",
+    "model_version, batch, seq_len, pcc",
     (
         (
             "tiiuae/falcon-7b-instruct",
             1,
             128,
-            False,
             0.98,
         ),
     ),
 )
-def test_FalconMLP_inference(model_version, batch, seq_len, on_weka, pcc):
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
+def test_FalconMLP_inference(
+    model_version,
+    batch,
+    seq_len,
+    pcc,
+    model_config_str,
+    model_location_generator,
+):
+    model_config = get_model_config(model_config_str)
+    tt_cache_path = get_tt_cache_path(model_version)
     # Initialize the device
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
 
-    run_test_FalconMLP_inference(device, model_version, batch, seq_len, on_weka, pcc)
+    run_test_FalconMLP_inference(
+        device,
+        model_version,
+        batch,
+        seq_len,
+        pcc,
+        model_config,
+        tt_cache_path,
+        model_location_generator,
+    )
     tt_lib.device.CloseDevice(device)

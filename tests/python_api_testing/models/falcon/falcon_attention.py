@@ -88,13 +88,22 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
     """
 
     def __init__(
-        self, tt_device, dim, max_position_embeddings=2048, base=10000, device=None
+        self,
+        tt_device,
+        dim,
+        base_url,
+        layer_num,
+        max_position_embeddings=2048,
+        base=10000,
+        model_config=None,
+        tt_cache_path=None,
     ):
         super().__init__()
-        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float().to(device) / dim))
+        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
 
         # Build here to make `torch.jit.trace` work.
         self.max_seq_len_cached = max_position_embeddings
+        self.model_config = model_config
         t = torch.arange(
             self.max_seq_len_cached,
             device=inv_freq.device,
@@ -104,8 +113,33 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
         # Different from paper, but it uses a different permutation in order to obtain the same calculation
         emb = torch.cat((freqs, freqs), dim=-1)
 
-        self.tt_cos_cached = torch2tt_tensor(emb.cos()[None, None, :, :], tt_device)
-        self.tt_sin_cached = torch2tt_tensor(emb.sin()[None, None, :, :], tt_device)
+        layer_name = f"{base_url}.{layer_num}.rotary_embedding"
+        if tt_cache_path is not None:
+            self.tt_cos_cached = tt_lib.tensor.load_tensor(
+                str(
+                    tt_cache_path
+                    / f"{layer_name}.cos_cached_{self.model_config['COS_CACHED_WEIGHTS_DTYPE'].name}.bin"
+                )
+            ).to(tt_device, self.model_config["COS_CACHED_WEIGHTS_MEMCFG"])
+            self.tt_sin_cached = tt_lib.tensor.load_tensor(
+                str(
+                    tt_cache_path
+                    / f"{layer_name}.sin_cached_{self.model_config['SIN_CACHED_WEIGHTS_DTYPE'].name}.bin"
+                )
+            ).to(tt_device, self.model_config["SIN_CACHED_WEIGHTS_MEMCFG"])
+        else:
+            self.tt_cos_cached = torch2tt_tensor(
+                emb.cos()[None, None, :, :],
+                tt_device,
+                tt_memory_config=self.model_config["COS_CACHED_WEIGHTS_MEMCFG"],
+                tt_dtype=self.model_config["COS_CACHED_WEIGHTS_DTYPE"],
+            )
+            self.tt_sin_cached = torch2tt_tensor(
+                emb.sin()[None, None, :, :],
+                tt_device,
+                tt_memory_config=self.model_config["SIN_CACHED_WEIGHTS_MEMCFG"],
+                tt_dtype=self.model_config["SIN_CACHED_WEIGHTS_DTYPE"],
+            )
 
     def forward(self, layer: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         # x: [bs, num_attention_heads, seq_len, head_size]
@@ -116,7 +150,11 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
         ), "seq_len exceeds max_seq_len_cached in RotaryEmbedding!"
 
         return tt_lib.tensor.rotary_embedding(
-            layer, self.tt_cos_cached, self.tt_sin_cached
+            layer,
+            self.tt_cos_cached,
+            self.tt_sin_cached,
+            output_mem_config=self.model_config["ROTARY_EMBEDDING_OUTPUT_MEMCFG"],
+            # output_dtype=self.model_config["ROTARY_EMBEDDING_OUTPUT_DTYPE"], # Not currently supported
         )
 
 
@@ -132,6 +170,8 @@ class TtFalconAttention(nn.Module):
         hidden_size: int,
         num_heads: int,
         max_position_embeddings: int = 2048,
+        model_config=None,
+        tt_cache_path=None,
     ):
         super().__init__()
         self.hidden_size = hidden_size
@@ -140,6 +180,7 @@ class TtFalconAttention(nn.Module):
         self.max_position_embeddings = max_position_embeddings
         self.device = device
         self.state_dict = state_dict
+        self.model_config = model_config
 
         if (self.head_dim * num_heads) != self.hidden_size:
             raise ValueError(
@@ -147,33 +188,54 @@ class TtFalconAttention(nn.Module):
                 f" and `num_heads`: {num_heads})."
             )
 
-        # TODO: Take in model_config instead of hardcoding dtypes/mem_configs
-        self.query_key_value_weights = torch2tt_tensor(
-            torch.transpose(
-                self.state_dict[
-                    f"{base_url}.{layer_num}.self_attention.query_key_value.weight"
-                ],
-                -2,
-                -1,
-            ),
-            self.device,
-            tt_dtype=tt_lib.tensor.DataType.BFLOAT8_B,
-        )
+        layer_name = f"{base_url}.{layer_num}.self_attention"
+        query_key_value_str = f"{layer_name}.query_key_value.weight"
+        selfout_str = f"{layer_name}.dense.weight"
+        if tt_cache_path is not None:
+            self.query_key_value_weights = tt_lib.tensor.load_tensor(
+                str(
+                    tt_cache_path
+                    / f"{query_key_value_str}_{self.model_config['FUSED_QKV_MM_WEIGHTS_DTYPE'].name}.bin"
+                )
+            ).to(device, self.model_config["FUSED_QKV_MM_WEIGHTS_MEMCFG"])
+            self.dense_weights = tt_lib.tensor.load_tensor(
+                str(
+                    tt_cache_path
+                    / f"{selfout_str}_{self.model_config['SELFOUT_MM_WEIGHTS_DTYPE'].name}.bin"
+                )
+            ).to(device, self.model_config["SELFOUT_MM_WEIGHTS_MEMCFG"])
+        else:
+            # TODO: Take in model_config instead of hardcoding dtypes/mem_configs
+            self.query_key_value_weights = torch2tt_tensor(
+                torch.transpose(
+                    self.state_dict[query_key_value_str],
+                    -2,
+                    -1,
+                ),
+                self.device,
+                tt_memory_config=self.model_config["FUSED_QKV_MM_WEIGHTS_MEMCFG"],
+                tt_dtype=self.model_config["FUSED_QKV_MM_WEIGHTS_DTYPE"],
+            )
 
-        self.dense_weights = torch2tt_tensor(
-            torch.transpose(
-                self.state_dict[f"{base_url}.{layer_num}.self_attention.dense.weight"],
-                -2,
-                -1,
-            ),
-            self.device,
-            tt_dtype=tt_lib.tensor.DataType.BFLOAT8_B,
-        )
+            self.dense_weights = torch2tt_tensor(
+                torch.transpose(
+                    self.state_dict[selfout_str],
+                    -2,
+                    -1,
+                ),
+                self.device,
+                tt_memory_config=self.model_config["SELFOUT_MM_WEIGHTS_MEMCFG"],
+                tt_dtype=self.model_config["SELFOUT_MM_WEIGHTS_DTYPE"],
+            )
 
         self.rotary_embedding = TtFalconRotaryEmbedding(
             self.device,
             self.head_dim,
+            base_url,
+            layer_num,
             max_position_embeddings=self.max_position_embeddings,
+            model_config=model_config,
+            tt_cache_path=tt_cache_path,
         )
 
         self.scalar = pad_by_zero(
@@ -202,15 +264,21 @@ class TtFalconAttention(nn.Module):
         ### FUSED QKV ###
         #################
         fused_query_key_value = tt_lib.tensor.falcon_fused_qkv_matmul(
-            hidden_states, self.query_key_value_weights
+            hidden_states,
+            self.query_key_value_weights,
+            output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
+            output_dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
         )  # b, 1, seq_len, 73 * head_dim
 
         ###########
         ### TMs ###
         ###########
         query_layer, key_layer, value_layer = tt_lib.tensor.nlp_create_qkv_heads(
-            fused_query_key_value
+            fused_query_key_value,
+            output_mem_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
+            # output_dtype=self.model_config["CREATE_QKV_HEADS_OUTPUT_DTYPE"], # Not currently supported
         )
+        fused_query_key_value.deallocate()
 
         #########################
         ### ROTARY EMBEDDINGS ###
@@ -236,17 +304,31 @@ class TtFalconAttention(nn.Module):
         past_key_value = (key_layer, value_layer) if use_cache else None
 
         ########################
-        ### PRE-SOFTMAX BMM ###
+        ### PRE-SOFTMAX MM ###
         ########################
         # TT implementation for:
         # attn_weights = torch.matmul(query_layer, key_layer.transpose(2, 3)) / math.sqrt(self.head_dim)
-        key_layer_transposed = tt_lib.tensor.transpose(key_layer)
-        attn_weights = tt_lib.tensor.matmul(query_layer, key_layer_transposed)
+        key_layer_transposed = tt_lib.tensor.transpose(
+            key_layer,
+            output_mem_config=self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"],
+            # output_dtype=self.model_config["K_TRANSPOSED_OUTPUT_DTYPE"], # Not currently supported
+        )
+
+        attn_weights = tt_lib.tensor.matmul(
+            query_layer,
+            key_layer_transposed,
+            output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
+            # output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"], # Not currently supported
+        )
+        query_layer.deallocate()
+
         attn_weights = tt_lib.tensor.bcast(
             attn_weights,
             self.scalar,
             tt_lib.tensor.BcastOpMath.MUL,
             tt_lib.tensor.BcastOpDim.HW,
+            output_mem_config=self.model_config["PRE_SOFTMAX_SCALE_OUTPUT_MEMCFG"],
+            # output_dtype=self.model_config["PRE_SOFTMAX_SCALE_OUTPUT_DTYPE"], # Not currently supported
         )  # b, self.num_heads, q_len, kv_seq_len
 
         ###############
@@ -262,24 +344,46 @@ class TtFalconAttention(nn.Module):
             attention_mask = torch2tt_tensor(attention_mask, self.device)
 
         # TODO: C can be 1 if we have bcast add along C; otherwise; we need to repeat along C
-        attn_weights = tt_lib.tensor.add(attn_weights, attention_mask)
+        attn_weights = tt_lib.tensor.add(
+            attn_weights,
+            attention_mask,
+            output_mem_config=self.model_config["PRE_SOFTMAX_MASK_OUTPUT_MEMCFG"],
+            # output_dtype=self.model_config["PRE_SOFTMAX_MASK_OUTPUT_DTYPE"], # Not currently supported
+        )
 
         # TT implementation for:
         # PyTorch: upcast attention to fp32
         # attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_layer.dtype)
-        attn_weights = tt_lib.operations.primary.softmax_in_place(attn_weights)
+        attn_weights = tt_lib.operations.primary.softmax_in_place(
+            attn_weights,
+            # output_mem_config=self.model_config["SOFTMAX_OUTPUT_MEMCFG"], # Not needed since in place
+            # output_dtype=self.model_config["SOFTMAX_OUTPUT_DTYPE"],
+        )
 
         ########################
-        ### POST-SOFTMAX BMM ###
+        ### POST-SOFTMAX MM ###
         ########################
-        attn_output = tt_lib.tensor.matmul(attn_weights, value_layer)
+        attn_output = tt_lib.tensor.matmul(
+            attn_weights,
+            value_layer,
+            output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
+            # output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"], # Not currently supported
+        )
+        attn_weights.deallocate()
 
         #########################
         ### ATTENTION SELFOUT ###
         #########################
-        attn_output = tt_lib.tensor.nlp_concat_heads(attn_output)
+        attn_output = tt_lib.tensor.nlp_concat_heads(
+            attn_output,
+            output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
+            # output_dtype=self.model_config["CONCAT_HEADS_OUTPUT_DTYPE"], # Not currently supported
+        )
         attn_output = tt_lib.tensor.falcon_selfout_matmul(
-            attn_output, self.dense_weights
+            attn_output,
+            self.dense_weights,
+            output_mem_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
+            output_dtype=self.model_config["SELFOUT_MM_OUTPUT_DTYPE"],
         )
 
         return attn_output, past_key_value

@@ -7,7 +7,10 @@ from tests.python_api_testing.models.falcon.reference.hf_falcon_model import (
     RWForCausalLM,
 )
 from tests.python_api_testing.models.falcon.falcon_decoder import TtFalconDecoderLayer
-
+from tests.python_api_testing.models.falcon.model_config import (
+    get_model_config,
+    get_tt_cache_path,
+)
 from tests.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
@@ -31,9 +34,19 @@ class PytorchFalconDecoderModel(torch.nn.Module):
 
 
 def run_test_FalconDecoder_inference(
-    device, model_version, batch, seq_len, layer_num, on_weka, pcc
+    device,
+    model_version,
+    batch,
+    seq_len,
+    layer_num,
+    pcc,
+    model_config,
+    tt_cache_path,
+    model_location_generator,
 ):
-    hugging_face_reference_model = RWForCausalLM.from_pretrained(model_version)
+    model_name = model_location_generator(model_version, model_subdir="Falcon")
+
+    hugging_face_reference_model = RWForCausalLM.from_pretrained(model_name)
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
@@ -60,6 +73,8 @@ def run_test_FalconDecoder_inference(
         layer_num,
         configuration,
         max_position_embeddings,
+        model_config,
+        tt_cache_path,
     )
 
     tt_decoder_input = decoder_input.unsqueeze(1)
@@ -91,21 +106,29 @@ def run_test_FalconDecoder_inference(
 
 
 @pytest.mark.parametrize(
-    "model_version, batch, seq_len, layer_num, on_weka, pcc",
+    "model_version, batch, seq_len, layer_num, pcc",
     (
         (
             "tiiuae/falcon-7b-instruct",
             1,
             128,
             0,
-            False,
             0.98,
         ),
     ),
 )
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
 def test_FalconDecoder_inference(
-    model_version, batch, seq_len, layer_num, on_weka, pcc
+    model_version,
+    batch,
+    seq_len,
+    layer_num,
+    pcc,
+    model_config_str,
+    model_location_generator,
 ):
+    model_config = get_model_config(model_config_str)
+    tt_cache_path = get_tt_cache_path(model_version)
     # Initialize the device
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
@@ -117,7 +140,9 @@ def test_FalconDecoder_inference(
         batch,
         seq_len,
         layer_num,
-        on_weka,
         pcc,
+        model_config,
+        tt_cache_path,
+        model_location_generator,
     )
     tt_lib.device.CloseDevice(device)

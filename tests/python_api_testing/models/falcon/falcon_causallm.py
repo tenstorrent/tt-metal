@@ -18,6 +18,8 @@ class TtFalconCausalLM(TtFalconModelShared):
         num_layers,
         config,
         max_position_embeddings,
+        model_config,
+        tt_cache_path,
     ):
         assert base_url == "", "base_url should be empty at the root of the model!"
 
@@ -28,13 +30,26 @@ class TtFalconCausalLM(TtFalconModelShared):
             num_layers=num_layers,
             config=config,
             max_position_embeddings=max_position_embeddings,
+            model_config=model_config,
+            tt_cache_path=tt_cache_path,
         )
+        self.model_config = model_config
 
-        self.lm_head_weights = torch2tt_tensor(
-            torch.transpose(self.state_dict[f"lm_head.weight"], -2, -1),
-            self.device,
-            tt_dtype=tt_lib.tensor.DataType.BFLOAT8_B,
-        )
+        lm_head_str = f"lm_head.weight"
+        if tt_cache_path is not None:
+            self.lm_head_weights = tt_lib.tensor.load_tensor(
+                str(
+                    tt_cache_path
+                    / f"{lm_head_str}_{self.model_config['LM_HEAD_MM_WEIGHTS_DTYPE'].name}.bin"
+                )
+            ).to(device, self.model_config["LM_HEAD_MM_WEIGHTS_MEMCFG"])
+        else:
+            self.lm_head_weights = torch2tt_tensor(
+                torch.transpose(self.state_dict[f"lm_head.weight"], -2, -1),
+                self.device,
+                tt_memory_config=self.model_config["LM_HEAD_MM_WEIGHTS_MEMCFG"],
+                tt_dtype=self.model_config["LM_HEAD_MM_WEIGHTS_DTYPE"],
+            )
 
     def forward(
         self,
@@ -43,7 +58,10 @@ class TtFalconCausalLM(TtFalconModelShared):
     ) -> tt_lib.tensor.Tensor:
         hidden_states = super().forward(input_embeddings, attention_mask)
         lm_logits = tt_lib.tensor.falcon_lm_head_matmul(
-            hidden_states, self.lm_head_weights
+            hidden_states,
+            self.lm_head_weights,
+            output_mem_config=self.model_config["LM_HEAD_MM_OUTPUT_MEMCFG"],
+            output_dtype=self.model_config["LM_HEAD_MM_OUTPUT_DTYPE"],
         )
 
         return lm_logits

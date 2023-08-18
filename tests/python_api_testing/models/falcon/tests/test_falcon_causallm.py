@@ -8,6 +8,11 @@ from tests.python_api_testing.models.falcon.reference.hf_falcon_model import (
 )
 from tests.python_api_testing.models.falcon.falcon_causallm import TtFalconCausalLM
 
+from tests.python_api_testing.models.falcon.model_config import (
+    get_model_config,
+    get_tt_cache_path,
+)
+
 from tests.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
@@ -36,10 +41,14 @@ def run_test_FalconCausalLM_inference(
     batch,
     seq_len,
     num_layers,
-    on_weka,
     pcc,
+    model_config,
+    tt_cache_path,
+    model_location_generator,
 ):
-    hugging_face_reference_model = RWForCausalLM.from_pretrained(model_version)
+    model_name = model_location_generator(model_version, model_subdir="Falcon")
+
+    hugging_face_reference_model = RWForCausalLM.from_pretrained(model_name)
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
@@ -74,6 +83,8 @@ def run_test_FalconCausalLM_inference(
         num_layers,
         configuration,
         max_position_embeddings,
+        model_config,
+        tt_cache_path,
     )
 
     # TODO: Generate embeddings and attention_mask on device
@@ -110,24 +121,24 @@ def run_test_FalconCausalLM_inference(
     ids=["layers_2", "layers_32"],
 )
 @pytest.mark.parametrize(
-    "model_version, on_weka",
-    (
-        (
-            "tiiuae/falcon-7b-instruct",
-            False,
-        ),
-    ),
+    "model_version",
+    ("tiiuae/falcon-7b-instruct",),
     ids=["falcon_7b"],
 )
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
 def test_FalconCausalLM_inference(
     model_version,
     batch,
     seq_len,
     num_layers,
-    on_weka,
     pcc,
     request,
+    model_config_str,
+    model_location_generator,
 ):
+    model_config = get_model_config(model_config_str)
+    tt_cache_path = get_tt_cache_path(model_version)
+
     # Initialize the device
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
@@ -143,7 +154,9 @@ def test_FalconCausalLM_inference(
         batch,
         seq_len,
         num_layers,
-        on_weka,
         pcc,
+        model_config,
+        tt_cache_path,
+        model_location_generator,
     )
     tt_lib.device.CloseDevice(device)
