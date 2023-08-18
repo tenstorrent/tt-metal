@@ -17,16 +17,17 @@ def _nearest_32(x):
 def nearest_32(x):    # needs refctoring; to match alias called in some scripts (e.g. test_padding_test in unit tests)
     return _nearest_32(x)
 
+
 def _nearest_y(x, y):
     return math.ceil(x / y) * y
 
 
 def divup(a, b):
-    return (a+b-1)//b
+    return (a + b - 1) // b
 
 
 def roundup(a, b):
-    result = divup(a, b)*b
+    result = divup(a, b) * b
     return result
 
 
@@ -35,8 +36,8 @@ def roundup32(a):
 
 
 def float_to_bits(x):
-    s = struct.pack('>f', x)
-    return struct.unpack('>l', s)[0]
+    s = struct.pack(">f", x)
+    return struct.unpack(">l", s)[0]
 
 
 ### Profiling ###
@@ -160,9 +161,11 @@ def tt2torch_tensor(tt_tensor, tt_host=None):
         tt_output = tt_output.to(tt_lib.tensor.Layout.ROW_MAJOR)
     return tt_output.to_torch()
 
+
 def tt_to_torch_tensor(tt_tensor):
     tt_output = tt_tensor.cpu().to(tt_lib.tensor.Layout.ROW_MAJOR)
     return tt_output.to_torch()
+
 
 def torch_to_tt_tensor_rm(py_tensor, device, shape=None, put_on_device=True):
     if shape is None:
@@ -170,12 +173,13 @@ def torch_to_tt_tensor_rm(py_tensor, device, shape=None, put_on_device=True):
         while len(shape) < 4:
             shape.insert(0, 1)
 
-    tt_tensor = (
-         tt_lib.tensor.Tensor(py_tensor.reshape(shape), tt_lib.tensor.DataType.BFLOAT16)
+    tt_tensor = tt_lib.tensor.Tensor(
+        py_tensor.reshape(shape), tt_lib.tensor.DataType.BFLOAT16
     )
     if put_on_device:
         tt_tensor = tt_tensor.to(device)
     return tt_tensor
+
 
 def torch_to_tt_tensor(py_tensor, device):
     shape = list(py_tensor.size())
@@ -184,36 +188,47 @@ def torch_to_tt_tensor(py_tensor, device):
 
     tt_tensor = (
         tt_lib.tensor.Tensor(py_tensor.reshape(shape), tt_lib.tensor.DataType.BFLOAT16)
-        .to(tt_lib.tensor.Layout.TILE)     # change memory layout of TT Tensor to TILE (as operation that will use it expects TILE layout)
-        .to(device)                         # move TT Tensor from host to TT accelerator device (device is of type tt_lib.device.Device)
+        .to(
+            tt_lib.tensor.Layout.TILE
+        )  # change memory layout of TT Tensor to TILE (as operation that will use it expects TILE layout)
+        .to(
+            device
+        )  # move TT Tensor from host to TT accelerator device (device is of type tt_lib.device.Device)
     )
 
     return tt_tensor
 
+
 ### Padding / Unpadding ###
-def pad_by_zero(x: torch.Tensor, device):
+def pad_by_zero(
+    x: torch.Tensor,
+    device,
+    tt_memory_config=tt_lib.tensor.MemoryConfig(True),
+    tt_dtype=tt_lib.tensor.DataType.BFLOAT16,
+):
     initial_shape = x.shape
     pad_shape = list(x.shape)
     while len(pad_shape) < 4:
         pad_shape.insert(0, 1)
-    if pad_shape[3] % 32 != 0 or pad_shape[2] % 32 != 0:
-        tt_tensor = tt_lib.tensor.Tensor(
-            x.reshape(pad_shape), tt_lib.tensor.DataType.BFLOAT16
-        )
-        x = tt_tensor.pad(
+    if pad_shape[-1] % 32 != 0 or pad_shape[-2] % 32 != 0:
+        # Pad in torch before creating TT tensor.
+        # Certain datatypes like BFP8_B requires inputs to already be a specific size when creating the tensor, so we need to pad first
+        x = torch.nn.functional.pad(
+            x.reshape(pad_shape),
             (
-                pad_shape[0],
-                pad_shape[1],
-                _nearest_32(pad_shape[2]),
-                _nearest_32(pad_shape[3]),
+                0,
+                _nearest_32(pad_shape[-1]) - pad_shape[-1],
+                0,
+                _nearest_32(pad_shape[-2]) - pad_shape[-2],
             ),
-            (0, 0, 0, 0),
-            0,
         )
+        x = tt_lib.tensor.Tensor(x, tt_dtype)
         x = x.to(tt_lib.tensor.Layout.TILE).to(device)
 
     else:
-        x = torch2tt_tensor(x, device)
+        x = torch2tt_tensor(
+            x, device, tt_memory_config=tt_memory_config, tt_dtype=tt_dtype
+        )
     return x, initial_shape
 
 
@@ -237,6 +252,7 @@ def unpad_from_zero(x, desired_shape):
         x = x.to_torch()
     return x
 
+
 def pad_activation(x):
     """
     This function pads an activation with 0s as a pre-preprocessing step to tilization.
@@ -251,21 +267,30 @@ def pad_activation(x):
     """
     nearest_32 = _nearest_32
 
-    assert isinstance(x, torch.Tensor), "Input to this function must be an instance of torch.Tensor"
-    assert len(x.shape) >= 1 and len(x.shape) <= 4, "Only tensors with dimension 1-4 supported"
-    if len(x.shape) == 1: # (num_features,)
+    assert isinstance(
+        x, torch.Tensor
+    ), "Input to this function must be an instance of torch.Tensor"
+    assert (
+        len(x.shape) >= 1 and len(x.shape) <= 4
+    ), "Only tensors with dimension 1-4 supported"
+    if len(x.shape) == 1:  # (num_features,)
         padded_tensor = torch.zeros(1, 1, 32, nearest_32(x.shape[0]))
-        padded_tensor[:, 0, 0, :x.shape[0]] = x
-    elif len(x.shape) == 2: # (batch, num features)
+        padded_tensor[:, 0, 0, : x.shape[0]] = x
+    elif len(x.shape) == 2:  # (batch, num features)
         padded_tensor = torch.zeros(x.shape[0], 1, 32, nearest_32(x.shape[1]))
-        padded_tensor[:, 0, 0, :x.shape[1]] = x
-    elif len(x.shape) == 3: # (batch, num features y, num features x)
-        padded_tensor = torch.zeros(x.shape[0], 1, nearest_32(x.shape[-2]), nearest_32(x.shape[-1]))
-        padded_tensor[..., 0, :x.shape[-2], :x.shape[-1]] = x
-    else: # (batch, num channels, num features y, num features x)
-        padded_tensor = torch.zeros(*x.shape[:-2], nearest_32(x.shape[-2]), nearest_32(x.shape[-1]))
-        padded_tensor[..., :x.shape[-2], :x.shape[-1]] = x
+        padded_tensor[:, 0, 0, : x.shape[1]] = x
+    elif len(x.shape) == 3:  # (batch, num features y, num features x)
+        padded_tensor = torch.zeros(
+            x.shape[0], 1, nearest_32(x.shape[-2]), nearest_32(x.shape[-1])
+        )
+        padded_tensor[..., 0, : x.shape[-2], : x.shape[-1]] = x
+    else:  # (batch, num channels, num features y, num features x)
+        padded_tensor = torch.zeros(
+            *x.shape[:-2], nearest_32(x.shape[-2]), nearest_32(x.shape[-1])
+        )
+        padded_tensor[..., : x.shape[-2], : x.shape[-1]] = x
     return padded_tensor
+
 
 def pad_weight(x):
     """
@@ -283,18 +308,26 @@ def pad_weight(x):
     """
     nearest_32 = _nearest_32
 
-    assert isinstance(x, torch.Tensor), "Input to this function must be an instance of torch.Tensor"
-    assert len(x.shape) >= 1 and len(x.shape) <= 4, "Only tensors with dimension 1-4 supported"
+    assert isinstance(
+        x, torch.Tensor
+    ), "Input to this function must be an instance of torch.Tensor"
+    assert (
+        len(x.shape) >= 1 and len(x.shape) <= 4
+    ), "Only tensors with dimension 1-4 supported"
 
-    if len(x.shape) == 1: # (num_features,)
+    if len(x.shape) == 1:  # (num_features,)
         padded_tensor = torch.zeros(1, 1, 32, nearest_32(x.shape[0]))
-        padded_tensor[:, 0, 0, :x.shape[0]] = x
-    elif len(x.shape) == 2: # (r_features, c_features)
-        padded_tensor = torch.zeros(1, 1, nearest_32(x.shape[0]), nearest_32(x.shape[1]))
-        padded_tensor[:, 0, :x.shape[0], :x.shape[1]] = x
+        padded_tensor[:, 0, 0, : x.shape[0]] = x
+    elif len(x.shape) == 2:  # (r_features, c_features)
+        padded_tensor = torch.zeros(
+            1, 1, nearest_32(x.shape[0]), nearest_32(x.shape[1])
+        )
+        padded_tensor[:, 0, : x.shape[0], : x.shape[1]] = x
     else:
-        padded_tensor = torch.zeros(*x.shape[:-2], nearest_32(x.shape[-2]), nearest_32(x.shape[-1]))
-        padded_tensor[..., :x.shape[-2], :x.shape[-1]] = x
+        padded_tensor = torch.zeros(
+            *x.shape[:-2], nearest_32(x.shape[-2]), nearest_32(x.shape[-1])
+        )
+        padded_tensor[..., : x.shape[-2], : x.shape[-1]] = x
 
     return padded_tensor
 
@@ -304,7 +337,7 @@ def convert_weights_2d_matrix(weights, w_shape):
     :param weights: Input PyTorch Tensor
     :type weights: class:`torch.Tensor`
     """
-    ret_shape = [1,1,w_shape[0],w_shape[1]*w_shape[2]*w_shape[3]]
+    ret_shape = [1, 1, w_shape[0], w_shape[1] * w_shape[2] * w_shape[3]]
     if isinstance(weights, torch.Tensor):
         ret = torch.zeros(np.prod(ret_shape))
     else:
@@ -315,11 +348,14 @@ def convert_weights_2d_matrix(weights, w_shape):
             for s in range(w_shape[3]):
                 for c in range(w_shape[1]):
                     ret[idx] = weights[k][c][r][s]
-                    idx+=1
+                    idx += 1
     assert idx == np.prod(ret_shape)
-    return ret.reshape(ret_shape).transpose(2,3)
+    return ret.reshape(ret_shape).transpose(2, 3)
 
-def convert_act_2d_matrix(activation, kernel_y, kernel_x, stride_y, stride_x, pad_y, pad_x):
+
+def convert_act_2d_matrix(
+    activation, kernel_y, kernel_x, stride_y, stride_x, pad_y, pad_x
+):
     """
     :param activation: Input PyTorch Tensor
     :type activation: class:`torch.Tensor`
@@ -329,27 +365,27 @@ def convert_act_2d_matrix(activation, kernel_y, kernel_x, stride_y, stride_x, pa
     H = activation.shape[2]
     W = activation.shape[3]
 
-    OH = (int) ((H - kernel_y + 2*pad_y) // stride_y) + 1
-    OW = ((W - kernel_x + 2*pad_x) // stride_x) + 1
-    nrows = OH*OW
-    ncols = C*kernel_x*kernel_y
-    ret_shape = [1,N,nrows,ncols]
+    OH = (int)((H - kernel_y + 2 * pad_y) // stride_y) + 1
+    OW = ((W - kernel_x + 2 * pad_x) // stride_x) + 1
+    nrows = OH * OW
+    ncols = C * kernel_x * kernel_y
+    ret_shape = [1, N, nrows, ncols]
     if isinstance(activation, torch.Tensor):
         ret = torch.zeros(np.prod(ret_shape))
     else:
         ret = np.zeros(np.prod(ret_shape))
     idx = 0
     for n in range(N):
-        for h in range(-1*pad_y, H+pad_y-kernel_y+1, stride_y):
-            for w in range(-1*pad_x, W+pad_x-kernel_x+1, stride_x):
+        for h in range(-1 * pad_y, H + pad_y - kernel_y + 1, stride_y):
+            for w in range(-1 * pad_x, W + pad_x - kernel_x + 1, stride_x):
                 for r in range(kernel_y):
                     for s in range(kernel_x):
                         for c in range(C):
-                            h_offs = h+r
-                            w_offs = w+s
+                            h_offs = h + r
+                            w_offs = w + s
                             pad = h_offs < 0 or h_offs >= H or w_offs < 0 or w_offs >= W
                             ret[idx] = 0 if pad else activation[n][c][h_offs][w_offs]
-                            idx+=1
+                            idx += 1
     assert idx == np.prod(ret_shape)
     return ret.reshape(ret_shape)
 
@@ -368,9 +404,13 @@ def tilize(x):
     """
     nearest_32 = _nearest_32
 
-    assert isinstance(x, (torch.Tensor, np.ndarray)), "Input to this function must be an instance of torch.Tensor or np.array"
+    assert isinstance(
+        x, (torch.Tensor, np.ndarray)
+    ), "Input to this function must be an instance of torch.Tensor or np.array"
     assert len(x.shape) == 4, "Only 4D tensors suppported"
-    assert (x.shape[-2] % 32) == 0 and (x.shape[-1] % 32) == 0, "The last two dimensions of the tensor must be divisible by 32"
+    assert (x.shape[-2] % 32) == 0 and (
+        x.shape[-1] % 32
+    ) == 0, "The last two dimensions of the tensor must be divisible by 32"
 
     if isinstance(x, torch.Tensor):
         ret = torch.zeros(np.prod(x.shape))
@@ -382,7 +422,7 @@ def tilize(x):
         for C in range(x.shape[1]):
             for H in range(0, x.shape[2], 32):
                 for W in range(0, x.shape[3], 32):
-                    unfaced_tile = x[B, C, H:H + 32, W:W + 32]
+                    unfaced_tile = x[B, C, H : H + 32, W : W + 32]
 
                     face0 = unfaced_tile[:16, :16]
                     face1 = unfaced_tile[:16, 16:]
@@ -390,10 +430,11 @@ def tilize(x):
                     face3 = unfaced_tile[16:, 16:]
 
                     for face in (face0, face1, face2, face3):
-                        ret[idx:idx + 256] = face.reshape(-1)
+                        ret[idx : idx + 256] = face.reshape(-1)
                         idx += 256
 
     return ret.reshape(x.shape)
+
 
 def tilize_to_list(x):
     """
@@ -409,6 +450,7 @@ def tilize_to_list(x):
 
     return tilize(x).reshape(-1).tolist()
 
+
 def untilize(x):
     """
     This function untilizes a tensor to row major format.
@@ -420,9 +462,13 @@ def untilize(x):
     """
     nearest_32 = _nearest_32
 
-    assert isinstance(x, (torch.Tensor, np.ndarray)), "Input to this function must be an instance of torch.Tensor"
+    assert isinstance(
+        x, (torch.Tensor, np.ndarray)
+    ), "Input to this function must be an instance of torch.Tensor"
     assert len(x.shape) == 4, "Only 4D tensors suppported"
-    assert (x.shape[-2] % 32) == 0 and (x.shape[-1] % 32) == 0, "The last two dimensions of the tensor must be divisible by 32"
+    assert (x.shape[-2] % 32) == 0 and (
+        x.shape[-1] % 32
+    ) == 0, "The last two dimensions of the tensor must be divisible by 32"
 
     if isinstance(x, torch.Tensor):
         ret = torch.zeros(x.shape)
@@ -431,24 +477,25 @@ def untilize(x):
 
     for B in range(x.shape[0]):
         for C in range(x.shape[1]):
-            x_hw = x[B,C,:].reshape(-1)
+            x_hw = x[B, C, :].reshape(-1)
             hw = 0
             for h in range(0, x.shape[2], 32):
                 for w in range(0, x.shape[3], 32):
-                    f_tile = x_hw[hw:hw+256].reshape(16, 16)
-                    ret[B, C, h:h+16, w:w+16] = f_tile
+                    f_tile = x_hw[hw : hw + 256].reshape(16, 16)
+                    ret[B, C, h : h + 16, w : w + 16] = f_tile
 
-                    f_tile = x_hw[hw+256:hw+512].reshape(16, 16)
-                    ret[B, C, h:h+16, w+16:w+32] = f_tile
+                    f_tile = x_hw[hw + 256 : hw + 512].reshape(16, 16)
+                    ret[B, C, h : h + 16, w + 16 : w + 32] = f_tile
 
-                    f_tile = x_hw[hw+512:hw+768].reshape(16, 16)
-                    ret[B, C, h+16:h+32, w:w+16] = f_tile
+                    f_tile = x_hw[hw + 512 : hw + 768].reshape(16, 16)
+                    ret[B, C, h + 16 : h + 32, w : w + 16] = f_tile
 
-                    f_tile = x_hw[hw+768:hw+1024].reshape(16, 16)
-                    ret[B, C, h+16:h+32, w+16:w+32] = f_tile
-                    hw += 1024 # traverse tiles in RM-order
+                    f_tile = x_hw[hw + 768 : hw + 1024].reshape(16, 16)
+                    ret[B, C, h + 16 : h + 32, w + 16 : w + 32] = f_tile
+                    hw += 1024  # traverse tiles in RM-order
 
     return ret
+
 
 ### Measuring accuracy and other metrics ###
 def is_close(a, b, rtol=1e-2, atol=1e-2, max_mag=2.0, max_mag_fraction=0.02):
@@ -475,7 +522,7 @@ def is_close(a, b, rtol=1e-2, atol=1e-2, max_mag=2.0, max_mag_fraction=0.02):
 
         HT = a.shape[-2] // 32
         WT = a.shape[-1] // 32
-        hwt = debug_index//1024
+        hwt = debug_index // 1024
         wt = hwt % WT
         ht = hwt // WT
         h = (debug_index % 1024) // 32
@@ -596,28 +643,43 @@ def get_oom_of_float(float_lst):
 
     return ooms
 
-def print_diff_argmax(a, b, annotation = ""):
+
+def print_diff_argmax(a, b, annotation=""):
     """
     Prints out the value of both tensors at a point where the absolute difference is the largest.
     """
-    absdiff = (a-b).abs()
+    absdiff = (a - b).abs()
     argmax = absdiff.argmax().item()
     diff = absdiff.reshape(-1)[argmax]
-    rela = a.abs()/(torch.max(a.abs(), b.abs()))
-    relb = b.abs()/(torch.max(a.abs(), b.abs()))
+    rela = a.abs() / (torch.max(a.abs(), b.abs()))
+    relb = b.abs() / (torch.max(a.abs(), b.abs()))
     HT = a.shape[-2] // 32
     WT = a.shape[-1] // 32
-    hwt = argmax//1024
+    hwt = argmax // 1024
     wt = hwt % WT
     ht = hwt // WT
     h = (argmax % 1024) // 32
     w = (argmax % 1024) % 32
-    print("Abs diff=", diff, " at ", argmax, " --- ", annotation, "HTWT=", ht, wt, "HW=", h, w)
+    print(
+        "Abs diff=",
+        diff,
+        " at ",
+        argmax,
+        " --- ",
+        annotation,
+        "HTWT=",
+        ht,
+        wt,
+        "HW=",
+        h,
+        w,
+    )
     print("  (a=", a.reshape(-1)[argmax].item(), ")")
     print("  (b=", b.reshape(-1)[argmax].item(), ")")
     print("  Rel a=", rela.reshape(-1)[argmax], " at ", argmax)
     print("  Rel b=", relb.reshape(-1)[argmax], " at ", argmax)
     return diff.item()
+
 
 def print_diff_tt_pyt(a, b, annotation=""):
     # first convert a pytorch tensor argument b to tt
@@ -639,7 +701,16 @@ def ttP(x, count=4, offset=0, stride=1):
     print(")")
 
 
-def prep_report(model_name: str, batch_size: int, inference_and_compile_time: float, inference_time: float, expected_compile_time: float, expected_inference_time: float, comments: str, inference_time_cpu: float=None):
+def prep_report(
+    model_name: str,
+    batch_size: int,
+    inference_and_compile_time: float,
+    inference_time: float,
+    expected_compile_time: float,
+    expected_inference_time: float,
+    comments: str,
+    inference_time_cpu: float = None,
+):
     today = time.strftime("%Y_%m_%d")
 
     def write_dict_to_file(csv_path, dict_res):
@@ -651,17 +722,22 @@ def prep_report(model_name: str, batch_size: int, inference_and_compile_time: fl
             csvfile.write("\n")
             csvfile.write(values)
 
-
     compile_time = inference_and_compile_time - inference_time
-    gs_throughput = "{:.4f}".format(batch_size * (1/inference_time))
-    cpu_throughput = batch_size * (1/inference_time_cpu) if inference_time_cpu else "unknown"
-    cpu_throughput = "{:.4f}".format(cpu_throughput) if not isinstance(cpu_throughput, str) else cpu_throughput
+    gs_throughput = "{:.4f}".format(batch_size * (1 / inference_time))
+    cpu_throughput = (
+        batch_size * (1 / inference_time_cpu) if inference_time_cpu else "unknown"
+    )
+    cpu_throughput = (
+        "{:.4f}".format(cpu_throughput)
+        if not isinstance(cpu_throughput, str)
+        else cpu_throughput
+    )
     dict_res = {
         "Model": model_name,
         "Setting": comments,
         "Batch": str(batch_size),
         "First Run (sec)": "{:.2f}".format(inference_and_compile_time),
-        "Second Run (sec)":  "{:.2f}".format(inference_time),
+        "Second Run (sec)": "{:.2f}".format(inference_time),
         "Compile Time (sec)": "{:.2f}".format(compile_time),
         "Expected Compile Time (sec)": "{:.2f}".format(expected_compile_time),
         "Inference Time GS (sec)": "{:.4f}".format(inference_time),
@@ -676,91 +752,136 @@ def prep_report(model_name: str, batch_size: int, inference_and_compile_time: fl
 
 
 ### Conv related helpers ###
-def read_conv_act_into_mm_act_block(conv_act, act_address_map_index, address_map, address_map_this_block_size, act_block_h, act_block_w):
-    mm_act_block_shape = [1,1,act_block_h*32, act_block_w*32]
-    mm_act_block_size = act_block_h*act_block_w*1024
+def read_conv_act_into_mm_act_block(
+    conv_act,
+    act_address_map_index,
+    address_map,
+    address_map_this_block_size,
+    act_block_h,
+    act_block_w,
+):
+    mm_act_block_shape = [1, 1, act_block_h * 32, act_block_w * 32]
+    mm_act_block_size = act_block_h * act_block_w * 1024
     mm_act_block = torch.zeros(mm_act_block_size, dtype=torch.bfloat16).float()
     for i in range(0, address_map_this_block_size, 4):
         src_address = address_map[act_address_map_index]
-        dst_address = address_map[act_address_map_index+1]
-        read_size = address_map[act_address_map_index+2]
-        pad = address_map[act_address_map_index+3]
+        dst_address = address_map[act_address_map_index + 1]
+        read_size = address_map[act_address_map_index + 2]
+        pad = address_map[act_address_map_index + 3]
         for s in range(read_size):
-            assert(dst_address+s < mm_act_block_size)
+            assert dst_address + s < mm_act_block_size
             if pad:
-                mm_act_block[dst_address+s] = 0
+                mm_act_block[dst_address + s] = 0
             else:
-                assert(src_address+s < len(conv_act))
-                mm_act_block[dst_address+s] = conv_act[src_address+s]
+                assert src_address + s < len(conv_act)
+                mm_act_block[dst_address + s] = conv_act[src_address + s]
         act_address_map_index += 4
     return (mm_act_block.reshape(mm_act_block_shape), act_address_map_index)
 
-def read_conv_weight_into_mm_weight_block(conv_weight, weight_address_map_index, weight_address_map, weight_address_map_this_block_size, weight_block_h, weight_block_w):
-    mm_weight_block_shape = [1,1,weight_block_h*32, weight_block_w*32]
-    mm_weight_block_size = weight_block_h*weight_block_w*1024
+
+def read_conv_weight_into_mm_weight_block(
+    conv_weight,
+    weight_address_map_index,
+    weight_address_map,
+    weight_address_map_this_block_size,
+    weight_block_h,
+    weight_block_w,
+):
+    mm_weight_block_shape = [1, 1, weight_block_h * 32, weight_block_w * 32]
+    mm_weight_block_size = weight_block_h * weight_block_w * 1024
     mm_weight_block = torch.zeros(mm_weight_block_size, dtype=torch.bfloat16).float()
     for i in range(0, weight_address_map_this_block_size, 4):
         src_address = weight_address_map[weight_address_map_index]
-        dst_address = weight_address_map[weight_address_map_index+1]
-        read_size = weight_address_map[weight_address_map_index+2]
-        pad = weight_address_map[weight_address_map_index+3]
+        dst_address = weight_address_map[weight_address_map_index + 1]
+        read_size = weight_address_map[weight_address_map_index + 2]
+        pad = weight_address_map[weight_address_map_index + 3]
         for s in range(read_size):
-            assert(dst_address+s < mm_weight_block_size)
+            assert dst_address + s < mm_weight_block_size
             if pad:
-                mm_weight_block[dst_address+s] = 0
+                mm_weight_block[dst_address + s] = 0
             else:
-                assert(src_address+s < len(conv_weight))
-                mm_weight_block[dst_address+s] = conv_weight[src_address+s]
+                assert src_address + s < len(conv_weight)
+                mm_weight_block[dst_address + s] = conv_weight[src_address + s]
         weight_address_map_index += 4
     return (mm_weight_block.reshape(mm_weight_block_shape), weight_address_map_index)
 
-def blocked_mm_with_conv_act(conv_act,
-                            mm_weight,
-                            act_address_map,
-                            weight_address_map,
-                            num_blocks_act_h,
-                            num_blocks_act_w,
-                            num_blocks_weight_w,
-                            act_block_h,
-                            act_block_w,
-                            weight_block_w):
+
+def blocked_mm_with_conv_act(
+    conv_act,
+    mm_weight,
+    act_address_map,
+    weight_address_map,
+    num_blocks_act_h,
+    num_blocks_act_w,
+    num_blocks_weight_w,
+    act_block_h,
+    act_block_w,
+    weight_block_w,
+):
     # act refers to conv activation tensor
     # weight refers to conv weight tensor
-    mm_output_shape = [1,1,num_blocks_act_h*act_block_h*32,num_blocks_weight_w*weight_block_w*32]
+    mm_output_shape = [
+        1,
+        1,
+        num_blocks_act_h * act_block_h * 32,
+        num_blocks_weight_w * weight_block_w * 32,
+    ]
     ret = torch.zeros(mm_output_shape, dtype=torch.bfloat16).float()
-    mm_output_block_shape = [1,1,act_block_h*32, weight_block_w*32]
+    mm_output_block_shape = [1, 1, act_block_h * 32, weight_block_w * 32]
     act_address_map_index = 0
     weight_address_map_index = 0
     weight_block_h = act_block_w
     num_groups = act_address_map[act_address_map_index]
-    assert(num_groups == num_blocks_act_h * num_blocks_act_w * num_blocks_weight_w)
+    assert num_groups == num_blocks_act_h * num_blocks_act_w * num_blocks_weight_w
     weight_num_groups = act_address_map[weight_address_map_index]
-    assert(weight_num_groups == num_groups);
+    assert weight_num_groups == num_groups
     act_address_map_index += 1
     weight_address_map_index += 1
     for block_act_h in range(num_blocks_act_h):
         # Reset weight (weight) to the starting tile in this column
         for block_weight_w in range(num_blocks_weight_w):
-            output_block = torch.zeros(mm_output_block_shape, dtype=torch.bfloat16).float()
+            output_block = torch.zeros(
+                mm_output_block_shape, dtype=torch.bfloat16
+            ).float()
             for block_act_w in range(num_blocks_act_w):
                 address_map_this_block_size = act_address_map[act_address_map_index]
                 act_address_map_index += 1
-                weight_address_map_this_block_size = weight_address_map[weight_address_map_index]
+                weight_address_map_this_block_size = weight_address_map[
+                    weight_address_map_index
+                ]
                 weight_address_map_index += 1
-                (mm_act_block, act_address_map_index) = read_conv_act_into_mm_act_block(conv_act, act_address_map_index,
-                                                    act_address_map, address_map_this_block_size, act_block_h, act_block_w)
-                (mm_weight_block, weight_address_map_index) = read_conv_weight_into_mm_weight_block(mm_weight, weight_address_map_index,
-                                                    weight_address_map, weight_address_map_this_block_size, weight_block_h, weight_block_w)
+                (mm_act_block, act_address_map_index) = read_conv_act_into_mm_act_block(
+                    conv_act,
+                    act_address_map_index,
+                    act_address_map,
+                    address_map_this_block_size,
+                    act_block_h,
+                    act_block_w,
+                )
+                (
+                    mm_weight_block,
+                    weight_address_map_index,
+                ) = read_conv_weight_into_mm_weight_block(
+                    mm_weight,
+                    weight_address_map_index,
+                    weight_address_map,
+                    weight_address_map_this_block_size,
+                    weight_block_h,
+                    weight_block_w,
+                )
                 # Untilize weight block (this CPU reference does matmul on untilized blocks)
                 mm_weight_block = untilize(mm_weight_block)
-                for out_h_block in range(act_block_h*32):
-                    for out_w_block in range(weight_block_w*32):
-                        output_block[0][0][out_h_block][out_w_block] += torch.dot(mm_act_block[0,0,out_h_block,:].reshape(-1), mm_weight_block[0,0,:,out_w_block].reshape(-1))
+                for out_h_block in range(act_block_h * 32):
+                    for out_w_block in range(weight_block_w * 32):
+                        output_block[0][0][out_h_block][out_w_block] += torch.dot(
+                            mm_act_block[0, 0, out_h_block, :].reshape(-1),
+                            mm_weight_block[0, 0, :, out_w_block].reshape(-1),
+                        )
             start_oh = block_act_h * act_block_h * 32
             start_ow = block_weight_w * weight_block_w * 32
             end_oh = start_oh + (act_block_h * 32)
             end_ow = start_ow + (weight_block_w * 32)
-            ret[0,0,start_oh:end_oh,start_ow:end_ow] = output_block
+            ret[0, 0, start_oh:end_oh, start_ow:end_ow] = output_block
 
     return ret
 
