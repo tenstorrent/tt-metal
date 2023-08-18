@@ -73,6 +73,7 @@ def custom_compare(*args, **kwargs):
                 "acosh",
                 "atanh",
                 "atan2",
+                "ldexp",
             ),
             ([[1, 1, 32, 32]], [[1, 3, 320, 64]]),
             (0,),
@@ -99,6 +100,7 @@ def test_run_eltwise_composite_test(
     options["softsign"] = (1, 100)
 
     options["sinh"] = (-9, 9)
+    options["ldexp"] = (-64, 64)
     options["tanhshrink"] = (-100, 100)
     options["atanh"] = (-100, 100)
     options["cosh"] = options["sinh"]
@@ -116,7 +118,7 @@ def test_run_eltwise_composite_test(
     num_inputs = 1
     if fn in ["mac", "addcmul", "addcdiv", "lerp_ternary"]:
         num_inputs = 3
-    elif fn in ["hypot", "min", "max", "lerp_binary", "xlogy","atan2"]:
+    elif fn in ["hypot", "min", "max", "lerp_binary", "xlogy", "atan2", "lerp_binary", "atan2", "ldexp"]:
         num_inputs = 2
 
     input_shapes = input_shapes * num_inputs

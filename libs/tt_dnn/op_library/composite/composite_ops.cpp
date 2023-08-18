@@ -479,6 +479,16 @@ Tensor lerp(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c,
     return operation::decorate_as_composite(__func__, _lerp_overload)(input_a, input_b, input_c, output_mem_config);
 }
 
+//ldexp(input,other)=input * (2^other)
+Tensor _ldexp(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
+    Tensor result = mul(input_a, exp2(input_b, output_mem_config), std::nullopt, output_mem_config);
+    return result;
+}
+Tensor ldexp(const Tensor &input_a, const Tensor &input_b, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _ldexp)(input_a, input_b, output_mem_config);
+}
+
 //addcmul(input,tensor1,tensor2,value)=input+value×tensor1×tensor2
 Tensor _addcmul(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c, float value, const MemoryConfig& output_mem_config) {
     Tensor t_value = mk_tiled_scalar(value);

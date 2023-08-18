@@ -1210,6 +1210,8 @@ void TensorModule(py::module &m_tensor) {
     detail::bind_binary_op<false, true>(m_tensor, "hypot", &hypot, R"doc(Returns tensor with the hypot activation on elements of the input tensors ``{0}`` and ``{1}``.)doc");
     detail::bind_binary_op<false, true>(m_tensor, "xlogy", &xlogy, R"doc(Performs eltwise-binary xlogy (``{0} * log( {1} )``) on two tensors.)doc");
     detail::bind_binary_op<false, true>(m_tensor, "atan2", &atan2, R"doc(Returns tensor with the atan2 activation on elements of the input tensors ``{0}`` and ``{1}``.)doc");
+    detail::bind_binary_op<false, true>(m_tensor, "ldexp", &ldexp, R"doc(Performs eltwise-binary ldexp (``{0} * 2**{1}``) on two tensors.)doc");
+
     detail::bind_binary_op(m_tensor, "add_without_autoformat", add_without_autoformat,
         R"doc(Perform an eltwise-binary add (``{0} + {1}``) on two tensors.
 
