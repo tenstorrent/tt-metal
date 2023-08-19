@@ -31,9 +31,7 @@ def function_level_defaults(reset_seeds):
 def model_location_generator():
     def model_location_generator_(model_version, model_subdir=""):
         model_folder = Path("tt_dnn-models") / model_subdir
-        internal_weka_path = (
-            Path("/mnt/MLPerf") / model_folder / model_version
-        )
+        internal_weka_path = Path("/mnt/MLPerf") / model_folder / model_version
         has_internal_weka = internal_weka_path.exists()
         internal_cache_path = (
             Path("/opt/tt-metal-models") / model_folder / model_version
@@ -61,8 +59,14 @@ def pytest_addoption(parser):
     parser.addoption(
         "--tt-arch",
         choices=[*ALL_ARCHS],
-        default="grayskull",
+        default=os.environ.get("ARCH_NAME", "grayskull"),
         help="Target arch, ex. grayskull, wormhole_b0",
+    )
+    parser.addoption(
+        "--chip-id",
+        type=int,
+        default=0,
+        help="Target chip id",
     )
 
 
@@ -210,6 +214,33 @@ def reset_tensix(request, silicon_arch_name):
         else:
             raise Exception(f"Unrecognized arch for tensix-reset: {silicon_arch_name}")
         assert result.returncode == 0, "Tensix reset script raised error"
+
+
+@pytest.fixture(scope="function")
+def device(request):
+    import tt_lib as ttl
+
+    silicon_arch_name = request.config.getoption("tt_arch")
+    chip_id = request.config.getoption("chip_id")
+
+    arch = getattr(ttl.device.Arch, silicon_arch_name.upper())
+
+    if arch == ttl.device.Arch.WORMHOLE_B0:
+        dispatch = os.environ.pop("TT_METAL_SLOW_DISPATCH_MODE", None)
+        os.environ["TT_METAL_SLOW_DISPATCH_MODE"] = "1"
+
+    device = ttl.device.CreateDevice(arch, chip_id)
+    ttl.device.InitializeDevice(device)
+    ttl.device.SetDefaultDevice(device)
+
+    yield device
+
+    ttl.device.CloseDevice(device)
+
+    if arch == ttl.device.Arch.WORMHOLE_B0:
+        os.environ.pop("TT_METAL_SLOW_DISPATCH_MODE", None)
+        if dispatch is not None:
+            os.environ["TT_METAL_SLOW_DISPATCH_MODE"] = dispatch
 
 
 @pytest.fixture(autouse=True)
