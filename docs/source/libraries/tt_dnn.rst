@@ -304,6 +304,10 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.heaviside
 
+.. autofunction:: tt_lib.tensor.logaddexp
+
+.. autofunction:: tt_lib.tensor.logaddexp2
+
 Tensor relational operations
 ----------------------------------
 .. autofunction:: tt_lib.tensor.gtz
@@ -486,10 +490,6 @@ Other Operations
 .. autofunction:: tt_lib.tensor.lerp
 
 .. autofunction:: tt_lib.tensor.atan2
-
-.. autofunction:: tt_lib.tensor.logaddexp
-
-.. autofunction:: tt_lib.tensor.logaddexp2
 
 .. autofunction:: tt_lib.tensor.signbit
 
