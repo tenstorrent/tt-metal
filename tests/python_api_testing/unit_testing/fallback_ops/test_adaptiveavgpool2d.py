@@ -21,11 +21,9 @@ def test_AdaptiveAvgPool2d_fallback(
     input_shape,
     output_size,
     on_device,
+    device,
 ):
     torch.manual_seed(1234)
-
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
 
     x = torch.randn(input_shape).bfloat16().float()
     pt_nn = torch.nn.AdaptiveAvgPool2d(output_size)
@@ -49,7 +47,3 @@ def test_AdaptiveAvgPool2d_fallback(
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
     logger.info(comp_out)
     assert comp_pass
-
-    del t1
-
-    ttl.device.CloseDevice(device)

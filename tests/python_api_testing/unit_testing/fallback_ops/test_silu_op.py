@@ -18,11 +18,8 @@ import pytest
     ],
 )
 @pytest.mark.parametrize("on_device", [True, False])
-def test_silu_fallback(input_shape, on_device):
+def test_silu_fallback(input_shape, on_device, device):
     torch.manual_seed(1234)
-
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
 
     x = torch.randn(input_shape).bfloat16().float()
     pt_out = torch.nn.functional.silu(x)
@@ -44,7 +41,3 @@ def test_silu_fallback(input_shape, on_device):
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
     logger.info(comp_out)
     assert comp_pass
-
-    del t1
-
-    ttl.device.CloseDevice(device)

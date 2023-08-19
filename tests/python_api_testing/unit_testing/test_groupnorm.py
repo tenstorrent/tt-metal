@@ -25,14 +25,14 @@ def ref_groupnorm(x, group_size, eps, **kwargs):
     return lnorm(x)
 
 
-def run_groupnorm_tests(test_id, group_size, dtype, in0_mem_config, out_mem_config):
+def run_groupnorm_tests(
+    test_id, group_size, dtype, in0_mem_config, out_mem_config, device
+):
     torch.manual_seed(1234)
 
     # Initialize the device
     tensor = ttl.tensor
-    device = ttl.device
-    dev = device.CreateDevice(device.Arch.GRAYSKULL, 0)
-    device.InitializeDevice(dev)
+    dev = device
 
     epsf = 1e-2
 
@@ -96,7 +96,9 @@ def run_groupnorm_tests(test_id, group_size, dtype, in0_mem_config, out_mem_conf
 
             if test_id == 0:
                 logger.info("Running LN_NOGB")
-                ttz = tensor.groupnorm(ttx, group_size, epsf, output_mem_config=out_mem_config)
+                ttz = tensor.groupnorm(
+                    ttx, group_size, epsf, output_mem_config=out_mem_config
+                )
                 golden = ref_groupnorm(x, group_size, epsf)
             elif test_id == 1:
                 logger.info("Running LN_G")
@@ -125,24 +127,18 @@ def run_groupnorm_tests(test_id, group_size, dtype, in0_mem_config, out_mem_conf
 
             torch.isclose(golden, tt_got_back)
 
-    device.CloseDevice(dev)
-
 
 import pytest
 
 
 @pytest.mark.parametrize(
     "out_mem_config",
-    (
-        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
-    ),
+    (ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),),
     ids=["out_DRAM"],
 )
 @pytest.mark.parametrize(
     "in0_mem_config",
-    (
-        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
-    ),
+    (ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),),
     ids=["in0_DRAM"],
 )
 @pytest.mark.parametrize(
@@ -157,6 +153,6 @@ import pytest
         "GN",
     ],
 )
-def test_groupnorm_test(test_id, dtype, in0_mem_config, out_mem_config, request):
+def test_groupnorm_test(test_id, dtype, in0_mem_config, out_mem_config, device):
     group_size = 1
-    run_groupnorm_tests(test_id, group_size, dtype, in0_mem_config, out_mem_config)
+    run_groupnorm_tests(test_id, group_size, dtype, in0_mem_config, out_mem_config, device)

@@ -8,11 +8,7 @@ from models.utility_functions import comp_pcc, pad_by_zero
 
 
 @pytest.mark.parametrize("shape", [[1, 1, 32, 128]])
-def test_softmax(shape):
-    # Initialize the device
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
-
+def test_softmax(shape, device):
     x = torch.randn(shape).bfloat16().float()
 
     xt = (
@@ -24,10 +20,6 @@ def test_softmax(shape):
 
     tt_got_back = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
-    del xtt
-
-    ttl.device.CloseDevice(device)
-
     pt_out = torch.nn.functional.softmax(x, dim=-1)
 
     passing, output = comp_pcc(pt_out, tt_got_back)
@@ -36,11 +28,7 @@ def test_softmax(shape):
 
 
 @pytest.mark.parametrize("shape", [[1, 1, 32, 128]])
-def test_layernorm(shape):
-    # Initialize the device
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
-
+def test_layernorm(shape, device):
     x = torch.randn(shape).bfloat16().float()
     gamma = torch.randn([shape[-1]]).bfloat16().float()
     beta = torch.randn([shape[-1]]).bfloat16().float()
@@ -56,10 +44,6 @@ def test_layernorm(shape):
     xtt = ttl.tensor.layernorm(xt, 1e-5, gammat, betat)
 
     tt_got_back = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    del xtt
-
-    ttl.device.CloseDevice(device)
 
     pt_out = torch.nn.functional.layer_norm(x, x.shape[-1:], gamma, beta, 1e-5)
 

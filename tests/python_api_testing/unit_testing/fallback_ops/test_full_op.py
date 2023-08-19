@@ -12,11 +12,8 @@ import pytest
     "input_shape", [torch.Size([1, 3, 6, 4]), torch.Size([3, 2, 65, 10])]
 )
 @pytest.mark.parametrize("fill_value", [13.8, 5.5, 31, 0.1])
-def test_full_fallback(input_shape, fill_value):
+def test_full_fallback(input_shape, fill_value, device):
     torch.manual_seed(1234)
-
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
 
     fill_value = torch.Tensor([fill_value]).bfloat16().float().item()
     pt_out = torch.full(input_shape, fill_value)
@@ -28,7 +25,3 @@ def test_full_fallback(input_shape, fill_value):
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
     logger.info(comp_out)
     assert comp_pass
-
-    del t0
-
-    ttl.device.CloseDevice(device)

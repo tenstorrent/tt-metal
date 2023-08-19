@@ -78,7 +78,7 @@ def getTensorFromBuff(buff):
     ],
 )
 def test_split_tiled_w(
-    shape, in_mem_config, out_mem_config, dtype=ttl.tensor.DataType.BFLOAT16
+    shape, in_mem_config, out_mem_config, device, dtype=ttl.tensor.DataType.BFLOAT16
 ):
     profile_location = "tt_metal/tools/profiler/logs/splitTwoChunks/"
     os.system(f"rm -rf {profile_location}")
@@ -93,9 +93,6 @@ def test_split_tiled_w(
 
     num_splits = 2
     torch.manual_seed(1234)
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
-    ttl.device.SetDefaultDevice(device)
 
     tile_size = 32
     W = 1
@@ -158,5 +155,3 @@ def test_split_tiled_w(
         logger.info(f"Out passing={passing_pcc}")
         logger.info(f"Output pcc={output_pcc}")
         assert passing_pcc
-
-    ttl.device.CloseDevice(device)

@@ -33,11 +33,8 @@ def apply_rotary_pos_emb(x, cos_cached, sin_cached):
     ),
 )
 @pytest.mark.parametrize("cache_size", [2048])
-def test_rotary_embedding(W, Z, Y, X, cache_size):
+def test_rotary_embedding(W, Z, Y, X, cache_size, device):
     torch.manual_seed(0)
-    # Initialize the device
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
 
     input_shape = [W, Z, Y, X]
     sin_cos_shape = [W, 1, cache_size, X]
@@ -66,10 +63,6 @@ def test_rotary_embedding(W, Z, Y, X, cache_size):
     tt_got_back = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
     pt_out = apply_rotary_pos_emb(x, cos_cached, sin_cached)
-
-    del xtt
-
-    ttl.device.CloseDevice(device)
 
     p, o = comp_pcc(pt_out, tt_got_back)
     logger.info(o)

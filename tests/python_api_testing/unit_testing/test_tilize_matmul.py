@@ -16,10 +16,7 @@ from models.utility_functions import (
 import torch
 
 
-def run_tilize_matmul_test(M, K, N):
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
-
+def run_tilize_matmul_test(M, K, N, device):
     a_shape = [1, 1, M, K]
     b_shape = [1, 1, K, N]
 
@@ -53,11 +50,8 @@ def run_tilize_matmul_test(M, K, N):
     print("Passing=", passing_pcc)
     print("Output pcc=", output_pcc)
 
-    del t2
-
-    ttl.device.CloseDevice(device)
     assert passing_pcc
 
 
-def test_run_tilize_matmul_test():
-    run_tilize_matmul_test(32, 32, 32)
+def test_run_tilize_matmul_test(device):
+    run_tilize_matmul_test(32, 32, 32, device)

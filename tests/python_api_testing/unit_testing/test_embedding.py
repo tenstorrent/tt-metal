@@ -25,15 +25,19 @@ def baseline_embeddings_list(num_rows, num_embeddings, embedding_dim, input, wei
 
 
 def run_embeddings_tests(
-    num_embeddings, embedding_dim, num_rows, dtype, in0_mem_config, out_mem_config
+    num_embeddings,
+    embedding_dim,
+    num_rows,
+    dtype,
+    in0_mem_config,
+    out_mem_config,
+    device,
 ):
     torch.manual_seed(1234)
 
     # Initialize the device
     tensor = ttl.tensor
-    device = ttl.device
-    dev = device.CreateDevice(device.Arch.GRAYSKULL, 0)
-    device.InitializeDevice(dev)
+    dev = device
 
     input_rows_shape = [1, 1, num_rows, 1]
 
@@ -45,9 +49,7 @@ def run_embeddings_tests(
     )
     weights_tensor = tensor.Tensor(weights_torch, dtype).to(dev, in0_mem_config)
 
-    ttz = tensor.embeddings(
-        input_tensor, weights_tensor, out_mem_config
-    )
+    ttz = tensor.embeddings(input_tensor, weights_tensor, out_mem_config)
     tt_data = ttz.cpu().to_torch()
     tt_got_back = torch.Tensor(tt_data).reshape((1, 1, num_rows, embedding_dim))
     reference_list = baseline_embeddings_list(
@@ -58,8 +60,6 @@ def run_embeddings_tests(
     )
 
     assert is_close(tt_got_back, reference_torch)
-
-    device.CloseDevice(dev)
 
 
 import pytest
@@ -81,16 +81,20 @@ import pytest
     ids=["BFLOAT16"],
 )
 
-#TODO add Llama Word embeddings of size 320000
-#Enqueue write buffer too large
+# TODO add Llama Word embeddings of size 320000
+# Enqueue write buffer too large
 @pytest.mark.parametrize(
     "num_embeddings",
     (512, 30522, 2048),
-    ids=["Bert_Position_Embeddings_512", "Bert_Word_Embeddings_30522",  "Llama_Position_Embeddings"],
+    ids=[
+        "Bert_Position_Embeddings_512",
+        "Bert_Word_Embeddings_30522",
+        "Llama_Position_Embeddings",
+    ],
 )
 @pytest.mark.parametrize(
     "embedding_dim",
-    (768,4096),
+    (768, 4096),
     ids=["Bert_Num_Cols_768", "Llama_Num_Cols"],
 )
 @pytest.mark.parametrize(
@@ -99,8 +103,20 @@ import pytest
     ids=["Num_Output_Rows_4"],
 )
 def test_embeddings(
-    num_embeddings, embedding_dim, num_rows, dtype, in0_mem_config, out_mem_config
+    num_embeddings,
+    embedding_dim,
+    num_rows,
+    dtype,
+    in0_mem_config,
+    out_mem_config,
+    device,
 ):
     run_embeddings_tests(
-        num_embeddings, embedding_dim, num_rows, dtype, in0_mem_config, out_mem_config
+        num_embeddings,
+        embedding_dim,
+        num_rows,
+        dtype,
+        in0_mem_config,
+        out_mem_config,
+        device,
     )

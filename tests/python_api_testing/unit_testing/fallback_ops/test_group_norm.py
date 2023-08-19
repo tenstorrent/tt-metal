@@ -78,12 +78,9 @@ import pytest
     ),
 )
 def test_group_norm_fallback(
-    input_shape, weight_shape, bias_shape, num_groups, eps, on_device
+    input_shape, weight_shape, bias_shape, num_groups, eps, on_device, device
 ):
     torch.manual_seed(1234)
-
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
 
     x = torch.randn(input_shape).bfloat16().float()
     w = (
@@ -152,10 +149,6 @@ def test_group_norm_fallback(
     logger.info(comp_out)
     assert comp_pass
 
-    del t1
-
-    ttl.device.CloseDevice(device)
-
 
 @pytest.mark.parametrize(
     "input_shape, weight_shape, bias_shape, num_groups, num_channels, eps, elementwise_affine, on_device",
@@ -211,11 +204,9 @@ def test_GroupNorm_fallback(
     eps,
     elementwise_affine,
     on_device,
+    device,
 ):
     torch.manual_seed(1234)
-
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
 
     x = torch.randn(input_shape).bfloat16().float()
     w = torch.randn(weight_shape).bfloat16().float()
@@ -271,7 +262,3 @@ def test_GroupNorm_fallback(
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
     logger.info(comp_out)
     assert comp_pass
-
-    del t1
-
-    ttl.device.CloseDevice(device)

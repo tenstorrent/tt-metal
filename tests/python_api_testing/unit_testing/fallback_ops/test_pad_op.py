@@ -17,11 +17,8 @@ import pytest
         (torch.Size([2, 4, 31, 16]), (1, 3, 1, 0, 17, 3, 5, 7), "constant", 9.2, False),
     ),
 )
-def test_pad_fallback(input_shape, pad, mode, value, on_device):
+def test_pad_fallback(input_shape, pad, mode, value, on_device, device):
     torch.manual_seed(1234)
-
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
 
     value = torch.Tensor([value]).bfloat16().float().item()
     x = torch.randn(input_shape).bfloat16().float()
@@ -44,7 +41,3 @@ def test_pad_fallback(input_shape, pad, mode, value, on_device):
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
     logger.info(comp_out)
     assert comp_pass
-
-    del t1
-
-    ttl.device.CloseDevice(device)

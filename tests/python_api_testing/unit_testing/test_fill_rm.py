@@ -10,12 +10,7 @@ import tt_lib
 from models.utility_functions import print_diff_argmax
 
 
-def test_fill_rm():
-    # Initialize the device
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
-    tt_lib.device.InitializeDevice(device)
-
-
+def test_fill_rm(device):
     N = 2
     C = 3
     H = 64
@@ -46,7 +41,3 @@ def test_fill_rm():
     print("reshape() max absdiff=")
     print_diff_argmax(tt_got_back, xp)
     assert torch.equal(tt_got_back, xp)
-
-    del xtt
-
-    tt_lib.device.CloseDevice(device)

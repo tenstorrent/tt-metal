@@ -19,10 +19,7 @@ from models.utility_functions import untilize
         (5, 2, 4, 7),  # slow non-power of 2 width path
     ),
 )
-def test_run_untilize_test(nb, nc, nh, nw):
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
-
+def test_run_untilize_test(nb, nc, nh, nw, device):
     nt = nb * nc * nh * nw
     shape = [nb, nc, 32 * nh, 32 * nw]
 
@@ -42,7 +39,3 @@ def test_run_untilize_test(nb, nc, nh, nw):
     assert (
         abs(untilized_inp - c) < 0.02
     ).all(), "Max abs difference for untilize can be 0.02 due to bfloat conversions"
-
-    del b
-
-    ttl.device.CloseDevice(device)

@@ -11,11 +11,7 @@ from models.utility_functions import comp_pcc
 from loguru import logger
 
 
-def test_eltwise_unary_chain():
-    # Initialize the device
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
-
+def test_eltwise_unary_chain(device):
     N = 1
     C = 2
     H = 32
@@ -50,16 +46,9 @@ def test_eltwise_unary_chain():
     passing, out = comp_pcc(pt_ref, tt_got_back)
     logger.info(out)
     assert passing
-    del xtt
-
-    ttl.device.CloseDevice(device)
 
 
-def test_eltwise_binary_fused():
-    # Initialize the device
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
-
+def test_eltwise_binary_fused(device):
     N = 1
     C = 2
     H = 32
@@ -105,6 +94,3 @@ def test_eltwise_binary_fused():
     passing, out = comp_pcc(pt_ref, tt_got_back)
     logger.info(out)
     assert passing
-    del xtt
-
-    ttl.device.CloseDevice(device)

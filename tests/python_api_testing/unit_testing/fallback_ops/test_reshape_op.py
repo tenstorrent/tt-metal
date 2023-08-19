@@ -17,11 +17,8 @@ import pytest
         (torch.Size([1, 2, 64, 32]), torch.Size([2, 4, 128, 4]), False),
     ),
 )
-def test_reshape_fallback(input_shape, output_shape, on_device):
+def test_reshape_fallback(input_shape, output_shape, on_device, device):
     torch.manual_seed(1234)
-
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
 
     x = torch.randn(input_shape).bfloat16().float()
     pt_out = torch.reshape(x, output_shape)
@@ -43,7 +40,3 @@ def test_reshape_fallback(input_shape, output_shape, on_device):
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
     logger.info(comp_out)
     assert comp_pass
-
-    del t1
-
-    ttl.device.CloseDevice(device)

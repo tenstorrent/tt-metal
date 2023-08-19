@@ -14,11 +14,8 @@ import pytest
 @pytest.mark.parametrize("chunks", [1, 2, 3])
 @pytest.mark.parametrize("dim", [0, 1, 2, 3])
 @pytest.mark.parametrize("on_device", [False, True])
-def test_chunk_fallback(input_shape, chunks, dim, on_device):
+def test_chunk_fallback(input_shape, chunks, dim, on_device, device):
     torch.manual_seed(1234)
-
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
 
     x = torch.randn(input_shape).bfloat16().float()
     pt_out = torch.chunk(x, chunks, dim)
@@ -42,7 +39,3 @@ def test_chunk_fallback(input_shape, chunks, dim, on_device):
         _, comp_out = comp_allclose_and_pcc(pt_output, tt_output)
         logger.info(comp_out)
         assert comp_pass
-
-    del tt_out
-
-    ttl.device.CloseDevice(device)

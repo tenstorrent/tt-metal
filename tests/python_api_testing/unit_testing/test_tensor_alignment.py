@@ -2,13 +2,9 @@ import tt_lib as ttl
 import torch
 
 
-def test_tensor_alignment():
+def test_tensor_alignment(device):
     a = torch.arange(1022).to(torch.bfloat16).reshape(1, 1, 1, 1022)
     b = torch.arange(1024).to(torch.bfloat16).reshape(1, 1, 32, 32)
-
-
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
 
     t0 = ttl.tensor.Tensor(
         a.reshape(-1).tolist(),
@@ -34,5 +30,3 @@ def test_tensor_alignment():
     t1_h = t1_d.cpu()
 
     assert torch.equal(b, t1_h.to_torch())
-
-    ttl.device.CloseDevice(device)

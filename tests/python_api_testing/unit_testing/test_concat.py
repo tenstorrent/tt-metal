@@ -23,11 +23,8 @@ from tests.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
     "dtype", ((ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B))
 )
 @pytest.mark.parametrize("nChannels", ((2, 3, 4)))
-def test_tile_simple_concat(memcfg, dtype, nChannels):
+def test_tile_simple_concat(memcfg, dtype, nChannels, device):
     torch.manual_seed(0)
-    # Initialize the device
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
     N = nChannels
     C = nChannels
     H = 32
@@ -71,7 +68,6 @@ def test_tile_simple_concat(memcfg, dtype, nChannels):
 
     assert comp_pcc(tt_cpu, tt_dev)[0]
 
-    ttl.device.CloseDevice(device)
 
 # @pytest.mark.skip(reason="For Stable Diffusion Sizes only")
 @pytest.mark.parametrize(
@@ -81,9 +77,9 @@ def test_tile_simple_concat(memcfg, dtype, nChannels):
         ((1, 1, 32, 64), (1, 1, 32, 128), 3),
         ((1, 1, 32, 128), (1, 1, 32, 64), 3),
         ((1, 1, 64, 128), (1, 1, 64, 256), 3),
-        ((1,32,32,32),(1,32,32,32),2),
-        ((1,1,32,32),(1,1,32,32),3),
-        ((2,4, 32, 1280), (2, 4, 32, 1280), 3),
+        ((1, 32, 32, 32), (1, 32, 32, 32), 2),
+        ((1, 1, 32, 32), (1, 1, 32, 32), 3),
+        ((2, 4, 32, 1280), (2, 4, 32, 1280), 3),
         # SD Shapes
         ((2, 1280, 4, 4), (2, 1280, 4, 4), 1),
         ((2, 640, 32, 32), (2, 320, 32, 32), 1),
@@ -92,12 +88,10 @@ def test_tile_simple_concat(memcfg, dtype, nChannels):
         ((2, 320, 32, 32), (2, 320, 32, 32), 1),
     ),
 )
-def test_tile_simple_dim3_concat(shape_a_b_dim):
+def test_tile_simple_dim3_concat(shape_a_b_dim, device):
     shape_a, shape_b, dim = shape_a_b_dim
     torch.manual_seed(0)
-    # Initialize the device
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
+
     N = shape_a[0]  # 1x1x64x32
     C = shape_a[1]
     H = shape_a[2]
@@ -139,7 +133,6 @@ def test_tile_simple_dim3_concat(shape_a_b_dim):
     assert torch.equal(tt_cpu, tt_dev)
 
     assert comp_pcc(tt_cpu, tt_dev)[0]
-    ttl.device.CloseDevice(device)
 
 
 def debug_show(H_cols, tt_dev, tt_cpu):

@@ -14,11 +14,8 @@ import pytest
 @pytest.mark.parametrize("repeats", [1, 2, 3])
 @pytest.mark.parametrize("dim", [0, 1, 2, 3])
 @pytest.mark.parametrize("on_device", [False, True])
-def test_repeat_interleave_fallback(input_shape, repeats, dim, on_device):
+def test_repeat_interleave_fallback(input_shape, repeats, dim, on_device, device):
     torch.manual_seed(1234)
-
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
 
     x = torch.randn(input_shape).bfloat16().float()
     pt_out = torch.repeat_interleave(x, repeats, dim)
@@ -40,7 +37,3 @@ def test_repeat_interleave_fallback(input_shape, repeats, dim, on_device):
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
     logger.info(comp_out)
     assert comp_pass
-
-    del t1
-
-    ttl.device.CloseDevice(device)

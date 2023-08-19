@@ -14,11 +14,8 @@ import pytest
 )
 @pytest.mark.parametrize("sizes", [[1, 2, 3, 4], [2, 2, 2, 2]])
 @pytest.mark.parametrize("on_device", [False, True])
-def test_repeat_fallback(input_shape, sizes, on_device):
+def test_repeat_fallback(input_shape, sizes, on_device, device):
     torch.manual_seed(1234)
-
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
 
     x = torch.randn(input_shape).bfloat16().float()
     pt_out = x.repeat(sizes)
@@ -40,7 +37,3 @@ def test_repeat_fallback(input_shape, sizes, on_device):
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
     logger.info(comp_out)
     assert comp_pass
-
-    del t1
-
-    ttl.device.CloseDevice(device)

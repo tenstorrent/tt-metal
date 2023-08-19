@@ -54,12 +54,17 @@ import pytest
     ),
 )
 def test_conv2d_fallback(
-    input_shape, weight_shape, bias_shape, stride, padding, dilation, groups, on_device
+    input_shape,
+    weight_shape,
+    bias_shape,
+    stride,
+    padding,
+    dilation,
+    groups,
+    on_device,
+    device,
 ):
     torch.manual_seed(1234)
-
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
 
     x = torch.randn(input_shape).bfloat16().float()
     w = torch.randn(weight_shape).bfloat16().float()
@@ -115,9 +120,6 @@ def test_conv2d_fallback(
     comp_pass, _ = comp_pcc(pt_out, output, 0.9999)
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
     logger.info(comp_out)
-    assert comp_pass
-
-    ttl.device.CloseDevice(device)
 
 
 @pytest.mark.parametrize(
@@ -199,11 +201,9 @@ def test_Conv2d_fallback(
     bias,
     padding_mode,
     on_device,
+    device,
 ):
     torch.manual_seed(1234)
-
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
 
     x = torch.randn(input_shape).bfloat16().float()
     w = torch.randn(weight_shape).bfloat16().float()
@@ -288,7 +288,3 @@ def test_Conv2d_fallback(
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
     logger.info(comp_out)
     assert comp_pass
-
-    del t1
-
-    ttl.device.CloseDevice(device)

@@ -10,12 +10,7 @@ import tt_lib as ttl
 from models.utility_functions import print_diff_argmax
 
 
-def test_transpose_hc():
-    # Initialize the device
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
-
-
+def test_transpose_hc(device):
     N = 3
     C = 32 * 2
     H = 32 * 4
@@ -42,7 +37,3 @@ def test_transpose_hc():
     print_diff_argmax(tt_got_back, transposed_ref)
 
     assert torch.equal(tt_got_back, transposed_ref)
-
-    del xtt
-
-    ttl.device.CloseDevice(device)

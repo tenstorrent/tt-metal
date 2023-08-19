@@ -106,7 +106,7 @@ def test_run_unpadding_test(input_tensor_shape, output_tensor_start, output_tens
     (((1, 1, 3, 4), (1, 1, 32, 32), (0, 0, 1, 1), 0),),
 )
 def test_run_padding_and_add_test(
-    input_tensor_shape, output_tensor_shape, input_tensor_start, pad_value
+    input_tensor_shape, output_tensor_shape, input_tensor_start, pad_value, device
 ):
     # Args for unpad
     output_tensor_start = input_tensor_start
@@ -137,9 +137,6 @@ def test_run_padding_and_add_test(
     b_pad = b.pad(output_tensor_shape, input_tensor_start, pad_value)
 
     # Run add op on device with padded tensors
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
-
 
     a_dev = a_pad.to(ttl.tensor.Layout.TILE).to(device)
     b_dev = b_pad.to(ttl.tensor.Layout.TILE).to(device)
@@ -156,10 +153,6 @@ def test_run_padding_and_add_test(
     # print("\n", out_ref)
 
     assert torch.allclose(out_pt, out_ref, rtol=1e-2)
-
-    del out_dev
-
-    ttl.device.CloseDevice(device)
 
 
 @pytest.mark.parametrize(
@@ -258,7 +251,7 @@ def test_run_tile_unpadding_test(input_tensor_shape, output_tensor_shape):
     "input_tensor_shape, pad_value",
     (((1, 1, 3, 4), 0),),
 )
-def test_run_tile_padding_and_add_test(input_tensor_shape, pad_value):
+def test_run_tile_padding_and_add_test(input_tensor_shape, pad_value, device):
     inp = torch.rand(*input_tensor_shape)
     ones = torch.ones(*input_tensor_shape)
 
@@ -280,11 +273,6 @@ def test_run_tile_padding_and_add_test(input_tensor_shape, pad_value):
     a_pad = a.pad_to_tile(pad_value)
     b_pad = b.pad_to_tile(pad_value)
 
-    # Run add op on device with padded tensors
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
-
-
     a_dev = a_pad.to(ttl.tensor.Layout.TILE).to(device)
     b_dev = b_pad.to(ttl.tensor.Layout.TILE).to(device)
     out_dev = ttl.tensor.add(a_dev, b_dev)
@@ -300,7 +288,3 @@ def test_run_tile_padding_and_add_test(input_tensor_shape, pad_value):
     # print("\n", out_ref)
 
     assert torch.allclose(out_pt, out_ref, rtol=1e-2)
-
-    del out_dev
-
-    ttl.device.CloseDevice(device)

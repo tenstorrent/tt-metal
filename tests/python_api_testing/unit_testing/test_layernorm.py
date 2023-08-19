@@ -73,14 +73,12 @@ def ref_layernorm(x, eps, gamma, beta, H, W):
     return lnorm(x)
 
 
-def run_layernorm_tests(test_id, dtype, in0_mem_config, out_mem_config):
+def run_layernorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device):
     torch.manual_seed(1234)
 
     # Initialize the device
     tensor = ttl.tensor
-    device = ttl.device
-    dev = device.CreateDevice(device.Arch.GRAYSKULL, 0)
-    device.InitializeDevice(dev)
+    dev = device
 
     epsf = 1e-2
 
@@ -147,12 +145,12 @@ def run_layernorm_tests(test_id, dtype, in0_mem_config, out_mem_config):
                 ttz = tensor.layernorm(ttx, epsf, output_mem_config=out_mem_config)
             elif test_id == 1:
                 logger.info("Running LN_G")
-                ttz = tensor.layernorm(ttx, epsf, ttgamma, output_mem_config=out_mem_config)
+                ttz = tensor.layernorm(
+                    ttx, epsf, ttgamma, output_mem_config=out_mem_config
+                )
             elif test_id == 2:
                 logger.info("Running LN_GB")
-                ttz = tensor.layernorm(
-                    ttx, epsf, ttgamma, ttbeta, out_mem_config
-                )
+                ttz = tensor.layernorm(ttx, epsf, ttgamma, ttbeta, out_mem_config)
             elif test_id == 3:
                 logger.info("Running add_LN_GB")
                 ttz = tensor.add_layernorm(
@@ -181,8 +179,6 @@ def run_layernorm_tests(test_id, dtype, in0_mem_config, out_mem_config):
             time.sleep(0.3)  # sleep to avoid print intermixing with kernel prints
 
             assert is_close(tt_got_back, ref_lnorm)
-
-    device.CloseDevice(dev)
 
 
 import pytest
@@ -215,7 +211,6 @@ import pytest
     ids=["LN", "LN_G", "LN_GB", "add_LN_GB"],
 )
 def test_layernorm_test(
-    test_id, dtype, in0_mem_config, out_mem_config, request
+    test_id, dtype, in0_mem_config, out_mem_config, request, device
 ):
-
-    run_layernorm_tests(test_id, dtype, in0_mem_config, out_mem_config)
+    run_layernorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device)

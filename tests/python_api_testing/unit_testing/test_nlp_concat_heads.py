@@ -6,10 +6,11 @@ from models.utility_functions import comp_pcc, tt2torch_tensor
 import torch
 
 
-def run_nlp_concat_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_config):
+def run_nlp_concat_heads_test(
+    batch, seq_len, dtype, in0_mem_config, out_mem_config, device
+):
     torch.manual_seed(1234)
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
+
     num_heads = 71
     head_dim = 64
     in0_shape = [batch, num_heads, seq_len, head_dim]
@@ -48,8 +49,6 @@ def run_nlp_concat_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_con
     logger.info(f"output pcc={output_pcc}")
     assert passing_pcc
 
-    ttl.device.CloseDevice(device)
-
 
 @pytest.mark.parametrize(
     "out_mem_config",
@@ -82,22 +81,28 @@ def run_nlp_concat_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_con
     ],
 )
 def test_nlp_concat_heads_test(
-    batch, seq_len, dtype, in0_mem_config, out_mem_config, request
+    batch, seq_len, dtype, in0_mem_config, out_mem_config, request, device
 ):
     ttl.profiler.set_profiler_location(
         f"tt_metal/tools/profiler/logs/nlp_concat_heads_tm_{request.node.callspec.id}"
     )
-    run_nlp_concat_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_config)
+    run_nlp_concat_heads_test(
+        batch, seq_len, dtype, in0_mem_config, out_mem_config, device
+    )
 
 
-def test_nlp_concat_heads_with_program_cache(use_program_cache):
+def test_nlp_concat_heads_with_program_cache(use_program_cache, device):
     dtype = ttl.tensor.DataType.BFLOAT8_B
     dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
     for _ in range(2):
-        run_nlp_concat_heads_test(1, 32, dtype, dram_mem_config, dram_mem_config)
+        run_nlp_concat_heads_test(
+            1, 32, dtype, dram_mem_config, dram_mem_config, device
+        )
 
     dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
     for _ in range(2):
-        run_nlp_concat_heads_test(1, 32, dtype, dram_mem_config, dram_mem_config)
+        run_nlp_concat_heads_test(
+            1, 32, dtype, dram_mem_config, dram_mem_config, device
+        )
 
     assert ttl.program_cache.num_entries() == 2

@@ -11,11 +11,7 @@ def rotate_half(x):
 
 
 @pytest.mark.parametrize("shape", [[1, 1, 128, 64], [1, 71, 128, 64]])
-def test_rotate_half(shape):
-    # Initialize the device
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
-
+def test_rotate_half(shape, device):
     x = torch.randn(shape).bfloat16().float()
 
     xt = (
@@ -26,10 +22,6 @@ def test_rotate_half(shape):
     xtt = ttl.tensor.rotate_half(xt)
 
     tt_got_back = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    del xtt
-
-    ttl.device.CloseDevice(device)
 
     pt_out = rotate_half(x)
 

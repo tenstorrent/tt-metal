@@ -11,11 +11,8 @@ import tt_lib as ttl
 from models.utility_functions import print_diff_argmax
 
 
-def test_tile_major_reshape():
+def test_tile_major_reshape(device):
     torch.manual_seed(0)
-    # Initialize the device
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
 
     N = 3
     C = 5
@@ -80,16 +77,8 @@ def test_tile_major_reshape():
     print("reshape() max absdiff=")
     print_diff_argmax(tt_got_back, x)
 
-    del xtt
 
-    ttl.device.CloseDevice(device)
-
-
-def test_row_major_reshape():
-    # Initialize the device
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
-
+def test_row_major_reshape(device):
     # Power of 2 reshape
     N = 1
     C = 1
@@ -102,4 +91,3 @@ def test_row_major_reshape():
     reshaped = reshaped.cpu().to_torch()
     torch_reshaped = torch.Tensor(x).reshape(1, 128, 2, 64)
     assert torch.equal(torch_reshaped, reshaped)
-    ttl.device.CloseDevice(device)

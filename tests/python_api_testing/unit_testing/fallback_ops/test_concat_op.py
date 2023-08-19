@@ -33,11 +33,8 @@ import pytest
         ((torch.Size([2, 3, 5, 4]), torch.Size([2, 3, 5, 20])), 3, False),
     ),
 )
-def test_concat_fallback(input_shapes, dim, on_device):
+def test_concat_fallback(input_shapes, dim, on_device, device):
     torch.manual_seed(1234)
-
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
 
     xs = [torch.randn(input_shape).bfloat16().float() for input_shape in input_shapes]
     pt_out = torch.concat(xs, dim)
@@ -62,7 +59,3 @@ def test_concat_fallback(input_shapes, dim, on_device):
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
     logger.info(comp_out)
     assert comp_pass
-
-    del t1
-
-    ttl.device.CloseDevice(device)
