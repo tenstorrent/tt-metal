@@ -210,6 +210,7 @@ BmmOpParallelizationStrategy::Enum get_parallelization_strategy(const Tensor &a,
         num_blocks_y = (Mt - 1) / per_core_M + 1;
         num_blocks_x = (Nt - 1) / per_core_N + 1;
     }
+    std::cout << num_blocks_x << " " << num_blocks_y << " " << num_cores_x << " " << num_cores_y << " " << Kt << " " << in0_block_w << std::endl;
 
     // If no possible params, matmul_params will be (0, 0, 0, 0)
     if (use_general_large_matmul_params and per_core_M > 0 and Kt % in0_block_w == 0 and B == 1) {

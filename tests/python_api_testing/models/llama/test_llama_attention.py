@@ -69,6 +69,7 @@ def run_test_LlamaAttention_inference(
     torch.manual_seed(0)
     # hidden states tensor: batch size is equal to 32, sequence length: 32
     attention_input = (torch.rand(batch, seq_len, 4096) * 2) - 1
+    print(attention_input.shape)
     layer_num = 0
     base_url = "model.layers"
     # max_position_embeddings parameter should be in the config file, but the used pretrained model doesn't consist this parameter

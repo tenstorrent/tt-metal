@@ -658,6 +658,14 @@ tt_metal::Program create_program_mcast_in0(
             auto core_start_physical = device->worker_core_from_logical_core(core_start);
             auto core_end_physical = device->worker_core_from_logical_core(core_end);
 
+            std::cout << "batch: " << B << std::endl;
+            std::cout << "num_blocks: " << K / in0_block_w << std::endl;
+            std::cout << "in0_block_w: " << in0_block_w << std::endl;
+            std::cout << "in0_block_h: " << per_core_M << std::endl;
+            std::cout << "Broadcast in0 to other Tensix cores." << std::endl;
+            std::cout << "in1_block_h: " << per_core_N << std::endl;
+            std::cout << "in1_block_w: " << in0_block_w << std::endl;
+
             std::vector<uint32_t> mm_reader_args = {
                 (std::uint32_t)  in0_dram_addr, // in0_tensor_addr
                 (std::uint32_t)  K * per_core_M * core_idx_y, // in0_tensor_start_tile_id
@@ -1067,6 +1075,9 @@ Tensor matmul_multi_core_reuse_mcast_padding_(const Tensor &a, const Tensor &b, 
 
     const auto& ashape = a.shape(), bshape = b.shape();
 
+    std::cout << "ashape " << ashape[0] << " " << ashape[1] << " " << ashape[2] << " " << ashape[3] << std::endl;
+    std::cout << "bshape " << bshape[0] << " " << bshape[1] << " " << bshape[2] << " " << bshape[3] << std::endl;
+
     // TODO: Build some sort of dispatcher based on location of op operands
     TT_ASSERT(not a.on_host() and not b.on_host(), "Operands to matmul need to be on device!");
     TT_ASSERT(a.device() == b.device(), "Operands to matmul need to be on the same device!");
@@ -1104,8 +1115,8 @@ Tensor matmul_multi_core_reuse_mcast_padding_(const Tensor &a, const Tensor &b, 
     // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
     uint32_t B = ashape[0]*ashape[1];
-    uint32_t Mt = ashape[2]/TILE_HEIGHT;
-    uint32_t Kt = ashape[3]/TILE_WIDTH;
+    uint32_t Mt = ashape[2]/TILE_HEIGHT;    // 4
+    uint32_t Kt = ashape[3]/TILE_WIDTH;     // 128
     uint32_t Nt = bshape[3]/TILE_WIDTH;
     uint32_t in0_block_w = 2;
     uint32_t out_subblock_h = 4;
@@ -1124,6 +1135,7 @@ Tensor matmul_multi_core_reuse_mcast_padding_(const Tensor &a, const Tensor &b, 
     // Calculate number of blocks along x and y; tensor dims are padded up to 512
     uint32_t num_blocks_y = (Mt - 1) / per_core_M + 1;
     uint32_t num_blocks_x = (Nt - 1) / per_core_N + 1;
+    std::cout << "num_blocks_y: " << num_blocks_y << " num_blocks_x: " << num_blocks_x << std::endl;
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
     TT_ASSERT(num_blocks_total <= num_cores_x * num_cores_y);
     CoreCoord core_range = bmm_op_utils::get_core_range(num_blocks_y, num_blocks_x, num_cores_y, num_cores_x);

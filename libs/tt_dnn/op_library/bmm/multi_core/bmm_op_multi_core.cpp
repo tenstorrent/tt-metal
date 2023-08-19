@@ -16,6 +16,9 @@ Tensor matmul_multi_core_(const Tensor &a, const Tensor &b, bool bcast_batch) {
 
     const auto& ashape = a.shape(), bshape = b.shape();
 
+    std::cout << "ashape " << ashape[0] << " " << ashape[1] << " " << ashape[2] << " " << ashape[3] << std::endl;
+    std::cout << "bshape " << bshape[0] << " " << bshape[1] << " " << bshape[2] << " " << bshape[3] << std::endl;
+
     // TODO: Build some sort of dispatcher based on location of op operands
     TT_ASSERT(not a.on_host() and not b.on_host(), "Operands to matmul need to be on device!");
     TT_ASSERT(a.device() == b.device(), "Operands to matmul need to be on the same device!");
@@ -51,6 +54,7 @@ Tensor matmul_multi_core_(const Tensor &a, const Tensor &b, bool bcast_batch) {
     uint32_t num_cores_y = compute_and_storage_grid_size.y;
     auto num_output_tiles = cshape[0] * cshape[1] * cshape[2] * cshape[3] / TILE_HW;
     auto num_cores = std::min(num_output_tiles, num_cores_x * num_cores_y);
+    std::cout << "num_cores " << num_cores << " num_cores_x: " << num_cores_x << " num_cores_y: " << num_cores_y << std::endl;
     std::vector<uint32_t> num_output_tiles_per_core(num_cores, num_output_tiles / num_cores);
     for(uint32_t i = 0; i < num_output_tiles % num_cores; i++){
         num_output_tiles_per_core[i]++;
