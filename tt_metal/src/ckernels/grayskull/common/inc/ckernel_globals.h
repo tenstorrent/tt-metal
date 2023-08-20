@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include "ckernel_structs.h"
+#include "risc_attribs.h"
 #include "tensix_functions.h"
 #include "hostdevcommon/common_runtime_address_map.h"
 
@@ -32,7 +33,7 @@ extern uint32_t __firmware_start[];
 extern void kernel_init();
 extern void kernel_launch();
 
-inline void l1_to_local_mem_copy(uint32_t *local_mem_addr, uint32_t *l1_addr, int32_t len) {
+inline void l1_to_local_mem_copy(uint32_t *local_mem_addr, uint32_t tt_l1_ptr *l1_addr, int32_t len) {
     // Cover L1 load latency of 6 cycles for the bulk of the copy
     int32_t n = 0;
     while (n < len - 5) {
