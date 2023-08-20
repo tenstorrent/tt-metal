@@ -589,6 +589,11 @@ def gen_heaviside_args(input_shapes, low=-100, high=100, dtype=torch.bfloat16):
         yield input_info
 
 
+def gen_subalpha_args(input_shapes, low=-100, high=100, dtype=torch.bfloat16):
+    for input_info in gen_scalar_args(input_shapes, "alpha", low, high, dtype):
+        yield input_info
+
+
 def gen_shrink_args(input_shapes, low=0, high=100, dtype=torch.bfloat16):
     for input_info in gen_scalar_args(input_shapes, "lambd", low, high, dtype):
         yield input_info
