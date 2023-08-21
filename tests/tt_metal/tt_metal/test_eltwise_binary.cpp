@@ -16,6 +16,12 @@ using namespace tt::tt_metal;
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
 int main(int argc, char** argv) {
+
+    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
+        std::cout << "Test not supported w/ slow dispatch, exiting" << std::endl;
+        exit(0);
+    }
+
     bool pass = true;
     bool multibank = true;
 

@@ -329,6 +329,11 @@ bool move_tiles_to_dram(
 int main(int argc, char **argv) {
     bool pass = true;
 
+    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
+        std::cout << "Test not supported w/ slow dispatch, exiting" << std::endl;
+        exit(0);
+    }
+
     try {
         int num_cores_r = 9;
         int num_cores_c = 12;
