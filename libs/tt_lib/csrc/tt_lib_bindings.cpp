@@ -29,6 +29,7 @@
 #include "tt_dnn/op_library/rotate_half/rotate_half_op.hpp"
 #include "tt_dnn/op_library/rotary_embedding/rotary_embedding_op.hpp"
 #include "tt_dnn/op_library/embeddings/embeddings_op.hpp"
+#include "tt_dnn/op_library/update_cache/update_cache_op.hpp"
 #include "tt_dnn/op_library/program_cache.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -2475,6 +2476,10 @@ void TensorModule(py::module &m_tensor) {
     m_tensor.def("rotary_embedding", &rotary_embedding,
         py::arg("input").noconvert(), py::arg("cos").noconvert(), py::arg("sin").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         "Performs rotary embedding with a given input, cos, and sin tensors. Sequence length is inferred as the second last dim of the input tensor.
+    )doc");
+    m_tensor.def("update_cache", &update_cache,
+         py::arg("cache").noconvert(), py::arg("input").noconvert(), py::arg("batch_idx"), py::arg("update_idx"), R"doc(
+        "Fills the cache tensor in place with the values from input at the specified batch_idx, update_idx.
     )doc");
 
 
