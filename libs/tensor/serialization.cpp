@@ -69,7 +69,7 @@ OwnedStorage load_owned_storage(ifstream& input_stream, DataType data_type) {
 void dump_tensor(const std::string& file_name, const Tensor& tensor) {
     ofstream output_stream(file_name, ios::out | ios::binary);
     if (not output_stream) {
-        throw std::runtime_error(fmt::format("Cannot open \"{file_name}\""));
+        throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
     }
 
     auto shape = tensor.shape();
@@ -102,9 +102,9 @@ void dump_tensor(const std::string& file_name, const Tensor& tensor) {
 }
 
 Tensor load_tensor(const std::string& file_name) {
-    ifstream input_stream(file_name, ios::out | ios::binary);
+    ifstream input_stream(file_name, ios::in | ios::binary);
     if (not input_stream) {
-        throw std::runtime_error(fmt::format("Cannot open \"{file_name}\""));
+        throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
     }
 
     auto shape = Shape{};
