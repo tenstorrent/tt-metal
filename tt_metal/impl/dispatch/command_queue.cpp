@@ -689,6 +689,10 @@ void CommandQueue::enqueue_read_buffer(Buffer& buffer, vector<u32>& dst, bool bl
 void CommandQueue::enqueue_write_buffer(Buffer& buffer, vector<u32>& src, bool blocking) {
     ZoneScopedN("CommandQueue_write_buffer");
     TT_ASSERT(not blocking, "EnqueueWriteBuffer only has support for non-blocking mode currently");
+    uint32_t src_size_bytes = src.size() * sizeof(uint32_t);
+    TT_ASSERT(
+        src_size_bytes <= buffer.size(),
+        "Bounds-Error -- Attempting to write {} bytes to a {} byte buffer", src_size_bytes, buffer.size());
     TT_ASSERT(
         buffer.page_size() < MEM_L1_SIZE - DEVICE_COMMAND_DATA_ADDR,
         "Buffer pages must fit within the command queue data section");

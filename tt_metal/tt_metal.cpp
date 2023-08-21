@@ -320,6 +320,11 @@ void WriteToDevice(const Buffer &buffer, const std::vector<uint32_t> &host_buffe
     ZoneScoped;
     detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("WriteToDevice");
 
+    uint32_t host_buffer_size_bytes = host_buffer.size() * sizeof(uint32_t);
+    TT_ASSERT(
+        host_buffer_size_bytes <= buffer.size(),
+        "Bounds-Error -- Attempting to write {} bytes to a {} byte buffer", host_buffer_size_bytes, buffer.size());
+
     uint32_t page_size = buffer.page_size();
     TT_ASSERT(buffer.size() % page_size == 0);
     uint32_t num_pages = buffer.size() / page_size;
