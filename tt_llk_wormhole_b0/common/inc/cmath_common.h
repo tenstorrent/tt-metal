@@ -216,10 +216,21 @@ inline constexpr uint32_t get_num_faces(const std::uint32_t operand_id)
    return math_tile_num_faces[operand_id];
 }
 
-   inline constexpr uint32_t get_partial_face(const std::uint32_t operand_id)
-   {
-      return math_partial_face[operand_id];
-   }
+inline constexpr uint32_t get_partial_face(const std::uint32_t operand_id)
+{
+   return math_partial_face[operand_id];
+}
+
+inline constexpr uint32_t get_face_r_dim(const std::uint32_t operand_id)
+{
+   return math_tile_face_r_dim[operand_id];
+}
+
+inline constexpr uint32_t get_narrow_tile(const std::uint32_t operand_id)
+{
+   return math_narrow_tile[operand_id];
+}
+
 
 
 } // namespace ckernel::math
