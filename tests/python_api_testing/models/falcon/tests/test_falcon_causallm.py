@@ -49,6 +49,7 @@ def run_test_FalconCausalLM_inference(
     model_name = model_location_generator(model_version, model_subdir="Falcon")
 
     hugging_face_reference_model = RWForCausalLM.from_pretrained(model_name)
+
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()

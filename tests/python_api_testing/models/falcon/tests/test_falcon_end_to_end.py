@@ -10,7 +10,7 @@ from tests.python_api_testing.models.falcon.reference.hf_falcon_model import (
 from tests.python_api_testing.models.falcon.falcon_causallm import TtFalconCausalLM
 
 # TODO: Remove this?
-from tests.python_api_testing.models.falcon.tests.test_falcon_causallm import (
+from tests.python_api_testing.models.falcon.falcon_common import (
     PytorchFalconCausalLM,
 )
 

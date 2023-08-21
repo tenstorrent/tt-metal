@@ -1,7 +1,6 @@
 import torch
 import pytest
 from loguru import logger
-
 import tt_lib
 from tests.python_api_testing.models.falcon.reference.hf_falcon_model import (
     RWForCausalLM,
@@ -23,8 +22,6 @@ class PytorchFalconModel(torch.nn.Module):
         super().__init__()
         self.model = hf_reference_model.transformer
         self.model.h = self.model.h[:num_layers]
-
-        # Disable dropout
         self.model.eval()
 
     def forward(self, input_ids):
@@ -45,17 +42,14 @@ def run_test_FalconModel_inference(
     model_location_generator,
 ):
     model_name = model_location_generator(model_version, model_subdir="Falcon")
-
     hugging_face_reference_model = RWForCausalLM.from_pretrained(model_name)
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
-
     # Prepare input ========================================================================
     torch.manual_seed(0)
     base_url = "transformer"
     max_position_embeddings = 2048
-
     if 1:
         model_input = torch.arange(seq_len * batch).reshape(batch, seq_len)
     else:
@@ -63,15 +57,12 @@ def run_test_FalconModel_inference(
         model_input = torch.stack([torch.arange(seq_len)] * batch).reshape(
             batch, seq_len
         )
-
     # PyTorch output =======================================================================
     pytorch_FalconModel = PytorchFalconModel(hugging_face_reference_model, num_layers)
     pytorch_out = pytorch_FalconModel(input_ids=model_input)
-
     # NOTE: Passing in pytorch tensor here instead of ll buda tensor
     # since we don't yet have embedding support on device
     # device, state_dict, base_url, max_position_embeddings, config, num_decoders
-
     tt_FalconModel = TtFalconModel(
         device,
         state_dict,
@@ -82,21 +73,16 @@ def run_test_FalconModel_inference(
         model_config,
         tt_cache_path,
     )
-
     # TODO: Generate embeddings and attention_mask on device
     tt_embeddings, tt_attention_mask = tt_FalconModel.model_preprocessing(model_input)
-
     tt_out = tt_FalconModel(
         input_embeddings=tt_embeddings, attention_mask=tt_attention_mask
     )
     tt_out = tt2torch_tensor(tt_out).squeeze(1)
-
     # check outputs ----------------------------------------------------------------------
     logger.info(comp_allclose(pytorch_out, tt_out))
-
     does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"PCC value: {output_pcc}")
-
     if does_pass:
         logger.info("Falcon Model Passed!")
     else:
@@ -135,7 +121,6 @@ def test_FalconModel_inference(
     device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
-
     run_test_FalconModel_inference(
         device,
         model_version,
