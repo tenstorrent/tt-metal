@@ -288,7 +288,7 @@ inline void llk_math_eltwise_unary_sfpu_abs_init(const uint operand) {
 }
 
 template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_cast_fp32_to_fp16a_init() {
+inline void llk_math_eltwise_unary_sfpu_cast_fp32_to_fp16a_init(const uint operand) {
     // Do nothing, as this llk does not exist on grayskull.
     // An empty definition is added here in order to match LLK apis between GS/WH_B0
 }
