@@ -310,9 +310,7 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.atan
 
-.. autofunction:: tt_lib.tensor.atan2
-
-.. autofunction:: tt_lib.tensor.atan
+.. autofunction:: tt_lib.tensor.atanh
 
 .. autofunction:: tt_lib.tensor.atan2
 
@@ -498,8 +496,6 @@ Other Operations
 .. autofunction:: tt_lib.tensor.lerp
 
 .. autofunction:: tt_lib.tensor.signbit
-
-.. autofunction:: tt_lib.tensor.atanh
 
 .. autofunction:: tt_lib.tensor.ldexp
 
