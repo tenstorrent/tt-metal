@@ -160,6 +160,17 @@ ALWI void sub_tiles( uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t iti
     #endif
 }
 
+ALWI void binary_op_specific_init(int op_code) // TODO(AP): better naming
+{
+    #ifdef ELTWISE_OP
+    if constexpr (ELTWISE_OP_CODE == 0) // TODO(AP): pass an enum probably
+        add_tiles_init_nof();
+    if constexpr (ELTWISE_OP_CODE == 1)
+        sub_tiles_init_nof();
+    if constexpr (ELTWISE_OP_CODE == 2)
+        mul_tiles_init_f();
+    #endif
+}
 
 
 } // namespace ckernel

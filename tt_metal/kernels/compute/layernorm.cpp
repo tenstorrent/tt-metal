@@ -10,7 +10,7 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/layernorm.h"
+#include "compute_kernel_api/layernorm.h"
 
 
 

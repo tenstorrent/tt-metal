@@ -2,7 +2,7 @@
 
 #include "debug_print.h"
 
-#include "compute_kernel_api.h"
+#include "compute_kernel_api/reduce.h"
 
 namespace NAMESPACE {
 void MAIN {

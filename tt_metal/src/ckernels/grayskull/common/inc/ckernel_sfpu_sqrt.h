@@ -14,7 +14,7 @@ namespace sfpu
 
 
 template <bool APPROXIMATION_MODE, int ITERATIONS=4, int RECIPROCAL_ITERATIONS=2>
-inline void calculate_sfpu_sqrt()
+inline void calculate_sqrt()
 {
     for (int d = 0; d < ITERATIONS; d++)
     {

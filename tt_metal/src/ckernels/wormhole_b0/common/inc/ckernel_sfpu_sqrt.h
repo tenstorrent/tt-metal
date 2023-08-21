@@ -13,16 +13,17 @@ namespace sfpu
 {
 
 
-template <bool APPROXIMATION_MODE, int ITERATIONS=4, int RECIPROCAL_ITERATIONS=2>
-inline void calculate_sfpu_sqrt()
+template <bool APPROXIMATION_MODE, int ITERATIONS=8, int RECIPROCAL_ITERATIONS=2>
+inline void calculate_sqrt()
 {
+    #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat val = dst_reg[0];
 
         if constexpr (APPROXIMATION_MODE)
         {
-            vUInt magic = l_reg[LRegs::LReg2];
+            vUInt magic = vConstIntPrgm0;
 
             //sqrt initial approximation
             // adjust bias
@@ -31,37 +32,41 @@ inline void calculate_sfpu_sqrt()
             // approximation of square root
             val_s >>= 1;
             dst_reg[0] = reinterpret<vFloat>(val_s);
-
-            l_reg[LRegs::LReg2] = magic;
         }
         else
         {
             // Recip root method
             //// Init approx
             //u.i = SQRT_MAGIC_F - (u.i >> 1);
-            vUInt magic = reinterpret<vUInt>(vFloat(s2vFloat16b(0x5f37)));
-            vFloat approx = reinterpret<vFloat>(magic - (reinterpret<vUInt>(val) >> 1));
-
-            // Re-load to save a MOV
-            val = dst_reg[0];
-
-            //Reciproot iterations
-            for (int r = 0; r < RECIPROCAL_ITERATIONS; r++)
+            v_if (val != 0.0f)
             {
-                //x*r*(1.5f - xhalf*r*r);
-                approx = (approx * approx * val * -0.5f + vConst1 + 0.5F) * approx;
-            }
+                vUInt magic = vConstIntPrgm0;
+                vFloat approx = reinterpret<vFloat>(magic - (reinterpret<vUInt>(val) >> 1));
 
-            dst_reg[0] = approx * val;
+                //Reciproot iterations
+                for (int r = 0; r < RECIPROCAL_ITERATIONS; r++)
+                {
+                    //x*r*(1.5f - xhalf*r*r);
+                    approx = ((approx * approx) * (val * -0.5f) + 1.5f) * approx;
+                }
+
+                dst_reg[0] = approx * val;
+            }
+            v_endif;
         }
 
         dst_reg++;
     }
 }
+
 template <bool APPROXIMATION_MODE>
 void sqrt_init(){
     if (APPROXIMATION_MODE) {
-        TTI_SFPLOADI(2, 0, 127 << 7);
+        vConstFloatPrgm0 = s2vFloat16b(127 << 7);
+    }
+    else{
+        vConstFloatPrgm0 = s2vFloat16b(0x5f37);
+
     }
 }
 } // namespace sfpu

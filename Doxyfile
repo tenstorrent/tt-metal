@@ -919,6 +919,23 @@ WARN_LOGFILE           =
 
 INPUT                  = tt_metal/src/firmware/riscv/common/dataflow_api.h \
                          tt_metal/host_api.hpp \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/erf_erfc.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/exp.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/gelu.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/recip.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/sqrt.h \
+                         tt_metal/include/compute_kernel_api/bcast.h \
+                         tt_metal/include/compute_kernel_api/cb_api.h \
+                         tt_metal/include/compute_kernel_api/eltwise_binary.h \
+                         tt_metal/include/compute_kernel_api/matmul.h \
+                         tt_metal/include/compute_kernel_api/pack.h \
+                         tt_metal/include/compute_kernel_api/reduce.h \
+                         tt_metal/include/compute_kernel_api/reg_api.h \
+                         tt_metal/include/compute_kernel_api/tile_move_copy.h \
+                         tt_metal/include/compute_kernel_api/tilize.h \
+                         tt_metal/include/compute_kernel_api/transpose_wh.h \
+                         tt_metal/include/compute_kernel_api/unpack.h \
+                         tt_metal/include/compute_kernel_api/untilize.h \
                          tt_metal/include/compute_kernel_api.h \
                          tt_metal/impl/kernels/kernel_args.hpp
 

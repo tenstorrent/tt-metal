@@ -16,7 +16,7 @@ namespace sfpu
 
 
 
-sfpi_inline vFloat sfpu_exp_opt(vFloat val)
+sfpi_inline vFloat sfpu_exp(vFloat val)
 {
     // If exponent is > -1 extract it and replace with -1
     vInt exp = exexp(val);
@@ -31,7 +31,6 @@ sfpi_inline vFloat sfpu_exp_opt(vFloat val)
 
     v_if (exp >= 0) {
         val = val * val;
-        #pragma GCC unroll 0
         for (int s_iter = 0; s_iter < 7; s_iter++) {
             exp = exp - 1;
             // Narrow predication on each loop
@@ -44,34 +43,28 @@ sfpi_inline vFloat sfpu_exp_opt(vFloat val)
     return val;
 }
 
-template <bool APPROXIMATION_MODE, bool ZERO_NEGATIVE, bool SCALE_EN=false, int ITERATIONS=4>
-inline void calculate_sfpu_exponential(uint exp_base_scale_factor = 0)
+
+template <bool APPROXIMATION_MODE, bool ZERO_NEGATIVE, bool SCALE_EN=false, int ITERATIONS=8>
+void calculate_exponential(uint exp_base_scale_factor = 0)
 {
-    vFloat c23_73;
-    vInt adj_exp;
-
-    if constexpr (APPROXIMATION_MODE)
-    {
-        c23_73 = l_reg[LRegs::LReg0];
-        adj_exp = l_reg[LRegs::LReg2];
-    }
-
-    #pragma GCC unroll 2
+    // Unroll 8 best for approx, unroll 0 for precise, compiler figures this out
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat val = dst_reg[0];
 
         if constexpr(SCALE_EN){
             val = val * s2vFloat16a(exp_base_scale_factor);
-            dst_reg[0] = val;
         }
+
         if constexpr (APPROXIMATION_MODE)
         {
             // * by 1/ln2 and add convert to 7.3 FxP format
-            val = val * vConstFloatPrgm0 + c23_73;
+            vFloat vConstLn2Recip = vConstFloatPrgm0;
+            vFloat c23_73 = vConstFloatPrgm1;
+            vInt adj_exp = vConstIntPrgm2;
+            val = val * vConstLn2Recip + c23_73;
 
             // Remove Exponent of 7 and bias the Mantissa to 127.
-            // LREG2 already holds 2's complement value so we simply do REG2 + REG3
             vInt val_short = adj_exp + reinterpret<vInt>(val);
 
             // SHL to move integer bits to exponent
@@ -91,33 +84,37 @@ inline void calculate_sfpu_exponential(uint exp_base_scale_factor = 0)
         else
         {
             // Force sign to 0 (make number positive)
-            val = sfpu_exp_opt(setsgn(val, 0));
+            vFloat result = sfpu_exp(setsgn(val, 0));
 
-            vFloat orig = dst_reg[0];
-
-            // Loaded by reciprocal
-            dst_reg[0] = val;
-            v_if (orig < 0) {
-                dst_reg[0] = sfpu_reciprocal_opt<false>(val);
+            v_if (val < 0) {
+                result = sfpu_reciprocal(result);
             }
             v_endif;
+
+	    dst_reg[0] = result;
         }
 
         dst_reg++;
-    }
-
-    if constexpr (APPROXIMATION_MODE)
-    {
-        l_reg[LRegs::LReg0] = c23_73;
-        l_reg[LRegs::LReg2] = adj_exp;
     }
 }
 
 template <bool APPROXIMATION_MODE>
 void exp_init(){
+
     if constexpr(APPROXIMATION_MODE) {
-        TTI_SFPLOADI(p_sfpu::LREG0, 0, p_exp::C23_73);
-        TTI_SFPLOADI(p_sfpu::LREG2, 0, p_exp::ADJ_EXP);
+        vConstFloatPrgm0 = 1.442695f; // ln2_recip
+        vConstFloatPrgm1 = s2vFloat16b(p_exp::C23_73);
+        vConstFloatPrgm2 = s2vFloat16b(p_exp::ADJ_EXP);
+    }
+    else{
+        vConstFloatPrgm0 = 0.692871f; // ln2
+        // XXXXX could do these to higher precision
+        vConstFloatPrgm1 = 0.1058f;
+        vConstFloatPrgm2 = -0.7166f;
+        vConstFloatPrgm0 = s2vFloat16b(0x5f37);
+        vConstIntPrgm0 = 0xb400;
+        vConstIntPrgm1 = 0x1; // binary 0b1 - used to extract LSB
+
     }
 }
 

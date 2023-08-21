@@ -101,37 +101,6 @@ inline void llk_math_eltwise_unary_sfpu_init(
 }
 
 // New LLK SFPU APIs
-
-template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_exponential(uint dst_index, int vector_mode = Dim::RC) {
-    llk_math_eltwise_unary_sfpu<SfpuType::exponential, APPROXIMATE, dst_sync>(dst_index, vector_mode);
-}
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_exponential_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::exponential, APPROXIMATE>();
-}
-
-template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_sqrt(uint dst_index, int vector_mode = Dim::RC) {
-    llk_math_eltwise_unary_sfpu<SfpuType::sqrt, APPROXIMATE, dst_sync>(dst_index, vector_mode);
-}
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_sqrt_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::sqrt, APPROXIMATE>();
-}
-
-template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_gelu(uint dst_index, int vector_mode = Dim::RC) {
-    llk_math_eltwise_unary_sfpu<SfpuType::gelu, APPROXIMATE, dst_sync>(dst_index, vector_mode);
-}
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_gelu_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::gelu, APPROXIMATE>();
-}
-
 template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
 inline void llk_math_eltwise_unary_sfpu_rsqrt(uint dst_index) {
     llk_math_eltwise_unary_sfpu<SfpuType::rsqrt, APPROXIMATE, dst_sync>(dst_index);
@@ -140,26 +109,6 @@ inline void llk_math_eltwise_unary_sfpu_rsqrt(uint dst_index) {
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_rsqrt_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::rsqrt, APPROXIMATE>();
-}
-
-template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_gelu_derivative(uint dst_index, int vector_mode = Dim::RC) {
-    llk_math_eltwise_unary_sfpu<SfpuType::gelu_derivative, APPROXIMATE, dst_sync>(dst_index, vector_mode);
-}
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_gelu_derivative_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::gelu_derivative, APPROXIMATE>();
-}
-
-template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_reciprocal(uint dst_index, int vector_mode = Dim::RC) {
-    llk_math_eltwise_unary_sfpu<SfpuType::reciprocal, APPROXIMATE, dst_sync>(dst_index, vector_mode);
-}
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_reciprocal_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::reciprocal, APPROXIMATE>();
 }
 
 template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>

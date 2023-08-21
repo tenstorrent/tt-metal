@@ -12,7 +12,7 @@
 
 namespace ckernel {
 
-ALWI void tilize_init(uint32_t icb, uint32_t block)
+ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb = 16)
 {
     #ifdef ARCH_GRAYSKULL
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, false>() ));
@@ -23,7 +23,7 @@ ALWI void tilize_init(uint32_t icb, uint32_t block)
     MATH(( llk_math_pack_sync_init<SyncHalf>() ));
 
     PACK(( llk_pack_init() ));
-    PACK(( llk_pack_hw_configure_disaggregated<false>(16) ));
+    PACK(( llk_pack_hw_configure_disaggregated<false>(ocb) ));
     PACK(( llk_setup_outputs() ));
     PACK(( llk_pack_dest_init<SyncHalf, DstTileFaceLayout::RowMajor, false>() ));
 

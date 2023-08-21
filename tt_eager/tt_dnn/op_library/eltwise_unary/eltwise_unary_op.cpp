@@ -134,6 +134,19 @@ std::map<string, string> get_defines(UnaryOpType op_type, std::optional<float> p
             || op_type == UnaryOpType::ERF ) {
             defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
     }
+    else if( op_type == UnaryOpType::EXP
+            || op_type == UnaryOpType::EXP2 ) {
+            defines["SFPU_OP_EXP_INCLUDE"] = "1";
+    }
+    else if( op_type == UnaryOpType::GELU) {
+            defines["SFPU_OP_GELU_INCLUDE"] = "1";
+    }
+    else if( op_type == UnaryOpType::RECIP) {
+            defines["SFPU_OP_RECIP_INCLUDE"] = "1";
+    }
+    else if( op_type == UnaryOpType::SQRT) {
+            defines["SFPU_OP_SQRT_INCLUDE"] = "1";
+    }
     return defines;
 }
 
@@ -158,6 +171,23 @@ std::map<string, string> get_block_defines(const std::vector<UnaryWithParam> op_
         if ( op_type == UnaryOpType::ERFC
             || op_type == UnaryOpType::ERF ) {
             block_defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
+            break;
+        }
+        else if( op_type == UnaryOpType::EXP
+            || op_type == UnaryOpType::EXP2 ) {
+            block_defines["SFPU_OP_EXP_INCLUDE"] = "1";
+            break;
+        }
+        else if( op_type == UnaryOpType::GELU) {
+            block_defines["SFPU_OP_GELU_INCLUDE"] = "1";
+            break;
+        }
+        else if( op_type == UnaryOpType::RECIP) {
+            block_defines["SFPU_OP_RECIP_INCLUDE"] = "1";
+            break;
+        }
+        else if( op_type == UnaryOpType::SQRT) {
+            block_defines["SFPU_OP_SQRT_INCLUDE"] = "1";
             break;
         }
     }

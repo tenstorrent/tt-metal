@@ -6,6 +6,9 @@
 
 #include "sfpi.h"
 
+#include "ckernel_sfpu_cdf.h"
+#include "ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_recip.h"
 using namespace sfpi;
 
 namespace ckernel
@@ -43,69 +46,6 @@ sfpi_inline vInt sfpu_is_fp16_zero(const vFloat& v, uint exponent_size_8)
 
         return tmp == 0;
     }
-}
-
-sfpi_inline vFloat sfpu_exp(vFloat val)
-{
-    // If exponent is > -1 extract it and replace with -1
-    vInt exp = exexp(val);
-    v_if (exp >= 0) {
-        val = setexp(val, 126);
-    }
-    v_endif;
-
-    // Run series in Horner form
-    vFloat tmp = val * vConst0p8373 + s2vFloat16b(0.863281);
-    val = val * tmp + vConst1;
-
-    v_if (exp >= 0) {
-        val = val * val;
-        for (int s_iter = 0; s_iter < 7; s_iter++) {
-            exp = exp - 1;
-            // Narrow predication on each loop
-            v_and(exp >= 0);
-            val = val * val;
-        }
-    }
-    v_endif;
-
-    return val;
-}
-
-template <int max_iter = 3>
-sfpi_inline vFloat sfpu_reciprocal(const vFloat in)
-{
-    // Force sign to 1 (make number negative)
-    vFloat val = setsgn(in, 1);
-
-    val = setexp(val, 126); // Set exponent to 126 to make the number in 0.5-1
-    // Use 1.44 as first guess at x, ideal value would be 1.33, but we happen to have 1.44 available, so use that to avoid a load
-    vFloat vConstLn2Recip = vConstFloatPrgm0;
-    vFloat two = vConstFloatPrgm1;
-    vFloat result = vConstLn2Recip * (val * vConstLn2Recip + two);
-
-    for (int s_iter = 0; s_iter < (max_iter-1); s_iter++) {
-        result = result * (val * result + two);
-    }
-
-    vInt orig_exp = exexp(in);
-    vInt new_exp = exexp(result);
-
-    // "Subtract" exponents, and re-bias.
-    // Execute: -1 - exp, then exp += 127
-    new_exp -= orig_exp;
-    new_exp += 126;
-
-    v_if (new_exp < 0) {
-        // If rebiased exponent is negative, we need to saturate at 0.
-        // This means the initial number was too big so reciprocal result should be 0
-        result = 0.0F;
-        new_exp = 0;
-    }
-    v_endif;
-
-    // Set newly denormalized exponent to result exponent field
-    return setexp(result, new_exp);
 }
 
 inline void init_dropout_seed(uint16_t p2){
@@ -364,207 +304,6 @@ void calculate_cube(uint16_t exp_base_scale_factor = 0)
 }
 */
 
-template <bool APPROXIMATION_MODE, bool ZERO_NEGATIVE, bool SCALE_EN, int ITERATIONS>
-void calculate_exponential(uint16_t exp_base_scale_factor = 0)
-{
-    // Unroll 8 best for approx, unroll 0 for precise, compiler figures this out
-    for (int d = 0; d < ITERATIONS; d++)
-    {
-        vFloat val = dst_reg[0];
-
-        if constexpr(SCALE_EN){
-            val = val * s2vFloat16a(exp_base_scale_factor);
-        }
-
-        if constexpr (APPROXIMATION_MODE)
-        {
-            // * by 1/ln2 and add convert to 7.3 FxP format
-            vFloat vConstLn2Recip = vConstFloatPrgm0;
-            vFloat c23_73 = vConstFloatPrgm1;
-            vInt adj_exp = vConstIntPrgm2;
-            val = val * vConstLn2Recip + c23_73;
-
-            // Remove Exponent of 7 and bias the Mantissa to 127.
-            vInt val_short = adj_exp + reinterpret<vInt>(val);
-
-            // SHL to move integer bits to exponent
-            val_short <<= 10 - p_exp::FRAC_BITS;
-            dst_reg[0] = reinterpret<vFloat>(val_short);
-
-            // Needed for fused kernels such as math_row_softmax_tables which call calculate_exponential()
-            // without using Relu in Packer to clamp -ve Infinity to 0.
-            if constexpr (ZERO_NEGATIVE)
-            {
-                v_if (val_short < 0) {
-                    dst_reg[0] = vConst0;
-                }
-                v_endif;
-            }
-        }
-        else
-        {
-            // Force sign to 0 (make number positive)
-            vFloat result = sfpu_exp(setsgn(val, 0));
-
-            v_if (val < 0) {
-                result = sfpu_reciprocal(result);
-            }
-            v_endif;
-
-	    dst_reg[0] = result;
-        }
-
-        dst_reg++;
-    }
-}
-
-#define POLYVAL5(coef4,coef3,coef2,coef1,coef0,val) ( (((coef4*val + coef3)*val + coef2)*val + coef1)*val + coef0 )
-
-inline
-vFloat calculate_pos_cdf_appx(vFloat val) {
-  //(0,2.5) interpolation polynomial coeffs  [ 0.0122792,  -0.05281024, -0.03048313,  0.41314081,  0.49866379]
-  //(2.5,5) interpolation polynomial coeffs  [0.44656975,  0.58216001]
-
-  // FIXME:
-  // reuse LREG0-3 for storing coefficients and do product computation
-  // const float coef_2dot5_to_5[4] = {-0.00221304f, -0.03253934f, -0.18027954f, -0.44656975f };
-  // TTI_SFPLOADI(p_sfpu::LREG0, 0, 0xbb1108a6);
-  // TTI_SFPLOADI(p_sfpu::LREG1, 0, 0xbd0547f9);
-  // TTI_SFPLOADI(p_sfpu::LREG2, 0, 0xbe389b33);
-  // TTI_SFPLOADI(p_sfpu::LREG2, 0, 0xbee4a4ca);
-
-  vFloat result;
-  v_if( val < 2.5f ) {
-    result = POLYVAL5(0.0122792f,  -0.05281024f, -0.03048313f,  0.41314081f,  0.49866379f, val);
-  } v_else {
-    // assume v >= 2.5f - 5
-    //result = POLYVAL5(result,-0.00221304f,  0.03253934f, -0.18027954f,  0.44656975f,  0.58216001f, val);
-    // result = ((vFloat)l_reg[LRegs::LReg0])*val + (vFloat)l_reg[LRegs::LReg1];
-    // result = result*val + (vFloat)l_reg[LRegs::LReg2];
-    // result = result*val + (vFloat)l_reg[LRegs::LReg3];
-    result = 0.44656975f*val + 0.58216001f;
-
-
-  }
-  v_endif;
-
-  v_if(result > 1.0f) {
-    result = 1.0f;
-  }
-  v_endif;
-  return result;
-}
-
-// compute the approximate value of CDF of normal distribution
-inline
-vFloat calculate_cdf_appx(vFloat val,bool scaled = false) {
-    vFloat result = 0.0f;
-    vFloat val2 = 0.0;
-    v_if ( val < 0.0f ) {
-         val2 = -val;
-    } v_else {
-         val2 = val;
-    }
-    v_endif;
-
-    result = calculate_pos_cdf_appx(val2);
-
-    v_if ( val < 0.0f ) {
-        result = 1.0f - result;
-    }
-    v_endif;
-
-    if ( scaled ) {
-      result *= val; //scale
-    }
-    return result;
-}
-
-template <bool APPROXIMATION_MODE>
-inline vFloat calculate_gelu_core(vFloat in)
-{
-    // SFPU microcode:
-    // result = (APPROX_MODE == 1)
-    //   ? (1 + erf(x/sqrt(2)))
-    //   : (1 + tanh( sqrt(2/pi) * (x + 0.044715*x^3) )
-    vFloat result;
-    if constexpr (APPROXIMATION_MODE) {
-        result = in;
-    } else {
-        // f = (0.044715*x^3 + x)
-        result = (in * in) * (in * s2vFloat16b(0.044715f)) + in;
-        result *= s2vFloat16b(0.79788f);
-    }
-
-    return result;
-}
-
-template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_gelu_appx()
-{
-
-    vUInt l0 = l_reg[LRegs::LReg0];
-    vUInt l1 = l_reg[LRegs::LReg1];
-    vUInt l2 = l_reg[LRegs::LReg2];
-    vUInt l4 = l_reg[LRegs::LReg4];
-    vUInt l5 = l_reg[LRegs::LReg5];
-    vUInt l6 = l_reg[LRegs::LReg6];
-
-    #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++)
-    {
-        // vFloat in = dst_reg[0];
-        // vFloat result = calculate_gelu_core<APPROXIMATION_MODE>(in);
-
-        // vFloat half_in = in * half;
-        // result = lut(result, l0, l1, l2);
-        // result = half_in * result + half_in;
-
-        //dst_reg[0] = result;
-
-        vFloat in = dst_reg[0];
-        vFloat half = vConstFloatPrgm0;
-        vFloat half_in = in * half;
-        vFloat result = lut2_sign(in, l0, l1, l2, l4, l5, l6);
-        result = half_in + result;
-
-        dst_reg[0] = result;
-
-        dst_reg++;
-
-        // dst_reg++;
-        //TTI_SFPLOAD(3, 0, 1/*load addr mode*/,0);    // load from dest
-        ////TTI_SFPMUL(3,11,9,7,0);           // lreg7 = 0.5*lreg3
-        //TTI_SFPLUTFP32(7, 2);                // lreg7= LUT(3)
-        //TTI_SFPMAD(3,12,7,3,0);            // lreg3 = 0.5*lreg3+lregm7
-        //TTI_SFPSTORE(3, 0, 3/*store_addr_mod3*/, 0);   // and INCRWC by 4 using mode 3
-    }
-
-    l_reg[LRegs::LReg0] = l0;
-    l_reg[LRegs::LReg1] = l1;
-    l_reg[LRegs::LReg2] = l2;
-    l_reg[LRegs::LReg4] = l4;
-    l_reg[LRegs::LReg5] = l5;
-    l_reg[LRegs::LReg6] = l6;
-}
-
-template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_gelu()
-{
-    if constexpr (APPROXIMATION_MODE) {
-	calculate_gelu_appx<APPROXIMATION_MODE,ITERATIONS>();
-    } else {
-      constexpr bool scaled = true;
-      // SFPU microcode
-      for (int d = 0; d < ITERATIONS; d++)
-	{
-	  vFloat val = dst_reg[0];
-	  vFloat result = calculate_cdf_appx(val,scaled);
-	  dst_reg[0] = result;
-	  dst_reg++;
-	}
-    }
-}
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, int RECIPROCAL_ITERATIONS>
 inline void calculate_rsqrt()
@@ -717,139 +456,6 @@ inline void calculate_tanh_derivative()
     l_reg[LRegs::LReg0] = l0;
     l_reg[LRegs::LReg1] = l1;
     l_reg[LRegs::LReg2] = l2;
-}
-
-template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_gelu_derivative()
-{
-    if constexpr (APPROXIMATION_MODE) {
-        constexpr int lut_mode = 1; // SFPLUTFP32_MOD0_FP16_6ENTRY_TABLE1
-
-        vUInt l0 = l_reg[LRegs::LReg0];
-        vUInt l1 = l_reg[LRegs::LReg1];
-        vUInt l2 = l_reg[LRegs::LReg2];
-        vUInt l4 = l_reg[LRegs::LReg4];
-        vUInt l5 = l_reg[LRegs::LReg5];
-        vUInt l6 = l_reg[LRegs::LReg6];
-
-        // SFPU microcode:
-        #pragma GCC unroll 0
-        for (int d = 0; d < ITERATIONS; d++)
-        {
-            vFloat val = dst_reg[0];
-            val = lut2(val, l0, l1, l2, l4, l5, l6, lut_mode);
-            v_if (val < 0.0F) {
-                val = val + 1.0f;
-            }
-            v_endif;
-            dst_reg[0] = val;
-            dst_reg++;
-
-        }
-
-        l_reg[LRegs::LReg0] = l0;
-        l_reg[LRegs::LReg1] = l1;
-        l_reg[LRegs::LReg2] = l2;
-        l_reg[LRegs::LReg4] = l4;
-        l_reg[LRegs::LReg5] = l5;
-        l_reg[LRegs::LReg6] = l6;
-    } else {
-        constexpr uint imm2 = 0xFF10;
-
-        vUInt l0 = l_reg[LRegs::LReg0];
-        vUInt l1 = l_reg[LRegs::LReg1];
-
-        // SFPU microcode:
-        #pragma GCC unroll 0
-        for (int d = 0; d < ITERATIONS; d++)
-        {
-            vFloat in = dst_reg[0];
-            vFloat neg_half_sq_in = in * in * -0.5f;
-
-            // exp = e^(val)
-            vFloat exp = calculate_exponential_body<false>(neg_half_sq_in);
-
-            // exp = exp * 1/sqrt(2*pi)
-            vFloat partial = exp * in * s2vFloat16b(0.3989423F);
-
-            vFloat result = calculate_gelu_core<true>(in);
-
-            result = lut(result, l0, l1, imm2);
-
-            dst_reg[0] = partial + result + 0.5f;
-            dst_reg++;
-        }
-
-        l_reg[LRegs::LReg0] = l0;
-        l_reg[LRegs::LReg1] = l1;
-    }
-}
-
-template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_reciprocal()
-{
-    #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++)
-    {
-        vFloat in = dst_reg[0];
-        vFloat out = sfpu_reciprocal<APPROXIMATION_MODE ? 2 : 3>(in);
-
-        v_if (in < 0.0F) {
-            // Invert sign on calculated value if CC=1 (number is negative)
-            out = -out;
-        }
-        v_endif;
-
-        dst_reg[0] = out;
-
-        dst_reg++;
-    }
-}
-
-template <bool APPROXIMATION_MODE, int ITERATIONS, int RECIPROCAL_ITERATIONS>
-inline void calculate_sqrt()
-{
-    #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++)
-    {
-        vFloat val = dst_reg[0];
-
-        if constexpr (APPROXIMATION_MODE)
-        {
-            vUInt magic = vConstIntPrgm0;
-
-            //sqrt initial approximation
-            // adjust bias
-            vUInt val_s = magic + reinterpret<vUInt>(val);
-
-            // approximation of square root
-            val_s >>= 1;
-            dst_reg[0] = reinterpret<vFloat>(val_s);
-        }
-        else
-        {
-            // Recip root method
-            //// Init approx
-            //u.i = SQRT_MAGIC_F - (u.i >> 1);
-            v_if (val != 0.0f)
-            {
-                vUInt magic = vConstIntPrgm0;
-                vFloat approx = reinterpret<vFloat>(magic - (reinterpret<vUInt>(val) >> 1));
-
-                //Reciproot iterations
-                for (int r = 0; r < RECIPROCAL_ITERATIONS; r++)
-                {
-                    //x*r*(1.5f - xhalf*r*r);
-                    approx = ((approx * approx) * (val * -0.5f) + 1.5f) * approx;
-                }
-
-                dst_reg[0] = approx * val;
-            }
-            v_endif;
-        }
-
-        dst_reg++;
-    }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
@@ -1676,11 +1282,11 @@ inline void calculate_heaviside(uint value)
 template <SfpuType operation, bool APPROXIMATION_MODE, int SfpuType_PARAM=0, int ITERATIONS=8>
 inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, uint param3 = 0, uint param4 = 0, uint param5 = 0)
 {
-    if constexpr (operation == SfpuType::exponential) {
-	constexpr bool zero_negative = true;
-        calculate_exponential<APPROXIMATION_MODE, zero_negative, false, ITERATIONS>(param0);
-    }
-    else if constexpr (operation == SfpuType::exp_with_base) {
+    //if constexpr (operation == SfpuType::exponential) {
+	//constexpr bool zero_negative = true;
+    //    calculate_exponential<APPROXIMATION_MODE, zero_negative, false, ITERATIONS>(param0);
+    //}
+    if constexpr (operation == SfpuType::exp_with_base) {
 	constexpr bool zero_negative = true;
         calculate_exponential<APPROXIMATION_MODE, zero_negative, true, ITERATIONS>(param0);
     }
@@ -1690,15 +1296,15 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
     else if constexpr (operation == SfpuType::hardtanh) {
         calculate_hardtanh<APPROXIMATION_MODE, ITERATIONS>(param0, param1, param2);
     }
-    else if constexpr (operation == SfpuType::gelu) {
-	//param0 = true -> approximate fast mode
-	//         false -> high precision mode
-	if ( param0 ) {
-	  calculate_gelu<true, ITERATIONS>();
-	} else {
-	  calculate_gelu<false, ITERATIONS>();
-	}
-    }
+//    else if constexpr (operation == SfpuType::gelu) {
+//	//param0 = true -> approximate fast mode
+//	//         false -> high precision mode
+//	if ( param0 ) {
+//	  calculate_gelu<true, ITERATIONS>();
+//	} else {
+//	  calculate_gelu<false, ITERATIONS>();
+//	}
+//    }
     else if constexpr (operation == SfpuType::rsqrt) {
 	//param0 = true -> approximate fast mode
 	//         false -> high precision mode
@@ -1709,18 +1315,18 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
 	  calculate_rsqrt<false, ITERATIONS, 25>();
 	}
     }
-    else if constexpr (operation == SfpuType::reciprocal) {
-        calculate_reciprocal<APPROXIMATION_MODE, ITERATIONS>();
-    }
+    //else if constexpr (operation == SfpuType::reciprocal) {
+    //    calculate_reciprocal<APPROXIMATION_MODE, ITERATIONS>();
+    //}
     else if constexpr (operation == SfpuType::sigmoid) {
         calculate_sigmoid<APPROXIMATION_MODE, ITERATIONS>();
     }
     else if constexpr (operation == SfpuType::sigmoid_appx) {
         calculate_sigmoid_appx<APPROXIMATION_MODE, ITERATIONS>();
     }
-    else if constexpr (operation == SfpuType::sqrt) {
-        calculate_sqrt<APPROXIMATION_MODE, ITERATIONS, 2>();
-    }
+//    else if constexpr (operation == SfpuType::sqrt) {
+//        calculate_sqrt<APPROXIMATION_MODE, ITERATIONS, 2>();
+//    }
     else if constexpr (operation == SfpuType::tanh_derivative) {
         calculate_tanh_derivative<APPROXIMATION_MODE, SfpuType_PARAM, ITERATIONS>();
     }
@@ -1749,9 +1355,9 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
     else if constexpr (operation == SfpuType::log_with_base) {
         calculate_log<APPROXIMATION_MODE, true, ITERATIONS>(param0);
     }
-    else if constexpr (operation == SfpuType::gelu_derivative) {
-        calculate_gelu_derivative<APPROXIMATION_MODE, ITERATIONS>();
-    }
+//    else if constexpr (operation == SfpuType::gelu_derivative) {
+//        calculate_gelu_derivative<APPROXIMATION_MODE, ITERATIONS>();
+//    }
     else if constexpr ((operation == SfpuType::equal_zero) ||
                        (operation == SfpuType::not_equal_zero) ||
                        (operation == SfpuType::less_than_zero) ||

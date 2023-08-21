@@ -1,10 +1,15 @@
 #include <cstdint>
-
+#include "compute_kernel_api/common.h"
+#include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api.h"
-
 #if SFPU_OP_ERF_ERFC_INCLUDE
 #include "compute_kernel_api/eltwise_unary/erf_erfc.h"
 #endif
+
+#include "compute_kernel_api/eltwise_unary/exp.h"
+#include "compute_kernel_api/eltwise_unary/gelu.h"
+#include "compute_kernel_api/eltwise_unary/recip.h"
+#include "compute_kernel_api/eltwise_unary/sqrt.h"
 
 namespace NAMESPACE {
 void MAIN {

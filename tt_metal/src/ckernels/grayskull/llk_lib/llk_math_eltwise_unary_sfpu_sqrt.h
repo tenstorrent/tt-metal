@@ -11,8 +11,8 @@ inline void llk_math_eltwise_unary_sfpu_sqrt(uint dst_index, int vector_mode = D
     constexpr bool zero_negative = true;
     constexpr int first_iterations = 1;
     llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
-                                (ckernel::sfpu::calculate_sfpu_sqrt<APPROXIMATE, first_iterations>,
-                                ckernel::sfpu::calculate_sfpu_sqrt<APPROXIMATE>,
+                                (ckernel::sfpu::calculate_sqrt<APPROXIMATE, first_iterations>,
+                                ckernel::sfpu::calculate_sqrt<APPROXIMATE>,
                                 dst_index, vector_mode);
 
 }

@@ -1,5 +1,8 @@
 #include <cstdint>
 
+#include "compute_kernel_api/common.h"
+#include "compute_kernel_api/untilize.h"
+#include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api.h"
 
 

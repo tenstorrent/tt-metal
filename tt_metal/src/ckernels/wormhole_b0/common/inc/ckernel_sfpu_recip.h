@@ -14,36 +14,24 @@ namespace sfpu
 
 
 
-template <bool save_reg, int max_iter = 3>
-sfpi_inline vFloat sfpu_reciprocal_opt(const vFloat in)
+template <int max_iter = 3>
+sfpi_inline vFloat sfpu_reciprocal(const vFloat in)
 {
-    vInt orig_exp;
-
-    if constexpr (max_iter == 1) {
-        // If we are only doing one iteration of the MAD loop, then we only need to use one LREG for the MAD instructions because we have our "first guess" in a hard-coded register
-        // This allows us to avoid having to load back in the original value later on
-        orig_exp = exexp(in);
-    }
-
     // Force sign to 1 (make number negative)
     vFloat val = setsgn(in, 1);
 
     val = setexp(val, 126); // Set exponent to 126 to make the number in 0.5-1
     // Use 1.44 as first guess at x, ideal value would be 1.33, but we happen to have 1.44 available, so use that to avoid a load
-    vFloat two;
-    if (!save_reg) {
-        two = 2.0f;
-    }
-    vFloat result = vConstFloatPrgm0 * (val * vConstFloatPrgm0 + (save_reg ? 2.0f : two));
+    vFloat vConstLn2Recip = vConstFloatPrgm0;
+    vFloat two = vConstFloatPrgm1;
+    vFloat result = vConstLn2Recip * (val * vConstLn2Recip + two);
 
     for (int s_iter = 0; s_iter < (max_iter-1); s_iter++) {
-        result = result * (val * result + (save_reg ? 2.0f : two));
+        result = result * (val * result + two);
     }
 
+    vInt orig_exp = exexp(in);
     vInt new_exp = exexp(result);
-    if constexpr (max_iter != 1) {
-        orig_exp = exexp(dst_reg[0]);
-    }
 
     // "Subtract" exponents, and re-bias.
     // Execute: -1 - exp, then exp += 127
@@ -62,17 +50,17 @@ sfpi_inline vFloat sfpu_reciprocal_opt(const vFloat in)
     return setexp(result, new_exp);
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS=4>
-inline void calculate_sfpu_reciprocal()
+
+template <bool APPROXIMATION_MODE, int ITERATIONS=8>
+inline void calculate_reciprocal()
 {
-    #pragma GCC unroll 0
+    #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat in = dst_reg[0];
-        vFloat out = sfpu_reciprocal_opt<false, APPROXIMATION_MODE ? 2 : 3>(in);
+        vFloat out = sfpu_reciprocal<APPROXIMATION_MODE ? 2 : 3>(in);
 
-        // Reload to reduce register pressure
-        v_if (dst_reg[0] < 0.0F) {
+        v_if (in < 0.0F) {
             // Invert sign on calculated value if CC=1 (number is negative)
             out = -out;
         }

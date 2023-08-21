@@ -2,13 +2,13 @@
 #include "llk_math_eltwise_unary_sfpu_common_includes.h"
 
 
-template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
+template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull, class PARAMTYPE>
 inline void llk_math_eltwise_unary_sfpu_1_param(
-    void (*first_func)(uint),
-    void (*func)(uint),
+    void (*first_func)(PARAMTYPE),
+    void (*func)(PARAMTYPE),
     uint dst_index,
     int vector_mode = Dim::RC,
-    uint param0 = 0) {
+    int param0 = 0) {
     if constexpr ((Dst == DstSync::SyncTile16) || (Dst == DstSync::SyncTile2)) {
         math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(math_sync_tile_dst_index);
     } else {

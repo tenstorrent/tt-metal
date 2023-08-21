@@ -6,7 +6,7 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_unary/softmax.h"
+#include "compute_kernel_api/softmax.h"
 #include "compute_kernel_api/reduce.h"
 
 #include "debug_print.h"
