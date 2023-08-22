@@ -390,7 +390,7 @@ namespace ckernel::unpacker
 
    inline uint32_t get_operand_id(uint32_t operand)
    {
-      return (operand>=INTERMEDIATE_BASE_ID) ? operand - 8 : operand - OPERAND_BASE_ID;
+      return operand;
    }
 
 }
