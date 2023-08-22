@@ -61,6 +61,9 @@ struct ConsoleSummary : public IReporter {
         subcase_strings.clear();
         cur_subcase_filter = "-sc=\"";
         test_case_filter = "-ts=\"" + std::string(in.m_test_suite) + "\"" + " -tc=\"" + std::string(in.m_name) + "\"";
+        if ((not opt.minimal) and (not opt.quiet)) {
+            stdout_stream << Color::Grey << test_case_filter << " STARTED" << std::endl;
+        }
     }
 
     // called when a test case is reentered because of unfinished subcases
