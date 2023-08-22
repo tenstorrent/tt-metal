@@ -198,6 +198,25 @@ in our documentation.
 Note that example programs are only available through source installation at
 this time.
 
+### C++ Integration Tests
+
+1. Build the TT-Metal C++ API integration tests using the make command,
+```
+make tests
+```
+2. Run the test binaries from the path **${TT_METAL_HOME}/build/test/tt_metal**
+
+### Python Integration Tests
+1. Initialize the Python virtual environment [see documentation](#Environment-setup)
+2. Run the specific test point with pytest tool, e.g.
+   ```
+   $ pytest tests/python_api_testing/sweep_tests/pytests/tt_dnn/test_composite.py
+   ```
+3. If you have any issues with import paths for python libraries include the following environment variable,
+   ```
+   $ export PYTHONPATH=${PYTHONPATH}:${TT_METAL_HOME}
+   ```
+
 ## Documentation
 
 Please refer to our
@@ -209,6 +228,12 @@ You can check out relevant sections in the
 [contribution
 standards](https://github.com/tenstorrent-metal/tt-metal/blob/main/CONTRIBUTING.md)
 if you ever need hardware troubleshooting help or debugging tips.
+
+### Slow Dispatch Mode
+The default mode is **fast-dispatch** but if you do need to use **slow-dispatch** you can set the following environment variable,
+```
+TT_METAL_SLOW_DISPATCH_MODE=1
+```
 
 ## Contributing
 
