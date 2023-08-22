@@ -13,14 +13,19 @@ sys.path.append(f"{f}/../../../..")
 
 from python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
+from python_api_testing.sweep_tests.common import skip_for_wormhole_b0, is_wormhole_b0
+
+shape_wh =  [
+    ([[1, 1, 32, 32]], 0),  # Single core
+    ([[3, 1, 320, 384]], 0),  # Multi core
+]
+if is_wormhole_b0():
+    del shape_wh[1:]
 
 
 @pytest.mark.parametrize(
     "input_shapes, pcie_slot",
-    (
-        ([[1, 1, 32, 32]], 0),  # Single core
-        ([[3, 1, 320, 384]], 0),  # Multi core
-    ),
+    shape_wh
 )
 def test_run_transpose_wh_test(input_shapes, pcie_slot, function_level_defaults):
     datagen_func = [
@@ -37,7 +42,7 @@ def test_run_transpose_wh_test(input_shapes, pcie_slot, function_level_defaults)
         pcie_slot,
     )
 
-
+@skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "input_shapes, pcie_slot",
     (
@@ -60,13 +65,16 @@ def test_run_transpose_hc_test(input_shapes, pcie_slot, function_level_defaults)
         pcie_slot,
     )
 
+shape_cn = [
+    ([[1, 1, 32, 32]], 0),  # Single core
+    ([[3, 5, 384, 96]], 0),  # Single core
+]
+if is_wormhole_b0():
+    del shape_cn[1:]
 
 @pytest.mark.parametrize(
     "input_shapes, pcie_slot",
-    (
-        ([[1, 1, 32, 32]], 0),  # Single core
-        ([[3, 5, 384, 96]], 0),  # Single core
-    ),
+    shape_cn
 )
 def test_run_transpose_cn_test(input_shapes, pcie_slot, function_level_defaults):
     datagen_func = [
@@ -83,7 +91,7 @@ def test_run_transpose_cn_test(input_shapes, pcie_slot, function_level_defaults)
         pcie_slot,
     )
 
-
+@skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "input_shapes, pcie_slot",
     (
@@ -106,7 +114,7 @@ def test_run_transpose_nh_test(input_shapes, pcie_slot, function_level_defaults)
         pcie_slot,
     )
 
-
+@skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "input_shapes, pcie_slot",
     (
@@ -129,7 +137,7 @@ def test_run_transpose_nw_test(input_shapes, pcie_slot, function_level_defaults)
         pcie_slot,
     )
 
-
+@skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "input_shapes, pcie_slot",
     (

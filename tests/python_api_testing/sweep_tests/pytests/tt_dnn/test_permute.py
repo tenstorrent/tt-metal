@@ -13,15 +13,23 @@ sys.path.append(f"{f}/../../../..")
 
 from python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
+from python_api_testing.sweep_tests.common import skip_for_wormhole_b0, is_wormhole_b0
 
-params = [
-    pytest.param([[1, 1, 32, 32]], permute_args, 0)
-    for permute_args in generation_funcs.gen_permute_args([[1, 1, 32, 32]])
-]
-params += [
-    pytest.param([[32, 32, 32, 32]], permute_args, 0)
-    for permute_args in generation_funcs.gen_permute_args([[32, 32, 32, 32]])
-]
+if is_wormhole_b0():
+    params = [
+        pytest.param([[1, 1, 32, 32]], permute_args, 0)
+        for permute_args in generation_funcs.gen_permute_args([[1, 1, 32, 32]])
+    ]
+    del params[8:]
+else:
+    params = [
+        pytest.param([[1, 1, 32, 32]], permute_args, 0)
+        for permute_args in generation_funcs.gen_permute_args([[1, 1, 32, 32]])
+    ]
+    params += [
+        pytest.param([[32, 32, 32, 32]], permute_args, 0)
+        for permute_args in generation_funcs.gen_permute_args([[32, 32, 32, 32]])
+    ]
 
 
 @pytest.mark.parametrize("input_shapes, permute_args, pcie_slot", params)

@@ -17,6 +17,7 @@ sys.path.append(f"{f}/../../../..")
 
 from python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
+from python_api_testing.sweep_tests.common import is_wormhole_b0
 
 
 reference_pcc = defaultdict(lambda: 0.999)
@@ -31,6 +32,9 @@ def custom_compare(*args, **kwargs):
     result = comparison_func(*args, **kwargs)
     return result
 
+shapes =([[1, 1, 32, 32]],[[1, 3, 320, 64]])
+if is_wormhole_b0():
+    shapes = (shapes[0],)
 
 # TODO: This function should be split apart instead of having all these if cases
 @pytest.mark.parametrize(
@@ -79,7 +83,7 @@ def custom_compare(*args, **kwargs):
                 "logaddexp2",
                 "bias_gelu",
             ),
-            ([[1, 1, 32, 32]], [[1, 3, 320, 64]]),
+            shapes,
             (0,),
         )
     ),  # Single core, and multi-core

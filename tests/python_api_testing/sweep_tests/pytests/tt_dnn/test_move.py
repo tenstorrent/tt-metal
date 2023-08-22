@@ -11,15 +11,24 @@ sys.path.append(f"{f}/../../../..")
 
 from python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
+from python_api_testing.sweep_tests.common import skip_for_wormhole_b0, is_wormhole_b0
 
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    [
+shapes = [
         [[1, 1, 32, 32]],  # Single core
         [[1, 1, 320, 384]],  # Multi core
         [[1, 3, 320, 384]],  # Multi core
-    ],
+]
+output_mem_configs = [
+    ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+    ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
+]
+if is_wormhole_b0():
+    del shapes[1:]
+    del output_mem_configs[1:]
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    shapes
 )
 @pytest.mark.parametrize("pcie_slot", [0])
 @pytest.mark.parametrize(
@@ -27,10 +36,7 @@ from python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytor
 )
 @pytest.mark.parametrize(
     "output_mem_config",
-    [
-        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
-    ],
+    output_mem_configs
 )
 def test_run_move_op(
     input_shapes,

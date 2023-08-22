@@ -14,6 +14,7 @@ sys.path.append(f"{f}/../../../..")
 
 from python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
+from python_api_testing.sweep_tests.common import skip_for_wormhole_b0, is_wormhole_b0
 import random
 
 # Seed here for fixed params
@@ -25,10 +26,11 @@ params = [
     pytest.param([[5, 5, 50, 50]], pad_args, 0)
     for pad_args in generation_funcs.gen_pad_args([[5, 5, 50, 50]])
 ]
-params += [
-    pytest.param([[5, 5, 64, 96]], pad_args, 0)
-    for pad_args in generation_funcs.gen_pad_args([[5, 5, 64, 96]])
-]
+if not is_wormhole_b0():
+    params += [
+        pytest.param([[5, 5, 64, 96]], pad_args, 0)
+        for pad_args in generation_funcs.gen_pad_args([[5, 5, 64, 96]])
+    ]
 
 
 @pytest.mark.parametrize("input_shapes, pad_args, pcie_slot", params)

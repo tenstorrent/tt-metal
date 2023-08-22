@@ -13,15 +13,19 @@ sys.path.append(f"{f}/../../../..")
 
 from python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
+from python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
 
+shapes_n_slots = (
+    ([[1, 1, 32, 32]], 0),  # Single core
+    ([[1, 1, 32, 3840]], 0),  # Multi core h
+    ([[1, 3, 32, 3840]], 0),  # Multi core h
+)
+if is_wormhole_b0():
+    shapes_n_slots = (shapes_n_slots[0],)
 
 @pytest.mark.parametrize(
     "input_shapes, pcie_slot",
-    (
-        ([[1, 1, 32, 32]], 0),  # Single core
-        ([[1, 1, 32, 3840]], 0),  # Multi core h
-        ([[1, 3, 32, 3840]], 0),  # Multi core h
-    ),
+    shapes_n_slots
 )
 def test_run_reduce_max_h_test(input_shapes, pcie_slot, function_level_defaults):
     datagen_func = [
@@ -39,14 +43,18 @@ def test_run_reduce_max_h_test(input_shapes, pcie_slot, function_level_defaults)
         pcie_slot,
     )
 
+shapes_n_slots2 = (
+    ([[1, 1, 32, 32]], 0),  # Single core
+    ([[1, 1, 3840, 32]], 0),  # Multi core w
+    ([[1, 3, 3840, 32]], 0),  # Multi core w
+)
+if is_wormhole_b0():
+    shapes_n_slots2 = (shapes_n_slots2[0],)
 
+@skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "input_shapes, pcie_slot",
-    (
-        ([[1, 1, 32, 32]], 0),  # Single core
-        ([[1, 1, 3840, 32]], 0),  # Multi core w
-        ([[1, 3, 3840, 32]], 0),  # Multi core w
-    ),
+    shapes_n_slots2
 )
 def test_run_reduce_max_w_test(input_shapes, pcie_slot, function_level_defaults):
     datagen_func = [
@@ -65,13 +73,18 @@ def test_run_reduce_max_w_test(input_shapes, pcie_slot, function_level_defaults)
     )
 
 
+shapes_n_slots3 =     (
+    ([[1, 1, 32, 32]], 0),  # Single core
+    ([[1, 1, 512, 512]], 0),  # Multi core hw (== multi core w + multi core h)
+    ([[1, 3, 512, 512]], 0),  # Multi core hw (== multi core w + multi core h)
+)
+
+if is_wormhole_b0():
+    shapes_n_slots3 = (shapes_n_slots3[0],)
+    
 @pytest.mark.parametrize(
     "input_shapes, pcie_slot",
-    (
-        ([[1, 1, 32, 32]], 0),  # Single core
-        ([[1, 1, 512, 512]], 0),  # Multi core hw (== multi core w + multi core h)
-        ([[1, 3, 512, 512]], 0),  # Multi core hw (== multi core w + multi core h)
-    ),
+    shapes_n_slots3,
 )
 def test_run_reduce_max_hw_test(input_shapes, pcie_slot, function_level_defaults):
     datagen_func = [
@@ -88,14 +101,18 @@ def test_run_reduce_max_hw_test(input_shapes, pcie_slot, function_level_defaults
         pcie_slot,
     )
 
+shapes_n_slots5 = (
+    ([[1, 1, 32, 32]], 0),  # Single core
+    ([[1, 1, 32, 3840]], 0),  # Multi core h
+    ([[1, 1, 32, 3840]], 0),  # Multi core h
+)
+if is_wormhole_b0():
+    shapes_n_slots5 = (shapes_n_slots5[0],)
+
 
 @pytest.mark.parametrize(
     "input_shapes, pcie_slot",
-    (
-        ([[1, 1, 32, 32]], 0),  # Single core
-        ([[1, 1, 32, 3840]], 0),  # Multi core h
-        ([[1, 1, 32, 3840]], 0),  # Multi core h
-    ),
+    shapes_n_slots5
 )
 def test_run_reduce_sum_h_test(input_shapes, pcie_slot, function_level_defaults):
     datagen_func = [
@@ -113,13 +130,19 @@ def test_run_reduce_sum_h_test(input_shapes, pcie_slot, function_level_defaults)
     )
 
 
+shapes_n_slots4 = (
+    ([[1, 1, 32, 32]], 0),  # Single core
+    ([[1, 1, 3840, 32]], 0),  # Multi core w
+    ([[1, 3, 3840, 32]], 0),  # Multi core w
+)
+
+if is_wormhole_b0():
+    shapes_n_slots4 = (shapes_n_slots4[0],)
+
+@skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "input_shapes, pcie_slot",
-    (
-        ([[1, 1, 32, 32]], 0),  # Single core
-        ([[1, 1, 3840, 32]], 0),  # Multi core w
-        ([[1, 3, 3840, 32]], 0),  # Multi core w
-    ),
+    shapes_n_slots4
 )
 def test_run_reduce_sum_w_test(input_shapes, pcie_slot, function_level_defaults):
     datagen_func = [
@@ -136,14 +159,18 @@ def test_run_reduce_sum_w_test(input_shapes, pcie_slot, function_level_defaults)
         pcie_slot,
     )
 
+shapes_n_slots5 = (
+    ([[1, 1, 32, 32]], 0),  # Single core
+    ([[1, 1, 512, 512]], 0),  # Multi core hw (== multi core w + multi core h)
+    ([[1, 1, 512, 512]], 0),  # Multi core hw (== multi core w + multi core h)
+)
+if is_wormhole_b0():
+    shapes_n_slots5 = (shapes_n_slots5[0],)
+
 
 @pytest.mark.parametrize(
     "input_shapes, pcie_slot",
-    (
-        ([[1, 1, 32, 32]], 0),  # Single core
-        ([[1, 1, 512, 512]], 0),  # Multi core hw (== multi core w + multi core h)
-        ([[1, 1, 512, 512]], 0),  # Multi core hw (== multi core w + multi core h)
-    ),
+    shapes_n_slots5
 )
 def test_run_reduce_sum_hw_test(input_shapes, pcie_slot, function_level_defaults):
     datagen_func = [

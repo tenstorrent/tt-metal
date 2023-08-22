@@ -20,6 +20,8 @@ if [ "$ARCH_NAME" == "grayskull" ]; then
   ./tests/scripts/run_python_api_unit_tests.sh
   env python tests/scripts/run_tt_metal.py
 else
+    
+  ./tests/scripts/run_python_api_unit_tests_wormhole_b0.sh
   ./build/test/tt_metal/test_bcast --arch $ARCH_NAME
   ./build/test/tt_metal/test_reduce_hw --arch $ARCH_NAME
   ./build/test/tt_metal/test_reduce_w --arch $ARCH_NAME

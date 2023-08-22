@@ -1,13 +1,15 @@
 import torch
 import tt_lib as ttl
 from python_api_testing.models.helper_funcs import Linear as tt_Linear
+from python_api_testing.sweep_tests.common import is_wormhole_b0
 
 from itertools import product
 
 
 def setup_host_and_device(func):
     def wrap(*args, pcie_slot, **kwargs):
-        device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
+        ARCH = is_wormhole_b0() and ttl.device.Arch.WORMHOLE_B0 or ttl.device.Arch.GRAYSKULL            
+        device = ttl.device.CreateDevice(ARCH, pcie_slot)            
         ttl.device.InitializeDevice(device)
         ttl.device.SetDefaultDevice(device)
         try:

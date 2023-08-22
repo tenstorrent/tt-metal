@@ -13,12 +13,16 @@ sys.path.append(f"{f}/../../../..")
 
 from python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
+from python_api_testing.sweep_tests.common import skip_for_wormhole_b0, is_wormhole_b0
 import tt_lib as ttl
 
+shapes = [ [[1, 1, 30, 32]], [[3, 1, 315, 384]], [[1, 1, 100, 7104]] ]
+if is_wormhole_b0():
+    shapes = [ shapes[0] ]
 
 @pytest.mark.parametrize(
     "input_shapes",
-    (([[1, 1, 30, 32]], [[3, 1, 315, 384]], [[1, 1, 100, 7104]])),
+    shapes
 )
 @pytest.mark.parametrize(
     "tilize_with_zero_padding_args",

@@ -13,22 +13,28 @@ sys.path.append(f"{f}/../../../..")
 
 from python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
+from python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
 import tt_lib as ttl
 
 
 fns = ["std_hw", "mean_hw", "var_hw", "normalize_hw"]
 
+shapes = [
+    [[2, 2, 32, 64], (0.99, 0.85, 0.85, 0.9)],  # Single core
+    [[4, 2, 64, 64], (0.97, 0.82, 0.85, 0.9)],  # Multi core
+    [[8, 6, 32, 96], (0.91, 0.82, 0.85, 0.9)],  # Multi core
+]
+
+if is_wormhole_b0():
+    shapes = [ [[1, 1, 32, 32], (0.99, 0.85, 0.85, 0.9)], ]  # Single core
 
 @pytest.mark.parametrize(
     "input_shapes_and_pcc",
-    [
-        [[2, 2, 32, 64], (0.99, 0.85, 0.85, 0.9)],  # Single core
-        [[4, 2, 64, 64], (0.97, 0.82, 0.85, 0.9)],  # Multi core
-        [[8, 6, 32, 96], (0.91, 0.82, 0.85, 0.9)],  # Multi core
-    ],
+    shapes,
 )
 @pytest.mark.parametrize("pcie_slot", [0])
 class TestStats:
+    @skip_for_wormhole_b0
     @pytest.mark.parametrize("fn_kind", fns)
     def test_run_stats_ops(
         self, input_shapes_and_pcc, fn_kind, pcie_slot, function_level_defaults

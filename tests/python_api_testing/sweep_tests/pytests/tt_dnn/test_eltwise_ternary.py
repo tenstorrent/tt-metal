@@ -15,15 +15,19 @@ sys.path.append(f"{f}/../../../..")
 
 from python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
+from python_api_testing.sweep_tests.common import is_wormhole_b0
 
+shapes_n_slots = (
+    ([[1, 1, 32, 32]], 0),  # Single core
+    ([[1, 1, 320, 384]], 0),  # Multi core
+    ([[1, 3, 320, 384]], 0),  # Multi core
+)
+if is_wormhole_b0():
+    shapes_n_slots = (shapes_n_slots[0],)
 
 @pytest.mark.parametrize(
     "input_shapes, pcie_slot",
-    (
-        ([[1, 1, 32, 32]], 0),  # Single core
-        ([[1, 1, 320, 384]], 0),  # Multi core
-        ([[1, 3, 320, 384]], 0),  # Multi core
-    ),
+    shapes_n_slots
 )
 def test_run_eltwise_where_test(input_shapes, pcie_slot, function_level_defaults):
     datagen_func = [
