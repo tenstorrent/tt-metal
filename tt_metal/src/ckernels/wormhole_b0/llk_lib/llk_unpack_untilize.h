@@ -12,28 +12,23 @@ using namespace ckernel;
 using namespace ckernel::unpacker;
 
 inline void llk_unpack_untilize_mop_config() {
-#if SKIP_UNP == 1
-    static constexpr uint unpack_srca = TT_OP_NOP;
-#else
-    static constexpr uint unpack_srca =
-        TT_OP_UNPACR(SrcA, 0b01000001, 0, 0, 0, 0, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-#endif
-    static constexpr uint unpack_addcr = TT_OP_ADDRCRZW(0b001, 0, 0, 0, 0, 0b0001);
-    static constexpr uint unpack_addr_offset =
-        TT_OP_ADDDMAREG(0, p_gpr_unpack::TILE_OFFSET, p_gpr_unpack::TILE_OFFSET, p_gpr_unpack::TILE_SIZE);
-    static constexpr uint unpack_wr_addr_offset = TT_OP_REG2FLOP(
-        1, 0, 0, 0, THCON_SEC0_REG7_Offset_address_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TILE_OFFSET);
-    // static constexpr uint unpack_inc_w_cnt = TT_OP_INCADCZW(0b001, 0, 0, 1, 0);
+    constexpr uint replay_buf_len = 5;
+    TTI_REPLAY(0, replay_buf_len, 0, 1);
+    TTI_UNPACR(SrcA, 0b01000001, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    TTI_UNPACR(SrcA, 0b01000001, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    TTI_ADDDMAREG(0, p_gpr_unpack::TILE_OFFSET, p_gpr_unpack::TILE_OFFSET, p_gpr_unpack::TILE_SIZE);
+    TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG7_Offset_address_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TILE_OFFSET);
+    TTI_ADDRCRZW(0b001, 0, 0, 0, 0, 0b0001);
     ckernel_unpack_template tmp = ckernel_unpack_template(
-        true,  // src B
-        true,  // halo - just used for 4 unpacks
-        unpack_srca,
-        unpack_srca,
-        unpack_addr_offset,
-        unpack_wr_addr_offset,
+        false,  // src B
+        false,  // halo - just used for 4 unpacks
+        TT_OP_REPLAY(0, replay_buf_len, 0, 0),
         0,
-        unpack_addcr,
-        TT_OP_NOP);
+        0,
+        0,
+        0,
+        0,
+        0);
 
     tmp.program(instrn_buffer);
 }
@@ -43,26 +38,21 @@ inline void llk_unpack_untilize_hw_configure(const llk_unpack_untilize_params_t 
         get_operand_id(unpack_untilize_params->unpA_operand), get_operand_id(unpack_untilize_params->unpA_operand), 1);
     // Override default settings
     std::uint32_t input = get_operand_id(unpack_untilize_params->unpA_operand);
+
+    uint unpA_ch1_x_stride = (uint) (unpack_dst_format[unpack_untilize_params->unpA_operand]&0x3) == (uint) DataFormat::Float32 ? 4 : (uint) (unpack_dst_format[unpack_untilize_params->unpA_operand]&0x3) == (uint) DataFormat::Float16 ? 2 : 1;
+    uint unpA_ch1_y_stride = 16*unpA_ch1_x_stride;
     // Get pointer to registers for current state ID
-    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
-    uint Tile_x_dim = FACE_HEIGHT;
-    cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32] = Tile_x_dim | (Tile_x_dim << 16);
-    unpack_tile_descriptor_u tile_descriptor;
-    tile_descriptor.val[0] = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + 0];
-    tile_descriptor.val[1] = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1];
-    tile_descriptor.f.x_dim = 16;
-    tile_descriptor.f.y_dim = FACE_HEIGHT;
-    cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + 0] = tile_descriptor.val[0];
-    cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1] = tile_descriptor.val[1];
-
-    cfg[UNP0_ADDR_BASE_REG_0_Base_ADDR32] =
-        ((((int)unpack_dst_format[input] & 0x3) == 1) ? 0x80 : 0x40)
-        << UNP0_ADDR_BASE_REG_1_Base_SHAMT;  // base address skips halo rows in srcA (ch1)
-
+    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32, UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT, UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK>(unpA_ch1_y_stride);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32, 0, 0xFFFF>(FACE_WIDTH | (FACE_WIDTH << 16));
+    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 16, 0xFFFF00>(FACE_WIDTH);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32+1, 0, 0xFFFF>(FACE_HEIGHT);
     regfile[p_gpr_unpack::TILE_SIZE] = cb_interface[input].fifo_page_size;
     regfile[p_gpr_unpack::TILE_OFFSET] = 0;
+    sync_regfile_write(p_gpr_unpack::TILE_OFFSET);
     TTI_SETDMAREG(0, 0, 0, LO_16(p_gpr_unpack::TILE_OFFSET));
+    TTI_SETDMAREG(0, 0, 0, HI_16(p_gpr_unpack::TILE_OFFSET));
     TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG7_Offset_address_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
+
 }
 
 inline void llk_unpack_untilize_hw_configure_disaggregated(const std::uint32_t unpA_operand) {
@@ -112,7 +102,10 @@ inline void llk_unpack_untilize_(std::uint32_t operand, std::uint32_t block_tile
 #if SKIP_UNP == 1
                 TTI_NOP;
 #else
-                TTI_UNPACR(SrcA, 0b0, 0, 0, 0, 0, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);  // set data valid
+                TTI_UNPACR(SrcA, 0b0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);  // set data valid
+
+                TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC);
+                TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_SET_DVALID);
 #endif
                 TTI_SETADCXY(0b001, 0, 0, 0, 0, 0b1000);  // Clear srcA addr y cnt
                 rem_blocks_in_row -= (8 - face_2xr_cnt);
@@ -130,6 +123,7 @@ inline void llk_unpack_untilize_(std::uint32_t operand, std::uint32_t block_tile
         } while (rem_blocks_in_row > 0);
 
         TTI_SETDMAREG(0, 0, 0, LO_16(p_gpr_unpack::TILE_OFFSET));  // Clear offset pointer
+        TTI_SETDMAREG(0, 0, 0, HI_16(p_gpr_unpack::TILE_OFFSET));  // Clear offset pointer
         TTI_REG2FLOP(
             1,
             0,
