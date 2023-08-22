@@ -212,7 +212,7 @@ namespace ckernel::packer
 
       // Workaround for bug in HW: tenstorrent/budabackend#1394
       if constexpr (is_fp32_dest_acc_en) {
-         if (IS_BFP_A_FORMAT((uint)pack_dst_format[output_id])) {
+         if (IS_A_FORMAT((uint)pack_dst_format[output_id])) {
             config.f.exp_threshold_en = 1;
             config.f.exp_threshold = 113;
          }

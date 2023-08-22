@@ -195,6 +195,17 @@ constexpr static bool IS_BFP_A_FORMAT(uint format) {
     };
 }
 
+constexpr static bool IS_A_FORMAT(uint format) {
+    switch (format&0xF) {
+        case ((uint8_t)DataFormat::Lf8):
+        case ((uint8_t)DataFormat::Float16):
+        case ((uint8_t)DataFormat::Bfp8):
+        case ((uint8_t)DataFormat::Bfp4):
+        case ((uint8_t)DataFormat::Bfp2): return true;
+        default: return false;
+    };
+}
+
 constexpr static std::uint32_t SCALE_DATUM_SIZE(uint format, uint datum_count) {
     switch (format&0xF) {
         case ((uint8_t)DataFormat::Float32): return (datum_count<<2);
