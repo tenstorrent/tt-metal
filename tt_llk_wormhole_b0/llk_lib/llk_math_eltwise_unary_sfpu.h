@@ -55,7 +55,7 @@ inline void llk_math_eltwise_unary_sfpu(
         const std::uint32_t operand_id = get_operand_id(operand);
         // Do a row vector, Face0 + Face1 -- first iteration (first row)
         const int iterations = (math::get_num_faces(operand_id) < 4) ? 
-                                    ((math::get_face_r_dim(operand_id) < 8) ? math::get_face_r_dim(operand_id)*2 : 8) : 2; // FIXME: why *2 
+                                    ((math::get_face_r_dim(operand_id) <= 2) ? 2 : math::get_face_r_dim(operand_id)/2) : 2; // At least 2 iterations for odd and even columns
 #pragma GCC unroll 0
         for (int face = 0; face < 2; face++) {
             sfpu::calculate_sfpu<sfpu_op, APPROXIMATE, 0, ITERATIONS>(iterations, param0, param1, param2, param3, param4, param5);
