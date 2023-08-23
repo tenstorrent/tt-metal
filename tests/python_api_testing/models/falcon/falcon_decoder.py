@@ -19,6 +19,7 @@ class TtFalconDecoderLayer(nn.Module):
         layer_num,
         config,
         max_position_embeddings,
+        llm_mode,
         model_config,
         tt_cache_path,
     ):
@@ -43,6 +44,7 @@ class TtFalconDecoderLayer(nn.Module):
             hidden_size=config.hidden_size,
             num_heads=config.num_attention_heads,
             max_position_embeddings=max_position_embeddings,
+            llm_mode=llm_mode,
             model_config=model_config,
             tt_cache_path=tt_cache_path,
         )
@@ -94,7 +96,8 @@ class TtFalconDecoderLayer(nn.Module):
         hidden_states: tt_lib.tensor.Tensor,
         alibi: torch.Tensor,
         attention_mask: torch.Tensor,
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        layer_past: Optional[Tuple[tt_lib.tensor.Tensor]] = None,
+        layer_past_len: int = 0,
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
     ) -> Tuple[
@@ -135,9 +138,10 @@ class TtFalconDecoderLayer(nn.Module):
             hidden_states=layernorm_output,
             alibi=alibi,
             attention_mask=attention_mask,
-            past_key_value=past_key_value,
-            use_cache=use_cache,
+            layer_past=layer_past,
+            layer_past_len=layer_past_len,
             output_attentions=output_attentions,
+            use_cache=use_cache,
         )
         attention_output, outputs = attn_outputs[0], attn_outputs[1:]
 
@@ -175,6 +179,6 @@ class TtFalconDecoderLayer(nn.Module):
             outputs = (
                 output,
                 (),
-            )  # Outputs should be empty if we ignore past_key_value as well
+            )  # Outputs should be empty if we ignore layer_past as well
 
         return outputs

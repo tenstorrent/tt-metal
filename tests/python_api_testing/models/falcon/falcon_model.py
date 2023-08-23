@@ -2,6 +2,7 @@ import torch
 import pytest
 from torch import nn
 from abc import abstractmethod
+from typing import Optional, Tuple
 
 import tt_lib
 
@@ -22,6 +23,7 @@ class TtFalconModelShared(torch.nn.Module):
         num_layers,
         config,
         max_position_embeddings,
+        llm_mode,
         model_config,
         tt_cache_path,
     ):
@@ -34,6 +36,7 @@ class TtFalconModelShared(torch.nn.Module):
         self.base_url = base_url
         self.config = config
         self.max_position_embeddings = max_position_embeddings
+        self.llm_mode = llm_mode
         self.model_config = model_config
 
         # So far on CPU until we add embeddings support on device
@@ -52,6 +55,7 @@ class TtFalconModelShared(torch.nn.Module):
                     layer_num=layer_num,
                     config=config,
                     max_position_embeddings=max_position_embeddings,
+                    llm_mode=llm_mode,
                     model_config=model_config,
                     tt_cache_path=tt_cache_path,
                 )
@@ -103,28 +107,75 @@ class TtFalconModelShared(torch.nn.Module):
             )[0]
         self.layernorm_eps = config.layer_norm_epsilon
 
-    def model_preprocessing(self, input_ids):
+    def model_preprocessing(self, input_ids, kv_cache_len):
         # input_ids: torch.Tensor with shape [batch, seq_len]
-        assert input_ids.dim() == 2
-        embeddings = self.embeddings(input_ids)
-        tt_embeddings = torch2tt_tensor(
-            embeddings,
-            self.device,
-            tt_memory_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"],
-            tt_dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
-        )
 
+        assert input_ids.dim() == 2
         batch, seq_len = input_ids.shape
-        q_len, kv_seq_len = seq_len, seq_len
-        tt_attention_mask = (
-            torch.ones(batch, self.config.n_head, q_len, kv_seq_len) * -100000
-        ).triu(diagonal=1)
-        tt_attention_mask = torch2tt_tensor(
-            tt_attention_mask,
-            self.device,
-            tt_memory_config=self.model_config["ATTN_MASK_MEMCFG"],
-            tt_dtype=self.model_config["ATTN_MASK_DTYPE"],
-        )
+
+        embeddings = self.embeddings(input_ids)
+
+        # Generate input and attention_mask ---------------------------------------------
+        # TODO: Generate attention_mask on device
+        if self.llm_mode == "prefill":
+            q_len, kv_len = seq_len, seq_len
+            assert batch == 1, "For prefill, batch must be 1!"
+            assert q_len % 32 == 0, "For prefill, seq_len must be multiple of 32!"
+            assert kv_cache_len == 0, "For prefill, no kv_cache is passed in!"
+
+            tt_embeddings = torch2tt_tensor(
+                embeddings.unsqueeze(1),
+                self.device,
+                tt_memory_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"],
+                tt_dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
+            )
+
+            attention_mask_bool = torch.ones(batch, 1, q_len, kv_len, dtype=bool).triu(
+                diagonal=1
+            )
+            tt_attention_mask = torch2tt_tensor(
+                (attention_mask_bool * -100000).expand(-1, self.config.n_head, -1, -1),
+                self.device,
+                tt_memory_config=self.model_config["ATTN_MASK_MEMCFG"],
+                tt_dtype=self.model_config["ATTN_MASK_DTYPE"],
+            )
+
+        elif self.llm_mode == "decode":
+            q_len, kv_len = seq_len, kv_cache_len + 1
+            assert batch % 32 == 0, "For decode, batch must be multiple of 32!"
+            assert q_len == 1, "For decode, q_len must be 1!"
+
+            tt_embeddings = torch2tt_tensor(
+                embeddings.unsqueeze(1).transpose(0, 2),
+                self.device,
+                tt_memory_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"],
+                tt_dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
+            )
+
+            attention_mask_bool = torch.zeros(batch, 1, q_len, kv_len, dtype=bool)
+            attention_mask_bool[:, :, :, -1] = True
+
+            kv_len_padded = (kv_len + 31) // 32 * 32
+            attention_mask_bool_padded = torch.cat(
+                (
+                    attention_mask_bool,
+                    torch.ones(batch, 1, q_len, kv_len_padded - kv_len, dtype=bool),
+                ),
+                dim=-1,
+            )
+            tt_attention_mask = torch2tt_tensor(
+                (attention_mask_bool_padded.transpose(0, 2) * -100000).expand(
+                    -1, self.config.n_head, -1, -1
+                ),
+                self.device,
+                tt_memory_config=self.model_config["ATTN_MASK_MEMCFG"],
+                tt_dtype=self.model_config["ATTN_MASK_DTYPE"],
+            )
+
+        else:
+            raise NotImplementedError(
+                f"Llm mode {self.llm_mode} is not supported! Must be one of prefill or decode."
+            )
 
         return tt_embeddings, tt_attention_mask
 
@@ -133,11 +184,17 @@ class TtFalconModelShared(torch.nn.Module):
         self,
         input_embeddings: tt_lib.tensor.Tensor,
         attention_mask: tt_lib.tensor.Tensor = None,
+        layer_past: Optional[Tuple[tt_lib.tensor.Tensor]] = None,
+        layer_past_len: int = 0,
     ) -> tt_lib.tensor.Tensor:
         layer_output = input_embeddings
         for idx, layer in enumerate(self.layers):
             layer_output = layer(
-                hidden_states=layer_output, alibi=None, attention_mask=attention_mask
+                hidden_states=layer_output,
+                alibi=None,
+                attention_mask=attention_mask,
+                layer_past=layer_past,
+                layer_past_len=layer_past_len,
             )[0]
 
         # apply final norm layer
@@ -176,6 +233,7 @@ class TtFalconModel(TtFalconModelShared):
         num_layers,
         config,
         max_position_embeddings,
+        llm_mode,
         model_config,
         tt_cache_path,
     ):
@@ -186,6 +244,7 @@ class TtFalconModel(TtFalconModelShared):
             num_layers=num_layers,
             config=config,
             max_position_embeddings=max_position_embeddings,
+            llm_mode=llm_mode,
             model_config=model_config,
             tt_cache_path=tt_cache_path,
         )
@@ -194,6 +253,13 @@ class TtFalconModel(TtFalconModelShared):
         self,
         input_embeddings: tt_lib.tensor.Tensor,
         attention_mask: tt_lib.tensor.Tensor = None,
+        layer_past: Optional[Tuple[tt_lib.tensor.Tensor]] = None,
+        layer_past_len: int = 0,
     ) -> tt_lib.tensor.Tensor:
-        hidden_states = super().forward(input_embeddings, attention_mask)
+        hidden_states = super().forward(
+            input_embeddings=input_embeddings,
+            attention_mask=attention_mask,
+            layer_past=layer_past,
+            layer_past_len=layer_past_len,
+        )
         return hidden_states

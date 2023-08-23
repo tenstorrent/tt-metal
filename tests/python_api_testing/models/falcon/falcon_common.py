@@ -16,8 +16,8 @@ class PytorchFalconCausalLM(torch.nn.Module):
         # Disable dropout
         self.model.eval()
 
-    def forward(self, input_ids):
+    def forward(self, input_ids, past_key_values):
         # this method is returning the logits
-        result = self.model(input_ids=input_ids)[0]
+        result = self.model(input_ids=input_ids, past_key_values=past_key_values)[0]
 
         return result

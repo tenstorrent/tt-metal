@@ -26,9 +26,12 @@ class PytorchFalconAttentionModel(torch.nn.Module):
         # Disable dropout
         self.attention.eval()
 
-    def forward(self, x, alibi, attention_mask):
+    def forward(self, x, alibi, attention_mask, layer_past):
         result = self.attention(
-            hidden_states=x, alibi=alibi, attention_mask=attention_mask
+            hidden_states=x,
+            alibi=alibi,
+            attention_mask=attention_mask,
+            layer_past=layer_past,
         )[0]
         return result
 
@@ -36,8 +39,10 @@ class PytorchFalconAttentionModel(torch.nn.Module):
 def run_test_FalconAttention_inference(
     device,
     model_version,
+    llm_mode,
     batch,
     seq_len,
+    kv_cache_len,
     pcc,
     model_config,
     tt_cache_path,
@@ -52,49 +57,119 @@ def run_test_FalconAttention_inference(
 
     # Prepare input
     torch.manual_seed(0)
-    attention_input = (torch.rand(batch, seq_len, configuration.hidden_size) * 2) - 1
     layer_num = 0
     base_url = "transformer.h"
     max_position_embeddings = 2048
+    head_dim = configuration.hidden_size // configuration.n_head
+    # head_dim = 64
 
-    # Generate attention_mask -----------------------------------------------------------
+    # Generate input, attention_mask, and kv_cache --------------------------------------
     # TODO: Generate attention_mask on device
-    q_len, kv_seq_len = seq_len, seq_len
-    attention_mask_bool = torch.ones(batch, 1, q_len, kv_seq_len, dtype=bool).triu(
-        diagonal=1
-    )
-    tt_attention_mask = torch2tt_tensor(
-        (attention_mask_bool * -100000).expand(-1, configuration.n_head, -1, -1), device
-    )
+    if llm_mode == "prefill":
+        q_len, kv_len = seq_len, seq_len
+        assert batch == 1, "For prefill, batch must be 1!"
+        assert q_len % 32 == 0, "For prefill, seq_len must be multiple of 32!"
+        assert kv_cache_len == 0, "For prefill, no kv_cache is passed in!"
+
+        attention_input = (torch.rand(batch, q_len, configuration.hidden_size) * 2) - 1
+        attention_mask_bool = torch.ones(batch, 1, q_len, kv_len, dtype=bool).triu(
+            diagonal=1
+        )
+        layer_past = None
+
+        tt_attention_input = torch2tt_tensor(attention_input.unsqueeze(1), device)
+        tt_attention_mask = torch2tt_tensor(
+            (attention_mask_bool * -100000).expand(-1, configuration.n_head, -1, -1),
+            device,
+        )
+        tt_layer_past = None
+
+    elif llm_mode == "decode":
+        q_len, kv_len = seq_len, kv_cache_len + 1
+        assert batch % 32 == 0, "For decode, batch must be multiple of 32!"
+        assert q_len == 1, "For decode, q_len must be 1!"
+
+        attention_input = (torch.rand(batch, q_len, configuration.hidden_size) * 2) - 1
+        # attention_input = (torch.rand(batch, q_len, 4544) * 2) - 1
+        attention_mask_bool = torch.zeros(batch, 1, q_len, kv_len, dtype=bool)
+        attention_mask_bool[:, :, :, -1] = True
+        k_cache = torch.rand(batch, kv_cache_len, head_dim)
+        v_cache = torch.rand(batch, kv_cache_len, head_dim)
+        layer_past = (k_cache, v_cache)
+
+        tt_attention_input = torch2tt_tensor(
+            attention_input.unsqueeze(1).transpose(0, 2), device
+        )
+
+        kv_len_padded = (kv_len + 31) // 32 * 32
+        attention_mask_bool_padded = torch.cat(
+            (
+                attention_mask_bool,
+                torch.ones(batch, 1, q_len, kv_len_padded - kv_len, dtype=bool),
+            ),
+            dim=-1,
+        )
+        tt_attention_mask = torch2tt_tensor(
+            (attention_mask_bool_padded.transpose(0, 2) * -100000).expand(
+                -1,
+                configuration.n_head,
+                -1,
+                -1
+                # -1, 71, -1, -1
+            ),
+            device,
+        )
+        tt_k_cache = torch.zeros(batch, max_position_embeddings, head_dim)
+        tt_v_cache = torch.zeros(batch, max_position_embeddings, head_dim)
+        tt_k_cache[:, :kv_cache_len, :] = k_cache
+        tt_v_cache[:, :kv_cache_len, :] = v_cache
+        tt_k_cache = torch2tt_tensor(tt_k_cache.unsqueeze(1), device)
+        tt_v_cache = torch2tt_tensor(tt_v_cache.unsqueeze(1), device)
+        tt_layer_past = (tt_k_cache, tt_v_cache)
+
+    else:
+        raise NotImplementedError(
+            f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode."
+        )
 
     # PyTorch output --------------------------------------------------------------------
     pytorch_FalconAttention_model = PytorchFalconAttentionModel(
         hugging_face_reference_model, layer_num
     )
     pytorch_out = pytorch_FalconAttention_model(
-        attention_input, alibi=None, attention_mask=attention_mask_bool
+        attention_input,
+        alibi=None,
+        attention_mask=attention_mask_bool,
+        layer_past=layer_past,
     )
 
     # TT hardware execution -------------------------------------------------------------
     tt_FalconAttention_model = TtFalconAttention(
         device,
         state_dict,
+        # None,
         base_url,
         layer_num,
         configuration.hidden_size,
         configuration.n_head,
+        # 4544,
+        # 71,
         max_position_embeddings,
+        llm_mode,
         model_config,
         tt_cache_path,
     )
 
-    tt_attention_input = attention_input.unsqueeze(1)
-    tt_attention_input = torch2tt_tensor(tt_attention_input, device)
-
-    tt_out, past_key_value = tt_FalconAttention_model(
-        tt_attention_input, alibi=None, attention_mask=tt_attention_mask
+    tt_out, layer_present = tt_FalconAttention_model(
+        tt_attention_input,
+        alibi=None,
+        attention_mask=tt_attention_mask,
+        layer_past=tt_layer_past,
+        layer_past_len=kv_cache_len,
     )
     tt_out = tt2torch_tensor(tt_out).squeeze(1)
+    if llm_mode == "decode":
+        tt_out = tt_out.transpose(0, 1)
 
     # check outputs ----------------------------------------------------------------------
     logger.info(comp_allclose(pytorch_out, tt_out))
@@ -110,21 +185,24 @@ def run_test_FalconAttention_inference(
 
 
 @pytest.mark.parametrize(
-    "model_version, batch, seq_len, pcc",
+    "llm_mode, batch, seq_len, kv_cache_len",
     (
-        (
-            "tiiuae/falcon-7b-instruct",
-            1,
-            128,
-            0.98,
-        ),
+        ("prefill", 1, 128, 0),
+        ("decode", 32, 1, 128),
     ),
+    ids=["prefill_seq128", "decode_batch32"],
+)
+@pytest.mark.parametrize(
+    "model_version, pcc",
+    (("tiiuae/falcon-7b-instruct", 0.98),),
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
 def test_FalconAttention_inference(
     model_version,
+    llm_mode,
     batch,
     seq_len,
+    kv_cache_len,
     pcc,
     model_config_str,
     model_location_generator,
@@ -139,8 +217,10 @@ def test_FalconAttention_inference(
     run_test_FalconAttention_inference(
         device,
         model_version,
+        llm_mode,
         batch,
         seq_len,
+        kv_cache_len,
         pcc,
         model_config,
         tt_cache_path,

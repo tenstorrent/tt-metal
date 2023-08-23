@@ -26,9 +26,12 @@ class PytorchFalconDecoderModel(torch.nn.Module):
         # Disable dropout
         self.decoder.eval()
 
-    def forward(self, x, alibi, attention_mask):
+    def forward(self, x, alibi, attention_mask, layer_past):
         result = self.decoder(
-            hidden_states=x, alibi=alibi, attention_mask=attention_mask
+            hidden_states=x,
+            alibi=alibi,
+            attention_mask=attention_mask,
+            layer_past=layer_past,
         )[0]
         return result
 
@@ -36,8 +39,10 @@ class PytorchFalconDecoderModel(torch.nn.Module):
 def run_test_FalconDecoder_inference(
     device,
     model_version,
+    llm_mode,
     batch,
     seq_len,
+    kv_cache_len,
     layer_num,
     pcc,
     model_config,
@@ -56,23 +61,81 @@ def run_test_FalconDecoder_inference(
     decoder_input = (torch.rand(batch, seq_len, configuration.hidden_size) * 2) - 1
     base_url = "transformer.h"
     max_position_embeddings = 2048
+    head_dim = configuration.hidden_size // configuration.n_head
 
-    # Generate attention_mask -----------------------------------------------------------
+    # Generate input, attention_mask, and kv_cache --------------------------------------
     # TODO: Generate attention_mask on device
-    q_len, kv_seq_len = seq_len, seq_len
-    attention_mask_bool = torch.ones(batch, 1, q_len, kv_seq_len, dtype=bool).triu(
-        diagonal=1
-    )
-    tt_attention_mask = torch2tt_tensor(
-        (attention_mask_bool * -100000).expand(-1, configuration.n_head, -1, -1), device
-    )
+    if llm_mode == "prefill":
+        q_len, kv_len = seq_len, seq_len
+        assert batch == 1, "For prefill, batch must be 1!"
+        assert q_len % 32 == 0, "For prefill, seq_len must be multiple of 32!"
+        assert kv_cache_len == 0, "For prefill, no kv_cache is passed in!"
+
+        decoder_input = (torch.rand(batch, q_len, configuration.hidden_size) * 2) - 1
+        attention_mask_bool = torch.ones(batch, 1, q_len, kv_len, dtype=bool).triu(
+            diagonal=1
+        )
+        layer_past = None
+
+        tt_decoder_input = torch2tt_tensor(decoder_input.unsqueeze(1), device)
+        tt_attention_mask = torch2tt_tensor(
+            (attention_mask_bool * -100000).expand(-1, configuration.n_head, -1, -1),
+            device,
+        )
+        tt_layer_past = None
+
+    elif llm_mode == "decode":
+        q_len, kv_len = seq_len, kv_cache_len + 1
+        assert batch % 32 == 0, "For decode, batch must be multiple of 32!"
+        assert q_len == 1, "For decode, q_len must be 1!"
+
+        decoder_input = (torch.rand(batch, q_len, configuration.hidden_size) * 2) - 1
+        attention_mask_bool = torch.zeros(batch, 1, q_len, kv_len, dtype=bool)
+        attention_mask_bool[:, :, :, -1] = True
+        k_cache = torch.rand(batch, kv_cache_len, head_dim)
+        v_cache = torch.rand(batch, kv_cache_len, head_dim)
+        layer_past = (k_cache, v_cache)
+
+        tt_decoder_input = torch2tt_tensor(
+            decoder_input.unsqueeze(1).transpose(0, 2), device
+        )
+
+        kv_len_padded = (kv_len + 31) // 32 * 32
+        attention_mask_bool_padded = torch.cat(
+            (
+                attention_mask_bool,
+                torch.ones(batch, 1, q_len, kv_len_padded - kv_len, dtype=bool),
+            ),
+            dim=-1,
+        )
+        tt_attention_mask = torch2tt_tensor(
+            (attention_mask_bool_padded.transpose(0, 2) * -100000).expand(
+                -1, configuration.n_head, -1, -1
+            ),
+            device,
+        )
+        tt_k_cache = torch.zeros(batch, max_position_embeddings, head_dim)
+        tt_v_cache = torch.zeros(batch, max_position_embeddings, head_dim)
+        tt_k_cache[:, :kv_cache_len, :] = k_cache
+        tt_v_cache[:, :kv_cache_len, :] = v_cache
+        tt_k_cache = torch2tt_tensor(tt_k_cache.unsqueeze(1), device)
+        tt_v_cache = torch2tt_tensor(tt_v_cache.unsqueeze(1), device)
+        tt_layer_past = (tt_k_cache, tt_v_cache)
+
+    else:
+        raise NotImplementedError(
+            f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode."
+        )
 
     # PyTorch output =======================================================================
     pytorch_FalconDecoder_model = PytorchFalconDecoderModel(
         hugging_face_reference_model, layer_num
     )
     pytorch_out = pytorch_FalconDecoder_model(
-        x=decoder_input, alibi=None, attention_mask=attention_mask_bool
+        x=decoder_input,
+        alibi=None,
+        attention_mask=attention_mask_bool,
+        layer_past=layer_past,
     )
 
     # TT hardware execution =================================================================
@@ -83,17 +146,21 @@ def run_test_FalconDecoder_inference(
         layer_num,
         configuration,
         max_position_embeddings,
+        llm_mode,
         model_config,
         tt_cache_path,
     )
 
-    tt_decoder_input = decoder_input.unsqueeze(1)
-    tt_decoder_input = torch2tt_tensor(tt_decoder_input, device)
-
-    tt_out, past_key_value = tt_FalconDecoder_model(
-        hidden_states=tt_decoder_input, alibi=None, attention_mask=tt_attention_mask
+    tt_out, layer_present = tt_FalconDecoder_model(
+        hidden_states=tt_decoder_input,
+        alibi=None,
+        attention_mask=tt_attention_mask,
+        layer_past=tt_layer_past,
+        layer_past_len=kv_cache_len,
     )
     tt_out = tt2torch_tensor(tt_out).squeeze(1)
+    if llm_mode == "decode":
+        tt_out = tt_out.transpose(0, 1)
 
     # check outputs ----------------------------------------------------------------------
     logger.info(comp_allclose(pytorch_out, tt_out))
@@ -109,22 +176,24 @@ def run_test_FalconDecoder_inference(
 
 
 @pytest.mark.parametrize(
-    "model_version, batch, seq_len, layer_num, pcc",
+    "llm_mode, batch, seq_len, kv_cache_len",
     (
-        (
-            "tiiuae/falcon-7b-instruct",
-            1,
-            128,
-            0,
-            0.98,
-        ),
+        ("prefill", 1, 128, 0),
+        ("decode", 32, 1, 128),
     ),
+    ids=["prefill_seq128", "decode_batch32"],
+)
+@pytest.mark.parametrize(
+    "model_version, layer_num, pcc",
+    (("tiiuae/falcon-7b-instruct", 0, 0.98),),
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
 def test_FalconDecoder_inference(
     model_version,
+    llm_mode,
     batch,
     seq_len,
+    kv_cache_len,
     layer_num,
     pcc,
     model_config_str,
@@ -140,8 +209,10 @@ def test_FalconDecoder_inference(
     run_test_FalconDecoder_inference(
         device,
         model_version,
+        llm_mode,
         batch,
         seq_len,
+        kv_cache_len,
         layer_num,
         pcc,
         model_config,
