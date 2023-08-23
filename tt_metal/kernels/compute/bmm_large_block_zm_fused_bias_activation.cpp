@@ -11,8 +11,11 @@
 #include "compute_kernel_api/bcast.h"
 #endif
 
-#ifdef SFPU_OP_INIT_GELU
+#ifdef GELU_ACTIVATION
 #include "compute_kernel_api/eltwise_unary/gelu.h"
+#endif
+#ifdef RELU_ACTIVATION
+#include "compute_kernel_api/eltwise_unary/relu.h"
 #endif
 namespace NAMESPACE {
 void MAIN {
@@ -125,10 +128,10 @@ void MAIN {
                         #endif
 
                         // sfpu activation
-                        #ifdef SFPU_OP_INIT_GELU
-                            SFPU_OP_INIT_GELU
+                        #ifdef SFPU_OP_INIT_ACTIVATION
+                            SFPU_OP_INIT_ACTIVATION
                             for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                               SFPU_OP_FUNC_GELU
+                               SFPU_OP_FUNC_ACTIVATION
                             }
                         #endif
                         // Pack out to output buffer

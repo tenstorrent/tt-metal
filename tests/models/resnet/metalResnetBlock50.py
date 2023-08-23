@@ -57,6 +57,96 @@ def compute_conv_output_shape(conv_params, x_shape):
     OW = ((int) ((W - S + 2 * P_W) / V)) + 1
     return [x_shape[0],OH,OW,K]
 
+# hardcoding matmul config for 1x1 convs
+# key: mm act height, mm act width, mm weight width
+hardcoded_matmul_config_conv = {
+    (3136, 64, 64) : {"compute_with_storage_grid_size" : (2,2),
+                            "in0_block_w" : 2,
+                            "out_subblock_h" : 1,
+                            "out_subblock_w": 1,
+                            "per_core_M": 49,
+                            "per_core_N": 1,
+                        },
+
+    (3136, 64, 256) : {"compute_with_storage_grid_size" : (4,2),
+                            "in0_block_w" : 2,
+                            "out_subblock_h" : 1,
+                            "out_subblock_w": 1,
+                            "per_core_M": 49,
+                            "per_core_N": 2,
+                        },
+    (3136, 256, 64) : {"compute_with_storage_grid_size" : (2,7),
+                    "in0_block_w" : 8,
+                    "out_subblock_h" : 1,
+                    "out_subblock_w": 1,
+                    "per_core_M": 14,
+                    "per_core_N": 1,
+                },
+    (3136, 256, 128) : {"compute_with_storage_grid_size" : (4,7),
+                    "in0_block_w" : 8,
+                    "out_subblock_h" : 1,
+                    "out_subblock_w": 1,
+                    "per_core_M": 14,
+                    "per_core_N": 1,
+                },
+    (800, 128, 512) : {"compute_with_storage_grid_size" : (4,2),
+                    "in0_block_w" : 4,
+                    "out_subblock_h" : 1,
+                    "out_subblock_w": 1,
+                    "per_core_M": 13,
+                    "per_core_N": 4,
+                },
+    (800, 512, 128) : {"compute_with_storage_grid_size" : (4,4),
+                    "in0_block_w" : 16,
+                    "out_subblock_h" : 1,
+                    "out_subblock_w": 1,
+                    "per_core_M": 7,
+                    "per_core_N": 1,
+                },
+    (800, 512, 256) : {"compute_with_storage_grid_size" : (8,4),
+                    "in0_block_w" : 16,
+                    "out_subblock_h" : 1,
+                    "out_subblock_w": 1,
+                    "per_core_M": 7,
+                    "per_core_N": 1,
+                },
+    (224, 256, 1024) : {"compute_with_storage_grid_size" : (8,7),
+                    "in0_block_w" : 8,
+                    "out_subblock_h" : 1,
+                    "out_subblock_w": 1,
+                    "per_core_M": 1,
+                    "per_core_N": 4,
+                },
+    (224, 1024, 256) : {"compute_with_storage_grid_size" : (8,7),
+                    "in0_block_w" : 32,
+                    "out_subblock_h" : 1,
+                    "out_subblock_w": 1,
+                    "per_core_M": 1,
+                    "per_core_N": 1,
+                },
+    (224, 1024, 512) : {"compute_with_storage_grid_size" : (8,7),
+                    "in0_block_w" : 32,
+                    "out_subblock_h" : 1,
+                    "out_subblock_w": 1,
+                    "per_core_M": 1,
+                    "per_core_N": 2,
+                },
+    (64, 512, 2048) : {"compute_with_storage_grid_size" : (8,2),
+                    "in0_block_w" : 16,
+                    "out_subblock_h" : 1,
+                    "out_subblock_w": 1,
+                    "per_core_M": 1,
+                    "per_core_N": 8,
+                },
+    (64, 2048, 512) : {"compute_with_storage_grid_size" : (8,2),
+                    "in0_block_w" : 64,
+                    "out_subblock_h" : 1,
+                    "out_subblock_w": 1,
+                    "per_core_M": 1,
+                    "per_core_N": 2,
+                },
+}
+
 class Bottleneck(nn.Module):
     # Bottleneck in torchvision places the stride for downsampling at 3x3 convolution(self.conv2)
     # while original implementation places the stride at the first 1x1 convolution(self.conv1)
@@ -150,9 +240,15 @@ class Bottleneck(nn.Module):
             self.bn3 = nn.Identity()
 
         self.conv1_params = [width, inplanes, 1, 1, 1, 1, 0, 0, dilation, groups]
+        self.conv1_output_shape = compute_conv_output_shape(self.conv1_params, input_shape)
+        conv1_as_mm_padded_act_height = _nearest_32(self.conv1_output_shape[1] * self.conv1_output_shape[2])
+        matmul_config = None
+        if (conv1_as_mm_padded_act_height, inplanes, width) in hardcoded_matmul_config_conv:
+            #print("Setting matmul config for 1x1 conv (first conv in module)")
+            matmul_config = hardcoded_matmul_config_conv[(conv1_as_mm_padded_act_height, inplanes, width)]
         if is_conv_supported_on_device(self.conv1_params):
             # 1x1 conv with stride 1 padding 0 is run using regular matmul
-            self.conv1 = TtResnetConv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, [1, 1], [1, 1], [1, 1], conv1_bias.tolist() if conv1_bias is not None else None)
+            self.conv1 = TtResnetConv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, [1, 1], [1, 1], [1, 1], conv1_bias.tolist() if conv1_bias is not None else None, matmul_config=matmul_config, fuse_relu=True)
         else:
             self.conv1 = fallback_ops.Conv2d(conv1_weight, conv1_bias, inplanes, width, kernel_size=1, stride=1, padding=0)
 
@@ -177,7 +273,6 @@ class Bottleneck(nn.Module):
             (224, 256) : [64, 128, 64, 128],
             (64, 512) : [32, 64, 32, 64] ,
         }
-        self.conv1_output_shape = compute_conv_output_shape(self.conv1_params, input_shape)
         self.conv2_params = [width, width, 3, 3, stride, stride, 1, 1, dilation, groups]
         self.conv2_output_shape = compute_conv_output_shape(self.conv2_params, self.conv1_output_shape)
         conv2_output_padded_face_size = _nearest_32(self.conv2_output_shape[1] * self.conv2_output_shape[2])
@@ -189,9 +284,15 @@ class Bottleneck(nn.Module):
             self.conv2 = fallback_ops.Conv2d(conv2_weight, conv2_bias, width, width, kernel_size=3, stride=1, padding=1)
 
         self.conv3_params = [planes * self.expansion, width, 1, 1, 1, 1, 0, 0, dilation, groups]
+        self.conv3_output_shape = compute_conv_output_shape(self.conv3_params, self.conv2_output_shape)
+        conv3_as_mm_padded_act_height = _nearest_32(self.conv3_output_shape[1] * self.conv3_output_shape[2])
+        matmul_config = None
+        if (conv3_as_mm_padded_act_height, width, planes * self.expansion) in hardcoded_matmul_config_conv:
+            #print("Setting matmul config for 1x1 conv (third conv in module)")
+            matmul_config = hardcoded_matmul_config_conv[(conv3_as_mm_padded_act_height, width, planes * self.expansion)]
         if is_conv_supported_on_device(self.conv3_params):
             # 1x1 conv with stride 1 padding 0 is run using regular matmul
-            self.conv3 = TtResnetConv(conv3_weight.reshape(-1).tolist(), self.conv3_params, self.device, [1, 1], [1, 1], [1, 1], conv3_bias.tolist() if conv3_bias is not None else None)
+            self.conv3 = TtResnetConv(conv3_weight.reshape(-1).tolist(), self.conv3_params, self.device, [1, 1], [1, 1], [1, 1], conv3_bias.tolist() if conv3_bias is not None else None, matmul_config=matmul_config)
         else:
             self.conv3 = fallback_ops.Conv2d(conv3_weight, conv3_bias, width, planes * self.expansion, kernel_size=1, stride=1, padding=0)
         self.conv3_output_shape = compute_conv_output_shape(self.conv3_params, self.conv2_output_shape)
@@ -199,21 +300,26 @@ class Bottleneck(nn.Module):
     def run_forward(self, x: torch.Tensor, x_actual_shape=[]):
         identity = x
         # conv1 is 1x1 conv
+        #print("Running conv1")
         out = self.conv1(x)
-        out = self.relu(out, self.memory_config)
+        # Relu after conv1 is fused with the 1x1 conv (matmul)
+        #out = self.relu(out, self.memory_config)
         out = format_tensor(out, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
         out = out.reshape(x_actual_shape[0], x_actual_shape[1], x_actual_shape[2], out.shape()[3])
         saved_shape = out.shape()
+        #print("Running conv1")
         out = self.conv2(out)
         conv_2_output_shape = compute_conv_output_shape(self.conv2_params, saved_shape)
         out = self.relu(out, self.memory_config)
         # conv3 is 1x1 conv
+        #print("Running conv1")
         out = self.conv3(out)
 
         if self.downsample_conv_on_tt is not None:
             if(self.downsample_params[2] != 1 or self.downsample_params[4] != 1 or self.downsample_params[6] != 0):
                 x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
                 x = x.reshape(x_actual_shape[0], x_actual_shape[1], x_actual_shape[2], x_actual_shape[3])
+            #print("Running downsample")
             identity = self.downsample_conv_on_tt(x)
             assert self.norm_layer_after_downsample_conv_on_tt is not None
             if not self.fold_batchnorm:
@@ -367,8 +473,15 @@ class ResNet(nn.Module):
             downsample_output_padded_face_size = _nearest_32(self.downsample_conv_output_shape[1] * self.downsample_conv_output_shape[2])
             assert (downsample_output_padded_face_size, downsample_output_channels) in hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_downsample_conv
             [act_block_h_datums, weight_block_w_datums, out_subblock_h_datums, out_subblock_w_datums] = hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_downsample_conv[(downsample_output_padded_face_size, downsample_output_channels)]
+
+            is_downsample_1x1_conv = stride == 1
+            matmul_config = None
+            if (is_downsample_1x1_conv and (downsample_output_padded_face_size, self.inplanes, downsample_output_channels) in hardcoded_matmul_config_conv):
+                #print("Setting matmul config for 1x1 conv (downsample stride 1 conv in module)")
+                matmul_config = hardcoded_matmul_config_conv[(downsample_output_padded_face_size,  self.inplanes, downsample_output_channels)]
+
             if is_conv_supported_on_device(self.downsample_params):
-                self.downsample_conv_on_tt = TtResnetConv(downsample_conv_weight.reshape(-1).tolist(), self.downsample_params, self.device, [act_block_h_datums, self.inplanes], [self.inplanes, weight_block_w_datums], [out_subblock_h_datums, out_subblock_w_datums], downsample_conv_bias.tolist() if downsample_conv_bias is not None else None)
+                self.downsample_conv_on_tt = TtResnetConv(downsample_conv_weight.reshape(-1).tolist(), self.downsample_params, self.device, [act_block_h_datums, self.inplanes], [self.inplanes, weight_block_w_datums], [out_subblock_h_datums, out_subblock_w_datums], downsample_conv_bias.tolist() if downsample_conv_bias is not None else None, matmul_config=matmul_config)
                 self.norm_layer_after_downsample_conv_on_tt = nl
             else:
                 downsample_conv = fallback_ops.Conv2d(downsample_conv_weight, downsample_conv_bias, self.inplanes, planes * block.expansion, kernel_size=1, stride=stride, padding=0)

@@ -36,7 +36,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
         .out_subblock_w = 2,
         .per_core_M = 12,
         .per_core_N = 8,
-        .fuse_gelu_activation=false,
+        .fused_activation = std::nullopt,
     };
     auto fused_qkv_matmul_output = tt::operations::primary::matmul(
         hidden_states,
@@ -91,7 +91,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
         .out_subblock_w = 1,
         .per_core_M = 12,
         .per_core_N = 3,
-        .fuse_gelu_activation=false,
+        .fused_activation = std::nullopt,
     };
     auto selfout_bmm_output = tt::operations::primary::matmul(
         concat_heads_output,
@@ -122,7 +122,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
         .out_subblock_w = 1,
         .per_core_M = 12,
         .per_core_N = 11,
-        .fuse_gelu_activation=true,
+        .fused_activation = UnaryWithParam{.op_type=UnaryOpType::GELU, .param=1.0f},
     };
     auto ff1_matmul_output = tt::operations::primary::matmul(
         attention_layernorm_output,
@@ -140,7 +140,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
         .out_subblock_w = 1,
         .per_core_M = 12,
         .per_core_N = 3,
-        .fuse_gelu_activation=false,
+        .fused_activation = std::nullopt,
     };
     auto ff2_matmul_output = tt::operations::primary::matmul(
         ff1_matmul_output,

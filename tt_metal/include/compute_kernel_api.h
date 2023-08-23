@@ -189,14 +189,6 @@ ALWI void cos_tile(uint32_t idst) {
     MATH(( llk_math_eltwise_unary_sfpu_cos<APPROX, SyncHalf>(idst) ));
 }
 
-// relu is implemented via unpack with llk_pack_relu_config(0) enabled
-ALWI void pack_relu_tile_to_stream(uint32_t idst, uint32_t cbid) {
-    PACK(( llk_pack<false, SYNC, false >(idst, cbid) ));
-}
-
-ALWI void pack_relu_config(uint32_t enable) {
-    PACK(( llk_pack_relu_config(enable) ));
-}
 
 
 //abs
