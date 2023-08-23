@@ -3,8 +3,8 @@ import pytest
 from loguru import logger
 
 import tt_lib
-from tests.python_api_testing.models.falcon.reference.hf_falcon_model import (
-    RWForCausalLM,
+from tests.python_api_testing.models.falcon.reference.hf_modeling_falcon import (
+    FalconForCausalLM,
 )
 from tests.python_api_testing.models.falcon.falcon_decoder import TtFalconDecoderLayer
 from tests.python_api_testing.models.falcon.model_config import (
@@ -46,7 +46,7 @@ def run_test_FalconDecoder_inference(
 ):
     model_name = model_location_generator(model_version, model_subdir="Falcon")
 
-    hugging_face_reference_model = RWForCausalLM.from_pretrained(model_name)
+    hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name)
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
@@ -57,12 +57,22 @@ def run_test_FalconDecoder_inference(
     base_url = "transformer.h"
     max_position_embeddings = 2048
 
+    # Generate attention_mask -----------------------------------------------------------
+    # TODO: Generate attention_mask on device
+    q_len, kv_seq_len = seq_len, seq_len
+    attention_mask_bool = torch.ones(batch, 1, q_len, kv_seq_len, dtype=bool).triu(
+        diagonal=1
+    )
+    tt_attention_mask = torch2tt_tensor(
+        (attention_mask_bool * -100000).expand(-1, configuration.n_head, -1, -1), device
+    )
+
     # PyTorch output =======================================================================
     pytorch_FalconDecoder_model = PytorchFalconDecoderModel(
         hugging_face_reference_model, layer_num
     )
     pytorch_out = pytorch_FalconDecoder_model(
-        x=decoder_input, alibi=None, attention_mask=None
+        x=decoder_input, alibi=None, attention_mask=attention_mask_bool
     )
 
     # TT hardware execution =================================================================
@@ -79,13 +89,6 @@ def run_test_FalconDecoder_inference(
 
     tt_decoder_input = decoder_input.unsqueeze(1)
     tt_decoder_input = torch2tt_tensor(tt_decoder_input, device)
-
-    # TODO: Generate attention_mask on device
-    q_len, kv_seq_len = seq_len, seq_len
-    tt_attention_mask = (
-        torch.ones(batch, configuration.n_head, q_len, kv_seq_len) * -100000
-    ).triu(diagonal=1)
-    tt_attention_mask = torch2tt_tensor(tt_attention_mask, device)
 
     tt_out, past_key_value = tt_FalconDecoder_model(
         hidden_states=tt_decoder_input, alibi=None, attention_mask=tt_attention_mask

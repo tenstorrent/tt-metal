@@ -3,8 +3,8 @@ import pytest
 from loguru import logger
 
 import tt_lib
-from tests.python_api_testing.models.falcon.reference.hf_falcon_model import (
-    RWForCausalLM,
+from tests.python_api_testing.models.falcon.reference.hf_modeling_falcon import (
+    FalconForCausalLM,
 )
 from tests.python_api_testing.models.falcon.falcon_causallm import TtFalconCausalLM
 
@@ -48,7 +48,7 @@ def run_test_FalconCausalLM_inference(
 ):
     model_name = model_location_generator(model_version, model_subdir="Falcon")
 
-    hugging_face_reference_model = RWForCausalLM.from_pretrained(model_name)
+    hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name)
 
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config

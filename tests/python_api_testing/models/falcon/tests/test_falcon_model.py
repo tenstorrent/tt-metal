@@ -2,8 +2,8 @@ import torch
 import pytest
 from loguru import logger
 import tt_lib
-from tests.python_api_testing.models.falcon.reference.hf_falcon_model import (
-    RWForCausalLM,
+from tests.python_api_testing.models.falcon.reference.hf_modeling_falcon import (
+    FalconForCausalLM,
 )
 from tests.python_api_testing.models.falcon.falcon_model import TtFalconModel
 from tests.python_api_testing.models.falcon.model_config import (
@@ -42,7 +42,7 @@ def run_test_FalconModel_inference(
     model_location_generator,
 ):
     model_name = model_location_generator(model_version, model_subdir="Falcon")
-    hugging_face_reference_model = RWForCausalLM.from_pretrained(model_name)
+    hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name)
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
@@ -57,6 +57,7 @@ def run_test_FalconModel_inference(
         model_input = torch.stack([torch.arange(seq_len)] * batch).reshape(
             batch, seq_len
         )
+
     # PyTorch output =======================================================================
     pytorch_FalconModel = PytorchFalconModel(hugging_face_reference_model, num_layers)
     pytorch_out = pytorch_FalconModel(input_ids=model_input)
