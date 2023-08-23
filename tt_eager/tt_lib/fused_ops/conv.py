@@ -77,7 +77,7 @@ def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
     return conv_
 
 
-def resnet_conv(weight: List[Union[int, float]], conv_params, device, act_block_shape_hw, weight_block_shape_hw, outsubblock_shape_hw, bias=None, padded_filter_window_width=0, pre_pad_conv=False, untilize_out=False):
+def resnet_conv(weight: List[Union[int, float]], conv_params, device, act_block_shape_hw, weight_block_shape_hw, outsubblock_shape_hw, bias=None, padded_filter_window_width=0, pre_pad_conv=False):
     """
     Returns a function that performs a Convolution.
     For bias, it calls bcast op without autoformatting
@@ -154,10 +154,11 @@ def resnet_conv(weight: List[Union[int, float]], conv_params, device, act_block_
             output = tensor.matmul(activation, weight_on_device, activation.memory_config())
         else:
             assert(activation.layout() == tensor.Layout.ROW_MAJOR)
-            output = tensor.conv_with_fast_reader(activation, weight_on_device, [R,padded_filter_window_width,U,V,P_H,P_W], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w, K, untilize_out)
+            output = tensor.conv_with_fast_reader(activation, weight_on_device, [R,padded_filter_window_width,U,V,P_H,P_W], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w, K, False)
         assert(output.storage_type() == tensor.StorageType.DEVICE)
 
         if bias_on_device is not None:
+            assert output.layout() == tensor.Layout.TILE
             if output.layout() == tensor.Layout.ROW_MAJOR:
                 # convert to tile layout
                 output = output.reshape(1, 1, output.shape()[0] * output.shape()[1] * output.shape()[2], output.shape()[3])

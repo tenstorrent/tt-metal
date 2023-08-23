@@ -30,8 +30,8 @@ from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
 )
 import torch
 
-@pytest.mark.skip(reason="Hanging post commit 8/24/23 debug war room session, see PR#2297, PR#2301")
-def test_resnet50_first_conv_as_large_blocked_matmul(use_program_cache, device):
+@pytest.mark.parametrize("untilize_out", (False,True))
+def test_resnet50_first_conv_as_large_blocked_matmul(use_program_cache, device, untilize_out):
     (K, C, padded_C, H, W, R, S, padded_S, stride_h, stride_w, pad_h, pad_w) = (
         64,
         3,
@@ -44,7 +44,7 @@ def test_resnet50_first_conv_as_large_blocked_matmul(use_program_cache, device):
         2,
         2,
         3,
-        3,
+        3
     )
 
     num_iterations = 1  # run twice to test op caching flow for conv op
@@ -97,8 +97,13 @@ def test_resnet50_first_conv_as_large_blocked_matmul(use_program_cache, device):
             out_subblock_h,
             out_subblock_w,
             K,
-            True
+            untilize_out
         )
+        if not untilize_out:
+           out_unpadded_shape = [1, 1, OH*OW, K]
+           assert out_unpadded_shape == out.shape_without_padding()
+           out = ttl.tensor.format_output_tensor(out, out.shape_without_padding(), device, ttl.tensor.Layout.ROW_MAJOR)
+           out = out.reshape(conv_output_shape[0], conv_output_shape[1], conv_output_shape[2], conv_output_shape[3])
         out = out.cpu()
         assert out.shape() == conv_output_shape
         assert out.layout() == ttl.tensor.Layout.ROW_MAJOR
