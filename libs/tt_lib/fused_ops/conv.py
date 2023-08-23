@@ -141,6 +141,7 @@ def resnet_conv(weight: List[Union[int, float]], conv_params, device, act_block_
     if pre_pad_conv:
         P_H = 0
         P_W = 0
+
     def conv_(activation):
         # if conv1x1 stride 1 padding 0, use matmul op
         if use_regular_matmul_op:

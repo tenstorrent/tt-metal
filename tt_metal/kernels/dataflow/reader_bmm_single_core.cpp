@@ -1,6 +1,12 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
+#include "debug_print.h"
+
+#ifdef FUSE_BIAS
+    #include "kernels/dataflow/reader_bmm_single_core_bias.hpp"
+#endif
+
 void kernel_main() {
 
 
@@ -75,6 +81,16 @@ void kernel_main() {
 
     // DPRINT << FIXP() << SETW(32) << SETP(2);
 
+    // read bias first if defined
+    #ifdef FUSE_BIAS
+        constexpr uint32_t bias_cb_id = tt::CB::c_in2;
+        uint32_t bias_addr = get_arg_val<uint32_t>(22);
+        uint32_t bias_width_ntiles = get_arg_val<uint32_t>(23);
+        uint32_t bias_log2_of_pagesize = get_arg_val<uint32_t>(24);
+        uint32_t bias_pagesize = get_arg_val<uint32_t>(25);
+        read_bias<true>(bias_addr, bias_width_ntiles, bias_cb_id, bias_log2_of_pagesize, bias_pagesize);
+    #endif
+
     uint32_t in0_start_tile_id = 0;
     // loop over in0 blocks along h
     for (uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
@@ -87,7 +103,6 @@ void kernel_main() {
             // loop over in0 blocks along w (in1 blocks along h)
             for (uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
                 // read in input data for current block
-
                 // in0 DRAM -> L1 (activations in tiled form)
                 // load block [in0_block_h_i, in0_block_w_i]
                 cb_reserve_back(in0_cb_id, in0_block_num_tiles);
@@ -106,7 +121,6 @@ void kernel_main() {
                     in0_row_start_tile_id += in0_stride_h;
                 }
                 noc_async_read_barrier();
-
                 in0_current_block_start_tile_id += in0_next_block_stride_w;
                 cb_push_back(in0_cb_id, in0_block_num_tiles);
 
@@ -127,7 +141,6 @@ void kernel_main() {
                     in1_row_start_tile_id += in1_stride_h;
                 } // for in1_block_h
                 noc_async_read_barrier();
-
                 in1_current_block_start_tile_id += in1_next_block_stride_h; // in1_width_ntiles * in1_block_h
                 cb_push_back(in1_cb_id, in1_block_num_tiles);
             } // for in0_num_blocks_w
