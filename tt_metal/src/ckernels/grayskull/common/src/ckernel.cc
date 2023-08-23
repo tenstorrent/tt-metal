@@ -33,27 +33,13 @@ uint32_t dest_offset_id __attribute__((used)) = 0; // Flip between 0 and 1 to ke
 
 uint32_t dbg_event_index = 0;
 uint32_t dbg_event_end = 0;
-volatile uint16_t *debug_mailbox_base = nullptr;
-uint8_t mailbox_index = 0;
-uint8_t mailbox_end = 32;
 uint32_t op_info_offset __attribute__((used)) = 0;
-volatile uint8_t *debug_buffer = nullptr;
-
 
 const uint8_t thread_id = COMPILE_FOR_TRISC;
 
 volatile uint local_mem_barrier __attribute__((used));
 
 volatile uint * const trisc_run_mailbox = reinterpret_cast<volatile uint *>(MEM_RUN_MAILBOX_ADDRESS + PREPROCESSOR_EXPAND(MEM_MAILBOX_TRISC, COMPILE_FOR_TRISC, _OFFSET));
-
-inline void allocate_debug_mailbox_buffer() {
-   debug_mailbox_base = reinterpret_cast<volatile uint16_t *>(MEM_DEBUG_MAILBOX_ADDRESS + COMPILE_FOR_TRISC * MEM_DEBUG_MAILBOX_SIZE);
-   clear_mailbox_values();
-}
-
-inline void allocate_debug_buffer() {
-    // TODO(PK) reimplement debug buffer
-}
 
 } // namespace ckernel
 
@@ -96,9 +82,6 @@ int main(int argc, char *argv[])
     reset_cfg_state_id();
 
     trisc_run_mailbox_write(RESET_VAL);
-
-    allocate_debug_mailbox_buffer();
-    allocate_debug_buffer();
 
     //while (ready_for_next_epoch())
     {

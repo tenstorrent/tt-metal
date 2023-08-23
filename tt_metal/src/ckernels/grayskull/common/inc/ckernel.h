@@ -58,16 +58,12 @@ extern volatile uint *mailbox_base[4];
 extern volatile uint *dbg_event_scratch;
 extern volatile uint * const trisc_run_mailbox;
 extern volatile uint local_mem_barrier;
-extern volatile uint8_t *debug_buffer;
 
 extern uint32_t cfg_state_id;
 extern uint32_t dest_offset_id;
 extern uint32_t dbg_event_index;
 extern uint32_t dbg_event_end;
 
-extern volatile uint16_t *debug_mailbox_base;
-extern uint8_t mailbox_index;
-extern uint8_t mailbox_end;
 extern uint32_t op_info_offset;
 
 // Internal scope to namespace methods only (C++ does not allow namespace private ownership)
@@ -359,25 +355,6 @@ template <class T>
 inline std::uint32_t memory_cast(T *object_ptr)
 {
     return reinterpret_cast<uint32_t>(object_ptr);
-}
-
-inline void record_mailbox_value(uint16_t event_value) {
-  if (mailbox_index < mailbox_end) {
-    debug_mailbox_base[mailbox_index] = event_value;
-    mailbox_index++;
-  }
-}
-
-inline void record_mailbox_value_with_index(uint8_t index, uint16_t event_value) {
-  if (index < mailbox_end) {
-    debug_mailbox_base[index] = event_value;
-  }
-}
-
-// Initialize debug scratch mailbox values and range
-inline void clear_mailbox_values(uint16_t value = 0) {
-  for (int i = 0; i < mailbox_end; i++)
-    debug_mailbox_base[i] = value;
 }
 
 inline void debug_dump(uint8_t *data, uint32_t byte_size) {

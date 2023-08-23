@@ -28,7 +28,6 @@ uint32_t dest_offset_id __attribute__((used)) = 0; // Flip between 0 and 1 to ke
 
 uint32_t dbg_event_index __attribute__((used)) = 0;
 uint32_t dbg_event_end __attribute__((used)) = 0;
-volatile uint16_t *debug_mailbox_base = nullptr;
 uint8_t mailbox_index = 0;
 uint8_t mailbox_end = 32;
 
@@ -76,19 +75,6 @@ inline void set_thread_id_parameter() {
     }
 }
 
-inline void allocate_debug_mailbox_buffer() {
-   std::int32_t debug_mailbox_addr;
-   if ((uint32_t)__firmware_start == (uint32_t)l1_mem::address_map::TRISC0_BASE) {
-      debug_mailbox_addr = DEBUG_MAILBOX_ADDRESS + 0*DEBUG_MAILBOX_SIZE;
-   } else if ((uint32_t) __firmware_start == (uint32_t)l1_mem::address_map::TRISC1_BASE) {
-      debug_mailbox_addr = DEBUG_MAILBOX_ADDRESS + 1*DEBUG_MAILBOX_SIZE;
-   } else {
-      debug_mailbox_addr = DEBUG_MAILBOX_ADDRESS + 2*DEBUG_MAILBOX_SIZE;
-   }
-   debug_mailbox_base = reinterpret_cast<volatile uint16_t *>(debug_mailbox_addr);
-   clear_mailbox_values();
-}
-
 } // namespace ckernel
 
 void local_mem_copy() {
@@ -132,8 +118,6 @@ int main(int argc, char *argv[])
     {
        local_mem_copy();
     }
-
-    allocate_debug_mailbox_buffer();
 
     //while (ready_for_next_epoch())
     {
