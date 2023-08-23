@@ -5,11 +5,22 @@
 ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
 ALWI void REL() { release_dst(tt::DstMode::Half); }
 
-ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
+ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles, uint32_t in1_idx) {
     // Multiply input by cos
     cb_wait_front(in0_cb, num_tiles);
-    cb_wait_front(in1_cb, num_tiles);
+    cb_wait_front(in1_cb, in1_idx + 1);
     cb_reserve_back(out_cb, num_tiles);
+
+    #ifdef DECODE_MODE
+    ACQ();
+    mul_bcast_rows_init_short();
+    mul_tiles_bcast_rows(in0_cb, in1_cb, 0, in1_idx, 0);
+    pack_tile(0, out_cb);
+    REL();
+    cb_push_back(out_cb, num_tiles);
+    cb_pop_front(in0_cb, num_tiles);
+    // We don't pop in1 in decode which is sin/cos since we don't stream
+    #else
     ACQ();
     mul_tiles_init();
     mul_tiles(in0_cb, in1_cb, 0, 0, 0);
@@ -18,6 +29,30 @@ ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
     cb_push_back(out_cb, num_tiles);
     cb_pop_front(in0_cb, num_tiles);
     cb_pop_front(in1_cb, num_tiles);
+    #endif
+}
+
+ALWI void UNTILIZE_TILES(uint32_t in0_cb, uint32_t out_cb, uint32_t num_tiles) {
+    untilize_init_short(in0_cb);
+    cb_wait_front(in0_cb, num_tiles);
+    cb_reserve_back(out_cb, num_tiles);
+    untilize_block(in0_cb, num_tiles, out_cb);
+    cb_push_back(out_cb, num_tiles);
+    cb_pop_front(in0_cb, num_tiles);
+    untilize_uninit(in0_cb);
+}
+
+ALWI void TILIZE_ROWS(uint32_t in0_cb, uint32_t sync_cb, uint32_t out_cb, uint32_t num_tiles) {
+    tilize_init_short(in0_cb, num_tiles);
+    cb_wait_front(sync_cb, num_tiles);
+    cb_reserve_back(out_cb, num_tiles);
+    tilize_block(in0_cb, num_tiles, out_cb);
+    cb_push_back(out_cb, num_tiles);
+
+    // Pop shared cbs after tilize
+    cb_pop_front(in0_cb, num_tiles);
+    cb_pop_front(sync_cb, num_tiles);
+    tilize_uninit();
 }
 
 namespace NAMESPACE {
@@ -41,8 +76,29 @@ void MAIN {
 
     cb_wait_front(scalar_cb, onetile);
 
+    uint32_t updated_cos_cb = cos_cb;
+    uint32_t updated_sin_cb = sin_cb;
+
+    #ifdef DECODE_MODE
+    constexpr uint32_t untilized_cos_cb = get_compile_time_arg_val(12);
+    constexpr uint32_t untilized_cos_sync_cb = get_compile_time_arg_val(13);
+    constexpr uint32_t untilized_sin_cb = get_compile_time_arg_val(14);
+    constexpr uint32_t untilized_sin_sync_cb = get_compile_time_arg_val(15);
+    constexpr uint32_t retilized_cos_cb = get_compile_time_arg_val(16);
+    constexpr uint32_t retilized_sin_cb = get_compile_time_arg_val(17);
+    UNTILIZE_TILES(sin_cb, untilized_sin_cb, Wt);
+    UNTILIZE_TILES(cos_cb, untilized_cos_cb, Wt);
+    TILIZE_ROWS(untilized_sin_cb, untilized_sin_sync_cb, retilized_sin_cb, Wt);
+    TILIZE_ROWS(untilized_cos_cb, untilized_cos_sync_cb, retilized_cos_cb, Wt);
+    updated_cos_cb = retilized_cos_cb;
+    updated_sin_cb = retilized_sin_cb;
+    #endif
+    uint32_t in1_idx = 0;
     for (uint32_t i = 0; i < num_rows; i++) {
         for (uint32_t j = 0; j < Wt; j++) {
+            #ifdef DECODE_MODE
+            in1_idx = j;
+            #endif
             if (j < half_Wt) {
                 // Multiply half of the rotated input by scalar (-1)
                 cb_wait_front(rotated_in_cb, onetile);
@@ -54,16 +110,15 @@ void MAIN {
                 REL();
                 cb_push_back(rotated_in_interm_cb, onetile);
                 cb_pop_front(rotated_in_cb, onetile);
-
                 // Multiply rotated input by sin
-                MUL_TILES(rotated_in_interm_cb, sin_cb, sin_interm_cb, onetile);
+                MUL_TILES(rotated_in_interm_cb, updated_sin_cb, sin_interm_cb, onetile, in1_idx);
             } else {
                 // Multiply rotated input by sin
-                MUL_TILES(rotated_in_cb, sin_cb, sin_interm_cb, onetile);
+                MUL_TILES(rotated_in_cb, updated_sin_cb, sin_interm_cb, onetile, in1_idx);
             }
 
             // Multiply input by cos
-            MUL_TILES(in_cb, cos_cb, cos_interm_cb, onetile);
+            MUL_TILES(in_cb, updated_cos_cb, cos_interm_cb, onetile, in1_idx);
 
             // Add applied sin/cos tensors
             cb_wait_front(cos_interm_cb, onetile);

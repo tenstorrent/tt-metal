@@ -31,14 +31,21 @@ void RotaryEmbedding::validate(const std::vector<Tensor>& input_tensors) const {
     uint32_t B = input_tensor.shape()[0];
     uint32_t X = input_tensor.shape()[-1];
     TT_ASSERT(cos.shape() == sin.shape(), "Cos and Sin dims must match");
-    TT_ASSERT(cos.shape()[0] == B && cos.shape()[1] == 1 && cos.shape()[-2] >= seq_len && cos.shape()[-1] == X, "Cos dims must match input dims");
+    TT_ASSERT(cos.shape()[0] == 1 && cos.shape()[1] == 1 && cos.shape()[-1] == X, "Cos dims must match input dims");
+    if (this->token_idx.has_value()) {
+        TT_ASSERT(cos.shape()[-2] >= token_idx, "Cos dims must match input dims");
+    } else {
+        TT_ASSERT(cos.shape()[-2] >= seq_len, "Cos dims must match input dims");
+    }
 }
 
 std::vector<Shape> RotaryEmbedding::compute_output_shapes(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto shape = input_tensor.shape();
-    shape[-2] = this->seq_len;
+    if (!this->token_idx.has_value()) {
+        shape[-2] = this->seq_len;
+    }
     return {shape};
 }
 
@@ -58,10 +65,10 @@ operation::ProgramWithCallbacks RotaryEmbedding::create_program(const std::vecto
 
     switch (this->get_parallelization_strategy(input_tensors)) {
         case RotaryEmbeddingOpParallelizationStrategy::MULTI_CORE:
-            return rotary_embedding_multi_core(input_tensor, cos, sin, output_tensor);
+            return rotary_embedding_multi_core(input_tensor, cos, sin, output_tensor, this->token_idx);
             break;
         case RotaryEmbeddingOpParallelizationStrategy::SINGLE_CORE:
-        default: return rotary_embedding_single_core(input_tensor, cos, sin, output_tensor);
+        default: return rotary_embedding_single_core(input_tensor, cos, sin, output_tensor, this->token_idx);
     }
 }
 
@@ -80,6 +87,7 @@ RotaryEmbeddingOpParallelizationStrategy RotaryEmbedding::get_parallelization_st
 tt::stl::reflection::Attributes RotaryEmbedding::attributes() const {
     return {
         {"seq_len", this->seq_len},
+        {"token_idx", this->token_idx},
         {"output_mem_config", this->output_mem_config},
     };
 }

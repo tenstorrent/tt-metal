@@ -11,7 +11,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks rotary_embedding_multi_core(const Tensor &input, const Tensor &cos, const Tensor &sin, Tensor &output) {
+operation::ProgramWithCallbacks rotary_embedding_multi_core(const Tensor &input, const Tensor &cos, const Tensor &sin, Tensor &output, std::optional<uint32_t> token_idx) {
     Program program{};
 
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
@@ -31,13 +31,11 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(const Tensor &input,
 
     uint32_t num_tiles = input.volume() / TILE_HW;
     uint32_t num_rows = input.volume()  / input.shape()[-1] / TILE_HEIGHT;
-    uint32_t C = input.shape()[1];
     uint32_t Ht = input.shape()[-2] / TILE_HEIGHT;
     uint32_t Wt = input.shape()[-1] / TILE_WIDTH;
     uint32_t half_Wt = Wt / 2;
     uint32_t HtWt = Ht * Wt;
-    uint32_t CHtWt = C * HtWt;
-    uint32_t cos_sin_HtWt = cos.shape()[-2] / TILE_HEIGHT * Wt;
+    uint32_t Wbytes = input.shape()[-1] * sizeof(bfloat16);
 
     tt_metal::Device *device = input.device();
 
@@ -48,7 +46,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(const Tensor &input,
 
 
     uint32_t input_cb_index = 0;
-    uint32_t num_input_tiles = 2;
+    uint32_t num_input_tiles = 2 * Wt;
     auto cb_input = tt_metal::CreateCircularBuffers(
         program,
         input_cb_index,
@@ -68,13 +66,14 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(const Tensor &input,
         input_cb_data_format
     );
 
+    uint32_t num_cos_sin_tiles = 2 * Wt;
     uint32_t cos_cb_index = 2;
     auto cb_cos = tt_metal::CreateCircularBuffers(
         program,
         cos_cb_index,
         all_cores,
-        num_input_tiles,
-        num_input_tiles * cos_single_tile_size,
+        num_cos_sin_tiles,
+        num_cos_sin_tiles * cos_single_tile_size,
         cos_cb_data_format
     );
 
@@ -83,8 +82,8 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(const Tensor &input,
         program,
         sin_cb_index,
         all_cores,
-        num_input_tiles,
-        num_input_tiles * sin_single_tile_size,
+        num_cos_sin_tiles,
+        num_cos_sin_tiles * sin_single_tile_size,
         sin_cb_data_format
     );
 
@@ -132,7 +131,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(const Tensor &input,
 
 
     uint32_t output_cb_index = 16; // output operands start at index 16
-    uint32_t num_output_tiles = 2;
+    uint32_t num_output_tiles = 2 * Wt;
     auto cb_output = tt_metal::CreateCircularBuffers(
         program,
         output_cb_index,
@@ -141,6 +140,49 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(const Tensor &input,
         num_output_tiles * output_single_tile_size,
         output_cb_data_format
     );
+
+    uint32_t untilized_cos_interm_cb_index = 27;
+    uint32_t untilized_cos_sync_cb_index = 28;
+    uint32_t untilized_sin_interm_cb_index = 29;
+    uint32_t untilized_sin_sync_cb_index = 30;
+    uint32_t retilized_cos_cb_index = 5;
+    uint32_t retilized_sin_cb_index = 6;
+    std::map<string, string> kernel_defines;
+    if (token_idx.has_value()) {
+        auto cb_cos2 = tt_metal::CreateCircularBuffers(
+            program,
+            retilized_cos_cb_index,
+            all_cores,
+            num_cos_sin_tiles,
+            num_cos_sin_tiles * cos_single_tile_size,
+            cos_cb_data_format
+        );
+        auto cb_sin2 = tt_metal::CreateCircularBuffers(
+            program,
+            retilized_sin_cb_index,
+            all_cores,
+            num_cos_sin_tiles,
+            num_cos_sin_tiles * sin_single_tile_size,
+            sin_cb_data_format
+        );
+        auto cb_untilized_cos_interm = tt_metal::CreateCircularBuffers(
+            program,
+            {untilized_cos_interm_cb_index, untilized_cos_sync_cb_index},
+            all_cores,
+            Wt,
+            Wt * scalar_single_tile_size,
+            scalar_cb_data_format
+        );
+        auto cb_untilized_sin_interm = tt_metal::CreateCircularBuffers(
+            program,
+            {untilized_sin_interm_cb_index, untilized_sin_sync_cb_index},
+            all_cores,
+            Wt,
+            Wt * scalar_single_tile_size,
+            scalar_cb_data_format
+        );
+        kernel_defines["DECODE_MODE"] = "1";
+    }
 
     const uint16_t bfloat16_scalar = bfloat16(-1.0f).to_uint16();
 
@@ -162,11 +204,9 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(const Tensor &input,
         (std::uint32_t)cos_is_dram,
         (std::uint32_t)sin_is_dram,
         (std::uint32_t)bfloat16_scalar,
-        (std::uint32_t)C,
         (std::uint32_t)Ht,
         (std::uint32_t)Wt,
         (std::uint32_t)HtWt,
-        (std::uint32_t)cos_sin_HtWt,
         (std::uint32_t)half_Wt,
     };
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
@@ -175,19 +215,30 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(const Tensor &input,
         (std::uint32_t) dst_is_dram
     };
 
+    if (token_idx.has_value()) {
+        writer_compile_time_args.insert(writer_compile_time_args.end(), {
+            untilized_cos_interm_cb_index,
+            untilized_cos_sync_cb_index,
+            untilized_sin_interm_cb_index,
+            untilized_sin_sync_cb_index,
+            Wt,
+            Wbytes
+        });
+    }
+
     tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_rotary_embedding_interleaved_start_id.cpp",
         all_cores,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args, .defines=kernel_defines});
 
     tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "tt_metal/kernels/dataflow/writer_rotary_embedding_interleaved_start_id.cpp",
         all_cores,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args, .defines=kernel_defines});
 
-	vector<uint32_t> compute_kernel_args_group_1 = {
+	vector<uint32_t> compute_kernel_args = {
 		(std::uint32_t)input_cb_index,
         (std::uint32_t)rotated_input_cb_index,
         (std::uint32_t)cos_cb_index,
@@ -201,35 +252,38 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(const Tensor &input,
         (std::uint32_t)Wt,
         (std::uint32_t)half_Wt
 	};
+    if (token_idx.has_value()) {
+        compute_kernel_args.insert(compute_kernel_args.end(), {
+            (std::uint32_t)untilized_cos_interm_cb_index,
+            (std::uint32_t)untilized_cos_sync_cb_index,
+            (std::uint32_t)untilized_sin_interm_cb_index,
+            (std::uint32_t)untilized_sin_sync_cb_index,
+            (std::uint32_t)retilized_cos_cb_index,
+            (std::uint32_t)retilized_sin_cb_index
+        });
+    }
 
 	auto rotary_embedding_kernel_group_1_id = tt_metal::CreateComputeKernel(
 		program,
 		"tt_metal/kernels/compute/rotary_embedding.cpp",
 		core_group_1,
-		tt_metal::ComputeConfig{.compile_args = compute_kernel_args_group_1}
+		tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines=kernel_defines}
 	);
     if(!core_group_2.ranges().empty()) {
-        vector<uint32_t> compute_kernel_args_group_2 = {
-            (std::uint32_t)input_cb_index,
-            (std::uint32_t)rotated_input_cb_index,
-            (std::uint32_t)cos_cb_index,
-            (std::uint32_t)sin_cb_index,
-            (std::uint32_t)src_scalar_cb_index,
-            (std::uint32_t)rotated_input_interm_cb_index,
-            (std::uint32_t)cos_interm_cb_index,
-            (std::uint32_t)sin_interm_cb_index,
-            (std::uint32_t)output_cb_index,
-            (std::uint32_t)num_rows_per_core_group_2,
-            (std::uint32_t)Wt,
-            (std::uint32_t)half_Wt
-        };
+        compute_kernel_args[9] = num_rows_per_core_group_2;
 
         auto rotary_embedding_kernel_group_2_id = tt_metal::CreateComputeKernel(
             program,
             "tt_metal/kernels/compute/rotary_embedding.cpp",
             core_group_2,
-            tt_metal::ComputeConfig{.compile_args = compute_kernel_args_group_2}
+            tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines=kernel_defines}
         );
+    }
+    uint32_t cos_sin_offset = 0;
+    uint32_t cos_sin_start_id = 0;
+    if (token_idx.has_value()) {
+        cos_sin_offset = token_idx.value() % TILE_HEIGHT * Wbytes;
+        cos_sin_start_id = token_idx.value() / TILE_HEIGHT * Wt;
     }
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
@@ -241,6 +295,9 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(const Tensor &input,
             num_rows_per_core = num_rows_per_core_group_2;
         } else {
             TT_ASSERT(false, "Core not in specified core ranges");
+        }
+        if (!token_idx.has_value()) {
+            cos_sin_start_id = num_tiles_written % HtWt;
         }
 
         tt_metal::SetRuntimeArgs(
@@ -254,8 +311,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(const Tensor &input,
                 num_rows_per_core,
                 num_tiles_written,
                 num_tiles_written / Wt % Ht,
-                num_tiles_written / HtWt % C,
-                num_tiles_written / (CHtWt) * (cos_sin_HtWt) + num_tiles_written % HtWt
+                cos_sin_start_id
             }
         );
 
@@ -266,7 +322,9 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(const Tensor &input,
             {
                 dst_buffer->address(),
                 num_rows_per_core * Wt,
-                num_tiles_written
+                num_tiles_written,
+                cos_sin_offset,
+                Wt, Wbytes
             }
         );
         num_tiles_written += num_rows_per_core * Wt;
