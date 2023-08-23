@@ -423,7 +423,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
     std::vector<uint32_t> writer_compile_time_args;
     if (untilize_out) {
         if (rn50_first_conv) {
-            writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_and_reader_weights_resnet50_first_conv.cpp";
+            writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_and_reader_weights_resnet50_first_conv_untilize_out.cpp";
         } else if (use_fast_reader) {
             writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_unary_stick_8bank_blocks_reader_weight_tile_with_pow2_addr_gen_fast.cpp";
         } else {
@@ -452,7 +452,11 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
 
         };
     } else {
-        writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_tiled_out_reader_conv_weights_tiled.cpp";
+        if (rn50_first_conv) {
+            writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_and_reader_weights_resnet50_first_conv_tiled_out.cpp";
+        } else {
+            writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_tiled_out_reader_conv_weights_tiled.cpp";
+        }
         writer_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0), out0_cb, weight_cb};
         writer_rt_args = {
             out_dram_addr,

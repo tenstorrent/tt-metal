@@ -203,7 +203,7 @@ class Bottleneck(nn.Module):
         out = self.relu(out, self.memory_config)
         # conv3 is 1x1 conv
         out = self.conv3(out)
-        
+
         if self.downsample_conv_on_tt is not None:
             if(self.downsample_params[2] != 1 or self.downsample_params[4] != 1 or self.downsample_params[6] != 0):
                 x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device)
@@ -286,7 +286,7 @@ class ResNet(nn.Module):
 
         self.conv1_params = [self.inplanes, 3, 7, 7, 2, 2, 3, 3, 1, groups]
         if is_conv_supported_on_device(self.conv1_params):
-            self.conv1 = TtResnetConv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, [128, 128], [128, 64], [128, 64], conv1_bias.tolist() if conv1_bias is not None else None, 8, True, True)
+            self.conv1 = TtResnetConv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, [128, 128], [128, 64], [128, 64], conv1_bias.tolist() if conv1_bias is not None else None, 8, True)
         else:
             self.conv1 = fallback_ops.Conv2d(conv1_weight, conv1_bias, 3, self.inplanes, kernel_size=7, stride=2, padding=3)
         self.conv1_output_shape = compute_conv_output_shape(self.conv1_params, [1, self.conv_input_face_shape_hw[0], self.conv_input_face_shape_hw[1], self.inplanes])
