@@ -26,6 +26,7 @@ from models.utility_functions import print_diff_argmax, is_close, comp_pcc
 from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
     create_conv_act_tensor,
     create_conv_weight_tensor,
+    create_conv_bias_tensor,
     create_conv_weight_tensor_special_padding,
 )
 import torch
@@ -33,6 +34,7 @@ import torch
 
 @pytest.mark.parametrize("run_conv_with_address_map", (False,))
 @pytest.mark.parametrize("untilize_out", (True, False))
+@pytest.mark.parametrize("has_bias", (False, True,))
 @pytest.mark.parametrize(
     "K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w",
     (
@@ -100,8 +102,17 @@ def test_run_conv_as_large_matmul(
     stride_w,
     pad_h,
     pad_w, untilize_out,
+    has_bias,
     device,
 ):
+    if run_conv_with_address_map and has_bias:
+        ## bias is only supported without address map
+        pytest.skip()
+
+    if has_bias and untilize_out:
+        ## bias is only supported without untilize out
+        pytest.skip()
+
     num_iterations = 1
     if not run_conv_with_address_map:
         num_iterations = (
@@ -112,8 +123,14 @@ def test_run_conv_as_large_matmul(
         torch.manual_seed(0)
         a_activation_shape = [1, C, H, W]
         A_pyt = torch.randn(a_activation_shape, dtype=torch.bfloat16).float()
+        # A_pyt = torch.ones(a_activation_shape, dtype=torch.bfloat16).float()
         b_weights_shape = [K, C, R, S]
         B_pyt = torch.randn(b_weights_shape, dtype=torch.bfloat16).float()
+        # B_pyt = torch.ones(b_weights_shape, dtype=torch.bfloat16).float()
+        bias_shape = [1, 1, 1, K]
+        bias_pyt = torch.randn(bias_shape, dtype=torch.bfloat16).float()
+        # bias_pyt = torch.zeros(bias_shape, dtype=torch.bfloat16).float() * 3.
+        # bias_pyt = torch.range(start=0, end=(K - 1), dtype=torch.bfloat16).float()
 
         # Parameters to define block dims
         act_block_h = 4
@@ -142,9 +159,19 @@ def test_run_conv_as_large_matmul(
             B_tiled = B_tiled_host.to(device, ttl.tensor.MemoryConfig(False))
         else:
             B_tiled = B_tiled_host.to(device)
+
+        # Bias
+        bias_cl_host = create_conv_bias_tensor(bias_pyt, 1, K, pad = 0)
+        bias_device = bias_cl_host.to(device)
+
+        if has_bias:
+            bias = torch.flatten(bias_pyt)
+        else:
+            bias = None
+
         # Calculate conv result with golden result. Run Pytorch conv
         out_golden = torch.nn.functional.conv2d(
-            A_pyt, B_pyt, stride=(stride_h, stride_w), padding=(pad_h, pad_w)
+            A_pyt, B_pyt, bias=bias, stride=(stride_h, stride_w), padding=(pad_h, pad_w)
         )
 
         # Run TT metal OP
@@ -162,9 +189,12 @@ def test_run_conv_as_large_matmul(
                 K,
             )
         else:
+            if not has_bias:
+                bias_device = None
             out = ttl.tensor.conv_with_fast_reader(
                 A,
                 B_tiled,
+                bias_device,
                 [R, S, stride_h, stride_w, pad_h, pad_w],
                 act_block_h,
                 act_block_w,
@@ -172,7 +202,8 @@ def test_run_conv_as_large_matmul(
                 out_subblock_h,
                 out_subblock_w,
                 K,
-                untilize_out)
+                untilize_out,
+                has_bias)
         if not untilize_out:
            out_unpadded_shape = [1, 1, OH*OW, K]
            assert out_unpadded_shape == out.shape_without_padding()
@@ -186,6 +217,13 @@ def test_run_conv_as_large_matmul(
         out_result = out.to_torch()
         out_result = torch.transpose(out_result, 2, 3)
         out_result = torch.transpose(out_result, 1, 2)
+
+        torch.set_printoptions(
+            precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32
+        )
+
+        # print(f'OUT: {out_result}')
+        # print(f'GLD: {out_golden}')
 
         # Compare against golden
         assert out_result.shape == out_golden.shape

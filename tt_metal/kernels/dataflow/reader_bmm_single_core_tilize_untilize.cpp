@@ -6,6 +6,10 @@
 #include "dataflow_api.h"
 #include "debug_print.h"
 
+#ifdef FUSE_BIAS
+    #include "kernels/dataflow/reader_bmm_single_core_bias.hpp"
+#endif
+
 /**
  * Reader kernel used for single core BMM with tilize activations and untilize output.
  */
@@ -41,33 +45,27 @@ void kernel_main() {
     const uint32_t in1_tile_nbytes = get_tile_size(in1_cb_id);
     const DataFormat in1_df = get_dataformat(in1_cb_id);
 
-    // const InterleavedAddrGenFast<true> s0 = {
-    //     .bank_base_address = in0_addr,
-    //     .page_size = in0_row_size_bytes,
-    //     .data_format = in0_df
-    // };
-
-    // const InterleavedAddrGenFast<true> s1 = {
-    //     .bank_base_address = in1_addr,
-    //     .page_size = in1_tile_nbytes,
-    //     .data_format = in1_df
-    // };
     const InterleavedAddrGen<true> s0 = {
         .bank_base_address = in0_addr,
         .page_size = in0_row_size_bytes
     };
 
-    // constexpr uint32_t tile_size_pow2_exponent = 11;    // 2^11 = 2048 = 32 * 32 * 2 bytes, tile size for 2 byte data types
-    // const InterleavedPow2AddrGen<true> s1 = {
-    //     .bank_base_address = in1_addr,
-    //     .log_base_2_of_page_size = tile_size_pow2_exponent
-    // };
     const InterleavedAddrGen<true> s1 = {
         .bank_base_address = in1_addr,
         .page_size = in1_tile_nbytes
     };
 
     // DPRINT << FIXP() << SETW(32) << SETP(2);
+
+    // read bias first if defined
+    #ifdef FUSE_BIAS
+        constexpr uint32_t bias_cb_id = tt::CB::c_in2;
+        uint32_t bias_addr = get_arg_val<uint32_t>(22);
+        uint32_t bias_width_ntiles = get_arg_val<uint32_t>(23);
+        uint32_t bias_log2_of_pagesize = get_arg_val<uint32_t>(24);
+        uint32_t bias_pagesize = get_arg_val<uint32_t>(25);
+        read_bias<true>(bias_addr, bias_width_ntiles, bias_cb_id, bias_log2_of_pagesize, bias_pagesize);
+    #endif
 
     uint32_t in0_curr_block_start_row_id = 0;
     // loop over in0 blocks along h

@@ -1,5 +1,11 @@
 #include "dataflow_api.h"
 
+#include "debug_print.h"
+
+#ifdef FUSE_BIAS
+    #include "kernels/dataflow/reader_bmm_single_core_bias.hpp"
+#endif
+
 inline void read_weight_blocks_inner_h_dim(uint32_t cb_id_weight,
                         uint32_t num_blocks_weight_h,
                         uint32_t weight_block_num_tiles,
@@ -29,7 +35,6 @@ inline void read_weight_blocks_inner_h_dim(uint32_t cb_id_weight,
             weight_row_start_tile_id += weight_stride_h;
         } // for weight_block_h
         noc_async_read_barrier();
-
         weight_current_block_start_tile_id += weight_next_block_stride_h;
         cb_push_back(cb_id_weight, weight_block_num_tiles);
     } // for num_blocks_weight_h
@@ -78,6 +83,19 @@ void kernel_main() {
         .bank_base_address = out_addr,
         .log_base_2_of_page_size = tile_size_pow2_exponent
     };
+
+        // first read in bias if enabled (done only once for all batches)
+    #ifdef FUSE_BIAS
+        const uint32_t bias_addr = get_arg_val<uint32_t>(i); i += 1;
+        const uint32_t bias_ntiles = get_arg_val<uint32_t>(i); i += 1;
+
+        constexpr uint32_t bias_cb_id = get_compile_time_arg_val(3);
+        constexpr uint32_t bias_log2_of_pagesize = get_compile_time_arg_val(4);
+        constexpr uint32_t bias_pagesize = get_compile_time_arg_val(5);
+        constexpr uint32_t bias_in_dram = get_compile_time_arg_val(6) == 1;
+
+        read_bias<bias_in_dram>(bias_addr, bias_ntiles, bias_cb_id, bias_log2_of_pagesize, bias_pagesize);
+    #endif
 
     // DPRINT << "tile_nbytes - " << tile_nbytes << ENDL();
     // DPRINT << "out_num_blocks_h - " << out_num_blocks_h << ENDL();

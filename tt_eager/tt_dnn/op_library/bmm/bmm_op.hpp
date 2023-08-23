@@ -102,6 +102,7 @@ struct BMMTilizeUntilize {
     const uint32_t in0_block_ntiles_h_, in0_block_ntiles_w_, in1_block_ntiles_w_;
     const uint32_t out_subblock_ntiles_h_, out_subblock_ntiles_w_;
     const bool tilize_in0_, untilize_out_;
+    const bool has_bias_;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -114,17 +115,17 @@ struct BMMTilizeUntilize {
  * Blocked Matmul, with support for tilize a and untilize output.
  * NOTE: Takes blocks and subblock information as arguments.
  */
-Tensor bmm_tilize_untilize(const Tensor& a, const Tensor& b, DataType out_dt,
+Tensor bmm_tilize_untilize(const Tensor& a, const Tensor& b, const Tensor& bias, DataType out_dt,
                            uint32_t a_height_nblocks, uint32_t a_width_nblocks, uint32_t b_width_nblocks,
                            uint32_t a_block_height_ntiles, uint32_t a_block_width_ntiles, uint32_t b_block_width_ntiles,
                            uint32_t out_subblock_height_ntiles, uint32_t out_subblock_width_ntiles,
-                           bool tilize_in0, bool untilize_out);
+                           bool tilize_in0, bool untilize_out, bool has_bias);
 operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
-                                    const Tensor &in0, const Tensor &in1, DataType out_dt,
+                                    const Tensor &in0, const Tensor &in1, Tensor &bias, DataType out_dt,
                                     uint32_t in0_height_nblocks, uint32_t in0_width_nblocks, uint32_t in1_width_nblocks,
                                     uint32_t in0_block_height_ntiles, uint32_t in0_block_width_ntiles, uint32_t in1_block_width_ntiles,
                                     uint32_t out_subblock_height_ntiles, uint32_t out_subblock_width_ntiles,
-                                    bool tilize_in0, bool untilize_out,
+                                    bool tilize_in0, bool untilize_out, bool has_bias,
                                     Tensor &out);
 
 }  // namespace tt_metal

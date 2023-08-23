@@ -84,7 +84,7 @@ ALWI void add_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, ui
 }
 
 template<EltwiseBinaryType tBcastOp, BroadcastType tBcastDim>
-void init_bcast(uint32_t icb0, uint32_t icb1)
+void init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb = 16)
 {
     if constexpr (tBcastOp == ELWMUL)
         MATH(( llk_math_eltwise_binary_init<tBcastOp, tBcastDim, MATH_FIDELITY>() ));
@@ -107,7 +107,7 @@ void init_bcast(uint32_t icb0, uint32_t icb1)
     //UNPACK(( llk_unpack_AB_hw_configure_disaggregated<BroadcastType::NONE>(icb0, icb1) ));
 
     PACK(( llk_pack_init() ));
-    PACK(( llk_pack_hw_configure_disaggregated<false>(16) ));
+    PACK(( llk_pack_hw_configure_disaggregated<false>(ocb) ));
     PACK(( llk_setup_outputs() ));
     PACK(( llk_pack_dest_init<SyncHalf, DstTileFaceLayout::RowMajor, false>() ));
 

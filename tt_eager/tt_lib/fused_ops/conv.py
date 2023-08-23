@@ -48,6 +48,7 @@ def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
         output = tensor.conv(
             activation,
             weight_on_device,
+            bias_on_device,
             [R, S, U, V, P_H, P_W],
             act_block_h,
             act_block_w,
@@ -55,22 +56,23 @@ def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
             out_subblock_h,
             out_subblock_w,
             K,
+            bias != None
         )
 
         assert output.storage_type() == tensor.StorageType.DEVICE
 
-        if bias_on_device is not None:
-            output_plus_bias = tensor.bcast(
-                output, bias_on_device, tensor.BcastOpMath.ADD, tensor.BcastOpDim.H
-            )
-            if output_plus_bias.layout() != tensor.Layout.ROW_MAJOR:
-                assert output_plus_bias.layout() == tensor.Layout.TILE
-                assert output_plus_bias.storage_type() == tensor.StorageType.DEVICE
-                output_plus_bias = tensor.untilize(
-                    output_plus_bias, output_plus_bias.memory_config()
-                )
-                assert output_plus_bias.layout() == tensor.Layout.ROW_MAJOR
-            return output_plus_bias
+        # if bias_on_device is not None:
+        #     output_plus_bias = tensor.bcast(
+        #         output, bias_on_device, tensor.BcastOpMath.ADD, tensor.BcastOpDim.H
+        #     )
+        #     if output_plus_bias.layout() != tensor.Layout.ROW_MAJOR:
+        #         assert output_plus_bias.layout() == tensor.Layout.TILE
+        #         assert output_plus_bias.storage_type() == tensor.StorageType.DEVICE
+        #         output_plus_bias = tensor.untilize(
+        #             output_plus_bias, output_plus_bias.memory_config()
+        #         )
+        #         assert output_plus_bias.layout() == tensor.Layout.ROW_MAJOR
+        #     return output_plus_bias
 
         return output
 
@@ -187,17 +189,24 @@ def resnet_conv(weight: List[Union[int, float]], conv_params, device, act_block_
 
     if bias is None:
         bias_on_device = None
+        enable_bias = False
     else:
         bias_shape = [1, 1, 1, K]
+        assert(use_regular_matmul_op or (not use_regular_matmul_op) and K % (weight_block_w * 32) == 0)
         bias_channels_padded_shape = [1, 1, 32, _nearest_32(K)]
         bias_ = (
             tensor.Tensor(
                 bias, bias_shape, tensor.DataType.BFLOAT16, tensor.Layout.ROW_MAJOR
             )
-            .pad(bias_channels_padded_shape, (0, 0, 0, 0), 0)
+            .pad_to_tile(0)
             .to(tensor.Layout.TILE)
         )
         bias_on_device = bias_.to(device)
+
+    if not enable_fused_bias:
+        bias_for_fused = None
+    else:
+        bias_for_fused = bias_on_device
 
     if pre_pad_conv:
         P_H = 0
@@ -225,7 +234,7 @@ def resnet_conv(weight: List[Union[int, float]], conv_params, device, act_block_
                 output = tensor.matmul(activation, weight_on_device, activation.memory_config())
         else:
             assert(activation.layout() == tensor.Layout.ROW_MAJOR)
-            output = tensor.conv_with_fast_reader(activation, weight_on_device, [R,padded_filter_window_width,U,V,P_H,P_W], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w, K, False)
+            output = tensor.conv_with_fast_reader(activation, weight_on_device, bias_for_fused, [R,padded_filter_window_width,U,V,P_H,P_W], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w, K, False, bias_for_fused is not None)
         assert(output.storage_type() == tensor.StorageType.DEVICE)
 
         if matmul_program_config is None and bias_on_device is not None:

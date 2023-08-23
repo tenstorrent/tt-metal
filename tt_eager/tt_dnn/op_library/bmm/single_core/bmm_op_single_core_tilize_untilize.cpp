@@ -15,19 +15,20 @@
 namespace tt {
 namespace tt_metal {
 
-Tensor bmm_tilize_untilize(const Tensor& a, const Tensor& b, DataType out_dt,
+Tensor bmm_tilize_untilize(const Tensor& a, const Tensor& b, const Tensor& bias, DataType out_dt,
                            uint32_t a_height_nblocks, uint32_t a_width_nblocks, uint32_t b_width_nblocks,
                            uint32_t a_block_height_ntiles, uint32_t a_block_width_ntiles, uint32_t b_block_width_ntiles,
                            uint32_t out_subblock_height_ntiles, uint32_t out_subblock_width_ntiles,
-                           bool tilize_in0, bool untilize_out) {
+                           bool tilize_in0, bool untilize_out, bool has_bias) {
     // NOTE: Currently only single core implementation exists.
     return operation::run(BMMTilizeUntilize {
                             out_dt,
                             a_height_nblocks, a_width_nblocks, b_width_nblocks,
                             a_block_height_ntiles, a_block_width_ntiles, b_block_width_ntiles,
                             out_subblock_height_ntiles, out_subblock_width_ntiles,
-                            tilize_in0, untilize_out},
-                          {a, b},
+                            tilize_in0, untilize_out,
+                            has_bias},
+                          {a, b, bias},
                           {}).at(0);
 }
 
@@ -35,22 +36,28 @@ void create_cb_bmm_single_core_tilize_untilize(Program &program,
                                                CoreRange core,
                                                DataFormat in0_df,
                                                DataFormat in1_df,
+                                               DataFormat bias_df,
                                                DataFormat out_df,
                                                uint32_t in0_block_w,
                                                uint32_t in0_block_h,
                                                uint32_t in1_block_w,
+                                               uint32_t bias_width_ntiles,
                                                uint32_t in0_tile_nbytes,
                                                uint32_t in1_tile_nbytes,
+                                               uint32_t bias_tile_nbytes,
                                                uint32_t out_tile_nbytes,
                                                bool tilize_in0 = true,
-                                               bool untilize_out = true) {
+                                               bool untilize_out = true,
+                                               bool has_bias = false) {
     // buffer indices
     uint32_t in0_cb                                 = CB::c_in0;
     uint32_t in1_cb                                 = CB::c_in1;
+    uint32_t bias_cb                                = CB::c_in2;
     uint32_t matmul_partials_cb                     = CB::c_intermed0;
     uint32_t tilize_mode_tilized_in0_cb             = CB::c_intermed1;
     uint32_t untilize_mode_final_matmul_partials_cb = CB::c_intermed2;
     uint32_t untilize_mode_reblock_cb               = CB::c_intermed3;
+    uint32_t out_for_bias_cb                        = CB::c_intermed4;
     uint32_t out_cb                                 = CB::c_out0;
 
     const uint32_t cb0_ntiles = in0_block_h * in0_block_w * 2;  // double buffer
@@ -137,11 +144,31 @@ void create_cb_bmm_single_core_tilize_untilize(Program &program,
             out_df
         );
     }
+
+    if (has_bias) {
+        auto cb_in_bias = CreateCircularBuffers(
+            program,
+            bias_cb,
+            core,
+            bias_width_ntiles,
+            bias_width_ntiles * bias_tile_nbytes,
+            bias_df
+        );
+        auto cb_out_for_bias = CreateCircularBuffers(
+            program,
+            out_for_bias_cb,
+            core,
+            out_ntiles,
+            out_ntiles * out_tile_nbytes,
+            out_df
+        );
+    }
 }
 
 operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
                                     const Tensor &in0,       // activations
                                     const Tensor &in1,       // weights
+                                    const Tensor &bias,      // optional bias
                                     DataType out_dt,
                                     uint32_t in0_height_nblocks,
                                     uint32_t in0_width_nblocks,
@@ -153,6 +180,7 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
                                     uint32_t out_subblock_width_ntiles,
                                     bool tilize_in0,
                                     bool untilize_out,
+                                    bool has_bias,
                                     Tensor &out) {
 
     uint32_t in0_batch = in0.shape()[0];
@@ -169,17 +197,28 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
     TT_ASSERT(in1_batch == in0_batch, "Batch dimension needs to match for two inputs");
     TT_ASSERT(in0_channel == in1_channel, "Channel dimension needs to match for two inputs");
     TT_ASSERT(in0_width == in1_height, "Input matrices should be compatible for multiplication");
+    if (has_bias) {
+        TT_ASSERT(bias.shape()[3] == in1.shape()[3], "Bias shape mismatch");
+    }
 
     // tile size checks
     TT_ASSERT(in0_height % constants::TILE_HEIGHT == 0, "Input tensor in0 height needs to be divisible by TILE_HEIGHT");
     TT_ASSERT(in1_height % constants::TILE_HEIGHT == 0, "Input tensor in1 height needs to be divisible by TILE_HEIGHT");
     TT_ASSERT(in0_width % constants::TILE_WIDTH == 0, "Input tensor in0 width needs to be divisible by TILE_WIDTH");
     TT_ASSERT(in1_width % constants::TILE_WIDTH == 0, "Input tensor in1 width needs to be divisible by TILE_WIDTH");
+    if (has_bias) {
+        TT_ASSERT(bias.shape()[2] % constants::TILE_HEIGHT == 0);
+        TT_ASSERT(bias.shape()[3] % constants::TILE_WIDTH == 0);
+    }
 
     // device compatibility checks
     TT_ASSERT(in0.storage_type() == StorageType::DEVICE and in1.storage_type() == StorageType::DEVICE, "Operands need to be on the device!");
     TT_ASSERT(in0.device() == in1.device(), "Operands need to be on the same device!");
     TT_ASSERT(in0.buffer() != nullptr && in1.buffer() != nullptr, "Operands need to have buffers allocated on the device!");
+    if (has_bias) {
+        TT_ASSERT(bias.storage_type() == StorageType::DEVICE);
+        TT_ASSERT(bias.device() == in0.device());
+    }
 
     // input data type and formats
     const auto in0_dt = in0.dtype();
@@ -191,12 +230,19 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
     TT_ASSERT(in0_dt == DataType::BFLOAT16 || (in0_dt == DataType::BFLOAT8_B && !tilize_in0),
               "in0 only supports BFLOAT16 and BFLOAT8_B data types for now");
     TT_ASSERT(in1_dt == DataType::BFLOAT16 || in1_dt == DataType::BFLOAT8_B, "in1 only supports BFLOAT16 and BFLOAT8_B formats for now!");
+    if (has_bias) {
+        TT_ASSERT(bias.dtype() == DataType::BFLOAT16 || bias.dtype() == DataType::BFLOAT8_B);
+    }
 
     // output data format
     const auto out_df = datatype_to_dataformat_converter(out_dt);
 
     // out dt checks
     TT_ASSERT(!untilize_out || (untilize_out && out_dt == DataType::BFLOAT16));
+
+    if (has_bias) {
+        TT_ASSERT(!untilize_out, "Untilize is not supported with bias");
+    }
 
     // TODO (AS): Certain mixed-prec cases do not currently work. Assert them out.
     if (!(in0_dt == out_dt && in0_dt == in1_dt && in0_dt == DataType::BFLOAT16) && (tilize_in0 || untilize_out)) {
@@ -223,11 +269,12 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
 
     // start debug server for kernel dprint
     // int hart_mask = DPRINT_HART_NC | DPRINT_HART_BR;
-    // tt_start_debug_print_server(device->cluster(), {0}, {debug_core});
+    tt_start_debug_print_server(device->cluster(), {0}, {debug_core});
 
     Buffer *dst_dram_buffer = out.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
 
+    // TODO [AS]: support non-tile multiple shapes
     // Convert tensor dims to tile dims
     uint32_t in0_height_ntiles = in0_height / constants::TILE_HEIGHT;   // == in0_height_nblocks * in0_block_height_ntiles
     uint32_t in0_width_ntiles = in0_width / constants::TILE_WIDTH;      // == in0_width_nblocks * in0_block_width_ntiles
@@ -236,12 +283,6 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
     TT_ASSERT(in0_height_ntiles == in0_height_nblocks * in0_block_height_ntiles, "Mismatch in tensor in0 height!");
     TT_ASSERT(in0_width_ntiles == in0_width_nblocks * in0_block_width_ntiles, "Mismatch tensor in0 width!");
     TT_ASSERT(in1_width_ntiles == in1_width_nblocks * in1_block_width_ntiles, "Mismatch tensor in1 width!");
-
-    {   // debug
-        log_debug("in0_height_ntiles = {}", in0_height_ntiles);
-        log_debug("in0_width_ntiles = {}", in0_width_ntiles);
-        log_debug("in1_width_ntiles = {}", in1_width_ntiles);
-    }
 
     // in0
     uint32_t in0_dram_addr = src0_dram_buffer->address();
@@ -270,11 +311,22 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
 
     // out
     uint32_t out_dram_addr = dst_dram_buffer->address();
-    auto out_dram_noc_xy = dst_dram_buffer->noc_coordinates();
-    uint32_t out_dram_noc_x = out_dram_noc_xy.x;
-    uint32_t out_dram_noc_y = out_dram_noc_xy.y;
     uint32_t out_subblock_ntiles = out_subblock_height_ntiles * out_subblock_width_ntiles;
     TT_ASSERT(out_subblock_ntiles <= 8, "Subblock can have at most 8 tiles to fit computed intermediates in dst[half]");
+
+    // bias
+    uint32_t bias_addr = 0;
+    uint32_t bias_ntiles_w = 0;
+    uint32_t bias_tile_nbytes = 0;
+    uint32_t bias_log2_of_pagesize = 0;
+    DataFormat bias_df = in0_df;
+    if (has_bias) {
+        bias_addr = bias.buffer()->address();
+        bias_ntiles_w = bias.shape()[3] / constants::TILE_WIDTH;
+        bias_df = datatype_to_dataformat_converter(bias.dtype());
+        bias_tile_nbytes = tile_size(bias_df);
+        bias_log2_of_pagesize = (uint32_t) log2((float) bias_tile_nbytes);
+    }
 
     {   // debug
         // in0
@@ -299,6 +351,10 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
         log_debug("in1_block_h: {}", in1_block_h);
         log_debug("in1_num_blocks_w: {}", in1_num_blocks_w);
         log_debug("in1_num_blocks_h: {}", in1_num_blocks_h);
+        // bias
+        log_debug("has_bias: {}", has_bias);
+        log_debug("bias_addr: {}", bias_addr);
+        log_debug("bias_ntiles_w: {}", bias_ntiles_w);
         // out
         log_debug("out_dram_addr: {}", out_dram_addr);
         log_debug("out_subblock_height_ntiles: {}", out_subblock_height_ntiles);
@@ -310,23 +366,33 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
         // data formats
         log_debug("in0_df: {}", in0_df);
         log_debug("in1_df: {}", in1_df);
+        log_debug("bias_df: {}", bias_df);
         log_debug("out_df: {}", out_df);
     }
 
-    create_cb_bmm_single_core_tilize_untilize(
-        program,
-        core_range,
-        in0_df,
-        in1_df,
-        out_df,
-        in0_block_w,
-        in0_block_h,
-        in1_block_w,
-        in0_tile_nbytes,
-        in1_tile_nbytes,
-        out_tile_nbytes,
-        tilize_in0,
-        untilize_out);
+    create_cb_bmm_single_core_tilize_untilize(program,
+                                              core_range,
+                                              in0_df,
+                                              in1_df,
+                                              bias_df,
+                                              out_df,
+                                              in0_block_w,
+                                              in0_block_h,
+                                              in1_block_w,
+                                              bias_ntiles_w,
+                                              in0_tile_nbytes,
+                                              in1_tile_nbytes,
+                                              bias_tile_nbytes,
+                                              out_tile_nbytes,
+                                              tilize_in0,
+                                              untilize_out,
+                                              has_bias);
+
+    // defines for Bias
+    std::map<string, string> all_defines;
+    if (has_bias) {
+        all_defines["FUSE_BIAS"] = "1";
+    }
 
     // Reader kernel
     std::string reader_kernel;
@@ -354,7 +420,16 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
             in1_block_num_tiles,
             in1_width_ntiles,
             in1_width_ntiles * in1_block_h,
-            in1_block_w
+            in1_block_w,
+            0,                                              // unused
+            0,                                              // unused
+            0,                                              // unused
+            0,                                              // unused
+            0,                                              // unused
+            bias_addr,
+            bias_ntiles_w,
+            bias_log2_of_pagesize,
+            bias_tile_nbytes
         };
     } else {
         // in0 is tiled, in1 is tiled
@@ -383,14 +458,21 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
             in0_width_ntiles * in0_block_h, // in0_next_block_stride_h,
             in0_block_w,                    // in0_next_block_stride_w,
             in1_width_ntiles * in1_block_h, // in1_next_block_stride_h,
-            in1_block_w                    // in1_next_block_stride_w
+            in1_block_w,                    // in1_next_block_stride_w
+            bias_addr,
+            bias_ntiles_w,
+            bias_log2_of_pagesize,
+            bias_tile_nbytes
         };
     }
     auto reader_id = CreateDataMovementKernel(
         program,                            // program
         reader_kernel,                      // file name
         core_range,                         // core
-        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default}
+        tt_metal::DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .defines = all_defines}
     );
 
     // number of data elements along height of an in0 block
@@ -437,7 +519,11 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
         program,                        // program
         writer_kernel,                  // file name
         core_range,                     // core
-        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_compile_time_args}
+        tt_metal::DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = writer_compile_time_args,
+            .defines = all_defines}
     );
 
     // Compute kernel
@@ -458,13 +544,16 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
         out_subblock_width_ntiles,
         out_subblock_ntiles,
         tilize_in0,
-        untilize_out
+        untilize_out,
+        bias_ntiles_w
     };
     auto bmm_compute_id = CreateComputeKernel(
         program,
         compute_kernel,
         core_range,
-        tt_metal::ComputeConfig{.compile_args = compute_comptime_args}
+        tt_metal::ComputeConfig{
+            .compile_args = compute_comptime_args,
+            .defines = all_defines}
     );
 
     // Reader rt args
@@ -483,12 +572,16 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
                                             const std::vector<Buffer*>& output_buffers) {
         auto in0_dram_buffer = input_buffers.at(0);
         auto in1_dram_buffer = input_buffers.at(1);
+        auto bias_dram_buffer = input_buffers.at(2);
         auto out_dram_buffer = output_buffers.at(0);
         CoreCoord core = {0, 0};
         {
             auto runtime_args = GetRuntimeArgs(program, kernel_reader_id, core);
             runtime_args[0] = in0_dram_buffer->address();
             runtime_args[9] = in1_dram_buffer->address();
+            if (bias_dram_buffer != nullptr) {
+                runtime_args[22] = bias_dram_buffer->address();
+            }
             SetRuntimeArgs(program, kernel_reader_id, core, runtime_args);
         }
         {
@@ -505,6 +598,7 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
 void BMMTilizeUntilize::validate(const std::vector<Tensor>& inputs) const {
     const auto& in0 = inputs.at(0);
     const auto& in1 = inputs.at(1);
+    const auto& bias = inputs.at(2);
     // TODO: Currently all validation is part of the primary function from create_program. Move them here.
 }
 
@@ -534,13 +628,15 @@ operation::ProgramWithCallbacks BMMTilizeUntilize::create_program(const std::vec
                                                                   std::vector<Tensor>& outputs) const {
     const auto& in0 = inputs.at(0);
     const auto& in1 = inputs.at(1);
+    const auto& bias = inputs.at(2);
     auto& out = outputs.at(0);
     // NOTE: currently only single core version exists
-    return bmm_single_core_tilize_untilize(in0, in1, out_dt_,
+    return bmm_single_core_tilize_untilize(in0, in1, bias, out_dt_,
                                            in0_nblocks_h_, in0_nblocks_w_, in1_nblocks_w_,
                                            in0_block_ntiles_h_, in0_block_ntiles_w_, in1_block_ntiles_w_,
                                            out_subblock_ntiles_h_, out_subblock_ntiles_w_,
                                            tilize_in0_, untilize_out_,
+                                           has_bias_,
                                            out);
 }
 
@@ -556,7 +652,8 @@ stl::reflection::Attributes BMMTilizeUntilize::attributes() const {
         {"out_subblock_ntiles_h", this->out_subblock_ntiles_h_},
         {"out_subblock_ntiles_w", this->out_subblock_ntiles_w_},
         {"tilize_in0", this->tilize_in0_},
-        {"untilize_out", this->untilize_out_}
+        {"untilize_out", this->untilize_out_},
+        {"has_bias", this->has_bias_},
     };
 }
 
