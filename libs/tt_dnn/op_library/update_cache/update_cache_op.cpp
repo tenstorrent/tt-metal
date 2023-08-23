@@ -21,21 +21,25 @@ void UpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
     TT_ASSERT((input_tensor.layout() == Layout::TILE && cache_tensor.layout() == Layout::TILE), "Inputs to update_cache must be tilized");
     TT_ASSERT(input_tensor.dtype() == cache_tensor.dtype());
     TT_ASSERT(input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::BFLOAT8_B);
-    TT_ASSERT(this->batch_idx < cache_tensor.shape()[0]);
+
+    TT_ASSERT(input_tensor.shape()[-1] == cache_tensor.shape()[-1]);
     TT_ASSERT(cache_tensor.shape()[1] == 1);
     TT_ASSERT(input_tensor.shape()[0] * input_tensor.shape()[1] == 1);
-    TT_ASSERT(input_tensor.shape()[-2] <= cache_tensor.shape()[-2]);
-    TT_ASSERT(input_tensor.shape()[-1] == cache_tensor.shape()[-1]);
+
+    if (this->op_type == UpdateCacheOpType::FILL) {
+        TT_ASSERT(this->batch_idx < cache_tensor.shape()[0]);
+        TT_ASSERT(input_tensor.shape()[-2] <= cache_tensor.shape()[-2]);
+    } else if (this->op_type == UpdateCacheOpType::UPDATE) {
+        TT_ASSERT(cache_tensor.shape()[0] == input_tensor.shape()[-2]);
+    }
 }
 
-std::vector<Shape> UpdateCache::compute_output_shapes(
-    const std::vector<Tensor>& input_tensors) const {
-
+std::vector<Shape> UpdateCache::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+    // Do nothing because it's an in-place operation
     return {};
 }
 
-std::vector<Tensor> UpdateCache::create_output_tensors(
-    const std::vector<Tensor>& input_tensors) const {
+std::vector<Tensor> UpdateCache::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     // Do nothing because it's an in-place operation
     return {};
 }
@@ -46,21 +50,34 @@ operation::ProgramWithCallbacks UpdateCache::create_program(const std::vector<Te
 
     switch(this->get_parallelization_strategy(input_tensors)) {
         case UpdateCacheOpParallelizationStrategy::MULTI_CORE:
-            return update_cache_multi_core(cache_tensor, input_tensor, this->batch_idx, this->update_idx);
+            if (this->op_type == UpdateCacheOpType::FILL) {
+                return fill_cache_multi_core(cache_tensor, input_tensor, this->batch_idx, this->update_idx);
+            } else {
+                TT_ASSERT(false, "Unsupported parallelization strategy for op");
+            }
         case UpdateCacheOpParallelizationStrategy::SINGLE_CORE:
         default:
-            return update_cache_single_core(cache_tensor, input_tensor, this->batch_idx, this->update_idx);
+            if (this->op_type == UpdateCacheOpType::FILL) {
+                return fill_cache_single_core(cache_tensor, input_tensor, this->batch_idx, this->update_idx);
+            } else {
+                return update_cache_single_core(cache_tensor, input_tensor, this->update_idx);
+            }
     };
+    return {};
 }
 
 
 UpdateCacheOpParallelizationStrategy UpdateCache::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(1);
     uint32_t num_tiles = input_tensor.volume() / TILE_HW;
-    if (num_tiles > 1) {
-        return UpdateCacheOpParallelizationStrategy::MULTI_CORE;
-    }
-    else{
+    if (this->op_type == UpdateCacheOpType::FILL) {
+        if (num_tiles > 1) {
+            return UpdateCacheOpParallelizationStrategy::MULTI_CORE;
+        }
+        else{
+            return UpdateCacheOpParallelizationStrategy::SINGLE_CORE;
+        }
+    } else {
         return UpdateCacheOpParallelizationStrategy::SINGLE_CORE;
     }
 }
@@ -69,6 +86,7 @@ tt::stl::reflection::Attributes UpdateCache::attributes() const {
     return {
         {"batch_idx", this->batch_idx},
         {"update_idx", this->update_idx},
+        {"op_type", this->op_type},
     };
 }
 

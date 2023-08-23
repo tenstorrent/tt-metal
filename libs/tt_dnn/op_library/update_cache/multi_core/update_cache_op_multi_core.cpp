@@ -11,7 +11,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t batch_idx, const uint32_t update_idx) {
+operation::ProgramWithCallbacks fill_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t batch_idx, const uint32_t update_idx) {
     Program program{};
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
@@ -116,9 +116,9 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
         const std::vector<Buffer*>& output_buffers
     ) {
 
-        auto src_buffer = input_buffers.at(0);
+        auto src_buffer = input_buffers.at(1);
 
-        auto dst_buffer = output_buffers.at(0);
+        auto dst_buffer = input_buffers.at(0);
 
         for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
             CoreCoord core = {i / num_cores_y, i % num_cores_y};

@@ -59,6 +59,7 @@ void kernel_main() {
         w++;
         if (w == Wt) {
             col_start_tile_id = curr_id - Wt + 1;
+            w = 0;
         } else {
             col_start_tile_id++;
         }

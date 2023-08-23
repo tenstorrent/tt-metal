@@ -2504,9 +2504,13 @@ void TensorModule(py::module &m_tensor) {
         py::arg("input").noconvert(), py::arg("cos").noconvert(), py::arg("sin").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         "Performs rotary embedding with a given input, cos, and sin tensors. Sequence length is inferred as the second last dim of the input tensor.
     )doc");
+    m_tensor.def("fill_cache", &fill_cache,
+         py::arg("cache").noconvert(), py::arg("input").noconvert(), py::arg("batch_idx"), R"doc(
+        "Fills the cache tensor in place with the values from input at the specified batch_idx.
+    )doc");
     m_tensor.def("update_cache", &update_cache,
-         py::arg("cache").noconvert(), py::arg("input").noconvert(), py::arg("batch_idx"), py::arg("update_idx"), R"doc(
-        "Fills the cache tensor in place with the values from input at the specified batch_idx, update_idx.
+         py::arg("cache").noconvert(), py::arg("input").noconvert(), py::arg("update_idx"), R"doc(
+        "Updates the cache tensor in place with the values from input at the specified update_idx.
     )doc");
 
 
