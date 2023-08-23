@@ -72,15 +72,12 @@ void kernel_main() {
     const uint32_t tile_nbytes = get_tile_size(cb_id_out0);
     const DataFormat out_df = get_dataformat(cb_id_out0);
 
-    // constexpr uint32_t tile_size_pow2_exponent = 11;    // == 2^11 = 2048 = 2 * 32 * 32 (assuming dtype = 2 bytes)
-    // const InterleavedPow2AddrGen<true> s = {
-    //     .bank_base_address = out_addr,
-    //     .log_base_2_of_page_size = tile_size_pow2_exponent
-    // };
-    const InterleavedAddrGen<out_in_dram> s = {
+    constexpr uint32_t tile_size_pow2_exponent = 11;    // == 2^11 = 2048 = 2 * 32 * 32 (assuming dtype = 2 bytes)
+    const InterleavedPow2AddrGen<out_in_dram> s = {
         .bank_base_address = out_addr,
-        .page_size = tile_nbytes
+        .log_base_2_of_page_size = tile_size_pow2_exponent
     };
+
     // DPRINT << "tile_nbytes - " << tile_nbytes << ENDL();
     // DPRINT << "out_num_blocks_h - " << out_num_blocks_h << ENDL();
     // DPRINT << "out_num_blocks_w - " << out_num_blocks_w << ENDL();
@@ -104,7 +101,6 @@ void kernel_main() {
     // DPRINT << "out_width_num_tiles - " << out_width_num_tiles << ENDL();
 
     const uint32_t weight_tile_nbytes = get_tile_size(cb_id_weight);
-    constexpr uint32_t tile_size_pow2_exponent = 11;
     const InterleavedPow2AddrGen<true> s_weight = {
         .bank_base_address = weight_addr_dram_base,
         .log_base_2_of_page_size = tile_size_pow2_exponent

@@ -103,17 +103,13 @@ void kernel_main() {
 
     const DataFormat out_df = get_dataformat(cb_id_out0);
 
-    // const InterleavedPow2AddrGenFast<out_in_dram> s = {
-    //     .bank_base_address = dst_addr,
-    //     .log_base_2_of_page_size = log_2_of_output_row_size
-    // };
     const uint32_t tile_nbytes = get_tile_size(cb_id_out0);
-    const InterleavedAddrGen<out_in_dram> s = {
+    constexpr uint32_t tile_size_pow2_exponent = 11;
+    const InterleavedPow2AddrGen<out_in_dram> s = {
         .bank_base_address = out_addr,
-        .page_size = tile_nbytes
+        .log_base_2_of_page_size = tile_size_pow2_exponent
     };
     const uint32_t weight_tile_nbytes = get_tile_size(cb_id_weight);
-    constexpr uint32_t tile_size_pow2_exponent = 11;
     const InterleavedPow2AddrGen<true> s_weight = {
         .bank_base_address = weight_addr_dram_base,
         .log_base_2_of_page_size = tile_size_pow2_exponent
