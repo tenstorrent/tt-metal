@@ -1123,7 +1123,7 @@ ALWI void transpose_wh_init(uint32_t icb)
     #ifdef ARCH_GRAYSKULL
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, true>() ));
     #else
-    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0, icb) ));
+    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(true, true, icb) ));
     #endif
 
     MATH(( llk_math_pack_sync_init<SyncHalf>() ));
@@ -1138,7 +1138,7 @@ ALWI void transpose_wh_init(uint32_t icb)
     UNPACK(( llk_unpack_A_init<BroadcastType::NONE, true, false>() ));
     UNPACK(( llk_unpack_A_hw_configure_disaggregated<BroadcastType::NONE, true, true, false>(0) ));
     #else
-    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>()  ));
+    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true)  ));
     UNPACK(( llk_unpack_A_hw_configure_disaggregated<>(0, true) ));
     #endif
 }
