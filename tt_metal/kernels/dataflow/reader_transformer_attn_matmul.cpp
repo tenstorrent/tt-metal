@@ -68,18 +68,20 @@ void kernel_main() {
         itileA = itileA_Mt;
         itileB = itileB_Nt;
 
+        cb_reserve_back(cb_id_in0, Kt);
+        for (uint32_t kt = 0; kt < Kt; kt++) {
+            // Read A's tile at (mt, kt)
+            uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
+            noc_async_read_tile(itileA, s0, l1_write_addr_in0);
+            noc_async_read_barrier();
+            cb_push_back(cb_id_in0, onetile);
+
+            itileA++; // A is MK
+        }
+
         cb_reserve_back(cb_id_intermed2, 1);
         for (uint32_t tile_row_id = 0; tile_row_id < num_rows_in_one_tile; tile_row_id++) {
             for (uint32_t kt = 0; kt < Kt; kt++) {
-                // Read A's tile at (mt, kt)
-                if (tile_row_id == 0) {
-                    cb_reserve_back(cb_id_in0, onetile);
-                    uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-                    noc_async_read_tile(itileA, s0, l1_write_addr_in0);
-                    noc_async_read_barrier();
-                    cb_push_back(cb_id_in0, onetile);
-                }
-
                 // Read B's tile at (kt, nt)
                 cb_reserve_back(cb_id_in1, onetile);
                 uint32_t l1_write_addr_in1 = get_write_ptr(cb_id_in1);
@@ -87,7 +89,6 @@ void kernel_main() {
                 noc_async_read_barrier();
                 cb_push_back(cb_id_in1, onetile);
 
-                itileA++; // A is MK
                 itileB += Nt; // B is KN, so to get k++ we stride by Nt
             } // Kt loop
 
