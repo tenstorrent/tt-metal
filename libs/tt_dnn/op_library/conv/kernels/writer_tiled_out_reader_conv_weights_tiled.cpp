@@ -39,6 +39,8 @@ void kernel_main() {
     // This writer is for output tensor in tile format
     uint32_t i = 0;
     uint32_t out_addr = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i); i+=1;
+
     uint32_t out_next_tile_stride_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t out_next_tile_stride_w = get_arg_val<uint32_t>(i); i+=1;
     uint32_t out_next_subblock_stride_h = get_arg_val<uint32_t>(i); i+=1;
@@ -56,7 +58,6 @@ void kernel_main() {
     uint32_t out_height_num_tiles = get_arg_val<uint32_t>(i); i+=1;
     uint32_t out_width_num_tiles = get_arg_val<uint32_t>(i); i+=1;
 
-    uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i); i+=1;
     uint32_t num_blocks_weight_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_block_num_tiles = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_block_height_ntiles = get_arg_val<uint32_t>(i); i+=1;

@@ -75,6 +75,8 @@ inline void write_tiles_in_output_block(uint32_t cb_id_out0,
 void kernel_main() {
     uint32_t i = 0;
     uint32_t dst_addr = get_arg_val<uint32_t>(i); i+=1;          // out_dram_addr
+    uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i); i+=1;
+
     uint32_t num_rows_block = get_arg_val<uint32_t>(i); i+=1;
     uint32_t block_row_size = get_arg_val<uint32_t>(i); i+=1;     // in0_block_w * TILE_WIDTH * dtype_nbytes
     uint32_t batch = get_arg_val<uint32_t>(i); i+=1;
@@ -84,7 +86,6 @@ void kernel_main() {
     uint32_t last_block_row_size_unpadded = get_arg_val<uint32_t>(i); i+=1; // unpadded last block width
     uint32_t num_output_rows_unpadded = get_arg_val<uint32_t>(i); i+=1;
 
-    uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i); i+=1;
     uint32_t num_blocks_weight_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_block_num_tiles = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_block_height_ntiles = get_arg_val<uint32_t>(i); i+=1;

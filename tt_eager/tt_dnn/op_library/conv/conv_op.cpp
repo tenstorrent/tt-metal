@@ -436,6 +436,8 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         writer_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0), out0_cb, weight_cb, (uint32_t) log2(out_row_size_bytes)};
         writer_rt_args = {
             out_dram_addr,
+            weight_dram_addr,
+
             act_block_h_datums,
             out_block_row_size_bytes,
             1,
@@ -445,7 +447,6 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
             last_block_row_size_bytes,
             act_matrix_height_unpadded,
 
-            weight_dram_addr,
             num_blocks_act_w, // = number of blocks of weight in height dim
             weight_block_num_tiles,
             weight_block_h_ntiles,
@@ -464,6 +465,8 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         writer_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0), out0_cb, weight_cb};
         writer_rt_args = {
             out_dram_addr,
+            weight_dram_addr,
+
             output_width_num_tiles, // out_next_tile_stride_h
             1, // out_next_tile_stride_w
             out_subblock_h_ntiles * output_width_num_tiles, // out_next_subblock_stride_h
@@ -481,7 +484,6 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
             output_height_num_tiles, // out_height_num_tiles without block shape padding
             output_width_num_tiles, // out_width_num_tiles withoug block shape padding
 
-            weight_dram_addr,
             num_blocks_act_w, // = number of blocks of weight in height dim
             weight_block_num_tiles,
             weight_block_h_ntiles,
@@ -547,8 +549,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
 
     auto override_runtime_args_callback = [
         reader_kernel_id=reader_id,
-        writer_kernel_id=writer_id,
-        untilize_out=untilize_out
+        writer_kernel_id=writer_id
     ]
     (
         const Program &program,
@@ -572,11 +573,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         {
             auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = dst_dram_buffer->address();
-            if (untilize_out) {
-                runtime_args[9] = src_dram_buffer_b->address();
-            } else {
-                runtime_args[17] = src_dram_buffer_b->address();
-            }
+            runtime_args[1] = src_dram_buffer_b->address();
             SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
         }
     };
