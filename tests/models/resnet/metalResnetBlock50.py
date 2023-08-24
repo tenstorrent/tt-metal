@@ -26,14 +26,14 @@ from tt_lib.fallback_ops import fallback_ops
 def _nearest_y(x, y):
     return math.ceil(x / y) * y
 
-def format_tensor(x, target_layout, device, pad_value=0.0):
+def format_tensor(x, target_layout, device, output_mem_config, pad_value=0.0):
     if x.layout() == target_layout:
         return x
     if x.layout() == tt_lib.tensor.Layout.ROW_MAJOR and target_layout == tt_lib.tensor.Layout.TILE:
         x_padded_shape = tt_lib.tensor.pad_to_tile_shape(x.shape(), False, False, True, True)
-        return tt_lib.tensor.format_input_tensor(x, device, x_padded_shape, pad_value, target_layout)
+        return tt_lib.tensor.format_input_tensor(x, device, x_padded_shape, pad_value, target_layout, output_mem_config)
     elif x.layout() == tt_lib.tensor.Layout.TILE and target_layout == tt_lib.tensor.Layout.ROW_MAJOR:
-        return tt_lib.tensor.format_output_tensor(x, x.shape_without_padding(), device, target_layout)
+        return tt_lib.tensor.format_output_tensor(x, x.shape_without_padding(), device, target_layout, output_mem_config)
     else:
         assert False
 
@@ -196,12 +196,12 @@ class Bottleneck(nn.Module):
             self.conv3 = fallback_ops.Conv2d(conv3_weight, conv3_bias, width, planes * self.expansion, kernel_size=1, stride=1, padding=0)
         self.conv3_output_shape = compute_conv_output_shape(self.conv3_params, self.conv2_output_shape)
 
-    def run_forward(self, x: torch.Tensor, x_actual_shape=[], output_in_dram=False):
+    def run_forward(self, x: torch.Tensor, x_actual_shape=[]):
         identity = x
         # conv1 is 1x1 conv
         out = self.conv1(x)
         out = self.relu(out, self.memory_config)
-        out = format_tensor(out, tt_lib.tensor.Layout.ROW_MAJOR, self.device)
+        out = format_tensor(out, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
         out = out.reshape(x_actual_shape[0], x_actual_shape[1], x_actual_shape[2], out.shape()[3])
         saved_shape = out.shape()
         out = self.conv2(out)
@@ -212,7 +212,7 @@ class Bottleneck(nn.Module):
 
         if self.downsample_conv_on_tt is not None:
             if(self.downsample_params[2] != 1 or self.downsample_params[4] != 1 or self.downsample_params[6] != 0):
-                x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device)
+                x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
                 x = x.reshape(x_actual_shape[0], x_actual_shape[1], x_actual_shape[2], x_actual_shape[3])
             identity = self.downsample_conv_on_tt(x)
             assert self.norm_layer_after_downsample_conv_on_tt is not None
@@ -221,10 +221,7 @@ class Bottleneck(nn.Module):
         elif self.downsample is not None:
             identity = self.downsample(x)
         out = tt_lib.tensor.add_without_autoformat(out, identity, output_mem_config=self.memory_config)
-        if output_in_dram:
-            out = self.relu(out)
-        else:
-            out = self.relu(out, self.memory_config)
+        out = self.relu(out, self.memory_config)
         out_actual_shape = [conv_2_output_shape[0], conv_2_output_shape[1], conv_2_output_shape[2], out.shape()[3]]
         return out, out_actual_shape
 
@@ -298,7 +295,7 @@ class ResNet(nn.Module):
         self.conv1_output_shape = compute_conv_output_shape(self.conv1_params, [1, self.conv_input_face_shape_hw[0], self.conv_input_face_shape_hw[1], self.inplanes])
         self.relu = tt_lib.tensor.relu_without_autoformat
         # self.maxpool = fallback_ops.MaxPool2d(kernel_size=3, stride=2, padding=1, channels_last=True, reshape_2d=True)
-        self.maxpool = TtMaxPool(self.device, kernel_size=3, stride=2, padding=1, channels_last=True, reshape_2d=True)
+        self.maxpool = TtMaxPool(self.device, kernel_size=3, stride=2, padding=1, output_mem_config=self.memory_config, channels_last=True, reshape_2d=True)
         self.maxpool_output_shape = compute_max_pool_shape(3, 2, 1, self.conv1_output_shape)
         self.layer1, self.layer1_output_shape = self._make_layer(block, 64, layers[0], name="layer1", state_dict=state_dict, layer_input_shape=self.maxpool_output_shape)
         self.layer2, self.layer2_output_shape = self._make_layer(block, 128, layers[1], stride=2, dilate=replace_stride_with_dilation[0], name="layer2", state_dict=state_dict, layer_input_shape=self.layer1_output_shape)
@@ -442,10 +439,10 @@ class ResNet(nn.Module):
         x = self.conv1(x)
         #x = x.reshape(1, 1, x.shape()[0]*x.shape()[1]*x.shape()[2], x.shape()[3]);
         x = self.relu(x, self.memory_config)
-        x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device)
+        x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
         x = x.reshape(saved_shape[0], saved_shape[1], saved_shape[2], saved_shape[3])
         x = self.maxpool(x)
-        x = format_tensor(x, tt_lib.tensor.Layout.TILE, self.device)
+        x = format_tensor(x, tt_lib.tensor.Layout.TILE, self.device, self.memory_config)
         saved_shape = compute_max_pool_shape(3, 2, 1, saved_shape)
 
         for layer in self.layer1:
@@ -455,13 +452,9 @@ class ResNet(nn.Module):
         for layer in self.layer3:
             x, saved_shape = layer.run_forward(x, saved_shape)
         for i,layer in enumerate(self.layer4):
-            if i == len(self.layer4) - 1:
-                out_in_dram = True
-            else:
-                out_in_dram = False
-            x, saved_shape = layer.run_forward(x, saved_shape, out_in_dram)
-        x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device)
-        x = format_tensor(x, tt_lib.tensor.Layout.TILE, self.device)
+            x, saved_shape = layer.run_forward(x, saved_shape)
+        x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
+        x = format_tensor(x, tt_lib.tensor.Layout.TILE, self.device, self.memory_config)
         x = self.avgpool(x)
         x = self.fc(x)
         desired_shape = [x.shape()[0], x.shape()[1], 1, 1000]
