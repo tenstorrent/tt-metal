@@ -84,6 +84,7 @@ class Device {
     void initialize_cluster();
     void initialize_allocator(const std::vector<uint32_t>& l1_bank_remap = {});
     void initialize_harvesting_information();
+    void clear_l1_state();
     // Puts device into reset
     bool close();
     friend bool CloseDevice(Device *device);
@@ -91,7 +92,7 @@ class Device {
     // TODO: Uplift usage of friends. Buffer and Program just need access to allocator
     friend class Buffer;
     friend class Program;
-    
+
 #ifdef TT_METAL_VERSIM_DISABLED
     static constexpr TargetDevice target_type_ = TargetDevice::Silicon;
 #else

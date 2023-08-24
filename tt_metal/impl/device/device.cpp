@@ -1,6 +1,7 @@
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 
 #include "common/utils.hpp"
 #include "llrt/llrt.hpp"
@@ -153,11 +154,25 @@ void Device::initialize_harvesting_information() {
     this->harvesting_initialized_ = true;
 }
 
+void Device::clear_l1_state() {
+    CoreCoord logical_grid_size = this->logical_grid_size();
+    TT_ASSERT(this->l1_size() % sizeof(uint32_t) == 0);
+    std::vector<uint32_t> zero_vec(this->l1_size() / sizeof(uint32_t), 0);
+    constexpr uint32_t start_address = 0;
+    for (uint32_t x = 0; x < logical_grid_size.x; x++) {
+        for (uint32_t y = 0; y < logical_grid_size.y; y++) {
+            CoreCoord logical_core(x, y);
+            detail::WriteToDeviceL1(this, logical_core, start_address, zero_vec);
+        }
+    }
+}
+
 bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
     ZoneScoped;
     this->initialize_cluster();
     this->initialize_harvesting_information();
     this->initialize_allocator(l1_bank_remap);
+    this->clear_l1_state();
     this->initialized_ = true;
     return true;
 }
