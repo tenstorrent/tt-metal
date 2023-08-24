@@ -170,9 +170,9 @@ namespace tt::tt_metal{
             }
         }
 
-        inline void GenerateBankToNocCoordHeaders(  Device *device,
-                                             build_kernel_for_riscv_options_t *build_options,
-                                             const std::string &op_path_suffix)
+        inline void GenerateDeviceHeaders(Device *device,
+                                          build_kernel_for_riscv_options_t *build_options,
+                                          const std::string &op_path_suffix)
         {
             // Basic Allocator generates number of banks which may not be power of 2, so we could just pad and alias for now
             const size_t num_dram_banks = device->num_banks(BufferType::DRAM);
@@ -205,6 +205,45 @@ namespace tt::tt_metal{
                 l1_noc_coord_per_bank,
                 l1_offset_per_bank
             );
+
+            vector<uint32_t> harvested;
+            CoreCoord worker_start(UINT_MAX, UINT_MAX);
+            CoreCoord worker_end(0, 0);
+
+            tt_SocDescriptor& soc_d = device->cluster()->get_soc_desc(device->pcie_slot());
+            CoreCoord grid_size = device->logical_grid_size();
+            for (uint32_t y = 0; y < grid_size.y; y++) {
+                for (uint32_t x = 0; x < grid_size.x; x++) {
+                    CoreCoord logical_core(x, y);
+                    CoreCoord phys_core = device->worker_core_from_logical_core(logical_core);
+
+                    // Get range of physical cores
+                    if (phys_core.x < worker_start.x) worker_start.x = phys_core.x;
+                    if (phys_core.y < worker_start.y) worker_start.y = phys_core.y;
+                    if (phys_core.x > worker_end.x) worker_end.x = phys_core.x;
+                    if (phys_core.y > worker_end.y) worker_end.y = phys_core.y;
+                }
+            }
+
+            // Note: assumes we harvest whole rows
+            for (uint32_t y = worker_start.y; y <= worker_end.y; y++) {
+                if (soc_d.is_harvested_core({1, y})) {
+                    harvested.push_back(y);
+                }
+            }
+
+            // XXXX TODO(PGK): get addr range values from device descriptor...
+            generate_noc_addr_ranges_header (
+                build_options,
+                op_path_suffix,
+                0, (uint64_t)4 * 1024 * 1024 * 1024,
+                0, 1 * 1024 * 1024 * 1024,
+                soc_d.get_pcie_cores(),
+                soc_d.get_dram_cores(),
+                soc_d.get_ethernet_cores(),
+                worker_start,
+                worker_end,
+                harvested);
         }
 
         inline DataMovementConfig GetDataMovementConfig(const Program &program, const std::string &file_name, const CoreRangeSet &core_ranges, const std::optional<DataMovementConfig> &dm_config) {

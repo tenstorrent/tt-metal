@@ -154,7 +154,7 @@ void ComputeKernel::set_build_options(build_kernel_for_riscv_options_t &build_op
 
 void DataMovementKernel::generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const {
     std::string arch_name = tt::get_string_lowercase(device->arch());
-    detail::GenerateBankToNocCoordHeaders(device, build_options, op_path_suffix);
+    detail::GenerateDeviceHeaders(device, build_options, op_path_suffix);
     switch (this->config_.processor) {
         case DataMovementProcessor::RISCV_0: {
             generate_binary_for_brisc(build_options, op_path_suffix, arch_name, this->config_.noc, this->compile_time_args_);

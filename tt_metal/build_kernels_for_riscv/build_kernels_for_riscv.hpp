@@ -96,6 +96,20 @@ void generate_bank_to_noc_coord_descriptor(
     std::vector<i32>& l1_bank_offset_map
 );
 
+void generate_noc_addr_ranges_header(
+    build_kernel_for_riscv_options_t* build_kernel_for_riscv_options,
+    string out_dir_path,
+    uint64_t pcie_addr_base,
+    uint64_t pcie_addr_size,
+    uint64_t dram_addr_base,
+    uint64_t dram_addr_size,
+    const std::vector<CoreCoord>& pcie_cores,
+    const std::vector<CoreCoord>& dram_cores,
+    const std::vector<CoreCoord>& ethernet_cores,
+    CoreCoord worker_start,
+    CoreCoord worker_end,
+    const std::vector<uint32_t>& harvested);
+
 void generate_descriptors(
     tt::build_kernel_for_riscv_options_t* opts, const std::string &op_dir);
 

@@ -53,7 +53,7 @@ namespace detail {
         std::string arch_name = tt::get_string_lowercase(device->arch());
 
         generate_binaries_params_t default_params;
-        detail::GenerateBankToNocCoordHeaders(device, &blank_build_options, blank_build_options.name);
+        detail::GenerateDeviceHeaders(device, &blank_build_options, blank_build_options.name);
         generate_binaries_all_riscs(&blank_build_options, blank_build_options.name, arch_name, default_params);
 
         compiled = true;
@@ -140,7 +140,7 @@ bool InitializeDevice(Device *device) {
             const std::lock_guard<std::mutex> lock(build_mutex);
             if (!global_init_complete) {
                 build_kernel_for_riscv_options_t build_options(device->pcie_slot());
-                detail::GenerateBankToNocCoordHeaders(device, &build_options, "");
+                detail::GenerateDeviceHeaders(device, &build_options, "");
                 std::string arch_name = tt::get_string_lowercase(device->arch());
                 generate_binaries_params_t default_params;
                 generate_binaries_all_riscs(&build_options,
