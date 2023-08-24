@@ -179,10 +179,12 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
 
 bool Device::close() {
     llrt::assert_reset_for_all_chips(cluster_);
-    cluster_->close_device();
-    cluster_ = nullptr;
+    this->clear_l1_state();
+    this->cluster_->close_device();
     allocator::clear(*this->allocator_);
     this->initialized_ = false;
+    delete this->cluster_;
+    this->cluster_ = nullptr;
     return true;
 }
 
