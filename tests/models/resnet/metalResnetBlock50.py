@@ -295,7 +295,7 @@ class ResNet(nn.Module):
         self.conv1_output_shape = compute_conv_output_shape(self.conv1_params, [1, self.conv_input_face_shape_hw[0], self.conv_input_face_shape_hw[1], self.inplanes])
         self.relu = tt_lib.tensor.relu_without_autoformat
         # self.maxpool = fallback_ops.MaxPool2d(kernel_size=3, stride=2, padding=1, channels_last=True, reshape_2d=True)
-        self.maxpool = TtMaxPool(self.device, kernel_size=3, stride=2, padding=1, output_mem_config=self.memory_config, channels_last=True, reshape_2d=True)
+        self.maxpool = TtMaxPool(self.device, kernel_size=3, stride=2, padding=1, output_mem_config=self.memory_config, nblocks=8, channels_last=True, reshape_2d=True)
         self.maxpool_output_shape = compute_max_pool_shape(3, 2, 1, self.conv1_output_shape)
         self.layer1, self.layer1_output_shape = self._make_layer(block, 64, layers[0], name="layer1", state_dict=state_dict, layer_input_shape=self.maxpool_output_shape)
         self.layer2, self.layer2_output_shape = self._make_layer(block, 128, layers[1], stride=2, dilate=replace_stride_with_dilation[0], name="layer2", state_dict=state_dict, layer_input_shape=self.layer1_output_shape)
