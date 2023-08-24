@@ -2782,7 +2782,9 @@ void DeviceModule(py::module &m_device) {
                     return Device(arch, pcie_slot);
                 }
             ), "Create device."
-        );
+        )
+        .def("pcie_slot", &Device::pcie_slot, "Device's pcie slot")
+        .def("arch", &Device::arch, "Device's arch");
 
     m_device.def("CreateDevice", &CreateDevice, R"doc(
         Creates an instance of TT device.
