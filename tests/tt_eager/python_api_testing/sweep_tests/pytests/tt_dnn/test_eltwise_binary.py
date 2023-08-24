@@ -37,11 +37,10 @@ if is_wormhole_b0():
     shapes,
 )
 @pytest.mark.parametrize("output_mem_config", output_mem_cfgs)
-@pytest.mark.parametrize("pcie_slot", [0])
 class TestEltwiseBinary:
     @pytest.mark.parametrize("fn_kind", ["add", "sub", "mul", "squared_difference"])
     def test_run_eltwise_binary_ops(
-        self, input_shapes, fn_kind, output_mem_config, pcie_slot, function_level_defaults
+        self, input_shapes, fn_kind, output_mem_config, device, function_level_defaults
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
@@ -56,7 +55,7 @@ class TestEltwiseBinary:
             input_shapes,
             datagen_func,
             comparison_func,
-            pcie_slot,
+            device,
             test_args,
         )
 
@@ -64,7 +63,7 @@ class TestEltwiseBinary:
         "cmp_kind", ["lt", "gt", "lte", "gte", "ne", "eq"]
     )
     def test_run_eltwise_binary_cmp_ops(
-        self, input_shapes, output_mem_config, cmp_kind, pcie_slot, function_level_defaults
+        self, input_shapes, output_mem_config, cmp_kind, device, function_level_defaults
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
@@ -79,6 +78,6 @@ class TestEltwiseBinary:
             input_shapes,
             datagen_func,
             comparison_func,
-            pcie_slot,
+            device,
             test_args,
         )

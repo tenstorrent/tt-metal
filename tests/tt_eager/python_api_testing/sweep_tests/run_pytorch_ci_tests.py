@@ -30,7 +30,7 @@ def run_single_pytorch_test(
     input_shapes,
     datagen_funcs,
     comparison_func,
-    pcie_slot,
+    device,
     test_args={},
     env="",
     plot_func=None,
@@ -65,15 +65,16 @@ def run_single_pytorch_test(
     if not test_args:
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
     ################# RUN TEST #################
-    logger.info(f"Running with shape: {input_shapes} on device: {pcie_slot}")
+    logger.info(f"Running with shape: {input_shapes} on device: {device.pcie_slot()}")
     test_pass, test_output = run_tt_lib_test(
         op_map[test_name]["tt_lib_op"],
         op_map[test_name]["pytorch_op"],
         input_shapes,
         datagen_funcs,
         comparison_func,
-        pcie_slot,
+        device.pcie_slot(),
         test_args,
+        device=device,
         plot_func = plot_func,
     )
     logger.debug(f"Test pass/fail: {test_pass} with {test_output}")
@@ -87,31 +88,3 @@ def run_single_pytorch_test(
 
     assert test_pass, f"{test_name} test failed with input shape {input_shapes}."
     logger.info(f"{test_name} test passed with input shape {input_shapes}.")
-
-
-# Can also run with: pytest tests/python_api_testing/sweep_tests/run_pytorch_ci_tests.py -svvv
-# def test_datacopy_test():
-#    datagen_func = generation_funcs.gen_func_with_cast(
-#        partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16
-#    )
-#    comparison_func = partial(comparison_funcs.comp_equal)
-#    run_single_pytorch_test(
-#        "datacopy",
-#        [[1, 1, 32, 32]],
-#        [datagen_func],
-#        comparison_func,
-#        0,
-#    )
-
-if __name__ == "__main__":
-    datagen_func = generation_funcs.gen_func_with_cast(
-        partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16
-    )
-    comparison_func = partial(comparison_funcs.comp_equal)
-    run_single_pytorch_test(
-        "datacopy",
-        [[1, 1, 32, 32]],
-        [datagen_func],
-        comparison_func,
-        0,
-    )

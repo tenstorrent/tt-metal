@@ -36,7 +36,6 @@ if is_wormhole_b0():
     "input_shapes",
     shapes
 )
-@pytest.mark.parametrize("pcie_slot", [0])
 @pytest.mark.parametrize(
     "output_mem_config",
     output_mem_configs
@@ -44,7 +43,7 @@ if is_wormhole_b0():
 def test_run_move_op(
     input_shapes,
     output_mem_config,
-    pcie_slot,
+    device,
     function_level_defaults,
 ):
     datagen_func = [
@@ -62,6 +61,6 @@ def test_run_move_op(
         input_shapes,
         datagen_func,
         comparison_func,
-        pcie_slot,
+        device,
         test_args,
     )

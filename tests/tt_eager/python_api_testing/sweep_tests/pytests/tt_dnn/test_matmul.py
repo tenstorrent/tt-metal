@@ -56,11 +56,10 @@ if is_wormhole_b0():
     "input_shapes",
     shapes_mm
 )
-@pytest.mark.parametrize("pcie_slot", (0,))
 @pytest.mark.parametrize(
     "dtype", (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B)
 )
-def test_run_matmul_test(input_shapes, pcie_slot, dtype, function_level_defaults):
+def test_run_matmul_test(input_shapes, device, dtype, function_level_defaults):
     datagen_func = [
         generation_funcs.gen_func_with_cast(
             partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32
@@ -72,7 +71,7 @@ def test_run_matmul_test(input_shapes, pcie_slot, dtype, function_level_defaults
         input_shapes,
         datagen_func,
         comparison_func,
-        pcie_slot,
+        device,
         {
             "dtype": [dtype, dtype],
             "layout": [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
@@ -113,11 +112,10 @@ if is_wormhole_b0():
     "input_shapes,",
     shapes_bmm
 )
-@pytest.mark.parametrize("pcie_slot", (0,))
 @pytest.mark.parametrize(
     "dtype", (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B)
 )
-def test_run_bmm_test(input_shapes, pcie_slot, dtype, function_level_defaults):
+def test_run_bmm_test(input_shapes, device, dtype, function_level_defaults):
     datagen_func = [
         generation_funcs.gen_func_with_cast(
             partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32
@@ -129,7 +127,7 @@ def test_run_bmm_test(input_shapes, pcie_slot, dtype, function_level_defaults):
         input_shapes,
         datagen_func,
         comparison_func,
-        pcie_slot,
+        device,
         {
             "dtype": [dtype, dtype],
             "layout": [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],

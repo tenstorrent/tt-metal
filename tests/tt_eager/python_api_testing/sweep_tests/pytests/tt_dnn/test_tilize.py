@@ -43,8 +43,7 @@ if is_wormhole_b0():
         },
     ),
 )
-@pytest.mark.parametrize("pcie_slot", ((0,)))
-def test_tilize_test(input_shapes, tilize_args, pcie_slot, function_level_defaults):
+def test_tilize_test(input_shapes, tilize_args, device, function_level_defaults):
     datagen_func = [
         generation_funcs.gen_func_with_cast(
             partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16
@@ -52,5 +51,5 @@ def test_tilize_test(input_shapes, tilize_args, pcie_slot, function_level_defaul
     ]
     comparison_func = comparison_funcs.comp_equal
     run_single_pytorch_test(
-        "tilize", input_shapes, datagen_func, comparison_func, pcie_slot, tilize_args
+        "tilize", input_shapes, datagen_func, comparison_func, device, tilize_args
     )

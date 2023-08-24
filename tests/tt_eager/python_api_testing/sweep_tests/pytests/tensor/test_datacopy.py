@@ -23,7 +23,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import r
 
 
 @pytest.mark.parametrize("input_shapes", ([[1, 1, 32, 32]], [[1, 1, 256, 256]]))
-@pytest.mark.parametrize("pcie_slot", (0,))
 @pytest.mark.parametrize(
     "dtype", (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B)
 )
@@ -37,7 +36,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import r
     ),
 )
 def test_run_datacopy_test(
-    input_shapes, pcie_slot, dtype, memory_config, function_level_defaults
+    input_shapes, device, dtype, memory_config, function_level_defaults
 ):
     datagen_func = [
         generation_funcs.gen_func_with_cast(
@@ -55,7 +54,7 @@ def test_run_datacopy_test(
         input_shapes,
         datagen_func,
         comparison_func,
-        pcie_slot,
+        device,
         {
             "dtype": [dtype],
             "layout": [ttl.tensor.Layout.TILE],

@@ -41,9 +41,8 @@ if is_wormhole_b0():
         },
     ),
 )
-@pytest.mark.parametrize("pcie_slot", ((0,)))
 def test_tilize_with_zero_padding_test(
-    input_shapes, tilize_with_zero_padding_args, pcie_slot, function_level_defaults
+    input_shapes, tilize_with_zero_padding_args, device, function_level_defaults
 ):
     datagen_func = [
         generation_funcs.gen_func_with_cast(
@@ -56,6 +55,6 @@ def test_tilize_with_zero_padding_test(
         input_shapes,
         datagen_func,
         comparison_func,
-        pcie_slot,
+        device,
         tilize_with_zero_padding_args,
     )

@@ -22,7 +22,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import r
 import tt_lib as ttl
 
 params = [
-    pytest.param([[4, 4, 32, 32]], reshape_args, 0)
+    pytest.param([[4, 4, 32, 32]], reshape_args)
     for reshape_args in generation_funcs.gen_reshape_args([[4, 4, 32, 32]], max_out_shapes=64)
 ]
 params += [
@@ -35,7 +35,6 @@ params += [
             "output_mem_config": ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
             "reshape_dims": [-1, 2, 32, 32],
         },
-        0,
     ),
     pytest.param(
         [[4, 4, 32, 32]],
@@ -46,7 +45,6 @@ params += [
             "output_mem_config": ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
             "reshape_dims": [-1, 2, 32, 64],
         },
-        0,
     ),
     pytest.param(
         [[4, 4, 32, 32]],
@@ -57,7 +55,6 @@ params += [
             "output_mem_config": ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
             "reshape_dims": [2, -1, 32, 32],
         },
-        0,
     ),
     pytest.param(
         [[4, 4, 32, 32]],
@@ -68,7 +65,6 @@ params += [
             "output_mem_config": ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
             "reshape_dims": [2, -1, 32, 64],
         },
-        0,
     ),
     pytest.param(
         [[4, 4, 32, 32]],
@@ -79,7 +75,6 @@ params += [
             "output_mem_config": ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
             "reshape_dims": [4, 2, -1, 32],
         },
-        0,
     ),
     pytest.param(
         [[4, 4, 32, 32]],
@@ -90,7 +85,6 @@ params += [
             "output_mem_config": ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
             "reshape_dims": [4, 2, -1, 64],
         },
-        0,
     ),
     pytest.param(
         [[4, 4, 32, 32]],
@@ -101,7 +95,6 @@ params += [
             "output_mem_config": ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
             "reshape_dims": [4, 4, 32, -1],
         },
-        0,
     ),
     pytest.param(
         [[4, 4, 32, 32]],
@@ -112,14 +105,13 @@ params += [
             "output_mem_config": ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
             "reshape_dims": [4, 2, 32, -1],
         },
-        0,
     ),
 ]
 
 
-@pytest.mark.parametrize("input_shapes, reshape_args, pcie_slot", params)
+@pytest.mark.parametrize("input_shapes, reshape_args", params)
 def test_run_reshape_test(
-    input_shapes, reshape_args, pcie_slot, function_level_defaults
+    input_shapes, reshape_args, device, function_level_defaults
 ):
     datagen_func = [
         generation_funcs.gen_func_with_cast(
@@ -132,6 +124,6 @@ def test_run_reshape_test(
         input_shapes,
         datagen_func,
         comparison_func,
-        pcie_slot,
+        device,
         reshape_args,
     )

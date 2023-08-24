@@ -23,19 +23,19 @@ from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, gene
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
 from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0
 
-shapes_n_slots = (
-    ([[1, 1, 32, 32]], 0),  # Single core
-    ([[1, 1, 320, 384]], 0),  # Multi core
-    ([[1, 3, 320, 384]], 0),  # Multi core
+shapes = (
+    [[1, 1, 32, 32]],  # Single core
+    [[1, 1, 320, 384]],  # Multi core
+    [[1, 3, 320, 384]],  # Multi core
 )
 if is_wormhole_b0():
-    shapes_n_slots = (shapes_n_slots[0],)
+    shapes = (shapes[0],)
 
 @pytest.mark.parametrize(
-    "input_shapes, pcie_slot",
-    shapes_n_slots
+    "input_shapes",
+    shapes
 )
-def test_run_eltwise_where_test(input_shapes, pcie_slot, function_level_defaults):
+def test_run_eltwise_where_test(input_shapes, device, function_level_defaults):
     datagen_func = [
         generation_funcs.gen_func_with_cast(
             partial(generation_funcs.gen_randint, low=-100, high=+100), torch.float32
@@ -53,5 +53,5 @@ def test_run_eltwise_where_test(input_shapes, pcie_slot, function_level_defaults
         [input_shapes[0], input_shapes[0], input_shapes[0]],
         datagen_func,
         comparison_func,
-        pcie_slot,
+        device,
     )

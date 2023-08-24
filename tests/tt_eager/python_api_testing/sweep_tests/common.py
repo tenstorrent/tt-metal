@@ -29,7 +29,7 @@ def get_test_fieldnames(test_args=[]):
         "pass/fail",
     ]
 
-
+# TODO: Deprecate pcie_slot arg after run_pytorch_test is uplifted to pytest and device fixture
 def run_tt_lib_test(
     tt_lib_op,
     pytorch_op,
@@ -38,7 +38,8 @@ def run_tt_lib_test(
     output_comparison_func,
     pcie_slot,
     test_args,
-    plot_func = None
+    device=None,
+    plot_func=None,
 ):
     logger.info(f"Running with args: {test_args}")
 
@@ -48,7 +49,9 @@ def run_tt_lib_test(
         tensor_input = data_gen_func(input_shape)
         tensor_inputs.append(tensor_input)
 
-    tt_lib_out = tt_lib_op(*tensor_inputs, pcie_slot=pcie_slot, **test_args)
+    tt_lib_out = tt_lib_op(
+        *tensor_inputs, pcie_slot=pcie_slot, device=device, **test_args
+    )
     pytorch_out = pytorch_op(*tensor_inputs, **test_args)
 
     result, output = output_comparison_func(pytorch_out, tt_lib_out)

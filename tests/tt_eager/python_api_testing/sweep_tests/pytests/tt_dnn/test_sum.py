@@ -31,12 +31,11 @@ import tt_lib as ttl
         [[8, 6, 320, 384]],  # Multi core
     ],
 )
-@pytest.mark.parametrize("pcie_slot", [0])
 class TestSum:
     @skip_for_wormhole_b0
     @pytest.mark.parametrize("fn_kind", ["sum-3", "sum-2", "sum-1", "sum-0"])
     def test_run_sum_ops(
-        self, input_shapes, fn_kind, pcie_slot, function_level_defaults
+        self, input_shapes, fn_kind, device, function_level_defaults
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
@@ -51,7 +50,7 @@ class TestSum:
             input_shapes,
             datagen_func,
             comparison_func,
-            pcie_slot,
+            device,
             test_args,
         )
 
@@ -62,12 +61,11 @@ class TestSum:
         [[1, 1, 32, 32]],  # Single core
     ],
 )
-@pytest.mark.parametrize("pcie_slot", [0])
 class TestSimpleSum:
     @skip_for_grayskull
     @pytest.mark.parametrize("fn_kind", ["sum-3",])
     def test_run_sum_ops(
-        self, input_shapes, fn_kind, pcie_slot, function_level_defaults
+        self, input_shapes, fn_kind, device, function_level_defaults
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
@@ -82,6 +80,6 @@ class TestSimpleSum:
             input_shapes,
             datagen_func,
             comparison_func,
-            pcie_slot,
+            device,
             test_args,
         )

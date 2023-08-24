@@ -30,7 +30,7 @@ random.seed(213919)
 torch.manual_seed(213919)
 
 params = [
-    pytest.param([[5, 5, 50, 50]], unpad_args, 0)
+    pytest.param([[5, 5, 50, 50]], unpad_args)
     for unpad_args in generation_funcs.gen_unpad_args(
         [[5, 5, 50, 50]],
         dtypes=[[tt_lib.tensor.DataType.BFLOAT16]],
@@ -39,7 +39,7 @@ params = [
 ]
 
 params += [
-    pytest.param([[5, 5, 64, 96]], unpad_args, 0)
+    pytest.param([[5, 5, 64, 96]], unpad_args)
     for unpad_args in generation_funcs.gen_unpad_args(
         [[5, 5, 64, 96]],
         dtypes=[[tt_lib.tensor.DataType.BFLOAT16]],
@@ -48,8 +48,8 @@ params += [
 ]
 
 
-@pytest.mark.parametrize("input_shapes, unpad_args, pcie_slot", params)
-def test_run_unpad_test(input_shapes, unpad_args, pcie_slot):
+@pytest.mark.parametrize("input_shapes, unpad_args", params)
+def test_run_unpad_test(input_shapes, unpad_args, device):
     if is_wormhole_b0():
         if input_shapes == [[5,5,64,96]]:
             pytest.skip("skip this shape for Wormhole B0")
@@ -64,6 +64,6 @@ def test_run_unpad_test(input_shapes, unpad_args, pcie_slot):
         input_shapes,
         datagen_func,
         comparison_func,
-        pcie_slot,
+        device,
         unpad_args,
     )

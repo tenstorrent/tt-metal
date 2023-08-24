@@ -22,13 +22,13 @@ from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import r
 import tt_lib as ttl
 
 params = [
-    pytest.param([[5, 5, 32, 32]], untilize_with_unpadding_args, 0)
+    pytest.param([[5, 5, 32, 32]], untilize_with_unpadding_args)
     for untilize_with_unpadding_args in generation_funcs.gen_untilize_with_unpadding_args(
         [[5, 5, 32, 32]]
     )
 ]
 params += [
-    pytest.param([[5, 5, 64, 96]], untilize_with_unpadding_args, 0)
+    pytest.param([[5, 5, 64, 96]], untilize_with_unpadding_args)
     for untilize_with_unpadding_args in generation_funcs.gen_untilize_with_unpadding_args(
         [[5, 5, 64, 96]]
     )
@@ -45,16 +45,15 @@ params += [
             "output_tensor_start": [0, 0, 0, 0],
             "output_tensor_end": [0, 0, 119, 7299],
         },
-        0,
     )
 ]
 
 
 @pytest.mark.parametrize(
-    "input_shapes, untilize_with_unpadding_args, pcie_slot", params
+    "input_shapes, untilize_with_unpadding_args", params
 )
 def test_run_untilize_with_unpadding_test(
-    input_shapes, untilize_with_unpadding_args, pcie_slot
+    input_shapes, untilize_with_unpadding_args, device
 ):
     datagen_func = [
         generation_funcs.gen_func_with_cast(
@@ -67,6 +66,6 @@ def test_run_untilize_with_unpadding_test(
         input_shapes,
         datagen_func,
         comparison_func,
-        pcie_slot,
+        device,
         untilize_with_unpadding_args,
     )

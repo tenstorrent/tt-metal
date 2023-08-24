@@ -22,13 +22,13 @@ from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import r
 import tt_lib as ttl
 
 params = [
-    pytest.param([[5, 5, 50, 50]], tilize_with_val_padding_args, 0)
+    pytest.param([[5, 5, 50, 50]], tilize_with_val_padding_args)
     for tilize_with_val_padding_args in generation_funcs.gen_tilize_with_val_padding_args(
         [[5, 5, 50, 50]]
     )
 ]
 params += [
-    pytest.param([[5, 5, 64, 96]], tilize_with_val_padding_args, 0)
+    pytest.param([[5, 5, 64, 96]], tilize_with_val_padding_args)
     for tilize_with_val_padding_args in generation_funcs.gen_tilize_with_val_padding_args(
         [[5, 5, 64, 96]]
     )
@@ -45,16 +45,15 @@ params += [
             "input_tensor_start": [0, 0, 0, 0],
             "pad_value": 10,
         },
-        0,
     )
 ]
 
 
 @pytest.mark.parametrize(
-    "input_shapes, tilize_with_val_padding_args, pcie_slot", params
+    "input_shapes, tilize_with_val_padding_args", params
 )
 def test_run_tilize_with_val_padding_test(
-    input_shapes, tilize_with_val_padding_args, pcie_slot, function_level_defaults
+    input_shapes, tilize_with_val_padding_args, device, function_level_defaults
 ):
     datagen_func = [
         generation_funcs.gen_func_with_cast(
@@ -67,6 +66,6 @@ def test_run_tilize_with_val_padding_test(
         input_shapes,
         datagen_func,
         comparison_func,
-        pcie_slot,
+        device,
         tilize_with_val_padding_args,
     )

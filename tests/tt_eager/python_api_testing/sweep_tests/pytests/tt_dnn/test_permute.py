@@ -23,24 +23,24 @@ from tests.tt_eager.python_api_testing.sweep_tests.common import skip_for_wormho
 
 if is_wormhole_b0():
     params = [
-        pytest.param([[1, 1, 32, 32]], permute_args, 0)
+        pytest.param([[1, 1, 32, 32]], permute_args)
         for permute_args in generation_funcs.gen_permute_args([[1, 1, 32, 32]])
     ]
     del params[8:]
 else:
     params = [
-        pytest.param([[1, 1, 32, 32]], permute_args, 0)
+        pytest.param([[1, 1, 32, 32]], permute_args)
         for permute_args in generation_funcs.gen_permute_args([[1, 1, 32, 32]])
     ]
     params += [
-        pytest.param([[32, 32, 32, 32]], permute_args, 0)
+        pytest.param([[32, 32, 32, 32]], permute_args)
         for permute_args in generation_funcs.gen_permute_args([[32, 32, 32, 32]])
     ]
 
 
-@pytest.mark.parametrize("input_shapes, permute_args, pcie_slot", params)
+@pytest.mark.parametrize("input_shapes, permute_args", params)
 def test_run_permute_test(
-    input_shapes, permute_args, pcie_slot, function_level_defaults
+    input_shapes, permute_args, device, function_level_defaults
 ):
     datagen_func = [
         generation_funcs.gen_func_with_cast(
@@ -53,6 +53,6 @@ def test_run_permute_test(
         input_shapes,
         datagen_func,
         comparison_func,
-        pcie_slot,
+        device,
         permute_args,
     )

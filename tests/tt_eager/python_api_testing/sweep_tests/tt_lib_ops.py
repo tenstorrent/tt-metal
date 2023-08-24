@@ -11,17 +11,20 @@ from tests.models.helper_funcs import Linear as tt_Linear
 
 from itertools import product
 
-
+# pcie slot arg will eventually be fully deprecated in favour of pytest uplift
+# and passing device from fixture
 def setup_host_and_device(func):
-    def wrap(*args, pcie_slot, **kwargs):
-        ARCH = is_wormhole_b0() and ttl.device.Arch.WORMHOLE_B0 or ttl.device.Arch.GRAYSKULL
-        device = ttl.device.CreateDevice(ARCH, pcie_slot)
-        ttl.device.InitializeDevice(device)
-        ttl.device.SetDefaultDevice(device)
-        try:
+    def wrap(*args, pcie_slot, device=None, **kwargs):
+        if device is None:
+            device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
+            ttl.device.InitializeDevice(device)
+            ttl.device.SetDefaultDevice(device)
+            try:
+                output = func(*args, device=device, **kwargs)
+            finally:
+                ttl.device.CloseDevice(device)
+        else:
             output = func(*args, device=device, **kwargs)
-        finally:
-            ttl.device.CloseDevice(device)
 
         return output
 
