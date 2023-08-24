@@ -385,43 +385,57 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         reader_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0)};
         compute_kernel = "tt_metal/kernels/compute/bmm_tilize_untilize.cpp";
     }
-    reader_rt_args = {
-        // arguments for act
-        act_dram_addr,
-        act_noc_x,
-        act_noc_y,
+    if (use_fast_reader && rn50_first_conv) {
+        assert(pad_h == 0 && pad_w == 0);
+        reader_rt_args = {
+            act_dram_addr,
+            conv_act_size_c,
+            conv_output_size_w,
+            weight_size_w,
+            num_blocks_act_h,
+            num_blocks_act_w,
+            act_block_h_datums,
+            act_block_num_tiles
+        };
+    } else {
+        reader_rt_args = {
+            // arguments for act
+            act_dram_addr,
+            act_noc_x,
+            act_noc_y,
 
-        conv_act_size_w,
-        conv_act_size_h,
-        conv_act_size_c,
-        weight_size_h,
-        weight_size_w,
-        stride_h,
-        stride_w,
-        pad_h,
-        pad_w,
-        conv_output_size_h,
-        conv_output_size_w,
-        num_blocks_act_h,
-        num_blocks_act_w,
-        num_blocks_weight_w,
-        num_groups,
+            conv_act_size_w,
+            conv_act_size_h,
+            conv_act_size_c,
+            weight_size_h,
+            weight_size_w,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            conv_output_size_h,
+            conv_output_size_w,
+            num_blocks_act_h,
+            num_blocks_act_w,
+            num_blocks_weight_w,
+            num_groups,
 
-        act_matrix_height_unpadded,
-        act_matrix_width_unpadded,
-        act_matrix_height,
-        act_matrix_width,
-        act_matrix_height_ntiles,
-        act_matrix_width_ntiles,
-        act_block_h_datums,
-        act_block_w_datums,
-        act_block_h_ntiles,
-        act_block_w_ntiles,
-        act_block_num_tiles,
+            act_matrix_height_unpadded,
+            act_matrix_width_unpadded,
+            act_matrix_height,
+            act_matrix_width,
+            act_matrix_height_ntiles,
+            act_matrix_width_ntiles,
+            act_block_h_datums,
+            act_block_w_datums,
+            act_block_h_ntiles,
+            act_block_w_ntiles,
+            act_block_num_tiles,
 
-        src_dram_act_buffer_size_bytes,
-        dst_l1_act_buffer_size_bytes,
-    };
+            src_dram_act_buffer_size_bytes,
+            dst_l1_act_buffer_size_bytes,
+        };
+    }
 
     vector<uint32_t> writer_rt_args;
     std::vector<uint32_t> writer_compile_time_args;
@@ -457,6 +471,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
 
         };
     } else {
+        assert(use_fast_reader); // tiled out not tested for generic conv
         if (rn50_first_conv) {
             writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_and_reader_weights_resnet50_first_conv_tiled_out.cpp";
         } else {

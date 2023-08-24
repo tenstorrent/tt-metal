@@ -9,38 +9,15 @@
 void kernel_main() {
     uint32_t i = 0;
     uint32_t act_addr_dram_base  = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t act_dram_noc_x = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t act_dram_noc_y = get_arg_val<uint32_t>(i); i+=1;
 
-    uint32_t conv_act_size_w_ = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t conv_act_size_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t conv_act_size_c = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weight_size_h = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weight_size_w = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t stride_h_ = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t stride_w_ = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t pad_h = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t pad_w = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t conv_output_size_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t conv_output_size_w = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t weight_size_w = get_arg_val<uint32_t>(i); i+=1;
     uint32_t num_blocks_act_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t num_blocks_act_w = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t num_blocks_weight_w = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t num_groups = get_arg_val<uint32_t>(i); i+=1;
 
-    uint32_t act_matrix_height_unpadded = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t act_matrix_width_unpadded = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t act_matrix_height = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t act_matrix_width = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t act_matrix_height_ntiles = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t act_matrix_width_ntiles = get_arg_val<uint32_t>(i); i+=1;
     uint32_t act_block_h_datums = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t act_block_w_datums = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t act_block_h_ntiles = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t act_block_w_ntiles = get_arg_val<uint32_t>(i); i+=1;
     uint32_t act_block_num_tiles = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t src_dram_act_buffer_size_bytes = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t dst_l1_act_buffer_size_bytes = get_arg_val<uint32_t>(i); i+=1;
 
     constexpr bool act_in_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t stride_h = get_compile_time_arg_val(1);
