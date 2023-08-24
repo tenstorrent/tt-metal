@@ -71,6 +71,36 @@ bool tt_SocDescriptor::is_ethernet_core(const CoreCoord &core) const {
     return this->ethernet_core_channel_map.find(core) != ethernet_core_channel_map.end();
 }
 
+bool tt_SocDescriptor::is_harvested_core(const CoreCoord &core) const {
+    for (const auto& core_it : harvested_workers) {
+        if (core_it == core) {
+            return true;
+        }
+    }
+    return false;
+}
+
+const std::vector<CoreCoord>& tt_SocDescriptor::get_pcie_cores() const {
+    return pcie_cores;
+}
+
+const std::vector<CoreCoord> tt_SocDescriptor::get_dram_cores() const {
+    std::vector<CoreCoord> cores;
+
+    // This is inefficient, but is currently not used in a perf path
+    for (const auto& channel_it : dram_cores) {
+        for (const auto& core_it : channel_it) {
+            cores.push_back(core_it);
+        }
+    }
+
+    return cores;
+}
+
+const std::vector<CoreCoord>& tt_SocDescriptor::get_ethernet_cores() const {
+    return ethernet_cores;
+}
+
 bool tt_SocDescriptor::get_channel_of_ethernet_core(const CoreCoord &core) const {
     return this->ethernet_core_channel_map.at(core);
 }

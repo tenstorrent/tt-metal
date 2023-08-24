@@ -97,6 +97,10 @@ struct tt_SocDescriptor {
   int get_num_dram_blocks_per_channel() const;
 
   bool is_ethernet_core(const CoreCoord &core) const;
+  bool is_harvested_core(const CoreCoord &core) const;
+  const std::vector<CoreCoord>& get_pcie_cores() const;
+  const std::vector<CoreCoord> get_dram_cores() const;
+  const std::vector<CoreCoord>& get_ethernet_cores() const;
   bool get_channel_of_ethernet_core(const CoreCoord &core) const;
 };
 
