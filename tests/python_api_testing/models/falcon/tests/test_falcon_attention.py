@@ -196,7 +196,7 @@ def run_test_FalconAttention_inference(
     "model_version, pcc",
     (("tiiuae/falcon-7b-instruct", 0.98),),
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
 def test_FalconAttention_inference(
     model_version,
     llm_mode,

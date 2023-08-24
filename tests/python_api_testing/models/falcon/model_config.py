@@ -21,6 +21,8 @@ OP_KEYS = (
     "FUSED_QKV_MM_OUTPUT",
     "CREATE_QKV_HEADS_OUTPUT",
     "ROTARY_EMBEDDING_OUTPUT",
+    "K_CACHE_SLICE_OUTPUT",
+    "V_CACHE_SLICE_OUTPUT",
     "K_TRANSPOSED_OUTPUT",
     "PRE_SOFTMAX_MM_OUTPUT",
     "PRE_SOFTMAX_SCALE_OUTPUT",
@@ -66,7 +68,7 @@ NO_DTYPE = (
     "LN_F_OUTPUT",
 )
 
-ACCEPTABLE_MODEL_CONFIG_STRS = ("BFLOAT16-DRAM",)
+ACCEPTABLE_MODEL_CONFIG_STRS = ("BFLOAT16-DRAM", "BFLOAT16-L1")
 
 
 def pretty_print_model_config(model_config):
@@ -91,9 +93,11 @@ def get_model_config(model_config_str):
     BFP8_DTYPE = ttl.tensor.DataType.BFLOAT8_B
 
     # Set default dtype and mem_config based on model_config_str
-    if model_config_str in ("BFLOAT16-DRAM",):
+    if model_config_str in ("BFLOAT16-DRAM", "BFLOAT16-L1"):
         dtype_str, mem_config_str = model_config_str.split("-")
-        mem_config = DRAM_MEMCFG if mem_config_str == "DRAM" else L1_MEMCFG
+        # TODO: Set default memcfg for BFLOAT16-L1 to L1
+        # mem_config = DRAM_MEMCFG if mem_config_str == "DRAM" else L1_MEMCFG
+        mem_config = DRAM_MEMCFG
         dtype = (
             ttl.tensor.DataType.BFLOAT16
             if dtype_str == "BFLOAT16"
@@ -120,6 +124,16 @@ def get_model_config(model_config_str):
     for key in model_config.keys():
         if "MM_WEIGHTS_DTYPE" in key:
             model_config[key] = BFP8_DTYPE
+
+    if model_config_str in ("BFLOAT16-L1",):
+        model_config["ROTARY_EMBEDDING_OUTPUT_MEMCFG"] = L1_MEMCFG
+        model_config["K_CACHE_SLICE_OUTPUT_MEMCFG"] = L1_MEMCFG
+        model_config["V_CACHE_SLICE_OUTPUT_MEMCFG"] = L1_MEMCFG
+        model_config["K_TRANSPOSED_OUTPUT_MEMCFG"] = L1_MEMCFG
+        model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"] = L1_MEMCFG
+        model_config["PRE_SOFTMAX_SCALE_OUTPUT_MEMCFG"] = L1_MEMCFG
+        model_config["PRE_SOFTMAX_MASK_OUTPUT_MEMCFG"] = L1_MEMCFG
+        model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"] = L1_MEMCFG
 
     logger.debug(f"Falcon model config: \n{pretty_print_model_config(model_config)}")
 

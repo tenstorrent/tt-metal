@@ -242,9 +242,9 @@ class TtFalconAttention(nn.Module):
         query_layer = self.rotary_embedding(query_layer)
         key_layer = self.rotary_embedding(key_layer)
 
-        ################
-        ### KV CACHE ###
-        ################
+        ######################
+        ### K CACHE UPDATE ###
+        ######################
         if self.llm_mode == "prefill":
             # TODO: Fill kv_cache
             pass
@@ -252,25 +252,20 @@ class TtFalconAttention(nn.Module):
         elif self.llm_mode == "decode":
             # Update kv_cache in place
             tt_lib.tensor.update_cache(layer_past[0], key_layer, layer_past_len)
-            tt_lib.tensor.update_cache(layer_past[1], value_layer, layer_past_len)
             # key and value layers will have kv_seq_len padded to nearest 32
             key_layer = tt_lib.tensor.unpad(
                 layer_past[0],
                 [0, 0, 0, 0],
                 [batch - 1, 0, nearest_32(layer_past_len + 1) - 1, self.head_dim - 1],
-            )
-            value_layer = tt_lib.tensor.unpad(
-                layer_past[1],
-                [0, 0, 0, 0],
-                [batch - 1, 0, nearest_32(layer_past_len + 1) - 1, self.head_dim - 1],
+                output_mem_config=self.model_config["K_CACHE_SLICE_OUTPUT_MEMCFG"],
             )
 
         kv_seq_len = key_layer.shape()[-2]
         layer_present = layer_past if use_cache else None
 
-        ########################
+        ######################
         ### PRE-SOFTMAX MM ###
-        ########################
+        ######################
         # TT implementation for:
         # attn_weights = torch.matmul(query_layer, key_layer.transpose(2, 3)) / math.sqrt(self.head_dim)
         key_layer_transposed = tt_lib.tensor.transpose(
@@ -329,6 +324,24 @@ class TtFalconAttention(nn.Module):
             # output_mem_config=self.model_config["SOFTMAX_OUTPUT_MEMCFG"], # Not needed since in place
             # output_dtype=self.model_config["SOFTMAX_OUTPUT_DTYPE"],
         )
+
+        ######################
+        ### V CACHE UPDATE ###
+        ######################
+        if self.llm_mode == "prefill":
+            # TODO: Fill kv_cache
+            pass
+
+        elif self.llm_mode == "decode":
+            # Update kv_cache in place
+            tt_lib.tensor.update_cache(layer_past[1], value_layer, layer_past_len)
+            # key and value layers will have kv_seq_len padded to nearest 32
+            value_layer = tt_lib.tensor.unpad(
+                layer_past[1],
+                [0, 0, 0, 0],
+                [batch - 1, 0, nearest_32(layer_past_len + 1) - 1, self.head_dim - 1],
+                output_mem_config=self.model_config["V_CACHE_SLICE_OUTPUT_MEMCFG"],
+            )
 
         ########################
         ### POST-SOFTMAX MM ###
