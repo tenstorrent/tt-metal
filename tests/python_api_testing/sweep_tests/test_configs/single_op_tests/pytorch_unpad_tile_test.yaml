@@ -2,9 +2,9 @@
 test-list:
   unpad:
     shape:
-      start-shape: [1, 1, 1, 2]
-      end-shape: [10, 10, 1000, 1000]
-      interval: [1, 1, 1, 2]
+      start-shape: [1, 1, 32, 32]
+      end-shape: [10, 10, 2048, 2048]
+      interval: [1, 1, 32, 32]
       num-samples: 1000
       num-shapes: 1
     datagen:
@@ -16,4 +16,4 @@ test-list:
     args-gen: gen_unpad_args
     comparison:
       function: comp_equal
-    output-file: unpad_sweep.csv
+    output-file: unpad_tile_sweep.csv

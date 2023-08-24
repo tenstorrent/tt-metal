@@ -13,6 +13,8 @@ TT_DNN_SRCS = \
 	libs/tt_dnn/op_library/eltwise_unary/single_core/eltwise_unary_op_single_core.cpp \
 	libs/tt_dnn/op_library/eltwise_unary/multi_core/eltwise_unary_op_multi_core.cpp \
 	libs/tt_dnn/op_library/pad/pad_op.cpp \
+	libs/tt_dnn/op_library/unpad/single_core/unpad_op_single_core.cpp \
+	libs/tt_dnn/op_library/unpad/multi_core/unpad_op_multi_core.cpp \
 	libs/tt_dnn/op_library/unpad/unpad_op.cpp \
 	libs/tt_dnn/op_library/fill_rm/fill_rm_op.cpp \
 	libs/tt_dnn/op_library/fully_connected/fully_connected_op.cpp \

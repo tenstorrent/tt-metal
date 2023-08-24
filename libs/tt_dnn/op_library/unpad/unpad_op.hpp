@@ -7,6 +7,13 @@ namespace tt {
 
 namespace tt_metal {
 
+enum class UnpadOpParallelizationStrategy {
+    MULTI_CORE = 0, SINGLE_CORE = 1
+};
+
+operation::ProgramWithCallbacks unpad_rm_single_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end);
+operation::ProgramWithCallbacks unpad_tile_single_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end);
+operation::ProgramWithCallbacks unpad_tile_multi_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end);
 
 struct Unpad {
     const Shape output_tensor_start;
@@ -17,6 +24,7 @@ struct Unpad {
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
+    UnpadOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
     tt::stl::reflection::Attributes attributes() const;
 };
 
