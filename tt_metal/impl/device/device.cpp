@@ -129,7 +129,7 @@ void Device::initialize_harvesting_information() {
         this->num_harvested_rows_);
     // Populate lookup table
     this->logical_to_routing_coord_lookup_table_.clear();
-    unsigned int num_rows = soc_desc.worker_grid_size.y - this->num_harvested_rows_;
+    unsigned int num_rows = soc_desc.worker_grid_size.y;
     unsigned int num_cols = soc_desc.worker_grid_size.x;
     unsigned int row_offset = 0;
     for (unsigned int r = 0; r < num_rows; r++) {
@@ -143,22 +143,6 @@ void Device::initialize_harvesting_information() {
                 .y = static_cast<size_t>(soc_desc.worker_log_to_routing_y.at(logical_coord.y)),
             });
             CoreCoord translated_coord = noc_routing_coord;
-            if (this->arch_ == tt::ARCH::GRAYSKULL) {
-                if (noc_row_harvested[noc_routing_coord.y]) {
-                    if (c == 0) {
-                        row_offset++;
-                    }
-                }
-                noc_routing_coord.y += row_offset;
-                while (not soc_desc.is_worker_core(noc_routing_coord)) {
-                    noc_routing_coord.y++;
-                }
-                CoreCoord post_harvesting_noc_routing_coord({
-                    .x = noc_routing_coord.x,
-                    .y = noc_routing_coord.y,
-                });
-                translated_coord = post_harvesting_noc_routing_coord;
-            }
             this->logical_to_routing_coord_lookup_table_.insert({
                 logical_coord,
                 translated_coord
@@ -167,7 +151,7 @@ void Device::initialize_harvesting_information() {
     }
     this->post_harvested_worker_grid_size_ = CoreCoord{
         .x = soc_desc.worker_grid_size.x,
-        .y = soc_desc.worker_grid_size.y - this->num_harvested_rows_,
+        .y = soc_desc.worker_grid_size.y
     };
     this->harvesting_initialized_ = true;
 }
