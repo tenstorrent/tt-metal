@@ -25,7 +25,7 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
     uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
     uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_data_format);
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
+    MathFidelity math_fidelity = MathFidelity::LoFi;
 
     tt_metal::Buffer *src0_buffer = a.buffer();
     tt_metal::Buffer *src1_buffer = b.buffer();
