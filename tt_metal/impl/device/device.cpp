@@ -169,6 +169,7 @@ void Device::clear_l1_state() {
 
 bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
     ZoneScoped;
+    TT_ASSERT(not this->initialized_, "Device {} has already been initialized!", this->pcie_slot_);
     this->initialize_cluster();
     this->initialize_harvesting_information();
     this->initialize_allocator(l1_bank_remap);
@@ -178,6 +179,7 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
 }
 
 bool Device::close() {
+    TT_ASSERT(this->initialized_, "Cannot close device {} that has not been initialized!", this->pcie_slot_);
     llrt::assert_reset_for_all_chips(cluster_);
     this->clear_l1_state();
     this->cluster_->close_device();
