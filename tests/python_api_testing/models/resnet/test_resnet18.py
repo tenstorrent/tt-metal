@@ -16,7 +16,7 @@ import tt_lib
 
 from sweep_tests.comparison_funcs import comp_allclose_and_pcc, comp_pcc
 
-@pytest.mark.skip(reason="Hanging post commit 8/24/23 debug war room session")
+@pytest.mark.skip(reason="Hanging post commit 8/24/23 debug war room session, see PR#2297, PR#2301")
 @pytest.mark.parametrize("fold_batchnorm", [True], ids=["Batchnorm folded"])
 def test_run_resnet18_inference(fold_batchnorm, imagenet_sample_input):
     image = imagenet_sample_input

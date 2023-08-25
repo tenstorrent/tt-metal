@@ -35,7 +35,7 @@ import torch
 import torch.nn as nn
 from torchvision import models
 
-@pytest.mark.skip(reason="Hanging post commit 8/24/23 debug war room session")
+@pytest.mark.skip(reason="Hanging post commit 8/24/23 debug war room session, see PR#2297, PR#2301")
 def make_conv_bn_pairs_in_one_resnet_block(
     inplanes, planes, base_address, state_dict, stride=1
 ):
@@ -106,7 +106,7 @@ def make_conv_bn_pairs_in_one_resnet_block(
     return [(conv1, bn1), (conv2, bn2), (conv3, bn3)]
 
 
-@pytest.mark.skip(reason="Hanging post commit 8/24/23 debug war room session")
+@pytest.mark.skip(reason="Hanging post commit 8/24/23 debug war room session, see PR#2297, PR#2301")
 def test_resnet50_convs_with_folded_batch_norm(device):
     with torch.no_grad():
         torch.manual_seed(1234)
