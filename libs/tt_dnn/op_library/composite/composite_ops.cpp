@@ -422,7 +422,6 @@ Tensor _atanh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
 Tensor atanh(const Tensor &input_a, const MemoryConfig& output_mem_config)
 {
     return operation::decorate_as_composite(__func__, _atanh)(input_a, output_mem_config);
->>>>>>> 07b5bfef1... #2057: add a nan test for the specific out of domain value of atanh
 }
 
 // logaddexp(a, b) = log(exp(a) + exp(b))
