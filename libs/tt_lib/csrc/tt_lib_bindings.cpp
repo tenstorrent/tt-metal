@@ -1396,6 +1396,12 @@ void TensorModule(py::module &m_tensor) {
         R"doc("value limits (-lambda to +lambda)", "float", ">= 0")doc"
     );
     detail::bind_unary_op_with_param(
+        m_tensor, "bias_gelu", &bias_gelu,
+        py::arg("bias"),
+        R"doc(Applies the Gelu activation function to the elements of the biased ``{1}`` input tensor ``{0}``.)doc",
+        R"doc("value limits (-bias to +bias)", "float", ">= 0")doc"
+    );
+    detail::bind_unary_op_with_param(
         m_tensor, "polyval", &polyval,
         py::arg("coeffs"),
         R"doc(Returns tensor with the polyval of all of elements of the input tensor ``{0}`` with coefficients ``{1}``.)doc",

@@ -257,6 +257,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_hardshrink,
         "pytorch_op": pytorch_ops.hardshrink,
     },
+    "eltwise-bias_gelu": {
+        "tt_lib_op": tt_lib_ops.eltwise_bias_gelu,
+        "pytorch_op": pytorch_ops.bias_gelu,
+    },
     "eltwise-softshrink": {
         "tt_lib_op": tt_lib_ops.eltwise_softshrink,
         "pytorch_op": pytorch_ops.softshrink,

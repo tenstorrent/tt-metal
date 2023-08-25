@@ -599,6 +599,11 @@ def gen_shrink_args(input_shapes, low=0, high=100, dtype=torch.bfloat16):
         yield input_info
 
 
+def gen_bias_gelu_args(input_shapes, low=0, high=100, dtype=torch.bfloat16):
+    for input_info in gen_scalar_args(input_shapes, "bias", low, high, dtype):
+        yield input_info
+
+
 def gen_leaky_relu_args(input_shapes, low=0, high=100, dtype=torch.bfloat16):
     for input_info in gen_scalar_args(input_shapes, "negative_slope", low, high, dtype):
         yield input_info

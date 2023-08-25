@@ -314,6 +314,10 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.atan2
 
+.. autofunction:: tt_lib.tensor.subalpha
+
+.. autofunction:: tt_lib.tensor.ldexp
+
 Tensor relational operations
 ----------------------------------
 .. autofunction:: tt_lib.tensor.gtz
@@ -497,8 +501,6 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.signbit
 
-.. autofunction:: tt_lib.tensor.ldexp
-
 .. autofunction:: tt_lib.tensor.fill_rm
 
 .. autofunction:: tt_lib.tensor.fill_ones_rm
@@ -538,3 +540,5 @@ Other Operations
 .. autofunction:: tt_lib.tensor.std_hw
 
 .. autofunction:: tt_lib.tensor.normalize_hw
+
+.. autofunction:: tt_lib.tensor.bias_gelu

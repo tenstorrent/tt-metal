@@ -77,6 +77,7 @@ def custom_compare(*args, **kwargs):
                 "subalpha",
                 "logaddexp",
                 "logaddexp2",
+                "bias_gelu",
             ),
             ([[1, 1, 32, 32]], [[1, 3, 320, 64]]),
             (0,),
@@ -91,6 +92,7 @@ def test_run_eltwise_composite_test(
     options["polyval"] = (1, 100)
 
     options["deg2rad"] = (-180, 180)
+    options["bias_gelu"] = (-1e-10, 1e10)
     options["rad2deg"] = (0, 2 * pi)
     options["hypot"] = (1, 100)
     options["atan2"] = (-100, 100)
@@ -144,6 +146,8 @@ def test_run_eltwise_composite_test(
         test_args.update({"weight": np.random.randint(1, 100)})
     elif fn in ["subalpha"]:
         test_args.update({"alpha": np.random.randint(1, 100)})
+    elif fn in ["bias_gelu"]:
+        test_args.update({"bias": np.random.randint(1, 100)})
     run_single_pytorch_test(
         "eltwise-%s" % (fn),
         input_shapes,

@@ -111,6 +111,11 @@ def hardshrink(x, *args, _lambda, **kwargs):
     return result
 
 
+def bias_gelu(x, *args, bias, **kwargs):
+    result = torch.nn.functional.gelu(x + bias)
+    return result
+
+
 def hardtanh(x, *args, **kwargs):
     result = torch.nn.functional.hardtanh(x)
     return result
