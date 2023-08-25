@@ -2635,15 +2635,19 @@ void TensorModule(py::module &m_tensor) {
     // input embeddings
     m_tensor.def("embeddings", &embeddings,
         py::arg("input").noconvert(), py::arg("weights").noconvert(),
+        py::arg("split_weights").noconvert() = false,
+        py::arg("tilized").noconvert() = false,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Returns specific indices of the embedding table specified by the input tensor
-        +----------------+-------------------------------------+------------+-------------------------------+----------+
-        | Argument       | Description                         | Data type  | Valid range                   | Required |
-        +================+=====================================+============+===============================+==========+
-        | num_embeddings | Number of rows in embedding table   | uint32     |                               | Yes      |
-        | input          | Tensor containing rows we want      | Tensor     |                               | Yes      |
-        | weights        | Entire Embedding Table              | Tensor     |                               | Yes      |
-        +----------------+-------------------------------------+------------+-------------------------------+----------+
+        +----------------+----------------------------------------------+------------+-------------------------------+----------+
+        | Argument       | Description                                  | Data type  | Valid range                   | Required |
+        +================+==============================================+============+===============================+==========+
+        | num_embeddings | Number of rows in embedding table            | uint32     |                               | Yes      |
+        | input          | Tensor containing rows we want               | Tensor     |                               | Yes      |
+        | weights        | Entire Embedding Table                       | Tensor     |                               | Yes      |
+        | split_weights  | Parallelizing over weights (instead of input)| Bool       |                               | No       |
+        | tilized        | Enable fused tilize on output                | Bool       |                               | No       |
+        +----------------+----------------------------------------------+------------+-------------------------------+----------+
     )doc");
 
 

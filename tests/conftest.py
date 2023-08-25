@@ -245,6 +245,33 @@ def device(request):
         if dispatch is not None:
             os.environ["TT_METAL_SLOW_DISPATCH_MODE"] = dispatch
 
+@pytest.fixture(scope="function")
+def local_device(request):
+    import tt_lib as ttl
+
+    silicon_arch_name = request.config.getoption("tt_arch")
+    device_id = request.config.getoption("device_id")
+
+    arch = getattr(ttl.device.Arch, silicon_arch_name.upper())
+
+    if arch == ttl.device.Arch.WORMHOLE_B0:
+        dispatch = os.environ.pop("TT_METAL_SLOW_DISPATCH_MODE", None)
+        os.environ["TT_METAL_SLOW_DISPATCH_MODE"] = "1"
+
+    device = ttl.device.CreateDevice(device_id)
+    ttl.device.InitializeDevice(device)
+    ttl.device.SetDefaultDevice(device)
+
+    yield device
+
+    ttl.device.CloseDevice(device)
+
+    if arch == ttl.device.Arch.WORMHOLE_B0:
+        os.environ.pop("TT_METAL_SLOW_DISPATCH_MODE", None)
+        if dispatch is not None:
+            os.environ["TT_METAL_SLOW_DISPATCH_MODE"] = dispatch
+
+
 
 @pytest.fixture(autouse=True)
 def clear_program_cache():

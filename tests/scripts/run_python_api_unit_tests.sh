@@ -12,7 +12,8 @@ if [[ ! -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then
   env pytest $(find $TT_METAL_HOME/tests/tt_eager/python_api_testing/sweep_tests/pytests/ -name 'test_*.py' -a ! -name 'test_sweep_conv_with_address_map.py') -vvv
 else
   # Need to remove move for time being since failing
-  env pytest $(find $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -name 'test_*.py' -a ! -name 'test_move.py') -vvv
+  # Need to run embedding separate due to tests being dependent in session
+  env pytest $(find $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -name 'test_*.py' -a ! -name 'test_move.py' -a ! -name 'test_embedding.py') -vvv
   env pytest $(find $TT_METAL_HOME/tests/tt_eager/python_api_testing/sweep_tests/pytests/ -name 'test_*.py' -a ! -name 'test_sweep_conv_with_address_map.py' -a ! -name 'test_move.py') -vvv
 fi
 
@@ -52,3 +53,6 @@ pytest $TT_METAL_HOME/tests/models/resnet/test_resnet18.py
 pytest $TT_METAL_HOME/tests/models/falcon/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py -k "seq_len_128 and in0_BFLOAT16-in1_BFLOAT8_B-out_BFLOAT16-weights_DRAM"
 pytest $TT_METAL_HOME/tests/models/falcon/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py -k "seq_len_512 and in0_BFLOAT16-in1_BFLOAT8_B-out_BFLOAT16-weights_DRAM"
 pytest $TT_METAL_HOME/tests/models/falcon/tests/unit_tests/test_falcon_attn_matmul.py
+
+# Embedding test running separately
+pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/test_embedding.py
