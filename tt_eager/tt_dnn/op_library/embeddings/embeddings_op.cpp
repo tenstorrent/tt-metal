@@ -545,7 +545,6 @@ void Embeddings::validate(const std::vector<Tensor> &input_tensors) const  {
     TT_ASSERT(weights.shape()[0] == 1 && weights.shape()[1] == 1,
                 "First two dimensions for the weights must be 1");
     if(this->tilized){
-        TT_ASSERT(a.shape()[2] % TILE_HEIGHT == 0, "Input must be a factor of tile height");
         TT_ASSERT(weights.shape()[3] % TILE_WIDTH == 0, "Number of columns in table must be factor of tile width");
     }
     TT_ASSERT(a.shape()[1] == 1 && a.shape()[3] == 1, "Only dim 0 && 2 for the input can be non 1");

@@ -7,6 +7,9 @@ from loguru import logger
 
 
 OP_MEMCFG_KEYS = (
+    #EMBEDDINGS
+    "INPUT_EMBEDDINGS_MEMCFG",
+    "OUTPUT_EMBEDDINGS_MEMCFG",
     # MHA
     "OP1_FUSED_QKV_MM_INPUT_MEMCFG",
     "OP1_FUSED_QKV_MM_WEIGHTS_MEMCFG",  # Needs to be DRAM
@@ -147,6 +150,9 @@ def get_model_config(model_config_str):
     # Override defaults for certain configs
     if model_config_str == "BFLOAT16-L1":
         new_config_values = {
+
+            # Embeddings
+            "INPUT_EMBEDDINGS_MEMCFG" : DRAM_MEMCFG,
             # MHA
             "OP1_FUSED_QKV_MM_WEIGHTS_MEMCFG": DRAM_MEMCFG,
             "OP1_FUSED_QKV_MM_BIAS_MEMCFG": DRAM_MEMCFG,
@@ -168,6 +174,8 @@ def get_model_config(model_config_str):
 
     elif model_config_str == "BFLOAT8_B-L1":
         new_config_values = {
+            # Embeddings
+            "INPUT_EMBEDDINGS_MEMCFG" : DRAM_MEMCFG,
             # MHA
             "OP1_FUSED_QKV_MM_WEIGHTS_MEMCFG": DRAM_MEMCFG,
             "OP1_FUSED_QKV_MM_BIAS_MEMCFG": DRAM_MEMCFG,
@@ -187,6 +195,8 @@ def get_model_config(model_config_str):
 
     elif model_config_str == "MIXED_PRECISION_BATCH9":
         new_config_values = {
+            # Embeddings
+            "INPUT_EMBEDDINGS_MEMCFG" : DRAM_MEMCFG,
             # MHA
             "OP1_FUSED_QKV_MM_WEIGHTS_MEMCFG": DRAM_MEMCFG,
             "OP1_FUSED_QKV_MM_BIAS_MEMCFG": DRAM_MEMCFG,
@@ -221,6 +231,8 @@ def get_model_config(model_config_str):
     elif model_config_str == "MIXED_PRECISION_BATCH8":
         new_config_values = {
             "MOVE_ENCODER_OUTPUT_BOOL": True,
+            # Embeddings
+            "INPUT_EMBEDDINGS_MEMCFG" : DRAM_MEMCFG,
             # MHA
             "OP1_FUSED_QKV_MM_WEIGHTS_MEMCFG": DRAM_MEMCFG,
             "OP1_FUSED_QKV_MM_BIAS_MEMCFG": DRAM_MEMCFG,

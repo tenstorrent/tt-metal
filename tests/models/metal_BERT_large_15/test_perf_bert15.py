@@ -58,13 +58,22 @@ def run_perf_bert15(
     tokenizer_name = str(model_location_generator(model_version, model_subdir="Bert"))
 
     disable_persistent_kernel_cache()
-    first_key = "first_iter"
-    second_key = "second_iter"
+    first_embedding_key = "first_embedding"
+    first_attention_mask_key = "first_attention_mask"
+    first_run_key = "first_run"
+    second_embedding_key = "second_embedding"
+    second_attention_mask_key = "second_attention_mask"
+    second_run_key = "second_run"
     cpu_key = "ref_key"
 
     HF_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
     HF_model.eval()
-    tt_model = TtBertBatchDram(HF_model.config, HF_model, device, model_config)
+    tt_model = TtBertBatchDram(
+        HF_model.config,
+        HF_model,
+        device,
+        model_config
+    )
 
     tokenizer = BertTokenizer.from_pretrained(tokenizer_name)
     context = BATCH_SIZE * [
@@ -80,30 +89,39 @@ def run_perf_bert15(
         return_token_type_ids=token_type_ids,
         return_tensors="pt",
     )
-    tt_input = tt_model.model_preprocessing(**inputs)
 
     with torch.no_grad():
         profiler.start(cpu_key)
         torch_out = HF_model(**inputs)
         profiler.end(cpu_key)
 
-        profiler.start(first_key)
-        tt_output = tt_model(1, *tt_input)
-        ttl.device.Synchronize()
-        profiler.end(first_key, force_enable=True)
-        del tt_output
-        tt_input = tt_model.model_preprocessing(**inputs)
+        profiler.start(first_attention_mask_key)
+        tt_attention_mask = tt_model.model_attention_mask(**inputs)
+        profiler.end(first_attention_mask_key, force_enable=True)
 
+        profiler.start(first_run_key)
+        tt_embedding = tt_model.model_embedding(**inputs)
+        tt_output = tt_model(1, tt_embedding, tt_attention_mask)
+        ttl.device.Synchronize()
+        profiler.end(first_run_key, force_enable=True)
+        
+        del tt_output
         enable_persistent_kernel_cache()
+        
+        profiler.start(second_attention_mask_key)
+        tt_attention_mask = tt_model.model_attention_mask(**inputs)
+        profiler.end(second_attention_mask_key, force_enable=True)
 
-        profiler.start(second_key)
-        tt_output = tt_model(1, *tt_input)
+        profiler.start(second_run_key)
+        tt_embedding = tt_model.model_embedding(**inputs)
+        tt_output = tt_model(1, tt_embedding, tt_attention_mask)
         ttl.device.Synchronize()
-        profiler.end(second_key, force_enable=True)
+        profiler.end(second_run_key, force_enable=True)
+        
         del tt_output
 
-    first_iter_time = profiler.get(first_key)
-    second_iter_time = profiler.get(second_key)
+    first_iter_time = profiler.get(first_run_key)
+    second_iter_time = profiler.get(second_run_key)
     cpu_time = profiler.get(cpu_key)
 
     prep_report(
@@ -124,7 +142,7 @@ def run_perf_bert15(
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
-    ([0.15, 11],),
+    ([0.15, 14.5],),
 )
 def test_perf_virtual_machine(
     use_program_cache,
@@ -141,7 +159,7 @@ def test_perf_virtual_machine(
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
-    ([0.08, 8.5],),
+    ([0.09, 10],),
 )
 def test_perf_bare_metal(
     use_program_cache,

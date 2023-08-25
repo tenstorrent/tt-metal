@@ -17,7 +17,7 @@ sys.path.append(f"{f}/../../../..")
 
 import time
 import tt_lib as ttl
-from tests.models.metal_BERT_large_15.embeddings import PytorchEmbeddings
+from tests.models.metal_BERT_large_15.embeddings import TtEmbeddings
 from tests.models.metal_BERT_large_15.bert_encoder import TtBertEncoder
 from tt_lib.utils import pad_activation, pad_weight
 from models.utility_functions import (
@@ -36,7 +36,13 @@ from tests.models.metal_BERT_large_15.model_config import get_model_config
 
 
 class TtBertBatchDram(torch.nn.Module):
-    def __init__(self, config, hugging_face_reference_model, device, model_config):
+    def __init__(
+        self,
+        config,
+        hugging_face_reference_model,
+        device,
+        model_config
+    ):
         super().__init__()
         self.device = device
         self.model_config = model_config
@@ -48,8 +54,13 @@ class TtBertBatchDram(torch.nn.Module):
         self.hidden_states_list = []
         self.tt_attention_mask_list = []
 
-        # So far on CPU until we add embeddings support on device
-        self.embeddings = PytorchEmbeddings(hugging_face_reference_model)
+        self.embeddings = TtEmbeddings(
+            hugging_face_reference_model,
+            device,
+            input_mem_config = model_config["INPUT_EMBEDDINGS_MEMCFG"],
+            output_mem_config = model_config["OUTPUT_EMBEDDINGS_MEMCFG"]
+        )
+
         self.get_extended_attention_mask = (
             hugging_face_reference_model.get_extended_attention_mask
         )
@@ -103,26 +114,37 @@ class TtBertBatchDram(torch.nn.Module):
 
         self.qa_linear = qa_linear_
 
-    def model_preprocessing(self, input_ids, attention_mask=None, token_type_ids=None):
-        embeddings = self.embeddings(input_ids, token_type_ids)
-        # Convert to tt tensor
-        pad_embeddings = pad_activation(embeddings)
-        tt_embeddings = (
-            ttl.tensor.Tensor(
-                pad_embeddings.reshape(-1).tolist(),
-                (
-                    pad_embeddings.shape[0],
-                    1,
-                    pad_embeddings.shape[-2],
-                    pad_embeddings.shape[-1],
-                ),
-                self.model_config["OP1_FUSED_QKV_MM_INPUT_DTYPE"],
-                ttl.tensor.Layout.ROW_MAJOR,
+    def model_embedding(self, input_ids, attention_mask=None, token_type_ids=None):
+        tt_embeddings = self.embeddings(input_ids, token_type_ids)
+        embeddings_shape = tt_embeddings.shape()
+        if (
+            tt_embeddings.dtype()
+            != self.model_config["OP1_FUSED_QKV_MM_INPUT_DTYPE"]
+        ):
+            embeddings = (
+                tt_embeddings.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
             )
-            .to(ttl.tensor.Layout.TILE)
-            .to(self.device, self.model_config["OP1_FUSED_QKV_MM_INPUT_MEMCFG"])
-        )
+            tt_embeddings = (
+                ttl.tensor.Tensor(
+                    embeddings.reshape(-1).tolist(),
+                    (
+                        embeddings_shape[0],
+                        1,
+                        embeddings_shape[-2],
+                        embeddings_shape[-1],
+                    ),
+                    #output of embeddings dtype should be same as op1
+                    self.model_config["OP1_FUSED_QKV_MM_INPUT_DTYPE"],
+                    ttl.tensor.Layout.ROW_MAJOR,
+                )
+                .to(ttl.tensor.Layout.TILE)
+                #output config of embeddings should be same as op1_input
+                .to(self.device, self.model_config["OP1_FUSED_QKV_MM_INPUT_MEMCFG"])
+            )
 
+        return tt_embeddings
+
+    def model_attention_mask(self, input_ids, attention_mask=None, token_type_ids=None):
         if attention_mask is not None:
             extended_attention_mask = self.get_extended_attention_mask(
                 attention_mask, input_ids.shape
@@ -143,7 +165,8 @@ class TtBertBatchDram(torch.nn.Module):
             )
         else:
             tt_attention_mask = attention_mask
-        return tt_embeddings, tt_attention_mask
+        return tt_attention_mask
+
 
     def forward(self, PERF_CNT, tt_embeddings, tt_attention_mask=None):
         print(f"Num encoders {len(self.encoders)}")
@@ -250,8 +273,10 @@ def run_bert_question_and_answering_inference(
             bert_input = torch.stack(oneseq)
             bert_input = bert_input.reshape(batch, seq_len)
 
-    tt_bert_input = tt_bert_model.model_preprocessing(**bert_input)
     profiler.end("processing_of_input")
+    profiler.start("embedding_of_input")
+    tt_bert_input = tt_bert_model.model_preprocessing(**bert_input)
+    profiler.end("embedding_of_input")
 
     profiler.start("hugging_face_reference_model")
     pytorch_out = hugging_face_reference_model(**bert_input)
