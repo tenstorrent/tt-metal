@@ -38,9 +38,11 @@ def custom_compare(*args, **kwargs):
     result = comparison_func(*args, **kwargs)
     return result
 
-shapes =([[1, 1, 32, 32]],[[1, 3, 320, 64]])
+
+shapes = ([[1, 1, 32, 32]], [[1, 3, 320, 64]])
 if is_wormhole_b0():
     shapes = (shapes[0],)
+
 
 # TODO: This function should be split apart instead of having all these if cases
 @pytest.mark.parametrize(
@@ -87,7 +89,7 @@ if is_wormhole_b0():
                 "subalpha",
                 "logaddexp",
                 "logaddexp2",
-                "bias_gelu",
+                "bias_gelu_unary",
             ),
             shapes,
         )
@@ -101,7 +103,7 @@ def test_run_eltwise_composite_test(
     options["polyval"] = (1, 100)
 
     options["deg2rad"] = (-180, 180)
-    options["bias_gelu"] = (-1e-10, 1e10)
+    options["bias_gelu_unary"] = (-1e10, 1e10)
     options["rad2deg"] = (0, 2 * pi)
     options["hypot"] = (1, 100)
     options["atan2"] = (-100, 100)
@@ -126,8 +128,8 @@ def test_run_eltwise_composite_test(
     generator = generation_funcs.gen_rand
 
     if is_wormhole_b0():
-        if fn in ["atanh","ldexp","logaddexp2"]:
-            pytest.skip('Not tested for Wormhole - skipping')
+        if fn in ["atanh", "ldexp", "logaddexp2"]:
+            pytest.skip("Not tested for Wormhole - skipping")
 
     datagen_func = [
         generation_funcs.gen_func_with_cast(
@@ -138,7 +140,20 @@ def test_run_eltwise_composite_test(
     num_inputs = 1
     if fn in ["mac", "addcmul", "addcdiv", "lerp_ternary"]:
         num_inputs = 3
-    elif fn in ["hypot", "min", "max", "lerp_binary", "xlogy", "atan2", "lerp_binary", "atan2", "ldexp", "subalpha", "logaddexp", "logaddexp2"]:
+    elif fn in [
+        "hypot",
+        "min",
+        "max",
+        "lerp_binary",
+        "xlogy",
+        "atan2",
+        "lerp_binary",
+        "atan2",
+        "ldexp",
+        "subalpha",
+        "logaddexp",
+        "logaddexp2",
+    ]:
         num_inputs = 2
 
     input_shapes = input_shapes * num_inputs
@@ -159,7 +174,7 @@ def test_run_eltwise_composite_test(
         test_args.update({"weight": np.random.randint(1, 100)})
     elif fn in ["subalpha"]:
         test_args.update({"alpha": np.random.randint(1, 100)})
-    elif fn in ["bias_gelu"]:
+    elif fn in ["bias_gelu_unary"]:
         test_args.update({"bias": np.random.randint(1, 100)})
     run_single_pytorch_test(
         "eltwise-%s" % (fn),

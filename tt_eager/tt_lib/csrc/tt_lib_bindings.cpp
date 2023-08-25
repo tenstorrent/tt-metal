@@ -1206,6 +1206,7 @@ void TensorModule(py::module &m_tensor) {
     detail::bind_binary_op(m_tensor, "sub", sub, R"doc(Perform an eltwise-binary sub (``{0} - {1}``) on two tensors.)doc");
     detail::bind_binary_op(m_tensor, "mul", mul, R"doc(Perform an eltwise-binary mul (``{0} * {1}``) on two tensors.)doc");
     detail::bind_binary_op(m_tensor, "squared_difference", squared_difference, R"doc(Perform an eltwise-binary squared_difference (``{0} - {1}``)^2 on two tensors.)doc");
+    detail::bind_binary_op(m_tensor, "bias_gelu", bias_gelu, R"doc(Perform an eltwise-binary bias_gelu (``{0} + {1}``) on two tensors.)doc");
     detail::bind_binary_op(m_tensor, "gt", gt, R"doc(Perform an eltwise-binary greater-than (``{0} > {1}``) on two tensors.)doc");
     detail::bind_binary_op(m_tensor, "lt", lt, R"doc(Perform an eltwise-binary less-than (``{0} < {1}``) on two tensors.)doc");
     detail::bind_binary_op(m_tensor, "lte", lte, R"doc(Perform an eltwise-binary less-than-or-equal (``{0} <= {1}``) on two tensors.)doc");
@@ -1403,7 +1404,7 @@ void TensorModule(py::module &m_tensor) {
         R"doc("value limits (-lambda to +lambda)", "float", ">= 0")doc"
     );
     detail::bind_unary_op_with_param(
-        m_tensor, "bias_gelu", &bias_gelu,
+        m_tensor, "bias_gelu_unary", &bias_gelu_unary,
         py::arg("bias"),
         R"doc(Applies the Gelu activation function to the elements of the biased ``{1}`` input tensor ``{0}``.)doc",
         R"doc("value limits (-bias to +bias)", "float", ">= 0")doc"

@@ -318,6 +318,10 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.ldexp
 
+.. autofunction:: tt_lib.tensor.bias_gelu
+
+.. autofunction:: tt_lib.tensor.bias_gelu_unary
+
 Tensor relational operations
 ----------------------------------
 .. autofunction:: tt_lib.tensor.gtz
@@ -540,6 +544,3 @@ Other Operations
 .. autofunction:: tt_lib.tensor.std_hw
 
 .. autofunction:: tt_lib.tensor.normalize_hw
-
-.. autofunction:: tt_lib.tensor.bias_gelu
-

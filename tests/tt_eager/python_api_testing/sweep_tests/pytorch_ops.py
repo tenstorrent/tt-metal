@@ -117,7 +117,7 @@ def hardshrink(x, *args, _lambda, **kwargs):
     return result
 
 
-def bias_gelu(x, *args, bias, **kwargs):
+def bias_gelu_unary(x, *args, bias, **kwargs):
     result = torch.nn.functional.gelu(x + bias)
     return result
 
@@ -547,13 +547,18 @@ def atan2(x, y, *args, **kwargs):
     return torch.atan2(y, x)
 
 
+def bias_gelu(x, y, *args, **kwargs):
+    result = torch.nn.functional.gelu(torch.add(x, y))
+    return result
+
+
 def lerp_binary(x, y, *args, weight, **kwargs):
     return torch.lerp(x, y, weight)
 
 
-
 def xlogy(x, y, *args, **kwargs):
     return torch.xlogy(x, y)
+
 
 def ldexp(x, y, *args, **kwargs):
     return torch.ldexp(x, y)

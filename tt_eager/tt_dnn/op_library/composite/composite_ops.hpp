@@ -55,7 +55,7 @@ Tensor hardshrink(const Tensor& a, float param, const MemoryConfig& output_mem_c
 
 //Function: bias gelu
 // Ref: http://www.xavierdupre.fr/app/mlprodict/helpsphinx/onnxops/onnx_commicrosoft_BiasGelu.html
-Tensor bias_gelu(const Tensor& a, float bias, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor bias_gelu_unary(const Tensor& a, float bias, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 // Function: softsign
 // Ref: https://pytorch.org/docs/stable/generated/torch.nn.Softsign.html

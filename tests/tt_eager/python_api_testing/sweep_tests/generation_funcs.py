@@ -1009,8 +1009,8 @@ def gen_subalpha_args(input_shapes, supported_dtypes, supported_layouts, on_devi
         yield input_info
 
 
-def gen_bias_gelu_args(input_shapes, supported_dtypes, supported_layouts, on_device, low=0, high=100, dtype=torch.bfloat16):
-    for input_info in gen_scalar_args(input_shapes, supported_dtypes, supported_layouts, on_device, "bias", low, high, dtype):
+def gen_bias_gelu_unary_args(input_shapes, low=0, high=100, dtype=torch.bfloat16):
+    for input_info in gen_scalar_args(input_shapes, "bias", low, high, dtype):
         yield input_info
 
 

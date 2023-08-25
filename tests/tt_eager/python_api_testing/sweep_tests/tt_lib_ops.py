@@ -15,6 +15,7 @@ from itertools import product
 # and passing device from fixture
 def setup_host_and_device(func):
     def wrap(*args, pcie_slot, device=None, **kwargs):
+        output = None
         if device is None:
             ARCH = is_wormhole_b0() and ttl.device.Arch.WORMHOLE_B0 or ttl.device.Arch.GRAYSKULL
             device = ttl.device.CreateDevice(ARCH, pcie_slot)
@@ -237,7 +238,7 @@ def eltwise_leaky_relu(
 
 
 @setup_host_and_device
-def eltwise_bias_gelu(x, *args, bias, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
+def eltwise_bias_gelu_unary(x, *args, bias, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
@@ -248,7 +249,7 @@ def eltwise_bias_gelu(x, *args, bias, device, dtype, layout, buffer_type, output
     t0 = t0.to(layout[0])
     t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.bias_gelu(t0, bias, output_mem_config=output_mem_config)
+    t1 = ttl.tensor.bias_gelu_unary(t0, bias)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     return output
@@ -2092,6 +2093,7 @@ eltwise_add = make_eltwise_binary_op(ttl.tensor.add)
 eltwise_sub = make_eltwise_binary_op(ttl.tensor.sub)
 eltwise_mul = make_eltwise_binary_op(ttl.tensor.mul)
 eltwise_squared_difference = make_eltwise_binary_op(ttl.tensor.squared_difference)
+eltwise_bias_gelu = make_eltwise_binary_op(ttl.tensor.bias_gelu)
 eltwise_hypot = make_eltwise_binary_op(ttl.tensor.hypot)
 eltwise_atan2 = make_eltwise_binary_op(ttl.tensor.atan2)
 eltwise_min = make_eltwise_binary_op(ttl.tensor.min)

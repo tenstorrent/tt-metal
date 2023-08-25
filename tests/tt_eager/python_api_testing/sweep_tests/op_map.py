@@ -29,11 +29,11 @@ op_map = {
         "pytorch_op": pytorch_ops.arange,
     },
     # stats
-     "stats-var_hw": {
+    "stats-var_hw": {
         "tt_lib_op": tt_lib_ops.var_hw,
         "pytorch_op": pytorch_ops.var_hw,
     },
-     "stats-std_hw": {
+    "stats-std_hw": {
         "tt_lib_op": tt_lib_ops.std_hw,
         "pytorch_op": pytorch_ops.std_hw,
     },
@@ -275,9 +275,9 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_hardshrink,
         "pytorch_op": pytorch_ops.hardshrink,
     },
-    "eltwise-bias_gelu": {
-        "tt_lib_op": tt_lib_ops.eltwise_bias_gelu,
-        "pytorch_op": pytorch_ops.bias_gelu,
+    "eltwise-bias_gelu_unary": {
+        "tt_lib_op": tt_lib_ops.eltwise_bias_gelu_unary,
+        "pytorch_op": pytorch_ops.bias_gelu_unary,
     },
     "eltwise-softshrink": {
         "tt_lib_op": tt_lib_ops.eltwise_softshrink,
@@ -379,6 +379,10 @@ op_map = {
     "eltwise-ne": {
         "tt_lib_op": tt_lib_ops.eltwise_ne,
         "pytorch_op": pytorch_ops.ne,
+    },
+    "eltwise-bias_gelu": {
+        "tt_lib_op": tt_lib_ops.eltwise_bias_gelu,
+        "pytorch_op": pytorch_ops.bias_gelu,
     },
     "eltwise-eq": {
         "tt_lib_op": tt_lib_ops.eltwise_eq,

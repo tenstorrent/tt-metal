@@ -1,9 +1,3 @@
-"""
-SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-
-SPDX-License-Identifier: Apache-2.0
-"""
-
 import torch
 import random
 import numpy as np
@@ -12,7 +6,8 @@ import matplotlib.pyplot as plt
 
 def function_bias_gelu(input, bias):
     input = torch.as_tensor(input)
-    bias_gelu = torch.nn.functional.gelu(input + bias)
+    bias = torch.as_tensor(bias)
+    bias_gelu = torch.nn.functional.gelu(torch.add(input, bias))
     return bias_gelu
 
 
@@ -30,9 +25,9 @@ def gelu(x):
 
 
 x = np.linspace(-1e-10, 1e10, 500)
-bias = random.randint(1, 100)
-z = function_bias_gelu(x, bias)
-z1 = custom_bias_gelu(x, bias)
+y = np.linspace(-1e-10, 1e10, 500)
+z = function_bias_gelu(x, y)
+z1 = custom_bias_gelu(x, y)
 plt.plot(x, z, "--g", label="bias_gelu")
 plt.plot(x, z1, "+r", label="custom bias_gelu")
 plt.legend(loc="upper center")
