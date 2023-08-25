@@ -509,6 +509,7 @@ These operations are currently not supported on TT accelerator device and will e
 
 .. autoclass:: tt_lib.fallback_ops.AdaptiveAvgPool2d
 
+
 Experimental Operations
 =======================
 
@@ -630,3 +631,5 @@ Other Operations
 .. autofunction:: tt_lib.tensor.reglu
 
 .. autofunction:: tt_lib.tensor.swiglu
+
+.. autofunction:: tt_lib.tensor.embeddings

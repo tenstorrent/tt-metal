@@ -96,7 +96,7 @@ import pytest
 
 @pytest.mark.parametrize(
     "num_embeddings",
-    (512, 30528, 2048),
+    (512, 30522, 2048),
     ids=[
         "Bert_Position_Embeddings_512",
         "Bert_Word_Embeddings_30528",
