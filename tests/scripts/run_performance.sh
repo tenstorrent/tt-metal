@@ -20,7 +20,8 @@ run_perf_models() {
 
     env pytest tests/python_api_testing/models/t5/tests -m $pipeline_type
 
-    env pytest tests/python_api_testing/models/resnet/tests -m $pipeline_type
+    # Bad tests, don't enable: Hanging post commit 8/24/23 debug war room session, see PR#2297, PR#2301
+    #env pytest tests/python_api_testing/models/resnet/tests -m $pipeline_type
 
     env pytest tests/python_api_testing/models/bloom -m $pipeline_type
 
