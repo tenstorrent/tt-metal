@@ -584,6 +584,10 @@ def subalpha(x, y, *args, alpha, **kwargs):
     return torch.sub(x, y, alpha=alpha)
 
 
+def addalpha(x, y, *args, alpha, **kwargs):
+    return torch.add(x, y, alpha=alpha)
+
+
 def lte(x, y, *args, **kwargs):
     return x <= y
 

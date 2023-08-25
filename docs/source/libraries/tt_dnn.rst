@@ -316,6 +316,8 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.subalpha
 
+.. autofunction:: tt_lib.tensor.addalpha
+
 .. autofunction:: tt_lib.tensor.ldexp
 
 .. autofunction:: tt_lib.tensor.bias_gelu

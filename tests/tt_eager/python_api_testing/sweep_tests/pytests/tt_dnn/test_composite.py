@@ -90,6 +90,7 @@ if is_wormhole_b0():
                 "logaddexp",
                 "logaddexp2",
                 "bias_gelu_unary",
+                "addalpha",
             ),
             shapes,
         )
@@ -153,6 +154,7 @@ def test_run_eltwise_composite_test(
         "subalpha",
         "logaddexp",
         "logaddexp2",
+        "addalpha",
     ]:
         num_inputs = 2
 
@@ -173,6 +175,8 @@ def test_run_eltwise_composite_test(
     elif fn in ["lerp_binary"]:
         test_args.update({"weight": np.random.randint(1, 100)})
     elif fn in ["subalpha"]:
+        test_args.update({"alpha": np.random.randint(1, 100)})
+    elif fn in ["addalpha"]:
         test_args.update({"alpha": np.random.randint(1, 100)})
     elif fn in ["bias_gelu_unary"]:
         test_args.update({"bias": np.random.randint(1, 100)})

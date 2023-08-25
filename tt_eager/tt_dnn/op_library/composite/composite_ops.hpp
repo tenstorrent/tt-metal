@@ -140,6 +140,9 @@ Tensor atan2(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& o
 //subalpha(input,other,alpha)=input-alpha*other
 Tensor subalpha(const Tensor& input_a, const Tensor& input_b, float alpha, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+//addalpha(input, other, alpha) = input + (alpha * other)
+Tensor addalpha(const Tensor& input_a, const Tensor& input_b, float alpha, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 //lerp(input, end, weight) = start + weight * (end - start), weight is float
 Tensor lerp(const Tensor& input_a, const Tensor& input_b, float value, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 

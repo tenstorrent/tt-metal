@@ -539,12 +539,22 @@ Tensor ldexp(const Tensor &input_a, const Tensor &input_b, const MemoryConfig& o
 
 //subalpha(input,other,alpha)=input-alpha*other
 Tensor _subalpha(const Tensor& input_a, const Tensor& input_b, float alpha, const MemoryConfig& output_mem_config) {
-    Tensor result = mac(input_b, neg(full_like(input_b, alpha), output_mem_config), input_a, output_mem_config);
+    Tensor result = add(neg(mul_unary(input_b, alpha, output_mem_config), output_mem_config), input_a, std::nullopt, output_mem_config);
     return result;
 }
 Tensor subalpha(const Tensor& input_a, const Tensor& input_b, float alpha, const MemoryConfig& output_mem_config)
 {
     return operation::decorate_as_composite(__func__, _subalpha)(input_a, input_b, alpha, output_mem_config);
+}
+
+//addalpha(input, other, alpha) = input + (alpha * other)
+Tensor _addalpha(const Tensor& input_a, const Tensor& input_b, float alpha, const MemoryConfig& output_mem_config) {
+    Tensor result = add(mul_unary(input_b, alpha, output_mem_config), input_a, std::nullopt, output_mem_config);
+    return result;
+}
+Tensor addalpha(const Tensor& input_a, const Tensor& input_b, float alpha, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _addalpha)(input_a, input_b, alpha, output_mem_config);
 }
 
 //addcmul(input,tensor1,tensor2,value)=input+value×tensor1×tensor2
