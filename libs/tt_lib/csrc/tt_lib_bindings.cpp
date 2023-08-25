@@ -2356,7 +2356,11 @@ void TensorModule(py::module &m_tensor) {
         +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
     )doc");
 
-    m_tensor.def("conv_with_fast_reader", &conv_with_fast_reader, R"doc(
+    m_tensor.def("conv_with_fast_reader", &conv_with_fast_reader,
+                 py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt,
+                 py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(),
+                 py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(),
+                 py::arg().noconvert(), R"doc(
         Perform a conv ``A x B`` with two tensors
         This op tilizes tensor A and untilizes the output
 

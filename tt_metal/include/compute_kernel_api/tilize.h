@@ -9,6 +9,8 @@
 #include "llk_unpack_tilize.h"
 #endif
 
+#include "debug_print.h"
+
 
 namespace ckernel {
 
@@ -53,7 +55,10 @@ ALWI void tilize_block(uint32_t icb, uint32_t block, uint32_t ocb)
 
     UNPACK(( llk_unpack_tilize_block(icb, block) ));
 
+    // UNPACK(( DPRINT << "WLKRHFJOLWSNDJN W" << ENDL() ));
+
     for (uint32_t t = 0; t < block; t++) {
+
         // Acquire dst
         MATH(( llk_math_wait_for_dest_available<SYNC>() ));
         PACK(( llk_packer_wait_for_math_done() ));
@@ -66,6 +71,7 @@ ALWI void tilize_block(uint32_t icb, uint32_t block, uint32_t ocb)
         MATH(( llk_math_dest_section_done<SYNC>() ));
         PACK(( llk_pack_dest_section_done<SYNC>() ));
     }
+    // PACK(( DPRINT << 'p' << ENDL() ));
 
 }
 
