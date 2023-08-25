@@ -74,7 +74,7 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
                 tt_dtype=self.model_config["SIN_CACHED_WEIGHTS_DTYPE"],
             )
 
-    def forward(self, layer: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, layer: tt_lib.tensor.Tensor, token_idx: Optional[int] = None) -> tt_lib.tensor.Tensor:
         # x: [bs, num_attention_heads, seq_len, head_size]
         # seq_len > self.max_seq_len_cached block is unlikely to be run after we build sin/cos in `__init__`. Keep the logic here just in case.
         seq_len = layer.shape()[2]
@@ -86,6 +86,7 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
             layer,
             self.tt_cos_cached,
             self.tt_sin_cached,
+            token_idx,
             output_mem_config=self.model_config["ROTARY_EMBEDDING_OUTPUT_MEMCFG"],
             # output_dtype=self.model_config["ROTARY_EMBEDDING_OUTPUT_DTYPE"], # Not currently supported
         )
@@ -239,8 +240,12 @@ class TtFalconAttention(nn.Module):
         #########################
         ### ROTARY EMBEDDINGS ###
         #########################
-        query_layer = self.rotary_embedding(query_layer)
-        key_layer = self.rotary_embedding(key_layer)
+        if self.llm_mode == "prefill":
+            query_layer = self.rotary_embedding(query_layer)
+            key_layer = self.rotary_embedding(key_layer)
+        elif self.llm_mode == "decode":
+            query_layer = self.rotary_embedding(query_layer, layer_past_len + 1)
+            key_layer = self.rotary_embedding(key_layer, layer_past_len + 1)
 
         ######################
         ### K CACHE UPDATE ###
