@@ -238,7 +238,7 @@ ALWI void cb_pop_front(uint32_t cbid, uint32_t ntiles) {
  */
 ALWI void matmul_tiles(uint32_t c_in0, uint32_t c_in1, uint32_t itile0, uint32_t itile1, uint32_t idst, bool transpose) {
     UNPACK(( llk_unpack_AB_matmul(c_in0,c_in1,itile0,itile1) ));
-    MATH(( llk_math_matmul<MATH_FIDELITY>(idst)  ));
+    MATH(( llk_math_matmul<MATH_FIDELITY>(idst, transpose)  ));
 }
 
 // documented in dataflow_api.h

@@ -18,7 +18,7 @@ inline void matmul_configure_addrmod();
 inline void matmul_configure_mop();
 
 template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
-inline void llk_math_matmul(uint dst_index) {
+inline void llk_math_matmul(uint dst_index, bool transpose) {
 
     math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
     if constexpr (FaceLayout == DstTileFaceLayout::ColMajor) {
@@ -37,7 +37,7 @@ inline void llk_math_matmul(uint dst_index) {
         if constexpr (NUM_FIDELITY_PHASES > 0) {
             for (int j=0; j<2; j++) {
                 // TODO(agrebenisan): NEED TO ADD THIS BACK IN!
-                // if (transpose) TTI_TRNSPSRCA;
+                if (transpose) TTI_TRNSPSRCA;
 
                 for (int i=0; i<NUM_FIDELITY_PHASES; i++) {
                     ckernel_template::run(instrn_buffer);
@@ -46,7 +46,7 @@ inline void llk_math_matmul(uint dst_index) {
                 TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D_F);     // DEST = 16, DEST_CR = 16, FIDELITY_PHASE = 0
 
                 // TODO(agrebenisan): NEED TO ADD THIS BACK IN!
-                // if (transpose) TTI_TRNSPSRCA;
+                if (transpose) TTI_TRNSPSRCA;
 
                 for (int i=0; i<NUM_FIDELITY_PHASES; i++) {
                     ckernel_template::run(instrn_buffer);
@@ -55,22 +55,22 @@ inline void llk_math_matmul(uint dst_index) {
             }
         } else {
             // TODO(agrebenisan): NEED TO ADD THIS BACK IN!
-            // if (transpose) TTI_TRNSPSRCA;
+            if (transpose) TTI_TRNSPSRCA;
 
             ckernel_template::run(instrn_buffer);
 
             // TODO(agrebenisan): NEED TO ADD THIS BACK IN!
-            // if (transpose) TTI_TRNSPSRCA;
+            if (transpose) TTI_TRNSPSRCA;
 
             ckernel_template::run(instrn_buffer);
             TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_D);
 
             // TODO(agrebenisan): NEED TO ADD THIS BACK IN!
-            // if (transpose) TTI_TRNSPSRCA;
+            if (transpose) TTI_TRNSPSRCA;
             ckernel_template::run(instrn_buffer);
 
             // TODO(agrebenisan): NEED TO ADD THIS BACK IN!
-            // if (transpose) TTI_TRNSPSRCA;
+            if (transpose) TTI_TRNSPSRCA;
             ckernel_template::run(instrn_buffer);
             TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_D);
         }

@@ -11,24 +11,22 @@ using std::uint32_t;
 namespace NAMESPACE {
 void MAIN {
 
-    constexpr int onetile = 1;
+    constexpr uint32_t onetile = 1;
 
-    int dst_tile_index = 0;
-    int in0_block_tile_index = 0;
+    constexpr uint32_t batch = get_compile_time_arg_val(0);
+    constexpr uint32_t Mt = get_compile_time_arg_val(1);
+    constexpr uint32_t Kt = get_compile_time_arg_val(2);
+    constexpr uint32_t Nt = get_compile_time_arg_val(3);
+    constexpr uint32_t transpose_hw = get_compile_time_arg_val(4);
 
-    uint32_t batch = get_compile_time_arg_val(0);
-    uint32_t Mt = get_compile_time_arg_val(1);
-    uint32_t Kt = get_compile_time_arg_val(2);
-    uint32_t Nt = get_compile_time_arg_val(3);
-
-    const uint32_t cb_intermed0 = 24;
-    const uint32_t cb_intermed1 = 25;
-    const uint32_t cb_intermed2 = 26;
-    const uint32_t out_cb_id = 16;
+    constexpr uint32_t cb_intermed0 = 24;
+    constexpr uint32_t cb_intermed1 = 25;
+    constexpr uint32_t cb_intermed2 = 26;
+    constexpr uint32_t out_cb_id = 16;
 
     constexpr uint32_t num_rows_in_one_tile = 32;
 
-    mm_init();
+    mm_init(tt::CB::c_in0, tt::CB::c_in1, out_cb_id, transpose_hw);
 
     for (uint32_t nb = 0; nb < batch; nb++)
     for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C) // output tile of C
@@ -42,7 +40,7 @@ void MAIN {
                 }
                 cb_wait_front(tt::CB::c_in1, onetile);
 
-                matmul_tiles(tt::CB::c_in0, tt::CB::c_in1, kt, 0, 0, false);
+                matmul_tiles(tt::CB::c_in0, tt::CB::c_in1, kt, 0, 0, transpose_hw);
 
                 cb_pop_front(tt::CB::c_in1, onetile);
             }
@@ -62,7 +60,7 @@ void MAIN {
             cb_pop_front(cb_intermed0, 1);
             untilize_uninit(cb_intermed0);
 
-            mm_init_short();
+            mm_init_short(transpose_hw);
         }
         cb_pop_front(tt::CB::c_in0, Kt);
 
@@ -78,8 +76,7 @@ void MAIN {
         cb_pop_front(cb_intermed2, 1);
         tilize_uninit();
 
-        mm_init_short();
-
+        mm_init_short(transpose_hw);
     }
 
 }

@@ -104,7 +104,6 @@ void AttnMatmul::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     TT_ASSERT((input_tensor_a.layout() == Layout::TILE && input_tensor_b.layout() == Layout::TILE), "Inputs to matmul must be tilized");
-    TT_ASSERT(input_tensor_a.shape()[3] == input_tensor_b.shape()[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in bmm_op"); // A.K == B.K
 
     // TODO: Uplift to support BFLOAT8_B and mixed precision
     TT_ASSERT(input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT16, "Unsupported data format");
@@ -116,10 +115,24 @@ void AttnMatmul::validate(const std::vector<Tensor>& input_tensors) const {
     const auto bshape = input_tensor_b.shape();
     TT_ASSERT((ashape[0] == 1), "Input q_len must be 1!");
     TT_ASSERT((bshape[1] == 1), "Number of kv_heads must be 1!"); // TODO: May need to uplift to support falcon-40B
-    // TT_ASSERT((ashape[2] == bshape[0]), "Num of users must match!");
-    // TODO: Remove falcon-7b specific shapes for decode?
-    // TT_ASSERT((input_tensor_a.shape() == Shape({1, 71, ashape[2], 64})), "Unsupported input shape");
-    // TT_ASSERT((input_tensor_b.shape() == Shape({bshape[0], 1, 64, bshape[3]})), "Unsupported input shape");
+    TT_ASSERT((ashape[2] == bshape[0]), "Num of users must match!");
+
+    bool read_from_kv_cache = false;
+    if (this->num_tokens.has_value() or this->transpose_hw.has_value()) {
+        TT_ASSERT((this->num_tokens.has_value() and this->transpose_hw.has_value()), "Must provide num_tokens and transpose_hw flag if we are reading from cache for in1!");
+        TT_ASSERT(this->num_tokens.value() % 32 == 0, "Number of tokens must be divisble by 32!");
+        read_from_kv_cache = true;
+    }
+
+    if (read_from_kv_cache) {
+        if (this->transpose_hw.value()) {
+            TT_ASSERT(ashape[3] == bshape[3] && "For pre-attention matmul, dimension K for B is in B.shape[3], so A.shape[3] must match B.shape[3]"); // A.K == B.K
+        } else {
+            TT_ASSERT(ashape[3] == this->num_tokens && "For post-attention matmul, dimension K (A.shape[3]) is the kv_seq_len in this case and must match the length of the cache we read"); // A.K == B.K
+        }
+    } else {
+        TT_ASSERT(ashape[3] == bshape[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in attn_matmul op"); // A.K == B.K
+    }
 }
 
 std::vector<Shape> AttnMatmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
@@ -132,7 +145,12 @@ std::vector<Shape> AttnMatmul::compute_output_shapes(const std::vector<Tensor>& 
     const auto ashape = input_tensor_a.shape();
     const auto bshape = input_tensor_b.shape();
 
-    return {Shape{1, ashape[1], ashape[2], bshape[3]}};
+    uint32_t N = bshape[3];
+    if (this->transpose_hw.value_or(false)) {
+        N = this->num_tokens.value();
+    }
+
+    return {Shape{1, ashape[1], ashape[2], N}};
 }
 
 std::vector<Tensor> AttnMatmul::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
@@ -148,11 +166,12 @@ operation::ProgramWithCallbacks AttnMatmul::create_program(const std::vector<Ten
     auto device_compute_with_storage_grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
     TT_ASSERT((this->compute_with_storage_grid_size.x <= device_compute_with_storage_grid_size.x && this->compute_with_storage_grid_size.y <= device_compute_with_storage_grid_size.y), "Unsupported grid shape");
 
-    return multi_core_attn_matmul(input_tensor_a, input_tensor_b, output_tensor, this->compute_with_storage_grid_size, output_dtype);
+    return multi_core_attn_matmul(input_tensor_a, input_tensor_b, output_tensor, this->num_tokens, this->transpose_hw, this->compute_with_storage_grid_size, output_dtype);
 }
 
 tt::stl::reflection::Attributes AttnMatmul::attributes() const {
     return {
+        {"transpose_hw", this->transpose_hw},
         {"compute_with_storage_grid_size", this->compute_with_storage_grid_size.str()},
         {"output_mem_config", this->output_mem_config},
         {"output_dtype", this->output_dtype},

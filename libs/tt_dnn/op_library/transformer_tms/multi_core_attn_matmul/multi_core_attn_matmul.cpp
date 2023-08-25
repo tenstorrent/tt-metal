@@ -13,7 +13,7 @@ namespace primary {
 namespace transformers {
 
 
-operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Tensor &b, Tensor& output, CoreCoord compute_with_storage_grid_size, DataType output_dtype) {
+operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Tensor &b, Tensor& output, std::optional<const uint32_t> num_tokens, std::optional<const bool> transpose_hw, CoreCoord compute_with_storage_grid_size, DataType output_dtype) {
 
     tt_metal::Program program{};
 
@@ -45,13 +45,24 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
 
     // C = torch.matmul(A.transpose(0, 2) * B).transpose(0, 2)
     // MN = MK*KN
+    // Note, in1 K may not be the same as in0 K. We will read up to in0 K from in1 K for matmul.
+    const bool transpose_hw_bool = transpose_hw.value_or(false);
+    const uint32_t num_tokens_val = num_tokens.value_or(0); // should not be nullopt if transpose_hw=true
+    constexpr uint32_t num_rows_in_one_tile = 32;
+
     uint32_t B = ashape[1];  // ashape[0] is q_len
     uint32_t Mt = ashape[2]/TILE_HEIGHT;
     uint32_t Kt = ashape[3]/TILE_WIDTH;
-    uint32_t Nt = bshape[3]/TILE_WIDTH;
-    uint32_t KtNt = Kt * Nt;
+    // For transpose_hw=true, in1_Kt is same as in0_Kt but on bshape[3]
+    // For transpose_hw=false, in1_Kt is on bshape[2] but represents the max cache length to read from (ie. may not equal in0_Kt)
+    uint32_t in1_Kt = transpose_hw_bool ? Kt : bshape[2]/TILE_HEIGHT;
+    uint32_t Nt = transpose_hw_bool ? num_tokens_val/TILE_HEIGHT : bshape[3]/TILE_WIDTH;
     uint32_t MtKt = Mt * Kt;
     uint32_t MtNt = Mt * Nt;
+    // For transpose_hw=true, in1_Kt is max cache length
+    // For transpose_hw=false, bshape[2] is max cache length
+    uint32_t in1_KtNt_stride = transpose_hw_bool ? bshape[2]/TILE_HEIGHT * in1_Kt : in1_Kt * Nt;
+    uint32_t in1_KtNt_skip = transpose_hw_bool ? (bshape[2]/TILE_HEIGHT - 1) * in1_Kt : (in1_Kt - Kt) * Nt;
 
     uint32_t src0_addr = src0_buffer->address();
     uint32_t src1_addr = src1_buffer->address();
@@ -119,9 +130,14 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
         num_output_tiles * output_single_tile_size,
         output_data_format
     );
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
+
+    const bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    const bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> reader_compile_time_args = {
+        (uint32_t) src0_is_dram,
+        (uint32_t) src1_is_dram,
+        (uint32_t) transpose_hw_bool,
+    };
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
@@ -145,7 +161,8 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
         1, // B
         1, // Mt
         Kt, // Kt
-        num_output_blocks_per_core_group_1 * MtNt // Nt
+        num_output_blocks_per_core_group_1 * MtNt, // Nt
+        (uint32_t) transpose_hw_bool, // transpose_hw for matmul_init
     }; // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set Nt for simplicity
 
     auto eltwise_binary_kernel_group_1_id = tt_metal::CreateComputeKernel(
@@ -160,7 +177,8 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
             1, // B
             1, // Mt
             Kt, // Kt
-            num_output_blocks_per_core_group_2 * MtNt // Nt
+            num_output_blocks_per_core_group_2 * MtNt, // Nt
+            (uint32_t) transpose_hw_bool, // transpose_hw for matmul_init
         }; // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set Nt for simplicity
 
         auto eltwise_binary_kernel_group_2_id = tt_metal::CreateComputeKernel(
@@ -172,7 +190,6 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
     }
 
     uint32_t num_output_blocks_per_core;
-    constexpr uint32_t num_rows_in_one_tile = 32;
     for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++){
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
@@ -193,7 +210,8 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
                 Kt,
                 Nt,
                 MtKt,
-                KtNt * num_rows_in_one_tile, // itileB stride; skips 32 * KtNt in bshape[0] for one block of MtNt
+                in1_KtNt_skip, // Skip to get next batch for in1 after reading in0 Kt
+                in1_KtNt_stride * num_rows_in_one_tile, // itileB stride; skips 32 * KtNt in bshape[0] for one block of MtNt
                 num_output_blocks_per_core,
                 num_blocks_written * MtKt, // itileA_start
                 0, // itileB_start; always read in same in1 per core TODO: multi-cast

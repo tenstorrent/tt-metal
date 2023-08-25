@@ -8,6 +8,7 @@ import torch
 
 def run_falcon_attn_matmul_test(
     falcon_op,
+    transpose_hw,
     batch,
     seq_len,
     K,
@@ -18,6 +19,10 @@ def run_falcon_attn_matmul_test(
     in1_mem_config,
     out_mem_config,
 ):
+    torch.manual_seed(1234)
+    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    ttl.device.InitializeDevice(device)
+
     pcc = 0.99
 
     if falcon_op == ttl.operations.primary.transformers.attn_matmul:
@@ -27,34 +32,71 @@ def run_falcon_attn_matmul_test(
         a_shape = [q_len, q_heads, batch, K]
         b_shape = [batch, kv_heads, K, seq_len]
         expected_output_shape = [1, q_heads, batch, seq_len]
+
+        B = torch.randn(b_shape) - 0.95
+        b_t = (
+            ttl.tensor.Tensor(B, in1_dtype)
+            .to(ttl.tensor.Layout.TILE)
+            .to(device, in1_mem_config)
+        )
+
+    elif falcon_op == ttl.operations.primary.transformers.attn_matmul_from_cache:
+        q_len = 1
+        kv_heads = 1
+        q_heads = 71
+        max_seq_len = 2048
+
+        if transpose_hw:
+            # Pre-attention matmul
+            a_shape = [q_len, q_heads, batch, K]
+            b_shape = [batch, kv_heads, max_seq_len, K]
+            kv_cache = torch.randn(b_shape) - 0.95
+            B = kv_cache[:, :, :seq_len, :].transpose(-1, -2)
+            expected_output_shape = [1, q_heads, batch, seq_len]
+        else:
+            # Post-attention matmul
+            a_shape = [q_len, q_heads, batch, seq_len]
+            b_shape = [batch, kv_heads, max_seq_len, K]
+            kv_cache = torch.randn(b_shape) - 0.95
+            B = kv_cache[:, :, :seq_len, :]
+            expected_output_shape = [1, q_heads, batch, K]
+
+        b_t = (
+            ttl.tensor.Tensor(kv_cache, in1_dtype)
+            .to(ttl.tensor.Layout.TILE)
+            .to(device, in1_mem_config)
+        )
+
     else:
         raise NotImplementedError(f"falcon matmul op is undefined!")
 
-    torch.manual_seed(1234)
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
-
     A = torch.randn(a_shape)
-    B = torch.randn(b_shape) - 0.95
 
     a_t = (
         ttl.tensor.Tensor(A, in0_dtype)
         .to(ttl.tensor.Layout.TILE)
         .to(device, in0_mem_config)
     )
-    b_t = (
-        ttl.tensor.Tensor(B, in1_dtype)
-        .to(ttl.tensor.Layout.TILE)
-        .to(device, in1_mem_config)
-    )
 
-    out = falcon_op(
-        a_t,
-        b_t,
-        compute_with_storage_grid_size=ttl.tensor.CoreCoord(12, 9),
-        output_mem_config=out_mem_config,
-        output_dtype=out_dtype,
-    )
+    if falcon_op == ttl.operations.primary.transformers.attn_matmul:
+        out = falcon_op(
+            a_t,
+            b_t,
+            compute_with_storage_grid_size=ttl.tensor.CoreCoord(12, 9),
+            output_mem_config=out_mem_config,
+            output_dtype=out_dtype,
+        )
+
+    elif falcon_op == ttl.operations.primary.transformers.attn_matmul_from_cache:
+        out = ttl.operations.primary.transformers.attn_matmul_from_cache(
+            a_t,
+            b_t,
+            seq_len,
+            transpose_hw,
+            compute_with_storage_grid_size=ttl.tensor.CoreCoord(12, 9),
+            output_mem_config=out_mem_config,
+            output_dtype=out_dtype,
+        )
 
     # Check memory and dtype of inputs and outputs
     assert a_t.memory_config().buffer_type == in0_mem_config.buffer_type
@@ -113,9 +155,13 @@ def run_falcon_attn_matmul_test(
     ids=["in0_BFLOAT16"],
 )
 @pytest.mark.parametrize(
-    "falcon_op",
-    (ttl.operations.primary.transformers.attn_matmul,),
-    ids=["attn_matmul"],
+    "falcon_op, transpose_hw",
+    (
+        (ttl.operations.primary.transformers.attn_matmul, None),
+        (ttl.operations.primary.transformers.attn_matmul_from_cache, True),
+        (ttl.operations.primary.transformers.attn_matmul_from_cache, False),
+    ),
+    ids=["attn_matmul", "pre_attn_matmul_from_cache", "post_attn_matmul_from_cache"],
 )
 @pytest.mark.parametrize(
     "batch, seq_len, K",
@@ -123,6 +169,7 @@ def run_falcon_attn_matmul_test(
 )
 def test_falcon_matmul(
     falcon_op,
+    transpose_hw,
     batch,
     seq_len,
     K,
@@ -139,6 +186,7 @@ def test_falcon_matmul(
     )
     run_falcon_attn_matmul_test(
         falcon_op,
+        transpose_hw,
         batch,
         seq_len,
         K,

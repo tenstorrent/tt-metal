@@ -9,13 +9,15 @@ void kernel_main() {
     uint32_t Kt                   = get_arg_val<uint32_t>(3);
     uint32_t Nt                   = get_arg_val<uint32_t>(4);
     uint32_t MtKt                 = get_arg_val<uint32_t>(5); // if 0
-    uint32_t KtNt_mul_32          = get_arg_val<uint32_t>(6);
-    uint32_t batch                = get_arg_val<uint32_t>(7);
-    uint32_t itileA_start 				= get_arg_val<uint32_t>(8);
-    uint32_t itileB_start 				= get_arg_val<uint32_t>(9);
+    uint32_t in1_KtNt_skip        = get_arg_val<uint32_t>(6); // 0 if in0 and in1 Kt are the same
+    uint32_t in1_KtNt_mul_32      = get_arg_val<uint32_t>(7);
+    uint32_t blocks               = get_arg_val<uint32_t>(8);
+    uint32_t itileA_start         = get_arg_val<uint32_t>(9);
+    uint32_t itileB_start         = get_arg_val<uint32_t>(10);
 
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr bool src1_is_dram = get_compile_time_arg_val(1) == 1;
+    #define transpose_hw_bool get_compile_time_arg_val(2) == 1
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
@@ -55,7 +57,7 @@ void kernel_main() {
     constexpr uint32_t bfloat16_row_bytes = 64;
     constexpr uint32_t num_rows_in_one_tile = 32;
 
-    for (uint32_t b = 0; b < batch; b++) {
+    for (uint32_t b = 0; b < blocks; b++) {
         itileA_Mt = itileA_batch;
         itileB_batch = itileB_start;
 
@@ -89,7 +91,11 @@ void kernel_main() {
                 noc_async_read_barrier();
                 cb_push_back(cb_id_in1, onetile);
 
-                itileB += Nt; // B is KN, so to get k++ we stride by Nt
+                #if (transpose_hw_bool)
+                itileB++; // Kt is in B[3], so it is contiguous in memory
+                #else
+                itileB += Nt; // Kt is in B[2], so stride is Nt
+                #endif
             } // Kt loop
 
             // Read 32 untilized tiles and select correct rows to reconstruct single correct tile
@@ -100,16 +106,21 @@ void kernel_main() {
             cb_intermed1_addr += bfloat16_row_bytes;
             cb_intermed2_addr += bfloat16_row_bytes;
 
-
+            itileB += in1_KtNt_skip; // different depending on transpose_hw
         } // 32 tiles loop
         cb_push_back(cb_id_intermed2, 1);
 
         // Next tile in Nt
+        #if (transpose_hw_bool)
+        itileB_Nt += Kt; // next tile in Nt is in B[2], so stride is Kt
+        #else
         itileB_Nt++;
+        #endif
     } // Nt loop
 
     itileA_Mt += Kt;
-    itileB_batch += KtNt_mul_32;
+    // here, KtNt is the stride of the full B tensor (ie. max cache length is incorporated in one of Kt or Nt depending on transpose_hw)
+    itileB_batch += in1_KtNt_mul_32; // different depending on transpose_hw
     } // Mt loop
 
     itileA_batch += MtKt;

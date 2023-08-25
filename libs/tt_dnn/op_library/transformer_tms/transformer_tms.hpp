@@ -16,7 +16,7 @@ namespace transformers {
 
 operation::ProgramWithCallbacks multi_core_split_fused_qkv_and_split_heads(const Tensor &input_tensor, std::vector<Tensor> &output, CoreCoord compute_with_storage_grid_size);
 operation::ProgramWithCallbacks multi_core_concat_heads(const Tensor &input_tensor, Tensor &output_tensor, CoreCoord compute_with_storage_grid_size);
-operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor &output_tensor, CoreCoord compute_with_storage_grid_size, DataType output_dtype);
+operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor &output_tensor, std::optional<const uint32_t> num_tokens, std::optional<const bool> transpose_hw, CoreCoord compute_with_storage_grid_size, DataType output_dtype);
 
 struct SplitFusedQKVAndSplitHeads {
     CoreCoord compute_with_storage_grid_size;
@@ -50,6 +50,8 @@ inline Tensor concatenate_heads(const Tensor &input_tensor, const CoreCoord& com
 }
 
 struct AttnMatmul {
+    std::optional<const uint32_t> num_tokens;
+    std::optional<const bool> transpose_hw;
     CoreCoord compute_with_storage_grid_size;
     MemoryConfig output_mem_config;
     DataType output_dtype;
@@ -62,7 +64,14 @@ struct AttnMatmul {
 };
 
 inline Tensor attn_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const CoreCoord& compute_with_storage_grid_size, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype=std::nullopt) {
-    return operation::run(AttnMatmul{compute_with_storage_grid_size, mem_config, output_dtype.value_or(input_tensor_a.dtype())}, {input_tensor_a, input_tensor_b}).at(0);
+    return operation::run(AttnMatmul{std::nullopt, std::nullopt, compute_with_storage_grid_size, mem_config, output_dtype.value_or(input_tensor_a.dtype())}, {input_tensor_a, input_tensor_b}).at(0);
+}
+
+inline Tensor attn_matmul_from_cache(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const uint32_t num_tokens, const bool transpose_hw, const CoreCoord& compute_with_storage_grid_size, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype=std::nullopt) {
+    TT_ASSERT(num_tokens > 0, "Number of tokens must be at least 1!");
+    TT_ASSERT(num_tokens <= input_tensor_b.shape()[2], "Number of tokens must be smaller or equal to the max cache length (B.shape[2])!");
+    const uint32_t num_tokens_rounded_up_to_32 = ((num_tokens - 1) / 32 + 1) * 32;
+    return operation::run(AttnMatmul{num_tokens_rounded_up_to_32, transpose_hw, compute_with_storage_grid_size, mem_config, output_dtype.value_or(input_tensor_a.dtype())}, {input_tensor_a, input_tensor_b}).at(0);
 }
 
 }  // namespace transformers
