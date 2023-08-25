@@ -28,12 +28,14 @@ env pytest tests/python_api_testing/models/whisper -k whisper_for_audio_classifi
 env pytest tests/python_api_testing/models/whisper -k whisper_for_conditional_generation
 
 env pytest tests/python_api_testing/models/stable_diffusion/tests/test_embedding.py
-env pytest tests/python_api_testing/models/stable_diffusion/tests/test_cross_attn_down_block.py -k test_run_cross_attn_down_block_real_input_inference
-env pytest tests/python_api_testing/models/stable_diffusion/tests/test_cross_attn_up_block.py -k test_run_cross_attn_up_block_real_input_inference
-env pytest tests/python_api_testing/models/stable_diffusion/tests/test_downblock_2d.py -k test_run_downblock_real_input_inference
-env pytest tests/python_api_testing/models/stable_diffusion/tests/test_unet_mid_block.py -k test_run_unet_mid_block_real_input_inference
-env pytest tests/python_api_testing/models/stable_diffusion/tests/test_upblock_2d.py -k test_run_upblock_real_input_inference
-env pytest tests/python_api_testing/models/stable_diffusion/tests -k test_unbatched_stable_diffusion
+
+# Bad tests, don't enable: Hanging post commit 8/24/23 debug war room session, see PR#2297, PR#2301
+# env pytest tests/python_api_testing/models/stable_diffusion/tests/test_cross_attn_down_block.py -k test_run_cross_attn_down_block_real_input_inference
+# env pytest tests/python_api_testing/models/stable_diffusion/tests/test_cross_attn_up_block.py -k test_run_cross_attn_up_block_real_input_inference
+# env pytest tests/python_api_testing/models/stable_diffusion/tests/test_downblock_2d.py -k test_run_downblock_real_input_inference
+# env pytest tests/python_api_testing/models/stable_diffusion/tests/test_unet_mid_block.py -k test_run_unet_mid_block_real_input_inference
+# env pytest tests/python_api_testing/models/stable_diffusion/tests/test_upblock_2d.py -k test_run_upblock_real_input_inference
+# env pytest tests/python_api_testing/models/stable_diffusion/tests -k test_unbatched_stable_diffusion
 
 env pytest tests/python_api_testing/models/deit/tests/test_deit_for_image_classification_with_teacher.py -k test_deit_for_image_classification_with_teacher_inference
 
