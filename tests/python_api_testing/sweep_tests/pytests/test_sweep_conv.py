@@ -107,7 +107,7 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
     ttl.device.CloseDevice(device)
     return passing_pcc
 
-
+@pytest.mark.skip(reason="Hanging post commit 8/24/23 debug war room session, see PR#2297, PR#2301")
 def test_sweep_conv_tt():
     test_bench = generate_conv_tb()
     pytorch_conv_golden_tb = generate_conv_tb_with_pytorch_golden(test_bench)

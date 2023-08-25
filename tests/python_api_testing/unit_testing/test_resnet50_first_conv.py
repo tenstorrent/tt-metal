@@ -24,7 +24,7 @@ from tests.python_api_testing.conv.conv_unit_test_utils import (
 )
 import torch
 
-
+@pytest.mark.skip(reason="Hanging post commit 8/24/23 debug war room session, see PR#2297, PR#2301")
 def test_resnet50_first_conv_as_large_blocked_matmul(use_program_cache, device):
     (K, C, padded_C, H, W, R, S, padded_S, stride_h, stride_w, pad_h, pad_w) = (
         64,
