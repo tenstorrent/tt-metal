@@ -521,13 +521,13 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.layernorm
 
+.. autofunction:: tt_lib.tensor.groupnorm
+
 .. autofunction:: tt_lib.tensor.add_layernorm
 
 .. autofunction:: tt_lib.tensor.convert_conv_weight_tensor_to_tiled_layout
 
 .. autofunction:: tt_lib.tensor.xlogy
-
-.. autofunction:: tt_lib.tensor.subalpha
 
 .. autofunction:: tt_lib.tensor.addcmul
 
@@ -542,3 +542,4 @@ Other Operations
 .. autofunction:: tt_lib.tensor.normalize_hw
 
 .. autofunction:: tt_lib.tensor.bias_gelu
+
