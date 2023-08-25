@@ -64,7 +64,7 @@ tt-metal/tt_metal/programming_examples/profiler @mo-tenstorrent
 
 # test scripts
 tests/scripts/run_profiler_regressions.sh @mo-tenstorrent @tt-rkim
-tests/scripts/run_performance.sh @ashayestehmanesh @farbabi
+tests/scripts/run_performance.sh @ashayestehmanesh
 
 # eager - dtx
 **/dtx/ @tt-nshanker
