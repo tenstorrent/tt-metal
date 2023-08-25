@@ -6,7 +6,7 @@ on:
     branches: ["main"]
 
 jobs:
-  build-and-unit-tests:
+  build-and-unit-tests-fast-dispatch:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
