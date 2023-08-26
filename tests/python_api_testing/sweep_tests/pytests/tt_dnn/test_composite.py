@@ -120,6 +120,10 @@ def test_run_eltwise_composite_test(
 
     generator = generation_funcs.gen_rand
 
+    if is_wormhole_b0():
+        if fn in ["atanh","ldexp","logaddexp2"]:
+            pytest.skip('Not tested for Wormhole - skipping')
+    
     datagen_func = [
         generation_funcs.gen_func_with_cast(
             partial(generator, low=options[fn][0], high=options[fn][1]),
