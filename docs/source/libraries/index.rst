@@ -6,3 +6,4 @@ Libraries
    tt_dnn
    tensor
    examples
+   llk
