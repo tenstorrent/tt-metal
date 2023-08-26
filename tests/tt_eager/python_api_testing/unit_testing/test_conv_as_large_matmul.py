@@ -87,7 +87,6 @@ import torch
         (16 * 32, 32, 24, 24, 3, 3, 1, 1, 0, 0),
     ),
 )
-@pytest.mark.skip(reason="Hanging post commit 8/24/23 debug war room session, see PR#2297, PR#2301")
 def test_run_conv_as_large_matmul(
     use_program_cache,
     run_conv_with_address_map,
