@@ -12,19 +12,20 @@ Welcome to TT-Metal documentation!
    get_started/get_started
 
 .. toctree::
-   :caption: BUDA-M
+   :caption: TT-Metal
 
-   apis/index
-   examples/index
+   tt_metal/programming_model/index.rst
+   tt_metal/apis/index
+   tt_metal/examples/index
    tools/index
 
 .. toctree::
-   :caption: BUDA-Eager
+   :caption: TT-Eager
 
    libraries/index
 
 .. toctree::
-   :caption: TT-Metal Models
+   :caption: Models
 
    tt_metal_models/get_started
    tt_metal_models/get_performance
