@@ -6,9 +6,9 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/bcast.h"
 
-#define DEBUG_PRINT 1
+#define DEBUG_PRINT 0
 
-#include "debug_macros.h"
+// #include "debug_macros.h"
 
 // SliceRange srt = SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 8, .ws = 1};
 // SliceRange srr = SliceRange{.h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1};
@@ -26,17 +26,11 @@ inline void tilize_in(
     tilize_init_short(in_cb_id, in_block_w);
     for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
         for (uint32_t h = 0; h < in_subblock_h; ++h) {
-            // UDPRINT("tilize in ...... " << in_subblock << "/" << in_num_subblocks << ", " << h << "/" << in_subblock_h << " NTILES: " << in_block_w);
             cb_wait_front(in_cb_id, in_block_w);
-            // UDPRINT("34");
             cb_reserve_back(out_cb_id, in_block_w);;
-            // UDPRINT("54");
             tilize_block(in_cb_id, in_block_w, out_cb_id);
-            // UDPRINT("14");
             cb_push_back(out_cb_id, in_block_w);
-            // UDPRINT("84");
             cb_pop_front(in_cb_id, in_block_w);
-            // UDPRINT("tilize in ...... done");
         }
     }
     tilize_uninit();
@@ -99,7 +93,6 @@ inline void pack_matmul_subblock(uint32_t cb_id, uint32_t out_subblock_num_tiles
         pack_tile(i, cb_id);
     }
     cb_push_back(cb_id, out_subblock_num_tiles);
-    // PACK(( DPRINT << 'q' << ENDL() ));
 }
 
 namespace NAMESPACE {
@@ -147,28 +140,19 @@ void MAIN {
         for(uint32_t in1_block_w_i = 0; in1_block_w_i < in1_num_blocks_w; ++in1_block_w_i) {
             bool enable_reload = false;
             for(uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
-                UDPRINT("hahahahah");
-                MDPRINT("hahahahah");
-                PACK(( DPRINT << 's' << ENDL() ));
                 bool last_out = (in0_block_w_i == in0_num_blocks_w - 1);
                 if (tilize_in0) {
                     tilize_in(in0_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
-                    // UDPRINT("08932748047081480730947032740327450720572409570247502347");
                     mm_init_short();
                     cb_wait_front(tilized_in0_cb_id, in0_block_num_tiles);
                 } else {
-                    // DPRINT << "WUR()*Y#Y$ *OU@QEHD WFR() *( R*HNW@UIEN) " << ENDL();
                     cb_wait_front(in0_cb_id, in0_block_num_tiles);
                 }
-                UDPRINT("hahahahah 2");
-                MDPRINT("hahahahah 2");
-                cb_wait_front(in1_cb_id, in1_block_num_tiles);      // <<<------ UNPACK
+                cb_wait_front(in1_cb_id, in1_block_num_tiles);
                 int in0_index_subblock_offset = 0;
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                     int in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
-                        UDPRINT("hahahahah 2.5 " << in0_subblock_i << "," << in1_subblock_i);
-                        MDPRINT("hahahahah 2.5 ");
                         acquire_dst(tt::DstMode::Half);
                         if (enable_reload) {
                             // Reconfigure input
@@ -184,8 +168,6 @@ void MAIN {
                         // Compute output sub-block from in0_subblock x in1_subblock
                         int dst_index = 0;
                         int in0_index_h_offset = 0;
-                        UDPRINT("hahahahah 3");
-                        MDPRINT("hahahahah 3");         // <<<<<---- MATH
                         for (uint32_t h = 0; h < out_subblock_h; ++h) {
                             for (uint32_t w = 0; w < out_subblock_w; ++w) {
                                 int in1_index_inner_dim_offset = 0;
@@ -205,32 +187,15 @@ void MAIN {
                         #ifdef FUSE_BIAS
                             // if bias is to be added, add it to the data in dst before packing into the out cb
                             if (last_out) {
-                                UDPRINT("a");
-                                MDPRINT("a");
-                                PACK(( DPRINT << 'X' << ENDL() ));  // <<<----- PACK
                                 // first move the current result from dst to interim CB
                                 pack_matmul_subblock(out_for_bias_cb_id, out_subblock_num_tiles);
                                 release_dst(tt::DstMode::Half);
-
-                                // UDPRINT("b");
-                                // MDPRINT("b");
-                                // PACK(( DPRINT << 'Y' << ENDL() ));
-
                                 // reconfig unpacker df for src B
                                 // unpack_reconfig_data_format(out_for_bias_cb_id, bias_cb_id);
                                 // bcast add data from bias_cb_id
-                                // UDPRINT("c");
-                                // MDPRINT("c");
-                                // PACK(( DPRINT << 'Z' << ENDL() ));
                                 cb_wait_front(bias_cb_id, bias_ntiles_w);
-                                // UDPRINT("d");
-                                // MDPRINT("d");
-                                // PACK(( DPRINT << '1' << ENDL() ));
                                 cb_wait_front(out_for_bias_cb_id, out_subblock_num_tiles);
                                 add_bcast_rows_init_short();
-                                // UDPRINT("e");
-                                // MDPRINT("e");
-                                // PACK(( DPRINT << '2' << ENDL() ));
                                 // reconfig packer df for out
                                 // pack_reconfig_data_format(out_cb_id);
                                 acquire_dst(tt::DstMode::Half);
@@ -243,14 +208,8 @@ void MAIN {
                                         ++ i;
                                     }
                                 }
-                                // UDPRINT("f");
-                                // MDPRINT("f");
-                                // PACK(( DPRINT << '3' << ENDL() ));
                                 // do not pop front bias as it may be used again for subsequent blocks
                                 cb_pop_front(out_for_bias_cb_id, out_subblock_num_tiles);
-                                UDPRINT("g");
-                                MDPRINT("g");
-                                PACK(( DPRINT << '4' << ENDL() ));
                                 // reconfig for matmul
                                 mm_init_short();
                                 // reconfig unpacker df for srcB
@@ -282,8 +241,6 @@ void MAIN {
                         } // last_out
                     #endif
                     in0_index_subblock_offset += in0_subblock_num_tiles;
-                    UDPRINT("hahahahah 5");
-                    MDPRINT("hahahahah 5");
                 }
 
                 if (spill) enable_reload = true;
@@ -293,8 +250,5 @@ void MAIN {
             } // for in0_num_blocks_w
         } // for in1_num_blocks_w
     } // for in0_num_blocks_h
-    UDPRINT("COMPUTE DONE");
-    MDPRINT("COMPUTE DONE");
-    PACK(( DPRINT << 'k' << ENDL() ));
 } // MAIN
 } // NAMESPACE

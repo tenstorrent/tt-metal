@@ -1,6 +1,8 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
+#include "debug_print.h"
+
 
 template <bool bias_in_dram>
 FORCE_INLINE void read_bias(uint32_t bias_addr,

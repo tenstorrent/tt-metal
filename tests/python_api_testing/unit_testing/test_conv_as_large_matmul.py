@@ -29,7 +29,6 @@ import torch
 @pytest.mark.parametrize("run_conv_with_address_map", (False,))
 @pytest.mark.parametrize("untilize_out", (True, False))
 @pytest.mark.parametrize("has_bias", (False, True,))
-# @pytest.mark.parametrize("has_bias", (True,))
 @pytest.mark.parametrize(
     "K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w",
     (
@@ -109,10 +108,10 @@ def test_run_conv_as_large_matmul(
         pytest.skip()
 
     num_iterations = 1
-    # if not run_conv_with_address_map:
-    #     num_iterations = (
-    #         2  # run twice to test op caching flow for conv op (without address map)
-    #     )
+    if not run_conv_with_address_map:
+        num_iterations = (
+            2  # run twice to test op caching flow for conv op (without address map)
+        )
     for i in range(num_iterations):
         # torch.set_printoptions(threshold=10000)
         torch.manual_seed(0)
@@ -204,9 +203,7 @@ def test_run_conv_as_large_matmul(
            assert out_unpadded_shape == out.shape_without_padding()
            out = ttl.tensor.format_output_tensor(out, out.shape_without_padding(), device, ttl.tensor.Layout.ROW_MAJOR)
            out = out.reshape(conv_output_shape[0], conv_output_shape[1], conv_output_shape[2], conv_output_shape[3])
-        print(f'soduhzjlkfhkn;oiqAHWFNAFNDSJKLF ')
         out = out.cpu()
-        print(f'soduhzjlkfhkn;oiqAHWFNAFNDSJKLF ')
         assert out.shape() == conv_output_shape
         assert out.layout() == ttl.tensor.Layout.ROW_MAJOR
 

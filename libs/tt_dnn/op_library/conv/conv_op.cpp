@@ -168,7 +168,7 @@ void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program &program,
             num_output_tiles * single_tile_size,
             tt::DataFormat::Float16_b
         );
-
+        log_debug("BIAS CBs: {} {} {}", bias_cb, bias_ntiles, bias_pagesize);
     }
 }
 
@@ -410,6 +410,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         act_block_h_ntiles * weight_block_w_ntiles * 2, // writer output cb, double bufferred
         num_bytes_of_df,
         untilize_out,
+        bias_ntiles,
         has_bias);
 
     // define for bias
@@ -522,7 +523,6 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         } else {
             writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_tiled_out_reader_conv_weights_tiled.cpp";
         }
-        log_debug("WRITER KERNEL: {}", writer_kernel);
         writer_compile_time_args = {
             (uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
             out0_cb,

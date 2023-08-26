@@ -19,7 +19,6 @@ inline void read_weight_blocks_inner_h_dim(uint32_t cb_id_weight,
     // weight DRAM -> L1 (weights in tiled form)
     uint32_t weight_current_block_start_tile_id = weight_start_tile_id;
     for(uint32_t block_weight_h = 0; block_weight_h < num_blocks_weight_h; block_weight_h++) {
-        // DPRINT << "READING WEIGHT: " << block_weight_h << " > " << cb_id_weight << ENDL();
         cb_reserve_back(cb_id_weight, weight_block_num_tiles);
         uint32_t weight_write_l1_addr = get_write_ptr(cb_id_weight);
         uint32_t weight_row_start_tile_id = weight_current_block_start_tile_id;
@@ -36,11 +35,7 @@ inline void read_weight_blocks_inner_h_dim(uint32_t cb_id_weight,
             weight_row_start_tile_id += weight_stride_h;
         } // for weight_block_h
         noc_async_read_barrier();
-
-        // DPRINT << "DONE WEIGHT!" << ENDL();
-
         weight_current_block_start_tile_id += weight_next_block_stride_h;
-        DPRINT << "PUSHING INTO IN1" << ENDL();
         cb_push_back(cb_id_weight, weight_block_num_tiles);
     } // for num_blocks_weight_h
 }
@@ -82,8 +77,6 @@ void kernel_main() {
     const uint32_t tile_nbytes = get_tile_size(cb_id_out0);
     const DataFormat out_df = get_dataformat(cb_id_out0);
 
-    DPRINT << "HMMMMMMM" << ENDL();
-
     // first read in bias if enabled (done only once for all batches)
     #ifdef FUSE_BIAS
         const uint32_t bias_addr = get_arg_val<uint32_t>(i); i += 1;
@@ -94,11 +87,7 @@ void kernel_main() {
         constexpr uint32_t bias_pagesize = get_compile_time_arg_val(5);
         constexpr uint32_t bias_in_dram = get_compile_time_arg_val(6) == 1;
 
-        DPRINT << "READING BIAS...." << bias_cb_id << "," << bias_log2_of_pagesize << "," << bias_pagesize << "," << bias_in_dram << ENDL();
-
         read_bias<bias_in_dram>(bias_addr, bias_ntiles, bias_cb_id, bias_log2_of_pagesize, bias_pagesize);
-
-        DPRINT << "DONE BIAS READ" << ENDL();
     #endif
 
     // constexpr uint32_t tile_size_pow2_exponent = 11;    // == 2^11 = 2048 = 2 * 32 * 32 (assuming dtype = 2 bytes)
@@ -154,7 +143,6 @@ void kernel_main() {
         uint32_t out_block_w_start_tile_id_w = 0;
         for (uint32_t bw = 0; bw < out_num_blocks_w; bw++) {
             // read weight blocks inner dim
-            // DPRINT << "WEIGHT READER ..........." << ENDL();
             read_weight_blocks_inner_h_dim(cb_id_weight,
                     num_blocks_weight_h,
                     weight_block_num_tiles,
