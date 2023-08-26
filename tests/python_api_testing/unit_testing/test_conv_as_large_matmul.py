@@ -116,14 +116,14 @@ def test_run_conv_as_large_matmul(
         # torch.set_printoptions(threshold=10000)
         torch.manual_seed(0)
         a_activation_shape = [1, C, H, W]
-        # A_pyt = torch.randn(a_activation_shape, dtype=torch.bfloat16).float()
-        A_pyt = torch.ones(a_activation_shape, dtype=torch.bfloat16).float()
+        A_pyt = torch.randn(a_activation_shape, dtype=torch.bfloat16).float()
+        # A_pyt = torch.ones(a_activation_shape, dtype=torch.bfloat16).float()
         b_weights_shape = [K, C, R, S]
-        # B_pyt = torch.randn(b_weights_shape, dtype=torch.bfloat16).float()
-        B_pyt = torch.ones(b_weights_shape, dtype=torch.bfloat16).float()
+        B_pyt = torch.randn(b_weights_shape, dtype=torch.bfloat16).float()
+        # B_pyt = torch.ones(b_weights_shape, dtype=torch.bfloat16).float()
         bias_shape = [1, 1, 1, K]
-        # bias_pyt = torch.randn(bias_shape, dtype=torch.bfloat16).float()
-        bias_pyt = torch.zeros(bias_shape, dtype=torch.bfloat16).float() * 3.
+        bias_pyt = torch.randn(bias_shape, dtype=torch.bfloat16).float()
+        # bias_pyt = torch.zeros(bias_shape, dtype=torch.bfloat16).float() * 3.
         # bias_pyt = torch.range(start=0, end=(K - 1), dtype=torch.bfloat16).float()
 
         # Parameters to define block dims
