@@ -3,7 +3,7 @@ from typing import Any, Optional
 
 import torch
 import torch.nn as nn
-from models.utility_functions import is_conv_supported_on_device, run_conv_on_device_wrapper
+from tt_models.utility_functions import is_conv_supported_on_device, run_conv_on_device_wrapper
 
 class Fire(nn.Module):
     def __init__(self, inplanes: int, squeeze_planes: int, expand1x1_planes: int, expand3x3_planes: int, state_dict=None, base_address="", device=None, disable_conv_on_tt_device=True) -> None:

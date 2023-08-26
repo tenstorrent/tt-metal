@@ -11,7 +11,7 @@ from python_api_testing.models.helper_funcs import Linear
 
 from transformers import GPT2LMHeadModel
 
-from models.utility_functions import (
+from tt_models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     torch_to_tt_tensor_rm,

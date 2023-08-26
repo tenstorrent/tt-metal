@@ -18,12 +18,12 @@ from tt_lib.fallback_ops import fallback_ops
 from typing import List, Union, Dict, cast
 from vgg_utils import get_shape
 from vgg_helper_funcs import tt_linear
-from models.utility_functions import (
+from tt_models.utility_functions import (
     is_conv_supported_on_device,
     run_conv_on_device_wrapper,
 )
 
-from models.utility_functions import torch_to_tt_tensor_rm
+from tt_models.utility_functions import torch_to_tt_tensor_rm
 
 num_classes = 1000
 

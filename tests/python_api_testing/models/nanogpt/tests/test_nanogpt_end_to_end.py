@@ -28,7 +28,7 @@ from python_api_testing.models.nanogpt.tt.nanogpt_config import GPTConfig
 
 
 
-from models.utility_functions import (
+from tt_models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     torch_to_tt_tensor_rm,

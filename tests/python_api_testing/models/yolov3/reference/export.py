@@ -407,7 +407,7 @@ def export_saved_model(
         convert_variables_to_constants_v2,
     )
 
-    from models.tf import TFModel
+    from tt_models.tf import TFModel
 
     LOGGER.info(f"\n{prefix} starting export with tensorflow {tf.__version__}...")
     f = str(file).replace(".pt", "_saved_model")
@@ -498,7 +498,7 @@ def export_tflite(
     converter.target_spec.supported_types = [tf.float16]
     converter.optimizations = [tf.lite.Optimize.DEFAULT]
     if int8:
-        from models.tf import representative_dataset_gen
+        from tt_models.tf import representative_dataset_gen
 
         dataset = LoadImages(
             check_dataset(check_yaml(data))["train"], img_size=imgsz, auto=False

@@ -20,9 +20,9 @@ from python_api_testing.models.bert_large_perf.fused_ops.layernorm import (
     create_var_scaler,
 )
 from tt_lib.utils import pad_activation, pad_weight
-from models.utility_functions import enable_persistent_kernel_cache
-from models.utility_functions import profiler
-from models.utility_functions import disable_persistent_kernel_cache
+from tt_models.utility_functions import enable_persistent_kernel_cache
+from tt_models.utility_functions import profiler
+from tt_models.utility_functions import disable_persistent_kernel_cache
 
 
 class DataSampler:

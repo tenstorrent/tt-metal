@@ -6,17 +6,17 @@ from transformers import VisionEncoderDecoderModel
 
 import tt_lib
 
-from models.utility_functions import (
+from tt_models.utility_functions import (
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
 )
 
-from models.utility_functions import (
+from tt_models.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
 
-from models.trocr.tt.trocr_for_causal_llm import TtTrOCRForCausalLM
+from tt_models.trocr.tt.trocr_for_causal_llm import TtTrOCRForCausalLM
 
 
 @pytest.mark.parametrize(

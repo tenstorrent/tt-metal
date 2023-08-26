@@ -13,7 +13,7 @@ import torch
 import tt_lib as ttl
 
 from tt_lib.utils import _nearest_32
-from models.utility_functions import comp_pcc
+from tt_models.utility_functions import comp_pcc
 
 
 def volume(shape):

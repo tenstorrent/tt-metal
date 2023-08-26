@@ -19,7 +19,7 @@ from tqdm import tqdm
 import tt_lib as ttl
 from torch_resnet import _make_layer, BasicBlock
 
-from models.utility_functions import comp_allclose_and_pcc, comp_pcc
+from tt_models.utility_functions import comp_allclose_and_pcc, comp_pcc
 
 
 batch_size=1

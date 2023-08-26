@@ -14,9 +14,9 @@ from datasets import load_dataset
 from loguru import logger
 import pytest
 import tt_lib
-from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, profiler
-from models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache
-from models.utility_functions import prep_report
+from tt_models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, profiler
+from tt_models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache
+from tt_models.utility_functions import prep_report
 
 from transformers import BloomForCausalLM, BloomTokenizerFast
 from sweep_tests.comparison_funcs import comp_allclose, comp_pcc

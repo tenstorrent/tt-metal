@@ -4,7 +4,7 @@ import torch
 
 from tt_lib import tensor, device
 from tt_lib.utils import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax, pad_weight, tt2torch as t2t, tt2torch_rm as t2trm, roundup32, float_to_bits
-from models.utility_functions import profiler
+from tt_models.utility_functions import profiler
 
 
 def create_var_scaler(H, W, layer_norm_eps, device):

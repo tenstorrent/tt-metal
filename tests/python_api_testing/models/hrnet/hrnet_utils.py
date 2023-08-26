@@ -1,5 +1,5 @@
 from tt_lib.fallback_ops import fallback_ops
-from models.utility_functions import torch_to_tt_tensor_rm
+from tt_models.utility_functions import torch_to_tt_tensor_rm
 
 
 def create_batchnorm(out_ch, state_dict, base_address: str, device=None):

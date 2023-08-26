@@ -16,7 +16,7 @@ import tt_lib as ttl
 from python_api_testing.models.metal_BERT_large_15.mha import TtMultiHeadAttentionModel
 from python_api_testing.models.metal_BERT_large_15.ffn import TtFeedForwardModel
 from tt_lib.utils import pad_activation, pad_weight
-from models.utility_functions import comp_pcc, comp_allclose, profiler
+from tt_models.utility_functions import comp_pcc, comp_allclose, profiler
 
 from python_api_testing.models.metal_BERT_large_15.model_config import get_model_config
 

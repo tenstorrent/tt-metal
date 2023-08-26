@@ -2,7 +2,7 @@ import torch
 import json
 import numpy as np
 import tt_lib as ttm
-from models.utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, nearest_32, print_diff_argmax, tt2torch, tt2torch_rm
+from tt_models.utility_functions import pad_activation, pad_weight, tilize_to_list, untilize, nearest_32, print_diff_argmax, tt2torch, tt2torch_rm
 
 
 

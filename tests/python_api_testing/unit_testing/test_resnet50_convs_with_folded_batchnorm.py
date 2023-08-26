@@ -16,7 +16,7 @@ from tt_lib.utils import (
     _nearest_y,
     convert_weights_2d_matrix,
 )
-from models.utility_functions import print_diff_argmax, is_close, comp_pcc
+from tt_models.utility_functions import print_diff_argmax, is_close, comp_pcc
 from tests.python_api_testing.conv.conv_unit_test_utils import (
     create_conv_act_tensor,
     create_conv_weight_tensor,
@@ -27,7 +27,7 @@ from python_api_testing.models.resnet.utils import (
     fold_bn_to_conv,
     fold_bn_to_conv_weights_bias,
 )
-from models.utility_functions import (
+from tt_models.utility_functions import (
     is_conv_supported_on_device,
     run_conv_on_device_wrapper,
 )

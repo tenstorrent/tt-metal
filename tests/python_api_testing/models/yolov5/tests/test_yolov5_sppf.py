@@ -13,7 +13,7 @@ from loguru import logger
 
 from python_api_testing.models.yolov5.reference.models.common import DetectMultiBackend
 from python_api_testing.models.yolov5.tt.yolov5_sppf import TtYolov5SPPF
-from models.utility_functions import (
+from tt_models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     comp_pcc,

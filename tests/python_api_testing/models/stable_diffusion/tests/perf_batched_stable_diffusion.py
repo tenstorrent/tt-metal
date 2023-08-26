@@ -7,15 +7,15 @@ from transformers import CLIPTextModel, CLIPTokenizer
 from diffusers import AutoencoderKL, UNet2DConditionModel
 from diffusers import LMSDiscreteScheduler
 
-from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
-from models.utility_functions import (
+from tt_models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
+from tt_models.utility_functions import (
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
 )
-from models.utility_functions import prep_report, Profiler
+from tt_models.utility_functions import prep_report, Profiler
 import tt_lib as ttl
-from models.stable_diffusion.tt.unet_2d_condition import UNet2DConditionModel as tt_unet_condition
-from models.stable_diffusion.tt.experimental_ops import UseDeviceConv
+from tt_models.stable_diffusion.tt.unet_2d_condition import UNet2DConditionModel as tt_unet_condition
+from tt_models.stable_diffusion.tt.experimental_ops import UseDeviceConv
 
 NUM_INFERENCE_STEPS = 2  # Number of denoising steps
 BATCH_SIZE = 1

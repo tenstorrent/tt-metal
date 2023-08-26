@@ -5,13 +5,13 @@ import pytest
 import tt_lib
 from loguru import logger
 
-from models.utility_functions import (
+from tt_models.utility_functions import (
     Profiler,
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
     prep_report,
 )
-from models.t5.tt.t5_model import TtT5Model
+from tt_models.t5.tt.t5_model import TtT5Model
 
 BATCH_SIZE=1
 

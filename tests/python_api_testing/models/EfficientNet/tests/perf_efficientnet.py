@@ -5,14 +5,14 @@ import torchvision
 from datasets import load_dataset
 import pytest
 
-from models.utility_functions import (
+from tt_models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     profiler,
     prep_report,
 )
-from models.EfficientNet.tt.efficientnet_model import efficientnet_b0
-from models.utility_functions import disable_compile_cache, enable_compile_cache
+from tt_models.EfficientNet.tt.efficientnet_model import efficientnet_b0
+from tt_models.utility_functions import disable_compile_cache, enable_compile_cache
 
 
 def make_input_tensor(imagenet_sample_input, resize=256, crop=224):

@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 import tt_lib
-from models.utility_functions import pad_by_zero
+from tt_models.utility_functions import pad_by_zero
 
 
 class TtLlamaRMSNorm(nn.Module):

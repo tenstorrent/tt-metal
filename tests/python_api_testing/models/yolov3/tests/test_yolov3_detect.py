@@ -18,7 +18,7 @@ from python_api_testing.models.yolov3.reference.utils.general import check_img_s
 from python_api_testing.models.yolov3.reference.models.common import DetectMultiBackend
 from python_api_testing.models.yolov3.tt.yolov3_detect import TtDetect
 import tt_lib
-from models.utility_functions import (
+from tt_models.utility_functions import (
     comp_allclose_and_pcc,
     comp_pcc,
     torch2tt_tensor,

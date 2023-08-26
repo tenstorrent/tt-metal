@@ -4,13 +4,13 @@ import torch.nn as nn
 from loguru import logger
 
 from transformers import WhisperModel, WhisperForAudioClassification
-from models.utility_functions import (
+from tt_models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
 
-from models.whisper.tt.whisper_attention import TtWhisperAttention
-from models.utility_functions import (
+from tt_models.whisper.tt.whisper_attention import TtWhisperAttention
+from tt_models.utility_functions import (
     comp_allclose,
     comp_pcc,
 )

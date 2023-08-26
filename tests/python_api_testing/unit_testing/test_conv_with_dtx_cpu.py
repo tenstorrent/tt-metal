@@ -17,7 +17,7 @@ from tt_lib.utils import (
     _nearest_y,
     convert_weights_2d_matrix,
 )
-from models.utility_functions import print_diff_argmax, is_close, comp_pcc
+from tt_models.utility_functions import print_diff_argmax, is_close, comp_pcc
 from python_api_testing.conv.pytorch_conv_tb import (
     TestLevel,
     generate_conv_tb_with_pytorch_golden,

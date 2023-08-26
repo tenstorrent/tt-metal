@@ -13,7 +13,7 @@ import torch
 from torch import nn
 
 import tt_lib
-from models.utility_functions import tt_to_torch_tensor, torch_to_tt_tensor_rm
+from tt_models.utility_functions import tt_to_torch_tensor, torch_to_tt_tensor_rm
 from deit_config import DeiTConfig
 from deit_embeddings import DeiTEmbeddings
 from deit_patch_embeddings import DeiTPatchEmbeddings

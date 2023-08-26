@@ -6,11 +6,11 @@ import sys
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/../../..")
 
-from models.vovnet.tt.conv_norm_act import TtConvNormAct
-from models.vovnet.tt.sequential_append_list import (
+from tt_models.vovnet.tt.conv_norm_act import TtConvNormAct
+from tt_models.vovnet.tt.sequential_append_list import (
     TtSequentialAppendList,
 )
-from models.vovnet.tt.effective_se_module import (
+from tt_models.vovnet.tt.effective_se_module import (
     TtEffectiveSEModule,
 )
 

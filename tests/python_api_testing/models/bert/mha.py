@@ -17,7 +17,7 @@ import tt_lib as ttl
 from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from python_api_testing.models.bert.fused_ops.linear import Linear as TtLinear
 from tt_lib.fused_ops.softmax import softmax
-from models.utility_functions import enable_persistent_kernel_cache, comp_pcc, comp_allclose
+from tt_models.utility_functions import enable_persistent_kernel_cache, comp_pcc, comp_allclose
 
 def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
     assert isinstance(num_heads, int) and num_heads > 0

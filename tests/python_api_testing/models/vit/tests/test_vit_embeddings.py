@@ -2,8 +2,8 @@ from transformers import ViTForImageClassification as HF_ViTForImageClassication
 from loguru import logger
 import torch
 
-from models.utility_functions import comp_allclose_and_pcc, comp_pcc
-from models.vit.tt.modeling_vit import ViTEmbeddings
+from tt_models.utility_functions import comp_allclose_and_pcc, comp_pcc
+from tt_models.vit.tt.modeling_vit import ViTEmbeddings
 
 
 def test_vit_embeddings(imagenet_sample_input, pcc=0.99):

@@ -4,12 +4,12 @@ from loguru import logger
 import torchvision
 from datasets import load_dataset
 
-from models.utility_functions import (
+from tt_models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     comp_pcc,
 )
-from models.EfficientNet.tt.efficientnet_model import (
+from tt_models.EfficientNet.tt.efficientnet_model import (
     efficientnet_b0,
     efficientnet_b1,
     efficientnet_b2,

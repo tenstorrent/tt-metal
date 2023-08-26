@@ -6,12 +6,12 @@ from loguru import logger
 
 
 import tt_lib as ttl
-from models.utility_functions import torch_to_tt_tensor, tt_to_torch_tensor
-from models.utility_functions import (
+from tt_models.utility_functions import torch_to_tt_tensor, tt_to_torch_tensor
+from tt_models.utility_functions import (
     comp_pcc,
     comp_allclose_and_pcc,
 )
-from models.stable_diffusion.tt.upsample_2d import TtUpsample2D
+from tt_models.stable_diffusion.tt.upsample_2d import TtUpsample2D
 
 def test_run_upsample2d_inference():
     # setup pytorch model

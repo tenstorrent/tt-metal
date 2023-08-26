@@ -4,7 +4,7 @@ from torchvision import transforms, datasets
 
 import tt_lib as ttl
 
-from models.utility_functions import tilize_to_list, untilize, comp_allclose_and_pcc
+from tt_models.utility_functions import tilize_to_list, untilize, comp_allclose_and_pcc
 
 epsilon1 = 1e-5
 epsilon2 = 1e-5

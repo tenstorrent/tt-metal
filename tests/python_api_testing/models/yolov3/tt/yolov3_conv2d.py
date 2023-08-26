@@ -9,12 +9,12 @@ from python_api_testing.models.yolov3.reference.models.common import autopad
 from python_api_testing.models.yolov3.reference.models.yolo import Conv, Model
 import tt_lib
 from tt_lib.fallback_ops import fallback_ops
-from models.utility_functions import (
+from tt_models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     torch_to_tt_tensor_rm,
 )
-from models.utility_functions import (
+from tt_models.utility_functions import (
     run_conv_on_device_wrapper,
     is_conv_supported_on_device,
 )

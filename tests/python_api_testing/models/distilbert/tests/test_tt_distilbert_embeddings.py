@@ -2,12 +2,12 @@ import pytest
 from loguru import logger
 import torch
 import tt_lib
-from models.utility_functions import tt_to_torch_tensor
-from models.utility_functions import (
+from tt_models.utility_functions import tt_to_torch_tensor
+from tt_models.utility_functions import (
     comp_allclose,
     comp_pcc,
 )
-from models.distilbert.tt.distilbert_embedding import TtDistilBert_Embeddings
+from tt_models.distilbert.tt.distilbert_embedding import TtDistilBert_Embeddings
 from transformers import (
     DistilBertForQuestionAnswering as HF_DistilBertForQuestionAnswering,
 )

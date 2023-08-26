@@ -15,7 +15,7 @@ from python_api_testing.models.bert.ffn import TtFeedForwardModel
 from python_api_testing.models.bert.fused_ops.add_and_norm import AddAndNorm
 from python_api_testing.models.bert.fused_ops.linear import Linear
 from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
-from models.utility_functions import comp_pcc, comp_allclose
+from tt_models.utility_functions import comp_pcc, comp_allclose
 
 class TtBertEncoder(torch.nn.Module):
     def __init__(self, config, encoder_idx, state_dict, device):

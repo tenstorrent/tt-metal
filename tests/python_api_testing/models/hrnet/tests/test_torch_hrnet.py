@@ -12,7 +12,7 @@ from loguru import logger
 from datasets import load_dataset
 
 from reference.hrnet import PytorchHighResolutionNet
-from models.utility_functions import comp_pcc, comp_allclose_and_pcc
+from tt_models.utility_functions import comp_pcc, comp_allclose_and_pcc
 
 
 @pytest.mark.parametrize(

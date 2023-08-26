@@ -8,7 +8,7 @@ sys.path.append(f"{f}/../..")
 
 
 import tt_lib as ttl
-from models.utility_functions import (
+from tt_models.utility_functions import (
     comp_pcc,
 )
 import torch

@@ -1,13 +1,13 @@
 import torch
 from loguru import logger
 import tt_lib
-from models.utility_functions import (
+from tt_models.utility_functions import (
     torch_to_tt_tensor_rm,
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
 )
-from models.utility_functions import Profiler, prep_report
-from models.ssd.tt.ssd_lite import ssd_for_object_detection
+from tt_models.utility_functions import Profiler, prep_report
+from tt_models.ssd.tt.ssd_lite import ssd_for_object_detection
 import pytest
 
 

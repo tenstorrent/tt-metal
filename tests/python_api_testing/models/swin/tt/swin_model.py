@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 
 
-from models.utility_functions import (
+from tt_models.utility_functions import (
     tt_to_torch_tensor,
     torch_to_tt_tensor_rm,
 )

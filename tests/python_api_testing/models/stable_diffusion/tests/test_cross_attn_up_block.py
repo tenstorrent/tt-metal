@@ -8,10 +8,10 @@ import pytest
 
 
 import tt_lib as ttl
-from models.utility_functions import torch_to_tt_tensor, tt_to_torch_tensor, torch_to_tt_tensor_rm
-from models.utility_functions import comp_pcc, comp_allclose_and_pcc
-from models.stable_diffusion.tt.unet_2d_blocks import TtCrossAttnUpBlock2D
-from models.stable_diffusion.tt.experimental_ops import UseDeviceConv
+from tt_models.utility_functions import torch_to_tt_tensor, tt_to_torch_tensor, torch_to_tt_tensor_rm
+from tt_models.utility_functions import comp_pcc, comp_allclose_and_pcc
+from tt_models.stable_diffusion.tt.unet_2d_blocks import TtCrossAttnUpBlock2D
+from tt_models.stable_diffusion.tt.experimental_ops import UseDeviceConv
 
 #low PCC for value 2, 3: 0.9851282356324425 etc.
 @pytest.mark.parametrize("index", [1,2,3])

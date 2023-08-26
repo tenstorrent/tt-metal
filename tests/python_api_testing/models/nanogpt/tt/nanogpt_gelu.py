@@ -6,7 +6,7 @@ from tt_lib.fallback_ops import fallback_ops
 
 import math
 
-from models.utility_functions import (
+from tt_models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     torch_to_tt_tensor_rm,

@@ -8,7 +8,7 @@ sys.path.append(f"{f}/../..")
 import torch
 
 import tt_lib as ttl
-from models.utility_functions import print_diff_argmax
+from tt_models.utility_functions import print_diff_argmax
 
 
 def test_tile_major_reshape(device):

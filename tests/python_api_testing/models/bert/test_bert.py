@@ -16,7 +16,7 @@ from python_api_testing.models.bert.ffn import TtFeedForwardModel
 from python_api_testing.models.bert.bert_encoder import TtBertEncoder
 from python_api_testing.models.bert.fused_ops.linear import Linear
 from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
-from models.utility_functions import enable_persistent_kernel_cache, comp_allclose_and_pcc, comp_pcc, comp_allclose
+from tt_models.utility_functions import enable_persistent_kernel_cache, comp_allclose_and_pcc, comp_pcc, comp_allclose
 
 class TtBertShared(torch.nn.Module):
     @abstractmethod

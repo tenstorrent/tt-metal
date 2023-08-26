@@ -2,7 +2,7 @@ import torch
 import tt_lib
 from loguru import logger
 from tt_lib.fallback_ops import fallback_ops
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+from tt_models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 
 class TtUpsample(torch.nn.Module):

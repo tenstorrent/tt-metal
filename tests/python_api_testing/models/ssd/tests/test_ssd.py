@@ -6,13 +6,13 @@ from torchvision.models.detection import (
     ssdlite320_mobilenet_v3_large as pretrained,
 )
 import tt_lib
-from models.utility_functions import torch_to_tt_tensor_rm
-from models.utility_functions import (
+from tt_models.utility_functions import torch_to_tt_tensor_rm
+from tt_models.utility_functions import (
     comp_allclose,
     comp_pcc,
 )
 
-from models.ssd.tt.ssd import TtSSD
+from tt_models.ssd.tt.ssd import TtSSD
 
 
 @pytest.mark.parametrize(

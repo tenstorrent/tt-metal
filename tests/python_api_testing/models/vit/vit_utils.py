@@ -7,7 +7,7 @@ sys.path.append(f"{f}/../..")
 sys.path.append(f"{f}/../../..")
 
 from helper_funcs import Linear as linear
-from models.utility_functions import torch_to_tt_tensor_rm
+from tt_models.utility_functions import torch_to_tt_tensor_rm
 
 
 def make_address(base_address, op_name):

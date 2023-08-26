@@ -4,9 +4,9 @@ from loguru import logger
 
 
 import tt_lib as ttl
-from models.utility_functions import torch_to_tt_tensor, tt_to_torch_tensor, torch_to_tt_tensor_rm
-from models.utility_functions import comp_pcc, comp_allclose_and_pcc
-from models.stable_diffusion.tt.upblock_2d import TtUpBlock2D
+from tt_models.utility_functions import torch_to_tt_tensor, tt_to_torch_tensor, torch_to_tt_tensor_rm
+from tt_models.utility_functions import comp_pcc, comp_allclose_and_pcc
+from tt_models.stable_diffusion.tt.upblock_2d import TtUpBlock2D
 import pytest
 
 def test_run_upblock_real_input_inference(model_location_generator):

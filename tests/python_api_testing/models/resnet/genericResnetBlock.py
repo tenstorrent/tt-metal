@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import math
 from utils import conv3x3, conv1x1, fold_bn_to_conv, fold_bn_to_conv_weights_bias
-from models.utility_functions import pad_by_zero, tt2torch_tensor, is_conv_supported_on_device, _nearest_32
+from tt_models.utility_functions import pad_by_zero, tt2torch_tensor, is_conv_supported_on_device, _nearest_32
 from tt_lib.utils import pad_weight
 
 from tt_lib.fused_ops.average_pool import run_avg_pool_on_device_wrapper as TtAvgPool

@@ -4,7 +4,7 @@ import torch.nn as nn
 from loguru import logger
 
 from lenet_utils import load_torch_lenet
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+from tt_models.utility_functions import torch2tt_tensor, tt2torch_tensor
 from tt_lib.fallback_ops import fallback_ops
 
 

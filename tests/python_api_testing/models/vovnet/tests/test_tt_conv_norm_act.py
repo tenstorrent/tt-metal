@@ -9,7 +9,7 @@ f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
 sys.path.append(f"{f}/../..")
 
-from models.utility_functions import (
+from tt_models.utility_functions import (
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
     comp_allclose,

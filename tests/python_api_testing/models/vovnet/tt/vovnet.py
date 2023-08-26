@@ -2,10 +2,10 @@ import torch.nn as nn
 import timm
 
 import tt_lib
-from models.vovnet.tt.classifier_head import TtClassifierHead
-from models.vovnet.tt.conv_norm_act import TtConvNormAct
-from models.vovnet.tt.osa_stage import TtOsaStage
-from models.vovnet.tt.separable_conv_norm_act import TtSeparableConvNormAct
+from tt_models.vovnet.tt.classifier_head import TtClassifierHead
+from tt_models.vovnet.tt.conv_norm_act import TtConvNormAct
+from tt_models.vovnet.tt.osa_stage import TtOsaStage
+from tt_models.vovnet.tt.separable_conv_norm_act import TtSeparableConvNormAct
 
 model_cfgs = dict(
     stem_chs=[64, 64, 64],

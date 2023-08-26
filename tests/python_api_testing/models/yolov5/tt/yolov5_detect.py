@@ -1,7 +1,7 @@
 import torch
 from tt_lib.fallback_ops import fallback_ops
 
-from models.utility_functions import tt2torch_tensor
+from tt_models.utility_functions import tt2torch_tensor
 from python_api_testing.models.yolov5.tt.yolov5_conv import TtYolov5Conv2D
 
 

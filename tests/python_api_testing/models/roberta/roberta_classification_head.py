@@ -18,8 +18,8 @@ from python_api_testing.models.roberta.roberta_common import (
     tt2torch_tensor,
 )
 from python_api_testing.models.roberta.roberta_model import TtRobertaModel
-from models.helper_funcs import Linear as TTLinear
-from models.utility_functions import pad_by_zero
+from tt_models.helper_funcs import Linear as TTLinear
+from tt_models.utility_functions import pad_by_zero
 import tt_lib
 from tt_lib.fallback_ops import fallback_ops
 

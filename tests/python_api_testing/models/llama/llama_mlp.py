@@ -2,8 +2,8 @@ import torch
 from torch import nn
 import tt_lib
 
-from models.helper_funcs import Linear as TTLinear
-from models.utility_functions import torch2tt_tensor
+from tt_models.helper_funcs import Linear as TTLinear
+from tt_models.utility_functions import torch2tt_tensor
 
 
 class TtLlamaMLP(nn.Module):

@@ -21,7 +21,7 @@ from python_api_testing.models.metal_BERT_large_15.fused_ops.layernorm import (
     create_var_scaler,
 )
 from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
-from models.utility_functions import enable_persistent_kernel_cache, comp_pcc, comp_allclose
+from tt_models.utility_functions import enable_persistent_kernel_cache, comp_pcc, comp_allclose
 
 
 class TtAddAndNormModel(torch.nn.Module):

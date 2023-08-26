@@ -10,7 +10,7 @@ import python_api_testing.models.bloom.bloom_utils as bloom_utils
 import python_api_testing.models.bloom.bloom_attention as bloom_attention
 import python_api_testing.models.bloom.bloom_mlp as bloom_mlp
 from typing import Optional, Tuple, Union
-from models.utility_functions import pad_by_zero
+from tt_models.utility_functions import pad_by_zero
 
 # class BloomBlock(nn.Module):
 #     def __init__(self, config: BloomConfig):

@@ -9,7 +9,7 @@ sys.path.append(f"{f}/../..")
 import numpy as np
 
 import tt_lib as ttl
-from models.utility_functions import untilize
+from tt_models.utility_functions import untilize
 
 
 @pytest.mark.parametrize(

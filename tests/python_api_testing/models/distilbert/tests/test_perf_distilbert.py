@@ -3,19 +3,19 @@ from loguru import logger
 
 import pytest
 import tt_lib
-from models.utility_functions import (
+from tt_models.utility_functions import (
     torch_to_tt_tensor_rm,
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
 )
-from models.utility_functions import Profiler, prep_report
+from tt_models.utility_functions import Profiler, prep_report
 
 from transformers import (
     DistilBertForQuestionAnswering as HF_DistilBertForQuestionAnswering,
 )
 from transformers import AutoTokenizer
 
-from models.distilbert.tt.distilbert import distilbert_for_question_answering
+from tt_models.distilbert.tt.distilbert import distilbert_for_question_answering
 
 BATCH_SIZE = 1
 

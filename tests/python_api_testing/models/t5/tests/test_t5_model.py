@@ -4,12 +4,12 @@ import tt_lib
 from loguru import logger
 
 from transformers import AutoTokenizer, T5Tokenizer, T5Model
-from models.utility_functions import (
+from tt_models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
-from models.utility_functions import comp_pcc
-from models.t5.tt.t5_model import TtT5Model
+from tt_models.utility_functions import comp_pcc
+from tt_models.t5.tt.t5_model import TtT5Model
 
 
 def run_test_T5Model_inference(device, use_attention_mask, model_name):

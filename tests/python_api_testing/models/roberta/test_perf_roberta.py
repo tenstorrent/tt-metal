@@ -16,7 +16,7 @@ from datasets import load_dataset
 from loguru import logger
 import pytest
 import tt_lib
-from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, Profiler, \
+from tt_models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, Profiler, \
          disable_persistent_kernel_cache, enable_persistent_kernel_cache, prep_report
 
 from python_api_testing.models.roberta.roberta_common import (

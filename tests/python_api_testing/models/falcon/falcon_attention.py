@@ -5,8 +5,8 @@ from typing import Optional, Tuple
 
 import tt_lib
 
-from models.helper_funcs import Linear as TTLinear
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
+from tt_models.helper_funcs import Linear as TTLinear
+from tt_models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
 
 
 """

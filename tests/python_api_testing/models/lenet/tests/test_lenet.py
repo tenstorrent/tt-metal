@@ -14,7 +14,7 @@ import torch
 from loguru import logger
 from lenet_utils import load_torch_lenet, prepare_image
 from tt.lenet import lenet5
-from models.utility_functions import comp_pcc, torch2tt_tensor
+from tt_models.utility_functions import comp_pcc, torch2tt_tensor
 
 
 @pytest.mark.parametrize(

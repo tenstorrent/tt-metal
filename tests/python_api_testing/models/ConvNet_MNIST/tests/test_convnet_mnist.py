@@ -2,13 +2,13 @@ import torch
 from loguru import logger
 import tt_lib
 
-from models.utility_functions import (
+from tt_models.utility_functions import (
     comp_pcc,
     tt2torch_tensor,
     torch2tt_tensor,
 )
-from models.ConvNet_MNIST.tt.convnet_mnist import convnet_mnist
-from models.ConvNet_MNIST.convnet_mnist_utils import get_test_data
+from tt_models.ConvNet_MNIST.tt.convnet_mnist import convnet_mnist
+from tt_models.ConvNet_MNIST.convnet_mnist_utils import get_test_data
 
 
 def test_mnist_inference():

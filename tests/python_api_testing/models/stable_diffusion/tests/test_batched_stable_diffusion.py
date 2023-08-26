@@ -12,17 +12,17 @@ from diffusers import (
     DPMSolverMultistepScheduler,
 )
 from diffusers import LMSDiscreteScheduler
-from models.stable_diffusion.tt.unet_2d_condition import UNet2DConditionModel as tt_unet_condition
-from models.stable_diffusion.tt.experimental_ops import UseDeviceConv
+from tt_models.stable_diffusion.tt.unet_2d_condition import UNet2DConditionModel as tt_unet_condition
+from tt_models.stable_diffusion.tt.experimental_ops import UseDeviceConv
 
 import tt_lib as ttl
 
-from models.utility_functions import (
+from tt_models.utility_functions import (
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
     torch_to_tt_tensor,
 )
-from models.utility_functions import (
+from tt_models.utility_functions import (
     comp_pcc,
     comp_allclose_and_pcc,
 )

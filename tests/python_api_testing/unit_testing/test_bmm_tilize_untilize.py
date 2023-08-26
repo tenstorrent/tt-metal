@@ -11,7 +11,7 @@ import numpy as np
 import torch
 
 import tt_lib as ttl
-from models.utility_functions import (
+from tt_models.utility_functions import (
     tilize_to_list,
     untilize,
     comp_pcc,
@@ -95,11 +95,11 @@ def test_run_bmm_single_core_tilize_untilize(
     if is_wormhole_b0():
         if ( ttl.tensor.DataType.BFLOAT16 in [a_dtype,b_dtype,out_dtype] ):
             pytest.skip('Not working for BFLOAT8 combination')
-        
+
         if a_width_nblocks == 7:
             pytest.skip('Skip this dimension for WH B0')
-    
-    
+
+
     if (tilize_a and a_dtype != ttl.tensor.DataType.BFLOAT16) or (
         untilize_out and out_dtype != ttl.tensor.DataType.BFLOAT16
     ):

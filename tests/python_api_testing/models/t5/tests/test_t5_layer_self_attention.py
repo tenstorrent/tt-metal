@@ -4,12 +4,12 @@ import tt_lib
 from loguru import logger
 
 from transformers import T5Model
-from models.utility_functions import (
+from tt_models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
-from models.utility_functions import comp_pcc
-from models.t5.tt.t5_layer_self_attention import TtT5LayerSelfAttention
+from tt_models.utility_functions import comp_pcc
+from tt_models.t5.tt.t5_layer_self_attention import TtT5LayerSelfAttention
 
 
 def run_test_T5LayerSelfAttention_inference(device, model_name, input_h, input_w):

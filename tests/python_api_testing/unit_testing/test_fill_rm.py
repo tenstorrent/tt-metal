@@ -7,7 +7,7 @@ sys.path.append(f"{f}/../..")
 import torch
 
 import tt_lib
-from models.utility_functions import print_diff_argmax
+from tt_models.utility_functions import print_diff_argmax
 
 
 def test_fill_rm(device):

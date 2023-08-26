@@ -13,7 +13,7 @@ import torch
 from transformers import BertForQuestionAnswering
 import tt_lib as ttl
 from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
-from models.utility_functions import comp_pcc, comp_allclose
+from tt_models.utility_functions import comp_pcc, comp_allclose
 
 from python_api_testing.models.metal_BERT_large_15.model_config import get_model_config
 

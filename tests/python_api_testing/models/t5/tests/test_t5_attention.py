@@ -5,12 +5,12 @@ import tt_lib
 from transformers import T5Model
 from loguru import logger
 from tt_lib.fused_ops.softmax import softmax as tt_softmax
-from models.utility_functions import (
+from tt_models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
-from models.utility_functions import comp_pcc
-from models.t5.tt.t5_attention import (
+from tt_models.utility_functions import comp_pcc
+from tt_models.t5.tt.t5_attention import (
     TtT5Attention,
     t5_unshape_pt,
     t5_unshape_tt,

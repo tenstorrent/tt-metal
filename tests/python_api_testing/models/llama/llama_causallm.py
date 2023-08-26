@@ -8,8 +8,8 @@ from python_api_testing.models.llama.llama_layer_norm import TtLlamaRMSNorm
 from python_api_testing.models.llama.llama_decoder import TtLlamaDecoderLayer
 from python_api_testing.models.llama.llama_model import TtLlamaShared
 
-from models.helper_funcs import Linear as TTLinear
-from models.utility_functions import torch2tt_tensor
+from tt_models.helper_funcs import Linear as TTLinear
+from tt_models.utility_functions import torch2tt_tensor
 
 
 class TtLlamaForCausalLM(TtLlamaShared):

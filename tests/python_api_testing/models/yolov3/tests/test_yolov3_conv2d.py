@@ -19,7 +19,7 @@ from python_api_testing.models.yolov3.reference.models.common import DetectMulti
 from python_api_testing.models.yolov3.tt.yolov3_conv2d import TtConv2D
 import tt_lib
 
-from models.utility_functions import (
+from tt_models.utility_functions import (
     comp_allclose_and_pcc,
     comp_pcc,
     torch2tt_tensor,

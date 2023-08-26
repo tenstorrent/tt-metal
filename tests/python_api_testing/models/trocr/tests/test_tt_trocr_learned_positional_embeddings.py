@@ -6,16 +6,16 @@ from transformers import VisionEncoderDecoderModel
 
 import tt_lib
 
-from models.utility_functions import (
+from tt_models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
 
-from models.utility_functions import (
+from tt_models.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
 
-from models.trocr.tt.trocr_learned_positional_embeddings import (
+from tt_models.trocr.tt.trocr_learned_positional_embeddings import (
     TtTrOCRLearnedPositionalEmbedding,
 )
 

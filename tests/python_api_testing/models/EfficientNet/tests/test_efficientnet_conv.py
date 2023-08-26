@@ -3,16 +3,16 @@ import torch
 from loguru import logger
 import torchvision
 
-from models.utility_functions import (
+from tt_models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     comp_pcc,
 )
-from models.EfficientNet.tt.efficientnet_conv import (
+from tt_models.EfficientNet.tt.efficientnet_conv import (
     TtEfficientnetConv2d,
     TtEfficientnetConv2dNormActivation,
 )
-from models.EfficientNet.tt.efficientnet_model import reference_efficientnet_lite0
+from tt_models.EfficientNet.tt.efficientnet_model import reference_efficientnet_lite0
 
 
 def run_efficientnet_conv2d(state_dict, base_address, reference_module):

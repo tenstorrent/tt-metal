@@ -6,14 +6,14 @@ import pytest
 
 import tt_lib
 
-from models.utility_functions import (
+from tt_models.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
 )
-from models.utility_functions import prep_report, Profiler
-from models.whisper.tt.whisper_model import TtWhisperModel
+from tt_models.utility_functions import prep_report, Profiler
+from tt_models.whisper.tt.whisper_model import TtWhisperModel
 
-from models.utility_functions import (
+from tt_models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
 )

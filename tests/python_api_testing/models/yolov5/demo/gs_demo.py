@@ -36,7 +36,7 @@ from python_api_testing.models.yolov5.reference.utils.plots import (
     colors,
 )
 
-from models.utility_functions import torch2tt_tensor
+from tt_models.utility_functions import torch2tt_tensor
 
 
 def download_images(path, imgsz):

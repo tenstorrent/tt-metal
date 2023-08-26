@@ -18,7 +18,7 @@ from python_api_testing.models.bert_large_perf.fused_ops.add_and_norm import Add
 from python_api_testing.models.bert_large_perf.fused_ops.layernorm import create_var_scaler
 from python_api_testing.models.bert_large_perf.fused_ops.linear import Linear
 from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
-from models.utility_functions import comp_pcc, comp_allclose, profiler
+from tt_models.utility_functions import comp_pcc, comp_allclose, profiler
 
 
 class TtBertEncoder(torch.nn.Module):

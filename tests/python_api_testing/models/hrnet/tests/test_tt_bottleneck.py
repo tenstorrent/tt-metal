@@ -9,7 +9,7 @@ sys.path.append(f"{f}/../")
 sys.path.append(f"{f}/../../")
 
 import timm
-from models.utility_functions import (
+from tt_models.utility_functions import (
     tt_to_torch_tensor,
     torch_to_tt_tensor_rm,
     comp_allclose,

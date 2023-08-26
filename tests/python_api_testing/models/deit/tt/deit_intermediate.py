@@ -15,7 +15,7 @@ from torch import nn
 
 from activations import ACT2FN
 from deit_config import DeiTConfig
-from models.utility_functions import torch_to_tt_tensor_rm
+from tt_models.utility_functions import torch_to_tt_tensor_rm
 
 import tt_lib
 from helper_funcs import Linear as TtLinear

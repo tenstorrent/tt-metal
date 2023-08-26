@@ -19,7 +19,7 @@ from typing import Optional, Union
 import torch
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
-from models.utility_functions import is_conv_supported_on_device, run_conv_on_device_wrapper
+from tt_models.utility_functions import is_conv_supported_on_device, run_conv_on_device_wrapper
 
 ACT_FN = nn.ReLU6()
 

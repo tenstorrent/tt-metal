@@ -5,7 +5,7 @@ import sys
 import torch
 
 import tt_lib as ttl
-from models.utility_functions import print_diff_argmax
+from tt_models.utility_functions import print_diff_argmax
 import pytest
 
 from tests.python_api_testing.sweep_tests.comparison_funcs import comp_pcc

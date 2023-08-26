@@ -4,12 +4,12 @@ import tt_lib
 from loguru import logger
 
 from transformers import T5Model
-from models.utility_functions import (
+from tt_models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
-from models.utility_functions import comp_pcc
-from models.t5.tt.t5_layer_cross_attention import TtT5LayerCrossAttention
+from tt_models.utility_functions import comp_pcc
+from tt_models.t5.tt.t5_layer_cross_attention import TtT5LayerCrossAttention
 
 
 def run_test_T5LayerCrossAttention_inference(device, model_name, input_h, input_w):

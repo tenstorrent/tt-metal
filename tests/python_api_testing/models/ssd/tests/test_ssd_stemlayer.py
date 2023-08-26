@@ -3,8 +3,8 @@ import pytest
 from loguru import logger
 
 import tt_lib
-from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
-from models.utility_functions import (
+from tt_models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
+from tt_models.utility_functions import (
     comp_allclose,
     comp_pcc,
 )
@@ -12,7 +12,7 @@ from torchvision.models.detection import (
     SSDLite320_MobileNet_V3_Large_Weights,
     ssdlite320_mobilenet_v3_large as pretrained,
 )
-from models.ssd.tt.ssd_mobilenetv3_stemlayer import TtMobileNetV3Stem
+from tt_models.ssd.tt.ssd_mobilenetv3_stemlayer import TtMobileNetV3Stem
 
 
 @pytest.mark.parametrize(

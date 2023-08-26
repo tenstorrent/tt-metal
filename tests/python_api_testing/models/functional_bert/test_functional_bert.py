@@ -21,7 +21,7 @@ from tests.python_api_testing.models.functional_bert.parameters import (
     preprocess_linear_weight,
     preprocess_linear_bias,
 )
-from models.utility_functions import (
+from tt_models.utility_functions import (
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
 )

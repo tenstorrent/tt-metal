@@ -3,15 +3,15 @@ from transformers import AutoImageProcessor as HF_AutoImageProcessor
 from loguru import logger
 import torch
 
-from models.vit.tt.modeling_vit import TtViTEncoder
+from tt_models.vit.tt.modeling_vit import TtViTEncoder
 import tt_lib
 
-from models.utility_functions import (
+from tt_models.utility_functions import (
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
 )
 
-from models.utility_functions import comp_pcc, comp_allclose_and_pcc
+from tt_models.utility_functions import comp_pcc, comp_allclose_and_pcc
 
 
 def test_vit_encoder(hf_cat_image_sample_input, pcc=0.92):

@@ -3,15 +3,15 @@ import tt_lib
 import pytest
 from loguru import logger
 
-from models.utility_functions import (
+from tt_models.utility_functions import (
     profiler,
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
     prep_report,
     torch2tt_tensor,
 )
-from models.ConvNet_MNIST.tt.convnet_mnist import convnet_mnist
-from models.ConvNet_MNIST.convnet_mnist_utils import get_test_data
+from tt_models.ConvNet_MNIST.tt.convnet_mnist import convnet_mnist
+from tt_models.ConvNet_MNIST.convnet_mnist_utils import get_test_data
 
 
 @pytest.mark.parametrize(

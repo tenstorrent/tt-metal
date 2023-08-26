@@ -5,12 +5,12 @@ from datasets import load_dataset
 from loguru import logger
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+from tt_models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
-from models.whisper.tt.whisper_for_conditional_generation import (
+from tt_models.whisper.tt.whisper_for_conditional_generation import (
     TtWhisperForConditionalGeneration,
 )
-from models.utility_functions import (
+from tt_models.utility_functions import (
     comp_allclose,
     comp_pcc,
 )

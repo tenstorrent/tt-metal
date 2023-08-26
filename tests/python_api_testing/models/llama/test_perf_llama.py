@@ -20,9 +20,9 @@ from transformers import (
 
 from python_api_testing.models.llama.llama_model import TtLlamaModel
 import tt_lib
-from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, Profiler
-from models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache
-from models.utility_functions import prep_report
+from tt_models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, Profiler
+from tt_models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache
+from tt_models.utility_functions import prep_report
 
 BATCH_SIZE = 1
 

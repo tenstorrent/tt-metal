@@ -14,7 +14,7 @@ from loguru import logger
 import pytest
 
 import tt_lib
-from models.utility_functions import comp_pcc
+from tt_models.utility_functions import comp_pcc
 from tt.vgg import vgg16
 from vgg_utils import get_shape
 

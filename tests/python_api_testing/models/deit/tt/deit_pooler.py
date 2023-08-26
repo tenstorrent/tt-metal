@@ -14,7 +14,7 @@ from torch import nn
 from deit_config import DeiTConfig
 
 import tt_lib
-from models.utility_functions import torch_to_tt_tensor_rm
+from tt_models.utility_functions import torch_to_tt_tensor_rm
 from helper_funcs import Linear as TtLinear
 
 class TtDeiTPooler(nn.Module):

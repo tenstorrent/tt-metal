@@ -10,9 +10,9 @@
 import torch
 from loguru import logger
 
-from models.utility_functions import torch_to_tt_tensor, tt_to_torch_tensor
+from tt_models.utility_functions import torch_to_tt_tensor, tt_to_torch_tensor
 
-from models.utility_functions import (
+from tt_models.utility_functions import (
     comp_pcc,
     comp_allclose_and_pcc
 )

@@ -8,7 +8,7 @@ import python_api_testing.models.bloom.bloom_block as bloom_block
 import tt_lib as ttl
 from tt_lib.fallback_ops import fallback_ops
 from typing import Optional, Tuple, Union
-from models.utility_functions import pad_by_zero
+from tt_models.utility_functions import pad_by_zero
 
 
 def _make_causal_mask(

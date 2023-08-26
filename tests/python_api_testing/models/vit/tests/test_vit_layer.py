@@ -3,13 +3,13 @@ from loguru import logger
 import torch
 
 import tt_lib
-from models.utility_functions import (
+from tt_models.utility_functions import (
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
 )
 
-from models.utility_functions import comp_pcc, comp_allclose_and_pcc
-from models.vit.tt.modeling_vit import TtViTLayer
+from tt_models.utility_functions import comp_pcc, comp_allclose_and_pcc
+from tt_models.vit.tt.modeling_vit import TtViTLayer
 
 
 def test_vit_layer(pcc=0.99):

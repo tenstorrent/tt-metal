@@ -4,12 +4,12 @@ import tt_lib
 from loguru import logger
 
 from transformers import T5Model, AutoModelForSeq2SeqLM
-from models.utility_functions import (
+from tt_models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
-from models.utility_functions import comp_pcc
-from models.t5.tt.t5_dense_gated_act_dense import TtT5DenseGatedActDense
+from tt_models.utility_functions import comp_pcc
+from tt_models.t5.tt.t5_dense_gated_act_dense import TtT5DenseGatedActDense
 
 
 def run_test_T5DenseGatedActDense_inference(device):

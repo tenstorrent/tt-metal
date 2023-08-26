@@ -7,7 +7,7 @@ import tt_lib
 
 from tests.python_api_testing.models.falcon.falcon_attention import TtFalconAttention
 from tests.python_api_testing.models.falcon.falcon_mlp import TtFalconMLP
-from models.utility_functions import pad_by_zero
+from tt_models.utility_functions import pad_by_zero
 
 
 class TtFalconDecoderLayer(nn.Module):

@@ -14,7 +14,7 @@ from transformers import AutoImageProcessor, DeiTForImageClassificationWithTeach
 from loguru import logger
 
 import tt_lib
-from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor , comp_pcc, comp_allclose_and_pcc
+from tt_models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor , comp_pcc, comp_allclose_and_pcc
 
 from deit_config import DeiTConfig
 from deit_for_image_classification_with_teacher import TtDeiTForImageClassificationWithTeacher
