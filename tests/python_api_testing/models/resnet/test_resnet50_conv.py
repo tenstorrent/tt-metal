@@ -15,23 +15,30 @@ import tt_lib
 from models.utility_functions import comp_pcc
 from tests.python_api_testing.models.resnet.metalResnetBlock50 import compute_conv_output_shape, TtResnetConv, _nearest_32, format_tensor
 
-@pytest.mark.parametrize("use_new_matmul", (True, False))
+@pytest.mark.parametrize("use_new_matmul", (True,))
 @pytest.mark.parametrize(
     "K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w",
     (
+        # 1x1 convs in rn50
         (64, 64, 56, 56, 1, 1, 1, 1, 0, 0),
-        #(256, 64, 56, 56, 1, 1, 1, 1, 0, 0), # slow with new_matmul but less than bias computation time
-        #(64, 256, 56, 56, 1, 1, 1, 1, 0, 0),
-        #(64, 256, 56, 56, 1, 1, 1, 1, 0, 0),
-        #(128, 256, 56, 56, 1, 1, 1, 1, 0, 0),
-        #(512, 128, 28, 28, 1, 1, 1, 1, 0, 0),
-        #(128, 512, 28, 28, 1, 1, 1, 1, 0, 0),
-        #(256, 512, 28, 28, 1, 1, 1, 1, 0, 0),
-        #(1024, 256, 14, 14, 1, 1, 1, 1, 0, 0),
-        #(256, 1024, 14, 14, 1, 1, 1, 1, 0, 0),
-        #(512, 1024, 14, 14, 1, 1, 1, 1, 0, 0),
-        #(2048, 512, 7, 7, 1, 1, 1, 1, 0, 0),
-        #(512, 2048, 7, 7, 1, 1, 1, 1, 0, 0), # slightly slower with new matmul but less than old matmul + bias computation time
+        (256, 64, 56, 56, 1, 1, 1, 1, 0, 0), # slow with new_matmul but less than bias computation time
+        (64, 256, 56, 56, 1, 1, 1, 1, 0, 0),
+        (64, 256, 56, 56, 1, 1, 1, 1, 0, 0),
+        (128, 256, 56, 56, 1, 1, 1, 1, 0, 0),
+        (512, 128, 28, 28, 1, 1, 1, 1, 0, 0),
+        (128, 512, 28, 28, 1, 1, 1, 1, 0, 0),
+        (256, 512, 28, 28, 1, 1, 1, 1, 0, 0),
+        (1024, 256, 14, 14, 1, 1, 1, 1, 0, 0),
+        (256, 1024, 14, 14, 1, 1, 1, 1, 0, 0),
+        (512, 1024, 14, 14, 1, 1, 1, 1, 0, 0),
+        (2048, 512, 7, 7, 1, 1, 1, 1, 0, 0),
+        (512, 2048, 7, 7, 1, 1, 1, 1, 0, 0), # slightly slower with new matmul but less than old matmul + bias computation time
+
+        # 3x3 convs in rn50 (not complete list)
+        (64, 64, 56, 56, 3, 3, 1, 1, 1, 1),
+
+        # downsample convs in rn50 (not complete list)
+        (128, 128, 56, 56, 1, 1, 2, 2, 0, 0),
     )
 )
 def test_resnet50_conv(use_program_cache, device, K,C,H,W,R,S,stride_h,stride_w,pad_h,pad_w, use_new_matmul):
@@ -176,11 +183,11 @@ def test_resnet50_conv(use_program_cache, device, K,C,H,W,R,S,stride_h,stride_w,
 
     output_on_device = conv(conv_input_on_device)
 
-    if (is_1x1_conv):
-        # convert matmul tiled output to RM
-        assert(output_on_device.layout() == tt_lib.tensor.Layout.TILE)
-        output_on_device = format_tensor(output_on_device, tt_lib.tensor.Layout.ROW_MAJOR, device, memory_config)
-        output_on_device = output_on_device.reshape(conv_output_shape[0], conv_output_shape[1], conv_output_shape[2], conv_output_shape[3])
+
+    # convert matmul tiled output to RM
+    assert(output_on_device.layout() == tt_lib.tensor.Layout.TILE)
+    output_on_device = format_tensor(output_on_device, tt_lib.tensor.Layout.ROW_MAJOR, device, memory_config)
+    output_on_device = output_on_device.reshape(conv_output_shape[0], conv_output_shape[1], conv_output_shape[2], conv_output_shape[3])
 
     # Copy to host and Compare against pytorch
     out = output_on_device.cpu()
