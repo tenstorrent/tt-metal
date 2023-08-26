@@ -92,7 +92,7 @@ void kernel_main() {
     constexpr bool out_in_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
     constexpr uint32_t cb_id_weight = get_compile_time_arg_val(2);
-    DPRINT << "cb id weight " << cb_id_weight << ENDL();
+    //DPRINT << "cb id weight " << cb_id_weight << ENDL();
     // NOTE: Row major layout only supports bfp16
     // TT_ASSERT(out_df != DataFormat::Bfp8_b);
     const DataFormat out_df = get_dataformat(cb_id_out0);
