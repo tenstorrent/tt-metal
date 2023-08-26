@@ -96,6 +96,7 @@ class TtFalconDecoderLayer(nn.Module):
         hidden_states: tt_lib.tensor.Tensor,
         alibi: torch.Tensor,
         attention_mask: torch.Tensor,
+        user_id: int = 0,
         layer_past: Optional[Tuple[tt_lib.tensor.Tensor]] = None,
         layer_past_len: int = 0,
         output_attentions: Optional[bool] = False,
@@ -138,6 +139,7 @@ class TtFalconDecoderLayer(nn.Module):
             hidden_states=layernorm_output,
             alibi=alibi,
             attention_mask=attention_mask,
+            user_id=user_id,
             layer_past=layer_past,
             layer_past_len=layer_past_len,
             output_attentions=output_attentions,
@@ -174,7 +176,7 @@ class TtFalconDecoderLayer(nn.Module):
         residual.deallocate()
 
         if use_cache:
-            outputs = (output, outputs)
+            outputs = (output,) + outputs
         else:
             outputs = (
                 output,

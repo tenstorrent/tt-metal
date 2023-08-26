@@ -108,13 +108,10 @@ def test_FalconMLP_inference(
     pcc,
     model_config_str,
     model_location_generator,
+    device
 ):
     model_config = get_model_config(model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)
-    # Initialize the device
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
-    tt_lib.device.InitializeDevice(device)
-    tt_lib.device.SetDefaultDevice(device)
 
     run_test_FalconMLP_inference(
         device,
@@ -126,4 +123,3 @@ def test_FalconMLP_inference(
         tt_cache_path,
         model_location_generator,
     )
-    tt_lib.device.CloseDevice(device)

@@ -26,13 +26,14 @@ class PytorchFalconAttentionModel(torch.nn.Module):
         # Disable dropout
         self.attention.eval()
 
-    def forward(self, x, alibi, attention_mask, layer_past):
+    def forward(self, x, alibi, attention_mask, layer_past, use_cache):
         result = self.attention(
             hidden_states=x,
             alibi=alibi,
             attention_mask=attention_mask,
             layer_past=layer_past,
-        )[0]
+            use_cache=use_cache
+        )
         return result
 
 
@@ -54,6 +55,8 @@ def run_test_FalconAttention_inference(
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
+    use_cache = True
+    user_id = 0
 
     # Prepare input
     torch.manual_seed(0)
@@ -82,7 +85,11 @@ def run_test_FalconAttention_inference(
             (attention_mask_bool * -100000).expand(-1, configuration.n_head, -1, -1),
             device,
         )
-        tt_layer_past = None
+        tt_k_cache = torch.zeros(batch, max_position_embeddings, head_dim)
+        tt_v_cache = torch.zeros(batch, max_position_embeddings, head_dim)
+        tt_k_cache = torch2tt_tensor(tt_k_cache.unsqueeze(1), device)
+        tt_v_cache = torch2tt_tensor(tt_v_cache.unsqueeze(1), device)
+        tt_layer_past = (tt_k_cache, tt_v_cache)
 
     elif llm_mode == "decode":
         q_len, kv_len = seq_len, kv_cache_len + 1
@@ -136,11 +143,12 @@ def run_test_FalconAttention_inference(
     pytorch_FalconAttention_model = PytorchFalconAttentionModel(
         hugging_face_reference_model, layer_num
     )
-    pytorch_out = pytorch_FalconAttention_model(
+    pytorch_out, pytorch_layer_present = pytorch_FalconAttention_model(
         attention_input,
         alibi=None,
         attention_mask=attention_mask_bool,
         layer_past=layer_past,
+        use_cache=use_cache
     )
 
     # TT hardware execution -------------------------------------------------------------
@@ -160,22 +168,37 @@ def run_test_FalconAttention_inference(
         tt_cache_path,
     )
 
-    tt_out, layer_present = tt_FalconAttention_model(
+    tt_out, tt_layer_present = tt_FalconAttention_model(
         tt_attention_input,
         alibi=None,
         attention_mask=tt_attention_mask,
+        user_id=user_id,
         layer_past=tt_layer_past,
         layer_past_len=kv_cache_len,
+        use_cache=use_cache
     )
     tt_out = tt2torch_tensor(tt_out).squeeze(1)
+    tt_layer_present = (tt2torch_tensor(tt_layer_present[0]).squeeze(1), tt2torch_tensor(tt_layer_present[1]).squeeze(1))
+
     if llm_mode == "decode":
         tt_out = tt_out.transpose(0, 1)
+    tt_layer_present = (tt_layer_present[0][:, :kv_len, :], tt_layer_present[1][:, :kv_len, :])
 
     # check outputs ----------------------------------------------------------------------
-    logger.info(comp_allclose(pytorch_out, tt_out))
-
     does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
-    logger.info(f"PCC value: {output_pcc}")
+    logger.info(f"Output: {output_pcc}")
+
+    does_pass2, output_pcc = comp_pcc(pytorch_layer_present[0], tt_layer_present[0], pcc)
+    logger.info(f"K Cache: {output_pcc}")
+
+    does_pass = does_pass and does_pass2
+
+    does_pass2, output_pcc = comp_pcc(pytorch_layer_present[1], tt_layer_present[1], pcc)
+    logger.info(f"V Cache: {output_pcc}")
+
+    does_pass = does_pass and does_pass2
+
+
 
     if does_pass:
         logger.info("Falcon Attention output Passed!")
@@ -206,13 +229,10 @@ def test_FalconAttention_inference(
     pcc,
     model_config_str,
     model_location_generator,
+    device,
 ):
     model_config = get_model_config(model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)
-    # Initialize the device
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
-    tt_lib.device.InitializeDevice(device)
-    tt_lib.device.SetDefaultDevice(device)
 
     run_test_FalconAttention_inference(
         device,
@@ -226,4 +246,3 @@ def test_FalconAttention_inference(
         tt_cache_path,
         model_location_generator,
     )
-    tt_lib.device.CloseDevice(device)

@@ -184,18 +184,25 @@ class TtFalconModelShared(torch.nn.Module):
         self,
         input_embeddings: tt_lib.tensor.Tensor,
         attention_mask: tt_lib.tensor.Tensor = None,
-        layer_past: Optional[Tuple[tt_lib.tensor.Tensor]] = None,
+        user_id: int = 0,
+        layer_past: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
         layer_past_len: int = 0,
+        use_cache: bool = False,
     ) -> tt_lib.tensor.Tensor:
         layer_output = input_embeddings
+        presents = ()
         for idx, layer in enumerate(self.layers):
             layer_output = layer(
                 hidden_states=layer_output,
                 alibi=None,
                 attention_mask=attention_mask,
-                layer_past=layer_past,
+                user_id=user_id,
+                layer_past=layer_past[idx],
                 layer_past_len=layer_past_len,
-            )[0]
+                use_cache=use_cache,
+            )
+            presents += layer_output[1:]
+            layer_output = layer_output[0]
 
         # apply final norm layer
         layer_output = tt_lib.tensor.layernorm(
@@ -221,7 +228,7 @@ class TtFalconModelShared(torch.nn.Module):
             # output_dtype=self.model_config["LN_F_OUTPUT_DTYPE"], # Not currently supported
         )
 
-        return layer_output
+        return layer_output, presents
 
 
 class TtFalconModel(TtFalconModelShared):
@@ -253,13 +260,17 @@ class TtFalconModel(TtFalconModelShared):
         self,
         input_embeddings: tt_lib.tensor.Tensor,
         attention_mask: tt_lib.tensor.Tensor = None,
-        layer_past: Optional[Tuple[tt_lib.tensor.Tensor]] = None,
+        user_id: int = 0,
+        layer_past: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
         layer_past_len: int = 0,
+        use_cache: bool = False,
     ) -> tt_lib.tensor.Tensor:
-        hidden_states = super().forward(
+        hidden_states, presents = super().forward(
             input_embeddings=input_embeddings,
             attention_mask=attention_mask,
+            user_id=user_id,
             layer_past=layer_past,
             layer_past_len=layer_past_len,
+            use_cache=use_cache,
         )
-        return hidden_states
+        return hidden_states, presents

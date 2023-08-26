@@ -74,7 +74,9 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
                 tt_dtype=self.model_config["SIN_CACHED_WEIGHTS_DTYPE"],
             )
 
-    def forward(self, layer: tt_lib.tensor.Tensor, token_idx: Optional[int] = None) -> tt_lib.tensor.Tensor:
+    def forward(
+        self, layer: tt_lib.tensor.Tensor, token_idx: Optional[int] = None
+    ) -> tt_lib.tensor.Tensor:
         # x: [bs, num_attention_heads, seq_len, head_size]
         # seq_len > self.max_seq_len_cached block is unlikely to be run after we build sin/cos in `__init__`. Keep the logic here just in case.
         seq_len = layer.shape()[2]
@@ -186,6 +188,7 @@ class TtFalconAttention(nn.Module):
         hidden_states: tt_lib.tensor.Tensor,
         alibi: torch.Tensor,
         attention_mask: torch.Tensor,
+        user_id: int = 0,
         layer_past: Optional[Tuple[tt_lib.tensor.Tensor]] = None,
         layer_past_len: int = 0,
         output_attentions: bool = False,
@@ -203,7 +206,7 @@ class TtFalconAttention(nn.Module):
         if self.llm_mode == "prefill":
             batch = hidden_states.shape()[0]
             q_len = hidden_states.shape()[2]
-            assert layer_past is None
+            assert layer_past is not None
         elif self.llm_mode == "decode":
             batch = hidden_states.shape()[2]
             q_len = hidden_states.shape()[0]
@@ -251,8 +254,7 @@ class TtFalconAttention(nn.Module):
         ### K CACHE UPDATE ###
         ######################
         if self.llm_mode == "prefill":
-            # TODO: Fill kv_cache
-            pass
+            tt_lib.tensor.fill_cache(layer_past[0], key_layer, user_id)
 
         elif self.llm_mode == "decode":
             # Update kv_cache in place
@@ -266,7 +268,6 @@ class TtFalconAttention(nn.Module):
             )
 
         kv_seq_len = key_layer.shape()[-2]
-        layer_present = layer_past if use_cache else None
 
         ######################
         ### PRE-SOFTMAX MM ###
@@ -278,6 +279,7 @@ class TtFalconAttention(nn.Module):
             output_mem_config=self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"],
             # output_dtype=self.model_config["K_TRANSPOSED_OUTPUT_DTYPE"], # Not currently supported
         )
+        key_layer.deallocate()
 
         if self.llm_mode == "prefill":
             attn_weights = tt_lib.tensor.matmul(
@@ -334,8 +336,7 @@ class TtFalconAttention(nn.Module):
         ### V CACHE UPDATE ###
         ######################
         if self.llm_mode == "prefill":
-            # TODO: Fill kv_cache
-            pass
+            tt_lib.tensor.fill_cache(layer_past[1], value_layer, user_id)
 
         elif self.llm_mode == "decode":
             # Update kv_cache in place
@@ -347,6 +348,8 @@ class TtFalconAttention(nn.Module):
                 [batch - 1, 0, nearest_32(layer_past_len + 1) - 1, self.head_dim - 1],
                 output_mem_config=self.model_config["V_CACHE_SLICE_OUTPUT_MEMCFG"],
             )
+
+        layer_present = layer_past if use_cache else None
 
         ########################
         ### POST-SOFTMAX MM ###
@@ -369,6 +372,7 @@ class TtFalconAttention(nn.Module):
                 ],  # Must be BFLOAT16
             )
         attn_weights.deallocate()
+        value_layer.deallocate()
 
         #########################
         ### ATTENTION SELFOUT ###
