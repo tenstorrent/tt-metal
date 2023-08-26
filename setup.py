@@ -163,7 +163,7 @@ setup(
     use_scm_version=get_version(buda_eager_build_config),
     packages=packages,
     package_dir={
-        "": "libs",
+        "": "tt_eager",
         "tt_lib.tt_metal": "tt_metal",
         "tt_lib.models": "tests/python_api_testing/models",
         "tt_lib.scripts": "scripts",

@@ -1,10 +1,10 @@
-#include "libs/tt_dnn/op_library/groupnorm/groupnorm_op.hpp"
+#include "tt_eager/tt_dnn/op_library/groupnorm/groupnorm_op.hpp"
 
 #include <optional>
 
-#include "libs/tt_dnn/op_library/work_split.hpp"
-#include "libs/tt_dnn/op_library/reshape/reshape_op.hpp"
-#include "libs/tt_dnn/op_library/composite/composite_ops.hpp"
+#include "tt_eager/tt_dnn/op_library/work_split.hpp"
+#include "tt_eager/tt_dnn/op_library/reshape/reshape_op.hpp"
+#include "tt_eager/tt_dnn/op_library/composite/composite_ops.hpp"
 
 using namespace tt::constants;
 using namespace std;

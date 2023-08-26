@@ -5,8 +5,8 @@ TT_LIB_LDFLAGS = $(LDFLAGS) -ltt_dnn -ldtx -ltensor -ltt_metal -lyaml-cpp -ltrac
 TT_LIB_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
 
 TT_LIB_SRCS = \
-	libs/tt_lib/csrc/tt_lib_bindings.cpp \
-	libs/tt_lib/csrc/type_caster.cpp \
+	tt_eager/tt_lib/csrc/tt_lib_bindings.cpp \
+	tt_eager/tt_lib/csrc/type_caster.cpp \
 
 TT_LIB_OBJS = $(addprefix $(OBJDIR)/, $(TT_LIB_SRCS:.cpp=.o))
 TT_LIB_DEPS = $(addprefix $(OBJDIR)/, $(TT_LIB_SRCS:.cpp=.d))
@@ -22,11 +22,11 @@ $(TT_LIB_LIB): $(TT_LIB_OBJS) $(TT_DNN_LIB) $(TENSOR_LIB) $(DTX_LIB) $(TT_METAL_
 
 .PHONY: tt_lib/csrc/setup_local_so
 tt_lib/csrc/setup_local_so: $(TT_LIB_LIB)
-	rm -f libs/tt_lib/_C.so
-	cp $^ libs/tt_lib/_C.so
+	rm -f tt_eager/tt_lib/_C.so
+	cp $^ tt_eager/tt_lib/_C.so
 
 # Compile obj files
-$(OBJDIR)/libs/tt_lib/csrc/%.o: libs/tt_lib/csrc/%.cpp
+$(OBJDIR)/tt_eager/tt_lib/csrc/%.o: tt_eager/tt_lib/csrc/%.cpp
 	@mkdir -p $(@D)
 	$(CXX) $(TT_LIB_CFLAGS) $(CXXFLAGS) $(STATIC_LIB_FLAGS) $(TT_LIB_INCLUDES) -c -o $@ $<
 

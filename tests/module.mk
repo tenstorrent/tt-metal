@@ -1,4 +1,4 @@
-TEST_INCLUDES = -I$(TT_METAL_HOME)/tests/ -I$(TT_METAL_HOME)/libs/.
+TEST_INCLUDES = -I$(TT_METAL_HOME)/tests/ -I$(TT_METAL_HOME)/tt_eager/.
 
 include $(TT_METAL_HOME)/tests/tt_metal/tt_metal/module.mk
 

@@ -1,6 +1,6 @@
 #include "tt_metal/host_api.hpp"
-#include "libs/tensor/tensor.hpp"
-#include "libs/tt_dnn/op_library/layernorm/layernorm_op.hpp"
+#include "tt_eager/tensor/tensor.hpp"
+#include "tt_eager/tt_dnn/op_library/layernorm/layernorm_op.hpp"
 #include <tt_numpy/functions.hpp>
 
 #include <algorithm>

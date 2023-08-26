@@ -6,7 +6,7 @@
 #include "tt_dnn/op_library/operation_history.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
 
-#include <libs/tensor/tensor.hpp>
+#include <tt_eager/tensor/tensor.hpp>
 
 #include <optional>
 

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "libs/tensor/tensor.hpp"
+#include "tt_eager/tensor/tensor.hpp"
 
 #include "tt_dnn/op_library/operation.hpp"
 

@@ -18,6 +18,6 @@ $(PYTHON_ENV)/.installed:
 $(PYTHON_ENV)/%: $(PYTHON_ENV)/.installed
 	bash -c "source $(PYTHON_ENV)/bin/activate"
 
-$(PYTHON_ENV)/.installed-dev: libs/tt_lib/dev_install python_env tt_metal/python_env/requirements-dev.txt
+$(PYTHON_ENV)/.installed-dev: tt_eager/tt_lib/dev_install python_env tt_metal/python_env/requirements-dev.txt
 	bash -c "source $(PYTHON_ENV)/bin/activate && python -m pip install -r tt_metal/python_env/requirements-dev.txt"
 	touch $@

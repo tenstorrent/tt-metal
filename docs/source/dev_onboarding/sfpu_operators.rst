@@ -69,14 +69,14 @@ Code Organization
    * - Folder
      - File
      - Description
-   * - libs/tt_dnn/op_library/
-     - libs/tt_dnn/op_library/your_operator/\*.cpp, \*.hpp
+   * - tt_eager/tt_dnn/op_library/
+     - tt_eager/tt_dnn/op_library/your_operator/\*.cpp, \*.hpp
      - TT DNN implementation of operator referencing SFPU
-   * - libs/tt_dnn/op_library/eltwise_unary/ or libs/tt_dnn/op_library/eltwise_binary/
-     - libs/tt_dnn/op_library/eltwise_(unary|binary)/\*.cpp, \*.hpp
+   * - tt_eager/tt_dnn/op_library/eltwise_unary/ or tt_eager/tt_dnn/op_library/eltwise_binary/
+     - tt_eager/tt_dnn/op_library/eltwise_(unary|binary)/\*.cpp, \*.hpp
      - TT DNN implementation of basic unary, binary ops referencing SFPU
-   * - libs/tt_dnn/op_library/composite/
-     - libs/tt_dnn/op_library/composite/\*.cpp, \*.hpp
+   * - tt_eager/tt_dnn/op_library/composite/
+     - tt_eager/tt_dnn/op_library/composite/\*.cpp, \*.hpp
      - TT DNN implementation of composite ops based on SFPU
    * - tt_metal/src/ckernels/grayskull/
      - tt_metal/src/ckernels/grayskull/common/inc/ckernel_sfpu.h,

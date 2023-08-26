@@ -2,7 +2,7 @@
 
 #include <optional>
 
-#include "libs/tensor/tensor.hpp"
+#include "tt_eager/tensor/tensor.hpp"
 
 #include "tt_dnn/op_library/run_operation.hpp"
 
