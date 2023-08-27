@@ -4,6 +4,7 @@
 
 #include "debug_tools.hpp"
 #include "device_data.hpp"
+#include "noc/noc_parameters.h"
 #include "tt_metal/detail/program.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"

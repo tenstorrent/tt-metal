@@ -8,16 +8,19 @@ COMMON_INCLUDES = $(BASE_INCLUDES)
 ifeq ("$(ARCH_NAME)", "wormhole_b0")
   COMMON_INCLUDES+= -Isrc/firmware/riscv/wormhole
   COMMON_INCLUDES+= -Isrc/firmware/riscv/wormhole/wormhole_b0_defines
-  COMMON_INCLUDES+= -I$(TT_METAL_HOME)/tt_metal/third_party/umd/device/wormhole/.
+  COMMON_INCLUDES+= -Itt_metal/third_party/umd/device/wormhole/.
+  COMMON_INCLUDES+= -Itt_metal/third_party/umd/src/firmware/riscv/wormhole
 else
   COMMON_INCLUDES+= -Isrc/firmware/riscv/$(ARCH_NAME)
-  COMMON_INCLUDES+= -I$(TT_METAL_HOME)/tt_metal/third_party/umd/device/$(ARCH_NAME)/.
+  COMMON_INCLUDES+= -Itt_metal/third_party/umd/device/$(ARCH_NAME)/.
+  COMMON_INCLUDES+= -Itt_metal/third_party/umd/src/firmware/riscv/$(ARCH_NAME)
 endif
 
 ifeq ("$(ARCH_NAME)", "wormhole")
   COMMON_INCLUDES+= -Isrc/firmware/riscv/wormhole
   COMMON_INCLUDES+= -Isrc/firmware/riscv/wormhole/wormhole_a0_defines
-  COMMON_INCLUDES+= -I$(TT_METAL_HOME)/tt_metal/third_party/umd/device/wormhole/.
+  COMMON_INCLUDES+= -Itt_metal/third_party/umd/device/wormhole/.
+  COMMON_INCLUDES+= -Itt_metal/third_party/umd/src/firmware/riscv/wormhole
 endif
 
 COMMON_LIB = $(LIBDIR)/libcommon.a

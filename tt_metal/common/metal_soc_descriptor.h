@@ -40,7 +40,4 @@ struct metal_SocDescriptor : public tt_SocDescriptor {
   void map_workers_to_dram_banks();
 };
 
-// Allocates a new soc descriptor on the heap. Returns an owning pointer.
-std::unique_ptr<metal_SocDescriptor> load_soc_descriptor_from_yaml(std::string device_descriptor_file_path);
-
 void load_dispatch_and_banking_config(metal_SocDescriptor &soc_descriptor, uint32_t num_harvested_noc_rows);

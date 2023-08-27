@@ -139,11 +139,6 @@ const std::string get_product_name(tt::ARCH arch, uint32_t num_harvested_noc_row
   return product_name.at(arch).at(num_harvested_noc_rows);
 }
 
-std::unique_ptr<metal_SocDescriptor> load_soc_descriptor_from_yaml(std::string device_descriptor_file_path) {
-  std::unique_ptr<metal_SocDescriptor> soc_desc  = std::unique_ptr<metal_SocDescriptor>(new metal_SocDescriptor(device_descriptor_file_path));
-  return soc_desc;
-}
-
 void load_dispatch_and_banking_config(metal_SocDescriptor &soc_descriptor, uint32_t num_harvested_noc_rows) {
   YAML::Node device_descriptor_yaml = YAML::LoadFile(soc_descriptor.device_descriptor_file_path);
 

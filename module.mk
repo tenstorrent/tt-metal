@@ -68,11 +68,11 @@ endif
 # Top level flags, compiler, defines etc.
 
 ifeq ("$(ARCH_NAME)", "wormhole_b0")
-	BASE_INCLUDES=-Itt_metal/src/firmware/riscv/wormhole -Itt_metal/src/firmware/riscv/wormhole/wormhole_b0_defines
+	BASE_INCLUDES=-Itt_metal/src/firmware/riscv/wormhole -Itt_metal/src/firmware/riscv/wormhole/wormhole_b0_defines -Itt_metal/third_party/umd/src/firmware/riscv/wormhole
 else ifeq ("$(ARCH_NAME)", "wormhole")
-	BASE_INCLUDES=-Itt_metal/src/firmware/riscv/wormhole -Itt_metal/src/firmware/riscv/wormhole/wormhole_a0_defines
+	BASE_INCLUDES=-Itt_metal/src/firmware/riscv/wormhole -Itt_metal/src/firmware/riscv/wormhole/wormhole_a0_defines -Itt_metal/third_party/umd/src/firmware/riscv/wormhole
 else
-	BASE_INCLUDES=-Itt_metal/src/firmware/riscv/$(ARCH_NAME)
+	BASE_INCLUDES=-Itt_metal/src/firmware/riscv/$(ARCH_NAME) -Itt_metal/third_party/umd/src/firmware/riscv/$(ARCH_NAME)
 endif
 
 # TODO: rk reduce this to one later

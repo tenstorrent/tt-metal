@@ -15,7 +15,7 @@
 #include "common/tt_backend_api_types.hpp"
 #include "common/metal_soc_descriptor.h"
 #include "host_mem_address_map.h"
-#include "eth_interface.h"
+#include "tt_metal/third_party/umd/src/firmware/riscv/wormhole/eth_interface.h"
 #include "dev_mem_map.h"
 
 static constexpr std::uint32_t SW_VERSION = 0x00020000;
