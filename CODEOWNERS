@@ -21,7 +21,7 @@ Makefile @tt-rkim
 /module.mk @tt-rkim
 tt_metal/module.mk @tt-rkim
 tt_metal/common/module.mk @tt-rkim
-libs/module.mk @tt-rkim
+tt_eager/module.mk @tt-rkim
 
 # Testing scripts and infra
 

@@ -28,7 +28,7 @@ graft tt_metal/third_party
 recursive-exclude tt_metal/third_party **/doxygen/* **/docs/*
 
 # BUDA-Eager sources
-recursive-include libs/ *.py *.hpp *.cpp module.mk
+recursive-include tt_eager/ *.py *.hpp *.cpp module.mk
 
 # Things we never wanna see
 prune build/
