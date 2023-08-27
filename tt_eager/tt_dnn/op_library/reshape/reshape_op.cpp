@@ -324,7 +324,7 @@ tt::stl::reflection::Attributes Reshape::attributes() const {
     };
 }
 
-Tensor reshape (Tensor &input_tensor_a, int N, int C, int H, int W, const MemoryConfig& output_mem_config) {
+Tensor reshape (const Tensor &input_tensor_a, int N, int C, int H, int W, const MemoryConfig& output_mem_config) {
     // No-op (Will do a tensor copy)
     auto output_shape = infer_dims_for_reshape(N, C, H, W, input_tensor_a.volume());
     if (
@@ -332,8 +332,7 @@ Tensor reshape (Tensor &input_tensor_a, int N, int C, int H, int W, const Memory
     ) {
         // Don't need to do a check here to see the H and W both divisible by 32
         // since handled within the tensor reshape method
-        input_tensor_a = input_tensor_a.reshape(N, C, H, W);
-        return input_tensor_a;
+        return input_tensor_a.reshape(N, C, H, W);
     }
     return operation::run_without_autoformat(Reshape{N, C, H, W, output_mem_config}, {input_tensor_a}).at(0);
 }

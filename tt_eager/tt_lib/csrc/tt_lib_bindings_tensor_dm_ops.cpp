@@ -283,7 +283,7 @@ namespace tt::tt_metal::detail{
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
                 "input", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "math_op", "Aggregating math operation", " ReduceOpMath", "SUM, MAX", "Yes"
+                "math_op", "Aggregating math operation", " ReduceOpMath", "SUM, MAX, MIN", "Yes"
                 "dim", "Dimension on which reduction is performed", "ReduceOpDim", "W, H, HW", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");

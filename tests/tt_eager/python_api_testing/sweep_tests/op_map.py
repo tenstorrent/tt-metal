@@ -47,6 +47,22 @@ op_map = {
         "tt_lib_op": tt_lib_ops.normalize_hw,
         "pytorch_op": pytorch_ops.normalize_hw,
     },
+    "stats-var_global": {
+        "tt_lib_op": None,  # tt_lib_ops.var_global,
+        "pytorch_op": pytorch_ops.var_global,
+    },
+    "stats-std_global": {
+        "tt_lib_op": None,  # tt_lib_ops.std_global,
+        "pytorch_op": pytorch_ops.std_global,
+    },
+    "stats-mean_global": {
+        "tt_lib_op": None,  # tt_lib_ops.mean_global,
+        "pytorch_op": pytorch_ops.mean_global,
+    },
+    "stats-normalize_global": {
+        "tt_lib_op": None,  # tt_lib_ops.normalize_global,
+        "pytorch_op": pytorch_ops.normalize_global,
+    },
     # Eltwise unary
     "eltwise-hardtanh": {
         "tt_lib_op": tt_lib_ops.eltwise_hardtanh,
@@ -624,6 +640,18 @@ op_map = {
     "reduce-max-hw": {
         "tt_lib_op": tt_lib_ops.reduce_max_hw,
         "pytorch_op": partial(pytorch_ops.reduce_max, dims=(-2, -1)),
+    },
+    "reduce-min-h": {
+        "tt_lib_op": tt_lib_ops.reduce_min_h,
+        "pytorch_op": partial(pytorch_ops.reduce_min, dims=(-2,)),
+    },
+    "reduce-min-w": {
+        "tt_lib_op": tt_lib_ops.reduce_min_w,
+        "pytorch_op": partial(pytorch_ops.reduce_min, dims=(-1,)),
+    },
+    "reduce-min-hw": {
+        "tt_lib_op": tt_lib_ops.reduce_min_hw,
+        "pytorch_op": partial(pytorch_ops.reduce_min, dims=(-2, -1)),
     },
     "reduce-sum-h": {
         "tt_lib_op": tt_lib_ops.reduce_sum_h,

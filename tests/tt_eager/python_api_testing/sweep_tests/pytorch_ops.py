@@ -55,6 +55,22 @@ def normalize_hw(x, *args, **kwargs):
             x[i, j, :, :] = (x[i, j, :, :] - mx[i, j, :, :]) / sx[i, j, :, :]
     return x
 
+def var_global(x, *args, **kwargs):
+    return torch.var(x, [0, 1, 2, 3], keepdim=True)
+
+
+def std_global(x, *args, **kwargs):
+    return torch.std(x, [0, 1, 2, 3], keepdim=True)
+
+
+def mean_global(x, *args, **kwargs):
+    return torch.mean(x, [0, 1, 2, 3], keepdim=True)
+
+def normalize_global(x, *args, **kwargs):
+    mx = mean_global(x)
+    sx = std_global(x)
+    x = (x-mx)/sx
+    return x
 
 # Ternary Ops
 def sum(x, *args, dim, **kwargs):
@@ -752,6 +768,8 @@ def reduce_sum(x, dims=None, keepdim=True, *args, **kwargs):
 def reduce_max(x, dims=None, keepdim=True, *args, **kwargs):
     return torch.amax(x, dims, keepdim)
 
+def reduce_min(x, dims=None, keepdim=True, *args, **kwargs):
+    return torch.amin(x, dims, keepdim)
 
 def flatten(x, *args, **kwargs):
     return torch.flatten(x)

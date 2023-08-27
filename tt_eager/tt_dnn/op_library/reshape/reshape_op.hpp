@@ -25,8 +25,7 @@ struct Reshape {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-// Tensor &a cannot be const, since in some cases we modify in place
-Tensor reshape (Tensor &a, int N, int C, int H, int W, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor reshape (const Tensor &a, int N, int C, int H, int W, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace tt_metal
 

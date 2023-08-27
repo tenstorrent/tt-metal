@@ -5,6 +5,7 @@
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_dnn/op_library/transpose/transpose_op.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
+#include "tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
@@ -44,7 +45,7 @@ std::map<string, string> get_defines(ReduceOpMath reduce_op, ReduceOpDim reduce_
         case ReduceOpDim::HW: reduce_dim_str = "ReduceDim::REDUCE_SCALAR"; break;
         default: TT_ASSERT(false && "Invalid reduce_op!");
     }
-    defines["REDUCE_OP"] = (do_max ? "PoolType::MAX" : "PoolType::SUM");
+    defines["REDUCE_OP"] = (do_max ? "PoolType::MAX" : "PoolType::SUM" );
     defines["REDUCE_DIM"] = reduce_dim_str;
     return defines;
 }
@@ -137,10 +138,24 @@ ReduceOpParallelizationStrategy Reduce::get_parallelization_strategy(const std::
     }
 }
 
+//reduce min
+//reduce min = - reduce_max( -x )
+Tensor reduce_min(const Tensor &input_tensor, ReduceOpDim reduce_dim, float scaler = 1.0f, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+    Tensor n_input_tensor = neg(input_tensor,output_mem_config);
+    Tensor max_reduce = reduce(n_input_tensor,ReduceOpMath::MAX,reduce_dim,scaler,output_mem_config);
+    Tensor min_tensor = neg(max_reduce,output_mem_config);
+    return min_tensor;
+}
+
 Tensor reduce(const Tensor &input_tensor, ReduceOpMath reduce_math, ReduceOpDim reduce_dim, float scaler, const MemoryConfig& output_mem_config) {
+    if ( reduce_math == ReduceOpMath::MIN ) {
+        return reduce_min(input_tensor,reduce_dim,scaler,output_mem_config);
+    }
+
     auto parallelization_strategy = Reduce{reduce_math, reduce_dim, scaler, output_mem_config}.get_parallelization_strategy({input_tensor});
     auto is_multicore_hw = parallelization_strategy == ReduceOpParallelizationStrategy::MULTI_CORE_HW;
     float pad_value = reduce_math == ReduceOpMath::MAX ? std::numeric_limits<float>::lowest() : 0;
+
     if (is_multicore_hw) {
         Device * device;
 
@@ -162,9 +177,27 @@ Tensor reduce(const Tensor &input_tensor, ReduceOpMath reduce_math, ReduceOpDim 
         return operation::run_with_autoformat(Reduce{reduce_math, reduce_dim, scaler, output_mem_config}, {input_tensor}, {}, pad_value).at(0);
     }
 }
+Tensor mean_hw(const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
+    return mean(input_tensor,2,output_mem_config);
+}
+Tensor global_mean(const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
+    return mean(input_tensor,4,output_mem_config);
+}
+Tensor mean(const Tensor& input_tensor,uint aggregate_dims /* = 2 */, const MemoryConfig& output_mem_config) {
+    tt::tt_metal::Shape shape = input_tensor.shape();
 
-Tensor mean_hw(const Tensor& input_tensor,const MemoryConfig& output_mem_config) {
-    auto shape = input_tensor.shape();
+    TT_ASSERT( aggregate_dims >= 2 && aggregate_dims <= 4, "mean aggregate dimensions should be [HW],[CHW] or [NCHW]");
+    switch( aggregate_dims ) {
+        case 4:
+        case 3:
+            {
+                Tensor result = mean(reshape(input_tensor,1,1,shape[0]*shape[1]*shape[2],shape[3],output_mem_config),2,output_mem_config);
+                return reshape(result,shape[0],shape[1],shape[2],shape[3],output_mem_config);
+            }
+        default:
+            break;
+    }
+
     float inv_scale_hw = 1.0f/(shape[3]*shape[2]);
     Tensor scaled_sum_hw = reduce(input_tensor,ReduceOpMath::SUM,ReduceOpDim::HW,inv_scale_hw,output_mem_config);
     return scaled_sum_hw;

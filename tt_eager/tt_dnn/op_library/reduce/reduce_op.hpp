@@ -15,7 +15,7 @@ namespace tt {
 
 namespace tt_metal {
 enum class ReduceOpMath {
-    SUM = 0, MAX = 1
+    SUM = 0, MAX = 1, MIN = 2
 };
 
 enum class ReduceOpDim {
@@ -47,7 +47,9 @@ struct Reduce {
 
 Tensor reduce(const Tensor &input_tensor, ReduceOpMath reduce_math, ReduceOpDim reduce_dim, float scaler = 1.0f, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 Tensor sum(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor mean(const Tensor& input_tensor, uint aggregate_dims=2, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 Tensor mean_hw(const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor global_mean(const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace tt_metal
 

@@ -40,6 +40,7 @@ def setup_host_and_device(func):
 ################## Helper-Funcs ################
 ################################################
 
+
 @setup_host_and_device
 def linear(
     x,
@@ -54,11 +55,15 @@ def linear(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    tt_weight = setup_tt_tensor(weight, device, layout[1], input_mem_config[1], dtype[1])
+    tt_weight = setup_tt_tensor(
+        weight, device, layout[1], input_mem_config[1], dtype[1]
+    )
     tt_bias = None
 
     if bias is not None:
-        tt_bias = setup_tt_tensor(bias, device, layout[2], input_mem_config[2], dtype[2])
+        tt_bias = setup_tt_tensor(
+            bias, device, layout[2], input_mem_config[2], dtype[2]
+        )
 
     _, __, out_features, in_features = tt_weight.shape()
     tt_linear = tt_Linear(in_features, out_features, tt_weight, tt_bias)
@@ -72,7 +77,14 @@ def linear(
 ################################################
 @setup_host_and_device
 def clone(
-    x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs,
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.clone(t0, output_mem_config=output_mem_config)
@@ -82,7 +94,14 @@ def clone(
 
 @setup_host_and_device
 def move(
-    x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs,
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.move(t0, output_mem_config=output_mem_config)
@@ -91,7 +110,16 @@ def move(
 
 
 @setup_host_and_device
-def eltwise_erf(x, *args, fast_and_appx, device, dtype, layout, input_mem_config, output_mem_config, **kwargs,
+def eltwise_erf(
+    x,
+    *args,
+    fast_and_appx,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.erf(t0, fast_and_appx, output_mem_config=output_mem_config)
@@ -100,7 +128,16 @@ def eltwise_erf(x, *args, fast_and_appx, device, dtype, layout, input_mem_config
 
 
 @setup_host_and_device
-def eltwise_erfc(x, *args, fast_and_appx, device, dtype, layout, input_mem_config, output_mem_config, **kwargs,
+def eltwise_erfc(
+    x,
+    *args,
+    fast_and_appx,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.erfc(t0, fast_and_appx, output_mem_config=output_mem_config)
@@ -109,7 +146,17 @@ def eltwise_erfc(x, *args, fast_and_appx, device, dtype, layout, input_mem_confi
 
 
 @setup_host_and_device
-def eltwise_threshold(x, *args, threshold, value, device, dtype, layout, input_mem_config, output_mem_config, **kwargs,
+def eltwise_threshold(
+    x,
+    *args,
+    threshold,
+    value,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.threshold(t0, threshold, value, output_mem_config=output_mem_config)
@@ -119,7 +166,16 @@ def eltwise_threshold(x, *args, threshold, value, device, dtype, layout, input_m
 
 @setup_host_and_device
 def eltwise_hardtanh(
-    x, *args, low, high, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+    x,
+    *args,
+    low,
+    high,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.hardtanh(t0, low, high, output_mem_config=output_mem_config)
@@ -129,7 +185,15 @@ def eltwise_hardtanh(
 
 @setup_host_and_device
 def eltwise_leaky_relu(
-    x, *args, negative_slope, device, dtype, layout, input_mem_config, output_mem_config, **kwargs,
+    x,
+    *args,
+    negative_slope,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.leaky_relu(t0, negative_slope, output_mem_config=output_mem_config)
@@ -139,7 +203,15 @@ def eltwise_leaky_relu(
 
 @setup_host_and_device
 def eltwise_logical_noti(
-    x, *args, immediate, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+    x,
+    *args,
+    immediate,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.logical_noti(t0, immediate, output_mem_config=output_mem_config)
@@ -149,7 +221,15 @@ def eltwise_logical_noti(
 
 @setup_host_and_device
 def eltwise_hardshrink(
-    x, *args, _lambda, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+    x,
+    *args,
+    _lambda,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.hardshrink(t0, _lambda, output_mem_config=output_mem_config)
@@ -159,7 +239,15 @@ def eltwise_hardshrink(
 
 @setup_host_and_device
 def eltwise_softshrink(
-    x, *args, _lambda, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+    x,
+    *args,
+    _lambda,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.softshrink(t0, _lambda, output_mem_config=output_mem_config)
@@ -169,7 +257,15 @@ def eltwise_softshrink(
 
 @setup_host_and_device
 def eltwise_elu(
-    x, *args, alpha, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+    x,
+    *args,
+    alpha,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.elu(t0, alpha, output_mem_config=output_mem_config)
@@ -179,7 +275,15 @@ def eltwise_elu(
 
 @setup_host_and_device
 def eltwise_gelu(
-    x, *args, fast_and_appx, device, dtype, layout, input_mem_config, output_mem_config, **kwargs,
+    x,
+    *args,
+    fast_and_appx,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.gelu(t0, fast_and_appx, output_mem_config=output_mem_config)
@@ -199,7 +303,16 @@ def eltwise_softmax_in_place(
 
 @setup_host_and_device
 def eltwise_scale_mask_softmax_in_place(
-    x, y, scale, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+    x,
+    y,
+    scale,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
@@ -210,7 +323,15 @@ def eltwise_scale_mask_softmax_in_place(
 
 @setup_host_and_device
 def eltwise_rsqrt(
-    x, *args, fast_and_appx, device, dtype, layout, input_mem_config, output_mem_config, **kwargs,
+    x,
+    *args,
+    fast_and_appx,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.rsqrt(t0, fast_and_appx, output_mem_config=output_mem_config)
@@ -220,7 +341,15 @@ def eltwise_rsqrt(
 
 @setup_host_and_device
 def eltwise_relu_min(
-    x, *args, lower_limit, device, dtype, layout, input_mem_config, output_mem_config, **kwargs,
+    x,
+    *args,
+    lower_limit,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.relu_min(t0, lower_limit, output_mem_config=output_mem_config)
@@ -230,7 +359,15 @@ def eltwise_relu_min(
 
 @setup_host_and_device
 def eltwise_relu_max(
-    x, *args, upper_limit, device, dtype, layout, input_mem_config, output_mem_config, **kwargs,
+    x,
+    *args,
+    upper_limit,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.relu_max(t0, upper_limit, output_mem_config=output_mem_config)
@@ -280,7 +417,15 @@ def mean_hw(
 
 @setup_host_and_device
 def eltwise_polyval(
-    x, *args, coeffs, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+    x,
+    *args,
+    coeffs,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.polyval(t0, coeffs, output_mem_config=output_mem_config)
@@ -302,7 +447,17 @@ def eltwise_mac(
 
 @setup_host_and_device
 def eltwise_addcmul(
-    x, y, z, *args, scalar, device, dtype, layout, input_mem_config, output_mem_config, **kwargs,
+    x,
+    y,
+    z,
+    *args,
+    scalar,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
@@ -314,7 +469,17 @@ def eltwise_addcmul(
 
 @setup_host_and_device
 def eltwise_addcdiv(
-    x, y, z, *args, scalar, device, dtype, layout, input_mem_config, output_mem_config, **kwargs,
+    x,
+    y,
+    z,
+    *args,
+    scalar,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
@@ -326,7 +491,16 @@ def eltwise_addcdiv(
 
 @setup_host_and_device
 def eltwise_lerp_binary(
-    x, y, *args, weight, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+    x,
+    y,
+    *args,
+    weight,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
@@ -337,7 +511,16 @@ def eltwise_lerp_binary(
 
 @setup_host_and_device
 def conv(
-    x, y, conv_params, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs,
+    x,
+    y,
+    conv_params,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
@@ -351,7 +534,9 @@ def layernorm_noweights(
     x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.operations.primary.layernorm(t0, 1e-5, None, None, output_mem_config=output_mem_config)
+    t1 = ttl.operations.primary.layernorm(
+        t0, 1e-5, None, None, output_mem_config=output_mem_config
+    )
 
     return tt2torch_tensor(t1)
 
@@ -362,7 +547,9 @@ def add_layernorm_noweights(
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = ttl.operations.primary.add_layernorm(t0, t1, 1e-5, None, None, output_mem_config=output_mem_config)
+    t2 = ttl.operations.primary.add_layernorm(
+        t0, t1, 1e-5, None, None, output_mem_config=output_mem_config
+    )
 
     return tt2torch_tensor(t2)
 
@@ -374,20 +561,34 @@ def layernorm(
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
     t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
-    t3 = ttl.operations.primary.layernorm(t0, 1e-5, t1, t2, output_mem_config=output_mem_config)
+    t3 = ttl.operations.primary.layernorm(
+        t0, 1e-5, t1, t2, output_mem_config=output_mem_config
+    )
 
     return tt2torch_tensor(t3)
 
 
 @setup_host_and_device
 def add_layernorm(
-    x, y, z, w, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+    x,
+    y,
+    z,
+    w,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
     t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
     t3 = setup_tt_tensor(w, device, layout[2], input_mem_config[2], dtype[2])
-    t4 = ttl.operations.primary.add_layernorm(t0, t1, 1e-5, t2, t3, output_mem_config=output_mem_config)
+    t4 = ttl.operations.primary.add_layernorm(
+        t0, t1, 1e-5, t2, t3, output_mem_config=output_mem_config
+    )
 
     return tt2torch_tensor(t4)
 
@@ -406,7 +607,16 @@ def eltwise_lerp_ternary(
 
 @setup_host_and_device
 def eltwise_subalpha(
-    x, y, *args, alpha, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+    x,
+    y,
+    *args,
+    alpha,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
@@ -427,7 +637,15 @@ def eltwise_logit(
 
 @setup_host_and_device
 def eltwise_logical_xori(
-    x, *args, immediate, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+    x,
+    *args,
+    immediate,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.logical_xori(t0, immediate, output_mem_config=output_mem_config)
@@ -437,7 +655,16 @@ def eltwise_logical_xori(
 
 @setup_host_and_device
 def eltwise_addalpha(
-    x, y, *args, alpha, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+    x,
+    y,
+    *args,
+    alpha,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
@@ -448,7 +675,15 @@ def eltwise_addalpha(
 
 @setup_host_and_device
 def eltwise_heaviside(
-    x, *args, scalar, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+    x,
+    *args,
+    scalar,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.heaviside(t0, scalar, output_mem_config=output_mem_config)
@@ -458,7 +693,17 @@ def eltwise_heaviside(
 
 @setup_host_and_device
 def eltwise_isclose(
-    x, y, *args, rtol, atol, device, dtype, layout, input_mem_config, output_mem_config, **kwargs,
+    x,
+    y,
+    *args,
+    rtol,
+    atol,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
@@ -469,7 +714,15 @@ def eltwise_isclose(
 
 @setup_host_and_device
 def full_like(
-    x, *args, scalar, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+    x,
+    *args,
+    scalar,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.full_like(t0, scalar, output_mem_config=output_mem_config)
@@ -478,7 +731,9 @@ def full_like(
 
 
 @setup_host_and_device
-def ones(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+def ones(
+    x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+):
     t1 = ttl.tensor.ones(
         x.shape,
         layout=layout[0],
@@ -490,7 +745,9 @@ def ones(x, *args, device, dtype, layout, input_mem_config, output_mem_config, *
 
 
 @setup_host_and_device
-def zeros(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+def zeros(
+    x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+):
     t1 = ttl.tensor.zeros(
         x.shape,
         layout=layout[0],
@@ -503,7 +760,15 @@ def zeros(x, *args, device, dtype, layout, input_mem_config, output_mem_config, 
 
 @setup_host_and_device
 def full(
-    x, *args, scalar, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+    x,
+    *args,
+    scalar,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t1 = ttl.tensor.full(
         x.shape,
@@ -518,7 +783,18 @@ def full(
 
 @setup_host_and_device
 def fill_rm(
-    x, *args, hOnes, wOnes, val_hi, val_lo, device, dtype, layout, input_mem_config, output_mem_config, **kwargs,
+    x,
+    *args,
+    hOnes,
+    wOnes,
+    val_hi,
+    val_lo,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.fill_rm(
@@ -539,7 +815,16 @@ def fill_rm(
 
 @setup_host_and_device
 def fill_ones_rm(
-    x, *args, hOnes, wOnes, device, dtype, layout, input_mem_config, output_mem_config, **kwargs,
+    x,
+    *args,
+    hOnes,
+    wOnes,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.fill_ones_rm(
@@ -558,7 +843,17 @@ def fill_ones_rm(
 
 @setup_host_and_device
 def arange(
-    x, *args, start, end, step=1, device, dtype, layout, input_mem_config, output_mem_config, **kwargs,
+    x,
+    *args,
+    start,
+    end,
+    step=1,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t1 = ttl.tensor.arange(
         start,
@@ -573,7 +868,15 @@ def arange(
 
 @setup_host_and_device
 def eltwise_logical_andi(
-    x, *args, immediate, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+    x,
+    *args,
+    immediate,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.logical_andi(t0, immediate, output_mem_config=output_mem_config)
@@ -583,7 +886,15 @@ def eltwise_logical_andi(
 
 @setup_host_and_device
 def eltwise_logical_ori(
-    x, *args, immediate, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+    x,
+    *args,
+    immediate,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.logical_ori(t0, immediate, output_mem_config=output_mem_config)
@@ -593,7 +904,16 @@ def eltwise_logical_ori(
 
 @setup_host_and_device
 def clip(
-    x, *args, low, high, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+    x,
+    *args,
+    low,
+    high,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.clip(t0, low, high, output_mem_config=output_mem_config)
@@ -602,7 +922,9 @@ def clip(
 
 
 @setup_host_and_device
-def where(x, y, z, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+def where(
+    x, y, z, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
     t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
@@ -613,7 +935,15 @@ def where(x, y, z, device, dtype, layout, input_mem_config, output_mem_config, *
 
 @setup_host_and_device
 def eltwise_div_unary(
-    x, *args, scalar, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+    x,
+    *args,
+    scalar,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.div_unary(t0, scalar, output_mem_config=output_mem_config)
@@ -623,7 +953,15 @@ def eltwise_div_unary(
 
 @setup_host_and_device
 def eltwise_mul_unary(
-    x, *args, scalar, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+    x,
+    *args,
+    scalar,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.mul_unary(t0, scalar, output_mem_config=output_mem_config)
@@ -633,7 +971,15 @@ def eltwise_mul_unary(
 
 @setup_host_and_device
 def eltwise_sub_unary(
-    x, *args, scalar, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+    x,
+    *args,
+    scalar,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.sub_unary(t0, scalar, output_mem_config=output_mem_config)
@@ -643,7 +989,15 @@ def eltwise_sub_unary(
 
 @setup_host_and_device
 def eltwise_add_unary(
-    x, *args, scalar, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+    x,
+    *args,
+    scalar,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.add_unary(t0, scalar, output_mem_config=output_mem_config)
@@ -976,6 +1330,63 @@ def reduce_max_hw(
 
 
 @setup_host_and_device
+def reduce_min_h(
+    x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttl.tensor.reduce(
+        t0,
+        ttl.tensor.ReduceOpMath.MIN,
+        ttl.tensor.ReduceOpDim.H,
+        1.0,
+        output_mem_config=output_mem_config,
+    )
+
+    output = tt2torch_tensor(t1)
+
+    # Slice out the 0 values from reduction
+    return output[..., :1, :]
+
+
+@setup_host_and_device
+def reduce_min_w(
+    x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttl.tensor.reduce(
+        t0,
+        ttl.tensor.ReduceOpMath.MIN,
+        ttl.tensor.ReduceOpDim.W,
+        1.0,
+        output_mem_config=output_mem_config,
+    )
+
+    output = tt2torch_tensor(t1)
+
+    # Slice out the 0 values from reduction
+    return output[..., :1]
+
+
+@setup_host_and_device
+def reduce_min_hw(
+    x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttl.tensor.reduce(
+        t0,
+        ttl.tensor.ReduceOpMath.MIN,
+        ttl.tensor.ReduceOpDim.HW,
+        1.0,
+        output_mem_config=output_mem_config,
+    )
+
+    output = tt2torch_tensor(t1)
+
+    # Slice out the 0 values from reduction
+    return output[..., :1, :1]
+
+
+@setup_host_and_device
 def transpose_nh(
     x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
 ):
@@ -1006,7 +1417,9 @@ def transpose_cw(
 
 
 @setup_host_and_device
-def sum(x, *args, dim, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+def sum(
+    x, *args, dim, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+):
     assert dim >= 0 and dim <= 3
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.sum(t0, dim, output_mem_config=output_mem_config)
@@ -1022,7 +1435,15 @@ def sum(x, *args, dim, device, dtype, layout, input_mem_config, output_mem_confi
 
 @setup_host_and_device
 def permute(
-    x, *args, device, dtype, layout, input_mem_config, output_mem_config, permute_dims, **kwargs,
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    permute_dims,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.permute(t0, permute_dims, output_mem_config=output_mem_config)
@@ -1032,7 +1453,15 @@ def permute(
 
 @setup_host_and_device
 def reshape(
-    x, *args, device, dtype, layout, input_mem_config, output_mem_config, reshape_dims, **kwargs,
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    reshape_dims,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.reshape(t0, *reshape_dims, output_mem_config=output_mem_config)
@@ -1045,7 +1474,9 @@ def split_last_dim_two_chunks_tiled(
     x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.split_last_dim_two_chunks_tiled( t0, output_mem_config=output_mem_config )
+    t1 = ttl.tensor.split_last_dim_two_chunks_tiled(
+        t0, output_mem_config=output_mem_config
+    )
 
     output0 = tt2torch_tensor(t1[0])
     output1 = tt2torch_tensor(t1[1])
@@ -1075,11 +1506,25 @@ def tilize_with_zero_padding(
 
 @setup_host_and_device
 def tilize_with_val_padding(
-    x, *args, device, dtype, layout, input_mem_config, output_mem_config, output_tensor_shape, input_tensor_start, pad_value, **kwargs,
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    output_tensor_shape,
+    input_tensor_start,
+    pad_value,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.tilize_with_val_padding(
-        t0, output_tensor_shape, input_tensor_start, pad_value, output_mem_config=output_mem_config,
+        t0,
+        output_tensor_shape,
+        input_tensor_start,
+        pad_value,
+        output_mem_config=output_mem_config,
     )
 
     return t1.cpu().to_torch()
@@ -1103,7 +1548,7 @@ def untilize(
             dtype[0],
             ttl.tensor.Layout.TILE,
             device,
-            input_mem_config[0]
+            input_mem_config[0],
         )
 
     t1 = ttl.tensor.untilize(t0, output_mem_config=output_mem_config)
@@ -1112,7 +1557,16 @@ def untilize(
 
 @setup_host_and_device
 def untilize_with_unpadding(
-    x, *args, device, dtype, layout, input_mem_config, output_mem_config, output_tensor_start, output_tensor_end, **kwargs,
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    output_tensor_start,
+    output_tensor_end,
+    **kwargs,
 ):
     if input_mem_config[0] is None:
         t0 = ttl.tensor.Tensor(
@@ -1128,7 +1582,7 @@ def untilize_with_unpadding(
             dtype[0],
             ttl.tensor.Layout.TILE,
             device,
-            input_mem_config[0]
+            input_mem_config[0],
         )
 
     t1 = ttl.tensor.untilize_with_unpadding(
@@ -1140,7 +1594,17 @@ def untilize_with_unpadding(
 
 @setup_host_and_device
 def pad(
-    x, *args, device, dtype, layout, input_mem_config, output_mem_config, output_tensor_shape, input_tensor_start, pad_value, **kwargs,
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    output_tensor_shape,
+    input_tensor_start,
+    pad_value,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.pad(
@@ -1156,17 +1620,36 @@ def pad(
 
 @setup_host_and_device
 def unpad(
-    x, *args, device, dtype, layout, input_mem_config, output_mem_config, output_tensor_start, output_tensor_end, **kwargs,
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    output_tensor_start,
+    output_tensor_end,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.unpad(t0, output_tensor_start, output_tensor_end, output_mem_config=output_mem_config)
+    t1 = ttl.tensor.unpad(
+        t0, output_tensor_start, output_tensor_end, output_mem_config=output_mem_config
+    )
 
     return tt2torch_tensor(t1)
 
 
 @setup_host_and_device
 def eltwise_power(
-    x, *args, exponent, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+    x,
+    *args,
+    exponent,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.power(t0, exponent, output_mem_config=output_mem_config)
@@ -1204,6 +1687,10 @@ def make_unary_op(ttl_tensor_unop):
     return unary_op
 
 
+# mean_global = make_unary_op(ttl.tensor.global_mean)
+# var_global = make_unary_op(ttl.tensor.global_var)
+# std_global = make_unary_op(ttl.tensor.global_std)
+# normalize_global = make_unary_op(ttl.tensor.global_normalize)
 # eltwise_softmax_in_place = make_unary_op(ttl.tensor.softmax_in_place)
 eltwise_cos = make_unary_op(ttl.tensor.cos)
 eltwise_sin = make_unary_op(ttl.tensor.sin)
@@ -1331,7 +1818,14 @@ eltwise_i0 = make_unary_op(ttl.tensor.i0)
 
 @setup_host_and_device
 def datacopy(
-    x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs,
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
 ):
     device_tensor = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     host_tensor = tt2torch_tensor(device_tensor)
@@ -1341,7 +1835,17 @@ def datacopy(
 
 @setup_host_and_device
 def tensor_pad(
-    x, *args, device, dtype, layout, input_mem_config, output_mem_config, output_tensor_shape, input_tensor_start, pad_value, **kwargs,
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    output_tensor_shape,
+    input_tensor_start,
+    pad_value,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = t0.pad(output_tensor_shape, input_tensor_start, pad_value)
@@ -1351,7 +1855,16 @@ def tensor_pad(
 
 @setup_host_and_device
 def tensor_unpad(
-    x, *args, device, dtype, layout, input_mem_config, output_mem_config, output_tensor_start, output_tensor_end, **kwargs,
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    output_tensor_start,
+    output_tensor_end,
+    **kwargs,
 ):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
@@ -1363,7 +1876,7 @@ def tensor_unpad(
     t0 = t0.to(layout[0])
 
     if (device is not None) and (input_mem_config[0] is not None):
-       t0 = t0.to(device, input_mem_config[0])
+        t0 = t0.to(device, input_mem_config[0])
 
     t1 = t0.unpad(output_tensor_start, output_tensor_end)
     return tt2torch_tensor(t1)
@@ -1371,7 +1884,15 @@ def tensor_unpad(
 
 @setup_host_and_device
 def pad_to_tile(
-    x, *args, device, dtype, layout, input_mem_config, output_mem_config, pad_value, **kwargs
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    pad_value,
+    **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = t0.pad_to_tile(pad_value)
@@ -1381,7 +1902,15 @@ def pad_to_tile(
 
 @setup_host_and_device
 def unpad_from_tile(
-    x, *args, device, dtype, layout, input_mem_config, output_mem_config, output_tensor_shape, **kwargs,
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    output_tensor_shape,
+    **kwargs,
 ):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
@@ -1393,7 +1922,7 @@ def unpad_from_tile(
     t0 = t0.to(layout[0])
 
     if (device is not None) and (input_mem_config[0] is not None):
-       t0 = t0.to(device, input_mem_config[0])
+        t0 = t0.to(device, input_mem_config[0])
 
     t1 = t0.unpad_from_tile(output_tensor_shape)
     return tt2torch_tensor(t1)

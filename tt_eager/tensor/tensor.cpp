@@ -158,7 +158,7 @@ uint32_t Tensor::element_size() const {
     return tensor_impl::element_size_bytes_wrapper(this->dtype_);
 }
 
-Tensor Tensor::reshape(int N, int C, int H, int W) {
+Tensor Tensor::reshape(int N, int C, int H, int W) const {
     auto new_shape = infer_dims_for_reshape(N, C, H, W, this->volume());
     return this->reshape(new_shape);
 }
