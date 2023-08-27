@@ -68,11 +68,11 @@ endif
 # Top level flags, compiler, defines etc.
 
 ifeq ("$(ARCH_NAME)", "wormhole_b0")
-	BASE_INCLUDES=-Itt_metal/src/firmware/riscv/wormhole -Itt_metal/src/firmware/riscv/wormhole/wormhole_b0_defines -Itt_metal/third_party/umd/src/firmware/riscv/wormhole
+	BASE_INCLUDES=-Itt_metal/src/firmware/riscv/wormhole -Itt_metal/src/firmware/riscv/wormhole/wormhole_b0_defines -I$(UMD_HOME)/src/firmware/riscv/wormhole
 else ifeq ("$(ARCH_NAME)", "wormhole")
-	BASE_INCLUDES=-Itt_metal/src/firmware/riscv/wormhole -Itt_metal/src/firmware/riscv/wormhole/wormhole_a0_defines -Itt_metal/third_party/umd/src/firmware/riscv/wormhole
+	BASE_INCLUDES=-Itt_metal/src/firmware/riscv/wormhole -Itt_metal/src/firmware/riscv/wormhole/wormhole_a0_defines -I$(UMD_HOME)/src/firmware/riscv/wormhole
 else
-	BASE_INCLUDES=-Itt_metal/src/firmware/riscv/$(ARCH_NAME) -Itt_metal/third_party/umd/src/firmware/riscv/$(ARCH_NAME)
+	BASE_INCLUDES=-Itt_metal/src/firmware/riscv/$(ARCH_NAME) -I$(UMD_HOME)/src/firmware/riscv/$(ARCH_NAME)
 endif
 
 # TODO: rk reduce this to one later
@@ -85,7 +85,7 @@ CXX ?= g++
 CFLAGS ?= -MMD $(WARNINGS) -I. $(CONFIG_CFLAGS) -mavx2 -DBUILD_DIR=\"$(OUT)\"
 CXXFLAGS ?= --std=c++17 -fvisibility-inlines-hidden -Werror
 
-LDFLAGS ?= $(CONFIG_LDFLAGS) -Wl,-rpath,$(PREFIX)/lib:$(UMD_HOME)/build/lib -L$(LIBDIR)/tools -L$(LIBDIR) -L$(UMD_HOME)/build/lib \
+LDFLAGS ?= $(CONFIG_LDFLAGS) -Wl,-rpath,$(PREFIX)/lib -L$(LIBDIR)/tools -L$(LIBDIR) \
 	-ldl \
 	-lz \
 	-lboost_thread \
@@ -155,7 +155,7 @@ endif
 
 build: $(LIBS_TO_BUILD)
 
-clean: set_up_kernels/clean eager_package/clean clean_umd_device
+clean: set_up_kernels/clean eager_package/clean
 	find build ! -path "build/python_env" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 	rm -rf dist/
 
