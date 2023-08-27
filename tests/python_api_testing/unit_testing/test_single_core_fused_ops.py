@@ -4,7 +4,7 @@ from loguru import logger
 
 import tt_lib as ttl
 
-from tt_models.utility_functions import comp_pcc, pad_by_zero
+from models.utility_functions import comp_pcc, pad_by_zero
 
 
 @pytest.mark.parametrize("shape", [[1, 1, 32, 128]])

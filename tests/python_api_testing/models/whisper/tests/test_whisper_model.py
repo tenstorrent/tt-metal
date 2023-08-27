@@ -5,12 +5,12 @@ from loguru import logger
 
 from transformers import WhisperModel, AutoFeatureExtractor
 
-from tt_models.utility_functions import (
+from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
-from tt_models.whisper.tt.whisper_model import TtWhisperModel
-from tt_models.utility_functions import (
+from models.whisper.tt.whisper_model import TtWhisperModel
+from models.utility_functions import (
     comp_allclose,
     comp_pcc,
 )

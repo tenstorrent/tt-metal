@@ -11,17 +11,17 @@ from diffusers import AutoencoderKL, UNet2DConditionModel
 from diffusers import LMSDiscreteScheduler
 from tqdm.auto import tqdm
 
-from tt_models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
-from tt_models.utility_functions import (
+from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
+from models.utility_functions import (
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
 )
-from tt_models.utility_functions import prep_report, Profiler
+from models.utility_functions import prep_report, Profiler
 import tt_lib as ttl
-from tt_models.stable_diffusion.tt.unet_2d_condition import (
+from models.stable_diffusion.tt.unet_2d_condition import (
     UNet2DConditionModel as tt_unet_condition,
 )
-from tt_models.stable_diffusion.tt.experimental_ops import UseDeviceConv, disable_conv_and_concat
+from models.stable_diffusion.tt.experimental_ops import UseDeviceConv, disable_conv_and_concat
 NUM_INFERENCE_STEPS = 2  # Number of denoising steps
 BATCH_SIZE = 1
 

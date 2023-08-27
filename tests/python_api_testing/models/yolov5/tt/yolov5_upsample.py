@@ -1,7 +1,7 @@
 import torch
 import tt_lib
 
-from tt_models.utility_functions import (
+from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
 )

@@ -2,11 +2,11 @@ import torch
 from diffusers import StableDiffusionPipeline
 from loguru import logger
 
-from tt_models.utility_functions import torch_to_tt_tensor, tt_to_torch_tensor
-from tt_models.utility_functions import comp_pcc, comp_allclose_and_pcc
+from models.utility_functions import torch_to_tt_tensor, tt_to_torch_tensor
+from models.utility_functions import comp_pcc, comp_allclose_and_pcc
 
 import tt_lib as ttl
-from tt_models.stable_diffusion.tt.feedforward import TtFeedForward
+from models.stable_diffusion.tt.feedforward import TtFeedForward
 
 
 def test_feedforward_inference():

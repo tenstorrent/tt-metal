@@ -3,12 +3,12 @@ import torch.nn as nn
 import tt_lib
 import tt_lib.fallback_ops
 
-from tt_models.helper_funcs import Linear
-from tt_models.vovnet.tt.select_adaptive_pool2d import (
+from models.helper_funcs import Linear
+from models.vovnet.tt.select_adaptive_pool2d import (
     TtSelectAdaptivePool2d,
 )
 
-from tt_models.utility_functions import (
+from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
 

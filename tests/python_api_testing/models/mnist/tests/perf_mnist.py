@@ -5,14 +5,14 @@ from loguru import logger
 import tt_lib
 import pytest
 
-from tt_models.mnist.tt.mnist_model import mnist_model
-from tt_models.utility_functions import (
+from models.mnist.tt.mnist_model import mnist_model
+from models.utility_functions import (
     torch2tt_tensor,
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
 )
 
-from tt_models.utility_functions import profiler, prep_report
+from models.utility_functions import profiler, prep_report
 
 
 @pytest.mark.parametrize(

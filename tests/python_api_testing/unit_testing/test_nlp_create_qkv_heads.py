@@ -2,7 +2,7 @@ import pytest
 from loguru import logger
 
 import tt_lib as ttl
-from tt_models.utility_functions import tt2torch_tensor, comp_pcc
+from models.utility_functions import tt2torch_tensor, comp_pcc
 import torch
 
 

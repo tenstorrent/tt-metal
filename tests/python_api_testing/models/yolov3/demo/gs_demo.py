@@ -31,7 +31,7 @@ from python_api_testing.models.yolov3.reference.utils.plots import (
     save_one_box,
 )
 
-from tt_models.utility_functions import torch2tt_tensor, tt2torch_tensor
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 
 def test_gs_demo(model_location_generator):

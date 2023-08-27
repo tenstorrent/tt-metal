@@ -4,14 +4,14 @@ from loguru import logger
 
 from transformers import WhisperModel, WhisperConfig
 
-from tt_models.utility_functions import (
+from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
-from tt_models.whisper.tt.whisper_decoder_layer import (
+from models.whisper.tt.whisper_decoder_layer import (
     TtWhisperDecoderLayer,
 )
-from tt_models.utility_functions import (
+from models.utility_functions import (
     comp_allclose,
     comp_pcc,
 )

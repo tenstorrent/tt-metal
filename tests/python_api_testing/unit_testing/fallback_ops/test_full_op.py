@@ -1,6 +1,6 @@
 import torch
 import tt_lib as ttl
-from tt_models.utility_functions import (
+from models.utility_functions import (
     comp_allclose_and_pcc,
     comp_pcc,
 )

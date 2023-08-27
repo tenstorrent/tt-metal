@@ -11,11 +11,11 @@ sys.path.append(f"{f}/../../../")
 import tt_lib
 from loguru import logger
 
-from tt_models.utility_functions import (
+from models.utility_functions import (
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
 )
-from tt_models.vovnet.tt.vovnet import vovnet_for_image_classification
+from models.vovnet.tt.vovnet import vovnet_for_image_classification
 
 
 @pytest.mark.parametrize(

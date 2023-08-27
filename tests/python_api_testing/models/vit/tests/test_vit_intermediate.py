@@ -4,14 +4,14 @@ import torch
 
 import tt_lib
 
-from tt_models.utility_functions import (
+from models.utility_functions import (
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
 )
 
-from tt_models.utility_functions import comp_pcc, comp_allclose_and_pcc
+from models.utility_functions import comp_pcc, comp_allclose_and_pcc
 
-from tt_models.vit.tt.modeling_vit import TtViTIntermediate
+from models.vit.tt.modeling_vit import TtViTIntermediate
 
 
 def test_vit_intermediate(pcc=0.99):

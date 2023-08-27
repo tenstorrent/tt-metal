@@ -7,7 +7,7 @@ f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
 sys.path.append(f"{f}/../../..")
 
-from tt_models.vovnet.tt.osa_block import TtOsaBlock
+from models.vovnet.tt.osa_block import TtOsaBlock
 
 import tt_lib
 from tt_lib import fallback_ops

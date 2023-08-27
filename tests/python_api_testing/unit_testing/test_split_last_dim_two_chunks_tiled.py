@@ -13,7 +13,7 @@ import tt_lib as ttl
 
 # TODO: need to use old utility_functions until the
 # rest of the unit tests use utility_functions
-from tt_models.utility_functions import (
+from models.utility_functions import (
     comp_pcc,
 )
 import torch

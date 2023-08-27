@@ -13,7 +13,7 @@ from loguru import logger
 import pytest
 import tt_lib
 
-from tt_models.utility_functions import (
+from models.utility_functions import (
     profiler,
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,

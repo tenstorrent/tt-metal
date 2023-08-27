@@ -9,7 +9,7 @@ import numpy as np
 import torch
 
 import tt_lib as ttl
-from tt_models.utility_functions import nearest_32
+from models.utility_functions import nearest_32
 
 
 @pytest.mark.parametrize(
