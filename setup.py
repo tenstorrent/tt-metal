@@ -165,7 +165,7 @@ setup(
     package_dir={
         "": "tt_eager",
         "tt_lib.tt_metal": "tt_metal",
-        "tt_lib.models": "tests/python_api_testing/models",
+        "tt_lib.models": "tests/models",
         "tt_lib.scripts": "scripts",
     },
     include_package_data=True,

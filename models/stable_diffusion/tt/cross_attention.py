@@ -6,7 +6,7 @@ from torch.nn import functional as F
 
 import tt_lib as ttl
 from tt_lib.fallback_ops import fallback_ops
-from tests.python_api_testing.fused_ops.softmax import softmax as TtSoftmax
+from tests.tt_eager.python_api_testing.fused_ops.softmax import softmax as TtSoftmax
 
 from models.stable_diffusion.sd_utils import make_linear
 

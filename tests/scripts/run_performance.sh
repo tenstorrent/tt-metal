@@ -10,31 +10,31 @@ fi
 run_perf_models() {
     local pipeline_type=$1
 
-    env pytest tests/python_api_testing/models/vgg/tests -m $pipeline_type
+    env pytest tests/models/vgg/tests -m $pipeline_type
 
-    env pytest tests/python_api_testing/models/vit/tests -m $pipeline_type
+    env pytest tests/models/vit/tests -m $pipeline_type
 
-    env pytest tests/python_api_testing/models/llama -m $pipeline_type
+    env pytest tests/models/llama -m $pipeline_type
 
-    env pytest tests/python_api_testing/models/roberta -m $pipeline_type
+    env pytest tests/models/roberta -m $pipeline_type
 
-    env pytest tests/python_api_testing/models/t5/tests -m $pipeline_type
+    env pytest tests/models/t5/tests -m $pipeline_type
 
     # Bad tests, don't enable: Hanging post commit 8/24/23 debug war room session, see PR#2297, PR#2301
-    #env pytest tests/python_api_testing/models/resnet/tests -m $pipeline_type
+    #env pytest tests/models/resnet/tests -m $pipeline_type
 
-    env pytest tests/python_api_testing/models/bloom -m $pipeline_type
+    env pytest tests/models/bloom -m $pipeline_type
 
-    env pytest tests/python_api_testing/models/metal_BERT_large_15 -m $pipeline_type
+    env pytest tests/models/metal_BERT_large_15 -m $pipeline_type
 
-    env pytest tests/python_api_testing/models/deit/tests -m $pipeline_type
+    env pytest tests/models/deit/tests -m $pipeline_type
 
-    env pytest tests/python_api_testing/models/stable_diffusion/tests -m $pipeline_type
+    env pytest tests/models/stable_diffusion/tests -m $pipeline_type
 
-    env pytest tests/python_api_testing/models/whisper -m $pipeline_type
+    env pytest tests/models/whisper -m $pipeline_type
 
     ## Merge all the generated reports
-    env python tests/python_api_testing/models/merge_perf_results.py
+    env python tests/models/merge_perf_results.py
 }
 
 main() {

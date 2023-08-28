@@ -107,8 +107,8 @@ run_models_performance_bare_metal_pipeline_tests() {
     if [[ -z "$FAST_DISPATCH" ]]; then
         echo "Not running bert large"
     else
-        env pytest -svv tests/python_api_testing/models/metal_BERT_large_15/test_bert_batch_dram.py::test_bert_batch_dram[BERT_LARGE-batch_9-BFLOAT16-DRAM]
-        env pytest -svv tests/python_api_testing/models/metal_BERT_large_15/test_bert_batch_dram.py::test_bert_batch_dram_with_program_cache[BERT_LARGE-batch_9-BFLOAT16-DRAM]
+        env pytest -svv tests/models/metal_BERT_large_15/test_bert_batch_dram.py::test_bert_batch_dram[BERT_LARGE-batch_9-BFLOAT16-DRAM]
+        env pytest -svv tests/models/metal_BERT_large_15/test_bert_batch_dram.py::test_bert_batch_dram_with_program_cache[BERT_LARGE-batch_9-BFLOAT16-DRAM]
     fi
 
     run_models_performance "$tt_arch" "$pipeline_type"
