@@ -451,6 +451,8 @@ void TensorModule(py::module &m_tensor) {
 
     detail::export_enum<StorageType>(m_tensor);
 
+    detail::export_enum<MathFidelity>(m_tensor);
+
     py::enum_<BufferType>(m_tensor, "BufferType")
         .value("DRAM", BufferType::DRAM)
         .value("L1", BufferType::L1);

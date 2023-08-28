@@ -127,7 +127,8 @@ def resnet50_1x1_conv_as_matmul(weight: List[Union[int, float]], conv_params, de
         # conv1x1 stride 1 padding 0, use matmul op
         output = operations.primary.matmul(activation, weight_on_device, bias=bias_on_device, program_config=matmul_program_config,
                                             output_mem_config=activation.memory_config(),
-                                            output_dtype=activation.dtype())
+                                            output_dtype=activation.dtype(),
+                                            math_fidelity=tensor.MathFidelity.HiFi4)
 
         return output
 

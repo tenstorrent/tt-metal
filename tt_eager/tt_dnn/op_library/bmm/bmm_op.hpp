@@ -191,6 +191,7 @@ struct Matmul {
     MatmulProgramConfig program_config;
     const MemoryConfig output_mem_config;
     const DataType output_dtype;
+    const MathFidelity math_fidelity;
 
     void validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
@@ -209,9 +210,10 @@ inline Tensor matmul(
     const Tensor &input_tensor_b,
     const MatmulProgramConfig& program_config = MatmulDefaultProgramConfig{},
     const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<const DataType> output_dtype=std::nullopt
+    std::optional<const DataType> output_dtype=std::nullopt,
+    const MathFidelity math_fidelity = MathFidelity::LoFi
 ) {
-    return operation::run(Matmul{program_config, mem_config, output_dtype.value_or(input_tensor_a.dtype())}, {input_tensor_a, input_tensor_b}, {std::nullopt}).at(0);
+    return operation::run(Matmul{program_config, mem_config, output_dtype.value_or(input_tensor_a.dtype()), math_fidelity}, {input_tensor_a, input_tensor_b}, {std::nullopt}).at(0);
 }
 
 inline Tensor matmul(
@@ -219,9 +221,10 @@ inline Tensor matmul(
     const Tensor &input_tensor_b, std::optional<const Tensor> bias,
     const MatmulProgramConfig& program_config = MatmulDefaultProgramConfig{},
     const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<const DataType> output_dtype=std::nullopt
+    std::optional<const DataType> output_dtype=std::nullopt,
+    const MathFidelity math_fidelity = MathFidelity::LoFi
 ) {
-    return operation::run(Matmul{program_config, mem_config, output_dtype.value_or(input_tensor_a.dtype())}, {input_tensor_a, input_tensor_b}, {bias}).at(0);
+    return operation::run(Matmul{program_config, mem_config, output_dtype.value_or(input_tensor_a.dtype()), math_fidelity}, {input_tensor_a, input_tensor_b}, {bias}).at(0);
 }
 
 Tensor matmul_1d(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, std::optional<MatmulMultiCoreReuseMultiCast1DProgramConfig> program_config = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype=std::nullopt);

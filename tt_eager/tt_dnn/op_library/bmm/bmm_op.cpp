@@ -635,7 +635,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
     auto& output_tensor = output_tensors.at(0);
 
     tt::tt_metal::DataType output_dtype = this->output_dtype;
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
+    MathFidelity math_fidelity = this->math_fidelity;
     bool fuse_batch = true;
 
     return std::visit(
@@ -704,6 +704,7 @@ tt::stl::reflection::Attributes Matmul::attributes() const {
         {"program_config", this->program_config},
         {"output_mem_config",  this->output_mem_config},
         {"output_dtype", this->output_dtype},
+        {"math_fidelity", this->math_fidelity},
     };
 }
 
@@ -711,7 +712,7 @@ Tensor matmul_1d(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std
     if (!program_config.has_value()) {
         program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b);
     }
-    return operations::primary::matmul(input_tensor_a, input_tensor_b, bias, program_config.value(), mem_config, output_dtype);
+    return operations::primary::matmul(input_tensor_a, input_tensor_b, bias, program_config.value(), mem_config, output_dtype, MathFidelity::LoFi);
 }
 
 }  // namespace primary
