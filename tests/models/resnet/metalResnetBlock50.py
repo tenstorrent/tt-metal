@@ -20,7 +20,7 @@ from tt_lib.fused_ops.max_pool import compute_max_pool_shape
 from tt_lib.fused_ops.linear import Linear as TtLinear
 from tt_lib.fused_ops.softmax import softmax as TtSoftmax
 from tt_lib.fused_ops.conv import resnet_conv as TtResnetConv
-from models.utility_functions import is_conv_supported_on_device, _nearest_32
+from models.utility_functions import _nearest_32
 from tt_lib.fallback_ops import fallback_ops
 
 def _nearest_y(x, y):
@@ -239,18 +239,14 @@ class Bottleneck(nn.Module):
             self.bn2 = nn.Identity()
             self.bn3 = nn.Identity()
 
+        self.module_input_shape = input_shape
         self.conv1_params = [width, inplanes, 1, 1, 1, 1, 0, 0, dilation, groups]
         self.conv1_output_shape = compute_conv_output_shape(self.conv1_params, input_shape)
         conv1_as_mm_padded_act_height = _nearest_32(self.conv1_output_shape[1] * self.conv1_output_shape[2])
-        matmul_config = None
-        if (conv1_as_mm_padded_act_height, inplanes, width) in hardcoded_matmul_config_conv:
-            #print("Setting matmul config for 1x1 conv (first conv in module)")
-            matmul_config = hardcoded_matmul_config_conv[(conv1_as_mm_padded_act_height, inplanes, width)]
-        if is_conv_supported_on_device(self.conv1_params):
-            # 1x1 conv with stride 1 padding 0 is run using regular matmul
-            self.conv1 = TtResnetConv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, [1, 1], [1, 1], [1, 1], conv1_bias.tolist() if conv1_bias is not None else None, matmul_config=matmul_config, fuse_relu=True)
-        else:
-            self.conv1 = fallback_ops.Conv2d(conv1_weight, conv1_bias, inplanes, width, kernel_size=1, stride=1, padding=0)
+        assert (conv1_as_mm_padded_act_height, inplanes, width) in hardcoded_matmul_config_conv
+        matmul_config = hardcoded_matmul_config_conv[(conv1_as_mm_padded_act_height, inplanes, width)]
+        # 1x1 conv with stride 1 padding 0 is run using regular matmul
+        self.conv1 = TtResnetConv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, [1, 1], [1, 1], [1, 1], conv1_bias.tolist() if conv1_bias is not None else None, matmul_config=matmul_config, fuse_relu=True)
 
         # With single buffered input CB, these shapes work -
         # hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv2 = {
@@ -278,26 +274,20 @@ class Bottleneck(nn.Module):
         conv2_output_padded_face_size = _nearest_32(self.conv2_output_shape[1] * self.conv2_output_shape[2])
         assert (conv2_output_padded_face_size, width) in hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv2
         [act_block_h_datums, weight_block_w_datums, out_subblock_h_datums, out_subblock_w_datums] = hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv2[(conv2_output_padded_face_size, width)]
-        if is_conv_supported_on_device(self.conv2_params):
-            self.conv2 = TtResnetConv(conv2_weight.reshape(-1).tolist(), self.conv2_params, self.device, [act_block_h_datums, width*3], [width*3, weight_block_w_datums], [out_subblock_h_datums, out_subblock_w_datums], conv2_bias.tolist() if conv2_bias is not None else None)
-        else:
-            self.conv2 = fallback_ops.Conv2d(conv2_weight, conv2_bias, width, width, kernel_size=3, stride=1, padding=1)
+        self.conv2 = TtResnetConv(conv2_weight.reshape(-1).tolist(), self.conv2_params, self.device, [act_block_h_datums, width*3], [width*3, weight_block_w_datums], [out_subblock_h_datums, out_subblock_w_datums], conv2_bias.tolist() if conv2_bias is not None else None)
 
         self.conv3_params = [planes * self.expansion, width, 1, 1, 1, 1, 0, 0, dilation, groups]
         self.conv3_output_shape = compute_conv_output_shape(self.conv3_params, self.conv2_output_shape)
         conv3_as_mm_padded_act_height = _nearest_32(self.conv3_output_shape[1] * self.conv3_output_shape[2])
         matmul_config = None
-        if (conv3_as_mm_padded_act_height, width, planes * self.expansion) in hardcoded_matmul_config_conv:
-            #print("Setting matmul config for 1x1 conv (third conv in module)")
-            matmul_config = hardcoded_matmul_config_conv[(conv3_as_mm_padded_act_height, width, planes * self.expansion)]
-        if is_conv_supported_on_device(self.conv3_params):
-            # 1x1 conv with stride 1 padding 0 is run using regular matmul
-            self.conv3 = TtResnetConv(conv3_weight.reshape(-1).tolist(), self.conv3_params, self.device, [1, 1], [1, 1], [1, 1], conv3_bias.tolist() if conv3_bias is not None else None, matmul_config=matmul_config)
-        else:
-            self.conv3 = fallback_ops.Conv2d(conv3_weight, conv3_bias, width, planes * self.expansion, kernel_size=1, stride=1, padding=0)
+        assert (conv3_as_mm_padded_act_height, width, planes * self.expansion) in hardcoded_matmul_config_conv
+        #print("Setting matmul config for 1x1 conv (third conv in module)")
+        matmul_config = hardcoded_matmul_config_conv[(conv3_as_mm_padded_act_height, width, planes * self.expansion)]
+        # 1x1 conv with stride 1 padding 0 is run using regular matmul
+        self.conv3 = TtResnetConv(conv3_weight.reshape(-1).tolist(), self.conv3_params, self.device, [1, 1], [1, 1], [1, 1], conv3_bias.tolist() if conv3_bias is not None else None, matmul_config=matmul_config)
         self.conv3_output_shape = compute_conv_output_shape(self.conv3_params, self.conv2_output_shape)
 
-    def run_forward(self, x: torch.Tensor, x_actual_shape=[]):
+    def run_forward(self, x: torch.Tensor):
         identity = x
         # conv1 is 1x1 conv
         #print("Running conv1")
@@ -305,31 +295,24 @@ class Bottleneck(nn.Module):
         # Relu after conv1 is fused with the 1x1 conv (matmul)
         #out = self.relu(out, self.memory_config)
         out = format_tensor(out, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
-        out = out.reshape(x_actual_shape[0], x_actual_shape[1], x_actual_shape[2], out.shape()[3])
-        saved_shape = out.shape()
-        #print("Running conv1")
+        out = out.reshape(self.conv1_output_shape[0], self.conv1_output_shape[1], self.conv1_output_shape[2], self.conv1_output_shape[3])
+        #print("Running conv2")
         out = self.conv2(out)
-        conv_2_output_shape = compute_conv_output_shape(self.conv2_params, saved_shape)
         out = self.relu(out, self.memory_config)
         # conv3 is 1x1 conv
-        #print("Running conv1")
+        #print("Running conv3")
         out = self.conv3(out)
 
         if self.downsample_conv_on_tt is not None:
             if(self.downsample_params[2] != 1 or self.downsample_params[4] != 1 or self.downsample_params[6] != 0):
                 x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
-                x = x.reshape(x_actual_shape[0], x_actual_shape[1], x_actual_shape[2], x_actual_shape[3])
+                x = x.reshape(self.module_input_shape[0], self.module_input_shape[1], self.module_input_shape[2], self.module_input_shape[3])
             #print("Running downsample")
             identity = self.downsample_conv_on_tt(x)
-            assert self.norm_layer_after_downsample_conv_on_tt is not None
-            if not self.fold_batchnorm:
-                identity = self.norm_layer_after_downsample_conv_on_tt(identity)
-        elif self.downsample is not None:
-            identity = self.downsample(x)
+
         out = tt_lib.tensor.add_without_autoformat(out, identity, output_mem_config=self.memory_config)
         out = self.relu(out, self.memory_config)
-        out_actual_shape = [conv_2_output_shape[0], conv_2_output_shape[1], conv_2_output_shape[2], out.shape()[3]]
-        return out, out_actual_shape
+        return out
 
 
 class ResNet(nn.Module):
@@ -394,10 +377,7 @@ class ResNet(nn.Module):
             self.bn1 = nn.Identity()
 
         self.conv1_params = [self.inplanes, 3, 7, 7, 2, 2, 3, 3, 1, groups]
-        if is_conv_supported_on_device(self.conv1_params):
-            self.conv1 = TtResnetConv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, [128, 128], [128, 64], [128, 64], conv1_bias.tolist() if conv1_bias is not None else None, 8, True, enable_fused_bias=False)
-        else:
-            self.conv1 = fallback_ops.Conv2d(conv1_weight, conv1_bias, 3, self.inplanes, kernel_size=7, stride=2, padding=3)
+        self.conv1 = TtResnetConv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, [128, 128], [128, 64], [128, 64], conv1_bias.tolist() if conv1_bias is not None else None, 8, True, enable_fused_bias=False)
         self.conv1_output_shape = compute_conv_output_shape(self.conv1_params, [1, self.conv_input_face_shape_hw[0], self.conv_input_face_shape_hw[1], self.inplanes])
         self.relu = tt_lib.tensor.relu_without_autoformat
         # self.maxpool = fallback_ops.MaxPool2d(kernel_size=3, stride=2, padding=1, channels_last=True, reshape_2d=True)
@@ -476,20 +456,12 @@ class ResNet(nn.Module):
 
             is_downsample_1x1_conv = stride == 1
             matmul_config = None
-            if (is_downsample_1x1_conv and (downsample_output_padded_face_size, self.inplanes, downsample_output_channels) in hardcoded_matmul_config_conv):
+            if is_downsample_1x1_conv:
+                assert (downsample_output_padded_face_size, self.inplanes, downsample_output_channels) in hardcoded_matmul_config_conv
                 #print("Setting matmul config for 1x1 conv (downsample stride 1 conv in module)")
                 matmul_config = hardcoded_matmul_config_conv[(downsample_output_padded_face_size,  self.inplanes, downsample_output_channels)]
-
-            if is_conv_supported_on_device(self.downsample_params):
-                self.downsample_conv_on_tt = TtResnetConv(downsample_conv_weight.reshape(-1).tolist(), self.downsample_params, self.device, [act_block_h_datums, self.inplanes], [self.inplanes, weight_block_w_datums], [out_subblock_h_datums, out_subblock_w_datums], downsample_conv_bias.tolist() if downsample_conv_bias is not None else None, matmul_config=matmul_config)
-                self.norm_layer_after_downsample_conv_on_tt = nl
-            else:
-                downsample_conv = fallback_ops.Conv2d(downsample_conv_weight, downsample_conv_bias, self.inplanes, planes * block.expansion, kernel_size=1, stride=stride, padding=0)
-                downsample = nn.Sequential(
-                    downsample_conv,
-                    nl,
-                )
-
+            self.downsample_conv_on_tt = TtResnetConv(downsample_conv_weight.reshape(-1).tolist(), self.downsample_params, self.device, [act_block_h_datums, self.inplanes], [self.inplanes, weight_block_w_datums], [out_subblock_h_datums, out_subblock_w_datums], downsample_conv_bias.tolist() if downsample_conv_bias is not None else None, matmul_config=matmul_config)
+            self.norm_layer_after_downsample_conv_on_tt = nl
 
         layers = []
         layers.append(
@@ -548,24 +520,22 @@ class ResNet(nn.Module):
         x = x.pad(act_shape_height_width_channel_padded, (0, 3, 3, 0), 0)
 
         x = x.to(self.device, self.memory_config)
-        saved_shape = compute_conv_output_shape(self.conv1_params, [1, 224, 224, 16])
         x = self.conv1(x)
         #x = x.reshape(1, 1, x.shape()[0]*x.shape()[1]*x.shape()[2], x.shape()[3]);
         x = self.relu(x, self.memory_config)
         x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
-        x = x.reshape(saved_shape[0], saved_shape[1], saved_shape[2], saved_shape[3])
+        x = x.reshape(self.conv1_output_shape[0], self.conv1_output_shape[1], self.conv1_output_shape[2], self.conv1_output_shape[3])
         x = self.maxpool(x)
         x = format_tensor(x, tt_lib.tensor.Layout.TILE, self.device, self.memory_config)
-        saved_shape = compute_max_pool_shape(3, 2, 1, saved_shape)
 
         for layer in self.layer1:
-            x, saved_shape = layer.run_forward(x, saved_shape)
+            x = layer.run_forward(x)
         for layer in self.layer2:
-            x, saved_shape = layer.run_forward(x, saved_shape)
+            x = layer.run_forward(x)
         for layer in self.layer3:
-            x, saved_shape = layer.run_forward(x, saved_shape)
+            x = layer.run_forward(x)
         for i,layer in enumerate(self.layer4):
-            x, saved_shape = layer.run_forward(x, saved_shape)
+            x = layer.run_forward(x)
         x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
         x = format_tensor(x, tt_lib.tensor.Layout.TILE, self.device, self.memory_config)
         x = self.avgpool(x)
