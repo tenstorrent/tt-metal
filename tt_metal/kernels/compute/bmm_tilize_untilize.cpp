@@ -109,7 +109,7 @@ void MAIN {
     uint32_t in0_subblock_h = get_compile_time_arg_val(4);
     uint32_t in1_num_subblocks = get_compile_time_arg_val(5); // outer column block size (in inner column blocks)
     uint32_t in1_block_num_tiles = get_compile_time_arg_val(6); //out_subblock_w*in0_block_w* in1_num_subblocks;
-    uint32_t in1_per_core_w = get_compile_time_arg_val(7); // out_subblock_w*in1_num_subblocks
+    uint32_t in1_block_w = get_compile_time_arg_val(7); // out_subblock_w*in1_num_subblocks
     // if these are not defined as volatile, it causes code size for TRISC2 to be too large if num_blocks > 1
     volatile uint32_t in0_num_blocks_h = get_compile_time_arg_val(8);
     volatile uint32_t in0_num_blocks_w = get_compile_time_arg_val(9);
@@ -120,7 +120,7 @@ void MAIN {
     bool tilize_in0 = get_compile_time_arg_val(14);
     bool untilize_out = get_compile_time_arg_val(15);
 
-    uint32_t out_block_w = in1_per_core_w;
+    uint32_t out_block_w = in1_block_w;
     bool spill = in0_num_blocks_w > 1;
 
     // CB indices
@@ -141,6 +141,9 @@ void MAIN {
 
     mm_init(in0_cb_id, in1_cb_id, out_cb_id);
     for(uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
+        #ifdef FUSE_BIAS
+            uint32_t bias_block_offset = 0;
+        #endif
         for(uint32_t in1_block_w_i = 0; in1_block_w_i < in1_num_blocks_w; ++in1_block_w_i) {
             bool enable_reload = false;
             for(uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
@@ -182,7 +185,7 @@ void MAIN {
                                                  in1_index_subblock_offset + in1_index_inner_dim_offset + w,    // in1 tile
                                                  dst_index,                                                     // dst
                                                  false);
-                                    in1_index_inner_dim_offset += in1_per_core_w;
+                                    in1_index_inner_dim_offset += in1_block_w;
                                 } // for in0_block_w
                                 ++dst_index;
                             } // for out_subblock_w
@@ -205,7 +208,7 @@ void MAIN {
                                 acquire_dst(tt::DstMode::Half);
                                 uint32_t i = 0;
                                 for (uint32_t h = 0; h < out_subblock_h; ++ h) {
-                                    uint32_t bcast_tile_i = in1_index_subblock_offset;
+                                    uint32_t bcast_tile_i = bias_block_offset + in1_index_subblock_offset;
                                     for (uint32_t w = 0; w < out_subblock_w; ++ w) {
                                         add_tiles_bcast_rows(out_for_bias_cb_id, bias_cb_id, i, bcast_tile_i, i);
                                         ++ bcast_tile_i;
@@ -252,6 +255,9 @@ void MAIN {
                 cb_pop_front(tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in0_block_num_tiles);
                 cb_pop_front(in1_cb_id, in1_block_num_tiles);
             } // for in0_num_blocks_w
+            #ifdef FUSE_BIAS
+                bias_block_offset += in1_block_w;
+            #endif
         } // for in1_num_blocks_w
     } // for in0_num_blocks_h
 } // MAIN
