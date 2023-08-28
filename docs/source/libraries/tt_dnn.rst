@@ -332,7 +332,6 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.isnan
 
-.. autofunction:: tt_lib.tensor.logit
 
 Tensor relational operations
 ----------------------------------
