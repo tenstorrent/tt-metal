@@ -179,7 +179,7 @@ inline bool deduce_if_involves_ncrisc(const TensixRiscsOptions &riscs_options) {
 }
 
 namespace utils {
-void log_current_ai_clk(tt_cluster *cluster);
+void log_current_ai_clk(tt_cluster *cluster, chip_id_t chip_id);
 }  // namespace utils
 
 namespace internal_ {

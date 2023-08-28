@@ -320,12 +320,10 @@ CoreCoord get_core_for_dram_channel(tt_cluster *cluster, int dram_channel_id, ch
 }
 
 namespace utils {
-void log_current_ai_clk(tt_cluster *cluster) {
+void log_current_ai_clk(tt_cluster *cluster, chip_id_t chip_id) {
     if (cluster->type == tt::TargetDevice::Silicon) {
-        for (const chip_id_t &chip_id : cluster->get_all_mmio_chips()) {
-            int ai_clk = cluster->get_device_aiclk(chip_id);
-            log_info(tt::LogLLRuntime, "AI CLK for device {} is:   {} MHz", chip_id, ai_clk);
-        }
+        int ai_clk = cluster->get_device_aiclk(chip_id);
+        log_info(tt::LogLLRuntime, "AI CLK for device {} is:   {} MHz", chip_id, ai_clk);
     }
 }
 }  // namespace utils

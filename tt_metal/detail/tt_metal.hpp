@@ -15,6 +15,7 @@
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/detail/program.hpp"
 #include "tt_metal/llrt/watcher.hpp"
+#include "tt_metal/third_party/umd/device/util.hpp"
 
 using std::unique_lock;
 using std::mutex;
@@ -309,5 +310,50 @@ namespace tt::tt_metal{
                 specified_core_spec
             );
         }
+
+        // TODO (abhullar): Remove this when tt_cluster and tt_metal::Device abstractions are redesigned
+        class ClusterWrapper {
+           public:
+            ClusterWrapper& operator=(const ClusterWrapper&) = delete;
+            ClusterWrapper& operator=(ClusterWrapper&& other) noexcept = delete;
+            ClusterWrapper(const ClusterWrapper&) = delete;
+            ClusterWrapper(ClusterWrapper&& other) noexcept = delete;
+
+            static ClusterWrapper& inst(const tt::ARCH &arch, const TargetDevice &target_type) {
+                static ClusterWrapper inst(arch, target_type);
+                return inst;
+            }
+
+            tt_cluster *cluster() const { return this->cluster_.get(); }
+
+           private:
+            ClusterWrapper(const tt::ARCH &arch, const TargetDevice &target_type) {
+                ZoneScoped;
+                this->cluster_ = std::make_unique<tt_cluster>();
+
+                std::vector<chip_id_t> avail_device_ids = tt_SiliconDevice::detect_available_device_ids(true, false);
+                std::set<chip_id_t> device_ids(avail_device_ids.begin(), avail_device_ids.end());
+
+                const std::string sdesc_file = get_soc_description_file(arch, target_type);
+                const std::string ndesc_path = (arch == tt::ARCH::WORMHOLE_B0) ? GetClusterDescYAML().string() : "";
+
+                // init UMD with all available device IDs
+                this->cluster_->open_device(arch, target_type, device_ids, sdesc_file, ndesc_path);
+
+                tt_device_params default_params;
+                if (getenv("TT_METAL_VERSIM_DUMP_CORES")) {
+                    std::string dump_cores_string = getenv("TT_METAL_VERSIM_DUMP_CORES");
+                    default_params.vcd_dump_cores = tt::utils::strsplit(dump_cores_string, ',');
+                }
+
+                this->cluster_->start_device(default_params);
+            }
+            ~ClusterWrapper() {
+                log_info(tt::LogMetal, "Closing device driver");
+                this->cluster_->close_device();
+            }
+
+            std::unique_ptr<tt_cluster> cluster_ = nullptr;
+        };
     }
 }

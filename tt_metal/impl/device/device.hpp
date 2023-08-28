@@ -74,7 +74,7 @@ class Device {
     std::vector<uint32_t> bank_ids_from_dram_channel(uint32_t dram_channel) const;
 
     std::vector<uint32_t> bank_ids_from_logical_core(const CoreCoord &logical_core) const;
-    bool cluster_is_initialized() const { return cluster_ != nullptr; }
+    bool cluster_is_initialized() const;
 
     allocator::Statistics get_memory_allocation_statistics(const BufferType &buffer_type) const;
 
@@ -106,7 +106,6 @@ class Device {
 #endif
     static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
     tt::ARCH arch_;
-    tt_cluster *cluster_ = nullptr;
     int pcie_slot_;
     std::unique_ptr<Allocator> allocator_ = nullptr;
     bool initialized_ = false;

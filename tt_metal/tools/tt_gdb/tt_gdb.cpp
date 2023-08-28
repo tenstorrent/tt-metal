@@ -439,7 +439,7 @@ void tt_gdb(Device* device, int chip_id, const vector<CoreCoord> logical_cores, 
         worker_cores.push_back(device->worker_core_from_logical_core(logical_core));
     }
 
-    tt_gdb::tt_gdb(device->cluster_, chip_id, worker_cores, ops);
+    tt_gdb::tt_gdb(device->cluster(), chip_id, worker_cores, ops);
 }
 
 } // end namespace tt_metal
