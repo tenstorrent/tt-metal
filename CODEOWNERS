@@ -89,13 +89,13 @@ tt_eager/tt_dnn/op_library/composite/ @muthutt
 **/tt_lib/fallback_ops @tt-aho @arakhmati
 
 # models
-models/ @boris-drazic @ashayestehmanesh @farbabi
+tt_models/ @boris-drazic @ashayestehmanesh @farbabi
 tests/python_api_testing/models/conv_on_device_utils*.py @tt-nshanker @ashayestehmanesh
 tests/python_api_testing/models/bert_large_performant @tt-aho @TT-BrianLiu
 tests/python_api_testing/models/metal_BERT_large_15 @tt-aho @TT-BrianLiu
-models/conv_on_device_utils*.py @tt-nshanker @ashayestehmanesh
-models/bert_large_performant @tt-aho @TT-BrianLiu
-models/metal_BERT_large_15 @tt-aho @TT-BrianLiu
+tt_models/conv_on_device_utils*.py @tt-nshanker @ashayestehmanesh
+tt_models/bert_large_performant @tt-aho @TT-BrianLiu
+tt_models/metal_BERT_large_15 @tt-aho @TT-BrianLiu
 
 # docs
 # docs/source/apis/host_apis/ @abhullar-tt @TT-billteng @davorchap @tt-rkim
