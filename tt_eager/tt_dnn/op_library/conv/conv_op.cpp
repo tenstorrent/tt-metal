@@ -178,7 +178,7 @@ void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program &program,
 
 operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, vector<int> conv_params,
                                        uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
-                                       uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool use_fast_reader, bool untilize_out, bool has_bias, Tensor &output) {
+                                       uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool use_fast_reader, bool untilize_out, bool has_bias, const MathFidelity math_fidelity, Tensor &output) {
     bool pass = true;
     tt_metal::Device *device = a.device();
     TT_ASSERT(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
@@ -636,6 +636,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         compute_kernel,
         core,
         ComputeConfig{
+            .math_fidelity = math_fidelity,
             .compile_args = compute_kernel_args,
             .defines = all_defines});
 
@@ -1411,8 +1412,8 @@ Tensor conv_with_address_map(const Tensor& a, const Tensor &b, std::optional<con
 }
 
 operation::ProgramWithCallbacks conv_single_core(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
-             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool use_fast_reader, bool untilize_out, bool has_bias, Tensor &output) {
-    return conv_as_large_bmm_single_core_(a, b, bias, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, use_fast_reader, untilize_out, has_bias, output);
+             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool use_fast_reader, bool untilize_out, bool has_bias, const MathFidelity math_fidelity, Tensor &output) {
+    return conv_as_large_bmm_single_core_(a, b, bias, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, use_fast_reader, untilize_out, has_bias, math_fidelity, output);
 }
 
 operation::ProgramWithCallbacks conv_with_address_map_single_core(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
@@ -1475,7 +1476,7 @@ operation::ProgramWithCallbacks Conv::create_program(const std::vector<Tensor>& 
     if(use_address_map) {
         return {conv_with_address_map_single_core(input_tensor_a, input_tensor_b, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, untilize_out, output_tensor)};
     } else {
-        return {conv_single_core(input_tensor_a, input_tensor_b, input_tensor_bias, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, use_fast_reader, untilize_out, has_bias, output_tensor)};
+        return {conv_single_core(input_tensor_a, input_tensor_b, input_tensor_bias, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, use_fast_reader, untilize_out, has_bias, math_fidelity, output_tensor)};
     }
 }
 

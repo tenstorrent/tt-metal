@@ -52,7 +52,7 @@ Tensor conv_with_fast_reader(const Tensor& a, const Tensor &b, std::optional<con
              uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool untilize_out, bool has_bias, MathFidelity math_fidelity = MathFidelity::HiFi4);
 
 operation::ProgramWithCallbacks conv_single_core(const Tensor& A, const Tensor& B, std::optional<const Tensor> bias, vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
-             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool has_bias, Tensor& output); // Tilizes a, untilizes b
+             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool has_bias, MathFidelity math_fidelity, Tensor& output); // Tilizes a, untilizes b
 
 Tensor conv_with_address_map(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
              uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels);
