@@ -241,6 +241,10 @@
    (((uint64_t)(x)) << NOC_ADDR_LOCAL_BITS) |                          \
    ((uint64_t)(addr)))
 
+#define NOC_XY_ADDR2(xy, addr)                                         \
+   ((((uint64_t)(xy)) << NOC_ADDR_LOCAL_BITS) |                        \
+   ((uint64_t)(addr)))
+
 #define NOC_MULTICAST_ADDR(x_start, y_start, x_end, y_end, addr)                \
   ((((uint64_t)(x_start)) << (NOC_ADDR_LOCAL_BITS+2*NOC_ADDR_NODE_ID_BITS)) |   \
    (((uint64_t)(y_start)) << (NOC_ADDR_LOCAL_BITS+3*NOC_ADDR_NODE_ID_BITS)) |   \

@@ -206,28 +206,15 @@ namespace tt::tt_metal{
                 l1_offset_per_bank
             );
 
-            vector<uint32_t> harvested;
-            CoreCoord worker_start(UINT_MAX, UINT_MAX);
-            CoreCoord worker_end(0, 0);
-
             tt_SocDescriptor& soc_d = device->cluster()->get_soc_desc(device->pcie_slot());
-            CoreCoord grid_size = device->logical_grid_size();
-            for (uint32_t y = 0; y < grid_size.y; y++) {
-                for (uint32_t x = 0; x < grid_size.x; x++) {
-                    CoreCoord logical_core(x, y);
-                    CoreCoord phys_core = device->worker_core_from_logical_core(logical_core);
 
-                    // Get range of physical cores
-                    if (phys_core.x < worker_start.x) worker_start.x = phys_core.x;
-                    if (phys_core.y < worker_start.y) worker_start.y = phys_core.y;
-                    if (phys_core.x > worker_end.x) worker_end.x = phys_core.x;
-                    if (phys_core.y > worker_end.y) worker_end.y = phys_core.y;
-                }
-            }
-
-            // Note: assumes we harvest whole rows
-            for (uint32_t y = worker_start.y; y <= worker_end.y; y++) {
-                if (soc_d.is_harvested_core({1, y})) {
+            // Determine which noc-coords are harvested
+            // TODO(PGK/Almeet): fix this w/ new UMD
+            vector<uint32_t> harvested;
+            uint32_t harvested_noc_rows = device->cluster()->get_harvested_rows(device->pcie_slot());
+            for (uint32_t y = 0; y < soc_d.grid_size.y; y++) {
+                bool row_harvested = (harvested_noc_rows >> y) & 0x1;
+                if (row_harvested) {
                     harvested.push_back(y);
                 }
             }
@@ -241,8 +228,7 @@ namespace tt::tt_metal{
                 soc_d.get_pcie_cores(),
                 soc_d.get_dram_cores(),
                 soc_d.get_ethernet_cores(),
-                worker_start,
-                worker_end,
+                soc_d.grid_size,
                 harvested);
         }
 

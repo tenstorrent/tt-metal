@@ -47,4 +47,4 @@ inline void write_debug_status(volatile tt_l1_ptr uint32_t *debug_status, uint32
 
 #define DEBUG_STATUS(x...)
 
-#endif
+#endif // WATCHER_ENABLED

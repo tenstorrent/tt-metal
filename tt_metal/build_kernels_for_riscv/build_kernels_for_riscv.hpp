@@ -106,8 +106,7 @@ void generate_noc_addr_ranges_header(
     const std::vector<CoreCoord>& pcie_cores,
     const std::vector<CoreCoord>& dram_cores,
     const std::vector<CoreCoord>& ethernet_cores,
-    CoreCoord worker_start,
-    CoreCoord worker_end,
+    CoreCoord grid_size,
     const std::vector<uint32_t>& harvested);
 
 void generate_descriptors(

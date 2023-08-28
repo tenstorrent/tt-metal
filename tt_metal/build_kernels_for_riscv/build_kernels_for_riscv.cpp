@@ -1074,7 +1074,7 @@ static string generate_noc_core_xy_range_define(const std::vector<CoreCoord>& co
     string end_of_line = " \\\n    ( \\";
     for (const auto& core : cores) {
         ss << end_of_line << endl;
-        ss << "    ((x) == " << core.x << " && (y) == " << core.y << ")";
+        ss << "    ((x) == NOC_X((uint32_t)" << core.x << ") && (y) == NOC_Y((uint32_t)" << core.y << "))";
         end_of_line = " || \\";
     }
     ss << ")" << endl;
@@ -1090,8 +1090,7 @@ static string generate_noc_addr_ranges_string(
     const std::vector<CoreCoord>& pcie_cores,
     const std::vector<CoreCoord>& dram_cores,
     const std::vector<CoreCoord>& ethernet_cores,
-    CoreCoord worker_start,
-    CoreCoord worker_end,
+    CoreCoord grid_size,
     const std::vector<uint32_t>& harvested) {
 
     stringstream ss;
@@ -1130,21 +1129,34 @@ static string generate_noc_addr_ranges_string(
     }
     ss << endl;
 
-    ss << "#define NOC_WORKER_XY_P(x, y) \\" << endl;
-    ss << "    ((x) >= " << worker_start.x << " && \\" << endl;
-    ss << "     (x) <= " << worker_end.x << " && \\" << endl;
-    ss << "     (y) >= " << worker_start.y << " && \\" << endl;
-    ss << "     (y) <= " << worker_end.y;
-
+    ss << "#define NOC_HARVESTED_Y_P(y)";
     if (harvested.size() == 0) {
-        ss << ")" << endl;
+        ss << " false" << endl;
     } else {
+        string join = " \\\n    ( \\\n";
         for (const auto& y : harvested) {
-            ss << " && \\" << endl;
-            ss << "     (y) != " << y;
+            ss << join << "     (NOC_Y((y)) == " << y << ")";
+            join = " || \\\n";
         }
         ss << ")" << endl;
     }
+    ss << endl;
+
+    ss << "#define NOC_WORKER_XY_P(x, y) \\" << endl;
+    ss << "    (!NOC_PCIE_XY_P(x, y) && \\" << endl;
+    ss << "     !NOC_DRAM_XY_P(x, y) && \\" << endl;
+    ss << "     !NOC_ETH_XY_P(x, y) && \\" << endl;
+    ss << "     !NOC_HARVESTED_Y_P(y) && \\" << endl;
+    ss << "     ((loading_noc == 0) ? \\" << endl;
+    ss << "      ((x) >= NOC_X((uint32_t)" << 1 << ") && \\" << endl;
+    ss << "       (x) <= NOC_X((uint32_t)" << grid_size.x - 1 << ") && \\" << endl;
+    ss << "       (y) >= NOC_Y((uint32_t)" << 1 << ") && \\" << endl;
+    ss << "       (y) <= NOC_Y((uint32_t)" << grid_size.y - 1 << ")) : \\" << endl;
+    ss << "      ((x) <= NOC_X((uint32_t)" << 1 << ") && \\" << endl;
+    ss << "       (x) >= NOC_X((uint32_t)" << grid_size.x - 1 << ") && \\" << endl;
+    ss << "       (y) <= NOC_Y((uint32_t)" << 1 << ") && \\" << endl;
+    ss << "       (y) >= NOC_Y((uint32_t)" << grid_size.y - 1<< "))))";
+    ss << endl;
 
     return ss.str();
 }
@@ -1159,12 +1171,11 @@ void generate_noc_addr_ranges_header(
     const std::vector<CoreCoord>& pcie_cores,
     const std::vector<CoreCoord>& dram_cores,
     const std::vector<CoreCoord>& ethernet_cores,
-    CoreCoord worker_start,
-    CoreCoord worker_end,
+    CoreCoord grid_size,
     const std::vector<uint32_t>& harvested) {
 
     string output_string = generate_noc_addr_ranges_string(pcie_addr_base, pcie_addr_size, dram_addr_base, dram_addr_size,
-                                                           pcie_cores, dram_cores, ethernet_cores, worker_start, worker_end, harvested);
+                                                           pcie_cores, dram_cores, ethernet_cores, grid_size, harvested);
 
     string full_path = build_kernel_for_riscv_options->outpath;
     full_path += out_dir_path;

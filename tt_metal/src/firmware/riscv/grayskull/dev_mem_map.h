@@ -24,6 +24,9 @@
 #define MEM_L1_BASE           0x0
 #define MEM_L1_SIZE           (1024 * 1024)
 
+#define MEM_ETH_BASE          0x0
+#define MEM_ETH_SIZE          0
+
 #define MEM_LOCAL_BASE        0xFFB00000
 #define MEM_BRISC_LOCAL_SIZE  (4 * 1024)
 #define MEM_NCRISC_LOCAL_SIZE (4 * 1024)
@@ -72,7 +75,8 @@
 #define MEM_DEBUG_TRISC1_STATUS_MAILBOX_ADDRESS  (MEM_MAILBOX_BASE + 172)  // 4 bytes
 #define MEM_DEBUG_TRISC2_STATUS_MAILBOX_ADDRESS  (MEM_MAILBOX_BASE + 176)  // 4 bytes
 #define MEM_DEBUG_STATUS_MAILBOX_END_ADDRESS     (MEM_MAILBOX_BASE + 180)
-#define MEM_MAILBOX_END                          (MEM_MAILBOX_BASE + 184)
+#define MEM_DEBUG_SANITIZE_NOC_MAILBOX_ADDRESS   (MEM_MAILBOX_BASE + 180) // 2 * 16 bytes
+#define MEM_MAILBOX_END                          (MEM_MAILBOX_BASE + 212)
 
 // XXXX TODO(pgk) remove these when the UMD gets unified and these host
 // dependencies go away
