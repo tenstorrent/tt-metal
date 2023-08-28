@@ -84,6 +84,7 @@ def test_resnet50_first_conv_as_large_blocked_matmul(use_program_cache, device, 
         out = ttl.tensor.conv_with_fast_reader(
             A,
             B_tiled,
+            None,
             [R, padded_S, stride_h, stride_w, 0, 0],
             act_block_h,
             act_block_w,
@@ -91,7 +92,8 @@ def test_resnet50_first_conv_as_large_blocked_matmul(use_program_cache, device, 
             out_subblock_h,
             out_subblock_w,
             K,
-            untilize_out
+            untilize_out,
+            False
         )
         if not untilize_out:
            out_unpadded_shape = [1, 1, OH*OW, K]

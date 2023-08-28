@@ -133,7 +133,7 @@ def resnet_1x1conv_as_mm(weight: List[Union[int, float]], conv_params, device, m
 
     return conv_
 
-def resnet_conv(weight: List[Union[int, float]], conv_params, device, act_block_shape_hw, weight_block_shape_hw, outsubblock_shape_hw, bias=None, padded_filter_window_width=0, pre_pad_conv=False, matmul_config=None, fuse_relu=False):
+def resnet_conv(weight: List[Union[int, float]], conv_params, device, act_block_shape_hw, weight_block_shape_hw, outsubblock_shape_hw, bias=None, padded_filter_window_width=0, pre_pad_conv=False, matmul_config=None, fuse_relu=False, enable_fused_bias=True):
     """
     Returns a function that performs a Convolution.
     For bias, it calls bcast op without autoformatting
@@ -237,7 +237,7 @@ def resnet_conv(weight: List[Union[int, float]], conv_params, device, act_block_
             output = tensor.conv_with_fast_reader(activation, weight_on_device, bias_for_fused, [R,padded_filter_window_width,U,V,P_H,P_W], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w, K, False, bias_for_fused is not None)
         assert(output.storage_type() == tensor.StorageType.DEVICE)
 
-        if matmul_program_config is None and bias_on_device is not None:
+        if (use_regular_matmul_op and matmul_program_config is None and bias_on_device is not None) or (not use_regular_matmul_op and not enable_fused_bias):
             assert output.layout() == tensor.Layout.TILE
             if output.layout() == tensor.Layout.ROW_MAJOR:
                 # convert to tile layout
@@ -246,7 +246,6 @@ def resnet_conv(weight: List[Union[int, float]], conv_params, device, act_block_
                 output = tensor.format_input_tensor(output, device, output_padded_shape, 0.0, tensor.Layout.TILE)
             output_plus_bias = tensor.bcast_without_autoformat(output, bias_on_device, tensor.BcastOpMath.ADD, tensor.BcastOpDim.H, output.memory_config())
             return output_plus_bias
-
         return output
 
     return conv_

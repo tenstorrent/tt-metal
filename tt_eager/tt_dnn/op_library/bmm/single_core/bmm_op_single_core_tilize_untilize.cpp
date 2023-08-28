@@ -325,7 +325,7 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
         bias_ntiles_w = bias.shape()[3] / constants::TILE_WIDTH;
         bias_df = datatype_to_dataformat_converter(bias.dtype());
         bias_tile_nbytes = tile_size(bias_df);
-        bias_log2_of_pagesize = (uint32_t) log2((float) bias_tile_nbytes);
+        bias_log2_of_pagesize = (uint32_t) std::log2((float) bias_tile_nbytes);
     }
 
     {   // debug
