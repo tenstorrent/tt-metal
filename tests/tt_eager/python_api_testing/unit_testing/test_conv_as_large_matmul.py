@@ -34,7 +34,8 @@ import torch
 
 @pytest.mark.parametrize("run_conv_with_address_map", (False,))
 @pytest.mark.parametrize("untilize_out", (False,))
-@pytest.mark.parametrize("has_bias", (False,))
+@pytest.mark.parametrize("has_bias", (True, False))
+@pytest.mark.parametrize("fuse_relu", (True, False))
 @pytest.mark.parametrize(
     "K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w",
     (
@@ -83,6 +84,7 @@ def test_run_conv_as_large_matmul(
     pad_h,
     pad_w, untilize_out,
     has_bias,
+    fuse_relu,
     device,
 ):
     if run_conv_with_address_map and has_bias:
@@ -156,6 +158,8 @@ def test_run_conv_as_large_matmul(
         out_golden = torch.nn.functional.conv2d(
             A_pyt, B_pyt, bias=bias, stride=(stride_h, stride_w), padding=(pad_h, pad_w)
         )
+        if fuse_relu:
+            out_golden = torch.nn.ReLU()(out_golden)
 
         # Run TT metal OP
         if run_conv_with_address_map:
@@ -187,6 +191,7 @@ def test_run_conv_as_large_matmul(
                 K,
                 untilize_out,
                 has_bias,
+                fuse_relu,
                 ttl.tensor.MathFidelity.HiFi4)
         if not untilize_out:
            out_unpadded_shape = [1, 1, OH*OW, K]

@@ -2394,7 +2394,7 @@ void TensorModule(py::module &m_tensor) {
                  py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt,
                  py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(),
                  py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(),
-                 py::arg().noconvert(), py::arg("math_fidelity").noconvert() = MathFidelity::HiFi4, R"doc(
+                 py::arg().noconvert(), py::arg().noconvert(), py::arg("math_fidelity").noconvert() = MathFidelity::HiFi4, R"doc(
         Perform a conv ``A x B`` with two tensors
         This op tilizes tensor A and untilizes the output
 

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_dnn/op_library/conv/conv_op.hpp"
+#include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -178,7 +179,12 @@ void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program &program,
 
 operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, vector<int> conv_params,
                                        uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
+<<<<<<< HEAD
                                        uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool use_fast_reader, bool untilize_out, bool has_bias, const MathFidelity math_fidelity, Tensor &output) {
+=======
+                                       uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels,
+                                       bool use_fast_reader, bool untilize_out, bool has_bias, bool fuse_relu, Tensor &output) {
+>>>>>>> 31d28d8b9... #0: RELU fused
     bool pass = true;
     tt_metal::Device *device = a.device();
     TT_ASSERT(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
@@ -316,7 +322,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         bias_dram_addr = bias_buffer->address();
         bias_ntiles = bias.value().shape()[3] / constants::TILE_WIDTH;  // TODO: support non tile multiple sizes
         bias_tile_nbytes = single_tile_size;
-        bias_log2_of_pagesize = (uint32_t) log2((float) bias_tile_nbytes);
+        bias_log2_of_pagesize = (uint32_t) std::log2((float) bias_tile_nbytes);
     }
 
     // more args for reader
@@ -419,8 +425,19 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
 
     // define for bias
     std::map<string, string> all_defines;
+    std::map<string, string> compute_defines;
     if (has_bias) {
         all_defines["FUSE_BIAS"] = "1";
+        compute_defines["FUSE_BIAS"] = "1";
+    }
+
+    if (fuse_relu) {
+        // auto relu_param = UnaryWithParam{.op_type = UnaryOpType.RELU};
+        compute_defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::RELU, nullopt, "ACTIVATION", "i"));
+        compute_defines["RELU_ACTIVATION"] = "1";
+        if (has_bias) {
+            compute_defines["FUSE_BIAS"] = "1";
+        }
     }
 
     string reader_kernel;
@@ -445,7 +462,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         }
         reader_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
                 (uint32_t) stride_h, (uint32_t) stride_w, (uint32_t) conv_act_size_w, (uint32_t) conv_output_size_w,
-                (uint32_t) conv_act_size_c * num_bytes_of_df, (uint32_t) log2(conv_act_size_c * num_bytes_of_df)};
+                (uint32_t) conv_act_size_c * num_bytes_of_df, (uint32_t) std::log2(conv_act_size_c * num_bytes_of_df)};
     } else {
         reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations.cpp";
         reader_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0)};
@@ -513,7 +530,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         } else {
             writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_unary_stick_layout_8bank_blocks_reader_weight_tile_layout.cpp";
         }
-        writer_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0), out0_cb, weight_cb, (uint32_t) log2(out_row_size_bytes)};
+        writer_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0), out0_cb, weight_cb, (uint32_t) std::log2(out_row_size_bytes)};
         writer_rt_args = {
             out_dram_addr,
             weight_dram_addr,
@@ -638,7 +655,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         ComputeConfig{
             .math_fidelity = math_fidelity,
             .compile_args = compute_kernel_args,
-            .defines = all_defines});
+            .defines = compute_defines});
 
     SetRuntimeArgs(
         program, reader_id, core,
@@ -1380,7 +1397,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
 inline Tensor conv_(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, const vector<int> conv_params,
                     uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
                     uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels,
-                    bool use_address_map, bool use_fast_reader, bool untilize_out, bool has_bias = false, MathFidelity math_fidelity = MathFidelity::HiFi4) {
+                    bool use_address_map, bool use_fast_reader, bool untilize_out, bool has_bias = false, bool fuse_relu = false, MathFidelity math_fidelity = MathFidelity::HiFi4) {
     TT_ASSERT(b.layout() == Layout::TILE); // Weights should already be formatted
     auto padded_a_shape = Shape({a.shape()[0], a.shape()[1], a.shape()[2], round_up(a.shape()[3], 16)});
     FormatParams input_a_format_params = {.pad_shape=padded_a_shape, .pad_value=0.0, .target_layout=Layout::ROW_MAJOR};
@@ -1391,7 +1408,7 @@ inline Tensor conv_(const Tensor& a, const Tensor &b, std::optional<const Tensor
     }
     auto output_layout = untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
     return operation::run_without_autoformat(
-        Conv(act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, conv_params, output_channels, use_address_map, use_fast_reader, untilize_out, has_bias, math_fidelity),
+        Conv(act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, conv_params, output_channels, use_address_map, use_fast_reader, untilize_out, has_bias, fuse_relu, math_fidelity),
         {a, b},
         {bias}).at(0);
 }
@@ -1402,8 +1419,8 @@ Tensor conv(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, 
 }
 
 Tensor conv_with_fast_reader(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
-             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool untilize_out, bool has_bias, MathFidelity math_fidelity) {
-    return conv_(a, b, bias, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, false, true, untilize_out, has_bias, math_fidelity);
+             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, MathFidelity math_fidelity) {
+    return conv_(a, b, bias, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, false, true, untilize_out, has_bias, fuse_relu, math_fidelity);
 }
 
 Tensor conv_with_address_map(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
@@ -1412,8 +1429,8 @@ Tensor conv_with_address_map(const Tensor& a, const Tensor &b, std::optional<con
 }
 
 operation::ProgramWithCallbacks conv_single_core(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
-             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool use_fast_reader, bool untilize_out, bool has_bias, const MathFidelity math_fidelity, Tensor &output) {
-    return conv_as_large_bmm_single_core_(a, b, bias, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, use_fast_reader, untilize_out, has_bias, math_fidelity, output);
+             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool use_fast_reader, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity, Tensor &output) {
+    return conv_as_large_bmm_single_core_(a, b, bias, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, use_fast_reader, untilize_out, has_bias, fuse_relu, math_fidelity, output);
 }
 
 operation::ProgramWithCallbacks conv_with_address_map_single_core(const Tensor& a, const Tensor &b, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
@@ -1476,7 +1493,7 @@ operation::ProgramWithCallbacks Conv::create_program(const std::vector<Tensor>& 
     if(use_address_map) {
         return {conv_with_address_map_single_core(input_tensor_a, input_tensor_b, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, untilize_out, output_tensor)};
     } else {
-        return {conv_single_core(input_tensor_a, input_tensor_b, input_tensor_bias, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, use_fast_reader, untilize_out, has_bias, math_fidelity, output_tensor)};
+        return {conv_single_core(input_tensor_a, input_tensor_b, input_tensor_bias, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, use_fast_reader, untilize_out, has_bias, fuse_relu, math_fidelity, output_tensor)};
     }
 }
 
@@ -1492,6 +1509,8 @@ tt::stl::reflection::Attributes Conv::attributes() const {
         {"use_address_map", this->use_address_map},
         {"use_fast_reader", this->use_fast_reader},
         {"untilize_out", this->untilize_out},
+        {"has_bias", this->has_bias},
+        {"fuse_relu", this->fuse_relu},
         {"math_fidelity", this->math_fidelity},
     };
 }

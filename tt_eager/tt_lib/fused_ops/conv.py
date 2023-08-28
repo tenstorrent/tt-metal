@@ -134,7 +134,7 @@ def resnet50_1x1_conv_as_matmul(weight: List[Union[int, float]], conv_params, de
 
     return conv_
 
-def resnet50_optimized_conv(weight: List[Union[int, float]], conv_params, device, act_block_shape_hw, weight_block_shape_hw, outsubblock_shape_hw, bias):
+def resnet50_optimized_conv(weight: List[Union[int, float]], conv_params, device, act_block_shape_hw, weight_block_shape_hw, outsubblock_shape_hw, bias, fuse_relu=False):
     """
     Returns a function that performs a Convolution.
     For bias, it calls bcast op without autoformatting
@@ -185,7 +185,7 @@ def resnet50_optimized_conv(weight: List[Union[int, float]], conv_params, device
     bias_on_device = bias_.to(device)
     def conv_(activation):
         #assert(activation.layout() == tensor.Layout.ROW_MAJOR)
-        output = tensor.conv_with_fast_reader(activation, weight_on_device, bias_on_device, [R,S,U,V,P_H,P_W], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w, K, False, True, math_fidelity=tensor.MathFidelity.HiFi4)
+        output = tensor.conv_with_fast_reader(activation, weight_on_device, bias_on_device, [R,S,U,V,P_H,P_W], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w, K, False, True, fuse_relu, math_fidelity=tensor.MathFidelity.HiFi4)
         #assert(output.storage_type() == tensor.StorageType.DEVICE)
         return output
 
@@ -248,7 +248,7 @@ def resnet50_first_conv(weight: List[Union[int, float]], conv_params, device, ac
     P_W = 0
     def conv_(activation):
         #assert(activation.layout() == tensor.Layout.ROW_MAJOR)
-        output = tensor.conv_with_fast_reader(activation, weight_on_device, None, [R,padded_filter_window_width,U,V,P_H,P_W], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w, K, False, False, math_fidelity=tensor.MathFidelity.HiFi4)
+        output = tensor.conv_with_fast_reader(activation, weight_on_device, None, [R,padded_filter_window_width,U,V,P_H,P_W], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w, K, False, False, False, math_fidelity=tensor.MathFidelity.HiFi4)
         #assert(output.storage_type() == tensor.StorageType.DEVICE)
         #assert output.layout() == tensor.Layout.TILE
         output_plus_bias = tensor.bcast_without_autoformat(output, bias_on_device, tensor.BcastOpMath.ADD, tensor.BcastOpDim.H, output.memory_config())
