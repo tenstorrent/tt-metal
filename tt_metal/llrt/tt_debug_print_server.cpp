@@ -439,18 +439,13 @@ bool DebugPrintServerContext::ProfilerIsRunning = false;
 
 } // anon namespace
 
-void tt_stop_debug_print_server(tt_cluster*)
+void tt_stop_debug_print_server()
 {
     // this can be called multiple times since we register it with atexit to make explicit call to stop optional
     if (DebugPrintServerContext::inst != nullptr) {
         delete DebugPrintServerContext::inst;
         DebugPrintServerContext::inst = nullptr;
     }
-}
-
-void tt_stop_debug_print_server_per_device(tt_cluster* cluster, int)
-{
-    tt_stop_debug_print_server(cluster);
 }
 
 void tt_set_profiler_state_for_debug_print(bool profile_device)

@@ -22,6 +22,8 @@ enum class BufferType;
 class Buffer;
 class Program;
 
+using on_close_device_callback = std::function<void ()>;
+
 // A physical PCIexpress Tenstorrent device
 class Device {
    public:
@@ -80,6 +82,8 @@ class Device {
 
     void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out) const;
 
+    void on_close_device(on_close_device_callback callback);
+
    private:
     void check_allocator_is_initialized() const;
 
@@ -114,6 +118,8 @@ class Device {
     CoreCoord post_harvested_worker_grid_size_ = {};
     std::unordered_map<CoreCoord, CoreCoord> logical_to_routing_coord_lookup_table_ = {};
     unsigned int num_harvested_rows_ = 0;
+
+    std::vector<on_close_device_callback> on_close_device_callbacks;
 };
 
 }  // namespace tt_metal

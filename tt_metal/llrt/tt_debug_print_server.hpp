@@ -12,6 +12,7 @@
 
 #include "tt_cluster.hpp"
 #include "tt_metal/common/core_coord.h"
+#include "tt_metal/impl/device/device.hpp"
 
 enum DebugPrintHartFlags : unsigned int {
     DPRINT_RISCV_NC  = 1,
@@ -46,11 +47,11 @@ void tt_start_debug_print_server(tt_cluster* cluster);
 /*
 @brief Stops the print server thread. This call is optional.
 
-tt_start_print_server() will register this function call with tt_cluster->on_destroy().
+tt_start_print_server() will register this function call with device->on_destroy().
 
 Note that this api call is not thread safe at the moment.
 */
-void tt_stop_debug_print_server(tt_cluster* cluster = nullptr);
+void tt_stop_debug_print_server();
 
 /**
 @brief Set device side profiler state.

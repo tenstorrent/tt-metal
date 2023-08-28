@@ -175,7 +175,15 @@ bool Device::close() {
     return true;
 }
 
-Device::~Device() {}
+void Device::on_close_device(on_close_device_callback callback) {
+    this->on_close_device_callbacks.push_back(callback);
+}
+
+Device::~Device() {
+    if (this->initialized_) {
+        this->close();
+    }
+}
 
 bool Device::cluster_is_initialized() const {
     return detail::ClusterWrapper::inst(this->arch_, this->target_type_).cluster() != nullptr;
