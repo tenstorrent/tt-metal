@@ -19,7 +19,7 @@ from tt_lib.fused_ops.max_pool import run_max_pool_on_device_wrapper as TtMaxPoo
 from tt_lib.fused_ops.max_pool import compute_max_pool_shape
 from tt_lib.fused_ops.linear import Linear as TtLinear
 from tt_lib.fused_ops.softmax import softmax as TtSoftmax
-from tt_lib.fused_ops.conv import resnet_conv as TtResnetConv
+from tt_lib.fused_ops.conv import resnet50_first_conv, resnet50_1x1_conv_as_matmul, resnet50_optimized_conv
 from models.utility_functions import _nearest_32
 from tt_lib.fallback_ops import fallback_ops
 
@@ -246,7 +246,7 @@ class Bottleneck(nn.Module):
         assert (conv1_as_mm_padded_act_height, inplanes, width) in hardcoded_matmul_config_conv
         matmul_config = hardcoded_matmul_config_conv[(conv1_as_mm_padded_act_height, inplanes, width)]
         # 1x1 conv with stride 1 padding 0 is run using regular matmul
-        self.conv1 = TtResnetConv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, [1, 1], [1, 1], [1, 1], conv1_bias.tolist() if conv1_bias is not None else None, matmul_config=matmul_config, fuse_relu=True)
+        self.conv1 = resnet50_1x1_conv_as_matmul(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, conv1_bias.tolist(), matmul_config, fuse_relu=True)
 
         # With single buffered input CB, these shapes work -
         # hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv2 = {
@@ -274,7 +274,7 @@ class Bottleneck(nn.Module):
         conv2_output_padded_face_size = _nearest_32(self.conv2_output_shape[1] * self.conv2_output_shape[2])
         assert (conv2_output_padded_face_size, width) in hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv2
         [act_block_h_datums, weight_block_w_datums, out_subblock_h_datums, out_subblock_w_datums] = hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv2[(conv2_output_padded_face_size, width)]
-        self.conv2 = TtResnetConv(conv2_weight.reshape(-1).tolist(), self.conv2_params, self.device, [act_block_h_datums, width*3], [width*3, weight_block_w_datums], [out_subblock_h_datums, out_subblock_w_datums], conv2_bias.tolist() if conv2_bias is not None else None)
+        self.conv2 = resnet50_optimized_conv(conv2_weight.reshape(-1).tolist(), self.conv2_params, self.device, [act_block_h_datums, width*3], [width*3, weight_block_w_datums], [out_subblock_h_datums, out_subblock_w_datums], conv2_bias.tolist())
 
         self.conv3_params = [planes * self.expansion, width, 1, 1, 1, 1, 0, 0, dilation, groups]
         self.conv3_output_shape = compute_conv_output_shape(self.conv3_params, self.conv2_output_shape)
@@ -284,7 +284,7 @@ class Bottleneck(nn.Module):
         #print("Setting matmul config for 1x1 conv (third conv in module)")
         matmul_config = hardcoded_matmul_config_conv[(conv3_as_mm_padded_act_height, width, planes * self.expansion)]
         # 1x1 conv with stride 1 padding 0 is run using regular matmul
-        self.conv3 = TtResnetConv(conv3_weight.reshape(-1).tolist(), self.conv3_params, self.device, [1, 1], [1, 1], [1, 1], conv3_bias.tolist() if conv3_bias is not None else None, matmul_config=matmul_config)
+        self.conv3 = resnet50_1x1_conv_as_matmul(conv3_weight.reshape(-1).tolist(), self.conv3_params, self.device, conv3_bias.tolist(), matmul_config)
         self.conv3_output_shape = compute_conv_output_shape(self.conv3_params, self.conv2_output_shape)
 
     def run_forward(self, x: torch.Tensor):
@@ -377,7 +377,7 @@ class ResNet(nn.Module):
             self.bn1 = nn.Identity()
 
         self.conv1_params = [self.inplanes, 3, 7, 7, 2, 2, 3, 3, 1, groups]
-        self.conv1 = TtResnetConv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, [128, 128], [128, 64], [128, 64], conv1_bias.tolist() if conv1_bias is not None else None, 8, True, enable_fused_bias=False)
+        self.conv1 = resnet50_first_conv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, [128, 128], [128, 64], [128, 64], conv1_bias.tolist(), 8)
         self.conv1_output_shape = compute_conv_output_shape(self.conv1_params, [1, self.conv_input_face_shape_hw[0], self.conv_input_face_shape_hw[1], self.inplanes])
         self.relu = tt_lib.tensor.relu_without_autoformat
         # self.maxpool = fallback_ops.MaxPool2d(kernel_size=3, stride=2, padding=1, channels_last=True, reshape_2d=True)
@@ -460,7 +460,15 @@ class ResNet(nn.Module):
                 assert (downsample_output_padded_face_size, self.inplanes, downsample_output_channels) in hardcoded_matmul_config_conv
                 #print("Setting matmul config for 1x1 conv (downsample stride 1 conv in module)")
                 matmul_config = hardcoded_matmul_config_conv[(downsample_output_padded_face_size,  self.inplanes, downsample_output_channels)]
-            self.downsample_conv_on_tt = TtResnetConv(downsample_conv_weight.reshape(-1).tolist(), self.downsample_params, self.device, [act_block_h_datums, self.inplanes], [self.inplanes, weight_block_w_datums], [out_subblock_h_datums, out_subblock_w_datums], downsample_conv_bias.tolist() if downsample_conv_bias is not None else None, matmul_config=matmul_config)
+                self.downsample_conv_on_tt = resnet50_1x1_conv_as_matmul(downsample_conv_weight.reshape(-1).tolist(), self.downsample_params, self.device, downsample_conv_bias.tolist(), matmul_config)
+            else:
+                self.downsample_conv_on_tt = resnet50_optimized_conv(downsample_conv_weight.reshape(-1).tolist(),
+                                                            self.downsample_params,
+                                                            self.device,
+                                                            [act_block_h_datums, self.inplanes],
+                                                            [self.inplanes, weight_block_w_datums],
+                                                            [out_subblock_h_datums, out_subblock_w_datums],
+                                                            downsample_conv_bias.tolist())
             self.norm_layer_after_downsample_conv_on_tt = nl
 
         layers = []

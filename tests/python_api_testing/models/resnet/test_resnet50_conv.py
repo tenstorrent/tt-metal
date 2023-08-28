@@ -13,7 +13,7 @@ import torch
 import pytest
 import tt_lib
 from models.utility_functions import comp_pcc
-from tests.python_api_testing.models.resnet.metalResnetBlock50 import compute_conv_output_shape, TtResnetConv, _nearest_32, format_tensor
+from tests.python_api_testing.models.resnet.metalResnetBlock50 import compute_conv_output_shape, resnet50_1x1_conv_as_matmul, resnet50_optimized_conv, _nearest_32, format_tensor
 
 # hardcoding matmul config for 1x1 convs
 # key: mm act height, mm act width, mm weight width
@@ -173,18 +173,17 @@ def test_resnet50_conv(use_program_cache, device, K,C,H,W,R,S,stride_h,stride_w,
                 print("Setting matmul config for 1x1 conv")
                 matmul_config = hardcoded_matmul_config_conv[(conv_as_mm_padded_act_height, C, K)]
             # 1x1 conv with stride 1 padding 0 is run using regular matmul
-            conv = TtResnetConv(conv_weight_pyt.reshape(-1).tolist(), conv_params, device, [1, 1], [1, 1], [1, 1], conv_bias_pyt.reshape(-1).tolist(), matmul_config=matmul_config)
+            conv = resnet50_1x1_conv_as_matmul(conv_weight_pyt.reshape(-1).tolist(), conv_params, device, conv_bias_pyt.reshape(-1).tolist(), matmul_config)
         else:
 
             assert (conv_as_mm_padded_act_height, K) in hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv
             [act_block_h_datums, weight_block_w_datums, out_subblock_h_datums, out_subblock_w_datums] = hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv[(conv_as_mm_padded_act_height, K)]
-            conv = TtResnetConv(conv_weight_pyt.reshape(-1).tolist(),
+            conv = resnet50_optimized_conv(conv_weight_pyt.reshape(-1).tolist(),
                                 conv_params,
                                 device,
                                 [act_block_h_datums, C*S], [C*S, weight_block_w_datums],
                                 [out_subblock_h_datums, out_subblock_w_datums],
-                                conv_bias_pyt.reshape(-1).tolist(),
-                                enable_fused_bias=True)
+                                conv_bias_pyt.reshape(-1).tolist())
 
         conv_input_on_device = tt_lib.tensor.Tensor(
                                 conv_input_pyt_nhwc.reshape(-1).tolist(),

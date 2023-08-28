@@ -18,13 +18,14 @@ import torch
 from torchvision import models
 import pytest
 import tt_lib
+from datetime import datetime
 
 from tests.models.resnet.metalResnetBlock50 import ResNet, Bottleneck
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose_and_pcc, comp_pcc
 
 
 @pytest.mark.parametrize("fold_batchnorm", [True], ids=["Batchnorm folded"])
-def test_run_resnet50_inference(fold_batchnorm, imagenet_sample_input):
+def test_run_resnet50_inference(use_program_cache, fold_batchnorm, imagenet_sample_input):
     image = imagenet_sample_input
 
     with torch.no_grad():
@@ -40,6 +41,7 @@ def test_run_resnet50_inference(fold_batchnorm, imagenet_sample_input):
 
         state_dict = torch_resnet50.state_dict()
         storage_in_dram = False
+        # run once to compile ops
         tt_resnet50 = ResNet(Bottleneck, [3, 4, 6, 3],
                         device=device,
                         state_dict=state_dict,
@@ -47,9 +49,17 @@ def test_run_resnet50_inference(fold_batchnorm, imagenet_sample_input):
                         fold_batchnorm=fold_batchnorm,
                         storage_in_dram=storage_in_dram)
 
-
         torch_output = torch_resnet50(image).unsqueeze(1).unsqueeze(1)
         tt_output = tt_resnet50(image)
+
+        # run again to measure end to end perf
+        start_time = datetime.now()
+        tt_output = tt_resnet50(image)
+        end_time = datetime.now()
+        diff = end_time - start_time
+        print("End to end time (microseconds))", diff.microseconds)
+        throughput_fps = (float) (1000000 / diff.microseconds)
+        print("Throughput (fps)", throughput_fps)
 
         passing, info = comp_pcc(torch_output, tt_output, pcc=0.985)
         logger.info(info)

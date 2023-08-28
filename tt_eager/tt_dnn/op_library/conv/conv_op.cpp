@@ -1389,13 +1389,10 @@ inline Tensor conv_(const Tensor& a, const Tensor &b, std::optional<const Tensor
         input_bias_format_params = {.pad_shape=bias.value().shape(), .pad_value=0, .target_layout=Layout::TILE};
     }
     auto output_layout = untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
-    return operation::run_with_autoformat(
+    return operation::run_without_autoformat(
         Conv(act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, conv_params, output_channels, use_address_map, use_fast_reader, untilize_out, has_bias),
         {a, b},
-        {input_a_format_params, input_b_format_params},
-        {output_layout},
-        {bias},
-        {input_bias_format_params}).at(0);
+        {bias}).at(0);
 }
 
 Tensor conv(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
