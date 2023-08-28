@@ -6,6 +6,11 @@
 #include "compute_kernel_api/common.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api.h"
+
+#if SFPU_OP_ISINF_ISNAN_INCLUDE
+#include "compute_kernel_api/eltwise_unary/isinf_isnan.h"
+#endif
+
 #if SFPU_OP_ERF_ERFC_INCLUDE
 #include "compute_kernel_api/eltwise_unary/erf_erfc.h"
 #endif

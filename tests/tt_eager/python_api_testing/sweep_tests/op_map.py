@@ -143,6 +143,22 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_abs,
         "pytorch_op": pytorch_ops.abs,
     },
+    "eltwise-isinf": {
+        "tt_lib_op": tt_lib_ops.eltwise_isinf,
+        "pytorch_op": pytorch_ops.isinf,
+    },
+    "eltwise-isposinf": {
+        "tt_lib_op": tt_lib_ops.eltwise_isposinf,
+        "pytorch_op": pytorch_ops.isposinf,
+    },
+    "eltwise-isneginf": {
+        "tt_lib_op": tt_lib_ops.eltwise_isneginf,
+        "pytorch_op": pytorch_ops.isneginf,
+    },
+    "eltwise-isnan": {
+        "tt_lib_op": tt_lib_ops.eltwise_isnan,
+        "pytorch_op": pytorch_ops.isnan,
+    },
     "eltwise-sign": {
         "tt_lib_op": tt_lib_ops.eltwise_sign,
         "pytorch_op": pytorch_ops.sign,

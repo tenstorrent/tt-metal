@@ -37,7 +37,6 @@ public:
 // update split eltwise ops include macros
 inline bool update_macro_defines(UnaryOpType op_type,std::map<std::string,std::string>& defines) {
   switch( op_type) {
-
   case UnaryOpType::EXP:
   case UnaryOpType::EXP2:
     defines["SFPU_OP_EXP_INCLUDE"] = "1";
@@ -64,6 +63,12 @@ inline bool update_macro_defines(UnaryOpType op_type,std::map<std::string,std::s
   case UnaryOpType::RELU_MIN:
   case UnaryOpType::LEAKY_RELU:
     defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
+    return true;
+  case UnaryOpType::ISINF:
+  case UnaryOpType::ISNAN:
+  case UnaryOpType::ISNEGINF:
+  case UnaryOpType::ISPOSINF:
+    defines["SFPU_OP_ISINF_ISNAN_INCLUDE"]="0";
     return true;
   default:
     break;
@@ -105,6 +110,10 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, stri
         case UnaryOpType::SIGNBIT: op_init_and_name = {"signbit_tile_init();", fmt::format("signbit_tile({});", idst)}; break;
         case UnaryOpType::SIN: op_init_and_name = {"sin_tile_init();", fmt::format("sin_tile({});", idst)}; break;
         case UnaryOpType::COS: op_init_and_name = {"cos_tile_init();", fmt::format("cos_tile({});", idst)}; break;
+        case UnaryOpType::ISINF: op_init_and_name = {"isinf_tile_init();", fmt::format("isinf_tile({});", idst)}; break;
+        case UnaryOpType::ISPOSINF: op_init_and_name = {"isposinf_tile_init();", fmt::format("isposinf_tile({});", idst)}; break;
+        case UnaryOpType::ISNEGINF: op_init_and_name = {"isneginf_tile_init();", fmt::format("isneginf_tile({});", idst)}; break;
+        case UnaryOpType::ISNAN: op_init_and_name = {"isnan_tile_init();", fmt::format("isnan_tile({});", idst)}; break;
         case UnaryOpType::LOG10:
             // log10[x] = log[x]/log[10] = log[x]*0.4342944819032518; FP32@U32 0x3ede5bd9; FP16@U16 0x36f3;
             op_init_and_name = {"log_with_base_tile_init();", fmt::format("log_with_base_tile({}, 0x36f3u);", idst)}; break;
@@ -162,7 +171,8 @@ std::map<string, string> get_defines_impl(std::string init_def, std::string func
         {func_def, op_func},
         {"SFPU_OP_ERF_ERFC_INCLUDE","0"}, //include guards for split eltwise ops
         {"SFPU_OP_ELU_INCLUDE","0"}, //include guards for split eltwise ops
-	{"SFPU_OP_RELU_FAMILY_INCLUDE","0"} //include guards for RELU family ops
+	    {"SFPU_OP_RELU_FAMILY_INCLUDE","0"}, //include guards for RELU family ops
+        {"SFPU_OP_ISINF_ISNAN_INCLUDE","0"}
     };
     return defines;
 }
@@ -195,7 +205,7 @@ std::map<string, string> get_block_defines(const std::vector<UnaryWithParam> op_
     }
     for (uint32_t i = 0; i<op_chain.size(); i++) {
         auto op_type = op_chain[i].op_type;
-	update_macro_defines(op_type,block_defines);
+	    update_macro_defines(op_type,block_defines);
     }
     block_defines[fmt::format("SFPU_OP_CHAIN_{}", block_id)] = block_define;
     return block_defines;

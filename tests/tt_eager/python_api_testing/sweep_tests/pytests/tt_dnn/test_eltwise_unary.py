@@ -30,8 +30,17 @@ shapes = [
 ]
 output_mem_cfgs = copy.copy(generation_funcs.supported_mem_configs)
 if is_wormhole_b0():
-    shapes = [shapes[0],]
-    output_mem_cfgs = [output_mem_cfgs[0],]
+    shapes = [
+        shapes[0],
+    ]
+    input_mem_cfgs = [
+        input_mem_cfgs[0],
+    ]
+    output_mem_cfgs = [
+        output_mem_cfgs[0],
+    ]
+
+
 @pytest.mark.parametrize(
     "input_shapes",
     shapes,
@@ -43,7 +52,13 @@ class TestEltwiseUnary:
         ["relu", "sigmoid", "square", "tanh", "relu6", "add1", "deg2rad", "rad2deg"],
     )
     def test_run_eltwise_unary_ops(
-            self, input_shapes, fn_kind, device, function_level_defaults, output_mem_config
+        self,
+        input_shapes,
+        fn_kind,
+        pcie_slot,
+        function_level_defaults,
+        input_mem_config,
+        output_mem_config,
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
@@ -51,7 +66,12 @@ class TestEltwiseUnary:
             )
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
-        test_args.update({"output_mem_config": output_mem_config})
+        test_args.update(
+            {
+                "input_mem_config": input_mem_config,
+                "output_mem_config": output_mem_config,
+            }
+        )
         comparison_func = comparison_funcs.comp_pcc
         run_single_pytorch_test(
             f"eltwise-{fn_kind}",
@@ -67,11 +87,13 @@ class TestEltwiseUnary:
         ["atan"],
     )
     def test_run_eltwise_atan_op(
-            self, input_shapes, fn_kind, device, function_level_defaults, output_mem_config
+        self,
+        function_level_defaults,
+        input_mem_config,
+        output_mem_config,
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=-1e6, high=1e6), torch.bfloat16
             )
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
@@ -87,7 +109,13 @@ class TestEltwiseUnary:
 
     @pytest.mark.parametrize("fast_and_appx", [True, False])
     def test_run_eltwise_gelu_op(
-        self, input_shapes, fast_and_appx, device, function_level_defaults, output_mem_config
+        self,
+        input_shapes,
+        fast_and_appx,
+        pcie_slot,
+        function_level_defaults,
+        input_mem_config,
+        output_mem_config,
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
@@ -109,11 +137,13 @@ class TestEltwiseUnary:
     @skip_for_wormhole_b0
     @pytest.mark.parametrize("fast_and_appx", [True, False])
     def test_run_eltwise_rsqrt_op(
-            self, input_shapes, fast_and_appx, device, function_level_defaults, output_mem_config
+        self,
+        function_level_defaults,
+        input_mem_config,
+        output_mem_config,
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=1, high=1e8), torch.bfloat16
             )
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
@@ -152,7 +182,8 @@ class TestEltwiseUnary:
         comparison_func,
         device,
         function_level_defaults,
-        output_mem_config
+        input_mem_config,
+        output_mem_config,
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
@@ -184,6 +215,7 @@ class TestEltwiseUnary:
         comparison_func,
         device,
         function_level_defaults,
+        input_mem_config,
         output_mem_config,
     ):
         datagen_func = [
@@ -193,18 +225,28 @@ class TestEltwiseUnary:
             )
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
-        test_args.update({"output_mem_config": output_mem_config})
+        test_args.update(
+            {
+                "input_mem_config": input_mem_config,
+                "output_mem_config": output_mem_config,
+            }
+        )
         run_single_pytorch_test(
             f"eltwise-{exp_type}",
             input_shapes,
             datagen_func,
             comparison_func,
-            device,
-            test_args
+            pcie_slot,
+            test_args,
         )
 
     def test_run_eltwise_recip_op(
-        self, input_shapes, device, function_level_defaults, output_mem_config
+        self,
+        input_shapes,
+        pcie_slot,
+        function_level_defaults,
+        input_mem_config,
+        output_mem_config,
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
@@ -213,19 +255,29 @@ class TestEltwiseUnary:
             )
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
-        test_args.update({"output_mem_config": output_mem_config})
+        test_args.update(
+            {
+                "input_mem_config": input_mem_config,
+                "output_mem_config": output_mem_config,
+            }
+        )
         comparison_func = comparison_funcs.comp_pcc
         run_single_pytorch_test(
             "eltwise-recip",
             input_shapes,
             datagen_func,
             comparison_func,
-            device,
-            test_args
+            pcie_slot,
+            test_args,
         )
 
     def test_run_eltwise_sqrt_op(
-            self, input_shapes, device, function_level_defaults, output_mem_config,
+        self,
+        input_shapes,
+        pcie_slot,
+        function_level_defaults,
+        input_mem_config,
+        output_mem_config,
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
@@ -255,6 +307,7 @@ class TestEltwiseUnary:
         limit,
         device,
         function_level_defaults,
+        input_mem_config,
         output_mem_config,
     ):
         datagen_func = [
@@ -266,7 +319,12 @@ class TestEltwiseUnary:
         comparison_func = comparison_funcs.comp_equal
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args.update({f"{limit_type}_limit": limit})
-        test_args.update({"output_mem_config": output_mem_config})
+        test_args.update(
+            {
+                "input_mem_config": input_mem_config,
+                "output_mem_config": output_mem_config,
+            }
+        )
         run_single_pytorch_test(
             f"eltwise-relu_{relu_type}",
             input_shapes,
@@ -288,14 +346,20 @@ class TestEltwiseUnary:
         ],
     )
     def test_run_eltwise_cmp_ops(
-        self, fn_kind, input_shapes, device, function_level_defaults, output_mem_config,
+        self,
+        fn_kind,
+        input_shapes,
+        pcie_slot,
+        function_level_defaults,
+        input_mem_config,
+        output_mem_config,
     ):
         numel = torch.Size(input_shapes[0]).numel()
         low = 0 - numel // 2
         high = numel + low
         datagen_func = [
             generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_linspace, low = low, high = high),
+                partial(generation_funcs.gen_linspace, low=low, high=high),
                 torch.bfloat16,
             )
         ]
@@ -313,7 +377,14 @@ class TestEltwiseUnary:
         "range", [{"low": 1e-6, "high": 1.0}, {"low": 1, "high": 100000}]
     )
     def test_run_eltwise_log_ops(
-        self, log_kind, range, input_shapes, device, function_level_defaults, output_mem_config,
+        self,
+        log_kind,
+        range,
+        input_shapes,
+        pcie_slot,
+        function_level_defaults,
+        input_mem_config,
+        output_mem_config,
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
@@ -334,8 +405,13 @@ class TestEltwiseUnary:
 
     @pytest.mark.parametrize("trig_kind", ["sin", "cos"])
     def test_run_eltwise_periodic_trig_ops(
-        self, input_shapes, trig_kind, device, function_level_defaults
-        , output_mem_config
+        self,
+        input_shapes,
+        trig_kind,
+        pcie_slot,
+        function_level_defaults,
+        input_mem_config,
+        output_mem_config,
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
@@ -356,7 +432,14 @@ class TestEltwiseUnary:
     @pytest.mark.parametrize("input_value", [-1.0, 2.0])
     @pytest.mark.parametrize("exponent", [0, 1, 2, 3])
     def test_run_eltwise_power_op(
-            self, input_shapes, input_value, exponent, device, function_level_defaults, output_mem_config
+        self,
+        input_shapes,
+        input_value,
+        exponent,
+        pcie_slot,
+        function_level_defaults,
+        input_mem_config,
+        output_mem_config,
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
@@ -367,7 +450,12 @@ class TestEltwiseUnary:
         comparison_func = comparison_funcs.comp_equal
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args.update({"exponent": exponent})
-        test_args.update({"output_mem_config": output_mem_config})
+        test_args.update(
+            {
+                "input_mem_config": input_mem_config,
+                "output_mem_config": output_mem_config,
+            }
+        )
         run_single_pytorch_test(
             "eltwise-power",
             input_shapes,
@@ -380,7 +468,14 @@ class TestEltwiseUnary:
     @pytest.mark.parametrize("fn_kind", ["abs", "sign", "neg", "signbit"])
     @pytest.mark.parametrize("fill_val", [-1.0, 0.0, 1.0])
     def test_run_eltwise_sign_ops(
-        self, fn_kind, input_shapes, fill_val, device, function_level_defaults, output_mem_config,
+        self,
+        fn_kind,
+        input_shapes,
+        fill_val,
+        pcie_slot,
+        function_level_defaults,
+        input_mem_config,
+        output_mem_config,
     ):
         if is_wormhole_b0() and fn_kind == "signbit":
             pytest.skip("Signbit fails for WH B0 arch")
@@ -393,20 +488,31 @@ class TestEltwiseUnary:
             )
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
-        test_args.update({"output_mem_config": output_mem_config})
+        test_args.update(
+            {
+                "input_mem_config": input_mem_config,
+                "output_mem_config": output_mem_config,
+            }
+        )
         comparison_func = comparison_funcs.comp_equal
         run_single_pytorch_test(
             f"eltwise-{fn_kind}",
             input_shapes,
             datagen_func,
             comparison_func,
-            device,
-            test_args
+            pcie_slot,
+            test_args,
         )
 
     @pytest.mark.parametrize("value", [0.5])
     def test_run_eltwise_heaviside(
-        self, input_shapes, value, device, function_level_defaults, output_mem_config,
+        self,
+        input_shapes,
+        value,
+        pcie_slot,
+        function_level_defaults,
+        input_mem_config,
+        output_mem_config,
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
@@ -414,8 +520,13 @@ class TestEltwiseUnary:
             )
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
-        test_args.update({"scalar": value})
-        test_args.update({"output_mem_config": output_mem_config})
+        test_args.update({"value": value})
+        test_args.update(
+            {
+                "input_mem_config": input_mem_config,
+                "output_mem_config": output_mem_config,
+            }
+        )
         comparison_func = comparison_funcs.comp_equal
         run_single_pytorch_test(
             "eltwise-heaviside",
@@ -431,7 +542,14 @@ class TestEltwiseUnary:
     )
     @pytest.mark.parametrize("scalar", [-2.0, 1.0, 2.0, 8.0])
     def test_run_eltwise_binop_to_unary_ops(
-        self, unary_kind, input_shapes, device, scalar, function_level_defaults, output_mem_config,
+        self,
+        unary_kind,
+        input_shapes,
+        pcie_slot,
+        scalar,
+        function_level_defaults,
+        input_mem_config,
+        output_mem_config,
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
@@ -441,7 +559,12 @@ class TestEltwiseUnary:
         comparison_func = comparison_funcs.comp_pcc
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args.update({"scalar": scalar})
-        test_args.update({"output_mem_config": output_mem_config})
+        test_args.update(
+            {
+                "input_mem_config": input_mem_config,
+                "output_mem_config": output_mem_config,
+            }
+        )
         run_single_pytorch_test(
             f"eltwise-{unary_kind}",
             input_shapes,
@@ -456,7 +579,14 @@ class TestEltwiseUnary:
         "clip_range", ({"low": -2.0, "high": 2.0}, {"low": -5.5, "high": 27.5})
     )
     def test_run_eltwise_clip_ops(
-        self, clip_kind, clip_range, input_shapes, device, function_level_defaults, output_mem_config
+        self,
+        clip_kind,
+        clip_range,
+        input_shapes,
+        pcie_slot,
+        function_level_defaults,
+        input_mem_config,
+        output_mem_config,
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
@@ -466,7 +596,12 @@ class TestEltwiseUnary:
         comparison_func = comparison_funcs.comp_pcc
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args.update(clip_range)
-        test_args.update({"output_mem_config": output_mem_config})
+        test_args.update(
+            {
+                "input_mem_config": input_mem_config,
+                "output_mem_config": output_mem_config,
+            }
+        )
         run_single_pytorch_test(
             f"eltwise-{clip_kind}",
             input_shapes,
@@ -478,7 +613,13 @@ class TestEltwiseUnary:
 
     @pytest.mark.parametrize("alpha", [-0.5, 0, 0.5])
     def test_run_eltwise_elu_op(
-        self, input_shapes, alpha, device, function_level_defaults, output_mem_config,
+        self,
+        input_shapes,
+        alpha,
+        pcie_slot,
+        function_level_defaults,
+        input_mem_config,
+        output_mem_config,
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
@@ -487,7 +628,12 @@ class TestEltwiseUnary:
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args.update({"alpha": alpha})
-        test_args.update({"output_mem_config": output_mem_config})
+        test_args.update(
+            {
+                "input_mem_config": input_mem_config,
+                "output_mem_config": output_mem_config,
+            }
+        )
         comparison_func = comparison_funcs.comp_pcc
         if is_wormhole_b0():
             comparison_func = partial(comparison_func,pcc=0.889)
@@ -502,7 +648,13 @@ class TestEltwiseUnary:
 
     @pytest.mark.parametrize("negative_slope", [-0.5, 0, 0.5])
     def test_run_eltwise_leaky_relu_op(
-        self, input_shapes, negative_slope, device, function_level_defaults, output_mem_config,
+        self,
+        input_shapes,
+        negative_slope,
+        pcie_slot,
+        function_level_defaults,
+        input_mem_config,
+        output_mem_config,
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
@@ -511,9 +663,14 @@ class TestEltwiseUnary:
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args.update({"negative_slope": negative_slope})
-        test_args.update({"output_mem_config": output_mem_config})
+        test_args.update(
+            {
+                "input_mem_config": input_mem_config,
+                "output_mem_config": output_mem_config,
+            }
+        )
         if is_wormhole_b0():
-            comparison_func = partial(comparison_funcs.comp_pcc,pcc=0.87)
+            comparison_func = partial(comparison_funcs.comp_pcc, pcc=0.87)
         else:
             comparison_func = comparison_funcs.comp_pcc
         run_single_pytorch_test(
@@ -526,7 +683,12 @@ class TestEltwiseUnary:
         )
 
     def test_run_eltwise_log_sigmoid_op(
-        self, input_shapes, device, function_level_defaults, output_mem_config
+        self,
+        input_shapes,
+        pcie_slot,
+        function_level_defaults,
+        input_mem_config,
+        output_mem_config,
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
@@ -535,7 +697,12 @@ class TestEltwiseUnary:
         ]
         comparison_func = partial(comparison_funcs.comp_pcc)
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
-        test_args.update({"output_mem_config": output_mem_config})
+        test_args.update(
+            {
+                "input_mem_config": input_mem_config,
+                "output_mem_config": output_mem_config,
+            }
+        )
         run_single_pytorch_test(
             "eltwise-log_sigmoid",
             input_shapes,
@@ -546,7 +713,13 @@ class TestEltwiseUnary:
 
     @pytest.mark.parametrize("arc_trig_kind", ["asin", "acos"])
     def test_run_eltwise_arc_trig_ops(
-        self, input_shapes, arc_trig_kind, device, function_level_defaults, output_mem_config
+        self,
+        input_shapes,
+        arc_trig_kind,
+        pcie_slot,
+        function_level_defaults,
+        input_mem_config,
+        output_mem_config,
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
@@ -556,7 +729,12 @@ class TestEltwiseUnary:
         ]
         comparison_func = comparison_funcs.comp_pcc
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
-        test_args.update({"output_mem_config": output_mem_config})
+        test_args.update(
+            {
+                "input_mem_config": input_mem_config,
+                "output_mem_config": output_mem_config,
+            }
+        )
         run_single_pytorch_test(
             f"eltwise-{arc_trig_kind}",
             input_shapes,
@@ -568,7 +746,14 @@ class TestEltwiseUnary:
     @pytest.mark.parametrize("fn_kind", ["erf", "erfc"])
     @pytest.mark.parametrize("fast_and_appx", [True, False])
     def test_run_eltwise_erf_ops(
-        self, input_shapes, fn_kind, fast_and_appx, device, function_level_defaults, output_mem_config,
+        self,
+        input_shapes,
+        fn_kind,
+        fast_and_appx,
+        pcie_slot,
+        function_level_defaults,
+        input_mem_config,
+        output_mem_config,
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
@@ -577,7 +762,12 @@ class TestEltwiseUnary:
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args["fast_and_appx"] = fast_and_appx
-        test_args.update({"output_mem_config": output_mem_config})
+        test_args.update(
+            {
+                "input_mem_config": input_mem_config,
+                "output_mem_config": output_mem_config,
+            }
+        )
         comparison_func = comparison_funcs.comp_pcc
         run_single_pytorch_test(
             f"eltwise-{fn_kind}",
@@ -586,4 +776,36 @@ class TestEltwiseUnary:
             comparison_func,
             device,
             test_args,
+        )
+
+    @pytest.mark.parametrize("fn_kind", ["isinf", "isposinf", "isneginf", "isnan"])
+    def test_run_eltwise_arc_inf_nan_ops(
+        self,
+        input_shapes,
+        fn_kind,
+        pcie_slot,
+        function_level_defaults,
+        input_mem_config,
+        output_mem_config,
+    ):
+        datagen_func = [
+            generation_funcs.gen_func_with_cast(
+                partial(generation_funcs.gen_rand, low=-100, high=100),
+                torch.bfloat16,
+            )
+        ]
+        comparison_func = comparison_funcs.comp_equal
+        test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
+        test_args.update(
+            {
+                "input_mem_config": input_mem_config,
+                "output_mem_config": output_mem_config,
+            }
+        )
+        run_single_pytorch_test(
+            f"eltwise-{fn_kind}",
+            input_shapes,
+            datagen_func,
+            comparison_func,
+            pcie_slot,
         )

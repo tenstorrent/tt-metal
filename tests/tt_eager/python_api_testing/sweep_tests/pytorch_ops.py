@@ -175,6 +175,22 @@ def abs(x, *args, **kwargs):
     return x.abs()
 
 
+def isinf(x, *args, **kwargs):
+    return torch.isinf(x)
+
+
+def isposinf(x, *args, **kwargs):
+    return torch.isposinf(x)
+
+
+def isneginf(x, *args, **kwargs):
+    return torch.isneginf(x)
+
+
+def isnan(x, *args, **kwargs):
+    return torch.isnan(x)
+
+
 def ltz(x, *args, **kwargs):
     return (x < 0.0).to(x.dtype)
 

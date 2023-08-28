@@ -145,6 +145,10 @@ enum SfpuType {
     erf,
     erfc,
     rsqrt,
+    isinf,
+    isposinf,
+    isneginf,
+    isnan,
     unused,
 };
 }  // namespace ckernel

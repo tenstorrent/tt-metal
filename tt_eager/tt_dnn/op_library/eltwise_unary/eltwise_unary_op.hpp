@@ -20,7 +20,7 @@ namespace tt_metal {
 enum class UnaryOpType {
     EXP = 0, RECIP = 1, GELU = 2, RELU = 3, SQRT = 4, SIGMOID = 5, LOG = 6, TANH = 7, LOG2 = 8, LOG10 = 9, SIN = 10, COS = 11,
     ABS=12, SIGN=13, SQUARE=14, EQZ = 15, NEZ = 16, GTZ = 17, LTZ = 18, GEZ = 19, LEZ = 20, RELU_MAX = 21, RELU_MIN = 22, POWER = 23, LEAKY_RELU = 24, ELU = 25, EXP2 = 26, HEAVISIDE = 27,
-    EXPM1 = 28, SIGNBIT = 29, ASIN = 30, ACOS = 31, RSQRT = 32, RELU6 = 33, ATAN = 34, ERF = 35, ERFC = 36
+    EXPM1 = 28, SIGNBIT = 29, ASIN = 30, ACOS = 31, RSQRT = 32, RELU6 = 33, ATAN = 34, ERF = 35, ERFC = 36, ISINF = 37, ISPOSINF = 38, ISNEGINF = 39, ISNAN = 40
 };
 
 template <typename T>
@@ -118,6 +118,10 @@ constexpr auto cos = make_eltwise_unary<UnaryOpType::COS>{};
 constexpr auto asin = make_eltwise_unary<UnaryOpType::ASIN>{};
 constexpr auto acos = make_eltwise_unary<UnaryOpType::ACOS>{};
 constexpr auto abs = make_eltwise_unary<UnaryOpType::ABS>{};
+constexpr auto isinf = make_eltwise_unary<UnaryOpType::ISINF>{};
+constexpr auto isposinf = make_eltwise_unary<UnaryOpType::ISPOSINF>{};
+constexpr auto isneginf = make_eltwise_unary<UnaryOpType::ISNEGINF>{};
+constexpr auto isnan = make_eltwise_unary<UnaryOpType::ISNAN>{};
 constexpr auto sign = make_eltwise_unary<UnaryOpType::SIGN>{};
 constexpr auto signbit = make_eltwise_unary<UnaryOpType::SIGNBIT>{};
 constexpr auto square = make_eltwise_unary<UnaryOpType::SQUARE>{};
