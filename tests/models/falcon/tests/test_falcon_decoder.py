@@ -32,7 +32,7 @@ class PytorchFalconDecoderModel(torch.nn.Module):
             alibi=alibi,
             attention_mask=attention_mask,
             layer_past=layer_past,
-            use_cache=use_cache
+            use_cache=use_cache,
         )
         return result
 
@@ -143,7 +143,7 @@ def run_test_FalconDecoder_inference(
         alibi=None,
         attention_mask=attention_mask_bool,
         layer_past=layer_past,
-        use_cache=use_cache
+        use_cache=use_cache,
     )
 
     # TT hardware execution =================================================================
@@ -154,41 +154,50 @@ def run_test_FalconDecoder_inference(
         layer_num,
         configuration,
         max_position_embeddings,
-        llm_mode,
         model_config,
         tt_cache_path,
     )
 
     tt_out, tt_layer_present = tt_FalconDecoder_model(
         hidden_states=tt_decoder_input,
+        llm_mode=llm_mode,
         alibi=None,
         attention_mask=tt_attention_mask,
         user_id=user_id,
         layer_past=tt_layer_past,
         layer_past_len=kv_cache_len,
-        use_cache=use_cache
+        use_cache=use_cache,
     )
     tt_out = tt2torch_tensor(tt_out).squeeze(1)
 
-    tt_layer_present = (tt2torch_tensor(tt_layer_present[0]).squeeze(1), tt2torch_tensor(tt_layer_present[1]).squeeze(1))
+    tt_layer_present = (
+        tt2torch_tensor(tt_layer_present[0]).squeeze(1),
+        tt2torch_tensor(tt_layer_present[1]).squeeze(1),
+    )
     if llm_mode == "decode":
         tt_out = tt_out.transpose(0, 1)
-    tt_layer_present = (tt_layer_present[0][:, :kv_len, :], tt_layer_present[1][:, :kv_len, :])
+    tt_layer_present = (
+        tt_layer_present[0][:, :kv_len, :],
+        tt_layer_present[1][:, :kv_len, :],
+    )
 
     # check outputs ----------------------------------------------------------------------
     does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"Output: {output_pcc}")
 
-    does_pass2, output_pcc = comp_pcc(pytorch_layer_present[0], tt_layer_present[0], pcc)
+    does_pass2, output_pcc = comp_pcc(
+        pytorch_layer_present[0], tt_layer_present[0], pcc
+    )
     logger.info(f"K Cache: {output_pcc}")
 
     does_pass = does_pass and does_pass2
 
-    does_pass2, output_pcc = comp_pcc(pytorch_layer_present[1], tt_layer_present[1], pcc)
+    does_pass2, output_pcc = comp_pcc(
+        pytorch_layer_present[1], tt_layer_present[1], pcc
+    )
     logger.info(f"V Cache: {output_pcc}")
 
     does_pass = does_pass and does_pass2
-
 
     if does_pass:
         logger.info("Falcon Decoder output Passed!")
@@ -220,7 +229,7 @@ def test_FalconDecoder_inference(
     pcc,
     model_config_str,
     model_location_generator,
-    device
+    device,
 ):
     model_config = get_model_config(model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)

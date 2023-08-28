@@ -124,7 +124,6 @@ def run_test_FalconModel_inference(
         num_layers,
         configuration,
         max_position_embeddings,
-        llm_mode,
         model_config,
         tt_cache_path,
     )
@@ -134,13 +133,14 @@ def run_test_FalconModel_inference(
         model_inputs = torch.split(model_input, 1)
         tt_embeddings, tt_attention_mask = zip(
             *[
-                tt_FalconModel.model_preprocessing(m_i, kv_cache_len)
+                tt_FalconModel.model_preprocessing(m_i, kv_cache_len, llm_mode)
                 for m_i in model_inputs
             ]
         )
         for user_id in range(batch):
             tt_out, tt_layer_present = tt_FalconModel(
                 input_embeddings=tt_embeddings[user_id],
+                llm_mode=llm_mode,
                 attention_mask=tt_attention_mask[user_id],
                 user_id=user_id,
                 layer_past=tt_layer_past,
@@ -152,10 +152,11 @@ def run_test_FalconModel_inference(
 
     elif llm_mode == "decode":
         tt_embeddings, tt_attention_mask = tt_FalconModel.model_preprocessing(
-            model_input, kv_cache_len
+            model_input, kv_cache_len, llm_mode
         )
         tt_out, tt_layer_present = tt_FalconModel(
             input_embeddings=tt_embeddings,
+            llm_mode=llm_mode,
             attention_mask=tt_attention_mask,
             layer_past=tt_layer_past,
             layer_past_len=kv_cache_len,

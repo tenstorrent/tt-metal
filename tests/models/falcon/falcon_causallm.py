@@ -19,7 +19,6 @@ class TtFalconCausalLM(TtFalconModelShared):
         num_layers,
         config,
         max_position_embeddings,
-        llm_mode,
         model_config,
         tt_cache_path,
     ):
@@ -32,7 +31,6 @@ class TtFalconCausalLM(TtFalconModelShared):
             num_layers=num_layers,
             config=config,
             max_position_embeddings=max_position_embeddings,
-            llm_mode=llm_mode,
             model_config=model_config,
             tt_cache_path=tt_cache_path,
         )
@@ -57,19 +55,21 @@ class TtFalconCausalLM(TtFalconModelShared):
     def forward(
         self,
         input_embeddings: tt_lib.tensor.Tensor,
+        llm_mode: str,
         attention_mask: tt_lib.tensor.Tensor = None,
         user_id: int = 0,
         layer_past: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
         layer_past_len: int = 0,
-        use_cache: bool = False
+        use_cache: bool = False,
     ) -> tt_lib.tensor.Tensor:
         hidden_states, presents = super().forward(
             input_embeddings=input_embeddings,
             attention_mask=attention_mask,
+            llm_mode=llm_mode,
             user_id=user_id,
             layer_past=layer_past,
             layer_past_len=layer_past_len,
-            use_cache=use_cache
+            use_cache=use_cache,
         )
         lm_logits = tt_lib.tensor.falcon_lm_head_matmul(
             hidden_states,

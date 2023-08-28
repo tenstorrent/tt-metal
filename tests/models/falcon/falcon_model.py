@@ -23,7 +23,6 @@ class TtFalconModelShared(torch.nn.Module):
         num_layers,
         config,
         max_position_embeddings,
-        llm_mode,
         model_config,
         tt_cache_path,
     ):
@@ -36,7 +35,6 @@ class TtFalconModelShared(torch.nn.Module):
         self.base_url = base_url
         self.config = config
         self.max_position_embeddings = max_position_embeddings
-        self.llm_mode = llm_mode
         self.model_config = model_config
 
         # So far on CPU until we add embeddings support on device
@@ -55,7 +53,6 @@ class TtFalconModelShared(torch.nn.Module):
                     layer_num=layer_num,
                     config=config,
                     max_position_embeddings=max_position_embeddings,
-                    llm_mode=llm_mode,
                     model_config=model_config,
                     tt_cache_path=tt_cache_path,
                 )
@@ -107,7 +104,7 @@ class TtFalconModelShared(torch.nn.Module):
             )[0]
         self.layernorm_eps = config.layer_norm_epsilon
 
-    def model_preprocessing(self, input_ids, kv_cache_len):
+    def model_preprocessing(self, input_ids, kv_cache_len, llm_mode):
         # input_ids: torch.Tensor with shape [batch, seq_len]
 
         assert input_ids.dim() == 2
@@ -117,7 +114,7 @@ class TtFalconModelShared(torch.nn.Module):
 
         # Generate input and attention_mask ---------------------------------------------
         # TODO: Generate attention_mask on device
-        if self.llm_mode == "prefill":
+        if llm_mode == "prefill":
             q_len, kv_len = seq_len, seq_len
             assert batch == 1, "For prefill, batch must be 1!"
             assert q_len % 32 == 0, "For prefill, seq_len must be multiple of 32!"
@@ -140,7 +137,7 @@ class TtFalconModelShared(torch.nn.Module):
                 tt_dtype=self.model_config["ATTN_MASK_DTYPE"],
             )
 
-        elif self.llm_mode == "decode":
+        elif llm_mode == "decode":
             q_len, kv_len = seq_len, kv_cache_len + 1
             assert batch % 32 == 0, "For decode, batch must be multiple of 32!"
             assert q_len == 1, "For decode, q_len must be 1!"
@@ -174,7 +171,7 @@ class TtFalconModelShared(torch.nn.Module):
 
         else:
             raise NotImplementedError(
-                f"Llm mode {self.llm_mode} is not supported! Must be one of prefill or decode."
+                f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode."
             )
 
         return tt_embeddings, tt_attention_mask
@@ -183,6 +180,7 @@ class TtFalconModelShared(torch.nn.Module):
     def forward(
         self,
         input_embeddings: tt_lib.tensor.Tensor,
+        llm_mode: str,
         attention_mask: tt_lib.tensor.Tensor = None,
         user_id: int = 0,
         layer_past: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
@@ -196,6 +194,7 @@ class TtFalconModelShared(torch.nn.Module):
                 hidden_states=layer_output,
                 alibi=None,
                 attention_mask=attention_mask,
+                llm_mode=llm_mode,
                 user_id=user_id,
                 layer_past=layer_past[idx],
                 layer_past_len=layer_past_len,
@@ -240,7 +239,6 @@ class TtFalconModel(TtFalconModelShared):
         num_layers,
         config,
         max_position_embeddings,
-        llm_mode,
         model_config,
         tt_cache_path,
     ):
@@ -251,7 +249,6 @@ class TtFalconModel(TtFalconModelShared):
             num_layers=num_layers,
             config=config,
             max_position_embeddings=max_position_embeddings,
-            llm_mode=llm_mode,
             model_config=model_config,
             tt_cache_path=tt_cache_path,
         )
@@ -259,6 +256,7 @@ class TtFalconModel(TtFalconModelShared):
     def forward(
         self,
         input_embeddings: tt_lib.tensor.Tensor,
+        llm_mode: str,
         attention_mask: tt_lib.tensor.Tensor = None,
         user_id: int = 0,
         layer_past: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
@@ -267,6 +265,7 @@ class TtFalconModel(TtFalconModelShared):
     ) -> tt_lib.tensor.Tensor:
         hidden_states, presents = super().forward(
             input_embeddings=input_embeddings,
+            llm_mode=llm_mode,
             attention_mask=attention_mask,
             user_id=user_id,
             layer_past=layer_past,

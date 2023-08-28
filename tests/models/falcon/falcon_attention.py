@@ -106,7 +106,6 @@ class TtFalconAttention(nn.Module):
         hidden_size: int,
         num_heads: int,
         max_position_embeddings: int = 2048,
-        llm_mode: str = "prefill",
         model_config=None,
         tt_cache_path=None,
     ):
@@ -115,7 +114,6 @@ class TtFalconAttention(nn.Module):
         self.num_heads = num_heads
         self.head_dim = hidden_size // num_heads
         self.max_position_embeddings = max_position_embeddings
-        self.llm_mode = llm_mode
         self.device = device
         self.state_dict = state_dict
         self.model_config = model_config
@@ -188,6 +186,7 @@ class TtFalconAttention(nn.Module):
         hidden_states: tt_lib.tensor.Tensor,
         alibi: torch.Tensor,
         attention_mask: torch.Tensor,
+        llm_mode: str,
         user_id: int = 0,
         layer_past: Optional[Tuple[tt_lib.tensor.Tensor]] = None,
         layer_past_len: int = 0,
@@ -203,11 +202,11 @@ class TtFalconAttention(nn.Module):
             not output_attentions
         )  # hf_reference Falcon Attention doesn't support this
 
-        if self.llm_mode == "prefill":
+        if llm_mode == "prefill":
             batch = hidden_states.shape()[0]
             q_len = hidden_states.shape()[2]
             assert layer_past is not None
-        elif self.llm_mode == "decode":
+        elif llm_mode == "decode":
             batch = hidden_states.shape()[2]
             q_len = hidden_states.shape()[0]
             # We always store max_position_embeddings for kv_cache,
@@ -243,20 +242,20 @@ class TtFalconAttention(nn.Module):
         #########################
         ### ROTARY EMBEDDINGS ###
         #########################
-        if self.llm_mode == "prefill":
+        if llm_mode == "prefill":
             query_layer = self.rotary_embedding(query_layer)
             key_layer = self.rotary_embedding(key_layer)
-        elif self.llm_mode == "decode":
+        elif llm_mode == "decode":
             query_layer = self.rotary_embedding(query_layer, layer_past_len + 1)
             key_layer = self.rotary_embedding(key_layer, layer_past_len + 1)
 
         ######################
         ### K CACHE UPDATE ###
         ######################
-        if self.llm_mode == "prefill":
+        if llm_mode == "prefill":
             tt_lib.tensor.fill_cache(layer_past[0], key_layer, user_id)
 
-        elif self.llm_mode == "decode":
+        elif llm_mode == "decode":
             # Update kv_cache in place
             tt_lib.tensor.update_cache(layer_past[0], key_layer, layer_past_len)
             # key and value layers will have kv_seq_len padded to nearest 32
@@ -281,14 +280,14 @@ class TtFalconAttention(nn.Module):
         )
         key_layer.deallocate()
 
-        if self.llm_mode == "prefill":
+        if llm_mode == "prefill":
             attn_weights = tt_lib.tensor.matmul(
                 query_layer,
                 key_layer_transposed,
                 output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
                 # output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"], # Not currently supported
             )
-        elif self.llm_mode == "decode":
+        elif llm_mode == "decode":
             attn_weights = tt_lib.operations.primary.transformers.attn_matmul(
                 query_layer,
                 key_layer_transposed,
@@ -335,10 +334,10 @@ class TtFalconAttention(nn.Module):
         ######################
         ### V CACHE UPDATE ###
         ######################
-        if self.llm_mode == "prefill":
+        if llm_mode == "prefill":
             tt_lib.tensor.fill_cache(layer_past[1], value_layer, user_id)
 
-        elif self.llm_mode == "decode":
+        elif llm_mode == "decode":
             # Update kv_cache in place
             tt_lib.tensor.update_cache(layer_past[1], value_layer, layer_past_len)
             # key and value layers will have kv_seq_len padded to nearest 32
@@ -354,14 +353,14 @@ class TtFalconAttention(nn.Module):
         ########################
         ### POST-SOFTMAX MM ###
         ########################
-        if self.llm_mode == "prefill":
+        if llm_mode == "prefill":
             attn_output = tt_lib.tensor.matmul(
                 attn_weights,
                 value_layer,
                 output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
                 # output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"], # Not currently supported
             )
-        elif self.llm_mode == "decode":
+        elif llm_mode == "decode":
             attn_output = tt_lib.operations.primary.transformers.attn_matmul(
                 attn_weights,
                 value_layer,

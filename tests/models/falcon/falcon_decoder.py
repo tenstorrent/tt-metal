@@ -19,7 +19,6 @@ class TtFalconDecoderLayer(nn.Module):
         layer_num,
         config,
         max_position_embeddings,
-        llm_mode,
         model_config,
         tt_cache_path,
     ):
@@ -44,7 +43,6 @@ class TtFalconDecoderLayer(nn.Module):
             hidden_size=config.hidden_size,
             num_heads=config.num_attention_heads,
             max_position_embeddings=max_position_embeddings,
-            llm_mode=llm_mode,
             model_config=model_config,
             tt_cache_path=tt_cache_path,
         )
@@ -96,6 +94,7 @@ class TtFalconDecoderLayer(nn.Module):
         hidden_states: tt_lib.tensor.Tensor,
         alibi: torch.Tensor,
         attention_mask: torch.Tensor,
+        llm_mode: str,
         user_id: int = 0,
         layer_past: Optional[Tuple[tt_lib.tensor.Tensor]] = None,
         layer_past_len: int = 0,
@@ -139,6 +138,7 @@ class TtFalconDecoderLayer(nn.Module):
             hidden_states=layernorm_output,
             alibi=alibi,
             attention_mask=attention_mask,
+            llm_mode=llm_mode,
             user_id=user_id,
             layer_past=layer_past,
             layer_past_len=layer_past_len,
