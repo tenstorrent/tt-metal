@@ -322,6 +322,15 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.bias_gelu_unary
 
+.. autofunction:: tt_lib.tensor.isinf
+
+.. autofunction:: tt_lib.tensor.isposinf
+
+.. autofunction:: tt_lib.tensor.isneginf
+
+.. autofunction:: tt_lib.tensor.isnan
+
+
 Tensor relational operations
 ----------------------------------
 .. autofunction:: tt_lib.tensor.gtz
@@ -544,11 +553,3 @@ Other Operations
 .. autofunction:: tt_lib.tensor.std_hw
 
 .. autofunction:: tt_lib.tensor.normalize_hw
-
-.. autofunction:: tt_lib.tensor.isinf
-
-.. autofunction:: tt_lib.tensor.isposinf
-
-.. autofunction:: tt_lib.tensor.isneginf
-
-.. autofunction:: tt_lib.tensor.isnan
