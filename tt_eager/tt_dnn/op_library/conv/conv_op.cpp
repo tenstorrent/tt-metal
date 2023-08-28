@@ -1379,7 +1379,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
 inline Tensor conv_(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, const vector<int> conv_params,
                     uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
                     uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels,
-                    bool use_address_map, bool use_fast_reader, bool untilize_out, bool has_bias = false) {
+                    bool use_address_map, bool use_fast_reader, bool untilize_out, bool has_bias = false, MathFidelity math_fidelity = MathFidelity::HiFi4) {
     TT_ASSERT(b.layout() == Layout::TILE); // Weights should already be formatted
     auto padded_a_shape = Shape({a.shape()[0], a.shape()[1], a.shape()[2], round_up(a.shape()[3], 16)});
     FormatParams input_a_format_params = {.pad_shape=padded_a_shape, .pad_value=0.0, .target_layout=Layout::ROW_MAJOR};
@@ -1390,7 +1390,7 @@ inline Tensor conv_(const Tensor& a, const Tensor &b, std::optional<const Tensor
     }
     auto output_layout = untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
     return operation::run_without_autoformat(
-        Conv(act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, conv_params, output_channels, use_address_map, use_fast_reader, untilize_out, has_bias),
+        Conv(act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, conv_params, output_channels, use_address_map, use_fast_reader, untilize_out, has_bias, math_fidelity),
         {a, b},
         {bias}).at(0);
 }
@@ -1401,8 +1401,8 @@ Tensor conv(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, 
 }
 
 Tensor conv_with_fast_reader(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
-             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool untilize_out, bool has_bias) {
-    return conv_(a, b, bias, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, false, true, untilize_out, has_bias);
+             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool untilize_out, bool has_bias, MathFidelity math_fidelity) {
+    return conv_(a, b, bias, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, false, true, untilize_out, has_bias, math_fidelity);
 }
 
 Tensor conv_with_address_map(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
@@ -1491,6 +1491,7 @@ tt::stl::reflection::Attributes Conv::attributes() const {
         {"use_address_map", this->use_address_map},
         {"use_fast_reader", this->use_fast_reader},
         {"untilize_out", this->untilize_out},
+        {"math_fidelity", this->math_fidelity},
     };
 }
 

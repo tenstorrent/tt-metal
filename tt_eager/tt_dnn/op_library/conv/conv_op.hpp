@@ -23,7 +23,8 @@ struct Conv {
     const std::vector<int> conv_params;
     const uint32_t act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels;
     bool use_address_map, use_fast_reader, untilize_out, has_bias;
-    Conv(uint32_t act_bh, uint32_t act_bw, uint32_t weight_bw, uint32_t out_sh, uint32_t out_sw, const std::vector<int>&c_params, uint32_t output_channels, bool address_map, bool fast_reader, bool untile_out, bool has_bias)
+    MathFidelity math_fidelity;
+    Conv(uint32_t act_bh, uint32_t act_bw, uint32_t weight_bw, uint32_t out_sh, uint32_t out_sw, const std::vector<int>&c_params, uint32_t output_channels, bool address_map, bool fast_reader, bool untile_out, bool has_bias, MathFidelity mfidelity)
         : act_block_h_ntiles(act_bh),
           act_block_w_ntiles(act_bw),
           weight_block_w_ntiles(weight_bw),
@@ -34,7 +35,8 @@ struct Conv {
           use_address_map(address_map),
           use_fast_reader(fast_reader),
           untilize_out(untile_out),
-          has_bias(has_bias) {}
+          has_bias(has_bias),
+          math_fidelity(mfidelity) {}
 
     void validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
@@ -47,7 +49,7 @@ Tensor conv(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, 
              uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool has_bias);
 
 Tensor conv_with_fast_reader(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
-             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool untilize_out, bool has_bias);
+             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool untilize_out, bool has_bias, MathFidelity math_fidelity = MathFidelity::HiFi4);
 
 operation::ProgramWithCallbacks conv_single_core(const Tensor& A, const Tensor& B, std::optional<const Tensor> bias, vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
              uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool has_bias, Tensor& output); // Tilizes a, untilizes b
