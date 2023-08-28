@@ -1,0 +1,49 @@
+# Every variable in subdir must be prefixed with subdir (emulating a namespace)
+TT_EAGER_TESTS += \
+		 tests/tt_eager/dtx/unit_tests \
+		 tests/tt_eager/dtx/tensor \
+		 tests/tt_eager/dtx/overlap \
+		 tests/tt_eager/dtx/collapse_transformations \
+		 tests/tt_eager/dtx/test_dtx \
+		 tests/tt_eager/dtx/test_dtx_tilized_row_to_col_major \
+		 tests/tt_eager/ops/test_average_pool \
+		 tests/tt_eager/ops/test_eltwise_binary_op \
+		 tests/tt_eager/ops/test_eltwise_unary_op \
+		 tests/tt_eager/ops/test_softmax_op \
+		 tests/tt_eager/ops/test_layernorm_op \
+		 tests/tt_eager/ops/test_transpose_op \
+		 tests/tt_eager/ops/test_transpose_wh_single_core \
+		 tests/tt_eager/ops/test_transpose_wh_multi_core \
+		 tests/tt_eager/ops/test_reduce_op \
+		 tests/tt_eager/ops/test_bcast_op \
+		 tests/tt_eager/ops/test_bmm_op \
+		 tests/tt_eager/ops/test_pad_op \
+		 tests/tt_eager/ops/test_tilize_op \
+		 tests/tt_eager/ops/test_tilize_zero_padding \
+		 tests/tt_eager/ops/test_tilize_op_channels_last \
+		 tests/tt_eager/ops/test_tilize_zero_padding_channels_last \
+		 tests/tt_eager/tensors/test_copy_and_move \
+		 tests/tt_eager/tensors/test_host_device_loopback \
+
+TT_EAGER_TESTS_SRCS = $(addprefix tests/tt_eager/, $(addsuffix .cpp, $(TT_EAGER_TESTS:tests/%=%)))
+
+TT_EAGER_TEST_INCLUDES = $(TEST_INCLUDES) $(TT_EAGER_INCLUDES)
+TT_EAGER_TESTS_LDFLAGS = -ltensor -ltt_dnn -ldtx -ltt_metal_impl -ltt_metal_detail -ltt_metal -lllrt -ltt_gdb -ldevice -lbuild_kernels_for_riscv -ldl -lcommon -lprofiler -ltracy -lstdc++fs -pthread -lyaml-cpp -lgtest
+
+TT_EAGER_TESTS_OBJS = $(addprefix $(OBJDIR)/, $(TT_EAGER_TESTS_SRCS:.cpp=.o))
+TT_EAGER_TESTS_DEPS = $(addprefix $(OBJDIR)/, $(TT_EAGER_TESTS_SRCS:.cpp=.d))
+
+-include $(TT_EAGER_TESTS_DEPS)
+
+tests/tt_eager: $(TT_EAGER_TESTS)
+tests/tt_eager/%: $(TESTDIR)/tt_eager/%;
+
+.PRECIOUS: $(TESTDIR)/tt_eager/%
+$(TESTDIR)/tt_eager/%: $(OBJDIR)/tt_eager/tests/%.o $(TT_DNN_LIB)
+	@mkdir -p $(@D)
+	$(CXX) $(CFLAGS) $(CXXFLAGS) $(TT_EAGER_TEST_INCLUDES) -o $@ $^ $(LDFLAGS) $(TT_EAGER_TESTS_LDFLAGS)
+
+.PRECIOUS: $(OBJDIR)/tt_eager/tests/%.o
+$(OBJDIR)/tt_eager/tests/%.o: tests/tt_eager/%.cpp
+	@mkdir -p $(@D)
+	$(CXX) $(CFLAGS) $(CXXFLAGS) $(TT_EAGER_TEST_INCLUDES) -c -o $@ $<

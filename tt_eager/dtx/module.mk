@@ -1,7 +1,7 @@
 # Every variable in subdir must be prefixed with subdir (emulating a namespace)
 DTX_LIB = $(LIBDIR)/libdtx.a
 DTX_DEFINES =
-DTX_INCLUDES = $(LIBS_INCLUDES)
+DTX_INCLUDES = $(TT_EAGER_INCLUDES)
 DTX_LDFLAGS = -lcommon -lllrt -ltt_metal -ltensor
 DTX_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
 

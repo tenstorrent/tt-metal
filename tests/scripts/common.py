@@ -16,6 +16,7 @@ class TestSuiteType(Enum):
     LLRT = auto()
     TT_METAL = auto()
     PROGRAMMING_EXAMPLE = auto()
+    TT_EAGER = auto()
     UNKNOWN = auto()
 
 
@@ -74,7 +75,7 @@ def default_build_full_path_to_test(namespace, executable_name, extra_params):
 
 
 def build_executable_command_for_test(namespace: str, test_entry: TestEntry, timeout, tt_arch, build_full_path_to_test):
-    assert namespace in ("build_kernels_for_riscv", "llrt", "tt_metal", "programming_example")
+    assert namespace in ("build_kernels_for_riscv", "llrt", "tt_metal", "programming_example", "tt_eager")
 
     test_name = test_entry.test_name
     executable_name = test_entry.executable_name

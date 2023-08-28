@@ -26,6 +26,8 @@ def add_test_type_specific_args_(argparser, test_suite_type=TestSuiteType.UNKNOW
         pass
     elif test_suite_type == TestSuiteType.TT_METAL:
         pass
+    elif test_suite_type == TestSuiteType.TT_EAGER:
+        pass
     else:
         raise Exception("You must specify a test type")
 

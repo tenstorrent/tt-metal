@@ -80,7 +80,7 @@ TT_DNN_SRCS = \
 
 TT_DNN_LIB = $(LIBDIR)/libtt_dnn.a
 TT_DNN_DEFINES =
-TT_DNN_INCLUDES = $(LIBS_INCLUDES)
+TT_DNN_INCLUDES = $(TT_EAGER_INCLUDES)
 TT_DNN_LDFLAGS = -lcommon -lllrt -ltt_metal -ltensor -ldtx
 TT_DNN_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
 

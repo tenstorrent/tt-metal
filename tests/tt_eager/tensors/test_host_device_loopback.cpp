@@ -1,7 +1,9 @@
 #include "tt_metal/host_api.hpp"
 #include "tensor/tensor.hpp"
-#include "tt_dnn/op_library/bmm/bmm_op.hpp"
-#include "constants.hpp"
+#include "tensor/owned_buffer.hpp"
+#include "tensor/owned_buffer_functions.hpp"
+#include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
+#include "common/constants.hpp"
 #include "tt_numpy/functions.hpp"
 
 #include <algorithm>
@@ -13,9 +15,33 @@ using namespace tt_metal;
 using namespace constants;
 
 
-//////////////////////////////////////////////////////////////////////////////////////////
-// TODO: explain what test does
-//////////////////////////////////////////////////////////////////////////////////////////
+bool test_single_tile_single_dram_bank_loopback(Device *device) {
+    bool pass = true;
+    Shape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
+
+    Tensor host_a = tt::numpy::random::random(single_tile_shape).to(Layout::TILE);
+    Tensor device_a = host_a.to(device);
+    Tensor loopbacked_a = device_a.cpu();
+    auto host_a_data = owned_buffer::get_as<bfloat16>(host_a);
+    auto loopbacked_a_data = owned_buffer::get_as<bfloat16>(loopbacked_a);
+    pass &= host_a_data == loopbacked_a_data;
+
+    return pass;
+}
+
+bool test_multi_tile_multi_dram_bank_loopback(Device *device) {
+    bool pass = true;
+    Shape multi_tile_shape = {1, 1, 4*TILE_HEIGHT, 3*TILE_WIDTH};
+
+    Tensor host_a = tt::numpy::random::random(multi_tile_shape).to(Layout::TILE);
+    Tensor device_a = host_a.to(device);
+    Tensor loopbacked_a = device_a.cpu();
+    auto host_a_data = owned_buffer::get_as<bfloat16>(host_a);
+    auto loopbacked_a_data = owned_buffer::get_as<bfloat16>(loopbacked_a);
+    pass &= host_a_data == loopbacked_a_data;
+    return pass;
+}
+
 int main(int argc, char **argv) {
     bool pass = true;
 
@@ -41,32 +67,11 @@ int main(int argc, char **argv) {
 
         pass &= tt_metal::InitializeDevice(device);
 
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Application Setup
-        ////////////////////////////////////////////////////////////////////////////
-        // Mt, Nt, Kt = num tiles, B = batch
-        uint32_t Mt = 3;
-        uint32_t Kt = 2;
-        uint32_t Nt = 4;
-        uint32_t B = 5;
-        Shape shapea = {B, 1, Mt*TILE_HEIGHT, Kt*TILE_WIDTH};
-        Shape shapeb = {B, 1, Kt*TILE_HEIGHT, Nt*TILE_WIDTH};
-        Shape shapeb1 = {1, 1, Kt*TILE_HEIGHT, Nt*TILE_WIDTH};
+        pass &= test_single_tile_single_dram_bank_loopback(device);
 
-        // Allocates a DRAM buffer on device populated with values specified by initialize
-        Tensor a = tt::numpy::random::random(shapea).to(Layout::TILE).to(device);
-        Tensor b = tt::numpy::zeros(shapeb, DataType::BFLOAT16).to(Layout::TILE).to(device);
-        Tensor b1 = tt::numpy::zeros(shapeb1, DataType::BFLOAT16).to(Layout::TILE).to(device);
+        pass &= test_multi_tile_multi_dram_bank_loopback(device);
 
-        Tensor mm = bmm(a, b).cpu();
-        Tensor mm1 = matmul(a, b1).cpu();
-
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Validation & Teardown
-        ////////////////////////////////////////////////////////////////////////////
-        Tensor host_a = a.cpu(); // Move tensor a to host to validate
-
-        pass &= tt_metal::CloseDevice(device);;
+        pass &= tt_metal::CloseDevice(device);
 
     } catch (const std::exception &e) {
         pass = false;

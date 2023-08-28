@@ -8,7 +8,7 @@ TENSOR_SRCS = \
 
 TENSOR_LIB = $(LIBDIR)/libtensor.a
 TENSOR_DEFINES =
-TENSOR_INCLUDES = $(LIBS_INCLUDES)
+TENSOR_INCLUDES = $(TT_EAGER_INCLUDES)
 TENSOR_LDFLAGS = -lcommon -lllrt -ltt_metal
 TENSOR_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
 

@@ -1,10 +1,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tensor/tensor.hpp"
-#include "tensor/owned_buffer.hpp"
-#include "tensor/owned_buffer_functions.hpp"
-#include "tensor/owned_buffer_functions.hpp"
-#include "tt_dnn/op_library/tilize/tilize_op.hpp"
-#include "constants.hpp"
+#include "tt_dnn/op_library/bmm/bmm_op.hpp"
+#include "common/constants.hpp"
 #include "tt_numpy/functions.hpp"
 
 #include <algorithm>
@@ -19,7 +16,6 @@ using namespace constants;
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
-
 int main(int argc, char **argv) {
     bool pass = true;
 
@@ -48,21 +44,28 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        Shape shape = {1, 32, 32, 64};
+        // Mt, Nt, Kt = num tiles, B = batch
+        uint32_t Mt = 3;
+        uint32_t Kt = 2;
+        uint32_t Nt = 4;
+        uint32_t B = 5;
+        Shape shapea = {B, 1, Mt*TILE_HEIGHT, Kt*TILE_WIDTH};
+        Shape shapeb = {B, 1, Kt*TILE_HEIGHT, Nt*TILE_WIDTH};
+        Shape shapeb1 = {1, 1, Kt*TILE_HEIGHT, Nt*TILE_WIDTH};
+
         // Allocates a DRAM buffer on device populated with values specified by initialize
-        Tensor a = tt::numpy::random::random(shape).to(device);
-        Tensor b = tilize(a);
-        Tensor c = b.cpu();
+        Tensor a = tt::numpy::random::random(shapea).to(Layout::TILE).to(device);
+        Tensor b = tt::numpy::zeros(shapeb, DataType::BFLOAT16).to(Layout::TILE).to(device);
+        Tensor b1 = tt::numpy::zeros(shapeb1, DataType::BFLOAT16).to(Layout::TILE).to(device);
+
+        Tensor mm = bmm(a, b).cpu();
+        Tensor mm1 = matmul(a, b1).cpu();
+
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
-        std::cout << "Moving src data to host to validate" << std::endl;
         Tensor host_a = a.cpu(); // Move tensor a to host to validate
-        Tensor g = Tensor(host_a.storage(), shape, DataType::BFLOAT16, Layout::ROW_MAJOR);
-        Tensor golden = g.to(Layout::TILE);
-        auto golden_vec = owned_buffer::get_as<bfloat16>(golden);
-        auto result_vec = owned_buffer::get_as<bfloat16>(c);
-        pass &= (result_vec == golden_vec);
+
         pass &= tt_metal::CloseDevice(device);;
 
     } catch (const std::exception &e) {

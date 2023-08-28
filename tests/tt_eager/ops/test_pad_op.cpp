@@ -1,6 +1,6 @@
 #include <cmath>
 
-#include "constants.hpp"
+#include "common/constants.hpp"
 #include "tensor/tensor.hpp"
 #include "tensor/owned_buffer.hpp"
 #include "tt_metal/host_api.hpp"

@@ -4,7 +4,7 @@
 #include "tt_numpy/functions.hpp"
 
 #include "tensor/tensor.hpp"
-#include "constants.hpp"
+#include "common/constants.hpp"
 
 using tt::tt_metal::Host;
 using tt::tt_metal::Device;

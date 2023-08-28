@@ -2,9 +2,9 @@
 #include "tensor/tensor.hpp"
 #include "tensor/owned_buffer.hpp"
 #include "tensor/owned_buffer_functions.hpp"
-#include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
-#include "constants.hpp"
-#include "tt_numpy/functions.hpp"
+#include "tt_dnn/op_library/tilize/tilize_op.hpp"
+#include "common/constants.hpp"
+#include <tt_numpy/functions.hpp>
 
 #include <algorithm>
 #include <functional>
@@ -15,32 +15,9 @@ using namespace tt_metal;
 using namespace constants;
 
 
-bool test_single_tile_single_dram_bank_loopback(Device *device) {
-    bool pass = true;
-    Shape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
-
-    Tensor host_a = tt::numpy::random::random(single_tile_shape).to(Layout::TILE);
-    Tensor device_a = host_a.to(device);
-    Tensor loopbacked_a = device_a.cpu();
-    auto host_a_data = owned_buffer::get_as<bfloat16>(host_a);
-    auto loopbacked_a_data = owned_buffer::get_as<bfloat16>(loopbacked_a);
-    pass &= host_a_data == loopbacked_a_data;
-
-    return pass;
-}
-
-bool test_multi_tile_multi_dram_bank_loopback(Device *device) {
-    bool pass = true;
-    Shape multi_tile_shape = {1, 1, 4*TILE_HEIGHT, 3*TILE_WIDTH};
-
-    Tensor host_a = tt::numpy::random::random(multi_tile_shape).to(Layout::TILE);
-    Tensor device_a = host_a.to(device);
-    Tensor loopbacked_a = device_a.cpu();
-    auto host_a_data = owned_buffer::get_as<bfloat16>(host_a);
-    auto loopbacked_a_data = owned_buffer::get_as<bfloat16>(loopbacked_a);
-    pass &= host_a_data == loopbacked_a_data;
-    return pass;
-}
+//////////////////////////////////////////////////////////////////////////////////////////
+// TODO: explain what test does
+//////////////////////////////////////////////////////////////////////////////////////////
 
 int main(int argc, char **argv) {
     bool pass = true;
@@ -67,10 +44,24 @@ int main(int argc, char **argv) {
 
         pass &= tt_metal::InitializeDevice(device);
 
-        pass &= test_single_tile_single_dram_bank_loopback(device);
+        ////////////////////////////////////////////////////////////////////////////
+        //                      Application Setup
+        ////////////////////////////////////////////////////////////////////////////
+        Shape shape = {1, 64, 32, 64};
+        // Allocates a DRAM buffer on device populated with values specified by initialize
+        Tensor a =  tt::numpy::random::random(shape).to(device);
+        Tensor b = tilize(a);
 
-        pass &= test_multi_tile_multi_dram_bank_loopback(device);
-
+        Tensor c = b.cpu();
+        ////////////////////////////////////////////////////////////////////////////
+        //                      Validation & Teardown
+        ////////////////////////////////////////////////////////////////////////////
+        std::cout << "Moving src data to host to validate" << std::endl;
+        Tensor host_a = a.cpu(); // Move tensor a to host to validate
+        Tensor golden = host_a.to(Layout::TILE);
+        auto golden_vec = owned_buffer::get_as<bfloat16>(golden);
+        auto result_vec = owned_buffer::get_as<bfloat16>(c);
+        pass &= (result_vec == golden_vec);
         pass &= tt_metal::CloseDevice(device);
 
     } catch (const std::exception &e) {

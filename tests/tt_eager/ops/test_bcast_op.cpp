@@ -1,10 +1,9 @@
 #include "tt_metal/host_api.hpp"
 #include "tensor/tensor.hpp"
-#include "tensor/owned_buffer.hpp"
-#include "tensor/owned_buffer_functions.hpp"
-#include "tt_dnn/op_library/tilize/tilize_op.hpp"
-#include "constants.hpp"
-#include "tt_numpy/functions.hpp"
+#include "tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "common/constants.hpp"
+#include "third_party/magic_enum/magic_enum.hpp"
+#include <tt_numpy/functions.hpp>
 
 #include <algorithm>
 #include <functional>
@@ -14,11 +13,9 @@ using namespace tt;
 using namespace tt_metal;
 using namespace constants;
 
-
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
-
 int main(int argc, char **argv) {
     bool pass = true;
 
@@ -42,41 +39,29 @@ int main(int argc, char **argv) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(arch, pci_express_slot);
 
-        pass &= tt_metal::InitializeDevice(device);
+        pass &= InitializeDevice(device);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        Shape shape = {1, 32, 45, 64};
+        Shape shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
         // Allocates a DRAM buffer on device populated with values specified by initialize
-        Tensor a =  tt::numpy::random::random(shape).to(device);
-        Tensor b = tilize_with_zero_padding(a);
-        Tensor c =  b.cpu();
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Validation & Teardown
-        ////////////////////////////////////////////////////////////////////////////
-        std::cout << "Moving src data to host to validate" << std::endl;
-        Tensor host_a = a.cpu(); // Move tensor a to host to validate
-        // TODO: Update when tensor.pad_to_tile() function is added
-        auto padded_shape = a.shape();
-        padded_shape[2] = round_up(padded_shape[2], TILE_HEIGHT);
-        padded_shape[3] = round_up(padded_shape[3], TILE_WIDTH);
-        Tensor padded_host_a = host_a.pad(padded_shape, {0,0,0,0}, 0);
-        Tensor golden = padded_host_a.to(Layout::TILE);
-        auto golden_vec =  owned_buffer::get_as<bfloat16>(golden);
-        auto result_vec = owned_buffer::get_as<bfloat16>(c);
-        std::cout << "Validating " << std::endl;
-         std::cout << "golden vec size " << golden_vec.size() << std::endl;
-        std::cout << "result vec size " << result_vec.size() << std::endl;
-        uint32_t num_errors = 0;
-        for(uint32_t i = 0; i < result_vec.size() ; i++) {
-            if(result_vec[i] != golden_vec[i]) {
-                if(num_errors < 10)
-                    std::cout << "Error at i=" << i << " result=" <<result_vec[i]<< " golden=" <<golden_vec[i] << std::endl;
-                num_errors++;
-            }
+        Tensor a = tt::numpy::random::random(shape).to(Layout::TILE).to(device);
+        Tensor b = tt::numpy::zeros(shape, DataType::BFLOAT16).to(Layout::TILE).to(device);
+
+        for (auto bcast_dim: magic_enum::enum_values<BcastOpDim>())
+        for (auto bcast_math: magic_enum::enum_values<BcastOpMath>()) {
+            Tensor c = bcast(a, b, bcast_math, bcast_dim);
+            Tensor d = c.cpu();
+
+            ////////////////////////////////////////////////////////////////////////////
+            //                      Validation & Teardown
+            ////////////////////////////////////////////////////////////////////////////
+            Tensor host_a = a.cpu(); // Move tensor a to host to validate
+            //pass &= (host_a.data() == d.data()); // src1 is all 0's
         }
-        pass &= (result_vec == golden_vec);
+
+        pass &= CloseDevice(device);
 
     } catch (const std::exception &e) {
         pass = false;
