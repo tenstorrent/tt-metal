@@ -7,47 +7,76 @@ from functools import partial
 
 from loguru import logger
 
-from tests.scripts.common import run_single_test, run_process_and_get_result, report_tests, TestEntry, error_out_if_test_report_has_failures, TestSuiteType, get_git_home_dir_str
-from tests.scripts.cmdline_args import get_tt_metal_arguments_from_cmdline_args, get_cmdline_args
+from tests.scripts.common import (
+    run_single_test,
+    run_process_and_get_result,
+    report_tests,
+    TestEntry,
+    error_out_if_test_report_has_failures,
+    TestSuiteType,
+    get_git_home_dir_str,
+)
+from tests.scripts.cmdline_args import (
+    get_tt_metal_arguments_from_cmdline_args,
+    get_cmdline_args,
+)
 
 TT_EAGER_TEST_ENTRIES = (
-    TestEntry("tt_eager/tests/ops/test_eltwise_binary_op", "ops/test_eltwise_binary_op"),
+    TestEntry(
+        "tt_eager/tests/ops/test_eltwise_binary_op", "ops/test_eltwise_binary_op"
+    ),
     TestEntry("tt_eager/tests/ops/test_bcast_op", "ops/test_bcast_op"),
     TestEntry("tt_eager/tests/ops/test_reduce_op", "ops/test_reduce_op"),
     TestEntry("tt_eager/tests/ops/test_transpose_op", "ops/test_transpose_op"),
     TestEntry("tt_eager/tests/ops/test_bmm_op", "ops/test_bmm_op"),
     TestEntry("tt_eager/tests/ops/test_eltwise_unary_op", "ops/test_eltwise_unary_op"),
-    TestEntry("tt_eager/tests/ops/test_transpose_wh_single_core", "ops/test_transpose_wh_single_core"),
-    TestEntry("tt_eager/tests/ops/test_transpose_wh_multi_core", "ops/test_transpose_wh_multi_core"),
+    TestEntry(
+        "tt_eager/tests/ops/test_transpose_wh_single_core",
+        "ops/test_transpose_wh_single_core",
+    ),
+    TestEntry(
+        "tt_eager/tests/ops/test_transpose_wh_multi_core",
+        "ops/test_transpose_wh_multi_core",
+    ),
     TestEntry("tt_eager/tests/ops/test_tilize_op", "ops/test_tilize_op"),
-    TestEntry("tt_eager/tests/ops/test_tilize_op_channels_last", "ops/test_tilize_op_channels_last"),
-    TestEntry("tt_eager/tests/ops/test_tilize_zero_padding", "ops/test_tilize_zero_padding"),
-    TestEntry("tt_eager/tests/ops/test_tilize_zero_padding_channels_last", "ops/test_tilize_zero_padding_channels_last"),
+    TestEntry(
+        "tt_eager/tests/ops/test_tilize_op_channels_last",
+        "ops/test_tilize_op_channels_last",
+    ),
+    TestEntry(
+        "tt_eager/tests/ops/test_tilize_zero_padding", "ops/test_tilize_zero_padding"
+    ),
+    TestEntry(
+        "tt_eager/tests/ops/test_tilize_zero_padding_channels_last",
+        "ops/test_tilize_zero_padding_channels_last",
+    ),
     TestEntry("tt_eager/tests/ops/test_layernorm_op", "ops/test_layernorm_op"),
     TestEntry("tt_eager/tests/ops/test_softmax_op", "ops/test_softmax_op"),
     TestEntry("tt_eager/tests/ops/test_average_pool", "ops/test_average_pool"),
     TestEntry("tt_eager/tests/ops/test_sfpu", "ops/test_sfpu"),
-
-    TestEntry("tt_eager/tests/tensors/test_host_device_loopback", "tensors/test_host_device_loopback"),
-    TestEntry("tt_eager/tests/tensors/test_copy_and_move", "tensors/test_copy_and_move"),
-
+    TestEntry(
+        "tt_eager/tests/tensors/test_host_device_loopback",
+        "tensors/test_host_device_loopback",
+    ),
+    TestEntry(
+        "tt_eager/tests/tensors/test_copy_and_move", "tensors/test_copy_and_move"
+    ),
     # DTX Tests
-    TestEntry("tt_eager/tests/dtx/test_dtx_tilized_row_to_col_major", "dtx/test_dtx_tilized_row_to_col_major"),
+    TestEntry(
+        "tt_eager/tests/dtx/test_dtx_tilized_row_to_col_major",
+        "dtx/test_dtx_tilized_row_to_col_major",
+    ),
     TestEntry("tt_eager/tests/dtx/test_dtx", "dtx/test_dtx"),
     TestEntry("tt_eager/tests/dtx/tensor", "dtx/tensor"),
     TestEntry("tt_eager/tests/dtx/unit_tests/", "dtx/unit_tests"),
     TestEntry("tt_eager/tests/dtx/overlap", "dtx/overlap"),
-    TestEntry("tt_eager/tests/dtx/collapse_transformations", "dtx/collapse_transformations"),
-
+    TestEntry(
+        "tt_eager/tests/dtx/collapse_transformations", "dtx/collapse_transformations"
+    ),
     # Integration tests
-    TestEntry("tt_eager/tests/integration_tests/test_bert", "integration_tests/test_bert"),
-)
-
-
-
-PROGRAMMING_EXAMPLE_ENTRIES = (
-    TestEntry("programming_examples/loopback", "programming_examples/loopback"),
-    TestEntry("programming_examples/eltwise_binary", "programming_examples/eltwise_binary"),
+    TestEntry(
+        "tt_eager/tests/integration_tests/test_bert", "integration_tests/test_bert"
+    ),
 )
 
 
@@ -60,7 +89,10 @@ def run_single_tt_eager_test(test_entry, timeout):
 
 
 def run_tt_cpp_tests(test_entries, timeout, run_single_test):
-    make_test_status_entry = lambda test_entry_: (test_entry_, run_single_test(test_entry_, timeout))
+    make_test_status_entry = lambda test_entry_: (
+        test_entry_,
+        run_single_test(test_entry_, timeout),
+    )
 
     seed = time.time()
 
@@ -74,9 +106,7 @@ def run_tt_cpp_tests(test_entries, timeout, run_single_test):
 
 
 def get_tt_eager_test_entries():
-    return list(
-        TT_EAGER_TEST_ENTRIES
-    )
+    return list(TT_EAGER_TEST_ENTRIES)
 
 
 if __name__ == "__main__":
@@ -86,7 +116,9 @@ if __name__ == "__main__":
 
     tt_eager_test_entries = get_tt_eager_test_entries()
 
-    eager_test_report = run_tt_cpp_tests(tt_eager_test_entries, timeout, run_single_tt_eager_test)
+    eager_test_report = run_tt_cpp_tests(
+        tt_eager_test_entries, timeout, run_single_tt_eager_test
+    )
 
     test_report = {**eager_test_report}
 
