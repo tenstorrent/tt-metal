@@ -12,37 +12,43 @@ sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
 
+
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
+from tests.tt_eager.python_api_testing.sweep_tests.common import skip_for_wormhole_b0, is_wormhole_b0
 
+shapes_mm = [
+    # Single core (won't be hit after padding is added for multicast)
+    [[1, 1, 32, 32], [1, 1, 32, 32]],
+    # Multi core (2% math util)
+    [[1, 2, 320, 1024], [1, 1, 1024, 384]],
+    # Multi core reuse (25% math util)
+    [[1, 2, 512, 1024], [1, 1, 1024, 512]],
+    # Multi core reuse multicast in0/in1 (25% math util)
+    [[1, 2, 4608, 1024], [1, 1, 1024, 6144]],
+    # Multi core reuse multicast in0 (25% math util)
+    [[1, 2, 512, 1024], [1, 1, 1024, 6144]],
+    # Multi core reuse multicast in1 (25% math util)
+    [[1, 2, 4608, 1024], [1, 1, 1024, 512]],
+    # Multi core reuse with padding (?% math util)
+    [[1, 2, 480, 1024], [1, 1, 1024, 480]],
+    # Multi core reuse multicast in0/in1 with padding (?% math util)
+    [[1, 2, 4576, 1024], [1, 1, 1024, 6112]],
+    [[1, 2, 4416, 1024], [1, 1, 1024, 6048]],
+    # Multi core reuse multicast in0 with padding (?% math util)
+    [[1, 2, 480, 1024], [1, 1, 1024, 6112]],
+    [[1, 2, 320, 1024], [1, 1, 1024, 6048]],
+    # Multi core reuse multicast in1 with padding (?% math util)
+    [[1, 2, 4576, 1024], [1, 1, 1024, 480]],
+    [[1, 2, 4416, 1024], [1, 1, 1024, 320]],
+]
 
+if is_wormhole_b0():
+    del shapes_mm[1:]
+          
 @pytest.mark.parametrize(
     "input_shapes",
-    (
-        # Single core (won't be hit after padding is added for multicast)
-        [[1, 1, 32, 32], [1, 1, 32, 32]],
-        # Multi core (2% math util)
-        [[1, 2, 320, 1024], [1, 1, 1024, 384]],
-        # Multi core reuse (25% math util)
-        [[1, 2, 512, 1024], [1, 1, 1024, 512]],
-        # Multi core reuse multicast in0/in1 (25% math util)
-        [[1, 2, 4608, 1024], [1, 1, 1024, 6144]],
-        # Multi core reuse multicast in0 (25% math util)
-        [[1, 2, 512, 1024], [1, 1, 1024, 6144]],
-        # Multi core reuse multicast in1 (25% math util)
-        [[1, 2, 4608, 1024], [1, 1, 1024, 512]],
-        # Multi core reuse with padding (?% math util)
-        [[1, 2, 480, 1024], [1, 1, 1024, 480]],
-        # Multi core reuse multicast in0/in1 with padding (?% math util)
-        [[1, 2, 4576, 1024], [1, 1, 1024, 6112]],
-        [[1, 2, 4416, 1024], [1, 1, 1024, 6048]],
-        # Multi core reuse multicast in0 with padding (?% math util)
-        [[1, 2, 480, 1024], [1, 1, 1024, 6112]],
-        [[1, 2, 320, 1024], [1, 1, 1024, 6048]],
-        # Multi core reuse multicast in1 with padding (?% math util)
-        [[1, 2, 4576, 1024], [1, 1, 1024, 480]],
-        [[1, 2, 4416, 1024], [1, 1, 1024, 320]],
-    ),
+    shapes_mm
 )
 @pytest.mark.parametrize("pcie_slot", (0,))
 @pytest.mark.parametrize(
@@ -64,34 +70,37 @@ def test_run_matmul_test(input_shapes, pcie_slot, dtype, function_level_defaults
         {"dtype": dtype, "layout": ttl.tensor.Layout.TILE, "on_device": True},
     )
 
+shapes_bmm = [
+    # Single core (won't be hit after padding is added for multicast)
+    [[1, 1, 32, 32], [1, 1, 32, 32]],
+    # Multi core (2% math util)
+    [[1, 2, 320, 1024], [1, 2, 1024, 384]],
+    # Multi core reuse (25% math util)
+    [[1, 2, 512, 1024], [1, 2, 1024, 512]],
+    # Multi core reuse multicast in0/in1 (25% math util)
+    [[1, 2, 4608, 1024], [1, 2, 1024, 6144]],
+    # Multi core reuse multicast in0 (25% math util)
+    [[1, 2, 512, 1024], [1, 2, 1024, 6144]],
+    # Multi core reuse multicast in1 (25% math util)
+    [[1, 2, 4608, 1024], [1, 2, 1024, 512]],
+    # Multi core reuse with padding (?% math util)
+    [[1, 2, 480, 1024], [1, 2, 1024, 480]],
+    # Multi core reuse multicast in0/in1 with padding (?% math util)
+    [[1, 2, 4576, 1024], [1, 2, 1024, 6112]],
+    [[1, 2, 4416, 1024], [1, 2, 1024, 6048]],
+    # Multi core reuse multicast in0 with padding (?% math util)
+    [[1, 2, 480, 1024], [1, 2, 1024, 6112]],
+    [[1, 2, 320, 1024], [1, 2, 1024, 6048]],
+    # Multi core reuse multicast in1 with padding (?% math util)
+    [[1, 2, 4576, 1024], [1, 2, 1024, 480]],
+    [[1, 2, 4416, 1024], [1, 2, 1024, 320]],
+]
+if is_wormhole_b0():
+    del shapes_bmm[1:]
 
 @pytest.mark.parametrize(
     "input_shapes,",
-    (
-        # Single core (won't be hit after padding is added for multicast)
-        [[1, 1, 32, 32], [1, 1, 32, 32]],
-        # Multi core (2% math util)
-        [[1, 2, 320, 1024], [1, 2, 1024, 384]],
-        # Multi core reuse (25% math util)
-        [[1, 2, 512, 1024], [1, 2, 1024, 512]],
-        # Multi core reuse multicast in0/in1 (25% math util)
-        [[1, 2, 4608, 1024], [1, 2, 1024, 6144]],
-        # Multi core reuse multicast in0 (25% math util)
-        [[1, 2, 512, 1024], [1, 2, 1024, 6144]],
-        # Multi core reuse multicast in1 (25% math util)
-        [[1, 2, 4608, 1024], [1, 2, 1024, 512]],
-        # Multi core reuse with padding (?% math util)
-        [[1, 2, 480, 1024], [1, 2, 1024, 480]],
-        # Multi core reuse multicast in0/in1 with padding (?% math util)
-        [[1, 2, 4576, 1024], [1, 2, 1024, 6112]],
-        [[1, 2, 4416, 1024], [1, 2, 1024, 6048]],
-        # Multi core reuse multicast in0 with padding (?% math util)
-        [[1, 2, 480, 1024], [1, 2, 1024, 6112]],
-        [[1, 2, 320, 1024], [1, 2, 1024, 6048]],
-        # Multi core reuse multicast in1 with padding (?% math util)
-        [[1, 2, 4576, 1024], [1, 2, 1024, 480]],
-        [[1, 2, 4416, 1024], [1, 2, 1024, 320]],
-    ),
+    shapes_bmm
 )
 @pytest.mark.parametrize("pcie_slot", (0,))
 @pytest.mark.parametrize(

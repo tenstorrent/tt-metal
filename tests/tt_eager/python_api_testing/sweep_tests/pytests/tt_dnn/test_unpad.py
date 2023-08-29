@@ -11,8 +11,10 @@ sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
 
+
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
+from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0
 import random
 
 # Seed here for fixed params
@@ -24,6 +26,7 @@ params = [
     pytest.param([[5, 5, 50, 50]], unpad_args, 0)
     for unpad_args in generation_funcs.gen_unpad_args([[5, 5, 50, 50]])
 ]
+
 params += [
     pytest.param([[5, 5, 64, 96]], unpad_args, 0)
     for unpad_args in generation_funcs.gen_unpad_args([[5, 5, 64, 96]])
@@ -32,6 +35,9 @@ params += [
 
 @pytest.mark.parametrize("input_shapes, unpad_args, pcie_slot", params)
 def test_run_unpad_test(input_shapes, unpad_args, pcie_slot):
+    if is_wormhole_b0():
+        if input_shapes == [[5,5,64,96]] and unpad_args['output_tensor_end'] ==  [2, 1, 63, 63]:
+            pytest.skip("skip this shape for Wormhole B0")
     datagen_func = [
         generation_funcs.gen_func_with_cast(
             partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16
