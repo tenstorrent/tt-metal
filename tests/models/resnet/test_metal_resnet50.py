@@ -64,5 +64,6 @@ def test_run_resnet50_inference(use_program_cache, fold_batchnorm, imagenet_samp
         passing, info = comp_allclose_and_pcc(torch_output, tt_output, pcc=0.985)
         logger.info(info)
         tt_lib.device.CloseDevice(device)
-        assert comp_pcc(torch_output, tt_output, pcc=0.985)
+        passing_pcc, _ = comp_pcc(torch_output, tt_output, pcc=0.985)
+        assert passing_pcc
         #assert passing # fails because of torch.allclose
