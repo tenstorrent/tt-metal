@@ -310,8 +310,9 @@ class Bottleneck(nn.Module):
             #print("Running downsample")
             identity = self.downsample_conv_on_tt(x)
 
-        out = tt_lib.tensor.add_without_autoformat(out, identity, output_mem_config=self.memory_config)
-        out = self.relu(out, self.memory_config)
+        fused_activations = [tt_lib.tensor.FusibleActivation.RELU]
+        out = tt_lib.tensor.add_without_autoformat(out, identity, fused_activations, output_mem_config=self.memory_config)
+        # out = self.relu(out, self.memory_config)
         return out
 
 
