@@ -44,29 +44,45 @@ inline bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {
  * TODO [AS]: reuse data moved to L1 instead of reading every time
  */
 void kernel_main() {
+    // input tensor address
     const uint32_t in_addr = get_arg_val<uint32_t>(0);
+    // arg 1 is skipped
+    // max pool window size height / width
     const uint32_t window_h = get_arg_val<uint32_t>(2);
     const uint32_t window_w = get_arg_val<uint32_t>(3);
+    // product of window_h and window_w
     const uint32_t window_hw = get_arg_val<uint32_t>(4);
+    // window_hw_padded = window_hw rounded up to the tile size (can be multiple tiles)
     const uint32_t window_hw_padded = get_arg_val<uint32_t>(5);
+    // max pool stride height / width
     const uint32_t stride_h = get_arg_val<uint32_t>(6);
     const uint32_t stride_w = get_arg_val<uint32_t>(7);
+    // max pool padding height / width
     const int32_t pad_h = get_arg_val<int32_t>(8);
     const int32_t pad_w = get_arg_val<int32_t>(9);
+    // output tensor height / width
     const int32_t out_h = get_arg_val<int32_t>(10);
     const int32_t out_w = get_arg_val<int32_t>(11);
+    // channel size in bytes, multiple of 32
     const uint32_t in_nbytes_c = get_arg_val<uint32_t>(14);
+    // input tensor height / width / channels
     const int32_t in_h = get_arg_val<int32_t>(16);
     const int32_t in_w = get_arg_val<int32_t>(17);
     const int32_t in_c = get_arg_val<int32_t>(19);
+    // input CB page szie
     const int32_t in_cb_pagesize = get_arg_val<int32_t>(22);
+    // product of window_hw_padded and in_c padded to the tile size (can be multiple tiles)
     const int32_t in_cb_page_nelems_padded = get_arg_val<int32_t>(24);
+    // out_w divided by number of out_nelems (== number of blocks per iteration)
     const int32_t out_w_loop_count = get_arg_val<int32_t>(25);
     const uint32_t in_log_base_2_of_page_size = get_arg_val<uint32_t>(26);
+    // batch size
     const uint32_t nbatch = get_arg_val<uint32_t>(27);
 
     constexpr bool is_in_dram = get_compile_time_arg_val(0) == 1;
+    // value of 1 in bf16 in a uin32_t
     constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(2);
+    // number of output elements per iteration == number of blocks per iteration
     constexpr uint32_t out_nelems = get_compile_time_arg_val(3);
     constexpr bool use_pow2 = get_compile_time_arg_val(4) == 1;
 

@@ -11,7 +11,7 @@
 #include "tensor/tensor_utils.hpp"
 #include "detail/util.hpp"
 
-#define DEBUG_SERVER 1
+#define DEBUG_SERVER 0
 
 #if DEBUG_SERVER == 1
     #include "tt_metal/llrt/tt_debug_print_server.hpp"
