@@ -11,7 +11,7 @@ TT_METAL_HOME = ENVS["TT_METAL_HOME"]
 LOG_LOCATIONS_RECORD = "tt_metal/tools/profiler/logs/.locations.log"
 
 def test_profiler_build():
-    from libs import tt_lib as ttl
+    from tt_eager import tt_lib as ttl
 
     tmpLocation ="tt_metal/tools/profiler/tmp"
     os.system(f"rm -rf {tmpLocation}")
