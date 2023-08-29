@@ -144,6 +144,7 @@ void MAIN {
     const uint32_t out_ntiles_c = get_compile_time_arg_val(7);
     const uint32_t out_nelems = get_compile_time_arg_val(8);
     const uint32_t out_w_loop_count = get_compile_time_arg_val(9);
+    const uint32_t nbatch = get_compile_time_arg_val(10);
 
     tilize_init(in_cb_id, in_ntiles_hwc, in_tiled_cb_id);
 
@@ -156,18 +157,20 @@ void MAIN {
     #endif
 
     cb_wait_front(in_scalar_cb_id, 1);
-    for (uint32_t out_h_i = 0; out_h_i < out_h; ++out_h_i) {
-        for (uint32_t out_w_i = 0; out_w_i < out_w_loop_count; ++out_w_i) {
-            // NOTE: Assuming in_ntiles_hw < 8 for now.
-            // TODO: subblocking to support this.
-            kernel_profiler::mark_time(11);
-            // tilize
-            tilize(out_nelems, in_cb_id, in_ntiles_hw, in_ntiles_c, in_ntiles_hwc, window_hw_padded, in_tiled_cb_id);
-            // Reduce H
-            reduce_h(out_nelems, in_tiled_cb_id, in_scalar_cb_id, in_ntiles_hw, in_ntiles_c, in_ntiles_hwc, out_ntiles_c, out_tiled_cb_id);
-            // untilize
-            untilize(out_nelems, out_tiled_cb_id, out_ntiles_c, 1, out_cb_id);
-            kernel_profiler::mark_time(12);
+    for (uint32_t batch = 0; batch < nbatch; ++ batch) {
+        for (uint32_t out_h_i = 0; out_h_i < out_h; ++out_h_i) {
+            for (uint32_t out_w_i = 0; out_w_i < out_w_loop_count; ++out_w_i) {
+                // NOTE: Assuming in_ntiles_hw < 8 for now.
+                // TODO: subblocking to support this.
+                kernel_profiler::mark_time(11);
+                // tilize
+                tilize(out_nelems, in_cb_id, in_ntiles_hw, in_ntiles_c, in_ntiles_hwc, window_hw_padded, in_tiled_cb_id);
+                // Reduce H
+                reduce_h(out_nelems, in_tiled_cb_id, in_scalar_cb_id, in_ntiles_hw, in_ntiles_c, in_ntiles_hwc, out_ntiles_c, out_tiled_cb_id);
+                // untilize
+                untilize(out_nelems, out_tiled_cb_id, out_ntiles_c, 1, out_cb_id);
+                kernel_profiler::mark_time(12);
+            }
         }
     }
     cb_pop_front(in_scalar_cb_id, 1);

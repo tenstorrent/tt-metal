@@ -63,6 +63,7 @@ void kernel_main() {
     const int32_t in_cb_page_nelems_padded = get_arg_val<int32_t>(24);
     const int32_t out_w_loop_count = get_arg_val<int32_t>(25);
     const uint32_t in_log_base_2_of_page_size = get_arg_val<uint32_t>(26);
+    const uint32_t nbatch = get_arg_val<uint32_t>(27);
 
     constexpr bool is_in_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(2);
@@ -103,57 +104,62 @@ void kernel_main() {
 
     kernel_profiler::mark_time(8);
 
-    int32_t start_h = - pad_h;
-    // for every output row (across all channels)
-    for (int32_t out_h_i = 0; out_h_i < out_h; ++ out_h_i) {
-        int32_t start_w = - pad_w;
-        // for every output col
-        for (int32_t out_w_i = 0; out_w_i < out_w_loop_count; ++ out_w_i) {
-            // make sure cb is available to fill
-            cb_reserve_back(in_cb_id, out_nelems);
-            uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
-            for (uint32_t out_elem_i = 0; out_elem_i < out_nelems; ++ out_elem_i) {
-                // if (out_w_i * out_elem_i >= out_w) continue; // TODO: Need some guard for the out of bounds when out_w is not multiple of out_nelems
+    uint32_t in_hw = in_h * in_w;   // TODO: pass this as an arg
+    uint32_t batch_offset = 0;
+    for (uint32_t batch = 0; batch < nbatch; ++ batch) {
+        int32_t start_h = - pad_h;
+        // for every output row (across all channels)
+        for (int32_t out_h_i = 0; out_h_i < out_h; ++ out_h_i) {
+            int32_t start_w = - pad_w;
+            // for every output col
+            for (int32_t out_w_i = 0; out_w_i < out_w_loop_count; ++ out_w_i) {
+                // make sure cb is available to fill
+                cb_reserve_back(in_cb_id, out_nelems);
+                uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
+                for (uint32_t out_elem_i = 0; out_elem_i < out_nelems; ++ out_elem_i) {
+                    // if (out_w_i * out_elem_i >= out_w) continue; // TODO: Need some guard for the out of bounds when out_w is not multiple of out_nelems
 
-                // kernel_profiler::mark_time(9);
+                    // kernel_profiler::mark_time(9);
 
-                // start = {start_h, curr_start_w}
-                int32_t curr_start_w = start_w + stride_w * out_elem_i;
-                int32_t end_h = start_h + window_h;
-                int32_t end_w = curr_start_w + window_w;
-                int32_t start_h_max = start_h < 0 ? 0 : start_h;
-                int32_t start_w_max = curr_start_w < 0 ? 0 : curr_start_w;
-                int32_t end_h_min = end_h < in_h ? end_h : in_h;
-                int32_t end_w_min = end_w < in_w ? end_w : in_w;
+                    // start = {start_h, curr_start_w}
+                    int32_t curr_start_w = start_w + stride_w * out_elem_i;
+                    int32_t end_h = start_h + window_h;
+                    int32_t end_w = curr_start_w + window_w;
+                    int32_t start_h_max = start_h < 0 ? 0 : start_h;
+                    int32_t start_w_max = curr_start_w < 0 ? 0 : curr_start_w;
+                    int32_t end_h_min = end_h < in_h ? end_h : in_h;
+                    int32_t end_w_min = end_w < in_w ? end_w : in_w;
 
-                // read at most window_hw input rows into CB
-                uint32_t read_rows = 0;
-                uint32_t in_hw_row_id_base = in_w * start_h_max;  // TODO: get rid of *
-                uint32_t curr_in_l1_write_addr = in_l1_write_addr;
-                for (int32_t h = start_h_max; h < end_h_min; ++ h) {
-                    for (int32_t w = start_w_max; w < end_w_min; ++ w) {
-                        uint32_t in_hw_row_id = in_hw_row_id_base + w;
-                        // uint64_t in_noc_addr = get_noc_addr(in_hw_row_id, s_in);
-                        // noc_async_read(in_noc_addr, curr_in_l1_write_addr, in_nbytes_c);
-                        s_in.noc_async_read_page(in_hw_row_id, curr_in_l1_write_addr);
-                        curr_in_l1_write_addr += in_nbytes_c;
-                        ++ read_rows;
+                    // read at most window_hw input rows into CB
+                    uint32_t read_rows = 0;
+                    uint32_t in_hw_row_id_base = in_w * start_h_max;  // TODO: get rid of *
+                    uint32_t curr_in_l1_write_addr = in_l1_write_addr;
+                    for (int32_t h = start_h_max; h < end_h_min; ++ h) {
+                        for (int32_t w = start_w_max; w < end_w_min; ++ w) {
+                            uint32_t in_hw_row_id = batch_offset + in_hw_row_id_base + w;
+                            // uint64_t in_noc_addr = get_noc_addr(in_hw_row_id, s_in);
+                            // noc_async_read(in_noc_addr, curr_in_l1_write_addr, in_nbytes_c);
+                            s_in.noc_async_read_page(in_hw_row_id, curr_in_l1_write_addr);
+                            curr_in_l1_write_addr += in_nbytes_c;
+                            ++ read_rows;
+                        }
+                        in_hw_row_id_base += in_w;
                     }
-                    in_hw_row_id_base += in_w;
-                }
-                if (read_rows != window_hw) {
-                    // if needed, fill the remainining (window_hw - read_row_id) with -INF
-                    fill_with_val(curr_in_l1_write_addr, (window_hw - read_rows) * in_c, 0xff7f);   // TODO: get rid of *
-                }
-                in_l1_write_addr += in_cb_pagesize;
+                    if (read_rows != window_hw) {
+                        // if needed, fill the remainining (window_hw - read_row_id) with -INF
+                        fill_with_val(curr_in_l1_write_addr, (window_hw - read_rows) * in_c, 0xff7f);   // TODO: get rid of *
+                    }
+                    in_l1_write_addr += in_cb_pagesize;
 
-                // kernel_profiler::mark_time(10);
+                    // kernel_profiler::mark_time(10);
+                }
+                noc_async_read_barrier();
+                // input for current output index (out_h_i, out_w_i) are ready for this block to be consumed by triscs
+                cb_push_back(in_cb_id, out_nelems);
+                start_w += stride_w * out_nelems;
             }
-            noc_async_read_barrier();
-            // input for current output index (out_h_i, out_w_i) are ready for this block to be consumed by triscs
-            cb_push_back(in_cb_id, out_nelems);
-            start_w += stride_w * out_nelems;
+            start_h += stride_h;
         }
-        start_h += stride_h;
+        batch_offset += in_hw;
     }
 } // kernel_main()

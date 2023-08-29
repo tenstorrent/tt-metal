@@ -11,7 +11,7 @@
 #include "tensor/tensor_utils.hpp"
 #include "detail/util.hpp"
 
-#define DEBUG_SERVER 0
+#define DEBUG_SERVER 1
 
 #if DEBUG_SERVER == 1
     #include "tt_metal/llrt/tt_debug_print_server.hpp"
@@ -61,6 +61,9 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
     uint32_t in_nbytes_c = input_shape[3] * in_nbytes;      // row of input (channels)
     uint32_t out_nbytes_c = output_shape[3] * out_nbytes;   // row of output (channels)
 
+    uint32_t nbatch = input_shape[0];
+    TT_ASSERT(nbatch == output_shape[0], "Mismatch in N for input and output!!");
+
     uint32_t kernel_size_hw = kernel_size_w * kernel_size_h;    // number of valid rows, to read
     uint32_t kernel_size_hw_padded = ceil_multiple_of(kernel_size_hw, constants::TILE_HEIGHT);
     uint32_t in_ntiles_hw = (uint32_t) ceil((float) kernel_size_hw_padded / constants::TILE_HEIGHT);
@@ -70,6 +73,9 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
 
     uint32_t out_nelems = nblocks;     // TODO [AS]: Remove hard coding after identifying optimal param val
     uint32_t out_w_loop_count = ceil((float) out_w / out_nelems);
+
+    uint32_t in_hw = in_ntiles_hw * constants::TILE_HEIGHT;
+    uint32_t out_hw = out_ntiles_hw * constants::TILE_HEIGHT;
 
     // CBs
     uint32_t multi_buffering_factor = 2;
@@ -143,7 +149,10 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                             out_ntiles_hw, out_ntiles_c,
                                             in_cb_pagesize, out_cb_pagesize,
                                             in_cb_page_nelems_padded, out_w_loop_count,
-                                            in_log_base_2_of_page_size};
+                                            in_log_base_2_of_page_size,
+                                            nbatch,
+                                            in_hw,
+                                            out_hw};
     auto reader_config = DataMovementConfig{.processor = DataMovementProcessor::RISCV_1,
                                             .noc = NOC::RISCV_1_default,
                                             .compile_args = reader_ct_args};
@@ -164,6 +173,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
 
         log_debug("in_addr: {}", src_dram_buffer->address());
         log_debug("out_addr: {}", dst_dram_buffer->address());
+        log_debug("nbatch: {}", nbatch);
         log_debug("kernel_size_h: {}", kernel_size_h);
         log_debug("kernel_size_w: {}", kernel_size_w);
         log_debug("kernel_size_hw: {}", kernel_size_hw);
@@ -181,7 +191,9 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
         log_debug("in_h: {}", in_h);
         log_debug("in_w: {}", in_w);
         log_debug("in_hw: {}", input_shape[2]);
+        log_debug("in_hw_padded: {}", in_hw);
         log_debug("in_c: {}", input_shape[3]);
+        log_debug("out_hw_padded: {}", out_hw);
         log_debug("out_ntiles_hw: {}", out_ntiles_hw);
         log_debug("out_ntiles_c: {}", out_ntiles_c);
         log_debug("out_nelems: {}", out_nelems);
@@ -220,7 +232,9 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                                          out_w,
                                                          (uint32_t) ceil((float) output_shape[2] / constants::TILE_HEIGHT),
                                                          (uint32_t) ceil((float) output_shape[3] / constants::TILE_WIDTH),
-                                                         out_nelems, out_w_loop_count},
+                                                         out_nelems,
+                                                         out_w_loop_count,
+                                                         nbatch},
                                         .defines = reduce_op_utils::get_defines(reduce_op, reduce_dim)};
     std::string compute_kernel_fname("tt_metal/kernels/compute/max_pool.cpp");
     auto compute_kernel = CreateComputeKernel(program,

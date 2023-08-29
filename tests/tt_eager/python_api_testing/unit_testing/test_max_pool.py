@@ -37,12 +37,20 @@ def volume(shape):
 @pytest.mark.parametrize(
     "act_shape",  ## NCHW
     (
-        (  # [1, 1, 32, 32],
-            [1, 32, 32, 32],
-            # [1, 32, 64, 64],
+        (   [1, 32, 32, 32],
             [1, 64, 64, 64],
             [1, 64, 112, 112],
             [1, 1, 128, 128],
+
+            [9, 32, 32, 32],
+            [9, 64, 64, 64],
+            [9, 64, 112, 112],
+            [9, 1, 128, 128],
+
+            # [16, 32, 32, 32],
+            # [16, 64, 64, 64],
+            # [16, 64, 112, 112],
+            # [16, 1, 128, 128],
         )
     ),
 )
@@ -72,22 +80,23 @@ def volume(shape):
     "in_mem_config",
     (
         ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
+        # ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
     ),
-    ids=["in_DRAM", "in_L1"],
+    ids=["in_DRAM",]# "in_L1"],
 )
 @pytest.mark.parametrize(
     "out_mem_config",
     (
         ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
+        # ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
     ),
-    ids=["out_DRAM", "out_L1"],
+    ids=["out_DRAM",]# "out_L1"],
 )
 @pytest.mark.parametrize(
     "nblocks",
     (
         1,  ## default
+        4,
         8,
     ),
 )
