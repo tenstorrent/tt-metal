@@ -8,7 +8,7 @@ from tests.models.falcon.reference.hf_modeling_falcon import (
 )
 from tests.models.falcon.falcon_causallm import TtFalconCausalLM
 
-from tests.models.falcon.mode_config import (
+from tests.models.falcon.model_config import (
     get_model_config,
     get_tt_cache_path,
 )
