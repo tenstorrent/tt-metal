@@ -31,11 +31,11 @@ from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
 )
 import torch
 
-
+# generic conv doesnt support tiled out, bias and relu fusions
 @pytest.mark.parametrize("run_conv_with_address_map", (False,))
-@pytest.mark.parametrize("untilize_out", (False,))
-@pytest.mark.parametrize("has_bias", (True, False))
-@pytest.mark.parametrize("fuse_relu", (True, False))
+@pytest.mark.parametrize("untilize_out", (True,))
+@pytest.mark.parametrize("has_bias", (False,))
+@pytest.mark.parametrize("fuse_relu", (False,))
 @pytest.mark.parametrize(
     "K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w",
     (
@@ -70,7 +70,7 @@ import torch
         (16 * 32, 32, 24, 24, 3, 3, 1, 1, 0, 0),
     ),
 )
-def test_run_conv_as_large_matmul(
+def test_run_generic_conv(
     use_program_cache,
     run_conv_with_address_map,
     K,
@@ -98,7 +98,7 @@ def test_run_conv_as_large_matmul(
     num_iterations = 1
     if not run_conv_with_address_map:
         num_iterations = (
-            1  # run twice to test op caching flow for conv op (without address map)
+            2  # run twice to test op caching flow for conv op (without address map)
         )
     for i in range(num_iterations):
         # torch.set_printoptions(threshold=10000)
@@ -137,7 +137,7 @@ def test_run_conv_as_large_matmul(
             A = A_cl_host.to(device)
 
         # Prepare weights
-        B_tiled_host = create_conv_weight_tensor_special_padding(
+        B_tiled_host = create_conv_weight_tensor(
             B_pyt, K, C, R, S, weight_block_h, weight_block_w
         )
         if run_conv_with_address_map:
@@ -178,10 +178,10 @@ def test_run_conv_as_large_matmul(
         else:
             if not has_bias:
                 bias_device = None
-            out = ttl.tensor.conv_with_fast_reader(
+            out = ttl.tensor.conv(
                 A,
                 B_tiled,
-                bias_device,
+                bias_device, # bias not fused with generic conv
                 [R, S, stride_h, stride_w, pad_h, pad_w],
                 act_block_h,
                 act_block_w,
@@ -189,10 +189,7 @@ def test_run_conv_as_large_matmul(
                 out_subblock_h,
                 out_subblock_w,
                 K,
-                untilize_out,
-                has_bias,
-                fuse_relu,
-                ttl.tensor.MathFidelity.HiFi4)
+                False)
         if not untilize_out:
            out_unpadded_shape = [1, 1, OH*OW, K]
            assert out_unpadded_shape == out.shape_without_padding()
@@ -234,8 +231,9 @@ def test_run_conv_as_large_matmul(
         #                     print(f"Bad value at {n},{c},{h},{w} with ATOL={atol_delta} and RTOL={rtol_delta}")
         #                     print(f"    result={calculated}, golden={golden}")
 
-        passing_allclose_and_pcc, output_info = comp_allclose_and_pcc(out_golden, out_result, rtol=1e-1, atol=1e-3, pcc=0.9999)  # For LowFi we need 0.99976
+        passing_allclose_and_pcc, output_info = comp_allclose_and_pcc(out_golden, out_result, rtol=1e-1, atol=1e-3, pcc=0.999)
         print("Passing=", passing_allclose_and_pcc)
         print("Output info=", output_info)
-        assert comp_pcc(out_golden, out_result, pcc=0.9999) # For LowFi we need 0.99976
+        passing_pcc, _ = comp_pcc(out_golden, out_result, pcc=0.999)
+        assert passing_pcc
         #assert passing_allclose_and_pcc

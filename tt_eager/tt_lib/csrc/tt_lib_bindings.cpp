@@ -7,6 +7,7 @@
 #include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "tt_dnn/op_library/conv/conv_op.hpp"
+#include "tt_dnn/op_library/conv/optimized_conv_op.hpp"
 #include "tt_dnn/op_library/fill_rm/fill_rm_op.hpp"
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_dnn/op_library/concat/concat_op.hpp"
@@ -2376,6 +2377,25 @@ void TensorModule(py::module &m_tensor) {
         +-------------------------------+-------------------------------------------------------+-----------+-------------+----------+
     )doc");
     m_tensor.def("conv", &conv, R"doc(
+        Perform a conv ``A x B`` with two tensors
+        This op tilizes tensor A and untilizes the output
+
+        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
+        | Argument     | Description                                                                                | Data type | Valid range | Required |
+        +==============+============================================================================================+===========+=============+==========+
+        | a            | Conv activation TT tensor (CHANNELS LAST                                                   | Tensor    |             | Yes      |
+        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
+        | b            | Conv weight TT tensor (TILED)                                                              | Tensor    |             | Yes      |
+        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
+        | conv_params  | Conv parameters list: kernel size H, kernel size W ,stride H,stride W,pad H,pad W          |Vector<int>|             | Yes      |
+        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
+    )doc");
+
+    m_tensor.def("optimized_conv", &optimized_conv,
+                 py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt,
+                 py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(),
+                 py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(),
+                 py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), R"doc(
         Perform a conv ``A x B`` with two tensors
         This op tilizes tensor A and untilizes the output
 

@@ -31,7 +31,7 @@ from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
 import torch
 
 @pytest.mark.parametrize("untilize_out", (False,True))
-def test_resnet50_first_conv_as_large_blocked_matmul(use_program_cache, device, untilize_out):
+def test_resnet50_first_conv(use_program_cache, device, untilize_out):
     (K, C, padded_C, H, W, R, S, padded_S, stride_h, stride_w, pad_h, pad_w) = (
         64,
         3,
@@ -87,7 +87,7 @@ def test_resnet50_first_conv_as_large_blocked_matmul(use_program_cache, device, 
         )
 
         # Run TT metal OP
-        out = ttl.tensor.conv_with_fast_reader(
+        out = ttl.tensor.optimized_conv(
             A,
             B_tiled,
             [R, padded_S, stride_h, stride_w, 0, 0],
@@ -97,7 +97,10 @@ def test_resnet50_first_conv_as_large_blocked_matmul(use_program_cache, device, 
             out_subblock_h,
             out_subblock_w,
             K,
-            untilize_out
+            untilize_out,
+            False,
+            False,
+            ttl.tensor.MathFidelity.HiFi4
         )
         if not untilize_out:
            out_unpadded_shape = [1, 1, OH*OW, K]
