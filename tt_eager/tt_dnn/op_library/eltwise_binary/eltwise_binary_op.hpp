@@ -19,7 +19,7 @@ namespace tt {
 namespace tt_metal {
 
 enum class BinaryOpType {
-    ADD = 0, SUB = 1, MUL = 2, GT = 3, LT = 4, LTE = 5, GTE = 6, EQ = 7, NE = 8, SQUARED_DIFFERENCE = 9, BIAS_GELU = 10
+    ADD = 0, SUB = 1, MUL = 2, GT = 3, LT = 4, LTE = 5, GTE = 6, EQ = 7, NE = 8, SQUARED_DIFFERENCE = 9, BIAS_GELU = 10, LOGADDEXP = 11
 };
 
 enum class BinaryOpParallelizationStrategy {
@@ -68,7 +68,8 @@ inline Tensor add_without_autoformat(const Tensor& input_tensor_a, const Tensor&
  constexpr auto mul = make_eltwise_binary<BinaryOpType::MUL>{};
  constexpr auto squared_difference = make_eltwise_binary<BinaryOpType::SQUARED_DIFFERENCE>{};
  constexpr auto bias_gelu = make_eltwise_binary<BinaryOpType::BIAS_GELU>{};
-
+ constexpr auto logaddexp = make_eltwise_binary<BinaryOpType::LOGADDEXP>{};
+ 
  // comparative binary ops
  constexpr auto lt = make_eltwise_binary<BinaryOpType::LT>{};
  constexpr auto gt = make_eltwise_binary<BinaryOpType::GT>{};

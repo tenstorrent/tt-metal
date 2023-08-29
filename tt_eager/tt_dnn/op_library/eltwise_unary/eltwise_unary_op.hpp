@@ -198,5 +198,6 @@ using namespace tt::tt_metal;
 bool get_op_approx_mode(UnaryOpType op_type);
 std::pair<string, string> get_op_init_and_func(UnaryOpType op_type, std::optional<float> param={}, string idst="0");
 std::map<string, string> get_defines(UnaryOpType op_type, std::optional<float> param={}, string id="0", string idst="0");
+std::map<string, string> get_pre_defines(UnaryOpType op_type, std::optional<float> param={}, string id="0", string idst="0");
 std::map<string, string> get_block_defines(const std::vector<UnaryWithParam> op_chain, string block_id="0", string idst="0");
 } // namespace eltwise_unary_op_utils

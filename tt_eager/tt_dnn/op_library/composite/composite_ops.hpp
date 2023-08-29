@@ -244,7 +244,7 @@ Tensor normalize_hw(const Tensor& y, const MemoryConfig& output_mem_config = ope
 
 
 //logaddexp(a,b) = log[ e^a + e^b ]
-Tensor logaddexp(const Tensor &input_a, const Tensor &input_b, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+// Tensor logaddexp(const Tensor &input_a, const Tensor &input_b, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //logaddexp2(a,b) = log2[ 2^a + 2^b ]
 Tensor logaddexp2(const Tensor &input_a, const Tensor &input_b, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);

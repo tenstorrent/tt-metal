@@ -144,3 +144,26 @@ class TestEltwiseBinary:
             device,
             test_args,
         )
+
+    @pytest.mark.parametrize(
+        "log_kind", ["logaddexp"]
+    )
+    def test_run_eltwise_binary_log_ops(
+        self, input_shapes, input_mem_config, output_mem_config, log_kind, pcie_slot, function_level_defaults
+    ):
+        datagen_func = [
+            generation_funcs.gen_func_with_cast(
+                partial(generation_funcs.gen_ones), torch.bfloat16
+            )
+        ] * len(input_shapes)
+        test_args = list(generation_funcs.gen_default_dtype_layout_device(input_shapes))[0]
+        test_args.update({"input_mem_config": input_mem_config, "output_mem_config": output_mem_config})
+        comparison_func = comparison_funcs.comp_equal
+        run_single_pytorch_test(
+            f"eltwise-{log_kind}",
+            input_shapes,
+            datagen_func,
+            comparison_func,
+            pcie_slot,
+            test_args,
+        )
