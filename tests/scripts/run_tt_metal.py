@@ -50,7 +50,6 @@ TT_METAL_TEST_ENTRIES = (
     TestEntry("tt_metal/tests/test_reduce_hw", "test_reduce_hw"),
     TestEntry("tt_metal/tests/test_bmm", "test_bmm"),
     TestEntry("tt_metal/tests/test_flatten", "test_flatten"),
-    TestEntry("tt_metal/tests/test_sfpu", "test_sfpu"),
 
     TestEntry("tt_metal/tests/test_multiple_programs", "test_multiple_programs"),
     TestEntry("tt_metal/tests/test_multi_core_kernel", "test_multi_core_kernel"),
@@ -74,9 +73,6 @@ TT_METAL_TEST_ENTRIES = (
     # Compile unit tests
     TestEntry("tt_metal/tests/test_compile_sets_kernel_binaries", "test_compile_sets_kernel_binaries"),
     TestEntry("tt_metal/tests/test_compile_program", "test_compile_program"),
-
-    # Integration tests
-    TestEntry("tt_metal/tests/integration_tests/test_bert", "integration_tests/test_bert"),
 )
 
 

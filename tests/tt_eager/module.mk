@@ -22,13 +22,15 @@ TT_EAGER_TESTS += \
 		 tests/tt_eager/ops/test_tilize_zero_padding \
 		 tests/tt_eager/ops/test_tilize_op_channels_last \
 		 tests/tt_eager/ops/test_tilize_zero_padding_channels_last \
+		 tests/tt_eager/ops/test_sfpu \
 		 tests/tt_eager/tensors/test_copy_and_move \
 		 tests/tt_eager/tensors/test_host_device_loopback \
+		 tests/tt_eager/integration_tests/test_bert \
 
 TT_EAGER_TESTS_SRCS = $(addprefix tests/tt_eager/, $(addsuffix .cpp, $(TT_EAGER_TESTS:tests/%=%)))
 
-TT_EAGER_TEST_INCLUDES = $(TEST_INCLUDES) $(TT_EAGER_INCLUDES)
-TT_EAGER_TESTS_LDFLAGS = -ltensor -ltt_dnn -ldtx -ltt_metal_impl -ltt_metal_detail -ltt_metal -lllrt -ltt_gdb -ldevice -lbuild_kernels_for_riscv -ldl -lcommon -lprofiler -ltracy -lstdc++fs -pthread -lyaml-cpp -lgtest
+TT_EAGER_TESTS_INCLUDES = $(TEST_INCLUDES) $(TT_EAGER_INCLUDES)
+TT_EAGER_TESTS_LDFLAGS = -ltensor -ltt_dnn -ldtx $(TT_METAL_TESTS_LDFLAGS)
 
 TT_EAGER_TESTS_OBJS = $(addprefix $(OBJDIR)/, $(TT_EAGER_TESTS_SRCS:.cpp=.o))
 TT_EAGER_TESTS_DEPS = $(addprefix $(OBJDIR)/, $(TT_EAGER_TESTS_SRCS:.cpp=.d))
@@ -41,9 +43,9 @@ tests/tt_eager/%: $(TESTDIR)/tt_eager/%;
 .PRECIOUS: $(TESTDIR)/tt_eager/%
 $(TESTDIR)/tt_eager/%: $(OBJDIR)/tt_eager/tests/%.o $(TT_DNN_LIB)
 	@mkdir -p $(@D)
-	$(CXX) $(CFLAGS) $(CXXFLAGS) $(TT_EAGER_TEST_INCLUDES) -o $@ $^ $(LDFLAGS) $(TT_EAGER_TESTS_LDFLAGS)
+	$(CXX) $(CFLAGS) $(CXXFLAGS) $(TT_EAGER_TESTS_INCLUDES) -o $@ $^ $(LDFLAGS) $(TT_EAGER_TESTS_LDFLAGS)
 
 .PRECIOUS: $(OBJDIR)/tt_eager/tests/%.o
 $(OBJDIR)/tt_eager/tests/%.o: tests/tt_eager/%.cpp
 	@mkdir -p $(@D)
-	$(CXX) $(CFLAGS) $(CXXFLAGS) $(TT_EAGER_TEST_INCLUDES) -c -o $@ $<
+	$(CXX) $(CFLAGS) $(CXXFLAGS) $(TT_EAGER_TESTS_INCLUDES) -c -o $@ $<

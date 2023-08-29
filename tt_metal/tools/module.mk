@@ -1,5 +1,8 @@
 # Every variable in subdir must be prefixed with subdir (emulating a namespace)
 
+include $(TT_METAL_HOME)/tt_metal/tools/tt_gdb/module.mk # needs to compiled after llrt and tt_metal
+include $(TT_METAL_HOME)/tt_metal/tools/profiler/module.mk
+
 TOOLS = \
 	tools/memset
 
@@ -23,6 +26,3 @@ $(OBJDIR)/tt_metal/tools/memset: $(OBJDIR)/tt_metal/tools/memset.o $(DEVICE_LIB)
 $(OBJDIR)/tt_metal/tools/memset.o: tt_metal/tools/memset.cpp
 	@mkdir -p $(@D)
 	$(CXX) $(CFLAGS) $(CXXFLAGS) $(TOOLS_INCLUDES) -c -o $@ $<
-
-include $(TT_METAL_HOME)/tt_metal/tools/tt_gdb/module.mk # needs to compiled after llrt and tt_metal
-include $(TT_METAL_HOME)/tt_metal/tools/profiler/module.mk

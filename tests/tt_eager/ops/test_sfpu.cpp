@@ -7,7 +7,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
-#include "sfpu_helper/sfpu_helper.hpp"
+#include "tests_common/sfpu_helper/sfpu_helper.hpp"
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 // #include "tt_gdb/tt_gdb.hpp"
 

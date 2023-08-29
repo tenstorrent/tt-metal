@@ -26,6 +26,7 @@ TT_EAGER_TEST_ENTRIES = (
     TestEntry("tt_eager/tests/ops/test_layernorm_op", "ops/test_layernorm_op"),
     TestEntry("tt_eager/tests/ops/test_softmax_op", "ops/test_softmax_op"),
     TestEntry("tt_eager/tests/ops/test_average_pool", "ops/test_average_pool"),
+    TestEntry("tt_eager/tests/ops/test_sfpu", "ops/test_sfpu"),
 
     TestEntry("tt_eager/tests/tensors/test_host_device_loopback", "tensors/test_host_device_loopback"),
     TestEntry("tt_eager/tests/tensors/test_copy_and_move", "tensors/test_copy_and_move"),
@@ -37,6 +38,9 @@ TT_EAGER_TEST_ENTRIES = (
     TestEntry("tt_eager/tests/dtx/unit_tests/", "dtx/unit_tests"),
     TestEntry("tt_eager/tests/dtx/overlap", "dtx/overlap"),
     TestEntry("tt_eager/tests/dtx/collapse_transformations", "dtx/collapse_transformations"),
+
+    # Integration tests
+    TestEntry("tt_eager/tests/integration_tests/test_bert", "integration_tests/test_bert"),
 )
 
 

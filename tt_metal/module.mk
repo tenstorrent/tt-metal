@@ -32,7 +32,7 @@ TT_METAL_DEPS = $(addprefix $(OBJDIR)/, $(TT_METAL_SRCS:.cpp=.d))
 -include $(TT_METAL_DEPS)
 
 # Each module has a top level target as the entrypoint which must match the subdir name
-tt_metal: $(TT_METAL_LIB)
+tt_metal: $(TT_METAL_LIB) tools
 
 ifeq ($(TT_METAL_CREATE_STATIC_LIB), 1)
 # If production build, release all of tt_metal as a full static library for later build with Eager wheel

@@ -3,7 +3,6 @@ include $(TT_METAL_HOME)/tests/tt_metal/tt_metal/unit_tests/module.mk
 
 # Every variable in subdir must be prefixed with subdir (emulating a namespace)
 TT_METAL_TESTS += \
-		 tests/tt_metal/integration_tests/test_bert \
 		 tests/tt_metal/test_bmm \
 		 tests/tt_metal/allocator/test_free_list_allocator_algo \
 		 tests/tt_metal/allocator/test_l1_banking_allocator \
@@ -41,7 +40,6 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/test_interleaved_layouts \
 		 tests/tt_metal/test_interleaved_l1_buffer \
 		 tests/tt_metal/test_bcast \
-		 tests/tt_metal/test_sfpu \
 		 tests/tt_metal/test_generic_binary_reader_matmul_large_block \
 		 tests/tt_metal/test_3x3conv_as_matmul_large_block \
 		 tests/tt_metal/test_pipeline_across_rows \
@@ -60,8 +58,8 @@ TT_METAL_TESTS += \
 
 TT_METAL_TESTS_SRCS = $(addprefix tests/tt_metal/, $(addsuffix .cpp, $(TT_METAL_TESTS:tests/%=%)))
 
-TT_METAL_TEST_INCLUDES = $(TEST_INCLUDES) $(TT_METAL_INCLUDES)
-TT_METAL_TESTS_LDFLAGS = -ltensor -ltt_dnn -ldtx -ltt_metal_impl -ltt_metal_detail -ltt_metal -lllrt -ltt_gdb -ldevice -lbuild_kernels_for_riscv -ldl -lcommon -lprofiler -ltracy -lstdc++fs -pthread -lyaml-cpp -lgtest
+TT_METAL_TESTS_INCLUDES = $(TEST_INCLUDES) $(TT_METAL_INCLUDES)
+TT_METAL_TESTS_LDFLAGS = -ltt_metal_impl -ltt_metal_detail -ltt_metal -lllrt -ltt_gdb -ldevice -lbuild_kernels_for_riscv -ldl -lcommon -lprofiler -ltracy -lstdc++fs -pthread -lyaml-cpp -lgtest
 
 TT_METAL_TESTS_OBJS = $(addprefix $(OBJDIR)/, $(TT_METAL_TESTS_SRCS:.cpp=.o))
 TT_METAL_TESTS_DEPS = $(addprefix $(OBJDIR)/, $(TT_METAL_TESTS_SRCS:.cpp=.d))
@@ -76,12 +74,12 @@ tests/tt_metal/%: $(TESTDIR)/tt_metal/% ;
 .PRECIOUS: $(TESTDIR)/tt_metal/%
 $(TESTDIR)/tt_metal/%: $(OBJDIR)/tt_metal/tests/%.o $(TT_METAL_LIB) $(TT_DNN_LIB)
 	@mkdir -p $(@D)
-	$(CXX) $(CFLAGS) $(CXXFLAGS) $(TT_METAL_TEST_INCLUDES) -o $@ $^ $(LDFLAGS) $(TT_METAL_TESTS_LDFLAGS)
+	$(CXX) $(CFLAGS) $(CXXFLAGS) $(TT_METAL_TESTS_INCLUDES) -o $@ $^ $(LDFLAGS) $(TT_METAL_TESTS_LDFLAGS)
 
 .PRECIOUS: $(OBJDIR)/tt_metal/tests/%.o
 $(OBJDIR)/tt_metal/tests/%.o: tests/tt_metal/tt_metal/%.cpp
 	@mkdir -p $(@D)
-	$(CXX) $(CFLAGS) $(CXXFLAGS) $(TT_METAL_TEST_INCLUDES) -c -o $@ $<
+	$(CXX) $(CFLAGS) $(CXXFLAGS) $(TT_METAL_TESTS_INCLUDES) -c -o $@ $<
 
 tt_metal/tests: tests/tt_metal
 tt_metal/tests/all: tests/tt_metal/all
