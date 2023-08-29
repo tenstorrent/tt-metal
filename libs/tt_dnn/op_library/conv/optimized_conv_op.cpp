@@ -38,8 +38,9 @@ pair<vector<uint32_t>, vector<uint32_t>> compute_opt_conv_activation_as_mm_shape
     uint32_t pad_h = (uint32_t) conv_params[4];
     uint32_t pad_w = (uint32_t) conv_params[5];
     auto [conv_output_h, conv_output_w] = compute_opt_conv_output_face_shape(conv_activation_shape[1], conv_activation_shape[2], filter_h, filter_w, stride_h, stride_w, pad_h, pad_w);
+    uint32_t batch_size = conv_activation_shape[0];
     // pad height
-    uint32_t num_rows = (uint32_t) conv_output_h*conv_output_w;
+    uint32_t num_rows = (uint32_t) batch_size * conv_output_h * conv_output_w;
     uint32_t act_block_h_datums = act_block_h_ntiles * TILE_HEIGHT;
     uint32_t num_rows_padded = (uint32_t) (ceil((double) num_rows / (double) act_block_h_datums ) * act_block_h_datums);
     uint32_t num_cols = conv_activation_shape[3] * filter_h * filter_w;
@@ -176,8 +177,6 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
     bool pass = true;
     tt_metal::Device *device = a.device();
     TT_ASSERT(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
-    uint32_t act_batch_size = a.shape()[0];
-    TT_ASSERT(act_batch_size == 1, "Only batch size 1 supported.");
     TT_ASSERT(output_channels <= b.shape()[3], "Invalid weight shape. Incorrect weight tensor.");
     uint32_t num_bytes_of_df = 2; // 2 bytes for bfloat16
     // Compute the 2d matrix shape
@@ -186,6 +185,8 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
     assert(act_matrix_shape[0] == 1);
     uint32_t act_matrix_height = (uint32_t) act_matrix_shape[1];
     uint32_t act_matrix_width = (uint32_t) act_matrix_shape[2];
+    uint32_t act_matrix_height_unpadded = (uint32_t) act_matrix_shape_unpadded[1];
+    uint32_t act_matrix_width_unpadded = (uint32_t) act_matrix_shape_unpadded[2];
 
     // Tensor b has weights and it should be tiled layout after converting conv weights into weight matrix
     TT_ASSERT(b.layout() == Layout::TILE, "Conv weights should be in tiled layout");
@@ -266,7 +267,7 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
     tt_metal::Program program = tt_metal::Program();
     CoreCoord core_coord = {0, 0};      // TODO: avoid another var here. Find a way to use core range instead.
     CoreRange core = {.start={0, 0}, .end={0, 0}};
-    // tt_start_debug_print_server(a.device()->cluster(), {0}, {{1, 1}});
+    //tt_start_debug_print_server(a.device()->cluster(), {0}, {{1, 1}});
 
     uint32_t single_tile_size = num_bytes_of_df * TILE_HEIGHT * TILE_WIDTH;
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
@@ -332,16 +333,14 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
         uint32_t conv_act_block_width_padding_bytes = (act_block_w_datums - (conv_act_size_c * weight_size_w)) * num_bytes_of_df;
         reader_defines["ACT_BLOCK_WIDTH_PADDING_BYTES"] = to_string(conv_act_block_width_padding_bytes);
     }
-    if (conv_output_size_h * conv_output_size_w < act_block_h_datums * num_blocks_act_h) {
+    if (act_matrix_height_unpadded < act_block_h_datums * num_blocks_act_h) {
         reader_defines["ACT_BLOCK_HEIGHT_PADDING"] = "1";
     }
 
-    uint32_t output_height_padded_to_tile_height = round_up(conv_output_size_h*conv_output_size_w, TILE_HEIGHT);
+    uint32_t output_height_padded_to_tile_height = round_up(act_matrix_height_unpadded, TILE_HEIGHT);
     uint32_t output_height_num_tiles = output_height_padded_to_tile_height / TILE_HEIGHT;
     assert(output_height_num_tiles <= act_matrix_height_ntiles);
 
-    uint32_t act_matrix_height_unpadded = conv_output_size_h * conv_output_size_w;
-    uint32_t act_matrix_width_unpadded = conv_act_size_c * weight_size_h * weight_size_w;
     uint32_t src_dram_act_buffer_size_bytes = src0_dram_buffer->size();
     uint32_t src_dram_weight_buffer_size_bytes = src1_dram_buffer->size();
     uint32_t dst_l1_act_buffer_size_bytes = act_block_h_ntiles * act_block_w_ntiles * single_tile_size;
@@ -440,7 +439,7 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
             reader_kernel = "libs/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast_resnet50_first_conv.cpp";
             compute_kernel = "libs/tt_dnn/op_library/conv/kernels/bmm_tilize_untilize_all_weights_in_l1_single_output_block_width_dim.cpp";
         } else {
-            reader_kernel = "libs/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast_without_conv_padding.cpp";
+            reader_kernel = "libs/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast.cpp";
             compute_kernel = "tt_metal/kernels/compute/bmm_tilize_untilize.cpp";
         }
     } else {
@@ -728,6 +727,7 @@ void OptimizedConv::validate(const std::vector<Tensor>& input_tensors, const std
 
 std::vector<Shape> OptimizedConv::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
+    uint32_t batch_size = input_tensor_a.shape()[0];
     uint32_t conv_activation_h = input_tensor_a.shape()[1];
     uint32_t conv_activation_w = input_tensor_a.shape()[2];
     // TODO: clean up here
@@ -740,16 +740,16 @@ std::vector<Shape> OptimizedConv::compute_output_shapes(const std::vector<Tensor
     auto [conv_output_h, conv_output_w] = compute_opt_conv_output_face_shape(conv_activation_h, conv_activation_w, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w);
 
     if (untilize_out) {
-        // TODO: Update batch size below
         // RM output has unpadded output height and padded output width to 32.
         // pad the output channels to TILE_WIDTH as conv writer kernel does not remove padding for tile
         // TODO (nshanker): specify padding explicitly here with "Padding" object and add unit test
+        assert(batch_size == 1); // batch size > 1 not tested with "untilize_out" (TODO)
         auto output_channels = round_up(this->output_channels, TILE_WIDTH);
-        Shape output_tensor_shape = {1, conv_output_h, conv_output_w, output_channels};
+        Shape output_tensor_shape = {batch_size, conv_output_h, conv_output_w, output_channels};
         return {output_tensor_shape};
     } else {
         // Tiled output shape is padded shape. Padded to tile shape.
-        auto shape_w = conv_output_h*conv_output_w;
+        auto shape_w = batch_size * conv_output_h * conv_output_w;
         auto shape_c = output_channels;
         auto padded_shape_w = round_up(shape_w, TILE_HEIGHT);
         auto padded_shape_c = round_up(this->output_channels, TILE_WIDTH);

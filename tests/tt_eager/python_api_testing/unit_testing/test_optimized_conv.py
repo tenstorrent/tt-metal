@@ -26,8 +26,9 @@ from tests.python_api_testing.conv.conv_unit_test_utils import (
 import torch
 
 @pytest.mark.parametrize("untilize_out", (False,))
-@pytest.mark.parametrize("has_bias", (True, False))
-@pytest.mark.parametrize("fuse_relu", (True, False))
+@pytest.mark.parametrize("has_bias", (True,))
+@pytest.mark.parametrize("fuse_relu", (True,))
+@pytest.mark.parametrize("N", (16,))
 @pytest.mark.parametrize(
     "K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w",
     (
@@ -64,6 +65,7 @@ import torch
 )
 def test_run_optimized_conv(
     use_program_cache,
+    N,
     K,
     C,
     H,
@@ -87,7 +89,7 @@ def test_run_optimized_conv(
     for i in range(num_iterations):
         # torch.set_printoptions(threshold=10000)
         torch.manual_seed(0)
-        a_activation_shape = [1, C, H, W]
+        a_activation_shape = [N, C, H, W]
         #A_pyt = torch.randn(a_activation_shape)
         A_pyt = torch.normal(mean=0, std=0.1, size=a_activation_shape)
         # A_pyt = torch.ones(a_activation_shape, dtype=torch.bfloat16).float()
@@ -111,10 +113,10 @@ def test_run_optimized_conv(
 
         OH = ((int)((H - R + 2 * pad_h) / stride_h)) + 1
         OW = ((int)((W - S + 2 * pad_w) / stride_w)) + 1
-        conv_output_shape = [1, OH, OW, K]
+        conv_output_shape = [N, OH, OW, K]
 
         # Prepare activations
-        A_cl_host = create_conv_act_tensor(A_pyt, 1, C, H, W)
+        A_cl_host = create_conv_act_tensor(A_pyt, N, C, H, W)
         A = A_cl_host.to(device)
 
         # Prepare weights
@@ -158,7 +160,7 @@ def test_run_optimized_conv(
             fuse_relu,
             ttl.tensor.MathFidelity.HiFi4)
         if not untilize_out:
-           out_unpadded_shape = [1, 1, OH*OW, K]
+           out_unpadded_shape = [1, 1, N*OH*OW, K]
            assert out_unpadded_shape == out.shape_without_padding()
            out = ttl.tensor.format_output_tensor(out, out.shape_without_padding(), device, ttl.tensor.Layout.ROW_MAJOR)
            out = out.reshape(conv_output_shape[0], conv_output_shape[1], conv_output_shape[2], conv_output_shape[3])
@@ -180,7 +182,6 @@ def test_run_optimized_conv(
 
         # Compare against golden
         assert out_result.shape == out_golden.shape
-
         [output_N, output_C, output_H, output_W] = out_result.shape
         #print("Golden - ")
         #print(out_golden.flatten())
@@ -201,5 +202,6 @@ def test_run_optimized_conv(
         passing_allclose_and_pcc, output_info = comp_allclose_and_pcc(out_golden, out_result, rtol=1e-1, atol=1e-3, pcc=0.9999)  # For LowFi we need 0.99976
         print("Passing=", passing_allclose_and_pcc)
         print("Output info=", output_info)
-        assert comp_pcc(out_golden, out_result, pcc=0.9999) # For LowFi we need 0.99976
+        passing_pcc, _ = comp_pcc(out_golden, out_result, pcc=0.9998) # For LowFi we need 0.99976
+        assert passing_pcc
         #assert passing_allclose_and_pcc

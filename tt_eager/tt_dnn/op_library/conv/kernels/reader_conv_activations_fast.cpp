@@ -89,13 +89,24 @@ void kernel_main() {
     uint32_t out_w = 0;
     uint32_t out_h_start = 0;
     uint32_t out_w_start = 0;
-    //DPRINT << "Running new conv reader" << ENDL();
+    uint32_t total_h = 0;
+    uint32_t total_h_start = 0;
+    uint32_t n = 0;
+    uint32_t n_start = 0;
+    // DPRINT << "Running new conv reader" << ENDL();
+    // DPRINT << "act matrix h unpadded " << act_matrix_height_unpadded << ENDL();
+    // DPRINT << "num_blocks_act_h " << num_blocks_act_h << ENDL();
+    // DPRINT << "act_block_h_datums " << act_block_h_datums << ENDL();
+    // DPRINT << "num_blocks_weight_w " << num_blocks_weight_w << ENDL();
+    // DPRINT << "num_blocks_act_w " << num_blocks_act_w << ENDL();
     for(uint32_t nbh = 0; nbh < num_blocks_act_h; nbh++) {
         for(uint32_t nbr = 0; nbr < num_blocks_weight_w; nbr++) {
             uint32_t in_h_offset_within_kernel_window = 0;
             for (uint32_t nbw = 0; nbw < num_blocks_act_w; nbw++) {
                 out_h = out_h_start;
                 out_w = out_w_start;
+                total_h = total_h_start;
+                n = n_start;
                 cb_reserve_back(cb_id_act, act_block_num_tiles);
                 uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
                 uint32_t l1_addr_offset = 0;
@@ -105,7 +116,8 @@ void kernel_main() {
                     uint32_t in_w_offset_within_kernel_window = 0;
                     for(uint32_t bw = 0; bw < weight_size_w; bw++) {
                         uint32_t read_size_bytes = conv_act_size_c_bytes;
-                        if (out_h < conv_output_size_h) {
+
+                        if (total_h < act_matrix_height_unpadded) {
                             uint32_t in_h = in_h_offset + in_h_offset_within_kernel_window;
                             uint32_t in_w = in_w_offset + in_w_offset_within_kernel_window;
 
@@ -118,11 +130,12 @@ void kernel_main() {
                                 // read one channel from dram multi bank - row_id = channel_id
                                 uint32_t in_h_raw = in_h - pad_h;
                                 uint32_t in_w_raw = in_w - pad_w;
-                                uint32_t channel_id = (in_h_raw * conv_act_size_w) + in_w_raw;
+                                uint32_t channel_id = (n * conv_act_size_h * conv_act_size_w) + (in_h_raw * conv_act_size_w) + in_w_raw;
+                                //DPRINT << "n=" << n << " h=" << in_h_raw << " w=" << in_w_raw << " conv_act_size_h=" << conv_act_size_h << " conv_act_size_w=" << conv_act_size_w << ENDL();
                                 uint32_t dst_addr = l1_write_addr_act + l1_addr_offset;
                                 s_act.noc_async_read_page(channel_id, dst_addr);
                             }
-                        } // else { do nothing. let garbage rows be in l1 }
+                        } //else { DPRINT << "total_h here =" << total_h << ENDL();  } //do nothing. let garbage rows be in l1
                         l1_addr_offset += read_size_bytes;
                         in_w_offset_within_kernel_window += 1;
                     } // for block width
@@ -136,9 +149,18 @@ void kernel_main() {
                     if(out_w < conv_output_size_w - 1) {
                         out_w += 1;
                     } else {
-                        out_h += 1;
                         out_w = 0;
+                        //DPRINT << "total_h=" << total_h << ENDL();
+                        if (out_h < conv_output_size_h - 1) {
+                            out_h += 1;
+                        } else if (total_h < act_matrix_height_unpadded){
+                            // next image in batch
+                            out_h = 0;
+                            n += 1;
+                            //DPRINT << "next image, n=" << n << ENDL();
+                        }
                     }
+                    total_h += 1;
                 } // for block height
                 in_h_offset_within_kernel_window += 1;
                 noc_async_read_barrier();
@@ -147,5 +169,7 @@ void kernel_main() {
         } // for num of weight blocks in width dim
         out_h_start = out_h;
         out_w_start = out_w;
+        total_h_start = total_h;
+        n_start = n;
     } // for num of act blocks in height dim
 }

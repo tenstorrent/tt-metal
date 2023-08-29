@@ -53,6 +53,9 @@ void kernel_main() {
     uint32_t first_c_id_in_2d_row_at_out_w_0 = 0;
     uint32_t first_c_id_in_2d_row_start = 0;
     uint32_t first_c_id_in_2d_row_at_out_w_0_start = 0;
+    uint32_t last_channed_id_at_outw_0_stride = 51282; // output h - 112, 51282 = 111 * 462
+    uint32_t last_channel_id_at_outw_0_of_curr_img = last_channed_id_at_outw_0_stride;
+    uint32_t last_channel_id_at_outw_0_of_curr_img_start = last_channel_id_at_outw_0_of_curr_img;
     //DPRINT << "Running new conv reader" << ENDL();
     for(uint32_t nbh = 0; nbh < num_blocks_act_h; nbh++) {
         uint32_t c_id_offset_inter_block_col = 0;
@@ -60,6 +63,7 @@ void kernel_main() {
             out_w = out_w_start;
             first_c_id_in_2d_row = first_c_id_in_2d_row_start;
             first_c_id_in_2d_row_at_out_w_0 = first_c_id_in_2d_row_at_out_w_0_start;
+            last_channel_id_at_outw_0_of_curr_img = last_channel_id_at_outw_0_of_curr_img_start;
             cb_reserve_back(cb_id_act, act_block_num_tiles);
             uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
             uint32_t l1_addr_offset = 0;
@@ -81,7 +85,15 @@ void kernel_main() {
                     first_c_id_in_2d_row += 2; // channel id stride in the w dimension
                 } else {
                     out_w = 0;
-                    first_c_id_in_2d_row_at_out_w_0 += 462; // channel id stride in the h dimension
+                    if (first_c_id_in_2d_row_at_out_w_0 < last_channel_id_at_outw_0_of_curr_img) {
+                        first_c_id_in_2d_row_at_out_w_0 += 462; // channel id stride in the h dimension
+                        //DPRINT << "c id stride H = " << first_c_id_in_2d_row_at_out_w_0 << ENDL();
+                    } else {
+                        // next image in batch
+                        //DPRINT << "going to increment for next image. first_c_id_in_2d_row_at_out_w_0=" << first_c_id_in_2d_row_at_out_w_0 << ENDL();
+                        first_c_id_in_2d_row_at_out_w_0 += 1848; // channel id stride in the n dimension, 1848 = 231 * 8
+                        last_channel_id_at_outw_0_of_curr_img = first_c_id_in_2d_row_at_out_w_0 + last_channed_id_at_outw_0_stride;
+                    }
                     first_c_id_in_2d_row = first_c_id_in_2d_row_at_out_w_0;
                 }
             } // for block height
@@ -92,5 +104,6 @@ void kernel_main() {
         out_w_start = out_w;
         first_c_id_in_2d_row_start  = first_c_id_in_2d_row;
         first_c_id_in_2d_row_at_out_w_0_start = first_c_id_in_2d_row_at_out_w_0;
+        last_channel_id_at_outw_0_of_curr_img_start = last_channel_id_at_outw_0_of_curr_img;
     } // for num of act blocks in height dim
 }

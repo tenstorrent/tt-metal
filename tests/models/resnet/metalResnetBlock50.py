@@ -60,91 +60,212 @@ def compute_conv_output_shape(conv_params, x_shape):
 # hardcoding matmul config for 1x1 convs
 # key: mm act height, mm act width, mm weight width
 hardcoded_matmul_config_conv = {
-    (3136, 64, 64) : {"compute_with_storage_grid_size" : (2,2),
-                            "in0_block_w" : 2,
-                            "out_subblock_h" : 1,
-                            "out_subblock_w": 1,
-                            "per_core_M": 49,
-                            "per_core_N": 1,
-                        },
+    1 :
+    {
+        (3136, 64, 64) : {"compute_with_storage_grid_size" : (2,2),
+                                "in0_block_w" : 2,
+                                "out_subblock_h" : 1,
+                                "out_subblock_w": 1,
+                                "per_core_M": 49,
+                                "per_core_N": 1,
+                            },
 
-    (3136, 64, 256) : {"compute_with_storage_grid_size" : (4,2),
-                            "in0_block_w" : 2,
-                            "out_subblock_h" : 1,
-                            "out_subblock_w": 1,
-                            "per_core_M": 49,
-                            "per_core_N": 2,
-                        },
-    (3136, 256, 64) : {"compute_with_storage_grid_size" : (2,7),
-                    "in0_block_w" : 8,
-                    "out_subblock_h" : 1,
-                    "out_subblock_w": 1,
-                    "per_core_M": 14,
-                    "per_core_N": 1,
-                },
-    (3136, 256, 128) : {"compute_with_storage_grid_size" : (4,7),
-                    "in0_block_w" : 8,
-                    "out_subblock_h" : 1,
-                    "out_subblock_w": 1,
-                    "per_core_M": 14,
-                    "per_core_N": 1,
-                },
-    (800, 128, 512) : {"compute_with_storage_grid_size" : (4,2),
-                    "in0_block_w" : 4,
-                    "out_subblock_h" : 1,
-                    "out_subblock_w": 1,
-                    "per_core_M": 13,
-                    "per_core_N": 4,
-                },
-    (800, 512, 128) : {"compute_with_storage_grid_size" : (4,4),
-                    "in0_block_w" : 16,
-                    "out_subblock_h" : 1,
-                    "out_subblock_w": 1,
-                    "per_core_M": 7,
-                    "per_core_N": 1,
-                },
-    (800, 512, 256) : {"compute_with_storage_grid_size" : (8,4),
-                    "in0_block_w" : 16,
-                    "out_subblock_h" : 1,
-                    "out_subblock_w": 1,
-                    "per_core_M": 7,
-                    "per_core_N": 1,
-                },
-    (224, 256, 1024) : {"compute_with_storage_grid_size" : (8,7),
-                    "in0_block_w" : 8,
-                    "out_subblock_h" : 1,
-                    "out_subblock_w": 1,
-                    "per_core_M": 1,
-                    "per_core_N": 4,
-                },
-    (224, 1024, 256) : {"compute_with_storage_grid_size" : (8,7),
-                    "in0_block_w" : 32,
-                    "out_subblock_h" : 1,
-                    "out_subblock_w": 1,
-                    "per_core_M": 1,
-                    "per_core_N": 1,
-                },
-    (224, 1024, 512) : {"compute_with_storage_grid_size" : (8,7),
-                    "in0_block_w" : 32,
-                    "out_subblock_h" : 1,
-                    "out_subblock_w": 1,
-                    "per_core_M": 1,
-                    "per_core_N": 2,
-                },
-    (64, 512, 2048) : {"compute_with_storage_grid_size" : (8,2),
-                    "in0_block_w" : 16,
-                    "out_subblock_h" : 1,
-                    "out_subblock_w": 1,
-                    "per_core_M": 1,
-                    "per_core_N": 8,
-                },
-    (64, 2048, 512) : {"compute_with_storage_grid_size" : (8,2),
-                    "in0_block_w" : 64,
-                    "out_subblock_h" : 1,
-                    "out_subblock_w": 1,
-                    "per_core_M": 1,
-                    "per_core_N": 2,
-                },
+        (3136, 64, 256) : {"compute_with_storage_grid_size" : (4,2),
+                                "in0_block_w" : 2,
+                                "out_subblock_h" : 1,
+                                "out_subblock_w": 1,
+                                "per_core_M": 49,
+                                "per_core_N": 2,
+                            },
+        (3136, 256, 64) : {"compute_with_storage_grid_size" : (2,7),
+                        "in0_block_w" : 8,
+                        "out_subblock_h" : 1,
+                        "out_subblock_w": 1,
+                        "per_core_M": 14,
+                        "per_core_N": 1,
+                    },
+        (3136, 256, 128) : {"compute_with_storage_grid_size" : (4,7),
+                        "in0_block_w" : 8,
+                        "out_subblock_h" : 1,
+                        "out_subblock_w": 1,
+                        "per_core_M": 14,
+                        "per_core_N": 1,
+                    },
+        (800, 128, 512) : {"compute_with_storage_grid_size" : (4,2),
+                        "in0_block_w" : 4,
+                        "out_subblock_h" : 1,
+                        "out_subblock_w": 1,
+                        "per_core_M": 13,
+                        "per_core_N": 4,
+                    },
+        (800, 512, 128) : {"compute_with_storage_grid_size" : (4,4),
+                        "in0_block_w" : 16,
+                        "out_subblock_h" : 1,
+                        "out_subblock_w": 1,
+                        "per_core_M": 7,
+                        "per_core_N": 1,
+                    },
+        (800, 512, 256) : {"compute_with_storage_grid_size" : (8,4),
+                        "in0_block_w" : 16,
+                        "out_subblock_h" : 1,
+                        "out_subblock_w": 1,
+                        "per_core_M": 7,
+                        "per_core_N": 1,
+                    },
+        (224, 256, 1024) : {"compute_with_storage_grid_size" : (8,7),
+                        "in0_block_w" : 8,
+                        "out_subblock_h" : 1,
+                        "out_subblock_w": 1,
+                        "per_core_M": 1,
+                        "per_core_N": 4,
+                    },
+        (224, 1024, 256) : {"compute_with_storage_grid_size" : (8,7),
+                        "in0_block_w" : 32,
+                        "out_subblock_h" : 1,
+                        "out_subblock_w": 1,
+                        "per_core_M": 1,
+                        "per_core_N": 1,
+                    },
+        (224, 1024, 512) : {"compute_with_storage_grid_size" : (8,7),
+                        "in0_block_w" : 32,
+                        "out_subblock_h" : 1,
+                        "out_subblock_w": 1,
+                        "per_core_M": 1,
+                        "per_core_N": 2,
+                    },
+        (64, 512, 2048) : {"compute_with_storage_grid_size" : (8,2),
+                        "in0_block_w" : 16,
+                        "out_subblock_h" : 1,
+                        "out_subblock_w": 1,
+                        "per_core_M": 1,
+                        "per_core_N": 8,
+                    },
+        (64, 2048, 512) : {"compute_with_storage_grid_size" : (8,2),
+                        "in0_block_w" : 64,
+                        "out_subblock_h" : 1,
+                        "out_subblock_w": 1,
+                        "per_core_M": 1,
+                        "per_core_N": 2,
+                    },
+    },
+    2 : {
+        (6272, 64, 64) : {"compute_with_storage_grid_size" : (2,4),
+                                "in0_block_w" : 2,
+                                "out_subblock_h" : 1,
+                                "out_subblock_w": 1,
+                                "per_core_M": 49,
+                                "per_core_N": 1,
+                            },
+
+        (6272, 64, 256) : {"compute_with_storage_grid_size" : (4,4),
+                                "in0_block_w" : 2,
+                                "out_subblock_h" : 1,
+                                "out_subblock_w": 1,
+                                "per_core_M": 49,
+                                "per_core_N": 2,
+                            },
+        (6272, 256, 64) : {"compute_with_storage_grid_size" : (2,9), # (x,y)
+                        "in0_block_w" : 8,
+                        "out_subblock_h" : 1,
+                        "out_subblock_w": 1,
+                        "per_core_M": 22, # across y
+                        "per_core_N": 1, # across x
+                    },
+        (6272, 256, 128) : {"compute_with_storage_grid_size" : (4,9),
+                        "in0_block_w" : 8,
+                        "out_subblock_h" : 1,
+                        "out_subblock_w": 1,
+                        "per_core_M": 22,
+                        "per_core_N": 1,
+                    },
+        (1568, 128, 512) : {"compute_with_storage_grid_size" : (4,4),
+                        "in0_block_w" : 4,
+                        "out_subblock_h" : 1,
+                        "out_subblock_w": 1,
+                        "per_core_M": 13,
+                        "per_core_N": 4,
+                    },
+        (1568, 512, 128) : {"compute_with_storage_grid_size" : (4,9),
+                        "in0_block_w" : 16,
+                        "out_subblock_h" : 1,
+                        "out_subblock_w": 1,
+                        "per_core_M": 6,
+                        "per_core_N": 1,
+                    },
+        (1568, 512, 256) : {"compute_with_storage_grid_size" : (8,9),
+                        "in0_block_w" : 16,
+                        "out_subblock_h" : 1,
+                        "out_subblock_w": 1,
+                        "per_core_M": 6,
+                        "per_core_N": 1,
+                    },
+        (416, 256, 1024) : {"compute_with_storage_grid_size" : (8,7),
+                        "in0_block_w" : 8,
+                        "out_subblock_h" : 1,
+                        "out_subblock_w": 1,
+                        "per_core_M": 2,
+                        "per_core_N": 4,
+                    },
+        (416, 1024, 256) : {"compute_with_storage_grid_size" : (8,7),
+                        "in0_block_w" : 32,
+                        "out_subblock_h" : 1,
+                        "out_subblock_w": 1,
+                        "per_core_M": 2,
+                        "per_core_N": 1,
+                    },
+        (416, 1024, 512) : {"compute_with_storage_grid_size" : (8,7),
+                        "in0_block_w" : 32,
+                        "out_subblock_h" : 1,
+                        "out_subblock_w": 1,
+                        "per_core_M": 2,
+                        "per_core_N": 2,
+                    },
+        (128, 512, 2048) : {"compute_with_storage_grid_size" : (8,4),
+                        "in0_block_w" : 16,
+                        "out_subblock_h" : 1,
+                        "out_subblock_w": 1,
+                        "per_core_M": 1,
+                        "per_core_N": 8,
+                    },
+        (128, 2048, 512) : {"compute_with_storage_grid_size" : (8,4),
+                        "in0_block_w" : 64,
+                        "out_subblock_h" : 1,
+                        "out_subblock_w": 1,
+                        "per_core_M": 1,
+                        "per_core_N": 2,
+                    },
+    },
+}
+
+hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv = {
+    1 : {
+        (3136, 64) : [128, 64, 128, 64] ,
+        (800, 128) : [128, 128, 128, 64] ,
+        (224, 256) : [64, 128, 64, 128],
+        (64, 512) : [32, 64, 32, 64] ,
+    },
+    2  : {
+        (6272, 64) : [128, 64, 128, 64] ,
+        (1568, 128) : [128, 128, 128, 64] ,
+        (416, 256) : [64, 128, 64, 128],
+        (128, 512) : [32, 64, 32, 64] ,
+    }
+}
+
+# With double buffered input CB, these shapes work -
+hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_downsample_conv = {
+    1 : {
+        (3136, 256) : [128, 64, 128, 64] ,
+        (800, 512) : [128, 64, 128, 64] ,
+        (224, 1024) : [64, 128, 64, 64],
+        (64, 2048) : [64, 128, 64, 64] ,
+    },
+    2 : {
+        (6272, 256) : [128, 64, 128, 64] ,
+        (1568, 512) : [128, 64, 128, 64] ,
+        (416, 1024) : [64, 128, 64, 64],
+        (128, 2048) : [64, 128, 64, 64] ,
+    }
 }
 
 class Bottleneck(nn.Module):
@@ -174,7 +295,8 @@ class Bottleneck(nn.Module):
         norm_layer_after_downsample_conv_on_tt = None,
         downsample_params = [],
         storage_in_dram=True,
-        input_shape = []
+        input_shape = [],
+        batch_size=1
     ) -> None:
         super().__init__()
         self.device = device
@@ -242,9 +364,9 @@ class Bottleneck(nn.Module):
         self.module_input_shape = input_shape
         self.conv1_params = [width, inplanes, 1, 1, 1, 1, 0, 0, dilation, groups]
         self.conv1_output_shape = compute_conv_output_shape(self.conv1_params, input_shape)
-        conv1_as_mm_padded_act_height = _nearest_32(self.conv1_output_shape[1] * self.conv1_output_shape[2])
-        assert (conv1_as_mm_padded_act_height, inplanes, width) in hardcoded_matmul_config_conv
-        matmul_config = hardcoded_matmul_config_conv[(conv1_as_mm_padded_act_height, inplanes, width)]
+        conv1_as_mm_padded_act_height = _nearest_32(self.conv1_output_shape[0] * self.conv1_output_shape[1] * self.conv1_output_shape[2])
+        assert (conv1_as_mm_padded_act_height, inplanes, width) in hardcoded_matmul_config_conv[batch_size]
+        matmul_config = hardcoded_matmul_config_conv[batch_size][(conv1_as_mm_padded_act_height, inplanes, width)]
         # 1x1 conv with stride 1 padding 0 is run using regular matmul
         self.conv1 = resnet50_1x1_conv_as_matmul(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, conv1_bias.tolist(), matmul_config, fuse_relu=True)
 
@@ -263,26 +385,21 @@ class Bottleneck(nn.Module):
         #     (224, 256) : [64, 128, 64, 128],
         #     (64, 512) : [32, 64, 32, 64] ,
         # }
-        hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv2 = {
-            (3136, 64) : [128, 64, 128, 64] ,
-            (800, 128) : [128, 128, 128, 64] ,
-            (224, 256) : [64, 128, 64, 128],
-            (64, 512) : [32, 64, 32, 64] ,
-        }
+
         self.conv2_params = [width, width, 3, 3, stride, stride, 1, 1, dilation, groups]
         self.conv2_output_shape = compute_conv_output_shape(self.conv2_params, self.conv1_output_shape)
-        conv2_output_padded_face_size = _nearest_32(self.conv2_output_shape[1] * self.conv2_output_shape[2])
-        assert (conv2_output_padded_face_size, width) in hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv2
-        [act_block_h_datums, weight_block_w_datums, out_subblock_h_datums, out_subblock_w_datums] = hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv2[(conv2_output_padded_face_size, width)]
+        conv2_output_padded_face_size = _nearest_32(self.conv2_output_shape[0] * self.conv2_output_shape[1] * self.conv2_output_shape[2])
+        assert (conv2_output_padded_face_size, width) in hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv[batch_size]
+        [act_block_h_datums, weight_block_w_datums, out_subblock_h_datums, out_subblock_w_datums] = hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv[batch_size][(conv2_output_padded_face_size, width)]
         self.conv2 = resnet50_optimized_conv(conv2_weight.reshape(-1).tolist(), self.conv2_params, self.device, [act_block_h_datums, width*3], [width*3, weight_block_w_datums], [out_subblock_h_datums, out_subblock_w_datums], conv2_bias.tolist(), True)
 
         self.conv3_params = [planes * self.expansion, width, 1, 1, 1, 1, 0, 0, dilation, groups]
         self.conv3_output_shape = compute_conv_output_shape(self.conv3_params, self.conv2_output_shape)
-        conv3_as_mm_padded_act_height = _nearest_32(self.conv3_output_shape[1] * self.conv3_output_shape[2])
+        conv3_as_mm_padded_act_height = _nearest_32(self.conv3_output_shape[0] * self.conv3_output_shape[1] * self.conv3_output_shape[2])
         matmul_config = None
-        assert (conv3_as_mm_padded_act_height, width, planes * self.expansion) in hardcoded_matmul_config_conv
+        assert (conv3_as_mm_padded_act_height, width, planes * self.expansion) in hardcoded_matmul_config_conv[batch_size]
         #print("Setting matmul config for 1x1 conv (third conv in module)")
-        matmul_config = hardcoded_matmul_config_conv[(conv3_as_mm_padded_act_height, width, planes * self.expansion)]
+        matmul_config = hardcoded_matmul_config_conv[batch_size][(conv3_as_mm_padded_act_height, width, planes * self.expansion)]
         # 1x1 conv with stride 1 padding 0 is run using regular matmul
         self.conv3 = resnet50_1x1_conv_as_matmul(conv3_weight.reshape(-1).tolist(), self.conv3_params, self.device, conv3_bias.tolist(), matmul_config)
         self.conv3_output_shape = compute_conv_output_shape(self.conv3_params, self.conv2_output_shape)
@@ -307,7 +424,6 @@ class Bottleneck(nn.Module):
             if(self.downsample_params[2] != 1 or self.downsample_params[4] != 1 or self.downsample_params[6] != 0):
                 x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
                 x = x.reshape(self.module_input_shape[0], self.module_input_shape[1], self.module_input_shape[2], self.module_input_shape[3])
-            #print("Running downsample")
             identity = self.downsample_conv_on_tt(x)
 
         fused_activations = [tt_lib.tensor.FusibleActivation.RELU]
@@ -332,7 +448,8 @@ class ResNet(nn.Module):
         base_address = None,
         fold_batchnorm = False,
         storage_in_dram = True,
-        conv_input_face_shape_hw = [224,224]
+        conv_input_face_shape_hw = [224,224],
+        batch_size = 1
     ) -> None:
         super().__init__()
         self.device = device
@@ -341,6 +458,7 @@ class ResNet(nn.Module):
         self.fold_batchnorm = fold_batchnorm
         self.storage_in_dram = storage_in_dram
         self.conv_input_face_shape_hw = conv_input_face_shape_hw
+        self.batch_size = batch_size
         if self.storage_in_dram:
             self.memory_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.DRAM)
         else:
@@ -379,15 +497,15 @@ class ResNet(nn.Module):
 
         self.conv1_params = [self.inplanes, 3, 7, 7, 2, 2, 3, 3, 1, groups]
         self.conv1 = resnet50_first_conv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, [128, 128], [128, 64], [128, 64], conv1_bias.tolist(), 8)
-        self.conv1_output_shape = compute_conv_output_shape(self.conv1_params, [1, self.conv_input_face_shape_hw[0], self.conv_input_face_shape_hw[1], self.inplanes])
+        self.conv1_output_shape = compute_conv_output_shape(self.conv1_params, [batch_size, self.conv_input_face_shape_hw[0], self.conv_input_face_shape_hw[1], self.inplanes])
         self.relu = tt_lib.tensor.relu_without_autoformat
         # self.maxpool = fallback_ops.MaxPool2d(kernel_size=3, stride=2, padding=1, channels_last=True, reshape_2d=True)
         self.maxpool = TtMaxPool(self.device, kernel_size=3, stride=2, padding=1, output_mem_config=self.memory_config, nblocks=8, channels_last=True, reshape_2d=True)
         self.maxpool_output_shape = compute_max_pool_shape(3, 2, 1, self.conv1_output_shape)
-        self.layer1, self.layer1_output_shape = self._make_layer(block, 64, layers[0], name="layer1", state_dict=state_dict, layer_input_shape=self.maxpool_output_shape)
-        self.layer2, self.layer2_output_shape = self._make_layer(block, 128, layers[1], stride=2, dilate=replace_stride_with_dilation[0], name="layer2", state_dict=state_dict, layer_input_shape=self.layer1_output_shape)
-        self.layer3, self.layer3_output_shape = self._make_layer(block, 256, layers[2], stride=2, dilate=replace_stride_with_dilation[1], name="layer3", state_dict=state_dict, layer_input_shape=self.layer2_output_shape)
-        self.layer4, self.layer4_output_shape = self._make_layer(block, 512, layers[3], stride=2, dilate=replace_stride_with_dilation[2], name="layer4", state_dict=state_dict, layer_input_shape=self.layer3_output_shape)
+        self.layer1, self.layer1_output_shape = self._make_layer(block, 64, layers[0], name="layer1", state_dict=state_dict, layer_input_shape=self.maxpool_output_shape, batch_size=batch_size)
+        self.layer2, self.layer2_output_shape = self._make_layer(block, 128, layers[1], stride=2, dilate=replace_stride_with_dilation[0], name="layer2", state_dict=state_dict, layer_input_shape=self.layer1_output_shape, batch_size=batch_size)
+        self.layer3, self.layer3_output_shape = self._make_layer(block, 256, layers[2], stride=2, dilate=replace_stride_with_dilation[1], name="layer3", state_dict=state_dict, layer_input_shape=self.layer2_output_shape, batch_size=batch_size)
+        self.layer4, self.layer4_output_shape = self._make_layer(block, 512, layers[3], stride=2, dilate=replace_stride_with_dilation[2], name="layer4", state_dict=state_dict, layer_input_shape=self.layer3_output_shape, batch_size=batch_size)
         self.avgpool = TtAvgPool(self.device)
 
         fc_weight = pad_weight(state_dict[f"{self.base_address_with_dot}fc.weight"])
@@ -408,7 +526,8 @@ class ResNet(nn.Module):
         dilate: bool = False,
         name: str = None,
         state_dict = None,
-        layer_input_shape = []
+        layer_input_shape = [],
+        batch_size = 1
     ):
         norm_layer = self._norm_layer
         downsample = None
@@ -441,26 +560,19 @@ class ResNet(nn.Module):
             #     (64, 2048) : [64, 128, 64, 64] ,
             # }
 
-            # With double buffered input CB, these shapes work -
-            hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_downsample_conv = {
-                (3136, 256) : [128, 64, 128, 64] ,
-                (800, 512) : [128, 64, 128, 64] ,
-                (224, 1024) : [64, 128, 64, 64],
-                (64, 2048) : [64, 128, 64, 64] ,
-            }
             downsample_output_channels = planes * block.expansion
             self.downsample_params = [downsample_output_channels, self.inplanes, 1, 1, stride, stride, 0, 0, self.dilation, 1]
             self.downsample_conv_output_shape = compute_conv_output_shape(self.downsample_params, layer_input_shape)
-            downsample_output_padded_face_size = _nearest_32(self.downsample_conv_output_shape[1] * self.downsample_conv_output_shape[2])
-            assert (downsample_output_padded_face_size, downsample_output_channels) in hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_downsample_conv
-            [act_block_h_datums, weight_block_w_datums, out_subblock_h_datums, out_subblock_w_datums] = hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_downsample_conv[(downsample_output_padded_face_size, downsample_output_channels)]
+            downsample_output_padded_face_size = _nearest_32(self.downsample_conv_output_shape[0] * self.downsample_conv_output_shape[1] * self.downsample_conv_output_shape[2])
+            assert (downsample_output_padded_face_size, downsample_output_channels) in hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_downsample_conv[batch_size]
+            [act_block_h_datums, weight_block_w_datums, out_subblock_h_datums, out_subblock_w_datums] = hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_downsample_conv[batch_size][(downsample_output_padded_face_size, downsample_output_channels)]
 
             is_downsample_1x1_conv = stride == 1
             matmul_config = None
             if is_downsample_1x1_conv:
-                assert (downsample_output_padded_face_size, self.inplanes, downsample_output_channels) in hardcoded_matmul_config_conv
+                assert (downsample_output_padded_face_size, self.inplanes, downsample_output_channels) in hardcoded_matmul_config_conv[batch_size]
                 #print("Setting matmul config for 1x1 conv (downsample stride 1 conv in module)")
-                matmul_config = hardcoded_matmul_config_conv[(downsample_output_padded_face_size,  self.inplanes, downsample_output_channels)]
+                matmul_config = hardcoded_matmul_config_conv[batch_size][(downsample_output_padded_face_size,  self.inplanes, downsample_output_channels)]
                 self.downsample_conv_on_tt = resnet50_1x1_conv_as_matmul(downsample_conv_weight.reshape(-1).tolist(), self.downsample_params, self.device, downsample_conv_bias.tolist(), matmul_config)
             else:
                 self.downsample_conv_on_tt = resnet50_optimized_conv(downsample_conv_weight.reshape(-1).tolist(),
@@ -491,7 +603,8 @@ class ResNet(nn.Module):
                 norm_layer_after_downsample_conv_on_tt=self.norm_layer_after_downsample_conv_on_tt,
                 downsample_params=self.downsample_params,
                 storage_in_dram=self.storage_in_dram,
-                input_shape=layer_input_shape
+                input_shape=layer_input_shape,
+                batch_size=batch_size
             )
         )
         self.inplanes = planes * block.expansion
@@ -510,7 +623,8 @@ class ResNet(nn.Module):
                     base_address=f"{self.base_address_with_dot}{name}.{_}",
                     fold_batchnorm=self.fold_batchnorm,
                     storage_in_dram=self.storage_in_dram,
-                    input_shape=previous_layer.conv3_output_shape
+                    input_shape=previous_layer.conv3_output_shape,
+                    batch_size=batch_size
                 )
             )
         last_layer_shape = layers[-1].conv3_output_shape
@@ -535,6 +649,7 @@ class ResNet(nn.Module):
         x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
         x = x.reshape(self.conv1_output_shape[0], self.conv1_output_shape[1], self.conv1_output_shape[2], self.conv1_output_shape[3])
         x = self.maxpool(x)
+        x = x.reshape(1, 1, self.maxpool_output_shape[0] * self.maxpool_output_shape[1] * self.maxpool_output_shape[2], self.maxpool_output_shape[3])
         x = format_tensor(x, tt_lib.tensor.Layout.TILE, self.device, self.memory_config)
 
         for layer in self.layer1:
@@ -546,11 +661,16 @@ class ResNet(nn.Module):
         for i,layer in enumerate(self.layer4):
             x = layer.run_forward(x)
         x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
+        x = x.reshape(self.batch_size, x.shape()[1], (int) (x.shape()[2]/self.batch_size), x.shape()[3])
         x = format_tensor(x, tt_lib.tensor.Layout.TILE, self.device, self.memory_config)
         x = self.avgpool(x)
         x = self.fc(x)
         desired_shape = [x.shape()[0], x.shape()[1], 1, 1000]
-        x = unpad_from_zero(x, desired_shape)
+        x = x.cpu()
+        assert x.layout() != tt_lib.tensor.Layout.ROW_MAJOR
+        x = x.to(tt_lib.tensor.Layout.ROW_MAJOR)
+        x = x.unpad((0, 0, 0, 0), (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1) )
+        x = x.to_torch().to(torch.float)
         return x
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

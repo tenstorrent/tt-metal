@@ -24,10 +24,12 @@ from tests.models.resnet.metalResnetBlock50 import ResNet, Bottleneck
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose_and_pcc, comp_pcc
 
 
-@pytest.mark.parametrize("fold_batchnorm", [True], ids=["Batchnorm folded"])
-def test_run_resnet50_inference(use_program_cache, fold_batchnorm, imagenet_sample_input):
-    image = imagenet_sample_input
-
+@pytest.mark.parametrize("batch_size", [1,2])
+def test_run_resnet50_inference(use_program_cache, batch_size, imagenet_sample_input):
+    image1 = imagenet_sample_input
+    image = image1
+    for i in range(batch_size-1):
+        image = torch.cat((image, image1), dim=0)
     with torch.no_grad():
         torch.manual_seed(1234)
 
@@ -46,8 +48,9 @@ def test_run_resnet50_inference(use_program_cache, fold_batchnorm, imagenet_samp
                         device=device,
                         state_dict=state_dict,
                         base_address="",
-                        fold_batchnorm=fold_batchnorm,
-                        storage_in_dram=storage_in_dram)
+                        fold_batchnorm=True,
+                        storage_in_dram=storage_in_dram,
+                        batch_size=batch_size)
 
         torch_output = torch_resnet50(image).unsqueeze(1).unsqueeze(1)
         tt_output = tt_resnet50(image)
