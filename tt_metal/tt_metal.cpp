@@ -634,7 +634,6 @@ bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
 
     for (auto &[logical_core, kernel_group] : program.core_to_kernel_group()) {
         auto worker_core = device->worker_core_from_logical_core(logical_core);
-        std::cout << "Logical core in program is: " << logical_core.str() << " worker core " << worker_core.str() << std::endl;
         worker_cores.insert(worker_core);
 
         if (program.circular_buffers_on_core(logical_core).size()) {
