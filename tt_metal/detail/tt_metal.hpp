@@ -319,7 +319,7 @@ namespace tt::tt_metal{
             ClusterWrapper(const ClusterWrapper&) = delete;
             ClusterWrapper(ClusterWrapper&& other) noexcept = delete;
 
-            static ClusterWrapper& inst(const tt::ARCH &arch, const TargetDevice &target_type) {
+            static const ClusterWrapper& inst(const tt::ARCH &arch, const TargetDevice &target_type) {
                 static ClusterWrapper inst(arch, target_type);
                 return inst;
             }
