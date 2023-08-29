@@ -179,12 +179,7 @@ void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program &program,
 
 operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, vector<int> conv_params,
                                        uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
-<<<<<<< HEAD
-                                       uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool use_fast_reader, bool untilize_out, bool has_bias, const MathFidelity math_fidelity, Tensor &output) {
-=======
-                                       uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels,
-                                       bool use_fast_reader, bool untilize_out, bool has_bias, bool fuse_relu, Tensor &output) {
->>>>>>> 31d28d8b9... #0: RELU fused
+                                       uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool use_fast_reader, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity, Tensor &output) {
     bool pass = true;
     tt_metal::Device *device = a.device();
     TT_ASSERT(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
