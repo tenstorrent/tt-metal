@@ -80,6 +80,3 @@ $(TESTDIR)/tt_metal/%: $(OBJDIR)/tt_metal/tests/%.o $(TT_METAL_LIB) $(TT_DNN_LIB
 $(OBJDIR)/tt_metal/tests/%.o: tests/tt_metal/tt_metal/%.cpp
 	@mkdir -p $(@D)
 	$(CXX) $(CFLAGS) $(CXXFLAGS) $(TT_METAL_TESTS_INCLUDES) -c -o $@ $<
-
-tt_metal/tests: tests/tt_metal
-tt_metal/tests/all: tests/tt_metal/all
