@@ -44,13 +44,15 @@ ALWI void REL() { release_dst(tt::DstMode::Half); }
 
 namespace NAMESPACE {
 void MAIN {
-    binary_op_specific_init(ELTWISE_OP_CODE);
-    binary_op_init_common(0, 1);
+    //binary_op_specific_init(ELTWISE_OP_CODE);
+    //binary_op_init_common(0, 1);
 
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_size = get_compile_time_arg_val(1);
     constexpr auto cb_ex = tt::CB::c_intermed0;
     constexpr auto cb_ex2 = tt::CB::c_intermed1;
+    //binary_op_specific_init(ELTWISE_OP_CODE);
+    binary_op_init_common(cb_ex, cb_ex2);
     for(uint32_t block = 0; block < per_core_block_cnt; ++block) {
 
         cb_reserve_back(tt::CB::c_out0, per_core_block_size);
@@ -98,7 +100,8 @@ void MAIN {
 
             //ELTWISE_OP(tt::CB::c_in0, cb_ex2, 0, 0, 0);
             add_tiles_init();
-            add_tiles(cb_ex, cb_ex2, 0, 0, 0);
+            // add_tiles(cb_ex, cb_ex2, 0, 0, 0);
+            ELTWISE_OP(cb_ex, cb_ex2, 0, 0, 0);
             //end of prescaling
 
            /*
