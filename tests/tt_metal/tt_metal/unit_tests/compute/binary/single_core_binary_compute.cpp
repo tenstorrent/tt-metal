@@ -1,8 +1,9 @@
+#include <gtest/gtest.h>
+
 #include <algorithm>
 #include <functional>
 #include <random>
 
-#include "doctest.h"
 #include "single_device_fixture.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
@@ -44,7 +45,6 @@ struct SingleCoreBinaryConfig {
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& test_config) {
-
     // Once this test is uplifted to use fast dispatch, this can be removed.
     char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
     putenv(env);
@@ -55,26 +55,14 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
     ////////////////////////////////////////////////////////////////////////////
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     tt_metal::Program program = tt_metal::Program();
-    auto input0_dram_buffer = tt_metal::Buffer(
-        device,
-        byte_size,
-        test_config.input_dram_byte_address,
-        byte_size,
-        tt_metal::BufferType::DRAM);
+    auto input0_dram_buffer =
+        tt_metal::Buffer(device, byte_size, test_config.input_dram_byte_address, byte_size, tt_metal::BufferType::DRAM);
     auto input0_dram_noc_xy = input0_dram_buffer.noc_coordinates();
     auto input1_dram_buffer = tt_metal::Buffer(
-        device,
-        byte_size,
-        test_config.input_dram_byte_address + byte_size,
-        byte_size,
-        tt_metal::BufferType::DRAM);
+        device, byte_size, test_config.input_dram_byte_address + byte_size, byte_size, tt_metal::BufferType::DRAM);
     auto input1_dram_noc_xy = input1_dram_buffer.noc_coordinates();
     auto output_dram_buffer = tt_metal::Buffer(
-        device,
-        byte_size,
-        test_config.output_dram_byte_address,
-        byte_size,
-        tt_metal::BufferType::DRAM);
+        device, byte_size, test_config.output_dram_byte_address, byte_size, tt_metal::BufferType::DRAM);
     auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 
     auto l1_input0_cb = tt_metal::CreateCircularBuffer(
@@ -106,13 +94,15 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
         program,
         "tt_metal/kernels/dataflow/reader_binary.cpp",
         test_config.core,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary.cpp",
         test_config.core,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     vector<uint32_t> compute_kernel_args = {
         uint32_t(test_config.num_tiles),  // per_core_block_cnt
@@ -120,8 +110,7 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
     };
     std::map<string, string> defines = {
         {"ELTWISE_OP_CODE", binary_op_name_to_op_code.at(test_config.binary_op)},
-        {"ELTWISE_OP", binary_op_name_to_op_kernel.at(test_config.binary_op)}
-    };
+        {"ELTWISE_OP", binary_op_name_to_op_kernel.at(test_config.binary_op)}};
     auto binary_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/eltwise_binary.cpp",
@@ -200,46 +189,87 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
     return pass;
 }
 }  // namespace unit_tests::compute::binary
-TEST_SUITE("BinaryCompute") {
-    TEST_CASE_FIXTURE(unit_tests::SingleDeviceFixture, "SingleCore") {
-        unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
-            .tile_byte_size = 2 * 32 * 32,
-            .output_dram_byte_address = 0,
-            .input_dram_byte_address = 16 * 32 * 32,
-            .l1_input_byte_address = UNRESERVED_BASE,
-            .l1_input_data_format = tt::DataFormat::Float16_b,
-            .l1_output_byte_address = UNRESERVED_BASE + 16 * 32 * 32,
-            .l1_output_data_format = tt::DataFormat::Float16_b,
-            .core = {.x = 0, .y = 0}};
-        SUBCASE("SingleTile") {
-            test_config.num_tiles = 1;
-            SUBCASE("add") {
-                test_config.binary_op = "add";
-                REQUIRE(unit_tests::compute::binary::single_core_binary(device_, test_config));
-            }
-            SUBCASE("sub") {
-                test_config.binary_op = "sub";
-                REQUIRE(unit_tests::compute::binary::single_core_binary(device_, test_config));
-            }
-            SUBCASE("sub") {
-                test_config.binary_op = "sub";
-                REQUIRE(unit_tests::compute::binary::single_core_binary(device_, test_config));
-            }
-        }
-        SUBCASE("MultiTile") {
-            test_config.num_tiles = 4;
-            SUBCASE("add") {
-                test_config.binary_op = "add";
-                REQUIRE(unit_tests::compute::binary::single_core_binary(device_, test_config));
-            }
-            SUBCASE("sub") {
-                test_config.binary_op = "sub";
-                REQUIRE(unit_tests::compute::binary::single_core_binary(device_, test_config));
-            }
-            SUBCASE("sub") {
-                test_config.binary_op = "sub";
-                REQUIRE(unit_tests::compute::binary::single_core_binary(device_, test_config));
-            }
-        }
-    }
+TEST_F(SingleDeviceFixture, BinaryComputeSingleCoreSingleTileAdd) {
+    unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
+        .tile_byte_size = 2 * 32 * 32,
+        .output_dram_byte_address = 0,
+        .input_dram_byte_address = 16 * 32 * 32,
+        .l1_input_byte_address = UNRESERVED_BASE,
+        .l1_input_data_format = tt::DataFormat::Float16_b,
+        .l1_output_byte_address = UNRESERVED_BASE + 16 * 32 * 32,
+        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .core = {.x = 0, .y = 0},
+        .binary_op = "add"};
+    test_config.num_tiles = 1;
+    ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device_, test_config));
+}
+TEST_F(SingleDeviceFixture, BinaryComputeSingleCoreSingleTileSub) {
+    unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
+        .tile_byte_size = 2 * 32 * 32,
+        .output_dram_byte_address = 0,
+        .input_dram_byte_address = 16 * 32 * 32,
+        .l1_input_byte_address = UNRESERVED_BASE,
+        .l1_input_data_format = tt::DataFormat::Float16_b,
+        .l1_output_byte_address = UNRESERVED_BASE + 16 * 32 * 32,
+        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .core = {.x = 0, .y = 0},
+        .binary_op = "sub"};
+    test_config.num_tiles = 1;
+    ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device_, test_config));
+}
+TEST_F(SingleDeviceFixture, BinaryComputeSingleCoreSingleTileMul) {
+    unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
+        .tile_byte_size = 2 * 32 * 32,
+        .output_dram_byte_address = 0,
+        .input_dram_byte_address = 16 * 32 * 32,
+        .l1_input_byte_address = UNRESERVED_BASE,
+        .l1_input_data_format = tt::DataFormat::Float16_b,
+        .l1_output_byte_address = UNRESERVED_BASE + 16 * 32 * 32,
+        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .core = {.x = 0, .y = 0},
+        .binary_op = "mul"};
+    test_config.num_tiles = 1;
+    ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device_, test_config));
+}
+TEST_F(SingleDeviceFixture, BinaryComputeSingleCoreMultiTileAdd) {
+    unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
+        .tile_byte_size = 2 * 32 * 32,
+        .output_dram_byte_address = 0,
+        .input_dram_byte_address = 16 * 32 * 32,
+        .l1_input_byte_address = UNRESERVED_BASE,
+        .l1_input_data_format = tt::DataFormat::Float16_b,
+        .l1_output_byte_address = UNRESERVED_BASE + 16 * 32 * 32,
+        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .core = {.x = 0, .y = 0},
+        .binary_op = "add"};
+    test_config.num_tiles = 4;
+    ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device_, test_config));
+}
+TEST_F(SingleDeviceFixture, BinaryComputeSingleCoreMultiTileSub) {
+    unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
+        .tile_byte_size = 2 * 32 * 32,
+        .output_dram_byte_address = 0,
+        .input_dram_byte_address = 16 * 32 * 32,
+        .l1_input_byte_address = UNRESERVED_BASE,
+        .l1_input_data_format = tt::DataFormat::Float16_b,
+        .l1_output_byte_address = UNRESERVED_BASE + 16 * 32 * 32,
+        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .core = {.x = 0, .y = 0},
+        .binary_op = "sub"};
+    test_config.num_tiles = 4;
+    ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device_, test_config));
+}
+TEST_F(SingleDeviceFixture, BinaryComputeSingleCoreMultiTileMul) {
+    unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
+        .tile_byte_size = 2 * 32 * 32,
+        .output_dram_byte_address = 0,
+        .input_dram_byte_address = 16 * 32 * 32,
+        .l1_input_byte_address = UNRESERVED_BASE,
+        .l1_input_data_format = tt::DataFormat::Float16_b,
+        .l1_output_byte_address = UNRESERVED_BASE + 16 * 32 * 32,
+        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .core = {.x = 0, .y = 0},
+        .binary_op = "mul"};
+    test_config.num_tiles = 4;
+    ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device_, test_config));
 }

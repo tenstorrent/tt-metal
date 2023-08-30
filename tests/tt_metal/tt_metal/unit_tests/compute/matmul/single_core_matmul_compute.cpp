@@ -1,10 +1,12 @@
+#include <gtest/gtest.h>
+
 #include <algorithm>
 #include <functional>
 #include <random>
 
 #include "common/test_tiles.hpp"  // FIXME: Remove dependency on this or move to test_utils like tilize/untilize
-#include "doctest.h"
 #include "single_device_fixture.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
 #include "tt_metal/test_utils/comparison.hpp"
@@ -12,7 +14,6 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/tilization.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -47,24 +48,12 @@ void create_CBs_for_fused_matmul(
     uint32_t src0_cb_addr = 120 * 1024;
     uint32_t cb0_tiles = M * in0_block_w * 2;
     auto cb_in0 = tt_metal::CreateCircularBuffer(
-        program,
-        in0_cb,
-        core,
-        cb0_tiles,
-        cb0_tiles * single_tile_size,
-        tt::DataFormat::Float16_b,
-        src0_cb_addr);
+        program, in0_cb, core, cb0_tiles, cb0_tiles * single_tile_size, tt::DataFormat::Float16_b, src0_cb_addr);
 
     uint32_t src1_cb_addr = 250 * 1024;
     uint32_t cb1_tiles = N * in0_block_w * 2;
     auto cb_in1 = tt_metal::CreateCircularBuffer(
-        program,
-        in1_cb,
-        core,
-        cb1_tiles,
-        cb1_tiles * single_tile_size,
-        tt::DataFormat::Float16_b,
-        src1_cb_addr);
+        program, in1_cb, core, cb1_tiles, cb1_tiles * single_tile_size, tt::DataFormat::Float16_b, src1_cb_addr);
 
     if (not activations_rm and not output_rm) {  // no tilize, no untilize
         uint32_t matmul_partials_addr = 400 * 1024;
@@ -332,13 +321,15 @@ bool single_core_matmul(tt_metal::Device* device, const SingleCoreMatmulConfig& 
         program,
         writer_kernel_name,
         cfg.core,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     auto reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_matmul_blocked.cpp",
         cfg.core,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     int num_blocks = (cfg.K / cfg.in0_block_w);
     int in0_num_subblocks = (cfg.M / cfg.out_subblock_h);
@@ -422,17 +413,17 @@ bool single_core_matmul(tt_metal::Device* device, const SingleCoreMatmulConfig& 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::StartDebugPrintServer(device, {{1,1}} );
+    tt_metal::StartDebugPrintServer(device, {{1, 1}});
     pass &= tt_metal::CompileProgram(device, program);
     tt_metal::WriteToBuffer(input0_dram_buffer, packed_activation);
     tt_metal::WriteToBuffer(input1_dram_buffer, packed_identity);
     std::vector<uint32_t> input0_dram_readback_packed;
     tt_metal::ReadFromBuffer(input0_dram_buffer, input0_dram_readback_packed);
-    REQUIRE(input0_dram_readback_packed == packed_activation);
+    EXPECT_TRUE(input0_dram_readback_packed == packed_activation);
     print_vector_fixed_numel_per_row(unpack_vector<bfloat16, uint32_t>(input0_dram_readback_packed), 32);
     std::vector<uint32_t> input1_dram_readback_packed;
     tt_metal::ReadFromBuffer(input1_dram_buffer, input1_dram_readback_packed);
-    REQUIRE(input1_dram_readback_packed == packed_identity);
+    EXPECT_TRUE(input1_dram_readback_packed == packed_identity);
     print_vector_fixed_numel_per_row(unpack_vector<bfloat16, uint32_t>(input1_dram_readback_packed), 32);
 
     pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
@@ -447,10 +438,10 @@ bool single_core_matmul(tt_metal::Device* device, const SingleCoreMatmulConfig& 
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> input0_l1_readback_packed;
     tt_metal::detail::ReadFromDeviceL1(device, cfg.core, 120 * 1024, 2 * single_tile_size, input0_l1_readback_packed);
-    REQUIRE(input0_l1_readback_packed == packed_activation);
+    EXPECT_TRUE(input0_l1_readback_packed == packed_activation);
     std::vector<uint32_t> input1_l1_readback_packed;
     tt_metal::detail::ReadFromDeviceL1(device, cfg.core, 250 * 1024, 2 * single_tile_size, input1_l1_readback_packed);
-    REQUIRE(input1_l1_readback_packed == packed_identity);
+    EXPECT_TRUE(input1_l1_readback_packed == packed_identity);
 
     // std::vector<uint32_t> input1_l1_readback_packed;
     // std::vector<uint32_t> output_l1_readback_packed;
@@ -469,7 +460,6 @@ bool single_core_matmul(tt_metal::Device* device, const SingleCoreMatmulConfig& 
     return pass;
 }
 bool single_tile_matmul(tt_metal::Device* device) {
-
     // Once this test is uplifted to use fast dispatch, this can be removed.
     tt::tt_metal::detail::GLOBAL_CQ.reset();
     char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
@@ -492,14 +482,11 @@ bool single_tile_matmul(tt_metal::Device* device) {
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program = tt_metal::Program();
-    auto input0_dram_buffer =
-        tt_metal::Buffer(device, byte_size, in0_dram_addr, byte_size, tt_metal::BufferType::DRAM);
+    auto input0_dram_buffer = tt_metal::Buffer(device, byte_size, in0_dram_addr, byte_size, tt_metal::BufferType::DRAM);
     auto input0_dram_noc_xy = input0_dram_buffer.noc_coordinates();
-    auto input1_dram_buffer =
-        tt_metal::Buffer(device, byte_size, in1_dram_addr, byte_size, tt_metal::BufferType::DRAM);
+    auto input1_dram_buffer = tt_metal::Buffer(device, byte_size, in1_dram_addr, byte_size, tt_metal::BufferType::DRAM);
     auto input1_dram_noc_xy = input1_dram_buffer.noc_coordinates();
-    auto output_dram_buffer =
-        tt_metal::Buffer(device, byte_size, out_dram_addr, byte_size, tt_metal::BufferType::DRAM);
+    auto output_dram_buffer = tt_metal::Buffer(device, byte_size, out_dram_addr, byte_size, tt_metal::BufferType::DRAM);
     auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 
     auto l1_input0_cb = tt_metal::CreateCircularBuffer(
@@ -513,13 +500,19 @@ bool single_tile_matmul(tt_metal::Device* device) {
         program,
         "tt_metal/kernels/compute/unit_tests/matmul/reader_binary.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = {in0_cb_index, in1_cb_index}});
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .compile_args = {in0_cb_index, in1_cb_index}});
 
     auto writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/compute/unit_tests/matmul/writer_unary.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = {out_cb_index}});
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = {out_cb_index}});
 
     auto simple_matmul_kernel = tt_metal::CreateComputeKernel(
         program,
@@ -635,19 +628,26 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
         program,
         "tt_metal/kernels/compute/unit_tests/matmul/reader_binary_blocked.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = {in0_cb_index, in1_cb_index}});
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .compile_args = {in0_cb_index, in1_cb_index}});
 
     auto writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/compute/unit_tests/matmul/writer_unary.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = {out_cb_index}});
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = {out_cb_index}});
 
     auto simple_matmul_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/unit_tests/matmul/multi_tile_compute.cpp",
         core,
-        tt_metal::ComputeConfig{.compile_args = {in0_cb_index, in1_cb_index, out_cb_index, M * K, K * N, M * N, M, N, K}});
+        tt_metal::ComputeConfig{
+            .compile_args = {in0_cb_index, in1_cb_index, out_cb_index, M * K, K * N, M * N, M, N, K}});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation
@@ -671,7 +671,7 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::StartDebugPrintServer(device, {{1,1}} );
+    tt_metal::StartDebugPrintServer(device, {{1, 1}});
     pass &= tt_metal::CompileProgram(device, program);
     tt_metal::WriteToBuffer(input0_dram_buffer, packed_input0);
     tt_metal::WriteToBuffer(input1_dram_buffer, packed_input1);
@@ -776,19 +776,37 @@ bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N
         program,
         "tt_metal/kernels/compute/unit_tests/matmul/reader_binary_blocked.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = {in0_cb_index, in1_cb_index}});
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .compile_args = {in0_cb_index, in1_cb_index}});
 
     auto writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/compute/unit_tests/matmul/writer_unary.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = {out_cb_index}});
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = {out_cb_index}});
 
     auto simple_matmul_kernel = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/unit_tests/matmul/multi_block_compute.cpp",
         core,
-        tt_metal::ComputeConfig{.compile_args = {in0_cb_index, in1_cb_index, out_cb_index, partials_cb_index, M * K, K * N, M * N, M, N, K, num_blocks}});
+        tt_metal::ComputeConfig{
+            .compile_args = {
+                in0_cb_index,
+                in1_cb_index,
+                out_cb_index,
+                partials_cb_index,
+                M * K,
+                K * N,
+                M * N,
+                M,
+                N,
+                K,
+                num_blocks}});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation
@@ -812,7 +830,7 @@ bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::StartDebugPrintServer(device, {{1,1}} );
+    tt_metal::StartDebugPrintServer(device, {{1, 1}});
     pass &= tt_metal::CompileProgram(device, program);
     tt_metal::WriteToBuffer(input0_dram_buffer, packed_input0);
     tt_metal::WriteToBuffer(input1_dram_buffer, packed_input1);
@@ -866,38 +884,16 @@ bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N
     return pass;
 }
 }  // namespace unit_tests::compute::matmul
-TEST_SUITE("MatmulCompute") {
-    TEST_CASE_FIXTURE(unit_tests::SingleDeviceFixture, "SingleCore") {
-        SUBCASE("SingleTile") { REQUIRE(unit_tests::compute::matmul::single_tile_matmul(this->device_)); }
-        SUBCASE("SingleBlockSingleTile") {
-            REQUIRE(unit_tests::compute::matmul::single_block_matmul(this->device_, 1, 1, 1));
-        }
-        SUBCASE("SingleBlockSingleTileAccumulation") {
-            REQUIRE(unit_tests::compute::matmul::single_block_matmul(this->device_, 1, 2, 1));
-        }
-        SUBCASE("SingleBlockNoAccumulation") {
-            REQUIRE(unit_tests::compute::matmul::single_block_matmul(this->device_, 2, 1, 2));
-        }
-        // SUBCASE("BlockedSingleTile") {
-        //     unit_tests::compute::matmul::SingleCoreMatmulConfig config = {
-        //         .activations_rm = false,
-        //         .outputs_rm = false,
-        //         .input0_dram_channel = 0,
-        //         .input0_dram_byte_address = 0,
-        //         .input1_dram_channel = 0,
-        //         .input1_dram_byte_address = 256 * 1024 * 1024,  // 256 MB
-        //         .output_dram_channel = 0,
-        //         .output_dram_byte_address = 512 * 1024 * 1024,  // 512 MB
-        //         .core = {.x = 0, .y = 0}};
-        //     config.M = 1;
-        //     config.K = 1;
-        //     config.N = 1;
-        //     config.out_subblock_h = 1;
-        //     config.out_subblock_w = 1;
-        //     config.in0_block_w = 1;
-        //     config.activations_rm = true;
-        //     config.outputs_rm = true;
-        //     REQUIRE(unit_tests::compute::matmul::single_core_matmul(this->device_, config));
-        // }
-    }
+
+TEST_F(SingleDeviceFixture, SingleCoreSingleTileMatmul) {
+    ASSERT_TRUE(unit_tests::compute::matmul::single_tile_matmul(this->device_));
+}
+TEST_F(SingleDeviceFixture, SingleCoreSingleBlockSingleTileMatmul) {
+    ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(this->device_, 1, 1, 1));
+}
+TEST_F(SingleDeviceFixture, SingleCoreSingleBlockSingleTileAccumulationMatmul) {
+    ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(this->device_, 1, 2, 1));
+}
+TEST_F(SingleDeviceFixture, SingleCoreSingleBlockSingleTileNoAccumulationMatmul) {
+    ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(this->device_, 2, 1, 2));
 }

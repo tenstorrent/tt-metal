@@ -1,23 +1,21 @@
-#include "doctest.h"
+#include <gtest/gtest.h>
+
+#include "common/bfloat16.hpp"
 #include "multi_device_fixture.hpp"
 #include "single_device_fixture.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
+#include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-
-#include "common/bfloat16.hpp"
-
 
 using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::tt_metal;
 
 namespace unit_tests::create_pipeline {
-
 
 void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
     CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
@@ -29,7 +27,7 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
     u32 num_blocks_in_CB = 2;
     u32 num_repetitions = 1;
 
-    TT_ASSERT(num_cores >= 2 && num_cores <= 12); // grayskull
+    TT_ASSERT(num_cores >= 2 && num_cores <= 12);  // grayskull
     TT_ASSERT(num_tiles % block_size_tiles == 0);
 
     std::vector<CoreCoord> cores;
@@ -49,7 +47,7 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
     log_info(LogTest, "CB size: {}", block_size_bytes * num_blocks_in_CB);
 
     // source and destination buffers
-    u32 buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+    u32 buffer_size = single_tile_size * num_tiles;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
     u32 total_bytes_moved = buffer_size * num_repetitions;
     log_info(LogTest, "total_bytes_moved: {}", total_bytes_moved);
 
@@ -60,13 +58,7 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
 
     for (auto core : cores) {
         auto cb = tt_metal::CreateCircularBuffer(
-            program,
-            cb_index,
-            core,
-            cb_size_tiles,
-            cb_size_bytes,
-            tt::DataFormat::Float16_b
-        );
+            program, cb_index, core, cb_size_tiles, cb_size_bytes, tt::DataFormat::Float16_b);
     }
 
     /// used only if IO data in DRAM
@@ -82,7 +74,8 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
     TT_ASSERT(dram_buffer_addr + buffer_size <= device->dram_bank_size());
 
     src_buffer = tt_metal::Buffer(device, buffer_size, dram_buffer_addr, buffer_size, tt_metal::BufferType::DRAM);
-    dst_buffer = tt_metal::Buffer(device, buffer_size, dram_buffer_addr + buffer_size, buffer_size, tt_metal::BufferType::DRAM);
+    dst_buffer =
+        tt_metal::Buffer(device, buffer_size, dram_buffer_addr + buffer_size, buffer_size, tt_metal::BufferType::DRAM);
 
     src_address = src_buffer.address();
     src_noc_xy = src_buffer.noc_coordinates();
@@ -105,7 +98,10 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
             program,
             receiver_kernel_name,
             cores[core_id],
-            DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = receiver_kernel_compile_time_args}));
+            DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = tt_metal::NOC::RISCV_1_default,
+                .compile_args = receiver_kernel_compile_time_args}));
 
         string sender_kernel_name;
         if (core_id == num_cores - 1) {
@@ -118,14 +114,13 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
             program,
             sender_kernel_name,
             cores[core_id],
-            DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = sender_kernel_compile_time_args}));
+            DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt_metal::NOC::RISCV_0_default,
+                .compile_args = sender_kernel_compile_time_args}));
 
         // Add blank compute kernel
-        tt_metal::CreateComputeKernel(
-            program,
-            "tt_metal/kernels/compute/blank.cpp",
-            cores[core_id]
-        );
+        tt_metal::CreateComputeKernel(program, "tt_metal/kernels/compute/blank.cpp", cores[core_id]);
     }
 
     // TODO(agrebenisan): Once semaphores are properly allocated at 16B-aligned addresses, then
@@ -150,7 +145,6 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
     }
 
     for (int core_id = 0; core_id < num_cores; core_id++) {
-
         // TODO(agrebenisan):  Once semaphores are properly allocated at 16B-aligned addresses, then
         // will make proper sems. For now, using the original code.
         CoreCoord core = cores[core_id];
@@ -159,34 +153,42 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
         auto l1_valid_value_addr = sems[core].at(2);
 
         if (core_id == 0) {
-            SetRuntimeArgs(program, receiver_kernels.at(core_id), core, {src_address,
-                (u32)src_noc_xy.x,
-                (u32)src_noc_xy.y,
-                (u32)num_tiles,
-                (u32)num_repetitions});
+            SetRuntimeArgs(
+                program,
+                receiver_kernels.at(core_id),
+                core,
+                {src_address, (u32)src_noc_xy.x, (u32)src_noc_xy.y, (u32)num_tiles, (u32)num_repetitions});
         } else {
-            SetRuntimeArgs(program, receiver_kernels.at(core_id), core, {(u32)device->worker_core_from_logical_core(cores[core_id-1]).x,
-                (u32)device->worker_core_from_logical_core(cores[core_id-1]).y,
-                (u32)num_tiles,
-                (u32)sender_semaphore_addr,
-                (u32)receiver_semaphore_addr,
-                (u32)num_repetitions});
+            SetRuntimeArgs(
+                program,
+                receiver_kernels.at(core_id),
+                core,
+                {(u32)device->worker_core_from_logical_core(cores[core_id - 1]).x,
+                 (u32)device->worker_core_from_logical_core(cores[core_id - 1]).y,
+                 (u32)num_tiles,
+                 (u32)sender_semaphore_addr,
+                 (u32)receiver_semaphore_addr,
+                 (u32)num_repetitions});
         }
 
         if (core_id == num_cores - 1) {
-            SetRuntimeArgs(program, sender_kernels.at(core_id), core, {dst_address,
-                (u32)dst_noc_xy.x,
-                (u32)dst_noc_xy.y,
-                (u32)num_tiles,
-                (u32)num_repetitions});
+            SetRuntimeArgs(
+                program,
+                sender_kernels.at(core_id),
+                core,
+                {dst_address, (u32)dst_noc_xy.x, (u32)dst_noc_xy.y, (u32)num_tiles, (u32)num_repetitions});
         } else {
-            SetRuntimeArgs(program, sender_kernels.at(core_id), core, {(u32)device->worker_core_from_logical_core(cores[core_id+1]).x,
-                (u32)device->worker_core_from_logical_core(cores[core_id+1]).y,
-                (u32)num_tiles,
-                (u32)sender_semaphore_addr,
-                (u32)receiver_semaphore_addr,
-                (u32)l1_valid_value_addr,
-                (u32)num_repetitions});
+            SetRuntimeArgs(
+                program,
+                sender_kernels.at(core_id),
+                core,
+                {(u32)device->worker_core_from_logical_core(cores[core_id + 1]).x,
+                 (u32)device->worker_core_from_logical_core(cores[core_id + 1]).y,
+                 (u32)num_tiles,
+                 (u32)sender_semaphore_addr,
+                 (u32)receiver_semaphore_addr,
+                 (u32)l1_valid_value_addr,
+                 (u32)num_repetitions});
         }
     }
 
@@ -196,8 +198,8 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
     // send input data to the device
-    std::vector<u32> src_vec = create_random_vector_of_bfloat16(
-        buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
+    std::vector<u32> src_vec =
+        create_random_vector_of_bfloat16(buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
     EnqueueWriteBuffer(cq, src_buffer, src_vec, false);
 
@@ -213,32 +215,24 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Validation & Teardown
     ////////////////////////////////////////////////////////////////////////////
-    REQUIRE(src_vec == result_vec);
+    ASSERT_TRUE(src_vec == result_vec);
 }
 
-} // namespace unit_tests::create_pipeline
+}  // namespace unit_tests::create_pipeline
 
-TEST_SUITE(
-    "Pipelining tests" *
-    doctest::description("Pipelining unit tests") *
-    doctest::timeout(5)
-) {
-    TEST_CASE_FIXTURE(unit_tests::SingleDeviceFixture, "Initialize device") {
-        SUBCASE("Create a pipeline of size 2 along row") {
-            auto arch = this->arch_;
-            if (arch != tt::ARCH::GRAYSKULL) {
-                return; // Figure out how to properly skip
-            }
-
-            unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, 2);
-        }
-        SUBCASE("Create a pipeline of size 12 along row") {
-            auto arch = this->arch_;
-            if (arch != tt::ARCH::GRAYSKULL) {
-                return; // Figure out how to properly skip
-            }
-
-            unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, 12);
-        }
+TEST_F(SingleDeviceFixture, TwoCorePipeline) {
+    auto arch = this->arch_;
+    if (arch != tt::ARCH::GRAYSKULL) {
+        GTEST_SKIP();
     }
+
+    unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, 2);
+}
+TEST_F(SingleDeviceFixture, TwelveCorePipeline) {
+    auto arch = this->arch_;
+    if (arch != tt::ARCH::GRAYSKULL) {
+        GTEST_SKIP();
+    }
+
+    unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, 12);
 }

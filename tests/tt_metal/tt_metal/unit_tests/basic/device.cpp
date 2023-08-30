@@ -1,12 +1,13 @@
+#include <gtest/gtest.h>
+
 #include <algorithm>
 #include <functional>
 #include <random>
 
-#include "doctest.h"
 #include "multi_device_fixture.hpp"
 #include "single_device_fixture.hpp"
-#include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -40,7 +41,7 @@ bool l1_ping(
             tt_metal::detail::ReadFromDeviceL1(device, dest_core, l1_byte_address, byte_size, dest_core_data);
             pass &= (dest_core_data == inputs);
             if (not pass) {
-                MESSAGE("Mismatch at Core: ", dest_core.str());
+                log_error("Mismatch at Core: ={}", dest_core.str());
             }
         }
     }
@@ -85,274 +86,286 @@ bool load_all_blank_kernels(tt_metal::Device* device) {
     pass &= tt_metal::LaunchKernels(device, program);
     return pass;
 }
-}  // namespace unit_tests::basic
+}  // namespace unit_tests::basic::device
 
-bool is_multi_device_gs_machine() {
-    tt::ARCH arch = tt::get_arch_from_string(get_env_arch_name());
+
+TEST(BasicMultiDeviceTest, InitializeAndTeardown) {
+    auto arch = tt::get_arch_from_string(get_env_arch_name());
     const size_t num_devices = tt::tt_metal::Device::detect_num_available_devices();
-
-    return arch == tt::ARCH::GRAYSKULL && num_devices > 1;
-}
-
-TEST_SUITE(
-    "BasicMultiDeviceTest" *
-    doctest::description("Basic device tests should just test simple APIs and shouldn't take more than 1s per chip, "
-                         "but can scale beyond for many devices.") *
-    doctest::timeout(10) *
-    doctest::skip(is_multi_device_gs_machine())
-    ) {
-    TEST_CASE("Multi Device Initialize and Teardown" * doctest::timeout(2)) {
-        auto arch = tt::get_arch_from_string(get_env_arch_name());
-        const size_t num_devices = tt::tt_metal::Device::detect_num_available_devices();
-        REQUIRE(num_devices > 0);
-        std::vector<tt::tt_metal::Device*> devices;
-
-        if (arch != tt::ARCH::GRAYSKULL) {
-            // Once this test is uplifted to use fast dispatch, this can be removed.
-            char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
-            putenv(env);
-        }
-        for (unsigned int id = 0; id < num_devices; id++) {
-            devices.push_back(tt::tt_metal::CreateDevice(arch, id));
-            REQUIRE(tt::tt_metal::InitializeDevice(devices.at(id)));
-        }
-        for (unsigned int id = 0; id < num_devices; id++) {
-            REQUIRE(tt::tt_metal::CloseDevice(devices.at(id)));
-        }
+    if (is_multi_device_gs_machine(arch, num_devices)) {
+        GTEST_SKIP();
     }
-    TEST_CASE("Multi Device Load Blank Kernels" * doctest::timeout(5)) {
-        auto arch = tt::get_arch_from_string(get_env_arch_name());
-        const size_t num_devices = tt::tt_metal::Device::detect_num_available_devices();
-        REQUIRE(num_devices > 0);
-        std::vector<tt::tt_metal::Device*> devices;
+    ASSERT_TRUE(num_devices > 0);
+    std::vector<tt::tt_metal::Device*> devices;
 
-        if (arch != tt::ARCH::GRAYSKULL) {
-            // Once this test is uplifted to use fast dispatch, this can be removed.
-            char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
-            putenv(env);
-        }
-
-        for (unsigned int id = 0; id < num_devices; id++) {
-            devices.push_back(tt::tt_metal::CreateDevice(arch, id));
-            REQUIRE(tt::tt_metal::InitializeDevice(devices.at(id)));
-        }
-        for (unsigned int id = 0; id < num_devices; id++) {
-            unit_tests::basic::device::load_all_blank_kernels(devices.at(id));
-        }
-        for (unsigned int id = 0; id < num_devices; id++) {
-            REQUIRE(tt::tt_metal::CloseDevice(devices.at(id)));
-        }
+    if (arch != tt::ARCH::GRAYSKULL) {
+        // Once this test is uplifted to use fast dispatch, this can be removed.
+        char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+        putenv(env);
     }
-    TEST_CASE_FIXTURE(unit_tests::MultiDeviceFixture, "Ping all legal dram channels") {
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            auto device_ = devices_.at(id);
-            SUBCASE("Low Address Dram") {
-                size_t start_byte_address = 0;
-                REQUIRE(unit_tests::basic::device::dram_ping(device_, 4, start_byte_address, device_->num_dram_channels()));
-                REQUIRE(unit_tests::basic::device::dram_ping(device_, 12, start_byte_address, device_->num_dram_channels()));
-                REQUIRE(unit_tests::basic::device::dram_ping(device_, 16, start_byte_address, device_->num_dram_channels()));
-                REQUIRE(unit_tests::basic::device::dram_ping(device_, 1024, start_byte_address, device_->num_dram_channels()));
-                REQUIRE(
-                    unit_tests::basic::device::dram_ping(device_, 2 * 1024, start_byte_address, device_->num_dram_channels()));
-                REQUIRE(
-                    unit_tests::basic::device::dram_ping(device_, 32 * 1024, start_byte_address, device_->num_dram_channels()));
-            }
-            SUBCASE("High Address Dram") {
-                size_t start_byte_address = device_->dram_bank_size() - 32 * 1024;
-                REQUIRE(unit_tests::basic::device::dram_ping(device_, 4, start_byte_address, device_->num_dram_channels()));
-                REQUIRE(unit_tests::basic::device::dram_ping(device_, 12, start_byte_address, device_->num_dram_channels()));
-                REQUIRE(unit_tests::basic::device::dram_ping(device_, 16, start_byte_address, device_->num_dram_channels()));
-                REQUIRE(unit_tests::basic::device::dram_ping(device_, 1024, start_byte_address, device_->num_dram_channels()));
-                REQUIRE(
-                    unit_tests::basic::device::dram_ping(device_, 2 * 1024, start_byte_address, device_->num_dram_channels()));
-                REQUIRE(
-                    unit_tests::basic::device::dram_ping(device_, 32 * 1024, start_byte_address, device_->num_dram_channels()));
-            }
-        }
+    for (unsigned int id = 0; id < num_devices; id++) {
+        devices.push_back(tt::tt_metal::CreateDevice(arch, id));
+        ASSERT_TRUE(tt::tt_metal::InitializeDevice(devices.at(id)));
     }
-    TEST_CASE_FIXTURE(unit_tests::MultiDeviceFixture, "Ping all legal dram channels + illegal channel") {
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            auto device_ = devices_.at(id);
-            auto num_channels = device_->num_dram_channels() + 1;
-            size_t start_byte_address = 0;
-            REQUIRE_THROWS_WITH(
-                unit_tests::basic::device::dram_ping(device_, 4, start_byte_address, num_channels),
-                doctest::Contains("Bounds-Error"));
-        }
-    }
-
-    TEST_CASE_FIXTURE(unit_tests::MultiDeviceFixture, "Ping all legal l1 cores") {
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            auto device_ = devices_.at(id);
-            SUBCASE("Low Address L1") {
-                size_t start_byte_address = UNRESERVED_BASE;  // FIXME: Should remove dependency on
-                                                              // hostdevcommon/common_runtime_address_map.h header.
-                REQUIRE(unit_tests::basic::device::l1_ping(device_, 4, start_byte_address, device_->logical_grid_size()));
-                REQUIRE(unit_tests::basic::device::l1_ping(device_, 12, start_byte_address, device_->logical_grid_size()));
-                REQUIRE(unit_tests::basic::device::l1_ping(device_, 16, start_byte_address, device_->logical_grid_size()));
-                REQUIRE(unit_tests::basic::device::l1_ping(device_, 1024, start_byte_address, device_->logical_grid_size()));
-                REQUIRE(
-                    unit_tests::basic::device::l1_ping(device_, 2 * 1024, start_byte_address, device_->logical_grid_size()));
-                REQUIRE(
-                    unit_tests::basic::device::l1_ping(device_, 32 * 1024, start_byte_address, device_->logical_grid_size()));
-            }
-            SUBCASE("High Address L1") {
-                size_t start_byte_address = device_->l1_size() - 32 * 1024;
-                REQUIRE(unit_tests::basic::device::l1_ping(device_, 4, start_byte_address, device_->logical_grid_size()));
-                REQUIRE(unit_tests::basic::device::l1_ping(device_, 12, start_byte_address, device_->logical_grid_size()));
-                REQUIRE(unit_tests::basic::device::l1_ping(device_, 16, start_byte_address, device_->logical_grid_size()));
-                REQUIRE(unit_tests::basic::device::l1_ping(device_, 1024, start_byte_address, device_->logical_grid_size()));
-                REQUIRE(
-                    unit_tests::basic::device::l1_ping(device_, 2 * 1024, start_byte_address, device_->logical_grid_size()));
-                REQUIRE(
-                    unit_tests::basic::device::l1_ping(device_, 32 * 1024, start_byte_address, device_->logical_grid_size()));
-            }
-        }
-    }
-
-    TEST_CASE_FIXTURE(unit_tests::MultiDeviceFixture, "Ping all legal l1 + illegal cores") {
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            auto device_ = devices_.at(id);
-            auto grid_size = device_->logical_grid_size();
-            grid_size.x++;
-            grid_size.y++;
-            size_t start_byte_address = UNRESERVED_BASE;  // FIXME: Should remove dependency on
-                                                          // hostdevcommon/common_runtime_address_map.h header.
-            REQUIRE_THROWS_WITH(
-                unit_tests::basic::device::l1_ping(device_, 4, start_byte_address, grid_size),
-                doctest::Contains("Bounds-Error"));
-        }
+    for (unsigned int id = 0; id < num_devices; id++) {
+        ASSERT_TRUE(tt::tt_metal::CloseDevice(devices.at(id)));
     }
 }
-
-TEST_SUITE(
-    "BasicSingleDeviceTest" *
-    doctest::description("Basic device tests should just test simple APIs and shouldn't take more than 5s") *
-    doctest::timeout(5)) {
-    TEST_CASE("Single Device Initialize and Teardown") {
-        auto arch = tt::get_arch_from_string(get_env_arch_name());
-        tt::tt_metal::Device* device;
-        const unsigned int pcie_id = 0;
-        device = tt::tt_metal::CreateDevice(arch, pcie_id);
-        if (arch != tt::ARCH::GRAYSKULL) {
-            // Once this test is uplifted to use fast dispatch, this can be removed.
-            char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
-            putenv(env);
-        }
-        REQUIRE(tt::tt_metal::InitializeDevice(device));
-        REQUIRE(tt::tt_metal::CloseDevice(device));
+TEST(BasicMultiDeviceTest, LoadBlankKernels) {
+    auto arch = tt::get_arch_from_string(get_env_arch_name());
+    const size_t num_devices = tt::tt_metal::Device::detect_num_available_devices();
+    if (is_multi_device_gs_machine(arch, num_devices)) {
+        GTEST_SKIP();
     }
-    TEST_CASE("HarvestingPrints") {
-        auto arch = tt::get_arch_from_string(get_env_arch_name());
-        tt::tt_metal::Device* device;
-        const unsigned int pcie_id = 0;
-        device = tt::tt_metal::CreateDevice(arch, pcie_id);
-        if (arch != tt::ARCH::GRAYSKULL) {
-            // Once this test is uplifted to use fast dispatch, this can be removed.
-            char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
-            putenv(env);
-        }
-        REQUIRE(tt::tt_metal::InitializeDevice(device));
-        CoreCoord unharvested_logical_grid_size = {.x=12, .y = 10};
-        if (arch == tt::ARCH::WORMHOLE_B0) {
-            unharvested_logical_grid_size = {.x=8, .y=10};
-        }
-        auto logical_grid_size = device->logical_grid_size();
-        if (logical_grid_size == unharvested_logical_grid_size) {
-            tt::log_info("Harvesting Disabled in SW");
-        } else {
-            tt::log_info("Harvesting Enabled in SW");
-            tt::log_info("Number of Harvested Rows={}", unharvested_logical_grid_size.y - logical_grid_size.y);
-        }
+    ASSERT_TRUE(num_devices > 0);
+    std::vector<tt::tt_metal::Device*> devices;
 
-        tt::log_info("Logical -- Noc Coordinates Mapping");
-        tt::log_info("[Logical <-> NOC0] Coordinates");
-        for (int r = 0; r < logical_grid_size.y; r ++) {
-            string output_row = "";
-            for (int c = 0; c < logical_grid_size.x; c ++) {
-                const CoreCoord logical_coord(c, r);
-                const auto noc_coord = device->worker_core_from_logical_core(logical_coord);
-                output_row += "{L[x" + std::to_string(c);
-                output_row += "-y" + std::to_string(r);
-                output_row += "]:N[x" + std::to_string(noc_coord.x);
-                output_row += "-y" + std::to_string(noc_coord.y);
-                output_row += "]}, ";
-            }
-            tt::log_info("{}", output_row);
-        }
-        REQUIRE(tt::tt_metal::CloseDevice(device));
+    if (arch != tt::ARCH::GRAYSKULL) {
+        // Once this test is uplifted to use fast dispatch, this can be removed.
+        char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+        putenv(env);
     }
 
-    TEST_CASE("Single Device Load Blank Kernels") {
-        auto arch = tt::get_arch_from_string(get_env_arch_name());
-        tt::tt_metal::Device* device;
-        const unsigned int pcie_id = 0;
-        device = tt::tt_metal::CreateDevice(arch, pcie_id);
-        if (arch != tt::ARCH::GRAYSKULL) {
-            // Once this test is uplifted to use fast dispatch, this can be removed.
-            char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
-            putenv(env);
-        }
-        REQUIRE(tt::tt_metal::InitializeDevice(device));
-        REQUIRE(tt::tt_metal::CloseDevice(device));
+    for (unsigned int id = 0; id < num_devices; id++) {
+        devices.push_back(tt::tt_metal::CreateDevice(arch, id));
+        ASSERT_TRUE(tt::tt_metal::InitializeDevice(devices.at(id)));
     }
-    TEST_CASE_FIXTURE(unit_tests::SingleDeviceFixture, "Ping all legal dram channels") {
-        SUBCASE("Low Address Dram") {
+    for (unsigned int id = 0; id < num_devices; id++) {
+        unit_tests::basic::device::load_all_blank_kernels(devices.at(id));
+    }
+    for (unsigned int id = 0; id < num_devices; id++) {
+        ASSERT_TRUE(tt::tt_metal::CloseDevice(devices.at(id)));
+    }
+}
+TEST_F(MultiDeviceFixture, PingAllLegalDramChannels) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        auto device_ = devices_.at(id);
+        {
             size_t start_byte_address = 0;
-            REQUIRE(unit_tests::basic::device::dram_ping(device_, 4, start_byte_address, device_->num_dram_channels()));
-            REQUIRE(unit_tests::basic::device::dram_ping(device_, 12, start_byte_address, device_->num_dram_channels()));
-            REQUIRE(unit_tests::basic::device::dram_ping(device_, 16, start_byte_address, device_->num_dram_channels()));
-            REQUIRE(unit_tests::basic::device::dram_ping(device_, 1024, start_byte_address, device_->num_dram_channels()));
-            REQUIRE(unit_tests::basic::device::dram_ping(device_, 2 * 1024, start_byte_address, device_->num_dram_channels()));
-            REQUIRE(unit_tests::basic::device::dram_ping(device_, 32 * 1024, start_byte_address, device_->num_dram_channels()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::dram_ping(device_, 4, start_byte_address, device_->num_dram_channels()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::dram_ping(device_, 12, start_byte_address, device_->num_dram_channels()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::dram_ping(device_, 16, start_byte_address, device_->num_dram_channels()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::dram_ping(device_, 1024, start_byte_address, device_->num_dram_channels()));
+            ASSERT_TRUE(unit_tests::basic::device::dram_ping(
+                device_, 2 * 1024, start_byte_address, device_->num_dram_channels()));
+            ASSERT_TRUE(unit_tests::basic::device::dram_ping(
+                device_, 32 * 1024, start_byte_address, device_->num_dram_channels()));
         }
-        SUBCASE("High Address Dram") {
+        {
             size_t start_byte_address = device_->dram_bank_size() - 32 * 1024;
-            REQUIRE(unit_tests::basic::device::dram_ping(device_, 4, start_byte_address, device_->num_dram_channels()));
-            REQUIRE(unit_tests::basic::device::dram_ping(device_, 12, start_byte_address, device_->num_dram_channels()));
-            REQUIRE(unit_tests::basic::device::dram_ping(device_, 16, start_byte_address, device_->num_dram_channels()));
-            REQUIRE(unit_tests::basic::device::dram_ping(device_, 1024, start_byte_address, device_->num_dram_channels()));
-            REQUIRE(unit_tests::basic::device::dram_ping(device_, 2 * 1024, start_byte_address, device_->num_dram_channels()));
-            REQUIRE(unit_tests::basic::device::dram_ping(device_, 32 * 1024, start_byte_address, device_->num_dram_channels()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::dram_ping(device_, 4, start_byte_address, device_->num_dram_channels()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::dram_ping(device_, 12, start_byte_address, device_->num_dram_channels()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::dram_ping(device_, 16, start_byte_address, device_->num_dram_channels()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::dram_ping(device_, 1024, start_byte_address, device_->num_dram_channels()));
+            ASSERT_TRUE(unit_tests::basic::device::dram_ping(
+                device_, 2 * 1024, start_byte_address, device_->num_dram_channels()));
+            ASSERT_TRUE(unit_tests::basic::device::dram_ping(
+                device_, 32 * 1024, start_byte_address, device_->num_dram_channels()));
         }
     }
-    TEST_CASE_FIXTURE(unit_tests::SingleDeviceFixture, "Ping all legal dram channels + illegal channel") {
+}
+TEST_F(MultiDeviceFixture, PingIllegalDramChannels) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        auto device_ = devices_.at(id);
         auto num_channels = device_->num_dram_channels() + 1;
         size_t start_byte_address = 0;
-        REQUIRE_THROWS_WITH(
-            unit_tests::basic::device::dram_ping(device_, 4, start_byte_address, num_channels),
-            doctest::Contains("Bounds-Error"));
+        ASSERT_ANY_THROW(unit_tests::basic::device::dram_ping(device_, 4, start_byte_address, num_channels));
     }
+}
 
-    TEST_CASE_FIXTURE(unit_tests::SingleDeviceFixture, "Ping all legal l1 cores") {
-        SUBCASE("Low Address L1") {
+TEST_F(MultiDeviceFixture, PingAllLegalL1Cores) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        auto device_ = devices_.at(id);
+        {
             size_t start_byte_address = UNRESERVED_BASE;  // FIXME: Should remove dependency on
                                                           // hostdevcommon/common_runtime_address_map.h header.
-            REQUIRE(unit_tests::basic::device::l1_ping(device_, 4, start_byte_address, device_->logical_grid_size()));
-            REQUIRE(unit_tests::basic::device::l1_ping(device_, 12, start_byte_address, device_->logical_grid_size()));
-            REQUIRE(unit_tests::basic::device::l1_ping(device_, 16, start_byte_address, device_->logical_grid_size()));
-            REQUIRE(unit_tests::basic::device::l1_ping(device_, 1024, start_byte_address, device_->logical_grid_size()));
-            REQUIRE(unit_tests::basic::device::l1_ping(device_, 2 * 1024, start_byte_address, device_->logical_grid_size()));
-            REQUIRE(unit_tests::basic::device::l1_ping(device_, 32 * 1024, start_byte_address, device_->logical_grid_size()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::l1_ping(device_, 4, start_byte_address, device_->logical_grid_size()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::l1_ping(device_, 12, start_byte_address, device_->logical_grid_size()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::l1_ping(device_, 16, start_byte_address, device_->logical_grid_size()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::l1_ping(device_, 1024, start_byte_address, device_->logical_grid_size()));
+            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
+                device_, 2 * 1024, start_byte_address, device_->logical_grid_size()));
+            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
+                device_, 32 * 1024, start_byte_address, device_->logical_grid_size()));
         }
-        SUBCASE("High Address L1") {
+        {
             size_t start_byte_address = device_->l1_size() - 32 * 1024;
-            REQUIRE(unit_tests::basic::device::l1_ping(device_, 4, start_byte_address, device_->logical_grid_size()));
-            REQUIRE(unit_tests::basic::device::l1_ping(device_, 12, start_byte_address, device_->logical_grid_size()));
-            REQUIRE(unit_tests::basic::device::l1_ping(device_, 16, start_byte_address, device_->logical_grid_size()));
-            REQUIRE(unit_tests::basic::device::l1_ping(device_, 1024, start_byte_address, device_->logical_grid_size()));
-            REQUIRE(unit_tests::basic::device::l1_ping(device_, 2 * 1024, start_byte_address, device_->logical_grid_size()));
-            REQUIRE(unit_tests::basic::device::l1_ping(device_, 32 * 1024, start_byte_address, device_->logical_grid_size()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::l1_ping(device_, 4, start_byte_address, device_->logical_grid_size()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::l1_ping(device_, 12, start_byte_address, device_->logical_grid_size()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::l1_ping(device_, 16, start_byte_address, device_->logical_grid_size()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::l1_ping(device_, 1024, start_byte_address, device_->logical_grid_size()));
+            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
+                device_, 2 * 1024, start_byte_address, device_->logical_grid_size()));
+            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
+                device_, 32 * 1024, start_byte_address, device_->logical_grid_size()));
         }
     }
+}
 
-    TEST_CASE_FIXTURE(unit_tests::SingleDeviceFixture, "Ping all legal l1 + illegal cores") {
+TEST_F(MultiDeviceFixture, PingIllegalL1Cores) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        auto device_ = devices_.at(id);
         auto grid_size = device_->logical_grid_size();
         grid_size.x++;
         grid_size.y++;
-        size_t start_byte_address =
-            UNRESERVED_BASE;  // FIXME: Should remove dependency on hostdevcommon/common_runtime_address_map.h header.
-        REQUIRE_THROWS_WITH(
-            unit_tests::basic::device::l1_ping(device_, 4, start_byte_address, grid_size), doctest::Contains("Bounds-Error"));
+        size_t start_byte_address = UNRESERVED_BASE;  // FIXME: Should remove dependency on
+                                                      // hostdevcommon/common_runtime_address_map.h header.
+        ASSERT_ANY_THROW(unit_tests::basic::device::l1_ping(device_, 4, start_byte_address, grid_size));
     }
+}
+
+TEST(BasicSingleDeviceTest, InitializeAndTeardown) {
+    auto arch = tt::get_arch_from_string(get_env_arch_name());
+    tt::tt_metal::Device* device;
+    const unsigned int pcie_id = 0;
+    device = tt::tt_metal::CreateDevice(arch, pcie_id);
+    if (arch != tt::ARCH::GRAYSKULL) {
+        // Once this test is uplifted to use fast dispatch, this can be removed.
+        char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+        putenv(env);
+    }
+    ASSERT_TRUE(tt::tt_metal::InitializeDevice(device));
+    ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
+}
+TEST(BasicSingleDeviceTest, HarvestingPrints) {
+    auto arch = tt::get_arch_from_string(get_env_arch_name());
+    tt::tt_metal::Device* device;
+    const unsigned int pcie_id = 0;
+    device = tt::tt_metal::CreateDevice(arch, pcie_id);
+    if (arch != tt::ARCH::GRAYSKULL) {
+        // Once this test is uplifted to use fast dispatch, this can be removed.
+        char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+        putenv(env);
+    }
+    ASSERT_TRUE(tt::tt_metal::InitializeDevice(device));
+    CoreCoord unharvested_logical_grid_size = {.x = 12, .y = 10};
+    if (arch == tt::ARCH::WORMHOLE_B0) {
+        unharvested_logical_grid_size = {.x = 8, .y = 10};
+    }
+    auto logical_grid_size = device->logical_grid_size();
+    if (logical_grid_size == unharvested_logical_grid_size) {
+        tt::log_info("Harvesting Disabled in SW");
+    } else {
+        tt::log_info("Harvesting Enabled in SW");
+        tt::log_info("Number of Harvested Rows={}", unharvested_logical_grid_size.y - logical_grid_size.y);
+    }
+
+    tt::log_info("Logical -- Noc Coordinates Mapping");
+    tt::log_info("[Logical <-> NOC0] Coordinates");
+    for (int r = 0; r < logical_grid_size.y; r++) {
+        string output_row = "";
+        for (int c = 0; c < logical_grid_size.x; c++) {
+            const CoreCoord logical_coord(c, r);
+            const auto noc_coord = device->worker_core_from_logical_core(logical_coord);
+            output_row += "{L[x" + std::to_string(c);
+            output_row += "-y" + std::to_string(r);
+            output_row += "]:N[x" + std::to_string(noc_coord.x);
+            output_row += "-y" + std::to_string(noc_coord.y);
+            output_row += "]}, ";
+        }
+        tt::log_info("{}", output_row);
+    }
+    ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
+}
+
+TEST(BasicSingleDeviceTest, LoadBlankKernels) {
+    auto arch = tt::get_arch_from_string(get_env_arch_name());
+    tt::tt_metal::Device* device;
+    const unsigned int pcie_id = 0;
+    device = tt::tt_metal::CreateDevice(arch, pcie_id);
+    if (arch != tt::ARCH::GRAYSKULL) {
+        // Once this test is uplifted to use fast dispatch, this can be removed.
+        char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+        putenv(env);
+    }
+    ASSERT_TRUE(tt::tt_metal::InitializeDevice(device));
+    ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
+}
+TEST_F(SingleDeviceFixture, PingAllLegalDramChannels) {
+    {
+        size_t start_byte_address = 0;
+        ASSERT_TRUE(unit_tests::basic::device::dram_ping(device_, 4, start_byte_address, device_->num_dram_channels()));
+        ASSERT_TRUE(
+            unit_tests::basic::device::dram_ping(device_, 12, start_byte_address, device_->num_dram_channels()));
+        ASSERT_TRUE(
+            unit_tests::basic::device::dram_ping(device_, 16, start_byte_address, device_->num_dram_channels()));
+        ASSERT_TRUE(
+            unit_tests::basic::device::dram_ping(device_, 1024, start_byte_address, device_->num_dram_channels()));
+        ASSERT_TRUE(
+            unit_tests::basic::device::dram_ping(device_, 2 * 1024, start_byte_address, device_->num_dram_channels()));
+        ASSERT_TRUE(
+            unit_tests::basic::device::dram_ping(device_, 32 * 1024, start_byte_address, device_->num_dram_channels()));
+    }
+    {
+        size_t start_byte_address = device_->dram_bank_size() - 32 * 1024;
+        ASSERT_TRUE(unit_tests::basic::device::dram_ping(device_, 4, start_byte_address, device_->num_dram_channels()));
+        ASSERT_TRUE(
+            unit_tests::basic::device::dram_ping(device_, 12, start_byte_address, device_->num_dram_channels()));
+        ASSERT_TRUE(
+            unit_tests::basic::device::dram_ping(device_, 16, start_byte_address, device_->num_dram_channels()));
+        ASSERT_TRUE(
+            unit_tests::basic::device::dram_ping(device_, 1024, start_byte_address, device_->num_dram_channels()));
+        ASSERT_TRUE(
+            unit_tests::basic::device::dram_ping(device_, 2 * 1024, start_byte_address, device_->num_dram_channels()));
+        ASSERT_TRUE(
+            unit_tests::basic::device::dram_ping(device_, 32 * 1024, start_byte_address, device_->num_dram_channels()));
+    }
+}
+TEST_F(SingleDeviceFixture, PingIllegalDramChannels) {
+    auto num_channels = device_->num_dram_channels() + 1;
+    size_t start_byte_address = 0;
+    ASSERT_ANY_THROW(unit_tests::basic::device::dram_ping(device_, 4, start_byte_address, num_channels));
+}
+
+TEST_F(SingleDeviceFixture, PingAllLegalL1Cores) {
+    {
+        size_t start_byte_address = UNRESERVED_BASE;  // FIXME: Should remove dependency on
+                                                      // hostdevcommon/common_runtime_address_map.h header.
+        ASSERT_TRUE(unit_tests::basic::device::l1_ping(device_, 4, start_byte_address, device_->logical_grid_size()));
+        ASSERT_TRUE(unit_tests::basic::device::l1_ping(device_, 12, start_byte_address, device_->logical_grid_size()));
+        ASSERT_TRUE(unit_tests::basic::device::l1_ping(device_, 16, start_byte_address, device_->logical_grid_size()));
+        ASSERT_TRUE(
+            unit_tests::basic::device::l1_ping(device_, 1024, start_byte_address, device_->logical_grid_size()));
+        ASSERT_TRUE(
+            unit_tests::basic::device::l1_ping(device_, 2 * 1024, start_byte_address, device_->logical_grid_size()));
+        ASSERT_TRUE(
+            unit_tests::basic::device::l1_ping(device_, 32 * 1024, start_byte_address, device_->logical_grid_size()));
+    }
+    {
+        size_t start_byte_address = device_->l1_size() - 32 * 1024;
+        ASSERT_TRUE(unit_tests::basic::device::l1_ping(device_, 4, start_byte_address, device_->logical_grid_size()));
+        ASSERT_TRUE(unit_tests::basic::device::l1_ping(device_, 12, start_byte_address, device_->logical_grid_size()));
+        ASSERT_TRUE(unit_tests::basic::device::l1_ping(device_, 16, start_byte_address, device_->logical_grid_size()));
+        ASSERT_TRUE(
+            unit_tests::basic::device::l1_ping(device_, 1024, start_byte_address, device_->logical_grid_size()));
+        ASSERT_TRUE(
+            unit_tests::basic::device::l1_ping(device_, 2 * 1024, start_byte_address, device_->logical_grid_size()));
+        ASSERT_TRUE(
+            unit_tests::basic::device::l1_ping(device_, 32 * 1024, start_byte_address, device_->logical_grid_size()));
+    }
+}
+
+TEST_F(SingleDeviceFixture, PingIllegalL1Cores) {
+    auto grid_size = device_->logical_grid_size();
+    grid_size.x++;
+    grid_size.y++;
+    size_t start_byte_address =
+        UNRESERVED_BASE;  // FIXME: Should remove dependency on hostdevcommon/common_runtime_address_map.h header.
+    ASSERT_ANY_THROW(unit_tests::basic::device::l1_ping(device_, 4, start_byte_address, grid_size));
 }
