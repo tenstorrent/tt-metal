@@ -682,9 +682,6 @@ bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
         const auto logical_coord = get_core_coord_from_relative(core, device->logical_grid_size());
         worker_cores.insert(device->worker_core_from_logical_core(logical_coord));
     }
-    // std::sort(worker_cores.begin(), worker_cores.end());
-
-    std::cout << "NUM WORKER CORES " << worker_cores.size() << std::endl;
 
     // Load blank kernel to all riscs of all cores excluding those in worker_cores
     const llrt::TensixRiscsOptions riscs_options = llrt::TensixRiscsOptions::ALL_RISCS;  // PROF_BEGIN("LOAD_BLANK")
