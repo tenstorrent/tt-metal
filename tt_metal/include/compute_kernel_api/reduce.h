@@ -85,7 +85,7 @@ ALWI void reduce_init_delta_v2(PoolType reduce_op, ReduceDim dim, uint32_t ocb =
 
     MATH(( llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>() ));
 
-    PACK(( llk_pack_reduce_config_v2<REDUCE_DIM, at_start>(16) ));
+    PACK(( llk_pack_reduce_config_v2<REDUCE_DIM, at_start>(ocb) ));
 }
 
 ALWI void reduce_revert_delta_v2(uint32_t ocb = 16)

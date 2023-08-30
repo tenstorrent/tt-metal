@@ -113,19 +113,8 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                              in_tiled_cb_npages,
                                              in_tiled_cb_npages * in_tiled_cb_pagesize,
                                              in_df);
-    // // reduce output == input to writer
-    // uint32_t out_tiled_cb_id = CB::c_intermed1;
-    // uint32_t out_tiled_cb_pagesize = tile_size(out_df);
-    // uint32_t out_tiled_cb_npages = out_ntiles_c * out_nelems;
-    // auto out_tiled_cb = CreateCircularBuffers(program,
-    //                                           out_tiled_cb_id,
-    //                                           cores,
-    //                                           out_tiled_cb_npages,
-    //                                           out_tiled_cb_npages * out_tiled_cb_pagesize,
-    //                                           out_df);
 
-
-    // output of untilize
+    // output of reduce == writer to write
     uint32_t out_cb_id = CB::c_out0;            // output rows in RM
     uint32_t out_cb_pagesize = tile_size(out_df);
     uint32_t out_cb_npages = out_ntiles_c * out_nelems * multi_buffering_factor;    // there is just one row of channels after reduction
@@ -177,9 +166,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
         log_debug("in_cb :: PS = {}, NP = {}", in_cb_pagesize, in_cb_npages);
         log_debug("in_scalar_cb :: PS = {}, NP = {}", in_scalar_cb_pagesize, in_scalar_cb_npages);
         log_debug("in_tiled_cb :: PS = {}, NP = {}", in_tiled_cb_pagesize, in_tiled_cb_npages);
-        // log_debug("out_tiled_cb :: PS = {}, NP = {}", out_tiled_cb_pagesize, out_tiled_cb_npages);
         log_debug("out_cb :: PS = {}, NP = {}", out_cb_pagesize, out_cb_npages);
-
         log_debug("in_addr: {}", src_dram_buffer->address());
         log_debug("out_addr: {}", dst_dram_buffer->address());
         log_debug("nbatch: {}", nbatch);
