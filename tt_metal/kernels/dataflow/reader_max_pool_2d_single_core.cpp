@@ -84,6 +84,7 @@ void kernel_main() {
     const uint32_t in_log_base_2_of_page_size = get_arg_val<uint32_t>(26);
     // batch size
     const uint32_t nbatch = get_arg_val<uint32_t>(27);
+    const uint32_t in_hw = get_arg_val<uint32_t>(28);
 
     constexpr bool is_in_dram = get_compile_time_arg_val(0) == 1;
     // value of 1 in bf16 in a uin32_t
@@ -134,7 +135,7 @@ void kernel_main() {
     kernel_profiler::mark_time(8);
 
     //uint32_t in_hw = in_h * in_w;   // TODO: pass this as an arg
-    uint32_t in_hw = 12544;   // TODO: pass this as an arg
+    // uint32_t in_hw = 12544;   // TODO: pass this as an arg
     uint32_t batch_offset = 0;
     for (uint32_t batch = 0; batch < nbatch; ++ batch) {
         int32_t start_h = - pad_h;

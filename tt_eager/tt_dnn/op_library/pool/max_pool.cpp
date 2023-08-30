@@ -74,8 +74,8 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
     uint32_t out_nelems = nblocks;     // TODO [AS]: Remove hard coding after identifying optimal param val
     uint32_t out_w_loop_count = ceil((float) out_w / out_nelems);
 
-    uint32_t in_hw = in_ntiles_hw * constants::TILE_HEIGHT;
-    uint32_t out_hw = out_ntiles_hw * constants::TILE_HEIGHT;
+    uint32_t in_hw = in_h * in_w;
+    uint32_t out_hw = out_h * out_w;
 
     // CBs
     uint32_t multi_buffering_factor = 2;
@@ -113,16 +113,16 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                              in_tiled_cb_npages,
                                              in_tiled_cb_npages * in_tiled_cb_pagesize,
                                              in_df);
-    // reduce output == input to untilize
-    uint32_t out_tiled_cb_id = CB::c_intermed1;
-    uint32_t out_tiled_cb_pagesize = tile_size(out_df);
-    uint32_t out_tiled_cb_npages = out_ntiles_c * out_nelems;
-    auto out_tiled_cb = CreateCircularBuffers(program,
-                                              out_tiled_cb_id,
-                                              cores,
-                                              out_tiled_cb_npages,
-                                              out_tiled_cb_npages * out_tiled_cb_pagesize,
-                                              out_df);
+    // // reduce output == input to writer
+    // uint32_t out_tiled_cb_id = CB::c_intermed1;
+    // uint32_t out_tiled_cb_pagesize = tile_size(out_df);
+    // uint32_t out_tiled_cb_npages = out_ntiles_c * out_nelems;
+    // auto out_tiled_cb = CreateCircularBuffers(program,
+    //                                           out_tiled_cb_id,
+    //                                           cores,
+    //                                           out_tiled_cb_npages,
+    //                                           out_tiled_cb_npages * out_tiled_cb_pagesize,
+    //                                           out_df);
 
 
     // output of untilize
@@ -177,7 +177,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
         log_debug("in_cb :: PS = {}, NP = {}", in_cb_pagesize, in_cb_npages);
         log_debug("in_scalar_cb :: PS = {}, NP = {}", in_scalar_cb_pagesize, in_scalar_cb_npages);
         log_debug("in_tiled_cb :: PS = {}, NP = {}", in_tiled_cb_pagesize, in_tiled_cb_npages);
-        log_debug("out_tiled_cb :: PS = {}, NP = {}", out_tiled_cb_pagesize, out_tiled_cb_npages);
+        // log_debug("out_tiled_cb :: PS = {}, NP = {}", out_tiled_cb_pagesize, out_tiled_cb_npages);
         log_debug("out_cb :: PS = {}, NP = {}", out_cb_pagesize, out_cb_npages);
 
         log_debug("in_addr: {}", src_dram_buffer->address());

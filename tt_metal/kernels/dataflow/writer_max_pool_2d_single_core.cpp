@@ -21,11 +21,12 @@ void kernel_main() {
     const uint32_t out_cb_pagesize = get_arg_val<uint32_t>(23);
     const uint32_t out_w_loop_count = get_arg_val<uint32_t>(25);
     const uint32_t nbatch = get_arg_val<uint32_t>(27);
+    const uint32_t out_hw = get_arg_val<uint32_t>(29);
 
     constexpr bool is_out_dram = get_compile_time_arg_val(1) == 1;
     constexpr uint32_t out_nelems = get_compile_time_arg_val(3);
 
-    constexpr uint32_t out_cb_id = tt::CB::c_intermed1;
+    constexpr uint32_t out_cb_id = tt::CB::c_out0;
 
     // ROW_MAJOR output
     const InterleavedAddrGen<is_out_dram> s_out = {
@@ -33,7 +34,7 @@ void kernel_main() {
         .page_size = out_nbytes_c   // TODO: Ensure this is 32B aligned
     };
 
-    uint32_t out_hw = out_h * out_w;
+    // uint32_t out_hw = out_h * out_w;
 
     uint32_t batch_offset = 0;
     for (uint32_t batch = 0; batch < nbatch; ++ batch) {

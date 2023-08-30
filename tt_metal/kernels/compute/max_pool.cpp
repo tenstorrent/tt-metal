@@ -110,36 +110,33 @@ inline void reduce_h(uint32_t out_nelems,
     cb_pop_front(in_cb_id, in_ntiles_hwc * out_nelems);
 }
 
-inline void untilize(uint32_t out_nelems,
-                     uint32_t in_cb_id,
-                     uint32_t out_ntiles_c,
-                     uint32_t out_npages,
-                     uint32_t out_cb_id) {
-    uint32_t total_tiles_to_untilize = out_nelems * out_ntiles_c;
-    constexpr uint32_t untilize_block_size = 8;
-    untilize_init_short(in_cb_id);
+// inline void untilize(uint32_t out_nelems,
+//                      uint32_t in_cb_id,
+//                      uint32_t out_ntiles_c,
+//                      uint32_t out_npages,
+//                      uint32_t out_cb_id) {
+//     uint32_t total_tiles_to_untilize = out_nelems * out_ntiles_c;
+//     constexpr uint32_t untilize_block_size = 8;
+//     untilize_init_short(in_cb_id);
+//     // for (uint32_t out_elem_i = 0; out_elem_i < out_nelems; ++ out_elem_i) {
+//     //     cb_wait_front(in_cb_id, out_ntiles_c);
+//     //     cb_reserve_back(out_cb_id, out_ntiles_c);
+//     //     untilize_block(in_cb_id, out_ntiles_c, out_cb_id);
+//     //     cb_push_back(out_cb_id, out_ntiles_c);
+//     //     cb_pop_front(in_cb_id, out_ntiles_c);
+//     // }
 
+//     cb_wait_front(in_cb_id, total_tiles_to_untilize);
+//     cb_reserve_back(out_cb_id, total_tiles_to_untilize);
+//     //for (uint32_t out_elem_i = 0; out_elem_i < total_tiles_to_untilize;  out_elem_i += block_size) {
+//        //untilize_block<4>(in_cb_id, out_ntiles_c, out_cb_id);
+//     //untilize_block<untilize_block_size>(in_cb_id, total_tiles_to_untilize, out_cb_id); // 1/2 works
+//     //}
+//     cb_push_back(out_cb_id, total_tiles_to_untilize);
+//     cb_pop_front(in_cb_id, total_tiles_to_untilize);
 
-    // for (uint32_t out_elem_i = 0; out_elem_i < out_nelems; ++ out_elem_i) {
-    //     cb_wait_front(in_cb_id, out_ntiles_c);
-    //     cb_reserve_back(out_cb_id, out_ntiles_c);
-    //     untilize_block(in_cb_id, out_ntiles_c, out_cb_id);
-    //     cb_push_back(out_cb_id, out_ntiles_c);
-    //     cb_pop_front(in_cb_id, out_ntiles_c);
-    // }
-
-    cb_wait_front(in_cb_id, total_tiles_to_untilize);
-    cb_reserve_back(out_cb_id, total_tiles_to_untilize);
-    //for (uint32_t out_elem_i = 0; out_elem_i < total_tiles_to_untilize;  out_elem_i += block_size) {
-       //untilize_block<4>(in_cb_id, out_ntiles_c, out_cb_id);
-    //untilize_block<untilize_block_size>(in_cb_id, total_tiles_to_untilize, out_cb_id); // 1/2 works
-    //}
-    cb_push_back(out_cb_id, total_tiles_to_untilize);
-    cb_pop_front(in_cb_id, total_tiles_to_untilize);
-
-    untilize_uninit(in_cb_id);
-
-}  // untilize()
+//     untilize_uninit(in_cb_id);
+// }  // untilize()
 
 namespace NAMESPACE {
 
@@ -147,7 +144,7 @@ void MAIN {
     constexpr uint32_t in_cb_id = tt::CB::c_in0;
     constexpr uint32_t in_scalar_cb_id = tt::CB::c_in1;
     constexpr uint32_t in_tiled_cb_id = tt::CB::c_intermed0;
-    constexpr uint32_t out_tiled_cb_id = tt::CB::c_intermed1;
+    // constexpr uint32_t out_tiled_cb_id = tt::CB::c_intermed1;
     constexpr uint32_t out_cb_id = tt::CB::c_out0;
 
     const uint32_t in_ntiles_hw = get_compile_time_arg_val(0);
@@ -167,7 +164,7 @@ void MAIN {
         print_cb_details(in_scalar_cb_id);
         print_cb_details(in_cb_id);
         print_cb_details(in_tiled_cb_id);
-        print_cb_details(out_tiled_cb_id);
+        // print_cb_details(out_tiled_cb_id);
         print_cb_details(out_cb_id);
     #endif
 
@@ -181,7 +178,7 @@ void MAIN {
                 // tilize
                 tilize(out_nelems, in_cb_id, in_ntiles_hw, in_ntiles_c, in_ntiles_hwc, window_hw_padded, in_tiled_cb_id);
                 // Reduce H
-                reduce_h(out_nelems, in_tiled_cb_id, in_scalar_cb_id, in_ntiles_hw, in_ntiles_c, in_ntiles_hwc, out_ntiles_c, out_tiled_cb_id);
+                reduce_h(out_nelems, in_tiled_cb_id, in_scalar_cb_id, in_ntiles_hw, in_ntiles_c, in_ntiles_hwc, out_ntiles_c, out_cb_id);
                 // untilize
                 //untilize(out_nelems, out_tiled_cb_id, out_ntiles_c, 1, out_cb_id);
                 kernel_profiler::mark_time(12);
