@@ -16,6 +16,8 @@
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include "hostdevcommon/common_values.hpp"
+#include <tuple>
+#include <vector>
 
 namespace tt {
 
@@ -73,6 +75,7 @@ class Program {
     CoreRangeSet get_worker_core_range_set() const { return worker_crs_; };
 
     std::vector<std::string> cores_to_ops() const;
+    string get_all_cbs_core_addr_size_info() const;
 
    private:
     struct CircularBufferConfig {
@@ -129,6 +132,7 @@ class Program {
     void add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t init_value);
 
     void validate_circular_buffer_region(const Device *device, std::optional<CoreCoord> logical_core) const;
+
 };
 
 }  // namespace tt_metal

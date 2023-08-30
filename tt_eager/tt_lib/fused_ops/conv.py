@@ -113,7 +113,6 @@ def resnet50_1x1_conv_as_matmul(weight: List[Union[int, float]], conv_params, de
         .to(tensor.Layout.TILE)
     )
     bias_on_device = bias_.to(device)
-
     matmul_program_config = operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
                                     compute_with_storage_grid_size=matmul_config["compute_with_storage_grid_size"],
                                     in0_block_w=matmul_config["in0_block_w"],

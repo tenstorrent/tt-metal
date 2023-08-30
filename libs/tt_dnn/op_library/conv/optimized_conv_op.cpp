@@ -263,7 +263,6 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
     uint32_t last_block_row_size_bytes = last_block_width_datums * num_bytes_of_df;
     // sanity check
     assert(num_blocks_output_w == num_blocks_weight_w);
-
     tt_metal::Program program = tt_metal::Program();
     CoreCoord core_coord = {0, 0};      // TODO: avoid another var here. Find a way to use core range instead.
     CoreRange core = {.start={0, 0}, .end={0, 0}};

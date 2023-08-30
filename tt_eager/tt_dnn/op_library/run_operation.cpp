@@ -150,6 +150,14 @@ std::vector<Tensor> run_with_program_cache(
         program_with_callbacks.override_runtime_args_callback.value(),
         program, input_tensors, optional_input_tensors, output_tensors
     );
+    // print CB report here for this program
+    // string all_cbs_info = program.get_all_cbs_core_addr_size_info();
+    // cout << "Printing all cbs info of this op" << endl;
+    // cout << all_cbs_info << endl;
+    // std::ofstream cbs_op_log("cbs_op_log.csv", std::ios_base::app | std::ios_base::out);
+    // cbs_op_log << all_cbs_info << "\n";
+
+
 
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {

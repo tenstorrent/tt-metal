@@ -237,6 +237,21 @@ void Program::construct_core_range_set_for_worker_cores() {
     }
 }
 
+string Program::get_all_cbs_core_addr_size_info() const {
+    string all_cbs_info;
+    for (const auto& cb : circular_buffers_) {
+        string core_range_set_string;
+        assert(cb.core_range_set().ranges().size() == 1);
+        const auto &  core_range = *(cb.core_range_set().ranges().begin());
+        core_range_set_string += std::to_string(core_range.size());
+        // for (const auto& core_range : cb.core_range_set().ranges()) {
+        //     core_range_set_string += core_range.size() + ""
+        // }
+        all_cbs_info += core_range_set_string + "," + std::to_string(cb.address()) + "," + std::to_string(cb.size()) + ",";
+    }
+    return all_cbs_info;
+}
+
 Program::~Program() {
     for (const auto &[kernel_id, kernel] : this->kernel_by_id_) {
         delete kernel;

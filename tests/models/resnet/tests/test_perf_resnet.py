@@ -115,6 +115,7 @@ def run_perf_resnet(batch_size, expected_inference_time, expected_compile_time, 
     (
         (1, 0.225, 33),
         (2, 0.225, 33),
+        (8, 0.225, 33),
     ),
 )
 
@@ -128,6 +129,7 @@ def test_perf_bare_metal(use_program_cache, batch_size, expected_inference_time,
     (
         (1, 0.3, 36),
         (2, 0.3, 36),
+        (8, 0.3, 36),
     ),
 )
 

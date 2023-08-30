@@ -235,6 +235,94 @@ hardcoded_matmul_config_conv = {
                         "per_core_N": 2,
                     },
     },
+    8 :
+    {
+        (25088, 64, 64) : {"compute_with_storage_grid_size" : (2,8),
+                                "in0_block_w" : 1,
+                                "out_subblock_h" : 1,
+                                "out_subblock_w": 1,
+                                "per_core_M": 98,
+                                "per_core_N": 1,
+                            },
+
+        (25088, 64, 256) : {"compute_with_storage_grid_size" : (8,8),
+                                "in0_block_w" : 1,
+                                "out_subblock_h" : 1,
+                                "out_subblock_w": 1,
+                                "per_core_M": 98,
+                                "per_core_N": 1,
+                            },
+        (25088, 256, 64) : {"compute_with_storage_grid_size" : (2,8),
+                        "in0_block_w" : 1,
+                        "out_subblock_h" : 1,
+                        "out_subblock_w": 1,
+                        "per_core_M": 98,
+                        "per_core_N": 1,
+                    },
+        (25088, 256, 128) : {"compute_with_storage_grid_size" : (4,8),
+                        "in0_block_w" : 1,
+                        "out_subblock_h" : 1,
+                        "out_subblock_w": 1,
+                        "per_core_M": 98,
+                        "per_core_N": 1,
+                    },
+        (6272, 128, 512) : {"compute_with_storage_grid_size" : (4,9),
+                        "in0_block_w" : 2,
+                        "out_subblock_h" : 1,
+                        "out_subblock_w": 1,
+                        "per_core_M": 22,
+                        "per_core_N": 4,
+                    },
+        (6272, 512, 128) : {"compute_with_storage_grid_size" : (4,9),
+                        "in0_block_w" : 2,
+                        "out_subblock_h" : 1,
+                        "out_subblock_w": 1,
+                        "per_core_M": 22,
+                        "per_core_N": 1,
+                    },
+        (6272, 512, 256) : {"compute_with_storage_grid_size" : (8,9),
+                        "in0_block_w" : 2,
+                        "out_subblock_h" : 1,
+                        "out_subblock_w": 1,
+                        "per_core_M": 22,
+                        "per_core_N": 1,
+                    },
+        (1568, 256, 1024) : {"compute_with_storage_grid_size" : (8,9),
+                        "in0_block_w" : 4,
+                        "out_subblock_h" : 1,
+                        "out_subblock_w": 1,
+                        "per_core_M": 6,
+                        "per_core_N": 4,
+                    },
+        (1568, 1024, 256) : {"compute_with_storage_grid_size" : (8,9),
+                        "in0_block_w" : 16,
+                        "out_subblock_h" : 1,
+                        "out_subblock_w": 1,
+                        "per_core_M": 6,
+                        "per_core_N": 1,
+                    },
+        (1568, 1024, 512) : {"compute_with_storage_grid_size" : (8,9),
+                        "in0_block_w" : 16,
+                        "out_subblock_h" : 1,
+                        "out_subblock_w": 1,
+                        "per_core_M": 6,
+                        "per_core_N": 2,
+                    },
+        (416, 512, 2048) : {"compute_with_storage_grid_size" : (8,7),
+                        "in0_block_w" : 16,
+                        "out_subblock_h" : 1,
+                        "out_subblock_w": 1,
+                        "per_core_M": 2,
+                        "per_core_N": 8,
+                    },
+        (416, 2048, 512) : {"compute_with_storage_grid_size" : (8,7),
+                        "in0_block_w" : 32,
+                        "out_subblock_h" : 1,
+                        "out_subblock_w": 1,
+                        "per_core_M": 2,
+                        "per_core_N": 2,
+                    },
+    },
 }
 
 hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv = {
@@ -249,7 +337,13 @@ hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv = {
         (1568, 128) : [128, 128, 128, 64] ,
         (416, 256) : [64, 128, 64, 128],
         (128, 512) : [32, 64, 32, 64] ,
-    }
+    },
+    8 : {
+        (25088, 64) : [128, 64, 128, 64] ,
+        (6272, 128) : [128, 128, 128, 64] ,
+        (1568, 256) : [64, 128, 64, 128],
+        (416, 512) : [32, 64, 32, 64] ,
+    },
 }
 
 # With double buffered input CB, these shapes work -
@@ -265,7 +359,13 @@ hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_downsample_conv =
         (1568, 512) : [128, 64, 128, 64] ,
         (416, 1024) : [64, 128, 64, 64],
         (128, 2048) : [64, 128, 64, 64] ,
-    }
+    },
+    8 : {
+        (25088, 256) : [128, 64, 128, 64] ,
+        (6272, 512) : [128, 64, 128, 64] ,
+        (1568, 1024) : [64, 128, 64, 64],
+        (416, 2048) : [64, 128, 64, 64] ,
+    },
 }
 
 class Bottleneck(nn.Module):
@@ -425,9 +525,11 @@ class Bottleneck(nn.Module):
                 x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
                 x = x.reshape(self.module_input_shape[0], self.module_input_shape[1], self.module_input_shape[2], self.module_input_shape[3])
             identity = self.downsample_conv_on_tt(x)
+            x.deallocate()
 
         fused_activations = [tt_lib.tensor.FusibleActivation.RELU]
         out = tt_lib.tensor.add_without_autoformat(out, identity, fused_activations, output_mem_config=self.memory_config)
+        identity.deallocate()
         # out = self.relu(out, self.memory_config)
         return out
 
@@ -646,6 +748,7 @@ class ResNet(nn.Module):
         x = self.conv1(x)
         #x = x.reshape(1, 1, x.shape()[0]*x.shape()[1]*x.shape()[2], x.shape()[3]);
         x = self.relu(x, self.memory_config)
+        #tt_lib.device.DumpDeviceMemoryState(self.device)
         x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
         x = x.reshape(self.conv1_output_shape[0], self.conv1_output_shape[1], self.conv1_output_shape[2], self.conv1_output_shape[3])
         x = self.maxpool(x)

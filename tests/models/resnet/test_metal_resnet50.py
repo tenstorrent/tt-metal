@@ -24,7 +24,7 @@ from tests.models.resnet.metalResnetBlock50 import ResNet, Bottleneck
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose_and_pcc, comp_pcc
 
 
-@pytest.mark.parametrize("batch_size", [1,2])
+@pytest.mark.parametrize("batch_size", [1,2,8])
 def test_run_resnet50_inference(use_program_cache, batch_size, imagenet_sample_input):
     image1 = imagenet_sample_input
     image = image1
@@ -37,6 +37,7 @@ def test_run_resnet50_inference(use_program_cache, batch_size, imagenet_sample_i
         device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
         tt_lib.device.InitializeDevice(device)
         tt_lib.device.SetDefaultDevice(device)
+        tt_lib.device.EnableMemoryReports()
 
         torch_resnet50 = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
         torch_resnet50.eval()
