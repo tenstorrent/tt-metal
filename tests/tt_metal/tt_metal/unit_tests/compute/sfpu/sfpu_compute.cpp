@@ -22,6 +22,7 @@ using namespace tt::tt_metal;
 
 namespace unit_tests::sfpu_util {
 
+
 const map<string, std::map<string, string>> sfpu_op_to_op_name = {
     // FIXME: #1157
     {"relu", {{"SFPU_OP_CHAIN_0", "relu_min_tile_init(); relu_min_tile(0,0x0);"}}},
@@ -189,6 +190,15 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
                 .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
         std::map<string, string> sfpu_defines = sfpu_util::sfpu_op_to_op_name.at(test_config.sfpu_op);
+
+	sfpu_defines["SFPU_OP_EXP_INCLUDE"] = "1";
+	sfpu_defines["SFPU_OP_GELU_INCLUDE"] = "1";
+	sfpu_defines["SFPU_OP_RECIP_INCLUDE"] = "1";
+	sfpu_defines["SFPU_OP_SQRT_INCLUDE"] = "1";
+	sfpu_defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
+	sfpu_defines["SFPU_OP_ELU_INCLUDE"] = "1";
+	sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
+
         auto sfpu_kernel = tt_metal::CreateComputeKernel(
             program,
             "tt_metal/kernels/compute/eltwise_sfpu.cpp",

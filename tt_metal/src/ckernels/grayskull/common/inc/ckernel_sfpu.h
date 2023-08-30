@@ -503,55 +503,6 @@ union Converter {
   }
 };
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_lrelu(uint slope)
-{
-    // SFPU microcode
-    Converter c_slope;
-    c_slope.u = slope;
-    vFloat s = c_slope.f;
-
-    #pragma GCC unroll 0
-    for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0];
-
-        v_if (v < 0.0f) {
-            v *= s;
-        }
-        v_endif;
-
-        dst_reg[0] = v;
-
-        dst_reg++;
-    }
-}
-
-template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_elu(uint slope)
-{
-    // SFPU microcode
-    constexpr bool zero_negative = true;
-    Converter c_slope;
-    c_slope.u = slope;
-    vFloat s = c_slope.f;
-
-    #pragma GCC unroll 0
-    for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0];
-
-        v_if (v < 0.0f) {
-         vFloat v_exp = calculate_exponential_body_improved<true,zero_negative>(v);
-
-         v = s*(v_exp - 1.0f);
-        }
-        v_endif;
-
-        dst_reg[0] = v;
-
-        dst_reg++;
-    }
-}
-
 template <bool APPROXIMATION_MODE,int ITERATIONS>
 inline void calculate_power_iterative(uint exponent)
 {
@@ -1016,44 +967,6 @@ inline void calculate_cosine()
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void relu_max(uint uint_threshold)
-{
-    vFloat threshold = Converter::to_float(uint_threshold);
-    for (int d = 0; d < ITERATIONS; d++)
-    {
-        vFloat a = dst_reg[0];
-        v_if(a > threshold) {
-            a = threshold;
-        }
-        v_endif;
-        v_if(a < 0.0f) {
-            a = 0.0f;
-        }
-        v_endif;
-        dst_reg[0] = a;
-        dst_reg++;
-    }
-}
-
-template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void relu_min(uint uint_threshold)
-{
-    vFloat threshold = Converter::to_float(uint_threshold);
-    for (int d = 0; d < ITERATIONS; d++)
-    {
-        vFloat a = dst_reg[0];
-        v_if(a < threshold) {
-            a = threshold;
-        }
-        v_endif;
-        dst_reg[0] = a;
-        dst_reg++;
-    }
-
-}
-
-
 inline
 vFloat sigmoid_piecewise_linear_positive(vFloat val) {
         vFloat result = 0.0f;
@@ -1179,9 +1092,6 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
     else if constexpr (operation == SfpuType::tanh_derivative) {
         calculate_tanh_derivative<APPROXIMATION_MODE, SfpuType_PARAM, ITERATIONS>();
     }
-    else if constexpr (operation == SfpuType::lrelu) {
-        calculate_lrelu<APPROXIMATION_MODE, ITERATIONS>(param0);
-    }
     else if constexpr (operation == SfpuType::dropout) {
         calculate_dropout<APPROXIMATION_MODE, ITERATIONS>(param0, param1);
     }
@@ -1232,15 +1142,6 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
     }
     else if constexpr (operation == SfpuType::cosine) {
         calculate_cosine<APPROXIMATION_MODE, ITERATIONS>();
-    }
-    else if constexpr (operation == SfpuType::relu_min) {
-        relu_min<APPROXIMATION_MODE, ITERATIONS>(param0);
-    }
-    else if constexpr (operation == SfpuType::relu_max) {
-        relu_max<APPROXIMATION_MODE, ITERATIONS>(param0);
-    }
-    else if constexpr (operation == SfpuType::elu) {
-        calculate_elu<APPROXIMATION_MODE, ITERATIONS>(param0);
     }
     else if constexpr (operation == SfpuType::exp2) {
         calculate_exp2<APPROXIMATION_MODE, ITERATIONS>();

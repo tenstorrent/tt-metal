@@ -212,4 +212,5 @@ constexpr static std::uint32_t SCALE_DATUM_SIZE(uint format, uint datum_count) {
 #define LOWER_HALFWORD(x) ((x) & 0xFFFF)
 #define UPPER_HALFWORD(x) ((x) >> 16)
 
+constexpr int WHB0_ITERATIONS = 8;
 } // namespace ckernel

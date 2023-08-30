@@ -16,7 +16,7 @@ namespace ckernel
 namespace sfpu
 {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+  template <int ITERATIONS>
 inline void calculate_gelu_appx()
 {
 
@@ -65,11 +65,11 @@ inline void calculate_gelu_appx()
     l_reg[LRegs::LReg6] = l6;
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS=8>
+template <bool APPROXIMATION_MODE,int ITERATIONS>
 inline void calculate_gelu()
 {
     if constexpr (APPROXIMATION_MODE) {
-	calculate_gelu_appx<APPROXIMATION_MODE,ITERATIONS>();
+	calculate_gelu_appx<ITERATIONS>();
     } else {
       constexpr bool scaled = true;
       // SFPU microcode
@@ -189,7 +189,7 @@ inline vFloat calculate_gelu_core(vFloat in)
     return result;
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS=8>
+template <bool APPROXIMATION_MODE,int ITERATIONS>
 inline void calculate_gelu_derivative()
 {
     if constexpr (APPROXIMATION_MODE) {
@@ -237,12 +237,12 @@ inline void calculate_gelu_derivative()
             vFloat neg_half_sq_in = in * in * -0.5f;
 
             // exp = e^(val)
-            vFloat exp = calculate_exponential_body<false>(neg_half_sq_in);
+            vFloat exp = calculate_exponential_body<false,ITERATIONS>(neg_half_sq_in);
 
             // exp = exp * 1/sqrt(2*pi)
             vFloat partial = exp * in * s2vFloat16b(0.3989423F);
 
-            vFloat result = calculate_gelu_core<true>(in);
+            vFloat result = calculate_gelu_core<true,ITERATIONS>(in);
 
             result = lut(result, l0, l1, imm2);
 

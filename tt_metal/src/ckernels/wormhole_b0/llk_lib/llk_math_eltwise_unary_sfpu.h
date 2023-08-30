@@ -320,35 +320,6 @@ inline void llk_math_eltwise_unary_sfpu_cosine_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::cosine, APPROXIMATE>();
 }
 
-template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_lrelu(uint dst_index, int vector_mode, uint uint_slope) {
-    llk_math_eltwise_unary_sfpu<SfpuType::lrelu, APPROXIMATE, dst_sync>(dst_index, vector_mode, uint_slope);
-}
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_lrelu_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::lrelu, APPROXIMATE>();
-}
-
-template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_relu_max(uint dst_index, int vector_mode, uint uint_threshold) {
-    llk_math_eltwise_unary_sfpu<SfpuType::relu_max, APPROXIMATE, dst_sync>(dst_index, vector_mode, uint_threshold);
-}
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_relu_max_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::relu_max, APPROXIMATE>();
-}
-
-template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_relu_min(uint dst_index, int vector_mode, uint uint_threshold) {
-    llk_math_eltwise_unary_sfpu<SfpuType::relu_min, APPROXIMATE, dst_sync>(dst_index, vector_mode, uint_threshold);
-}
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_relu_min_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::relu_min, APPROXIMATE>();
-}
 
 template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
 inline void llk_math_eltwise_unary_sfpu_abs(uint dst_index, int vector_mode = Dim::RC) {

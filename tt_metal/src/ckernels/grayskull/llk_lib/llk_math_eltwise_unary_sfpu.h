@@ -324,49 +324,8 @@ inline void llk_math_eltwise_unary_sfpu_gez_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::greater_than_equal_zero, APPROXIMATE>();
 }
 
-// RELU MAX
-template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_relu_max(uint dst_index,uint param0, int vector_mode = Dim::RC) {
-    llk_math_eltwise_unary_sfpu<SfpuType::relu_max, APPROXIMATE, dst_sync>(dst_index,vector_mode,param0);
-}
+//ELU - implemented in ckernel_sfpu_elu.h
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_relu_max_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::relu_max, APPROXIMATE>();
-}
-
-// RELU MIN
-template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_relu_min(uint dst_index,uint param0, int vector_mode = Dim::RC) {
-    llk_math_eltwise_unary_sfpu<SfpuType::relu_min, APPROXIMATE, dst_sync>(dst_index,vector_mode,param0);
-}
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_relu_min_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::relu_min, APPROXIMATE>();
-}
-
-//Leaky Relu
-template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_leaky_relu(uint dst_index,uint param0, int vector_mode = Dim::RC) {
-    llk_math_eltwise_unary_sfpu<SfpuType::lrelu, APPROXIMATE, dst_sync>(dst_index,vector_mode,param0);
-}
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_leaky_relu_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::lrelu, APPROXIMATE>();
-}
-
-//ELU
-template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_elu(uint dst_index,uint param0, int vector_mode = Dim::RC) {
-    llk_math_eltwise_unary_sfpu<SfpuType::elu, APPROXIMATE, dst_sync>(dst_index,vector_mode,param0);
-}
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_elu_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::elu, APPROXIMATE>();
-}
 
 //EXP2
 template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>

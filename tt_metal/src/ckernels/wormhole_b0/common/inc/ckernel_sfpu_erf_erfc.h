@@ -2,7 +2,6 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "ckernel_sfpu.h"
 #include "noc_nonblocking_api.h"
 #include "llk_math_eltwise_unary_sfpu_1_param.h"
 
@@ -10,6 +9,8 @@ using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
+
+#define POLYVAL5(coef4,coef3,coef2,coef1,coef0,val) ( (((coef4*val + coef3)*val + coef2)*val + coef1)*val + coef0 )
 
 template <bool APPROXIMATION_MODE>
 sfpi_inline vFloat calculate_erf_body(vFloat x) {
@@ -27,9 +28,9 @@ sfpi_inline vFloat calculate_erf_body(vFloat x) {
 }
 
 // TODO: Fix assertion error for accurate mode
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <bool APPROXIMATION_MODE>
 inline void calculate_erf() {
-    for (int d = 0; d < ITERATIONS; d++) {
+    for (int d = 0; d < WHB0_ITERATIONS; d++) {
         // SFPU microcode:
         vFloat x = dst_reg[0];
         v_if(x < 0.0f) {
@@ -44,10 +45,10 @@ inline void calculate_erf() {
 }
 
 // TODO: Fix assertion error for accurate mode
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <bool APPROXIMATION_MODE>
 inline void calculate_erfc() {
 // SFPU microcode:
-    for (int d = 0; d < ITERATIONS; d++) {
+    for (int d = 0; d < WHB0_ITERATIONS; d++) {
         vFloat x = dst_reg[0];
         v_if(x < 0.0f) { x = 1.0 + (calculate_erf_body<APPROXIMATION_MODE>(x)); }
         v_else { x = 1.0 - (calculate_erf_body<APPROXIMATION_MODE>(x)); }
@@ -57,20 +58,20 @@ inline void calculate_erfc() {
     }
 }
 
-template <SfpuType operation, bool APPROXIMATION_MODE, int ITERATIONS=4>
+template <SfpuType operation, bool APPROXIMATION_MODE>
 inline void calculate_sfpu_erf_erfc(
     uint param0 = 0) {
     if constexpr (operation == SfpuType::erf) {
         if (param0) {
-            calculate_erf<true, ITERATIONS>();
+	  calculate_erf<true>();
         } else {
-            calculate_erf<false, ITERATIONS>();
+	  calculate_erf<false>();
         }
     } else if constexpr (operation == SfpuType::erfc) {
         if (param0) {
-            calculate_erfc<true, ITERATIONS>();
+	  calculate_erfc<true>();
         } else {
-            calculate_erfc<false, ITERATIONS>();
+	  calculate_erfc<false>();
         }
     }
 }
@@ -79,14 +80,16 @@ template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
 inline void llk_math_eltwise_unary_sfpu_erf(uint dst_index, int param0 = 0) {
     llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE, Dst>
                                 (ckernel::sfpu::calculate_sfpu_erf_erfc<SfpuType::erf,APPROXIMATE>,
-                                dst_index, param0);
+				 ckernel::sfpu::calculate_sfpu_erf_erfc<SfpuType::erf,APPROXIMATE>,
+				 dst_index, Dim::RC, param0);
 }
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
 inline void llk_math_eltwise_unary_sfpu_erfc(uint dst_index, int param0 = 0) {
     llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE, Dst>
                                 (ckernel::sfpu::calculate_sfpu_erf_erfc<SfpuType::erfc,APPROXIMATE>,
-                                dst_index, param0);
+				 ckernel::sfpu::calculate_sfpu_erf_erfc<SfpuType::erfc,APPROXIMATE>,
+				 dst_index, Dim::RC, param0);
 }
 
 }  // namespace sfpu

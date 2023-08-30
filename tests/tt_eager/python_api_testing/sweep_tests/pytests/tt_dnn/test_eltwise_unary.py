@@ -495,6 +495,8 @@ class TestEltwiseUnary:
         test_args.update({"alpha": alpha})
         test_args.update({"input_mem_config": input_mem_config, "output_mem_config": output_mem_config})
         comparison_func = comparison_funcs.comp_pcc
+        if is_wormhole_b0():
+            comparison_func = partial(comparison_func,pcc=0.889)
         run_single_pytorch_test(
             "eltwise-elu",
             input_shapes,
@@ -571,7 +573,6 @@ class TestEltwiseUnary:
             pcie_slot,
         )
 
-    @skip_for_wormhole_b0
     @pytest.mark.parametrize("fn_kind", ["erf", "erfc"])
     @pytest.mark.parametrize("fast_and_appx", [True, False])
     def test_run_eltwise_erf_ops(

@@ -1,5 +1,6 @@
 #include <cstdint>
-
+#include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api.h"
 
 #if SFPU_OP_ERF_ERFC_INCLUDE
 #include "compute_kernel_api/eltwise_unary/erf_erfc.h"
@@ -13,16 +14,22 @@
 #include "compute_kernel_api/eltwise_unary/gelu.h"
 #endif
 
-#if SFPU_OP_RECIP_INCLUDE
-#include "compute_kernel_api/eltwise_unary/recip.h"
-#endif
-
 #if SFPU_OP_SQRT_INCLUDE
 #include "compute_kernel_api/eltwise_unary/sqrt.h"
 #endif
 
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api.h"
+#if SFPU_OP_RECIP_INCLUDE
+#include "compute_kernel_api/eltwise_unary/recip.h"
+#endif
+
+#if SFPU_OP_RELU_FAMILY_INCLUDE
+#include "compute_kernel_api/eltwise_unary/relu.h"
+#endif
+
+#if SFPU_OP_ELU_INCLUDE
+#include "compute_kernel_api/eltwise_unary/elu.h"
+#endif
+
 //#include "debug_print.h"
 
 namespace NAMESPACE {

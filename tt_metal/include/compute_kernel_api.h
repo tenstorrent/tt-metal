@@ -272,30 +272,8 @@ ALWI void gez_tile_init() {
 }
 
 
-//RELU MAX-MIN ops
-ALWI void relu_max_tile(uint32_t idst,uint32_t param0) {
-    #ifdef ARCH_GRAYSKULL
-    MATH(( llk_math_eltwise_unary_sfpu_relu_max<APPROX, SyncHalf>(idst,param0) ));
-    #else
-    MATH(( llk_math_eltwise_unary_sfpu_relu_max<APPROX, SyncHalf>(idst, Dim::RC, param0) ));
-    #endif
-}
-
-ALWI void relu_max_tile_init() {
-    MATH(( llk_math_eltwise_unary_sfpu_relu_max_init<APPROX>() ));
-}
-
-ALWI void relu_min_tile(uint32_t idst,uint32_t param0) {
-    #ifdef ARCH_GRAYSKULL
-    MATH(( llk_math_eltwise_unary_sfpu_relu_min<APPROX, SyncHalf>(idst,param0) ));
-    #else
-    MATH(( llk_math_eltwise_unary_sfpu_relu_min<APPROX, SyncHalf>(idst, Dim::RC, param0) ));
-    #endif
-}
-
-ALWI void relu_min_tile_init() {
-    MATH(( llk_math_eltwise_unary_sfpu_relu_min_init<APPROX>() ));
-}
+//relu, relu-min, relu-max operators are implemented in
+//compute_kernel_api/eltwise_unary/relu.h
 
 //POWER : y = x^(const param0)
 ALWI void power_tile(uint32_t idst,uint32_t param0) {
@@ -325,23 +303,8 @@ ALWI void graph_interpreter_init() // TODO(AP): probably duplicated, remove
     UNPACK(( llk_unpack_AB_hw_configure_disaggregated(0,0) ));
 }
 
-//Leaky Relu : y = relu(x) + slope*-relu(-x)
-ALWI void leaky_relu_tile(uint32_t idst,uint32_t param0) {
-    MATH(( llk_math_eltwise_unary_sfpu_leaky_relu<APPROX, SyncHalf>(idst,param0) ));
-}
-
-ALWI void leaky_relu_tile_init() {
-    MATH(( llk_math_eltwise_unary_sfpu_leaky_relu_init<APPROX>() ));
-}
-
-//elu : y = relu(x) + slope*(exp(x) - 1)*(x <= 0 );
-ALWI void elu_tile(uint32_t idst,uint32_t param0) {
-    MATH(( llk_math_eltwise_unary_sfpu_elu<true, SyncHalf>(idst,param0) ));
-}
-
-ALWI void elu_tile_init() {
-    MATH(( llk_math_eltwise_unary_sfpu_elu_init<true>() ));
-}
+//leaky_relu implemented in compute_kernel_api/eltwise_unary/relu.h
+//elu implemented in same header as @leaky_relu
 
 //exp2 : y = 2 ^ x  ==> [y = exp(x * log(2))]
 ALWI void exp2_tile(uint32_t idst) {

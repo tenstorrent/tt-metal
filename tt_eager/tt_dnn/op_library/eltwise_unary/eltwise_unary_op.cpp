@@ -30,6 +30,43 @@ public:
   }
 };
 
+// update split eltwise ops include macros
+inline bool update_macro_defines(UnaryOpType op_type,std::map<std::string,std::string>& defines) {
+  switch( op_type) {
+
+  case UnaryOpType::EXP:
+  case UnaryOpType::EXP2:
+    defines["SFPU_OP_EXP_INCLUDE"] = "1";
+    break;
+  case UnaryOpType::GELU:
+    defines["SFPU_OP_GELU_INCLUDE"] = "1";
+    break;
+  case UnaryOpType::RECIP:
+    defines["SFPU_OP_RECIP_INCLUDE"] = "1";
+    break;
+  case UnaryOpType::SQRT:
+    defines["SFPU_OP_SQRT_INCLUDE"] = "1";
+    break;
+  case UnaryOpType::ERFC:
+  case UnaryOpType::ERF:
+    defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
+    return true;
+  case UnaryOpType::ELU:
+    defines["SFPU_OP_ELU_INCLUDE"] = "1";
+    return true;
+  case UnaryOpType::RELU:
+  case UnaryOpType::RELU6:
+  case UnaryOpType::RELU_MAX:
+  case UnaryOpType::RELU_MIN:
+  case UnaryOpType::LEAKY_RELU:
+    defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
+    return true;
+  default:
+    break;
+  };
+  return false;
+}
+
 std::pair<string, string> get_op_init_and_func_parameterized(UnaryOpType op_type, float param0, string idst) {
     std::pair<string, string> op_init_and_name;
     TT_ASSERT( is_parametrized_type(op_type) && "operator should support one parameter" );
@@ -119,7 +156,9 @@ std::map<string, string> get_defines_impl(std::string init_def, std::string func
     std::map<string, string> defines = {
         {init_def, op_init},
         {func_def, op_func},
-        {"SFPU_OP_ERF_ERFC_INCLUDE","0"} //include guards for split eltwise ops
+        {"SFPU_OP_ERF_ERFC_INCLUDE","0"}, //include guards for split eltwise ops
+        {"SFPU_OP_ELU_INCLUDE","0"}, //include guards for split eltwise ops
+	{"SFPU_OP_RELU_FAMILY_INCLUDE","0"} //include guards for RELU family ops
     };
     return defines;
 }
@@ -130,23 +169,8 @@ std::map<string, string> get_defines(UnaryOpType op_type, std::optional<float> p
     std::string func_def = fmt::format("SFPU_OP_FUNC_{}", id);
     std::map<std::string,std::string> defines = get_defines_impl(init_def, func_def, op_init_and_name.first, op_init_and_name.second);
     // update split eltwise ops include macros
-    if ( op_type == UnaryOpType::ERFC
-            || op_type == UnaryOpType::ERF ) {
-            defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
-    }
-    else if( op_type == UnaryOpType::EXP
-            || op_type == UnaryOpType::EXP2 ) {
-            defines["SFPU_OP_EXP_INCLUDE"] = "1";
-    }
-    else if( op_type == UnaryOpType::GELU) {
-            defines["SFPU_OP_GELU_INCLUDE"] = "1";
-    }
-    else if( op_type == UnaryOpType::RECIP) {
-            defines["SFPU_OP_RECIP_INCLUDE"] = "1";
-    }
-    else if( op_type == UnaryOpType::SQRT) {
-            defines["SFPU_OP_SQRT_INCLUDE"] = "1";
-    }
+
+    update_macro_defines(op_type, defines);
     return defines;
 }
 
@@ -167,29 +191,7 @@ std::map<string, string> get_block_defines(const std::vector<UnaryWithParam> op_
     }
     for (uint32_t i = 0; i<op_chain.size(); i++) {
         auto op_type = op_chain[i].op_type;
-        // update split eltwise ops include macros
-        if ( op_type == UnaryOpType::ERFC
-            || op_type == UnaryOpType::ERF ) {
-            block_defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
-            break;
-        }
-        else if( op_type == UnaryOpType::EXP
-            || op_type == UnaryOpType::EXP2 ) {
-            block_defines["SFPU_OP_EXP_INCLUDE"] = "1";
-            break;
-        }
-        else if( op_type == UnaryOpType::GELU) {
-            block_defines["SFPU_OP_GELU_INCLUDE"] = "1";
-            break;
-        }
-        else if( op_type == UnaryOpType::RECIP) {
-            block_defines["SFPU_OP_RECIP_INCLUDE"] = "1";
-            break;
-        }
-        else if( op_type == UnaryOpType::SQRT) {
-            block_defines["SFPU_OP_SQRT_INCLUDE"] = "1";
-            break;
-        }
+	update_macro_defines(op_type,block_defines);
     }
     block_defines[fmt::format("SFPU_OP_CHAIN_{}", block_id)] = block_define;
     return block_defines;
