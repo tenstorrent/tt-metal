@@ -86,7 +86,10 @@ void metal_SocDescriptor::map_workers_to_dram_banks() {
     CoreCoord target_dram_bank = this->dram_cores.at(0).at(0);
     std::vector<std::vector<CoreCoord>> dram_cores_per_channel;
     if (this->arch == tt::ARCH::WORMHOLE || this->arch == tt::ARCH::WORMHOLE_B0) {
-      dram_cores_per_channel = {{CoreCoord(0, 0)}, {CoreCoord(0, 5)}, {CoreCoord(5, 0)}, {CoreCoord(5, 2)}, {CoreCoord(5, 3)}, {CoreCoord(5, 5)}};
+      // Wormhole DRAM has two 1GB banks per each of the 6 channels. Metal interprets this as 12 banks
+      for (int channel = 0; channel < this->dram_cores.size(); channel+=2) {
+        dram_cores_per_channel.push_back({this->dram_cores.at(channel).at(0)});
+      }
     } else {
       dram_cores_per_channel = this->dram_cores;
     }
