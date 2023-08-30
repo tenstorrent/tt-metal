@@ -6,7 +6,6 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
-#include "tests/tt_metal/llrt/test_libs/debug_mailbox.hpp"
 #include "tt_metal/detail/util.hpp"
 
 using namespace tt::constants;

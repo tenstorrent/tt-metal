@@ -11,8 +11,6 @@
 #include "common/bfloat16.hpp"
 
 #include "llrt/llrt.hpp"
-#include "tt_metal/llrt/test_libs/debug_mailbox.hpp"
-
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -200,8 +198,6 @@ int main(int argc, char **argv) {
 
         tt_metal::WriteRuntimeArgsToDevice(device, program);
 
-        CoreCoord debug_core = {1, 1};
-        read_trisc_debug_mailbox(device->cluster(), 0, debug_core, 0);
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;

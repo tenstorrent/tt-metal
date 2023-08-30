@@ -10,7 +10,6 @@
 #include "common/bfloat16.hpp"
 #include "tests_common/sfpu_helper/sfpu_helper.hpp"
 #include "llrt/tt_debug_print_server.hpp"
-#include "tt_metal/llrt/test_libs/debug_mailbox.hpp"
 #include "build_kernels_for_riscv/build_kernels_for_riscv.hpp"
 #include "common/utils.hpp"
 #include "tt_metal/detail/tt_metal.hpp"

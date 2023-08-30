@@ -529,53 +529,6 @@ void tt_cluster::stop_remote_chip(const chip_id_t &chip) {
     }
 }
 
-void tt_cluster::check_timeout(std::string output_dir) {
-    if (get_device_duration() > get_device_timeout()) {
-        cout << __FUNCTION__ << " @ " << get_device_duration().count() << "s exceeded TIMEOUT " << get_device_timeout().count() << "s" << endl;
-        dump_debug_mailbox(output_dir);
-        TT_ASSERT(false ,  "Device TIMEOUT reached, possible hang is detected!");
-    }
-}
-
-void tt_cluster::dump_debug_mailbox(std::string output_dir) {
-    TT_ASSERT(device != nullptr, "Device not initialized, make sure compile is done before running!");
-    if (output_dir.find("tt_build") != std::string::npos) {
-        for (auto device_id: target_device_ids) {
-            string output_path = output_dir + "/debug_mailbox_device_";
-            output_path += to_string(device_id) + ".yaml";
-            tt::log_info(tt::LogLLRuntime, "Reading debug mailbox for device {}, output yaml path {}", device_id, output_path);
-            std::ofstream output_file(output_path);
-
-            std::vector<std::string> debug_mailboxes = {"T0", "T1", "T2", "Ncrisc"};
-
-            const int mailbox_base_addr = MEM_DEBUG_MAILBOX_ADDRESS;
-            const int mailbox_size = MEM_DEBUG_MAILBOX_SIZE;
-            for (auto &worker_core : get_soc_desc(device_id).workers) {
-                int core_x = worker_core.x;
-                int core_y = worker_core.y;
-                std::string core_id = std::to_string(core_x) + "-" + std::to_string(core_y);
-                output_file << core_id << ":" << std::endl;
-                int thread_idx = 0;
-                for (auto thread : debug_mailboxes) {
-                    output_file << "    " << thread << ":" << std::endl;
-                    const int mailbox_thread_base_addr = mailbox_base_addr + thread_idx * mailbox_size;
-                    std::vector<uint32_t> mailbox_events;
-                    read_dram_vec(
-                        mailbox_events, tt_cxy_pair(device_id, core_x, core_y), mailbox_thread_base_addr, mailbox_size);
-                    thread_idx++;
-                    // Number of events returned must be the mailbox size divided by event size (4B)
-                    assert(mailbox_events.size() == mailbox_size / 4);
-                    for (auto event : mailbox_events) {
-                        // The debug mailbox registers are 16b each
-                        output_file << "        - " << (event & 0xffff) << std::endl;
-                        output_file << "        - " << ((event >> 16) & 0xffff) << std::endl;
-                    }
-                }
-            }
-        }
-    }
-}
-
 inline uint64_t get_sys_addr(uint32_t chip_x, uint32_t chip_y, uint32_t noc_x, uint32_t noc_y, uint64_t offset) {
     uint64_t result = chip_y;
     uint64_t noc_addr_local_bits_mask = (1UL << NOC_ADDR_LOCAL_BITS) - 1;

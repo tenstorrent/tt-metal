@@ -11,8 +11,6 @@
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "test_tiles.hpp"
 
-#include "tt_metal/llrt/test_libs/debug_mailbox.hpp"
-
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -445,9 +443,7 @@ bool test_matmul_large_block(tt_metal::Device *device, const tt::ARCH& arch, boo
 
         tt_metal::WriteRuntimeArgsToDevice(device, program);
 
-        read_trisc_debug_mailbox(device->cluster(), 0, debug_core, 0);
         pass &= tt_metal::LaunchKernels(device, program);
-        // read_trisc_debug_mailbox(device->cluster(), 0, debug_core, 1);
         std::vector<uint32_t> result_vec;
         tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);
 

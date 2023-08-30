@@ -10,7 +10,6 @@
 #include "common/bfloat16.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "test_tiles.hpp"
-#include "tt_metal/llrt/test_libs/debug_mailbox.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -297,9 +296,6 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
             (std::uint32_t)dram_dst_noc_xy.x,
             (std::uint32_t)dram_dst_noc_xy.y,
             M * N});
-
-        CoreCoord debug_core = {1, 1};
-        read_trisc_debug_mailbox(device->cluster(), 0, debug_core, 0);
 
         tt_metal::WriteRuntimeArgsToDevice(device, program);
         pass &= tt_metal::LaunchKernels(device, program);

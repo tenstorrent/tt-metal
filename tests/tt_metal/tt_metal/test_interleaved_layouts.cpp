@@ -11,7 +11,6 @@
 #include "common/bfloat16.hpp"
 
 #include "llrt/llrt.hpp"
-#include "tt_metal/llrt/test_libs/debug_mailbox.hpp"
 
 #include "llrt/tt_debug_print_server.hpp"
 
@@ -373,9 +372,6 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
             (uint32_t) stick_size,
             (uint32_t) log2(stick_size)});
 
-        CoreCoord debug_core = {1,1};
-        read_trisc_debug_mailbox(device->cluster(), 0, debug_core, 0);
-        read_trisc_debug_mailbox(device->cluster(), 0, debug_core, 1);
         tt_metal::WriteRuntimeArgsToDevice(device, program);
         pass &= tt_metal::LaunchKernels(device, program);
 

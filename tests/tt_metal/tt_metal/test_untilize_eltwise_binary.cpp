@@ -9,7 +9,6 @@
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
 #include "test_gold_impls.hpp"
-#include "tt_metal/llrt/test_libs/debug_mailbox.hpp"
 
 using namespace tt;
 
@@ -255,7 +254,6 @@ int main(int argc, char **argv) {
             (std::uint32_t)dram_dst_noc_xy.y,
             num_tiles});
 
-        read_trisc_debug_mailbox(device->cluster(), 0, {1, 1}, 0);
         tt_metal::WriteRuntimeArgsToDevice(device, program);
         pass &= tt_metal::LaunchKernels(device, program);
 
