@@ -16,6 +16,7 @@
 #include "tt_metal/detail/program.hpp"
 #include "tt_metal/llrt/watcher.hpp"
 #include "tt_metal/third_party/umd/device/util.hpp"
+#include "tt_metal/third_party/umd/device/tt_device.h"
 
 using std::unique_lock;
 using std::mutex;
@@ -319,19 +320,26 @@ namespace tt::tt_metal{
             ClusterWrapper(const ClusterWrapper&) = delete;
             ClusterWrapper(ClusterWrapper&& other) noexcept = delete;
 
-            static const ClusterWrapper& inst(const tt::ARCH &arch, const TargetDevice &target_type) {
-                static ClusterWrapper inst(arch, target_type);
+            static const ClusterWrapper& inst(const TargetDevice &target_type) {
+                static ClusterWrapper inst(target_type);
                 return inst;
             }
 
             tt_cluster *cluster() const { return this->cluster_.get(); }
 
            private:
-            ClusterWrapper(const tt::ARCH &arch, const TargetDevice &target_type) {
+            ClusterWrapper(const TargetDevice &target_type) {
                 ZoneScoped;
                 this->cluster_ = std::make_unique<tt_cluster>();
 
                 std::vector<chip_id_t> avail_device_ids = tt_SiliconDevice::detect_available_device_ids(true, false);
+                tt::ARCH arch = detect_arch(avail_device_ids.at(0));
+                for (int dev_index = 1; dev_index < avail_device_ids.size(); dev_index++) {
+                    chip_id_t device_id = avail_device_ids.at(dev_index);
+                    tt::ARCH detected_arch = detect_arch(device_id);
+                    TT_ASSERT(arch == detected_arch, "Expected all devices to be {} but device {} is {}", get_arch_str(arch), device_id, get_arch_str(detected_arch));
+                }
+
                 std::set<chip_id_t> device_ids(avail_device_ids.begin(), avail_device_ids.end());
 
                 const std::string sdesc_file = get_soc_description_file(arch, target_type);

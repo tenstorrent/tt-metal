@@ -186,14 +186,14 @@ Device::~Device() {
 }
 
 bool Device::cluster_is_initialized() const {
-    return detail::ClusterWrapper::inst(this->arch_, this->target_type_).cluster() != nullptr;
+    return detail::ClusterWrapper::inst(this->target_type_).cluster() != nullptr;
 }
 
 tt_cluster *Device::cluster() const {
     if (not this->cluster_is_initialized()) {
         TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
     }
-    return detail::ClusterWrapper::inst(this->arch_, this->target_type_).cluster();
+    return detail::ClusterWrapper::inst(this->target_type_).cluster();
 }
 
 int Device::num_dram_channels() const {
