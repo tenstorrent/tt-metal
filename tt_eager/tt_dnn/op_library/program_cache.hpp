@@ -11,11 +11,6 @@ namespace program_cache {
 namespace detail {
 
 struct ProgramCache {
-
-    explicit ProgramCache() : is_enabled_(true), cache_(std::unordered_map<operation::Hash, operation::ProgramWithCallbacks>{}) {
-        tt::log_info(tt::LogOp, "Program Cache: enabled.");
-    }
-
     operation::ProgramWithCallbacks& get_or_create(
         const operation::DeviceOperation& op,
         const std::vector<Tensor> &input_tensors,
@@ -38,12 +33,10 @@ struct ProgramCache {
     }
 
     void enable() {
-        tt::log_info(tt::LogOp, "Program Cache: enabled.");
         this->is_enabled_ = true;
     }
 
     void disable() {
-        tt::log_info(tt::LogOp, "Program Cache: disabled.");
         this->is_enabled_ = false;
     }
 
@@ -52,7 +45,6 @@ struct ProgramCache {
     }
 
     void clear() {
-        tt::log_info(tt::LogOp, "Program Cache: cleared.");
         this->cache_.clear();
     }
 
@@ -61,7 +53,7 @@ struct ProgramCache {
     }
 
     private:
-        bool is_enabled_;
+        bool is_enabled_ = false;
         std::unordered_map<operation::Hash, operation::ProgramWithCallbacks> cache_{};
 };
 
@@ -79,10 +71,12 @@ static bool is_enabled() {
 }
 
 static void enable() {
+    tt::log_info(tt::LogOp, "Program Cache: enabled.");
     detail::PROGRAM_CACHE.enable();
 }
 
 static void disable_and_clear() {
+    tt::log_info(tt::LogOp, "Program Cache: disabled and cleared.");
     detail::PROGRAM_CACHE.disable();
     detail::PROGRAM_CACHE.clear();
 }

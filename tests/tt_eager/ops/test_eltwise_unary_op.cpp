@@ -246,7 +246,6 @@ void test_program_cache() {
 }
 
 int main(int argc, char** argv) {
-    tt::tt_metal::program_cache::disable_and_clear();
     test_operation_infrastructure();
     test_shape_padding();
     test_numerically();
