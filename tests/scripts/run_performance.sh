@@ -10,6 +10,9 @@ fi
 run_perf_models() {
     local pipeline_type=$1
 
+    env pytest tests/models/falcon/tests -m $pipeline_type
+
+
     env pytest tests/models/vgg/tests -m $pipeline_type
 
     env pytest tests/models/vit/tests -m $pipeline_type
@@ -20,8 +23,8 @@ run_perf_models() {
 
     env pytest tests/models/t5/tests -m $pipeline_type
 
-    # Bad tests, don't enable: Hanging post commit 8/24/23 debug war room session, see PR#2297, PR#2301
-    #env pytest tests/models/resnet/tests -m $pipeline_type
+    # # Bad tests, don't enable: Hanging post commit 8/24/23 debug war room session, see PR#2297, PR#2301
+    # #env pytest tests/models/resnet/tests -m $pipeline_type
 
     env pytest tests/models/bloom -m $pipeline_type
 
