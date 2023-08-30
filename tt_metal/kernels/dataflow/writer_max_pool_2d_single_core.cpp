@@ -25,7 +25,7 @@ void kernel_main() {
     constexpr bool is_out_dram = get_compile_time_arg_val(1) == 1;
     constexpr uint32_t out_nelems = get_compile_time_arg_val(3);
 
-    constexpr uint32_t out_cb_id = tt::CB::c_out0;
+    constexpr uint32_t out_cb_id = tt::CB::c_intermed1;
 
     // ROW_MAJOR output
     const InterleavedAddrGen<is_out_dram> s_out = {
@@ -41,19 +41,45 @@ void kernel_main() {
         // for every output pixel
         for (int32_t out_h_i = 0; out_h_i < out_h; ++ out_h_i) {
             for (uint32_t out_w_i = 0; out_w_i < out_w_loop_count; ++ out_w_i) {
-                cb_wait_front(out_cb_id, out_nelems);
+                cb_wait_front(out_cb_id, out_nelems * 2);
                 // kernel_profiler::mark_time(13);
                 uint32_t out_l1_read_addr = get_read_ptr(out_cb_id);
                 for (uint32_t out_elem_i = 0; out_elem_i < out_nelems; ++ out_elem_i) {
                     // TODO [AS]: skip OOB indices when out_nelems is not multiple of out_w
                     uint64_t out_noc_addr = get_noc_addr(batch_offset + out_row_id, s_out);
-                    noc_async_write(out_l1_read_addr, out_noc_addr, out_nbytes_c);
+
+                    // tile 0
+                    // face 0
+                    // write 16 elements from face0 // 32B
+                    noc_async_write(out_l1_read_addr, out_noc_addr, 32);
+                    out_noc_addr += 32;
+
+                    // face 1
+                    out_l1_read_addr += 512; // go to face 1
+                    noc_async_write(out_l1_read_addr, out_noc_addr, 32);
+                    out_noc_addr += 32;
+
+                    // go to tile 1
+                    out_l1_read_addr += 512 + 1024;
+
+                    // face 0
+                    // write 16 elements from face0 // 32B
+                    noc_async_write(out_l1_read_addr, out_noc_addr, 32);
+                    out_noc_addr += 32;
+
+                    // face 1
+                    out_l1_read_addr += 512; // go to face 1
+                    noc_async_write(out_l1_read_addr, out_noc_addr, 32);
+                    out_noc_addr += 32;
+
+                    // go to next tile in the block (next channel)
+                    out_l1_read_addr += 512 + 1024;
+
                     ++ out_row_id;
-                    out_l1_read_addr += out_cb_pagesize;
                 }
                 noc_async_write_barrier();
                 // kernel_profiler::mark_time(14);
-                cb_pop_front(out_cb_id, out_nelems);
+                cb_pop_front(out_cb_id, out_nelems * 2);
             }
         }
         batch_offset += out_hw;

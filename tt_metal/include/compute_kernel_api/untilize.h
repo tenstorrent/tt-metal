@@ -52,21 +52,29 @@ ALWI void untilize_init_short(uint32_t icb)
     #endif
 }
 
+template <int N = 1>
 ALWI void untilize_block(uint32_t icb, uint32_t block, uint32_t ocb)
 {
     UNPACK(( llk_unpack_untilize(icb, block) ));
 
-    for (uint32_t t = 0; t < block; t++) {
-        // Acquire dst
+    for (uint32_t t = 0; t < block / N; t++) {
         MATH(( llk_math_wait_for_dest_available<SYNC>() ));
+
+        // Datacopy
+        for (int reg_id = 0; reg_id < N; reg_id++) {
+            MATH(( llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, SyncHalf>(reg_id) ));
+        }
+
+        MATH(( llk_math_dest_section_done<SYNC>() ));
+
         PACK(( llk_packer_wait_for_math_done() ));
 
         // Datacopy
-        MATH(( llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, SyncHalf>(0) ));
-        PACK(( llk_pack<false, SYNC, false >(0, ocb)  ));
+        for (int reg_id = 0; reg_id < N; reg_id++) {
+            PACK(( llk_pack<false, SYNC, false >(reg_id, ocb)  ));
+        }
 
         // Release dest
-        MATH(( llk_math_dest_section_done<SYNC>() ));
         PACK(( llk_pack_dest_section_done<SYNC>() ));
     }
 }

@@ -80,6 +80,18 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
     // CBs
     uint32_t multi_buffering_factor = 2;
 
+    // scalar CB as coefficient of reduce
+    uint32_t in_scalar_cb_id = CB::c_in1;
+    uint32_t in_scalar_cb_pagesize = tile_size(in_df);
+    uint32_t in_scalar_cb_npages = 1;
+    auto in_scalar_cb = CreateCircularBuffers(program,
+                                              in_scalar_cb_id,
+                                              cores,
+                                              in_scalar_cb_npages,
+                                              in_scalar_cb_npages * in_scalar_cb_pagesize,
+                                              in_df);
+
+    // reader output == input to tilize
     uint32_t in_cb_id = CB::c_in0;          // input rows for "multiple (out_nelems)" output pixels
     uint32_t in_cb_page_nelems_padded = ceil_multiple_of(input_shape[3] * kernel_size_hw_padded, constants::TILE_HW);    // NOTE: ceil to tile size since triscs work with tilesize instead of pagesize
     uint32_t in_cb_pagesize = in_nbytes * in_cb_page_nelems_padded;
@@ -90,15 +102,8 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                        in_cb_npages,
                                        in_cb_npages * in_cb_pagesize,
                                        in_df);
-    uint32_t in_scalar_cb_id = CB::c_in1;
-    uint32_t in_scalar_cb_pagesize = tile_size(in_df);
-    uint32_t in_scalar_cb_npages = 1;
-    auto in_scalar_cb = CreateCircularBuffers(program,
-                                              in_scalar_cb_id,
-                                              cores,
-                                              in_scalar_cb_npages,
-                                              in_scalar_cb_npages * in_scalar_cb_pagesize,
-                                              in_df);
+
+    // output of tilize == input to reduce
     uint32_t in_tiled_cb_id = CB::c_intermed0;  // tiled input
     uint32_t in_tiled_cb_pagesize = tile_size(in_df);
     uint32_t in_tiled_cb_npages = in_ntiles_c * in_ntiles_hw * out_nelems;
@@ -108,7 +113,8 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                              in_tiled_cb_npages,
                                              in_tiled_cb_npages * in_tiled_cb_pagesize,
                                              in_df);
-    uint32_t out_tiled_cb_id = CB::c_intermed1; // tiled output
+    // reduce output == input to untilize
+    uint32_t out_tiled_cb_id = CB::c_intermed1;
     uint32_t out_tiled_cb_pagesize = tile_size(out_df);
     uint32_t out_tiled_cb_npages = out_ntiles_c * out_nelems;
     auto out_tiled_cb = CreateCircularBuffers(program,
@@ -117,9 +123,12 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                               out_tiled_cb_npages,
                                               out_tiled_cb_npages * out_tiled_cb_pagesize,
                                               out_df);
+
+
+    // output of untilize
     uint32_t out_cb_id = CB::c_out0;            // output rows in RM
-    uint32_t out_cb_pagesize = ceil_multiple_of(out_nbytes_c, constants::TILE_HW * out_nbytes);    // pad to tile size
-    uint32_t out_cb_npages = multi_buffering_factor * out_nelems;    // there is just one row of channels after reduction
+    uint32_t out_cb_pagesize = tile_size(out_df);
+    uint32_t out_cb_npages = out_ntiles_c * out_nelems * multi_buffering_factor;    // there is just one row of channels after reduction
     auto cb_out = CreateCircularBuffers(program,
                                         out_cb_id,
                                         cores,

@@ -98,6 +98,8 @@ def volume(shape):
         1,  ## default
         4,
         8,
+        28, # for perf
+        56,
     ),
 )
 def test_run_max_pool(
@@ -200,6 +202,9 @@ def test_run_max_pool(
 
     ## test for equivalance
     out_pytorch = out_pytorch.reshape(golden_pytorch.shape)
+    #print(out_pytorch)
+    ## TODO AS: this should be passing
+    # assert torch.allclose(out_pytorch, golden_pytorch, rtol=1e-01, atol=1e-01)
     passing_pcc, output_pcc = comp_pcc(golden_pytorch, out_pytorch)
     logger.info(f"Passing PCC = {passing_pcc}")
     logger.info(f"Output PCC = {output_pcc}")

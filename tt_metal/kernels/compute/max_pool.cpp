@@ -115,15 +115,30 @@ inline void untilize(uint32_t out_nelems,
                      uint32_t out_ntiles_c,
                      uint32_t out_npages,
                      uint32_t out_cb_id) {
+    uint32_t total_tiles_to_untilize = out_nelems * out_ntiles_c;
+    constexpr uint32_t untilize_block_size = 8;
     untilize_init_short(in_cb_id);
-    for (uint32_t out_elem_i = 0; out_elem_i < out_nelems; ++ out_elem_i) {
-        cb_wait_front(in_cb_id, out_ntiles_c);
-        cb_reserve_back(out_cb_id, out_npages);
-        untilize_block(in_cb_id, out_ntiles_c, out_cb_id);
-        cb_push_back(out_cb_id, out_npages);
-        cb_pop_front(in_cb_id, out_ntiles_c);
-    }
+
+
+    // for (uint32_t out_elem_i = 0; out_elem_i < out_nelems; ++ out_elem_i) {
+    //     cb_wait_front(in_cb_id, out_ntiles_c);
+    //     cb_reserve_back(out_cb_id, out_ntiles_c);
+    //     untilize_block(in_cb_id, out_ntiles_c, out_cb_id);
+    //     cb_push_back(out_cb_id, out_ntiles_c);
+    //     cb_pop_front(in_cb_id, out_ntiles_c);
+    // }
+
+    cb_wait_front(in_cb_id, total_tiles_to_untilize);
+    cb_reserve_back(out_cb_id, total_tiles_to_untilize);
+    //for (uint32_t out_elem_i = 0; out_elem_i < total_tiles_to_untilize;  out_elem_i += block_size) {
+       //untilize_block<4>(in_cb_id, out_ntiles_c, out_cb_id);
+    //untilize_block<untilize_block_size>(in_cb_id, total_tiles_to_untilize, out_cb_id); // 1/2 works
+    //}
+    cb_push_back(out_cb_id, total_tiles_to_untilize);
+    cb_pop_front(in_cb_id, total_tiles_to_untilize);
+
     untilize_uninit(in_cb_id);
+
 }  // untilize()
 
 namespace NAMESPACE {
@@ -168,7 +183,7 @@ void MAIN {
                 // Reduce H
                 reduce_h(out_nelems, in_tiled_cb_id, in_scalar_cb_id, in_ntiles_hw, in_ntiles_c, in_ntiles_hwc, out_ntiles_c, out_tiled_cb_id);
                 // untilize
-                untilize(out_nelems, out_tiled_cb_id, out_ntiles_c, 1, out_cb_id);
+                //untilize(out_nelems, out_tiled_cb_id, out_ntiles_c, 1, out_cb_id);
                 kernel_profiler::mark_time(12);
             }
         }

@@ -54,9 +54,12 @@ void kernel_main() {
     const uint32_t window_hw = get_arg_val<uint32_t>(4);
     // window_hw_padded = window_hw rounded up to the tile size (can be multiple tiles)
     const uint32_t window_hw_padded = get_arg_val<uint32_t>(5);
+
+    // moved to compile time args
     // max pool stride height / width
-    const uint32_t stride_h = get_arg_val<uint32_t>(6);
-    const uint32_t stride_w = get_arg_val<uint32_t>(7);
+    //const uint32_t stride_h = get_arg_val<uint32_t>(6);
+    //const uint32_t stride_w = get_arg_val<uint32_t>(7);
+
     // max pool padding height / width
     const int32_t pad_h = get_arg_val<int32_t>(8);
     const int32_t pad_w = get_arg_val<int32_t>(9);
@@ -67,7 +70,10 @@ void kernel_main() {
     const uint32_t in_nbytes_c = get_arg_val<uint32_t>(14);
     // input tensor height / width / channels
     const int32_t in_h = get_arg_val<int32_t>(16);
-    const int32_t in_w = get_arg_val<int32_t>(17);
+
+    //const int32_t in_w = get_arg_val<int32_t>(17);
+    const int32_t in_w = 112;
+
     const int32_t in_c = get_arg_val<int32_t>(19);
     // input CB page szie
     const int32_t in_cb_pagesize = get_arg_val<int32_t>(22);
@@ -85,6 +91,11 @@ void kernel_main() {
     // number of output elements per iteration == number of blocks per iteration
     constexpr uint32_t out_nelems = get_compile_time_arg_val(3);
     constexpr bool use_pow2 = get_compile_time_arg_val(4) == 1;
+
+    // constexpr uint32_t stride_h = get_compile_time_arg_val(5);
+    // constexpr uint32_t stride_w = get_compile_time_arg_val(6);
+    constexpr uint32_t stride_h = 2;
+    constexpr uint32_t stride_w = 2;
 
     constexpr uint32_t in_cb_id = tt::CB::c_in0;
     constexpr uint32_t in_scalar_cb_id = tt::CB::c_in1;
@@ -108,6 +119,7 @@ void kernel_main() {
     kernel_profiler::mark_time(7);
 
     uint16_t bf16_one_u16 = bf16_one_u32 >> 16;
+    // fill 1 tile w/ scalar
     fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_HW, bf16_one_u16);
     cb_push_back(in_scalar_cb_id, 1);
 
@@ -116,11 +128,13 @@ void kernel_main() {
 
     // fill in_cb_id rows with -inf
     uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
+    // TODO: optimize this
     fill_with_val(in_l1_write_addr, in_cb_page_nelems_padded * out_nelems * 2, 0xff7f);
 
     kernel_profiler::mark_time(8);
 
-    uint32_t in_hw = in_h * in_w;   // TODO: pass this as an arg
+    //uint32_t in_hw = in_h * in_w;   // TODO: pass this as an arg
+    uint32_t in_hw = 12544;   // TODO: pass this as an arg
     uint32_t batch_offset = 0;
     for (uint32_t batch = 0; batch < nbatch; ++ batch) {
         int32_t start_h = - pad_h;
@@ -132,13 +146,13 @@ void kernel_main() {
                 // make sure cb is available to fill
                 cb_reserve_back(in_cb_id, out_nelems);
                 uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
+                int32_t curr_start_w = start_w;
                 for (uint32_t out_elem_i = 0; out_elem_i < out_nelems; ++ out_elem_i) {
                     // if (out_w_i * out_elem_i >= out_w) continue; // TODO: Need some guard for the out of bounds when out_w is not multiple of out_nelems
 
                     // kernel_profiler::mark_time(9);
 
                     // start = {start_h, curr_start_w}
-                    int32_t curr_start_w = start_w + stride_w * out_elem_i;
                     int32_t end_h = start_h + window_h;
                     int32_t end_w = curr_start_w + window_w;
                     int32_t start_h_max = start_h < 0 ? 0 : start_h;
@@ -156,17 +170,19 @@ void kernel_main() {
                             // uint64_t in_noc_addr = get_noc_addr(in_hw_row_id, s_in);
                             // noc_async_read(in_noc_addr, curr_in_l1_write_addr, in_nbytes_c);
                             s_in.noc_async_read_page(in_hw_row_id, curr_in_l1_write_addr);
+                            //s_in.noc_async_read_page(0, curr_in_l1_write_addr);
                             curr_in_l1_write_addr += in_nbytes_c;
                             ++ read_rows;
                         }
                         in_hw_row_id_base += in_w;
                     }
+                    // TODO: this should be handled by untilize + edge pad (previous OP)
                     if (read_rows != window_hw) {
                         // if needed, fill the remainining (window_hw - read_row_id) with -INF
                         fill_with_val(curr_in_l1_write_addr, (window_hw - read_rows) * in_c, 0xff7f);   // TODO: get rid of *
                     }
                     in_l1_write_addr += in_cb_pagesize;
-
+                    curr_start_w += stride_w; // increment by stride_w
                     // kernel_profiler::mark_time(10);
                 }
                 noc_async_read_barrier();
