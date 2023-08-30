@@ -153,12 +153,12 @@ class TestEltwiseBinary:
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_ones), torch.bfloat16
+                partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16
             )
         ] * len(input_shapes)
         test_args = list(generation_funcs.gen_default_dtype_layout_device(input_shapes))[0]
         test_args.update({"input_mem_config": input_mem_config, "output_mem_config": output_mem_config})
-        comparison_func = comparison_funcs.comp_equal
+        comparison_func = comparison_funcs.comp_pcc
         run_single_pytorch_test(
             f"eltwise-{log_kind}",
             input_shapes,

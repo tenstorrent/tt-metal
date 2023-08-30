@@ -64,6 +64,22 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
         num_input_tiles * src1_single_tile_size,
         src1_cb_data_format
     );
+    auto cb_interm = tt_metal::CreateCircularBuffers(
+        program,
+        CB::c_intermed0,
+        all_cores,
+        1,
+        1 * src0_single_tile_size,
+        src0_cb_data_format
+    );
+    auto cb_interm2 = tt_metal::CreateCircularBuffers(
+        program,
+        CB::c_intermed1,
+        all_cores,
+        1,
+        1 * src1_single_tile_size,
+        src1_cb_data_format
+    );
 
     uint32_t output_cb_index = 16; // output operands start at index 16
     uint32_t num_output_tiles = 2;

@@ -49,8 +49,8 @@ void MAIN {
 
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_size = get_compile_time_arg_val(1);
-    constexpr auto cb_ex = tt::CB::c_intermed1;
-    constexpr auto cb_ex2 = tt::CB::c_intermed2;
+    constexpr auto cb_ex = tt::CB::c_intermed0;
+    constexpr auto cb_ex2 = tt::CB::c_intermed1;
     for(uint32_t block = 0; block < per_core_block_cnt; ++block) {
 
         cb_reserve_back(tt::CB::c_out0, per_core_block_size);
@@ -58,7 +58,6 @@ void MAIN {
         for(uint32_t t = 0; t < per_core_block_size; ++t)
         {
             acquire_dst(tt::DstMode::Half);
-
 
             // Below set of code creates hang issue
             // start of prescaling
@@ -69,19 +68,37 @@ void MAIN {
             copy_tile(tt::CB::c_in1, 0, 0); // copy from c_in[0] to DST[0]
             cb_pop_front(tt::CB::c_in1, 1);
 
-            //cb_reserve_back(cb_ex2, 1);
+            cb_reserve_back(cb_ex2, 1);
             exp_tile_init();
             exp_tile(0); // exp on DST[0]
             pack_tile(0, cb_ex2); // DST[0]->cb_id[wt]
             cb_push_back(cb_ex2, 1);
             REL();
+
+            ACQ();
+            cb_wait_front(tt::CB::c_in0, 1);
+            copy_tile_init(); // need to copy from CB to DST to be able to run sfpu math
+            copy_tile(tt::CB::c_in0, 0, 0); // copy from c_in[0] to DST[0]
+            cb_pop_front(tt::CB::c_in0, 1);
+
+            cb_reserve_back(cb_ex, 1);
+            exp_tile_init();
+            exp_tile(0); // exp on DST[0]
+            pack_tile(0, cb_ex); // DST[0]->cb_id[wt]
+            cb_push_back(cb_ex, 1);
+
+            REL();
             //#endif
             //cb_wait_front(tt::CB::c_in1, 1);
             ACQ();
+            cb_wait_front(cb_ex, 1);
             cb_wait_front(cb_ex2, 1);
-            cb_wait_front(tt::CB::c_in0, 1);
+            // copy_tile_init(); // need to copy from CB to DST to be able to run sfpu math
+            // copy_tile(cb_ex2, 0, 0);
 
-            ELTWISE_OP(tt::CB::c_in0, cb_ex2, 0, 0, 0);
+            //ELTWISE_OP(tt::CB::c_in0, cb_ex2, 0, 0, 0);
+            add_tiles_init();
+            add_tiles(cb_ex, cb_ex2, 0, 0, 0);
             //end of prescaling
 
            /*
@@ -107,6 +124,7 @@ void MAIN {
             cb_pop_front(tt::CB::c_in0, 1);
             cb_pop_front(tt::CB::c_in1, 1);
             cb_pop_front(cb_ex2, 1);
+            cb_pop_front(cb_ex, 1);
             release_dst(tt::DstMode::Half);
         }
 
