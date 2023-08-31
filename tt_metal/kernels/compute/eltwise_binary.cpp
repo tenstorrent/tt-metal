@@ -123,9 +123,10 @@ void MAIN {
             #endif
 
             pack_tile(0, tt::CB::c_out0);
-
-            cb_pop_front(tt::CB::c_in0, 1);
-            cb_pop_front(tt::CB::c_in1, 1);
+            #ifndef SFPU_OP_PRE_INIT_0
+                cb_pop_front(tt::CB::c_in0, 1);
+                cb_pop_front(tt::CB::c_in1, 1);
+            #endif
             #ifdef SFPU_OP_PRE_INIT_0
                 cb_pop_front(cb_ex2, 1);
                 cb_pop_front(cb_ex, 1);
