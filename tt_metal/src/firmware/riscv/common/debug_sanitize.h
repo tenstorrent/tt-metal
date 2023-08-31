@@ -124,31 +124,26 @@ void debug_sanitize_noc_uni_addr(uint64_t a, uint32_t l)
     debug_sanitize_noc_addr(x, y, la, a, l, DebugSanitizeNocInvalidUnicast);
 }
 
-void debug_sanitize_noc_multi_addr(uint64_t a, uint32_t l, bool loopback)
+void debug_sanitize_noc_multi_addr(uint64_t a, uint32_t l)
 {
     uint32_t xs = NOC_MCAST_ADDR_START_X(a);
     uint32_t ys = NOC_MCAST_ADDR_START_Y(a);
     uint32_t xe = NOC_MCAST_ADDR_END_X(a);
     uint32_t ye = NOC_MCAST_ADDR_END_Y(a);
 
-    // Going out on a limb here and assuming we won't mix worker/dram/pcie/eth transactions in one
-    // So, we'll use one XY to determine the type for validating the address
     if (!NOC_WORKER_XY_P(xs, ys) ||
         !NOC_WORKER_XY_P(xe, ye) ||
-        (xs > xe || ys > ye) ||
-        (!loopback &&
-         xs <= my_x[loading_noc] && my_x[loading_noc] <= xe &&
-         ys <= my_y[loading_noc] && my_y[loading_noc] <= ye)) {
+        (xs > xe || ys > ye)) {
         debug_sanitize_post_noc_addr_and_hang(a, l, DebugSanitizeNocInvalidMulticast);
     }
+    // Use one XY to determine the type for validating the address
     uint64_t la = NOC_LOCAL_ADDR_OFFSET(a);
     debug_sanitize_noc_addr(xs, ys, la, a, l, DebugSanitizeNocInvalidMulticast);
 }
 
 #define DEBUG_SANITIZE_WORKER_ADDR(a, l) debug_sanitize_worker_addr(a, l)
 #define DEBUG_SANITIZE_NOC_ADDR(a, l) debug_sanitize_noc_uni_addr(a, l)
-#define DEBUG_SANITIZE_NOC_MULTI_ADDR(a, l) debug_sanitize_noc_multi_addr(a, l, false)
-#define DEBUG_SANITIZE_NOC_MULTI_LOOPBACK_ADDR(a, l) debug_sanitize_noc_multi_addr(a, l, true)
+#define DEBUG_SANITIZE_NOC_MULTI_ADDR(a, l) debug_sanitize_noc_multi_addr(a, l)
 
 #else // !WATCHER_ENABLED
 

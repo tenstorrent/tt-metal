@@ -998,7 +998,7 @@ void noc_async_write_multicast_loopback_src(
     std::uint32_t size,
     std::uint32_t num_dests) {
     DEBUG_STATUS('N', 'M', 'L', 'W');
-    DEBUG_SANITIZE_NOC_MULTI_LOOPBACK_ADDR(dst_noc_addr_multicast, size);
+    DEBUG_SANITIZE_NOC_MULTI_ADDR(dst_noc_addr_multicast, size);
     DEBUG_SANITIZE_WORKER_ADDR(src_local_l1_addr, size);
     ncrisc_noc_fast_write_any_len_loopback_src(
         loading_noc,
