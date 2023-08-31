@@ -14,5 +14,5 @@ jobs:
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
     secrets: inherit
   run-profiler-regression:
-    uses: ./.github/workflows/perf-models.yaml
+    uses: ./.github/workflows/run-profiler-regression.yaml
     secrets: inherit
