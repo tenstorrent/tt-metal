@@ -12,7 +12,7 @@
 #include "tensor/tensor_utils.hpp"
 #include "detail/util.hpp"
 
-#define DEBUG_SERVER 1
+#define DEBUG_SERVER 0
 
 #if DEBUG_SERVER == 1
     #include "tt_metal/llrt/tt_debug_print_server.hpp"
@@ -128,18 +128,6 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core(const Tensor &input, Tens
 
     auto [all_cores, core_range, core_range_cliff, out_h_per_core, out_h_per_core_cliff] = max_pool_helpers::get_decomposition_h(out_h, ncores_h, ncores_w);
 
-    // TT_ASSERT(core_g2.ranges().empty(), "Currently only support cases whithout any cliffs.");
-
-    {
-        log_debug("out_hw: {}", out_hw);
-        log_debug("available total_ncores_h: {}, total_ncores_w: {}", total_ncores_h, total_ncores_w);
-        log_debug("using ncores_h: {}", ncores_h);
-        log_debug("using ncores_w: {}", ncores_w);
-        log_debug("using ncores_hw: {}", ncores_hw);
-        log_debug("out_h_per_core: {}", out_h_per_core);
-        log_debug("out_h_per_core_cliff: {}", out_h_per_core_cliff);
-    }
-
     // CBs
     uint32_t multi_buffering_factor = 2;
 
@@ -188,7 +176,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core(const Tensor &input, Tens
                                         out_cb_npages * out_cb_pagesize,
                                         out_df);
 
-    #if 1
+    #if 0
     {   // debug
         log_debug("in_cb :: PS = {}, NP = {}", in_cb_pagesize, in_cb_npages);
         log_debug("in_scalar_cb :: PS = {}, NP = {}", in_scalar_cb_pagesize, in_scalar_cb_npages);
@@ -221,6 +209,14 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core(const Tensor &input, Tens
         log_debug("out_ntiles_c: {}", out_ntiles_c);
         log_debug("out_nelems: {}", out_nelems);
         log_debug("out_w_loop_count: {}", out_w_loop_count);
+
+        log_debug("out_hw: {}", out_hw);
+        log_debug("available total_ncores_h: {}, total_ncores_w: {}", total_ncores_h, total_ncores_w);
+        log_debug("using ncores_h: {}", ncores_h);
+        log_debug("using ncores_w: {}", ncores_w);
+        log_debug("using ncores_hw: {}", ncores_hw);
+        log_debug("out_h_per_core: {}", out_h_per_core);
+        log_debug("out_h_per_core_cliff: {}", out_h_per_core_cliff);
     }
     #endif
 
@@ -249,7 +245,12 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core(const Tensor &input, Tens
                                             in_log_base_2_of_page_size,
                                             nbatch,
                                             in_hw,
-                                            out_hw};
+                                            out_hw,
+                                            // these are set later in the following
+                                            0,          // start_out_h_i
+                                            0,          // end_out_h_i
+                                            0,          // base_start_h
+                                            0};         // start_out_row_id
     auto reader_config = DataMovementConfig{.processor = DataMovementProcessor::RISCV_1,
                                             .noc = NOC::RISCV_1_default,
                                             .compile_args = reader_ct_args};
@@ -263,7 +264,6 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core(const Tensor &input, Tens
      * Writer Kernel: output cb -> output rows
      */
     std::vector<uint32_t> writer_ct_args = reader_ct_args;
-    std::vector<uint32_t> writer_rt_args = reader_rt_args;
     auto writer_config = DataMovementConfig{.processor = DataMovementProcessor::RISCV_0,
                                             .noc = NOC::RISCV_0_default,
                                             .compile_args = writer_ct_args};
@@ -317,10 +317,6 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core(const Tensor &input, Tens
     }
 
     // calculate and set the start/end h_i for each core
-    // add more args to be set below
-    reader_rt_args.push_back(0);  // arg num 30
-    reader_rt_args.push_back(0);  // arg num 31
-    reader_rt_args.push_back(0);  // arg num 32   (only used on reader)
     // for all but last core (cliff)
     uint32_t curr_out_h_i = 0;
     int32_t curr_start_h = - pad_h;
@@ -328,37 +324,35 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core(const Tensor &input, Tens
         // have a cliff core
         for (int32_t i = 0; i < ncores_hw - 1; ++ i) {
             CoreCoord core(i % ncores_w, i / ncores_w);
-            writer_rt_args[30] = curr_out_h_i;                                  // start for writer
             reader_rt_args[30] = curr_out_h_i; curr_out_h_i += out_h_per_core;  // start for reader
-            writer_rt_args[31] = curr_out_h_i;
             reader_rt_args[31] = curr_out_h_i;
             reader_rt_args[32] = curr_start_h; curr_start_h += stride_h;
 
             SetRuntimeArgs(program, reader_kernel, core, reader_rt_args);
+            std::vector<uint32_t> writer_rt_args = reader_rt_args;
             SetRuntimeArgs(program, writer_kernel, core, writer_rt_args);
         }
         // last core (cliff)
         CoreCoord core_cliff(ncores_w - 1, ncores_h - 1);
-        writer_rt_args[30] = curr_out_h_i;
         reader_rt_args[30] = curr_out_h_i;
         reader_rt_args[31] = curr_out_h_i + out_h_per_core_cliff;
-        writer_rt_args[31] = curr_out_h_i + out_h_per_core_cliff;
-        reader_rt_args[33] = curr_start_h;
+        reader_rt_args[32] = curr_start_h;
         SetRuntimeArgs(program, reader_kernel, core_cliff, reader_rt_args);
+        std::vector<uint32_t> writer_rt_args = reader_rt_args;
         SetRuntimeArgs(program, writer_kernel, core_cliff, writer_rt_args);
     } else {
         // no cliff core
         for (int32_t i = 0; i < ncores_hw; ++ i) {
             CoreCoord core(i % ncores_w, i / ncores_w);
-            writer_rt_args[30] = curr_out_h_i;          // start for writer
-            reader_rt_args[30] = curr_out_h_i;          // start for reader
+            reader_rt_args[30] = curr_out_h_i;          // start out_h i
+            reader_rt_args[33] = curr_out_h_i * out_w;
             curr_out_h_i += out_h_per_core;
-            writer_rt_args[31] = curr_out_h_i;
             reader_rt_args[31] = curr_out_h_i;
             reader_rt_args[32] = static_cast<uint32_t>(curr_start_h);
             curr_start_h += stride_h;
-            log_debug("CORE: ({},{}), RT ARGS 32: {}", core.x, core.y, reader_rt_args[32]);
+            // log_debug("CORE: ({},{}), RT ARGS 32: {}", core.x, core.y, reader_rt_args[31]);
             SetRuntimeArgs(program, reader_kernel, core, reader_rt_args);
+            std::vector<uint32_t> writer_rt_args = reader_rt_args;
             SetRuntimeArgs(program, writer_kernel, core, writer_rt_args);
         }
     }
@@ -519,7 +513,8 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                             out_hw,
                                             0,                              // start_out_h_i
                                             out_h,                          // end_out_h_i
-                                            static_cast<uint32_t>(-pad_h)   // base_start_h
+                                            static_cast<uint32_t>(-pad_h),  // base_start_h
+                                            0                               // start_out_row_id
                                             };
     auto reader_config = DataMovementConfig{.processor = DataMovementProcessor::RISCV_1,
                                             .noc = NOC::RISCV_1_default,

@@ -9,7 +9,7 @@
 #include "compute_kernel_api/reduce.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
-#define DEBUG_PRINT 1
+#define DEBUG_PRINT 0
 
 #if DEBUG_PRINT == 1
     #include "debug_macros.h"
@@ -110,7 +110,7 @@ void MAIN {
     const uint32_t nbatch = get_compile_time_arg_val(10);
     const uint32_t out_h_per_core = get_compile_time_arg_val(11);
 
-    DPRINT << "I AM THE COMPUTE!! " << ENDL();
+    // DPRINT << "I AM THE COMPUTE!! " << ENDL();
 
     tilize_init(in_cb_id, in_ntiles_hwc, in_tiled_cb_id);
 
@@ -128,8 +128,10 @@ void MAIN {
                 // NOTE: Assuming in_ntiles_hw < 8 for now.
                 // TODO: subblocking to support this.
                 kernel_profiler::mark_time(11);
+                // UDPRINT('T' << out_w_i);
                 // tilize
                 tilize(out_nelems, in_cb_id, in_ntiles_hw, in_ntiles_c, in_ntiles_hwc, window_hw_padded, in_tiled_cb_id);
+                // UDPRINT('R' << out_w_i);
                 // Reduce H
                 reduce_h(out_nelems, in_tiled_cb_id, in_scalar_cb_id, in_ntiles_hw, in_ntiles_c, in_ntiles_hwc, out_ntiles_c, out_cb_id);
                 kernel_profiler::mark_time(12);
@@ -137,6 +139,7 @@ void MAIN {
         }
     }
     cb_pop_front(in_scalar_cb_id, 1);
+    // ADPRINT("COMPUTE IS DONE");
 }
 
 }  // namespace NAMESPACE

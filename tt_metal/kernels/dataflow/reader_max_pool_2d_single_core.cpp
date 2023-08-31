@@ -5,7 +5,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 
-#include "debug_print.h"
+// #include "debug_print.h"
 // SliceRange srr = SliceRange{ .h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1 };
 // SliceRange srt = SliceRange{ .h0 = 0, .h1 = 32, .hs = 8, .w0 = 0, .w1 = 32, .ws = 4 };
 
@@ -45,7 +45,7 @@ inline bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {
  */
 void kernel_main() {
 
-    DPRINT << "THIS IS THE READER STARTING!!" << ENDL();
+    // DPRINT << "THIS IS THE READER STARTING!!" << ENDL();
 
     // input tensor address
     const uint32_t in_addr = get_arg_val<uint32_t>(0);
@@ -75,7 +75,7 @@ void kernel_main() {
     const int32_t in_h = get_arg_val<int32_t>(16);
 
     //const int32_t in_w = get_arg_val<int32_t>(17);
-    const int32_t in_w = 112;
+    const int32_t in_w = 112;                           // TODO: make sure this is correct
 
     const int32_t in_c = get_arg_val<int32_t>(19);
     // input CB page szie
@@ -110,10 +110,6 @@ void kernel_main() {
 
     constexpr uint32_t TILE_HW = 1024;
 
-    DPRINT << "start_out_h_i: " << (uint) start_out_h_i << ENDL();
-    DPRINT << "end_out_h_i: " << (uint) end_out_h_i << ENDL();
-    DPRINT << "base_start_h: " << (uint) base_start_h << ENDL();
-
     // ROW_MAJOR input
     const InterleavedPow2AddrGenFast<is_in_dram> s_in = {
         .bank_base_address = in_addr,
@@ -142,13 +138,15 @@ void kernel_main() {
 
     uint32_t batch_offset = 0;
     for (uint32_t batch = 0; batch < nbatch; ++ batch) {
-        // int32_t start_h = - pad_h;
         int32_t start_h = base_start_h;
         // for every output row (across all channels)
         for (uint32_t out_h_i = start_out_h_i; out_h_i < end_out_h_i; ++ out_h_i) {
             int32_t start_w = - pad_w;
             // for every output col
             for (int32_t out_w_i = 0; out_w_i < out_w_loop_count; ++ out_w_i) {
+
+                // DPRINT << "READER LS: " << (uint) out_w_i << ENDL();
+
                 // make sure cb is available to fill
                 cb_reserve_back(in_cb_id, out_nelems);
                 uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
@@ -195,9 +193,13 @@ void kernel_main() {
                 // input for current output index (out_h_i, out_w_i) are ready for this block to be consumed by triscs
                 cb_push_back(in_cb_id, out_nelems);
                 start_w += stride_w * out_nelems;
+
+                // DPRINT << "READER LE: " << (uint) out_w_i << ENDL();
             }
             start_h += stride_h;
         }
         batch_offset += in_hw;
     }
+
+    // DPRINT << "READER IS DONE" << ENDL();
 } // kernel_main()
