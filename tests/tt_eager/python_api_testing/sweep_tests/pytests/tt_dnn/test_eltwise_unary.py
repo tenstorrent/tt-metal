@@ -778,6 +778,7 @@ class TestEltwiseUnary:
             test_args,
         )
 
+    @skip_for_wormhole_b0        
     @pytest.mark.parametrize("fn_kind", ["isinf", "isposinf", "isneginf", "isnan"])
     def test_run_eltwise_arc_inf_nan_ops(
         self,

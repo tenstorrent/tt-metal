@@ -545,8 +545,6 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.normalize_hw
 
-.. autofunction:: tt_lib.tensor.bias_gelu
-
 .. autofunction:: tt_lib.tensor.isinf
 
 .. autofunction:: tt_lib.tensor.isposinf
@@ -554,4 +552,3 @@ Other Operations
 .. autofunction:: tt_lib.tensor.isneginf
 
 .. autofunction:: tt_lib.tensor.isnan
-
