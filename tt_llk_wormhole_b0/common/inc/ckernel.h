@@ -150,6 +150,17 @@ inline void t6_semaphore_get(const uint8_t index)
     TTI_SEMGET(semaphore::t6_sem(index));
 }
 
+template <uint WaitRes>
+inline void t6_semaphore_wait_on_max(const uint8_t index)
+{
+    TTI_SEMWAIT(WaitRes, semaphore::t6_sem(index), p_stall::STALL_ON_MAX);
+}
+template <uint WaitRes>
+inline void t6_semaphore_wait_on_zero(const uint8_t index)
+{
+    TTI_SEMWAIT(WaitRes, semaphore::t6_sem(index), p_stall::STALL_ON_ZERO);
+}
+
 // Tensix thread semaphore get optionally stalled
 inline void t6_semaphore_init(const uint8_t index, const uint8_t min_value, const uint8_t max_value)
 {

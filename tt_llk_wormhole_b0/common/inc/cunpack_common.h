@@ -153,7 +153,7 @@ namespace ckernel::unpacker
    {
        while (semaphore_read(semaphore::UNPACK_SYNC) >= num_contexts) {}
    }
-   
+
    inline void switch_config_context(uint &unp_cfg_context)
    {
       // Switch config context
@@ -382,6 +382,38 @@ namespace ckernel::unpacker
    inline uint32_t get_operand_id(uint32_t operand) 
    {
       return (operand>=INTERMEDIATE_BASE_ID) ? operand - 8 : operand - OPERAND_BASE_ID;
+   }
+
+   inline void wait_for_dest_available() {
+      t6_semaphore_wait_on_max<p_stall::UNPACK>(semaphore::UNPACK_TO_DEST);
+   }
+
+   inline void unpack_to_dest_tile_done(uint &context_id) {
+      t6_semaphore_post<p_stall::UNPACK0>(semaphore::UNPACK_TO_DEST);
+      // Restore config context
+      if (context_id == 0) {
+         cfg_reg_rmw_tensix<THCON_SEC0_REG2_Unpack_if_sel_cntx0_RMW>(0);
+         cfg_reg_rmw_tensix<THCON_SEC0_REG5_Dest_cntx0_address_RMW>(4*16);
+      } else {
+         cfg_reg_rmw_tensix<THCON_SEC0_REG2_Unpack_if_sel_cntx1_RMW>(0);
+         cfg_reg_rmw_tensix<THCON_SEC0_REG5_Dest_cntx1_address_RMW>(4*16);
+      }
+      TTI_SETC16(SRCA_SET_Base_ADDR32, 0x4); // Enable address bit swizzle
+   }
+
+
+   inline void set_dst_write_addr(uint32_t &context_id)
+   {
+      uint32_t dst_byte_addr = 16*(4 + mailbox_read(ThreadId::MathThreadId)); // Apply fixed offset of 4*16 to dest address
+      TTI_SETC16(SRCA_SET_Base_ADDR32, 0x0); // Disable address bit swizzle
+      if (context_id == 0) {
+         cfg_reg_rmw_tensix<THCON_SEC0_REG2_Unpack_if_sel_cntx0_RMW>(1);
+         cfg_reg_rmw_tensix<THCON_SEC0_REG5_Dest_cntx0_address_RMW>(dst_byte_addr);
+      } else {
+         cfg_reg_rmw_tensix<THCON_SEC0_REG2_Unpack_if_sel_cntx1_RMW>(1);
+         cfg_reg_rmw_tensix<THCON_SEC0_REG5_Dest_cntx1_address_RMW>(dst_byte_addr);
+      }
+      
    }
 
 }

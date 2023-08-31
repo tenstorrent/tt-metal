@@ -4,6 +4,7 @@
 #include "ckernel_structs.h"
 #include "risc_attribs.h"
 
+extern uint32_t dst_local_ptr;
 extern uint32_t cfg_state_id;
 extern uint32_t unp_cfg_context;
 

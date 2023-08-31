@@ -11,7 +11,7 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
-template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE, bool unpack_to_dest = false>
 inline void llk_unpack_A_mop_config(const bool transpose_of_faces, const std::uint32_t operand_id) {
 
     static_assert(!((BType != BroadcastType::NONE) && acc_to_dest && (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)), "Not supported configuration!");
@@ -32,6 +32,7 @@ inline void llk_unpack_A_mop_config(const bool transpose_of_faces, const std::ui
         TTI_NOP;
     #else
         static constexpr uint unpack_srca = TT_OP_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        static constexpr uint unpack_srca_to_dest = TT_OP_UNPACR(SrcA, 0b00010001 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // ch0/ch1 z_inc
         static constexpr uint unpack_srca_set_dvalid = TT_OP_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC_SET_DVALID);
         static constexpr uint unpack_srcb = TT_OP_UNPACR(SrcB, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
         static constexpr uint unpack_srcb_inc_z_0 = TT_OP_UNPACR(SrcB, 0b0 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
@@ -41,8 +42,14 @@ inline void llk_unpack_A_mop_config(const bool transpose_of_faces, const std::ui
         static constexpr uint srcb_set_z_2 = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 2, 0b0001); // set srcB ch0_z = 2 
         static constexpr uint srcb_clear_z = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0001); // set srcB ch0_z = 0
     #endif
-
-    if constexpr (BType == BroadcastType::COL) {
+    
+    if constexpr (unpack_to_dest) {
+        //static_assert((BType == BroadcastType::NONE) && (!acc_to_dest) && (binary_reuse_dest == EltwiseBinaryReuseDestType::NONE), "Not supported configuration when unpacking to dest!");
+        const uint32_t outerloop = num_faces;   
+        constexpr uint32_t innerloop = 1;   
+        ckernel_template tmp(outerloop, innerloop, unpack_srca_to_dest);
+        tmp.program(instrn_buffer);
+    } else if constexpr (BType == BroadcastType::COL) {
         if constexpr (acc_to_dest) {
             constexpr uint32_t innerloop = 1;   
             constexpr uint32_t outerloop = 2; //TODO: add support for num_faces, add support for dest to srcB  
@@ -146,7 +153,7 @@ inline void llk_unpack_A_hw_configure_disaggregated(const std::uint32_t unpA_ope
     llk_unpack_A_hw_configure<is_fp32_dest_acc_en, srnd_fpu_en>(&unpack_A_params, within_face_16x16_transpose);
 }
 
-template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE, bool unpack_to_dest = false>
 inline void llk_unpack_A_init(const std::uint32_t transpose_of_faces=0, const std::uint32_t within_face_16x16_transpose=0, const std::uint32_t operand = 0) {
     TT_LLK_DUMP("llk_unpack_A_init<{}, {}, {}>({}, {}, {})", BType, acc_to_dest, binary_reuse_dest, transpose_of_faces, within_face_16x16_transpose, operand);
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
@@ -157,10 +164,10 @@ inline void llk_unpack_A_init(const std::uint32_t transpose_of_faces=0, const st
 
     constexpr std::uint32_t UNP_SEL = (BType == BroadcastType::NONE) ? p_setadc::UNP_A : p_setadc::UNP_B;
     config_face_dim<false, UNP_SEL>(face_r_dim);
-    llk_unpack_A_mop_config<BType, acc_to_dest, binary_reuse_dest>(transpose_of_faces>0, operand_id);
+    llk_unpack_A_mop_config<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(transpose_of_faces>0, operand_id);
 }
 
-template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE, bool unpack_to_dest = false>
 inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index, const bool transpose_of_faces = 0) {
     TT_LLK_DUMP("llk_unpack_A<{}, {}, {}>({}, {}, {})", BType, acc_to_dest, binary_reuse_dest, operand, tile_index, transpose_of_faces);
 
@@ -202,14 +209,24 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
         }
     }
 
+    if constexpr (unpack_to_dest) {
+        set_dst_write_addr(unp_cfg_context);
+        wait_for_dest_available();
+    }    
+
     // Run MOP
     ckernel::ckernel_template::run(instrn_buffer);
 
     // T6::SEMGET for context release
     t6_semaphore_get(semaphore::UNPACK_SYNC);
 
+    if constexpr (unpack_to_dest) {
+        unpack_to_dest_tile_done(unp_cfg_context);
+    }
+
     // Switch unpacker config context
     switch_config_context(unp_cfg_context);
+
 
 #ifdef PERF_DUMP
     first_unpack_recorded = true;

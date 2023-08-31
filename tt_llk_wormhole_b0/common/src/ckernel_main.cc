@@ -15,6 +15,7 @@
 #endif
 
 // Global vars
+uint32_t dst_local_ptr = 0;
 uint32_t unp_cfg_context = 0;
 uint32_t pack_sync_tile_dst_ptr = 0;
 uint32_t math_sync_tile_dst_index = 0;

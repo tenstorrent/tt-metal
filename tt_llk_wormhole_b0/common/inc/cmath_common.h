@@ -148,13 +148,23 @@ inline void set_math_semaphores()
     t6_semaphore_post<p_stall::MATH|p_stall::WAIT_SFPU>(semaphore::MATH_PACK);
 }
 
-template <DstTileLayout layout, DstTileShape tile_shape>
+inline void math_unpack_to_dest_tile_ready() 
+{
+    t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::UNPACK_TO_DEST);
+    t6_semaphore_get<p_stall::NONE>(semaphore::UNPACK_TO_DEST);
+}
+
+template <DstTileLayout layout, DstTileShape tile_shape, bool unpack_to_dest = false>
 inline void set_dst_write_addr(uint32_t tile_index)
 {
     if constexpr (layout == DstTileLayout::Default) {
         uint dst_index = tile_index << DstTileSizeLog2[tile_shape];
         dst_index = dst_index + get_dest_buffer_base();
-        TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index);
+        if constexpr (unpack_to_dest) {
+            mailbox_write(ThreadId::UnpackThreadId, dst_index); // Send to unpacker   
+        } else {
+            TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index);
+        }    
     } else {
         // FIXME MT: add this mapping for other layout
     }
