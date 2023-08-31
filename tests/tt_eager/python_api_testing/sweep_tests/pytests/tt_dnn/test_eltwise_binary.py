@@ -23,9 +23,15 @@ from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import r
 from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0
 
 shapes = [
+<<<<<<< HEAD:tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_eltwise_binary.py
     [[1, 1, 32, 32], [1, 1, 32, 32]],  # Single core
     [[1, 1, 320, 384], [1, 1, 320, 384]],  # Multi core
     [[1, 3, 320, 384], [1, 3, 320, 384]],  # Multi core
+=======
+        [[1, 1, 32, 32], [1, 1, 32, 32]],  # Single core
+        [[1, 1, 320, 384], [1, 1, 320, 384]],  # Multi core
+        [[1, 3, 320, 384], [1, 3, 320, 384]],  # Multi core
+>>>>>>> #2150: Update test file:tests/python_api_testing/sweep_tests/pytests/tt_dnn/test_eltwise_binary.py
 ]
 output_mem_cfgs = copy.copy(generation_funcs.supported_mem_configs)
 if is_wormhole_b0():
