@@ -144,9 +144,6 @@ void kernel_main() {
             int32_t start_w = - pad_w;
             // for every output col
             for (int32_t out_w_i = 0; out_w_i < out_w_loop_count; ++ out_w_i) {
-
-                // DPRINT << "READER LS: " << (uint) out_w_i << ENDL();
-
                 // make sure cb is available to fill
                 cb_reserve_back(in_cb_id, out_nelems);
                 uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
@@ -193,8 +190,6 @@ void kernel_main() {
                 // input for current output index (out_h_i, out_w_i) are ready for this block to be consumed by triscs
                 cb_push_back(in_cb_id, out_nelems);
                 start_w += stride_w * out_nelems;
-
-                // DPRINT << "READER LE: " << (uint) out_w_i << ENDL();
             }
             start_h += stride_h;
         }

@@ -23,7 +23,7 @@ def run_max_pool_on_device_wrapper(device, kernel_size, stride, padding, output_
         out_shape_nopad = compute_max_pool_shape(kernel_size, stride, padding, x_shape_nopad)
         if reshape_2d and channels_last:
             x = x.reshape(x_shape_nopad[0], 1, x_shape_nopad[1] * x_shape_nopad[2], x_shape_nopad[3])
-        out = ttl.tensor.max_pool2d(x, x_shape_nopad[1], x_shape_nopad[2], kernel_size, kernel_size, stride, stride, padding, padding, output_mem_config=output_mem_config, nblocks=nblocks)
+        out = ttl.tensor.max_pool2d(x, x_shape_nopad[1], x_shape_nopad[2], kernel_size, kernel_size, stride, stride, padding, padding, output_mem_config=output_mem_config, nblocks=nblocks, use_multicore=True)
         # if reshape_2d and channels_last:
         #     out = out.reshape(out_shape_nopad[0], out_shape_nopad[1], out_shape_nopad[2], out_shape_nopad[3])
         return out
