@@ -6,6 +6,7 @@ on:
     branches: ["main"]
   schedule:
     - cron: "0 2 * * *"
+  workflow_call:
 
 jobs:
   build-and-test-measure-perf:

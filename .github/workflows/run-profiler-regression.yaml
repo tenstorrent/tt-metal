@@ -2,6 +2,7 @@ name: Run profiler regression
 
 on:
   workflow_dispatch:
+  workflow_call:
 
 jobs:
   run_profiler_regression:

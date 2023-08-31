@@ -1,0 +1,18 @@
+name: "[post-commit] Run all post-commit workflows"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-and-unit-tests:
+    uses: ./.github/workflows/build-and-unit-tests.yaml
+    secrets: inherit
+  build-and-test-measure-perf:
+    uses: ./.github/workflows/perf-models.yaml
+    secrets: inherit
+  build-and-unit-tests-fast-dispatch:
+    uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
+    secrets: inherit
+  run-profiler-regression:
+    uses: ./.github/workflows/perf-models.yaml
+    secrets: inherit
