@@ -81,6 +81,9 @@ void kernel_main() {
                     // read one channel
                     uint32_t channel_id = first_c_id_in_2d_row + c_id_offset_inter_block_col + c_id_offset_inra_block_col;
                     uint32_t dst_addr = l1_write_addr_act + l1_addr_offset;
+                    //uint32_t page_id = channel_id / in_w_padded_for_32_alignment;
+                    //uint32_t channel_id_within_page = channel_id % in_w_padded_for_32_alignment;
+                    //s_act.noc_async_read_page(page_id, dst_addr, channel_id_within_page * channel_stick_size_bytes);
                     s_act.noc_async_read_page(channel_id, dst_addr);
 
                     l1_addr_offset += read_size_bytes;

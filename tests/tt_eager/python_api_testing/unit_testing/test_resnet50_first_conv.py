@@ -32,7 +32,7 @@ import torch
 
 @pytest.mark.parametrize("untilize_out", (False,))
 @pytest.mark.parametrize("N", (1,2))
-@pytest.mark.parametrize("extra_padding_for_32B_alignment", (0,1))
+@pytest.mark.parametrize("extra_padding_for_32B_alignment", (0,1,25))
 def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignment, device, untilize_out):
     (K, C, padded_C, H, W, R, S, padded_S, stride_h, stride_w, pad_h, pad_w) = (
         64,
@@ -78,10 +78,21 @@ def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignme
         A_cl_host = create_conv_act_tensor(
             A_pyt, N, C, H, W, pad_h, pad_w, extra_pad_w_right=1 + extra_padding_for_32B_alignment
         )
-        print("A_cl_host shape w/ padding", A_cl_host.shape())
-        print("A_cl_host shape w/o padding", A_cl_host.shape_without_padding())
+        print("A_cl_host shape", A_cl_host.shape())
         memory_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
-        A = A_cl_host.to(device, memory_config)
+
+        # save original shape (N, H, W, C)
+        original_A_cl_host_shape = A_cl_host.shape()
+
+        # re-shape to (N, H, 1, W*C)
+        #A_cl_host = A_cl_host.reshape(A_cl_host.shape()[0], A_cl_host.shape()[1], 1, A_cl_host.shape()[2] * A_cl_host.shape()[3])
+        print("A_cl_host shape after re-shape (only for transfer)", A_cl_host.shape())
+        A_cl_device = A_cl_host.to(device, memory_config)
+
+        print(original_A_cl_host_shape)
+        # re-shape back to original shape (N, H, W, C)
+        A_cl_device = A_cl_device.reshape(original_A_cl_host_shape[0], original_A_cl_host_shape[1], original_A_cl_host_shape[2], original_A_cl_host_shape[3])
+        print("A_cl_device shape into OP", A_cl_device.shape())
 
         # Prepare weights
         B_tiled_host = create_conv_weight_tensor_special_padding(
@@ -95,7 +106,7 @@ def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignme
 
         # Run TT metal OP
         out = ttl.tensor.optimized_conv(
-            A,
+            A_cl_device,
             B_tiled,
             [R, padded_S, stride_h, stride_w, 0, 0],
             act_block_h,
