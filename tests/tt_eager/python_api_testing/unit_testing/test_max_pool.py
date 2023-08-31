@@ -102,6 +102,10 @@ def volume(shape):
         56,
     ),
 )
+@pytest.mark.parametrize(
+    "use_multicore",
+    ( False, True ),
+)
 def test_run_max_pool(
     act_shape,
     kernel_size,
@@ -111,8 +115,11 @@ def test_run_max_pool(
     in_mem_config,
     out_mem_config,
     nblocks,
+    use_multicore,
     device,
 ):
+    ttl.device.EnableMemoryReports()
+
     in_n, in_c, in_h, in_w = act_shape
     kernel_h, kernel_w = kernel_size
     pad_h, pad_w = padding
@@ -182,6 +189,7 @@ def test_run_max_pool(
         dilation_w,
         out_mem_config,
         nblocks,
+        use_multicore
     )
     out_padded = out_padded.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
 
@@ -201,10 +209,9 @@ def test_run_max_pool(
     )(act)
 
     ## test for equivalance
-    out_pytorch = out_pytorch.reshape(golden_pytorch.shape)
-    #print(out_pytorch)
+    out_pytorch = out_pytorch.reshape(golden_pytorch.shape).float()
     ## TODO AS: this should be passing
-    # assert torch.allclose(out_pytorch, golden_pytorch, rtol=1e-01, atol=1e-01)
+    assert torch.allclose(out_pytorch, golden_pytorch)  ##, rtol=1e-01, atol=1e-01)
     passing_pcc, output_pcc = comp_pcc(golden_pytorch, out_pytorch)
     logger.info(f"Passing PCC = {passing_pcc}")
     logger.info(f"Output PCC = {output_pcc}")

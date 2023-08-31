@@ -5,7 +5,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 
-// #include "debug_print.h"
+#include "debug_print.h"
 // SliceRange srr = SliceRange{ .h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1 };
 // SliceRange srt = SliceRange{ .h0 = 0, .h1 = 32, .hs = 8, .w0 = 0, .w1 = 32, .ws = 4 };
 
@@ -86,6 +86,10 @@ void kernel_main() {
     const uint32_t nbatch = get_arg_val<uint32_t>(27);
     const uint32_t in_hw = get_arg_val<uint32_t>(28);
 
+    const uint32_t start_out_h_i = get_arg_val<uint32_t>(30);
+    const uint32_t end_out_h_i = get_arg_val<uint32_t>(31);
+    const int32_t base_start_h = get_arg_val<int32_t>(32);
+
     constexpr bool is_in_dram = get_compile_time_arg_val(0) == 1;
     // value of 1 in bf16 in a uin32_t
     constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(2);
@@ -103,16 +107,15 @@ void kernel_main() {
 
     constexpr uint32_t TILE_HW = 1024;
 
+    DPRINT << "start_out_h_i: " << start_out_h_i << ENDL();
+    DPRINT << "end_out_h_i: " << end_out_h_i << ENDL();
+    DPRINT << "base_start_h: " << base_start_h << ENDL();
+
     // ROW_MAJOR input
     const InterleavedPow2AddrGenFast<is_in_dram> s_in = {
         .bank_base_address = in_addr,
         .log_base_2_of_page_size = in_log_base_2_of_page_size
     };
-    // const InterleavedAddrGen<is_in_dram> s_in = {
-    //     .bank_base_address = in_addr,
-    //     .page_size = in_nbytes_c
-    // };
-
 
     // Reduce scalar = 1
     cb_reserve_back(in_scalar_cb_id, 1);
@@ -134,13 +137,12 @@ void kernel_main() {
 
     kernel_profiler::mark_time(8);
 
-    //uint32_t in_hw = in_h * in_w;   // TODO: pass this as an arg
-    // uint32_t in_hw = 12544;   // TODO: pass this as an arg
     uint32_t batch_offset = 0;
     for (uint32_t batch = 0; batch < nbatch; ++ batch) {
-        int32_t start_h = - pad_h;
+        // int32_t start_h = - pad_h;
+        int32_t start_h = base_start_h;
         // for every output row (across all channels)
-        for (int32_t out_h_i = 0; out_h_i < out_h; ++ out_h_i) {
+        for (uint32_t out_h_i = start_out_h_i; out_h_i < end_out_h_i; ++ out_h_i) {
             int32_t start_w = - pad_w;
             // for every output col
             for (int32_t out_w_i = 0; out_w_i < out_w_loop_count; ++ out_w_i) {

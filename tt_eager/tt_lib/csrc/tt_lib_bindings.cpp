@@ -2593,7 +2593,8 @@ void TensorModule(py::module &m_tensor) {
         py::arg("pad_h") = 0, py::arg("pad_w") = 0,
         py::arg("dilation_h") = 1, py::arg("dilation_w") = 1,
         py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("nblocks") = 1, R"doc(
+        py::arg("nblocks") = 1,
+        py::arg("use_multicore") = false, R"doc(
         Max Pool 2D
         +-------------------+-------------------------------+---------------+-------------+----------+
         | Argument          | Description                   | Data type     | Valid range | Required |

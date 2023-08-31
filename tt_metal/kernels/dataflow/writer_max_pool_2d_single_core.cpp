@@ -22,11 +22,16 @@ void kernel_main() {
     const uint32_t out_w_loop_count = get_arg_val<uint32_t>(25);
     const uint32_t nbatch = get_arg_val<uint32_t>(27);
     const uint32_t out_hw = get_arg_val<uint32_t>(29);
+    const uint32_t start_out_h_i = get_arg_val<uint32_t>(30);
+    const int32_t end_out_h_i = get_arg_val<int32_t>(31);
 
     constexpr bool is_out_dram = get_compile_time_arg_val(1) == 1;
     constexpr uint32_t out_nelems = get_compile_time_arg_val(3);
 
     constexpr uint32_t out_cb_id = tt::CB::c_out0;
+
+    DPRINT << "start_out_h_i: " << start_out_h_i << ENDL();
+    DPRINT << "end_out_h_i: " << end_out_h_i << ENDL();
 
     // ROW_MAJOR output
     const InterleavedAddrGen<is_out_dram> s_out = {
@@ -34,13 +39,11 @@ void kernel_main() {
         .page_size = out_nbytes_c   // TODO: Ensure this is 32B aligned
     };
 
-    // uint32_t out_hw = out_h * out_w;
-
     uint32_t batch_offset = 0;
     for (uint32_t batch = 0; batch < nbatch; ++ batch) {
-        uint32_t out_row_id = 0;
+        uint32_t out_row_id = start_out_h_i;
         // for every output pixel
-        for (int32_t out_h_i = 0; out_h_i < out_h; ++ out_h_i) {
+        for (int32_t out_h_i = start_out_h_i; out_h_i < end_out_h_i; ++ out_h_i) {
             for (uint32_t out_w_i = 0; out_w_i < out_w_loop_count; ++ out_w_i) {
                 cb_wait_front(out_cb_id, out_nelems * 2);
                 // kernel_profiler::mark_time(13);
