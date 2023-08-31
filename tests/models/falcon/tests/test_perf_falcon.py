@@ -5,7 +5,6 @@
 import torch
 import pytest
 from loguru import logger
-from pathlib import Path
 
 import tt_lib
 from tests.models.falcon.reference.hf_modeling_falcon import (
@@ -24,9 +23,9 @@ from tests.models.falcon.model_config import (
 )
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_allclose,
     comp_pcc,
 )
+
 from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
@@ -82,9 +81,6 @@ def run_test_FalconCausalLM_end_to_end(
         model_input = torch.stack([torch.arange(seq_len)] * batch).reshape(
             batch, seq_len
         )
-    logger.info(f"#################################################### {llm_mode}")
-    logger.info(f"model input shape {model_input.shape}")
-    logger.info(f"####################################################")
 
     # Generate dummy kv_cache --------------------------------------------------------------
     if llm_mode == "prefill":
@@ -191,13 +187,6 @@ def run_test_FalconCausalLM_end_to_end(
                 layer_past_len=kv_cache_len,
                 use_cache=use_cache,
             )
-            logger.info(
-                f"################################################################ prefill"
-            )
-            logger.info(f"kv cache tensor shape: {tt_layer_present[0][0].shape()}")
-            logger.info(
-                f"################################################################"
-            )
             tt_outs.append(tt_out)
         tt_out = tt_outs
 
@@ -210,11 +199,6 @@ def run_test_FalconCausalLM_end_to_end(
             layer_past_len=kv_cache_len,
             use_cache=use_cache,
         )
-        logger.info(
-            f"################################################################ decode"
-        )
-        logger.info(f"kv cache tensor shape: {tt_layer_present[0][0].shape()}")
-        logger.info(f"################################################################")
     tt_lib.device.Synchronize()
     profiler.end("first_model_run_with_compile", force_enable=True)
     del tt_out
@@ -356,6 +340,8 @@ def run_test_FalconCausalLM_end_to_end(
     compile_time = first_iter_time - second_iter_time
     logger.info(f"falcon {comment} inference time: {second_iter_time}")
     logger.info(f"falcon {comment} compile time: {compile_time}")
+    assert second_iter_time < expected_inference_time, "Falcon is too slow"
+    assert compile_time < expected_compile_time, "Falcon compile time is too slow"
 
     if does_pass:
         logger.info("Falcon CausalLM Passed!")
@@ -435,52 +421,67 @@ def test_perf_bare_metal(
     )
 
 
-# @pytest.mark.parametrize(
-#     "llm_mode, batch, seq_len, kv_cache_len",
-#     (
-#         ("prefill", 1, 128, 0),
-#         ("decode", 32, 1, 128),
-#         ("decode", 32, 1, 1024),
-#         ("decode", 32, 1, 2047),
-#     ),
-#     ids=["prefill_seq128", "decode_batch32", "decode_batch32_1024", "decode_batch32_2047"],
-# )
-# @pytest.mark.parametrize(
-#     "num_layers, pcc",
-#     ((32, 0.86),),
-#     ids=["layers_32"],
-# )
-# @pytest.mark.parametrize(
-#     "model_version",
-#     ("tiiuae/falcon-7b-instruct",),
-#     ids=["falcon_7b"],
-# )
-# @pytest.mark.parametrize("model_config_str", ("BFLOAT16-L1", ))
 @pytest.mark.models_performance_virtual_machine
-def test_perf_virtual_machine():
-    pass
+@pytest.mark.parametrize(
+    "llm_mode, batch, seq_len, kv_cache_len, expected_inference_time",
+    (
+        ("prefill", 1, 128, 0, 0.34),
+        ("decode", 32, 1, 128, 0.36),
+        # ("prefill", 1, 256, 0, 0.40),
+        # ("decode", 32, 1, 1024, 0.36),
+        # ("decode", 32, 1, 2047, 0.47),
+    ),
+    ids=[
+        "prefill_seq128",
+        "decode_batch32",
+    ],  # "prefill_seq256","decode_batch32_1024", "decode_batch32_2047"],
+)
+@pytest.mark.parametrize(
+    "num_layers, pcc",
+    ((32, 0.86),),
+    ids=["layers_32"],
+)
+@pytest.mark.parametrize(
+    "model_version",
+    ("tiiuae/falcon-7b-instruct",),
+    ids=["falcon_7b"],
+)
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-L1",))
+def test_perf_virtual_machine(
+    use_program_cache,
+    model_version,
+    llm_mode,
+    batch,
+    seq_len,
+    kv_cache_len,
+    expected_inference_time,
+    num_layers,
+    pcc,
+    request,
+    model_config_str,
+    model_location_generator,
+    device,
+):
+    model_config = get_model_config(model_config_str)
+    tt_cache_path = get_tt_cache_path(model_version)
+    disable_persistent_kernel_cache()
+    disable_compilation_reports()
 
+    tt_lib.profiler.set_profiler_location(
+        f"tt_metal/tools/profiler/logs/falcon-7b_{request.node.callspec.id}"
+    )
 
-#     model_config = get_model_config(model_config_str)
-#     tt_cache_path = get_tt_cache_path(model_version)
-
-#     disable_persistent_kernel_cache()
-#     disable_compilation_reports()
-
-#     # tt_lib.profiler.set_profiler_location(
-#     #     f"tt_metal/tools/profiler/logs/falcon-7b_{request.node.callspec.id}"
-#     # )
-
-#     run_test_FalconCausalLM_end_to_end(
-#         device,
-#         model_version,
-#         llm_mode,
-#         batch,
-#         seq_len,
-#         kv_cache_len,
-#         num_layers,
-#         pcc,
-#         model_config,
-#         tt_cache_path,
-#         model_location_generator,
-#     )
+    run_test_FalconCausalLM_end_to_end(
+        device,
+        model_version,
+        llm_mode,
+        batch,
+        seq_len,
+        kv_cache_len,
+        num_layers,
+        pcc,
+        model_config,
+        tt_cache_path,
+        model_location_generator,
+        expected_inference_time,
+    )
