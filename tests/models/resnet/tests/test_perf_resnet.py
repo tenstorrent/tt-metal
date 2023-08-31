@@ -32,9 +32,9 @@ from tests.models.resnet.metalResnetBlock50 import ResNet, Bottleneck
 
 def run_perf_resnet(batch_size, expected_inference_time, expected_compile_time, hf_cat_image_sample_input):
     disable_persistent_kernel_cache()
-    first_key = "first_iter"
-    second_key = "second_iter"
-    cpu_key = "ref_key"
+    first_key = f"first_iter_batchsize{batch_size}"
+    second_key = f"second_iter_batchsize{batch_size}"
+    cpu_key = f"ref_key_batchsize{batch_size}"
     model_name = "microsoft/resnet-50"
 
     # Initialize the device
@@ -47,7 +47,7 @@ def run_perf_resnet(batch_size, expected_inference_time, expected_compile_time, 
     inputs = image_processor(image, return_tensors="pt")
 
     inputs = inputs["pixel_values"]
-    comments = f"{list(inputs.shape)[-2]}x{list(inputs.shape)[-1]}"
+    comments = f"{list(inputs.shape)[-2]}x{list(inputs.shape)[-1]}_batchsize{batch_size}"
 
     inputs1 = inputs
     for i in range(batch_size-1):
@@ -77,7 +77,7 @@ def run_perf_resnet(batch_size, expected_inference_time, expected_compile_time, 
         tt_lib.device.Synchronize()
         profiler.end(first_key)
 
-        enable_persistent_kernel_cache()
+        #enable_persistent_kernel_cache()
 
         profiler.start(second_key)
         tt_output = tt_resnet50(inputs)
@@ -92,7 +92,7 @@ def run_perf_resnet(batch_size, expected_inference_time, expected_compile_time, 
     cpu_time = profiler.get(cpu_key)
     compile_time = first_iter_time - second_iter_time
     prep_report(
-        model_name="resnet50",
+        model_name=f"resnet50_batch_size{batch_size}",
         batch_size=batch_size,
         inference_and_compile_time=first_iter_time,
         inference_time=second_iter_time,
