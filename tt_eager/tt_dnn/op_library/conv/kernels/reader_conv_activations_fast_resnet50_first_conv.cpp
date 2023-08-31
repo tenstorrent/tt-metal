@@ -24,6 +24,8 @@ void kernel_main() {
     constexpr uint32_t stride_w = get_compile_time_arg_val(2);
     constexpr uint32_t conv_act_size_w = get_compile_time_arg_val(3);
     constexpr uint32_t conv_output_w_last_index = get_compile_time_arg_val(4) - 1;
+    // 5,6 not used
+    constexpr uint32_t extra_padding_for_32B_alignment = get_compile_time_arg_val(7);
     //constexpr uint32_t act_block_width_padding_bytes = get_compile_time_arg_val(1);
 
     constexpr uint32_t cb_id_act = 0;
@@ -47,13 +49,17 @@ void kernel_main() {
     // assert(act_block_w_ntiles == act_block_w_datums/32)
     // assert(act_block_num_tiles == (act_block_h_datums * act_block_w_datums)/1024)
 
+
+    constexpr uint32_t in_w_padded_for_32_alignment = 231 + extra_padding_for_32B_alignment;
+
     uint32_t out_w = 0;
     uint32_t out_w_start = 0;
     uint32_t first_c_id_in_2d_row = 0;
     uint32_t first_c_id_in_2d_row_at_out_w_0 = 0;
     uint32_t first_c_id_in_2d_row_start = 0;
     uint32_t first_c_id_in_2d_row_at_out_w_0_start = 0;
-    uint32_t last_channed_id_at_outw_0_stride = 51282; // output h - 112, 51282 = 111 * 462
+    //uint32_t last_channed_id_at_outw_0_stride = 51282; // output h = 112 --> 51282 = 111 * in_w * 2
+    uint32_t last_channed_id_at_outw_0_stride = 111 * in_w_padded_for_32_alignment * 2; // output h = 112 --> 51282 = 111 * in_w * 2
     uint32_t last_channel_id_at_outw_0_of_curr_img = last_channed_id_at_outw_0_stride;
     uint32_t last_channel_id_at_outw_0_of_curr_img_start = last_channel_id_at_outw_0_of_curr_img;
     //DPRINT << "Running new conv reader" << ENDL();
@@ -86,18 +92,18 @@ void kernel_main() {
                 } else {
                     out_w = 0;
                     if (first_c_id_in_2d_row_at_out_w_0 < last_channel_id_at_outw_0_of_curr_img) {
-                        first_c_id_in_2d_row_at_out_w_0 += 462; // channel id stride in the h dimension
+                        first_c_id_in_2d_row_at_out_w_0 += (in_w_padded_for_32_alignment * 2); // channel id stride in the h dimension
                         //DPRINT << "c id stride H = " << first_c_id_in_2d_row_at_out_w_0 << ENDL();
                     } else {
                         // next image in batch
                         //DPRINT << "going to increment for next image. first_c_id_in_2d_row_at_out_w_0=" << first_c_id_in_2d_row_at_out_w_0 << ENDL();
-                        first_c_id_in_2d_row_at_out_w_0 += 1848; // channel id stride in the n dimension, 1848 = 231 * 8
+                        first_c_id_in_2d_row_at_out_w_0 += (7+1) * in_w_padded_for_32_alignment; // channel id stride in the n dimension, 1848 = in_w * 8
                         last_channel_id_at_outw_0_of_curr_img = first_c_id_in_2d_row_at_out_w_0 + last_channed_id_at_outw_0_stride;
                     }
                     first_c_id_in_2d_row = first_c_id_in_2d_row_at_out_w_0;
                 }
             } // for block height
-            c_id_offset_inter_block_col += 231;
+            c_id_offset_inter_block_col += in_w_padded_for_32_alignment;
             noc_async_read_barrier();
             cb_push_back(cb_id_act, act_block_num_tiles);
         } // for num of act blocks in inner width dim

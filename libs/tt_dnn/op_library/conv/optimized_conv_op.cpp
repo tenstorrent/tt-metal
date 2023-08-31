@@ -25,19 +25,19 @@ const uint32_t untilize_mode_reblock_cb               = CB::c_intermed3;
 const uint32_t out_for_bias_cb                        = CB::c_intermed4;
 const uint32_t out0_cb                                = CB::c_out0;
 
-pair<uint32_t, uint32_t> compute_opt_conv_output_face_shape(uint32_t conv_activation_h, uint32_t conv_activation_w, uint32_t filter_h, uint32_t filter_w, uint32_t stride_h, uint32_t stride_w, uint32_t pad_h, uint32_t pad_w) {
+pair<uint32_t, uint32_t> compute_opt_conv_output_face_shape(uint32_t conv_activation_h, uint32_t conv_activation_w, uint32_t filter_h, uint32_t filter_w, uint32_t stride_h, uint32_t stride_w, uint32_t pad_h, uint32_t pad_w, uint32_t padding_for_32B_alignment=0) {
     uint32_t conv_output_h = ((conv_activation_h - filter_h + (2 * pad_h)) / stride_h) + 1;
-    uint32_t conv_output_w = ((conv_activation_w - filter_w + (2 * pad_w)) / stride_w) + 1;
+    uint32_t conv_output_w = ((conv_activation_w - filter_w + (2 * pad_w)) / stride_w) + 1 - padding_for_32B_alignment;
     return {conv_output_h, conv_output_w};
 }
-pair<vector<uint32_t>, vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(Shape conv_activation_shape, vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles) {
+pair<vector<uint32_t>, vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(Shape conv_activation_shape, vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t padding_for_32B_alignment=0) {
     uint32_t filter_h = (uint32_t) conv_params[0];
     uint32_t filter_w = (uint32_t) conv_params[1];
     uint32_t stride_h = (uint32_t) conv_params[2];
     uint32_t stride_w = (uint32_t) conv_params[3];
     uint32_t pad_h = (uint32_t) conv_params[4];
     uint32_t pad_w = (uint32_t) conv_params[5];
-    auto [conv_output_h, conv_output_w] = compute_opt_conv_output_face_shape(conv_activation_shape[1], conv_activation_shape[2], filter_h, filter_w, stride_h, stride_w, pad_h, pad_w);
+    auto [conv_output_h, conv_output_w] = compute_opt_conv_output_face_shape(conv_activation_shape[1], conv_activation_shape[2], filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, padding_for_32B_alignment);
     uint32_t batch_size = conv_activation_shape[0];
     // pad height
     uint32_t num_rows = (uint32_t) batch_size * conv_output_h * conv_output_w;
@@ -173,14 +173,14 @@ void create_CBs(tt_metal::Program &program,
 
 operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, vector<int> conv_params,
                                        uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
-                                       uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity, Tensor &output) {
+                                       uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity, uint32_t extra_padding_for_32B_alignment, Tensor &output) {
     bool pass = true;
     tt_metal::Device *device = a.device();
     TT_ASSERT(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_ASSERT(output_channels <= b.shape()[3], "Invalid weight shape. Incorrect weight tensor.");
     uint32_t num_bytes_of_df = 2; // 2 bytes for bfloat16
     // Compute the 2d matrix shape
-    auto [act_matrix_shape, act_matrix_shape_unpadded] = compute_opt_conv_activation_as_mm_shape(a.shape(), conv_params, act_block_h_ntiles, act_block_w_ntiles);
+    auto [act_matrix_shape, act_matrix_shape_unpadded] = compute_opt_conv_activation_as_mm_shape(a.shape(), conv_params, act_block_h_ntiles, act_block_w_ntiles, extra_padding_for_32B_alignment);
     assert(act_matrix_shape.size() == 3);
     assert(act_matrix_shape[0] == 1);
     uint32_t act_matrix_height = (uint32_t) act_matrix_shape[1];
@@ -324,8 +324,12 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
     uint32_t stride_w = (uint32_t) conv_params[3];
     uint32_t pad_h = (uint32_t) conv_params[4];
     uint32_t pad_w = (uint32_t) conv_params[5];
-    uint32_t conv_output_size_h = ((conv_act_size_h - weight_size_h + (2 * pad_h)) / stride_h) + 1;
-    uint32_t conv_output_size_w = ((conv_act_size_w - weight_size_w + (2 * pad_w)) / stride_w) + 1;
+
+    //uint32_t conv_output_size_h = ((conv_act_size_h - weight_size_h + (2 * pad_h)) / stride_h) + 1;
+    //uint32_t conv_output_size_w = ((conv_act_size_w - weight_size_w + (2 * pad_w)) / stride_w) + 1;
+
+    auto [conv_output_size_h, conv_output_size_w] = compute_opt_conv_output_face_shape(conv_act_size_h, conv_act_size_w, weight_size_h, weight_size_w, stride_h, stride_w, pad_h, pad_w, extra_padding_for_32B_alignment);
+
     std::map<string, string> reader_defines;
 
     if(conv_act_size_c * weight_size_w != act_block_w_datums) {
@@ -385,7 +389,7 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
         log_debug(tt::LogOp, "num_groups: {}", num_groups);
     }
 
-    bool rn50_first_conv = (conv_act_size_h == 230 && conv_act_size_w == 231 &&
+    bool rn50_first_conv = (conv_act_size_h == 230 && conv_act_size_w == (231 + extra_padding_for_32B_alignment) &&
                             conv_output_size_h == 112 && conv_output_size_w == 112 &&
                             weight_size_h == 7 && weight_size_w == 8 &&
                             stride_h == 2 && stride_w == 2 &&
@@ -448,7 +452,7 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
     }
     reader_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
             (uint32_t) stride_h, (uint32_t) stride_w, (uint32_t) conv_act_size_w, (uint32_t) conv_output_size_w,
-            (uint32_t) conv_act_size_c * num_bytes_of_df, (uint32_t) std::log2(conv_act_size_c * num_bytes_of_df)};
+            (uint32_t) conv_act_size_c * num_bytes_of_df, (uint32_t) std::log2(conv_act_size_c * num_bytes_of_df), extra_padding_for_32B_alignment};
 
     if (rn50_first_conv) {
         assert(pad_h == 0 && pad_w == 0);
@@ -703,7 +707,8 @@ Tensor optimized_conv(const Tensor& a,
             bool untilize_out,
             bool has_bias,
             bool fuse_relu,
-            MathFidelity math_fidelity) {
+            MathFidelity math_fidelity,
+            uint32_t extra_padding_for_32B_alignment) {
     TT_ASSERT(b.layout() == Layout::TILE); // Weights should already be formatted
     auto padded_a_shape = Shape({a.shape()[0], a.shape()[1], a.shape()[2], round_up(a.shape()[3], 16)});
     FormatParams input_a_format_params = {.pad_shape=padded_a_shape, .pad_value=0.0, .target_layout=Layout::ROW_MAJOR};
@@ -714,7 +719,8 @@ Tensor optimized_conv(const Tensor& a,
     }
     auto output_layout = untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
     return operation::run_without_autoformat(
-        OptimizedConv(act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity),
+        OptimizedConv(act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, extra_padding_for_32B_alignment
+        ),
         {a, b},
         {bias}).at(0);
 }
@@ -737,7 +743,7 @@ std::vector<Shape> OptimizedConv::compute_output_shapes(const std::vector<Tensor
     uint32_t stride_w = (uint32_t) conv_params[3];
     uint32_t pad_h = (uint32_t) conv_params[4];
     uint32_t pad_w = (uint32_t) conv_params[5];
-    auto [conv_output_h, conv_output_w] = compute_opt_conv_output_face_shape(conv_activation_h, conv_activation_w, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w);
+    auto [conv_output_h, conv_output_w] = compute_opt_conv_output_face_shape(conv_activation_h, conv_activation_w, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, extra_padding_for_32B_alignment);
 
     if (untilize_out) {
         // RM output has unpadded output height and padded output width to 32.
@@ -778,7 +784,7 @@ operation::ProgramWithCallbacks OptimizedConv::create_program(const std::vector<
             weight_block_w_ntiles, out_subblock_h_ntiles,
             out_subblock_w_ntiles, output_channels,
             untilize_out, has_bias,
-            fuse_relu, math_fidelity, output_tensor)};
+            fuse_relu, math_fidelity, extra_padding_for_32B_alignment, output_tensor)};
 }
 
 tt::stl::reflection::Attributes OptimizedConv::attributes() const {

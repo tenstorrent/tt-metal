@@ -18,7 +18,8 @@ struct OptimizedConv {
     const uint32_t act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels;
     bool untilize_out, has_bias, fuse_relu;
     MathFidelity math_fidelity;
-    OptimizedConv(uint32_t act_bh, uint32_t act_bw, uint32_t weight_bw, uint32_t out_sh, uint32_t out_sw, const std::vector<int>&c_params, uint32_t output_channels, bool untile_out, bool has_bias, bool fuse_relu, MathFidelity mfidelity)
+    uint32_t extra_padding_for_32B_alignment;
+    OptimizedConv(uint32_t act_bh, uint32_t act_bw, uint32_t weight_bw, uint32_t out_sh, uint32_t out_sw, const std::vector<int>&c_params, uint32_t output_channels, bool untile_out, bool has_bias, bool fuse_relu, MathFidelity mfidelity, uint32_t e_padding_for_32B_alignment)
         : act_block_h_ntiles(act_bh),
           act_block_w_ntiles(act_bw),
           weight_block_w_ntiles(weight_bw),
@@ -29,7 +30,8 @@ struct OptimizedConv {
           untilize_out(untile_out),
           has_bias(has_bias),
           fuse_relu(fuse_relu),
-          math_fidelity(mfidelity) {}
+          math_fidelity(mfidelity),
+          extra_padding_for_32B_alignment(e_padding_for_32B_alignment) {}
 
     void validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
@@ -39,7 +41,7 @@ struct OptimizedConv {
 };
 
 Tensor optimized_conv(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
-             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, MathFidelity math_fidelity);
+             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, MathFidelity math_fidelity, uint32_t extra_padding_for_32B_alignment=0);
 
 }  // namespace tt_metal
 

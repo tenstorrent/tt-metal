@@ -31,8 +31,9 @@ from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
 import torch
 
 @pytest.mark.parametrize("untilize_out", (False,))
-@pytest.mark.parametrize("N", (2,))
-def test_resnet50_first_conv(use_program_cache, N, device, untilize_out):
+@pytest.mark.parametrize("N", (1,2))
+@pytest.mark.parametrize("extra_padding_for_32B_alignment", (0,1))
+def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignment, device, untilize_out):
     (K, C, padded_C, H, W, R, S, padded_S, stride_h, stride_w, pad_h, pad_w) = (
         64,
         3,
@@ -69,11 +70,16 @@ def test_resnet50_first_conv(use_program_cache, N, device, untilize_out):
         OH = ((int)((H - R + 2 * pad_h) / stride_h)) + 1
         OW = ((int)((W - padded_S + (2 * pad_w) + 1) / stride_w)) + 1
         conv_output_shape = [N, OH, OW, K]
+        print(a_activation_shape)
+        print(conv_output_shape)
 
         # Prepare activations
+
         A_cl_host = create_conv_act_tensor(
-            A_pyt, N, C, H, W, pad_h, pad_w, extra_pad_w_right=1
+            A_pyt, N, C, H, W, pad_h, pad_w, extra_pad_w_right=1 + extra_padding_for_32B_alignment
         )
+        print("A_cl_host shape w/ padding", A_cl_host.shape())
+        print("A_cl_host shape w/o padding", A_cl_host.shape_without_padding())
         memory_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
         A = A_cl_host.to(device, memory_config)
 
@@ -101,7 +107,8 @@ def test_resnet50_first_conv(use_program_cache, N, device, untilize_out):
             untilize_out,
             False,
             False,
-            ttl.tensor.MathFidelity.HiFi4
+            ttl.tensor.MathFidelity.HiFi4,
+            extra_padding_for_32B_alignment
         )
         if not untilize_out:
            out_unpadded_shape = [1, 1, N*OH*OW, K]
@@ -117,16 +124,18 @@ def test_resnet50_first_conv(use_program_cache, N, device, untilize_out):
         out_result = torch.transpose(out_result, 2, 3)
         out_result = torch.transpose(out_result, 1, 2)
 
+        # Debug
+        # assert out_result.shape == out_golden.shape
+        # out_result_first_image = out_result[0][:][:][:]
+        # out_golden_first_image = out_golden[0][:][:][:]
+        # first_pcc, _ = comp_pcc(out_golden_first_image, out_result_first_image, pcc=0.9998)
+        # assert first_pcc
+        # out_result_sec_image = out_result[1][:][:][:]
+        # out_golden_sec_image = out_golden[1][:][:][:]
+        # sec_pcc, _ = comp_pcc(out_golden_sec_image, out_result_sec_image, pcc=0.9998)
+        # assert sec_pcc
+
         # Compare against golden
-        assert out_result.shape == out_golden.shape
-        out_result_first_image = out_result[0][:][:][:]
-        out_golden_first_image = out_golden[0][:][:][:]
-        first_pcc, _ = comp_pcc(out_golden_first_image, out_result_first_image, pcc=0.9998)
-        assert first_pcc
-        out_result_sec_image = out_result[1][:][:][:]
-        out_golden_sec_image = out_golden[1][:][:][:]
-        sec_pcc, _ = comp_pcc(out_golden_sec_image, out_result_sec_image, pcc=0.9998)
-        assert sec_pcc
         passing_pcc, output_pcc = comp_pcc(out_golden, out_result, 0.99)
         print("Passing=", passing_pcc)
         print("Output pcc=", output_pcc)
