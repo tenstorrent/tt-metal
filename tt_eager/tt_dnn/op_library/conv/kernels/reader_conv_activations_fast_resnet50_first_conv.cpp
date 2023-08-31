@@ -36,7 +36,8 @@ void kernel_main() {
 
     const InterleavedPow2AddrGenFast<act_in_dram> s_act = {
         .bank_base_address = act_addr_dram_base,
-        .log_base_2_of_page_size = 5 // TODO: send as a compile-time arg, currently C=16 in FP16_B (so 32 B)
+        //.log_base_2_of_page_size = 5 // TODO: send as a compile-time arg, currently C=16 in FP16_B (so 32 B)
+        .log_base_2_of_page_size = 13 // TODO: send as a compile-time arg, currently C=16 x W=256 in FP16_B = 8192
     };
 
     // Assumptions. Must be true. Validate on host.
@@ -52,6 +53,8 @@ void kernel_main() {
 
     constexpr uint32_t in_w_padded_for_32_alignment = 231 + extra_padding_for_32B_alignment;
 
+    uint32_t in_h = 0;
+    uint32_t in_h_start = 0;
     uint32_t out_w = 0;
     uint32_t out_w_start = 0;
     uint32_t first_c_id_in_2d_row = 0;
@@ -67,6 +70,7 @@ void kernel_main() {
         uint32_t c_id_offset_inter_block_col = 0;
         for (uint32_t nbw = 0; nbw < num_blocks_act_w; nbw++) {
             out_w = out_w_start;
+            in_h = in_h_start;
             first_c_id_in_2d_row = first_c_id_in_2d_row_start;
             first_c_id_in_2d_row_at_out_w_0 = first_c_id_in_2d_row_at_out_w_0_start;
             last_channel_id_at_outw_0_of_curr_img = last_channel_id_at_outw_0_of_curr_img_start;
@@ -81,10 +85,13 @@ void kernel_main() {
                     // read one channel
                     uint32_t channel_id = first_c_id_in_2d_row + c_id_offset_inter_block_col + c_id_offset_inra_block_col;
                     uint32_t dst_addr = l1_write_addr_act + l1_addr_offset;
+                    //s_act.noc_async_read_page(channel_id, dst_addr);
+
                     //uint32_t page_id = channel_id / in_w_padded_for_32_alignment;
-                    //uint32_t channel_id_within_page = channel_id % in_w_padded_for_32_alignment;
-                    //s_act.noc_async_read_page(page_id, dst_addr, channel_id_within_page * channel_stick_size_bytes);
-                    s_act.noc_async_read_page(channel_id, dst_addr);
+                    uint32_t channel_id_within_page = channel_id % in_w_padded_for_32_alignment;
+                    uint32_t page_id = in_h + (c_id_offset_inter_block_col/ in_w_padded_for_32_alignment);
+                    uint32_t page_offset = channel_id_within_page * channel_stick_size_bytes;
+                    s_act.noc_async_read_partial_page(page_id, dst_addr, channel_stick_size_bytes, page_offset);
 
                     l1_addr_offset += read_size_bytes;
                     c_id_offset_inra_block_col += 1;
@@ -94,6 +101,7 @@ void kernel_main() {
                     first_c_id_in_2d_row += 2; // channel id stride in the w dimension
                 } else {
                     out_w = 0;
+                    in_h += 2; // stride_h
                     if (first_c_id_in_2d_row_at_out_w_0 < last_channel_id_at_outw_0_of_curr_img) {
                         first_c_id_in_2d_row_at_out_w_0 += (in_w_padded_for_32_alignment * 2); // channel id stride in the h dimension
                         //DPRINT << "c id stride H = " << first_c_id_in_2d_row_at_out_w_0 << ENDL();
@@ -111,6 +119,7 @@ void kernel_main() {
             cb_push_back(cb_id_act, act_block_num_tiles);
         } // for num of act blocks in inner width dim
         out_w_start = out_w;
+        in_h_start = in_h;
         first_c_id_in_2d_row_start  = first_c_id_in_2d_row;
         first_c_id_in_2d_row_at_out_w_0_start = first_c_id_in_2d_row_at_out_w_0;
         last_channel_id_at_outw_0_of_curr_img_start = last_channel_id_at_outw_0_of_curr_img;

@@ -696,6 +696,44 @@ struct InterleavedPow2AddrGenFast {
     }
 
     FORCE_INLINE
+    void noc_async_read_partial_page(const uint32_t id, uint32_t dest_addr, const uint32_t size, const uint32_t offset) const {
+        uint32_t src_addr;
+        uint32_t src_noc_xy;
+
+        if constexpr (DRAM) {
+#ifdef IS_NOT_POW2_NUM_DRAM_BANKS
+            uint32_t bank_id = umodsi3_const_divisor<NUM_DRAM_BANKS>(id);
+            src_addr = (udivsi3_const_divisor<NUM_DRAM_BANKS>(id) << this->log_base_2_of_page_size) + this->bank_base_address + offset;
+            src_addr += bank_to_dram_offset[bank_id];
+            src_noc_xy = dram_bank_to_noc_xy[bank_id];
+#else
+            uint32_t bank_id = id & (NUM_DRAM_BANKS - 1);
+            src_addr = ((id >> LOG_BASE_2_OF_NUM_DRAM_BANKS) << this->log_base_2_of_page_size) + this->bank_base_address + offset;
+            src_addr += bank_to_dram_offset[bank_id];
+            src_noc_xy = dram_bank_to_noc_xy[bank_id];
+#endif
+        } else {
+            uint32_t bank_id = id & (NUM_L1_BANKS - 1);
+            src_addr = ((id >> LOG_BASE_2_OF_NUM_L1_BANKS) << this->log_base_2_of_page_size) + this->bank_base_address + offset;
+            src_addr += bank_to_l1_offset[bank_id];
+            src_noc_xy = l1_bank_to_noc_xy[bank_id];
+        }
+
+        DEBUG_STATUS('R', 'P', 'W');
+        while (!ncrisc_noc_fast_read_ok(loading_noc, NCRISC_RD_CMD_BUF))
+            ;
+        DEBUG_STATUS('R', 'P', 'D');
+
+        NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_LO, dest_addr);
+        NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_LO, src_addr);      // (uint32_t)src_addr
+        NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_MID, src_noc_xy);   // src_addr >> 32
+        NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE, size);  // len_bytes
+        NOC_CMD_BUF_WRITE_REG(loading_noc, NCRISC_RD_CMD_BUF, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+        noc_reads_num_issued[loading_noc] += 1;
+    }
+
+
+    FORCE_INLINE
     void noc_async_write_page(const uint32_t id, uint32_t src_addr, const uint32_t write_size_bytes, const uint32_t offset = 0) const {
         uint32_t dest_addr;
         uint32_t dest_noc_xy;

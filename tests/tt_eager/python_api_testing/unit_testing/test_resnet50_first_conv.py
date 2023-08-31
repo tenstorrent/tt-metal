@@ -85,7 +85,7 @@ def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignme
         original_A_cl_host_shape = A_cl_host.shape()
 
         # re-shape to (N, H, 1, W*C)
-        #A_cl_host = A_cl_host.reshape(A_cl_host.shape()[0], A_cl_host.shape()[1], 1, A_cl_host.shape()[2] * A_cl_host.shape()[3])
+        A_cl_host = A_cl_host.reshape(A_cl_host.shape()[0], A_cl_host.shape()[1], 1, A_cl_host.shape()[2] * A_cl_host.shape()[3])
         print("A_cl_host shape after re-shape (only for transfer)", A_cl_host.shape())
         A_cl_device = A_cl_host.to(device, memory_config)
 
