@@ -36,17 +36,18 @@ struct tt_cluster
     std::set<chip_id_t> target_device_ids;
 
     tt_device_l1_address_params l1_fw_params = {
-        (int32_t)20480, (int32_t)0, (int32_t)20480, (int32_t)16384, (int32_t)20480, (int32_t)53248
+        (uint32_t)MEM_NCRISC_INIT_IRAM_L1_BASE, (uint32_t)MEM_BRISC_FIRMWARE_BASE, (uint32_t)MEM_TRISC0_SIZE, (uint32_t)MEM_TRISC1_SIZE, (uint32_t)MEM_TRISC2_SIZE, (uint32_t)MEM_TRISC0_BASE
     };
 
     tt_driver_host_address_params host_address_params = {host_mem::address_map::ETH_ROUTING_BLOCK_SIZE, host_mem::address_map::ETH_ROUTING_BUFFERS_START};
 
-    tt_driver_eth_interface_params eth_interface_params = {NOC_ADDR_LOCAL_BITS, NOC_ADDR_NODE_ID_BITS, ETH_RACK_COORD_WIDTH, CMD_BUF_SIZE_MASK, MAX_BLOCK_SIZE,
-                                    REQUEST_CMD_QUEUE_BASE, RESPONSE_CMD_QUEUE_BASE, CMD_COUNTERS_SIZE_BYTES, REMOTE_UPDATE_PTR_SIZE_BYTES,
-                                    CMD_DATA_BLOCK, CMD_WR_REQ, CMD_WR_ACK, CMD_RD_REQ, CMD_RD_DATA, CMD_BUF_SIZE, CMD_DATA_BLOCK_DRAM, ETH_ROUTING_DATA_BUFFER_ADDR,
-                                    REQUEST_ROUTING_CMD_QUEUE_BASE, RESPONSE_ROUTING_CMD_QUEUE_BASE, CMD_BUF_PTR_MASK};
+    tt_driver_eth_interface_params eth_interface_params = {
+        NOC_ADDR_LOCAL_BITS, NOC_ADDR_NODE_ID_BITS, ETH_RACK_COORD_WIDTH, CMD_BUF_SIZE_MASK, MAX_BLOCK_SIZE,
+        REQUEST_CMD_QUEUE_BASE, RESPONSE_CMD_QUEUE_BASE, CMD_COUNTERS_SIZE_BYTES, REMOTE_UPDATE_PTR_SIZE_BYTES,
+        CMD_DATA_BLOCK, CMD_WR_REQ, CMD_WR_ACK, CMD_RD_REQ, CMD_RD_DATA, CMD_BUF_SIZE, CMD_DATA_BLOCK_DRAM, ETH_ROUTING_DATA_BUFFER_ADDR,
+        REQUEST_ROUTING_CMD_QUEUE_BASE, RESPONSE_ROUTING_CMD_QUEUE_BASE, CMD_BUF_PTR_MASK
+    };
 
-    int remote_arc_msg(const chip_id_t &chip, uint32_t msg_code, bool wait_for_done, uint32_t arg0, uint32_t arg1, int timeout, uint32_t *return_3, uint32_t *return_4);
     void configure_static_tlbs(const std::uint32_t& chip);
     void set_dram_barrier(chip_id_t chip_id, uint32_t barrier_value);
     void set_l1_barrier(chip_id_t chip_id, uint32_t barrier_value);
@@ -92,11 +93,7 @@ struct tt_cluster
     void assert_risc_reset(const chip_id_t &chip);
     void set_remote_tensix_risc_reset(const tt_cxy_pair &core, const TensixSoftResetOptions &soft_resets);
     void deassert_risc_reset(const chip_id_t &target_device_id, bool start_stagger = false);
-    void reset_remote_chip(const chip_id_t &chip_id);
-    void stop_remote_chip(const chip_id_t &chip);
     void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions);
-
-    uint32_t reserve_non_mmio_block(bool reserve, tt_cxy_pair core, uint64_t address);
 
     void write_dram_vec(vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, bool small_access = false);
     void read_dram_vec(vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, uint32_t size, bool small_access = false);

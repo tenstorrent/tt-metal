@@ -369,84 +369,6 @@ void tt_cluster::close_device() {
     sdesc_per_chip.clear();
 }
 
-// Returns 0 if everything was OK
-int tt_cluster::remote_arc_msg(const chip_id_t &chip, uint32_t msg_code, bool wait_for_done, uint32_t arg0, uint32_t arg1, int timeout, uint32_t *return_3, uint32_t *return_4) {
-    constexpr uint64_t ARC_RESET_SCRATCH_ADDR = 0x880030060;
-    constexpr uint64_t ARC_RESET_MISC_CNTL_ADDR = 0x880030100;
-
-    auto core = tt_cxy_pair(chip, get_soc_desc(chip).arc_cores.at(0));
-
-    if ((msg_code & 0xff00) != 0xaa00) {
-        tt::log_error(tt::LogLLRuntime, "Malformed message. msg_code is 0x{:x} but should be 0xaa..\n", msg_code);
-    }
-    assert (arg0 <= 0xffff and arg1 <= 0xffff); // Only 16 bits are allowed
-
-    const uint32_t MSG_ERROR_REPLY = 0xffffffff;
-
-    uint32_t fw_arg = arg0 | (arg1<<16);
-    int exit_code = 0;
-
-    {
-        std::vector<uint32_t> fw_vec = {fw_arg};
-        write_dram_vec(fw_vec, core, ARC_RESET_SCRATCH_ADDR + 3 * 4, true);
-    }
-
-    {
-        std::vector<uint32_t> msg_vec = {msg_code};
-        write_dram_vec(msg_vec, core, ARC_RESET_SCRATCH_ADDR + 5 * 4, true);
-    }
-
-    std::vector<uint32_t> read_data;
-    read_dram_vec(read_data, core, ARC_RESET_MISC_CNTL_ADDR, 4, true);
-    uint32_t misc = read_data[0];
-
-    if (misc & (1 << 16)) {
-        log_error(tt::LogDevice, "trigger_fw_int failed on device {}", chip);
-        return 1;
-    } else {
-        std::vector<uint32_t> misc_vec = {misc | (1 << 16)};
-        write_dram_vec(misc_vec, core, ARC_RESET_MISC_CNTL_ADDR, true);
-    }
-
-    if (wait_for_done) {
-        uint32_t status = 0xbadbad;
-        auto timeout_seconds = std::chrono::seconds(timeout);
-        auto start = std::chrono::system_clock::now();
-        while (true) {
-            if (std::chrono::system_clock::now() - start > timeout_seconds) {
-                throw std::runtime_error("Timed out after waiting " + std::to_string(timeout) + " seconds for device " + std::to_string(chip) + " ARC to respond");
-            }
-
-            read_data.clear();
-            read_dram_vec(read_data, core, ARC_RESET_SCRATCH_ADDR + 5 * 4, 4, true);
-            status = read_data[0];
-
-            if ((status & 0xffff) == (msg_code & 0xff)) {
-                if (return_3 != nullptr) {
-                    read_data.clear();
-                    read_dram_vec(read_data, core, ARC_RESET_SCRATCH_ADDR + 3 * 4, 4, true);
-                    *return_3 = read_data[0];
-                }
-
-                if (return_4 != nullptr) {
-                    read_data.clear();
-                    read_dram_vec(read_data, core, ARC_RESET_SCRATCH_ADDR + 4 * 4, 4, true);
-                    *return_4 = read_data[0];
-                }
-
-                exit_code = (status & 0xffff0000) >> 16;
-                break;
-            } else if (status == MSG_ERROR_REPLY) {
-                log_warning(tt::LogDevice, "On device {}, message code 0x{:x} not recognized by FW", chip, msg_code);
-                exit_code = MSG_ERROR_REPLY;
-                break;
-            }
-        }
-    }
-
-    return exit_code;
-}
-
 void tt_cluster::assert_risc_reset(const chip_id_t &chip) {
     device->assert_risc_reset(chip);
 }
@@ -472,61 +394,12 @@ void tt_cluster::deassert_risc_reset(const chip_id_t &target_device_id, bool sta
         // Not running silicon multichip test
         device->deassert_risc_reset(*this->target_device_ids.begin());
     } else if (type == TargetDevice::Silicon) {
-        // On silicon, we might have num_mmio_chips < total_chips, in this case we manually write data to all the worker
-        // cores on remote chips
-        // TODO: for now assume that chip ids for MMIO chips are 0 ~ (num_mmio_chips-1)
-        // Need to change m_pci_device object in silicon driver to support a generic subset of chip ids with MMIO
         log_debug(tt::LogLLRuntime, "Stagger start : {}", start_stagger);
         TT_ASSERT(not start_stagger, "UMD currently does not support staggered deassert of RISC reset");
         device->deassert_risc_reset(target_device_id);
     }
     device_reset_time = high_resolution_clock::now();
     deasserted_risc_reset = false;
-}
-
-void tt_cluster::reset_remote_chip(const chip_id_t &chip) {
-    constexpr uint64_t DEASSERT_ARC_WRITE_ADDR = 0x880030040;
-
-    assert_risc_reset(chip);
-
-    // NOTE(drosen): In wormhole this write should not be done as it can trigger a timing violation.
-    //               It remains for backwards compatibility until the new reset sequence is finallized
-    //               and broadly distriuted.
-    // What if there are multiple arc cores? Revisit this
-    TT_ASSERT(sdesc_per_chip.at(chip).arc_cores.size() == 1, "Multiple arc cores specified in soc descriptor, update this reset function");
-    // deassert arc reset
-    std::vector<uint32_t> RISCV_RESET_DEASSERT = {0xffffffff, 0xffffffff, 0xffff, 0x0, 0x0, 0x0, 0x0, 0x0};
-    write_dram_vec(RISCV_RESET_DEASSERT, tt_cxy_pair(chip, sdesc_per_chip.at(chip).arc_cores.at(0)), DEASSERT_ARC_WRITE_ADDR);
-}
-
-void tt_cluster::stop_remote_chip(const chip_id_t &chip) {
-    auto arch = get_soc_desc(chip).arch;
-    switch (arch) {
-        case tt::ARCH::GRAYSKULL: {
-            // NOTE(drosen): Running this at maximum clocks violates timing contraints for wormhole.
-            //               resets are entirely controlled via soft reset regs.
-            constexpr uint64_t ASSERT_ARC_WRITE_ADDR = 0x880030040;
-            // What if there are multiple arc cores? Revisit this
-            TT_ASSERT(get_soc_desc(chip).arc_cores.size() == 1, "Multiple arc cores specified in soc descriptor, update this reset function");
-            // assert arc reset
-            std::vector<uint32_t> vec = {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0};
-            write_dram_vec(vec, tt_cxy_pair(chip, get_soc_desc(chip).arc_cores.at(0)), ASSERT_ARC_WRITE_ADDR);
-            break;
-        }
-        case tt::ARCH::WORMHOLE:
-        case tt::ARCH::WORMHOLE_B0: {
-            assert_risc_reset(chip);
-            break;
-        }
-        case tt::ARCH::Invalid: {
-            log_warning(tt::LogLLRuntime, "Tried to stop device with tt::ARCH::Invalid, skipping riscv reset assertion.");
-            break;
-        }
-        default: {
-            TT_ASSERT(false, "Unexpected arch %s detected when stopping remote chip!", tt::get_string_lowercase(arch));
-            break;
-        }
-    }
 }
 
 inline uint64_t get_sys_addr(uint32_t chip_x, uint32_t chip_y, uint32_t noc_x, uint32_t noc_y, uint64_t offset) {

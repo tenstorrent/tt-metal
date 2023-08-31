@@ -6,10 +6,6 @@ grid:
   x_size: 10
   y_size: 12
 
-worker_grid:
-  x_size: 8
-  y_size: 10
-
 arc:
   [ 0-10 ]
 
