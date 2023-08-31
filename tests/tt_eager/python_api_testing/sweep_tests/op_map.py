@@ -363,6 +363,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_addalpha,
         "pytorch_op": pytorch_ops.addalpha,
     },
+    "eltwise-logit": {
+        "tt_lib_op": tt_lib_ops.eltwise_logit,
+        "pytorch_op": pytorch_ops.logit,
+    },
     "eltwise-hardsigmoid": {
         "tt_lib_op": tt_lib_ops.eltwise_hardsigmoid,
         "pytorch_op": pytorch_ops.hardsigmoid,

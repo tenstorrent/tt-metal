@@ -2064,6 +2064,13 @@ void TensorModule(py::module &m_tensor) {
         R"doc("dimension to sum along", "int", "0, 1, 2, or 3")doc"
     );
 
+    detail::bind_unary_op_with_param(
+        m_tensor, "logit", &logit,
+        py::arg("eps"),
+        R"doc(Returns a tensor that is a logit  of input tensor with shape ``[W, Z, Y, X]`` along clamp ``{1}``.)doc",
+        R"doc("dimension to logit along", "int", "0, 1, 2, or 3")doc"
+    );
+
     m_tensor.def("transpose", py::overload_cast<const Tensor&, uint, uint, const MemoryConfig&>(&transpose),
         py::arg("input").noconvert(), py::arg("dim0"), py::arg("dim1"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``arg1`` and ``arg2`` are swapped.

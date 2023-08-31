@@ -361,6 +361,11 @@ def scale_mask_softmax_in_place(x, y, scale, *args, **kwargs):
 def rsqrt(x, *args, **kwargs):
     return torch.rsqrt(x)
 
+
+def logit(x, *args, eps, **kwargs):
+    return torch.special.logit(x, eps=eps)
+
+
 def relu(x, *args, **kwargs):
     return torch.nn.functional.relu(x)
 

@@ -21,8 +21,13 @@ sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
 
-from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
-from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
+from tests.tt_eager.python_api_testing.sweep_tests import (
+    comparison_funcs,
+    generation_funcs,
+)
+from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
+    run_single_pytorch_test,
+)
 from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0
 
 
@@ -91,6 +96,7 @@ if is_wormhole_b0():
                 "logaddexp2",
                 "bias_gelu_unary",
                 "addalpha",
+                "logit",
             ),
             shapes,
         )
@@ -102,7 +108,7 @@ def test_run_eltwise_composite_test(
     options = defaultdict(lambda: (-1.0, 1.0))
     options["log1"] = (0.0, 1.0)
     options["polyval"] = (1, 100)
-
+    options["logit"] = (0, 1)
     options["deg2rad"] = (-180, 180)
     options["bias_gelu_unary"] = (-1e10, 1e10)
     options["rad2deg"] = (0, 2 * pi)
@@ -180,6 +186,8 @@ def test_run_eltwise_composite_test(
         test_args.update({"alpha": np.random.randint(1, 100)})
     elif fn in ["bias_gelu_unary"]:
         test_args.update({"bias": np.random.randint(1, 100)})
+    elif fn in ["logit"]:
+        test_args.update({"eps": np.random.randint(-1e-6, 1e6)})
     run_single_pytorch_test(
         "eltwise-%s" % (fn),
         input_shapes,

@@ -310,7 +310,26 @@ def eltwise_elu(x, *args, alpha, device, dtype, layout, buffer_type, output_mem_
 
 
 @setup_host_and_device
-def eltwise_gelu(x, *args, fast_and_appx, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
+def eltwise_logit(x, *args, eps, device, dtype, layout, on_device, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout)
+    if on_device:
+        t0 = t0.to(device)
+
+    t1 = ttl.tensor.logit(t0, eps)
+
+    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    return output
+
+
+@setup_host_and_device
+def eltwise_gelu(x, *args, fast_and_appx, device, dtype, layout, on_device, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,

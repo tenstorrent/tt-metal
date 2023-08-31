@@ -587,6 +587,62 @@ Tensor addcdiv(const Tensor& input_a, const Tensor& input_b, const Tensor& input
     return operation::decorate_as_composite(__func__, _addcdiv)(input_a, input_b, input_c, value, output_mem_config);
 }
 
+//logit(input, eps)=log(input / 1 - input)
+Tensor _logit(const Tensor& input_a,  float eps, const MemoryConfig& output_mem_config) {
+    Tensor t_eps = mk_filled_tensor_like(input_a, eps, output_mem_config);
+    Tensor t_one   = ones_like(input_a, output_mem_config);
+    Tensor t_inf = mul_unary(t_one, std::numeric_limits<float>::infinity(), output_mem_config);
+    Tensor partial_output(input_a);
+    {
+        Tensor result(input_a);
+        {
+            Tensor output(input_a);
+            {
+                Tensor mul_input(input_a);
+                {
+                    Tensor sub_input(input_a);
+                    {
+                        Tensor neg_input = neg(input_a, output_mem_config);
+                        sub_input = add_unary(neg_input, 1.0f, output_mem_config);
+                    }
+                    mul_input =  mul(input_a, recip(sub_input, output_mem_config), std::nullopt, output_mem_config);
+                }
+
+                Tensor mul_eps(input_a);
+                {
+                    Tensor sub_eps(input_a);
+                    {
+                        Tensor neg_eps = neg(t_eps, output_mem_config);
+                        sub_eps = add_unary(neg_eps, 1.0f, output_mem_config);
+                    }
+                    mul_eps = mul(t_eps, recip(sub_eps, output_mem_config), std::nullopt, output_mem_config);
+                }
+                {
+                Tensor ia_lt_eps = lt(input_a, t_eps, std::nullopt, output_mem_config);
+                output = where(ia_lt_eps, mul_eps, mul_input, output_mem_config);
+                }
+            }
+            result = log(output, output_mem_config);
+        }
+        {
+            Tensor in_eq_one = eq(input_a, t_one, std::nullopt, output_mem_config);
+            partial_output = where(in_eq_one, t_inf, result, output_mem_config);
+        }
+    }
+    Tensor final_result(input_a);
+    {
+        Tensor t_nan = mul_unary(t_one, std::nanf(""), output_mem_config);
+        Tensor eps_gt_one = gt(t_eps, t_one, std::nullopt, output_mem_config);
+        Tensor eps_eq_one = eq(t_eps, t_one, std::nullopt, output_mem_config);
+        final_result = where(eps_eq_one, t_inf, where(eps_gt_one, t_nan, partial_output, output_mem_config), output_mem_config);
+    }
+    return final_result;
+}
+Tensor logit(const Tensor& input_a, float eps, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _logit)(input_a, eps, output_mem_config);
+}
+
 //xlogy(x,y))=x*log(y)
 Tensor _xlogy(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
     Tensor t_value = mk_tiled_scalar(std::nanf(""));
