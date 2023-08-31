@@ -27,8 +27,8 @@ jobs:
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Build tt-metal and libs
-        run: make build
+        run: |
+          ./scripts/build_scripts/build_with_profiler_opt.sh
       - name: Run profiler regression tests
         run: |
-          source build/python_env/bin/activate
           ./tests/scripts/run_profiler_regressions.sh

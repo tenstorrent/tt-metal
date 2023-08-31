@@ -1,4 +1,7 @@
-=================
+====================
+Performance Profiler
+====================
+
 Quick Start Guide
 =================
 
@@ -6,8 +9,19 @@ Quick Start Guide
 
 ..  code-block:: sh
 
+    cd $TT_METAL_HOME
     make clean
     make build ENABLE_PROFILER=1
+
+Or,
+
+Run the following build script:
+
+..  code-block:: sh
+
+    cd $TT_METAL_HOME
+    scripts/build_scripts/build_with_profiler_opt.sh
+
 
 2. Determine the execution command for running your model of OP unit test. e.g.
 
@@ -107,12 +121,11 @@ The headers of the columns with their descriptions is below:
     - WriteToDevice
     - DumpDeviceProfileResults
 
-===========
 Deeper Dive
 ===========
 
 Automated Script
-================
+----------------
 
 The ``profile_this.py`` script is an automated script that cover most Models and OPs units test profiling scenarios.
 
@@ -136,7 +149,7 @@ Setp 2 above can manually be replicated if we have a profiler enabled build:
 
 
 Profiling OPs
-=============
+-------------
 
 Models and OPs unit tests are automatically profiled in PROFILER builds.
 
