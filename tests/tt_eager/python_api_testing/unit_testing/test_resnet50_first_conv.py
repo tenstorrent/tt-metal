@@ -25,8 +25,9 @@ from tt_lib.utils import (
 from models.utility_functions import print_diff_argmax, is_close, comp_pcc
 from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
     create_conv_act_tensor,
+    create_conv_act_tensor_special,
     create_conv_weight_tensor,
-    create_conv_weight_tensor_special_padding,
+    create_conv_weight_tensor_special_special,
 )
 import torch
 
@@ -37,7 +38,7 @@ def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignme
     (K, C, padded_C, H, W, R, S, padded_S, stride_h, stride_w, pad_h, pad_w) = (
         64,
         3,
-        16,
+        4,
         224,
         224,
         7,
@@ -60,7 +61,7 @@ def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignme
 
         # Parameters to define block dims
         act_block_h = 4
-        assert padded_C * padded_C % 32 == 0
+        assert padded_C * padded_S % 32 == 0
         act_block_w = (int)((padded_C * padded_S) / 32)
         weight_block_h = act_block_w
         weight_block_w = 2
@@ -75,7 +76,7 @@ def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignme
 
         # Prepare activations
 
-        A_cl_host = create_conv_act_tensor(
+        A_cl_host = create_conv_act_tensor_special(
             A_pyt, N, C, H, W, pad_h, pad_w, extra_pad_w_right=1 + extra_padding_for_32B_alignment
         )
         print("A_cl_host shape", A_cl_host.shape())
@@ -95,7 +96,7 @@ def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignme
         print("A_cl_device shape into OP", A_cl_device.shape())
 
         # Prepare weights
-        B_tiled_host = create_conv_weight_tensor_special_padding(
+        B_tiled_host = create_conv_weight_tensor_special_special(
             B_pyt, K, C, R, S, weight_block_h, weight_block_w, padded_S
         )
         B_tiled = B_tiled_host.to(device)

@@ -37,7 +37,8 @@ void kernel_main() {
     const InterleavedPow2AddrGenFast<act_in_dram> s_act = {
         .bank_base_address = act_addr_dram_base,
         //.log_base_2_of_page_size = 5 // TODO: send as a compile-time arg, currently C=16 in FP16_B (so 32 B)
-        .log_base_2_of_page_size = 13 // TODO: send as a compile-time arg, currently C=16 x W=256 in FP16_B = 8192
+        //.log_base_2_of_page_size = 13 // TODO: send as a compile-time arg, currently C=16 x W=256 in FP16_B = 8192
+        .log_base_2_of_page_size = 11 // TODO: send as a compile-time arg, currently C=4 x W=256 in FP16_B = 2048
     };
     uint32_t read_size_bytes = channel_stick_size_bytes << 3; // channel stick size * 8
     // Assumptions. Must be true. Validate on host.
