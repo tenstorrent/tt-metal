@@ -4,7 +4,6 @@ ARCH_NAME ?= wormhole_b0
 DEVICE_TYPE=0
 
 MAILBOX_ADDR ?= 4
-HLKC_KERNELS ?=
 KERNELS ?= cblank
 UPCASE_KERNELS = $(shell echo $(KERNELS) | tr a-z A-Z)
 KERNEL_DEFINES = $(addprefix -DUCK_, $(UPCASE_KERNELS))
@@ -35,19 +34,7 @@ CKERNEL_INC_DIR  = $(BUDA_HOME)/build/src/ckernels
 FIRMWARE_RISCV_DIR = $(BUDA_HOME)/src/firmware/riscv
 FIRMWARE_RISCV_INC_DIR = $(BUDA_HOME)/build/src/firmware/riscv
 
-ifdef HLKC_INC
-# if HLKC_INC is defined, we have detected the HLKC flow
-# these are the includes for the HLKC auto-generated flow
-DEFINES += -DHLKC_PIPELINE_ENABLED
-INCLUDES = \
-	-I$(CKERNEL_DIR)/$(ARCH_NAME)/common/inc \
-	-I$(HLKC_INC) \
-	-I$(CKERNEL_DIR)/$(ARCH_NAME)/llk_lib/ \
-	-I$(FIRMWARE_RISCV_INC_DIR)/$(ARCH_NAME)/ \
-	-I$(FIRMWARE_RISCV_INC_DIR)/$(ARCH_NAME)/noc \
-	-I$(BUDA_HOME)/perf_lib/ \
-	-I$(CKERNEL_INC_DIR)/gen/out # needed for ckernel_ops.h
-else ifdef HLK_INC
+ifdef HLK_INC
 # if HLK_INC is defined, we have detected the HLK compilation flow
 # these are the includes for the HLK auto-generated flow
 # todo.pp line 57 (-I$(CKERNEL_INC_DIR)/gen/out \) might not be needed
