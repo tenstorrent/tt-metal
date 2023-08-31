@@ -39,7 +39,7 @@ void kernel_main() {
         //.log_base_2_of_page_size = 5 // TODO: send as a compile-time arg, currently C=16 in FP16_B (so 32 B)
         .log_base_2_of_page_size = 13 // TODO: send as a compile-time arg, currently C=16 x W=256 in FP16_B = 8192
     };
-
+    uint32_t read_size_bytes = channel_stick_size_bytes << 3; // channel stick size * 8
     // Assumptions. Must be true. Validate on host.
     // assert(act_block_w_datums == C * weight_size_w)
     // assert(num_blocks_act_w == weight_size_h)
@@ -82,27 +82,34 @@ void kernel_main() {
             uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
             uint32_t l1_addr_offset = 0;
             for(uint32_t bh = 0; bh < act_block_h_datums; bh++) {
-                uint32_t c_id_offset_inra_block_col = 0;
-                uint32_t page_offset_intra_block_w = 0;
-                for(uint32_t bw = 0; bw < weight_size_w; bw++) {
-                    uint32_t read_size_bytes = channel_stick_size_bytes;
+                //uint32_t c_id_offset_inra_block_col = 0;
 
-                    // read one channel
-                    //uint32_t channel_id = first_c_id_in_2d_row + c_id_offset_inter_block_col + c_id_offset_inra_block_col;
-                    uint32_t dst_addr = l1_write_addr_act + l1_addr_offset;
-                    //s_act.noc_async_read_page(channel_id, dst_addr);
+                // channel_stick * filter window width is contiguous in page
+                uint32_t page_id = in_h + page_id_offset_inter_block_w;
+                uint32_t page_offset = page_offset_h_2d_matrix;
+                uint32_t dst_addr = l1_write_addr_act + l1_addr_offset;
+                s_act.noc_async_read_partial_page(page_id, dst_addr, read_size_bytes, page_offset);
+                l1_addr_offset += read_size_bytes;
+                // uint32_t page_offset_intra_block_w = 0;
+                // for(uint32_t bw = 0; bw < weight_size_w; bw++) {
+                //     uint32_t read_size_bytes = channel_stick_size_bytes;
 
-                    //uint32_t page_id = channel_id / in_w_padded_for_32_alignment;
-                    //uint32_t channel_id_within_page = channel_id % in_w_padded_for_32_alignment;
-                    uint32_t page_id = in_h + page_id_offset_inter_block_w;
-                    //uint32_t page_offset = channel_id_within_page * channel_stick_size_bytes;
-                    uint32_t page_offset = page_offset_h_2d_matrix + page_offset_intra_block_w;
-                    s_act.noc_async_read_partial_page(page_id, dst_addr, channel_stick_size_bytes, page_offset);
+                //     // read one channel
+                //     //uint32_t channel_id = first_c_id_in_2d_row + c_id_offset_inter_block_col + c_id_offset_inra_block_col;
+                //     uint32_t dst_addr = l1_write_addr_act + l1_addr_offset;
+                //     //s_act.noc_async_read_page(channel_id, dst_addr);
 
-                    l1_addr_offset += read_size_bytes;
-                    //c_id_offset_inra_block_col += 1;
-                    page_offset_intra_block_w += channel_stick_size_bytes;
-                } // for block width
+                //     //uint32_t page_id = channel_id / in_w_padded_for_32_alignment;
+                //     //uint32_t channel_id_within_page = channel_id % in_w_padded_for_32_alignment;
+                //     uint32_t page_id = in_h + page_id_offset_inter_block_w;
+                //     //uint32_t page_offset = channel_id_within_page * channel_stick_size_bytes;
+                //     uint32_t page_offset = page_offset_h_2d_matrix + page_offset_intra_block_w;
+                //     s_act.noc_async_read_partial_page(page_id, dst_addr, channel_stick_size_bytes, page_offset);
+
+                //     l1_addr_offset += read_size_bytes;
+                //     //c_id_offset_inra_block_col += 1;
+                //     page_offset_intra_block_w += channel_stick_size_bytes;
+                // } // for block width
                 if(out_w < conv_output_size_w - 1) {
                     out_w += 1;
                     first_c_id_in_2d_row += 2; // channel id stride in the w dimension
