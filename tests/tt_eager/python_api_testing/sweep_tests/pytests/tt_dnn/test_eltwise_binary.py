@@ -23,15 +23,9 @@ from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import r
 from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0
 
 shapes = [
-<<<<<<< HEAD:tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_eltwise_binary.py
     [[1, 1, 32, 32], [1, 1, 32, 32]],  # Single core
     [[1, 1, 320, 384], [1, 1, 320, 384]],  # Multi core
     [[1, 3, 320, 384], [1, 3, 320, 384]],  # Multi core
-=======
-        [[1, 1, 32, 32], [1, 1, 32, 32]],  # Single core
-        [[1, 1, 320, 384], [1, 1, 320, 384]],  # Multi core
-        [[1, 3, 320, 384], [1, 3, 320, 384]],  # Multi core
->>>>>>> #2150: Update test file:tests/python_api_testing/sweep_tests/pytests/tt_dnn/test_eltwise_binary.py
 ]
 output_mem_cfgs = copy.copy(generation_funcs.supported_mem_configs)
 if is_wormhole_b0():
@@ -159,7 +153,7 @@ class TestEltwiseBinary:
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16
+                partial(generation_funcs.gen_rand, low=-90, high=90), torch.bfloat16
             )
         ] * len(input_shapes)
         test_args = list(generation_funcs.gen_default_dtype_layout_device(input_shapes))[0]

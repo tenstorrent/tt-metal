@@ -37,7 +37,7 @@
 //#include "debug_print.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api.h"
-#include "debug_print.h"
+//#include "debug_print.h"
 
 ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
 ALWI void REL() { release_dst(tt::DstMode::Half); }
@@ -73,8 +73,8 @@ void MAIN {
                 cb_pop_front(tt::CB::c_in1, 1);
 
                 cb_reserve_back(cb_ex2, 1);
-                exp_tile_init();
-                exp_tile(0); // exp on DST[0]
+                SFPU_OP_PRE_INIT_0
+                SFPU_OP_PRE_FUNC_0
                 pack_tile(0, cb_ex2); // DST[0]->cb
                 cb_push_back(cb_ex2, 1);
                 REL();
@@ -86,8 +86,8 @@ void MAIN {
                 cb_pop_front(tt::CB::c_in0, 1);
 
                 cb_reserve_back(cb_ex, 1);
-                exp_tile_init();
-                exp_tile(0); // exp on DST[0]
+                SFPU_OP_PRE_INIT_0
+                SFPU_OP_PRE_FUNC_0
                 pack_tile(0, cb_ex); // DST[0]->cb
                 cb_push_back(cb_ex, 1);
                 REL();

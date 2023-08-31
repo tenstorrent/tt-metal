@@ -45,6 +45,7 @@ std::map<string, string> get_defines(BinaryOpType op_type, const std::optional<s
             op_name = "add_tiles";
             op_code = "0";
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GELU, 0));
+            break;
         case BinaryOpType::LOGADDEXP:
             defines.merge(eltwise_unary_op_utils::get_pre_defines(UnaryOpType::EXP));
             op_name = "add_tiles";
