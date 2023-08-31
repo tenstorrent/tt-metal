@@ -118,7 +118,7 @@ def test_run_max_pool(
     use_multicore,
     device,
 ):
-    ttl.device.EnableMemoryReports()
+    # ttl.device.EnableMemoryReports()
 
     in_n, in_c, in_h, in_w = act_shape
     kernel_h, kernel_w = kernel_size

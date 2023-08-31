@@ -9,7 +9,7 @@
 #include "compute_kernel_api/reduce.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
-#define DEBUG_PRINT 0
+#define DEBUG_PRINT 1
 
 #if DEBUG_PRINT == 1
     #include "debug_macros.h"
@@ -108,19 +108,22 @@ void MAIN {
     const uint32_t out_nelems = get_compile_time_arg_val(8);
     const uint32_t out_w_loop_count = get_compile_time_arg_val(9);
     const uint32_t nbatch = get_compile_time_arg_val(10);
+    const uint32_t out_h_per_core = get_compile_time_arg_val(11);
+
+    DPRINT << "I AM THE COMPUTE!! " << ENDL();
 
     tilize_init(in_cb_id, in_ntiles_hwc, in_tiled_cb_id);
 
     #if DEBUG_PRINT == 1
-        print_cb_details(in_scalar_cb_id);
         print_cb_details(in_cb_id);
+        print_cb_details(in_scalar_cb_id);
         print_cb_details(in_tiled_cb_id);
         print_cb_details(out_cb_id);
     #endif
 
     cb_wait_front(in_scalar_cb_id, 1);
     for (uint32_t batch = 0; batch < nbatch; ++ batch) {
-        for (uint32_t out_h_i = 0; out_h_i < out_h; ++out_h_i) {
+        for (uint32_t out_h_i = 0; out_h_i < out_h_per_core; ++out_h_i) {
             for (uint32_t out_w_i = 0; out_w_i < out_w_loop_count; ++out_w_i) {
                 // NOTE: Assuming in_ntiles_hw < 8 for now.
                 // TODO: subblocking to support this.

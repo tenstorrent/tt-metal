@@ -87,7 +87,8 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core(const Tensor &input, Tens
 
     #if DEBUG_SERVER == 1
         // start debug server
-        tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}});
+        auto debug_core = CoreCoord(1, 1);
+        tt_start_debug_print_server(device->cluster(), {0}, {debug_core});
     #endif
 
     // NOTE: input is assumed to be in {N, 1, H * W, C }
@@ -316,10 +317,10 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core(const Tensor &input, Tens
     }
 
     // calculate and set the start/end h_i for each core
-    reader_rt_args.push_back(0);        // arg num 30
-    reader_rt_args.push_back(out_h);    // arg num 31
-    reader_rt_args.push_back(- pad_h);  // arg num 32   (only used on reader)
-    log_debug("reader_rt_args[32]: {}", reader_rt_args[32]);
+    // add more args to be set below
+    reader_rt_args.push_back(0);  // arg num 30
+    reader_rt_args.push_back(0);  // arg num 31
+    reader_rt_args.push_back(0);  // arg num 32   (only used on reader)
     // for all but last core (cliff)
     uint32_t curr_out_h_i = 0;
     int32_t curr_start_h = - pad_h;
@@ -349,15 +350,20 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core(const Tensor &input, Tens
         // no cliff core
         for (int32_t i = 0; i < ncores_hw; ++ i) {
             CoreCoord core(i % ncores_w, i / ncores_w);
-            writer_rt_args[30] = curr_out_h_i;                                  // start for writer
-            reader_rt_args[30] = curr_out_h_i; curr_out_h_i += out_h_per_core;  // start for reader
+            writer_rt_args[30] = curr_out_h_i;          // start for writer
+            reader_rt_args[30] = curr_out_h_i;          // start for reader
+            curr_out_h_i += out_h_per_core;
             writer_rt_args[31] = curr_out_h_i;
             reader_rt_args[31] = curr_out_h_i;
-            reader_rt_args[32] = curr_start_h; curr_start_h += stride_h;
+            reader_rt_args[32] = static_cast<uint32_t>(curr_start_h);
+            curr_start_h += stride_h;
+            log_debug("CORE: ({},{}), RT ARGS 32: {}", core.x, core.y, reader_rt_args[32]);
             SetRuntimeArgs(program, reader_kernel, core, reader_rt_args);
             SetRuntimeArgs(program, writer_kernel, core, writer_rt_args);
         }
     }
+
+    log_debug("Program constructed!!");
 
     auto override_runtime_args_callback =
         [reader_kernel, writer_kernel, ncores_hw, ncores_w](const Program& program,
@@ -510,7 +516,11 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                             in_log_base_2_of_page_size,
                                             nbatch,
                                             in_hw,
-                                            out_hw};
+                                            out_hw,
+                                            0,                              // start_out_h_i
+                                            out_h,                          // end_out_h_i
+                                            static_cast<uint32_t>(-pad_h)   // base_start_h
+                                            };
     auto reader_config = DataMovementConfig{.processor = DataMovementProcessor::RISCV_1,
                                             .noc = NOC::RISCV_1_default,
                                             .compile_args = reader_ct_args};
@@ -590,7 +600,8 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                                          (uint32_t) ceil((float) output_shape[3] / constants::TILE_WIDTH),
                                                          out_nelems,
                                                          out_w_loop_count,
-                                                         nbatch},
+                                                         nbatch,
+                                                         out_h},    // out_h_per_core
                                         .defines = reduce_op_utils::get_defines(reduce_op, reduce_dim)};
     std::string compute_kernel_fname("tt_metal/kernels/compute/max_pool.cpp");
     auto compute_kernel = CreateComputeKernel(program,

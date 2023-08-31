@@ -44,6 +44,9 @@ inline bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {
  * TODO [AS]: reuse data moved to L1 instead of reading every time
  */
 void kernel_main() {
+
+    DPRINT << "THIS IS THE READER STARTING!!" << ENDL();
+
     // input tensor address
     const uint32_t in_addr = get_arg_val<uint32_t>(0);
     // arg 1 is skipped
@@ -107,9 +110,9 @@ void kernel_main() {
 
     constexpr uint32_t TILE_HW = 1024;
 
-    DPRINT << "start_out_h_i: " << start_out_h_i << ENDL();
-    DPRINT << "end_out_h_i: " << end_out_h_i << ENDL();
-    DPRINT << "base_start_h: " << base_start_h << ENDL();
+    DPRINT << "start_out_h_i: " << (uint) start_out_h_i << ENDL();
+    DPRINT << "end_out_h_i: " << (uint) end_out_h_i << ENDL();
+    DPRINT << "base_start_h: " << (uint) base_start_h << ENDL();
 
     // ROW_MAJOR input
     const InterleavedPow2AddrGenFast<is_in_dram> s_in = {
