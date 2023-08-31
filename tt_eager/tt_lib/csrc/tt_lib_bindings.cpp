@@ -2470,7 +2470,7 @@ void TensorModule(py::module &m_tensor) {
         Perform a bert_large_fused_qkv non-batched matmul ``A x B`` with two tensors.
     )doc");
     m_tensor.def("bert_large_ff1_matmul", &bert_large_ff1_matmul,
-        py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("fuse_gelu_activation") = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, R"doc(
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("fuse_gelu_activation") = false, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, R"doc(
         Perform a bert_large_ff1 non-batched matmul ``A x B`` with two tensors.
     )doc");
     m_tensor.def("bert_large_ff2_matmul", &bert_large_ff2_matmul,
