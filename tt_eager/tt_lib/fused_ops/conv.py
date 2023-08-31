@@ -197,7 +197,7 @@ def resnet50_first_conv(weight: List[Union[int, float]], conv_params, device, ac
     """
     assert len(conv_params) == 10
     K, C, R, S, U, V, P_H, P_W, dilation, groups = [conv_params[i] for i in range(10)]
-
+    extra_padding_for_32B_alignment = 25
 
     assert len(act_block_shape_hw) == 2
     assert len(weight_block_shape_hw) == 2
@@ -219,7 +219,7 @@ def resnet50_first_conv(weight: List[Union[int, float]], conv_params, device, ac
 
     weights_shape = [K, C, R, S]
     assert padded_filter_window_width >= S
-    weights_channels_padded_shape = [_nearest_32(K), _nearest_y(C, 16), R, padded_filter_window_width]
+    weights_channels_padded_shape = [_nearest_32(K), _nearest_y(C, 4), R, padded_filter_window_width] # first conv channel padded to 4 only
     weight_untiled = tensor.Tensor(
         weight, weights_shape, tensor.DataType.BFLOAT16, tensor.Layout.ROW_MAJOR
     ).pad(weights_channels_padded_shape, (0, 0, 0, 0), 0)
@@ -247,7 +247,7 @@ def resnet50_first_conv(weight: List[Union[int, float]], conv_params, device, ac
     P_W = 0
     def conv_(activation):
         #assert(activation.layout() == tensor.Layout.ROW_MAJOR)
-        output = tensor.optimized_conv(activation, weight_on_device, None, [R,padded_filter_window_width,U,V,P_H,P_W], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w, K, False, False, False, tensor.MathFidelity.HiFi4)
+        output = tensor.optimized_conv(activation, weight_on_device, None, [R,padded_filter_window_width,U,V,P_H,P_W], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w, K, False, False, False, tensor.MathFidelity.HiFi4, extra_padding_for_32B_alignment)
         #assert(output.storage_type() == tensor.StorageType.DEVICE)
         #assert output.layout() == tensor.Layout.TILE
         output_plus_bias = tensor.bcast_without_autoformat(output, bias_on_device, tensor.BcastOpMath.ADD, tensor.BcastOpDim.H, output.memory_config())

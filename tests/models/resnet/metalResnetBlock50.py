@@ -598,7 +598,7 @@ class ResNet(nn.Module):
             self.bn1 = nn.Identity()
 
         self.conv1_params = [self.inplanes, 3, 7, 7, 2, 2, 3, 3, 1, groups]
-        self.conv1 = resnet50_first_conv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, [128, 128], [128, 64], [128, 64], conv1_bias.tolist(), 8)
+        self.conv1 = resnet50_first_conv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, [128, 32], [32, 64], [128, 64], conv1_bias.tolist(), 8)
         self.conv1_output_shape = compute_conv_output_shape(self.conv1_params, [batch_size, self.conv_input_face_shape_hw[0], self.conv_input_face_shape_hw[1], self.inplanes])
         self.relu = tt_lib.tensor.relu_without_autoformat
         # self.maxpool = fallback_ops.MaxPool2d(kernel_size=3, stride=2, padding=1, channels_last=True, reshape_2d=True)
@@ -740,11 +740,18 @@ class ResNet(nn.Module):
                 x.shape,
                 tt_lib.tensor.DataType.BFLOAT16,
                 tt_lib.tensor.Layout.ROW_MAJOR)
+        extra_padding_for_32B_alignment = 25
         # Pre-pad input shape
-        act_shape_height_width_channel_padded = [x.shape()[0], x.shape()[1] + 6, x.shape()[2] + 7, _nearest_y(x.shape()[3], 16)]
+        act_shape_height_width_channel_padded = [x.shape()[0], x.shape()[1] + 6, x.shape()[2] + 7 + extra_padding_for_32B_alignment, _nearest_y(x.shape()[3], 4)] # first conv channel is padded to 4 only
         x = x.pad(act_shape_height_width_channel_padded, (0, 3, 3, 0), 0)
+        original_A_cl_host_shape = x.shape()
+        x = x.reshape(x.shape()[0], x.shape()[1], 1, x.shape()[2] * x.shape()[3])
+        #print("A_cl_host shape after re-shape (only for transfer)", x.shape())
 
         x = x.to(self.device, self.memory_config)
+        # re-shape back to original shape (N, H, W, C)
+        x = x.reshape(original_A_cl_host_shape[0], original_A_cl_host_shape[1], original_A_cl_host_shape[2], original_A_cl_host_shape[3])
+        #print("A_cl_device shape into OP", x.shape())
         x = self.conv1(x)
         #x = x.reshape(1, 1, x.shape()[0]*x.shape()[1]*x.shape()[2], x.shape()[3]);
         x = self.relu(x, self.memory_config)
