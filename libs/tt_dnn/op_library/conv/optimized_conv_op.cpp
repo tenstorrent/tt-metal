@@ -437,17 +437,12 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
     string compute_kernel;
     TT_ASSERT(!(conv_act_size_c & (conv_act_size_c - 1))); // channel depth power of 2 is supported only
     TT_ASSERT(!(out_row_size_bytes & (out_row_size_bytes - 1))); // output channels power of 2 is supported only
-    if (pad_h == 0 && pad_w == 0) {
-        if(rn50_first_conv) {
-            reader_kernel = "libs/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast_resnet50_first_conv.cpp";
-            compute_kernel = "libs/tt_dnn/op_library/conv/kernels/bmm_tilize_untilize_all_weights_in_l1_single_output_block_width_dim.cpp";
-        } else {
-            reader_kernel = "libs/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast.cpp";
-            compute_kernel = "tt_metal/kernels/compute/bmm_tilize_untilize.cpp";
-        }
+    if(rn50_first_conv) {
+        reader_kernel = "libs/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast_resnet50_first_conv.cpp";
+        compute_kernel = "libs/tt_dnn/op_library/conv/kernels/bmm_tilize_untilize_all_weights_in_l1_single_output_block_width_dim.cpp";
     } else {
-        reader_kernel = "libs/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast.cpp";
-        compute_kernel = "tt_metal/kernels/compute/bmm_tilize_untilize.cpp";
+        reader_kernel = "libs/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast_for_col_major_conv_out_blocks.cpp";
+        compute_kernel = "libs/tt_dnn/op_library/conv/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
     }
     reader_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
             (uint32_t) stride_h, (uint32_t) stride_w, (uint32_t) conv_act_size_w, (uint32_t) conv_output_size_w,
@@ -507,6 +502,7 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
 
     vector<uint32_t> writer_rt_args;
     std::vector<uint32_t> writer_compile_time_args;
+    assert(!untilize_out);
     if (untilize_out) {
         if (rn50_first_conv) {
             writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_and_reader_weights_resnet50_first_conv_untilize_out.cpp";
@@ -540,7 +536,7 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
         if (rn50_first_conv) {
             writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_and_reader_weights_resnet50_first_conv_tiled_out.cpp";
         } else {
-            writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_tiled_out_reader_conv_weights_tiled.cpp";
+            writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_tiled_out_reader_conv_weights_tiled_col_to_rm_blocks.cpp";
         }
         writer_compile_time_args = {
             (uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
@@ -708,6 +704,7 @@ Tensor optimized_conv(const Tensor& a,
             bool fuse_relu,
             MathFidelity math_fidelity,
             uint32_t extra_padding_for_32B_alignment) {
+    TT_ASSERT(!untilize_out, "Optimized conv only supports tiled out");
     TT_ASSERT(b.layout() == Layout::TILE); // Weights should already be formatted
     auto padded_a_shape = Shape({a.shape()[0], a.shape()[1], a.shape()[2], round_up(a.shape()[3], 16)});
     FormatParams input_a_format_params = {.pad_shape=padded_a_shape, .pad_value=0.0, .target_layout=Layout::ROW_MAJOR};
