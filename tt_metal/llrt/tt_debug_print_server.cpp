@@ -560,6 +560,8 @@ void tt_start_debug_print_server(tt_cluster* cluster)
         TT_ASSERT(DebugPrintServerContext::inst == nullptr, "Multiple print servers not allowed");
         TT_ASSERT(DebugPrintServerContext::ProfilerIsRunning == false, "Device side profiler is running, cannot start print server");
 
+        cluster->reset_debug_print_server_buffers();
+
         // Using an invalid core can hang the chip, sanitize
         // TODO(PGK)
 

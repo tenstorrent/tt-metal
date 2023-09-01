@@ -297,8 +297,6 @@ void tt_cluster::start_device(const tt_device_params &device_params) {
         device->start(device_params.expand_plusargs(), {}, false, false, device_params.skip_driver_allocs);
     }
 
-    reset_debug_print_server_buffers();
-
     device_reset_time = high_resolution_clock::now();
 }
 
