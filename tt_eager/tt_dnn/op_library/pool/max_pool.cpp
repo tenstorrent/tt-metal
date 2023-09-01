@@ -264,7 +264,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core(const Tensor &input, Tens
                                             0,          // start_out_row_id
                                             minus_inf_const_tensor_addr,
                                             const_buffer_size * in_nbytes,
-                                            (in_cb_page_nelems_padded * out_nelems * 2) >> 5    // num rows to fill in in_cb
+                                            (in_cb_page_nelems_padded * out_nelems * 2) >> 5    // TODO: generalize num rows to fill in in_cb
                                             };
     auto reader_config = DataMovementConfig{.processor = DataMovementProcessor::RISCV_1,
                                             .noc = NOC::RISCV_1_default,
@@ -498,6 +498,12 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                         out_cb_npages * out_cb_pagesize,
                                         out_df);
 
+    // Construct const buffer with -INF
+    uint32_t const_buffer_size = 32;
+    auto minus_inf_const_buffer = owned_buffer::create(std::vector<bfloat16>(const_buffer_size, bfloat16(0xf7ff)));
+    const Tensor minus_inf_const_tensor = Tensor(OwnedStorage{minus_inf_const_buffer}, Shape({1, 1, 1, const_buffer_size}), DataType::BFLOAT16, Layout::ROW_MAJOR).to(device);
+    auto minus_inf_const_tensor_addr = minus_inf_const_tensor.buffer()->address();
+
     /**
      * Reader Kernel: input rows -> input cb
      */
@@ -527,7 +533,10 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                             0,                              // start_out_h_i
                                             out_h,                          // end_out_h_i
                                             static_cast<uint32_t>(-pad_h),  // base_start_h
-                                            0                               // start_out_row_id
+                                            0,                               // start_out_row_id
+                                            minus_inf_const_tensor_addr,
+                                            const_buffer_size * in_nbytes,
+                                            (in_cb_page_nelems_padded * out_nelems * 2) >> 5    // TODO: generalize num rows to fill in in_cb
                                             };
     auto reader_config = DataMovementConfig{.processor = DataMovementProcessor::RISCV_1,
                                             .noc = NOC::RISCV_1_default,
