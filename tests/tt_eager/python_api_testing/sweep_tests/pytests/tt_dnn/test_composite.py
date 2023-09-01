@@ -92,7 +92,6 @@ if is_wormhole_b0():
                 "atan2",
                 "ldexp",
                 "subalpha",
-                # "logaddexp",
                 "logaddexp2",
                 "bias_gelu_unary",
                 "addalpha",
@@ -114,7 +113,6 @@ def test_run_eltwise_composite_test(
     options["rad2deg"] = (0, 2 * pi)
     options["hypot"] = (1, 100)
     options["atan2"] = (-100, 100)
-    # options["logaddexp"] = (-90, 90)
     options["logaddexp2"] = (-100, 100)
     options["cbrt"] = (-1000, 1000)
     options["hardsigmoid"] = (-100, 100)

@@ -437,23 +437,6 @@ Tensor atanh(const Tensor &input_a, const MemoryConfig& output_mem_config)
     return operation::decorate_as_composite(__func__, _atanh)(input_a, output_mem_config);
 }
 
-// // logaddexp(a, b) = log(exp(a) + exp(b))
-// Tensor _logaddexp(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
-//     TT_ASSERT( (input_a.shape() == input_b.shape()) , "Both the inputs shape should be same");
-//     Tensor add_res(input_a);
-//     {
-//         Tensor exp_a   = exp(input_a, output_mem_config);
-//         Tensor exp_b   = exp(input_b, output_mem_config);
-//         add_res        = add(exp_a, exp_b, std::nullopt, output_mem_config);
-//      }
-//     Tensor result  = log(add_res, output_mem_config);
-//     return result;
-// }
-// Tensor logaddexp(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config)
-// {
-//     return operation::decorate_as_composite(__func__, _logaddexp)(input_a, input_b, output_mem_config);
-// }
-
 // logaddexp2(a, b) = log2(2^a + 2^b)
 // 2^a = exp(log(2) * a) = exp(0.6931471805599453 * a)
 // logaddexp2(a, b) = log2(exp(0.6931471805599453 * a) + exp(0.6931471805599453 * b))
