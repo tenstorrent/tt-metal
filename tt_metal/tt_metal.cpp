@@ -436,6 +436,12 @@ void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
 
 void DeallocateBuffer(Buffer &buffer) { buffer.deallocate(); }
 
+// GenerateBinaries is multithreaded via Taskflow
+// When a thread throws an exception, Taskflow does not propagate this to main thread (https://github.com/taskflow/taskflow/issues/479)
+// As a workaround when a thread hits an exception during kernel compilation it will set `error_in_generating_binaries`
+// The main thread will check this to determine whether it should throw
+std::atomic<bool> error_in_generating_binaries = false;
+
 void GenerateBinaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix, Kernel *kernel) {
     ZoneScoped;
     const std::string tracyPrefix = "GenerateBinaries_";
@@ -445,7 +451,8 @@ void GenerateBinaries(Device *device, build_kernel_for_riscv_options_t *build_op
     try {
         kernel->generate_binaries(device, build_options, op_path_suffix);
     } catch (std::runtime_error &ex) {
-        log_error(tt::LogMetal, "EXCEPTION in GenerateBinaries: ", ex.what());
+        log_error("Failed to generate binaries for {} {}", kernel->name(), ex.what());
+        error_in_generating_binaries = true;
     }
 }
 
@@ -591,6 +598,9 @@ bool CompileProgram(Device *device, Program &program) {
         }
 
         GetExecutor().run(tf).wait();
+    }
+    if (error_in_generating_binaries) {
+        throw std::runtime_error("Error in compiling kernels");
     }
     {
         tf::Taskflow tf;
