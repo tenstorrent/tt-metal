@@ -394,16 +394,20 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
                             stride_h == 2 && stride_w == 2 &&
                             num_blocks_weight_w == 1);
 
-    uint32_t num_weight_tiles_in_cb = weight_block_h_ntiles * weight_block_w_ntiles;
+    uint32_t num_weight_cb_tiles = weight_block_h_ntiles * weight_block_w_ntiles * num_blocks_act_w;
     if (rn50_first_conv) {
-        num_weight_tiles_in_cb = weight_block_h_ntiles * weight_block_w_ntiles * num_blocks_weight_w * num_blocks_act_w;
+        num_weight_cb_tiles = weight_block_h_ntiles * weight_block_w_ntiles * num_blocks_weight_w * num_blocks_act_w;
+    }
+    uint32_t num_act_cb_tiles = act_block_h_ntiles * act_block_w_ntiles;
+    if (conv_act_size_c < 256) {
+        num_act_cb_tiles = num_act_cb_tiles * 2; // double buffered
     }
     create_CBs(
         program,
         a.device(),
         core,
-        act_block_h_ntiles * act_block_w_ntiles * 2, // row major act cb, double bufferred
-        num_weight_tiles_in_cb, // tiled weight cb
+        num_act_cb_tiles, // row major act cb
+        num_weight_cb_tiles, // tiled weight cb
         act_block_h_ntiles * act_block_w_ntiles, // tiled act cb
         act_block_h_ntiles * weight_block_w_ntiles, // math output cb
         weight_block_w_ntiles, // reblock cb
@@ -442,7 +446,7 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
         compute_kernel = "libs/tt_dnn/op_library/conv/kernels/bmm_tilize_untilize_all_weights_in_l1_single_output_block_width_dim.cpp";
     } else {
         reader_kernel = "libs/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast_for_col_major_conv_out_blocks.cpp";
-        compute_kernel = "libs/tt_dnn/op_library/conv/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
+        compute_kernel = "libs/tt_dnn/op_library/conv/kernels/conv_bmm_tilize_col_major_out_blocks_reuse_weights.cpp";
     }
     reader_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
             (uint32_t) stride_h, (uint32_t) stride_w, (uint32_t) conv_act_size_w, (uint32_t) conv_output_size_w,
@@ -536,7 +540,7 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
         if (rn50_first_conv) {
             writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_and_reader_weights_resnet50_first_conv_tiled_out.cpp";
         } else {
-            writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_tiled_out_reader_conv_weights_tiled_col_to_rm_blocks.cpp";
+            writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_tiled_out_reader_conv_weights_tiled_col_to_rm_blocks_read_weight_slices_once.cpp";
         }
         writer_compile_time_args = {
             (uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
