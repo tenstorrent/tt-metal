@@ -21,8 +21,11 @@ from tt_lib.fused_ops.max_pool import compute_max_pool_shape
 from models.helper_funcs import ResnetLinear as TtLinear
 from tt_lib.fused_ops.softmax import softmax as TtSoftmax
 from tt_lib.fused_ops.conv import resnet50_first_conv, resnet50_1x1_conv_as_matmul, resnet50_optimized_conv
-from models.utility_functions import _nearest_32
+from models.utility_functions import _nearest_32, profiler
 from tt_lib.fallback_ops import fallback_ops
+
+def do_nothing_op(x):
+    return x
 
 def _nearest_y(x, y):
     return math.ceil(x / y) * y
@@ -505,8 +508,21 @@ class Bottleneck(nn.Module):
         self.conv3 = resnet50_1x1_conv_as_matmul(conv3_weight.reshape(-1).tolist(), self.conv3_params, self.device, conv3_bias.tolist(), matmul_config)
         self.conv3_output_shape = compute_conv_output_shape(self.conv3_params, self.conv2_output_shape)
 
-    def run_forward(self, x: torch.Tensor):
-        identity = x
+        self.downsample_or_noop = self.downsample_conv_on_tt
+        if self.downsample_or_noop is None:
+            self.downsample_or_noop = do_nothing_op
+        else:
+            if(self.downsample_params[2] != 1 or self.downsample_params[4] != 1 or self.downsample_params[6] != 0):
+                # this downsample conv requires row major input
+                def downsample_conv_op_wrapper(op):
+                    def downsample_conv_op_with_formatting(x):
+                        x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
+                        x = x.reshape(self.module_input_shape[0], self.module_input_shape[1], self.module_input_shape[2], self.module_input_shape[3])
+                        return op(x)
+                    return downsample_conv_op_with_formatting
+                self.downsample_or_noop = downsample_conv_op_wrapper(self.downsample_conv_on_tt)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         # conv1 is 1x1 conv
         #print("Running conv1")
         out = self.conv1(x)
@@ -521,16 +537,15 @@ class Bottleneck(nn.Module):
         #print("Running conv3")
         out = self.conv3(out)
 
-        if self.downsample_conv_on_tt is not None:
-            if(self.downsample_params[2] != 1 or self.downsample_params[4] != 1 or self.downsample_params[6] != 0):
-                x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
-                x = x.reshape(self.module_input_shape[0], self.module_input_shape[1], self.module_input_shape[2], self.module_input_shape[3])
-            identity = self.downsample_conv_on_tt(x)
-            x.deallocate()
+        # if self.downsample_conv_on_tt is not None:
+        #     if(self.downsample_params[2] != 1 or self.downsample_params[4] != 1 or self.downsample_params[6] != 0):
+        #         x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
+        #         x = x.reshape(self.module_input_shape[0], self.module_input_shape[1], self.module_input_shape[2], self.module_input_shape[3])
+        #     identity = self.downsample_conv_on_tt(x)
+        x = self.downsample_or_noop(x)
 
         fused_activations = [tt_lib.tensor.FusibleActivation.RELU]
-        out = tt_lib.tensor.add_without_autoformat(out, identity, fused_activations, output_mem_config=self.memory_config)
-        identity.deallocate()
+        out = tt_lib.tensor.add_without_autoformat(out, x, fused_activations, output_mem_config=self.memory_config)
         # out = self.relu(out, self.memory_config)
         return out
 
@@ -609,6 +624,29 @@ class ResNet(nn.Module):
         self.layer2, self.layer2_output_shape = self._make_layer(block, 128, layers[1], stride=2, dilate=replace_stride_with_dilation[0], name="layer2", state_dict=state_dict, layer_input_shape=self.layer1_output_shape, batch_size=batch_size)
         self.layer3, self.layer3_output_shape = self._make_layer(block, 256, layers[2], stride=2, dilate=replace_stride_with_dilation[1], name="layer3", state_dict=state_dict, layer_input_shape=self.layer2_output_shape, batch_size=batch_size)
         self.layer4, self.layer4_output_shape = self._make_layer(block, 512, layers[3], stride=2, dilate=replace_stride_with_dilation[2], name="layer4", state_dict=state_dict, layer_input_shape=self.layer3_output_shape, batch_size=batch_size)
+
+        # All modules in RN50 are unrolled here. One variable for each module. Only specific number of modules supported - layers MUST equal to [3, 4, 6, 3]
+        assert(layers == [3, 4, 6, 3]);
+        self.layer1_module1 = self.layer1[0]
+        self.layer1_module2 = self.layer1[1]
+        self.layer1_module3 = self.layer1[2]
+
+        self.layer2_module1 = self.layer2[0]
+        self.layer2_module2 = self.layer2[1]
+        self.layer2_module3 = self.layer2[2]
+        self.layer2_module4 = self.layer2[3]
+
+        self.layer3_module1 = self.layer3[0]
+        self.layer3_module2 = self.layer3[1]
+        self.layer3_module3 = self.layer3[2]
+        self.layer3_module4 = self.layer3[3]
+        self.layer3_module5 = self.layer3[4]
+        self.layer3_module6 = self.layer3[5]
+
+        self.layer4_module1 = self.layer4[0]
+        self.layer4_module2 = self.layer4[1]
+        self.layer4_module3 = self.layer4[2]
+
         self.avgpool = TtAvgPool(self.device)
 
         fc_weight = pad_weight(state_dict[f"{self.base_address_with_dot}fc.weight"])
@@ -671,6 +709,10 @@ class ResNet(nn.Module):
             [act_block_h_datums, weight_block_w_datums, out_subblock_h_datums, out_subblock_w_datums] = hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_downsample_conv[batch_size][(downsample_output_padded_face_size, downsample_output_channels)]
 
             is_downsample_1x1_conv = stride == 1
+            is_1x1_downsample_conv_sanity_check = self.downsample_params[2] == 1 and self.downsample_params[3] == 1 and \
+                                    self.downsample_params[4] == 1 and self.downsample_params[5] == 1 and \
+                                    self.downsample_params[6] == 0 and self.downsample_params[7] == 0
+            assert(is_1x1_downsample_conv_sanity_check == is_downsample_1x1_conv)
             matmul_config = None
             if is_downsample_1x1_conv:
                 assert (downsample_output_padded_face_size, self.inplanes, downsample_output_channels) in hardcoded_matmul_config_conv[batch_size]
@@ -733,23 +775,32 @@ class ResNet(nn.Module):
         last_layer_shape = layers[-1].conv3_output_shape
         return layers, last_layer_shape
 
-    def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        #permute_key="permute_key"
+        #input_tensor_construct_key="input_tensor_construct_key"
+        #misc_key = "misc_key"
         #assert x.shape[3] == 224 and x.shape[2] == 224
+        #profiler.start(permute_key)
         x = torch.permute(x, (0, 2, 3, 1))
+        #profiler.end(permute_key)
+        #profiler.start(input_tensor_construct_key)
         x = tt_lib.tensor.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                tt_lib.tensor.DataType.BFLOAT16,
-                tt_lib.tensor.Layout.ROW_MAJOR)
+                x,
+                tt_lib.tensor.DataType.BFLOAT16)
+        #profiler.end(input_tensor_construct_key)
+        #profiler.start(misc_key)
         extra_padding_for_32B_alignment = 25
         # Pre-pad input shape
-        act_shape_height_width_channel_padded = [x.shape()[0], x.shape()[1] + 6, x.shape()[2] + 7 + extra_padding_for_32B_alignment, _nearest_y(x.shape()[3], 4)] # first conv channel is padded to 4 only
+        act_shape_height_width_channel_padded = \
+        [x.shape()[0], x.shape()[1] + 6, x.shape()[2] + 7 + extra_padding_for_32B_alignment, _nearest_y(x.shape()[3], 4)] # first conv channel is padded to 4 only
+        #profiler.end(misc_key)
+
         x = x.pad(act_shape_height_width_channel_padded, (0, 3, 3, 0), 0)
         original_A_cl_host_shape = x.shape()
         x = x.reshape(x.shape()[0], x.shape()[1], 1, x.shape()[2] * x.shape()[3])
         #print("A_cl_host shape after re-shape (only for transfer)", x.shape())
 
-        x = x.to(self.device, self.memory_config)
+        x = x.to(self.device, self.memory_config) # to l1
         # re-shape back to original shape (N, H, W, C)
         x = x.reshape(original_A_cl_host_shape[0], original_A_cl_host_shape[1], original_A_cl_host_shape[2], original_A_cl_host_shape[3])
         #print("A_cl_device shape into OP", x.shape())
@@ -763,14 +814,26 @@ class ResNet(nn.Module):
         x = x.reshape(1, 1, self.maxpool_output_shape[0] * self.maxpool_output_shape[1] * self.maxpool_output_shape[2], self.maxpool_output_shape[3])
         x = format_tensor(x, tt_lib.tensor.Layout.TILE, self.device, self.memory_config)
 
-        for layer in self.layer1:
-            x = layer.run_forward(x)
-        for layer in self.layer2:
-            x = layer.run_forward(x)
-        for layer in self.layer3:
-            x = layer.run_forward(x)
-        for i,layer in enumerate(self.layer4):
-            x = layer.run_forward(x)
+        x = self.layer1_module1(x)
+        x = self.layer1_module2(x)
+        x = self.layer1_module3(x)
+
+        x = self.layer2_module1(x)
+        x = self.layer2_module2(x)
+        x = self.layer2_module3(x)
+        x = self.layer2_module4(x)
+
+        x = self.layer3_module1(x)
+        x = self.layer3_module2(x)
+        x = self.layer3_module3(x)
+        x = self.layer3_module4(x)
+        x = self.layer3_module5(x)
+        x = self.layer3_module6(x)
+
+        x = self.layer4_module1(x)
+        x = self.layer4_module2(x)
+        x = self.layer4_module3(x)
+
         x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
         x = x.reshape(self.batch_size, x.shape()[1], (int) (x.shape()[2]/self.batch_size), x.shape()[3])
         x = format_tensor(x, tt_lib.tensor.Layout.TILE, self.device, self.memory_config)
@@ -788,8 +851,11 @@ class ResNet(nn.Module):
         # x = x.to(tt_lib.tensor.Layout.ROW_MAJOR)
         desired_shape = [x.shape()[0], x.shape()[1], 1, 1000]
         x = x.unpad((0, 0, 0, 0), (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1) )
+        #tt_to_torch_key = "tt_to_torch_key"
+        #profiler.start(tt_to_torch_key)
         x = x.to_torch().to(torch.float)
+        #profiler.end(tt_to_torch_key)
+        #print("Printing profiler")
+        #profiler.print()
+        #print("Done printing profiler")
         return x
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self._forward_impl(x)
