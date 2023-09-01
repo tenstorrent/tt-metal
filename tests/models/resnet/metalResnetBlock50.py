@@ -774,11 +774,19 @@ class ResNet(nn.Module):
         x = x.reshape(self.batch_size, x.shape()[1], (int) (x.shape()[2]/self.batch_size), x.shape()[3])
         x = format_tensor(x, tt_lib.tensor.Layout.TILE, self.device, self.memory_config)
         x = self.avgpool(x)
+
+        unpadded_shape = [x.shape()[0], x.shape()[1], 1, x.shape()[3]]
+        unpadded_shape_end = [x.shape()[0]-1, x.shape()[1]-1, 1-1, x.shape()[3]-1]
+        x = tt_lib.tensor.untilize_with_unpadding(x, output_tensor_end=unpadded_shape_end, output_tensor_start=[0,0,0,0], output_mem_config=self.memory_config)
+        x = x.reshape(1, x.shape()[1], self.batch_size * x.shape()[2], x.shape()[3])
+        x = tt_lib.tensor.tilize_with_zero_padding(x)
         x = self.fc(x)
-        desired_shape = [x.shape()[0], x.shape()[1], 1, 1000]
+        x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
+        x = x.reshape(self.batch_size, x.shape()[1], (int) (x.shape()[2] / self.batch_size), x.shape()[3])
         x = x.cpu()
-        assert x.layout() != tt_lib.tensor.Layout.ROW_MAJOR
-        x = x.to(tt_lib.tensor.Layout.ROW_MAJOR)
+        # assert x.layout() != tt_lib.tensor.Layout.ROW_MAJOR
+        # x = x.to(tt_lib.tensor.Layout.ROW_MAJOR)
+        desired_shape = [x.shape()[0], x.shape()[1], 1, 1000]
         x = x.unpad((0, 0, 0, 0), (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1) )
         x = x.to_torch().to(torch.float)
         return x
