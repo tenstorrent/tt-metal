@@ -279,6 +279,12 @@ struct CompileState {
         if (std::getenv("TT_METAL_WATCHER") != nullptr) {
             result += " -DWATCHER_ENABLED";
         }
+        if (std::getenv("TT_DEBUG_PRINT_CORES") != nullptr) {
+            if (profile_kernel) {
+                log_fatal(tt::LogBuildKernels, "Cannot enable debug printing and profiling");
+            }
+            result += " -DDEBUG_PRINT_ENABLED";
+        }
 
         result += " -DLOCAL_MEM_EN=0 ";
         return result;
