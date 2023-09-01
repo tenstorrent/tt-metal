@@ -349,8 +349,8 @@ def run_test_FalconCausalLM_end_to_end(
     compile_time = first_iter_time - second_iter_time
     logger.info(f"falcon {comment} inference time: {second_iter_time}")
     logger.info(f"falcon {comment} compile time: {compile_time}")
-    assert second_iter_time < expected_inference_time, "vit is too slow"
-    assert compile_time < expected_compile_time, "vit compile time is too slow"
+    assert second_iter_time < expected_inference_time, "Falcon is too slow"
+    assert compile_time < expected_compile_time, "Falcon compile time is too slow"
 
 
     if does_pass:
@@ -367,11 +367,12 @@ def run_test_FalconCausalLM_end_to_end(
     "llm_mode, batch, seq_len, kv_cache_len, expected_inference_time",
     (
         ("prefill", 1, 128, 0, 0.34),
-        ("decode", 32, 1, 128, 0.33),
+        ("prefill", 1, 256, 0, 0.40),
+        ("decode", 32, 1, 128, 0.36),
         ("decode", 32, 1, 1024, 0.36),
         ("decode", 32, 1, 2047, 0.47),
     ),
-    ids=["prefill_seq128", "decode_batch32", "decode_batch32_1024", "decode_batch32_2047"],
+    ids=["prefill_seq128", "prefill_seq256", "decode_batch32", "decode_batch32_1024", "decode_batch32_2047"],
 )
 @pytest.mark.parametrize(
     "num_layers, pcc",
