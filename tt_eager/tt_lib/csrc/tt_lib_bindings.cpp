@@ -2493,6 +2493,13 @@ void TensorModule(py::module &m_tensor) {
         Perform a falcon_lm_head non-batched matmul ``A x B`` with two tensors. This invokes the MULTI_CORE matmul parallelization. This parallelization does not support bias option yet.
     )doc");
 
+    // Custom Resnet matmuls
+    m_tensor.def("resnet_matmul", &resnet_matmul,
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, R"doc(
+        Perform a resnet_matmul with fused bias.
+    )doc");
+
+
     // Custom Generic NLP TMs
     // TODO: Uplift nlp_create_qkv_heads to support generic qkv num_heads and head_dim
     // This op should support arbitrary B and S divisible by 32 on DRAM; on L1, might error out due to space

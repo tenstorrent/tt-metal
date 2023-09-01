@@ -17,7 +17,8 @@ from tt_lib.utils import pad_weight
 from tt_lib.fused_ops.average_pool import run_avg_pool_on_device_wrapper as TtAvgPool
 from tt_lib.fused_ops.max_pool import run_max_pool_on_device_wrapper as TtMaxPool
 from tt_lib.fused_ops.max_pool import compute_max_pool_shape
-from tt_lib.fused_ops.linear import Linear as TtLinear
+# from tt_lib.fused_ops.linear import Linear as TtLinear
+from models.helper_funcs import ResnetLinear as TtLinear
 from tt_lib.fused_ops.softmax import softmax as TtSoftmax
 from tt_lib.fused_ops.conv import resnet50_first_conv, resnet50_1x1_conv_as_matmul, resnet50_optimized_conv
 from models.utility_functions import _nearest_32
@@ -615,7 +616,7 @@ class ResNet(nn.Module):
         fc_bias = pad_weight(state_dict[f"{self.base_address_with_dot}fc.bias"])
         fc_bias = tt_lib.tensor.Tensor(fc_bias.reshape(-1).tolist(), fc_bias.shape, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.Layout.ROW_MAJOR).to(tt_lib.tensor.Layout.TILE)
 
-        self.fc = TtLinear(512 * block.expansion, 1024, fc_weight, fc_bias, self.device) # num_classes = 1000
+        self.fc = TtLinear(512 * block.expansion, 1024, fc_weight, fc_bias, output_mem_config=self.memory_config, device=self.device) # num_classes = 1000
         # self.fc = nn.Linear(512 * block.expansion, num_classes)
 
 

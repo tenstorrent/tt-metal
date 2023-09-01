@@ -213,7 +213,9 @@ void kernel_main() {
         #ifdef FUSE_BIAS
             // Only read bias on first batch
             if (b == 0) {
+                #ifndef SKIP_MCAST
                 *(in3_mcast_receiver_semaphore_addr_ptr) = VALID;
+                #endif
                 // Operand 1
                 cb_reserve_back(cb_id_in3, in1_block_w);
                 l1_write_addr_in3 = get_write_ptr(cb_id_in3);

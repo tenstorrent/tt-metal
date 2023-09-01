@@ -94,6 +94,12 @@ Tensor falcon_dense_h_to_4h_matmul (const Tensor &input_tensor_a, const Tensor &
 Tensor falcon_lm_head_matmul (const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype=std::nullopt);
 
 /**
+ * Resnet matmul for linear
+ */
+Tensor resnet_matmul(const Tensor& input_a, const Tensor& input_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype = std::nullopt);
+
+
+/**
  * Generalized blocked matmul with support for tilize and untilize and mixed-prec
  */
 struct BMMTilizeUntilize {
