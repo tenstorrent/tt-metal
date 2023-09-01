@@ -10,6 +10,7 @@
 #include "tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tensor/tensor_utils.hpp"
+#include "tensor/owned_buffer_functions.hpp"
 #include "detail/util.hpp"
 
 #define DEBUG_SERVER 0
@@ -176,6 +177,12 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core(const Tensor &input, Tens
                                         out_cb_npages * out_cb_pagesize,
                                         out_df);
 
+    // Construct const buffer with -INF
+    uint32_t const_buffer_size = 32;
+    auto minus_inf_const_buffer = owned_buffer::create(std::vector<bfloat16>(const_buffer_size, bfloat16(0xf7ff)));
+    const Tensor minus_inf_const_tensor = Tensor(OwnedStorage{minus_inf_const_buffer}, Shape({1, 1, 1, const_buffer_size}), DataType::BFLOAT16, Layout::ROW_MAJOR).to(device);
+    auto minus_inf_const_tensor_addr = minus_inf_const_tensor.buffer()->address();
+
     #if 0
     {   // debug
         log_debug("in_cb :: PS = {}, NP = {}", in_cb_pagesize, in_cb_npages);
@@ -217,8 +224,12 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core(const Tensor &input, Tens
         log_debug("using ncores_hw: {}", ncores_hw);
         log_debug("out_h_per_core: {}", out_h_per_core);
         log_debug("out_h_per_core_cliff: {}", out_h_per_core_cliff);
+
+        log_debug("minus_inf_const_tensor_addr: {}", minus_inf_const_tensor_addr);
+        log_debug("minus_inf_const_tensor_size: {}", minus_inf_const_buffer.size());
     }
     #endif
+
 
     /**
      * Reader Kernel: input rows -> input cb
@@ -250,7 +261,11 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core(const Tensor &input, Tens
                                             0,          // start_out_h_i
                                             0,          // end_out_h_i
                                             0,          // base_start_h
-                                            0};         // start_out_row_id
+                                            0,          // start_out_row_id
+                                            minus_inf_const_tensor_addr,
+                                            const_buffer_size * in_nbytes,
+                                            (in_cb_page_nelems_padded * out_nelems * 2) >> 5    // num rows to fill in in_cb
+                                            };
     auto reader_config = DataMovementConfig{.processor = DataMovementProcessor::RISCV_1,
                                             .noc = NOC::RISCV_1_default,
                                             .compile_args = reader_ct_args};
@@ -356,8 +371,6 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core(const Tensor &input, Tens
             SetRuntimeArgs(program, writer_kernel, core, writer_rt_args);
         }
     }
-
-    log_debug("Program constructed!!");
 
     auto override_runtime_args_callback =
         [reader_kernel, writer_kernel, ncores_hw, ncores_w](const Program& program,

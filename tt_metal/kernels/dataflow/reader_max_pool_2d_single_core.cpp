@@ -21,6 +21,16 @@ inline bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {
     return true;
 }
 
+template<bool is_in_dram>
+inline bool fill_with_val_async(uint64_t in_noc_addr, uint32_t begin_addr, int32_t nrows, uint32_t row_nbytes) {
+    uint32_t curr_addr = begin_addr;
+    for (int32_t row_i = 0; row_i < nrows; ++ row_i) {
+        noc_async_read(in_noc_addr, curr_addr, row_nbytes);
+        curr_addr += row_nbytes;
+    }
+    return true;
+}
+
 // inline void reset_cb(uint32_t cb_id, uint16_t val) {
 //     uint32_t wr_ptr = cb_interface[cb_id].fifo_wr_ptr;
 //     uint32_t sz_nbytes = cb_interface[cb_id].fifo_size >> 4;
@@ -54,7 +64,7 @@ void kernel_main() {
     const uint32_t window_h = get_arg_val<uint32_t>(2);
     const uint32_t window_w = get_arg_val<uint32_t>(3);
     // product of window_h and window_w
-    const uint32_t window_hw = get_arg_val<uint32_t>(4);
+    const int32_t window_hw = get_arg_val<int32_t>(4);
     // window_hw_padded = window_hw rounded up to the tile size (can be multiple tiles)
     const uint32_t window_hw_padded = get_arg_val<uint32_t>(5);
 
@@ -92,6 +102,10 @@ void kernel_main() {
     const uint32_t start_out_h_i = get_arg_val<uint32_t>(30);
     const uint32_t end_out_h_i = get_arg_val<uint32_t>(31);
     const int32_t base_start_h = get_arg_val<int32_t>(32);
+
+    const uint32_t minus_inf_buffer_addr = get_arg_val<uint32_t>(34);
+    const uint32_t minus_inf_buffer_nbytes = get_arg_val<uint32_t>(35);
+    const uint32_t in_cb_nrows = get_arg_val<uint32_t>(36);
 
     constexpr bool is_in_dram = get_compile_time_arg_val(0) == 1;
     // value of 1 in bf16 in a uin32_t
@@ -131,8 +145,15 @@ void kernel_main() {
 
     // fill in_cb_id rows with -inf
     uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
-    // TODO: optimize this
-    fill_with_val(in_l1_write_addr, in_cb_page_nelems_padded * out_nelems * 2, 0xff7f);
+    const InterleavedPow2AddrGen<is_in_dram> s_const = {
+        .bank_base_address = minus_inf_buffer_addr,
+        .log_base_2_of_page_size = 6        // TODO: generalize, currently hardcorded for 1 row of 32 16b values
+    };
+    uint32_t row_nbytes = 64;
+    uint32_t src_row_id = 0;
+    uint64_t minus_inf_in_noc_addr = get_noc_addr(src_row_id, s_const);
+    fill_with_val_async<is_in_dram>(minus_inf_in_noc_addr, in_l1_write_addr, in_cb_nrows, row_nbytes);  //, minus_inf_buffer_nbytes);
+    noc_async_read_barrier();
 
     kernel_profiler::mark_time(8);
 
@@ -162,7 +183,7 @@ void kernel_main() {
                     int32_t end_w_min = end_w < in_w ? end_w : in_w;
 
                     // read at most window_hw input rows into CB
-                    uint32_t read_rows = 0;
+                    int32_t read_rows = 0;
                     uint32_t in_hw_row_id_base = in_w * start_h_max;  // TODO: get rid of *
                     uint32_t curr_in_l1_write_addr = in_l1_write_addr;
                     for (int32_t h = start_h_max; h < end_h_min; ++ h) {
@@ -178,9 +199,9 @@ void kernel_main() {
                         in_hw_row_id_base += in_w;
                     }
                     // TODO: this should be handled by untilize + edge pad (previous OP)
-                    if (read_rows != window_hw) {
+                    if (read_rows < window_hw) {
                         // if needed, fill the remainining (window_hw - read_row_id) with -INF
-                        fill_with_val(curr_in_l1_write_addr, (window_hw - read_rows) * in_c, 0xff7f);   // TODO: get rid of *
+                        fill_with_val_async<is_in_dram>(minus_inf_in_noc_addr, curr_in_l1_write_addr, window_hw - read_rows, in_nbytes_c);  //, minus_inf_buffer_nbytes);
                     }
                     in_l1_write_addr += in_cb_pagesize;
                     curr_start_w += stride_w; // increment by stride_w
