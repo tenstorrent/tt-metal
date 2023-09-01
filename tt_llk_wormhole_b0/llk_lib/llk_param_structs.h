@@ -65,8 +65,6 @@ struct llk_math_reduce_params_t {
 
 using llk_relu_config_t = hlk_relu_config_t;
 using llk_relu_config_u = hlk_relu_config_u; 
-using llk_pack_shifted_params_t = hlk_pack_shifted_params_t;
-using llk_pack_shifted_state_t = hlk_pack_shifted_state_t;
 
 struct llk_pack_params_t {
     std::uint32_t pack_output;
