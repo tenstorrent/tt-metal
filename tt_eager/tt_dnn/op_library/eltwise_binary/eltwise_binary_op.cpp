@@ -47,7 +47,10 @@ std::map<string, string> get_defines(BinaryOpType op_type, const std::optional<s
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GELU, 0));
             break;
         case BinaryOpType::LOGADDEXP:
-            defines.merge(eltwise_unary_op_utils::get_pre_defines(UnaryOpType::EXP));
+            // PRE_0 ====> Applies prescaling for both the inputs
+            // PRE_IN1_0 ===> Applies prescaling for first input
+            // PRE_IN2_0 ====> Applies prescaling for second input
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP, {}, "PRE_0"));
             op_name = "add_tiles";
             op_code = "0";
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::LOG));

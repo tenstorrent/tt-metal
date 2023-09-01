@@ -188,18 +188,6 @@ std::map<string, string> get_defines(UnaryOpType op_type, std::optional<float> p
     return defines;
 }
 
-std::map<string, string> get_pre_defines(UnaryOpType op_type, std::optional<float> param0, std::string id, std::string idst) {
-    std::pair<string, string> op_init_and_name = get_op_init_and_func(op_type, param0, idst);
-    std::string init_def = fmt::format("SFPU_OP_PRE_INIT_{}", id);
-    std::string func_def = fmt::format("SFPU_OP_PRE_FUNC_{}", id);
-    std::map<std::string,std::string> defines = get_defines_impl(init_def, func_def, op_init_and_name.first, op_init_and_name.second);
-    // update split eltwise ops include macros
-    if ( op_type == UnaryOpType::ERFC
-            || op_type == UnaryOpType::ERF ) {
-            defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
-    }
-    return defines;
-}
 
 std::pair<string, string> get_op_init_and_func(UnaryOpType op_type, std::optional<float> param0, std::string idst) {
    return param0.has_value() ? get_op_init_and_func_parameterized(op_type, param0.value(), idst) : get_op_init_and_func_default(op_type, idst);
