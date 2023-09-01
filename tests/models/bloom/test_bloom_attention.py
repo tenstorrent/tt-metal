@@ -2,29 +2,32 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
 import torch
 import tt_lib
+import pytest
 
 from transformers import BloomForCausalLM
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from models.utility_functions import (
+    comp_pcc,
+    comp_allclose,
+    torch_to_tt_tensor_rm,
+    tt_to_torch_tensor,
+)
 from loguru import logger
-
-import tests.models.bloom.bloom_utils as bloom_utils
-import tests.models.bloom.bloom_attention as bloom_attention
+from models.bloom.tt.bloom_attention import TtBloomAttention
 
 
-def run_bloom_attention_test(device):
+@pytest.mark.parametrize(
+    "pcc",
+    ((0.99),),
+)
+def test_bloom_attention(pcc, reset_seeds):
+    device = tt_lib.device.CreateDevice(0)
+    tt_lib.device.InitializeDevice(device)
+    tt_lib.device.SetDefaultDevice(device)
+
     hugging_bloom_reference_model = BloomForCausalLM.from_pretrained(
-        "bigscience/bloom-560m", torchscript=False
+        "bigscience/bloom-560m"
     )
     hugging_bloom_reference_model.eval()
 
@@ -34,15 +37,12 @@ def run_bloom_attention_test(device):
     base_address = f"transformer.h.{block}.self_attention"
     hidden_size = config.hidden_size
 
-    tt_bloom_attention = bloom_attention.TtBloomAttention(
-        config, state_dict, base_address, device
-    )
+    tt_bloom_attention = TtBloomAttention(config, state_dict, base_address, device)
     pt_bloom_attention = hugging_bloom_reference_model.transformer.h[
         block
     ].self_attention
 
     # Prepare input
-    torch.manual_seed(0)
     seq_len = 62
 
     hidden_states = ((torch.rand(1, seq_len, hidden_size) * 2) - 1) / hidden_size
@@ -50,38 +50,33 @@ def run_bloom_attention_test(device):
     alibi = ((torch.rand(config.n_head, seq_len, seq_len) * 2) - 1) / seq_len
     attention_mask = torch.randint(0, 2, (1, 1, seq_len, seq_len))
 
-    pt_out = pt_bloom_attention.forward(hidden_states, residual, alibi, attention_mask)[
-        0
-    ]
+    tt_hidden_states = torch_to_tt_tensor_rm(hidden_states, device)
+    tt_residual = torch_to_tt_tensor_rm(residual, device)
+    tt_alibi = torch_to_tt_tensor_rm(alibi, device)
+    tt_attention_mask = torch_to_tt_tensor_rm(attention_mask, device)
 
-    tt_hidden_states = bloom_utils.torch2tt_tensor(hidden_states, device)
-    tt_residual = bloom_utils.torch2tt_tensor(residual, device)
-    tt_alibi = bloom_utils.torch2tt_tensor(alibi, device)
+    with torch.no_grad():
+        # pytorch output
+        pt_out = pt_bloom_attention(hidden_states, residual, alibi, attention_mask)[0]
 
-    tt_out = tt_bloom_attention.forward(
-        device, tt_hidden_states, tt_residual, tt_alibi, attention_mask
-    )[0]
+        # tt output
+        tt_out = tt_bloom_attention(
+            tt_hidden_states, tt_residual, tt_alibi, tt_attention_mask
+        )[0]
 
-    tt_out_converted = bloom_utils.tt2torch_tensor(tt_out)
+    tt_out_converted = tt_to_torch_tensor(tt_out)
     pt_out_unsqueezed = pt_out.unsqueeze(0)
 
-    does_pass, pcc_message = comp_pcc(pt_out_unsqueezed, tt_out_converted, 0.99)
+    does_pass, pcc_message = comp_pcc(pt_out_unsqueezed, tt_out_converted, pcc)
+
+    logger.info(comp_allclose(pt_out_unsqueezed, tt_out_converted))
     logger.info(pcc_message)
+
+    tt_lib.device.CloseDevice(device)
 
     if does_pass:
         logger.info("bloom_attention: Passed!")
     else:
         logger.warning("bloom_attention: Failed!")
 
-    assert does_pass
-
-
-def test_bloom_attention():
-    device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
-    run_bloom_attention_test(device)
-    tt_lib.device.CloseDevice(device)
-
-
-if __name__ == "__main__":
-    test_bloom_attention()
+    assert does_pass, f"bloom_attention output does not meet PCC requirement {pcc}."

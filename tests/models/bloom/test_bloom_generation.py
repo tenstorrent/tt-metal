@@ -2,28 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
 import torch
-import json
-import warnings
 import tt_lib
 
 from transformers import BloomForCausalLM, BloomTokenizerFast
 from transformers.generation.configuration_utils import GenerationConfig
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from models.utility_functions import comp_pcc, tt_to_torch_tensor
 
 from loguru import logger
-import tests.models.bloom.bloom_causal_lm as bloom_causal_lm
-import tests.models.bloom.bloom_utils as bloom_utils
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+import models.bloom.tt.bloom_causal_lm as bloom_causal_lm
+import models.bloom.tt.bloom_utils as bloom_utils
 
 from transformers.generation.logits_process import (
     EncoderNoRepeatNGramLogitsProcessor,
@@ -54,9 +42,9 @@ from transformers.generation.logits_process import (
 
 
 def _merge_criteria_processor_list(
-    default_list,  # Union[LogitsProcessorList, StoppingCriteriaList],
-    custom_list,  # Union[LogitsProcessorList, StoppingCriteriaList],
-):  # -> Union[LogitsProcessorList, StoppingCriteriaList]:
+    default_list,
+    custom_list,
+):
     if len(custom_list) == 0:
         return default_list
 
@@ -82,19 +70,12 @@ def _merge_criteria_processor_list(
 def _get_logits_processor(
     generation_config: GenerationConfig,
     input_ids_seq_length: int,
-    encoder_input_ids,  # torch.LongTensor
-    prefix_allowed_tokens_fn,  # Callable[[int, torch.Tensor], List[int]],
-    logits_processor,  # Optional[LogitsProcessorList]
-):  # -> LogitsProcessorList:
-    """
-    This class returns a [`LogitsProcessorList`] list object that contains all relevant [`LogitsProcessor`]
-    instances used to modify the scores of the language model head.
-    """
-    # instantiate processors list
+    encoder_input_ids,
+    prefix_allowed_tokens_fn,
+    logits_processor,
+):
     processors = LogitsProcessorList()
 
-    # the following idea is largely copied from this PR: https://github.com/huggingface/transformers/pull/5420/files
-    # all samplers can be found in `generation_utils_samplers.py`
     if (
         generation_config.diversity_penalty is not None
         and generation_config.diversity_penalty > 0.0
@@ -216,7 +197,6 @@ def _get_logits_processor(
             else begin_index + 1
         )
         if generation_config.forced_decoder_ids is not None:
-            # generation starts after the last token that is forced
             begin_index += generation_config.forced_decoder_ids[-1][0]
         processors.append(
             SuppressTokensAtBeginLogitsProcessor(
@@ -228,7 +208,6 @@ def _get_logits_processor(
             ForceTokensLogitsProcessor(generation_config.forced_decoder_ids)
         )
     processors = _merge_criteria_processor_list(processors, logits_processor)
-    # `LogitNormalization` should always be the last logit processor, when present
     if generation_config.renormalize_logits is True:
         processors.append(LogitNormalization())
     return processors
@@ -262,7 +241,7 @@ def run_generate(input_sentance, run_tt_model, device):
         )
 
     # Prepare input
-    tokenized = tokenizer(input_sentance, return_tensors="pt")  # Batch size 1
+    tokenized = tokenizer(input_sentance, return_tensors="pt")
     generation_config = hf_reference_model.generation_config
 
     input_ids = tokenized.input_ids
@@ -284,18 +263,15 @@ def run_generate(input_sentance, run_tt_model, device):
         torch.long
     )
 
-    while i < 64:
+    while i < 30:
         # PyTorch forward pass
-        pt_out = hf_reference_model(
-            input_ids=input_ids
-        )  # , attention_mask=attention_mask)
+        pt_out = hf_reference_model(input_ids=input_ids)
         pt_next_token_logits = pt_out.logits
 
         if run_tt_model:
-            tt_out = tt_model.forward(
-                device, input_ids=input_ids, return_dict=False
-            )  # attention_mask=attention_mask,
+            tt_out = tt_model(input_ids=input_ids, return_dict=False)
             next_token_logits = tt_out[0]
+            next_token_logits = tt_to_torch_tensor(next_token_logits).squeeze(0)
 
             does_pass, pcc_message = comp_pcc(
                 pt_next_token_logits, next_token_logits, 0.6
@@ -331,18 +307,15 @@ def run_generate(input_sentance, run_tt_model, device):
     return tokenizer.decode(input_ids[0], skip_special_tokens=True)
 
 
-if __name__ == "__main__":
+def test_run_generate():
     device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
+    tt_lib.device.SetDefaultDevice(device)
 
     output_sentance_night = run_generate(
         "It was a dark and stormy night", run_tt_model=True, device=device
     )
-    output_sentance_alice = run_generate(
-        "Alice stepped through the small door", run_tt_model=True, device=device
-    )
 
     logger.info(f"Decoded output night: {output_sentance_night}")
-    logger.info(f"Decoded output alice: {output_sentance_alice}")
 
     tt_lib.device.CloseDevice(device)

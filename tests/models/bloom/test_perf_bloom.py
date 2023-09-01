@@ -2,33 +2,23 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}")
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../tt")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
 import torch
-from datasets import load_dataset
 from loguru import logger
 import pytest
 import tt_lib
-from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, profiler
-from models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache
+from models.utility_functions import profiler
+from models.utility_functions import (
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+)
 from models.utility_functions import prep_report
 
 from transformers import BloomForCausalLM, BloomTokenizerFast
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 from loguru import logger
+import pytest
 
-import tests.models.bloom.bloom_utils as bloom_utils
-import tests.models.bloom.bloom_model as bloom_model
+from models.bloom.tt.bloom_model import TtBloomModel
 
 
 BATCH_SIZE = 1
@@ -53,7 +43,7 @@ def run_perf_bloom(expected_inference_time, expected_compile_time, device):
     state_dict = HF_model_top.state_dict()
     base_address = "transformer"
 
-    tt_model = bloom_model.TtBloomModel(config, state_dict, base_address, device)
+    tt_model = TtBloomModel(config, state_dict, base_address, device)
     HF_model = HF_model_top.transformer
 
     # Prepare input
@@ -65,11 +55,11 @@ def run_perf_bloom(expected_inference_time, expected_compile_time, device):
 
     with torch.no_grad():
         profiler.start(cpu_key)
-        logits = HF_model.forward(input_ids)
+        logits = HF_model(input_ids)
         profiler.end(cpu_key)
 
         profiler.start(first_key)
-        tt_output = tt_model.forward(device, input_ids)
+        tt_output = tt_model(input_ids)
         tt_lib.device.Synchronize()
         profiler.end(first_key)
         del tt_output
@@ -77,11 +67,10 @@ def run_perf_bloom(expected_inference_time, expected_compile_time, device):
         enable_persistent_kernel_cache()
 
         profiler.start(second_key)
-        tt_output = tt_model.forward(device, input_ids)
+        tt_output = tt_model(input_ids)
         tt_lib.device.Synchronize()
         profiler.end(second_key)
         del tt_output
-
 
     first_iter_time = profiler.get(first_key)
     second_iter_time = profiler.get(second_key)
@@ -96,22 +85,25 @@ def run_perf_bloom(expected_inference_time, expected_compile_time, device):
         expected_compile_time=expected_compile_time,
         expected_inference_time=expected_inference_time,
         comments=comments,
-        inference_time_cpu=cpu_time
+        inference_time_cpu=cpu_time,
     )
 
     logger.info(f"bloom {comments} inference time: {second_iter_time}")
     logger.info(f"bloom {comments} compile time: {compile_time}")
 
     assert second_iter_time < expected_inference_time, f"bloom {comments} is too slow"
-    assert compile_time < expected_compile_time, f"bloom {comments} compile time is too slow"
+    assert (
+        compile_time < expected_compile_time
+    ), f"bloom {comments} compile time is too slow"
 
 
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (1.47,
-         16,
+        (
+            1.47,
+            16,
         ),
     ),
 )
@@ -123,8 +115,9 @@ def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_co
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (1.75,
-         17,
+        (
+            1.75,
+            17,
         ),
     ),
 )

@@ -2,38 +2,35 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
+import pytest
 import torch
 import tt_lib
 
 from transformers import BloomForCausalLM, BloomTokenizerFast
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from models.utility_functions import comp_pcc, tt_to_torch_tensor, comp_allclose
 
 from loguru import logger
-import tests.models.bloom.bloom_causal_lm as bloom_causal_lm
+from models.bloom.tt.bloom_causal_lm import TtBloomForCausalLM
 
 
-def test_bloom_causal_lm():
+@pytest.mark.parametrize(
+    "pcc",
+    ((0.99),),
+)
+def test_bloom_causal_lm(pcc, reset_seeds):
     device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
+    tt_lib.device.SetDefaultDevice(device)
 
     hugging_bloom_reference_model = BloomForCausalLM.from_pretrained(
-        "bigscience/bloom-560m", torchscript=False
+        "bigscience/bloom-560m"
     )
     hugging_bloom_reference_model.eval()
 
     config = hugging_bloom_reference_model.config
     state_dict = hugging_bloom_reference_model.state_dict()
 
-    tt_bloom_causal_lm = bloom_causal_lm.TtBloomForCausalLM(config, state_dict, device)
+    tt_bloom_causal_lm = TtBloomForCausalLM(config, state_dict, device)
     pt_bloom_causal_lm = hugging_bloom_reference_model
 
     # Prepare input
@@ -42,23 +39,26 @@ def test_bloom_causal_lm():
     tokenized = tokenizer(input_sentance, return_tensors="pt")
     input_ids = tokenized.input_ids
 
-    pt_out = pt_bloom_causal_lm.forward(input_ids)
-    tt_out = tt_bloom_causal_lm.forward(device, input_ids)
+    with torch.no_grad():
+        # pytorch output
+        pt_out = pt_bloom_causal_lm(input_ids)
+        # tt output
+        tt_out = tt_bloom_causal_lm(input_ids)
 
-    pt_out = pt_out[0]
+    pt_out = pt_out[0].unsqueeze(0)
     tt_out = tt_out[0]
+    tt_out = tt_to_torch_tensor(tt_out)
 
-    does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)
+    does_pass, pcc_message = comp_pcc(pt_out, tt_out, pcc)
+
+    logger.info(comp_allclose(pt_out, tt_out))
     logger.info(pcc_message)
+
+    tt_lib.device.CloseDevice(device)
 
     if does_pass:
         logger.info("bloom_causal_lm: Passed!")
     else:
         logger.warning("bloom_causal_lm: Failed!")
 
-    assert does_pass
-    tt_lib.device.CloseDevice(device)
-
-
-if __name__ == "__main__":
-    test_bloom_causal_lm()
+    assert does_pass, f"bloom_causal_lm output does not meet PCC requirement {pcc}."
