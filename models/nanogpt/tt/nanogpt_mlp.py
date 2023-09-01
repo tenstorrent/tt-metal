@@ -3,24 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from torch.nn import functional as F
-
 import tt_lib
-from tests.models.nanogpt.tt.nanogpt_config import GPTConfig
-from tests.models.helper_funcs import Linear
-
+from models.helper_funcs import Linear
 
 from models.utility_functions import (
-    torch2tt_tensor,
-    tt2torch_tensor,
     torch_to_tt_tensor_rm,
 )
 
-from transformers import GPT2LMHeadModel
-
 
 class TtMLP(torch.nn.Module):
-    def __init__(self, base_address, config: GPTConfig(), state_dict, device):
+    def __init__(self, base_address, config, state_dict, device):
         super().__init__()
         # Get the weights
         self.tt_weight_c_fc = state_dict[f"{base_address}.c_fc.weight"]
@@ -29,23 +21,19 @@ class TtMLP(torch.nn.Module):
         self.device = device
 
         # Push weights to Tt device
-        self.tt_weight_c_fc = torch2tt_tensor(
-            self.tt_weight_c_fc, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-        )
-        self.tt_weight_c_proj = torch2tt_tensor(
-            self.tt_weight_c_proj, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
+        self.tt_weight_c_fc = torch_to_tt_tensor_rm(self.tt_weight_c_fc, self.device)
+
+        self.tt_weight_c_proj = torch_to_tt_tensor_rm(
+            self.tt_weight_c_proj, self.device
         )
 
         # Load biases
-        self.tt_bias_c_fc = torch2tt_tensor(
-            state_dict[f"{base_address}.c_fc.bias"],
-            device,
-            tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
+        self.tt_bias_c_fc = torch_to_tt_tensor_rm(
+            state_dict[f"{base_address}.c_fc.bias"], self.device
         )
-        self.tt_bias_c_proj = torch2tt_tensor(
-            state_dict[f"{base_address}.c_proj.bias"],
-            device,
-            tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
+
+        self.tt_bias_c_proj = torch_to_tt_tensor_rm(
+            state_dict[f"{base_address}.c_proj.bias"], self.device
         )
 
         self.tt_weight_c_fc = tt_lib.tensor.transpose(self.tt_weight_c_fc)
@@ -58,11 +46,9 @@ class TtMLP(torch.nn.Module):
             4 * config.n_embd, config.n_embd, self.tt_weight_c_proj, self.tt_bias_c_proj
         )
 
-    def forward(self, x):
+    def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         x1 = self.c_fc(x)
-
         x2 = tt_lib.tensor.gelu(x1)
-
         x3 = self.c_proj(x2)
 
         return x3
