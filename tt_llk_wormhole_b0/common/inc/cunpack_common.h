@@ -254,7 +254,9 @@ namespace ckernel::unpacker
       alu_payload.f.ALU_ACC_CTRL_Fp32_enabled = fp32_dest_acc_en;
       alu_payload.f.ALU_ACC_CTRL_SFPU_Fp32_enabled = fp32_dest_acc_en;
       alu_payload.f.ALU_ACC_CTRL_INT8_math_enabled = ((uint)unpack_dst_format[unpA_operand_id] == (uint)DataFormat::Int8) || 
-                                                     ((uint)unpack_dst_format[unpB_operand_id] == (uint)DataFormat::Int8);
+                                                     ((uint)unpack_dst_format[unpB_operand_id] == (uint)DataFormat::Int8) || 
+                                                     ((uint)unpack_dst_format[unpA_operand_id] == (uint)DataFormat::Int32) || 
+                                                     ((uint)unpack_dst_format[unpB_operand_id] == (uint)DataFormat::Int32);
 
       constexpr uint mask1 = ALU_ACC_CTRL_INT8_math_enabled_MASK | ALU_ACC_CTRL_SFPU_Fp32_enabled_MASK | ALU_ACC_CTRL_Fp32_enabled_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK | ALU_FORMAT_SPEC_REG0_SrcA_MASK;
 
