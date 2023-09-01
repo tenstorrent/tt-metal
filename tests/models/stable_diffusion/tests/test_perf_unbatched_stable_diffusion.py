@@ -311,7 +311,7 @@ def run_perf_unbatched_stable_diffusion(expected_inference_time, expected_compil
     "expected_inference_time, expected_compile_time",
     (
         (
-            40.5,
+            37,
             95,
         ),
     ),
