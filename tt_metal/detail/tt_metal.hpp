@@ -223,7 +223,7 @@ namespace tt::tt_metal{
                 l1_offset_per_bank
             );
 
-            tt_SocDescriptor& soc_d = device->cluster()->get_soc_desc(device->pcie_slot());
+            metal_SocDescriptor& soc_d = device->cluster()->get_soc_desc(device->pcie_slot());
 
             // Determine which noc-coords are harvested
             // TODO(PGK/Almeet): fix this w/ new UMD
