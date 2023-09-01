@@ -41,13 +41,7 @@ Note that this call only works correctly after open_device and start_device call
 This call is not thread safe, and there is only one instance of print server supported at a time.
 
 */
-void tt_start_debug_print_server(
-    tt_cluster* cluster,
-    const vector<int>& chip_ids,
-    const vector<CoreCoord>& cores,
-    unsigned int thread_mask =
-        DPRINT_HART_NC | DPRINT_HART_TR0 | DPRINT_HART_TR1 | DPRINT_HART_TR2 | DPRINT_HART_BR,
-    const char* filename = nullptr);
+void tt_start_debug_print_server(tt_cluster* cluster);
 
 /*
 @brief Stops the print server thread. This call is optional.

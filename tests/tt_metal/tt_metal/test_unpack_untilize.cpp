@@ -10,8 +10,6 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
 
-#include "llrt/tt_debug_print_server.hpp"
-
 #include "llrt/llrt.hpp"
 
 
@@ -98,8 +96,6 @@ int main(int argc, char **argv) {
             tt_metal::CreateDevice(arch, pci_express_slot);
 
         pass &= tt_metal::InitializeDevice(device);
-
-        tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}});
 
         // ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup

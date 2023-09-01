@@ -11,8 +11,6 @@
 #include <functional>
 #include <random>
 
-#include "tt_metal/llrt/tt_debug_print_server.hpp"
-
 using namespace tt;
 using namespace tt::tt_metal;
 using namespace constants;
@@ -42,7 +40,6 @@ int main(int argc, char **argv) {
     tt_metal::Device *device =
         tt_metal::CreateDevice(arch, pci_express_slot);
     pass &= InitializeDevice(device);
-    tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}});
     Shape shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
     Tensor a = tt::numpy::random::random(shape).to(Layout::TILE).to(device);
     Tensor c = tt::operations::primary::softmax_in_place(a);

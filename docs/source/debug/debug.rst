@@ -131,24 +131,37 @@ Kernel printf()
 
 
 The codebase supports debug prints from device kernels that get displayed on the host. On device the APIs are defined in src/firmware/riscv/common/debug_print.h.
-To use debug printing capability, it is first required to start the debug print server on the host - use the API defined in llrt/tt_debug_print_server.h.
+To use debug printing capability, it is first required to start the debug print server on the host - use the env variables defined below.
 
 *Basic use steps:*
 ------------------
 
 - Include the device side header ``#include "debug_print.h"`` in your kernel.
 - Use ``DPRINT << "string" << 1 << SETW(4) << F32(2.0f) << ENDL();`` std::cout-style syntax to print values.
-- For the prints to show up on the host, it is first required to start the host-side server using ``tt_start_debug_print_server(...)`` API.
-  - If the server isn't started, then the prints will not show up and do nothing.
-- Tests test_debug_print_br/nc.cpp and test_run_test_debug_print.cpp show an example of using debug prints in a complete running kernel example::
+- For the prints to show up on the host, it is first required to start the host-side server using:
 
-    auto device = tt_metal::CreateDevice(tt_metal::DeviceType::Grayskull, pci_express_slot);
-    ...
-    vector<CoreCoord> cores = {{1,1}};
-    int hart_mask = DPRINT_HART_NC | DPRINT_HART_BR;
-    tt_start_debug_print_server(device->cluster(), {chip_id}, cores, hart_mask);
-    ...
-- Note that the core coordinates used in tt_start_debug_print_server are currently NOC coordinates (not logical).
+  - ``export TT_DEBUG_PRINT_CORES=<list of cores>``
+  - ``<list of cores>`` is one of:
+
+    - single core: ``x,y``
+    - multiple cores: ``"(x,y),(x,y)"`` (etc)
+    - range of cores: ``"(x,y)-(x,y)"`` (bounding box, inclusive)
+
+- Optionally ``export TT_DEBUG_PRINT_CHIPS=<list of chips>``
+
+  - use a comma separated list
+  - default is 0
+
+- Optionally ``export TT_DEBUG_PRINT_HART=<hart>``
+
+  - ``<hart>`` is one of:
+
+    - ``NC``, ``BR``, ``TR0``, ``TR1``, ``TR2``
+
+  - default is all harts
+
+- Optionally ``export TT_DEBUG_PRINT_FILE=<filename>``
+- Note that the core coordinates are currently NOC coordinates (not logical).
 - Since on TRISCs the same code compiles 3 times and executes on 3 threads, you can use the pattern ``MATH(( DPRINT << x << ENDL() ));`` to make prints execute only on one of 3 threads.
 - The two other available macros for pack/unpack threads are ``PACK(( ))`` and ``UNPACK(( ))``
 - ``DPRINT << SETW(width, sticky);`` supports a sticky flag (defaults to different froim std::setw() behavior).

@@ -9,7 +9,6 @@
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
 #include "test_gold_impls.hpp"
-#include "llrt/tt_debug_print_server.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -46,8 +45,6 @@ int main(int argc, char **argv) {
             tt_metal::CreateDevice(arch, pci_express_slot);
 
         pass &= tt_metal::InitializeDevice(device);;
-
-        tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}});
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup

@@ -152,16 +152,6 @@ bool InitializeDevice(Device *device) {
                                             arch_name,
                                             default_params);
 
-                char *dbg_print = std::getenv("TT_KERNEL_DEBUG_PRINT");
-                if (dbg_print != nullptr) {
-                    uint32_t x, y;
-                    sscanf(dbg_print, "%d,%d", &x, &y);
-                    auto hart_mask = DPRINT_HART_BR | DPRINT_HART_TR0 | DPRINT_HART_TR1 | DPRINT_HART_TR2 | DPRINT_HART_NC;
-                    CoreCoord coord = {x, y};
-                    tt_start_debug_print_server(device->cluster(), {0}, {coord}, hart_mask);
-                    log_debug(tt::LogMetal, "Started debug print server on core {}", coord.str());
-                }
-
                 global_init_complete = true;
             }
         }
@@ -208,11 +198,6 @@ bool CloseDevice(Device *device) {
     }
 
     return device->close();
-}
-
-void StartDebugPrintServer(Device *device, const std::vector<CoreCoord> & cores)
-{
-    tt_start_debug_print_server(device->cluster(), {0}, cores);
 }
 
 KernelID CreateDataMovementKernel(Program &program, const std::string &file_name, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::optional<DataMovementConfig> &config) {

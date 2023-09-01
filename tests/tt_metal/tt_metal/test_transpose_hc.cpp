@@ -12,8 +12,6 @@
 
 #include "test_tiles.hpp"
 
-#include "llrt/tt_debug_print_server.hpp"
-
 using namespace tt;
 
 using u32 = std::uint32_t;
@@ -57,10 +55,6 @@ int main(int argc, char **argv) {
             tt_metal::CreateDevice(arch, pci_express_slot);
 
         pass &= tt_metal::InitializeDevice(device);;
-
-        // Also tests that the debug print server terminates cleanly with new tt_metal APIs
-        // (it was previously crashing due to different termination sequence)
-        tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}});
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup

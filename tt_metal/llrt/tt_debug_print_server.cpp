@@ -463,20 +463,114 @@ bool tt_is_print_server_running()
     return DebugPrintServerContext::inst != nullptr;
 }
 
-// The print server is not valid without alive tt_cluster and tt_device
-void tt_start_debug_print_server(
-    tt_cluster* cluster, const vector<int>& chip_ids, const vector<CoreCoord>& cores, uint32_t hart_mask, const char* filename)
+static vector<CoreCoord> parse_core_range_env(const char* envvar)
 {
-    TT_ASSERT(DebugPrintServerContext::inst == nullptr, "Multiple print servers not allowed");
-    TT_ASSERT(DebugPrintServerContext::ProfilerIsRunning == false, "Device side profiler is running, cannot start print server");
+    char *str = std::getenv(envvar);
+    vector<CoreCoord> cores;
+    if (str != nullptr) {
+        if (isdigit(str[0])) {
+            // Assume this is a single core
+            uint32_t x, y;
+            if (sscanf(str, "%d,%d", &x, &y) != 2) {
+                tt::log_fatal("Invalid {}", envvar);
+            }
+            cores.push_back({x, y});
+        } else if (str[0] == '(') {
+            if (strchr(str, '-')) {
+                // Assume this is a range
+                CoreCoord start, end;
+                if (sscanf(str, "(%zu,%zu)", &start.x, &start.y) != 2) {
+                    tt::log_fatal("Invalid {}", envvar);
+                }
+                str = strchr(str, '-');
+                if (sscanf(str, "-(%zu,%zu)", &end.x, &end.y) != 2) {
+                    tt::log_fatal("Invalid {}", envvar);
+                }
+                for (uint32_t x = start.x; x <= end.x; x++) {
+                    for (uint32_t y = start.y; y <= end.y; y++) {
+                        cores.push_back({x, y});
+                    }
+                }
+            } else {
+                // Assume this is a list of coordinates (maybe just one)
+                while (str != nullptr) {
+                    uint32_t x, y;
+                    if (sscanf(str, "(%d,%d)", &x, &y) != 2) {
+                        tt::log_fatal("Invalid {}", envvar);
+                    }
+                    cores.push_back({x, y});
+                    str = strchr(str, ',');
+                    str = strchr(str+1, ',');
+                    if (str != nullptr) str++;
+                }
+            }
+        } else {
+            tt::log_fatal("Invalid {}", envvar);
+        }
+    }
 
-    DebugPrintServerContext* ctx = new DebugPrintServerContext(cluster, chip_ids, cores, hart_mask, filename);
+    return cores;
+}
 
-    // currently there's only one device per cluster
-    // in some tests close_device is not called but we still need to flush the debug prints
-    // in other tests, the device is destroyed before the cluster is destroyed.
-    // so by the time we get to cluster destructor the device is destroyed and in between the state is invalid
-    // so we add the callback to both paths since it doesn't hurt to call it twice
-    cluster->on_close_device(tt_stop_debug_print_server_per_device);
-    cluster->on_destroy(tt_stop_debug_print_server);
+static vector<int> parse_chip_list_env(const char* envvar)
+{
+    vector<int> chips;
+    char *str = std::getenv(envvar);
+    while (str != nullptr) {
+        uint32_t chip;
+        if (sscanf(str, "%d", &chip) != 1) {
+            tt::log_fatal("Invalid {}", envvar);
+        }
+        chips.push_back(chip);
+        str = strchr(str, ',');
+        if (str != nullptr) str++;
+    }
+
+    return chips;
+}
+
+// The print server is not valid without alive tt_cluster and tt_device
+void tt_start_debug_print_server(tt_cluster* cluster)
+{
+    if (getenv("TT_DEBUG_PRINT_CORES") != nullptr) {
+        vector<CoreCoord> cores = parse_core_range_env("TT_DEBUG_PRINT_CORES");
+        vector<int> chip_ids = parse_chip_list_env("TT_DEBUG_PRINT_CHIPS");
+        if (chip_ids.size() == 0) {
+            chip_ids.push_back(0);
+        }
+        auto hart_mask = DPRINT_HART_BR | DPRINT_HART_TR0 | DPRINT_HART_TR1 | DPRINT_HART_TR2 | DPRINT_HART_NC;
+        char *dbg_hart = std::getenv("TT_DEBUG_PRINT_HART");
+        if (dbg_hart != nullptr) {
+            if (strcmp(dbg_hart, "BR") == 0) {
+                hart_mask = DPRINT_HART_BR;
+            } else if (strcmp(dbg_hart, "NC") == 0) {
+                hart_mask = DPRINT_HART_NC;
+            } else if (strcmp(dbg_hart, "TR0") == 0) {
+                hart_mask = DPRINT_HART_TR0;
+            } else if (strcmp(dbg_hart, "TR1") == 0) {
+                hart_mask = DPRINT_HART_TR1;
+            } else if (strcmp(dbg_hart, "TR2") == 0) {
+                hart_mask = DPRINT_HART_TR2;
+            } else {
+                tt::log_fatal("Invalid TT_DEBUG_PRINT_HART");
+            }
+        }
+        char *db_file = std::getenv("TT_DEBUG_PRINT_FILE");
+
+        TT_ASSERT(DebugPrintServerContext::inst == nullptr, "Multiple print servers not allowed");
+        TT_ASSERT(DebugPrintServerContext::ProfilerIsRunning == false, "Device side profiler is running, cannot start print server");
+
+        // Using an invalid core can hang the chip, sanitize
+        // TODO(PGK)
+
+        DebugPrintServerContext* ctx = new DebugPrintServerContext(cluster, chip_ids, cores, hart_mask, db_file);
+
+        // currently there's only one device per cluster
+        // in some tests close_device is not called but we still need to flush the debug prints
+        // in other tests, the device is destroyed before the cluster is destroyed.
+        // so by the time we get to cluster destructor the device is destroyed and in between the state is invalid
+        // so we add the callback to both paths since it doesn't hurt to call it twice
+        cluster->on_close_device(tt_stop_debug_print_server_per_device);
+        cluster->on_destroy(tt_stop_debug_print_server);
+    }
 }

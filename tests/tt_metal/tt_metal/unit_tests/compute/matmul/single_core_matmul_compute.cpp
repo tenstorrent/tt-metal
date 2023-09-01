@@ -417,7 +417,6 @@ bool single_core_matmul(tt_metal::Device* device, const SingleCoreMatmulConfig& 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::StartDebugPrintServer(device, {{1, 1}});
     pass &= tt_metal::CompileProgram(device, program);
     tt_metal::WriteToBuffer(input0_dram_buffer, packed_activation);
     tt_metal::WriteToBuffer(input1_dram_buffer, packed_identity);
@@ -675,7 +674,6 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::StartDebugPrintServer(device, {{1, 1}});
     pass &= tt_metal::CompileProgram(device, program);
     tt_metal::WriteToBuffer(input0_dram_buffer, packed_input0);
     tt_metal::WriteToBuffer(input1_dram_buffer, packed_input1);
@@ -834,7 +832,6 @@ bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::StartDebugPrintServer(device, {{1, 1}});
     pass &= tt_metal::CompileProgram(device, program);
     tt_metal::WriteToBuffer(input0_dram_buffer, packed_input0);
     tt_metal::WriteToBuffer(input1_dram_buffer, packed_input1);

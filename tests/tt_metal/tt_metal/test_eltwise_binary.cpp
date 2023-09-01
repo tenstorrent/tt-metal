@@ -7,7 +7,6 @@
 #include <random>
 
 #include "common/bfloat16.hpp"
-#include "llrt/tt_debug_print_server.hpp"
 #include "test_gold_impls.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
@@ -52,7 +51,6 @@ int main(int argc, char** argv) {
     tt_metal::Device* device = tt_metal::CreateDevice(arch, pci_express_slot);
 
     pass &= tt_metal::InitializeDevice(device);
-    tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}, {1, 11}});
     CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
 
     Program programs[] = {tt_metal::Program(), tt_metal::Program(), tt_metal::Program()};

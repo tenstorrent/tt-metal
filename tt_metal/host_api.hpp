@@ -73,21 +73,6 @@ bool InitializeDevice(Device *device);
  */
 bool CloseDevice(Device *device);
 
-/**
- * Starts a debug print server on given set of core grid coordinates.
- *
- * Return value: void
- *
- * | Argument | Description                | Type                   | Valid Range | Required |
- * |----------|----------------------------|------------------------|-------------|----------|
- * | device   | Pointer to a device object | Device *               |             | True     |
- * | cores    | set of core coordinates    | std::vector <CoreCoord>|             | True     |
-
- */
-
-void StartDebugPrintServer(Device *device, const std::vector<CoreCoord> & cores);
-
-
 // ==================================================
 //                  HOST API: program & kernels
 // ==================================================

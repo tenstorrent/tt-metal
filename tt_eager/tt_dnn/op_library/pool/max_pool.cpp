@@ -13,12 +13,6 @@
 #include "tensor/owned_buffer_functions.hpp"
 #include "detail/util.hpp"
 
-#define DEBUG_SERVER 0
-
-#if DEBUG_SERVER == 1
-    #include "tt_metal/llrt/tt_debug_print_server.hpp"
-#endif
-
 uint32_t ceil_multiple_of(uint32_t n, uint32_t m) {
     return (uint32_t) ceil((float) n / m) * m;
 }
@@ -418,11 +412,6 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
     Shape output_shape = output.shape();
 
     log_debug("SHAPES: input = {}, output = {}", input_shape, output_shape);
-
-    #if DEBUG_SERVER == 1
-        // start debug server
-        tt_start_debug_print_server(device->cluster(), {0}, {{1, 1}});
-    #endif
 
     // NOTE: input is assumed to be in {N, 1, H * W, C }
 

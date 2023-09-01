@@ -6,6 +6,7 @@
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "llrt/tt_debug_print_server.hpp"
 
 #include "common/utils.hpp"
 #include "llrt/llrt.hpp"
@@ -178,12 +179,14 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
     this->initialize_harvesting_information();
     this->initialize_allocator(l1_bank_remap);
     this->clear_l1_state();
+    tt_start_debug_print_server(this->cluster());
     this->initialized_ = true;
     return true;
 }
 
 bool Device::close() {
     TT_ASSERT(this->initialized_, "Cannot close device {} that has not been initialized!", this->pcie_slot_);
+    tt_stop_debug_print_server(this->cluster());
     llrt::assert_reset_for_all_chips(cluster_);
     this->clear_l1_state();
     this->cluster_->close_device();

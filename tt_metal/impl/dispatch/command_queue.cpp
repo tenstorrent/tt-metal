@@ -7,7 +7,6 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/buffers/semaphore.hpp"
-#include "tt_metal/llrt/tt_debug_print_server.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 
 namespace tt::tt_metal {
@@ -828,10 +827,6 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
         TT_ASSERT(
             DISPATCH_MAP_DUMP != nullptr,
             "Cannot compare dispatch device output to host when dispatch map dump not enabled");
-
-        string device_dispatch_dump_file = "device_" + string(DISPATCH_MAP_DUMP);
-        auto hart_mask = DPRINT_HART_BR;
-        tt_start_debug_print_server(cq.device->cluster(), {0}, {{1, 11}}, hart_mask, device_dispatch_dump_file.c_str());
     }
 
     detail::ValidateCircularBufferRegion(program, cq.device);
