@@ -15,7 +15,7 @@ template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, E
 inline void llk_unpack_A_mop_config(const bool transpose_of_faces, const std::uint32_t operand_id) {
 
     static_assert(!((BType != BroadcastType::NONE) && acc_to_dest && (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)), "Not supported configuration!");
-    //static_assert(((BType == BroadcastType::NONE) && (!acc_to_dest) && (binary_reuse_dest == EltwiseBinaryReuseDestType::NONE) || (!unpack_to_dest)), "Not supported configuration when unpacking to dest!");
+    static_assert(((BType == BroadcastType::NONE) && (!acc_to_dest) && (binary_reuse_dest == EltwiseBinaryReuseDestType::NONE) || (!unpack_to_dest)), "Not supported configuration when unpacking to dest!");
 
     const uint32_t num_faces = get_num_faces(operand_id); 
     #if SKIP_UNP == 1
