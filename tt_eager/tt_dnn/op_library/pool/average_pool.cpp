@@ -10,20 +10,24 @@ namespace tt {
 namespace tt_metal {
 
 template<PoolType pool>
-Tensor pool_2d(const Tensor& input) {
+Tensor pool_2d(const Tensor& input, std::optional<MemoryConfig> output_mem_config) {
     TT_ASSERT(input.storage_type() == StorageType::DEVICE, "Input tensor needs to be on device");
     auto input_shape = input.shape();
     switch (pool) {
         case PoolType::AVG: {
             auto height_without_padding = input.shape().without_padding()[-2];
-            return reduce(input, ReduceOpMath::SUM, ReduceOpDim::H, 1 / float(height_without_padding));
+            if (output_mem_config.has_value()) {
+                return reduce(input, ReduceOpMath::SUM, ReduceOpDim::H, 1 / float(height_without_padding), output_mem_config.value());
+            } else {
+                return reduce(input, ReduceOpMath::SUM, ReduceOpDim::H, 1 / float(height_without_padding));
+            }
         }
         default:
             TT_ASSERT(false && "Undefined pool type");
     }
 }
 
-Tensor average_pool_2d(const Tensor& input) {
+Tensor average_pool_2d(const Tensor& input, std::optional<MemoryConfig> output_mem_config) {
     TT_ASSERT(input.storage_type() == StorageType::DEVICE, "Input tensor needs to be on device");
     auto output = input;
 
@@ -34,7 +38,7 @@ Tensor average_pool_2d(const Tensor& input) {
     auto output_shape = Shape({in_shape[0], 1, in_shape[1] * in_shape[2], in_shape[3]}, output_padding);
     output = output.reshape(output_shape);
 
-    output = pool_2d<PoolType::AVG>(output);
+    output = pool_2d<PoolType::AVG>(output, output_mem_config);
     return output;
 }
 

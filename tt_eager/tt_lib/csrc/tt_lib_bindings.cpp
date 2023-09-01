@@ -2582,7 +2582,8 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     // Pools
-    m_tensor.def("average_pool_2d", &average_pool_2d, R"doc(
+    m_tensor.def("average_pool_2d", &average_pool_2d,
+        py::arg().noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,  R"doc(
         Average Pool 2D
         It operates on tensors whose that have channels as the last dimension
 
@@ -2601,7 +2602,7 @@ void TensorModule(py::module &m_tensor) {
         py::arg("dilation_h") = 1, py::arg("dilation_w") = 1,
         py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("nblocks") = 1,
-        py::arg("use_multicore") = false, R"doc(
+        py::arg("use_multicore") = true, R"doc(
         Max Pool 2D
         +-------------------+-------------------------------+---------------+-------------+----------+
         | Argument          | Description                   | Data type     | Valid range | Required |

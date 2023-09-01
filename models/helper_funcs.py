@@ -38,18 +38,21 @@ def Linear(in_features: int, out_features: int, weight: tensor.Tensor, bias: Opt
     return linear_
 
 
-def ResnetLinear(in_features: int, out_features: int, weight: tensor.Tensor, bias: Optional[tensor.Tensor] = None, output_mem_config = tensor.MemoryConfig(True, tensor.BufferType.DRAM), device = None):
+def ResnetLinear(in_features: int, out_features: int, weight: tensor.Tensor, bias: Optional[tensor.Tensor] = None, transpose: bool = True, output_mem_config = tensor.MemoryConfig(True, tensor.BufferType.DRAM), device = None):
     """
     Returns a function for linear operation in resnet with bias.
     """
-    assert weight.shape() == [1, 1, out_features, in_features], "weight does not have the expected shape"
-
     if bias is not None:
         assert bias.shape()[-1] == out_features, "bias shape is not as expected"
         if device is not None:
             bias = bias.to(device)
 
-    weight_T = tensor.transpose(weight)
+    if transpose:
+        assert weight.shape() == [1, 1, out_features, in_features], "weight does not have the expected shape"
+        weight_T = tensor.transpose(weight)
+    else:
+        assert weight.shape() == [1, 1, in_features, out_features], "weight does not have the expected shape"
+        weight_T = weight
     if device is not None:
         weight_T = weight_T.to(device)
 
