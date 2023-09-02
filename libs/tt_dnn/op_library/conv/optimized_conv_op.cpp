@@ -173,7 +173,8 @@ void create_CBs(tt_metal::Program &program,
 
 operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, vector<int> conv_params,
                                        uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
-                                       uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity, uint32_t extra_padding_for_32B_alignment, Tensor &output) {
+                                       uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity,
+                                       const OptimizedConvParallelizationConfig& parallelization_config, uint32_t extra_padding_for_32B_alignment, Tensor &output) {
     bool pass = true;
     tt_metal::Device *device = a.device();
     TT_ASSERT(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
@@ -264,8 +265,8 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
     // sanity check
     assert(num_blocks_output_w == num_blocks_weight_w);
     tt_metal::Program program = tt_metal::Program();
-    CoreCoord core_coord = {0, 0};      // TODO: avoid another var here. Find a way to use core range instead.
-    CoreRange core = {.start={0, 0}, .end={0, 0}};
+    //CoreCoord core_coord = {0, 0};      // TODO: avoid another var here. Find a way to use core range instead.
+    //CoreRange core = {.start={0, 0}, .end={0, 0}};
     //tt_start_debug_print_server(a.device()->cluster(), {0}, {{1, 1}});
 
     uint32_t single_tile_size = num_bytes_of_df * TILE_HEIGHT * TILE_WIDTH;
@@ -352,11 +353,19 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
     // more args for writer
     uint32_t out_block_row_size_bytes = weight_block_w_ntiles*TILE_WIDTH*num_bytes_of_df;
     uint32_t out_row_size_bytes = output_channels_padded_to_tile_width*num_bytes_of_df;
-    uint32_t batch_size = 1;
+
     // output data format
     const auto out_df = datatype_to_dataformat_converter(a.dtype());
+
     // For debug
     {
+        log_debug(tt::LogOp, "conv_act_size_c: {}", conv_act_size_c);
+        log_debug(tt::LogOp, "conv_act_size_h: {}", conv_act_size_h);
+        log_debug(tt::LogOp, "conv_act_size_w: {}", conv_act_size_w);
+        log_debug(tt::LogOp, "act_matrix_height: {}", act_matrix_height);
+        log_debug(tt::LogOp, "act_matrix_width: {}", act_matrix_width);
+        log_debug(tt::LogOp, "act_matrix_height_unpadded: {}", act_matrix_height_unpadded);
+        log_debug(tt::LogOp, "act_matrix_width_unpadded: {}", act_matrix_width_unpadded);
         log_debug(tt::LogOp, "act_matrix_height_ntiles: {}", act_matrix_height_ntiles);
         log_debug(tt::LogOp, "act_matrix_width_ntiles: {}", act_matrix_width_ntiles);
         log_debug(tt::LogOp, "weight_matrix_width_ntiles: {}", weight_matrix_width_ntiles);
@@ -387,6 +396,24 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
         log_debug(tt::LogOp, "out_subblock_num_tiles: {}", out_subblock_num_tiles);
         log_debug(tt::LogOp, "num_groups: {}", num_groups);
     }
+    // parallelization config
+    const auto& p_config = parallelization_config;
+    uint32_t num_cores_x = p_config.grid_size.x;
+    uint32_t num_cores_y = p_config.grid_size.y;
+    uint32_t total_num_cores = num_cores_x * num_cores_y;
+    assert(num_cores_x < 11);
+    assert(num_cores_y < 10);
+    uint32_t per_core_act_matrix_height_ntiles = p_config.per_core_act_matrix_height_ntiles;
+    //cout << "total_num_cores=" << total_num_cores << endl;
+    //cout << "per_core_act_matrix_height_ntiles=" << per_core_act_matrix_height_ntiles << endl;
+    //cout << "act_matrix_height_ntiles=" << act_matrix_height_ntiles << endl;
+    //cout << "act_block_h_datums=" << act_block_h_datums << endl;
+    assert(total_num_cores * per_core_act_matrix_height_ntiles == act_matrix_height_ntiles);
+    assert(per_core_act_matrix_height_ntiles % act_block_h_ntiles == 0);
+    uint32_t num_blocks_act_h_per_core = per_core_act_matrix_height_ntiles / act_block_h_ntiles;
+    if (total_num_cores == 1) {
+        num_blocks_act_h_per_core = num_blocks_act_h;
+    }
 
     bool rn50_first_conv = (conv_act_size_h == 230 && conv_act_size_w == (231 + extra_padding_for_32B_alignment) &&
                             conv_output_size_h == 112 && conv_output_size_w == 112 &&
@@ -402,20 +429,54 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
     if (conv_act_size_c < 256) {
         num_act_cb_tiles = num_act_cb_tiles * 2; // double buffered
     }
+
+    vector<CoreCoord> debug_cores;
+    for(uint32_t core_i = 0; core_i < total_num_cores; core_i++) {
+        uint32_t core_x_i = core_i % num_cores_x;
+        uint32_t core_y_i = core_i / num_cores_x;
+        debug_cores.push_back({core_x_i+1, core_y_i+1});
+    }
+
+    CoreRange all_cores = {.start = CoreCoord(0, 0), .end = CoreCoord(num_cores_x - 1, num_cores_y - 1)};
+
     create_CBs(
-        program,
-        a.device(),
-        core,
-        num_act_cb_tiles, // row major act cb
-        num_weight_cb_tiles, // tiled weight cb
-        act_block_h_ntiles * act_block_w_ntiles, // tiled act cb
-        act_block_h_ntiles * weight_block_w_ntiles, // math output cb
-        weight_block_w_ntiles, // reblock cb
-        act_block_h_ntiles * weight_block_w_ntiles * 2, // writer output cb, double bufferred
-        num_bytes_of_df,
-        untilize_out,
-        bias_ntiles,
-        has_bias);
+            program,
+            a.device(),
+            all_cores,
+            num_act_cb_tiles, // row major act cb
+            num_weight_cb_tiles, // tiled weight cb
+            act_block_h_ntiles * act_block_w_ntiles, // tiled act cb
+            act_block_h_ntiles * weight_block_w_ntiles, // math output cb
+            weight_block_w_ntiles, // reblock cb
+            act_block_h_ntiles * weight_block_w_ntiles * 2, // writer output cb, double bufferred
+            num_bytes_of_df,
+            untilize_out,
+            bias_ntiles,
+            has_bias);
+
+    string reader_kernel;
+    string writer_kernel;
+    string compute_kernel;
+    if (rn50_first_conv) {
+        reader_kernel = "libs/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast_resnet50_first_conv.cpp";
+        compute_kernel = "libs/tt_dnn/op_library/conv/kernels/bmm_tilize_untilize_all_weights_in_l1_single_output_block_width_dim.cpp";
+        writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_and_reader_weights_resnet50_first_conv_tiled_out.cpp";
+    } else {
+        reader_kernel = "libs/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast_for_col_major_conv_out_blocks.cpp";
+        compute_kernel = "libs/tt_dnn/op_library/conv/kernels/conv_bmm_tilize_col_major_out_blocks_reuse_weights.cpp";
+        writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_tiled_out_reader_conv_weights_tiled_col_to_rm_blocks_read_weight_slices_once.cpp";
+    }
+    vector<vector<uint32_t>>reader_rt_args;
+    std::vector<uint32_t> reader_compile_time_args;
+    vector<vector<uint32_t>> writer_rt_args;
+    std::vector<uint32_t> writer_compile_time_args;
+
+    TT_ASSERT(!(conv_act_size_c & (conv_act_size_c - 1))); // channel depth power of 2 is supported only
+    TT_ASSERT(!(out_row_size_bytes & (out_row_size_bytes - 1))); // output channels power of 2 is supported only
+
+    reader_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
+            (uint32_t) stride_h, (uint32_t) stride_w, (uint32_t) conv_act_size_w, (uint32_t) conv_output_size_w,
+            (uint32_t) conv_act_size_c * num_bytes_of_df, (uint32_t) std::log2(conv_act_size_c * num_bytes_of_df), extra_padding_for_32B_alignment};
 
     // define for bias
     std::map<string, string> all_defines;
@@ -434,123 +495,160 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
         }
     }
 
-    string reader_kernel;
-    vector<uint32_t> reader_rt_args;
-    std::vector<uint32_t> reader_compile_time_args;
-    string writer_kernel;
-    string compute_kernel;
-    TT_ASSERT(!(conv_act_size_c & (conv_act_size_c - 1))); // channel depth power of 2 is supported only
-    TT_ASSERT(!(out_row_size_bytes & (out_row_size_bytes - 1))); // output channels power of 2 is supported only
-    if(rn50_first_conv) {
-        reader_kernel = "libs/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast_resnet50_first_conv.cpp";
-        compute_kernel = "libs/tt_dnn/op_library/conv/kernels/bmm_tilize_untilize_all_weights_in_l1_single_output_block_width_dim.cpp";
-    } else {
-        reader_kernel = "libs/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast_for_col_major_conv_out_blocks.cpp";
-        compute_kernel = "libs/tt_dnn/op_library/conv/kernels/conv_bmm_tilize_col_major_out_blocks_reuse_weights.cpp";
-    }
-    reader_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
-            (uint32_t) stride_h, (uint32_t) stride_w, (uint32_t) conv_act_size_w, (uint32_t) conv_output_size_w,
-            (uint32_t) conv_act_size_c * num_bytes_of_df, (uint32_t) std::log2(conv_act_size_c * num_bytes_of_df), extra_padding_for_32B_alignment};
+    writer_compile_time_args = {
+        (uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
+        out0_cb,
+        weight_cb,
+        bias_cb,
+        bias_log2_of_pagesize,
+        bias_tile_nbytes,
+        (uint32_t) (bias_buffer == nullptr ? 0 : (bias_buffer->buffer_type() == BufferType::DRAM ? 1 : 0))};
 
-    if (rn50_first_conv) {
-        assert(pad_h == 0 && pad_w == 0);
-        reader_rt_args = {
-            act_dram_addr,
-            conv_act_size_c,
-            conv_output_size_w,
-            weight_size_w,
-            num_blocks_act_h,
-            num_blocks_act_w,
-            act_block_h_datums,
-            act_block_num_tiles
-        };
-    } else {
-        reader_rt_args = {
-            // arguments for act
-            act_dram_addr,
-            act_noc_x,
-            act_noc_y,
+    vector<uint32_t> compute_kernel_args = {
+        act_block_w_ntiles,
+        act_num_subblocks,
+        act_block_num_tiles,
+        act_subblock_num_tiles,
+        act_subblock_h_ntiles,
 
-            conv_act_size_w,
-            conv_act_size_h,
-            conv_act_size_c,
-            weight_size_h,
-            weight_size_w,
-            stride_h,
-            stride_w,
-            pad_h,
-            pad_w,
-            conv_output_size_h,
-            conv_output_size_w,
-            num_blocks_act_h,
-            num_blocks_act_w,
-            num_blocks_weight_w,
-            num_groups,
+        weight_num_subblocks,
+        weight_block_num_tiles,
+        weight_block_w_ntiles,
 
-            act_matrix_height_unpadded,
-            act_matrix_width_unpadded,
-            act_matrix_height,
-            act_matrix_width,
-            act_matrix_height_ntiles,
-            act_matrix_width_ntiles,
-            act_block_h_datums,
-            act_block_w_datums,
-            act_block_h_ntiles,
-            act_block_w_ntiles,
-            act_block_num_tiles,
+        num_blocks_act_h_per_core,
+        num_blocks_act_w,
+        num_blocks_weight_w,
 
-            src_dram_act_buffer_size_bytes,
-            dst_l1_act_buffer_size_bytes,
-        };
-    }
+        out_subblock_h_ntiles,
+        out_subblock_w_ntiles,
+        out_subblock_num_tiles,
 
-    vector<uint32_t> writer_rt_args;
-    std::vector<uint32_t> writer_compile_time_args;
-    assert(!untilize_out);
-    if (untilize_out) {
+        true,
+        untilize_out,
+
+        bias_ntiles
+    };
+    auto writer_id = CreateDataMovementKernel(
+    program,
+    writer_kernel,
+    all_cores,
+    DataMovementConfig{
+        .processor = DataMovementProcessor::RISCV_0,
+        .noc = NOC::RISCV_0_default,
+        .compile_args = writer_compile_time_args,
+        .defines = all_defines});
+
+    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(a.dtype());
+    auto reader_id = CreateDataMovementKernel(
+        program,
+        reader_kernel,
+        all_cores,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = reader_compile_time_args,
+            .defines = reader_defines});
+
+    auto compute = CreateComputeKernel(
+        program,
+        compute_kernel,
+        all_cores,
+        ComputeConfig{
+            .math_fidelity = math_fidelity,
+            .compile_args = compute_kernel_args,
+            .defines = compute_defines});
+    vector<KernelID> reader_ids;
+    vector<KernelID> writer_ids;
+    //tt_start_debug_print_server(a.device()->cluster(), {0}, debug_cores);
+    for(uint32_t core_i = 0; core_i < total_num_cores; core_i++) {
+        uint32_t core_x_i = core_i % num_cores_x;
+        uint32_t core_y_i = core_i / num_cores_x;
+        // cout << "core_x_i=" << core_x_i << ", core_y_i=" << core_y_i << endl;
+        CoreRange core = {.start = CoreCoord(core_x_i, core_y_i), .end = CoreCoord(core_x_i, core_y_i)};
+
+        // per core specific args
+        uint32_t total_h_start = core_i * per_core_act_matrix_height_ntiles * TILE_HEIGHT;
+        uint32_t n_start = total_h_start / (conv_output_size_h * conv_output_size_w);
+        uint32_t matrix_h_start = total_h_start % (conv_output_size_h * conv_output_size_w);
+        uint32_t out_h_start = matrix_h_start / conv_output_size_w;
+        uint32_t out_w_start = matrix_h_start % conv_output_size_w;
+        uint32_t in_h_start = (n_start * conv_act_size_h) + out_h_start * stride_h;
+        uint32_t last_start_in_h_curr_image = 222 + (n_start * conv_act_size_h);
+        // cout << "total_h_start=" << total_h_start << endl;
+        // cout << "in_h_start=" << in_h_start << endl;
+        // cout << "out_h_start=" << out_h_start << endl;
+        // cout << "out_w_start=" << out_w_start << endl;
+        // cout << "matrix_h_start=" << matrix_h_start << endl;
+        // cout << "n_start=" << n_start << endl;
         if (rn50_first_conv) {
-            writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_and_reader_weights_resnet50_first_conv_untilize_out.cpp";
+            assert(pad_h == 0 && pad_w == 0);
+            reader_rt_args.push_back({
+                act_dram_addr,
+                conv_act_size_c,
+                conv_output_size_w,
+                weight_size_w,
+                num_blocks_act_h_per_core,
+                num_blocks_act_w,
+                act_block_h_datums,
+                act_block_num_tiles,
+                in_h_start,
+                out_w_start,
+                last_start_in_h_curr_image
+            });
         } else {
-            writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_unary_stick_8bank_blocks_reader_weight_tile_with_pow2_addr_gen_fast.cpp";
+            reader_rt_args.push_back({
+                // arguments for act
+                act_dram_addr,
+                act_noc_x,
+                act_noc_y,
+
+                conv_act_size_w,
+                conv_act_size_h,
+                conv_act_size_c,
+                weight_size_h,
+                weight_size_w,
+                stride_h,
+                stride_w,
+                pad_h,
+                pad_w,
+                conv_output_size_h,
+                conv_output_size_w,
+                num_blocks_act_h_per_core, // per core
+                num_blocks_act_w,
+                num_blocks_weight_w,
+                num_groups,
+
+                act_matrix_height_unpadded,
+                act_matrix_width_unpadded,
+                act_matrix_height,
+                act_matrix_width,
+                act_matrix_height_ntiles,
+                act_matrix_width_ntiles,
+                act_block_h_datums,
+                act_block_w_datums,
+                act_block_h_ntiles,
+                act_block_w_ntiles,
+                act_block_num_tiles,
+
+                src_dram_act_buffer_size_bytes,
+                dst_l1_act_buffer_size_bytes,
+
+                n_start,
+                out_h_start,
+                out_w_start,
+                total_h_start,
+            });
         }
-        writer_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0), out0_cb, weight_cb, (uint32_t) std::log2(out_row_size_bytes)};
-        writer_rt_args = {
-            out_dram_addr,
-            weight_dram_addr,
 
-            act_block_h_datums,
-            out_block_row_size_bytes,
-            1,
-            num_blocks_act_h,
-            num_blocks_weight_w,
-            out_row_size_bytes,
-            last_block_row_size_bytes,
-            act_matrix_height_unpadded,
 
-            num_blocks_act_w, // = number of blocks of weight in height dim
-            weight_block_num_tiles,
-            weight_block_h_ntiles,
-            weight_block_w_ntiles,
-            weight_matrix_width_ntiles, // weight_stride_h
-            weight_matrix_width_ntiles * weight_block_h_ntiles, // weight_next_block_stride_h,
-            weight_block_w_ntiles, // weight_next_block_stride_w
+        uint32_t out_start_tile_id = core_i * per_core_act_matrix_height_ntiles * weight_matrix_width_ntiles;
+        uint32_t out_start_tile_id_h = core_i * per_core_act_matrix_height_ntiles;
+        // cout << "out_start_tile_id=" << out_start_tile_id << endl;
+        // cout << "per_core_act_matrix_height_ntiles=" << per_core_act_matrix_height_ntiles << endl;
+        // cout << "weight_matrix_width_ntiles=" << weight_matrix_width_ntiles <<  endl;
+        // cout << "out_start_tile_id_h=" << out_start_tile_id_h << endl;
 
-        };
-    } else {
-        if (rn50_first_conv) {
-            writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_and_reader_weights_resnet50_first_conv_tiled_out.cpp";
-        } else {
-            writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_tiled_out_reader_conv_weights_tiled_col_to_rm_blocks_read_weight_slices_once.cpp";
-        }
-        writer_compile_time_args = {
-            (uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
-            out0_cb,
-            weight_cb,
-            bias_cb,
-            bias_log2_of_pagesize,
-            bias_tile_nbytes,
-            (uint32_t) (bias_buffer == nullptr ? 0 : (bias_buffer->buffer_type() == BufferType::DRAM ? 1 : 0))};
-        writer_rt_args = {
+        writer_rt_args.push_back({
             out_dram_addr,
             weight_dram_addr,
 
@@ -565,11 +663,13 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
             out_subblock_num_tiles,
             act_block_h_ntiles / out_subblock_h_ntiles, // out_num_subblocks_h
             weight_block_w_ntiles / out_subblock_w_ntiles,   // out_num_subblocks_w
-            num_blocks_act_h, // out_num_blocks_h
+            num_blocks_act_h_per_core, // out_num_blocks_h
             num_blocks_weight_w, // out_num_blocks_w
             act_block_h_ntiles, // out_block_height_num_tiles
             output_height_num_tiles, // out_height_num_tiles without block shape padding
             output_width_num_tiles, // out_width_num_tiles withoug block shape padding
+            out_start_tile_id,
+            out_start_tile_id_h,
 
             num_blocks_act_w, // = number of blocks of weight in height dim
             weight_block_num_tiles,
@@ -582,76 +682,30 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
             // bias
             bias_dram_addr,
             bias_ntiles
-        };
-    }
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(a.dtype());
-    auto reader_id = CreateDataMovementKernel(
-        program,
-        reader_kernel,
-        core,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
-            .compile_args = reader_compile_time_args,
-            .defines = reader_defines});
+        });
 
-    auto writer_id = CreateDataMovementKernel(
-        program,
-        writer_kernel,
-        core,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = writer_compile_time_args,
-            .defines = all_defines});
 
-    vector<uint32_t> compute_kernel_args = {
-        act_block_w_ntiles,
-        act_num_subblocks,
-        act_block_num_tiles,
-        act_subblock_num_tiles,
-        act_subblock_h_ntiles,
 
-        weight_num_subblocks,
-        weight_block_num_tiles,
-        weight_block_w_ntiles,
+        SetRuntimeArgs(
+            program, reader_id, core,
+            reader_rt_args.back()
+        );
 
-        num_blocks_act_h,
-        num_blocks_act_w,
-        num_blocks_weight_w,
+        SetRuntimeArgs(
+            program, writer_id, core,
+            writer_rt_args.back()
+        );
+        reader_ids.push_back(reader_id);
+        writer_ids.push_back(writer_id);
 
-        out_subblock_h_ntiles,
-        out_subblock_w_ntiles,
-        out_subblock_num_tiles,
-
-        true,
-        untilize_out,
-
-        bias_ntiles
-    };
-
-    auto compute = CreateComputeKernel(
-        program,
-        compute_kernel,
-        core,
-        ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .compile_args = compute_kernel_args,
-            .defines = compute_defines});
-
-    SetRuntimeArgs(
-        program, reader_id, core,
-        reader_rt_args
-    );
-
-    SetRuntimeArgs(
-        program, writer_id, core,
-        writer_rt_args
-    );
+    } // for num_cores
 
     auto override_runtime_args_callback = [
-        reader_kernel_id=reader_id,
-        writer_kernel_id=writer_id,
+        reader_kernel_ids=reader_ids,
+        writer_kernel_ids=writer_ids,
+        total_num_cores=total_num_cores,
+        num_cores_x=num_cores_x,
+        num_cores_y=num_cores_y,
         has_bias=has_bias
     ]
     (
@@ -667,25 +721,27 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
         auto src_dram_buffer_b = input_buffers.at(1);
 
         auto dst_dram_buffer = output_buffers.at(0);
-
-        CoreCoord core = {0, 0};
-
-        {
-            auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = src_dram_buffer_a->address();
-            SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
-        }
-
-        {
-            auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = dst_dram_buffer->address();
-            runtime_args[1] = src_dram_buffer_b->address();
-            if (has_bias) {
-                auto src_dram_buffer_c = input_buffers.at(2);
-                TT_ASSERT(src_dram_buffer_c != nullptr);
-                runtime_args[25] = src_dram_buffer_c->address();
+        for(uint32_t core_i = 0; core_i < total_num_cores; core_i++) {
+            uint32_t core_x_i = core_i % num_cores_x;
+            uint32_t core_y_i = core_i / num_cores_x;
+            CoreCoord core = {core_x_i, core_y_i};
+            {
+                auto runtime_args = GetRuntimeArgs(program, reader_kernel_ids[core_i], core);
+                runtime_args[0] = src_dram_buffer_a->address();
+                SetRuntimeArgs(program, reader_kernel_ids[core_i], core, runtime_args);
             }
-            SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
+
+            {
+                auto runtime_args = GetRuntimeArgs(program, writer_kernel_ids[core_i], core);
+                runtime_args[0] = dst_dram_buffer->address();
+                runtime_args[1] = src_dram_buffer_b->address();
+                if (has_bias) {
+                    auto src_dram_buffer_c = input_buffers.at(2);
+                    TT_ASSERT(src_dram_buffer_c != nullptr);
+                    runtime_args[27] = src_dram_buffer_c->address();
+                }
+                SetRuntimeArgs(program, writer_kernel_ids[core_i], core, runtime_args);
+            }
         }
     };
 
@@ -707,6 +763,7 @@ Tensor optimized_conv(const Tensor& a,
             bool has_bias,
             bool fuse_relu,
             MathFidelity math_fidelity,
+            const OptimizedConvParallelizationConfig& parallelization_config,
             uint32_t extra_padding_for_32B_alignment) {
     TT_ASSERT(!untilize_out, "Optimized conv only supports tiled out");
     TT_ASSERT(b.layout() == Layout::TILE); // Weights should already be formatted
@@ -714,12 +771,13 @@ Tensor optimized_conv(const Tensor& a,
     FormatParams input_a_format_params = {.pad_shape=padded_a_shape, .pad_value=0.0, .target_layout=Layout::ROW_MAJOR};
     FormatParams input_b_format_params = {.pad_shape=b.shape(), .pad_value=0.0, .target_layout=Layout::TILE};
     FormatParams input_bias_format_params = {};
+
     if (has_bias) {
         input_bias_format_params = {.pad_shape=bias.value().shape(), .pad_value=0, .target_layout=Layout::TILE};
     }
     auto output_layout = untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
     return operation::run_without_autoformat(
-        OptimizedConv(act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, extra_padding_for_32B_alignment
+        OptimizedConv(act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, extra_padding_for_32B_alignment
         ),
         {a, b},
         {bias}).at(0);
@@ -784,7 +842,7 @@ operation::ProgramWithCallbacks OptimizedConv::create_program(const std::vector<
             weight_block_w_ntiles, out_subblock_h_ntiles,
             out_subblock_w_ntiles, output_channels,
             untilize_out, has_bias,
-            fuse_relu, math_fidelity, extra_padding_for_32B_alignment, output_tensor)};
+            fuse_relu, math_fidelity, parallelization_config, extra_padding_for_32B_alignment, output_tensor)};
 }
 
 tt::stl::reflection::Attributes OptimizedConv::attributes() const {
@@ -800,6 +858,13 @@ tt::stl::reflection::Attributes OptimizedConv::attributes() const {
         {"has_bias", this->has_bias},
         {"fuse_relu", this->fuse_relu},
         {"math_fidelity", this->math_fidelity},
+    };
+}
+
+tt::stl::reflection::Attributes OptimizedConvParallelizationConfig::attributes() const {
+    return {
+        {"grid_size",  this->grid_size.str()},
+        {"per_core_act_matrix_height_ntiles",  this->per_core_act_matrix_height_ntiles},
     };
 }
 

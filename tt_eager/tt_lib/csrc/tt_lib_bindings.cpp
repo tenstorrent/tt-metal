@@ -2391,11 +2391,30 @@ void TensorModule(py::module &m_tensor) {
         +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
     )doc");
 
+    py::class_<OptimizedConvParallelizationConfig>(m_tensor, "OptimizedConvParallelizationConfig")
+        .def(
+            py::init<>(
+                [] (
+                    std::tuple<std::size_t, std::size_t> grid_size,
+                    uint32_t per_core_act_matrix_height_ntiles
+                ) {
+                    return OptimizedConvParallelizationConfig{
+                        .grid_size={std::get<0>(grid_size), std::get<1>(grid_size)},
+                        .per_core_act_matrix_height_ntiles=per_core_act_matrix_height_ntiles
+                    };
+
+                }
+            ),
+            py::kw_only(),
+            py::arg("grid_size").noconvert(),
+            py::arg("per_core_act_matrix_height_ntiles").noconvert()
+        );
+
     m_tensor.def("optimized_conv", &optimized_conv,
                  py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt,
                  py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(),
                  py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(),
-                 py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert() = 0, R"doc(
+                 py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert() = 0, R"doc(
         Perform a conv ``A x B`` with two tensors
         This op tilizes tensor A and untilizes the output
 

@@ -18,6 +18,9 @@ void kernel_main() {
 
     uint32_t act_block_h_datums = get_arg_val<uint32_t>(i); i+=1;
     uint32_t act_block_num_tiles = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t in_h_start = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t out_w_start = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t last_start_in_h_curr_image = get_arg_val<uint32_t>(i); i+=1;
 
     constexpr bool act_in_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t stride_h = get_compile_time_arg_val(1);
@@ -54,35 +57,22 @@ void kernel_main() {
 
     constexpr uint32_t in_w_padded_for_32_alignment = 231 + extra_padding_for_32B_alignment;
 
-    uint32_t in_h = 0;
-    uint32_t in_h_start = 0;
-    uint32_t page_offset_h_2d_matrix = 0;
-    uint32_t page_offset_h_2d_matrix_start = 0;
+    uint32_t in_h = in_h_start;
+    uint32_t in_h_reset = in_h;
+    uint32_t out_w = out_w_start;
+    uint32_t out_w_reset = out_w;
+    uint32_t page_offset_h_2d_matrix = out_w_start * (channel_stick_size_bytes << 1);
+    uint32_t page_offset_h_2d_matrix_reset = page_offset_h_2d_matrix;
     uint32_t last_start_in_h_stride = 222;
-    uint32_t last_start_in_h_curr_image = last_start_in_h_stride;
-    uint32_t last_start_in_h_curr_image_start = last_start_in_h_stride;
-    uint32_t out_w = 0;
-    uint32_t out_w_start = 0;
-    // uint32_t first_c_id_in_2d_row = 0;
-    // uint32_t first_c_id_in_2d_row_at_out_w_0 = 0;
-    // uint32_t first_c_id_in_2d_row_start = 0;
-    // uint32_t first_c_id_in_2d_row_at_out_w_0_start = 0;
-    //uint32_t last_channed_id_at_outw_0_stride = 51282; // output h = 112 --> 51282 = 111 * in_w * 2
-    //uint32_t last_channed_id_at_outw_0_stride = 111 * in_w_padded_for_32_alignment * 2; // output h = 112 --> 51282 = 111 * in_w * 2
-    //uint32_t last_channel_id_at_outw_0_of_curr_img = last_channed_id_at_outw_0_stride;
-    //uint32_t last_channel_id_at_outw_0_of_curr_img_start = last_channel_id_at_outw_0_of_curr_img;
-    //DPRINT << "Running new conv reader" << ENDL();
+    uint32_t last_start_in_h_curr_image_reset = last_start_in_h_curr_image;
     for(uint32_t nbh = 0; nbh < num_blocks_act_h; nbh++) {
         uint32_t c_id_offset_inter_block_col = 0;
         uint32_t page_id_offset_inter_block_w = 0;
         for (uint32_t nbw = 0; nbw < num_blocks_act_w; nbw++) {
-            out_w = out_w_start;
-            in_h = in_h_start;
-            page_offset_h_2d_matrix = page_offset_h_2d_matrix_start;
-            //first_c_id_in_2d_row = first_c_id_in_2d_row_start;
-            //first_c_id_in_2d_row_at_out_w_0 = first_c_id_in_2d_row_at_out_w_0_start;
-            //last_channel_id_at_outw_0_of_curr_img = last_channel_id_at_outw_0_of_curr_img_start;
-            last_start_in_h_curr_image = last_start_in_h_curr_image_start;
+            out_w = out_w_reset;
+            in_h = in_h_reset;
+            page_offset_h_2d_matrix = page_offset_h_2d_matrix_reset;
+            last_start_in_h_curr_image = last_start_in_h_curr_image_reset;
             cb_reserve_back(cb_id_act, act_block_num_tiles);
             uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
             uint32_t l1_addr_offset = 0;
@@ -95,26 +85,6 @@ void kernel_main() {
                 uint32_t dst_addr = l1_write_addr_act + l1_addr_offset;
                 s_act.noc_async_read_partial_page(page_id, dst_addr, read_size_bytes, page_offset);
                 l1_addr_offset += read_size_bytes;
-                // uint32_t page_offset_intra_block_w = 0;
-                // for(uint32_t bw = 0; bw < weight_size_w; bw++) {
-                //     uint32_t read_size_bytes = channel_stick_size_bytes;
-
-                //     // read one channel
-                //     //uint32_t channel_id = first_c_id_in_2d_row + c_id_offset_inter_block_col + c_id_offset_inra_block_col;
-                //     uint32_t dst_addr = l1_write_addr_act + l1_addr_offset;
-                //     //s_act.noc_async_read_page(channel_id, dst_addr);
-
-                //     //uint32_t page_id = channel_id / in_w_padded_for_32_alignment;
-                //     //uint32_t channel_id_within_page = channel_id % in_w_padded_for_32_alignment;
-                //     uint32_t page_id = in_h + page_id_offset_inter_block_w;
-                //     //uint32_t page_offset = channel_id_within_page * channel_stick_size_bytes;
-                //     uint32_t page_offset = page_offset_h_2d_matrix + page_offset_intra_block_w;
-                //     s_act.noc_async_read_partial_page(page_id, dst_addr, channel_stick_size_bytes, page_offset);
-
-                //     l1_addr_offset += read_size_bytes;
-                //     //c_id_offset_inra_block_col += 1;
-                //     page_offset_intra_block_w += channel_stick_size_bytes;
-                // } // for block width
                 if(out_w < conv_output_size_w - 1) {
                     out_w += 1;
                     //first_c_id_in_2d_row += 2; // channel id stride in the w dimension
@@ -130,16 +100,6 @@ void kernel_main() {
                         in_h += 8;
                         last_start_in_h_curr_image = in_h + last_start_in_h_stride;
                     }
-                    // if (first_c_id_in_2d_row_at_out_w_0 < last_channel_id_at_outw_0_of_curr_img) {
-                    //     first_c_id_in_2d_row_at_out_w_0 += (in_w_padded_for_32_alignment * 2); // channel id stride in the h dimension
-                    //     //DPRINT << "c id stride H = " << first_c_id_in_2d_row_at_out_w_0 << ENDL();
-                    // } else {
-                    //     // next image in batch
-                    //     //DPRINT << "going to increment for next image. first_c_id_in_2d_row_at_out_w_0=" << first_c_id_in_2d_row_at_out_w_0 << ENDL();
-                    //     first_c_id_in_2d_row_at_out_w_0 += (7+1) * in_w_padded_for_32_alignment; // channel id stride in the n dimension, 1848 = in_w * 8
-                    //     last_channel_id_at_outw_0_of_curr_img = first_c_id_in_2d_row_at_out_w_0 + last_channed_id_at_outw_0_stride;
-                    // }
-                    //first_c_id_in_2d_row = first_c_id_in_2d_row_at_out_w_0;
                 }
             } // for block height
             c_id_offset_inter_block_col += in_w_padded_for_32_alignment;
@@ -147,12 +107,9 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_push_back(cb_id_act, act_block_num_tiles);
         } // for num of act blocks in inner width dim
-        out_w_start = out_w;
-        in_h_start = in_h;
-        page_offset_h_2d_matrix_start = page_offset_h_2d_matrix;
-        // first_c_id_in_2d_row_start  = first_c_id_in_2d_row;
-        // first_c_id_in_2d_row_at_out_w_0_start = first_c_id_in_2d_row_at_out_w_0;
-        // last_channel_id_at_outw_0_of_curr_img_start = last_channel_id_at_outw_0_of_curr_img;
-        last_start_in_h_curr_image_start = last_start_in_h_curr_image;
+        out_w_reset = out_w;
+        in_h_reset = in_h;
+        page_offset_h_2d_matrix_reset = page_offset_h_2d_matrix;
+        last_start_in_h_curr_image_reset = last_start_in_h_curr_image;
     } // for num of act blocks in height dim
 }

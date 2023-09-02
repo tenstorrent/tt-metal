@@ -63,6 +63,8 @@ void kernel_main() {
     uint32_t out_block_height_num_tiles = get_arg_val<uint32_t>(i); i+=1;
     uint32_t out_height_num_tiles = get_arg_val<uint32_t>(i); i+=1;
     uint32_t out_width_num_tiles = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t out_start_tile_id = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t out_start_tile_id_h = get_arg_val<uint32_t>(i); i+=1;
 
     uint32_t num_blocks_weight_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_block_num_tiles = get_arg_val<uint32_t>(i); i+=1;
@@ -134,7 +136,8 @@ void kernel_main() {
 
     // OUTER most loop is looping over out blocks in width dim because blocks from compute are in col major order.
     // Write out col major blocks in row major layout to output
-    uint32_t out_block_w_start_tile_id = 0;
+    uint32_t out_block_w_start_tile_id = out_start_tile_id;
+    //DPRINT << "out_start_tile_id=" << out_start_tile_id << ENDL();
     uint32_t out_block_w_start_tile_id_w = 0;
     uint32_t weight_start_tile_id = 0;
     for (uint32_t bw = 0; bw < out_num_blocks_w; bw++) {
@@ -157,7 +160,8 @@ void kernel_main() {
         weight_start_tile_id += weight_next_block_stride_w;
 
         uint32_t out_block_h_start_tile_id = out_block_w_start_tile_id;
-        uint32_t out_block_h_start_tile_id_h = 0;
+        //DPRINT << "out_block_h_start_tile_id=" << out_block_h_start_tile_id << ENDL();
+        uint32_t out_block_h_start_tile_id_h = out_start_tile_id_h;
         for(uint32_t bh = 0; bh < out_num_blocks_h; bh++) {
 
             uint32_t out_sbh_start_tile_id = out_block_h_start_tile_id;

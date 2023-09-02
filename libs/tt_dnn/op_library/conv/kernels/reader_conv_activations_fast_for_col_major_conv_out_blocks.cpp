@@ -54,6 +54,10 @@ void kernel_main() {
     uint32_t act_block_num_tiles = get_arg_val<uint32_t>(i); i+=1;
     uint32_t src_dram_act_buffer_size_bytes = get_arg_val<uint32_t>(i); i+=1;
     uint32_t dst_l1_act_buffer_size_bytes = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t n_start = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t out_h_start = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t out_w_start = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t total_h_start = get_arg_val<uint32_t>(i); i+=1;
 
     constexpr bool act_in_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t stride_h = get_compile_time_arg_val(1);
@@ -90,21 +94,21 @@ void kernel_main() {
     // Outer loop is number of blocks in weight width dim
     // Conv output blocks are computed in col major order
     for(uint32_t nbr = 0; nbr < num_blocks_weight_w; nbr++) {
-        uint32_t out_h = 0;
-        uint32_t out_w = 0;
-        uint32_t out_h_start = 0;
-        uint32_t out_w_start = 0;
-        uint32_t total_h = 0;
-        uint32_t total_h_start = 0;
-        uint32_t n = 0;
-        uint32_t n_start = 0;
+        uint32_t out_h = out_h_start;
+        uint32_t out_w = out_w_start;
+        uint32_t out_h_reset = out_h_start;
+        uint32_t out_w_reset = out_w_start;
+        uint32_t total_h = total_h_start;
+        uint32_t total_h_reset = total_h_start;
+        uint32_t n = n_start;
+        uint32_t n_reset = n_start;
         for(uint32_t nbh = 0; nbh < num_blocks_act_h; nbh++) {
             uint32_t in_h_offset_within_kernel_window = 0;
             for (uint32_t nbw = 0; nbw < num_blocks_act_w; nbw++) {
-                out_h = out_h_start;
-                out_w = out_w_start;
-                total_h = total_h_start;
-                n = n_start;
+                out_h = out_h_reset;
+                out_w = out_w_reset;
+                total_h = total_h_reset;
+                n = n_reset;
                 cb_reserve_back(cb_id_act, act_block_num_tiles);
                 uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
                 uint32_t l1_addr_offset = 0;
@@ -164,10 +168,10 @@ void kernel_main() {
                 noc_async_read_barrier();
                 cb_push_back(cb_id_act, act_block_num_tiles);
             } // for num of act blocks in inner width dim
-            out_h_start = out_h;
-            out_w_start = out_w;
-            total_h_start = total_h;
-            n_start = n;
+            out_h_reset = out_h;
+            out_w_reset = out_w;
+            total_h_reset = total_h;
+            n_reset = n;
         } // for num of act blocks in height dim
     } // for num of weight blocks in width dim
 }

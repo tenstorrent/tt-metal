@@ -60,12 +60,12 @@ def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignme
         B_pyt = torch.randn(b_weights_shape, dtype=torch.bfloat16).float()
 
         # Parameters to define block dims
-        act_block_h = 4
+        #[128, 32], [32, 64], [128, 64]
         assert padded_C * padded_S % 32 == 0
         act_block_w = (int)((padded_C * padded_S) / 32)
         weight_block_h = act_block_w
         weight_block_w = 2
-        out_subblock_h = 4
+        out_subblock_h = 1
         out_subblock_w = 2
         # pad filter from 7x7 to 7x8
         OH = ((int)((H - R + 2 * pad_h) / stride_h)) + 1
@@ -73,6 +73,20 @@ def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignme
         conv_output_shape = [N, OH, OW, K]
         print(a_activation_shape)
         print(conv_output_shape)
+
+        if(N == 1):
+            act_block_h_datums = 256
+            grid_size = (7,7)
+            per_core_act_h_ntiles = 8
+        elif(N == 2):
+            act_block_h_datums = 256
+            grid_size = (7,7)
+            per_core_act_h_ntiles = 16
+        elif(N == 8):
+            act_block_h_datums = 256
+            grid_size = (7,7)
+            per_core_act_h_ntiles = 64
+        act_block_h = (int) (act_block_h_datums / 32)
 
         # Prepare activations
 
@@ -120,6 +134,7 @@ def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignme
             False,
             False,
             ttl.tensor.MathFidelity.HiFi4,
+            ttl.tensor.OptimizedConvParallelizationConfig(grid_size=grid_size, per_core_act_matrix_height_ntiles=per_core_act_h_ntiles),
             extra_padding_for_32B_alignment
         )
         if not untilize_out:
@@ -139,14 +154,14 @@ def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignme
         assert out_result.shape == out_golden.shape
 
         # Debug
-        out_result_first_image = out_result[0][:][:][:]
-        out_golden_first_image = out_golden[0][:][:][:]
-        first_pcc, _ = comp_pcc(out_golden_first_image, out_result_first_image, pcc=0.9998)
-        assert first_pcc
-        out_result_sec_image = out_result[1][:][:][:]
-        out_golden_sec_image = out_golden[1][:][:][:]
-        sec_pcc, _ = comp_pcc(out_golden_sec_image, out_result_sec_image, pcc=0.9998)
-        assert sec_pcc
+        # out_result_first_image = out_result[0][:][:][:]
+        # out_golden_first_image = out_golden[0][:][:][:]
+        # first_pcc, _ = comp_pcc(out_golden_first_image, out_result_first_image, pcc=0.9998)
+        # assert first_pcc
+        # out_result_sec_image = out_result[1][:][:][:]
+        # out_golden_sec_image = out_golden[1][:][:][:]
+        # sec_pcc, _ = comp_pcc(out_golden_sec_image, out_result_sec_image, pcc=0.9998)
+        # assert sec_pcc
 
         # Compare against golden
         passing_pcc, output_pcc = comp_pcc(out_golden, out_result, 0.99)

@@ -331,44 +331,44 @@ hardcoded_matmul_config_conv = {
 
 hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv = {
     1 : {
-        (3136, 64) : [128, 64, 128, 64] ,
-        (800, 128) : [128, 128, 128, 64] ,
-        (224, 256) : [64, 128, 64, 128],
-        (64, 512) : [32, 64, 32, 64] ,
+        (3136, 64) : [64, 64, 64, 64, (7,7), 64],
+        (800, 128) : [32, 128, 32, 64, (5,5), 32],
+        (224, 256) : [32, 128, 32, 128, (1,7), 32],
+        (64, 512) : [32, 64, 32, 64, (1, 2), 32] ,
     },
     2  : {
-        (6272, 64) : [128, 64, 128, 64] ,
-        (1568, 128) : [128, 128, 128, 64] ,
-        (416, 256) : [64, 128, 64, 128],
-        (128, 512) : [32, 64, 32, 64] ,
+        (6272, 64) : [128, 64, 128, 64, (7,7), 128],
+        (1568, 128) : [32, 128, 32, 64, (7,7), 32],
+        (416, 256) : [64, 128, 64, 128, (7,1), 64],
+        (128, 512) : [32, 64, 32, 64, (1,4), 32],
     },
     8 : {
-        (25088, 64) : [128, 64, 128, 64] ,
-        (6272, 128) : [64, 128, 64, 64] ,
-        (1568, 256) : [32, 128, 32, 128],
-        (416, 512) : [32, 64, 32, 64] ,
+        (25088, 64) : [128, 64, 128, 64, (7,7), 512],
+        (6272, 128) : [64, 128, 64, 64, (7,7), 128],
+        (1568, 256) : [32, 128, 32, 128, (7,7), 32],
+        (416, 512) : [64, 32, 64, 32, (7,1), 64],
     },
 }
 
 # With double buffered input CB, these shapes work -
 hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_downsample_conv = {
     1 : {
-        (3136, 256) : [128, 64, 128, 64] ,
-        (800, 512) : [128, 64, 128, 64] ,
-        (224, 1024) : [64, 128, 64, 64],
-        (64, 2048) : [64, 128, 64, 64] ,
+        (3136, 256) : [64, 64, 64, 64, (7,7), 64],
+        (800, 512) : [32, 64, 32, 64, (5,5), 32],
+        (224, 1024) : [32, 128, 32, 64, (1,7), 32],
+        (64, 2048) : [32, 128, 32, 64, (1, 2), 32],
     },
     2 : {
-        (6272, 256) : [128, 64, 128, 64] ,
-        (1568, 512) : [128, 64, 128, 64] ,
-        (416, 1024) : [64, 128, 64, 64],
-        (128, 2048) : [64, 128, 64, 64] ,
+        (6272, 256) : [128, 64, 128, 64, (7,7), 128],
+        (1568, 512) : [32, 64, 32, 64, (7,7), 32],
+        (416, 1024) : [64, 128, 64, 64, (7,1), 64],
+        (128, 2048) : [64, 128, 64, 64, (1,2), 64],
     },
     8 : {
-        (25088, 256) : [128, 64, 128, 64] ,
-        (6272, 512) : [128, 64, 128, 64] ,
-        (1568, 1024) : [64, 128, 64, 64],
-        (416, 2048) : [64, 128, 64, 64] ,
+        (25088, 256) : [128, 64, 128, 64, (7,7), 512] ,
+        (6272, 512) : [128, 64, 128, 64, (7,7), 128] ,
+        (1568, 1024) : [32, 128, 32, 64, (7,7), 32],
+        (416, 2048) : [64, 128, 64, 64, (7,1), 64] ,
     },
 }
 
@@ -494,8 +494,13 @@ class Bottleneck(nn.Module):
         self.conv2_output_shape = compute_conv_output_shape(self.conv2_params, self.conv1_output_shape)
         conv2_output_padded_face_size = _nearest_32(self.conv2_output_shape[0] * self.conv2_output_shape[1] * self.conv2_output_shape[2])
         assert (conv2_output_padded_face_size, width) in hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv[batch_size]
-        [act_block_h_datums, weight_block_w_datums, out_subblock_h_datums, out_subblock_w_datums] = hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv[batch_size][(conv2_output_padded_face_size, width)]
-        self.conv2 = resnet50_optimized_conv(conv2_weight.reshape(-1).tolist(), self.conv2_params, self.device, [act_block_h_datums, width*3], [width*3, weight_block_w_datums], [out_subblock_h_datums, out_subblock_w_datums], conv2_bias.tolist(), True)
+        [act_block_h_datums, weight_block_w_datums, out_subblock_h_datums, out_subblock_w_datums, grid_size, per_core_act_h] = hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv[batch_size][(conv2_output_padded_face_size, width)]
+        assert per_core_act_h % 32 == 0
+        per_core_act_h_ntiles = (int) (per_core_act_h / 32)
+        self.conv2 = resnet50_optimized_conv(conv2_weight.reshape(-1).tolist(), self.conv2_params, self.device, [act_block_h_datums, width*3], [width*3, weight_block_w_datums],
+                                             [out_subblock_h_datums, out_subblock_w_datums],
+                                             grid_size, per_core_act_h_ntiles,
+                                             conv2_bias.tolist(), True)
 
         self.conv3_params = [planes * self.expansion, width, 1, 1, 1, 1, 0, 0, dilation, groups]
         self.conv3_output_shape = compute_conv_output_shape(self.conv3_params, self.conv2_output_shape)
@@ -542,9 +547,11 @@ class Bottleneck(nn.Module):
         #         x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
         #         x = x.reshape(self.module_input_shape[0], self.module_input_shape[1], self.module_input_shape[2], self.module_input_shape[3])
         #     identity = self.downsample_conv_on_tt(x)
+        #print("Running downsample or nop")
         x = self.downsample_or_noop(x)
 
         fused_activations = [tt_lib.tensor.FusibleActivation.RELU]
+        #print("Running eltwise add")
         out = tt_lib.tensor.add_without_autoformat(out, x, fused_activations, output_mem_config=self.memory_config)
         # out = self.relu(out, self.memory_config)
         return out
@@ -614,7 +621,19 @@ class ResNet(nn.Module):
             self.bn1 = nn.Identity()
 
         self.conv1_params = [self.inplanes, 3, 7, 7, 2, 2, 3, 3, 1, groups]
-        self.conv1 = resnet50_first_conv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, [128, 32], [32, 64], [128, 64], conv1_bias.tolist(), 8)
+        if(batch_size == 1):
+            act_block_h_datums = 256
+            grid_size = (7,7)
+            per_core_act_h_ntiles = 8
+        elif(batch_size == 2):
+            act_block_h_datums = 256
+            grid_size = (7,7)
+            per_core_act_h_ntiles = 16
+        elif(batch_size == 8):
+            act_block_h_datums = 256
+            grid_size = (7,7)
+            per_core_act_h_ntiles = 64
+        self.conv1 = resnet50_first_conv(conv1_weight.reshape(-1).tolist(), self.conv1_params, self.device, [act_block_h_datums, 32], [32, 64], [128, 64], grid_size, per_core_act_h_ntiles, conv1_bias.tolist(), 8)
         self.conv1_output_shape = compute_conv_output_shape(self.conv1_params, [batch_size, self.conv_input_face_shape_hw[0], self.conv_input_face_shape_hw[1], self.inplanes])
         self.relu = tt_lib.tensor.relu_without_autoformat
         # self.maxpool = fallback_ops.MaxPool2d(kernel_size=3, stride=2, padding=1, channels_last=True, reshape_2d=True)
@@ -706,8 +725,9 @@ class ResNet(nn.Module):
             self.downsample_conv_output_shape = compute_conv_output_shape(self.downsample_params, layer_input_shape)
             downsample_output_padded_face_size = _nearest_32(self.downsample_conv_output_shape[0] * self.downsample_conv_output_shape[1] * self.downsample_conv_output_shape[2])
             assert (downsample_output_padded_face_size, downsample_output_channels) in hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_downsample_conv[batch_size]
-            [act_block_h_datums, weight_block_w_datums, out_subblock_h_datums, out_subblock_w_datums] = hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_downsample_conv[batch_size][(downsample_output_padded_face_size, downsample_output_channels)]
-
+            [act_block_h_datums, weight_block_w_datums, out_subblock_h_datums, out_subblock_w_datums, grid_size, per_core_act_h] = hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_downsample_conv[batch_size][(downsample_output_padded_face_size, downsample_output_channels)]
+            assert per_core_act_h % 32 == 0
+            per_core_act_h_ntiles = (int) (per_core_act_h / 32)
             is_downsample_1x1_conv = stride == 1
             is_1x1_downsample_conv_sanity_check = self.downsample_params[2] == 1 and self.downsample_params[3] == 1 and \
                                     self.downsample_params[4] == 1 and self.downsample_params[5] == 1 and \
@@ -726,6 +746,7 @@ class ResNet(nn.Module):
                                                             [act_block_h_datums, self.inplanes],
                                                             [self.inplanes, weight_block_w_datums],
                                                             [out_subblock_h_datums, out_subblock_w_datums],
+                                                            grid_size, per_core_act_h_ntiles,
                                                             downsample_conv_bias.tolist())
             self.norm_layer_after_downsample_conv_on_tt = nl
 
@@ -804,13 +825,17 @@ class ResNet(nn.Module):
         # re-shape back to original shape (N, H, W, C)
         x = x.reshape(original_A_cl_host_shape[0], original_A_cl_host_shape[1], original_A_cl_host_shape[2], original_A_cl_host_shape[3])
         #print("A_cl_device shape into OP", x.shape())
+        #print("Running conv1")
         x = self.conv1(x)
         #x = x.reshape(1, 1, x.shape()[0]*x.shape()[1]*x.shape()[2], x.shape()[3]);
+        #print("Printing relu after conv1")
         x = self.relu(x, self.memory_config)
         #tt_lib.device.DumpDeviceMemoryState(self.device)
         x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
         x = x.reshape(self.conv1_output_shape[0], self.conv1_output_shape[1], self.conv1_output_shape[2], self.conv1_output_shape[3])
+        #print("Running maxpool")
         x = self.maxpool(x)
+        #print("Done maxpool")
         x = x.reshape(1, 1, self.maxpool_output_shape[0] * self.maxpool_output_shape[1] * self.maxpool_output_shape[2], self.maxpool_output_shape[3])
         x = format_tensor(x, tt_lib.tensor.Layout.TILE, self.device, self.memory_config)
 
