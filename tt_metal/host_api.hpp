@@ -45,9 +45,9 @@ class CircularBuffer;
  * | Argument       | Description                                                      | Data type | Valid range                                         | required |
  * |----------------|------------------------------------------------------------------|-----------|-----------------------------------------------------|----------|
  * | device_type    | Type of Tenstorrent device to be used                            | ARCH enum | “tt::ARCH::GRAYSKULL”                               | Yes      |
- * | pcie_slot      | The number of the PCIexpress slot in which the device is located | int       | 0 to 7                                              | Yes      |
+ * | device_id      | ID of device to target                                           | int       | 0 to number of devices on machine                   | Yes      |
  * */
-Device *CreateDevice(tt::ARCH arch, int pcie_slot);
+Device *CreateDevice(tt::ARCH arch, int device_id);
 
 /**
  * Initializes a device by creating a tt_cluster object and memory manager. Puts device into reset.

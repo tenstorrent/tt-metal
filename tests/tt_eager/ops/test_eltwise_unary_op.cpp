@@ -97,8 +97,8 @@ void test_operation_infrastructure() {
 void test_shape_padding() {
     tt::log_info(tt::LogTest, "Running {}", __func__);
 
-    int pci_express_slot = 0;
-    auto device = tt::tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
+    int device_id = 0;
+    auto device = tt::tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, device_id);
     tt::tt_metal::AutoFormat::SetDefaultDevice(device);
 
     TT_ASSERT(tt::tt_metal::InitializeDevice(device));
@@ -125,8 +125,8 @@ void test_numerically() {
     using tt::constants::TILE_HEIGHT;
     using tt::constants::TILE_WIDTH;
 
-    int pci_express_slot = 0;
-    auto device = tt::tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
+    int device_id = 0;
+    auto device = tt::tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, device_id);
 
     TT_ASSERT(tt::tt_metal::InitializeDevice(device));
 
@@ -187,8 +187,8 @@ void test_program_cache() {
     using tt::constants::TILE_HEIGHT;
     using tt::constants::TILE_WIDTH;
 
-    int pci_express_slot = 0;
-    auto device = tt::tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
+    int device_id = 0;
+    auto device = tt::tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, device_id);
 
     TT_ASSERT(tt::tt_metal::InitializeDevice(device));
 

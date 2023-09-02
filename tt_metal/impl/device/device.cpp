@@ -24,8 +24,8 @@ void Device::initialize_cluster() {
     this->clear_l1_state();
     this->cluster()->initialize_dram_barrier(this->id_);
     this->cluster()->initialize_l1_barrier(this->id_);
-    llrt::utils::log_current_ai_clk(this->cluster(), this->pcie_slot_);
-    this->cluster()->assert_risc_reset(pcie_slot_);
+    llrt::utils::log_current_ai_clk(this->cluster(), this->id_);
+    this->cluster()->assert_risc_reset(this->id_);
 }
 
 void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
@@ -35,7 +35,7 @@ void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
         this->harvesting_initialized_,
         "Harvesting information needs to be initialized before allocator"
     );
-    auto soc_desc = this->cluster()->get_soc_desc(this->pcie_slot_);
+    auto soc_desc = this->cluster()->get_soc_desc(this->id_);
     // Construct allocator config from soc_desc
     AllocatorConfig config({
         .num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_channels()),
@@ -82,10 +82,10 @@ void Device::initialize_harvesting_information() {
     if (not cluster_is_initialized()) {
         tt::log_fatal("Device has not been initialized, did you forget to call InitializeDevice?");
     }
-    auto &soc_desc = this->cluster()->get_soc_desc(this->pcie_slot_);
+    auto &soc_desc = this->cluster()->get_soc_desc(this->id_);
     uint32_t harvested_noc_rows = 0;
     if (this->target_type_ == tt::TargetDevice::Silicon) {
-        harvested_noc_rows = this->cluster()->get_harvested_rows(this->pcie_slot_);
+        harvested_noc_rows = this->cluster()->get_harvested_rows(this->id_);
     }
 
     // Determine which noc-coords are harvested
@@ -102,8 +102,8 @@ void Device::initialize_harvesting_information() {
     tt::log_assert(
         this->num_harvested_rows_ <= 2,
         tt::LogDevice,
-        "this->pcie_slot_={} has this->num_harvested_rows_={}>2",
-        this->pcie_slot_,
+        "this->id={} has this->num_harvested_rows_={}>2",
+        this->id_,
         this->num_harvested_rows_);
     tt::log_assert(
         (this->num_harvested_rows_ == 0) or (this->arch_ == tt::ARCH::WORMHOLE_B0),
@@ -154,8 +154,8 @@ void Device::clear_l1_state() {
 
 bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
     ZoneScoped;
-    log_info(tt::LogMetal, "Initializing device {}", this->pcie_slot_);
-    TT_ASSERT(not this->initialized_, "Device {} has already been initialized!", this->pcie_slot_);
+    log_info(tt::LogMetal, "Initializing device {}", this->id_);
+    TT_ASSERT(not this->initialized_, "Device {} has already been initialized!", this->id_);
     this->initialize_cluster();
     this->initialize_harvesting_information();
     this->initialize_allocator(l1_bank_remap);
@@ -165,18 +165,14 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
 }
 
 bool Device::close() {
-    log_info(tt::LogMetal, "Closing device {}", this->pcie_slot_);
-    TT_ASSERT(this->initialized_, "Cannot close device {} that has not been initialized!", this->pcie_slot_);
+    log_info(tt::LogMetal, "Closing device {}", this->id_);
+    TT_ASSERT(this->initialized_, "Cannot close device {} that has not been initialized!", this->id_);    
     tt_stop_debug_print_server(this->cluster());
-    this->cluster()->assert_risc_reset(pcie_slot_);
+    this->cluster()->assert_risc_reset(id_);
     this->clear_l1_state();
     allocator::clear(*this->allocator_);
     this->initialized_ = false;
     return true;
-}
-
-void Device::on_close_device(on_close_device_callback callback) {
-    this->on_close_device_callbacks.push_back(callback);
 }
 
 Device::~Device() {
@@ -200,20 +196,20 @@ int Device::num_dram_channels() const {
     if (not cluster_is_initialized()) {
         TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
     }
-    return this->cluster()->get_soc_desc(pcie_slot_).get_num_dram_channels();
+    return this->cluster()->get_soc_desc(id_).get_num_dram_channels();
 }
 
 uint32_t Device::l1_size() const {
     if (not cluster_is_initialized()) {
         TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
     }
-    return this->cluster()->get_soc_desc(pcie_slot_).worker_l1_size;
+    return this->cluster()->get_soc_desc(id_).worker_l1_size;
 }
 uint32_t Device::dram_bank_size() const {
     if (not cluster_is_initialized()) {
         TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
     }
-    return this->cluster()->get_soc_desc(pcie_slot_).dram_bank_size;
+    return this->cluster()->get_soc_desc(id_).dram_bank_size;
 }
 
 CoreCoord Device::logical_grid_size() const {
@@ -227,7 +223,7 @@ CoreCoord Device::compute_with_storage_grid_size() const {
     if (not cluster_is_initialized()) {
         TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
     }
-    return this->cluster()->get_soc_desc(pcie_slot_).compute_with_storage_grid_size;
+    return this->cluster()->get_soc_desc(id_).compute_with_storage_grid_size;
 }
 
 CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) const {
@@ -279,7 +275,7 @@ CoreCoord Device::core_from_dram_channel(uint32_t dram_channel) const {
         dram_channel,
         this->num_dram_channels()
     );
-    return this->cluster()->get_soc_desc(pcie_slot_).get_preferred_worker_core_for_dram_channel(dram_channel);
+    return this->cluster()->get_soc_desc(id_).get_preferred_worker_core_for_dram_channel(dram_channel);
 }
 
 int32_t Device::l1_bank_offset_from_bank_id(uint32_t bank_id) const {

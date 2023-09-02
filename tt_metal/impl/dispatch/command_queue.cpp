@@ -288,7 +288,7 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(u32 dst_ad
     u32 available_l1 = MEM_L1_SIZE - DEVICE_COMMAND_DATA_ADDR;
     u32 burst_size = (available_l1 / padded_page_size) * padded_page_size;
 
-    vector<CoreCoord> pcie_cores = this->device->cluster()->get_soc_desc(this->device->pcie_slot()).pcie_cores;
+    vector<CoreCoord> pcie_cores = this->device->cluster()->get_soc_desc(this->device->id()).pcie_cores;
     TT_ASSERT(pcie_cores.size() == 1, "Should only have one pcie core");
     const CoreCoord& pcie_core = pcie_cores.at(0);
 
@@ -350,7 +350,7 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(u32 src_a
     u32 available_l1 = MEM_L1_SIZE - DEVICE_COMMAND_DATA_ADDR;
     u32 burst_size = (available_l1 / padded_page_size) * padded_page_size;
 
-    vector<CoreCoord> pcie_cores = this->device->cluster()->get_soc_desc(this->device->pcie_slot()).pcie_cores;
+    vector<CoreCoord> pcie_cores = this->device->cluster()->get_soc_desc(this->device->id()).pcie_cores;
     TT_ASSERT(pcie_cores.size() == 1, "Should only have one pcie core");
     const CoreCoord& pcie_core = pcie_cores.at(0);
 
@@ -491,8 +491,8 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(u32 runtime_a
         }
     }
 
-    u32 pcie_slot = 0;
-    vector<CoreCoord> pcie_cores = this->device->cluster()->get_soc_desc(pcie_slot).pcie_cores;
+    u32 device_id = 0;
+    vector<CoreCoord> pcie_cores = this->device->cluster()->get_soc_desc(device_id).pcie_cores;
     TT_ASSERT(pcie_cores.size() == 1, "Should only have one pcie core");
     const CoreCoord& pcie_core = pcie_cores.at(0);
 
@@ -587,7 +587,7 @@ void send_dispatch_kernel_to_device(Device* device) {
 
     Program dispatch_program = Program();
     CoreCoord dispatch_logical_core = {0, 9};
-    vector<CoreCoord> pcie_cores = device->cluster()->get_soc_desc(device->pcie_slot()).pcie_cores;
+    vector<CoreCoord> pcie_cores = device->cluster()->get_soc_desc(device->id()).pcie_cores;
     TT_ASSERT(pcie_cores.size() == 1, "Should only have one pcie core");
     std::map<string, string> dispatch_defines = {
         {"IS_DISPATCH_KERNEL", ""},

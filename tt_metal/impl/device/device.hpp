@@ -29,7 +29,7 @@ class Device {
    public:
     static size_t detect_num_available_devices(const TargetDevice target_type = TargetDevice::Silicon);
     friend void tt_gdb(Device* device, int chip_id, const vector<CoreCoord> cores, vector<string> ops);
-    Device(tt::ARCH arch, int pcie_slot) : arch_(arch), pcie_slot_(pcie_slot) {}
+    Device(tt::ARCH arch, int device_id) : arch_(arch), id_(device_id) {}
 
     ~Device();
 
@@ -42,7 +42,7 @@ class Device {
 
     tt::ARCH arch() const { return arch_; }
 
-    int pcie_slot() const { return pcie_slot_; }
+    int id() const { return id_; }
 
     tt_cluster *cluster() const;  // Need to access cluster in llrt APIs
 
@@ -82,8 +82,6 @@ class Device {
 
     void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out) const;
 
-    void on_close_device(on_close_device_callback callback);
-
    private:
     void check_allocator_is_initialized() const;
 
@@ -110,7 +108,7 @@ class Device {
 #endif
     static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
     tt::ARCH arch_;
-    int pcie_slot_;
+    int id_;
     std::unique_ptr<Allocator> allocator_ = nullptr;
     bool initialized_ = false;
 
@@ -118,8 +116,6 @@ class Device {
     CoreCoord post_harvested_worker_grid_size_ = {};
     std::unordered_map<CoreCoord, CoreCoord> logical_to_routing_coord_lookup_table_ = {};
     unsigned int num_harvested_rows_ = 0;
-
-    std::vector<on_close_device_callback> on_close_device_callbacks;
 };
 
 }  // namespace tt_metal

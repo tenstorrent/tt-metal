@@ -46,7 +46,7 @@ struct CompileState {
     string gpp_           { "/tt_metal/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-g++ " };
     string gcc_           { "/tt_metal/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-gcc " }; // TODO(AP): this wasn't really necessary for assembler
     string objcopy_       { "/tt_metal/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-objcopy " };
-    int pcie_slot;
+    int device_id;
     string kernel_subdir_;
     string thread_bin_subdir;
     string log_file;
@@ -61,7 +61,7 @@ struct CompileState {
         if (home_.back() != '/')
             home_.push_back('/');
         kernel_subdir_ = build_opts->outpath + in_kernel_subdir;
-        pcie_slot = build_opts->pcie_slot;
+        device_id = build_opts->device_id;
         gpp_ = home_ + gpp_;
         gcc_ = home_ + gcc_;
         objcopy_ = home_ + objcopy_;
@@ -375,7 +375,7 @@ struct CompileState {
             linkopts += " -fno-tree-loop-distribute-patterns";
         }
         if (!is_fw_build_) {
-            string weakened_elf_name = tt::get_firmware_compile_outpath(pcie_slot) + elfname + "/" + elfname + "_weakened.elf";
+            string weakened_elf_name = tt::get_firmware_compile_outpath(device_id) + elfname + "/" + elfname + "_weakened.elf";
             if (!fs::exists(weakened_elf_name)) {
                 log_fatal(tt::LogBuildKernels, "File {} does not exist, link failed\n", weakened_elf_name);
             }

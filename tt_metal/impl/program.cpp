@@ -208,7 +208,7 @@ uint32_t Program::semaphore_address ( uint32_t sem_idx ) const {
 void Program::init_semaphores( const Device & device, const CoreCoord &logical_core ) const{
     auto semaphores_on_core = this->semaphores_on_core(logical_core);
     for (auto semaphore : semaphores_on_core) {
-        llrt::write_hex_vec_to_core(device.cluster(), device.pcie_slot(), device.worker_core_from_logical_core(logical_core), {semaphore.get().initial_value()}, semaphore.get().address());
+        llrt::write_hex_vec_to_core(device.cluster(), device.id(), device.worker_core_from_logical_core(logical_core), {semaphore.get().initial_value()}, semaphore.get().address());
     }
 }
 

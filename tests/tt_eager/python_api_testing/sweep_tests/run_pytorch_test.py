@@ -65,8 +65,8 @@ def run_pytorch_test(args):
         logger.info(f"Not logging results in {output_folder}. Delete that folder to write csv results.")
 
     ################# PARSE ARGS #################
-    pcie_slot = args.pcie_slot
-    logger.info(f"Running on device {pcie_slot} for test.")
+    device_id = args.device_id
+    logger.info(f"Running on device {device_id} for test.")
 
     ################# PARSE TEST CONFIGS #################
     with open(args.input_test_config, "r") as stream:
@@ -251,7 +251,7 @@ def run_pytorch_test(args):
                             input_shapes,
                             datagen_funcs,
                             comparison_func,
-                            pcie_slot,
+                            device_id,
                             generated_test_args,
                         )
 

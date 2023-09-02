@@ -17,20 +17,20 @@ using namespace tt;
 typedef std::vector<std::unique_ptr<tt_metal::Buffer>> BufferKeeper;
 
 CoreCoord get_logical_coord_from_noc_coord(tt::tt_metal::Device *device, const CoreCoord &noc_coord) {
-    auto soc_desc = device->cluster()->get_soc_desc(device->pcie_slot());
+    auto soc_desc = device->cluster()->get_soc_desc(device->id());
     auto logical_coord_x = soc_desc.routing_x_to_worker_x.at(noc_coord.x);
     auto logical_coord_y = soc_desc.routing_y_to_worker_y.at(noc_coord.y);
     return CoreCoord(logical_coord_x, logical_coord_y);
 }
 
 std::vector<uint32_t> get_logical_compute_and_storage_core_bank_ids(tt_metal::Device *device) {
-    auto soc_desc = device->cluster()->get_soc_desc(device->pcie_slot());
+    auto soc_desc = device->cluster()->get_soc_desc(device->id());
     auto logical_core = get_core_coord_from_relative(soc_desc.compute_with_storage_cores.at(0), device->logical_grid_size());
     return device->bank_ids_from_logical_core(logical_core);
 }
 
 std::vector<uint32_t> get_logical_storage_core_bank_ids(tt_metal::Device *device) {
-    auto soc_desc = device->cluster()->get_soc_desc(device->pcie_slot());
+    auto soc_desc = device->cluster()->get_soc_desc(device->id());
     auto logical_grid_size = device->logical_grid_size();
     auto storage_core_rel_coord = soc_desc.storage_cores.at(0);
     auto logical_core = get_core_coord_from_relative(storage_core_rel_coord, logical_grid_size);
@@ -172,9 +172,9 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
-        int pci_express_slot = 0;
+        int device_id = 0;
         tt_metal::Device *device =
-            tt_metal::CreateDevice(arch, pci_express_slot);
+            tt_metal::CreateDevice(arch, device_id);
 
         BufferKeeper buffers;
         tt_metal::Program program = tt_metal::Program();

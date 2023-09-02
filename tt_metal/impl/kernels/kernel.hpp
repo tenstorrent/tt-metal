@@ -63,7 +63,7 @@ class Kernel {
     virtual void generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const = 0;
     void set_binary_path ( const std::string & binary_path) { binary_path_ = binary_path; }
     void set_binaries(std::vector<ll_api::memory> &&binaries);
-    virtual void read_binaries(int pcie_slot) = 0;
+    virtual void read_binaries(int device_id) = 0;
 
     void set_runtime_args(const CoreCoord &logical_core, const std::vector<u32> &runtime_args);
 
@@ -94,7 +94,7 @@ class DataMovementKernel : public Kernel {
 
     void set_build_options(build_kernel_for_riscv_options_t &build_options) const;
     void generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const;
-    void read_binaries(int pcie_slot);
+    void read_binaries(int device_id);
 
     bool configure(Device *device, const CoreCoord &logical_core) const;
 
@@ -120,7 +120,7 @@ class ComputeKernel : public Kernel {
 
     void set_build_options(build_kernel_for_riscv_options_t &build_options) const;
     void generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const;
-    void read_binaries(int pcie_slot);
+    void read_binaries(int device_id);
 
     bool configure(Device *device, const CoreCoord &logical_core) const;
 

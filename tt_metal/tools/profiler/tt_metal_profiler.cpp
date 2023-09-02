@@ -31,8 +31,8 @@ void DumpDeviceProfileResults(Device *device, const Program &program) {
         auto worker_cores_used_in_program =\
             device->worker_cores_from_logical_cores(program.logical_cores());
         auto cluster = device->cluster();
-        auto pcie_slot = device->pcie_slot();
-        tt_metal_profiler.dumpDeviceResults(cluster, pcie_slot, worker_cores_used_in_program);
+        auto device_id = device->id();
+        tt_metal_profiler.dumpDeviceResults(cluster, device_id, worker_cores_used_in_program);
     }
 #endif
 }

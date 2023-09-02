@@ -17,14 +17,14 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-bool test_compile_args(std::vector<uint32_t> compile_args_vec, int pci_express_slot) {
+bool test_compile_args(std::vector<uint32_t> compile_args_vec, int device_id) {
     bool pass = true;
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Device *device =
-        tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
+        tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, device_id);
 
     pass &= tt_metal::InitializeDevice(device);
 
@@ -67,13 +67,13 @@ int main(int argc, char **argv) {
     bool pass = true;
 
     try {
-        int pci_express_slot = 0;
+        int device_id = 0;
         static const std::string kernel_name = "test_compile_args";
-        auto binary_path_str = get_kernel_compile_outpath(pci_express_slot) + kernel_name;
+        auto binary_path_str = get_kernel_compile_outpath(device_id) + kernel_name;
         std::filesystem::remove_all(binary_path_str);
 
-        pass &= test_compile_args({0, 68, 0, 124}, pci_express_slot);
-        pass &= test_compile_args({1, 5, 0, 124}, pci_express_slot);
+        pass &= test_compile_args({0, 68, 0, 124}, device_id);
+        pass &= test_compile_args({1, 5, 0, 124}, device_id);
 
         log_assert(std::filesystem::exists(binary_path_str), "Expected kernel to be compiled!");
 

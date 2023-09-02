@@ -20,9 +20,9 @@ class SingleDeviceFixture : public ::testing::Test  {
             GTEST_SKIP();
         }
         arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-        const int pci_express_slot = 0;
+        const int device_id = 0;
 
-        device_ = tt::tt_metal::CreateDevice(arch_, pci_express_slot);
+        device_ = tt::tt_metal::CreateDevice(device_id);
         tt::tt_metal::InitializeDevice(device_);
     }
 

@@ -17,9 +17,9 @@ Silicon accelerator setup
 
 .. code-block:: cpp
 
-   constexpr int pci_express_slot = 0;
+   constexpr int device_id = 0;
    Device *device =
-       CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
+       CreateDevice(tt::ARCH::GRAYSKULL, device_id);
 
    pass &= InitializeDevice(device);
 

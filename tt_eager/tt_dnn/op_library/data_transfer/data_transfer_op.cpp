@@ -61,7 +61,7 @@ std::vector<Tensor> DataTransferToDevice::compute_output_tensors(const std::vect
 
 tt::stl::reflection::Attributes DataTransferToDevice::attributes() const {
     return {
-        {"device", this->device->pcie_slot()},
+        {"device", this->device->id()},
         {"mem_config", this->mem_config},
     };
 }

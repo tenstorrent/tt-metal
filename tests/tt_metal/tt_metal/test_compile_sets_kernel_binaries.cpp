@@ -17,8 +17,8 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-std::string get_latest_kernel_binary_path(int pcie_slot, const tt_metal::Kernel *kernel) {
-    auto root_dir = get_kernel_compile_outpath(pcie_slot);
+std::string get_latest_kernel_binary_path(int device_id, const tt_metal::Kernel *kernel) {
+    auto root_dir = get_kernel_compile_outpath(device_id);
     TT_ASSERT(kernel != nullptr);
     TT_ASSERT(std::filesystem::exists(root_dir + kernel->name()));
 
@@ -55,9 +55,9 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
-        int pci_express_slot = 0;
+        int device_id = 0;
         tt_metal::Device *device =
-            tt_metal::CreateDevice(arch, pci_express_slot);
+            tt_metal::CreateDevice(arch, device_id);
 
         pass &= tt_metal::InitializeDevice(device);
 
@@ -142,7 +142,7 @@ int main(int argc, char **argv) {
         tt_metal::Kernel *riscv1_kernel = tt_metal::detail::GetKernel(program, kernel_group.riscv1_id.value());
         std::vector<string> kernel_names = {"reader_unary_push_4", "writer_unary", "eltwise_copy_3m"};
         for (auto kernel_name : kernel_names) {
-            std::filesystem::remove_all(get_kernel_compile_outpath(device->pcie_slot()) + kernel_name);
+            std::filesystem::remove_all(get_kernel_compile_outpath(device->id()) + kernel_name);
         }
 
         int num_compiles = 3;
@@ -164,16 +164,16 @@ int main(int argc, char **argv) {
                 TT_ASSERT(riscv0_kernel->binaries() == brisc_binaries);
                 TT_ASSERT(riscv1_kernel->binaries() == ncrisc_binaries);
             }
-            std::string brisc_hex_path = get_latest_kernel_binary_path(device->pcie_slot(), riscv0_kernel) + "/brisc/brisc.hex";
-            ll_api::memory brisc_binary = llrt::get_risc_binary(brisc_hex_path, device->pcie_slot(), false);
+            std::string brisc_hex_path = get_latest_kernel_binary_path(device->id(), riscv0_kernel) + "/brisc/brisc.hex";
+            ll_api::memory brisc_binary = llrt::get_risc_binary(brisc_hex_path, device->id(), false);
             TT_ASSERT(brisc_binary == brisc_binaries.at(0), "Expected saved BRISC binary to be the same as binary in persistent cache");
-            std::string ncrisc_hex_path = get_latest_kernel_binary_path(device->pcie_slot(), riscv1_kernel) + "/ncrisc/ncrisc.hex";
-            ll_api::memory ncrisc_binary = llrt::get_risc_binary(ncrisc_hex_path, device->pcie_slot(), false);
+            std::string ncrisc_hex_path = get_latest_kernel_binary_path(device->id(), riscv1_kernel) + "/ncrisc/ncrisc.hex";
+            ll_api::memory ncrisc_binary = llrt::get_risc_binary(ncrisc_hex_path, device->id(), false);
             TT_ASSERT(ncrisc_binary == ncrisc_binaries.at(0), "Expected saved NCRISC binary to be the same as binary in persistent cache");
             for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
                 std::string trisc_id_str = std::to_string(trisc_id);
-                std::string trisc_hex_path = get_latest_kernel_binary_path(device->pcie_slot(), compute_kernel) + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex";
-                ll_api::memory trisc_binary = llrt::get_risc_binary(trisc_hex_path, device->pcie_slot(), false);
+                std::string trisc_hex_path = get_latest_kernel_binary_path(device->id(), compute_kernel) + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex";
+                ll_api::memory trisc_binary = llrt::get_risc_binary(trisc_hex_path, device->id(), false);
                 TT_ASSERT(trisc_binary == compute_binaries.at(trisc_id), "Expected saved TRISC binary for " + trisc_id_str + " to be the same as binary in persistent cache");
             }
         }

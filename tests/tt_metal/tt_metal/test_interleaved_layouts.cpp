@@ -31,9 +31,9 @@ bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(const tt::AR
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
-        int pci_express_slot = 0;
+        int device_id = 0;
         tt_metal::Device *device =
-            tt_metal::CreateDevice(arch, pci_express_slot);
+            tt_metal::CreateDevice(arch, device_id);
 
         pass &= tt_metal::InitializeDevice(device);
 
@@ -73,9 +73,9 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
-        int pci_express_slot = 0;
+        int device_id = 0;
         tt_metal::Device *device =
-            tt_metal::CreateDevice(arch, pci_express_slot);
+            tt_metal::CreateDevice(arch, device_id);
 
         pass &= tt_metal::InitializeDevice(device);
 
@@ -253,9 +253,9 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
-        int pci_express_slot = 0;
+        int device_id = 0;
         tt_metal::Device *device =
-            tt_metal::CreateDevice(arch, pci_express_slot);
+            tt_metal::CreateDevice(arch, device_id);
 
         pass &= tt_metal::InitializeDevice(device);
 
@@ -419,9 +419,9 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
 
     bool pass = true;
 
-    int pci_express_slot = 0;
+    int device_id = 0;
     tt_metal::Device *device =
-        tt_metal::CreateDevice(arch, pci_express_slot);
+        tt_metal::CreateDevice(arch, device_id);
 
     pass &= tt_metal::InitializeDevice(device);
 

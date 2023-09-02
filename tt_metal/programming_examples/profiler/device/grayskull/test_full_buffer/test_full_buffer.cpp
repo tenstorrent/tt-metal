@@ -58,9 +58,9 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Grayskull Device Setup
         ////////////////////////////////////////////////////////////////////////////
-        int pci_express_slot = 0;
+        int device_id = 0;
         tt_metal::Device *device =
-            tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
+            tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, device_id);
 
         pass &= tt_metal::InitializeDevice(device);
 

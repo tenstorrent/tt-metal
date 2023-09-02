@@ -94,9 +94,9 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
-        int pci_express_slot = 0;
+        int device_id = 0;
         tt_metal::Device *device =
-            tt_metal::CreateDevice(arch, pci_express_slot);
+            tt_metal::CreateDevice(arch, device_id);
 
         pass &= tt_metal::InitializeDevice(device);;
 

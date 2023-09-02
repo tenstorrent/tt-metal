@@ -186,7 +186,7 @@ void Kernel::set_binaries(std::vector<ll_api::memory> &&binaries) {
     }
 }
 
-void DataMovementKernel::read_binaries(int pcie_slot) {
+void DataMovementKernel::read_binaries(int device_id) {
     TT_ASSERT ( !binary_path_.empty(), "Path to Kernel binaries not set!" );
     std::vector<ll_api::memory> binaries;
     uint32_t riscv_id;
@@ -205,18 +205,18 @@ void DataMovementKernel::read_binaries(int pcie_slot) {
         default:
             TT_ASSERT(false, "Unsupported data movement processor!");
     }
-    ll_api::memory binary_mem = llrt::get_risc_binary(binary_path_ + binary_path_suffix, pcie_slot, false);
+    ll_api::memory binary_mem = llrt::get_risc_binary(binary_path_ + binary_path_suffix, device_id, false);
     binaries.push_back(binary_mem);
     this->set_binaries(std::move(binaries));
 }
 
-void ComputeKernel::read_binaries(int pcie_slot) {
+void ComputeKernel::read_binaries(int device_id) {
     TT_ASSERT ( !binary_path_.empty(), "Path to Kernel binaries not set!" );
     std::vector<ll_api::memory> binaries;
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
         std::string trisc_id_str = std::to_string(trisc_id);
         std::string hex_path = binary_path_ + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex";
-        ll_api::memory binary_mem = llrt::get_risc_binary(hex_path, pcie_slot, false);
+        ll_api::memory binary_mem = llrt::get_risc_binary(hex_path, device_id, false);
         binaries.push_back(binary_mem);
     }
     this->set_binaries(std::move(binaries));
@@ -237,11 +237,11 @@ RISCV ComputeKernel::processor() const { return RISCV::COMPUTE; }
 void init_run_mailbox(Device *device, const CoreCoord &core, uint64_t run_mailbox_addr) {
     std::vector<uint32_t> run_mailbox_init_val = {INIT_VALUE};
     tt::llrt::write_hex_vec_to_core(
-        device->cluster(), device->pcie_slot(), core, run_mailbox_init_val, run_mailbox_addr);
+        device->cluster(), device->id(), core, run_mailbox_init_val, run_mailbox_addr);
 
     std::vector<uint32_t> run_mailbox_init_val_check;
     run_mailbox_init_val_check = tt::llrt::read_hex_vec_from_core(
-        device->cluster(), device->pcie_slot(), core, run_mailbox_addr, sizeof(uint32_t));  // read a single uint32_t
+        device->cluster(), device->id(), core, run_mailbox_addr, sizeof(uint32_t));  // read a single uint32_t
     TT_ASSERT(run_mailbox_init_val_check[0] == INIT_VALUE);
 }
 
@@ -251,7 +251,7 @@ bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core
         TT_THROW("Cannot configure kernel because it is not on core " + logical_core.str());
     }
     auto cluster = device->cluster();
-    auto pcie_slot = device->pcie_slot();
+    auto device_id = device->id();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
     ll_api::memory binary_mem = this->binaries().at(0);
 
@@ -264,14 +264,14 @@ bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core
         break;
         case (DataMovementProcessor::RISCV_1): {
             riscv_id = 1;
-            tt::llrt::enable_ncrisc(cluster, pcie_slot, worker_core);
+            tt::llrt::enable_ncrisc(cluster, device_id, worker_core);
         }
         break;
         default:
             TT_ASSERT(false, "Unsupported data movement processor!");
     }
 
-    pass &= tt::llrt::test_load_write_read_risc_binary(cluster, binary_mem, pcie_slot, worker_core, riscv_id);
+    pass &= tt::llrt::test_load_write_read_risc_binary(cluster, binary_mem, device_id, worker_core, riscv_id);
     return pass;
 }
 
@@ -281,7 +281,7 @@ bool ComputeKernel::configure(Device *device, const CoreCoord &logical_core) con
         TT_THROW("Cannot configure kernel because it is not on core " + logical_core.str());
     }
     auto cluster = device->cluster();
-    auto pcie_slot = device->pcie_slot();
+    auto device_id = device->id();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
     std::vector<ll_api::memory> binaries = this->binaries();
 
@@ -289,11 +289,11 @@ bool ComputeKernel::configure(Device *device, const CoreCoord &logical_core) con
         pass &= tt::llrt::test_load_write_read_trisc_binary(
             cluster,
             binaries.at(trisc_id),
-            pcie_slot,
+            device_id,
             worker_core,
             trisc_id);
     }
-    tt::llrt::enable_triscs(cluster, pcie_slot, worker_core);
+    tt::llrt::enable_triscs(cluster, device_id, worker_core);
 
     return pass;
 }

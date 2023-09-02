@@ -345,9 +345,9 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
-        int pci_express_slot = 0;
+        int device_id = 0;
         tt_metal::Device *device =
-            tt_metal::CreateDevice(arch, pci_express_slot);
+            tt_metal::CreateDevice(arch, device_id);
         tt_metal::InitializeDevice(device);
 
         pass &= test_multi_core_kernel_same_runtime_args(device);

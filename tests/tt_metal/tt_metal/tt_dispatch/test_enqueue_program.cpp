@@ -88,8 +88,8 @@ tt_metal::Program generate_eltwise_unary_program(Device *device) {
 void test_enqueue_program(std::function<tt_metal::Program(tt_metal::Device *device)> create_program) {
 
 
-    int pci_express_slot = 0;
-    tt_metal::Device *device = tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
+    int device_id = 0;
+    tt_metal::Device *device = tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, device_id);
 
     tt_metal::InitializeDevice(device);
 

@@ -46,8 +46,8 @@ int main(int argc, char** argv) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    int pci_express_slot = 0;
-    tt_metal::Device* device = tt_metal::CreateDevice(arch, pci_express_slot);
+    int device_id = 0;
+    tt_metal::Device* device = tt_metal::CreateDevice(arch, device_id);
 
     pass &= tt_metal::InitializeDevice(device);
     CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;

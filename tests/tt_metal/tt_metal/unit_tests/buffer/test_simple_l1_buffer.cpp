@@ -113,7 +113,7 @@ namespace tt::test::buffer::detail {
 }
 
 TEST_F(SingleDeviceFixture, TestSimpleL1BufferReadOnlyLo) {
-    size_t lo_address = this->device_->l1_size() - this->device_->cluster()->get_soc_desc(this->device_->pcie_slot()).l1_bank_size;
+    size_t lo_address = this->device_->l1_size() - this->device_->cluster()->get_soc_desc(this->device_->id()).l1_bank_size;
     ASSERT_TRUE(SimpleL1ReadOnly(this->device_, lo_address, 4));
     ASSERT_TRUE(SimpleL1ReadOnly(this->device_, lo_address, 8));
     ASSERT_TRUE(SimpleL1ReadOnly(this->device_, lo_address, 16));
@@ -131,7 +131,7 @@ TEST_F(SingleDeviceFixture, TestSimpleL1BufferReadOnlyHi) {
     ASSERT_TRUE(SimpleL1ReadOnly(this->device_, hi_address, 16*1024));
 }
 TEST_F(SingleDeviceFixture, TestSimpleL1BufferWriteOnlyLo) {
-    size_t lo_address = this->device_->l1_size() - this->device_->cluster()->get_soc_desc(this->device_->pcie_slot()).l1_bank_size;
+    size_t lo_address = this->device_->l1_size() - this->device_->cluster()->get_soc_desc(this->device_->id()).l1_bank_size;
     ASSERT_TRUE(SimpleL1WriteOnly(this->device_, lo_address, 4));
     ASSERT_TRUE(SimpleL1WriteOnly(this->device_, lo_address, 8));
     ASSERT_TRUE(SimpleL1WriteOnly(this->device_, lo_address, 16));

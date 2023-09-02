@@ -84,7 +84,7 @@ CoreCoord Buffer::noc_coordinates(u32 bank_id) const {
     switch (this->buffer_type_) {
         case BufferType::DRAM: {
             auto dram_channel = this->dram_channel_from_bank_id(bank_id);
-            return llrt::get_core_for_dram_channel(this->device_->cluster(), dram_channel, this->device_->pcie_slot());
+            return llrt::get_core_for_dram_channel(this->device_->cluster(), dram_channel, this->device_->id());
         }
         case BufferType::L1: {
             auto logical_core = this->logical_core_from_bank_id(bank_id);

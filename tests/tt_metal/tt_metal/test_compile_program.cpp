@@ -23,15 +23,15 @@ struct KernelCacheStatus {
     std::unordered_map<std::string, bool> kernel_name_to_cache_hit;
 };
 
-void ClearKernelCache (int pcie_slot){
-    std::filesystem::remove_all(get_kernel_compile_outpath(pcie_slot));
+void ClearKernelCache (int device_id){
+    std::filesystem::remove_all(get_kernel_compile_outpath(device_id));
     detail::HashLookup::inst().clear();
 }
 
 // This assumes binaries are written to specific location: kernel_compile_outpath / kernel_name / hash
-std::unordered_map<std::string, std::string> get_last_program_binary_path(const Program &program, int pcie_slot) {
+std::unordered_map<std::string, std::string> get_last_program_binary_path(const Program &program, int device_id) {
     std::unordered_map<std::string, std::string> kernel_name_to_last_compiled_dir;
-    auto root_dir = get_kernel_compile_outpath(pcie_slot);
+    auto root_dir = get_kernel_compile_outpath(device_id);
     for (auto kernel_id : program.kernel_ids()) {
         tt_metal::Kernel *kernel = detail::GetKernel(program, kernel_id);
         if (not std::filesystem::exists(root_dir + kernel->name())) {
@@ -57,12 +57,12 @@ std::unordered_map<std::string, std::string> get_last_program_binary_path(const 
 // TODO: Replace this when we have debug/test hooks (GH: #964) to inspect inside CompileProgram
 KernelCacheStatus CompileProgramTestWrapper(Device *device, Program &program, bool profile_kernel=false) {
     // Check
-    auto root_dir = get_kernel_compile_outpath(device->pcie_slot());
-    std::unordered_map<std::string, std::string> pre_compile_kernel_to_hash_str = get_last_program_binary_path(program, device->pcie_slot());
+    auto root_dir = get_kernel_compile_outpath(device->id());
+    std::unordered_map<std::string, std::string> pre_compile_kernel_to_hash_str = get_last_program_binary_path(program, device->id());
 
     CompileProgram(device, program);
 
-    std::unordered_map<std::string, std::string> post_compile_kernel_to_hash_str = get_last_program_binary_path(program, device->pcie_slot());
+    std::unordered_map<std::string, std::string> post_compile_kernel_to_hash_str = get_last_program_binary_path(program, device->id());
 
     KernelCacheStatus kernel_cache_status;
     for (const auto&[kernel_name, hash_str] : post_compile_kernel_to_hash_str) {
@@ -153,12 +153,12 @@ Program create_program(Device *device, const ProgramAttributes &program_attribut
     return std::move(program);
 }
 
-void assert_kernel_binary_path_exists(const Program &program, int pcie_slot, const KernelCacheStatus &kernel_cache_status) {
+void assert_kernel_binary_path_exists(const Program &program, int device_id, const KernelCacheStatus &kernel_cache_status) {
     auto kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
     for (auto kernel_id : program.kernel_ids()) {
         tt_metal::Kernel *kernel = detail::GetKernel(program, kernel_id);
         auto hash = kernel_name_to_hash.at(kernel->name());
-        auto kernel_binary_path = get_kernel_compile_outpath(pcie_slot) + kernel->name() + "/" + hash;
+        auto kernel_binary_path = get_kernel_compile_outpath(device_id) + kernel->name() + "/" + hash;
         TT_ASSERT(std::filesystem::exists(kernel_binary_path), "Expected " + kernel_binary_path + " folder to exist!");
     }
 }
@@ -182,7 +182,7 @@ void assert_kernel_hash_matches(const std::unordered_map<std::string, std::strin
 bool test_compile_program_in_loop(Device *device) {
     bool pass = true;
 
-    ClearKernelCache(device->pcie_slot());
+    ClearKernelCache(device->id());
     ProgramAttributes default_attributes;
     auto program = create_program(device, default_attributes);
 
@@ -191,7 +191,7 @@ bool test_compile_program_in_loop(Device *device) {
     for (int compile_idx = 0; compile_idx < num_compiles; compile_idx++) {
         auto kernel_cache_status = CompileProgramTestWrapper(device, program);
         if (compile_idx == 0) {
-            assert_kernel_binary_path_exists(program, device->pcie_slot(), kernel_cache_status);
+            assert_kernel_binary_path_exists(program, device->id(), kernel_cache_status);
             assert_program_cache_hit_status(program, /*hit_expected=*/false, kernel_cache_status);
             kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
         } else {
@@ -206,18 +206,18 @@ bool test_compile_program_in_loop(Device *device) {
 bool test_compile_program_after_clean_kernel_binary_directory(Device *device) {
     bool pass = true;
 
-    ClearKernelCache(device->pcie_slot());
+    ClearKernelCache(device->id());
 
     ProgramAttributes default_attributes;
     auto program = create_program(device, default_attributes);
 
     auto kernel_cache_status = CompileProgramTestWrapper(device, program);
 
-    assert_kernel_binary_path_exists(program, device->pcie_slot(), kernel_cache_status);
+    assert_kernel_binary_path_exists(program, device->id(), kernel_cache_status);
     assert_program_cache_hit_status(program, /*hit_expected=*/false, kernel_cache_status);
     std::unordered_map<std::string, std::string> kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
 
-    ClearKernelCache(device->pcie_slot());
+    ClearKernelCache(device->id());
 
     auto second_kernel_cache_status = CompileProgramTestWrapper(device, program);
     assert_program_cache_hit_status(program, /*hit_expected=*/false, second_kernel_cache_status);
@@ -264,7 +264,7 @@ std::unordered_map<std::string, std::string> compile_program_with_modified_kerne
 ) {
     auto program = create_program(device, attributes);
     auto kernel_cache_status = CompileProgramTestWrapper(device, program);
-    assert_kernel_binary_path_exists(program, device->pcie_slot(), kernel_cache_status);
+    assert_kernel_binary_path_exists(program, device->id(), kernel_cache_status);
     assert_cache_hit_status_for_kernel_type(program, kernel_type_to_cache_hit_status, kernel_cache_status);
     assert_hash_comparison_for_kernel_type(program, prev_kernel_name_to_hash, kernel_type_to_cache_hit_status, kernel_cache_status);
     std::unordered_map<std::string, std::string> kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
@@ -298,12 +298,12 @@ bool test_compile_program_with_modified_program(Device *device) {
         {tt::RISCV::NCRISC, false}
     };
 
-    ClearKernelCache(device->pcie_slot());
+    ClearKernelCache(device->id());
 
     ProgramAttributes attributes;
     auto program = create_program(device, attributes);
     auto kernel_cache_status = CompileProgramTestWrapper(device, program);
-    assert_kernel_binary_path_exists(program, device->pcie_slot(), kernel_cache_status);
+    assert_kernel_binary_path_exists(program, device->id(), kernel_cache_status);
     assert_program_cache_hit_status(program, /*hit_expected=*/false, kernel_cache_status);
     std::unordered_map<std::string, std::string> kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
 
@@ -349,8 +349,8 @@ int main(int argc, char **argv) {
     bool pass = true;
 
     try {
-        int pci_express_slot = 0;
-        Device *device = CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
+        int device_id = 0;
+        Device *device = CreateDevice(tt::ARCH::GRAYSKULL, device_id);
 
         constexpr bool profile_device = true;
         pass &= InitializeDevice(device);

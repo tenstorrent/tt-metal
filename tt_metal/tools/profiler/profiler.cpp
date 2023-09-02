@@ -79,7 +79,7 @@ void Profiler::dumpHostResults(const std::string& timer_name, const std::vector<
 
 void Profiler::readRiscProfilerResults(
         tt_cluster *cluster,
-        int pcie_slot,
+        int device_id,
         const CoreCoord &worker_core,
         std::string risc_name,
         int risc_print_buffer_addr){
@@ -90,7 +90,7 @@ void Profiler::readRiscProfilerResults(
 
     profile_buffer = tt::llrt::read_hex_vec_from_core(
             cluster,
-            pcie_slot,
+            device_id,
             worker_core,
             risc_print_buffer_addr,
             PRINT_BUFFER_SIZE);
@@ -104,7 +104,7 @@ void Profiler::readRiscProfilerResults(
                 tt::LogDevice,
                 "{} device markers on device {} worker core {},{} risc {} were dropped. End index {}",
                 dropped_marker_counter,
-                pcie_slot,
+                device_id,
                 worker_core.x,
                 worker_core.y,
                 risc_name,
@@ -113,7 +113,7 @@ void Profiler::readRiscProfilerResults(
 
     for (int i = kernel_profiler::MARKER_DATA_START; i < end_index; i+=kernel_profiler::TIMER_DATA_UINT32_SIZE) {
         dumpDeviceResultToFile(
-                pcie_slot,
+                device_id,
                 worker_core.x,
                 worker_core.y,
                 risc_name,
@@ -210,37 +210,37 @@ void Profiler::setOutputDir(const std::string& new_output_dir)
 
 void Profiler::dumpDeviceResults (
         tt_cluster *cluster,
-        int pcie_slot,
+        int device_id,
         const vector<CoreCoord> &worker_cores){
 #if defined(PROFILER)
     for (const auto &worker_core : worker_cores) {
         readRiscProfilerResults(
             cluster,
-            pcie_slot,
+            device_id,
             worker_core,
             "NCRISC",
             PRINT_BUFFER_NC);
         readRiscProfilerResults(
             cluster,
-            pcie_slot,
+            device_id,
             worker_core,
             "BRISC",
             PRINT_BUFFER_BR);
         readRiscProfilerResults(
             cluster,
-            pcie_slot,
+            device_id,
             worker_core,
             "TRISC_0",
             PRINT_BUFFER_T0);
 	readRiscProfilerResults(
 	    cluster,
-	    pcie_slot,
+	    device_id,
 	    worker_core,
 	    "TRISC_1",
 	    PRINT_BUFFER_T1);
 	readRiscProfilerResults(
 	    cluster,
-	    pcie_slot,
+	    device_id,
 	    worker_core,
 	    "TRISC_2",
 	    PRINT_BUFFER_T2);

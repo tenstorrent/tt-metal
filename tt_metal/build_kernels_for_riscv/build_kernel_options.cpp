@@ -11,17 +11,17 @@
 namespace tt
 {
 
-    build_kernel_for_riscv_options_t::build_kernel_for_riscv_options_t(int slot) :
-      pcie_slot(slot),
+    build_kernel_for_riscv_options_t::build_kernel_for_riscv_options_t(int dev_id) :
+      device_id(dev_id),
       name(""),
-      outpath(get_firmware_compile_outpath(slot)),
+      outpath(get_firmware_compile_outpath(dev_id)),
       fp32_dest_acc_en(false),
       fw_build_(true) {}
 
-    build_kernel_for_riscv_options_t::build_kernel_for_riscv_options_t(int slot, std::string name) :
-      pcie_slot(slot),
+    build_kernel_for_riscv_options_t::build_kernel_for_riscv_options_t(int dev_id, std::string name) :
+      device_id(dev_id),
       name(name),
-      outpath(get_kernel_compile_outpath(slot)),
+      outpath(get_kernel_compile_outpath(dev_id)),
       fp32_dest_acc_en(false),
       fw_build_(false) {}
 

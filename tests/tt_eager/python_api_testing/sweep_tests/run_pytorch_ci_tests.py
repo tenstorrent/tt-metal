@@ -63,14 +63,14 @@ def run_single_pytorch_test(
     if not test_args:
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
     ################# RUN TEST #################
-    logger.info(f"Running with shape: {input_shapes} on device: {device.pcie_slot()}")
+    logger.info(f"Running with shape: {input_shapes} on device: {device.id()}")
     test_pass, test_output = run_tt_lib_test(
         op_map[test_name]["tt_lib_op"],
         op_map[test_name]["pytorch_op"],
         input_shapes,
         datagen_funcs,
         comparison_func,
-        device.pcie_slot(),
+        device.id(),
         test_args,
         device=device,
         plot_func = plot_func,

@@ -30,8 +30,8 @@ Tensor run_avg_pool_2d_resnet(Shape& tensor_shape, Device* device) {
 };
 
 int main () {
-    int pci_express_slot = 0;
-    auto device = tt::tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
+    int device_id = 0;
+    auto device = tt::tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, device_id);
     TT_ASSERT(tt::tt_metal::InitializeDevice(device));
 
     Shape resnet18_shape = {1, 1, 7 * 7, 2048};

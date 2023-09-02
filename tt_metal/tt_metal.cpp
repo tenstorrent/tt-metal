@@ -43,7 +43,7 @@ namespace detail {
             return;
         }
 
-        build_kernel_for_riscv_options_t blank_build_options(device->pcie_slot(), "blank_op");
+        build_kernel_for_riscv_options_t blank_build_options(device->id(), "blank_op");
         struct hlk_args_t {
             std::int32_t dummy;
         };
@@ -85,7 +85,7 @@ void DownloadFirmware(Device *device, CoreCoord phys_core) {
         switch (riscv_id) {
             case 0:
                 fname = "brisc/brisc.hex";
-                tt::llrt::program_brisc_startup_addr(device->cluster(), device->pcie_slot(), phys_core);
+                tt::llrt::program_brisc_startup_addr(device->cluster(), device->id(), phys_core);
                 break;
             case 1: fname = "ncrisc/ncrisc.hex"; break;
             case 2: fname = "tensix_thread0/tensix_thread0.hex"; break;
@@ -93,7 +93,7 @@ void DownloadFirmware(Device *device, CoreCoord phys_core) {
             case 4: fname = "tensix_thread2/tensix_thread2.hex"; break;
         }
         tt::llrt::test_load_write_read_risc_binary(
-            device->cluster(), fname, device->pcie_slot(), phys_core, riscv_id, true);
+            device->cluster(), fname, device->id(), phys_core, riscv_id, true);
     }
 }
 
@@ -126,7 +126,7 @@ std::optional<uint32_t> get_semaphore_address(const Program &program, const Core
 }
 }  // namespace
 
-Device *CreateDevice(tt::ARCH arch, int pcie_slot) { return new Device(arch, pcie_slot); }
+Device *CreateDevice(tt::ARCH arch, int device_id) { return new Device(arch, device_id); }
 
 bool InitializeDevice(Device *device) {
     ZoneScoped;
@@ -141,7 +141,7 @@ bool InitializeDevice(Device *device) {
             // Need a lock here to prevent the race of building mulitple times
             const std::lock_guard<std::mutex> lock(build_mutex);
             if (!global_init_complete) {
-                build_kernel_for_riscv_options_t build_options(device->pcie_slot());
+                build_kernel_for_riscv_options_t build_options(device->id());
                 detail::GenerateDeviceHeaders(device, &build_options, "");
                 std::string arch_name = tt::get_string_lowercase(device->arch());
                 generate_binaries_params_t default_params;
@@ -168,12 +168,12 @@ bool InitializeDevice(Device *device) {
                 // Enable ncrisc/trisc on worker cores since device dispatch
                 // expects this.  Non device-dispatch will override and device
                 // dispatch will set up the dispatch cores appropriately
-                tt::llrt::enable_ncrisc(device->cluster(), device->pcie_slot(), phys_core);
-                tt::llrt::enable_triscs(device->cluster(), device->pcie_slot(), phys_core);
+                tt::llrt::enable_ncrisc(device->cluster(), device->id(), phys_core);
+                tt::llrt::enable_triscs(device->cluster(), device->id(), phys_core);
             }
         }
 
-        tt::llrt::watcher_attach(device, device->cluster(), device->pcie_slot(),
+        tt::llrt::watcher_attach(device, device->cluster(), device->id(),
                                  [&, device]() { return device->logical_grid_size(); },
                                  [&, device](CoreCoord core) { return device->worker_core_from_logical_core(core); },
                                  get_compile_outpath()
@@ -344,12 +344,12 @@ void WriteToDevice(const Buffer &buffer, const std::vector<uint32_t> &host_buffe
             case BufferType::DRAM: {
                 auto dram_channel = buffer.dram_channel_from_bank_id(bank_index);
                 device->cluster()->write_dram_vec(
-                    page, tt_target_dram{device->pcie_slot(), dram_channel, 0}, absolute_address);
+                    page, tt_target_dram{device->id(), dram_channel, 0}, absolute_address);
             } break;
             case BufferType::L1: {
                 auto noc_coordinates = buffer.noc_coordinates(bank_index);
                 llrt::write_hex_vec_to_core(
-                    device->cluster(), device->pcie_slot(), noc_coordinates, page, absolute_address);
+                    device->cluster(), device->id(), noc_coordinates, page, absolute_address);
             } break;
             default: TT_ASSERT(false && "Unsupported buffer type to write to device!");
         }
@@ -392,12 +392,12 @@ void ReadFromDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
             case BufferType::DRAM: {
                 auto dram_channel = buffer.dram_channel_from_bank_id(bank_index);
                 device->cluster()->read_dram_vec(
-                    page, tt_target_dram{device->pcie_slot(), dram_channel, 0}, absolute_address, page_size);
+                    page, tt_target_dram{device->id(), dram_channel, 0}, absolute_address, page_size);
             } break;
             case BufferType::L1: {
                 auto noc_coordinates = buffer.noc_coordinates(bank_index);
                 page = llrt::read_hex_vec_from_core(
-                    device->cluster(), device->pcie_slot(), noc_coordinates, absolute_address, page_size);
+                    device->cluster(), device->id(), noc_coordinates, absolute_address, page_size);
             } break;
             default: TT_ASSERT(false && "Unsupported buffer type to write to device!");
         }
@@ -460,7 +460,7 @@ void SetCircularBufferDataFormat(
 #endif
 
 size_t KernelCompileHash(
-    Kernel *kernel, build_kernel_for_riscv_options_t &build_options, const int &pcie_slot) {
+    Kernel *kernel, build_kernel_for_riscv_options_t &build_options, const int &device_id) {
     string compile_hash_str = std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc));
     compile_hash_str += kernel->compute_hash();
     size_t compile_hash = std::hash<std::string>{}(compile_hash_str);
@@ -481,13 +481,13 @@ size_t KernelCompileHash(
 }
 
 void CompileKernel(Device *device, Program &program, Kernel *kernel) {
-    build_kernel_for_riscv_options_t build_options(device->pcie_slot(), kernel->name());
+    build_kernel_for_riscv_options_t build_options(device->id(), kernel->name());
     ZoneScoped;
 
     kernel->set_build_options(build_options);
     SetCircularBufferDataFormat(device, program, kernel, build_options);
 
-    auto kernel_hash = KernelCompileHash(kernel, build_options, device->pcie_slot());
+    auto kernel_hash = KernelCompileHash(kernel, build_options, device->id());
     std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash);
 
     bool cache_hit = true;
@@ -582,7 +582,7 @@ bool CompileProgram(Device *device, Program &program) {
 
     for (auto kernel_id : program.kernel_ids()) {
         auto kernel = detail::GetKernel(program, kernel_id);
-        events.emplace_back ( detail::async ( [kernel, device] { kernel->read_binaries(device->pcie_slot()); }));
+        events.emplace_back ( detail::async ( [kernel, device] { kernel->read_binaries(device->id()); }));
     }
 
     for (auto & f : events)
@@ -617,7 +617,7 @@ bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
 
     std::unordered_set<CoreCoord> worker_cores;
     auto cluster = device->cluster();
-    auto pcie_slot = device->pcie_slot();
+    auto device_id = device->id();
 
     for (auto &[logical_core, kernel_group] : program.core_to_kernel_group()) {
         auto worker_core = device->worker_core_from_logical_core(logical_core);
@@ -630,8 +630,8 @@ bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
         llrt::CircularBufferConfigVec circular_buffer_config_vec = llrt::create_circular_buffer_config_vector();
 
         // Load firmware into L1 of worker core
-        llrt::disable_ncrisc(cluster, pcie_slot, worker_core);     // PROF_BEGIN("CONF_DISABLE_NCTR")
-        llrt::disable_triscs(cluster, pcie_slot, worker_core);     // PROF_END("CONF_DISABLE_NCTR")
+        llrt::disable_ncrisc(cluster, device_id, worker_core);     // PROF_BEGIN("CONF_DISABLE_NCTR")
+        llrt::disable_triscs(cluster, device_id, worker_core);     // PROF_END("CONF_DISABLE_NCTR")
 
         ConfigureKernelGroup(program, kernel_group, device, logical_core); // PROF_BEGIN("CONF_KERN") PROF_END("CONF_KERN")
 
@@ -639,7 +639,7 @@ bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
         constexpr static uint32_t INVALID = 0x4321;  // PROF_BEGIN("WRITE_HEX")
         uint32_t stream_register_address = STREAM_REG_ADDR(0, 24);
         llrt::write_hex_vec_to_core(
-            cluster, pcie_slot, worker_core, {INVALID}, stream_register_address);  // PROF_END("WRITE_HEX")
+            cluster, device_id, worker_core, {INVALID}, stream_register_address);  // PROF_END("WRITE_HEX")
 
         auto cbs_on_core = program.circular_buffers_on_core(logical_core);         // PROF_BEGIN("CBS")
         for (auto circular_buffer : cbs_on_core) {
@@ -656,7 +656,7 @@ bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
         if (cbs_on_core.size()) {
             llrt::write_circular_buffer_config_vector_to_core(
                 cluster,
-                pcie_slot,
+                device_id,
                 worker_core,
                 circular_buffer_config_vec);  // PROF_BEGIN("WRITE_CBS") PROF_END("WRITE_CBS")
         }
@@ -665,7 +665,7 @@ bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
     }
 
     // Skip loading of blank kernels to storage cores
-    for (const auto &core : device->cluster()->get_soc_desc(device->pcie_slot()).storage_cores) {
+    for (const auto &core : device->cluster()->get_soc_desc(device->id()).storage_cores) {
         const auto logical_coord = get_core_coord_from_relative(core, device->logical_grid_size());
         worker_cores.insert(device->worker_core_from_logical_core(logical_coord));
     }
@@ -673,7 +673,7 @@ bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
     // Load blank kernel to all riscs of all cores excluding those in worker_cores
     const llrt::TensixRiscsOptions riscs_options = llrt::TensixRiscsOptions::ALL_RISCS;  // PROF_BEGIN("LOAD_BLANK")
     llrt::internal_::load_blank_kernel_to_all_worker_cores_with_exceptions(
-        cluster, pcie_slot, riscs_options, worker_cores);                                // PROF_END("LOAD_BLANK")
+        cluster, device_id, riscs_options, worker_cores);                                // PROF_END("LOAD_BLANK")
 
     return pass;
 }
@@ -707,8 +707,9 @@ std::vector<uint32_t> GetRuntimeArgs(const Program &program, KernelID kernel_id,
 void WriteRuntimeArgsToDevice(Device *device, const Program &program) {
     ZoneScoped;
     auto cluster = device->cluster();
-    auto pcie_slot = device->pcie_slot();
+    auto device_id = device->id();
     detail::DispatchStateCheck( false );
+
     auto get_l1_arg_base_addr = [](const RISCV &riscv) {
         uint32_t l1_arg_base = 0;
         switch (riscv) {
@@ -728,7 +729,7 @@ void WriteRuntimeArgsToDevice(Device *device, const Program &program) {
         auto processor = kernel->processor();
         for (const auto &[logical_core, rt_args] : kernel->runtime_args()) {
             auto worker_core = device->worker_core_from_logical_core(logical_core);
-            tt::llrt::write_hex_vec_to_core(cluster, pcie_slot, worker_core, rt_args, get_l1_arg_base_addr(processor));
+            tt::llrt::write_hex_vec_to_core(cluster, device_id, worker_core, rt_args, get_l1_arg_base_addr(processor));
         }
     }
 }
@@ -763,7 +764,7 @@ bool LaunchKernels(Device *device, const Program &program, bool stagger_start) {
     detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("LaunchKernels");
 
     auto cluster = device->cluster();
-    auto pcie_slot = device->pcie_slot();
+    auto device_id = device->id();
 
     cluster->dram_barrier(pcie_slot);
     cluster->l1_barrier(pcie_slot);
@@ -786,7 +787,7 @@ bool LaunchKernels(Device *device, const Program &program, bool stagger_start) {
             auto risc_option = GetRiscOptionFromCoreConfig(ncrisc_runs, triscs_run);
             auto worker_core = device->worker_core_from_logical_core(logical_core);
             riscs_are_done &=
-                llrt::internal_::check_if_riscs_on_specified_core_done(cluster, pcie_slot, risc_option, worker_core);
+                llrt::internal_::check_if_riscs_on_specified_core_done(cluster, device_id, risc_option, worker_core);
         }
     }
 

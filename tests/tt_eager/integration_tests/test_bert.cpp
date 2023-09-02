@@ -188,8 +188,8 @@ void test_bert() {
 
     tt::log_info(tt::LogTest, "Running {}", __func__);
 
-    int pci_express_slot = 0;
-    auto device = tt::tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, pci_express_slot);
+    int device_id = 0;
+    auto device = tt::tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, device_id);
 
     TT_ASSERT(tt::tt_metal::InitializeDevice(device));
 

@@ -13,15 +13,10 @@ from itertools import product
 # pcie slot arg will eventually be fully deprecated in favour of pytest uplift
 # and passing device from fixture
 def setup_host_and_device(func):
-    def wrap(*args, pcie_slot, device=None, **kwargs):
+    def wrap(*args, device_id, device=None, **kwargs):
         output = None
         if device is None:
-            ARCH = (
-                is_wormhole_b0()
-                and ttl.device.Arch.WORMHOLE_B0
-                or ttl.device.Arch.GRAYSKULL
-            )
-            device = ttl.device.CreateDevice(ARCH, pcie_slot)
+            device = ttl.device.CreateDevice(device_id)
             ttl.device.InitializeDevice(device)
             ttl.device.SetDefaultDevice(device)
             try:

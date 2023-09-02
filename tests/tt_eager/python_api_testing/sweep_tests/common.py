@@ -34,7 +34,7 @@ def run_tt_lib_test(
     input_shapes,
     data_gen_funcs,
     output_comparison_func,
-    pcie_slot,
+    device_id,
     test_args,
     device=None,
     plot_func=None,
@@ -48,7 +48,7 @@ def run_tt_lib_test(
         tensor_inputs.append(tensor_input)
 
     tt_lib_out = tt_lib_op(
-        *tensor_inputs, pcie_slot=pcie_slot, device=device, **test_args
+        *tensor_inputs, device_id=device_id, device=device, **test_args
     )
     pytorch_out = pytorch_op(*tensor_inputs, **test_args)
 
