@@ -17,8 +17,17 @@ namespace tt {
 namespace tt_metal {
 
 size_t Device::detect_num_available_devices(const TargetDevice target_type) {
-    return tt_cluster::detect_available_devices(target_type).size();
+    switch (target_type) {
+        case TargetDevice::Silicon:
+            return tt_SiliconDevice::detect_available_device_ids(true).size();
+        case TargetDevice::Versim:
+            return 1;
+        default:
+            TT_ASSERT(false, "Unsupported target type!");
+    }
+    return 0;
 }
+
 void Device::initialize_cluster() {
     ZoneScoped;
     this->clear_l1_state();

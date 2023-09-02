@@ -90,42 +90,6 @@ void tt_cluster::dump_wall_clock_mailbox(std::string output_dir) {
     }
 }
 
-// Return vector of device names detected, used by API function. Assumes all devices are the same arch.
-std::vector<tt::ARCH> tt_cluster::detect_available_devices(const TargetDevice &target_type){
-    static std::vector<tt::ARCH> available_devices = {}; // Static to act as cache for repeat queries to avoid device interation.
-
-    TT_ASSERT(target_type == TargetDevice::Versim or target_type == TargetDevice::Silicon);
-
-    if (target_type == TargetDevice::Silicon) {
-        if (available_devices.size() == 0){
-            log_debug(tt::LogDevice, "Going to query silicon device for detect_available_devices()");
-
-            std::vector<chip_id_t> available_device_ids = tt_SiliconDevice::detect_available_device_ids(true, true);
-            int num_available_devices = available_device_ids.size();
-
-            if (num_available_devices > 0) {
-                auto detected_arch_name = detect_arch(available_device_ids.at(0));
-                if (detected_arch_name != tt::ARCH::Invalid){
-                    tt::ARCH device_name = detected_arch_name;
-                    int num_devices = tt_SiliconDevice::detect_number_of_chips(true);
-                    available_devices.insert(available_devices.end(), num_devices, device_name);
-                }else{
-                    tt::log_info(tt::LogDevice, "Silicon device arch name was detected as Invalid");
-                }
-            } else {
-                tt::log_info(tt::LogDevice, "No silicon devices detected");
-            }
-        }
-    } else {
-        if (available_devices.size() == 0){
-            log_trace(tt::LogDevice, "Going to query versim device for detect_available_devices()");
-            int num_devices = tt_VersimDevice::detect_number_of_chips();
-            available_devices.insert(available_devices.end(), num_devices, tt::ARCH::Invalid); // Name is not important.
-        }
-    }
-    return available_devices;
-}
-
 // clean up bad system resource state that may be carried over
 void tt_cluster::clean_system_resources() {
     TT_ASSERT(device != nullptr ,  "Device not initialized, make sure compile is done before running!");

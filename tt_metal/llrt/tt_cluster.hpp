@@ -75,7 +75,6 @@ struct tt_cluster
     void dump_wall_clock_mailbox(std::string output_dir);
 
     //! device driver and misc apis
-    static std::vector<tt::ARCH> detect_available_devices(const TargetDevice &target_type);
     void clean_system_resources();
 
     void open_device(
