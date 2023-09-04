@@ -151,14 +151,20 @@ class TestEltwiseBinary:
         )
 
     @pytest.mark.parametrize(
-        "log_kind", ["logaddexp"]
+        "log_kind, input_range",
+        (
+            ("logaddexp",  {"low": -90, "high": 90}),
+            ("ldexp",      {"low": -64, "high": 64}),
+        ),
     )
     def test_run_eltwise_binary_log_ops(
-        self, input_shapes, input_mem_config, output_mem_config, log_kind, pcie_slot, function_level_defaults
+        self, input_shapes, input_mem_config, output_mem_config, log_kind, input_range, pcie_slot, function_level_defaults
     ):
+        if is_wormhole_b0() and (log_kind in  ["logaddexp2", "ldexp"]) :
+            pytest.skip("Not works for WH B0 arch - Skipping")
         datagen_func = [
             generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=-90, high=90), torch.bfloat16
+                partial(generation_funcs.gen_rand, **input_range), torch.bfloat16
             )
         ] * len(input_shapes)
         test_args = list(generation_funcs.gen_default_dtype_layout_device(input_shapes))[0]

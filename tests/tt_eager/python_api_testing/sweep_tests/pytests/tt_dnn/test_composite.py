@@ -95,7 +95,6 @@ if is_wormhole_b0():
                 "acosh",
                 "atanh",
                 "atan2",
-                "ldexp",
                 "subalpha",
                 "logaddexp2",
                 "bias_gelu_unary",
@@ -129,7 +128,6 @@ def test_run_eltwise_composite_test(
     options["softsign"] = (1, 100)
 
     options["sinh"] = (-9, 9)
-    options["ldexp"] = (-64, 64)
     options["tanhshrink"] = (-100, 100)
     options["atanh"] = (-100, 100)
     options["cosh"] = options["sinh"]
@@ -139,7 +137,7 @@ def test_run_eltwise_composite_test(
     generator = generation_funcs.gen_rand
 
     if is_wormhole_b0():
-        if fn in ["atanh", "ldexp", "logaddexp2"]:
+        if fn in ["atanh", "logaddexp2"]:
             pytest.skip("Not tested for Wormhole - skipping")
         if fn in ["logit"]:
             pytest.skip("does not work for Wormhole -skipping")
@@ -169,7 +167,6 @@ def test_run_eltwise_composite_test(
         "atan2",
         "lerp_binary",
         "atan2",
-        "ldexp",
         "subalpha",
         "logaddexp2",
         "addalpha",

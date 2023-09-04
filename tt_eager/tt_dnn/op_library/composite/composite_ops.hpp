@@ -120,9 +120,6 @@ Tensor addcdiv(const Tensor& input_a, const Tensor& input_b, const Tensor& input
 //xlogy(x,y))=x*log(y)
 Tensor xlogy(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-//ldexp(input,other)=input * (2^other)
-Tensor ldexp(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 //logical_xor
 Tensor logical_xor(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
