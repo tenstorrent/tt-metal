@@ -21,7 +21,7 @@ namespace tt_metal {
 enum class BinaryOpType {
 
   ADD = 0, SUB = 1, MUL = 2, GT = 3, LT = 4, LTE = 5, GTE = 6, EQ = 7, NE = 8, SQUARED_DIFFERENCE = 9, BIAS_GELU = 10, LOGADDEXP = 11,
-  LOGICAL_AND = 12, LOGICAL_OR = 13, LDEXP = 14
+  LOGICAL_AND = 12, LOGICAL_OR = 13, LDEXP = 14, LOGADDEXP2 = 15
 };
 
 enum class BinaryOpParallelizationStrategy {
@@ -72,6 +72,7 @@ inline Tensor add_without_autoformat(const Tensor& input_tensor_a, const Tensor&
  constexpr auto bias_gelu = make_eltwise_binary<BinaryOpType::BIAS_GELU>{};
  constexpr auto logaddexp = make_eltwise_binary<BinaryOpType::LOGADDEXP>{};
  constexpr auto ldexp = make_eltwise_binary<BinaryOpType::LDEXP>{};
+ constexpr auto logaddexp2 = make_eltwise_binary<BinaryOpType::LOGADDEXP2>{};
 
  // comparative binary ops
  constexpr auto lt = make_eltwise_binary<BinaryOpType::LT>{};

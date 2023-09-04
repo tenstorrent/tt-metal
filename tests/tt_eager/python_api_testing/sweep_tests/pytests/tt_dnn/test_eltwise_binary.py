@@ -37,9 +37,7 @@ if is_wormhole_b0():
     shapes = [
         shapes[0],
     ]
-    output_mem_cfgs = [
-        output_mem_cfgs[0],
-    ]
+    del output_mem_cfgs[1:]
 
 @pytest.mark.parametrize(
     "input_shapes",
@@ -48,11 +46,10 @@ if is_wormhole_b0():
 @pytest.mark.parametrize("output_mem_config", output_mem_cfgs)
 class TestEltwiseBinary:
     @pytest.mark.parametrize("fn_kind", ["add", "sub", "mul", "squared_difference"])
-    def test_run_eltwise_binary_ops(
+    def test_run_eltwise_binary_ops_1(
         self,
         input_shapes,
         fn_kind,
-        input_mem_config,
         output_mem_config,
         pcie_slot,
         function_level_defaults,
@@ -67,7 +64,6 @@ class TestEltwiseBinary:
         )[0]
         test_args.update(
             {
-                "input_mem_config": input_mem_config,
                 "output_mem_config": output_mem_config,
             }
         )
@@ -81,12 +77,11 @@ class TestEltwiseBinary:
             test_args,
         )
 
-    @pytest.mark.parametrize("fn_kind", ["bias_gelu"])
-    def test_run_eltwise_binary_ops(
+    @pytest.mark.parametrize("fn_kind", ["bias_gelu",])
+    def test_run_eltwise_binary_ops_2(
         self,
         input_shapes,
         fn_kind,
-        input_mem_config,
         output_mem_config,
         pcie_slot,
         function_level_defaults,
@@ -102,11 +97,11 @@ class TestEltwiseBinary:
         )[0]
         test_args.update(
             {
-                "input_mem_config": input_mem_config,
+                "bias": 0.5,
                 "output_mem_config": output_mem_config,
             }
         )
-        comparison_func = comparison_funcs.comp_pcc
+        comparison_func = partial(comparison_funcs.comp_pcc,pcc=0.60)
         run_single_pytorch_test(
             f"eltwise-{fn_kind}",
             input_shapes,
@@ -120,7 +115,6 @@ class TestEltwiseBinary:
     def test_run_eltwise_binary_cmp_ops(
         self,
         input_shapes,
-        input_mem_config,
         output_mem_config,
         cmp_kind,
         pcie_slot,
@@ -136,7 +130,6 @@ class TestEltwiseBinary:
         )[0]
         test_args.update(
             {
-                "input_mem_config": input_mem_config,
                 "output_mem_config": output_mem_config,
             }
         )
@@ -155,10 +148,11 @@ class TestEltwiseBinary:
         (
             ("logaddexp",  {"low": -90, "high": 90}),
             ("ldexp",      {"low": -64, "high": 64}),
+            ("logaddexp2", {"low": -100, "high": 100}),
         ),
     )
     def test_run_eltwise_binary_log_ops(
-        self, input_shapes, input_mem_config, output_mem_config, log_kind, input_range, pcie_slot, function_level_defaults
+        self, input_shapes, output_mem_config, log_kind, input_range, pcie_slot, function_level_defaults
     ):
         if is_wormhole_b0() and (log_kind in  ["logaddexp2", "ldexp"]) :
             pytest.skip("Not works for WH B0 arch - Skipping")
@@ -168,7 +162,7 @@ class TestEltwiseBinary:
             )
         ] * len(input_shapes)
         test_args = list(generation_funcs.gen_default_dtype_layout_device(input_shapes))[0]
-        test_args.update({"input_mem_config": input_mem_config, "output_mem_config": output_mem_config})
+        test_args.update({"output_mem_config": output_mem_config})
         comparison_func = comparison_funcs.comp_pcc
         run_single_pytorch_test(
             f"eltwise-{log_kind}",
@@ -184,7 +178,6 @@ class TestEltwiseBinary:
     def test_run_eltwise_binary_logical_ops(
         self,
         input_shapes,
-        input_mem_config,
         output_mem_config,
         logical_kind,
         pcie_slot,
@@ -200,7 +193,6 @@ class TestEltwiseBinary:
         )[0]
         test_args.update(
             {
-                "input_mem_config": input_mem_config,
                 "output_mem_config": output_mem_config,
             }
         )

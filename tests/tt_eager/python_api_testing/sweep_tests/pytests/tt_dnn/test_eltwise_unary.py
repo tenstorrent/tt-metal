@@ -28,6 +28,7 @@ shapes = [
     [[1, 1, 320, 384]],  # Multi core
     [[1, 3, 320, 384]],  # Multi core
 ]
+input_mem_cfgs = copy.copy(generation_funcs.supported_mem_configs)
 output_mem_cfgs = copy.copy(generation_funcs.supported_mem_configs)
 if is_wormhole_b0():
     shapes = [
@@ -45,6 +46,7 @@ if is_wormhole_b0():
     "input_shapes",
     shapes,
 )
+@pytest.mark.parametrize("input_mem_config", input_mem_cfgs)
 @pytest.mark.parametrize("output_mem_config", output_mem_cfgs)
 class TestEltwiseUnary:
     @pytest.mark.parametrize(
@@ -88,12 +90,16 @@ class TestEltwiseUnary:
     )
     def test_run_eltwise_atan_op(
         self,
+        fn_kind,
+        pcie_slot,
+        input_shapes,
         function_level_defaults,
         input_mem_config,
         output_mem_config,
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
+                partial(generation_funcs.gen_rand, low=-1e6, high=1e6), torch.bfloat16
             )
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
@@ -138,12 +144,16 @@ class TestEltwiseUnary:
     @pytest.mark.parametrize("fast_and_appx", [True, False])
     def test_run_eltwise_rsqrt_op(
         self,
+        input_shapes,
+        fast_and_appx,
+        pcie_slot,
         function_level_defaults,
         input_mem_config,
         output_mem_config,
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
+                partial(generation_funcs.gen_rand, low=1, high=1e8), torch.bfloat16
             )
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
@@ -504,11 +514,11 @@ class TestEltwiseUnary:
             test_args,
         )
 
-    @pytest.mark.parametrize("value", [0.5])
+    @pytest.mark.parametrize("scalar", [0.5])
     def test_run_eltwise_heaviside(
         self,
         input_shapes,
-        value,
+        scalar,
         pcie_slot,
         function_level_defaults,
         input_mem_config,
@@ -520,7 +530,7 @@ class TestEltwiseUnary:
             )
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
-        test_args.update({"value": value})
+        test_args.update({"scalar": scalar})
         test_args.update(
             {
                 "input_mem_config": input_mem_config,
@@ -778,7 +788,7 @@ class TestEltwiseUnary:
             test_args,
         )
 
-    @skip_for_wormhole_b0        
+    @skip_for_wormhole_b0
     @pytest.mark.parametrize("fn_kind", ["isinf", "isposinf", "isneginf", "isnan"])
     def test_run_eltwise_arc_inf_nan_ops(
         self,
@@ -810,3 +820,4 @@ class TestEltwiseUnary:
             comparison_func,
             pcie_slot,
         )
+    

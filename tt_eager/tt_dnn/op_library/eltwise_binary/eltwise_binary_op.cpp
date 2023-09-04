@@ -60,20 +60,23 @@ std::map<string, string> get_defines(BinaryOpType op_type, const std::optional<s
             op_code = "0";
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::LOG));
             break;
-
         case BinaryOpType::LOGICAL_OR:
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::NEZ, {}, "PRE_0"));
             op_name = "add_tiles";
             op_code = "0";
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GTZ));
 	    break;
-	    
         case BinaryOpType::LDEXP:
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP2, {}, "PRE_IN2_0"));
             op_name = "mul_tiles";
             op_code = "2";
             break;
-	    
+        case BinaryOpType::LOGADDEXP2:
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP2, {}, "PRE_0"));
+            op_name = "add_tiles";
+            op_code = "0";
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::LOG2));
+            break;
         default: TT_ASSERT(false && "Undefined op type");
     }
     defines["ELTWISE_OP"] = op_name.c_str();

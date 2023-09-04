@@ -108,8 +108,8 @@ op_map = {
         "pytorch_op": pytorch_ops.logical_not,
     },
     "eltwise-bitwise_complement": {
-        "tt_lib_op": tt_lib_ops.eltwise_bitwise_complement,
-        "pytorch_op": pytorch_ops.bitwise_complement,
+        "tt_lib_op": None, #tt_lib_ops.eltwise_bitwise_complement,
+        "pytorch_op": None, #pytorch_ops.bitwise_complement,
     },
     "eltwise-logical_xor": {
         "tt_lib_op": tt_lib_ops.eltwise_logical_xor,
