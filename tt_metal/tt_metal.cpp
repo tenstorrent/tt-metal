@@ -440,9 +440,12 @@ void GenerateBinaries(Device *device, build_kernel_for_riscv_options_t *build_op
     ZoneScoped;
     const std::string tracyPrefix = "GenerateBinaries_";
     ZoneName( (tracyPrefix + op_path_suffix).c_str(), op_path_suffix.length() + tracyPrefix.length());
-    std::string arch_name = tt::get_string_lowercase(device->arch());
-    generate_descriptors(build_options, op_path_suffix);
-    kernel->generate_binaries(device, build_options, op_path_suffix);
+    try {
+        generate_descriptors(build_options, op_path_suffix);
+        kernel->generate_binaries(device, build_options, op_path_suffix);
+    } catch (std::runtime_error &ex) {
+        log_fatal("Failed to generate binaries for {} {}", kernel->name(), ex.what());
+    }
 }
 
 void SetCircularBufferDataFormat(
