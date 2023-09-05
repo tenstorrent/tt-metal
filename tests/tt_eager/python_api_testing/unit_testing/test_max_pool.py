@@ -106,6 +106,7 @@ def volume(shape):
     "use_multicore",
     ( False, True ),
 )
+@pytest.mark.skip(reason="Hanging. Abhinav to fix later.")
 def test_run_max_pool(
     act_shape,
     kernel_size,

@@ -732,7 +732,6 @@ struct InterleavedPow2AddrGenFast {
         noc_reads_num_issued[loading_noc] += 1;
     }
 
-
     FORCE_INLINE
     void noc_async_write_page(const uint32_t id, uint32_t src_addr, const uint32_t write_size_bytes, const uint32_t offset = 0) const {
         uint32_t dest_addr;

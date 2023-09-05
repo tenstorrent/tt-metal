@@ -445,14 +445,14 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         TT_ASSERT(!(out_row_size_bytes & (out_row_size_bytes - 1))); // output channels power of 2 is supported only
         if (pad_h == 0 && pad_w == 0) {
             if(rn50_first_conv) {
-                reader_kernel = "libs/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast_resnet50_first_conv.cpp";
-                compute_kernel = "libs/tt_dnn/op_library/conv/kernels/bmm_tilize_untilize_all_weights_in_l1_single_output_block_width_dim.cpp";
+                reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast_resnet50_first_conv.cpp";
+                compute_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/bmm_tilize_untilize_all_weights_in_l1_single_output_block_width_dim.cpp";
             } else {
-                reader_kernel = "libs/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast_without_conv_padding.cpp";
+                reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast_without_conv_padding.cpp";
                 compute_kernel = "tt_metal/kernels/compute/bmm_tilize_untilize.cpp";
             }
         } else {
-            reader_kernel = "libs/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast.cpp";
+            reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast.cpp";
             compute_kernel = "tt_metal/kernels/compute/bmm_tilize_untilize.cpp";
         }
         reader_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
@@ -519,11 +519,11 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
     std::vector<uint32_t> writer_compile_time_args;
     if (untilize_out) {
         if (rn50_first_conv) {
-            writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_and_reader_weights_resnet50_first_conv_untilize_out.cpp";
+            writer_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_and_reader_weights_resnet50_first_conv_untilize_out.cpp";
         } else if (use_fast_reader) {
-            writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_unary_stick_8bank_blocks_reader_weight_tile_with_pow2_addr_gen_fast.cpp";
+            writer_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_unary_stick_8bank_blocks_reader_weight_tile_with_pow2_addr_gen_fast.cpp";
         } else {
-            writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_unary_stick_layout_8bank_blocks_reader_weight_tile_layout.cpp";
+            writer_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_unary_stick_layout_8bank_blocks_reader_weight_tile_layout.cpp";
         }
         writer_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0), out0_cb, weight_cb, (uint32_t) std::log2(out_row_size_bytes)};
         writer_rt_args = {
@@ -551,9 +551,9 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
     } else {
         assert(use_fast_reader); // tiled out not tested for generic conv
         if (rn50_first_conv) {
-            writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_and_reader_weights_resnet50_first_conv_tiled_out.cpp";
+            writer_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_and_reader_weights_resnet50_first_conv_tiled_out.cpp";
         } else {
-            writer_kernel = "libs/tt_dnn/op_library/conv/kernels/writer_tiled_out_reader_conv_weights_tiled.cpp";
+            writer_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_tiled_out_reader_conv_weights_tiled.cpp";
         }
         writer_compile_time_args = {
             (uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),

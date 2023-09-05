@@ -168,15 +168,4 @@ constexpr static std::int32_t GET_L1_HEADERLESS_TILE_SIZE(uint format) {
 #define LOWER_HALFWORD(x) ((x) & 0xFFFF)
 #define UPPER_HALFWORD(x) ((x) >> 16)
 
-union Converter {
-  float f;
-  uint32_t u;
-  static float to_float(uint32_t _v) {
-    Converter c{};
-    c.u = _v;
-    return c.f;
-  }
-};
-
-
 } // namespace ckernel

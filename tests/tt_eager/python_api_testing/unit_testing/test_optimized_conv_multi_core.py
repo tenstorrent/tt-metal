@@ -17,7 +17,7 @@ from tt_lib.utils import (
     convert_weights_2d_matrix,
 )
 from models.utility_functions import print_diff_argmax, is_close, comp_pcc, comp_allclose_and_pcc
-from tests.python_api_testing.conv.conv_unit_test_utils import (
+from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
     create_conv_act_tensor,
     create_conv_weight_tensor,
     create_conv_bias_tensor,

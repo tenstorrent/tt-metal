@@ -49,6 +49,4 @@ enum firmware_msg_e
     SET_PERF_SCRATCH = 4
 };
 
-
-
 } // namespace ckelimitrnel

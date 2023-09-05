@@ -9,7 +9,9 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "noc_nonblocking_api.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_1_param.h"
+#include "sfpi.h"
 
 using namespace sfpi;
 
