@@ -34,6 +34,7 @@ public:
   }
 };
 
+
 // update split eltwise ops include macros
 inline bool update_macro_defines(UnaryOpType op_type,std::map<std::string,std::string>& defines) {
   switch( op_type) {
@@ -68,7 +69,7 @@ inline bool update_macro_defines(UnaryOpType op_type,std::map<std::string,std::s
   case UnaryOpType::ISNAN:
   case UnaryOpType::ISNEGINF:
   case UnaryOpType::ISPOSINF:
-    defines["SFPU_OP_ISINF_ISNAN_INCLUDE"]="0";
+    defines["SFPU_OP_ISINF_ISNAN_INCLUDE"]="1";
     return true;
   default:
     break;
@@ -185,6 +186,7 @@ std::map<string, string> get_defines(UnaryOpType op_type, std::optional<float> p
     // update split eltwise ops include macros
 
     update_macro_defines(op_type, defines);
+   
     return defines;
 }
 
