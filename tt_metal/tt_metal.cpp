@@ -436,24 +436,13 @@ void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
 
 void DeallocateBuffer(Buffer &buffer) { buffer.deallocate(); }
 
-// GenerateBinaries is multithreaded via Taskflow
-// When a thread throws an exception, Taskflow does not propagate this to main thread (https://github.com/taskflow/taskflow/issues/479)
-// As a workaround when a thread hits an exception during kernel compilation it will set `error_in_generating_binaries`
-// The main thread will check this to determine whether it should throw
-std::atomic<bool> error_in_generating_binaries = false;
-
 void GenerateBinaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix, Kernel *kernel) {
     ZoneScoped;
     const std::string tracyPrefix = "GenerateBinaries_";
     ZoneName( (tracyPrefix + op_path_suffix).c_str(), op_path_suffix.length() + tracyPrefix.length());
     std::string arch_name = tt::get_string_lowercase(device->arch());
     generate_descriptors(build_options, op_path_suffix);
-    try {
-        kernel->generate_binaries(device, build_options, op_path_suffix);
-    } catch (std::runtime_error &ex) {
-        log_error("Failed to generate binaries for {} {}", kernel->name(), ex.what());
-        error_in_generating_binaries = true;
-    }
+    kernel->generate_binaries(device, build_options, op_path_suffix);
 }
 
 void SetCircularBufferDataFormat(
@@ -585,32 +574,26 @@ bool CompileProgram(Device *device, Program &program) {
         !(profile_kernel && tt_is_print_server_running()), "Debug print server is running, profiling is not allowed");
     tt_set_profiler_state_for_debug_print(profile_kernel);
 
-    {
-        tf::Taskflow tf;
+    events.emplace_back( detail::async ( [device, &program] { AddBlankKernels(device, program); }) );
 
-        tf.emplace([device, &program] { AddBlankKernels(device, program); });
-
-        for (auto kernel_id : program.kernel_ids()) {
-            auto kernel = detail::GetKernel(program, kernel_id);
-            tf.emplace ( [kernel, device, &program] {
-                CompileKernel(device, program, kernel);
-            } );
-        }
-
-        GetExecutor().run(tf).wait();
+    for (auto kernel_id : program.kernel_ids()) {
+        auto kernel = detail::GetKernel(program, kernel_id);
+        events.emplace_back ( detail::async ( [kernel, device, &program] {
+            CompileKernel(device, program, kernel);
+        } ) );
     }
-    if (error_in_generating_binaries) {
-        throw std::runtime_error("Error in compiling kernels");
-    }
-    {
-        tf::Taskflow tf;
 
-        for (auto kernel_id : program.kernel_ids()) {
-            auto kernel = detail::GetKernel(program, kernel_id);
-            tf.emplace ( [kernel, device] { kernel->read_binaries(device->pcie_slot()); });
-        }
-        GetExecutor().run(tf).wait();
+    for (auto & f : events)
+        f.wait();
+
+    for (auto kernel_id : program.kernel_ids()) {
+        auto kernel = detail::GetKernel(program, kernel_id);
+        events.emplace_back ( detail::async ( [kernel, device] { kernel->read_binaries(device->pcie_slot()); }));
     }
+
+    for (auto & f : events)
+        f.wait();
+
     program.construct_core_range_set_for_worker_cores();
 
     if (detail::CompilationReporter::enabled()) {
