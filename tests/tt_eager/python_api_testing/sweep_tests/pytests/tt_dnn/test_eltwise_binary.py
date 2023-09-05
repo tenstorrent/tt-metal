@@ -18,8 +18,13 @@ sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
 
 
-from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
-from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
+from tests.tt_eager.python_api_testing.sweep_tests import (
+    comparison_funcs,
+    generation_funcs,
+)
+from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
+    run_single_pytorch_test,
+)
 from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0
 
 shapes = [
@@ -161,6 +166,40 @@ class TestEltwiseBinary:
         comparison_func = comparison_funcs.comp_pcc
         run_single_pytorch_test(
             f"eltwise-{log_kind}",
+            input_shapes,
+            datagen_func,
+            comparison_func,
+            pcie_slot,
+            test_args,
+        )
+
+    @pytest.mark.parametrize("logical_kind", ["logical_and"])
+    def test_run_eltwise_binary_logical_ops(
+        self,
+        input_shapes,
+        input_mem_config,
+        output_mem_config,
+        logical_kind,
+        pcie_slot,
+        function_level_defaults,
+    ):
+        datagen_func = [
+            generation_funcs.gen_func_with_cast(
+                partial(generation_funcs.gen_rand, low=-100, high=100), torch.int32
+            )
+        ] * len(input_shapes)
+        test_args = list(
+            generation_funcs.gen_default_dtype_layout_device(input_shapes)
+        )[0]
+        test_args.update(
+            {
+                "input_mem_config": input_mem_config,
+                "output_mem_config": output_mem_config,
+            }
+        )
+        comparison_func = comparison_funcs.comp_equal
+        run_single_pytorch_test(
+            f"eltwise-{logical_kind}",
             input_shapes,
             datagen_func,
             comparison_func,

@@ -15,6 +15,7 @@ from tt_lib.utils import _nearest_32 as nearest_32, tilize
 supported_dtypes = {
     "float32": torch.float32,
     "bfloat16": torch.bfloat16,
+    "int32": torch.int32,
 }
 
 supported_tt_dtypes = [ttl.tensor.DataType.BFLOAT16]

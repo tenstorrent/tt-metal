@@ -2150,6 +2150,7 @@ eltwise_squared_difference = make_eltwise_binary_op(ttl.tensor.squared_differenc
 eltwise_bias_gelu = make_eltwise_binary_op(ttl.tensor.bias_gelu)
 eltwise_hypot = make_eltwise_binary_op(ttl.tensor.hypot)
 eltwise_atan2 = make_eltwise_binary_op(ttl.tensor.atan2)
+eltwise_logical_and = make_eltwise_binary_op(ttl.tensor.logical_and)
 eltwise_min = make_eltwise_binary_op(ttl.tensor.min)
 eltwise_max = make_eltwise_binary_op(ttl.tensor.max)
 eltwise_ne = make_eltwise_binary_op(ttl.tensor.ne)

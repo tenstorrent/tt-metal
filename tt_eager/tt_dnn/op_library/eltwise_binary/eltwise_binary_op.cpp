@@ -41,6 +41,11 @@ std::map<string, string> get_defines(BinaryOpType op_type, const std::optional<s
         case BinaryOpType::EQ: defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EQZ)); break;
         case BinaryOpType::NE: defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::NEZ)); break;
         case BinaryOpType::SQUARED_DIFFERENCE: defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::SQUARE)); break;
+        case BinaryOpType::LOGICAL_AND:
+            op_name = "mul_tiles";
+            op_code = "2";
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::NEZ));
+            break;
         case BinaryOpType::BIAS_GELU:
             op_name = "add_tiles";
             op_code = "0";

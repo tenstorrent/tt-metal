@@ -568,6 +568,11 @@ def atan2(x, y, *args, **kwargs):
     return torch.atan2(y, x)
 
 
+def logical_and(x, y, *args, **kwargs):
+    result = torch.logical_and(x, y)
+    return result
+
+
 def bias_gelu(x, y, *args, **kwargs):
     result = torch.nn.functional.gelu(torch.add(x, y))
     return result

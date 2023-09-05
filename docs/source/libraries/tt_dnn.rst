@@ -556,3 +556,5 @@ Other Operations
 .. autofunction:: tt_lib.tensor.std_hw
 
 .. autofunction:: tt_lib.tensor.normalize_hw
+
+.. autofunction:: tt_lib.tensor.logical_and
