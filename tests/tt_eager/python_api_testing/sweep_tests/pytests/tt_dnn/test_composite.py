@@ -39,7 +39,12 @@ reference_pcc["softplus"] = 0.9984
 
 def custom_compare(*args, **kwargs):
     function = kwargs.pop("function")
-    comparison_func = partial(comparison_funcs.comp_pcc, pcc=reference_pcc[function])
+    if function in ["logical_xor"]:
+        comparison_func = comparison_funcs.comp_equal
+    else:
+        comparison_func = partial(
+            comparison_funcs.comp_pcc, pcc=reference_pcc[function]
+        )
     result = comparison_func(*args, **kwargs)
     return result
 
@@ -96,6 +101,7 @@ if is_wormhole_b0():
                 "bias_gelu_unary",
                 "addalpha",
                 "logit",
+                "logical_xor",
             ),
             shapes,
         )
@@ -137,12 +143,20 @@ def test_run_eltwise_composite_test(
             pytest.skip("Not tested for Wormhole - skipping")
         if fn in ["logit"]:
             pytest.skip("does not work for Wormhole -skipping")
-    datagen_func = [
-        generation_funcs.gen_func_with_cast(
-            partial(generator, low=options[fn][0], high=options[fn][1]),
-            torch.bfloat16,
-        )
-    ]
+    if fn in ["logical_xor"]:
+        datagen_func = [
+            generation_funcs.gen_func_with_cast(
+                partial(generator, low=options[fn][0], high=options[fn][1]),
+                torch.int32,
+            )
+        ]
+    else:
+        datagen_func = [
+            generation_funcs.gen_func_with_cast(
+                partial(generator, low=options[fn][0], high=options[fn][1]),
+                torch.bfloat16,
+            )
+        ]
     num_inputs = 1
     if fn in ["mac", "addcmul", "addcdiv", "lerp_ternary"]:
         num_inputs = 3
@@ -159,6 +173,7 @@ def test_run_eltwise_composite_test(
         "subalpha",
         "logaddexp2",
         "addalpha",
+        "logical_xor",
     ]:
         num_inputs = 2
 

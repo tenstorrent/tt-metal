@@ -314,6 +314,8 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.atan2
 
+.. autofunction:: tt_lib.tensor.logical_xor
+
 .. autofunction:: tt_lib.tensor.subalpha
 
 .. autofunction:: tt_lib.tensor.addalpha

@@ -590,6 +590,10 @@ def ldexp(x, y, *args, **kwargs):
     return torch.ldexp(x, y)
 
 
+def logical_xor(x, y, *args, **kwargs):
+    return torch.logical_xor(x, y)
+
+
 def subalpha(x, y, *args, alpha, **kwargs):
     return torch.sub(x, y, alpha=alpha)
 
