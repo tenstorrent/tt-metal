@@ -836,13 +836,23 @@ class ResNet(nn.Module):
 
         x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
         x = x.reshape(self.batch_size, x.shape()[1], (int) (x.shape()[2]/self.batch_size), x.shape()[3])
-        x = format_tensor(x, tt_lib.tensor.Layout.TILE, self.device, self.memory_config)
+
+        unpadded_shape = x.shape()
+        padded_shape = [ unpadded_shape[0], unpadded_shape[1], _nearest_32(unpadded_shape[2]), _nearest_32(unpadded_shape[3]) ]
+        x = tt_lib.tensor.pad(x, padded_shape, [0, 0, 0, 0], 0, output_mem_config=self.memory_config)
+        x = tt_lib.tensor.tilize(x, output_mem_config=self.memory_config)
+
         x = self.avgpool(x, self.memory_config)
 
         unpadded_shape_end = [x.shape()[0]-1, x.shape()[1]-1, 1-1, x.shape()[3]-1]
         x = tt_lib.tensor.untilize_with_unpadding(x, output_tensor_end=unpadded_shape_end, output_tensor_start=[0,0,0,0], output_mem_config=self.memory_config)
         x = x.reshape(1, x.shape()[1], self.batch_size * x.shape()[2], x.shape()[3])
-        x = tt_lib.tensor.tilize_with_zero_padding(x, output_mem_config=self.memory_config)
+
+        unpadded_shape = x.shape()
+        padded_shape = [ unpadded_shape[0], unpadded_shape[1], _nearest_32(unpadded_shape[2]), _nearest_32(unpadded_shape[3]) ]
+        x = tt_lib.tensor.pad(x, padded_shape, [0, 0, 0, 0], 0, output_mem_config=self.memory_config)
+        x = tt_lib.tensor.tilize(x, output_mem_config=self.memory_config)
+
         x = self.fc(x)
         x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
         x = x.reshape(self.batch_size, x.shape()[1], (int) (x.shape()[2] / self.batch_size), x.shape()[3])
