@@ -86,8 +86,6 @@ run_frequent_pipeline_tests() {
         exit 1
     fi
 
-    make nuke
-    make build
     make tests
 
     source build/python_env/bin/activate
