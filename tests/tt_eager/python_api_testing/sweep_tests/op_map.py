@@ -500,6 +500,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_logaddexp2,
         "pytorch_op": pytorch_ops.logaddexp2,
     },
+    "eltwise-logical_or": {
+        "tt_lib_op": tt_lib_ops.eltwise_logical_or,
+        "pytorch_op": pytorch_ops.logical_or,
+    },
     # Eltwise ternary
     "eltwise-arange": {
         "tt_lib_op": tt_lib_ops.arange,

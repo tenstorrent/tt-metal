@@ -2164,6 +2164,7 @@ eltwise_ldexp = make_eltwise_binary_op(ttl.tensor.ldexp)
 eltwise_logical_xor = make_eltwise_binary_op(ttl.tensor.logical_xor)
 eltwise_logaddexp = make_eltwise_binary_op(ttl.tensor.logaddexp)
 eltwise_logaddexp2 = make_eltwise_binary_op(ttl.tensor.logaddexp2)
+eltwise_logical_or = make_eltwise_binary_op(ttl.tensor.logical_or)
 
 
 ################################################

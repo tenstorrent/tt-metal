@@ -1224,6 +1224,7 @@ void TensorModule(py::module &m_tensor) {
     //detail::bind_binary_op<false, true>(m_tensor, "logaddexp", &logaddexp, R"doc(Perform an eltwise-binary logaddexp (``log(exp({0}) + exp({1}))``) on two tensors.)doc");
     detail::bind_binary_op<false, true>(m_tensor, "logaddexp2", logaddexp2, R"doc(Perform an eltwise-binary logaddexp2 (``log2(2^({0}) + 2^({1}))``) on two tensors.)doc");
     detail::bind_binary_op(m_tensor, "logaddexp", logaddexp, R"doc(Perform an eltwise-binary logaddexp (``log(exp({0}) + exp({1}))``) on two tensors.)doc");
+    detail::bind_binary_op(m_tensor, "logical_or", logical_or, R"doc(Perform an eltwise-binary logical OR (``{0} | {1}``) on two tensors.)doc");
 
     detail::bind_binary_op(m_tensor, "add_without_autoformat", add_without_autoformat,
         R"doc(Perform an eltwise-binary add (``{0} + {1}``) on two tensors.

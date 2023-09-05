@@ -646,6 +646,8 @@ def logaddexp(x, y, *args, **kwargs):
 def logaddexp2(x, y, *args, **kwargs):
     return torch.logaddexp2(x, y)
 
+def logical_or(x, y, *args, **kwargs):
+    return torch.logical_or(x, y)
 
 def add(x, y, *args, **kwargs):
     return torch.add(x, y)

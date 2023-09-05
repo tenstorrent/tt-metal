@@ -173,7 +173,8 @@ class TestEltwiseBinary:
             test_args,
         )
 
-    @pytest.mark.parametrize("logical_kind", ["logical_and"])
+
+    @pytest.mark.parametrize("logical_kind", ["logical_and","logical_or"])
     def test_run_eltwise_binary_logical_ops(
         self,
         input_shapes,

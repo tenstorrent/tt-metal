@@ -513,6 +513,8 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.erfc
 
+.. autofunction:: tt_lib.tensor.logical_or
+
 .. autofunction:: tt_lib.tensor.rsqrt
 
 .. autofunction:: tt_lib.tensor.lerp
