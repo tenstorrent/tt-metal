@@ -28,7 +28,7 @@ void kernel_main() {
     };
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
-    for (uint32_t i = start_id; i<start_id + num_tiles; i ++) {
+    for (uint32_t i = start_id; i < start_id + num_tiles; ++ i) {
         cb_reserve_back(cb_id_in0, onetile);
         uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
         noc_async_read_tile(i, s, l1_write_addr);

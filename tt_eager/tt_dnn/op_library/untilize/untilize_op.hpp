@@ -17,6 +17,7 @@ namespace tt_metal {
 
 struct Untilize {
     const MemoryConfig output_mem_config;
+    const bool use_multicore;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -38,7 +39,7 @@ struct UntilizeWithUnpadding {
 };
 
 
-Tensor untilize (const Tensor &a, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor untilize (const Tensor &a, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, bool use_multicore = false);
 Tensor untilize_with_unpadding(const Tensor &a, const Shape &output_tensor_start, const Shape &output_tensor_end, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace tt_metal
