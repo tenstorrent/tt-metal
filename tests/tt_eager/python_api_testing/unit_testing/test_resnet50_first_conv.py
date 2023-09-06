@@ -118,6 +118,7 @@ def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignme
         out = ttl.tensor.optimized_conv(
             A_cl_device,
             B_tiled,
+            None,
             [R, padded_S, stride_h, stride_w, 0, 0],
             act_block_h,
             act_block_w,
