@@ -45,7 +45,7 @@ shapes_mm = [
 
 if is_wormhole_b0():
     del shapes_mm[1:]
-          
+
 @pytest.mark.parametrize(
     "input_shapes",
     shapes_mm
@@ -67,7 +67,12 @@ def test_run_matmul_test(input_shapes, pcie_slot, dtype, function_level_defaults
         datagen_func,
         comparison_func,
         pcie_slot,
-        {"dtype": dtype, "layout": ttl.tensor.Layout.TILE, "on_device": True},
+        {
+            "dtype": [dtype, dtype],
+            "layout": [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+            "buffer_type": [ttl.tensor.BufferType.DRAM, ttl.tensor.BufferType.DRAM],
+            "output_mem_config": ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+        },
     )
 
 shapes_bmm = [
@@ -119,5 +124,10 @@ def test_run_bmm_test(input_shapes, pcie_slot, dtype, function_level_defaults):
         datagen_func,
         comparison_func,
         pcie_slot,
-        {"dtype": dtype, "layout": ttl.tensor.Layout.TILE, "on_device": True},
+        {
+            "dtype": [dtype, dtype],
+            "layout": [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+            "buffer_type": [ttl.tensor.BufferType.DRAM, ttl.tensor.BufferType.DRAM],
+            "output_mem_config": ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+        },
     )

@@ -117,7 +117,10 @@ def bias_gelu(x, *args, bias, **kwargs):
 
 
 def hardtanh(x, *args, **kwargs):
-    result = torch.nn.functional.hardtanh(x)
+    low = kwargs.pop("low")
+    high = kwargs.pop("high")
+
+    result = torch.nn.functional.hardtanh(x, min_val=low, max_val=high)
     return result
 
 
@@ -127,11 +130,6 @@ def clip(x, *args, low, high, **kwargs):
 
 
 # Unary Ops and Composite Unary
-def bitwise_complement(x, *args, **kwargs):
-    result = torch.bitwise_not(x)
-    return result
-
-
 def logical_not(x, *args, **kwargs):
     result = torch.logical_not(x).to(torch.int32)
     return result
@@ -248,12 +246,98 @@ def sqrt(x, *args, **kwargs):
 
 
 def gelu(x, *args, **kwargs):
-    return torch.nn.functional.gelu(x)
+    fast_and_appx = kwargs.pop("fast_and_appx")
+    approximate = 'tanh' if fast_and_appx else 'none'
+    return torch.nn.functional.gelu(x, approximate=approximate)
 
+def softmax_in_place(x, *args, **kwargs):
+    return torch.softmax(x, -1)
+
+
+def ref_stable_softmax(x):
+    torch.set_printoptions(
+        precision=2, threshold=1000, sci_mode=False, edgeitems=8, linewidth=480
+    )
+    z = x  # - torch.max(x, dim=3, keepdim=True)[0]
+    numerator = torch.exp(z)
+    # print(x.shape)
+    H = x.shape[-2]
+    # print("H=", H)
+    pw0, pw1 = 0, 1  # prints a tile slice with these tile coord range
+    ph0, ph1 = 0, 1
+    sh, sw = 16, 16  # stride inside the tile
+    ow0, ow1 = 0, 0  # offset inside the tile
+    oh0, oh1 = 0, 0
+    # print(
+    #     "Ref x=\n",
+    #     x[
+    #         0,
+    #         0,
+    #         ph0 * 32 + oh0 : ph1 * 32 + oh1 : sh,
+    #         pw0 * 32 + ow0 : pw1 * 32 + ow1 : sw,
+    #     ],
+    # )
+    # print("Ref exps=\n", numerator[0, 0, ph0*32 : ph1*32 : sh, pw0*32 : pw1*32 : sw])
+    denominator = torch.sum(numerator, 3, keepdim=True)
+    # print("denom shape=", denominator.shape)
+    # print("Ref sumexp=\n", torch.reshape(denominator, (-1,H))[:, ph0*32:ph1*32])
+
+    denom1 = torch.reciprocal(denominator)
+    # print("ref 1/sumexp=\n", denom1[0, 0, 0:32:8, 0:64:8])
+    softmax = numerator * denom1
+    # print("softmaxManual=\n", softmax[0, 0, 0:32:8, 0:64:8])
+    softmax = torch.nn.Softmax(3)(x)
+    # print("softmaxTorch=\n", softmax[0, 0, 0:32:8, 0:64:8])
+
+    return softmax
+
+
+def layernorm(x, y, z, *args, **kwargs):
+    y = y.squeeze(0)
+    y = y.squeeze(0)
+    y = y.squeeze(0)
+
+    z = z.squeeze(0)
+    z = z.squeeze(0)
+    z = z.squeeze(0)
+
+    return torch.nn.functional.layer_norm(input=x, normalized_shape=y.shape, weight=y, bias=z, eps=1e-05)
+
+
+def layernorm_noweights(x, *args, **kwargs):
+    last = x.shape[3]
+    return torch.nn.functional.layer_norm(input=x, normalized_shape=(last,), weight=None, bias=None, eps=1e-05)
+
+
+def add_layernorm(x, y, z, w, *args, **kwargs):
+    res = x+y
+
+    w = w.squeeze(0)
+    w = w.squeeze(0)
+    w = w.squeeze(0)
+
+    z = z.squeeze(0)
+    z = z.squeeze(0)
+    z = z.squeeze(0)
+
+    return torch.nn.functional.layer_norm(input=res, normalized_shape=z.shape, weight=z, bias=w, eps=1e-05)
+
+
+def add_layernorm_noweights(x, y, *args, **kwargs):
+    res = x+y
+    last = res.shape[3]
+
+    return torch.nn.functional.layer_norm(input=res, normalized_shape=(last,), weight=None, bias=None, eps=1e-05)
+
+
+def scale_mask_softmax_in_place(x, y, scale, *args, **kwargs):
+    x1 = scale * x
+    x2 = x1 + y
+    retval = ref_stable_softmax(x2)
+    return retval
 
 def rsqrt(x, *args, **kwargs):
     return torch.rsqrt(x)
-
 
 def relu(x, *args, **kwargs):
     return torch.nn.functional.relu(x)
@@ -269,7 +353,7 @@ def log_sigmoid(x, *args, **kwargs):
 
 
 def heaviside(x, *args, **kwargs):
-    value = kwargs.pop("value")
+    value = kwargs.pop("scalar")
     result = torch.heaviside(x, torch.tensor(value, dtype=torch.bfloat16))
     return result
 
@@ -408,18 +492,43 @@ def full(x, *args, scalar, **kwargs):
     return result
 
 
+def fill_rm(x, *args, **kwargs):
+    hOnes = kwargs.pop("hOnes")
+    wOnes = kwargs.pop("wOnes")
+
+    val_hi = kwargs.pop("val_hi")
+    val_lo = kwargs.pop("val_lo")
+
+    y = x
+    y[:, :, :, :] = val_lo
+    y[:, :, 0:hOnes, 0:wOnes] = val_hi
+
+    return y
+
+
+def fill_ones_rm(x, *args, **kwargs):
+    hOnes = kwargs.pop("hOnes")
+    wOnes = kwargs.pop("wOnes")
+
+    y = x
+    y[:, :, :, :] = 0
+    y[:, :, 0:hOnes, 0:wOnes] = 1
+
+    return y
+
+
 ## Trinary op
 def mac(x, y, z, *args, **kwargs):
     return x * y + z
 
 
-def addcmul(x, y, z, *args, value, **kwargs):
-    result = torch.addcmul(x, y, z, value=value)
+def addcmul(x, y, z, *args, scalar, **kwargs):
+    result = torch.addcmul(x, y, z, value=scalar)
     return result
 
 
-def addcdiv(x, y, z, *args, value, **kwargs):
-    result = torch.addcdiv(x, y, z, value=value)
+def addcdiv(x, y, z, *args, scalar, **kwargs):
+    result = torch.addcdiv(x, y, z, value=scalar)
     return result
 
 
@@ -537,6 +646,16 @@ def reshape(x, *args, reshape_dims, **kwargs):
     return torch.reshape(x, reshape_dims)
 
 
+def split_last_dim_two_chunks_tiled(x, *args, **kwargs):
+    W = x.shape[-1]
+    half = W // 2
+
+    output0 = x[:, :, :, 0:half]
+    output1 = x[:, :, :, half:W]
+
+    return [output0, output1]
+
+
 def tilize(x, *args, **kwargs):
     return tilize_util(x)
 
@@ -644,3 +763,7 @@ def unpad_from_tile(x, output_tensor_shape, *args, **kwargs):
     ]
 
     return out
+
+def conv(x, y, *args, **kwargs):
+    conv_params = kwargs.pop("conv_params")
+    return torch.nn.functional.conv2d(x, y, bias=None, stride=(conv_params[2], conv_params[3]), padding=(conv_params[4], conv_params[5]))

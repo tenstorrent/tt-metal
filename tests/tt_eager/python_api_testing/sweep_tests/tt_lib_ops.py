@@ -25,38 +25,56 @@ def setup_host_and_device(func):
 ################################################
 ################## Helper-Funcs ################
 ################################################
+
+def make_mem_config(beffer_type):
+    if beffer_type == None:
+        return None
+
+    return ttl.tensor.MemoryConfig(True, beffer_type)
+
+
+def tensor_to_device(x, device, beffer_type):
+    if beffer_type == None:
+        return x
+
+    return x.to(device, ttl.tensor.MemoryConfig(True, beffer_type))
+
+
 @setup_host_and_device
-def linear(x, weight, bias=None, *args, device, dtype, layout, on_device, **kwargs):
+def linear(x, weight, bias=None, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     tt_bias = None
+
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
     tt_weight = ttl.tensor.Tensor(
         weight.reshape(-1).tolist(),
         weight.shape,
-        dtype,
+        dtype[1],
         ttl.tensor.Layout.ROW_MAJOR,
     )
     if bias is not None:
         tt_bias = ttl.tensor.Tensor(
             bias.reshape(-1).tolist(),
             bias.shape,
-            dtype,
+            dtype[2],
             ttl.tensor.Layout.ROW_MAJOR,
         )
+        tt_bias = tt_bias.to(layout[2])
 
-    t0 = t0.to(layout)
-    tt_weight = tt_weight.to(layout)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    if on_device:
-        t0 = t0.to(device)
-        tt_weight = tt_weight.to(device)
-        if bias is not None:
-            tt_bias = tt_bias.to(device)
+    tt_weight = tt_weight.to(layout[1])
+    tt_weight = tensor_to_device(tt_weight, device, buffer_type[0])
+
+    if bias is not None:
+        tt_bias = tensor_to_device(tt_bias, device, buffer_type[0])
+
     _, __, out_features, in_features = tt_weight.shape()
     tt_linear = tt_Linear(in_features, out_features, tt_weight, tt_bias)
 
@@ -72,123 +90,117 @@ def linear(x, weight, bias=None, *args, device, dtype, layout, on_device, **kwar
 def move(
     x,
     *args,
-    input_mem_config,
-    output_mem_config,
     device,
     dtype,
     layout,
-    on_device,
+    buffer_type,
+    output_mem_config,
     **kwargs,
 ):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device, input_mem_config)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.move(t0, output_mem_config)
-
+    t1 = ttl.tensor.move(t0, output_mem_config=output_mem_config)
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+
     return output
 
 
 @setup_host_and_device
-def eltwise_bitwise_complement(x, *args, device, dtype, layout, on_device, **kwargs):
+def eltwise_erf(x, *args, fast_and_appx, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.bitwise_complement(t0)
-
+    t1 = ttl.tensor.erf(t0, fast_and_appx, output_mem_config=output_mem_config)
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+
     return output
 
 
 @setup_host_and_device
-def eltwise_erf(x, *args, fast_and_appx, device, dtype, layout, on_device, **kwargs):
+def eltwise_erfc(x, *args, fast_and_appx, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.erf(t0, fast_and_appx)
-
+    t1 = ttl.tensor.erfc(t0, fast_and_appx, output_mem_config=output_mem_config)
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+
     return output
 
 
 @setup_host_and_device
-def eltwise_erfc(x, *args, fast_and_appx, device, dtype, layout, on_device, **kwargs):
+def eltwise_logical_not(x, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.erfc(t0, fast_and_appx)
+    t1 = ttl.tensor.logical_not(t0, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     return output
 
 
 @setup_host_and_device
-def eltwise_logical_not(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.logical_not(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-    return output
-
-
-@setup_host_and_device
-def eltwise_threshold(
-    x, *args, threshold, value, device, dtype, layout, on_device, **kwargs
+def eltwise_threshold(x, *args, threshold, value, device, dtype, layout, buffer_type, output_mem_config, **kwargs
 ):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.threshold(t0, threshold, value)
+    t1 = ttl.tensor.threshold(t0, threshold, value, output_mem_config=output_mem_config)
+
+    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    return output
+
+
+@setup_host_and_device
+def eltwise_hardtanh(
+    x, *args, low, high, device, dtype, layout, buffer_type, output_mem_config, **kwargs
+):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype[0],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
+
+    t1 = ttl.tensor.hardtanh(t0, low, high, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     return output
@@ -196,196 +208,229 @@ def eltwise_threshold(
 
 @setup_host_and_device
 def eltwise_leaky_relu(
-    x, *args, negative_slope, device, dtype, layout, on_device, **kwargs
+    x, *args, negative_slope, device, dtype, layout, buffer_type, output_mem_config, **kwargs
 ):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.leaky_relu(t0, negative_slope)
+    t1 = ttl.tensor.leaky_relu(t0, negative_slope, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     return output
 
 
 @setup_host_and_device
-def eltwise_bias_gelu(x, *args, bias, device, dtype, layout, on_device, **kwargs):
+def eltwise_bias_gelu(x, *args, bias, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.bias_gelu(t0, bias)
+    t1 = ttl.tensor.bias_gelu(t0, bias, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     return output
 
 
 @setup_host_and_device
-def eltwise_hardshrink(x, *args, _lambda, device, dtype, layout, on_device, **kwargs):
+def eltwise_hardshrink(x, *args, _lambda, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.hardshrink(t0, _lambda)
+    t1 = ttl.tensor.hardshrink(t0, _lambda, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     return output
 
 
 @setup_host_and_device
-def eltwise_softshrink(x, *args, _lambda, device, dtype, layout, on_device, **kwargs):
+def eltwise_softshrink(x, *args, _lambda, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.softshrink(t0, _lambda)
+    t1 = ttl.tensor.softshrink(t0, _lambda, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     return output
 
 
 @setup_host_and_device
-def eltwise_elu(x, *args, alpha, device, dtype, layout, on_device, **kwargs):
+def eltwise_elu(x, *args, alpha, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.elu(t0, alpha)
+    t1 = ttl.tensor.elu(t0, alpha, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     return output
 
 
 @setup_host_and_device
-def eltwise_gelu(x, *args, fast_and_appx, device, dtype, layout, on_device, **kwargs):
+def eltwise_gelu(x, *args, fast_and_appx, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.gelu(t0, fast_and_appx)
+    t1 = ttl.tensor.gelu(t0, fast_and_appx, output_mem_config=output_mem_config)
+
+    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+
+    return output
+
+@setup_host_and_device
+def eltwise_softmax_in_place(x, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype[0],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
+
+    t1 = ttl.operations.primary.softmax_in_place(t0)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
     return output
 
 
+
 @setup_host_and_device
-def eltwise_rsqrt(x, *args, fast_and_appx, device, dtype, layout, on_device, **kwargs):
+def eltwise_scale_mask_softmax_in_place(x, y, scale, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.rsqrt(t0, fast_and_appx)
+    t1 = ttl.tensor.Tensor(
+        y.reshape(-1).tolist(),
+        y.shape,
+        dtype[1],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t1 = t1.to(layout[1])
+    t1 = tensor_to_device(t1, device, buffer_type[1])
+
+    t2 = ttl.operations.primary.transformers.scale_mask_softmax_in_place(t0, scale, t1)
+
+    output = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    return output
+
+@setup_host_and_device
+def eltwise_rsqrt(x, *args, fast_and_appx, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype[0],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
+
+    t1 = ttl.tensor.rsqrt(t0, fast_and_appx, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def eltwise_relu_min(x, *args, lower_limit, device, dtype, layout, on_device, **kwargs):
+def eltwise_relu_min(x, *args, lower_limit, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.relu_min(t0, lower_limit)
+    t1 = ttl.tensor.relu_min(t0, lower_limit, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def eltwise_relu_max(x, *args, upper_limit, device, dtype, layout, on_device, **kwargs):
+def eltwise_relu_max(x, *args, upper_limit, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.relu_max(t0, upper_limit)
+    t1 = ttl.tensor.relu_max(t0, upper_limit, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 # stats ops
 @setup_host_and_device
-def std_hw(x, *args, device, dtype, layout, on_device, **kwargs):
+def std_hw(x, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.std_hw(t0)
+    t1 = ttl.tensor.std_hw(t0, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     output = output.max(2, True)[0].max(3, True)[0]
@@ -394,19 +439,18 @@ def std_hw(x, *args, device, dtype, layout, on_device, **kwargs):
 
 
 @setup_host_and_device
-def var_hw(x, *args, device, dtype, layout, on_device, **kwargs):
+def var_hw(x, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.var_hw(t0)
+    t1 = ttl.tensor.var_hw(t0, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     output = output.max(2, True)[0].max(3, True)[0]
@@ -415,19 +459,18 @@ def var_hw(x, *args, device, dtype, layout, on_device, **kwargs):
 
 
 @setup_host_and_device
-def mean_hw(x, *args, device, dtype, layout, on_device, **kwargs):
+def mean_hw(x, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.mean_hw(t0)
+    t1 = ttl.tensor.mean_hw(t0, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     output = output.max(2, True)[0].max(3, True)[0]
@@ -436,197 +479,180 @@ def mean_hw(x, *args, device, dtype, layout, on_device, **kwargs):
 
 
 @setup_host_and_device
-def normalize_hw(x, *args, device, dtype, layout, on_device, **kwargs):
+def normalize_hw(x, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.normalize_hw(t0)
+    t1 = ttl.tensor.normalize_hw(t0, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     return output
 
 
 @setup_host_and_device
-def eltwise_polyval(x, *args, coeffs, device, dtype, layout, on_device, **kwargs):
+def eltwise_polyval(x, *args, coeffs, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.polyval(t0, coeffs)
+    t1 = ttl.tensor.polyval(t0, coeffs, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def eltwise_mac(x, y, z, *args, device, dtype, layout, on_device, **kwargs):
+def eltwise_mac(x, y, z, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
     t1 = ttl.tensor.Tensor(
         y.reshape(-1).tolist(),
         y.shape,
-        dtype,
+        dtype[1],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t1 = t1.to(layout)
-    if on_device:
-        t1 = t1.to(device)
+    t1 = t1.to(layout[1])
+    t1 = tensor_to_device(t1, device, buffer_type[1])
 
     t2 = ttl.tensor.Tensor(
         z.reshape(-1).tolist(),
         z.shape,
-        dtype,
+        dtype[2],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t2 = t2.to(layout)
-    if on_device:
-        t2 = t2.to(device)
+    t2 = t2.to(layout[2])
+    t2 = tensor_to_device(t2, device, buffer_type[2])
 
-    t3 = ttl.tensor.mac(t0, t1, t2)
+    t3 = ttl.tensor.mac(t0, t1, t2, output_mem_config=output_mem_config)
 
     output = t3.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def eltwise_addcmul(x, y, z, *args, value, device, dtype, layout, on_device, **kwargs):
+def eltwise_addcmul(x, y, z, *args, scalar, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
     t1 = ttl.tensor.Tensor(
         y.reshape(-1).tolist(),
         y.shape,
-        dtype,
+        dtype[1],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t1 = t1.to(layout)
-    if on_device:
-        t1 = t1.to(device)
+    t1 = t1.to(layout[1])
+    t1 = tensor_to_device(t1, device, buffer_type[1])
 
     t2 = ttl.tensor.Tensor(
         z.reshape(-1).tolist(),
         z.shape,
-        dtype,
+        dtype[2],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t2 = t2.to(layout)
-    if on_device:
-        t2 = t2.to(device)
+    t2 = t2.to(layout[2])
+    t2 = tensor_to_device(t2, device, buffer_type[2])
 
-    t3 = ttl.tensor.addcmul(t0, t1, t2, value)
+    t3 = ttl.tensor.addcmul(t0, t1, t2, scalar, output_mem_config=output_mem_config)
 
     output = t3.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def eltwise_addcdiv(x, y, z, *args, value, device, dtype, layout, on_device, **kwargs):
+def eltwise_addcdiv(x, y, z, *args, scalar, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
     t1 = ttl.tensor.Tensor(
         y.reshape(-1).tolist(),
         y.shape,
-        dtype,
+        dtype[1],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t1 = t1.to(layout)
-    if on_device:
-        t1 = t1.to(device)
+    t1 = t1.to(layout[1])
+    t1 = tensor_to_device(t1, device, buffer_type[1])
 
     t2 = ttl.tensor.Tensor(
         z.reshape(-1).tolist(),
         z.shape,
-        dtype,
+        dtype[2],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t2 = t2.to(layout)
-    if on_device:
-        t2 = t2.to(device)
+    t2 = t2.to(layout[2])
+    t2 = tensor_to_device(t2, device, buffer_type[2])
 
-    t3 = ttl.tensor.addcdiv(t0, t1, t2, value)
+    t3 = ttl.tensor.addcdiv(t0, t1, t2, scalar, output_mem_config)
 
     output = t3.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
 def eltwise_lerp_binary(
-    x, y, *args, weight, device, dtype, layout, on_device, **kwargs
+    x, y, *args, weight, device, dtype, layout, buffer_type, output_mem_config, **kwargs
 ):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
     t1 = ttl.tensor.Tensor(
         y.reshape(-1).tolist(),
         y.shape,
-        dtype,
+        dtype[1],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t1 = t1.to(layout)
-    if on_device:
-        t1 = t1.to(device)
+    t1 = t1.to(layout[1])
+    t1 = tensor_to_device(t1, device, buffer_type[1])
 
-    t2 = ttl.tensor.lerp(t0, t1, weight)
+    t2 = ttl.tensor.lerp(t0, t1, weight, output_mem_config=output_mem_config)
 
     output = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
@@ -634,72 +660,237 @@ def eltwise_lerp_binary(
 
 
 @setup_host_and_device
-def eltwise_lerp_ternary(x, y, z, *args, device, dtype, layout, on_device, **kwargs):
+def conv(x, y, conv_params, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
     t1 = ttl.tensor.Tensor(
         y.reshape(-1).tolist(),
         y.shape,
-        dtype,
+        dtype[1],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t1 = t1.to(layout)
-    if on_device:
-        t1 = t1.to(device)
+    t1 = t1.to(layout[1])
+    t1 = tensor_to_device(t1, device, buffer_type[1])
+
+    t2 = ttl.tensor.conv(t0, t1, conv_params, 0, 0, 0, 0, 0, conv_params[0])
+
+    output = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    return output
+
+@setup_host_and_device
+def layernorm(x, y, z, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype[0],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
+
+    if layout[1] == ttl.tensor.Layout.TILE:
+        y = torch.nn.functional.pad(y, (0, 0, 0, 32 - y.shape[2]))
+
+    t1 = ttl.tensor.Tensor(
+        y.reshape(-1).tolist(),
+        y.shape,
+        dtype[1],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t1 = t1.to(layout[1])
+    t1 = tensor_to_device(t1, device, buffer_type[1])
+
+    if layout[2] == ttl.tensor.Layout.TILE:
+        z = torch.nn.functional.pad(z, (0, 0, 0, 32 - z.shape[2]))
 
     t2 = ttl.tensor.Tensor(
         z.reshape(-1).tolist(),
         z.shape,
-        dtype,
+        dtype[2],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t2 = t2.to(layout)
-    if on_device:
-        t2 = t2.to(device)
+    t2 = t2.to(layout[2])
+    t2 = tensor_to_device(t2, device, buffer_type[2])
 
-    t3 = ttl.tensor.lerp(t0, t1, t2)
+    t3 = ttl.operations.primary.layernorm(t0, 1e-5, t1, t2, output_mem_config=output_mem_config)
 
     output = t3.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def eltwise_subalpha(x, y, *args, alpha, device, dtype, layout, on_device, **kwargs):
+def layernorm_noweights(x, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
+
+    t3 = ttl.operations.primary.layernorm(t0, 1e-5, None, None, output_mem_config=output_mem_config)
+
+    output = t3.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    return output
+
+
+@setup_host_and_device
+def add_layernorm_noweights(x, y, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype[0],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
     t1 = ttl.tensor.Tensor(
         y.reshape(-1).tolist(),
         y.shape,
-        dtype,
+        dtype[1],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t1 = t1.to(layout)
-    if on_device:
-        t1 = t1.to(device)
+    t1 = t1.to(layout[1])
+    t1 = tensor_to_device(t1, device, buffer_type[1])
 
-    t2 = ttl.tensor.subalpha(t0, t1, alpha)
+    t4 = ttl.operations.primary.add_layernorm(t0, t1, 1e-5, None, None, output_mem_config=output_mem_config)
+
+    output = t4.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    return output
+
+
+@setup_host_and_device
+def add_layernorm(x, y, z, w, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype[0],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
+
+    t1 = ttl.tensor.Tensor(
+        y.reshape(-1).tolist(),
+        y.shape,
+        dtype[1],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t1 = t1.to(layout[1])
+    t1 = tensor_to_device(t1, device, buffer_type[1])
+
+
+    if layout[2] == ttl.tensor.Layout.TILE:
+        z = torch.nn.functional.pad(z, (0, 0, 0, 32 - z.shape[2]))
+
+    t2 = ttl.tensor.Tensor(
+        z.reshape(-1).tolist(),
+        z.shape,
+        dtype[2],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t2 = t2.to(layout[2])
+    t2 = tensor_to_device(t2, device, buffer_type[2])
+
+    if layout[3] == ttl.tensor.Layout.TILE:
+        w = torch.nn.functional.pad(w, (0, 0, 0, 32 - w.shape[2]))
+
+    t3 = ttl.tensor.Tensor(
+        w.reshape(-1).tolist(),
+        w.shape,
+        dtype[3],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t3 = t3.to(layout[3])
+    t3 = tensor_to_device(t3, device, buffer_type[3])
+
+    t4 = ttl.operations.primary.add_layernorm(t0, t1, 1e-5, t2, t3, output_mem_config=output_mem_config)
+
+    output = t4.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    return output
+
+@setup_host_and_device
+def eltwise_lerp_ternary(x, y, z, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype[0],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
+
+    t1 = ttl.tensor.Tensor(
+        y.reshape(-1).tolist(),
+        y.shape,
+        dtype[1],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t1 = t1.to(layout[1])
+    t1 = tensor_to_device(t1, device, buffer_type[1])
+
+    t2 = ttl.tensor.Tensor(
+        z.reshape(-1).tolist(),
+        z.shape,
+        dtype[2],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t2 = t2.to(layout[2])
+    t2 = tensor_to_device(t2, device, buffer_type[2])
+
+    t3 = ttl.tensor.lerp(t0, t1, t2, output_mem_config=output_mem_config)
+
+    output = t3.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    return output
+
+
+@setup_host_and_device
+def eltwise_subalpha(x, y, *args, alpha, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype[0],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
+
+    t1 = ttl.tensor.Tensor(
+        y.reshape(-1).tolist(),
+        y.shape,
+        dtype[1],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t1 = t1.to(layout[1])
+    t1 = tensor_to_device(t1, device, buffer_type[1])
+
+    t2 = ttl.tensor.subalpha(t0, t1, alpha, output_mem_config=output_mem_config)
 
     output = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
@@ -707,129 +898,62 @@ def eltwise_subalpha(x, y, *args, alpha, device, dtype, layout, on_device, **kwa
 
 
 @setup_host_and_device
-def eltwise_heaviside(x, *args, value, device, dtype, layout, on_device, **kwargs):
+def eltwise_heaviside(x, *args, scalar, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.heaviside(t0, value)
+    t1 = ttl.tensor.heaviside(t0, scalar, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     return output
 
 
 @setup_host_and_device
-def zeros_like(x, *args, device, dtype, layout, on_device, **kwargs):
+def full_like(x, *args, scalar, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.zeros_like(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def ones_like(x, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.ones_like(t0)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def full_like(x, *args, scalar, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-
-    t1 = ttl.tensor.full_like(t0, scalar)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def ones(x, *args, device, dtype, layout, on_device, **kwargs):
-    t1 = ttl.tensor.ones(x.shape)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def zeros(x, *args, device, dtype, layout, on_device, **kwargs):
-    t1 = ttl.tensor.zeros(x.shape)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def full(x, *args, scalar, device, dtype, layout, on_device, **kwargs):
-    t1 = ttl.tensor.full(x.shape, scalar)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    return output
-
-
-@setup_host_and_device
-def arange(x, *args, start, end, step=1, device, dtype, layout, on_device, **kwargs):
-    t1 = ttl.tensor.arange(start, end, step)
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-    return output
-
-
-@setup_host_and_device
-def clip(x, *args, low, high, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.clip(t0, low, high)
+    t1 = ttl.tensor.full_like(t0, scalar, output_mem_config=output_mem_config)
+
+    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    return output
+
+
+@setup_host_and_device
+def ones(x, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
+    t1 = ttl.tensor.ones(
+        x.shape,
+        layout=layout[0],
+        device=device if buffer_type[0] is not None else None,
+        output_mem_config = output_mem_config
+    )
+
+    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    return output
+
+
+@setup_host_and_device
+def zeros(x, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
+    t1 = ttl.tensor.zeros(
+        x.shape,
+        layout=layout[0],
+        device=device if buffer_type[0] is not None else None,
+        output_mem_config = output_mem_config
+    )
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
@@ -837,277 +961,363 @@ def clip(x, *args, low, high, device, dtype, layout, on_device, **kwargs):
 
 
 @setup_host_and_device
-def where(x, y, z, device, dtype, layout, on_device, **kwargs):
+def full(x, *args, scalar, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
+    t1 = ttl.tensor.full(
+        x.shape,
+        scalar,
+        layout=layout[0],
+        device=device if buffer_type[0] is not None else None,
+        output_mem_config = output_mem_config
+    )
+
+    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+
+    return output
+
+
+@setup_host_and_device
+def fill_rm(x, *args, hOnes, wOnes, val_hi, val_lo, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    # Layout must be row mayor
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
+
+    t1 = ttl.tensor.fill_rm(
+        x.shape[0],
+        x.shape[1],
+        x.shape[2],
+        x.shape[3],
+        hOnes,
+        wOnes,
+        t0,
+        val_hi,
+        val_lo,
+        output_mem_config=output_mem_config
+    )
+
+    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    return output
+
+
+@setup_host_and_device
+def fill_ones_rm(x, *args, hOnes, wOnes, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
+
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype[0],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    # Layout must be row mayor
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
+
+    t1 = ttl.tensor.fill_ones_rm(
+        x.shape[0],
+        x.shape[1],
+        x.shape[2],
+        x.shape[3],
+        hOnes,
+        wOnes,
+        t0,
+        output_mem_config=output_mem_config
+    )
+
+    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    return output
+
+
+@setup_host_and_device
+def arange(x, *args, start, end, step=1, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
+    t1 = ttl.tensor.arange(
+        start,
+        end,
+        step,
+        device=device if buffer_type[0] is not None else None,
+        output_mem_config=output_mem_config)
+
+    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    return output
+
+
+@setup_host_and_device
+def clip(x, *args, low, high, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype[0],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
+
+    t1 = ttl.tensor.clip(t0, low, high, output_mem_config=output_mem_config)
+
+    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    return output
+
+
+@setup_host_and_device
+def where(x, y, z, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
     t1 = ttl.tensor.Tensor(
         y.reshape(-1).tolist(),
         y.shape,
-        dtype,
+        dtype[1],
         ttl.tensor.Layout.ROW_MAJOR,
     )
     t2 = ttl.tensor.Tensor(
         z.reshape(-1).tolist(),
         z.shape,
-        dtype,
+        dtype[2],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    t1 = t1.to(layout)
-    t2 = t2.to(layout)
-    if on_device:
-        t0 = t0.to(device)
-        t1 = t1.to(device)
-        t2 = t2.to(device)
+    t0 = t0.to(layout[0])
+    t1 = t1.to(layout[1])
+    t2 = t2.to(layout[2])
 
-    t3 = ttl.tensor.where(t0, t1, t2)
+    t0 = tensor_to_device(t0, device, buffer_type[0])
+    t1 = tensor_to_device(t1, device, buffer_type[1])
+    t2 = tensor_to_device(t2, device, buffer_type[2])
+
+    t3 = ttl.tensor.where(t0, t1, t2, output_mem_config=output_mem_config)
 
     output = t3.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def eltwise_div_unary(x, *args, scalar, device, dtype, layout, on_device, **kwargs):
+def eltwise_div_unary(x, *args, scalar, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.div_unary(t0, scalar)
+    t1 = ttl.tensor.div_unary(t0, scalar, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def eltwise_mul_unary(x, *args, scalar, device, dtype, layout, on_device, **kwargs):
+def eltwise_mul_unary(x, *args, scalar, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.mul_unary(t0, scalar)
+    t1 = ttl.tensor.mul_unary(t0, scalar, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def eltwise_sub_unary(x, *args, scalar, device, dtype, layout, on_device, **kwargs):
+def eltwise_sub_unary(x, *args, scalar, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.sub_unary(t0, scalar)
+    t1 = ttl.tensor.sub_unary(t0, scalar, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def eltwise_add_unary(x, *args, scalar, device, dtype, layout, on_device, **kwargs):
+def eltwise_add_unary(x, *args, scalar, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.add_unary(t0, scalar)
+    t1 = ttl.tensor.add_unary(t0, scalar, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def matmul(x, y, *args, device, dtype, layout, on_device, **kwargs):
+def matmul(x, y, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
+
     t1 = ttl.tensor.Tensor(
         y.reshape(-1).tolist(),
         y.shape,
-        dtype,
+        dtype[1],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t1 = t1.to(layout)
-    if on_device:
-        t1 = t1.to(device)
+    t1 = t1.to(layout[1])
+    t1 = tensor_to_device(t1, device, buffer_type[1])
 
-    t2 = ttl.tensor.matmul(t0, t1)
+    t2 = ttl.tensor.matmul(t0, t1, output_mem_config=output_mem_config)
 
     output = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def outer(x, y, *args, device, dtype, layout, on_device, **kwargs):
+def outer(x, y, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
+
     t1 = ttl.tensor.Tensor(
         y.reshape(-1).tolist(),
         y.shape,
-        dtype,
+        dtype[1],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t1 = t1.to(layout)
-    if on_device:
-        t1 = t1.to(device)
+    t1 = t1.to(layout[1])
+    t1 = tensor_to_device(t1, device, buffer_type[1])
 
-    t2 = ttl.tensor.outer(t0, t1)
+    t2 = ttl.tensor.outer(t0, t1, output_mem_config=output_mem_config)
 
     output = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def bmm(x, y, *args, device, dtype, layout, on_device, **kwargs):
+def bmm(x, y, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
+
     t1 = ttl.tensor.Tensor(
         y.reshape(-1).tolist(),
         y.shape,
-        dtype,
+        dtype[1],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t1 = t1.to(layout)
-    if on_device:
-        t1 = t1.to(device)
+    t1 = t1.to(layout[1])
+    t1 = tensor_to_device(t1, device, buffer_type[0])
 
-    t2 = ttl.tensor.bmm(t0, t1)
+    t2 = ttl.tensor.bmm(t0, t1, output_mem_config=output_mem_config)
 
     output = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def bcast_add_h(x, y, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(x, dtype)
+def bcast_add_h(x, y, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
+    t0 = ttl.tensor.Tensor(x, dtype[0])
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
+
     t1 = y
-    if layout == ttl.tensor.Layout.TILE:
+    if layout[1] == ttl.tensor.Layout.TILE:
         t1 = torch.nn.functional.pad(y, (0, 0, 0, 32 - y.shape[2]))
-    t1 = ttl.tensor.Tensor(t1, dtype)
-    t1 = t1.to(layout)
-    if on_device:
-        t1 = t1.to(device)
 
-    t2 = ttl.tensor.bcast(t0, t1, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H)
+    t1 = ttl.tensor.Tensor(t1, dtype[1])
+    t1 = t1.to(layout[1])
+    t1 = tensor_to_device(t1, device, buffer_type[1])
+
+    t2 = ttl.tensor.bcast(t0, t1, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H, output_mem_config=output_mem_config)
 
     output = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def bcast_add_w(x, y, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(x, dtype)
+def bcast_add_w(x, y, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
+    t0 = ttl.tensor.Tensor(x, dtype[0])
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
+
     t1 = y
-    if layout == ttl.tensor.Layout.TILE or (
-        on_device and layout == ttl.tensor.Layout.ROW_MAJOR
+    if layout[1] == ttl.tensor.Layout.TILE or (
+        buffer_type[1] and layout == ttl.tensor.Layout.ROW_MAJOR
     ):
         t1 = torch.nn.functional.pad(y, (0, 32 - y.shape[3]))
-    t1 = ttl.tensor.Tensor(t1, dtype)
-    t1 = t1.to(layout)
-    if on_device:
-        t1 = t1.to(device)
 
-    t2 = ttl.tensor.bcast(t0, t1, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.W)
+    t1 = ttl.tensor.Tensor(t1, dtype[1])
+    t1 = t1.to(layout[1])
+    t1 = tensor_to_device(t1, device, buffer_type[1])
+
+    t2 = ttl.tensor.bcast(t0, t1, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.W, output_mem_config=output_mem_config)
 
     output = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def bcast_add_hw(x, y, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(x, dtype)
+def bcast_add_hw(x, y, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
+    t0 = ttl.tensor.Tensor(x, dtype[0])
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
     t1 = y
-    if layout == ttl.tensor.Layout.TILE:
+    if layout[1] == ttl.tensor.Layout.TILE:
         t1 = torch.nn.functional.pad(y, (0, 32 - y.shape[3], 0, 32 - y.shape[2]))
-    elif on_device and layout == ttl.tensor.Layout.ROW_MAJOR:
+    elif buffer_type[1] and layout[1] == ttl.tensor.Layout.ROW_MAJOR:
         t1 = torch.nn.functional.pad(y, (0, 32 - y.shape[3]))
 
-    t1 = ttl.tensor.Tensor(t1, dtype)
-    t1 = t1.to(layout)
-    if on_device:
-        t1 = t1.to(device)
+    t1 = ttl.tensor.Tensor(t1, dtype[1])
+    t1 = t1.to(layout[1])
+    t1 = tensor_to_device(t1, device, buffer_type[1])
 
-    t2 = ttl.tensor.bcast(t0, t1, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.HW)
+    t2 = ttl.tensor.bcast(t0, t1, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.HW, output_mem_config=output_mem_config)
 
     output = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
@@ -1115,432 +1325,396 @@ def bcast_add_hw(x, y, *args, device, dtype, layout, on_device, **kwargs):
 
 
 @setup_host_and_device
-def bcast_sub_h(x, y, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(x, dtype)
+def bcast_sub_h(x, y, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
+    t0 = ttl.tensor.Tensor(x, dtype[0])
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
+
     t1 = y
-    if layout == ttl.tensor.Layout.TILE:
+    if layout[1] == ttl.tensor.Layout.TILE:
         t1 = torch.nn.functional.pad(y, (0, 0, 0, 32 - y.shape[2]))
-    t1 = ttl.tensor.Tensor(t1, dtype)
-    t1 = t1.to(layout)
-    if on_device:
-        t1 = t1.to(device)
+    t1 = ttl.tensor.Tensor(t1, dtype[1])
+    t1 = t1.to(layout[1])
+    t1 = tensor_to_device(t1, device, buffer_type[1])
 
-    t2 = ttl.tensor.bcast(t0, t1, ttl.tensor.BcastOpMath.SUB, ttl.tensor.BcastOpDim.H)
+    t2 = ttl.tensor.bcast(t0, t1, ttl.tensor.BcastOpMath.SUB, ttl.tensor.BcastOpDim.H, output_mem_config=output_mem_config)
 
     output = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def bcast_sub_w(x, y, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(x, dtype)
+def bcast_sub_w(x, y, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
+    t0 = ttl.tensor.Tensor(x, dtype[0])
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
+
     t1 = y
-    if layout == ttl.tensor.Layout.TILE or (
-        on_device and layout == ttl.tensor.Layout.ROW_MAJOR
+    if layout[1] == ttl.tensor.Layout.TILE or (
+        buffer_type[1] and layout == ttl.tensor.Layout.ROW_MAJOR
     ):
         t1 = torch.nn.functional.pad(y, (0, 32 - y.shape[3]))
-    t1 = ttl.tensor.Tensor(t1, dtype)
-    t1 = t1.to(layout)
-    if on_device:
-        t1 = t1.to(device)
+    t1 = ttl.tensor.Tensor(t1, dtype[1])
+    t1 = t1.to(layout[1])
+    t1 = tensor_to_device(t1, device, buffer_type[1])
 
-    t2 = ttl.tensor.bcast(t0, t1, ttl.tensor.BcastOpMath.SUB, ttl.tensor.BcastOpDim.W)
+    t2 = ttl.tensor.bcast(t0, t1, ttl.tensor.BcastOpMath.SUB, ttl.tensor.BcastOpDim.W, output_mem_config=output_mem_config)
 
     output = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def bcast_sub_hw(x, y, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(x, dtype)
+def bcast_sub_hw(x, y, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
+    t0 = ttl.tensor.Tensor(x, dtype[0])
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
     t1 = y
-    if layout == ttl.tensor.Layout.TILE:
+    if layout[1] == ttl.tensor.Layout.TILE:
         t1 = torch.nn.functional.pad(y, (0, 32 - y.shape[3], 0, 32 - y.shape[2]))
-    elif on_device and layout == ttl.tensor.Layout.ROW_MAJOR:
+    elif buffer_type[1] and layout[1] == ttl.tensor.Layout.ROW_MAJOR:
         t1 = torch.nn.functional.pad(y, (0, 32 - y.shape[3]))
-    t1 = ttl.tensor.Tensor(t1, dtype)
-    t1 = t1.to(layout)
-    if on_device:
-        t1 = t1.to(device)
 
-    t2 = ttl.tensor.bcast(t0, t1, ttl.tensor.BcastOpMath.SUB, ttl.tensor.BcastOpDim.HW)
+    t1 = ttl.tensor.Tensor(t1, dtype[1])
+    t1 = t1.to(layout[1])
+    t1 = tensor_to_device(t1, device, buffer_type[1])
+
+    t2 = ttl.tensor.bcast(t0, t1, ttl.tensor.BcastOpMath.SUB, ttl.tensor.BcastOpDim.HW, output_mem_config=output_mem_config)
 
     output = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def bcast_mul_h(x, y, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(x, dtype)
+def bcast_mul_h(x, y, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
+    t0 = ttl.tensor.Tensor(x, dtype[0])
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
+
     t1 = y
-    if layout == ttl.tensor.Layout.TILE:
+    if layout[1] == ttl.tensor.Layout.TILE:
         t1 = torch.nn.functional.pad(y, (0, 0, 0, 32 - y.shape[2]))
-    t1 = ttl.tensor.Tensor(t1, dtype)
-    t1 = t1.to(layout)
-    if on_device:
-        t1 = t1.to(device)
 
-    t2 = ttl.tensor.bcast(t0, t1, ttl.tensor.BcastOpMath.MUL, ttl.tensor.BcastOpDim.H)
+    t1 = ttl.tensor.Tensor(t1, dtype[1])
+    t1 = t1.to(layout[1])
+    t1 = tensor_to_device(t1, device, buffer_type[1])
+
+    t2 = ttl.tensor.bcast(t0, t1, ttl.tensor.BcastOpMath.MUL, ttl.tensor.BcastOpDim.H, output_mem_config=output_mem_config)
 
     output = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def bcast_mul_w(x, y, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(x, dtype)
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+def bcast_mul_w(x, y, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
+    t0 = ttl.tensor.Tensor(x, dtype[0])
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    if layout == ttl.tensor.Layout.TILE or (
-        on_device and layout == ttl.tensor.Layout.ROW_MAJOR
+    t1 = y
+    if layout[1] == ttl.tensor.Layout.TILE or (
+        buffer_type[1] and layout[1] == ttl.tensor.Layout.ROW_MAJOR
     ):
         t1 = torch.nn.functional.pad(y, (0, 32 - y.shape[3]))
-    t1 = ttl.tensor.Tensor(t1, dtype)
-    t1 = t1.to(layout)
-    if on_device:
-        t1 = t1.to(device)
 
-    t2 = ttl.tensor.bcast(t0, t1, ttl.tensor.BcastOpMath.MUL, ttl.tensor.BcastOpDim.W)
+    t1 = ttl.tensor.Tensor(t1, dtype[1])
+    t1 = t1.to(layout[1])
+    t1 = tensor_to_device(t1, device, buffer_type[1])
+
+    t2 = ttl.tensor.bcast(t0, t1, ttl.tensor.BcastOpMath.MUL, ttl.tensor.BcastOpDim.W, output_mem_config=output_mem_config)
 
     output = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def bcast_mul_hw(x, y, *args, device, dtype, layout, on_device, **kwargs):
-    t0 = ttl.tensor.Tensor(x, dtype)
+def bcast_mul_hw(x, y, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
+    t0 = ttl.tensor.Tensor(x, dtype[0])
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
     t1 = y
-    if layout == ttl.tensor.Layout.TILE:
+    if layout[1] == ttl.tensor.Layout.TILE:
         t1 = torch.nn.functional.pad(y, (0, 32 - y.shape[3], 0, 32 - y.shape[2]))
-    elif on_device and layout == ttl.tensor.Layout.ROW_MAJOR:
+    elif buffer_type[1] and layout[1] == ttl.tensor.Layout.ROW_MAJOR:
         t1 = torch.nn.functional.pad(y, (0, 32 - y.shape[3]))
 
-    t1 = ttl.tensor.Tensor(t1, dtype)
-    t1 = t1.to(layout)
-    if on_device:
-        t1 = t1.to(device)
+    t1 = ttl.tensor.Tensor(t1, dtype[1])
+    t1 = t1.to(layout[1])
+    t1 = tensor_to_device(t1, device, buffer_type[1])
 
-    t2 = ttl.tensor.bcast(t0, t1, ttl.tensor.BcastOpMath.MUL, ttl.tensor.BcastOpDim.HW)
+    t2 = ttl.tensor.bcast(t0, t1, ttl.tensor.BcastOpMath.MUL, ttl.tensor.BcastOpDim.HW, output_mem_config=output_mem_config)
 
     output = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def reduce_sum_h(x, *args, device, dtype, layout, on_device, **kwargs):
+def reduce_sum_h(x, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
     t1 = ttl.tensor.reduce(
-        t0, ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.H, 1.0
+        t0, ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.H, 1.0, output_mem_config=output_mem_config
     )
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
     # Slice out the 0 values from reduction
     output = output[..., :1, :]
-
     return output
 
 
 @setup_host_and_device
-def reduce_sum_w(x, *args, device, dtype, layout, on_device, **kwargs):
+def reduce_sum_w(x, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
     t1 = ttl.tensor.reduce(
-        t0, ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.W, 1.0
+        t0, ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.W, 1.0, output_mem_config=output_mem_config
     )
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
     # Slice out the 0 values from reduction
     output = output[..., :, :1]
-
     return output
 
 
 @setup_host_and_device
-def reduce_sum_hw(x, *args, device, dtype, layout, on_device, **kwargs):
+def reduce_sum_hw(x, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
     t1 = ttl.tensor.reduce(
-        t0, ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.HW, 1.0
+        t0, ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.HW, 1.0, output_mem_config=output_mem_config
     )
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
     # Slice out the 0 values from reduction
     output = output[..., :1, :1]
-
     return output
 
 
 @setup_host_and_device
-def reduce_max_h(x, *args, device, dtype, layout, on_device, **kwargs):
+def reduce_max_h(x, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
     t1 = ttl.tensor.reduce(
-        t0, ttl.tensor.ReduceOpMath.MAX, ttl.tensor.ReduceOpDim.H, 1.0
+        t0, ttl.tensor.ReduceOpMath.MAX, ttl.tensor.ReduceOpDim.H, 1.0, output_mem_config=output_mem_config
     )
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
     # Slice out the 0 values from reduction
     output = output[..., :1, :]
-
     return output
 
 
 @setup_host_and_device
-def reduce_max_w(x, *args, device, dtype, layout, on_device, **kwargs):
+def reduce_max_w(x, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
     t1 = ttl.tensor.reduce(
-        t0, ttl.tensor.ReduceOpMath.MAX, ttl.tensor.ReduceOpDim.W, 1.0
+        t0, ttl.tensor.ReduceOpMath.MAX, ttl.tensor.ReduceOpDim.W, 1.0, output_mem_config=output_mem_config
     )
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
     # Slice out the 0 values from reduction
     output = output[..., :1]
-
     return output
 
 
 @setup_host_and_device
-def reduce_max_hw(x, *args, device, dtype, layout, on_device, **kwargs):
+def reduce_max_hw(x, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
     t1 = ttl.tensor.reduce(
-        t0, ttl.tensor.ReduceOpMath.MAX, ttl.tensor.ReduceOpDim.HW, 1.0
+        t0, ttl.tensor.ReduceOpMath.MAX, ttl.tensor.ReduceOpDim.HW, 1.0, output_mem_config=output_mem_config
     )
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
     # Slice out the 0 values from reduction
     output = output[..., :1, :1]
-
     return output
 
 
 @setup_host_and_device
-def transpose_wh(x, *args, device, dtype, layout, on_device, **kwargs):
+def transpose_wh(x, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.transpose(t0)
+    t1 = ttl.tensor.transpose(t0, output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def transpose_hc(x, *args, device, dtype, layout, on_device, **kwargs):
+def transpose_hc(x, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.transpose_hc(t0)
+    t1 = ttl.tensor.transpose_hc(t0, output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def transpose_cn(x, *args, device, dtype, layout, on_device, **kwargs):
+def transpose_cn(x, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.transpose_cn(t0)
+    t1 = ttl.tensor.transpose_cn(t0, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def transpose_nh(x, *args, device, dtype, layout, on_device, **kwargs):
+def transpose_nh(x, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.transpose(t0, 0, 2)
+    t1 = ttl.tensor.transpose(t0, 0, 2, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def transpose_nw(x, *args, device, dtype, layout, on_device, **kwargs):
+def transpose_nw(x, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.transpose(t0, 0, 3)
+    t1 = ttl.tensor.transpose(t0, 0, 3, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def transpose_cw(x, *args, device, dtype, layout, on_device, **kwargs):
+def transpose_cw(x, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.transpose(t0, 1, 3)
+    t1 = ttl.tensor.transpose(t0, 1, 3, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def sum(x, *args, dim, device, dtype, layout, on_device, **kwargs):
+def sum(x, *args, dim, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     assert dim >= 0 and dim <= 3
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.sum(t0, dim)
+    t1 = ttl.tensor.sum(t0, dim, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
@@ -1552,101 +1726,113 @@ def sum(x, *args, dim, device, dtype, layout, on_device, **kwargs):
 
 
 @setup_host_and_device
-def permute(x, *args, device, dtype, layout, on_device, permute_dims, **kwargs):
+def permute(x, *args, device, dtype, layout, buffer_type, output_mem_config, permute_dims, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.permute(t0, *permute_dims)
+    t1 = ttl.tensor.permute(t0, *permute_dims, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def reshape(x, *args, device, dtype, layout, on_device, reshape_dims, **kwargs):
+def reshape(x, *args, device, dtype, layout, buffer_type, output_mem_config, reshape_dims, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.reshape(t0, *reshape_dims)
+    t1 = ttl.tensor.reshape(t0, *reshape_dims, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def tilize(x, *args, device, dtype, layout, on_device, **kwargs):
+def split_last_dim_two_chunks_tiled(x, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
+    print(f"tt input.shape {x.shape}")
+
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.tilize(t0)
+    t1 = ttl.tensor.split_last_dim_two_chunks_tiled(t0, output_mem_config=output_mem_config)
 
+    output0 = t1[0].cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    output1 = t1[1].cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+
+    return [output0, output1]
+
+
+@setup_host_and_device
+def tilize(x, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype[0],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
+
+    t1 = ttl.tensor.tilize(t0, output_mem_config=output_mem_config)
     output = t1.cpu().to_torch()
 
     return output
 
 
 @setup_host_and_device
-def tilize_with_zero_padding(x, *args, device, dtype, layout, on_device, **kwargs):
+def tilize_with_zero_padding(x, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.tilize_with_zero_padding(t0)
+    t1 = ttl.tensor.tilize_with_zero_padding(t0, output_mem_config=output_mem_config)
 
     output = t1.cpu().to_torch()
-
     return output
 
 
 @setup_host_and_device
-def untilize(x, *args, device, dtype, layout, on_device, **kwargs):
+def untilize(x, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.TILE,
     )
 
-    if on_device:
-        t0 = t0.to(device)
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.untilize(t0)
+    t1 = ttl.tensor.untilize(t0, output_mem_config=output_mem_config)
 
     output = t1.cpu().to_torch()
-
     return output
 
 
@@ -1657,7 +1843,8 @@ def tilize_with_val_padding(
     device,
     dtype,
     layout,
-    on_device,
+    buffer_type,
+    output_mem_config,
     output_tensor_shape,
     input_tensor_start,
     pad_value,
@@ -1666,20 +1853,18 @@ def tilize_with_val_padding(
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
     t1 = ttl.tensor.tilize_with_val_padding(
-        t0, output_tensor_shape, input_tensor_start, pad_value
+        t0, output_tensor_shape, input_tensor_start, pad_value, output_mem_config=output_mem_config
     )
 
     output = t1.cpu().to_torch()
-
     return output
 
 
@@ -1690,7 +1875,8 @@ def untilize_with_unpadding(
     device,
     dtype,
     layout,
-    on_device,
+    buffer_type,
+    output_mem_config,
     output_tensor_start,
     output_tensor_end,
     **kwargs,
@@ -1698,17 +1884,15 @@ def untilize_with_unpadding(
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.TILE,
     )
 
-    if on_device:
-        t0 = t0.to(device)
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.untilize_with_unpadding(t0, output_tensor_start, output_tensor_end)
+    t1 = ttl.tensor.untilize_with_unpadding(t0, output_tensor_start, output_tensor_end, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
@@ -1719,7 +1903,8 @@ def pad(
     device,
     dtype,
     layout,
-    on_device,
+    buffer_type,
+    output_mem_config,
     output_tensor_shape,
     input_tensor_start,
     pad_value,
@@ -1728,18 +1913,16 @@ def pad(
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.pad(t0, output_tensor_shape, input_tensor_start, pad_value)
+    t1 = ttl.tensor.pad(t0, output_tensor_shape, input_tensor_start, pad_value, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
@@ -1750,7 +1933,8 @@ def unpad(
     device,
     dtype,
     layout,
-    on_device,
+    buffer_type,
+    output_mem_config,
     output_tensor_start,
     output_tensor_end,
     **kwargs,
@@ -1758,38 +1942,34 @@ def unpad(
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.unpad(t0, output_tensor_start, output_tensor_end)
+    t1 = ttl.tensor.unpad(t0, output_tensor_start, output_tensor_end, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
 @setup_host_and_device
-def eltwise_power(x, *args, exponent, device, dtype, layout, on_device, **kwargs):
+def eltwise_power(x, *args, exponent, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.power(t0, exponent)
+    t1 = ttl.tensor.power(t0, exponent, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
     return output
 
 
@@ -1801,26 +1981,22 @@ def make_eltwise_unary_op(ttl_tensor_unop):
         device,
         dtype,
         layout,
-        on_device,
-        input_mem_config=ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+        buffer_type,
         output_mem_config=ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
         **kwargs,
     ):
-        t0 = ttl.tensor.Tensor(x, dtype)
-
-        t0 = t0.to(layout)
-        if on_device:
-            t0 = t0.to(device, input_mem_config)
+        t0 = ttl.tensor.Tensor(x, dtype[0])
+        t0 = t0.to(layout[0])
+        t0 = tensor_to_device(t0, device, buffer_type[0])
 
         t1 = ttl_tensor_unop(t0, output_mem_config=output_mem_config)
-
         output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
         return output
 
     return eltwise_unary_op
 
-
+#eltwise_softmax_in_place = make_eltwise_unary_op(ttl.tensor.softmax_in_place)
 eltwise_cos = make_eltwise_unary_op(ttl.tensor.cos)
 eltwise_sin = make_eltwise_unary_op(ttl.tensor.sin)
 eltwise_acos = make_eltwise_unary_op(ttl.tensor.acos)
@@ -1868,8 +2044,8 @@ eltwise_lez = make_eltwise_unary_op(ttl.tensor.lez)
 eltwise_gez = make_eltwise_unary_op(ttl.tensor.gez)
 eltwise_nez = make_eltwise_unary_op(ttl.tensor.nez)
 eltwise_eqz = make_eltwise_unary_op(ttl.tensor.eqz)
-
-hardtanh = make_eltwise_unary_op(ttl.tensor.hardtanh)  # hardtanh can take args
+zeros_like = make_eltwise_unary_op(ttl.tensor.zeros_like)
+ones_like = make_eltwise_unary_op(ttl.tensor.ones_like)
 
 
 def make_eltwise_binary_op(ttl_tensor_binop):
@@ -1881,25 +2057,19 @@ def make_eltwise_binary_op(ttl_tensor_binop):
         device,
         dtype,
         layout,
-        on_device,
-        input_mem_config=ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
-        output_mem_config=ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+        buffer_type,
+        output_mem_config,
         **kwargs,
     ):
-        t0 = ttl.tensor.Tensor(x, dtype)
+        t0 = ttl.tensor.Tensor(x, dtype[0])
+        t0 = t0.to(layout[0])
+        t0 = tensor_to_device(t0, device, buffer_type[0])
 
-        t0 = t0.to(layout)
-        if on_device:
-            t0 = t0.to(device, input_mem_config)
-
-        t1 = ttl.tensor.Tensor(y, dtype)
-
-        t1 = t1.to(layout)
-        if on_device:
-            t1 = t1.to(device, input_mem_config)
+        t1 = ttl.tensor.Tensor(y, dtype[1])
+        t1 = t1.to(layout[1])
+        t1 = tensor_to_device(t1, device, buffer_type[1])
 
         t2 = ttl_tensor_binop(t0, t1, output_mem_config=output_mem_config)
-
         output = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
         return output
@@ -1930,89 +2100,140 @@ eltwise_logaddexp2 = make_eltwise_binary_op(ttl.tensor.logaddexp2)
 ################################################
 #################### Tensor ####################
 ################################################
+
+@setup_host_and_device
 def datacopy(
     x,
-    pcie_slot,
     *args,
-    dtype=ttl.tensor.DataType.BFLOAT16,
-    memory_config=ttl.tensor.MemoryConfig(),
+    device,
+    dtype,
+    layout,
+    buffer_type,
+    output_mem_config,
     **kwargs,
 ):
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
-    ttl.device.InitializeDevice(device)
+    device_tensor = (
+        ttl.tensor.Tensor(x, dtype[0])
+        .to(layout[0])
+        .to(device, output_mem_config)
+    )
 
-    try:
-        device_tensor = (
-            ttl.tensor.Tensor(x, dtype)
-            .to(ttl.tensor.Layout.TILE)
-            .to(device, memory_config)
-        )
-
-        host_tensor = device_tensor.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
-        output = host_tensor.to_torch()
-    finally:
-        ttl.device.CloseDevice(device)
+    host_tensor = device_tensor.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
+    output = host_tensor.to_torch()
 
     return output
 
 
+@setup_host_and_device
 def tensor_pad(
-    x, pcie_slot, *args, output_tensor_shape, input_tensor_start, pad_value, **kwargs
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    buffer_type,
+    output_mem_config,
+    output_tensor_shape,
+    input_tensor_start,
+    pad_value,
+    **kwargs
 ):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        ttl.tensor.DataType.BFLOAT16,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
+
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
     t1 = t0.pad(output_tensor_shape, input_tensor_start, pad_value)
-
     output = t1.to_torch()
 
     return output
 
 
-def tensor_unpad(x, pcie_slot, *args, output_tensor_start, output_tensor_end, **kwargs):
+@setup_host_and_device
+def tensor_unpad(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    buffer_type,
+    output_mem_config,
+    output_tensor_start,
+    output_tensor_end,
+    **kwargs
+):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        ttl.tensor.DataType.BFLOAT16,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
+
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
     t1 = t0.unpad(output_tensor_start, output_tensor_end)
-
     output = t1.to_torch()
 
     return output
 
 
-def pad_to_tile(x, pcie_slot, *args, pad_value, **kwargs):
+@setup_host_and_device
+def pad_to_tile(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    buffer_type,
+    output_mem_config,
+    pad_value,
+    **kwargs
+):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        ttl.tensor.DataType.BFLOAT16,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
+
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
     t1 = t0.pad_to_tile(pad_value)
-
     output = t1.to_torch()
 
     return output
 
 
-def unpad_from_tile(x, pcie_slot, *args, output_tensor_shape, **kwargs):
+@setup_host_and_device
+def unpad_from_tile(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    buffer_type,
+    output_mem_config,
+    output_tensor_shape,
+    **kwargs
+):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        ttl.tensor.DataType.BFLOAT16,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t1 = t0.unpad_from_tile(output_tensor_shape)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
+    t1 = t0.unpad_from_tile(output_tensor_shape)
     output = t1.to_torch()
 
     return output

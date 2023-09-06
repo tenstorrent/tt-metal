@@ -5,9 +5,11 @@ import time
 import torch
 import argparse
 import yaml
+import random
 from pathlib import Path
 from loguru import logger
 from functools import partial
+import tt_lib
 
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
@@ -23,17 +25,40 @@ from tests.tt_eager.python_api_testing.sweep_tests.common import (
 
 from tests.tt_eager.python_api_testing.sweep_tests.op_map import op_map
 
+DTYPES_TT_DICT = {
+    "BFLOAT16": tt_lib.tensor.DataType.BFLOAT16,
+    "BFLOAT8_B": tt_lib.tensor.DataType.BFLOAT8_B,
+}
+
+LAYOUTS_TT_DICT = {
+    "ROW_MAJOR": tt_lib.tensor.Layout.ROW_MAJOR,
+    "TILE": tt_lib.tensor.Layout.TILE,
+}
+
+BUFFER_TYPES_TT_DICT = {
+    "DRAM": tt_lib.tensor.BufferType.DRAM,
+    "L1": tt_lib.tensor.BufferType.L1,
+    "SYSTEM_MEMORY": None,
+}
+
 
 def run_pytorch_test(args):
     # Create output folder
     output_folder = Path(args.output_folder_path)
-    if output_folder.exists():
-        logger.error(
-            f"Directory {output_folder} already exists! Remove this folder or provide a different path to start pytorch tests."
-        )
-        sys.exit(1)
-    output_folder.mkdir(parents=True)
-    logger.info(f"Starting pytorch tests in: {output_folder}")
+
+    # if output_folder.exists():
+    #     logger.error(
+    #         f"Directory {output_folder} already exists! Remove this folder or provide a different path to start pytorch tests."
+    #     )
+    #     sys.exit(1)
+
+    if not output_folder.exists():
+        output_folder.mkdir(parents=True)
+        write_to_csv = True
+        logger.info(f"Starting pytorch tests in: {output_folder}. Writing to csv.")
+    else:
+        write_to_csv = False
+        logger.info(f"Not logging results in {output_folder}. Delete that folder to write csv results.")
 
     ################# PARSE ARGS #################
     pcie_slot = args.pcie_slot
@@ -49,7 +74,10 @@ def run_pytorch_test(args):
     assert "test-list" in pytorch_test_configs_yaml
     pytorch_test_list = pytorch_test_configs_yaml["test-list"]
 
-    default_env_dict = {"TT_PCI_DMA_BUF_SIZE": "1048576"}
+    default_env_dict = {
+        "TT_PCI_DMA_BUF_SIZE": "1048576",
+        "TT_METAL_DEVICE_DISPATCH_MODE": "1"
+    }
     # Get env variables from CLI
     args_env_dict = {}
     if args.env != "":
@@ -62,106 +90,190 @@ def run_pytorch_test(args):
                 name, value = e.split("=")
             args_env_dict[name] = value
 
-    for test_name, test_config in pytorch_test_list.items():
-        assert test_name in op_map
+    # make list
+    if isinstance(pytorch_test_list, dict):
+        pytorch_test_list = [pytorch_test_list]
 
-        # Get env variables from yaml (yaml overrides CLI)
-        yaml_env_dict = test_config.get("env", {})
+    start_time = time.time()
+    run_id = 0
+    random.seed(0)
 
-        # Env variables to use (precedence yaml > cli > default)
-        if yaml_env_dict:
-            env_dict = yaml_env_dict
-        elif args_env_dict:
-            env_dict = args_env_dict
-        else:
-            env_dict = default_env_dict
+    for i in range(len(pytorch_test_list)):
+        for test_name, test_config in pytorch_test_list[i].items():
 
-        old_env_dict = {}
-        assert isinstance(env_dict, dict)
-        for key, value in env_dict.items():
-            old_env_dict[key] = os.environ.pop(key, None)
-            os.environ[key] = value
+            assert test_name in op_map
 
-        shape_dict = test_config["shape"]
-        datagen_dict = test_config["datagen"]
-        results_csv_path = output_folder / test_config["output-file"]
+            # Get env variables from yaml (yaml overrides CLI)
+            yaml_env_dict = test_config.get("env", {})
 
-        comparison_dict = test_config["comparison"]
-        comparison_args = comparison_dict.get("args", {})
-        comparison_func = partial(
-            getattr(comparison_funcs, comparison_dict["function"]), **comparison_args
-        )
-        test_args_gen = getattr(
-            generation_funcs,
-            test_config.get("args-gen", "gen_default_dtype_layout_device"),
-        )
+            # Env variables to use (precedence yaml > cli > default)
+            if yaml_env_dict:
+                env_dict = yaml_env_dict
+            elif args_env_dict:
+                env_dict = args_env_dict
+            else:
+                env_dict = default_env_dict
 
-        # Optional test args for dtype, etc...
-        test_args = test_config.get("args", {})
+            old_env_dict = {}
+            assert isinstance(env_dict, dict)
+            for key, value in env_dict.items():
+                old_env_dict[key] = os.environ.pop(key, None)
+                os.environ[key] = value
 
-        skip_header = False
-        if results_csv_path.exists():
-            skip_header = True
+            shape_dict = test_config["shape"]
+            datagen_dict = test_config["datagen"]
+            results_csv_path = output_folder / test_config["output-file"]
 
-        ################# RUN TEST SWEEP #################
-        with open(results_csv_path, "a", newline="") as results_csv:
-            results_csv_writer = None
+            comparison_dict = test_config["comparison"]
+            comparison_args = comparison_dict.get("args", {})
+            comparison_func = partial(
+                getattr(comparison_funcs, comparison_dict["function"]), **comparison_args
+            )
+            test_args_gen = getattr(
+                generation_funcs,
+                test_config.get("args-gen", "gen_default_dtype_layout_device"),
+            )
+            # Optional test args for dtype, etc...
+            test_args = test_config.get("args", {})
 
-            init_file = True
+            # Set tests parameters --------------------------
+            test_tt_dtypes = []
+            test_tt_layouts = []
+            test_buffer_types = []
+
+            if "inputs" in test_args:
+                for input_spec in test_args["inputs"]:
+                    test_tt_dtypes.append([])
+                    test_tt_layouts.append([])
+                    test_buffer_types.append([])
+
+                    assert 'data-type' in input_spec, f"For each input you need to specify 'data-type'"
+                    assert 'data-layout' in input_spec, f"For each input you need to specify 'data-layout'"
+                    assert 'buffer-type' in input_spec, f"For each input you need to specify 'buffer-type'"
+
+                    for dtype in input_spec['data-type']:
+                        test_tt_dtypes[-1].append(DTYPES_TT_DICT[dtype])
+
+                    for layout in input_spec['data-layout']:
+                        test_tt_layouts[-1].append(LAYOUTS_TT_DICT[layout])
+
+                    for buffer_type in input_spec['buffer-type']:
+                        test_buffer_types[-1].append(BUFFER_TYPES_TT_DICT[buffer_type])
+            else:
+                for i in range(shape_dict["num-shapes"]):
+                    test_tt_dtypes.append([])
+                    test_tt_layouts.append([])
+                    test_buffer_types.append([])
+
+                    if 'data-layout' in test_args:
+                        for layout in test_args['data-layout']:
+                            test_tt_layouts[-1].append(LAYOUTS_TT_DICT[layout])
+                    else:
+                        test_tt_layouts[-1] = generation_funcs.supported_tt_layouts
+
+                    if 'data-type' in test_args:
+                        for dtype in test_args['data-type']:
+                            test_tt_dtypes[-1].append(DTYPES_TT_DICT[dtype])
+                    else:
+                        test_tt_dtypes[-1] = generation_funcs.supported_tt_dtypes
+
+                    if 'buffer-type' in test_args:
+                        for buffer_type in test_args['buffer-type']:
+                            test_buffer_types[-1].append(BUFFER_TYPES_TT_DICT[buffer_type])
+                    else:
+                        test_buffer_types[-1] = generation_funcs.supported_tt_buffer_types
+
+            if "outputs" in test_args:
+                for out_spec in test_args["outputs"]:
+                    test_buffer_types.append([])
+
+                    assert 'out-buffer-type' in out_spec, f"For output you need to specify 'out-buffer-type'"
+
+                    for buffer_type in out_spec['out-buffer-type']:
+                        test_buffer_types[-1].append(buffer_type)
+            else:
+                test_buffer_types.append([])
+
+                if 'out-buffer-type' in test_args:
+                    for buffer_type in test_args['out-buffer-type']:
+                        test_buffer_types[-1].append(BUFFER_TYPES_TT_DICT[buffer_type])
+                else:
+                    test_buffer_types[-1] = [tt_lib.tensor.BufferType.DRAM]
+            # Set tests parameters --------------------------
+
+            ################# RUN TEST SWEEP #################
             for input_shapes, datagen_funcs in shapes_and_datagen(
                 shape_dict, datagen_dict
             ):
-                for generated_test_args in test_args_gen(input_shapes):
-                    generated_test_args.update(
-                        test_args
-                    )  # specified test args overrides generated test args
+                for generated_test_args in test_args_gen(input_shapes, test_tt_dtypes, test_tt_layouts, test_buffer_types):
+                    # generated_test_args.update(
+                    #     test_args
+                    # )  # specified test args overrides generated test args
 
                     # Moved this here so that we don't need to maintain a hardcoded list of headers per op
-                    if init_file:
-                        results_csv_writer = csv.DictWriter(
-                            results_csv,
-                            fieldnames=get_test_fieldnames(generated_test_args.keys()),
+                    skip_header = results_csv_path.exists()
+
+                    with open(results_csv_path, "a", newline="") as results_csv:
+                        results_csv_writer = None
+
+                        if write_to_csv:
+                            results_csv_writer = csv.DictWriter(
+                                results_csv,
+                                fieldnames=get_test_fieldnames(["args"])
+                            )
+                            if not skip_header:
+                                results_csv_writer.writeheader()
+                                results_csv.flush()
+
+                        data_seed = random.randint(0, 20000000) # int(time.time())
+                        torch.manual_seed(data_seed)
+
+                        logger.info(
+                            f"Running with shape: {input_shapes} and seed: {data_seed}"
                         )
-                        if not skip_header:
-                            results_csv_writer.writeheader()
-                            results_csv.flush()
-                        init_file = False
 
-                    data_seed = int(time.time())
-                    torch.manual_seed(data_seed)
+                        test_profiling_key = f"test_sweep_separator - {run_id}"
+                        logger.info(f"Starting profiling test {test_profiling_key}")
+                        tt_lib.profiler.start_profiling(test_profiling_key)
 
-                    logger.info(
-                        f"Running with shape: {input_shapes} and seed: {data_seed}"
-                    )
-                    test_pass = run_test_and_save_results(
-                        results_csv_writer,
-                        test_name,
-                        input_shapes,
-                        data_seed,
-                        env_dict,
-                        generated_test_args,
-                        op_map[test_name]["tt_lib_op"],
-                        op_map[test_name]["pytorch_op"],
-                        input_shapes,
-                        datagen_funcs,
-                        comparison_func,
-                        pcie_slot,
-                        generated_test_args,
-                    )
-                    results_csv.flush()
-
-                    # Check if test passed
-                    if args.run_tests_for_ci and not test_pass:
-                        logger.error(
-                            f"{test_name} test failed with input shape {input_shapes}."
+                        test_pass = run_test_and_save_results(
+                            results_csv_writer,
+                            test_name,
+                            input_shapes,
+                            data_seed,
+                            env_dict,
+                            generated_test_args,
+                            op_map[test_name]["tt_lib_op"],
+                            op_map[test_name]["pytorch_op"],
+                            input_shapes,
+                            datagen_funcs,
+                            comparison_func,
+                            pcie_slot,
+                            generated_test_args,
                         )
-                        sys.exit(1)
 
-        # Unset env variables
-        for key, value in old_env_dict.items():
-            os.environ.pop(key)
-            if value is not None:
-                os.environ[key] = value
+                        tt_lib.device.Synchronize()
+                        tt_lib.profiler.stop_profiling(test_profiling_key)
+                        logger.info(f"Stopped profiling test {test_profiling_key}")
+                        run_id += 1
+
+                        results_csv.flush()
+
+                        # Check if test passed
+                        if args.run_tests_for_ci and not test_pass:
+                            logger.error(
+                                f"{test_name} test failed with input shape {input_shapes}."
+                            )
+                            sys.exit(1)
+
+            # Unset env variables
+            for key, value in old_env_dict.items():
+                os.environ.pop(key)
+                if value is not None:
+                    os.environ[key] = value
+
+    duration = time.time() - start_time
+    logger.info(f"Tests run in {duration:.2f}s")
 
 
 if __name__ == "__main__":

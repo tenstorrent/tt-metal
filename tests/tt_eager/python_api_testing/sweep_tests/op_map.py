@@ -41,7 +41,7 @@ op_map = {
     },
     # Eltwise unary
     "eltwise-hardtanh": {
-        "tt_lib_op": tt_lib_ops.hardtanh,
+        "tt_lib_op": tt_lib_ops.eltwise_hardtanh,
         "pytorch_op": pytorch_ops.hardtanh,
     },
     "eltwise-clip": {
@@ -55,6 +55,14 @@ op_map = {
     "eltwise-ones": {
         "tt_lib_op": tt_lib_ops.ones,
         "pytorch_op": pytorch_ops.ones,
+    },
+    "fill-rm": {
+        "tt_lib_op": tt_lib_ops.fill_rm,
+        "pytorch_op": pytorch_ops.fill_rm,
+    },
+    "fill-ones-rm": {
+        "tt_lib_op": tt_lib_ops.fill_ones_rm,
+        "pytorch_op": pytorch_ops.fill_ones_rm,
     },
     "eltwise-full": {
         "tt_lib_op": tt_lib_ops.full,
@@ -92,10 +100,6 @@ op_map = {
     "eltwise-logical_not": {
         "tt_lib_op": tt_lib_ops.eltwise_logical_not,
         "pytorch_op": pytorch_ops.logical_not,
-    },
-    "eltwise-bitwise_complement": {
-        "tt_lib_op": tt_lib_ops.eltwise_bitwise_complement,
-        "pytorch_op": pytorch_ops.bitwise_complement,
     },
     "eltwise-sinh": {
         "tt_lib_op": tt_lib_ops.eltwise_sinh,
@@ -228,6 +232,14 @@ op_map = {
     "eltwise-gelu": {
         "tt_lib_op": tt_lib_ops.eltwise_gelu,
         "pytorch_op": pytorch_ops.gelu,
+    },
+    "eltwise-softmax_in_place": {
+        "tt_lib_op": tt_lib_ops.eltwise_softmax_in_place,
+        "pytorch_op": pytorch_ops.softmax_in_place,
+    },
+    "eltwise-scale_mask_softmax_in_place": {
+        "tt_lib_op": tt_lib_ops.eltwise_scale_mask_softmax_in_place,
+        "pytorch_op": pytorch_ops.scale_mask_softmax_in_place,
     },
     "eltwise-rsqrt": {
         "tt_lib_op": tt_lib_ops.eltwise_rsqrt,
@@ -575,6 +587,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.reshape,
         "pytorch_op": pytorch_ops.reshape,
     },
+    "split-last-dim-two-chunks-tiled": {
+        "tt_lib_op": tt_lib_ops.split_last_dim_two_chunks_tiled,
+        "pytorch_op": pytorch_ops.split_last_dim_two_chunks_tiled,
+    },
     "tilize": {
         "tt_lib_op": tt_lib_ops.tilize,
         "pytorch_op": pytorch_ops.tilize,
@@ -594,6 +610,22 @@ op_map = {
     "untilize_with_unpadding": {
         "tt_lib_op": tt_lib_ops.untilize_with_unpadding,
         "pytorch_op": pytorch_ops.untilize_with_unpadding,
+    },
+    "layernorm": {
+        "tt_lib_op": tt_lib_ops.layernorm,
+        "pytorch_op": pytorch_ops.layernorm,
+    },
+    "layernorm-noweights": {
+        "tt_lib_op": tt_lib_ops.layernorm_noweights,
+        "pytorch_op": pytorch_ops.layernorm_noweights,
+    },
+    "add-layernorm-noweights": {
+        "tt_lib_op": tt_lib_ops.add_layernorm_noweights,
+        "pytorch_op": pytorch_ops.add_layernorm_noweights,
+    },
+    "add-layernorm": {
+        "tt_lib_op": tt_lib_ops.add_layernorm,
+        "pytorch_op": pytorch_ops.add_layernorm,
     },
     "pad": {
         "tt_lib_op": tt_lib_ops.pad,
@@ -625,5 +657,9 @@ op_map = {
     "unpad_from_tile": {
         "tt_lib_op": tt_lib_ops.unpad_from_tile,
         "pytorch_op": pytorch_ops.unpad_from_tile,
+    },
+    "conv": {
+        "tt_lib_op": tt_lib_ops.conv,
+        "pytorch_op": pytorch_ops.conv,
     },
 }

@@ -3,6 +3,7 @@ import sys
 import torch
 from pathlib import Path
 from functools import partial
+import tt_lib
 
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
@@ -24,19 +25,27 @@ torch.manual_seed(213919)
 
 params = [
     pytest.param([[5, 5, 50, 50]], unpad_args, 0)
-    for unpad_args in generation_funcs.gen_unpad_args([[5, 5, 50, 50]])
+    for unpad_args in generation_funcs.gen_unpad_args(
+        [[5, 5, 50, 50]],
+        dtypes=[[tt_lib.tensor.DataType.BFLOAT16]],
+        layouts=[[tt_lib.tensor.Layout.ROW_MAJOR]],
+        buffer_types=[[tt_lib.tensor.BufferType.DRAM]])
 ]
 
 params += [
     pytest.param([[5, 5, 64, 96]], unpad_args, 0)
-    for unpad_args in generation_funcs.gen_unpad_args([[5, 5, 64, 96]])
+    for unpad_args in generation_funcs.gen_unpad_args(
+        [[5, 5, 64, 96]],
+        dtypes=[[tt_lib.tensor.DataType.BFLOAT16]],
+        layouts=[[tt_lib.tensor.Layout.TILE]],
+        buffer_types=[[tt_lib.tensor.BufferType.DRAM]])
 ]
 
 
 @pytest.mark.parametrize("input_shapes, unpad_args, pcie_slot", params)
 def test_run_unpad_test(input_shapes, unpad_args, pcie_slot):
     if is_wormhole_b0():
-        if input_shapes == [[5,5,64,96]] and unpad_args['output_tensor_end'] ==  [2, 1, 63, 63]:
+        if input_shapes == [[5,5,64,96]]:
             pytest.skip("skip this shape for Wormhole B0")
     datagen_func = [
         generation_funcs.gen_func_with_cast(

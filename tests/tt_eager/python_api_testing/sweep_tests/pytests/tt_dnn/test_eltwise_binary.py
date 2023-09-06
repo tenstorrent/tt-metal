@@ -21,24 +21,21 @@ shapes = [
         [[1, 1, 320, 384], [1, 1, 320, 384]],  # Multi core
         [[1, 3, 320, 384], [1, 3, 320, 384]],  # Multi core
 ]
-input_mem_cfgs = copy.copy(generation_funcs.supported_mem_configs)
 output_mem_cfgs = copy.copy(generation_funcs.supported_mem_configs)
 if is_wormhole_b0():
     shapes = [shapes[0],]
-    input_mem_cfgs = [input_mem_cfgs[0],]
     output_mem_cfgs = [output_mem_cfgs[0],]
 
 @pytest.mark.parametrize(
     "input_shapes",
     shapes,
 )
-@pytest.mark.parametrize("input_mem_config", input_mem_cfgs)
 @pytest.mark.parametrize("output_mem_config", output_mem_cfgs)
 @pytest.mark.parametrize("pcie_slot", [0])
 class TestEltwiseBinary:
     @pytest.mark.parametrize("fn_kind", ["add", "sub", "mul", "squared_difference"])
     def test_run_eltwise_binary_ops(
-        self, input_shapes, fn_kind, input_mem_config, output_mem_config, pcie_slot, function_level_defaults
+        self, input_shapes, fn_kind, output_mem_config, pcie_slot, function_level_defaults
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
@@ -46,7 +43,7 @@ class TestEltwiseBinary:
             )
         ] * len(input_shapes)
         test_args = list(generation_funcs.gen_default_dtype_layout_device(input_shapes))[0]
-        test_args.update({"input_mem_config": input_mem_config, "output_mem_config": output_mem_config})
+        test_args.update({"output_mem_config": output_mem_config})
         comparison_func = comparison_funcs.comp_pcc
         run_single_pytorch_test(
             f"eltwise-{fn_kind}",
@@ -61,7 +58,7 @@ class TestEltwiseBinary:
         "cmp_kind", ["lt", "gt", "lte", "gte", "ne", "eq"]
     )
     def test_run_eltwise_binary_cmp_ops(
-        self, input_shapes, input_mem_config, output_mem_config, cmp_kind, pcie_slot, function_level_defaults
+        self, input_shapes, output_mem_config, cmp_kind, pcie_slot, function_level_defaults
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
@@ -69,7 +66,7 @@ class TestEltwiseBinary:
             )
         ] * len(input_shapes)
         test_args = list(generation_funcs.gen_default_dtype_layout_device(input_shapes))[0]
-        test_args.update({"input_mem_config": input_mem_config, "output_mem_config": output_mem_config})
+        test_args.update({"output_mem_config": output_mem_config})
         comparison_func = comparison_funcs.comp_equal
         run_single_pytorch_test(
             f"eltwise-{cmp_kind}",

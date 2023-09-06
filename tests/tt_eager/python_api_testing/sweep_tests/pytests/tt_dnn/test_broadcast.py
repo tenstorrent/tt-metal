@@ -48,7 +48,12 @@ def test_run_bcast_h_test(
         datagen_func,
         comparison_func,
         pcie_slot,
-        {"dtype": dtype, "layout": ttl.tensor.Layout.TILE, "on_device": True},
+        {
+            "dtype": [dtype, dtype],
+            "layout": [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+            "buffer_type": [ttl.tensor.BufferType.DRAM, ttl.tensor.BufferType.DRAM],
+            "output_mem_config": ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+        },
     )
 
 shape2 = [
@@ -84,7 +89,12 @@ def test_run_bcast_w_test(
         datagen_func,
         comparison_func,
         pcie_slot,
-        {"dtype": dtype, "layout": ttl.tensor.Layout.TILE, "on_device": True},
+        {
+            "dtype": [dtype, dtype],
+            "layout": [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+            "buffer_type": [ttl.tensor.BufferType.DRAM, ttl.tensor.BufferType.DRAM],
+            "output_mem_config": ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+        },
     )
 
 
@@ -121,5 +131,10 @@ def test_run_bcast_hw_test(
         datagen_func,
         comparison_func,
         pcie_slot,
-        {"dtype": dtype, "layout": ttl.tensor.Layout.TILE, "on_device": True},
+        {
+            "dtype": [dtype, dtype],
+            "layout": [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+            "buffer_type": [ttl.tensor.BufferType.DRAM, ttl.tensor.BufferType.DRAM],
+            "output_mem_config": ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+        },
     )

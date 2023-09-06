@@ -32,15 +32,11 @@ if is_wormhole_b0():
 )
 @pytest.mark.parametrize("pcie_slot", [0])
 @pytest.mark.parametrize(
-    "input_mem_config", [ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)]
-)
-@pytest.mark.parametrize(
     "output_mem_config",
     output_mem_configs
 )
 def test_run_move_op(
     input_shapes,
-    input_mem_config,
     output_mem_config,
     pcie_slot,
     function_level_defaults,
@@ -52,7 +48,7 @@ def test_run_move_op(
     ]
     test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
     test_args.update(
-        {"input_mem_config": input_mem_config, "output_mem_config": output_mem_config}
+        {"output_mem_config": output_mem_config}
     )
     comparison_func = comparison_funcs.comp_equal
     run_single_pytorch_test(

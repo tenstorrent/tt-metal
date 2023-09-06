@@ -86,20 +86,28 @@ def run_test_and_save_results(
     test_pass, test_status, test_output, test_result = _try_except_wrapper(
         run_tt_lib_test, *run_test_args
     )
-    results_csv_writer.writerow(
-        {
-            "test_name": test_name,
-            "input_shapes": input_shapes,
-            **test_args,
-            "data_seed": data_seed,
-            "env_vars": env_vars,
-            "status": test_status,
-            "test_output": test_output,
-            "pass/fail": test_result,
-        }
-    )
+
+    if results_csv_writer is not None:
+        results_csv_writer.writerow(
+            {
+                "test_name": test_name,
+                "input_shapes": input_shapes,
+                "args": test_args,
+                "data_seed": data_seed,
+                "env_vars": env_vars,
+                "status": test_status,
+                "test_output": test_output,
+                "pass/fail": test_result,
+            }
+        )
 
     return test_pass
+
+
+def align_to_interval(x, start_val, interval):
+    dx = x - start_val
+    dx = (dx // interval) * interval
+    return start_val + dx
 
 
 def shapes_and_datagen(shape_dict, datagen_dict):
@@ -253,10 +261,11 @@ def shapes_and_datagen(shape_dict, datagen_dict):
             # Only supports dim = 4; for the second shape, only the last dim is used
             assert len(start_shape) == len(end_shape) == 2
             assert num_shapes == 2
+
             shape1_start, shape2_start = start_shape
             shape1_end, shape2_end = end_shape
-
             num_dims = 4
+
             assert (
                 len(shape1_start)
                 == len(shape1_end)
@@ -265,50 +274,97 @@ def shapes_and_datagen(shape_dict, datagen_dict):
                 == num_dims
             )
 
-            if not isinstance(interval, list):
-                interval = [interval] * (num_dims + 1)
+            for _ in range(num_samples):
+                shape1 = []
 
-            assert len(interval) == (num_dims + 1)
+                for i in range(num_dims):
+                    x = random.randint(shape1_start[i], shape1_end[i])
+                    shape1.append(align_to_interval(x, shape1_start[i], interval[i]))
 
-            dim_ranges = [
-                range(shape1_start[i], shape1_end[i] + interval[i], interval[i])
-                for i in range(num_dims)
-            ]
-            # Add outer dim from last dim of second shape
-            dim_ranges.append(
-                range(shape2_start[-1], shape2_end[-1] + interval[-1], interval[-1])
+                x = random.randint(shape2_start[-1], shape2_end[-1])
+                outer_dim = align_to_interval(x, shape2_start[-1], interval[-1])
+
+                shape2 = [shape1[0], shape1[1], shape1[3], outer_dim]
+                yield [shape1, shape2], datagen_funcs
+
+
+        elif method == "layernorm":
+            # start-shape and end-shape are lists of two shapes
+            # Only supports dim = 4; for the second shape, only the last dim is used
+
+            shape1_start = start_shape
+            shape1_end = end_shape
+            num_dims = 4
+
+            assert (
+                len(shape1_start)
+                == num_dims
             )
 
-            sweeps_generator = product(*dim_ranges)
-            total_shapes = functools.reduce(operator.mul, map(len, dim_ranges), 1)
-            idx_list = _get_sample_indices(total_shapes, num_shapes)
+            for _ in range(num_samples):
+                shape1 = []
 
-            if "split" in shape_dict:
-                split_params = shape_dict["split"]
-                assert len(split_params) == 2
+                for i in range(num_dims):
+                    x = random.randint(shape1_start[i], shape1_end[i])
+                    shape1.append(align_to_interval(x, shape1_start[i], interval[i]))
 
-                split_id, num_splits = split_params
-                assert len(idx_list) % num_splits == 0
-                samples_per_split = len(idx_list) // num_splits
-                idx_list = idx_list[
-                    (split_id - 1) * samples_per_split : split_id * samples_per_split
-                ]
+                normalized_shape = [1, 1, 32, shape1[3]]
 
-            idx_list = deque(idx_list)
-            for i, shape in enumerate(sweeps_generator):
-                if i == idx_list[0]:
-                    idx_list.popleft()
-                    if len(idx_list) == 0:
-                        break
-                else:
-                    continue
-                shape = list(shape)
-                b, c, h, w, outer_dim = shape
-                shape1 = [b, c, h, w]
-                shape2 = [b, c, w, outer_dim]
-                if bcast_batch:
-                    shape2[:-2] = [1] * len(shape2[:-2])
-                yield [shape1, shape2], datagen_funcs
+                yield [shape1, normalized_shape, normalized_shape], datagen_funcs
+
+
+        elif method == "add_layernorm":
+            # start-shape and end-shape are lists of two shapes
+            # Only supports dim = 4; for the second shape, only the last dim is used
+
+            shape1_start = start_shape
+            shape1_end = end_shape
+            num_dims = 4
+
+            assert (
+                len(shape1_start)
+                == num_dims
+            )
+
+            for _ in range(num_samples):
+                shape1 = []
+
+                for i in range(num_dims):
+                    x = random.randint(shape1_start[i], shape1_end[i])
+                    shape1.append(align_to_interval(x, shape1_start[i], interval[i]))
+
+                normalized_shape = [1, 1, 1, shape1[3]]
+
+                yield [shape1, shape1, normalized_shape, normalized_shape], datagen_funcs
+
+        elif method == "conv":
+            # start-shape and end-shape are lists of two shapes
+            # Only supports dim = 4; for the second shape, only the last dim is used
+
+            shape1_start = start_shape
+            shape1_end = end_shape
+            num_dims = 4
+
+            assert (
+                len(shape1_start)
+                == num_dims
+            )
+
+            for _ in range(num_samples):
+                shape1 = []
+
+                for i in range(num_dims):
+                    x = random.randint(shape1_start[i], shape1_end[i])
+                    shape1.append(align_to_interval(x, shape1_start[i], interval[i]))
+
+                conv_shape = [0, 0, 0, 0]
+                conv_shape[0] = 1
+                conv_shape[1] = shape1[1]
+                conv_shape[2] = random.randint(1, 4)
+                conv_shape[3] = random.randint(1, 4)
+
+                yield [shape1, conv_shape], datagen_funcs
+
         elif method == "linear":
             # start-shape and end-shape are lists of two shapes
             # Only supports dim = 4; for the second shape, only the last dim is used

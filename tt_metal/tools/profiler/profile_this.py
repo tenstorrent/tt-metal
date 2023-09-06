@@ -2,7 +2,7 @@
 
 import os
 import subprocess
-
+from tt_eager import tt_lib
 import click
 from loguru import logger
 
@@ -11,15 +11,13 @@ TT_METAL_HOME = ENVS["TT_METAL_HOME"]
 LOG_LOCATIONS_RECORD = "tt_metal/tools/profiler/logs/.locations.log"
 
 def test_profiler_build():
-    from tt_eager import tt_lib as ttl
-
     tmpLocation ="tt_metal/tools/profiler/tmp"
     os.system(f"rm -rf {tmpLocation}")
     ret = False
 
-    ttl.profiler.set_profiler_location(tmpLocation)
-    ttl.profiler.start_profiling("test")
-    ttl.profiler.stop_profiling("test")
+    tt_lib.profiler.set_profiler_location(tmpLocation)
+    tt_lib.profiler.start_profiling("test")
+    tt_lib.profiler.stop_profiling("test")
 
     if os.path.isfile(f"{tmpLocation}/test/profile_log_host.csv"):
         ret = True
@@ -47,15 +45,20 @@ def get_log_locations ():
                 logLocations.append(logLocation)
     return logLocations
 
-def post_process():
+
+def post_process(outputLocation=None):
     logLocations = get_log_locations()
+
     for logLocation in logLocations:
         testName = logLocation.split("/")[-1]
         if testName == "ops":
             testName = "default"
-        outputLocation = f"tt_metal/tools/profiler/output/ops/{testName}"
+
+        if outputLocation is None:
+            outputLocation = f"tt_metal/tools/profiler/output/ops/{testName}"
+
         os.system(f"tt_metal/tools/profiler/process_ops_logs.py -i {logLocation} -o {outputLocation}")
-        logger.info(f"Post processed {testName} with results save in {outputLocation}")
+        logger.info(f"Post processed {testName} with results saved in {outputLocation}")
 
 
 @click.command()

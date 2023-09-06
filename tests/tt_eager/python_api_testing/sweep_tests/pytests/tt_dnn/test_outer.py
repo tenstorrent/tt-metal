@@ -47,5 +47,10 @@ def test_run_outer_test(input_shapes, pcie_slot, dtype, function_level_defaults)
         datagen_func,
         comparison_func,
         pcie_slot,
-        {"dtype": dtype, "layout": ttl.tensor.Layout.ROW_MAJOR, "on_device": False},
+        {
+            "dtype": [dtype, dtype],
+            "layout": [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
+            "buffer_type": [None, None],
+            "output_mem_config": ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+        },
     )

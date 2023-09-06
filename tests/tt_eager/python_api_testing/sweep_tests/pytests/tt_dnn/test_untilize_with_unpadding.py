@@ -32,9 +32,10 @@ params += [
     pytest.param(
         [[1, 1, 128, 7328]],
         {
-            "dtype": ttl.tensor.DataType.BFLOAT16,
-            "on_device": True,
-            "layout": ttl.tensor.Layout.TILE,
+            "dtype": [ttl.tensor.DataType.BFLOAT16],
+            "layout": [ttl.tensor.Layout.TILE],
+            "buffer_type": [ttl.tensor.BufferType.DRAM],
+            "output_mem_config": ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
             "output_tensor_start": [0, 0, 0, 0],
             "output_tensor_end": [0, 0, 119, 7299],
         },
