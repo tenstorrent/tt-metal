@@ -11,6 +11,7 @@
       * [Running model performance tests](#running-model-performance-tests)
    * [Debugging tips](#debugging-tips)
    * [Contribution standards](#contribution-standards)
+      * [File structure and formats](#file-structure-and-formats)
       * [CI/CD Guidelines](#cicd-guidelines)
       * [Documentation](#documentation)
       * [Git rules and guidelines](#git-rules-and-guidelines)
@@ -20,6 +21,8 @@
       * [Logging, assertions, and exceptions](#logging-assertions-and-exceptions)
    * [Hardware troubleshooting](#hardware-troubleshooting)
       * [Resetting an accelerator board](#resetting-an-accelerator-board)
+
+<!-- Created by https://github.com/ekalinin/github-markdown-toc -->
 
 <!-- tocstop -->
 
