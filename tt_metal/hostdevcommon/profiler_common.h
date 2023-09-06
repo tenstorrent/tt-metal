@@ -1,4 +1,10 @@
 /*
+ * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/*
 *
 * Ennums and defines shared between host and device profiler.
 *

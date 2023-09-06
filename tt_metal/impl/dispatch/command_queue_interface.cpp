@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "command_queue_interface.hpp"
 
 u32 get_cq_rd_ptr(Device* device) {

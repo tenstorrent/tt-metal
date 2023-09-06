@@ -1,3 +1,9 @@
+/*
+ * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 #include "ckernel_include.h"
 
 inline uint32_t convert_float_to_1_8_7(float input) {

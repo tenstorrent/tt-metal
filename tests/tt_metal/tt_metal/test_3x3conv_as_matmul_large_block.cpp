@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //////////////////////////////////////////////////////////////////////////////////////////
 // Tests a 3x3 convolution by implementing as a matmul.
 // Converts the layout of activation from nchw to nhwc on the host and copies to DRAM.

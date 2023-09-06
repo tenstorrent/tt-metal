@@ -1,3 +1,9 @@
+"""
+SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
 #################################################################################################################
 # Link: https://github.com/huggingface/transformers/blob/main/src/transformers/models/falcon/modeling_falcon.py
 # NOTE: Modified to use TT_functional.scaled_dot_product_attention as F.scaled_dot_product_attention is not working with torch version 1.13.1+cpu.

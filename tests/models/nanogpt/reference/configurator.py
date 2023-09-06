@@ -1,4 +1,10 @@
 """
+SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
+"""
 Poor Man's Configurator. Probably a terrible idea. Example usage:
 $ python train.py config/override_file.py --batch_size=32
 this will first run config/override_file.py, then override batch_size to 32

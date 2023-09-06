@@ -1,3 +1,9 @@
+"""
+SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
 # coding=utf-8
 # Copyright 2021 Google AI, Ross Wightman, The HuggingFace Inc. team. All rights reserved.
 #

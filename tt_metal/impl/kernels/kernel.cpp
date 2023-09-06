@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "build_kernels_for_riscv/build_kernels_for_riscv.hpp"

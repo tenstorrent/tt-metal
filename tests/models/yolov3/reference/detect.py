@@ -1,3 +1,9 @@
+"""
+SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
 # YOLOv3 🚀 by Ultralytics, AGPL-3.0 license
 """
 Run YOLOv3 detection inference on images, videos, directories, globs, YouTube, webcam, streams, etc.

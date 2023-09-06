@@ -1,3 +1,9 @@
+"""
+SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
 from models.distilbert.tt.distilbert_for_question_answering import (
     TtDistilBertForQuestionAnswering,
 )

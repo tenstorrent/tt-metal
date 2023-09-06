@@ -1,3 +1,9 @@
+/*
+ * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 #define PERF_CNT_INSTR_THREAD_DAISY_ID 0
 #define PERF_CNT_TDMA_DAISY_ID 1
 

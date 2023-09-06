@@ -1,3 +1,9 @@
+/*
+ * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 #include <tensor/tensor.hpp>
 #include <tensor/tensor_utils.hpp>
 #include <tensor/owned_buffer.hpp>

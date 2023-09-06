@@ -1,4 +1,10 @@
 """
+SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
+"""
     This file parses ops reports and puts them together with a cleaner format.
     To generate ops reports for Stable Diffusion;
     When running SD's test_perf() in perf_unbatched_stable.py, do

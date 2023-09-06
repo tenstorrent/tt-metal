@@ -1,3 +1,9 @@
+"""
+SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
 #! /usr/bin/env python3
 
 # NOTE: This file is tightly coupled with fw_debug.h

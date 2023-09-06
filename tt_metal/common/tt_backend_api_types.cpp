@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "tt_backend_api_types.hpp"
 
 std::string tt::get_string(tt::ARCH arch) {

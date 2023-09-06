@@ -1,4 +1,10 @@
 """
+SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
+"""
 Huge pages is a linux feature that enables support for memory pages greater than the default 4kb.
 Running this script with `python setup_hugepages.py enable` will enable hugepages up to a size of
 1GB, and set iommu=pt. If run with `python setup_hugepages.py check` this script will check if

@@ -1,3 +1,9 @@
+"""
+SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
 from models.t5.tt.t5_for_conditional_generation import (
     flan_t5_small_for_conditional_generation,
 )

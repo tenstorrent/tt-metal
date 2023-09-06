@@ -1,3 +1,9 @@
+"""
+SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
 from models.helper_funcs import Linear as linear
 from models.utility_functions import torch_to_tt_tensor_rm
 import tt_lib

@@ -1,3 +1,9 @@
+"""
+SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
 from transformers import AutoFeatureExtractor, WhisperForAudioClassification
 from datasets import load_dataset
 import numpy as np

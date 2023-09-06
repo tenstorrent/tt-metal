@@ -1,3 +1,9 @@
+"""
+SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
 from typing import List, Union
 from .. import tensor
 from ..utils import _nearest_32, _nearest_y

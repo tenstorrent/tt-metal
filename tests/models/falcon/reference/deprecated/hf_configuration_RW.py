@@ -1,3 +1,9 @@
+"""
+SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
 ########################################################################################################
 # Link: https://huggingface.co/blog/falcon
 # File: https://huggingface.co/tiiuae/falcon-7b-instruct/blob/main/configuration_RW.py

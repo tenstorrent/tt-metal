@@ -1,3 +1,9 @@
+/*
+ * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 const NAMESPACE::hlk_args_t hlk_args =
   {
     .per_core_tile_cnt = 0x4,

@@ -1,3 +1,9 @@
+"""
+SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
 from .. import tensor as ttl_tensor, device as ttl_device, profiler as ttl_profiler
 import torch
 from functools import wraps

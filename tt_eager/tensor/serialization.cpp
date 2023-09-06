@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "tensor/serialization.hpp"
 #include "tensor/borrowed_buffer_functions.hpp"
 #include "tensor/owned_buffer_functions.hpp"

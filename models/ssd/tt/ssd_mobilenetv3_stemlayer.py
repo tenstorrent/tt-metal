@@ -1,3 +1,9 @@
+"""
+SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
 import torch.nn as nn
 import tt_lib
 from models.ssd.tt.ssd_mobilenetv3_convlayer import (

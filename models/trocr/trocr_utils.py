@@ -1,3 +1,9 @@
+"""
+SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
 import torch
 from typing import Optional
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor

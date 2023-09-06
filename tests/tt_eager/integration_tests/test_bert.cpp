@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "tt_metal/common/constants.hpp"
 #include "tensor/tensor.hpp"
 #include "tensor/owned_buffer.hpp"

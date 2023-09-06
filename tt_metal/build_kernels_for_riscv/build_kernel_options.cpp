@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "common/assert.hpp"
 #include "common/core_coord.h"
 #include "build_kernels_for_riscv/build_kernel_options.hpp"

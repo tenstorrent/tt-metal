@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "tt_dnn/op_library/fill_rm/fill_rm_op.hpp"
 #include "common/test_tiles.hpp"
 

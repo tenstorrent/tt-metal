@@ -1,3 +1,9 @@
+/*
+ * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 #pragma once
 
 #include "ckernel.h"
@@ -75,7 +81,7 @@ inline void llk_math_eltwise_unary_sfpu_relu_min(uint dst_index, uint param0 = 0
 				 ckernel::sfpu::relu_min<APPROXIMATE,4>,
 				 dst_index, Dim::RC, param0);
 }
-  
+
 // RELU
 //RELU - implemented by relu-min
 //relu = relu_min @ threshold = 0
@@ -85,15 +91,15 @@ inline void llk_math_eltwise_unary_sfpu_relu(uint dst_index) {
                                 (ckernel::sfpu::relu_min<APPROXIMATE,4>,
 				 ckernel::sfpu::relu_min<APPROXIMATE,4>,
 				 dst_index, Dim::RC, 0);
-  
+
 }
-  
+
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_relu_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::relu_min, APPROXIMATE>();
 }
 
- 
+
 //Leaky Relu
 
 // LRELU = LEAKY RELU
@@ -132,7 +138,7 @@ template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
 inline void llk_math_eltwise_unary_sfpu_leaky_relu(uint dst_index,int param0){
     llk_math_eltwise_unary_sfpu_lrelu<SfpuType::lrelu, APPROXIMATE, dst_sync>(dst_index,param0);
 }
-  
+
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_lrelu_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::lrelu, APPROXIMATE>();

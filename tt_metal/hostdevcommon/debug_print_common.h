@@ -1,4 +1,10 @@
 /*
+ * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/*
 *
 * Type ids shared between the debug print server and on-device debug prints.
 *

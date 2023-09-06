@@ -1,3 +1,9 @@
+"""
+SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
 import os
 from common import get_smi_log_lines, check_not_empty, get_tt_arch_from_cmd_line
 

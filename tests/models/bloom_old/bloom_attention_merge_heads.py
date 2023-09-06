@@ -1,3 +1,9 @@
+"""
+SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
 import torch
 import tt_lib as ttm
 import tests.models.bloom_old.bloom_utils as bloom_utils

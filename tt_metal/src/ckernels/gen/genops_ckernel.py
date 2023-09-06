@@ -4,6 +4,12 @@
 # Generates C++ code from assembly.yaml
 #
 
+"""
+SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
 import yaml
 import cgi
 import sys

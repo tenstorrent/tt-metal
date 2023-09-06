@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "tt_dnn/op_library/pool/average_pool.hpp"
 #include "tt_dnn/op_library/program_cache.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"

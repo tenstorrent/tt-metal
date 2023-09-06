@@ -1,3 +1,9 @@
+"""
+SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
 from models.vit.tt.modeling_vit import TtViTAttention
 from transformers import ViTForImageClassification as HF_ViTForImageClassication
 from loguru import logger

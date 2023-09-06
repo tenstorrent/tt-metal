@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "tt_dnn/op_library/program_cache.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_numpy/functions.hpp"

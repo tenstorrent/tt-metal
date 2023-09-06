@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "../basic_harness.hpp"
 #include "gtest/gtest.h"
 #include "test_buffer_utils.hpp"

@@ -1,3 +1,9 @@
+"""
+SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
 import torch
 from typing import List, Tuple, Union, Optional
 from .conversion_wrapper import convert_tt_tensors_wrapper

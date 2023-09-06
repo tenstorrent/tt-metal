@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "dtx.hpp"
 #include "dtx_passes.hpp"
 #include "util.hpp"

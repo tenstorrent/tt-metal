@@ -1,3 +1,9 @@
+"""
+SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
 # train a miniature character-level shakespeare model
 # good for debugging and playing on macbooks and such
 

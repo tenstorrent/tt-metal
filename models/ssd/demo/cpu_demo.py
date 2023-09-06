@@ -1,3 +1,9 @@
+"""
+SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
 import torch
 from loguru import logger
 from torchvision.models.detection import SSDLite320_MobileNet_V3_Large_Weights

@@ -1,3 +1,9 @@
+"""
+SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
 import tt_lib
 import tests.models.bloom.bloom_utils as bloom_utils
 mem_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
