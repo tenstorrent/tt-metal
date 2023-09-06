@@ -34,6 +34,7 @@ import torch
 @pytest.mark.parametrize("untilize_out", (False,))
 @pytest.mark.parametrize("N", (1,2,8))
 @pytest.mark.parametrize("extra_padding_for_32B_alignment", (25,))
+@pytest.mark.skip(reason="Conv disabled in main.")
 def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignment, device, untilize_out):
     (K, C, padded_C, H, W, R, S, padded_S, stride_h, stride_w, pad_h, pad_w) = (
         64,

@@ -338,6 +338,7 @@ hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv = {
 
     )
 )
+@pytest.mark.skip(reason="Conv disabled in main.")
 def test_resnet50_conv(use_program_cache, device, N,K,C,H,W,R,S,stride_h,stride_w,pad_h,pad_w, use_new_matmul):
     for i in range(1): # increase num of iterations to test op caching
         assert C % 32 == 0

@@ -24,6 +24,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 
 
 @pytest.mark.parametrize("fold_batchnorm", [True], ids=["Batchnorm folded"])
+@pytest.mark.skip(reason="Conv disabled in main.")
 def test_run_resnet50_inference(fold_batchnorm, imagenet_sample_input):
     image = imagenet_sample_input
 

@@ -65,6 +65,7 @@ import torch
         (64, 32, 16, 16, 1, 1, 1, 1, 0, 0, 2, 1, 4, 2),
     ),
 )
+@pytest.mark.skip(reason="Conv disabled in main.")
 def test_run_optimized_conv(
     use_program_cache,
     N,

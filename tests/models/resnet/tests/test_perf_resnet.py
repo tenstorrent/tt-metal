@@ -118,7 +118,7 @@ def run_perf_resnet(batch_size, expected_inference_time, expected_compile_time, 
         (8, 0.225, 33),
     ),
 )
-
+@pytest.mark.skip(reason="Conv disabled in main.")
 def test_perf_bare_metal(use_program_cache, batch_size, expected_inference_time, expected_compile_time, hf_cat_image_sample_input):
     run_perf_resnet(batch_size, expected_inference_time, expected_compile_time, hf_cat_image_sample_input)
 
@@ -132,6 +132,6 @@ def test_perf_bare_metal(use_program_cache, batch_size, expected_inference_time,
         (8, 0.3, 36),
     ),
 )
-
+@pytest.mark.skip(reason="Conv disabled in main.")
 def test_perf_virtual_machine(use_program_cache, batch_size, expected_inference_time, expected_compile_time, hf_cat_image_sample_input):
     run_perf_resnet(batch_size, expected_inference_time, expected_compile_time, hf_cat_image_sample_input)
