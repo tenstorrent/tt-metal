@@ -10,7 +10,7 @@ import tt_lib
 import torch
 import torch.nn as nn
 import math
-from utils import conv3x3, conv1x1, fold_bn_to_conv, fold_bn_to_conv_weights_bias
+from tests.models.resnet.utils import conv3x3, conv1x1, fold_bn_to_conv, fold_bn_to_conv_weights_bias
 from models.utility_functions import pad_by_zero, tt2torch_tensor
 from tt_lib.utils import pad_weight
 
