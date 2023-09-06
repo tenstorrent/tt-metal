@@ -27,7 +27,7 @@ from hrnet.tt.hrnet_model import hrnet_w18_small
     (("hrnet_w18_small", 0.99),),
 )
 def test_hrnet_model_inference(model_name, pcc, imagenet_sample_input, reset_seeds):
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
 

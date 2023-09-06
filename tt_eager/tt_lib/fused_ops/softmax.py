@@ -47,7 +47,7 @@ def ref_stable_softmax(x):
     return softmax
 
 if __name__ == "__main__":
-    device = device.CreateDevice(device.Arch.GRAYSKULL, 0)
+    device = device.CreateDevice(0)
     device.InitializeDevice(device)
 
     H, W = 64, 96

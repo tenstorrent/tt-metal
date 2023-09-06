@@ -22,7 +22,7 @@ def run_split_fused_qkv_and_split_heads_test(
     batch, dtype, in0_mem_config, out_mem_config
 ):
     torch.manual_seed(1234)
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    device = ttl.device.CreateDevice(0)
     ttl.device.InitializeDevice(device)
     a_shape = [batch, 1, 384, 3072]
 

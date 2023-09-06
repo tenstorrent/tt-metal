@@ -36,7 +36,7 @@ def run_perf_resnet(batch_size, expected_inference_time, expected_compile_time, 
     model_name = "microsoft/resnet-50"
 
     # Initialize the device
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
 

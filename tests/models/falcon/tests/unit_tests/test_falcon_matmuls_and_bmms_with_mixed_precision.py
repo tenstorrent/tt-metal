@@ -91,7 +91,7 @@ def run_falcon_matmul_test(
         raise NotImplementedError(f"falcon matmul op is undefined!")
 
     torch.manual_seed(1234)
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    device = ttl.device.CreateDevice(0)
     ttl.device.InitializeDevice(device)
 
     A = torch.randn(a_shape)

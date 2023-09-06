@@ -35,7 +35,7 @@ def test_run_embedding_inference():
     torch_output = time_embedding(t_emb.squeeze(0).squeeze(0))
 
     # Initialize the device
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    device = ttl.device.CreateDevice(0)
     ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
 

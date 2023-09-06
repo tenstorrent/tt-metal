@@ -27,7 +27,7 @@ from tests.models.swin.tt.swin import *
     (("microsoft/swin-tiny-patch4-window7-224"),),
 )
 def test_gs_demo(imagenet_sample_input, model_name):
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
 

@@ -133,7 +133,7 @@ class PytorchAddAndNormModel(torch.nn.Module):
 def run_add_and_norm_inference(
     model_version, batch, seq_len, pcc, model_location_generator
 ):
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    device = ttl.device.CreateDevice(0)
     # Initialize the device
     ttl.device.InitializeDevice(device)
 

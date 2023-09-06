@@ -83,7 +83,7 @@ def run_layernorm_tests(test_id, batch, dtype, in0_mem_config, out_mem_config):
     # Initialize the device
     tensor = ttl.tensor
     device = ttl.device
-    dev = device.CreateDevice(device.Arch.GRAYSKULL, 0)
+    dev = device.CreateDevice(0)
     device.InitializeDevice(dev)
 
     epsf = 1e-2

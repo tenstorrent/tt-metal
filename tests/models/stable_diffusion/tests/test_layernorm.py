@@ -39,7 +39,7 @@ import pytest
 @torch.no_grad()
 def test_layer_norm(input_shape, normalized_shape_hint):
     # Initialize the device
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    device = ttl.device.CreateDevice(0)
     ttl.device.InitializeDevice(device)
 
 

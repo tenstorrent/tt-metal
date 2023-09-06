@@ -24,7 +24,7 @@ def run_falcon_attn_matmul_test(
     out_mem_config,
 ):
     torch.manual_seed(1234)
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    device = ttl.device.CreateDevice(0)
     ttl.device.InitializeDevice(device)
 
     pcc = 0.99

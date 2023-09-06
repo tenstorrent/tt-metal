@@ -233,7 +233,7 @@ def device(request):
         dispatch = os.environ.pop("TT_METAL_SLOW_DISPATCH_MODE", None)
         os.environ["TT_METAL_SLOW_DISPATCH_MODE"] = "1"
 
-    device = ttl.device.CreateDevice(arch, chip_id)
+    device = ttl.device.CreateDevice(chip_id)
     ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
 

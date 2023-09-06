@@ -126,7 +126,7 @@ std::optional<uint32_t> get_semaphore_address(const Program &program, const Core
 }
 }  // namespace
 
-Device *CreateDevice(tt::ARCH arch, int device_id) { return new Device(arch, device_id); }
+Device *CreateDevice(int device_id) { return new Device(device_id); }
 
 bool InitializeDevice(Device *device) {
     ZoneScoped;

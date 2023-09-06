@@ -48,7 +48,7 @@ int main() {
     using tt::constants::TILE_WIDTH;
 
     int device_id = 0;
-    auto device = tt::tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, device_id);
+    auto device = tt::tt_metal::CreateDevice(device_id);
 
     TT_ASSERT(tt::tt_metal::InitializeDevice(device));
 

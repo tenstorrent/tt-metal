@@ -32,7 +32,7 @@ from transformers import AutoFeatureExtractor
     (("microsoft/swin-tiny-patch4-window7-224", 0.99),),
 )
 def test_swin_image_classification_inference(imagenet_sample_input, model_name, pcc, reset_seeds):
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
 

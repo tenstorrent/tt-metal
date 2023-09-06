@@ -44,7 +44,7 @@ def run_bloom_merge_heads_test(device, num_heads, hidden_size, num_attention_hea
 
 
 def test_bloom_merge_heads():
-    device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
+    device = ttm.device.CreateDevice(0)
     ttm.device.InitializeDevice(device)
     run_bloom_merge_heads_test(device, 32, 1024, 32)
     ttm.device.CloseDevice(device)

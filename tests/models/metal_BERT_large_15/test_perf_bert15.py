@@ -61,7 +61,7 @@ def run_perf_bert15(expected_inference_time, expected_compile_time, model_locati
     cpu_key = "ref_key"
 
     # Initialize the device
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    device = ttl.device.CreateDevice(0)
     ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
 

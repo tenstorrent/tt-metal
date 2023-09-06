@@ -38,7 +38,7 @@ def run_bert_large_ff1_matmul_test(
         pytest.skip("Skipping test since these tensors won't fit on device!")
 
     torch.manual_seed(1234)
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    device = ttl.device.CreateDevice(0)
     ttl.device.InitializeDevice(device)
     a_shape = [9, 1, 384, 1024]
     b_shape = [1, 1, 1024, 4096]

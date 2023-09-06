@@ -65,7 +65,7 @@ def run_baddbmm_test(device):
 
 
 def test_baddbmm():
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
     run_baddbmm_test(device)
     tt_lib.device.CloseDevice(device)

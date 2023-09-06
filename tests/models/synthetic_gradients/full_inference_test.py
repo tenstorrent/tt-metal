@@ -243,7 +243,7 @@ def run_full_inference(in_features, hidden_features, out_features, device):
 
 def test_run_full_inference():
     # Initialize the device
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    device = ttl.device.CreateDevice(0)
     ttl.device.InitializeDevice(device)
     run_full_inference(1024, 256, 32, device)
     ttl.device.CloseDevice(device)

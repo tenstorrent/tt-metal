@@ -641,7 +641,7 @@ void TensorModule(py::module &m_tensor) {
                 .. code-block:: python
 
                     py_tensor = torch.randn((1, 1, 32, 32))
-                    tt_device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+                    tt_device = tt_lib.device.CreateDevice(0)
                     // ...
                     tt_lib.tensor.Tensor(
                         py_tensor.reshape(-1).tolist(),
@@ -688,7 +688,7 @@ void TensorModule(py::module &m_tensor) {
                 .. code-block:: python
 
                     py_tensor = torch.randn((1, 1, 32, 32))
-                    tt_device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+                    tt_device = tt_lib.device.CreateDevice(0)
                     mem_config = tt_lib.tensor.MemoryConfig(False)
                     // ...
                     tt_lib.tensor.Tensor(
@@ -2863,8 +2863,8 @@ void DeviceModule(py::module &m_device) {
     pyDevice
         .def(
             py::init<>(
-                [](tt::ARCH arch, int device_id) {
-                    return Device(arch, device_id);
+                [](int device_id) {
+                    return Device(device_id);
                 }
             ), "Create device."
         )
@@ -2877,8 +2877,6 @@ void DeviceModule(py::module &m_device) {
         +------------------+------------------------+---------------------+------------------------------+----------+
         | Argument         | Description            | Data type           | Valid range                  | Required |
         +==================+========================+=====================+==============================+==========+
-        | arch             | Type of TT Device      | tt_lib.device.Arch  | tt_lib.device.Arch.GRAYSKULL | Yes      |
-        +------------------+------------------------+---------------------+------------------------------+----------+
         | device_id        | Device index           | int                 |                              | Yes      |
         +------------------+------------------------+---------------------+------------------------------+----------+
     )doc");

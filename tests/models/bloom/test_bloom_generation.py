@@ -332,7 +332,7 @@ def run_generate(input_sentance, run_tt_model, device):
 
 
 if __name__ == "__main__":
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
 
     output_sentance_night = run_generate(

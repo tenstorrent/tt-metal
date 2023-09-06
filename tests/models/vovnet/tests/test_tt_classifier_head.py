@@ -27,7 +27,7 @@ from models.vovnet.tt.classifier_head import TtClassifierHead
     ((0.99),),
 )
 def test_classifier_head_inference(pcc, reset_seeds):
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
 

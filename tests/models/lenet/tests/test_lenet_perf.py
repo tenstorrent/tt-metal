@@ -42,7 +42,7 @@ def test_lenet_perf_inference(
 
     with torch.no_grad():
         # Initialize the device
-        device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+        device = tt_lib.device.CreateDevice(0)
         tt_lib.device.InitializeDevice(device)
         tt_lib.device.SetDefaultDevice(device)
 

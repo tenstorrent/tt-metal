@@ -174,7 +174,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
         tt_metal::Device *device =
-            tt_metal::CreateDevice(arch, device_id);
+            tt_metal::CreateDevice(device_id);
 
         BufferKeeper buffers;
         tt_metal::Program program = tt_metal::Program();

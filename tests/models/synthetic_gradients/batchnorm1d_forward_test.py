@@ -12,7 +12,7 @@ from tt_lib.utils import pad_activation, pad_weight
 
 def create_global_variables():
     global device
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    device = ttl.device.CreateDevice(0)
     global host
 
 

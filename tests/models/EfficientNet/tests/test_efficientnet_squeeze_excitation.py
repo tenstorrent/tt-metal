@@ -18,7 +18,7 @@ from models.EfficientNet.tt.efficientnet_squeeze_excitation import (
 
 
 def test_efficientnet_squeeze_excitation_b0():
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
 
@@ -66,7 +66,7 @@ def test_efficientnet_squeeze_excitation_b0():
 
 
 def test_efficientnet_squeeze_excitation_v2_s():
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
 

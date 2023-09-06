@@ -23,7 +23,7 @@ def run_bert_large_selfout_matmul_test(
     dtype, in0_mem_config, in1_mem_config, bias_mem_config, out_mem_config
 ):
     torch.manual_seed(1234)
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    device = ttl.device.CreateDevice(0)
     ttl.device.InitializeDevice(device)
     a_shape = [9, 1, 384, 1024]
     b_shape = [1, 1, 1024, 1024]

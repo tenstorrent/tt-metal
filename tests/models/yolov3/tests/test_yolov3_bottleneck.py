@@ -33,7 +33,7 @@ from models.utility_functions import (
 
 def test_bottleneck_module(model_location_generator):
     torch.manual_seed(1234)
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
 
     # Load yolo

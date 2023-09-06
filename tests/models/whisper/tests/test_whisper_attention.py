@@ -232,7 +232,7 @@ def run_whisper_attention(
 
 def test_WhisperEncoderAttention_inference():
     torch.manual_seed(1234)
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
     run_whisper_attention(
         decoder=False, layer=0, device=device, for_audio_classification=False
@@ -242,7 +242,7 @@ def test_WhisperEncoderAttention_inference():
 
 def test_WhisperDecoderEncoderAttention_inference():
     torch.manual_seed(1234)
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
     run_whisper_attention(
         decoder=True,
@@ -256,7 +256,7 @@ def test_WhisperDecoderEncoderAttention_inference():
 
 def test_WhisperDecoderSelfAttention_inference():
     torch.manual_seed(1234)
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
     run_whisper_attention(
         decoder=True,
@@ -270,7 +270,7 @@ def test_WhisperDecoderSelfAttention_inference():
 
 def test_WhisperEncoderForAudioClassificationAttention_inference():
     torch.manual_seed(1234)
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
     run_whisper_attention(
         decoder=False, layer=0, device=device, for_audio_classification=True

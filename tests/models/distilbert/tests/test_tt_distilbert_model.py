@@ -22,7 +22,7 @@ from transformers import AutoTokenizer
     ((0.99),),
 )
 def test_distilbert_model_inference(pcc, reset_seeds):
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
 

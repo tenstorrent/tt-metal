@@ -31,7 +31,7 @@ from hrnet.tt.basicblock import TtBasicBlock
     (("hrnet_w18_small", 0.99),),
 )
 def test_hrnet_module_inference(model_name, pcc, reset_seeds):
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
 

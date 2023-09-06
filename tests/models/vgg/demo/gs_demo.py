@@ -32,7 +32,7 @@ def test_gs_demo(imagenet_sample_input, imagenet_label_dict):
     batch_size = _batch_size
     with torch.no_grad():
         # Initialize the device
-        device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+        device = tt_lib.device.CreateDevice(0)
         tt_lib.device.InitializeDevice(device)
         tt_lib.device.SetDefaultDevice(device)
 

@@ -22,7 +22,7 @@ def run_bert_large_pre_softmax_bmm_test(
     dtype, in0_mem_config, in1_mem_config, out_mem_config
 ):
     torch.manual_seed(1234)
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    device = ttl.device.CreateDevice(0)
     ttl.device.InitializeDevice(device)
     a_shape = [9, 16, 384, 64]
     b_shape = [9, 16, 64, 384]

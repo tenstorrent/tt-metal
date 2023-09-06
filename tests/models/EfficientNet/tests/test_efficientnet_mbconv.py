@@ -22,7 +22,7 @@ from models.EfficientNet.tt.efficientnet_model import reference_efficientnet_lit
 def run_efficientnet_mbconv(
     state_dict, base_address, reference_module, mb_conv_config, is_lite
 ):
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
 

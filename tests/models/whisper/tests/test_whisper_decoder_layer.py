@@ -171,7 +171,7 @@ def run_whisper_decoder_layer(layer, device):
 
 def test_WhipserDecoderLayer_inference():
     torch.manual_seed(1234)
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
     run_whisper_decoder_layer(layer=0, device=device)
     tt_lib.device.CloseDevice(device)

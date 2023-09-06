@@ -162,7 +162,7 @@ class PytorchMultiHeadAttentionModel(torch.nn.Module):
 
 def run_mha_inference(model_version, batch, seq_len, pcc, model_location_generator):
 
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    device = ttl.device.CreateDevice(0)
     # Initialize the device
     ttl.device.InitializeDevice(device)
 

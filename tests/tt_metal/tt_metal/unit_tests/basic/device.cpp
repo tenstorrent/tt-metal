@@ -106,7 +106,7 @@ TEST_F(BasicFixture, MultiDeviceInitializeAndTeardown) {
     std::vector<tt::tt_metal::Device*> devices;
 
     for (unsigned int id = 0; id < num_devices; id++) {
-        devices.push_back(tt::tt_metal::CreateDevice(arch, id));
+        devices.push_back(tt::tt_metal::CreateDevice(id));
         ASSERT_TRUE(tt::tt_metal::InitializeDevice(devices.at(id)));
     }
     for (unsigned int id = 0; id < num_devices; id++) {
@@ -123,7 +123,7 @@ TEST_F(BasicFixture, MultiDeviceLoadBlankKernels) {
     std::vector<tt::tt_metal::Device*> devices;
 
     for (unsigned int id = 0; id < num_devices; id++) {
-        devices.push_back(tt::tt_metal::CreateDevice(arch, id));
+        devices.push_back(tt::tt_metal::CreateDevice(id));
         ASSERT_TRUE(tt::tt_metal::InitializeDevice(devices.at(id)));
     }
     for (unsigned int id = 0; id < num_devices; id++) {
@@ -229,16 +229,16 @@ TEST_F(MultiDeviceFixture, PingIllegalL1Cores) {
 TEST_F(BasicFixture, SingleDeviceInitializeAndTeardown) {
     auto arch = tt::get_arch_from_string(get_env_arch_name());
     tt::tt_metal::Device* device;
-    const unsigned int pcie_id = 0;
-    device = tt::tt_metal::CreateDevice(arch, pcie_id);
+    const unsigned int device_id = 0;
+    device = tt::tt_metal::CreateDevice(device_id);
     ASSERT_TRUE(tt::tt_metal::InitializeDevice(device));
     ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
 }
 TEST_F(BasicFixture, SingleDeviceHarvestingPrints) {
     auto arch = tt::get_arch_from_string(get_env_arch_name());
     tt::tt_metal::Device* device;
-    const unsigned int pcie_id = 0;
-    device = tt::tt_metal::CreateDevice(arch, pcie_id);
+    const unsigned int device_id = 0;
+    device = tt::tt_metal::CreateDevice(device_id);
     ASSERT_TRUE(tt::tt_metal::InitializeDevice(device));
     CoreCoord unharvested_logical_grid_size = {.x = 12, .y = 10};
     if (arch == tt::ARCH::WORMHOLE_B0) {
@@ -273,8 +273,8 @@ TEST_F(BasicFixture, SingleDeviceHarvestingPrints) {
 TEST_F(BasicFixture, SingleDeviceLoadBlankKernels) {
     auto arch = tt::get_arch_from_string(get_env_arch_name());
     tt::tt_metal::Device* device;
-    const unsigned int pcie_id = 0;
-    device = tt::tt_metal::CreateDevice(arch, pcie_id);
+    const unsigned int device_id = 0;
+    device = tt::tt_metal::CreateDevice(device_id);
     ASSERT_TRUE(tt::tt_metal::InitializeDevice(device));
     unit_tests::basic::device::load_all_blank_kernels(device);
     ASSERT_TRUE(tt::tt_metal::CloseDevice(device));

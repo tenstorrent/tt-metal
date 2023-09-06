@@ -46,7 +46,7 @@ def test_cross_attn_inference():
     torch_output = cross_attn(input.squeeze(0), encoder_hidden_states)
 
     # Initialize the device
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    device = ttl.device.CreateDevice(0)
     ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
 

@@ -59,7 +59,7 @@ def test_run_basic_transformer_inference():
     torch_output = basic_transformer(input.squeeze(0), encoder_hidden_states.squeeze(0))
 
     # Initialize the device
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    device = ttl.device.CreateDevice(0)
     ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
 
@@ -161,7 +161,7 @@ def test_run_transformer_inference():
     torch_output = transformer(input, encoder_hidden_states.squeeze(0)).sample
 
     # Initialize the device
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    device = ttl.device.CreateDevice(0)
     ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
 

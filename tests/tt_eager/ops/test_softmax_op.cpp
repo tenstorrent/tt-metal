@@ -37,8 +37,7 @@ int main(int argc, char **argv) {
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     int device_id = 0;
-    tt_metal::Device *device =
-        tt_metal::CreateDevice(arch, device_id);
+    tt_metal::Device *device = tt_metal::CreateDevice(device_id);
     pass &= InitializeDevice(device);
     Shape shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
     Tensor a = tt::numpy::random::random(shape).to(Layout::TILE).to(device);

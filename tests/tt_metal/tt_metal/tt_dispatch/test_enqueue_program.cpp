@@ -89,7 +89,7 @@ void test_enqueue_program(std::function<tt_metal::Program(tt_metal::Device *devi
 
 
     int device_id = 0;
-    tt_metal::Device *device = tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, device_id);
+    tt_metal::Device *device = tt_metal::CreateDevice(device_id);
 
     tt_metal::InitializeDevice(device);
 

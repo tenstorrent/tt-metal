@@ -62,7 +62,7 @@ ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torc
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
 # TT init
-tt_device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
+tt_device = ttm.device.CreateDevice(0)
 ttm.device.InitializeDevice(tt_device)
 
 # model

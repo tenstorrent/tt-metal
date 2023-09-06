@@ -32,7 +32,7 @@ from transformers import RobertaModel
 
 def test_roberta_pooler_inference():
     torch.manual_seed(1234)
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
 
     base_address = f"pooler"

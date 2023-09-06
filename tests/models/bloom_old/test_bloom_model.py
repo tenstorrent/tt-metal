@@ -81,7 +81,7 @@ def run_bloom_model_test(device):
 
 
 def test_bloom_model():
-    device = ttm.device.CreateDevice(ttm.device.Arch.GRAYSKULL, 0)
+    device = ttm.device.CreateDevice(0)
     ttm.device.InitializeDevice(device)
     run_bloom_model_test(device)
     ttm.device.CloseDevice(device)

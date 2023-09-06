@@ -32,7 +32,7 @@ def test_vit_output(pcc=0.99):
         HF_output = reference(hidden_state, input_tensor)
 
         # Initialize the device
-        device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+        device = tt_lib.device.CreateDevice(0)
         tt_lib.device.InitializeDevice(device)
         tt_lib.device.SetDefaultDevice(device)
 

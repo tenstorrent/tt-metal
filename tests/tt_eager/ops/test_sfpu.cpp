@@ -46,7 +46,7 @@ void update_sfpu_op_to_hlk_op()
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-bool run_sfpu_test(const tt::ARCH& arch, string sfpu_name) {
+bool run_sfpu_test(string sfpu_name) {
 
     bool multibank = true;
     bool pass = true;
@@ -55,8 +55,7 @@ bool run_sfpu_test(const tt::ARCH& arch, string sfpu_name) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device *device =
-            tt_metal::CreateDevice(arch, device_id);
+        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
 
         pass &= tt_metal::InitializeDevice(device);;
 
@@ -244,7 +243,7 @@ int main(int argc, char **argv) {
     for (const auto& [op_name, _]: sfpu_op_to_hlk_op_name) {
         log_info(LogTest, "Running {}", op_name);
 
-        bool pass_ = run_sfpu_test(arch, op_name);
+        bool pass_ = run_sfpu_test(op_name);
 
         if (pass_) {
             log_info(LogTest, "{} test passed", op_name);

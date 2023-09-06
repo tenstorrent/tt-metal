@@ -16,7 +16,7 @@ from models.ConvNet_MNIST.convnet_mnist_utils import get_test_data
 
 
 def test_mnist_inference():
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
 

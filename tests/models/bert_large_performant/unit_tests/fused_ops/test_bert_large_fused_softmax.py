@@ -107,7 +107,7 @@ def run_softmax_tests(test_id, batch, dtype, in0_mem_config):
     tensor = ttl.tensor
     device = ttl.device
 
-    dev = device.CreateDevice(device.Arch.GRAYSKULL, 0)
+    dev = device.CreateDevice(0)
     device.InitializeDevice(dev)
 
     test_dims = ((batch, 1, 6144, 384),)

@@ -101,7 +101,7 @@ def run_perf_unbatched_stable_diffusion(expected_inference_time, expected_compil
     second_key = "second_iter"
     cpu_key = "ref_iter"
     # Initialize the device
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    device = ttl.device.CreateDevice(0)
     ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
 

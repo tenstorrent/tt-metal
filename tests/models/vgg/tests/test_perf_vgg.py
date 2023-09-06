@@ -27,7 +27,7 @@ def run_perf_vgg(imagenet_sample_input, expected_inference_time, expected_compil
     image = imagenet_sample_input
 
     # Initialize the device
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
 

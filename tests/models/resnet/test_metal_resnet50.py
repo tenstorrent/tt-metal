@@ -27,7 +27,7 @@ def test_run_resnet50_inference(use_program_cache, batch_size, imagenet_sample_i
         torch.manual_seed(1234)
 
         # Initialize the device
-        device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+        device = tt_lib.device.CreateDevice(0)
         tt_lib.device.InitializeDevice(device)
         tt_lib.device.SetDefaultDevice(device)
         tt_lib.device.EnableMemoryReports()

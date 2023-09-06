@@ -78,7 +78,7 @@ def run_bert_large_matmul_test(
         raise NotImplementedError(f"bert_large matmul op is undefined!")
 
     torch.manual_seed(1234)
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    device = ttl.device.CreateDevice(0)
     ttl.device.InitializeDevice(device)
 
     A = torch.randn(a_shape)
@@ -196,7 +196,7 @@ def run_bert_large_bmm_test(
         raise NotImplementedError(f"bert_large bmm op is undefined!")
 
     torch.manual_seed(1234)
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
+    device = ttl.device.CreateDevice(0)
     ttl.device.InitializeDevice(device)
 
     A = torch.randn(a_shape)

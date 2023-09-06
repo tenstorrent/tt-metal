@@ -201,42 +201,42 @@ def run_test_T5Attention_inference(
 
 
 def test_t5_shape():
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
     run_test_t5_shape(device)
     tt_lib.device.CloseDevice(device)
 
 
 def test_transpose():
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
     run_test_transpose(device)
     tt_lib.device.CloseDevice(device)
 
 
 def test_matmul():
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
     run_test_matmul(device)
     tt_lib.device.CloseDevice(device)
 
 
 def test_softmax():
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
     run_test_softmax(device)
     tt_lib.device.CloseDevice(device)
 
 
 def test_t5_unshape():
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
     run_test_t5_unshape(device)
     tt_lib.device.CloseDevice(device)
 
 
 def test_T5Attention_block_0_no_mask_t5_small():
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
     run_test_T5Attention_inference(
         device, block=0, use_mask=False, model_name="t5-small", input_h=32, input_w=512
@@ -245,7 +245,7 @@ def test_T5Attention_block_0_no_mask_t5_small():
 
 
 def test_T5Attention_block_2_no_mask_t5_small():
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
     run_test_T5Attention_inference(
         device, block=2, use_mask=False, model_name="t5-small", input_h=32, input_w=512
@@ -254,7 +254,7 @@ def test_T5Attention_block_2_no_mask_t5_small():
 
 
 def test_T5Attention_block_0_with_mask_t5_small():
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
     run_test_T5Attention_inference(
         device, block=0, use_mask=True, model_name="t5-small", input_h=32, input_w=512
@@ -263,7 +263,7 @@ def test_T5Attention_block_0_with_mask_t5_small():
 
 
 def test_T5Attention_block_0_no_mask_flan_t5_small():
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
     run_test_T5Attention_inference(
         device,
@@ -277,7 +277,7 @@ def test_T5Attention_block_0_no_mask_flan_t5_small():
 
 
 def test_T5Attention_block_0_no_mask_t5_base():
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
     run_test_T5Attention_inference(
         device, block=0, use_mask=False, model_name="t5-base", input_h=32, input_w=768

@@ -29,7 +29,7 @@ from models.vovnet.tt.select_adaptive_pool2d import (
     ((0.99),),
 )
 def test_select_adaptive_pool2d_inference(pcc, reset_seeds):
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
 

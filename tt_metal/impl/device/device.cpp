@@ -115,7 +115,7 @@ void Device::initialize_harvesting_information() {
         this->id_,
         this->num_harvested_rows_);
     tt::log_assert(
-        (this->num_harvested_rows_ == 0) or (this->arch_ == tt::ARCH::WORMHOLE_B0),
+        (this->num_harvested_rows_ == 0) or (this->arch() == tt::ARCH::WORMHOLE_B0),
         tt::LogDevice,
         "Harvested Rows={} -- Harvesting is only supported on WORMHOLE_B0",
         this->num_harvested_rows_);
@@ -199,6 +199,10 @@ tt_cluster *Device::cluster() const {
         TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
     }
     return detail::ClusterWrapper::inst(this->target_type_).cluster();
+}
+
+tt::ARCH Device::arch() const {
+    return detect_arch(this->id_);
 }
 
 int Device::num_dram_channels() const {

@@ -23,7 +23,7 @@ from models.mnist.tt.mnist_model import mnist_model
 
 
 def test_mnist_inference():
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
 
     # Data preprocessing/loading

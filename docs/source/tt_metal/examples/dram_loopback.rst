@@ -18,8 +18,7 @@ Silicon accelerator setup
 .. code-block:: cpp
 
    constexpr int device_id = 0;
-   Device *device =
-       CreateDevice(tt::ARCH::GRAYSKULL, device_id);
+   Device *device = CreateDevice(device_id);
 
    pass &= InitializeDevice(device);
 

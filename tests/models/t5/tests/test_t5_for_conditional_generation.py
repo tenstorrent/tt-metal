@@ -57,7 +57,7 @@ def run_T5ForConditionalGeneration(model_constructor, model_name):
     #     correct_output = "bob greene: it's another rainy Sunday afternoon. he's wasting his time. he says he's hanging around waiting for you. but nothing ever happens. greene: i wonder if he'll ever get to see you again. he"
 
     tokenizer = AutoTokenizer.from_pretrained(model_name, model_max_length=32)
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
 
     pt_output_sentance = run_generate(

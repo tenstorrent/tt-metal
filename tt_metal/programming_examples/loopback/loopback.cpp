@@ -27,7 +27,7 @@ int main(int argc, char **argv) {
         */
         constexpr int device_id = 0;
         Device *device =
-            CreateDevice(tt::ARCH::GRAYSKULL, device_id);
+            CreateDevice(device_id);
 
         pass &= InitializeDevice(device);
 

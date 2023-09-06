@@ -22,7 +22,7 @@ from models.distilbert.tt.distilbert import *
     (("distilbert-base-uncased-distilled-squad"),),
 )
 def test_gs_demo(model_name):
-    device = tt_lib.device.CreateDevice(tt_lib.device.Arch.GRAYSKULL, 0)
+    device = tt_lib.device.CreateDevice(0)
     tt_lib.device.InitializeDevice(device)
     tt_lib.device.SetDefaultDevice(device)
 

@@ -189,7 +189,7 @@ void test_bert() {
     tt::log_info(tt::LogTest, "Running {}", __func__);
 
     int device_id = 0;
-    auto device = tt::tt_metal::CreateDevice(tt::ARCH::GRAYSKULL, device_id);
+    auto device = tt::tt_metal::CreateDevice(device_id);
 
     TT_ASSERT(tt::tt_metal::InitializeDevice(device));
 

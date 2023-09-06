@@ -29,7 +29,7 @@ class Device {
    public:
     static size_t detect_num_available_devices(const TargetDevice target_type = TargetDevice::Silicon);
     friend void tt_gdb(Device* device, int chip_id, const vector<CoreCoord> cores, vector<string> ops);
-    Device(tt::ARCH arch, int device_id) : arch_(arch), id_(device_id) {}
+    Device(int device_id) : id_(device_id) {}
 
     ~Device();
 
@@ -40,7 +40,7 @@ class Device {
     Device(Device &&other) { }
     Device& operator=(Device &&other) { return *this; }
 
-    tt::ARCH arch() const { return arch_; }
+    tt::ARCH arch() const;
 
     int id() const { return id_; }
 
@@ -107,7 +107,6 @@ class Device {
     static constexpr TargetDevice target_type_ = TargetDevice::Versim;
 #endif
     static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
-    tt::ARCH arch_;
     int id_;
     std::unique_ptr<Allocator> allocator_ = nullptr;
     bool initialized_ = false;
