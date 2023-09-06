@@ -391,7 +391,6 @@ hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv = {
         (256, 256, 28, 28, 3, 3, 2, 2, 1, 1),
     ),
 )
-@pytest.mark.skip(reason="Conv disabled in main.")
 def test_resnet50_conv(
     use_program_cache,
     device,

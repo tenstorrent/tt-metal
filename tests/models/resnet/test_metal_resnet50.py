@@ -20,8 +20,9 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 
 
 @pytest.mark.parametrize("batch_size", [1, 2, 8])
-@pytest.mark.skip(reason="Conv disabled in main.")
-def test_run_resnet50_inference(device, batch_size, imagenet_sample_input):
+def test_run_resnet50_inference(
+    use_program_cache, device, batch_size, imagenet_sample_input
+):
     image1 = imagenet_sample_input
     image = image1
     for i in range(batch_size - 1):
