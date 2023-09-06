@@ -178,8 +178,6 @@ namespace basic_tests {
 namespace compiler_workaround_hardware_bug_tests {
 
 TEST_F(CommandQueueHarness, TestArbiterDoesNotHang) {
-    char env[] = "TT_METAL_DEVICE_DISPATCH_MODE=1";
-    putenv(env);
     Program program;
 
     CoreRange cr = {.start = {0, 0}, .end = {0, 0}};

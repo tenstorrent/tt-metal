@@ -82,7 +82,6 @@ def run_pytorch_test(args):
 
     default_env_dict = {
         "TT_PCI_DMA_BUF_SIZE": "1048576",
-        "TT_METAL_DEVICE_DISPATCH_MODE": "1"
     }
     # Get env variables from CLI
     args_env_dict = {}
