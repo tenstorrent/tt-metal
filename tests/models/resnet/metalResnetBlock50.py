@@ -17,12 +17,35 @@ from tt_lib.utils import pad_weight
 from tt_lib.fused_ops.average_pool import run_avg_pool_on_device_wrapper as TtAvgPool
 from tt_lib.fused_ops.max_pool import run_max_pool_on_device_wrapper as TtMaxPool
 from tt_lib.fused_ops.max_pool import compute_max_pool_shape
-# from tt_lib.fused_ops.linear import Linear as TtLinear
-from models.helper_funcs import ResnetLinear as TtLinear
 from tt_lib.fused_ops.softmax import softmax as TtSoftmax
 from tt_lib.fused_ops.conv import resnet50_first_conv, resnet50_1x1_conv_as_matmul, resnet50_optimized_conv
 from models.utility_functions import _nearest_32, profiler
 from tt_lib.fallback_ops import fallback_ops
+
+def ResnetLinear(in_features: int, out_features: int, weight: tt_lib.tensor.Tensor, bias: Optional[tt_lib.tensor.Tensor] = None, transpose: bool = True, output_mem_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.DRAM), device = None):
+    """
+    Returns a function for linear operation in resnet with bias.
+    """
+    if bias is not None:
+        assert bias.shape()[-1] == out_features, "bias shape is not as expected"
+        if device is not None:
+            bias = bias.to(device)
+
+    if transpose:
+        assert weight.shape() == [1, 1, out_features, in_features], "weight does not have the expected shape"
+        weight_T = tt_lib.tensor.transpose(weight)
+    else:
+        assert weight.shape() == [1, 1, in_features, out_features], "weight does not have the expected shape"
+        weight_T = weight
+    if device is not None:
+        weight_T = weight_T.to(device)
+
+    def linear_(act):
+        ## this uses the systolic 1d matmul with bias fused
+        output = tt_lib.tensor.resnet_matmul(act, weight_T, bias, output_mem_config)
+        return output
+
+    return linear_
 
 def do_nothing_op(x):
     return x
@@ -673,7 +696,7 @@ class ResNet(nn.Module):
         fc_weight = tt_lib.tensor.Tensor(fc_weight.reshape(-1).tolist(), fc_weight.shape, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.Layout.ROW_MAJOR).to(tt_lib.tensor.Layout.TILE)
         fc_bias = pad_weight(state_dict[f"{self.base_address_with_dot}fc.bias"])
         fc_bias = tt_lib.tensor.Tensor(fc_bias.reshape(-1).tolist(), fc_bias.shape, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.Layout.ROW_MAJOR).to(tt_lib.tensor.Layout.TILE)
-        self.fc = TtLinear(512 * block.expansion, 1024, fc_weight, fc_bias, transpose=False, output_mem_config=self.memory_config, device=self.device) # num_classes = 1000
+        self.fc = ResnetLinear(512 * block.expansion, 1024, fc_weight, fc_bias, transpose=False, output_mem_config=self.memory_config, device=self.device) # num_classes = 1000
         # self.fc = nn.Linear(512 * block.expansion, num_classes)
 
 
