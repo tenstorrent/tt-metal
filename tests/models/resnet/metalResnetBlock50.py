@@ -1227,28 +1227,23 @@ class ResNet(nn.Module):
         return layers, last_layer_shape
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        extra_padding_for_32B_alignment = 25
+        x = torch.nn.functional.pad(
+            x, (3, 4 + extra_padding_for_32B_alignment, 3, 3, 0, 1)
+        )
         # permute_key="permute_key"
         # input_tensor_construct_key="input_tensor_construct_key"
         # misc_key = "misc_key"
         # assert x.shape[3] == 224 and x.shape[2] == 224
         # profiler.start(permute_key)
+
+        # print("padding x shape - ", x.shape)
         x = torch.permute(x, (0, 2, 3, 1))
         # profiler.end(permute_key)
         # profiler.start(input_tensor_construct_key)
         x = tt_lib.tensor.Tensor(x, tt_lib.tensor.DataType.BFLOAT16)
         # profiler.end(input_tensor_construct_key)
-        # profiler.start(misc_key)
-        extra_padding_for_32B_alignment = 25
-        # Pre-pad input shape
-        act_shape_height_width_channel_padded = [
-            x.shape()[0],
-            x.shape()[1] + 6,
-            x.shape()[2] + 7 + extra_padding_for_32B_alignment,
-            _nearest_y(x.shape()[3], 4),
-        ]  # first conv channel is padded to 4 only
-        # profiler.end(misc_key)
 
-        x = x.pad(act_shape_height_width_channel_padded, (0, 3, 3, 0), 0)
         original_A_cl_host_shape = x.shape()
         x = x.reshape(x.shape()[0], x.shape()[1], 1, x.shape()[2] * x.shape()[3])
         # print("A_cl_host shape after re-shape (only for transfer)", x.shape())
