@@ -331,6 +331,21 @@ Tensor max(const Tensor &input_a, const Tensor &input_b, const MemoryConfig& out
     return operation::decorate_as_composite(__func__, _max)(input_a, input_b, output_mem_config);
 }
 
+Tensor _logical_andi(const Tensor &input_a, float immediate, const MemoryConfig& output_mem_config)
+{
+    if ( std::fpclassify(immediate) == FP_ZERO ) {
+        return full_like(input_a, immediate, output_mem_config);
+    }else {
+        return nez(input_a);
+    }
+}
+Tensor logical_andi(const Tensor& input_a, float immediate, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _logical_andi)(input_a, immediate, output_mem_config);
+}
+
+
+
 //sinh[x] = (exp[x] - exp[-x])/2
 Tensor _sinh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
     Tensor e_pos_x = exp(input_a, output_mem_config);
@@ -504,7 +519,7 @@ Tensor logical_xor(const Tensor &input_a, const Tensor &input_b, const MemoryCon
 }
 
 Tensor _logical_ori(const Tensor &input_a, float immediate, const MemoryConfig& output_mem_config) {
-    if ( std::fpclassify(immediate) == FP_ZERO ) {    
+    if ( std::fpclassify(immediate) == FP_ZERO ) {
         return nez(input_a, output_mem_config);
     } else {
         return full_like(input_a, 1, output_mem_config);

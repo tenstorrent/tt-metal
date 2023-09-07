@@ -39,7 +39,15 @@ reference_pcc["softplus"] = 0.9984
 
 def custom_compare(*args, **kwargs):
     function = kwargs.pop("function")
-    if function in ["logical_xor", "logical_ori","logical_or", "logical_xori","logical_noti","logical_not"]:
+    if function in [
+        "logical_xor",
+        "logical_ori",
+        "logical_or",
+        "logical_xori",
+        "logical_noti",
+        "logical_not",
+        "logical_andi",
+    ]:
         comparison_func = comparison_funcs.comp_equal
     else:
         comparison_func = partial(
@@ -103,6 +111,7 @@ if is_wormhole_b0():
                 "logical_xor",
                 "logical_xori",
                 "logical_noti",
+                "logical_andi",
             ),
             shapes,
         )
@@ -135,6 +144,7 @@ def test_run_eltwise_composite_test(
     options["asinh"] = (-100, 100)
     options["acosh"] = (1, 100)
     options["logical_ori"] = (-100, 100)
+    options["logical_andi"] = (-100, 100)
 
     generator = generation_funcs.gen_rand
 
@@ -143,7 +153,7 @@ def test_run_eltwise_composite_test(
             pytest.skip("Not tested for Wormhole - skipping")
         if fn in ["logit"]:
             pytest.skip("does not work for Wormhole -skipping")
-    if fn in ["logical_xor", "logical_xori"]:
+    if fn in ["logical_xor", "logical_xori", "logical_andi"]:
         datagen_func = [
             generation_funcs.gen_func_with_cast(
                 partial(generator, low=options[fn][0], high=options[fn][1]),
@@ -169,14 +179,15 @@ def test_run_eltwise_composite_test(
         "ldexp",
         "subalpha",
         "addalpha",
-        "bias_gelu_unary",            
+        "bias_gelu_unary",
         "atan2",
         "subalpha",
         "addalpha",
         "logit",
         "logical_ori",
+        "logical_andi",
         "logical_xor",
-        "logical_xori",            
+        "logical_xori",
     ]:
         num_inputs = 2
 
@@ -206,7 +217,7 @@ def test_run_eltwise_composite_test(
         test_args.update({"immediate": np.random.randint(0, 100)})
     elif fn in ["logit"]:
         test_args.update({"eps": np.random.randint(-1e-6, 1e6)})
-    elif fn in ["logical_ori"]:
+    elif fn in ["logical_ori", "logical_andi"]:
         test_args.update({"immediate": np.random.randint(0, 100)})
     run_single_pytorch_test(
         "eltwise-%s" % (fn),

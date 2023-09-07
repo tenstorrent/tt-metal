@@ -340,6 +340,10 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.logit
 
+.. autofunction:: tt_lib.tensor.logical_and
+
+.. autofunction:: tt_lib.tensor.logical_andi
+
 Tensor relational operations
 ----------------------------------
 .. autofunction:: tt_lib.tensor.gtz
@@ -568,5 +572,3 @@ Other Operations
 .. autofunction:: tt_lib.tensor.std_hw
 
 .. autofunction:: tt_lib.tensor.normalize_hw
-
-.. autofunction:: tt_lib.tensor.logical_and

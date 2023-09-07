@@ -5,19 +5,17 @@ import torch
 
 def custom_implementation(in_x, in_y):
     if in_y == 0:
-        result = in_x != 0
+        return 0
     else:
-        result = np.ones_like(in_x)
+        mul = torch.mul(in_x, in_y)
+        return torch.where(mul != 0, True, False)
 
-    return result
 
+x = np.linspace(-100, 100, 60, dtype=np.float32)
+x = torch.from_numpy(x)
+y = torch.tensor([5])
 
-x = np.linspace(0, 100, 60, dtype=np.float32)
-y = 5
-
-t_x = torch.from_numpy(x)
-t_out = torch.logical_or(t_x, torch.tensor(y))
-
+t_out = torch.logical_and(x, y)
 cust_out = custom_implementation(x, y)
 
 

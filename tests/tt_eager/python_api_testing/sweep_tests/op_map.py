@@ -286,6 +286,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_logical_and,
         "pytorch_op": pytorch_ops.logical_and,
     },
+    "eltwise-logical_andi": {
+        "tt_lib_op": tt_lib_ops.eltwise_logical_andi,
+        "pytorch_op": pytorch_ops.logical_andi,
+    },
     "eltwise-atan2": {
         "tt_lib_op": tt_lib_ops.eltwise_atan2,
         "pytorch_op": pytorch_ops.atan2,

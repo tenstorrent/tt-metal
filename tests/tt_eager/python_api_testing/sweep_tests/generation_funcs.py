@@ -1009,28 +1009,113 @@ def gen_lerp_binary_args(
         yield input_info
 
 
-def gen_subalpha_args(input_shapes, supported_dtypes, supported_layouts, on_device, low=-100, high=100, dtype=torch.bfloat16):
-    for input_info in gen_scalar_args(input_shapes, supported_dtypes, supported_layouts, on_device, "alpha", low, high, dtype):
+def gen_subalpha_args(
+    input_shapes,
+    supported_dtypes,
+    supported_layouts,
+    on_device,
+    low=-100,
+    high=100,
+    dtype=torch.bfloat16,
+):
+    for input_info in gen_scalar_args(
+        input_shapes,
+        supported_dtypes,
+        supported_layouts,
+        on_device,
+        "alpha",
+        low,
+        high,
+        dtype,
+    ):
         yield input_info
 
 
-def gen_addalpha_args(input_shapes, supported_dtypes, supported_layouts, on_device, low=-100, high=100, dtype=torch.bfloat16):
-    for input_info in gen_scalar_args(input_shapes, supported_dtypes, supported_layouts, on_device, "alpha", low, high, dtype):
+def gen_addalpha_args(
+    input_shapes,
+    supported_dtypes,
+    supported_layouts,
+    on_device,
+    low=-100,
+    high=100,
+    dtype=torch.bfloat16,
+):
+    for input_info in gen_scalar_args(
+        input_shapes,
+        supported_dtypes,
+        supported_layouts,
+        on_device,
+        "alpha",
+        low,
+        high,
+        dtype,
+    ):
         yield input_info
 
 
-def gen_logit_args(input_shapes, supported_dtypes, supported_layouts, on_device, low=-1e-6, high=1e6, dtype=torch.bfloat16):
-    for input_info in gen_scalar_args(input_shapes, supported_dtypes, supported_layouts, on_device, "eps", low, high, dtype):
+def gen_logit_args(
+    input_shapes,
+    supported_dtypes,
+    supported_layouts,
+    on_device,
+    low=-1e-6,
+    high=1e6,
+    dtype=torch.bfloat16,
+):
+    for input_info in gen_scalar_args(
+        input_shapes,
+        supported_dtypes,
+        supported_layouts,
+        on_device,
+        "eps",
+        low,
+        high,
+        dtype,
+    ):
         yield input_info
 
 
-def gen_shrink_args(input_shapes, supported_dtypes, supported_layouts, on_device, low=0, high=100, dtype=torch.bfloat16):
-    for input_info in (input_shapes, supported_dtypes, supported_layouts, on_device, "lambd", low, high, dtype):
+def gen_shrink_args(
+    input_shapes,
+    supported_dtypes,
+    supported_layouts,
+    on_device,
+    low=0,
+    high=100,
+    dtype=torch.bfloat16,
+):
+    for input_info in (
+        input_shapes,
+        supported_dtypes,
+        supported_layouts,
+        on_device,
+        "lambd",
+        low,
+        high,
+        dtype,
+    ):
         yield input_info
 
 
-def gen_bias_gelu_unary_args(input_shapes, supported_dtypes, supported_layouts, on_device, low=0, high=100, dtype=torch.bfloat16):
-    for input_info in (input_shapes, supported_dtypes, supported_layouts, on_device, "bias", low, high, dtype):
+def gen_bias_gelu_unary_args(
+    input_shapes,
+    supported_dtypes,
+    supported_layouts,
+    on_device,
+    low=0,
+    high=100,
+    dtype=torch.bfloat16,
+):
+    for input_info in (
+        input_shapes,
+        supported_dtypes,
+        supported_layouts,
+        on_device,
+        "bias",
+        low,
+        high,
+        dtype,
+    ):
         yield input_info
 
 

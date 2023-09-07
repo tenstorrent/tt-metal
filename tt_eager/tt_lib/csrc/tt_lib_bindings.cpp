@@ -1296,7 +1296,13 @@ void TensorModule(py::module &m_tensor) {
         R"doc(Applies the Gaussian Error Linear Units (GELU) function to the elements of the input tensor ``{0}``.)doc",
         R"doc("Indicate true for approx and fast mode; false for accurate and slow mode", "bool", "default of true")doc"
     );
-     detail::bind_unary_op_with_param(
+    detail::bind_unary_op_with_param(
+        m_tensor, "logical_andi", &logical_andi,
+        py::arg("immediate"),
+        R"doc(Perform an eltwise logical AND (``{0} && {1}``) on input tensor and immediate value.)doc",
+        R"doc("Scalar", "float", "")doc"
+    );
+    detail::bind_unary_op_with_param(
         m_tensor, "erf", &erf,
         py::arg("fast_and_approx") = true,
         R"doc(Computes error function for all elements of the input tensor ``{0}``.)doc",

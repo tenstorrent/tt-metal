@@ -478,6 +478,12 @@ def acosh(x, *args, **kwargs):
     return torch.acosh(x)
 
 
+def logical_andi(x, *args, **kwargs):
+    value = kwargs.pop("immediate")
+    result = torch.logical_and(x, torch.tensor(value, dtype=torch.int32))
+    return result
+
+
 def elu(x, *args, alpha, **kwargs):
     return torch.nn.functional.elu(x, alpha)
 
