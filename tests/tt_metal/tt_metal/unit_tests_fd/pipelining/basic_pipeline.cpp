@@ -5,8 +5,7 @@
 #include <gtest/gtest.h>
 
 #include "common/bfloat16.hpp"
-#include "multi_device_fixture.hpp"
-#include "single_device_fixture.hpp"
+#include "command_queue_fixture.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
@@ -224,17 +223,15 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
 
 }  // namespace unit_tests::create_pipeline
 
-TEST_F(SingleDeviceFixture, TwoCorePipeline) {
-    auto arch = this->arch_;
-    if (arch != tt::ARCH::GRAYSKULL) {
+TEST_F(CommandQueueFixture, TwoCorePipeline) {
+    if (this->arch_ != tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();
     }
 
     unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, 2);
 }
-TEST_F(SingleDeviceFixture, TwelveCorePipeline) {
-    auto arch = this->arch_;
-    if (arch != tt::ARCH::GRAYSKULL) {
+TEST_F(CommandQueueFixture, TwelveCorePipeline) {
+    if (this->arch_ != tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();
     }
 

@@ -463,10 +463,6 @@ bool single_core_matmul(tt_metal::Device* device, const SingleCoreMatmulConfig& 
     return pass;
 }
 bool single_tile_matmul(tt_metal::Device* device) {
-    // Once this test is uplifted to use fast dispatch, this can be removed.
-    tt::tt_metal::detail::GLOBAL_CQ.reset();
-    char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
-    putenv(env);
 
     bool pass = true;
     // FIXME: Convert to config
@@ -586,10 +582,6 @@ bool single_tile_matmul(tt_metal::Device* device) {
 }
 // blocked matmul has blocking, but still fits within dst, so no spill/reloads or intermediates
 bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N) {
-    // Once this test is uplifted to use fast dispatch, this can be removed.
-    tt::tt_metal::detail::GLOBAL_CQ.reset();
-    char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
-    putenv(env);
 
     bool pass = true;
     // FIXME: Convert to config
@@ -728,10 +720,6 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
 }
 // blocked matmul has blocking on output, spill/reloads using intermediate
 bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N) {
-    // Once this test is uplifted to use fast dispatch, this can be removed.
-    tt::tt_metal::detail::GLOBAL_CQ.reset();
-    char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
-    putenv(env);
 
     bool pass = true;
     // FIXME: Convert to config

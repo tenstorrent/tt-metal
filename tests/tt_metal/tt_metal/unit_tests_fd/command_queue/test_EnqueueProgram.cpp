@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "../basic_harness.hpp"
+#include "command_queue_fixture.hpp"
 #include "command_queue_test_utils.hpp"
 #include "gtest/gtest.h"
 #include "tt_metal/common/bfloat16.hpp"
@@ -177,7 +177,7 @@ namespace basic_tests {
 
 namespace compiler_workaround_hardware_bug_tests {
 
-TEST_F(CommandQueueHarness, TestArbiterDoesNotHang) {
+TEST_F(CommandQueueFixture, TestArbiterDoesNotHang) {
     Program program;
 
     CoreRange cr = {.start = {0, 0}, .end = {0, 0}};
@@ -185,9 +185,9 @@ TEST_F(CommandQueueHarness, TestArbiterDoesNotHang) {
     // Add an NCRISC blank manually, but in compile program, the BRISC blank will be
     // added separately
     auto dummy_reader_kernel = CreateDataMovementKernel(
-        program, "tests/tt_metal/tt_metal/gtest_unit_tests/command_queue/test_kernels/arbiter_hang.cpp", cr_set, DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        program, "tt_metal/kernels/dataflow/unit_tests/command_queue/arbiter_hang.cpp", cr_set, DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
-    CompileProgram(this->device, program);
+    CompileProgram(this->device_, program);
 
     EnqueueProgram(*::detail::GLOBAL_CQ, program, false);
     Finish(*::detail::GLOBAL_CQ);
@@ -197,7 +197,7 @@ TEST_F(CommandQueueHarness, TestArbiterDoesNotHang) {
 
 namespace single_core_tests {
 
-TEST_F(CommandQueueHarness, TestSingleCbConfigCorrectlySentSingleCore) {
+TEST_F(CommandQueueFixture, TestSingleCbConfigCorrectlySentSingleCore) {
     CoreRange cr = {.start = {0, 0}, .end = {0, 0}};
     CoreRangeSet cr_set({cr});
 
@@ -205,19 +205,19 @@ TEST_F(CommandQueueHarness, TestSingleCbConfigCorrectlySentSingleCore) {
 
     DummyProgramConfig config = {.cr_set = cr_set, .cb_config = cb_config, .num_cbs = 1, .first_cb_start = 500 * 1024};
 
-    EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(this->device, *tt::tt_metal::detail::GLOBAL_CQ, config));
+    EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(this->device_, *tt::tt_metal::detail::GLOBAL_CQ, config));
 }
 
-TEST_F(CommandQueueHarness, TestSingleSemaphoreConfigCorrectlySentSingleCore) {
+TEST_F(CommandQueueFixture, TestSingleSemaphoreConfigCorrectlySentSingleCore) {
     CoreRange cr = {.start = {0, 0}, .end = {0, 0}};
     CoreRangeSet cr_set({cr});
 
     DummyProgramConfig config = {.cr_set = cr_set, .num_sems = 1};
 
-    EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_sems(this->device, *tt::tt_metal::detail::GLOBAL_CQ, config));
+    EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_sems(this->device_, *tt::tt_metal::detail::GLOBAL_CQ, config));
 }
 
-TEST_F(CommandQueueHarness, TestAutoInsertedBlankBriscKernelInDeviceDispatchMode) {
+TEST_F(CommandQueueFixture, TestAutoInsertedBlankBriscKernelInDeviceDispatchMode) {
     Program program;
 
     CoreRange cr = {.start = {0, 0}, .end = {0, 0}};
@@ -228,7 +228,7 @@ TEST_F(CommandQueueHarness, TestAutoInsertedBlankBriscKernelInDeviceDispatchMode
         program, "tt_metal/kernels/dataflow/blank.cpp", cr_set,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
-    CompileProgram(this->device, program);
+    CompileProgram(this->device_, program);
 
     EnqueueProgram(*tt::tt_metal::detail::GLOBAL_CQ, program, false);
     Finish(*tt::tt_metal::detail::GLOBAL_CQ);
@@ -237,8 +237,8 @@ TEST_F(CommandQueueHarness, TestAutoInsertedBlankBriscKernelInDeviceDispatchMode
 }  // end namespace single_core_tests
 
 namespace multicore_tests {
-TEST_F(CommandQueueHarness, TestAllCbConfigsCorrectlySentMultiCore) {
-    CoreCoord worker_grid_size = this->device->cluster()->get_soc_desc(0).worker_grid_size;
+TEST_F(CommandQueueFixture, TestAllCbConfigsCorrectlySentMultiCore) {
+    CoreCoord worker_grid_size = this->device_->cluster()->get_soc_desc(0).worker_grid_size;
 
     CoreRange cr = {.start = {0, 0}, .end = {worker_grid_size.x - 1, worker_grid_size.y - 2}};
     CoreRangeSet cr_set({cr});
@@ -248,33 +248,33 @@ TEST_F(CommandQueueHarness, TestAllCbConfigsCorrectlySentMultiCore) {
     DummyProgramConfig config = {
         .cr_set = cr_set, .cb_config = cb_config, .num_cbs = NUM_CIRCULAR_BUFFERS, .first_cb_start = 500 * 1024};
 
-    EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(this->device, *tt::tt_metal::detail::GLOBAL_CQ, config));
+    EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(this->device_, *tt::tt_metal::detail::GLOBAL_CQ, config));
 }
 
-TEST_F(CommandQueueHarness, TestAllSemConfigsCorrectlySentMultiCore) {
-    CoreCoord worker_grid_size = this->device->cluster()->get_soc_desc(0).worker_grid_size;
+TEST_F(CommandQueueFixture, TestAllSemConfigsCorrectlySentMultiCore) {
+    CoreCoord worker_grid_size = this->device_->cluster()->get_soc_desc(0).worker_grid_size;
 
     CoreRange cr = {.start = {0, 0}, .end = {worker_grid_size.x - 1, worker_grid_size.y - 2}};
     CoreRangeSet cr_set({cr});
 
     DummyProgramConfig config = {.cr_set = cr_set, .num_sems = NUM_SEMAPHORES};
 
-    EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_sems(this->device, *tt::tt_metal::detail::GLOBAL_CQ, config));
+    EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_sems(this->device_, *tt::tt_metal::detail::GLOBAL_CQ, config));
 }
 
 }  // end namespace multicore_tests
 
 namespace dram_cache_tests {
-TEST_F(CommandQueueHarness, DISABLED_TestDramCacheHit) {}
+TEST_F(CommandQueueFixture, DISABLED_TestDramCacheHit) {}
 
-TEST_F(CommandQueueHarness, DISABLED_TestDramCacheMatch) {}
+TEST_F(CommandQueueFixture, DISABLED_TestDramCacheMatch) {}
 
-TEST_F(CommandQueueHarness, DISABLED_TestProgramVectorSizeMatch) {}
+TEST_F(CommandQueueFixture, DISABLED_TestProgramVectorSizeMatch) {}
 
 }  // end namespace dram_cache_tests
 }  // end namespace basic_tests
 
 namespace stress_tests {
-TEST_F(CommandQueueHarness, DISABLED_TestSendMaxNumberOfRuntimeArgs) {}
+TEST_F(CommandQueueFixture, DISABLED_TestSendMaxNumberOfRuntimeArgs) {}
 
 }  // namespace stress_tests

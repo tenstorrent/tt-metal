@@ -33,8 +33,11 @@ else
   ./build/test/tt_metal/test_matmul_single_core --arch $ARCH_NAME
 fi
 
-./build/test/tt_metal/unit_tests # Runs both on WH/GS on CI
-./build/test/tt_metal/gtest_unit_tests
+if [[ -z "$FAST_DISPATCH" ]]; then
+  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests
+else
+  ./build/test/tt_metal/unit_tests_fd
+fi
 
 echo "Checking docs build..."
 

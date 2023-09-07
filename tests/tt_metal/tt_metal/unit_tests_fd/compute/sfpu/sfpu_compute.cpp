@@ -9,10 +9,11 @@
 #include <functional>
 #include <random>
 
-#include "single_device_fixture.hpp"
+#include "command_queue_fixture.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
+#include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -184,6 +185,7 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
+        // Enqueue apis only supported on gs so far
         auto writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
             "tt_metal/kernels/dataflow/writer_unary.cpp",
@@ -193,13 +195,13 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
 
         std::map<string, string> sfpu_defines = sfpu_util::sfpu_op_to_op_name.at(test_config.sfpu_op);
 
-        sfpu_defines["SFPU_OP_EXP_INCLUDE"] = "1";
-        sfpu_defines["SFPU_OP_GELU_INCLUDE"] = "1";
-        sfpu_defines["SFPU_OP_RECIP_INCLUDE"] = "1";
-        sfpu_defines["SFPU_OP_SQRT_INCLUDE"] = "1";
-        sfpu_defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
-        sfpu_defines["SFPU_OP_ELU_INCLUDE"] = "1";
-        sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
+	sfpu_defines["SFPU_OP_EXP_INCLUDE"] = "1";
+	sfpu_defines["SFPU_OP_GELU_INCLUDE"] = "1";
+	sfpu_defines["SFPU_OP_RECIP_INCLUDE"] = "1";
+	sfpu_defines["SFPU_OP_SQRT_INCLUDE"] = "1";
+	sfpu_defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
+	sfpu_defines["SFPU_OP_ELU_INCLUDE"] = "1";
+	sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
 
         auto sfpu_kernel = tt_metal::CreateComputeKernel(
             program,
@@ -216,6 +218,7 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
 
         bool terminate;
 
+        // TODO(agrebenisan): Clean this up to only use the first path once Enqueue apis supported on WH
         do {
             auto [core_coord, terminate_] = cores_in_core_range();
 
@@ -229,18 +232,19 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
     tt_metal::CompileProgram(device, program);
 
     std::vector<u32> dest_buffer_data;
-    tt_metal::WriteRuntimeArgsToDevice(device, program);
-    tt_metal::WriteToBuffer(input_dram_buffer, packed_input);
-    tt_metal::ConfigureDeviceWithProgram(device, program);
-    tt_metal::LaunchKernels(device, program);
-    tt_metal::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
+    CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
+    EnqueueWriteBuffer(cq, input_dram_buffer, packed_input, false);
+
+    EnqueueProgram(cq, program, false);
+
+    EnqueueReadBuffer(cq, output_dram_buffer, dest_buffer_data, true);
 
 
     return sfpu_util::is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);
 }
 
 }  // namespace unit_tests::compute::sfpu
-class SingleCoreSingleDeviceSfpuParameterizedFixture : public SingleDeviceFixture,
+class SingleCoreSingleDeviceSfpuParameterizedFixture : public CommandQueueFixture,
                                                        public testing::WithParamInterface<std::tuple<size_t, string>> {
 };
 TEST_P(SingleCoreSingleDeviceSfpuParameterizedFixture, SfpuCompute) {
@@ -291,7 +295,7 @@ INSTANTIATE_TEST_CASE_P(
         std::make_tuple(4, "log"),
         std::make_tuple(4, "tanh")));
 class SingleCoreSingleDeviceSfpuParameterizedApproxFixture
-    : public SingleDeviceFixture,
+    : public CommandQueueFixture,
       public testing::WithParamInterface<std::tuple<size_t, string>> {};
 
 TEST_P(SingleCoreSingleDeviceSfpuParameterizedApproxFixture, SfpuCompute) {
@@ -342,7 +346,7 @@ INSTANTIATE_TEST_CASE_P(
         std::make_tuple(4, "log"),
         std::make_tuple(4, "tanh")));
 
-TEST_F(SingleDeviceFixture, DISABLED_MultiContinguousCoreSingleTileSfpuApproxCompute) {
+TEST_F(CommandQueueFixture, DISABLED_MultiContinguousCoreSingleTileSfpuApproxCompute) {
     CoreRange core_range = {.start = {0, 0}, .end = {1, 0}};
     CoreRangeSet core_range_set({core_range});
     unit_tests::compute::sfpu::SfpuConfig test_config = {
@@ -384,7 +388,7 @@ TEST_F(SingleDeviceFixture, DISABLED_MultiContinguousCoreSingleTileSfpuApproxCom
     EXPECT_TRUE(run_sfpu_all_same_buffer(device_, test_config));
 }
 
-TEST_F(SingleDeviceFixture, DISABLED_MultiContinguousCoreMultiTileSfpuApproxCompute) {
+TEST_F(CommandQueueFixture, DISABLED_MultiContinguousCoreMultiTileSfpuApproxCompute) {
     CoreRange core_range = {.start = {0, 0}, .end = {1, 0}};
     CoreRangeSet core_range_set({core_range});
     unit_tests::compute::sfpu::SfpuConfig test_config = {
@@ -426,7 +430,7 @@ TEST_F(SingleDeviceFixture, DISABLED_MultiContinguousCoreMultiTileSfpuApproxComp
     test_config.sfpu_op = "tanh";
     EXPECT_TRUE(run_sfpu_all_same_buffer(device_, test_config));
 }
-TEST_F(SingleDeviceFixture, DISABLED_AllCoreSingleTileSfpuApproxCompute) {
+TEST_F(CommandQueueFixture, DISABLED_AllCoreSingleTileSfpuApproxCompute) {
     unit_tests::compute::sfpu::SfpuConfig test_config = {
         .tile_byte_size = 2 * 32 * 32,
         .output_dram_byte_address = 0,
@@ -469,7 +473,7 @@ TEST_F(SingleDeviceFixture, DISABLED_AllCoreSingleTileSfpuApproxCompute) {
     test_config.sfpu_op = "tanh";
     EXPECT_TRUE(run_sfpu_all_same_buffer(device_, test_config));
 }
-TEST_F(SingleDeviceFixture, DISABLED_AllCoreMultiTileSfpuApproxCompute) {
+TEST_F(CommandQueueFixture, DISABLED_AllCoreMultiTileSfpuApproxCompute) {
     unit_tests::compute::sfpu::SfpuConfig test_config = {
         .tile_byte_size = 2 * 32 * 32,
         .output_dram_byte_address = 0,

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "../basic_harness.hpp"
+#include "single_device_fixture.hpp"
 #include "gtest/gtest.h"
 #include "circular_buffer_test_utils.hpp"
 #include "tt_metal/host_api.hpp"
@@ -44,17 +44,7 @@ bool test_cb_config_written_to_core(Program &program, Device *device, const Core
     return pass;
 }
 
-// Disabled until APIs are added to device to get dispatch/storage/compute and storage cores only
-// Valid cores are: compute and storage cores
-TEST_F(DeviceHarness, DISABLED_TestCreateCircularBufferOnValidCore) {
-}
-
-// Disabled until APIs are added to device to get dispatch/storage/compute and storage cores only
-// This test should assert if any circular buffers are added to dispatch or compute cores
-TEST_F(CommandQueueHarness, DISABLED_TestCreateCircularBufferOnInvalidCore) {
-}
-
-TEST_F(DeviceHarness, TestCreateCircularBufferAtValidIndices) {
+TEST_F(SingleDeviceFixture, TestCreateCircularBufferAtValidIndices) {
     CBConfig cb_config;
 
     CoreRange cr = {.start = {0, 0}, .end = {0, 1}};
@@ -67,10 +57,10 @@ TEST_F(DeviceHarness, TestCreateCircularBufferAtValidIndices) {
 
     auto cb = CreateCircularBuffers(program, indices, cr_set, cb_config.num_pages, cb_config.page_size, cb_config.data_format);
     EXPECT_EQ(cb.buffer_indices().size(), indices.size());
-    EXPECT_TRUE(test_cb_config_written_to_core(program, this->device, cr_set));
+    EXPECT_TRUE(test_cb_config_written_to_core(program, this->device_, cr_set));
 }
 
-TEST_F(DeviceHarness, TestCreateCircularBufferAtInvalidIndex) {
+TEST_F(SingleDeviceFixture, TestCreateCircularBufferAtInvalidIndex) {
     Program program;
     CBConfig cb_config;
 
@@ -80,7 +70,7 @@ TEST_F(DeviceHarness, TestCreateCircularBufferAtInvalidIndex) {
     EXPECT_ANY_THROW(CreateCircularBuffers(program, NUM_CIRCULAR_BUFFERS, cr_set, cb_config.num_pages, cb_config.page_size, cb_config.data_format));
 }
 
-TEST_F(DeviceHarness, TestCreateCircularBufferAtOverlappingIndex) {
+TEST_F(SingleDeviceFixture, TestCreateCircularBufferAtOverlappingIndex) {
     Program program;
     CBConfig cb_config;
 

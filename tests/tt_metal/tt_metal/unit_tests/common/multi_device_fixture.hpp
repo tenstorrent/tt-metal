@@ -18,12 +18,12 @@ bool is_multi_device_gs_machine(const tt::ARCH& arch, const size_t num_devices) 
 class MultiDeviceFixture : public ::testing::Test {
    protected:
     void SetUp() override {
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-        if (arch_ != tt::ARCH::GRAYSKULL) {
-            // Once this test is uplifted to use fast dispatch, this can be removed.
-            char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
-            putenv(env);
+        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (not slow_dispatch) {
+            tt::log_info("Skipping since this suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
+            GTEST_SKIP();
         }
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
         num_devices_ = tt::tt_metal::Device::detect_num_available_devices(); // FIXME: Is this too greedy?
 
         if (is_multi_device_gs_machine(arch_, num_devices_)) {
@@ -36,10 +36,8 @@ class MultiDeviceFixture : public ::testing::Test {
     }
 
     void TearDown() override {
-        if (not is_multi_device_gs_machine(arch_, num_devices_)) {
-            for (unsigned int id = 0; id < num_devices_; id++) {
-                tt::tt_metal::CloseDevice(devices_.at(id));
-            }
+        for (unsigned int id = 0; id < devices_.size(); id++) {
+            tt::tt_metal::CloseDevice(devices_.at(id));
         }
     }
 

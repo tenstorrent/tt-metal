@@ -10,6 +10,7 @@
 
 #include "multi_device_fixture.hpp"
 #include "single_device_fixture.hpp"
+#include "basic_fixture.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
@@ -93,7 +94,7 @@ bool load_all_blank_kernels(tt_metal::Device* device) {
 }  // namespace unit_tests::basic::device
 
 
-TEST(BasicMultiDeviceTest, InitializeAndTeardown) {
+TEST_F(BasicFixture, MultiDeviceInitializeAndTeardown) {
     auto arch = tt::get_arch_from_string(get_env_arch_name());
     const size_t num_devices = tt::tt_metal::Device::detect_num_available_devices();
     if (is_multi_device_gs_machine(arch, num_devices)) {
@@ -102,11 +103,6 @@ TEST(BasicMultiDeviceTest, InitializeAndTeardown) {
     ASSERT_TRUE(num_devices > 0);
     std::vector<tt::tt_metal::Device*> devices;
 
-    if (arch != tt::ARCH::GRAYSKULL) {
-        // Once this test is uplifted to use fast dispatch, this can be removed.
-        char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
-        putenv(env);
-    }
     for (unsigned int id = 0; id < num_devices; id++) {
         devices.push_back(tt::tt_metal::CreateDevice(arch, id));
         ASSERT_TRUE(tt::tt_metal::InitializeDevice(devices.at(id)));
@@ -115,7 +111,7 @@ TEST(BasicMultiDeviceTest, InitializeAndTeardown) {
         ASSERT_TRUE(tt::tt_metal::CloseDevice(devices.at(id)));
     }
 }
-TEST(BasicMultiDeviceTest, LoadBlankKernels) {
+TEST_F(BasicFixture, MultiDeviceLoadBlankKernels) {
     auto arch = tt::get_arch_from_string(get_env_arch_name());
     const size_t num_devices = tt::tt_metal::Device::detect_num_available_devices();
     if (is_multi_device_gs_machine(arch, num_devices)) {
@@ -123,12 +119,6 @@ TEST(BasicMultiDeviceTest, LoadBlankKernels) {
     }
     ASSERT_TRUE(num_devices > 0);
     std::vector<tt::tt_metal::Device*> devices;
-
-    if (arch != tt::ARCH::GRAYSKULL) {
-        // Once this test is uplifted to use fast dispatch, this can be removed.
-        char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
-        putenv(env);
-    }
 
     for (unsigned int id = 0; id < num_devices; id++) {
         devices.push_back(tt::tt_metal::CreateDevice(arch, id));
@@ -234,29 +224,19 @@ TEST_F(MultiDeviceFixture, PingIllegalL1Cores) {
     }
 }
 
-TEST(BasicSingleDeviceTest, InitializeAndTeardown) {
+TEST_F(BasicFixture, SingleDeviceInitializeAndTeardown) {
     auto arch = tt::get_arch_from_string(get_env_arch_name());
     tt::tt_metal::Device* device;
     const unsigned int pcie_id = 0;
     device = tt::tt_metal::CreateDevice(arch, pcie_id);
-    if (arch != tt::ARCH::GRAYSKULL) {
-        // Once this test is uplifted to use fast dispatch, this can be removed.
-        char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
-        putenv(env);
-    }
     ASSERT_TRUE(tt::tt_metal::InitializeDevice(device));
     ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
 }
-TEST(BasicSingleDeviceTest, HarvestingPrints) {
+TEST_F(BasicFixture, SingleDeviceHarvestingPrints) {
     auto arch = tt::get_arch_from_string(get_env_arch_name());
     tt::tt_metal::Device* device;
     const unsigned int pcie_id = 0;
     device = tt::tt_metal::CreateDevice(arch, pcie_id);
-    if (arch != tt::ARCH::GRAYSKULL) {
-        // Once this test is uplifted to use fast dispatch, this can be removed.
-        char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
-        putenv(env);
-    }
     ASSERT_TRUE(tt::tt_metal::InitializeDevice(device));
     CoreCoord unharvested_logical_grid_size = {.x = 12, .y = 10};
     if (arch == tt::ARCH::WORMHOLE_B0) {
@@ -288,16 +268,11 @@ TEST(BasicSingleDeviceTest, HarvestingPrints) {
     ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
 }
 
-TEST(BasicSingleDeviceTest, LoadBlankKernels) {
+TEST_F(BasicFixture, SingleDeviceLoadBlankKernels) {
     auto arch = tt::get_arch_from_string(get_env_arch_name());
     tt::tt_metal::Device* device;
     const unsigned int pcie_id = 0;
     device = tt::tt_metal::CreateDevice(arch, pcie_id);
-    if (arch != tt::ARCH::GRAYSKULL) {
-        // Once this test is uplifted to use fast dispatch, this can be removed.
-        char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
-        putenv(env);
-    }
     ASSERT_TRUE(tt::tt_metal::InitializeDevice(device));
     ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
 }

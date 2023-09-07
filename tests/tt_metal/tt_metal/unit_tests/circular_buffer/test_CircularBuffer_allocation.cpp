@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "../basic_harness.hpp"
+#include "single_device_fixture.hpp"
 #include "gtest/gtest.h"
 #include "circular_buffer_test_utils.hpp"
 #include "tt_metal/host_api.hpp"
@@ -12,7 +12,7 @@ using namespace tt::tt_metal;
 
 namespace basic_tests::circular_buffer {
 
-TEST_F(DeviceHarness, TestCircularBuffersSequentiallyPlaced) {
+TEST_F(SingleDeviceFixture, TestCircularBuffersSequentiallyPlaced) {
     Program program;
     CBConfig cb_config;
     CoreRange cr = {.start = {0, 0}, .end = {0, 0}};
@@ -26,7 +26,7 @@ TEST_F(DeviceHarness, TestCircularBuffersSequentiallyPlaced) {
     }
 }
 
-TEST_F(DeviceHarness, TestCircularBufferSequentialAcrossAllCores) {
+TEST_F(SingleDeviceFixture, TestCircularBufferSequentialAcrossAllCores) {
     Program program;
     CBConfig cb_config;
 
@@ -55,7 +55,7 @@ TEST_F(DeviceHarness, TestCircularBufferSequentialAcrossAllCores) {
     EXPECT_EQ(multi_core_cb.address(), expected_address);
 }
 
-TEST_F(DeviceHarness, TestValidCircularBufferAddress) {
+TEST_F(SingleDeviceFixture, TestValidCircularBufferAddress) {
     Program program;
     CBConfig cb_config;
 
@@ -67,7 +67,7 @@ TEST_F(DeviceHarness, TestValidCircularBufferAddress) {
     EXPECT_EQ(multi_core_cb.address(), expected_cb_addr);
 }
 
-TEST_F(DeviceHarness, TestInvalidCircularBufferAddress) {
+TEST_F(SingleDeviceFixture, TestInvalidCircularBufferAddress) {
     Program program;
     CBConfig cb_config;
 
@@ -87,12 +87,12 @@ TEST_F(DeviceHarness, TestInvalidCircularBufferAddress) {
     EXPECT_ANY_THROW(CreateCircularBuffers(program, multi_core_cb_index, cr_set, cb_config.num_pages, cb_config.page_size, cb_config.data_format, UNRESERVED_BASE));
 }
 
-TEST_F(DeviceHarness, TestCircularBuffersAndL1BuffersCollision) {
+TEST_F(SingleDeviceFixture, TestCircularBuffersAndL1BuffersCollision) {
     Program program;
     CBConfig cb_config {.num_pages = 5};
 
     auto buffer_size = cb_config.page_size * 128;
-    auto l1_buffer = Buffer(this->device, buffer_size, buffer_size, BufferType::L1);
+    auto l1_buffer = Buffer(this->device_, buffer_size, buffer_size, BufferType::L1);
 
     // L1 buffer is entirely in bank 0
     auto core = l1_buffer.logical_core_from_bank_id(0);
@@ -108,8 +108,8 @@ TEST_F(DeviceHarness, TestCircularBuffersAndL1BuffersCollision) {
         cb_addr += cb_buffer_size;
     }
 
-    CompileProgram(this->device, program);
-    EXPECT_ANY_THROW(ConfigureDeviceWithProgram(this->device, program));
+    CompileProgram(this->device_, program);
+    EXPECT_ANY_THROW(ConfigureDeviceWithProgram(this->device_, program));
 }
 
 }   // end namespace basic_tests::circular_buffer

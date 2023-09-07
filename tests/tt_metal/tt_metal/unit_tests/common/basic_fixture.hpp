@@ -11,7 +11,7 @@
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/test_utils/env_vars.hpp"
 
-class SingleDeviceFixture : public ::testing::Test  {
+class BasicFixture : public ::testing::Test  {
    protected:
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -19,19 +19,6 @@ class SingleDeviceFixture : public ::testing::Test  {
             tt::log_info("Skipping since this suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
             GTEST_SKIP();
         }
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-        const int pci_express_slot = 0;
-
-        device_ = tt::tt_metal::CreateDevice(arch_, pci_express_slot);
-        tt::tt_metal::InitializeDevice(device_);
     }
 
-    void TearDown() override {
-        if (device_) {
-            tt::tt_metal::CloseDevice(device_);
-        }
-    }
-
-    tt::tt_metal::Device* device_ = nullptr;
-    tt::ARCH arch_;
 };
