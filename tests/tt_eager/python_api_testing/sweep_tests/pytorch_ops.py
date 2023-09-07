@@ -269,8 +269,9 @@ def sqrt(x, *args, **kwargs):
 
 def gelu(x, *args, **kwargs):
     fast_and_appx = kwargs.pop("fast_and_appx")
-    approximate = 'tanh' if fast_and_appx else 'none'
+    approximate = "tanh" if fast_and_appx else "none"
     return torch.nn.functional.gelu(x, approximate=approximate)
+
 
 def softmax_in_place(x, *args, **kwargs):
     return torch.softmax(x, -1)
@@ -323,16 +324,20 @@ def layernorm(x, y, z, *args, **kwargs):
     z = z.squeeze(0)
     z = z.squeeze(0)
 
-    return torch.nn.functional.layer_norm(input=x, normalized_shape=y.shape, weight=y, bias=z, eps=1e-05)
+    return torch.nn.functional.layer_norm(
+        input=x, normalized_shape=y.shape, weight=y, bias=z, eps=1e-05
+    )
 
 
 def layernorm_noweights(x, *args, **kwargs):
     last = x.shape[3]
-    return torch.nn.functional.layer_norm(input=x, normalized_shape=(last,), weight=None, bias=None, eps=1e-05)
+    return torch.nn.functional.layer_norm(
+        input=x, normalized_shape=(last,), weight=None, bias=None, eps=1e-05
+    )
 
 
 def add_layernorm(x, y, z, w, *args, **kwargs):
-    res = x+y
+    res = x + y
 
     w = w.squeeze(0)
     w = w.squeeze(0)
@@ -342,14 +347,18 @@ def add_layernorm(x, y, z, w, *args, **kwargs):
     z = z.squeeze(0)
     z = z.squeeze(0)
 
-    return torch.nn.functional.layer_norm(input=res, normalized_shape=z.shape, weight=z, bias=w, eps=1e-05)
+    return torch.nn.functional.layer_norm(
+        input=res, normalized_shape=z.shape, weight=z, bias=w, eps=1e-05
+    )
 
 
 def add_layernorm_noweights(x, y, *args, **kwargs):
-    res = x+y
+    res = x + y
     last = res.shape[3]
 
-    return torch.nn.functional.layer_norm(input=res, normalized_shape=(last,), weight=None, bias=None, eps=1e-05)
+    return torch.nn.functional.layer_norm(
+        input=res, normalized_shape=(last,), weight=None, bias=None, eps=1e-05
+    )
 
 
 def scale_mask_softmax_in_place(x, y, scale, *args, **kwargs):
@@ -358,12 +367,19 @@ def scale_mask_softmax_in_place(x, y, scale, *args, **kwargs):
     retval = ref_stable_softmax(x2)
     return retval
 
+
 def rsqrt(x, *args, **kwargs):
     return torch.rsqrt(x)
 
 
 def logit(x, *args, eps, **kwargs):
     return torch.special.logit(x, eps=eps)
+
+
+def logical_xori(x, *args, **kwargs):
+    value = kwargs.pop("scalar")
+    result = torch.logical_xor(x, torch.tensor(value, dtype=torch.bfloat16))
+    return result
 
 
 def relu(x, *args, **kwargs):
@@ -819,6 +835,13 @@ def unpad_from_tile(x, output_tensor_shape, *args, **kwargs):
 
     return out
 
+
 def conv(x, y, *args, **kwargs):
     conv_params = kwargs.pop("conv_params")
-    return torch.nn.functional.conv2d(x, y, bias=None, stride=(conv_params[2], conv_params[3]), padding=(conv_params[4], conv_params[5]))
+    return torch.nn.functional.conv2d(
+        x,
+        y,
+        bias=None,
+        stride=(conv_params[2], conv_params[3]),
+        padding=(conv_params[4], conv_params[5]),
+    )

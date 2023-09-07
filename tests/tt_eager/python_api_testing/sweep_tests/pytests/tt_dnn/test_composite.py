@@ -39,7 +39,7 @@ reference_pcc["softplus"] = 0.9984
 
 def custom_compare(*args, **kwargs):
     function = kwargs.pop("function")
-    if function in ["logical_xor", "logical_ori"]:
+    if function in ["logical_xor", "logical_ori","logical_or", "logical_xori"]:
         comparison_func = comparison_funcs.comp_equal
     else:
         comparison_func = partial(
@@ -99,8 +99,9 @@ if is_wormhole_b0():
                 "bias_gelu_unary",
                 "addalpha",
                 "logit",
-                "logical_xor",
                 "logical_ori",
+                "logical_xor",
+                "logical_xori",
             ),
             shapes,
         )
@@ -141,7 +142,7 @@ def test_run_eltwise_composite_test(
             pytest.skip("Not tested for Wormhole - skipping")
         if fn in ["logit"]:
             pytest.skip("does not work for Wormhole -skipping")
-    if fn in ["logical_xor"]:
+    if fn in ["logical_xor", "logical_xori"]:
         datagen_func = [
             generation_funcs.gen_func_with_cast(
                 partial(generator, low=options[fn][0], high=options[fn][1]),
@@ -164,11 +165,17 @@ def test_run_eltwise_composite_test(
         "max",
         "lerp_binary",
         "xlogy",
-        "atan2",
-        "lerp_binary",
+        "ldexp",
         "subalpha",
         "addalpha",
+        "bias_gelu_unary",            
+        "atan2",
+        "subalpha",
+        "addalpha",
+        "logit",
+        "logical_ori",
         "logical_xor",
+        "logical_xori",            
     ]:
         num_inputs = 2
 

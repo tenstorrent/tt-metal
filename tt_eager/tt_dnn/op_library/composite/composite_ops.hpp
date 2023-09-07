@@ -203,6 +203,8 @@ Tensor clamp(const Tensor& a,float low, float high, const MemoryConfig& output_m
 //logit(input, eps)=log(input / 1 - input)
 Tensor logit(const Tensor& input_a, float eps, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+Tensor logical_xori(const Tensor& input_a, float value, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 /** hyperbolic operations **/
 //sinh(x) = (exp(x) - exp(-x))/2
 Tensor sinh(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);

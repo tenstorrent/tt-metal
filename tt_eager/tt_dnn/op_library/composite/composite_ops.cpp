@@ -622,6 +622,19 @@ Tensor logit(const Tensor& input_a, float eps, const MemoryConfig& output_mem_co
     return operation::decorate_as_composite(__func__, _logit)(input_a, eps, output_mem_config);
 }
 
+//logical_xori
+Tensor _logical_xori(const Tensor &input_a, float value, const MemoryConfig& output_mem_config) {
+    if ( std::fpclassify(value) == FP_ZERO ) {
+      return tt::tt_metal::nez(input_a);
+    } else {
+      return tt::tt_metal::eqz(input_a); //eqz( input_a ) = not( nez( input_a ) )
+    }
+}
+Tensor logical_xori(const Tensor& input_a, float value, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _logical_xori)(input_a, value, output_mem_config);
+}
+
 //xlogy(x,y))=x*log(y)
 Tensor _xlogy(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
     Tensor t_value = mk_tiled_scalar(std::nanf(""));
