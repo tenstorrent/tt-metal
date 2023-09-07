@@ -23,7 +23,7 @@ class CoreCoordHarness : public ::testing::Test {
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (not slow_dispatch) {
-            tt::log_info("Skipping since this suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
+            tt::log_fatal("This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
             GTEST_SKIP();
         }
     }

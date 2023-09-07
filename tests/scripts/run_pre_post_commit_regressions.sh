@@ -36,7 +36,7 @@ fi
 if [[ -z "$FAST_DISPATCH" ]]; then
   TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests
 else
-  ./build/test/tt_metal/unit_tests_fd
+  ./build/test/tt_metal/unit_tests_fast_dispatch
 fi
 
 echo "Checking docs build..."

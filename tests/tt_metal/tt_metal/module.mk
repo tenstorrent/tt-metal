@@ -1,5 +1,5 @@
 include $(TT_METAL_HOME)/tests/tt_metal/tt_metal/unit_tests/module.mk
-include $(TT_METAL_HOME)/tests/tt_metal/tt_metal/unit_tests_fd/module.mk
+include $(TT_METAL_HOME)/tests/tt_metal/tt_metal/unit_tests_fast_dispatch/module.mk
 
 # Every variable in subdir must be prefixed with subdir (emulating a namespace)
 TT_METAL_TESTS += \
@@ -67,7 +67,7 @@ TT_METAL_TESTS_DEPS = $(addprefix $(OBJDIR)/, $(TT_METAL_TESTS_SRCS:.cpp=.d))
 -include $(TT_METAL_TESTS_DEPS)
 
 # Each module has a top level target as the entrypoint which must match the subdir name
-tests/tt_metal: $(TT_METAL_TESTS) programming_examples tests/tt_metal/unit_tests tests/tt_metal/unit_tests_fd
+tests/tt_metal: $(TT_METAL_TESTS) programming_examples tests/tt_metal/unit_tests tests/tt_metal/unit_tests_fast_dispatch
 tests/tt_metal/all: $(TT_METAL_TESTS)
 tests/tt_metal/%: $(TESTDIR)/tt_metal/% ;
 
