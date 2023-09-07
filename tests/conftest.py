@@ -284,3 +284,12 @@ def use_program_cache(clear_program_cache):
 
     ttl.program_cache.enable()
     yield
+
+@pytest.fixture(scope="function")
+def tracy_profile():
+    from tracy import Profiler
+    profiler = Profiler()
+
+    profiler.enable()
+    yield
+    profiler.disable()

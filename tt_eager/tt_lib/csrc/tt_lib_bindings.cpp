@@ -180,8 +180,8 @@ void ProfilerModule(py::module &m_profiler) {
         +------------------+------------------------------------------------+-----------------------+-------------+----------+
         | Argument         | Description                                    | Data type             | Valid range | Required |
         +==================+================================================+=======================+=============+==========+
-        | Name             | Name of the op or zone to be profiled          | string                |             | Yes      |
-        | Type             | Fallback op or custom zone                     | string                |             | No       |
+        | opName             | Name of the op or zone to be profiled          | string                |             | Yes      |
+        | opType             | Fallback op or custom zone                     | string                |             | No       |
         +------------------+------------------------------------------------+-----------------------+-------------+----------+
     )doc");
 
@@ -190,7 +190,30 @@ void ProfilerModule(py::module &m_profiler) {
         +------------------+------------------------------------------------+-----------------------+-------------+----------+
         | Argument         | Description                                    | Data type             | Valid range | Required |
         +==================+================================================+=======================+=============+==========+
-        | Name             | Name of the op or zone to stop profiling       | string                |             | Yes      |
+        | name             | Name of the op or zone to stop profiling       | string                |             | Yes      |
+        +------------------+------------------------------------------------+-----------------------+-------------+----------+
+    )doc");
+
+    m_profiler.def("start_tracy_zone",&op_profiler::start_tracy_zone,
+            py::arg("source"), py::arg("functName"),py::arg("lineNum"), py::arg("color") = 0, R"doc(
+        Stop profiling op with tracy.
+        +------------------+------------------------------------------------+-----------------------+-------------+----------+
+        | Argument         | Description                                    | Data type             | Valid range | Required |
+        +==================+================================================+=======================+=============+==========+
+        | source           | Source file for the zone                       | string                |             | Yes      |
+        | functName        | Function of the zone                           | string                |             | Yes      |
+        | lineNum          | Line number of the zone marker                 | int                   |             | Yes      |
+        | color            | Zone color                                     | int                   |             | No       |
+        +------------------+------------------------------------------------+-----------------------+-------------+----------+
+    )doc");
+
+    m_profiler.def("stop_tracy_zone",&op_profiler::stop_tracy_zone, py::arg("name") = "", py::arg("color") = 0, R"doc(
+        Stop profiling op with tracy.
+        +------------------+------------------------------------------------+-----------------------+-------------+----------+
+        | Argument         | Description                                    | Data type             | Valid range | Required |
+        +==================+================================================+=======================+=============+==========+
+        | name             | Replace name for the zone                          | string                |             | No       |
+        | color            | Replace zone color                             | int                   |             | No       |
         +------------------+------------------------------------------------+-----------------------+-------------+----------+
     )doc");
 
@@ -259,4 +282,14 @@ PYBIND11_MODULE(_C, m) {
 
     py::module_ m_operations = m.def_submodule("operations", "Submodule for operations");
     tt::operations::py_module(m_operations);
+
+#if defined(TRACY_ENABLE)
+    py::function tracy_decorator = py::module::import("tt_eager.tt_lib_profiler_wrapper").attr("callable_decorator");
+
+    tracy_decorator(m_device);
+    tracy_decorator(m_tensor);
+    tracy_decorator(m_dtx);
+    tracy_decorator(m_program_cache);
+    tracy_decorator(m_operations);
+#endif
 }

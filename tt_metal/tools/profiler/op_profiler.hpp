@@ -16,6 +16,9 @@
 #include "tools/profiler/profiler.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 
+#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tt_metal/third_party/tracy/public/tracy/TracyC.h"
+
 namespace tt {
 
 namespace tt_metal {
@@ -378,6 +381,48 @@ namespace op_profiler {
 #if defined(PROFILER)
         detail::operationProfiler.stop_profiling(opName);
 #endif
+    }
+
+#if defined(TRACY_ENABLE)
+    inline stack<TracyCZoneCtx> call_stack;
+#endif
+
+    static void start_tracy_zone (const string& source,const string& functName, uint32_t lineNum, uint32_t color = 0)
+    {
+#if defined(TRACY_ENABLE)
+        auto tracySrcLoc = ___tracy_alloc_srcloc(lineNum, source.c_str(), source.length(), functName.c_str(), functName.length());
+        TracyCZoneCtx ctx =  ___tracy_emit_zone_begin_alloc(tracySrcLoc,1);
+        if (color != 0)
+        {
+            TracyCZoneColor(ctx, color);
+        }
+
+        call_stack.push(ctx);
+#endif
+    }
+
+    static bool stop_tracy_zone (const string& name = "", uint32_t color = 0)
+    {
+        bool callStackWasEmpty = true;
+#if defined(TRACY_ENABLE)
+        if (!call_stack.empty())
+        {
+            callStackWasEmpty = false;
+            TracyCZoneCtx ctx =  call_stack.top();
+            if (name != "")
+            {
+                TracyCZoneName(ctx,name.c_str(), name.length());
+            }
+            if (color != 0)
+            {
+                TracyCZoneColor(ctx, color);
+            }
+            TracyCZoneEnd(ctx);
+            call_stack.pop();
+        }
+#endif
+        return callStackWasEmpty;
+
     }
 
     static bool get_profiler_flag ()
