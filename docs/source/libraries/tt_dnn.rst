@@ -318,6 +318,8 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.logical_xori
 
+.. autofunction:: tt_lib.tensor.logical_not_unary
+
 .. autofunction:: tt_lib.tensor.subalpha
 
 .. autofunction:: tt_lib.tensor.addalpha
@@ -560,6 +562,8 @@ Other Operations
 .. autofunction:: tt_lib.tensor.mean_hw
 
 .. autofunction:: tt_lib.tensor.var_hw
+
+.. autofunction:: tt_lib.tensor.logical_noti
 
 .. autofunction:: tt_lib.tensor.std_hw
 

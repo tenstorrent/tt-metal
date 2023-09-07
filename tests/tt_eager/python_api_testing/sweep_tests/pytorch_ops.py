@@ -141,6 +141,11 @@ def logical_not(x, *args, **kwargs):
     return result
 
 
+def logical_not_unary(x, *args, **kwargs):
+    result = torch.logical_not(x).to(torch.int32)
+    return result
+
+
 def cosh(x, *args, **kwargs):
     result = torch.cosh(x)
     return result
@@ -586,6 +591,12 @@ def atan2(x, y, *args, **kwargs):
 
 def logical_and(x, y, *args, **kwargs):
     result = torch.logical_and(x, y)
+    return result
+
+
+def logical_noti(x, *args, **kwargs):
+    immediate = kwargs.pop("immediate")
+    result = torch.logical_not(torch.full_like(x, immediate)).to(torch.int32)
     return result
 
 

@@ -1288,6 +1288,7 @@ void TensorModule(py::module &m_tensor) {
     detail::bind_unary_op(m_tensor, "atanh", atanh, R"doc(Returns a new tensor with the inverse hyperbolic tangent of the elements of the input tensor ``{0}``.)doc");
     detail::bind_unary_op(m_tensor, "asin", asin, R"doc(Returns a new tensor with the arcsine of the elements of the input tensor ``{0}``.)doc");
     detail::bind_unary_op(m_tensor, "acos", acos, R"doc(Returns a new tensor with the arccosine of the elements of the input tensor ``{0}``.)doc");
+    detail::bind_unary_op(m_tensor, "logical_not_unary", logical_not_unary, R"doc(Returns a new tensor with the logical not of the elements of the input tensor ``{0}``.)doc");
     detail::bind_unary_op(m_tensor, "log_sigmoid", &log_sigmoid, R"doc(Applies the logsigmoid function to the elements of the input tensor ``{0}``.)doc");
     detail::bind_unary_op_with_param(
         m_tensor, "gelu", &gelu,
@@ -1435,6 +1436,12 @@ void TensorModule(py::module &m_tensor) {
         py::arg("scalar"),
         R"doc(Perform an eltwise-binary add on one tensor ``{0}`` and one scalar ``{1}``.)doc",
         R"doc("Scalar", "float", "")doc"
+    );
+    detail::bind_unary_op_with_param(
+        m_tensor, "logical_noti", &logical_noti,
+        py::arg("immediate"),
+        R"doc(Perform an eltwise logical NOT (``!{1}``) on immediate value.)doc",
+        R"doc("immediate", "float", "")doc"
     );
     detail::bind_unary_op_with_param(
         m_tensor, "sub_unary", py::overload_cast<const Tensor&, float, const MemoryConfig&>(&sub_unary),

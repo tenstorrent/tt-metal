@@ -15,6 +15,10 @@
 #include "compute_kernel_api/eltwise_unary/erf_erfc.h"
 #endif
 
+#if SFPU_OP_LOGICAL_NOT_NOTI_INCLUDE
+#include "compute_kernel_api/eltwise_unary/logical_not_noti.h"
+#endif
+
 #if SFPU_OP_EXP_INCLUDE
 #include "compute_kernel_api/eltwise_unary/exp.h"
 #endif

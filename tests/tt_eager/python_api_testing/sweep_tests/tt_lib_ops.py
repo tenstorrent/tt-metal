@@ -312,6 +312,26 @@ def eltwise_bias_gelu(
 
 
 @setup_host_and_device
+def eltwise_logical_noti(
+    x, *args, immediate, device, dtype, layout, buffer_type, output_mem_config, **kwargs
+):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype[0],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
+
+    t1 = ttl.tensor.logical_noti(t0, immediate, output_mem_config=output_mem_config)
+
+    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    return output
+
+
+@setup_host_and_device
 def eltwise_hardshrink(
     x, *args, _lambda, device, dtype, layout, buffer_type, output_mem_config, **kwargs
 ):
@@ -2596,6 +2616,7 @@ eltwise_isinf = make_eltwise_unary_op(ttl.tensor.isinf)
 eltwise_isposinf = make_eltwise_unary_op(ttl.tensor.isposinf)
 eltwise_isneginf = make_eltwise_unary_op(ttl.tensor.isneginf)
 eltwise_isnan = make_eltwise_unary_op(ttl.tensor.isnan)
+eltwise_logical_not_unary = make_eltwise_unary_op(ttl.tensor.logical_not_unary)
 
 
 ################################################

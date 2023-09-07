@@ -71,6 +71,9 @@ inline bool update_macro_defines(UnaryOpType op_type,std::map<std::string,std::s
   case UnaryOpType::ISPOSINF:
     defines["SFPU_OP_ISINF_ISNAN_INCLUDE"]="1";
     return true;
+  case UnaryOpType::LOGICAL_NOT_UNARY:
+    defines["SFPU_OP_LOGICAL_NOT_NOTI_INCLUDE"]="1";
+    return true;
   default:
     break;
   };
@@ -115,6 +118,7 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, stri
         case UnaryOpType::ISPOSINF: op_init_and_name = {"isposinf_tile_init();", fmt::format("isposinf_tile({});", idst)}; break;
         case UnaryOpType::ISNEGINF: op_init_and_name = {"isneginf_tile_init();", fmt::format("isneginf_tile({});", idst)}; break;
         case UnaryOpType::ISNAN: op_init_and_name = {"isnan_tile_init();", fmt::format("isnan_tile({});", idst)}; break;
+        case UnaryOpType::LOGICAL_NOT_UNARY: op_init_and_name = {"logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile({});", idst)}; break;
         case UnaryOpType::LOG10:
             // log10[x] = log[x]/log[10] = log[x]*0.4342944819032518; FP32@U32 0x3ede5bd9; FP16@U16 0x36f3;
             op_init_and_name = {"log_with_base_tile_init();", fmt::format("log_with_base_tile({}, 0x36f3u);", idst)}; break;
@@ -186,7 +190,7 @@ std::map<string, string> get_defines(UnaryOpType op_type, std::optional<float> p
     // update split eltwise ops include macros
 
     update_macro_defines(op_type, defines);
-   
+
     return defines;
 }
 

@@ -39,7 +39,7 @@ reference_pcc["softplus"] = 0.9984
 
 def custom_compare(*args, **kwargs):
     function = kwargs.pop("function")
-    if function in ["logical_xor", "logical_ori","logical_or", "logical_xori"]:
+    if function in ["logical_xor", "logical_ori","logical_or", "logical_xori","logical_noti","logical_not"]:
         comparison_func = comparison_funcs.comp_equal
     else:
         comparison_func = partial(
@@ -102,6 +102,7 @@ if is_wormhole_b0():
                 "logical_ori",
                 "logical_xor",
                 "logical_xori",
+                "logical_noti",
             ),
             shapes,
         )
@@ -201,6 +202,8 @@ def test_run_eltwise_composite_test(
         test_args.update({"alpha": np.random.randint(1, 100)})
     elif fn in ["bias_gelu_unary"]:
         test_args.update({"bias": np.random.randint(1, 100)})
+    elif fn in ["logical_noti"]:
+        test_args.update({"immediate": np.random.randint(0, 100)})
     elif fn in ["logit"]:
         test_args.update({"eps": np.random.randint(-1e-6, 1e6)})
     elif fn in ["logical_ori"]:

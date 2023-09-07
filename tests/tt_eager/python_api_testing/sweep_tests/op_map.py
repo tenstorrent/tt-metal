@@ -102,10 +102,13 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_add_unary,
         "pytorch_op": pytorch_ops.add_unary,
     },
-    # Eltwise unary + Composite Unary
-    "eltwise-logical_not": {
-        "tt_lib_op": tt_lib_ops.eltwise_logical_not,
-        "pytorch_op": pytorch_ops.logical_not,
+    "eltwise-logical_not_unary": {
+        "tt_lib_op": tt_lib_ops.eltwise_logical_not_unary,
+        "pytorch_op": pytorch_ops.logical_not_unary,
+    },
+    "eltwise-logical_noti": {
+        "tt_lib_op": tt_lib_ops.eltwise_logical_noti,
+        "pytorch_op": pytorch_ops.logical_noti,
     },
     "eltwise-bitwise_complement": {
         "tt_lib_op": None,  # tt_lib_ops.eltwise_bitwise_complement,
