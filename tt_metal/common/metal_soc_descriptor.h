@@ -21,8 +21,18 @@ struct metal_SocDescriptor : public tt_SocDescriptor {
   std::vector<RelativeCoreCoord> dispatch_cores; // saved as CoreType::WORKER
   int l1_bank_size;
 
-  metal_SocDescriptor(std::string device_descriptor_path);
-  metal_SocDescriptor(const tt_SocDescriptor& other);
+  // in tt_SocDescriptor worker_log_to_routing_x and worker_log_to_routing_y map logical coordinates to NOC virtual coordinates
+  // UMD accepts NOC virtual coordinates but Metal needs NOC physical coordinates to ensure a harvested core is not targetted
+  std::unordered_map<tt_xy_pair, CoreDescriptor> physical_cores;
+  std::vector<tt_xy_pair> physical_workers;
+  std::vector<tt_xy_pair> physical_harvested_workers;
+
+  std::unordered_map<int, int> worker_log_to_physical_routing_x;
+  std::unordered_map<int, int> worker_log_to_physical_routing_y;
+  std::unordered_map<int, int> physical_routing_to_virtual_routing_x;
+  std::unordered_map<int, int> physical_routing_to_virtual_routing_y;
+
+  metal_SocDescriptor(const tt_SocDescriptor& other, uint32_t harvesting_mask);
   metal_SocDescriptor() = default;
 
   CoreCoord get_preferred_worker_core_for_dram_channel(int dram_chan) const;
@@ -35,7 +45,7 @@ struct metal_SocDescriptor : public tt_SocDescriptor {
   const std::vector<CoreCoord>& get_ethernet_cores() const;
 
   private:
-  void init();
+  void generate_physical_descriptors_from_virtual(uint32_t harvesting_mask);
   void load_dram_metadata_from_device_descriptor();
   void map_workers_to_dram_banks();
 };

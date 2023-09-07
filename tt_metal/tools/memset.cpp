@@ -19,7 +19,7 @@ tt_cluster* initialize_tt_cluster(int chip_id) {
 void memset_l1(tt_cluster* cluster, vector<uint32_t> mem_vec, uint32_t chip_id, uint32_t start_addr) {
     // Utility function that writes a memory vector to L1 for all cores at a specific start address.
     metal_SocDescriptor sdesc = cluster->get_soc_desc(chip_id);
-    for (auto &worker_core : sdesc.workers) {
+    for (auto &worker_core : sdesc.physical_workers) {
         tt::llrt::write_hex_vec_to_core(cluster, chip_id, worker_core, mem_vec, start_addr);
     }
 }

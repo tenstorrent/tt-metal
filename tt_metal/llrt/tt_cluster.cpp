@@ -115,10 +115,13 @@ int extract_chip_id_from_sdesc_path(std::filesystem::path sdesc_path) {
     return atoi(file.substr(0, file.find(".")).c_str());
 }
 
-std::unordered_map<chip_id_t, metal_SocDescriptor> get_metal_desc_from_tt_desc(const std::unordered_map<chip_id_t, tt_SocDescriptor>& input) {
+std::unordered_map<chip_id_t, metal_SocDescriptor> get_metal_desc_from_tt_desc(
+    const std::unordered_map<chip_id_t, tt_SocDescriptor>& input, const std::unordered_map<chip_id_t, uint32_t> &per_chip_id_harvesting_masks)
+{
     std::unordered_map<chip_id_t, metal_SocDescriptor> rval = {};
     for(const auto it : input) {
-        rval.emplace(it.first, metal_SocDescriptor(it.second));
+        chip_id_t id = it.first;
+        rval.emplace(id, metal_SocDescriptor(it.second, per_chip_id_harvesting_masks.at(id)));
     }
     return rval;
 }
@@ -166,7 +169,7 @@ void tt_cluster::open_device(
     device->set_device_l1_address_params(l1_fw_params);
     type = target_type;
     TT_ASSERT(type == TargetDevice::Versim or type == TargetDevice::Silicon);
-    sdesc_per_chip = get_metal_desc_from_tt_desc(device->get_virtual_soc_descriptors());
+    sdesc_per_chip = get_metal_desc_from_tt_desc(device->get_virtual_soc_descriptors(), device->get_harvesting_masks_for_soc_descriptors());
 
     if (device) {
         // if (get_num_chips() != tt::MAX_AVAILABLE_CHIPS) {
@@ -189,13 +192,6 @@ int tt_cluster::get_device_aiclk(const chip_id_t &chip_id) {
     }
     return 0;
 }
-
-// void tt_cluster::set_power_state(tt_DevicePowerState device_state) {
-//     std::stringstream ss;
-//     ss << "Setting silicon device power state to " << device_state;
-//     tt::log_info("{}", ss.str());
-//     device->set_power_state(device_state);
-// }
 
 void tt_cluster::reset_debug_print_server_buffers() {
     for (const int device_id : this->target_device_ids) {
@@ -414,14 +410,25 @@ void tt_cluster::read_dram_vec(vector<uint32_t> &vec, tt_target_dram dram, uint6
     read_dram_vec(vec, dram_core, addr + offset, size, small_access);
 }
 
+// UMD expects virtual NOC coordinates
+tt_cxy_pair tt_cluster::convert_physical_cxy_to_virtual(const tt_cxy_pair &physical_cxy) {
+    const metal_SocDescriptor& soc_desc = get_soc_desc(physical_cxy.chip);
+    CoreCoord virtual_core({
+            .x = static_cast<size_t>(soc_desc.physical_routing_to_virtual_routing_x.at(physical_cxy.x)),
+            .y = static_cast<size_t>(soc_desc.physical_routing_to_virtual_routing_y.at(physical_cxy.y)),
+    });
+    return tt_cxy_pair(physical_cxy.chip, virtual_core);
+}
+
 void tt_cluster::write_dram_vec(const std::uint32_t *mem_ptr, uint32_t len, tt_cxy_pair dram_core, uint64_t addr, bool small_access)
 {
     int chip_id = dram_core.chip;
     if (tt::llrt::OptionsG.get_watcher_enabled()) {
         tt::llrt::watcher_sanitize_host_noc_write(get_soc_desc(chip_id), {dram_core.x, dram_core.y}, addr, len * sizeof(uint32_t));
     }
-    device->write_to_device(mem_ptr, len, dram_core, addr, "LARGE_WRITE_TLB");
-    if (device->get_target_remote_device_ids().find(dram_core.chip) != device->get_target_remote_device_ids().end()) {
+    tt_cxy_pair virtual_dram_core = this->convert_physical_cxy_to_virtual(dram_core);
+    device->write_to_device(mem_ptr, len, virtual_dram_core, addr, "LARGE_WRITE_TLB");
+    if (device->get_target_remote_device_ids().find(virtual_dram_core.chip) != device->get_target_remote_device_ids().end()) {
         device->wait_for_non_mmio_flush();
     }
 }
@@ -438,7 +445,8 @@ void tt_cluster::read_dram_vec(std::uint32_t *mem_ptr, tt_cxy_pair dram_core, ui
     if (tt::llrt::OptionsG.get_watcher_enabled()) {
         tt::llrt::watcher_sanitize_host_noc_read(get_soc_desc(chip_id), {dram_core.x, dram_core.y}, addr, size_in_bytes);
     }
-    device->read_from_device(mem_ptr, dram_core, addr, size_in_bytes, "LARGE_READ_TLB");
+    tt_cxy_pair virtual_dram_core = this->convert_physical_cxy_to_virtual(dram_core);
+    device->read_from_device(mem_ptr, virtual_dram_core, addr, size_in_bytes, "LARGE_READ_TLB");
 }
 
 void tt_cluster::read_dram_vec(vector<uint32_t> &vec, tt_cxy_pair dram_core, uint64_t addr, uint32_t size_in_bytes, bool small_access)
@@ -449,7 +457,6 @@ void tt_cluster::read_dram_vec(vector<uint32_t> &vec, tt_cxy_pair dram_core, uin
 
 void tt_cluster::write_sysmem_vec(vector<uint32_t> &vec, uint64_t addr, chip_id_t src_device_id)
 {
-    // TODO: Uplift
     constexpr uint16_t channel = 0;
     device->write_to_sysmem(vec, addr, channel, src_device_id);
 }

@@ -42,7 +42,8 @@ struct AllocatorConfig {
     size_t worker_l1_size = 0;
     size_t l1_bank_size = 0;
     std::unordered_map<CoreCoord, AllocCoreType> core_type_from_noc_coord_table = {};
-    std::unordered_map<CoreCoord, CoreCoord> logical_to_routing_coord_lookup_table = {};
+    std::unordered_map<int, int> worker_log_to_physical_routing_x = {};
+    std::unordered_map<int, int> worker_log_to_physical_routing_y = {};
     BankMapping l1_bank_remap = {}; // for remapping which l1 bank points to which bank if we assume normal row-major assignment
 };
 

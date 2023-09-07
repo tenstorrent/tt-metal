@@ -67,13 +67,17 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
     for (u32 y = 0; y < alloc_config.worker_grid_size.y; y++) {
         for (u32 x = 0; x < alloc_config.worker_grid_size.x; x++) {
             CoreCoord logical_core = CoreCoord(x, y);
-            log_assert (
-                alloc_config.logical_to_routing_coord_lookup_table.find(logical_core) != alloc_config.logical_to_routing_coord_lookup_table.end(),
-                "Cannot find log_coord=[.y={}, .x={}] in logical_to_routing_coord_lookup_table... invalid AllocatorConfig setup",
+            TT_ASSERT (
+                alloc_config.worker_log_to_physical_routing_x.find(logical_core.x) != alloc_config.worker_log_to_physical_routing_x.end() and
+                alloc_config.worker_log_to_physical_routing_y.find(logical_core.y) != alloc_config.worker_log_to_physical_routing_y.end(),
+                "Cannot find log_coord=[.y={}, .x={}] in logical to routing coord lookup tables... invalid AllocatorConfig setup",
                 logical_core.y, logical_core.x
             );
-            CoreCoord noc_core = alloc_config.logical_to_routing_coord_lookup_table.at(logical_core);
-            log_assert (
+            CoreCoord noc_core({
+                .x = static_cast<size_t>(alloc_config.worker_log_to_physical_routing_x.at(logical_core.x)),
+                .y = static_cast<size_t>(alloc_config.worker_log_to_physical_routing_y.at(logical_core.y)),
+            });
+            TT_ASSERT (
                 alloc_config.core_type_from_noc_coord_table.find(noc_core) != alloc_config.core_type_from_noc_coord_table.end(),
                 "Cannot find noc-coord=[.y={}, .x={}] in core_type_from_noc_coord_table... invalid AllocatorConfig setup",
                 noc_core.y, noc_core.x

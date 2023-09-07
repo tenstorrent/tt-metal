@@ -25,7 +25,7 @@ size_t metal_SocDescriptor::get_address_offset(int dram_chan) const {
 }
 
 bool metal_SocDescriptor::is_harvested_core(const CoreCoord &core) const {
-    for (const auto& core_it : this->harvested_workers) {
+    for (const auto& core_it : this->physical_harvested_workers) {
         if (core_it == core) {
             return true;
         }
@@ -119,18 +119,88 @@ void metal_SocDescriptor::map_workers_to_dram_banks() {
   }
 }
 
-void metal_SocDescriptor::init() {
+void metal_SocDescriptor::generate_physical_descriptors_from_virtual(uint32_t harvesting_mask) {
+  if (harvesting_mask == 0) {
+    this->worker_log_to_physical_routing_x = this->worker_log_to_routing_x;
+    this->worker_log_to_physical_routing_y = this->worker_log_to_routing_y;
+    this->physical_cores = this->cores;
+    this->physical_workers = this->workers;
+    this->physical_harvested_workers = this->harvested_workers;
+
+    for (const auto &[virtual_noc_core, core_desc] : this->cores) {
+      this->physical_routing_to_virtual_routing_x.insert({virtual_noc_core.x, virtual_noc_core.x});
+      this->physical_routing_to_virtual_routing_y.insert({virtual_noc_core.y, virtual_noc_core.y});
+    }
+
+    return;
+  }
+
+  std::unordered_set<int> row_coordinates_to_remove;
+  int row_coordinate = 0;
+  int tmp = harvesting_mask;
+  while (tmp) {
+      if (tmp & 1) {
+        row_coordinates_to_remove.insert(row_coordinate);
+      }
+      tmp = tmp >> 1;
+      row_coordinate++;
+  }
+
+  // Columns are not harvested so virtual x == physical x
+  std::set<int> virtual_y_coords;
+  for (const auto &[virtual_noc_core, core_desc] : this->cores) {
+    if (core_desc.type == CoreType::WORKER or core_desc.type == CoreType::HARVESTED) {
+      virtual_y_coords.insert(virtual_noc_core.y);
+    }
+    this->physical_routing_to_virtual_routing_x.insert({virtual_noc_core.x, virtual_noc_core.x});
+  }
+  this->worker_log_to_physical_routing_x = this->worker_log_to_routing_x;
+
+  std::unordered_map<int, int> virtual_routing_to_physical_routing_y;
+  auto virtual_y_coord_it = virtual_y_coords.begin();
+  for (int logical_y_coord = 0; logical_y_coord < this->worker_grid_size.y; logical_y_coord++) {
+    while (row_coordinates_to_remove.find(*virtual_y_coord_it) != row_coordinates_to_remove.end()) {
+      virtual_y_coord_it++;
+    }
+    int physical_y_coord = *virtual_y_coord_it;
+    virtual_y_coord_it++;
+    this->worker_log_to_physical_routing_y.insert({logical_y_coord, physical_y_coord});
+    int virtual_y_coord = this->worker_log_to_routing_y.at(logical_y_coord);
+    this->physical_routing_to_virtual_routing_y.insert({physical_y_coord, virtual_y_coord});
+    virtual_routing_to_physical_routing_y.insert({virtual_y_coord, physical_y_coord});
+  }
+
+  for (const auto &[virtual_noc_core, core_desc] : this->cores) {
+    CoreCoord physical_noc_core = virtual_noc_core;
+    CoreDescriptor phys_core_desc = core_desc;
+    if (core_desc.type == CoreType::WORKER) {
+      physical_noc_core.y = virtual_routing_to_physical_routing_y.at(virtual_noc_core.y);
+      phys_core_desc.coord = physical_noc_core;
+      this->physical_workers.push_back(physical_noc_core);
+    } else if (core_desc.type == CoreType::HARVESTED) {
+      this->physical_harvested_workers.push_back(physical_noc_core);
+      this->physical_routing_to_virtual_routing_y.insert({physical_noc_core.y, virtual_noc_core.y});
+    } else {
+      this->physical_routing_to_virtual_routing_y.insert({physical_noc_core.y, physical_noc_core.y});
+    }
+    this->physical_cores.insert({physical_noc_core, phys_core_desc});
+  }
+
+  TT_ASSERT(
+    this->physical_routing_to_virtual_routing_y.size() == this->grid_size.y and this->physical_routing_to_virtual_routing_x.size() == this->grid_size.x);
+}
+
+// UMD initializes and owns tt_SocDescriptor
+// For architectures with translation tables enabled, UMD will remove the last x rows from the descriptors in tt_SocDescriptor (workers list and worker_log_to_routing_x/y maps)
+// This creates a virtual coordinate system, where translation tables are used to convert virtual core coordinates to the true harvesting state.
+// For architectures without translation tables enabled (Grayskull), UMD updates tt_SocDescriptor to contain the true harvesting state by removing the harvested physical coordiniates
+// Metal needs the true harvesting state so we generate physical descriptors from virtual coordinates
+// We also initialize additional lookup tables to translate physical coordinates to virtual coordinates because UMD APIs expect virtual coordinates.
+metal_SocDescriptor::metal_SocDescriptor(const tt_SocDescriptor& other, uint32_t harvesting_mask) : tt_SocDescriptor(other) {
   this->trisc_sizes = {MEM_TRISC0_SIZE, MEM_TRISC1_SIZE, MEM_TRISC2_SIZE};  // TODO: Read trisc size from yaml
+  this->generate_physical_descriptors_from_virtual(harvesting_mask);
   this->load_dram_metadata_from_device_descriptor();
   this->map_workers_to_dram_banks();
-}
-
-metal_SocDescriptor::metal_SocDescriptor(std::string device_descriptor_path) : tt_SocDescriptor(device_descriptor_path) {
-  this->init();
-}
-
-metal_SocDescriptor::metal_SocDescriptor(const tt_SocDescriptor& other) : tt_SocDescriptor(other) {
-  this->init();
 }
 
 const std::string get_product_name(tt::ARCH arch, uint32_t num_harvested_noc_rows) {

@@ -125,7 +125,7 @@ std::vector<std::uint32_t> read_hex_vec_from_core(
 
 void print_worker_cores(tt_cluster *cluster, chip_id_t chip_id) {
     std::cout << std::endl << "worker cores: " << std::endl;
-    for (const CoreCoord &core : cluster->get_soc_desc(chip_id).workers) {
+    for (const CoreCoord &core : cluster->get_soc_desc(chip_id).physical_workers) {
         std::cout << core.str() << " ";
     }
     std::cout << std::endl << std::endl;
@@ -133,8 +133,8 @@ void print_worker_cores(tt_cluster *cluster, chip_id_t chip_id) {
 
 bool is_worker_core(tt_cluster *cluster, const CoreCoord &core, chip_id_t chip_id) {
     return std::find(
-               cluster->get_soc_desc(chip_id).workers.begin(), cluster->get_soc_desc(chip_id).workers.end(), core) !=
-           cluster->get_soc_desc(chip_id).workers.end();
+               cluster->get_soc_desc(chip_id).physical_workers.begin(), cluster->get_soc_desc(chip_id).physical_workers.end(), core) !=
+           cluster->get_soc_desc(chip_id).physical_workers.end();
 }
 
 CircularBufferConfigVec create_circular_buffer_config_vector() {
@@ -306,15 +306,6 @@ void disable_triscs(tt_cluster *cluster, int chip_id, const CoreCoord &core) {
     log_debug(tt::LogLLRuntime, "disabled triscs");
 }
 
-WorkerCores get_worker_cores_from_cluster(tt_cluster *cluster, int chip_id) {
-    WorkerCores worker_cores;
-    for (CoreCoord raw_core : cluster->get_soc_desc(chip_id).workers) {
-        TT_ASSERT(cluster->get_soc_desc(chip_id).is_worker_core(raw_core));
-        worker_cores.emplace_back(chip_id, raw_core);
-    }
-    return worker_cores;
-}
-
 CoreCoord get_core_for_dram_channel(tt_cluster *cluster, int dram_channel_id, chip_id_t chip_id) {
     return cluster->get_soc_desc(chip_id).get_preferred_worker_core_for_dram_channel(dram_channel_id);
 }
@@ -370,14 +361,8 @@ void load_blank_kernel_to_all_worker_cores_with_exceptions(
     tt_cluster *cluster, int chip_id, const TensixRiscsOptions &riscs_to_load, std::unordered_set<CoreCoord> exceptions) {
     std::vector<CoreCoord> cores_to_load_with_blanks;  // PROF_BEGIN("set_diff")
 
-    uint32_t harvested_noc_rows = 0;
-    if (cluster->type == tt::TargetDevice::Silicon) {
-        harvested_noc_rows = cluster->get_harvested_rows(chip_id);
-    }
-    for (const CoreCoord &worker_core : cluster->get_soc_desc(chip_id).workers) {
-        unsigned int row = worker_core.y;
-        bool row_harvested = (harvested_noc_rows>>row)&0x1;
-        if (not row_harvested and exceptions.find(worker_core) == exceptions.end()) {
+    for (const CoreCoord &worker_core : cluster->get_soc_desc(chip_id).physical_workers) {
+        if (exceptions.find(worker_core) == exceptions.end()) {
             cores_to_load_with_blanks.push_back(worker_core);
         }
     }

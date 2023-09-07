@@ -152,8 +152,6 @@ void enable_triscs(tt_cluster *cluster, int chip_id, const CoreCoord &core);
 
 void disable_triscs(tt_cluster *cluster, int chip_id, const CoreCoord &core);
 
-WorkerCores get_worker_cores_from_cluster(tt_cluster *cluster, int chip_id);
-
 // subchannel hard-coded to 0 for now
 CoreCoord get_core_for_dram_channel(tt_cluster *cluster, int dram_channel_id, chip_id_t chip_id = 0);
 

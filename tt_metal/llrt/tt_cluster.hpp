@@ -48,6 +48,7 @@ struct tt_cluster
         REQUEST_ROUTING_CMD_QUEUE_BASE, RESPONSE_ROUTING_CMD_QUEUE_BASE, CMD_BUF_PTR_MASK
     };
 
+    tt_cxy_pair convert_physical_cxy_to_virtual(const tt_cxy_pair &physical_cxy);
     void configure_static_tlbs(const std::uint32_t& chip);
     void set_dram_barrier(chip_id_t chip_id, uint32_t barrier_value);
     void set_l1_barrier(chip_id_t chip_id, uint32_t barrier_value);

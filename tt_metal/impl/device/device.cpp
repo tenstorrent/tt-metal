@@ -37,56 +37,7 @@ void Device::initialize_cluster() {
     this->cluster()->assert_risc_reset(this->id_);
 }
 
-void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
-    ZoneScoped;
-    TT_ASSERT(cluster_is_initialized() && "Cluster needs to be initialized!");
-    tt::log_assert(
-        this->harvesting_initialized_,
-        "Harvesting information needs to be initialized before allocator"
-    );
-    auto soc_desc = this->cluster()->get_soc_desc(this->id_);
-    // Construct allocator config from soc_desc
-    AllocatorConfig config({
-        .num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_channels()),
-        .dram_bank_size = soc_desc.dram_bank_size,
-        .dram_bank_offsets = {},
-        .worker_grid_size = this->post_harvested_worker_grid_size_,
-        .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
-        .l1_bank_size = static_cast<size_t>(soc_desc.l1_bank_size),
-        .core_type_from_noc_coord_table = {}, // Populated later
-        .logical_to_routing_coord_lookup_table=this->logical_to_routing_coord_lookup_table_,
-        .l1_bank_remap = l1_bank_remap,
-    });
-    // Initialize dram_offsets from soc_descriptor
-    for (auto channel = 0; channel < soc_desc.get_num_dram_channels(); channel++) {
-        config.dram_bank_offsets.push_back(soc_desc.get_address_offset(channel));
-    }
-    // Initialize core_type_from_noc_coord_table table
-    for (const auto& core: soc_desc.cores) {
-        config.core_type_from_noc_coord_table.insert({core.first, AllocCoreType::Invalid});
-    }
-    for (const auto& core : soc_desc.compute_with_storage_cores) {
-        const auto logical_coord = get_core_coord_from_relative(core, this->post_harvested_worker_grid_size_);
-        const auto noc_coord = this->logical_to_routing_coord_lookup_table_[logical_coord];
-        config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::ComputeAndStore;
-    }
-    for (const auto& core : soc_desc.storage_cores) {
-        const auto logical_coord = get_core_coord_from_relative(core, this->post_harvested_worker_grid_size_);
-        const auto noc_coord = this->logical_to_routing_coord_lookup_table_[logical_coord];
-        config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::StorageOnly;
-    }
-    for (const auto& core : soc_desc.dispatch_cores) {
-        const auto logical_coord = get_core_coord_from_relative(core, this->post_harvested_worker_grid_size_);
-        const auto noc_coord = this->logical_to_routing_coord_lookup_table_[logical_coord];
-        config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::Dispatch;
-    }
-    // L1_BANKING scheme creates 1 bank per DRAM core and splits up L1 such that there are power 2 num L1 banks
-    // This is the only allocator scheme supported because kernel APIs assume num L1 banks are power of 2
-    static_assert(this->allocator_scheme_ == MemoryAllocator::L1_BANKING);
-    this->allocator_ = std::make_unique<L1BankingAllocator>(config);
-}
-
-void Device::initialize_harvesting_information() {
+void Device::initialize_dispatch_and_banking_information() {
     ZoneScoped;
     if (not cluster_is_initialized()) {
         tt::log_fatal("Device has not been initialized, did you forget to call InitializeDevice?");
@@ -98,54 +49,73 @@ void Device::initialize_harvesting_information() {
     }
 
     // Determine which noc-coords are harvested
-    std::vector<unsigned int> noc_row_harvested(soc_desc.grid_size.y, 0);
-    this->num_harvested_rows_ = 0;
+    uint32_t num_harvested_rows = 0;
     for (unsigned int r = 0; r < soc_desc.grid_size.y; r++) {
         bool row_harvested = (harvested_noc_rows>>r)&0x1;
-        this->num_harvested_rows_ += row_harvested;
-        noc_row_harvested[r] = row_harvested;
+        num_harvested_rows += row_harvested;
     }
 
-    load_dispatch_and_banking_config(soc_desc, this->num_harvested_rows_);
+    load_dispatch_and_banking_config(soc_desc, num_harvested_rows);
 
     tt::log_assert(
-        this->num_harvested_rows_ <= 2,
+        num_harvested_rows <= 2,
         tt::LogDevice,
         "this->id={} has this->num_harvested_rows_={}>2",
         this->id_,
-        this->num_harvested_rows_);
+        num_harvested_rows);
     tt::log_assert(
-        (this->num_harvested_rows_ == 0) or (this->arch() == tt::ARCH::WORMHOLE_B0),
+        (num_harvested_rows == 0) or (this->arch() == tt::ARCH::WORMHOLE_B0),
         tt::LogDevice,
         "Harvested Rows={} -- Harvesting is only supported on WORMHOLE_B0",
-        this->num_harvested_rows_);
-    // Populate lookup table
-    this->logical_to_routing_coord_lookup_table_.clear();
-    unsigned int num_rows = soc_desc.worker_grid_size.y;
-    unsigned int num_cols = soc_desc.worker_grid_size.x;
-    unsigned int row_offset = 0;
-    for (unsigned int r = 0; r < num_rows; r++) {
-        for (unsigned int c = 0; c < num_cols; c++) {
-            CoreCoord logical_coord({
-                .x = c,
-                .y = r,
-            });
-            CoreCoord noc_routing_coord({
-                .x = static_cast<size_t>(soc_desc.worker_log_to_routing_x.at(logical_coord.x)),
-                .y = static_cast<size_t>(soc_desc.worker_log_to_routing_y.at(logical_coord.y)),
-            });
-            CoreCoord translated_coord = noc_routing_coord;
-            this->logical_to_routing_coord_lookup_table_.insert({
-                logical_coord,
-                translated_coord
-            });
-        }
+        num_harvested_rows);
+}
+
+void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
+    ZoneScoped;
+    TT_ASSERT(cluster_is_initialized() && "Cluster needs to be initialized!");
+
+    this->initialize_dispatch_and_banking_information();
+    metal_SocDescriptor soc_desc = this->cluster()->get_soc_desc(this->id_);
+    // Construct allocator config from soc_desc
+    AllocatorConfig config({
+        .num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_channels()),
+        .dram_bank_size = soc_desc.dram_bank_size,
+        .dram_bank_offsets = {},
+        .worker_grid_size = this->logical_grid_size(),
+        .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
+        .l1_bank_size = static_cast<size_t>(soc_desc.l1_bank_size),
+        .core_type_from_noc_coord_table = {}, // Populated later
+        .worker_log_to_physical_routing_x=soc_desc.worker_log_to_physical_routing_x,
+        .worker_log_to_physical_routing_y=soc_desc.worker_log_to_physical_routing_y,
+        .l1_bank_remap = l1_bank_remap,
+    });
+    // Initialize dram_offsets from soc_descriptor
+    for (auto channel = 0; channel < soc_desc.get_num_dram_channels(); channel++) {
+        config.dram_bank_offsets.push_back(soc_desc.get_address_offset(channel));
     }
-    this->post_harvested_worker_grid_size_ = CoreCoord{
-        .x = soc_desc.worker_grid_size.x,
-        .y = soc_desc.worker_grid_size.y
-    };
-    this->harvesting_initialized_ = true;
+    // Initialize core_type_from_noc_coord_table table
+    for (const auto& core: soc_desc.physical_cores) {
+        config.core_type_from_noc_coord_table.insert({core.first, AllocCoreType::Invalid});
+    }
+    for (const auto& core : soc_desc.compute_with_storage_cores) {
+        const auto logical_coord = get_core_coord_from_relative(core, this->logical_grid_size());
+        const auto noc_coord = this->worker_core_from_logical_core(logical_coord);
+        config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::ComputeAndStore;
+    }
+    for (const auto& core : soc_desc.storage_cores) {
+        const auto logical_coord = get_core_coord_from_relative(core, this->logical_grid_size());
+        const auto noc_coord = this->worker_core_from_logical_core(logical_coord);
+        config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::StorageOnly;
+    }
+    for (const auto& core : soc_desc.dispatch_cores) {
+        const auto logical_coord = get_core_coord_from_relative(core, this->logical_grid_size());
+        const auto noc_coord = this->worker_core_from_logical_core(logical_coord);
+        config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::Dispatch;
+    }
+    // L1_BANKING scheme creates 1 bank per DRAM core and splits up L1 such that there are power 2 num L1 banks
+    // This is the only allocator scheme supported because kernel APIs assume num L1 banks are power of 2
+    static_assert(this->allocator_scheme_ == MemoryAllocator::L1_BANKING);
+    this->allocator_ = std::make_unique<L1BankingAllocator>(config);
 }
 
 void Device::clear_l1_state() {
@@ -166,7 +136,6 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
     log_info(tt::LogMetal, "Initializing device {}", this->id_);
     TT_ASSERT(not this->initialized_, "Device {} has already been initialized!", this->id_);
     this->initialize_cluster();
-    this->initialize_harvesting_information();
     this->initialize_allocator(l1_bank_remap);
     tt_start_debug_print_server(this->cluster());
     this->initialized_ = true;
@@ -229,7 +198,7 @@ CoreCoord Device::logical_grid_size() const {
     if (not cluster_is_initialized()) {
         TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
     }
-    return this->post_harvested_worker_grid_size_;
+    return this->cluster()->get_soc_desc(id_).worker_grid_size;
 }
 
 CoreCoord Device::compute_with_storage_grid_size() const {
@@ -243,14 +212,19 @@ CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) c
     if (not cluster_is_initialized()) {
         TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
     }
+    CoreCoord logical_grid_size = this->logical_grid_size();
     TT_ASSERT(
-        (logical_core.x < this->post_harvested_worker_grid_size_.x) and
-        (logical_core.y < this->post_harvested_worker_grid_size_.y),
+        (logical_core.x < logical_grid_size.x) and
+        (logical_core.y < logical_grid_size.y),
         "Bounds-Error -- Logical_core={} is outside of logical_grid_size={}",
         logical_core.str(),
-        this->post_harvested_worker_grid_size_.str()
+        logical_grid_size.str()
     );
-    CoreCoord worker_core = this->logical_to_routing_coord_lookup_table_.at(logical_core);
+    metal_SocDescriptor &soc_desc = this->cluster()->get_soc_desc(this->id_);
+    CoreCoord worker_core({
+            .x = static_cast<size_t>(soc_desc.worker_log_to_physical_routing_x.at(logical_core.x)),
+            .y = static_cast<size_t>(soc_desc.worker_log_to_physical_routing_y.at(logical_core.y)),
+    });
     return worker_core;
 }
 

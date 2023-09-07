@@ -91,7 +91,7 @@ class Device {
     friend bool InitializeDevice(Device *device);
     void initialize_cluster();
     void initialize_allocator(const std::vector<uint32_t>& l1_bank_remap = {});
-    void initialize_harvesting_information();
+    void initialize_dispatch_and_banking_information();
     void clear_l1_state();
     // Puts device into reset
     bool close();
@@ -110,11 +110,6 @@ class Device {
     int id_;
     std::unique_ptr<Allocator> allocator_ = nullptr;
     bool initialized_ = false;
-
-    bool harvesting_initialized_ = false;
-    CoreCoord post_harvested_worker_grid_size_ = {};
-    std::unordered_map<CoreCoord, CoreCoord> logical_to_routing_coord_lookup_table_ = {};
-    unsigned int num_harvested_rows_ = 0;
 };
 
 }  // namespace tt_metal
