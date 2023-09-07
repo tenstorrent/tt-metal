@@ -125,7 +125,6 @@ def run_perf_resnet(
         (8, 0.225, 33),
     ),
 )
-@pytest.mark.skip(reason="Conv disabled in main.")
 def test_perf_bare_metal(
     use_program_cache,
     batch_size,
@@ -152,7 +151,6 @@ def test_perf_bare_metal(
         (8, 0.3, 36),
     ),
 )
-@pytest.mark.skip(reason="Conv disabled in main.")
 def test_perf_virtual_machine(
     use_program_cache,
     batch_size,
