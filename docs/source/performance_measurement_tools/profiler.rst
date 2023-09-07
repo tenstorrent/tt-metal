@@ -2,8 +2,14 @@
 Performance Profiler
 ====================
 
-Quick Start Guide
-=================
+For generating perf csv reports for OPs or model runs, please refer to the `Generating Perf Reports`_ section.
+
+For device or otherwise also known as kernel side profiling, please refer to the `Profiling Device`_ section.
+
+For profiling host-side C++ and python code using tracy, please refer to the `Tracy`_ section.
+
+Generating Perf Reports
+=======================
 
 1. Build the tt_metal project with the profiler build flag set as follows:
 
@@ -41,10 +47,11 @@ Run the following build script:
 - Make sure tt_metal python virtual env is setup as per :ref:`Getting Started<Getting Started>`
 - ``-c`` is the only option for the script which is for providing the run the test execution script.
 - If your command actually starts a collection of tests, please refer to the `Profiling OPs`_ section for more info on how to choose log locations for your tests.
-- Once the script finished, it will provide log messages to tell you where the generated ops report csv is stored.
+- Once the script finishes, it will provide log messages to tell you where the generated ops report csv is stored.
 
-OPs Report
-==========
+
+Perf Report Headers
+-------------------
 
 The OPs profiler report demonstrates the execution flow of the OPs in the pipeline. Each row in the CSV represents an OP executed.
 
@@ -133,11 +140,9 @@ The headers of the columns with their descriptions is below:
     - WriteToDevice
     - DumpDeviceProfileResults
 
-Deeper Dive
-===========
 
-Automated Script
-----------------
+profile_this description
+------------------------
 
 The ``profile_this.py`` script is an automated script that cover most Models and OPs units test profiling scenarios.
 
@@ -204,7 +209,7 @@ Profiling Device
 Any point on the device side code can be marked with a time marker. The markers are stored in a statically assigned L1 location.
 As part of tt_metal api ``LaunchProgram`` the markers are fetched from all the cores on the device.
 
-Because downloading profiler results from device through has high overheads, ``TT_METAL_DEVICE_PROFILER=1`` environment variable has to be set for ``LaunchProgram`` to perform the download.
+Because downloading profiler results from device has high overheads, ``TT_METAL_DEVICE_PROFILER=1`` environment variable has to be set for ``LaunchProgram`` to perform the download.
 
 Default markers are present in device FW(i.e. ``.cc`` files) that mark kernel and FW start and end times.
 
@@ -283,20 +288,100 @@ Limitations
 * Debug print can not used in kernels that are being profiled.Correct usage of DPRINT and profiler is suggested in the `add_two_ints.cpp` tt_metal test. If `profile_device` is set, it profiles, if not it prints. The test will error out if DRPRINT and profiler are attempted to be used together.
 
 
-TRACY
+Tracy
 =====
 
 Profiling
 ---------
 
-Fresh build with the tracy flag is required for profiling with tracy profiler.
+Tracy is an alternative method for profiling host-side python and C++ code.
+
+Build with the tracy flag set is required for profiling with tracy profiler.
 
 ..  code-block:: sh
 
     make clean
     make build ENABLE_TRACY=1
 
-With this build, all the marked zones in the code will be profiled.
+With this build, all the marked zones in the C++ code will be profiled.
+
+
+Profiling python code with tracy requires running your python code with the `tracy` module similar to the `cProfile` standard python module.
+
+Also similar to the `cProfile` module, `sys.setprofile` and `sys.settrace` functions are used to set profiling callbacks.
+
+For profiling your entire python program in tracy run your program as follows:
+
+..  code-block:: sh
+
+    python -m tracy {test_script}.py
+
+For **pytest** scripts you can import pytest as a module and pass its argument accordingly.
+
+For example to profile a bert unit test you can run the following:
+
+..  code-block:: sh
+
+    python -m tracy -m pytest tests/models/bert_large_performant/unit_tests/test_bert_large_split_and_transform_qkv_heads.py::test_split_fused_qkv_and_split_heads_with_program_cache
+
+
+Python programs can also be partially profiled by instrumenting parts of the code intended to be profiled and run them with the `-p` option of the `tracy` module set.
+
+For instrumenting pytest tests, `tracy_profile` fixture can be used to profile the entire test function.
+
+The following example shows how to use the fixture and the required CLI command to do partial profiling.
+
+Adding fixture:
+
+..  code-block:: python
+
+    def test_split_fused_qkv_and_split_heads_with_program_cache(device, use_program_cache, tracy_profile):
+
+Running the `tracy` module with the `-p` option to do partial profiling:
+
+..  code-block:: sh
+
+    python -m tracy -p -m pytest tests/models/bert_large_performant/unit_tests/test_bert_large_split_and_transform_qkv_heads.py::test_split_fused_qkv_and_split_heads_with_program_cache
+
+Instead of profiling the entirety of the pytest run, python functions only called as part of the `test_split_fused_qkv_and_split_heads_with_program_cache` functions are profiled in
+tracy.
+
+Instrumentation can also be done without using the pytest fixture.
+
+The following shows how to profile an example `function_under_test` function.
+
+
+..  code-block:: python
+
+    def function_under_test():
+        child_function_1()
+        child_function_2()
+
+
+    from tracy import Profiler
+    profiler = Profiler()
+
+    profiler.enable()
+    funtion_under_test()
+    profiler.disable()
+
+Similar to the pytest setup, calling the parent script with `-p` option of the `tracy` set will profile the region where profiler is enabled.
+
+**Note**, it is recommended to sandwich the function call between the enable and disable calls rather than having them as first first and last calls in the function being profiled.
+This is because `settrace` and `setprofile` trigger on more relevant events when the setup is done previous to the functions call.
+
+In some cases, significant durations of a function, do not get broken down to smaller child calls with explainable durations. This is usually either due to inline work that is
+not wrapped inside a function or a call to a function that is defined as parte of a shared object. For example, `pytorch` function calls do not come in as native python calls and will not generate python call events.
+
+For these cases, the line profiling feature of the `settrace` functions is utilized to provide line by line profiling. Because, substantially more data is produced in line by line
+profiling, this options is only provided with partial profiling.
+
+The same pytest example above will be profiled line by line by adding the `-l` option to the list of `tracy` module options.
+
+..  code-block:: sh
+
+    python -m tracy -p -l -m pytest tests/models/bert_large_performant/unit_tests/test_bert_large_split_and_transform_qkv_heads.py::test_split_fused_qkv_and_split_heads_with_program_cache
+
 
 GUI
 ---
