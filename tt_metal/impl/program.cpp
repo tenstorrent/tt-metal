@@ -232,9 +232,12 @@ std::vector<CoreCoord> Program::logical_cores() const {
 }
 
 void Program::construct_core_range_set_for_worker_cores() {
+    bool found_kernels = false;
     for (const auto &[kernel_id, kernel] : this->kernel_by_id_) {
         this->worker_crs_.merge ( kernel->core_range_set());
+        found_kernels = true;
     }
+    TT_ASSERT(!found_kernels || this->worker_crs_.ranges().size() >= 1, "Invalid core range set");
 }
 
 Program::~Program() {

@@ -391,9 +391,6 @@ int main(int argc, char **argv) {
         int device_id = 0;
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
 
-
-        ;
-
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
@@ -410,11 +407,6 @@ int main(int argc, char **argv) {
             per_core_M,
             per_core_N);
 
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Compile Application
-        ////////////////////////////////////////////////////////////////////////////
-
-        tt::log_assert(program.get_worker_core_range_set().ranges().size() >= 1, "Invalid core range set");
 
         CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
 
