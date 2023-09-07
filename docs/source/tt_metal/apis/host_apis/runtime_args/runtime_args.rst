@@ -8,5 +8,3 @@ Runtime Arguments
 .. doxygenfunction:: SetRuntimeArgs(const Program &program, KernelID kernel_id, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &runtime_args)
 
 .. doxygenfunction:: GetRuntimeArgs
-
-.. doxygenfunction:: WriteRuntimeArgsToDevice

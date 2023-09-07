@@ -1,5 +1,0 @@
-
-InitializeDevice
-=================
-
-.. doxygenfunction:: InitializeDevice
