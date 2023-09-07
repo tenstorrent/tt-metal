@@ -1,5 +1,7 @@
 include $(TT_METAL_HOME)/tests/tt_metal/tt_metal/unit_tests/module.mk
 include $(TT_METAL_HOME)/tests/tt_metal/tt_metal/unit_tests_fast_dispatch/module.mk
+# Programming examples for external users
+include $(TT_METAL_HOME)/tt_metal/programming_examples/module.mk
 
 # Every variable in subdir must be prefixed with subdir (emulating a namespace)
 TT_METAL_TESTS += \

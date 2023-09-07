@@ -7,9 +7,6 @@ include $(TT_METAL_HOME)/tt_metal/build_kernels_for_riscv/module.mk
 include $(TT_METAL_HOME)/tt_metal/llrt/module.mk
 include $(TT_METAL_HOME)/tt_metal/tools/module.mk
 
-# Programming examples for external users
-include $(TT_METAL_HOME)/tt_metal/programming_examples/module.mk
-
 ifeq ($(TT_METAL_CREATE_STATIC_LIB), 1)
 TT_METAL_LIB = $(LIBDIR)/libtt_metal.a
 else
