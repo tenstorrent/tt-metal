@@ -20,6 +20,7 @@ inline void llk_unpack_A_mop_config(const bool transpose_of_faces, const std::ui
     const uint32_t num_faces = get_num_faces(operand_id); 
     #if SKIP_UNP == 1
         static constexpr uint unpack_srca = TT_OP_NOP;
+        static constexpr uint unpack_srca_to_dest = TT_OP_NOP;
         static constexpr uint unpack_srca_set_dvalid = TT_OP_NOP;
         static constexpr uint unpack_srcb = TT_OP_NOP;
         static constexpr uint unpack_srcb_inc_z_0 = TT_OP_NOP;
