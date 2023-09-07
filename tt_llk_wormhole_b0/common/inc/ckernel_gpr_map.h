@@ -43,6 +43,8 @@ struct p_gpr_unpack
     constexpr static uint PERF_UNPACK_NUM_TILES_1 = 46;   // num tiles for input operands 2-3
     constexpr static uint PERF_UNPACK_NUM_TILES_2 = 47;   // num tiles for input operands 4-5
     constexpr static uint PERF_UNPACK_NUM_TILES_3 = 48;   // num tiles for input operands 6-7
+    constexpr static uint UNPACK_STRIDE     = 52;   // Used to save/restore unpack A stride (UNP0_ADDR_CTRL_ZW_REG_1_Zstride register)
+                                                    // before/after unpacking directly to dest
 };
 
 // Math GPR thread

@@ -210,7 +210,7 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
     }
 
     if constexpr (unpack_to_dest) {
-        set_dst_write_addr(unp_cfg_context);
+        set_dst_write_addr(unp_cfg_context, input);
         wait_for_dest_available();
     }    
 

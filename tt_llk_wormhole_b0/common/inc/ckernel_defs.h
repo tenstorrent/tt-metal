@@ -159,6 +159,7 @@ constexpr static std::int32_t GET_DEST_TILE_BYTE_SIZE(uint format) {
 
 constexpr static std::uint32_t GET_L1_HEADERLESS_TILE_SIZE(uint format) {
     switch (format&0xF) {
+        case ((uint8_t)DataFormat::Int32):
         case ((uint8_t)DataFormat::Float32): return (4096>>4);
         case ((uint8_t)DataFormat::Float16):
         case ((uint8_t)DataFormat::Float16_b): return (2048>>4);
@@ -208,6 +209,7 @@ constexpr static bool IS_A_FORMAT(uint format) {
 
 constexpr static std::uint32_t SCALE_DATUM_SIZE(uint format, uint datum_count) {
     switch (format&0xF) {
+        case ((uint8_t)DataFormat::Int32):
         case ((uint8_t)DataFormat::Float32): return (datum_count<<2);
         case ((uint8_t)DataFormat::Float16): 
         case ((uint8_t)DataFormat::Float16_b): return (datum_count<<1);
