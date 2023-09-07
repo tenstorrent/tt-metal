@@ -45,9 +45,9 @@ void kernel_main() {
     uint32_t tensor_stride = out_num_tiles_per_tensor_x;
     uint32_t tensor_stride_cum = 0;
 #ifdef DEBUG
-    DPRINT << "Reader Tile ID Offset: " << in0_tensor_tile_id << ENDL() << ENDL();
-    DPRINT << "Reader Z Stride: " << z_stride << ENDL();
-    DPRINT << "Reader Y Stride: " << y_stride << ENDL();
+    // DPRINT << "Reader Tile ID Offset: " << in0_tensor_tile_id << ENDL() << ENDL();
+    // DPRINT << "Reader Z Stride: " << z_stride << ENDL();
+    // DPRINT << "Reader Y Stride: " << y_stride << ENDL();
 #endif
     for (uint32_t out_tensor_id = 0; out_tensor_id < out_num_tensors; out_tensor_id++) {
         uint32_t z_stride_cum = 0;
@@ -62,8 +62,8 @@ void kernel_main() {
                     noc_async_read_barrier();
                     cb_push_back(cb_id_in0, onetile);
 #ifdef DEBUG
-                    DPRINT << "Reader Tile ID: " << tile_id  + in0_tensor_tile_id << ENDL();
-                    DPRINT << "Reader Address: " << l1_write_addr_in0 << ENDL() << ENDL();
+                    // DPRINT << "Reader Tile ID: " << tile_id  + in0_tensor_tile_id << ENDL();
+                    // DPRINT << "Reader Address: " << l1_write_addr_in0 << ENDL() << ENDL();
 #endif
                 }
                 y_stride_cum += y_stride;

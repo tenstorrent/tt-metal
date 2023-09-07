@@ -55,12 +55,12 @@ void kernel_main() {
     uint32_t bank_id = 0;
     uint32_t tile_id = 0;
 #ifdef DEBUG
-    DPRINT << "Writer Tile ID Offset: " << out_tensor_tile_id << ENDL() << ENDL();
+    // DPRINT << "Writer Tile ID Offset: " << out_tensor_tile_id << ENDL() << ENDL();
 #endif
     for (const auto& s : output_banks) {
         if(out1_only && (bank_id == 0)){
             #ifdef DEBUG
-                DPRINT << "Writer is K Only " << ENDL();
+                // DPRINT << "Writer is K Only " << ENDL();
             #endif
             bank_id++;
             continue;
@@ -77,8 +77,8 @@ void kernel_main() {
                     noc_async_write_barrier();
                     cb_pop_front(cb_id_out0, onetile);
 #ifdef DEBUG
-            DPRINT << "Writer for Bank: " << bank_id << " has Tile ID: " << tile_id + out_tensor_tile_id << ENDL();
-            DPRINT << "Writer Address: " << l1_read_addr << ENDL() << ENDL();
+            // DPRINT << "Writer for Bank: " << bank_id << " has Tile ID: " << tile_id + out_tensor_tile_id << ENDL();
+            // DPRINT << "Writer Address: " << l1_read_addr << ENDL() << ENDL();
 #endif
                 }
                 y_stride_cum += y_stride;
@@ -88,13 +88,13 @@ void kernel_main() {
         bank_id++;
         if(out0_only){
             #ifdef DEBUG
-                DPRINT << "Writer is Q Only " << ENDL();
+                // DPRINT << "Writer is Q Only " << ENDL();
             #endif
             break;
         }
     }
 
 #ifdef DEBUG
-    DPRINT << "Writer End " << ENDL();
+    // DPRINT << "Writer End " << ENDL();
 #endif
 }
