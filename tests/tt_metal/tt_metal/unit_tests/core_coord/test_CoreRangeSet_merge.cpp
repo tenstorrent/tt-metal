@@ -12,6 +12,10 @@ namespace basic_tests::CoreRangeSet{
 
 TEST_F(CoreCoordHarness, TestCoreRangeSetMerge)
 {
+    ::CoreRangeSet empty_crs({});
+    EXPECT_EQ ( empty_crs.merge({this->single_core}).ranges().size(), 1);
+
+    EXPECT_EQ ( ::CoreRangeSet({cr1}).merge({cr1}).ranges() , std::set<::CoreRange>( {cr1}) );
     EXPECT_EQ ( ::CoreRangeSet({cr1}).merge({cr1}).ranges() , std::set<::CoreRange>( {cr1}) );
     EXPECT_EQ ( ::CoreRangeSet({cr1}).merge({cr2}).merge({cr3}).ranges() , std::set<::CoreRange>( {cr1,cr2,cr3}) );
     EXPECT_EQ ( ::CoreRangeSet({cr1, cr2, cr3}).merge({cr4}).ranges() , std::set<::CoreRange>( {cr4}) );
