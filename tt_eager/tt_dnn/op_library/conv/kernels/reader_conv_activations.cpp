@@ -86,7 +86,7 @@ void kernel_main() {
             uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
             // TODO (nshanker): add macro to disable checks
             if(start_block_2d_index_w >= act_matrix_width_unpadded) {
-                DPRINT << "Problem" << ENDL();
+                //DPRINT << "Problem" << ENDL();
             }
             for(uint32_t h_b = 0; h_b < act_block_h_datums; h_b++) {
                 uint32_t h = start_block_2d_index_h + h_b;
@@ -96,7 +96,7 @@ void kernel_main() {
                     uint32_t pad_size_bytes = act_block_w_datums<<1;
                     // TODO (nshanker): add macro to disable checks
                     if(dst_address_offset_l1 + (pad_size_bytes-1) >= dst_l1_act_buffer_size_bytes) {
-                        DPRINT << "Problem" << ENDL();
+                        //DPRINT << "Problem" << ENDL();
                     }
                     uint32_t dst_addr = l1_write_addr_act + dst_address_offset_l1;
                     pad_l1_buffer_with_zeroes(dst_addr, pad_size_bytes);
@@ -106,7 +106,7 @@ void kernel_main() {
                     uint32_t end_block_2d_index_w = start_block_2d_index_w + act_block_w_datums - 1;
                     // TODO (nshanker): add macro to disable checks
                     if(end_block_2d_index_w >= act_matrix_width) {
-                        DPRINT << "Problem" << ENDL();
+                        //DPRINT << "Problem" << ENDL();
                     }
                     while (w <= end_block_2d_index_w) {
                         uint32_t src_address_offset_dram = 0;
@@ -116,11 +116,11 @@ void kernel_main() {
                             // pad (block shape padding for width dim)
                             // TODO (nshanker): add macro to disable checks
                             if(end_block_2d_index_w != act_matrix_width-1) {
-                                DPRINT << "Problem" << ENDL();
+                                //DPRINT << "Problem" << ENDL();
                             }
                             uint32_t pad_size_bytes = (end_block_2d_index_w - w + 1)<<1;
                             if(dst_address_offset_l1 + (pad_size_bytes-1) >= dst_l1_act_buffer_size_bytes) {
-                                DPRINT << "Problem" << ENDL();
+                                //DPRINT << "Problem" << ENDL();
                             }
                             uint32_t dst_addr = l1_write_addr_act + dst_address_offset_l1;
                             pad_l1_buffer_with_zeroes(dst_addr, pad_size_bytes);
@@ -131,7 +131,7 @@ void kernel_main() {
                             uint32_t channel_stick_col_id = w / channel_stick_size;
                             uint32_t channel_stick_row_id = h;
                             if(channel_stick_offset % 16 != 0) { // DRAM read address must be aligned to 32 bytes
-                                DPRINT << "Problem" << ENDL();
+                                //DPRINT << "Problem" << ENDL();
                             }
                             uint32_t channel_stick_row_id_x = channel_stick_row_id % conv_output_size_w;
                             uint32_t channel_stick_row_id_y = channel_stick_row_id / conv_output_size_w;
@@ -140,7 +140,7 @@ void kernel_main() {
                             uint32_t act_tensor_padded_x = act_tensor_start_x + (channel_stick_col_id % weight_size_w);
                             uint32_t act_tensor_padded_y = act_tensor_start_y + (channel_stick_col_id / weight_size_w);
                             if(w > end_block_2d_index_w) {
-                                DPRINT << "Problem" << ENDL();
+                                //DPRINT << "Problem" << ENDL();
                             }
                             uint32_t a = channel_stick_size - channel_stick_offset;
                             uint32_t b = (end_block_2d_index_w+1)-w;
@@ -151,7 +151,7 @@ void kernel_main() {
                                 uint32_t dst_addr = l1_write_addr_act + dst_address_offset_l1;
                                 uint32_t pad_size_bytes = read_size_bytes;
                                 if(dst_address_offset_l1 + (pad_size_bytes-1) >= dst_l1_act_buffer_size_bytes) {
-                                    DPRINT << "Problem" << ENDL();
+                                    //DPRINT << "Problem" << ENDL();
                                 }
                                 pad_l1_buffer_with_zeroes(dst_addr, pad_size_bytes);
                             }
@@ -159,18 +159,18 @@ void kernel_main() {
                                 uint32_t act_tensor_x = act_tensor_padded_x - pad_w;
                                 uint32_t act_tensor_y = act_tensor_padded_y - pad_h;
                                 if(act_tensor_x >= conv_act_size_w || act_tensor_y >= conv_act_size_h) {
-                                    DPRINT << "Problem" << ENDL();
+                                    //DPRINT << "Problem" << ENDL();
                                 }
                                 uint32_t act_tensor_channel_id = act_tensor_y * conv_act_size_w + act_tensor_x;
                                 src_address_offset_dram = ((act_tensor_channel_id * channel_stick_size) + channel_stick_offset)<<1;
                                 if(src_address_offset_dram % 32 != 0) { // DRAM read address must be aligned to 32 bytes
-                                    DPRINT << "Problem1" << ENDL();
+                                    //DPRINT << "Problem1" << ENDL();
                                 }
                                 if(src_address_offset_dram >= src_dram_act_buffer_size_bytes) {
-                                    DPRINT << "Problem2" << ENDL();
+                                    //DPRINT << "Problem2" << ENDL();
                                 }
                                 if(dst_address_offset_l1 + (read_size_bytes-1) >= dst_l1_act_buffer_size_bytes) {
-                                    DPRINT << "Problem3" << ENDL();
+                                    //DPRINT << "Problem3" << ENDL();
                                 }
                                 uint32_t src_addr = act_addr_dram_base + src_address_offset_dram;
                                 uint32_t dst_addr = l1_write_addr_act + dst_address_offset_l1;
@@ -181,7 +181,7 @@ void kernel_main() {
                         dst_address_offset_l1 += read_size_bytes;
                         w += (read_size_bytes>>1);
                         if(w > end_block_2d_index_w+1) {
-                            DPRINT << "Problem" << ENDL();
+                            //DPRINT << "Problem" << ENDL();
                         }
                     }
                 }
