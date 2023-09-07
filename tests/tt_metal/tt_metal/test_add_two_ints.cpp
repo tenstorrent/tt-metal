@@ -7,7 +7,6 @@
 #include <random>
 
 #include "tt_metal/host_api.hpp"
-#include "tools/profiler/profiler_state.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 
 ////////////////////////////////////////////////////////////////////////////
@@ -65,9 +64,6 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-        if (getDeviceProfilerState() == false){
-            StartDebugPrintServer(device, {{1,1}});
-        }
         tt_metal::SetRuntimeArgs(program, add_two_ints_kernel, core, first_runtime_args);
 
         pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
