@@ -6,7 +6,7 @@
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "tt_dnn/op_library/reshape/reshape_op.hpp"
-
+#include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
 #include "tt_numpy/functions.hpp"
 
 namespace tt {
@@ -882,6 +882,47 @@ Tensor _outer(Tensor& a, Tensor& b, const MemoryConfig& output_mem_config) {
 }
 Tensor outer(Tensor& a, Tensor& b, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _outer)(a, b, output_mem_config);
+}
+
+// Gated Linear Unit activation: matmul(split[0],sigmoid(split[1]))
+Tensor glu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
+    TT_ASSERT( dim == -1 || dim == 3, "last dime GLU only supported at this time ");
+    if ( dim == -1 ) dim = 3;
+    std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input_a,output_mem_config);
+    Tensor sigmoid_b = sigmoid(ab[1], output_mem_config);
+    Tensor glu_result = mul(ab[0], sigmoid_b, std::nullopt, output_mem_config);
+    return glu_result;
+}
+
+// ReLU Gated Linear Unit activation: matmul(split[0],relu(split[1]))
+Tensor reglu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
+    TT_ASSERT( dim == -1 || dim == 3, "last dime GLU only supported at this time ");
+    if ( dim == -1 ) dim = 3;    
+    std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input_a,output_mem_config);
+    Tensor relu_b = relu(ab[1], output_mem_config);
+    Tensor reglu_result = mul(ab[0], relu_b, std::nullopt, output_mem_config);
+    return reglu_result;
+}
+
+// Gaussian Error Gated Linear Unit activation: matmul(split[0],gelu(split[1]))
+Tensor geglu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
+    TT_ASSERT( dim == -1 || dim == 3, "last dime GLU only supported at this time "); 
+    if ( dim == -1 ) dim = 3;   
+    std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input_a,output_mem_config);
+    constexpr bool fast_appx = true;
+    Tensor gelu_b = gelu(ab[1], fast_appx, output_mem_config);
+    Tensor geglu_result = mul(ab[0], gelu_b, std::nullopt, output_mem_config);
+    return geglu_result;
+}
+
+// Swish Gated Linear Unit activation: matmul(split[0],swish(split[1]))
+Tensor swiglu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
+    TT_ASSERT( dim == -1 || dim == 3, "last dime GLU only supported at this time ");
+    if ( dim == -1 ) dim = 3;    
+    std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input_a,output_mem_config);
+    Tensor swish_b = swish(ab[1], output_mem_config);
+    Tensor swiglu_result = mul(ab[0], swish_b, std::nullopt, output_mem_config);
+    return swiglu_result;
 }
 
 

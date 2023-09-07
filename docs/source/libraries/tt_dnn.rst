@@ -572,3 +572,11 @@ Other Operations
 .. autofunction:: tt_lib.tensor.std_hw
 
 .. autofunction:: tt_lib.tensor.normalize_hw
+
+.. autofunction:: tt_lib.tensor.glu
+
+.. autofunction:: tt_lib.tensor.geglu
+
+.. autofunction:: tt_lib.tensor.reglu
+
+.. autofunction:: tt_lib.tensor.swiglu

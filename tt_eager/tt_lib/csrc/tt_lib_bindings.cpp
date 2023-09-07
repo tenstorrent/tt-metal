@@ -1291,6 +1291,30 @@ void TensorModule(py::module &m_tensor) {
     detail::bind_unary_op(m_tensor, "logical_not_unary", logical_not_unary, R"doc(Returns a new tensor with the logical not of the elements of the input tensor ``{0}``.)doc");
     detail::bind_unary_op(m_tensor, "log_sigmoid", &log_sigmoid, R"doc(Applies the logsigmoid function to the elements of the input tensor ``{0}``.)doc");
     detail::bind_unary_op_with_param(
+        m_tensor, "glu", &glu,
+	py::arg("dim") = -1,
+        R"doc(Applies the Gated Linear Units (GLU) function to the elements of the input tensor ``{0}`` split along dim ``{1}``.)doc",
+	R"doc(dimension to split)doc"
+    );
+    detail::bind_unary_op_with_param(
+        m_tensor, "geglu", &geglu,
+	py::arg("dim") = -1,
+        R"doc(Applies the Gaussian Error Gated Linear Units function to the elements of the input tensor ``{0}`` split along dim ``{1}``.)doc",
+	R"doc(dimension to split)doc"	
+    );    
+    detail::bind_unary_op_with_param(
+        m_tensor, "reglu", &reglu,
+        py::arg("dim") = -1,
+        R"doc(Applies the Rectified Linear Gated Linear Units (ReGLU) function to the elements of the input tensor ``{0}`` split along dim ``{1}``.)doc",
+	R"doc(dimension to split)doc"	       
+    );
+    detail::bind_unary_op_with_param(
+        m_tensor, "swiglu", &swiglu,
+        py::arg("dim") = -1,
+        R"doc(Applies the Swish Gated Linear Units (SwiGLU) function to the elements of the input tensor ``{0}`` split along dim ``{1}``.)doc",	
+	R"doc(dimension to split)doc"
+    );
+    detail::bind_unary_op_with_param(
         m_tensor, "gelu", &gelu,
         py::arg("fast_and_approx") = true,
         R"doc(Applies the Gaussian Error Linear Units (GELU) function to the elements of the input tensor ``{0}``.)doc",

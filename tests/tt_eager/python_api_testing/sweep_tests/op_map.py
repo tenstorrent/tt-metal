@@ -727,4 +727,20 @@ op_map = {
         "tt_lib_op": tt_lib_ops.conv,
         "pytorch_op": pytorch_ops.conv,
     },
+    "activation_glu": {
+        "tt_lib_op": tt_lib_ops.activation_glu,
+        "pytorch_op": pytorch_ops.activation_glu,
+    },
+    "activation_reglu": {
+        "tt_lib_op": tt_lib_ops.activation_reglu,
+        "pytorch_op": pytorch_ops.activation_reglu,
+    },
+   "activation_geglu": {
+        "tt_lib_op": tt_lib_ops.activation_geglu,
+        "pytorch_op": pytorch_ops.activation_geglu,
+    },
+   "activation_swiglu": {
+        "tt_lib_op": tt_lib_ops.activation_swiglu,
+        "pytorch_op": pytorch_ops.activation_swiglu,
+    },
 }

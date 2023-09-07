@@ -2770,3 +2770,87 @@ def unpad_from_tile(
     output = t1.to_torch()
 
     return output
+
+
+@setup_host_and_device
+def activation_glu(
+    x, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs
+):
+    dim = kwargs.get("dim", -1)
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype[0],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
+
+    t1 = ttl.tensor.glu(t0, dim, output_mem_config=output_mem_config)
+
+    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    return output
+
+
+@setup_host_and_device
+def activation_geglu(
+    x, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs
+):
+    dim = kwargs.get("dim", -1)
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype[0],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
+
+    t1 = ttl.tensor.geglu(t0, dim, output_mem_config=output_mem_config)
+
+    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    return output
+
+
+@setup_host_and_device
+def activation_reglu(
+    x, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs
+):
+    dim = kwargs.get("dim", -1)
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype[0],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
+
+    t1 = ttl.tensor.reglu(t0, dim, output_mem_config=output_mem_config)
+
+    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    return output
+
+
+@setup_host_and_device
+def activation_swiglu(
+    x, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs
+):
+    dim = kwargs.get("dim", -1)
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype[0],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
+
+    t1 = ttl.tensor.swiglu(t0, dim, output_mem_config=output_mem_config)
+
+    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    return output

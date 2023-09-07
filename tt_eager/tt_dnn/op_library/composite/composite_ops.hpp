@@ -251,6 +251,15 @@ Tensor normalize_hw(const Tensor& y, const MemoryConfig& output_mem_config = ope
 
 Tensor logical_ori(const Tensor& input_a, float immediate, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+// Gated Linear Unit activation
+Tensor glu(const Tensor& input_a, int32_t dim = -1, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+// ReLU based GLU
+Tensor reglu(const Tensor& input_a, int32_t dim = -1, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+// Gelu based GLU
+Tensor geglu(const Tensor& input_a, int32_t dim = -1, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+// Swish based GLU
+Tensor swiglu(const Tensor& input_a, int32_t dim = -1, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 } //namespace tt_metal
 
 } //namespace tt
