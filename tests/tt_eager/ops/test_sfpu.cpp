@@ -57,7 +57,7 @@ bool run_sfpu_test(string sfpu_name) {
         int device_id = 0;
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
 
-        pass &= tt_metal::InitializeDevice(device);;
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -146,7 +146,7 @@ bool run_sfpu_test(string sfpu_name) {
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
 
-        pass &= tt_metal::CompileProgram(device, program);
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
@@ -156,7 +156,7 @@ bool run_sfpu_test(string sfpu_name) {
 
         tt_metal::WriteToBuffer(src_dram_buffer, src_vec);
 
-        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -183,7 +183,7 @@ bool run_sfpu_test(string sfpu_name) {
             }
         );
 
-        tt_metal::WriteRuntimeArgsToDevice(device, program);
+
 
         // tt::tt_metal::tt_gdb(device, 0, program->cores(), program->cores_to_ops());
         pass &= tt_metal::LaunchKernels(device, program);

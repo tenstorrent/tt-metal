@@ -148,9 +148,9 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
 
     check_program_is_mapped_to_correct_cores(program, core_range_set, compute_kernel_args);
 
-    pass &= tt_metal::CompileProgram(device, program);
+    pass &= tt_metal::detail::CompileProgram(device, program);
 
-    pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+    pass &= tt_metal::detail::ConfigureDeviceWithProgram(device, program);
 
     check_semaphores_are_initialized(device, core_range_set, golden_sem_values);
 
@@ -184,7 +184,7 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
             num_tiles});
     }
 
-    tt_metal::WriteRuntimeArgsToDevice(device, program);
+
     pass &= tt_metal::LaunchKernels(device, program);
 
     for (const auto &[core, dst_l1_buffer] : core_to_l1_buffer) {
@@ -200,6 +200,9 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
 
 int main(int argc, char **argv) {
     bool pass = true;
+    // Once this test is uplifted to use fast dispatch, this can be removed.
+    char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+    putenv(env);
 
     try {
         ////////////////////////////////////////////////////////////////////////////
@@ -221,7 +224,7 @@ int main(int argc, char **argv) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(device_id);
 
-        pass &= tt_metal::InitializeDevice(device);
+
 
         tt_metal::Program program = tt_metal::Program();
         CoreRange core_range_one = {.start={0, 0}, .end={1, 1}};

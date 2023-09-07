@@ -11,7 +11,7 @@
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
 #include "llrt/tt_debug_print_server.hpp"
-
+#include "tt_metal/detail/tt_metal.hpp"
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -26,7 +26,7 @@ bool test_compile_args(std::vector<uint32_t> compile_args_vec, int device_id) {
     tt_metal::Device *device =
         tt_metal::CreateDevice(device_id);
 
-    pass &= tt_metal::InitializeDevice(device);
+
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -58,7 +58,7 @@ bool test_compile_args(std::vector<uint32_t> compile_args_vec, int device_id) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile Application
     ////////////////////////////////////////////////////////////////////////////
-    pass &= tt_metal::CompileProgram(device, program);
+    pass &= tt_metal::detail::CompileProgram(device, program);
 
     return pass;
 }

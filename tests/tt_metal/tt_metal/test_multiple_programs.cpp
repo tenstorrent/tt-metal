@@ -199,7 +199,7 @@ void write_program_runtime_args_to_device(
         num_tiles}
     );
 
-    tt_metal::WriteRuntimeArgsToDevice(device, program);
+
 }
 //////////////////////////////////////////////////////////////////////////////////////////
 // 1. First program runs eltwise binary on logical core {0, 0}
@@ -232,7 +232,7 @@ int main(int argc, char **argv) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(device_id);
 
-        pass &= tt_metal::InitializeDevice(device);;
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -255,11 +255,11 @@ int main(int argc, char **argv) {
         //                      Compile Applications
         ////////////////////////////////////////////////////////////////////////////
 
-        pass &= tt_metal::CompileProgram(device, program1);
+
 
         // Both programs use the same CB addresses but they can be compiled one after
         // the other because they use the same data formats
-        pass &= tt_metal::CompileProgram(device, program2);
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Program One
@@ -275,7 +275,7 @@ int main(int argc, char **argv) {
         auto src1_activations = pack_bfloat16_vec_into_uint32_vec(src1_activations_tile_layout);
         tt_metal::WriteToBuffer(src1_dram_buffer, src1_activations);
 
-        pass &= tt_metal::ConfigureDeviceWithProgram(device, program1);
+
 
         write_program_runtime_args_to_device(device, program1, reader1_kernel_id, writer1_kernel_id, core, num_tiles, src0_dram_buffer, src1_dram_buffer, dst_dram_buffer);
 
@@ -303,7 +303,7 @@ int main(int argc, char **argv) {
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
         tt_metal::WriteToBuffer(src1_dram_buffer, weights);
 
-        pass &= tt_metal::ConfigureDeviceWithProgram(device, program2);
+
 
         write_program_runtime_args_to_device(device, program2, reader2_kernel_id, writer2_kernel_id, core, num_tiles, src0_dram_buffer, src1_dram_buffer, dst_dram_buffer);
 

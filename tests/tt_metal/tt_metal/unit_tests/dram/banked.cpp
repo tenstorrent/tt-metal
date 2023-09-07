@@ -129,14 +129,14 @@ bool dram_reader_cb_writer_dram(
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    pass &= tt_metal::CompileProgram(device, program);
+
     auto input_packed = generate_uniform_random_vector<uint32_t>(0, 100, cfg.size_bytes / sizeof(uint32_t));
     tt_metal::WriteToBuffer(input_dram_buffer, input_packed);
 
-    pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
     tt_metal::SetRuntimeArgs(program, reader_kernel, cfg.target_core, reader_runtime_args);
     tt_metal::SetRuntimeArgs(program, writer_kernel, cfg.target_core, writer_runtime_args);
-    tt_metal::WriteRuntimeArgsToDevice(device, program);
+
     pass &= tt_metal::LaunchKernels(device, program);
 
     std::vector<uint32_t> output_packed;

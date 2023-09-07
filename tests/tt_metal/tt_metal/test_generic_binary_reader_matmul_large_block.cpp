@@ -152,7 +152,7 @@ int main(int argc, char **argv) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(device_id);
 
-        pass &= tt_metal::InitializeDevice(device);;
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -323,7 +323,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        pass &= tt_metal::CompileProgram(device, program);
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
@@ -343,7 +343,7 @@ int main(int argc, char **argv) {
         tt_metal::WriteToBuffer(src1_dram_buffer, weights);
         tt_metal::detail::WriteToDeviceL1(device, core, source_addresses_in_l1_addr, source_addresses);
 
-        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
         tt_metal::SetRuntimeArgs(
             program,
             generic_binary_reader_kernel,
@@ -355,7 +355,7 @@ int main(int argc, char **argv) {
             unary_writer_kernel,
             core,
             writer_rt_args);
-        tt_metal::WriteRuntimeArgsToDevice(device, program);
+
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;

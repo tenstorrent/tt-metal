@@ -41,8 +41,6 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count, string run_name = 
         tt_metal::ComputeConfig{.compile_args = trisc_kernel_args, .defines = kernel_defines}
     );
 
-    pass &= tt_metal::CompileProgram(device, program);
-    pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
     pass &= tt_metal::LaunchKernels(device, program);
 
     return pass;
@@ -62,7 +60,7 @@ int main(int argc, char **argv) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(device_id);
 
-        pass &= tt_metal::InitializeDevice(device);
+
 
         int loop_count = 20;
         pass &= RunCustomCycle(device, loop_count);

@@ -166,7 +166,6 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
-        pass &= tt_metal::InitializeDevice(device);
 
         pass &= test_tensor_copy_semantics(device);
 

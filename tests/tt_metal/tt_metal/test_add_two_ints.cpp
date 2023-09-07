@@ -40,7 +40,7 @@ int main(int argc, char **argv) {
         int device_id = 0;
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
 
-        pass &= tt_metal::InitializeDevice(device);
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -55,17 +55,10 @@ int main(int argc, char **argv) {
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
         ////////////////////////////////////////////////////////////////////////////
-        //                      Compile Application
-        ////////////////////////////////////////////////////////////////////////////
-        pass &= tt_metal::CompileProgram(device, program);
-
-        ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::SetRuntimeArgs(program, add_two_ints_kernel, core, first_runtime_args);
 
-        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
-        tt_metal::WriteRuntimeArgsToDevice(device, program);
 
         pass &= tt_metal::LaunchKernels(device, program);
 
@@ -77,9 +70,6 @@ int main(int argc, char **argv) {
         //                  Update Runtime Args and Re-run Application
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::SetRuntimeArgs(program, add_two_ints_kernel, core, second_runtime_args);
-
-        tt_metal::WriteRuntimeArgsToDevice(device, program);
-
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> second_kernel_result;

@@ -38,7 +38,7 @@ int main () {
     int device_id = 0;
     auto device = tt::tt_metal::CreateDevice(device_id);
 
-    TT_ASSERT(tt::tt_metal::InitializeDevice(device));
+
 
     {
         run_test<device_function<ReduceOpMath::SUM, ReduceOpDim::H>>( device);

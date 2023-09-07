@@ -62,7 +62,7 @@ int main(int argc, char **argv) {
         Device *device =
             CreateDevice(device_id);
 
-        pass &= InitializeDevice(device);;
+
 
         /*
         * Setup program to execute along with its buffers and kernels to use
@@ -163,11 +163,6 @@ int main(int argc, char **argv) {
         );
 
         /*
-        * Compile kernels used during execution
-        */
-        pass &= CompileProgram(device, program);
-
-        /*
          * Create source data and write to DRAM.
          */
         std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(
@@ -183,7 +178,7 @@ int main(int argc, char **argv) {
         /*
          * Configure program and runtime kernel arguments, then execute.
          */
-        pass &= ConfigureDeviceWithProgram(device, program);
+
 
         SetRuntimeArgs(
             program,
@@ -214,7 +209,7 @@ int main(int argc, char **argv) {
             }
         );
 
-        WriteRuntimeArgsToDevice(device, program);
+
 
         pass &= LaunchKernels(device, program);
 
@@ -289,11 +284,6 @@ int main(int argc, char **argv) {
         );
 
         /*
-         * Compile kernels.
-         */
-        pass &= CompileProgram(device, program_mul);
-
-        /*
          * Send new input data.
          */
         WriteToBuffer(src0_dram_buffer, result_vec);
@@ -303,7 +293,7 @@ int main(int argc, char **argv) {
 
         WriteToBuffer(src1_dram_buffer, src1_vec);
 
-        pass &= ConfigureDeviceWithProgram(device, program_mul);
+
 
         /*
          * Configure program and runtime kernel arguments.
@@ -341,7 +331,7 @@ int main(int argc, char **argv) {
         /*
          * Execute.
          */
-        WriteRuntimeArgsToDevice(device, program_mul);
+
         pass &= LaunchKernels(device, program_mul);
 
         /*

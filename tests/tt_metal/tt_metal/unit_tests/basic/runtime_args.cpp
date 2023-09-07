@@ -28,7 +28,7 @@ Program init_compile_and_configure_program(Device *device, const CoreRangeSet &c
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
-    CompileProgram(device, program);
+    detail::CompileProgram(device, program);
     return std::move(program);
 }
 
@@ -94,12 +94,12 @@ TEST_F(SingleDeviceFixture, LegallyModifyRTArgs) {
             }
         }
     }
-    WriteRuntimeArgsToDevice(this->device_, program);
+    detail::WriteRuntimeArgsToDevice(this->device_, program);
     ASSERT_TRUE(unit_tests::runtime_args::verify_result(this->device_, program, core_to_rt_args));
 
     std::vector<uint32_t> second_runtime_args = {303, 606};
     SetRuntimeArgs(program, program.kernel_ids().at(0), first_core_range, second_runtime_args);
-    WriteRuntimeArgsToDevice(this->device_, program);
+    detail::WriteRuntimeArgsToDevice(this->device_, program);
     for (auto x = first_core_range.start.x; x <= first_core_range.end.x; x++) {
         for (auto y = first_core_range.start.y; y <= first_core_range.end.y; y++) {
             CoreCoord logical_core(x, y);
@@ -129,7 +129,7 @@ TEST_F(SingleDeviceFixture, IllegallyModifyRTArgs) {
             }
         }
     }
-    WriteRuntimeArgsToDevice(this->device_, program);
+    detail::WriteRuntimeArgsToDevice(this->device_, program);
     ASSERT_TRUE(unit_tests::runtime_args::verify_result(this->device_, program, core_to_rt_args));
     std::vector<uint32_t> invalid_runtime_args = {303, 404, 505};
     EXPECT_ANY_THROW(SetRuntimeArgs(program, program.kernel_ids().at(0), first_core_range, invalid_runtime_args));

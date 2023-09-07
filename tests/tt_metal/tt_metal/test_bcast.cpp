@@ -99,7 +99,7 @@ int main(int argc, char **argv) {
         int device_id = 0;
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
 
-        pass &= tt_metal::InitializeDevice(device);;
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -293,20 +293,14 @@ int main(int argc, char **argv) {
         );
 
         ////////////////////////////////////////////////////////////////////////////
-        //                      Compile Application
-        ////////////////////////////////////////////////////////////////////////////
-        pass &= tt_metal::CompileProgram(device, program);
-
-
-        ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
         auto seed = std::chrono::system_clock::now().time_since_epoch().count();
         vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(dram_buffer_bytes, 10.0f, 0x1234);
         tt_metal::WriteToBuffer(src0_dram_buffer, src0_vec);
-        tt_metal::WriteRuntimeArgsToDevice(device, program);
 
-        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
+
 
         pass &= tt_metal::LaunchKernels(device, program);
 

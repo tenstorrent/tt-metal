@@ -401,7 +401,7 @@ bool test_matmul_large_block(tt_metal::Device *device, const tt::ARCH& arch, boo
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        pass &= tt_metal::CompileProgram(device, program);
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
@@ -425,7 +425,7 @@ bool test_matmul_large_block(tt_metal::Device *device, const tt::ARCH& arch, boo
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
         tt_metal::WriteToBuffer(src1_dram_buffer, weights);
 
-        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -441,7 +441,7 @@ bool test_matmul_large_block(tt_metal::Device *device, const tt::ARCH& arch, boo
 
         CoreCoord debug_core = {1, 1};
 
-        tt_metal::WriteRuntimeArgsToDevice(device, program);
+
 
         pass &= tt_metal::LaunchKernels(device, program);
         std::vector<uint32_t> result_vec;
@@ -482,7 +482,9 @@ bool test_matmul_large_block(tt_metal::Device *device, const tt::ARCH& arch, boo
 
 int main(int argc, char **argv) {
     bool pass = true;
-
+    // Once this test is uplifted to use fast dispatch, this can be removed.
+    char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+    putenv(env);
     ////////////////////////////////////////////////////////////////////////////
     //                      Initial Runtime Args Parse
     ////////////////////////////////////////////////////////////////////////////
@@ -500,7 +502,7 @@ int main(int argc, char **argv) {
     tt_metal::Device *device =
         tt_metal::CreateDevice(device_id);
 
-    pass &= tt_metal::InitializeDevice(device);;
+
 
     // Row major input, tilized output
     pass &= test_matmul_large_block(device, arch, true, false);

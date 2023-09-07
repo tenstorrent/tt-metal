@@ -31,7 +31,6 @@ class CommandQueueFixture : public ::testing::Test {
 
         const int device_id = 0;
         this->device_ = tt::tt_metal::CreateDevice(device_id);
-        tt::tt_metal::InitializeDevice(this->device_);
 
         this->pcie_id = 0;
     }

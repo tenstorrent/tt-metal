@@ -90,7 +90,7 @@ int main(int argc, char **argv) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(device_id);
 
-        pass &= tt_metal::InitializeDevice(device);;
+
 
         // ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -175,14 +175,14 @@ int main(int argc, char **argv) {
             dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
         vector<uint32_t> golden = gold_standard_flatten(src_vec, {num_tiles_r * 32, num_tiles_c * 32});
-        pass &= tt_metal::CompileProgram(device, program);
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::WriteToBuffer(src_dram_buffer, src_vec);
 
-        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -204,7 +204,7 @@ int main(int argc, char **argv) {
             (std::uint32_t)dram_dst_noc_xy.y,
             num_tiles * 32});
 
-        tt_metal::WriteRuntimeArgsToDevice(device, program);
+
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;

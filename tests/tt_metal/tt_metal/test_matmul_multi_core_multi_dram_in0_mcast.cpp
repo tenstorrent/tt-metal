@@ -335,7 +335,6 @@ bool write_runtime_args_to_device(
             tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, writer_args);
         }
     }
-    tt_metal::WriteRuntimeArgsToDevice(device, program);
     return pass;
 }
 
@@ -434,7 +433,7 @@ int main(int argc, char **argv) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(device_id);
 
-        pass &= tt_metal::InitializeDevice(device);;
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -445,7 +444,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        pass &= tt_metal::CompileProgram(device, program);
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
@@ -487,7 +486,7 @@ int main(int argc, char **argv) {
         log_info(LogTest, "Writing kernel runtime args to device complete");
 
         log_info(LogTest, "Running Matmul {} core test", num_cores_r * num_cores_c);
-        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
         pass &= tt_metal::LaunchKernels(device, program);
         log_info(LogTest, "Matmul test done");
 

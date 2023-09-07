@@ -16,8 +16,8 @@ namespace basic_tests::circular_buffer {
 bool test_cb_config_written_to_core(Program &program, Device *device, const CoreRangeSet &cr_set) {
     bool pass = true;
 
-    CompileProgram(device, program);
-    ConfigureDeviceWithProgram(device, program);
+    detail::CompileProgram(device, program);
+    detail::ConfigureDeviceWithProgram(device, program);
 
     vector<u32> cb_config_vector;
     u32 cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(u32);

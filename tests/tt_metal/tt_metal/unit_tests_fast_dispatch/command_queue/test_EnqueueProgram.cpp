@@ -61,7 +61,6 @@ bool test_dummy_EnqueueProgram_with_cbs(Device* device, CommandQueue& cq, const 
     }
 
     initialize_dummy_kernels(program, program_config.cr_set);
-    CompileProgram(device, program);
     EnqueueProgram(cq, program, false);
     Finish(cq);
 
@@ -107,7 +106,6 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, const
         auto sem = CreateSemaphore(program, program_config.cr_set, sem_id);
     }
 
-    CompileProgram(device, program);
     EnqueueProgram(cq, program, false);
     Finish(cq);
 
@@ -187,8 +185,6 @@ TEST_F(CommandQueueFixture, TestArbiterDoesNotHang) {
     auto dummy_reader_kernel = CreateDataMovementKernel(
         program, "tt_metal/kernels/dataflow/unit_tests/command_queue/arbiter_hang.cpp", cr_set, DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
-    CompileProgram(this->device_, program);
-
     EnqueueProgram(*::detail::GLOBAL_CQ, program, false);
     Finish(*::detail::GLOBAL_CQ);
 }
@@ -227,8 +223,6 @@ TEST_F(CommandQueueFixture, TestAutoInsertedBlankBriscKernelInDeviceDispatchMode
     auto dummy_reader_kernel = CreateDataMovementKernel(
         program, "tt_metal/kernels/dataflow/blank.cpp", cr_set,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-
-    CompileProgram(this->device_, program);
 
     EnqueueProgram(*tt::tt_metal::detail::GLOBAL_CQ, program, false);
     Finish(*tt::tt_metal::detail::GLOBAL_CQ);

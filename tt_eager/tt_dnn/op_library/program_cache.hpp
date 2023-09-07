@@ -9,6 +9,7 @@
 #include <tt_eager/tensor/tensor.hpp>
 #include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_dnn/op_library/operation.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 
 namespace tt::tt_metal {
 
@@ -33,7 +34,7 @@ struct ProgramCache {
             tt::log_debug(tt::LogOp, "Program Cache: MISS - Compiling new program \"{}\"", program_hash);
             this->cache_[program_hash] = op.create_program(input_tensors, optional_input_tensors, output_tensors);
             auto& program = this->cache_[program_hash].program;
-            tt_metal::CompileProgram(device, program);
+            tt_metal::detail::CompileProgram(device, program);
             return this->cache_[program_hash];
         }
     }

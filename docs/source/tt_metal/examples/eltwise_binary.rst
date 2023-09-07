@@ -117,15 +117,15 @@ first source tensor.
 
 .. code-block:: cpp
 
-        WriteRuntimeArgsToDevice(
-          device,
-          unary_writer_kernel,
-          core,
+        SetRuntimeArgs(
+            program,
+            unary_writer_kernel_id,
+            core,
             {
-              dst_dram_buffer.address(),
-              static_cast<uint32_t>(dst_dram_buffer.noc_coordinates().x),
-              static_cast<uint32_t>(dst_dram_buffer.noc_coordinates().y),
-              num_tiles
+                dst_dram_buffer.address(),
+                static_cast<uint32_t>(dst_dram_buffer.noc_coordinates().x),
+                static_cast<uint32_t>(dst_dram_buffer.noc_coordinates().y),
+                num_tiles
             }
         );
 

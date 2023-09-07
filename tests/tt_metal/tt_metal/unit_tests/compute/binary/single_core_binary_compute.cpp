@@ -150,11 +150,11 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    pass &= tt_metal::CompileProgram(device, program);
+
     tt_metal::WriteToBuffer(input0_dram_buffer, packed_input0);
     tt_metal::WriteToBuffer(input1_dram_buffer, packed_input1);
 
-    pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
     tt_metal::SetRuntimeArgs(
         program,
         reader_kernel,
@@ -178,7 +178,7 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
             (uint32_t)output_dram_noc_xy.y,
             (uint32_t)test_config.num_tiles,
         });
-    tt_metal::WriteRuntimeArgsToDevice(device, program);
+
     pass &= tt_metal::LaunchKernels(device, program);
 
     ////////////////////////////////////////////////////////////////////////////

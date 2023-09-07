@@ -60,7 +60,7 @@ KernelCacheStatus CompileProgramTestWrapper(Device *device, Program &program, bo
     auto root_dir = get_kernel_compile_outpath(device->id());
     std::unordered_map<std::string, std::string> pre_compile_kernel_to_hash_str = get_last_program_binary_path(program, device->id());
 
-    CompileProgram(device, program);
+    detail::CompileProgram(device, program);
 
     std::unordered_map<std::string, std::string> post_compile_kernel_to_hash_str = get_last_program_binary_path(program, device->id());
 
@@ -353,7 +353,7 @@ int main(int argc, char **argv) {
         Device *device = CreateDevice(device_id);
 
         constexpr bool profile_device = true;
-        pass &= InitializeDevice(device);
+
 
         pass &= test_compile_program_in_loop(device);
 

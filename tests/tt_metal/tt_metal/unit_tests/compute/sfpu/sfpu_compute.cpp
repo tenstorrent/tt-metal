@@ -224,15 +224,10 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
         } while (not terminate);
     }
 
-    tt_metal::CompileProgram(device, program);
-
     std::vector<u32> dest_buffer_data;
-    tt_metal::WriteRuntimeArgsToDevice(device, program);
     tt_metal::WriteToBuffer(input_dram_buffer, packed_input);
-    tt_metal::ConfigureDeviceWithProgram(device, program);
     tt_metal::LaunchKernels(device, program);
     tt_metal::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
-
 
     return sfpu_util::is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);
 }

@@ -42,7 +42,7 @@ int main(int argc, char **argv) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(device_id);
 
-        pass &= tt_metal::InitializeDevice(device);;
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -95,7 +95,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        pass &= tt_metal::CompileProgram(device, program);
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
@@ -106,8 +106,8 @@ int main(int argc, char **argv) {
         tt_metal::WriteToBuffer(dram_buffer, activations);
 
         tt_metal::SetRuntimeArgs(program, mcast_reader_kernel, core, mcast_reader_args);
-        tt_metal::WriteRuntimeArgsToDevice(device, program);
-        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
+
 
 
         log_info(LogTest, "Launching kernels");

@@ -20,9 +20,7 @@ Silicon accelerator setup
    constexpr int device_id = 0;
    Device *device = CreateDevice(device_id);
 
-   pass &= InitializeDevice(device);
-
-We instantiate and initialize a device to control our ``GRAYSKULL`` type
+We instantiate a device to control our ``GRAYSKULL`` type
 accelerator.
 
 Program pre-compilation setup
@@ -88,15 +86,6 @@ Let's make the input and output DRAM buffers.
   constexpr uint32_t output_dram_buffer_addr = 512 * 1024;
   Buffer output_dram_buffer = Buffer(device, dram_buffer_size, output_dram_buffer_addr, dram_buffer_size, BufferType::DRAM);
 
-Program compilation
--------------------
-
-.. code-block:: cpp
-
-   pass &= CompileProgram(device, program);
-
-Next we compile our program.
-
 Sending real data into DRAM
 ---------------------------
 
@@ -109,17 +98,7 @@ Sending real data into DRAM
 Send in a randomly-generated FP16 vector that will act as our input data
 tensor.
 
-Loading the program with desired settings
------------------------------------------
-
-.. code-block:: cpp
-
-   pass &= ConfigureDeviceWithProgram(device, program);
-
-We then configure the device with our compiled program. Now it's time for any
-runtime arguments or input data.
-
-Sending runtime arguments for the data movement kernel
+Setting runtime arguments for the data movement kernel
 ------------------------------------------------------
 
 .. code-block:: cpp
@@ -134,15 +113,16 @@ Sending runtime arguments for the data movement kernel
       static_cast<uint32_t>(output_dram_buffer.noc_coordinates().y),
       l1_buffer.size()
   };
+            tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, writer_args);
 
-  pass &= WriteRuntimeArgsToDevice(
-      device,
-      dram_copy_kernel,
+  SetRuntimeArgs(
+      program,
+      dram_copy_kernel_id,
       core,
       runtime_args
   );
 
-We now write runtime arguments for our data movement kernel. For this
+We now set runtime arguments for our data movement kernel. For this
 particular kernel, we have to provide:
 
 * Where the L1 buffer starts (memory address)

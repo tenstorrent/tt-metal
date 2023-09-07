@@ -40,7 +40,7 @@ int main(int argc, char **argv) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(device_id);
 
-        pass &= tt_metal::InitializeDevice(device);;
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -130,18 +130,13 @@ int main(int argc, char **argv) {
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_cb_kernel_args});
 
         ////////////////////////////////////////////////////////////////////////////
-        //                      Compile Application
-        ////////////////////////////////////////////////////////////////////////////
-        pass &= tt_metal::CompileProgram(device, program);
-
-        ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
         std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
             dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
         tt_metal::WriteToBuffer(src_dram_buffer, src_vec);
 
-        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -161,7 +156,7 @@ int main(int argc, char **argv) {
             (uint32_t)dram_dst_noc_xy.y,
             (uint32_t)num_tiles_per_cb});
 
-        tt_metal::WriteRuntimeArgsToDevice(device, program);
+
 
         pass &= tt_metal::LaunchKernels(device, program);
 

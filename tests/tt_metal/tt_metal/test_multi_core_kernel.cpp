@@ -90,14 +90,14 @@ void compile_and_configure_program(
     //                      Compile Application
     ////////////////////////////////////////////////////////////////////////////
 
-    tt_metal::CompileProgram(device, program);
+
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::WriteToBuffer(src_dram_buffer, src_vec);
 
-    tt_metal::ConfigureDeviceWithProgram(device, program);
+
 }
 
 void set_rt_args(tt_metal::Program &program, tt_metal::KernelID kernel, const CoreRange &core_range, const std::vector<uint32_t> &rt_args) {
@@ -136,7 +136,7 @@ void write_same_runtime_args_to_device(
 
     set_rt_args(program, reader_kernel_id, core_range, unary_reader_args);
     set_rt_args(program, writer_kernel_id, core_range, unary_writer_args);
-    tt_metal::WriteRuntimeArgsToDevice(device, program);
+
 }
 
 void write_unique_writer_runtime_args_to_device(
@@ -187,7 +187,7 @@ void write_unique_writer_runtime_args_to_device(
     for (auto core_range : core_blocks.ranges()) {
         set_rt_args(program, writer_kernel_id, core_range, rt_args.at(core_range_idx++));
     }
-    tt_metal::WriteRuntimeArgsToDevice(device, program);
+
 }
 
 bool test_multi_core_kernel_same_runtime_args(tt_metal::Device *device) {
@@ -348,7 +348,6 @@ int main(int argc, char **argv) {
         int device_id = 0;
         tt_metal::Device *device =
             tt_metal::CreateDevice(device_id);
-        tt_metal::InitializeDevice(device);
 
         pass &= test_multi_core_kernel_same_runtime_args(device);
 

@@ -44,7 +44,7 @@ int main(int argc, char **argv) {
         int device_id = 0;
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
 
-        pass &= tt_metal::InitializeDevice(device);;
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -99,7 +99,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        pass &= tt_metal::CompileProgram(device, program);
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
@@ -109,7 +109,7 @@ int main(int argc, char **argv) {
         auto input_vector = unpack_uint32_vec_into_bfloat16_vec(input_vec);
         tt_metal::WriteToBuffer(input_dram_buffer, input_vec);
 
-        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
 
         tt_metal::detail::WriteToDeviceL1(device, core, address_map_l1_addr, address_map);
 
@@ -124,7 +124,7 @@ int main(int argc, char **argv) {
             address_map_l1_addr,
             (std::uint32_t) address_map.size()});
 
-        tt_metal::WriteRuntimeArgsToDevice(device, program);
+
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;

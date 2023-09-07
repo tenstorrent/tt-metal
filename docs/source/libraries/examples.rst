@@ -22,7 +22,6 @@ These are the steps:
     if __name__ == "__main__":
         # Initialize TT Accelerator device on PCI slot 0
         tt_device = tt_lib.device.CreateDevice(0)
-        tt_lib.device.InitializeDevice(tt_device)
 
         # Create random PyTorch tensor
         py_tensor = torch.randn((1, 1, 32, 32))
@@ -73,7 +72,6 @@ Lastly, we run ``exp`` on TT Accelerator device (suppling it with output from ``
     if __name__ == "__main__":
         # Initialize TT Accelerator device on PCI slot 0
         tt_device = tt_lib.device.CreateDevice(0)
-        tt_lib.device.InitializeDevice(tt_device)
 
         # Create random PyTorch tensor
         py_tensor = torch.randn((1, 1, 32, 32))
@@ -147,7 +145,6 @@ can be modified as follow:
     if __name__ == "__main__":
         # Initialize TT Accelerator device on PCI slot 0
         tt_device = tt_lib.device.CreateDevice(0)
-        tt_lib.device.InitializeDevice(tt_device)
 
         # Set default TT Accelerator device
         # This device will be used to execute TT Tensors that are not assigned to a device

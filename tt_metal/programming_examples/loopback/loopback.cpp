@@ -29,7 +29,7 @@ int main(int argc, char **argv) {
         Device *device =
             CreateDevice(device_id);
 
-        pass &= InitializeDevice(device);
+
 
         /*
         * Setup program to execute along with its buffers and kernels to use
@@ -58,23 +58,13 @@ int main(int argc, char **argv) {
         const uint32_t output_dram_buffer_addr = output_dram_buffer.address();
 
         /*
-        * Compile kernels used during execution
-        */
-
-       std::cout << "about to compile " << std::endl;
-
-        pass &= CompileProgram(device, program);
-
-        std::cout << "done compiling " << std::endl;
-
-        /*
         * Create input data and runtime arguments, then execute
         */
         std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
             dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
         WriteToBuffer(input_dram_buffer, input_vec);
 
-        pass &= ConfigureDeviceWithProgram(device, program);
+
 
         const std::vector<uint32_t> runtime_args = {
             l1_buffer.address(),
@@ -98,7 +88,7 @@ int main(int argc, char **argv) {
 
         std::cout << "done setting runtime args " << std::endl;
 
-        WriteRuntimeArgsToDevice(device, program);
+
 
         pass &= LaunchKernels(device, program);
 

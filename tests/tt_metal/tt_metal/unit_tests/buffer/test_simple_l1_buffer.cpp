@@ -74,8 +74,8 @@ namespace tt::test::buffer::detail {
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::NOC_1, .compile_args = {cb_index}});
 
-        tt_metal::CompileProgram(device, program);
-        tt_metal::ConfigureDeviceWithProgram(device, program);
+
+
         tt_metal::SetRuntimeArgs(
             program,
             reader_kernel,
@@ -96,7 +96,7 @@ namespace tt::test::buffer::detail {
                 (uint32_t)phys_core.y,
                 (uint32_t)num_tiles,
             });
-        tt_metal::WriteRuntimeArgsToDevice(device, program);
+
 
         writeL1Backdoor(device, core, input_local_address, inputs);
         tt_metal::LaunchKernels(device, program);

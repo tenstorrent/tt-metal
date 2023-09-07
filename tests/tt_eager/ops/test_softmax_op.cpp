@@ -38,7 +38,6 @@ int main(int argc, char **argv) {
     ////////////////////////////////////////////////////////////////////////////
     int device_id = 0;
     tt_metal::Device *device = tt_metal::CreateDevice(device_id);
-    pass &= InitializeDevice(device);
     Shape shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
     Tensor a = tt::numpy::random::random(shape).to(Layout::TILE).to(device);
     Tensor c = tt::operations::primary::softmax_in_place(a);

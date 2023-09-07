@@ -414,7 +414,7 @@ bool single_core_matmul(tt_metal::Device* device, const SingleCoreMatmulConfig& 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    pass &= tt_metal::CompileProgram(device, program);
+
     tt_metal::WriteToBuffer(input0_dram_buffer, packed_activation);
     tt_metal::WriteToBuffer(input1_dram_buffer, packed_identity);
     std::vector<uint32_t> input0_dram_readback_packed;
@@ -426,11 +426,11 @@ bool single_core_matmul(tt_metal::Device* device, const SingleCoreMatmulConfig& 
     EXPECT_TRUE(input1_dram_readback_packed == packed_identity);
     print_vector_fixed_numel_per_row(unpack_vector<bfloat16, uint32_t>(input1_dram_readback_packed), 32);
 
-    pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
     tt_metal::SetRuntimeArgs(program, reader_kernel, cfg.core, reader_rt_args);
     tt_metal::SetRuntimeArgs(program, writer_kernel, cfg.core, writer_rt_args);
 
-    tt_metal::WriteRuntimeArgsToDevice(device, program);
+
     pass &= tt_metal::LaunchKernels(device, program);
 
     ////////////////////////////////////////////////////////////////////////////
@@ -536,11 +536,11 @@ bool single_tile_matmul(tt_metal::Device* device) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    pass &= tt_metal::CompileProgram(device, program);
+
     tt_metal::WriteToBuffer(input0_dram_buffer, packed_input0);
     tt_metal::WriteToBuffer(input1_dram_buffer, packed_input1);
 
-    pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
     tt_metal::SetRuntimeArgs(
         program,
         reader_kernel,
@@ -565,7 +565,7 @@ bool single_tile_matmul(tt_metal::Device* device) {
             (uint32_t)1,
         });
 
-    tt_metal::WriteRuntimeArgsToDevice(device, program);
+
     pass &= tt_metal::LaunchKernels(device, program);
 
     ////////////////////////////////////////////////////////////////////////////
@@ -660,11 +660,11 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    pass &= tt_metal::CompileProgram(device, program);
+
     tt_metal::WriteToBuffer(input0_dram_buffer, packed_input0);
     tt_metal::WriteToBuffer(input1_dram_buffer, packed_input1);
 
-    pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
     tt_metal::SetRuntimeArgs(
         program,
         reader_kernel,
@@ -692,7 +692,7 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
             (uint32_t)output_dram_noc_xy.y,
             (uint32_t)M * N,
         });
-    tt_metal::WriteRuntimeArgsToDevice(device, program);
+
     pass &= tt_metal::LaunchKernels(device, program);
     sleep(1);
     ////////////////////////////////////////////////////////////////////////////
@@ -812,11 +812,11 @@ bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    pass &= tt_metal::CompileProgram(device, program);
+
     tt_metal::WriteToBuffer(input0_dram_buffer, packed_input0);
     tt_metal::WriteToBuffer(input1_dram_buffer, packed_input1);
 
-    pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
     tt_metal::SetRuntimeArgs(
         program,
         reader_kernel,
@@ -844,7 +844,7 @@ bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N
             (uint32_t)output_dram_noc_xy.y,
             (uint32_t)M * N,
         });
-    tt_metal::WriteRuntimeArgsToDevice(device, program);
+
     pass &= tt_metal::LaunchKernels(device, program);
     sleep(1);
     ////////////////////////////////////////////////////////////////////////////

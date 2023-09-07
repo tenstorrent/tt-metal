@@ -29,7 +29,8 @@ class Device {
    public:
     static size_t detect_num_available_devices(const TargetDevice target_type = TargetDevice::Silicon);
     friend void tt_gdb(Device* device, int chip_id, const vector<CoreCoord> cores, vector<string> ops);
-    Device(int device_id) : id_(device_id) {}
+    Device () = delete;
+    Device(int device_id, const std::vector<uint32_t>& l1_bank_remap = {});
 
     ~Device();
 
@@ -94,7 +95,6 @@ class Device {
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
     bool initialize(const std::vector<uint32_t>& l1_bank_remap = {});
-    friend bool InitializeDevice(Device *device);
     void initialize_cluster();
     void initialize_allocator(const std::vector<uint32_t>& l1_bank_remap = {});
     void initialize_dispatch_and_banking_information();

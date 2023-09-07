@@ -42,7 +42,7 @@ int main(int argc, char **argv) {
         int device_id = 0;
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
 
-        pass &= tt_metal::InitializeDevice(device);;
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -136,13 +136,13 @@ int main(int argc, char **argv) {
             tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
         );
 
-        pass &= tt_metal::CompileProgram(device, program);
+
 
         std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(bytesA, 1.0f, 0x1234);
         std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(bytesB, 1.0f, 0x1234, -0.45f);
         tt_metal::WriteToBuffer(src0_dram_buffer, src0_vec);
         tt_metal::WriteToBuffer(src1_dram_buffer, src1_vec);
-        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
         uint32_t do_bcast = 0;
         tt_metal::SetRuntimeArgs(
             program, reader, core,
@@ -152,7 +152,7 @@ int main(int argc, char **argv) {
             program, writer, core,
             {dram_buffer_dst_addr, 0, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B}
         );
-        tt_metal::WriteRuntimeArgsToDevice(device, program);
+
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;

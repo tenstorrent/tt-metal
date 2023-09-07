@@ -80,7 +80,7 @@ int main(int argc, char **argv) {
         int num_bank_pages_one = 258;
         int num_bank_pages_two = 378;
 
-        pass &= tt_metal::InitializeDevice(device);
+
 
         pass &= test_interleaved_l1_buffer(device, num_bank_pages_one, num_bank_pages_two, page_size);
 

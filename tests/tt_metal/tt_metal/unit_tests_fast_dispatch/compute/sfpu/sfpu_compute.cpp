@@ -227,8 +227,6 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
         } while (not terminate);
     }
 
-    tt_metal::CompileProgram(device, program);
-
     std::vector<u32> dest_buffer_data;
     CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
     EnqueueWriteBuffer(cq, input_dram_buffer, packed_input, false);

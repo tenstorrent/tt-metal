@@ -115,7 +115,6 @@ std::vector<Tensor> run_without_program_cache(
     auto program_with_callbacks = operation.create_program(input_tensors, optional_input_tensors, output_tensors);
     auto& program = program_with_callbacks.program;
 
-    CompileProgram(device, program);
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
         EnqueueProgram(*::detail::GLOBAL_CQ, program, false);
@@ -123,8 +122,6 @@ std::vector<Tensor> run_without_program_cache(
         // LaunchKernel automatically dumps device data
         op_profiler::dump_device_profiler_results(device, program);
     } else {
-        ConfigureDeviceWithProgram(device, program);
-        WriteRuntimeArgsToDevice(device, program);
         LaunchKernels(device, program);
     }
 
@@ -158,8 +155,6 @@ std::vector<Tensor> run_with_program_cache(
         // LaunchKernel automatically dumps device data
         op_profiler::dump_device_profiler_results(device, program);
     } else {
-        ConfigureDeviceWithProgram(device, program);
-        WriteRuntimeArgsToDevice(device, program);
         LaunchKernels(device, program);
     }
 

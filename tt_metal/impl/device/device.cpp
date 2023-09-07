@@ -16,6 +16,14 @@ namespace tt {
 
 namespace tt_metal {
 
+Device::Device(tt::ARCH arch, int pcie_slot, const std::vector<uint32_t>& l1_bank_remap) : arch_(arch), pcie_slot_(pcie_slot)
+{
+    ZoneScoped;
+    this->initialize(l1_bank_remap);
+    detail::InitializeDevice(this);
+
+}
+
 size_t Device::detect_num_available_devices(const TargetDevice target_type) {
     switch (target_type) {
         case TargetDevice::Silicon:

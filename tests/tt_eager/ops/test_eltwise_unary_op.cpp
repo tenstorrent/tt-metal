@@ -101,7 +101,7 @@ void test_shape_padding() {
     auto device = tt::tt_metal::CreateDevice(device_id);
     tt::tt_metal::AutoFormat::SetDefaultDevice(device);
 
-    TT_ASSERT(tt::tt_metal::InitializeDevice(device));
+
 
     auto input_shape = Shape{1, 1, 13, 18};
     auto padded_input_shape = Shape{1, 1, TILE_HEIGHT, TILE_WIDTH};
@@ -128,7 +128,7 @@ void test_numerically() {
     int device_id = 0;
     auto device = tt::tt_metal::CreateDevice(device_id);
 
-    TT_ASSERT(tt::tt_metal::InitializeDevice(device));
+
 
     auto shape = Shape{1, 1, TILE_HEIGHT, TILE_WIDTH};
     {
@@ -190,7 +190,7 @@ void test_program_cache() {
     int device_id = 0;
     auto device = tt::tt_metal::CreateDevice(device_id);
 
-    TT_ASSERT(tt::tt_metal::InitializeDevice(device));
+
 
     auto run_tests = [&]() {
         // Program Cache Miss

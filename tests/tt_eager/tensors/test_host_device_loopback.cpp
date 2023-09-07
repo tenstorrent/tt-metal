@@ -68,7 +68,7 @@ int main(int argc, char **argv) {
         int device_id = 0;
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
 
-        pass &= tt_metal::InitializeDevice(device);
+
 
         pass &= test_single_tile_single_dram_bank_loopback(device);
 

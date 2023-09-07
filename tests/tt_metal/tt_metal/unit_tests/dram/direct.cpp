@@ -56,11 +56,11 @@ bool reader_only(
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    pass &= tt_metal::CompileProgram(device, program);
+
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
     tt_metal::WriteToBuffer(input_dram_buffer, inputs);
 
-    pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
     tt_metal::SetRuntimeArgs(
         program,
         reader_kernel,
@@ -72,7 +72,7 @@ bool reader_only(
             (uint32_t)l1_byte_address,
             (uint32_t)byte_size,
         });
-    tt_metal::WriteRuntimeArgsToDevice(device, program);
+
     pass &= tt_metal::LaunchKernels(device, program);
 
     std::vector<uint32_t> dest_core_data;
@@ -120,12 +120,12 @@ bool writer_only(
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    pass &= tt_metal::CompileProgram(device, program);
+
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
     tt_metal::detail::WriteToDeviceL1(device, writer_core, l1_byte_address, inputs);
     // tt_metal::WriteToBuffer(l1_buffer, inputs);
 
-    pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
     tt_metal::SetRuntimeArgs(
         program,
         writer_kernel,
@@ -137,7 +137,7 @@ bool writer_only(
             (uint32_t)l1_byte_address,
             (uint32_t)byte_size,
         });
-    tt_metal::WriteRuntimeArgsToDevice(device, program);
+
     pass &= tt_metal::LaunchKernels(device, program);
 
     std::vector<uint32_t> dest_buffer_data;
@@ -212,10 +212,10 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    pass &= tt_metal::CompileProgram(device, program);
+
     tt_metal::WriteToBuffer(input_dram_buffer, inputs);
 
-    pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
     tt_metal::SetRuntimeArgs(
         program,
         reader_kernel,
@@ -236,7 +236,7 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
             (uint32_t)output_dram_noc_xy.y,
             (uint32_t)test_config.num_tiles,
         });
-    tt_metal::WriteRuntimeArgsToDevice(device, program);
+
     pass &= tt_metal::LaunchKernels(device, program);
 
     std::vector<uint32_t> dest_buffer_data;
@@ -327,10 +327,10 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    pass &= tt_metal::CompileProgram(device, program);
+
     tt_metal::WriteToBuffer(input_dram_buffer, inputs);
 
-    pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
     tt_metal::SetRuntimeArgs(
         program,
         reader_kernel,
@@ -351,7 +351,7 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
             (uint32_t)output_dram_noc_xy.y,
             (uint32_t)test_config.num_tiles,
         });
-    tt_metal::WriteRuntimeArgsToDevice(device, program);
+
     pass &= tt_metal::LaunchKernels(device, program);
 
     std::vector<uint32_t> dest_buffer_data;

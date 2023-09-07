@@ -80,7 +80,7 @@ int main(int argc, char **argv) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(device_id);
 
-        pass &= tt_metal::InitializeDevice(device);
+
 
         // ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -169,14 +169,14 @@ int main(int argc, char **argv) {
             dram_buffer_size, false);
 
         vector<uint32_t> golden = gold_standard_tilize(src_vec, {num_tiles_r * 32, num_tiles_c * 32});
-        pass &= tt_metal::CompileProgram(device, program);
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
         pass &= tt_metal::detail::WriteToDeviceDRAMChannel(device, dram_src_channel_id, src_dram_buffer.address(), src_vec);
 
-        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -196,7 +196,7 @@ int main(int argc, char **argv) {
             (std::uint32_t)dram_dst_noc_xy.y,
             num_tiles});
 
-        tt_metal::WriteRuntimeArgsToDevice(device, program);
+
 
         pass &= tt_metal::LaunchKernels(device, program);
 

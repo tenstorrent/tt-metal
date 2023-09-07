@@ -50,7 +50,7 @@ int main(int argc, char **argv) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(device_id);
 
-        pass &= tt_metal::InitializeDevice(device);
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -120,7 +120,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        pass &= tt_metal::CompileProgram(device, program);
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
@@ -129,7 +129,7 @@ int main(int argc, char **argv) {
             buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
         tt_metal::WriteToBuffer(src_dram_buffer, src_vec);
 
-        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -149,7 +149,7 @@ int main(int argc, char **argv) {
             (std::uint32_t)l1_dst_noc_xy.y,
             num_tiles});
 
-        tt_metal::WriteRuntimeArgsToDevice(device, program);
+
         // tt::tt_metal::tt_gdb(device, 0, program->logical_cores(), program->cores_to_ops());
         pass &= tt_metal::LaunchKernels(device, program);
 

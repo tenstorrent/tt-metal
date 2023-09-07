@@ -51,7 +51,7 @@ int main(int argc, char **argv) {
             tt_metal::CreateDevice(device_id);
 
         bool profile_kernel = true;
-        pass &= tt_metal::InitializeDevice(device);
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -92,7 +92,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        pass &= tt_metal::CompileProgram(device, program);
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
@@ -101,7 +101,7 @@ int main(int argc, char **argv) {
             dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
         tt_metal::WriteToBuffer(src_dram_buffer, src_vec);
 
-        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
         std::cout << "Num cores " << num_cores_r * num_cores_c << std::endl;
         uint32_t core_index = 0;
         for(int i = start_core.y; i < start_core.y + num_cores_r; i++) {
@@ -121,7 +121,7 @@ int main(int argc, char **argv) {
             }
         }
 
-        tt_metal::WriteRuntimeArgsToDevice(device, program);
+
         pass &= tt_metal::LaunchKernels(device, program);
         //std::vector<uint32_t> result_vec;
         //tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);

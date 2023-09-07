@@ -11,6 +11,7 @@
 #include "tt_metal/llrt/tt_memory.h"
 #include "tt_metal/llrt/llrt.hpp"
 #include "tt_metal/detail/program.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -59,7 +60,7 @@ int main(int argc, char **argv) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(device_id);
 
-        pass &= tt_metal::InitializeDevice(device);
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -151,7 +152,7 @@ int main(int argc, char **argv) {
         std::vector<ll_api::memory> brisc_binaries;
         std::vector<ll_api::memory> ncrisc_binaries;
         for (int i = 0; i < num_compiles; i++) {
-            pass &= tt_metal::CompileProgram(device, program);
+            pass &= tt_metal::detail::CompileProgram(device, program);
             if (i == 0) {
                 compute_binaries = compute_kernel->binaries();
                 TT_ASSERT(compute_binaries.size() == 3, "Expected 3 Compute binaries!");

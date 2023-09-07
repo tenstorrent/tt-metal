@@ -98,7 +98,7 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(device_id);
 
-        pass &= tt_metal::InitializeDevice(device);;
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -226,7 +226,7 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        pass &= tt_metal::CompileProgram(device, program);
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
@@ -250,7 +250,7 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
             tt_metal::WriteToBuffer(src2_dram_buffer, bias);
         }
 
-        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
 
         vector<uint32_t> reader_l1_args = {
             src0_dram_buffer.address(),
@@ -297,7 +297,6 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
             (std::uint32_t)dram_dst_noc_xy.y,
             M * N});
 
-        tt_metal::WriteRuntimeArgsToDevice(device, program);
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;

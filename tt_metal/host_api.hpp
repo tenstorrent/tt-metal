@@ -49,19 +49,6 @@ class CircularBuffer;
 Device *CreateDevice(int device_id);
 
 /**
- * Initializes a device by creating a tt_cluster object and memory manager. Puts device into reset.
- *
- * Currently device has a 1:1 mapping with tt_cluster
- *
- * Return value: bool
- *
- * | Argument                    | Description                                 | Type                 | Valid Range         | Required |
- * |-----------------------------|---------------------------------------------|----------------------|---------------------|----------|
- * | device                      | Pointer to device object                    | Device *             |                     | Yes      |
- */
-bool InitializeDevice(Device *device);
-
-/**
  * Resets device and closes device
  *
  * Return value: bool
@@ -279,31 +266,6 @@ void DeallocateBuffer(Buffer &buffer);
 //
 // ==================================================
 
-/**
- *  Compiles all kernels within the program, and generates binaries that are written to `$TT_METAL_HOME/built/kernels/<kernel name>/<kernel hash>`
- *  Blank data movement kernel targeting RISCV_0 are placed onto cores that are missing a RISCV_0 kernel because RISCV_0 processor needs to run to enable Compute and RISCV_1 processors
- *
- *  To speed up compilation there is a kernel compilation cache that skips over generating binaries for the previously compiled kernels.
- *  Kernel uniqueness is determined by the kernel hash which is computed based on compile time args, defines, and kernel type specific attributes such as NOC for data movement kernels and math fidelity for compute kernels
- *  TODO: Kernel hash needs to account for device architecture as binaries are not the same across architectures.
- *  On cache hits the kernel is not recompiled if the output binary directory exists, otherwise the kernel is compiled.
- *  This cache is static is enabled for the duration of the running process.
- *  By default the cache does not persistent across runs, but can be enabled by calling EnablePersistentKernelCache(). Setting this will skip compilation when output binary directory exists.
- *
- *  Return value: bool
- *
- * | Argument       | Description                                                      | Type      | Valid Range                                        | Required |
- * |----------------|------------------------------------------------------------------|-----------|----------------------------------------------------|----------|
- * | device         | Which device the program is compiled for                         | Device *  | Must be initialized via tt_metal::InitializeDevice | Yes      |
- * | program        | The program to compile                                           | Program & |                                                    | Yes      |
- */
-bool CompileProgram(Device *device, Program &program);
-
-// Configures a given device with a given program.
-// - Loads all kernel binaries into L1s of assigned Tensix cores
-// - Configures circular buffers (inits regs with buffer data)
-// - Takes the device out of reset
-bool ConfigureDeviceWithProgram(Device *device, const Program &program);
 
 /**
  * Set runtime args for a kernel that are sent to the core during runtime. This API needs to be called to update the runtime args for the kernel.
@@ -360,21 +322,9 @@ void SetRuntimeArgs(const Program &program, KernelID kernel, const CoreRangeSet 
  */
 std::vector<uint32_t> GetRuntimeArgs(const Program &program, KernelID kernel_id, const CoreCoord &logical_core);
 
-/**
- * Writes runtime args that are saved in the program to device
- *
- * Return value: void
- *
- * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | device       | The device to whcih runtime args will be written                       | Device *                      |                                    | Yes      |
- * | program      | The program holding the runtime args                                   | const Program &               |                                    | Yes      |
- */
-void WriteRuntimeArgsToDevice(Device *device, const Program &program);
-
 // Launches all kernels on cores specified with kernels in the program.
 // All kernels on a given Tensix core must be launched.
-bool LaunchKernels(Device *device, const Program &program, bool stagger_start = false);
+bool LaunchKernels(Device *device, Program &program, bool stagger_start = false);
 
 /**
  * Reads a buffer from the device

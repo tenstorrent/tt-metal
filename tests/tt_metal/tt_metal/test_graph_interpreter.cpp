@@ -133,7 +133,7 @@ bool run_chained_sfpu_test(const tt::ARCH& arch, int chain_length) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(device_id);
 
-        pass &= tt_metal::InitializeDevice(device);
+
 
         run_compile_blank(device);
 
@@ -237,7 +237,7 @@ bool run_chained_sfpu_test(const tt::ARCH& arch, int chain_length) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        pass &= tt_metal::CompileProgram(device, program);
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Write op info to L1
@@ -293,12 +293,12 @@ bool run_chained_sfpu_test(const tt::ARCH& arch, int chain_length) {
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::WriteToBuffer(src_dram_buffer, src_vec);
 
-        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
 
         tt_metal::SetRuntimeArgs(program, unary_reader_kernel, core, unary_reader_args);
         tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, unary_writer_args);
 
-        tt_metal::WriteRuntimeArgsToDevice(device, program);
+
 
         // TT_ASSERT(false);
         pass &= tt_metal::LaunchKernels(device, program);
@@ -358,7 +358,7 @@ bool run_binary_add_and_then_eltwise_gelu_test(const tt::ARCH& arch) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(device_id);
 
-        pass &= tt_metal::InitializeDevice(device);
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -489,7 +489,7 @@ bool run_binary_add_and_then_eltwise_gelu_test(const tt::ARCH& arch) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        pass &= tt_metal::CompileProgram(device, program);
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Write op info to L1
@@ -556,12 +556,12 @@ bool run_binary_add_and_then_eltwise_gelu_test(const tt::ARCH& arch) {
         tt_metal::WriteToBuffer(src0_dram_buffer, src0_vec);
         tt_metal::WriteToBuffer(src1_dram_buffer, src1_vec);
 
-        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
 
         tt_metal::SetRuntimeArgs(program, binary_reader_kernel, core, binary_reader_args);
         tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, unary_writer_args);
 
-        tt_metal::WriteRuntimeArgsToDevice(device, program);
+
 
         // TT_ASSERT(false);
         pass &= tt_metal::LaunchKernels(device, program);
@@ -631,7 +631,7 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(device_id);
 
-        pass &= tt_metal::InitializeDevice(device);
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -751,7 +751,7 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        pass &= tt_metal::CompileProgram(device, program);
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Write op info to L1
@@ -1052,12 +1052,12 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
         ////////////////////////////////////////////////////////////////////////////
 
 
-        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
 
         tt_metal::SetRuntimeArgs(program, nary_reader_kernel, core, nary_reader_args);
         tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, unary_writer_args);
 
-        tt_metal::WriteRuntimeArgsToDevice(device, program);
+
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;

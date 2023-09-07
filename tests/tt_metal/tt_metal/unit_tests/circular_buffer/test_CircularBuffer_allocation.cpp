@@ -7,6 +7,7 @@
 #include "circular_buffer_test_utils.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 
 using namespace tt::tt_metal;
 
@@ -108,8 +109,8 @@ TEST_F(SingleDeviceFixture, TestCircularBuffersAndL1BuffersCollision) {
         cb_addr += cb_buffer_size;
     }
 
-    CompileProgram(this->device_, program);
-    EXPECT_ANY_THROW(ConfigureDeviceWithProgram(this->device_, program));
+    detail::CompileProgram(this->device_, program);
+    EXPECT_ANY_THROW(detail::ConfigureDeviceWithProgram(this->device_, program));
 }
 
 }   // end namespace basic_tests::circular_buffer

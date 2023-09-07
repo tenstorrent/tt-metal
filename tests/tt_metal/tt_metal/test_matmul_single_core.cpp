@@ -167,7 +167,7 @@ int main(int argc, char **argv) {
         tt_metal::Device *device =
             tt_metal::CreateDevice(device_id);
 
-        pass &= tt_metal::InitializeDevice(device);;
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -321,7 +321,7 @@ int main(int argc, char **argv) {
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
 
-        pass &= tt_metal::CompileProgram(device, program);
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
@@ -340,7 +340,7 @@ int main(int argc, char **argv) {
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
         tt_metal::WriteToBuffer(src1_dram_buffer, weights);
 
-        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -354,7 +354,7 @@ int main(int argc, char **argv) {
             core,
             writer_rt_args);
 
-        tt_metal::WriteRuntimeArgsToDevice(device, program);
+
         log_info(LogTest, "Launching kernels");
         pass &= tt_metal::LaunchKernels(device, program);
         log_info(LogTest, "Kernels done");

@@ -277,7 +277,7 @@ bool assign_runtime_args_to_program(
             tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, writer_args);
         }
     }
-    // tt_metal::WriteRuntimeArgsToDevice(device, program);
+
     return pass;
 }
 
@@ -391,7 +391,7 @@ int main(int argc, char **argv) {
         int device_id = 0;
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
 
-        pass &= tt_metal::InitializeDevice(device);
+
         ;
 
         ////////////////////////////////////////////////////////////////////////////
@@ -413,7 +413,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        pass &= tt_metal::CompileProgram(device, program);
+
         tt::log_assert(program.get_worker_core_range_set().ranges().size() >= 1, "Invalid core range set");
 
         CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;

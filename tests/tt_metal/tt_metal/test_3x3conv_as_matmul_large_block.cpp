@@ -52,7 +52,7 @@ int main(int argc, char **argv) {
         int device_id = 0;
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
 
-        pass &= tt_metal::InitializeDevice(device);;
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -283,12 +283,6 @@ int main(int argc, char **argv) {
         );
 
         ////////////////////////////////////////////////////////////////////////////
-        //                      Compile Application
-        ////////////////////////////////////////////////////////////////////////////
-        std::cout << "GOING TO COMPILE PROGRAM." << std::endl;
-        pass &= tt_metal::CompileProgram(device, program);
-        std::cout << "DONE COMPILING THE PROGRAM. GOING TO WRITE TO DRAM." << std::endl;
-        ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
 
@@ -297,7 +291,7 @@ int main(int argc, char **argv) {
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tilized);
         tt_metal::WriteToBuffer(src1_dram_buffer, weights);
         std::cout << "DONE WRITING TO DEVICE. GOING TO CONFIGURE DEVICE WITH PROGRAM" << std::endl;
-        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
         tt_metal::SetRuntimeArgs(
             program,
             generic_binary_reader_kernel,
@@ -309,7 +303,6 @@ int main(int argc, char **argv) {
             unary_writer_kernel,
             core,
             writer_rt_args);
-        tt_metal::WriteRuntimeArgsToDevice(device, program);
         std::cout << "DONE DEVICE CONFIGURE. GOING TO WRITE address map TO DEVICE L1" << std::endl;
         tt_metal::detail::WriteToDeviceL1(device, core, source_addresses_in_l1_addr, source_addresses);
 

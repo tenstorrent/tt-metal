@@ -463,11 +463,6 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
     // Writer rt args
     SetRuntimeArgs(program, writer_id, core_range, writer_rt_args);
 
-    // Compile and launch
-    bool pass = CompileProgram(device, program);
-
-    TT_ASSERT(pass);
-
     auto override_runtime_args_callback = [kernel_reader_id = reader_id, kernel_writer_id = writer_id](
                                             const Program &program,
                                             const std::vector<Buffer*>& input_buffers,

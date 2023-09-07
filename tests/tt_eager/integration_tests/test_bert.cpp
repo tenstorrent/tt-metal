@@ -191,7 +191,7 @@ void test_bert() {
     int device_id = 0;
     auto device = tt::tt_metal::CreateDevice(device_id);
 
-    TT_ASSERT(tt::tt_metal::InitializeDevice(device));
+
 
     std::size_t num_iterations = 2;
     std::size_t num_encoders = 24;

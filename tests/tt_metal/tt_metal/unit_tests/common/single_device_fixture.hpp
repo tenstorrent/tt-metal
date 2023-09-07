@@ -23,7 +23,6 @@ class SingleDeviceFixture : public ::testing::Test  {
         const int device_id = 0;
 
         device_ = tt::tt_metal::CreateDevice(device_id);
-        tt::tt_metal::InitializeDevice(device_);
     }
 
     void TearDown() override {

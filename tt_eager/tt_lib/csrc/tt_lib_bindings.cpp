@@ -2871,7 +2871,7 @@ void DeviceModule(py::module &m_device) {
         .def("id", &Device::id, "Device's ID")
         .def("arch", &Device::arch, "Device's arch");
 
-    m_device.def("CreateDevice", &CreateDevice, R"doc(
+    m_device.def("CreateDevice", [](tt::ARCH arch, int pcie_slot) { return CreateDevice(arch, pcie_slot); }, R"doc(
         Creates an instance of TT device.
 
         +------------------+------------------------+---------------------+------------------------------+----------+
@@ -2880,7 +2880,7 @@ void DeviceModule(py::module &m_device) {
         | device_id        | Device index           | int                 |                              | Yes      |
         +------------------+------------------------+---------------------+------------------------------+----------+
     )doc");
-    m_device.def("InitializeDevice", &InitializeDevice, py::arg().noconvert(), R"doc(
+    m_device.def("InitializeDevice", [](Device* dev){}, R"doc(
         Initialize instance of TT accelerator device.
 
         +-------------------+--------------------------------------------------------+----------------------------------+-------------------------------------------+----------+

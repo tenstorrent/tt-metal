@@ -35,7 +35,7 @@ bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(const tt::AR
         tt_metal::Device *device =
             tt_metal::CreateDevice(device_id);
 
-        pass &= tt_metal::InitializeDevice(device);
+
 
         int num_sticks = 256;
         int num_elements_in_stick = 1024;
@@ -77,7 +77,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
         tt_metal::Device *device =
             tt_metal::CreateDevice(device_id);
 
-        pass &= tt_metal::InitializeDevice(device);
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -162,7 +162,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        pass &= tt_metal::CompileProgram(device, program);
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
@@ -171,7 +171,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
             dram_buffer_size, false);
 
         tt_metal::WriteToBuffer(src_dram_buffer, src_vec);
-        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -192,7 +192,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
             (uint32_t) num_output_tiles});
 
         CoreCoord debug_core = {1,1};
-        tt_metal::WriteRuntimeArgsToDevice(device, program);
+
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;
@@ -257,7 +257,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
         tt_metal::Device *device =
             tt_metal::CreateDevice(device_id);
 
-        pass &= tt_metal::InitializeDevice(device);
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -342,7 +342,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-        pass &= tt_metal::CompileProgram(device, program);
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
@@ -352,7 +352,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
 
         tt_metal::WriteToBuffer(src_dram_buffer, src_vec);
 
-        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -372,7 +372,6 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
             (uint32_t) stick_size,
             (uint32_t) log2(stick_size)});
 
-        tt_metal::WriteRuntimeArgsToDevice(device, program);
         pass &= tt_metal::LaunchKernels(device, program);
 
         std::vector<uint32_t> result_vec;
@@ -423,7 +422,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
     tt_metal::Device *device =
         tt_metal::CreateDevice(device_id);
 
-    pass &= tt_metal::InitializeDevice(device);
+
 
     tt_metal::Program program = tt_metal::Program();
     CoreCoord core = {0, 0};
@@ -507,9 +506,9 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
             core,
             {dst.address(), 0, 0, num_pages});
 
-        pass &= tt_metal::CompileProgram(device, program);
-        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
-        tt_metal::WriteRuntimeArgsToDevice(device, program);
+
+
+
 
         pass &= tt_metal::LaunchKernels(device, program);
 
@@ -524,9 +523,9 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
             core,
             {dst.address(), 0, 0, num_pages});
 
-        pass &= tt_metal::CompileProgram(device, program);
-        pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
-        tt_metal::WriteRuntimeArgsToDevice(device, program);
+
+
+
 
         pass &= tt_metal::LaunchKernels(device, program);
 

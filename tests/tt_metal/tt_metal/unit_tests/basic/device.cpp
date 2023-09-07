@@ -88,8 +88,8 @@ bool dram_ping(
 bool load_all_blank_kernels(tt_metal::Device* device) {
     bool pass = true;
     tt_metal::Program program = tt_metal::Program();
-    pass &= tt_metal::CompileProgram(device, program);
-    pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
+
     pass &= tt_metal::LaunchKernels(device, program);
     return pass;
 }
@@ -107,7 +107,6 @@ TEST_F(BasicFixture, MultiDeviceInitializeAndTeardown) {
 
     for (unsigned int id = 0; id < num_devices; id++) {
         devices.push_back(tt::tt_metal::CreateDevice(id));
-        ASSERT_TRUE(tt::tt_metal::InitializeDevice(devices.at(id)));
     }
     for (unsigned int id = 0; id < num_devices; id++) {
         ASSERT_TRUE(tt::tt_metal::CloseDevice(devices.at(id)));
@@ -124,7 +123,6 @@ TEST_F(BasicFixture, MultiDeviceLoadBlankKernels) {
 
     for (unsigned int id = 0; id < num_devices; id++) {
         devices.push_back(tt::tt_metal::CreateDevice(id));
-        ASSERT_TRUE(tt::tt_metal::InitializeDevice(devices.at(id)));
     }
     for (unsigned int id = 0; id < num_devices; id++) {
         unit_tests::basic::device::load_all_blank_kernels(devices.at(id));
@@ -231,7 +229,6 @@ TEST_F(BasicFixture, SingleDeviceInitializeAndTeardown) {
     tt::tt_metal::Device* device;
     const unsigned int device_id = 0;
     device = tt::tt_metal::CreateDevice(device_id);
-    ASSERT_TRUE(tt::tt_metal::InitializeDevice(device));
     ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
 }
 TEST_F(BasicFixture, SingleDeviceHarvestingPrints) {
@@ -239,7 +236,6 @@ TEST_F(BasicFixture, SingleDeviceHarvestingPrints) {
     tt::tt_metal::Device* device;
     const unsigned int device_id = 0;
     device = tt::tt_metal::CreateDevice(device_id);
-    ASSERT_TRUE(tt::tt_metal::InitializeDevice(device));
     CoreCoord unharvested_logical_grid_size = {.x = 12, .y = 10};
     if (arch == tt::ARCH::WORMHOLE_B0) {
         unharvested_logical_grid_size = {.x = 8, .y = 10};
@@ -275,7 +271,6 @@ TEST_F(BasicFixture, SingleDeviceLoadBlankKernels) {
     tt::tt_metal::Device* device;
     const unsigned int device_id = 0;
     device = tt::tt_metal::CreateDevice(device_id);
-    ASSERT_TRUE(tt::tt_metal::InitializeDevice(device));
     unit_tests::basic::device::load_all_blank_kernels(device);
     ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
 }

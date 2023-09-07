@@ -50,7 +50,7 @@ int main() {
     int device_id = 0;
     auto device = tt::tt_metal::CreateDevice(device_id);
 
-    TT_ASSERT(tt::tt_metal::InitializeDevice(device));
+
 
     {
         auto allclose = run_test<host_function<std::plus<float>>>(tt::tt_metal::add, device);

@@ -81,7 +81,7 @@ tt_metal::Program generate_eltwise_unary_program(Device *device) {
         core,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
 
-    tt_metal::CompileProgram(device, program);
+
     return program;
 }
 
@@ -91,7 +91,6 @@ void test_enqueue_program(std::function<tt_metal::Program(tt_metal::Device *devi
     int device_id = 0;
     tt_metal::Device *device = tt_metal::CreateDevice(device_id);
 
-    tt_metal::InitializeDevice(device);
 
     tt_metal::Program program = create_program(device);
 
@@ -117,7 +116,7 @@ void test_enqueue_program(std::function<tt_metal::Program(tt_metal::Device *devi
     }
 
     TT_ASSERT(out_vec == inp);
-
+    tt_metal::CloseDevice(device);
 }
 
 int main() {

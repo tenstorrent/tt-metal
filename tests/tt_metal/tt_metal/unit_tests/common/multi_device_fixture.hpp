@@ -31,7 +31,6 @@ class MultiDeviceFixture : public ::testing::Test {
         }
         for (unsigned int id = 0; id < num_devices_; id++) {
             devices_.push_back(tt::tt_metal::CreateDevice(id));
-            tt::tt_metal::InitializeDevice(devices_.at(id));
         }
     }
 
