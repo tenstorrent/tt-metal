@@ -503,6 +503,19 @@ Tensor logical_xor(const Tensor &input_a, const Tensor &input_b, const MemoryCon
     return operation::decorate_as_composite(__func__, _logical_xor)(input_a, input_b, output_mem_config);
 }
 
+Tensor _logical_ori(const Tensor &input_a, float immediate, const MemoryConfig& output_mem_config) {
+    if (iszero(immediate)){
+        return nez(input_a, output_mem_config);
+    } else {
+        return full_like(input_a, 1, output_mem_config);
+    }
+}
+Tensor logical_ori(const Tensor& input_a, float immediate, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _logical_ori)(input_a, immediate, output_mem_config);
+}
+
+
 //subalpha(input,other,alpha)=input-alpha*other
 Tensor _subalpha(const Tensor& input_a, const Tensor& input_b, float alpha, const MemoryConfig& output_mem_config) {
     Tensor result = add(neg(mul_unary(input_b, alpha, output_mem_config), output_mem_config), input_a, std::nullopt, output_mem_config);

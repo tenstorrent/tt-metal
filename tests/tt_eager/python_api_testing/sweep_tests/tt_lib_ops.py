@@ -1106,6 +1106,24 @@ def arange(x, *args, start, end, step=1, device, dtype, layout, buffer_type, out
 
 
 @setup_host_and_device
+def eltwise_logical_ori(x, *args, immediate, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype[0],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
+
+    t1 = ttl.tensor.logical_ori(t0, immediate, output_mem_config=output_mem_config)
+
+    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    return output
+
+
+@setup_host_and_device
 def clip(x, *args, low, high, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),

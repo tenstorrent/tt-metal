@@ -515,6 +515,8 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.logical_or
 
+.. autofunction:: tt_lib.tensor.logical_ori
+
 .. autofunction:: tt_lib.tensor.rsqrt
 
 .. autofunction:: tt_lib.tensor.lerp

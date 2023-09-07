@@ -39,7 +39,7 @@ reference_pcc["softplus"] = 0.9984
 
 def custom_compare(*args, **kwargs):
     function = kwargs.pop("function")
-    if function in ["logical_xor"]:
+    if function in ["logical_xor", "logical_ori"]:
         comparison_func = comparison_funcs.comp_equal
     else:
         comparison_func = partial(
@@ -100,6 +100,7 @@ if is_wormhole_b0():
                 "addalpha",
                 "logit",
                 "logical_xor",
+                "logical_ori",
             ),
             shapes,
         )
@@ -131,6 +132,7 @@ def test_run_eltwise_composite_test(
     options["cosh"] = options["sinh"]
     options["asinh"] = (-100, 100)
     options["acosh"] = (1, 100)
+    options["logical_ori"] = (-100, 100)
 
     generator = generation_funcs.gen_rand
 
@@ -164,7 +166,6 @@ def test_run_eltwise_composite_test(
         "xlogy",
         "atan2",
         "lerp_binary",
-        "atan2",
         "subalpha",
         "addalpha",
         "logical_xor",
@@ -195,6 +196,8 @@ def test_run_eltwise_composite_test(
         test_args.update({"bias": np.random.randint(1, 100)})
     elif fn in ["logit"]:
         test_args.update({"eps": np.random.randint(-1e-6, 1e6)})
+    elif fn in ["logical_ori"]:
+        test_args.update({"immediate": np.random.randint(0, 100)})
     run_single_pytorch_test(
         "eltwise-%s" % (fn),
         input_shapes,

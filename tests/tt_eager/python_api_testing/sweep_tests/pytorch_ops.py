@@ -646,8 +646,16 @@ def logaddexp(x, y, *args, **kwargs):
 def logaddexp2(x, y, *args, **kwargs):
     return torch.logaddexp2(x, y)
 
+
 def logical_or(x, y, *args, **kwargs):
     return torch.logical_or(x, y)
+
+
+def logical_ori(x, *args, **kwargs):
+    value = kwargs.pop("immediate")
+    result = torch.logical_or(x, torch.tensor(value, dtype=torch.int32))
+    return result
+
 
 def add(x, y, *args, **kwargs):
     return torch.add(x, y)

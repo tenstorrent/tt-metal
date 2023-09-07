@@ -1455,6 +1455,13 @@ void TensorModule(py::module &m_tensor) {
         R"doc("Scalar", "float", "")doc"
     );
 
+    detail::bind_unary_op_with_param(
+        m_tensor, "logical_ori", &logical_ori,
+        py::arg("immediate"),
+        R"doc(Perform an eltwise logical OR (``{0} || {1}``) on input tensor and immediate value.)doc",
+        R"doc("Scalar", "float", "")doc"
+    );
+
     m_tensor.def("add_unary", py::overload_cast<float, const Tensor&, const MemoryConfig&>(&add_unary),
         py::arg("scalar"), py::arg("input"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Perform an eltwise-binary add on one tensor and one scalar.
