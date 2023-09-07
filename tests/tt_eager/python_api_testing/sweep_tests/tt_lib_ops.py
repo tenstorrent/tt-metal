@@ -248,9 +248,9 @@ def eltwise_bias_gelu(x, *args, bias, device, dtype, layout, buffer_type, output
     t0 = t0.to(layout[0])
 
     t_bias = ttl.tensor.full_like(t0,bias)
-    t0 = tensor_to_device(t0, device, buffer_type[0])    
+    t0 = tensor_to_device(t0, device, buffer_type[0])
     t_bias = tensor_to_device(t_bias, device, buffer_type[0])
-    
+
     t1 = ttl.tensor.bias_gelu(t0, t_bias, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
@@ -911,19 +911,18 @@ def eltwise_subalpha(x, y, *args, alpha, device, dtype, layout, buffer_type, out
     return output
 
 @setup_host_and_device
-def eltwise_logit(x, *args, eps, device, dtype, layout, on_device, **kwargs):
+def eltwise_logit(x, *args, eps, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.logit(t0, eps)
+    t1 = ttl.tensor.logit(t0, eps, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     return output
@@ -2056,19 +2055,18 @@ def make_eltwise_unary_op(ttl_tensor_unop):
     return eltwise_unary_op
 
 @setup_host_and_device
-def eltwise_bias_gelu_unary(x, *args, bias, device, dtype, layout, on_device, **kwargs):
+def eltwise_bias_gelu_unary(x, *args, bias, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
     t0 = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        dtype,
+        dtype[0],
         ttl.tensor.Layout.ROW_MAJOR,
     )
 
-    t0 = t0.to(layout)
-    if on_device:
-        t0 = t0.to(device)
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
 
-    t1 = ttl.tensor.bias_gelu_unary(t0, bias)
+    t1 = ttl.tensor.bias_gelu_unary(t0, bias, output_mem_config=output_mem_config)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     return output
