@@ -157,9 +157,7 @@ inline void c_tensix_core::ex_zeroacc(vptr_uint instrn_buf, uint clear_mode, uin
 
 inline void c_tensix_core::ex_encc(vptr_uint instrn_buf)
 {
-#ifdef RISC_B0_HW
    ::ex_encc(instrn_buf);
-#endif
 }
 
 inline void c_tensix_core::ex_load_const(vptr_uint instrn_buf)
