@@ -9,7 +9,6 @@
 
 #include "tensor/tensor.hpp"
 
-#include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 
 namespace tt {
@@ -70,7 +69,7 @@ inline Tensor bmm    (const Tensor &input_tensor_a, const Tensor &input_tensor_b
 }
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const Tensor> bias, Tensor &output_tensor, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool gelu);
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const Tensor> bias, Tensor &output_tensor, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, std::optional<UnaryWithParam> fused_activation);
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const Tensor> bias, Tensor &output_tensor, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool gelu);
 operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(const Tensor& input_tensor_a, const Tensor& input_tensor_b, const Shape &ashape, const Shape &bshape, Tensor &output_tensor, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
 
 
@@ -78,7 +77,7 @@ operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(const Tensor& inp
  * Bert large matmuls using operations::primary::matmul + program_config
  */
 Tensor bert_large_fused_qkv_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype=std::nullopt);
-Tensor bert_large_ff1_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, bool fused_activation, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype=std::nullopt);
+Tensor bert_large_ff1_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, bool fuse_gelu_activation, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype=std::nullopt);
 Tensor bert_large_ff2_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype=std::nullopt);
 Tensor bert_large_selfout_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype=std::nullopt);
 Tensor bert_large_pre_softmax_bmm(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype=std::nullopt);
@@ -94,12 +93,6 @@ Tensor falcon_dense_h_to_4h_matmul (const Tensor &input_tensor_a, const Tensor &
 Tensor falcon_lm_head_matmul (const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype=std::nullopt);
 
 /**
- * Resnet matmul for linear
- */
-Tensor resnet_matmul(const Tensor& input_a, const Tensor& input_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype = std::nullopt);
-
-
-/**
  * Generalized blocked matmul with support for tilize and untilize and mixed-prec
  */
 struct BMMTilizeUntilize {
@@ -108,7 +101,6 @@ struct BMMTilizeUntilize {
     const uint32_t in0_block_ntiles_h_, in0_block_ntiles_w_, in1_block_ntiles_w_;
     const uint32_t out_subblock_ntiles_h_, out_subblock_ntiles_w_;
     const bool tilize_in0_, untilize_out_;
-    const bool has_bias_;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -121,17 +113,17 @@ struct BMMTilizeUntilize {
  * Blocked Matmul, with support for tilize a and untilize output.
  * NOTE: Takes blocks and subblock information as arguments.
  */
-Tensor bmm_tilize_untilize(const Tensor& a, const Tensor& b, const Tensor& bias, DataType out_dt,
+Tensor bmm_tilize_untilize(const Tensor& a, const Tensor& b, DataType out_dt,
                            uint32_t a_height_nblocks, uint32_t a_width_nblocks, uint32_t b_width_nblocks,
                            uint32_t a_block_height_ntiles, uint32_t a_block_width_ntiles, uint32_t b_block_width_ntiles,
                            uint32_t out_subblock_height_ntiles, uint32_t out_subblock_width_ntiles,
-                           bool tilize_in0, bool untilize_out, bool has_bias);
+                           bool tilize_in0, bool untilize_out);
 operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
-                                    const Tensor &in0, const Tensor &in1, Tensor &bias, DataType out_dt,
+                                    const Tensor &in0, const Tensor &in1, DataType out_dt,
                                     uint32_t in0_height_nblocks, uint32_t in0_width_nblocks, uint32_t in1_width_nblocks,
                                     uint32_t in0_block_height_ntiles, uint32_t in0_block_width_ntiles, uint32_t in1_block_width_ntiles,
                                     uint32_t out_subblock_height_ntiles, uint32_t out_subblock_width_ntiles,
-                                    bool tilize_in0, bool untilize_out, bool has_bias,
+                                    bool tilize_in0, bool untilize_out,
                                     Tensor &out);
 
 }  // namespace tt_metal
@@ -167,7 +159,7 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
     std::size_t out_subblock_w;
     std::size_t per_core_M;
     std::size_t per_core_N;
-    std::optional<UnaryWithParam> fused_activation;
+    const bool fuse_gelu_activation;
 
     tt::stl::reflection::Attributes attributes() const;
 };
@@ -197,7 +189,6 @@ struct Matmul {
     MatmulProgramConfig program_config;
     const MemoryConfig output_mem_config;
     const DataType output_dtype;
-    const MathFidelity math_fidelity;
 
     void validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
@@ -216,10 +207,9 @@ inline Tensor matmul(
     const Tensor &input_tensor_b,
     const MatmulProgramConfig& program_config = MatmulDefaultProgramConfig{},
     const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<const DataType> output_dtype=std::nullopt,
-    const MathFidelity math_fidelity = MathFidelity::LoFi
+    std::optional<const DataType> output_dtype=std::nullopt
 ) {
-    return operation::run(Matmul{program_config, mem_config, output_dtype.value_or(input_tensor_a.dtype()), math_fidelity}, {input_tensor_a, input_tensor_b}, {std::nullopt}).at(0);
+    return operation::run(Matmul{program_config, mem_config, output_dtype.value_or(input_tensor_a.dtype())}, {input_tensor_a, input_tensor_b}, {std::nullopt}).at(0);
 }
 
 inline Tensor matmul(
@@ -227,10 +217,9 @@ inline Tensor matmul(
     const Tensor &input_tensor_b, std::optional<const Tensor> bias,
     const MatmulProgramConfig& program_config = MatmulDefaultProgramConfig{},
     const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<const DataType> output_dtype=std::nullopt,
-    const MathFidelity math_fidelity = MathFidelity::LoFi
+    std::optional<const DataType> output_dtype=std::nullopt
 ) {
-    return operation::run(Matmul{program_config, mem_config, output_dtype.value_or(input_tensor_a.dtype()), math_fidelity}, {input_tensor_a, input_tensor_b}, {bias}).at(0);
+    return operation::run(Matmul{program_config, mem_config, output_dtype.value_or(input_tensor_a.dtype())}, {input_tensor_a, input_tensor_b}, {bias}).at(0);
 }
 
 Tensor matmul_1d(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, std::optional<MatmulMultiCoreReuseMultiCast1DProgramConfig> program_config = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype=std::nullopt);

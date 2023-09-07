@@ -374,21 +374,14 @@ Tensor bert_large_fused_qkv_matmul(const Tensor &input_tensor_a, const Tensor &i
         .out_subblock_w = 2,
         .per_core_M = 12,
         .per_core_N = 8,
-        .fused_activation = std::nullopt,
+        .fuse_gelu_activation=false,
     };
     return operations::primary::matmul(input_tensor_a, input_tensor_b, bias, program_config, mem_config, output_dtype);
 }
 
-Tensor bert_large_ff1_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, bool fused_activation, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype) {
+Tensor bert_large_ff1_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, bool fuse_gelu_activation, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype) {
     auto batch_size = input_tensor_a.shape()[0];
 
-    UnaryWithParam fa;
-    if(fused_activation){
-    	fa.op_type = UnaryOpType::RELU;
-    }
-    else{
-    	fa.op_type = UnaryOpType::GELU;
-    }
     TT_ASSERT((input_tensor_a.dtype() != DataType::BFLOAT16 or input_tensor_b.dtype() != DataType::BFLOAT16 or output_dtype != DataType::BFLOAT16) or (mem_config.buffer_type == BufferType::DRAM) or (input_tensor_a.memory_config().buffer_type == BufferType::DRAM and input_tensor_b.memory_config().buffer_type == BufferType::DRAM), "For BFLOAT16, if output is on L1, one of in0 or in1 must be on DRAM!");
     TT_ASSERT((input_tensor_a.shape() == Shape({batch_size, 1, 384, 1024})), "Unsupported input shape");
     TT_ASSERT((input_tensor_b.shape() == Shape({1, 1, 1024, 4096})), "Unsupported input shape");
@@ -400,7 +393,7 @@ Tensor bert_large_ff1_matmul(const Tensor &input_tensor_a, const Tensor &input_t
         .out_subblock_w = 1,
         .per_core_M = 12,
         .per_core_N = 11,
-        .fused_activation = fa,
+        .fuse_gelu_activation=fuse_gelu_activation,
     };
     return operations::primary::matmul(input_tensor_a, input_tensor_b, bias, program_config, mem_config, output_dtype);
 }
@@ -418,7 +411,7 @@ Tensor bert_large_ff2_matmul(const Tensor &input_tensor_a, const Tensor &input_t
         .out_subblock_w = 1,
         .per_core_M = 12,
         .per_core_N = 3,
-        .fused_activation = std::nullopt,
+        .fuse_gelu_activation=false,
     };
     return operations::primary::matmul(input_tensor_a, input_tensor_b, bias, program_config, mem_config, output_dtype);
 }
@@ -436,7 +429,7 @@ Tensor bert_large_selfout_matmul(const Tensor &input_tensor_a, const Tensor &inp
         .out_subblock_w = 1,
         .per_core_M = 12,
         .per_core_N = 3,
-        .fused_activation = std::nullopt,
+        .fuse_gelu_activation=false,
     };
     return operations::primary::matmul(input_tensor_a, input_tensor_b, bias, program_config, mem_config, output_dtype);
 }
@@ -526,15 +519,6 @@ Tensor falcon_lm_head_matmul(const Tensor &input_tensor_a, const Tensor &input_t
     }
 }
 
-/**
- * Resnet50 matmul with fused batch
- */
-Tensor resnet_matmul(const Tensor& input_a, const Tensor& input_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config,std::optional<const DataType> output_dtype) {
-    auto program_config = bmm_op_utils::get_mcast_1d_config(input_a, input_b, true);
-    return operations::primary::matmul_1d(input_a, input_b, bias, program_config, mem_config, output_dtype);
-}
-
-
 }  // namespace tt_metal
 
 
@@ -563,7 +547,7 @@ tt::stl::reflection::Attributes MatmulMultiCoreReuseMultiCastProgramConfig::attr
         {"out_subblock_w",  this->out_subblock_w},
         {"per_core_M",  this->per_core_M},
         {"per_core_N",  this->per_core_N},
-        {"fusee_activation",  this->fused_activation},
+        {"fuse_gelu_activation",  this->fuse_gelu_activation},
     };
 }
 
@@ -617,11 +601,6 @@ void Matmul::validate(
                 TT_ASSERT(program_config.per_core_M % program_config.out_subblock_h == 0, "per_core_M must be divisible by out_subblock_h");
                 TT_ASSERT(program_config.per_core_N % program_config.out_subblock_w == 0, "per_core_N must be divisible by out_subblock_w");
             }
-            if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig>) {
-                if (program_config.fused_activation.has_value()) {
-                    TT_ASSERT(program_config.fused_activation.value().op_type == UnaryOpType::GELU || program_config.fused_activation.value().op_type == UnaryOpType::RELU);
-                }
-            }
         },
         this->program_config
     );
@@ -651,7 +630,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
     auto& output_tensor = output_tensors.at(0);
 
     tt::tt_metal::DataType output_dtype = this->output_dtype;
-    MathFidelity math_fidelity = this->math_fidelity;
+    MathFidelity math_fidelity = MathFidelity::LoFi;
     bool fuse_batch = true;
 
     return std::visit(
@@ -696,7 +675,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.compute_with_storage_grid_size,
                     output_dtype, math_fidelity,
                     program_config.in0_block_w, program_config.out_subblock_h, program_config.out_subblock_w,
-                    program_config.per_core_M, program_config.per_core_N, fuse_batch, program_config.fused_activation
+                    program_config.per_core_M, program_config.per_core_N, fuse_batch, program_config.fuse_gelu_activation
                 );
             }
             else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
@@ -720,7 +699,6 @@ tt::stl::reflection::Attributes Matmul::attributes() const {
         {"program_config", this->program_config},
         {"output_mem_config",  this->output_mem_config},
         {"output_dtype", this->output_dtype},
-        {"math_fidelity", this->math_fidelity},
     };
 }
 
@@ -728,7 +706,7 @@ Tensor matmul_1d(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std
     if (!program_config.has_value()) {
         program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b);
     }
-    return operations::primary::matmul(input_tensor_a, input_tensor_b, bias, program_config.value(), mem_config, output_dtype, MathFidelity::LoFi);
+    return operations::primary::matmul(input_tensor_a, input_tensor_b, bias, program_config.value(), mem_config, output_dtype);
 }
 
 }  // namespace primary
