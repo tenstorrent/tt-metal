@@ -204,6 +204,9 @@ void tt_cluster::open_device(
         }
     } else if (target_type == TargetDevice::Versim) {
         device = std::make_unique<tt_VersimDevice>(this->sdesc_per_chip.at(0));
+        for(auto chip_id = target_devices.begin(); chip_id != target_devices.end(); chip_id++){
+            harvested_rows_per_target[*chip_id] = 0;
+        }
     }
 
     type = target_type;
