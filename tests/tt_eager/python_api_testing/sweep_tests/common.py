@@ -314,7 +314,7 @@ def shapes_and_datagen(shape_dict, datagen_dict):
                     x = random.randint(shape1_start[i], shape1_end[i])
                     shape1.append(align_to_interval(x, shape1_start[i], interval[i]))
 
-                normalized_shape = [1, 1, 32, shape1[3]]
+                normalized_shape = [1, 1, 1, shape1[3]]
 
                 yield [shape1, normalized_shape, normalized_shape], datagen_funcs
 

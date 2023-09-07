@@ -692,49 +692,6 @@ def conv(x, y, conv_params, *args, device, dtype, layout, buffer_type, output_me
     output = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     return output
 
-@setup_host_and_device
-def layernorm(x, y, z, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype[0],
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout[0])
-    t0 = tensor_to_device(t0, device, buffer_type[0])
-
-    if layout[1] == ttl.tensor.Layout.TILE:
-        y = torch.nn.functional.pad(y, (0, 0, 0, 32 - y.shape[2]))
-
-    t1 = ttl.tensor.Tensor(
-        y.reshape(-1).tolist(),
-        y.shape,
-        dtype[1],
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t1 = t1.to(layout[1])
-    t1 = tensor_to_device(t1, device, buffer_type[1])
-
-    if layout[2] == ttl.tensor.Layout.TILE:
-        z = torch.nn.functional.pad(z, (0, 0, 0, 32 - z.shape[2]))
-
-    t2 = ttl.tensor.Tensor(
-        z.reshape(-1).tolist(),
-        z.shape,
-        dtype[2],
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t2 = t2.to(layout[2])
-    t2 = tensor_to_device(t2, device, buffer_type[2])
-
-    t3 = ttl.operations.primary.layernorm(t0, 1e-5, t1, t2, output_mem_config=output_mem_config)
-
-    output = t3.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-    return output
-
 
 @setup_host_and_device
 def layernorm_noweights(x, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
@@ -781,6 +738,49 @@ def add_layernorm_noweights(x, y, *args, device, dtype, layout, buffer_type, out
     output = t4.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     return output
 
+
+@setup_host_and_device
+def layernorm(x, y, z, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype[0],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
+
+    if layout[1] == ttl.tensor.Layout.TILE:
+        y = torch.nn.functional.pad(y, (0, 0, 0, 32 - y.shape[2]))
+
+    t1 = ttl.tensor.Tensor(
+        y.reshape(-1).tolist(),
+        y.shape,
+        dtype[1],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t1 = t1.to(layout[1])
+    t1 = tensor_to_device(t1, device, buffer_type[1])
+
+    if layout[2] == ttl.tensor.Layout.TILE:
+        z = torch.nn.functional.pad(z, (0, 0, 0, 32 - z.shape[2]))
+
+    t2 = ttl.tensor.Tensor(
+        z.reshape(-1).tolist(),
+        z.shape,
+        dtype[2],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t2 = t2.to(layout[2])
+    t2 = tensor_to_device(t2, device, buffer_type[2])
+
+    t3 = ttl.operations.primary.layernorm(t0, 1e-5, t1, t2, output_mem_config=output_mem_config)
+
+    output = t3.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    return output
 
 @setup_host_and_device
 def add_layernorm(x, y, z, w, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
@@ -835,6 +835,7 @@ def add_layernorm(x, y, z, w, *args, device, dtype, layout, buffer_type, output_
 
     output = t4.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     return output
+
 
 @setup_host_and_device
 def eltwise_lerp_ternary(x, y, z, *args, device, dtype, layout, buffer_type, output_mem_config, **kwargs):
