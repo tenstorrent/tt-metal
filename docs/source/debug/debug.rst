@@ -147,18 +147,18 @@ To use debug printing capability, it is first required to start the debug print 
     - multiple cores: ``"(x,y),(x,y)"`` (etc)
     - range of cores: ``"(x,y)-(x,y)"`` (bounding box, inclusive)
 
-- Optionally ``export TT_DEBUG_PRINT_CHIPS=<list of chips>``
+- Optionally (for multi-chip parts) ``export TT_DEBUG_PRINT_CHIPS=<list of chips>``
 
   - use a comma separated list
   - default is 0
 
-- Optionally ``export TT_DEBUG_PRINT_HART=<hart>``
+- Optionally ``export TT_DEBUG_PRINT_RISCV=<riscv>``
 
-  - ``<hart>`` is one of:
+  - ``<riscv>`` is one of:
 
     - ``NC``, ``BR``, ``TR0``, ``TR1``, ``TR2``
 
-  - default is all harts
+  - default is all riscvs
 
 - Optionally ``export TT_DEBUG_PRINT_FILE=<filename>``
 - Note that the core coordinates are currently NOC coordinates (not logical).

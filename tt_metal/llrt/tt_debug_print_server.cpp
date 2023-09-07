@@ -91,7 +91,7 @@ struct DebugPrintServerContext {
         exit_threads_condition_ = false;
         for (auto chip: chip_ids) {
             for (auto core: cores) {
-                for (int hart_index = 0; hart_index < DPRINT_NHARTS; hart_index++) {
+                for (int hart_index = 0; hart_index < DPRINT_NRISCVS; hart_index++) {
                     if (hart_mask & (1<<hart_index)) {
                         // Cannot do this magic write inside the thread because of a possible race condition
                         // where the kernel subsequently both launches and terminates prior to magic write going through
@@ -538,21 +538,21 @@ void tt_start_debug_print_server(tt_cluster* cluster)
         if (chip_ids.size() == 0) {
             chip_ids.push_back(0);
         }
-        auto hart_mask = DPRINT_HART_BR | DPRINT_HART_TR0 | DPRINT_HART_TR1 | DPRINT_HART_TR2 | DPRINT_HART_NC;
-        char *dbg_hart = std::getenv("TT_DEBUG_PRINT_HART");
-        if (dbg_hart != nullptr) {
-            if (strcmp(dbg_hart, "BR") == 0) {
-                hart_mask = DPRINT_HART_BR;
-            } else if (strcmp(dbg_hart, "NC") == 0) {
-                hart_mask = DPRINT_HART_NC;
-            } else if (strcmp(dbg_hart, "TR0") == 0) {
-                hart_mask = DPRINT_HART_TR0;
-            } else if (strcmp(dbg_hart, "TR1") == 0) {
-                hart_mask = DPRINT_HART_TR1;
-            } else if (strcmp(dbg_hart, "TR2") == 0) {
-                hart_mask = DPRINT_HART_TR2;
+        auto riscv_mask = DPRINT_RISCV_BR | DPRINT_RISCV_TR0 | DPRINT_RISCV_TR1 | DPRINT_RISCV_TR2 | DPRINT_RISCV_NC;
+        char *dbg_riscvs = std::getenv("TT_DEBUG_PRINT_RISCVS");
+        if (dbg_riscvs != nullptr) {
+            if (strcmp(dbg_riscvs, "BR") == 0) {
+                riscv_mask = DPRINT_RISCV_BR;
+            } else if (strcmp(dbg_riscvs, "NC") == 0) {
+                riscv_mask = DPRINT_RISCV_NC;
+            } else if (strcmp(dbg_riscvs, "TR0") == 0) {
+                riscv_mask = DPRINT_RISCV_TR0;
+            } else if (strcmp(dbg_riscvs, "TR1") == 0) {
+                riscv_mask = DPRINT_RISCV_TR1;
+            } else if (strcmp(dbg_riscvs, "TR2") == 0) {
+                riscv_mask = DPRINT_RISCV_TR2;
             } else {
-                tt::log_fatal("Invalid TT_DEBUG_PRINT_HART");
+                tt::log_fatal("Invalid TT_DEBUG_PRINT_RISCV");
             }
         }
         char *db_file = std::getenv("TT_DEBUG_PRINT_FILE");
@@ -565,7 +565,7 @@ void tt_start_debug_print_server(tt_cluster* cluster)
         // Using an invalid core can hang the chip, sanitize
         // TODO(PGK)
 
-        DebugPrintServerContext* ctx = new DebugPrintServerContext(cluster, chip_ids, cores, hart_mask, db_file);
+        DebugPrintServerContext* ctx = new DebugPrintServerContext(cluster, chip_ids, cores, riscv_mask, db_file);
 
         // currently there's only one device per cluster
         // in some tests close_device is not called but we still need to flush the debug prints

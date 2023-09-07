@@ -14,14 +14,14 @@
 #include "tt_metal/common/core_coord.h"
 
 enum DebugPrintHartFlags : unsigned int {
-    DPRINT_HART_NC  = 1,
-    DPRINT_HART_TR0 = 2,
-    DPRINT_HART_TR1 = 4,
-    DPRINT_HART_TR2 = 8,
-    DPRINT_HART_BR  = 16,
+    DPRINT_RISCV_NC  = 1,
+    DPRINT_RISCV_TR0 = 2,
+    DPRINT_RISCV_TR1 = 4,
+    DPRINT_RISCV_TR2 = 8,
+    DPRINT_RISCV_BR  = 16,
 };
 
-constexpr int DPRINT_NHARTS = 5;
+constexpr int DPRINT_NRISCVS = 5;
 
 /*
 @brief Starts the print server thread - will poll all specified chip/cores/harts of a device for any print data accumulated in thread-local buffers.
