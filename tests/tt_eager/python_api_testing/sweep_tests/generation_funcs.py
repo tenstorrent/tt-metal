@@ -364,6 +364,53 @@ def sanitize_args(input_shapes, dtype_buffer_layout):
     return dtype_buffer_layout
 
 
+def gen_dtype_layout_device(
+    input_shapes,
+    dtypes=[supported_tt_dtypes],
+    layouts=[supported_tt_layouts],
+    buffer_types=[supported_tt_buffer_types],
+):
+    # last buffer_types option is for output buffer
+    dtype_buffer_layouts = []
+
+    for i in range(len(input_shapes)):
+        dtype_buffer_layout = []
+
+        for dtype, layout, buffer_type in product(
+            dtypes[i],
+            layouts[i],
+            buffer_types[i],
+        ):
+            dtype_buffer_layout.append({"dtype": dtype, "layout": layout, "buffer_type": buffer_type})
+
+        dtype_buffer_layouts.append(dtype_buffer_layout)
+
+    result = []
+
+    for out_buffer_type in buffer_types[-1]:
+        for dtype_buffer_layout_combination in product(*dtype_buffer_layouts):
+            out = sanitize_args(input_shapes, dtype_buffer_layout_combination)
+
+            if out is not None:
+                dtype = []
+                layout = []
+                buff_type = []
+
+                for x in dtype_buffer_layout_combination:
+                    dtype.append(x["dtype"])
+                    layout.append(x["layout"])
+                    buff_type.append(x["buffer_type"])
+
+                result.append({
+                    "dtype": dtype,
+                    "layout": layout,
+                    "buffer_type": buff_type,
+                    "output_mem_config": make_out_mem_config(out_buffer_type),
+                })
+
+    return result
+
+
 def sanitize_args_layernorm(input_shapes, dtype_buffer_layout, runtime_tile_padding_layernorm=False, runtime_tile_padding_add_layernorm=False):
     for i in range(len(input_shapes)):
         shape = input_shapes[i]
@@ -386,24 +433,7 @@ def sanitize_args_layernorm(input_shapes, dtype_buffer_layout, runtime_tile_padd
     return dtype_buffer_layout
 
 
-def gen_layernorm_layout_device(
-    input_shapes,
-    dtypes=[supported_tt_dtypes],
-    layouts=[supported_tt_layouts],
-    buffer_types=[supported_tt_buffer_types],
-):
-    return gen_dtype_layout_layernorm_device(input_shapes, dtypes, layouts, buffer_types, runtime_tile_padding_layernorm = True, runtime_tile_padding_add_layernorm=False)
-
-
-def gen_add_layernorm_layout_device(
-    input_shapes,
-    dtypes=[supported_tt_dtypes],
-    layouts=[supported_tt_layouts],
-    buffer_types=[supported_tt_buffer_types],
-):
-    return gen_dtype_layout_layernorm_device(input_shapes, dtypes, layouts, buffer_types, runtime_tile_padding_layernorm = False, runtime_tile_padding_add_layernorm=True)
-
-def gen_dtype_layout_layernorm_device(
+def gen_dtype_layout_device_layernorm(
     input_shapes,
     dtypes=[supported_tt_dtypes],
     layouts=[supported_tt_layouts],
@@ -451,51 +481,23 @@ def gen_dtype_layout_layernorm_device(
 
     return result
 
-def gen_dtype_layout_device(
+
+def gen_layernorm_args(
     input_shapes,
     dtypes=[supported_tt_dtypes],
     layouts=[supported_tt_layouts],
     buffer_types=[supported_tt_buffer_types],
 ):
-    # last buffer_types option is for output buffer
-    dtype_buffer_layouts = []
+    return gen_dtype_layout_device_layernorm(input_shapes, dtypes, layouts, buffer_types, runtime_tile_padding_layernorm = True, runtime_tile_padding_add_layernorm=False)
 
-    for i in range(len(input_shapes)):
-        dtype_buffer_layout = []
 
-        for dtype, layout, buffer_type in product(
-            dtypes[i],
-            layouts[i],
-            buffer_types[i],
-        ):
-            dtype_buffer_layout.append({"dtype": dtype, "layout": layout, "buffer_type": buffer_type})
-
-        dtype_buffer_layouts.append(dtype_buffer_layout)
-
-    result = []
-
-    for out_buffer_type in buffer_types[-1]:
-        for dtype_buffer_layout_combination in product(*dtype_buffer_layouts):
-            out = sanitize_args(input_shapes, dtype_buffer_layout_combination)
-
-            if out is not None:
-                dtype = []
-                layout = []
-                buff_type = []
-
-                for x in dtype_buffer_layout_combination:
-                    dtype.append(x["dtype"])
-                    layout.append(x["layout"])
-                    buff_type.append(x["buffer_type"])
-
-                result.append({
-                    "dtype": dtype,
-                    "layout": layout,
-                    "buffer_type": buff_type,
-                    "output_mem_config": make_out_mem_config(out_buffer_type),
-                })
-
-    return result
+def gen_add_layernorm_args(
+    input_shapes,
+    dtypes=[supported_tt_dtypes],
+    layouts=[supported_tt_layouts],
+    buffer_types=[supported_tt_buffer_types],
+):
+    return gen_dtype_layout_device_layernorm(input_shapes, dtypes, layouts, buffer_types, runtime_tile_padding_layernorm = False, runtime_tile_padding_add_layernorm=True)
 
 
 def gen_permute_args(

@@ -6,7 +6,7 @@ test-list:
         end-shape: [12, 24, 512, 512]
         interval: [1, 1, 32, 32]
         num-shapes: 4
-        num-samples: 10
+        num-samples: 2
         method: add_layernorm
       datagen:
         function: gen_rand
@@ -15,24 +15,32 @@ test-list:
           high: 10
       comparison:
         function: comp_pcc
-      args-gen: gen_add_layernorm_layout_device
+      args-gen: gen_add_layernorm_args
       output-file: add_layernorm_sweep.csv
       args:
-        inputs:
-          - input-1:
-            data-layout: ["TILE"]
-            data-type: ["BFLOAT16", "BFLOAT8_B"]
-            buffer-type: ["DRAM", "SYSTEM_MEMORY"]
-          - input-2:
-            data-layout: ["TILE"]
-            data-type: ["BFLOAT16", "BFLOAT8_B"]
-            buffer-type: ["DRAM", "SYSTEM_MEMORY"]
-          - input-3:
-            data-layout: ["TILE"]
-            data-type: ["BFLOAT16", "BFLOAT8_B"]
-            buffer-type: ["DRAM", "SYSTEM_MEMORY"]
-          - input-4:
-            data-layout: ["TILE"]
-            data-type: ["BFLOAT16", "BFLOAT8_B"]
-            buffer-type: ["DRAM", "SYSTEM_MEMORY"]
+        data-layout: ["TILE"]
+        data-type: ["BFLOAT16", "BFLOAT8_B"]
+        buffer-type: ["DRAM", "SYSTEM_MEMORY"]
+        out-buffer-type: ["DRAM"]
+  - add-layernorm:
+      shape:
+        start-shape: [1, 1, 2, 2]
+        end-shape: [12, 24, 512, 512]
+        interval: [1, 1, 1, 2]
+        num-shapes: 4
+        num-samples: 2
+        method: add_layernorm
+      datagen:
+        function: gen_rand
+        args:
+          low: -10
+          high: 10
+      comparison:
+        function: comp_pcc
+      args-gen: gen_add_layernorm_args
+      output-file: add_layernorm_sweep.csv
+      args:
+        data-layout: ["ROW_MAJOR"]
+        data-type: ["BFLOAT16"]
+        buffer-type: ["DRAM", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM"]

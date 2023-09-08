@@ -12,8 +12,24 @@ from loguru import logger
 from tt_metal.tools.profiler.profile_this import (
     test_profiler_build,
     profile_command,
-    post_process,
+    get_log_locations,
 )
+
+
+def post_process(outputLocation=None):
+    logLocations = get_log_locations()
+
+    for logLocation in logLocations:
+        testName = logLocation.split("/")[-1]
+        if testName == "ops":
+            testName = "default"
+
+        if outputLocation is None:
+            outputLocation = f"tt_metal/tools/profiler/output/ops/{testName}"
+
+        os.system(f"python tt_metal/tools/profiler/process_ops_logs.py -i {logLocation} -o {outputLocation}")
+        logger.info(f"Post processed {testName} with results saved in {outputLocation}")
+
 
 directory = "tests/tt_eager/python_api_testing/sweep_tests/test_configs/ci_sweep_tests"
 result_folder = "/home/ubuntu/tt-metal/ng-test-sweeps/"
@@ -35,7 +51,7 @@ if __name__ == "__main__":
         command = f"python tests/tt_eager/python_api_testing/sweep_tests/run_pytorch_test.py -i {txt_file} -o {result_folder}{basename}"
         profile_output_folder = f"{result_folder}{basename}/profile"
 
-        # if basename == "pytorch_eltwise_add_test":
+        # if basename == "pytorch_add_layernorm_test":
         #     do_run = True
 
         # if basename == "pytorch_eltwise_asinh_test":
@@ -61,3 +77,5 @@ if __name__ == "__main__":
 
             with open(f"{result_folder}{basename}/total_time.txt", "w") as file:
                 file.write(f"{duration:.2f}")
+
+            # break
