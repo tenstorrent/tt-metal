@@ -13,6 +13,7 @@
 #include "common/assert.hpp"
 #include "common/logger.hpp"
 
+#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 using namespace std;
 
 class bfloat16 {
@@ -279,14 +280,10 @@ inline void print_vec(std::vector<uint32_t> vec, int num_tiles, string name = ""
 }
 
 inline std::vector<uint32_t> pack_bfloat16_vec_into_uint32_vec(const std::vector<bfloat16>& data) {
-    std::vector<uint32_t> result;
+    ZoneScoped;
     TT_ASSERT(data.size() % 2 == 0);
-    for(auto i = 0; i < data.size(); i+=2) {
-        auto val1 = data[i];
-        auto val2 = data[i+1];
-        uint32_t packed = pack_two_bfloat16_into_uint32(std::make_pair(val1, val2));
-        result.push_back(packed);
-    }
+    std::vector<uint32_t> result(data.size()/2);
+    std::memcpy (result.data(), data.data(), result.size()*sizeof(uint32_t));
     return result;
 }
 
