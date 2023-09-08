@@ -811,15 +811,18 @@ void CommandQueue::wrap() {
 
 // OpenCL-like APIs
 void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& dst, bool blocking) {
+    detail::DispatchStateCheck(true);
     TT_ASSERT(blocking, "Non-blocking EnqueueReadBuffer not yet supported");
     cq.enqueue_read_buffer(buffer, dst, blocking);
 }
 
 void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& src, bool blocking) {
+    detail::DispatchStateCheck(true);
     cq.enqueue_write_buffer(buffer, src, blocking);
 }
 
 void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
+    detail::DispatchStateCheck(true);
     const char* COMPARE_DISPATCH_DEVICE_TO_HOST = std::getenv("TT_METAL_COMPARE_DISPATCH_DEVICE_TO_HOST");
     const char* DISPATCH_MAP_DUMP = std::getenv("TT_METAL_DISPATCH_MAP_DUMP");
 
@@ -837,6 +840,9 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
     }
 }
 
-void Finish(CommandQueue& cq) { cq.finish(); }
+void Finish(CommandQueue& cq) {
+    detail::DispatchStateCheck(true);
+    cq.finish();
+}
 
 } // namespace tt::tt_metal

@@ -606,9 +606,9 @@ void ConfigureKernelGroup(const Program &program, const KernelGroup &kernel_grou
 }
 
 bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
-    bool pass = true;
-
     ZoneScoped;
+    bool pass = true;
+    detail::DispatchStateCheck( false );
     detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("ConfigureDeviceWithProgram");
 
     std::unordered_set<CoreCoord> worker_cores;
@@ -704,7 +704,7 @@ void WriteRuntimeArgsToDevice(Device *device, const Program &program) {
     ZoneScoped;
     auto cluster = device->cluster();
     auto pcie_slot = device->pcie_slot();
-
+    detail::DispatchStateCheck( false );
     auto get_l1_arg_base_addr = [](const RISCV &riscv) {
         uint32_t l1_arg_base = 0;
         switch (riscv) {
@@ -755,6 +755,7 @@ bool LaunchKernels(Device *device, const Program &program, bool stagger_start) {
     bool pass = true;
     {//Profiler scope start
     ZoneScoped;
+    detail::DispatchStateCheck( false );
     detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("LaunchKernels");
 
     auto cluster = device->cluster();

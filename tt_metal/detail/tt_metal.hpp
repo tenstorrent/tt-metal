@@ -26,6 +26,12 @@ namespace tt::tt_metal{
         // command queue for the time being.
         inline unique_ptr<CommandQueue> GLOBAL_CQ;
 
+        inline static bool DispatchStateCheck( bool isFastDispatch){
+            static bool fd = isFastDispatch;
+            TT_ASSERT( fd == isFastDispatch, "Mixing fast and slow dispatch is prohibited!" );
+            return fd;
+        }
+
         /**
          * Read device side profiler data and dump results into device side CSV log
          *
