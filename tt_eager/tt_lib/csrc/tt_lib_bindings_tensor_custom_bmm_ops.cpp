@@ -133,6 +133,12 @@ namespace tt::tt_metal::detail
             py::arg().noconvert(), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Shuffles [B, 71, S, 64] tensor into tensor with shape [B, 1, S, 4544].
         )doc");
+
+        // Custom Resnet matmuls
+        m_tensor.def("resnet_matmul", &resnet_matmul,
+            py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, R"doc(
+            Perform a resnet_matmul with fused bias.
+        )doc");
     }
 
 }

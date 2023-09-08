@@ -124,8 +124,8 @@ void create_CBs(tt_metal::Program &program,
         auto cb_bias = tt_metal::CreateCircularBuffer(program, core, cb_bias_config);
 
         // intermed mm output
-        CircularBufferConfig cb_out_for_bias_config = CircularBufferConfig(num_output_tiles * single_tile_size, {{bias_cb, tt::DataFormat::Float16_b}})
-		    .set_page_size(bias_cb, single_tile_size);
+        CircularBufferConfig cb_out_for_bias_config = CircularBufferConfig(num_output_tiles * single_tile_size, {{out_for_bias_cb, tt::DataFormat::Float16_b}})
+		    .set_page_size(out_for_bias_cb, single_tile_size);
         auto cb_out_for_bias = tt_metal::CreateCircularBuffer(program, core, cb_out_for_bias_config);
         log_debug("BIAS CBs: {} {} {}", bias_cb, bias_ntiles, bias_pagesize);
     }

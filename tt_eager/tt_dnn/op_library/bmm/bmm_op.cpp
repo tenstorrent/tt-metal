@@ -519,6 +519,15 @@ Tensor falcon_lm_head_matmul(const Tensor &input_tensor_a, const Tensor &input_t
     }
 }
 
+/**
+ * Resnet50 matmul with fused batch
+ */
+Tensor resnet_matmul(const Tensor& input_a, const Tensor& input_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config,std::optional<const DataType> output_dtype) {
+    auto program_config = bmm_op_utils::get_mcast_1d_config(input_a, input_b, true);
+    return operations::primary::matmul_1d(input_a, input_b, bias, program_config, mem_config, output_dtype);
+}
+
+
 }  // namespace tt_metal
 
 
@@ -630,7 +639,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
     auto& output_tensor = output_tensors.at(0);
 
     tt::tt_metal::DataType output_dtype = this->output_dtype;
-    MathFidelity math_fidelity = MathFidelity::LoFi;
+    MathFidelity math_fidelity = this->math_fidelity;
     bool fuse_batch = true;
 
     return std::visit(
@@ -699,6 +708,7 @@ tt::stl::reflection::Attributes Matmul::attributes() const {
         {"program_config", this->program_config},
         {"output_mem_config",  this->output_mem_config},
         {"output_dtype", this->output_dtype},
+        {"math_fidelity", this->math_fidelity},
     };
 }
 
@@ -706,7 +716,7 @@ Tensor matmul_1d(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std
     if (!program_config.has_value()) {
         program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b);
     }
-    return operations::primary::matmul(input_tensor_a, input_tensor_b, bias, program_config.value(), mem_config, output_dtype);
+    return operations::primary::matmul(input_tensor_a, input_tensor_b, bias, program_config.value(), mem_config, output_dtype, MathFidelity::LoFi);
 }
 
 }  // namespace primary
