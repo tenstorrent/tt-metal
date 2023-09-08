@@ -382,8 +382,8 @@ def logit(x, *args, eps, **kwargs):
 
 
 def logical_xori(x, *args, **kwargs):
-    value = kwargs.pop("scalar")
-    result = torch.logical_xor(x, torch.tensor(value, dtype=torch.bfloat16))
+    value = kwargs.pop("immediate")
+    result = torch.logical_xor(x, torch.tensor(value, dtype=torch.int32))
     return result
 
 

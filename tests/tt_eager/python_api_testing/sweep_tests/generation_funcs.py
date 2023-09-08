@@ -1141,28 +1141,6 @@ def gen_logical_immediate_args(
         yield input_info
 
 
-def gen_logical_immediate_args(
-    input_shapes,
-    dtypes,
-    layouts,
-    buffer_types,
-    low=0,
-    high=100,
-    dtype=torch.int32,
-):
-    for input_info in gen_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        buffer_types,
-        "immediate",
-        low,
-        high,
-        dtype,
-    ):
-        yield input_info
-
-
 def gen_shrink_args(
     input_shapes,
     dtypes,

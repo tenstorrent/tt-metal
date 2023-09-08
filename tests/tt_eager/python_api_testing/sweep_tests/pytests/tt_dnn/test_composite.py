@@ -145,6 +145,7 @@ def test_run_eltwise_composite_test(
     options["acosh"] = (1, 100)
     options["logical_ori"] = (-100, 100)
     options["logical_andi"] = (-100, 100)
+    options["logical_xori"] = (-100, 100)
 
     generator = generation_funcs.gen_rand
 
@@ -153,7 +154,7 @@ def test_run_eltwise_composite_test(
             pytest.skip("Not tested for Wormhole - skipping")
         if fn in ["logit"]:
             pytest.skip("does not work for Wormhole -skipping")
-    if fn in ["logical_xor", "logical_xori", "logical_andi"]:
+    if fn in ["logical_xor", "logical_xori", "logical_ori", "logical_andi"]:
         datagen_func = [
             generation_funcs.gen_func_with_cast(
                 partial(generator, low=options[fn][0], high=options[fn][1]),
@@ -184,10 +185,7 @@ def test_run_eltwise_composite_test(
         "subalpha",
         "addalpha",
         "logit",
-        "logical_ori",
-        "logical_andi",
         "logical_xor",
-        "logical_xori",
     ]:
         num_inputs = 2
 
@@ -213,11 +211,9 @@ def test_run_eltwise_composite_test(
         test_args.update({"alpha": np.random.randint(1, 100)})
     elif fn in ["bias_gelu_unary"]:
         test_args.update({"bias": np.random.randint(1, 100)})
-    elif fn in ["logical_noti"]:
-        test_args.update({"immediate": np.random.randint(0, 100)})
     elif fn in ["logit"]:
         test_args.update({"eps": np.random.randint(-1e-6, 1e6)})
-    elif fn in ["logical_ori", "logical_andi"]:
+    elif fn in ["logical_ori", "logical_andi", "logical_xori", "logical_noti"]:
         test_args.update({"immediate": np.random.randint(0, 100)})
     run_single_pytorch_test(
         "eltwise-%s" % (fn),

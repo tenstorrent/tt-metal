@@ -1206,7 +1206,7 @@ void TensorModule(py::module &m_tensor) {
     detail::bind_binary_op(m_tensor, "sub", sub, R"doc(Perform an eltwise-binary sub (``{0} - {1}``) on two tensors.)doc");
     detail::bind_binary_op(m_tensor, "mul", mul, R"doc(Perform an eltwise-binary mul (``{0} * {1}``) on two tensors.)doc");
     detail::bind_binary_op(m_tensor, "squared_difference", squared_difference, R"doc(Perform an eltwise-binary squared_difference (``{0} - {1}``)^2 on two tensors.)doc");
-    detail::bind_binary_op(m_tensor, "logical_and", logical_and, R"doc(Performs the element-wise logical AND of the given input tensors ``{0}`` and ``{1}``, Zeros are treated as False and nonzeros are treated as True.)doc");
+    detail::bind_binary_op(m_tensor, "logical_and", logical_and, R"doc(Performs the element-wise logical AND of the given input tensors ``{0}`` && ``{1}``, Zeros are treated as False and nonzeros are treated as True.)doc");
     detail::bind_binary_op(m_tensor, "bias_gelu", bias_gelu, R"doc(Perform an eltwise-binary bias_gelu (``{0} + {1}``) on two tensors.)doc");
     detail::bind_binary_op(m_tensor, "gt", gt, R"doc(Perform an eltwise-binary greater-than (``{0} > {1}``) on two tensors.)doc");
     detail::bind_binary_op(m_tensor, "lt", lt, R"doc(Perform an eltwise-binary less-than (``{0} < {1}``) on two tensors.)doc");
@@ -1223,7 +1223,7 @@ void TensorModule(py::module &m_tensor) {
     detail::bind_binary_op<false, true>(m_tensor, "hypot", &hypot, R"doc(Returns tensor with the hypot activation on elements of the input tensors ``{0}`` and ``{1}``.)doc");
     detail::bind_binary_op<false, true>(m_tensor, "xlogy", &xlogy, R"doc(Performs eltwise-binary xlogy (``{0} * log( {1} )``) on two tensors.)doc");
     detail::bind_binary_op<false, true>(m_tensor, "atan2", &atan2, R"doc(Returns tensor with the atan2 activation on elements of the input tensors ``{0}`` and ``{1}``.)doc");
-    detail::bind_binary_op<false, true>(m_tensor, "logical_xor", &logical_xor, R"doc(Performs eltwise-binary logical_xor (``{0} * 2**{1}``) on two tensors.)doc");
+    detail::bind_binary_op<false, true>(m_tensor, "logical_xor", &logical_xor, R"doc(Performs eltwise-binary logical_xor (``{0} ^ {1}``) on two tensors.)doc");
 
     detail::bind_binary_op(m_tensor, "add_without_autoformat", add_without_autoformat,
         R"doc(Perform an eltwise-binary add (``{0} + {1}``) on two tensors.
@@ -2094,10 +2094,10 @@ void TensorModule(py::module &m_tensor) {
         R"doc("dimension to logit along", "int", "0, 1, 2, or 3")doc"
     );
 
-   detail::bind_unary_op_with_param(
+    detail::bind_unary_op_with_param(
         m_tensor, "logical_xori", &logical_xori,
-        py::arg("scalar"),
-        R"doc(Perform an eltwise logical XOR (``{0} || {1}``) on input tensor and immediate value.)doc",
+        py::arg("immediate"),
+        R"doc(Perform an eltwise logical XOR (``{0} ^ {1}``) on input tensor and immediate value.)doc",
         R"doc("Scalar", "float", "")doc"
     );
 
