@@ -58,7 +58,7 @@ bool test_compile_args(std::vector<uint32_t> compile_args_vec, int device_id) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile Application
     ////////////////////////////////////////////////////////////////////////////
-    pass &= tt_metal::detail::CompileProgram(device, program);
+    pass &= tt_metal::CompileProgram(device, program);
 
     return pass;
 }

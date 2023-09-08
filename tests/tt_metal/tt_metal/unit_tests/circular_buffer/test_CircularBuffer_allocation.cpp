@@ -109,7 +109,7 @@ TEST_F(SingleDeviceFixture, TestCircularBuffersAndL1BuffersCollision) {
         cb_addr += cb_buffer_size;
     }
 
-    detail::CompileProgram(this->device_, program);
+    CompileProgram(this->device_, program);
     EXPECT_ANY_THROW(detail::ConfigureDeviceWithProgram(this->device_, program));
 }
 

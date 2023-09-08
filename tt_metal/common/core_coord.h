@@ -278,6 +278,13 @@ class CoreRangeSet {
       return false;
     }
 
+    bool intersects ( const CoreRange & cr) const{
+      for (auto local_cr : this->ranges_) {
+        if ( local_cr.intersects(cr) ) return true;
+      }
+      return false;
+    }
+
     std::set<CoreRange> ranges() const { return this->ranges_; }
 
   private:

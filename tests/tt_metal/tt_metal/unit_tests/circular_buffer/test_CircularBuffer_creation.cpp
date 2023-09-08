@@ -16,7 +16,7 @@ namespace basic_tests::circular_buffer {
 bool test_cb_config_written_to_core(Program &program, Device *device, const CoreRangeSet &cr_set) {
     bool pass = true;
 
-    detail::CompileProgram(device, program);
+    CompileProgram(device, program);
     detail::ConfigureDeviceWithProgram(device, program);
 
     vector<u32> cb_config_vector;

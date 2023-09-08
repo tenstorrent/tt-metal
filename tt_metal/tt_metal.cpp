@@ -47,8 +47,8 @@ void ConfigureKernelGroup(const Program &program, const KernelGroup &kernel_grou
 void SetCircularBufferDataFormat(
     Device *device, const Program &program, Kernel *kernel, build_kernel_for_riscv_options_t &build_options) {
     ZoneScoped;
-    for (auto logical_core : kernel->logical_cores()) {
-        auto cbs_on_core = program.circular_buffers_on_core(logical_core);
+    for (auto logical_cr : kernel->logical_coreranges()) {
+        auto cbs_on_core = program.circular_buffers_on_corerange(logical_cr);
         for (auto circular_buffer : cbs_on_core) {
             for (auto buffer_index : circular_buffer.buffer_indices()) {
                 build_options.set_cb_dataformat_all_cores(static_cast<CB>(buffer_index), circular_buffer.data_format());
@@ -705,7 +705,6 @@ bool CompileProgram(Device *device, Program &program){
     }
     return pass;
 }
-}
 
 void ConfigureKernelGroup(const Program &program, const KernelGroup &kernel_group, Device *device, const CoreCoord &logical_core) {
     if (kernel_group.compute_id.has_value()) {
@@ -764,14 +763,14 @@ llrt::TensixRiscsOptions GetRiscOptionFromCoreConfig(bool core_runs_ncrisc, bool
     return risc_option;
 }
 
-bool LaunchKernels(Device *device, Program &program, bool stagger_start) {
+bool LaunchKernels(Device *device, Program &program, bool stagger_start, bool compileProgram) {
     bool pass = true;
     {//Profiler scope start
     ZoneScoped;
     detail::DispatchStateCheck( false );
     detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("LaunchKernels");
 
-    detail::CompileProgram(device, program);
+    if (compileProgram) CompileProgram(device, program);
     detail::WriteRuntimeArgsToDevice(device, program);
     detail::ConfigureDeviceWithProgram(device, program);
     auto cluster = device->cluster();

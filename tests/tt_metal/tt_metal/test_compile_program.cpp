@@ -60,7 +60,7 @@ KernelCacheStatus CompileProgramTestWrapper(Device *device, Program &program, bo
     auto root_dir = get_kernel_compile_outpath(device->id());
     std::unordered_map<std::string, std::string> pre_compile_kernel_to_hash_str = get_last_program_binary_path(program, device->id());
 
-    detail::CompileProgram(device, program);
+    CompileProgram(device, program);
 
     std::unordered_map<std::string, std::string> post_compile_kernel_to_hash_str = get_last_program_binary_path(program, device->id());
 

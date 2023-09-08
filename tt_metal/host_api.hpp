@@ -8,7 +8,6 @@
 
 #include <optional>
 #include <variant>
-#include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/impl/program.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 
@@ -90,12 +89,6 @@ KernelID CreateDataMovementKernel(Program &program, const std::string &file_name
  * | config       | Config for compute kernels                                                                                                           | const std::optional<ComputeConfig> &                     |             | No       |
  */
 KernelID CreateComputeKernel(Program &program, const std::string &file_name, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::optional<ComputeConfig> &config = {});
-
-// ==================================================
-//                  HOST API: data format
-// ==================================================
-
-
 
 // ==================================================
 //                  HOST API: buffers
@@ -266,6 +259,25 @@ void DeallocateBuffer(Buffer &buffer);
 //
 // ==================================================
 
+/**
+ *  Compiles all kernels within the program, and generates binaries that are written to `$TT_METAL_HOME/built/kernels/<kernel name>/<kernel hash>`
+ *  Blank data movement kernel targeting RISCV_0 are placed onto cores that are missing a RISCV_0 kernel because RISCV_0 processor needs to run to enable Compute and RISCV_1 processors
+ *
+ *  To speed up compilation there is a kernel compilation cache that skips over generating binaries for the previously compiled kernels.
+ *  Kernel uniqueness is determined by the kernel hash which is computed based on compile time args, defines, and kernel type specific attributes such as NOC for data movement kernels and math fidelity for compute kernels
+ *  TODO: Kernel hash needs to account for device architecture as binaries are not the same across architectures.
+ *  On cache hits the kernel is not recompiled if the output binary directory exists, otherwise the kernel is compiled.
+ *  This cache is static is enabled for the duration of the running process.
+ *  By default the cache does not persistent across runs, but can be enabled by calling EnablePersistentKernelCache(). Setting this will skip compilation when output binary directory exists.
+ *
+ *  Return value: bool
+ *
+ * | Argument       | Description                                                      | Type      | Valid Range                                        | Required |
+ * |----------------|------------------------------------------------------------------|-----------|----------------------------------------------------|----------|
+ * | device         | Which device the program is compiled for                         | Device *  | Must be initialized via tt_metal::InitializeDevice | Yes      |
+ * | program        | The program to compile                                           | Program & |                                                    | Yes      |
+ */
+bool CompileProgram(Device *device, Program &program);
 
 /**
  * Set runtime args for a kernel that are sent to the core during runtime. This API needs to be called to update the runtime args for the kernel.
@@ -324,7 +336,7 @@ std::vector<uint32_t> GetRuntimeArgs(const Program &program, KernelID kernel_id,
 
 // Launches all kernels on cores specified with kernels in the program.
 // All kernels on a given Tensix core must be launched.
-bool LaunchKernels(Device *device, Program &program, bool stagger_start = false);
+bool LaunchKernels(Device *device, Program &program, bool stagger_start = false, bool compileProgram = true);
 
 /**
  * Reads a buffer from the device
@@ -365,7 +377,7 @@ void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& src, bool
  * | program      | The program we are writing to the device                               | Program &                     |                                    | Yes      |
  * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
  */
-void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
+void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking, bool compileProgram = true);
 
 /**
  * Blocks until all previously dispatched commands on the device have completed

@@ -156,6 +156,16 @@ const std::vector<CircularBuffer> Program::circular_buffers_on_core(const CoreCo
     return cbs_on_core;
 }
 
+const std::vector<CircularBuffer>  Program::circular_buffers_on_corerange(const CoreRange & cr) const {
+    std::vector<CircularBuffer>  cbs_on_core;
+    for (auto circular_buffer : circular_buffers_) {
+        if (circular_buffer.is_on_logical_corerange(cr)) {
+            cbs_on_core.push_back(circular_buffer);
+        }
+    }
+    return cbs_on_core;
+}
+
 void Program::validate_circular_buffer_region(const Device *device, std::optional<CoreCoord> logical_core) const {
     auto highest_cb_l1_region = [&](const CoreCoord &core) {
         if (this->per_core_cb_config_.find(core) == this->per_core_cb_config_.end()) {

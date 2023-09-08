@@ -40,6 +40,8 @@ class Kernel {
 
     std::set<CoreCoord> logical_cores() const;
 
+    std::vector<CoreRange> logical_coreranges() const;
+
     bool is_on_logical_core(const CoreCoord &logical_core) const;
 
     std::vector<ll_api::memory> const &binaries() const;

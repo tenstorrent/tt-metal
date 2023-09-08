@@ -62,6 +62,8 @@ class Program {
 
     const std::vector<CircularBuffer> circular_buffers_on_core(const CoreCoord &core) const;
 
+    const std::vector<CircularBuffer> circular_buffers_on_corerange(const CoreRange &cr) const;
+
     auto semaphores_on_core(const CoreCoord &core) const;
 
     size_t num_semaphores ( const CoreCoord & core ) const;

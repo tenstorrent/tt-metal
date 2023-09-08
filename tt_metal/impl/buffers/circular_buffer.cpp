@@ -30,6 +30,10 @@ CircularBuffer::CircularBuffer(
     validate_buffer_indices(buffer_indices);
 }
 
+bool CircularBuffer::is_on_logical_corerange( const CoreRange & logical_cr ) const{
+    return this->core_range_set_.intersects(logical_cr);
+}
+
 bool CircularBuffer::is_on_logical_core(const CoreCoord &logical_core) const {
     return this->core_range_set_.core_coord_in_core_ranges(logical_core);
 }

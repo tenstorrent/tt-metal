@@ -150,12 +150,12 @@ std::vector<Tensor> run_with_program_cache(
 
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
-        EnqueueProgram(*::detail::GLOBAL_CQ, program, false);
+        EnqueueProgram(*::detail::GLOBAL_CQ, program, false, false);
         // Only need to dump device data when in dispatch mode
         // LaunchKernel automatically dumps device data
         op_profiler::dump_device_profiler_results(device, program);
     } else {
-        LaunchKernels(device, program);
+        LaunchKernels(device, program, false, false);
     }
 
     return output_tensors;

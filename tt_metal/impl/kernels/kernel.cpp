@@ -43,6 +43,11 @@ std::set<CoreCoord> Kernel::logical_cores() const {
     return cores;
 }
 
+std::vector<CoreRange> Kernel::logical_coreranges() const {
+    auto crs = this->core_range_set_.ranges();
+    return {crs.begin(), crs.end()};
+}
+
 bool Kernel::is_on_logical_core(const CoreCoord &logical_core) const {
     return this->core_range_set_.core_coord_in_core_ranges(logical_core);
 }

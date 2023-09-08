@@ -44,6 +44,8 @@ class CircularBuffer {
 
     DataFormat data_format() const { return data_format_; }
 
+    bool is_on_logical_corerange( const CoreRange & logical_cr ) const;
+
     bool is_on_logical_core(const CoreCoord &logical_core) const;
 
    private:

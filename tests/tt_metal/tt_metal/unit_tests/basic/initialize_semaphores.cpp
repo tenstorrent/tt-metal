@@ -70,7 +70,7 @@ void initialize_and_compile_program(tt_metal::Device *device, tt_metal::Program 
         core_range,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
 
-    tt_metal::detail::CompileProgram(device, program);
+    tt_metal::CompileProgram(device, program);
 }
 
 void create_and_read_max_num_semaphores(
