@@ -30,7 +30,7 @@ import torch
 from time import sleep
 
 
-def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
+def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden, device):
     print("Testing convolution with following parameters - ")
     conv_op_test_params.print("   ")
     ctp = conv_op_test_params.conv_params
@@ -48,9 +48,6 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
     pad_w = ctp.pad_w
 
     # torch.manual_seed(0)
-    device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, 0)
-    ttl.device.InitializeDevice(device)
-    ttl.device.SetDefaultDevice(device)
 
     A_pyt = pytorch_inputs_and_golden[0]
     B_pyt = pytorch_inputs_and_golden[1]
@@ -110,7 +107,6 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden):
     passing_pcc, output_pcc = comp_pcc(out_golden, out_result, 0.99)
     print("Passing=", passing_pcc)
     print("Output pcc=", output_pcc)
-    ttl.device.CloseDevice(device)
     return passing_pcc
 
 

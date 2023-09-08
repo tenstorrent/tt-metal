@@ -234,8 +234,6 @@ def device(request):
     if arch == ttl.device.Arch.WORMHOLE_B0:
         dispatch = os.environ.pop("TT_METAL_SLOW_DISPATCH_MODE", None)
         os.environ["TT_METAL_SLOW_DISPATCH_MODE"] = "1"
-        single_core = os.environ.pop("TT_METAL_SINGLE_CORE_MODE", None)
-        os.environ["TT_METAL_SINGLE_CORE_MODE"] = "1"
 
     device = ttl.device.CreateDevice(arch, chip_id)
     ttl.device.InitializeDevice(device)
@@ -249,10 +247,6 @@ def device(request):
         os.environ.pop("TT_METAL_SLOW_DISPATCH_MODE", None)
         if dispatch is not None:
             os.environ["TT_METAL_SLOW_DISPATCH_MODE"] = dispatch
-
-        os.environ.pop("TT_METAL_SINGLE_CORE_MODE", None)
-        if single_core is not None:
-            os.environ["TT_METAL_SINGLE_CORE_MODE"] = single_core
 
 
 @pytest.fixture(autouse=True)

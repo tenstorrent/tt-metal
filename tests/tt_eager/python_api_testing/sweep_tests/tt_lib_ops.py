@@ -16,7 +16,8 @@ from itertools import product
 def setup_host_and_device(func):
     def wrap(*args, pcie_slot, device=None, **kwargs):
         if device is None:
-            device = ttl.device.CreateDevice(ttl.device.Arch.GRAYSKULL, pcie_slot)
+            ARCH = is_wormhole_b0() and ttl.device.Arch.WORMHOLE_B0 or ttl.device.Arch.GRAYSKULL
+            device = ttl.device.CreateDevice(ARCH, pcie_slot)
             ttl.device.InitializeDevice(device)
             ttl.device.SetDefaultDevice(device)
             try:
