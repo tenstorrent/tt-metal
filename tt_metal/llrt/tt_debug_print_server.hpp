@@ -47,11 +47,11 @@ void tt_start_debug_print_server(tt_cluster* cluster);
 /*
 @brief Stops the print server thread. This call is optional.
 
-tt_start_print_server() will register this function call with device->on_destroy().
+tt_start_print_server() will register this function call with tt_cluster->on_destroy().
 
 Note that this api call is not thread safe at the moment.
 */
-void tt_stop_debug_print_server();
+void tt_stop_debug_print_server(tt_cluster* cluster = nullptr);
 
 /**
 @brief Set device side profiler state.

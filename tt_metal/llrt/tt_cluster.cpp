@@ -322,6 +322,13 @@ void tt_cluster::start_device(const tt_device_params &device_params) {
 }
 
 void tt_cluster::close_device() {
+    for (auto cb: on_close_device_callbacks) {
+        // presumably we will have multiple devices per cluster in the future
+        // so we pass a device index here
+        // currently this is only used for shutting down the debug print server
+        cb(this, 0);
+    }
+
     if (device) {
         device->close_device();
         device.reset();

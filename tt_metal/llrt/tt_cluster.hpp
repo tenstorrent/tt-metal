@@ -26,6 +26,10 @@ using tt_target_dram = std::tuple<int, int, int>;
 using tt::TargetDevice;
 using tt::DEVICE;
 
+struct tt_cluster;
+using tt_cluster_on_destroy_callback = std::function<void (tt_cluster*)>;
+using tt_cluster_on_close_device_callback = std::function<void (tt_cluster*, int)>;
+
 struct tt_cluster
 {
     private:
@@ -34,6 +38,8 @@ struct tt_cluster
     std::unique_ptr<tt_cluster_description> ndesc;
     high_resolution_clock::time_point device_reset_time;
     std::set<chip_id_t> target_device_ids;
+    vector<tt_cluster_on_destroy_callback> on_destroy_callbacks;
+    vector<tt_cluster_on_close_device_callback> on_close_device_callbacks;
 
     tt_device_l1_address_params l1_fw_params = {
         (uint32_t)MEM_NCRISC_INIT_IRAM_L1_BASE, (uint32_t)MEM_BRISC_FIRMWARE_BASE, (uint32_t)MEM_TRISC0_SIZE, (uint32_t)MEM_TRISC1_SIZE, (uint32_t)MEM_TRISC2_SIZE, (uint32_t)MEM_TRISC0_BASE
@@ -58,7 +64,11 @@ struct tt_cluster
     int target_ai_clk = 0;
     bool deasserted_risc_reset;
     tt_cluster() : device(nullptr), type(TargetDevice::Invalid), deasserted_risc_reset(false) {};
-    ~tt_cluster() {}
+    ~tt_cluster() { for (auto cb: on_destroy_callbacks) cb(this); }
+
+    // adds a specified callback to the list of callbacks to be called on destroy of this cluster instance
+    void on_destroy(tt_cluster_on_destroy_callback callback);
+    void on_close_device(tt_cluster_on_close_device_callback callback);
 
     std::chrono::seconds get_device_timeout();
     std::chrono::seconds get_device_duration();

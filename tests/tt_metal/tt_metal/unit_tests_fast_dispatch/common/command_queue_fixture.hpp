@@ -29,8 +29,8 @@ class CommandQueueFixture : public ::testing::Test {
             GTEST_SKIP();
         }
 
-        const int pci_express_slot = 0;
-        this->device_ = tt::tt_metal::CreateDevice(arch_, pci_express_slot);
+        const int device_id = 0;
+        this->device_ = tt::tt_metal::CreateDevice(device_id);
         tt::tt_metal::InitializeDevice(this->device_);
 
         this->pcie_id = 0;
