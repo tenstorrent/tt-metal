@@ -34,3 +34,4 @@ pytest ${TT_METAL_HOME}/tests/tt_eager/python_api_testing/sweep_tests/pytests/tt
 pytest ${TT_METAL_HOME}/tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_conv_with_dtx_cpu_sweep.py
 pytest ${TT_METAL_HOME}/tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_untilize_with_unpadding.py
 pytest ${TT_METAL_HOME}/tests/tt_eager/python_api_testing/unit_testing/test_bmm_tilize_untilize.py
+pytest ${TT_METAL_HOME}/tests/tt_eager/python_api_testing/unit_testing/test_single_core_fused_ops.py
