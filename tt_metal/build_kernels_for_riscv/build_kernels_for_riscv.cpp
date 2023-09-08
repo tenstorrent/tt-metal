@@ -336,7 +336,7 @@ struct CompileState {
         if (arch == tt::ARCH::GRAYSKULL) {
             linkopts = " -mgrayskull -march=rv32iy -mtune=rvtt-b1 ";
         } else if (arch == tt::ARCH::WORMHOLE_B0) {
-            linkopts = " -mwormhole -march=rv32imw -mtune=rvtt-b1 -fno-rvtt-hll ";
+            linkopts = " -mwormhole -march=rv32imw -mtune=rvtt-b1 ";
         } else {
             TT_ASSERT(false, "Invalid arch");
         }
