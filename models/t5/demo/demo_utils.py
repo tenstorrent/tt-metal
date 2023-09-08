@@ -13,7 +13,7 @@ def run_demo_t5(t5_model_constructor):
     tokenizer = AutoTokenizer.from_pretrained("t5-base", model_max_length=32)
 
     device = tt_lib.device.CreateDevice(0)
-
+    tt_lib.device.SetDefaultDevice(device)
 
     output_sentance = run_generate(
         input_sentance,
