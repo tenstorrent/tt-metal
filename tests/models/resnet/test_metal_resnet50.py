@@ -63,6 +63,9 @@ def test_run_resnet50_inference(
 
         passing, info = comp_allclose_and_pcc(torch_output, tt_output, pcc=0.985)
         logger.info(info)
-        passing_pcc, _ = comp_pcc(torch_output, tt_output, pcc=0.985)
+        golden_pcc = 0.985
+        if batch_size == 8:
+            golden_pcc = 0.9899485705112977
+        passing_pcc, _ = comp_pcc(torch_output, tt_output, pcc=golden_pcc)
         assert passing_pcc
         # assert passing # fails because of torch.allclose
