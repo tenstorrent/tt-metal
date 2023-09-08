@@ -209,16 +209,24 @@ On the host you'll need to modify tt_debug_print_server.cpp, look for the switch
 Watcher
 *******
 
-The Watcher is a thread that monitors the status of the TT device to help with debug.  It is enabled with:
-- ``export TT_METAL_WATCHER=<n>``
-where <n> is the number of seconds between status updates, use 0 for the default.  The output is logged to the file ``/tmp/metal_watcher.txt``.  The file is re-written each time a new TT device is initialized; optionally, set:
-- ``export TT)_METAL_WATCHER_APPEND=1``
-to append to the end of the file instead (useful for tests which construct/destruct devices in a loop).
+The Watcher is a thread that monitors the status of the TT device to help with
+debug.  It:
 
-Use:
-- ``export TT_METAL_WATCHER_DOPE_L1=<val>``
-to set all of L1 across all cores to a known value during device init.
+- logs "waypoints" during execution on each core (to help with hangs)
+- watches L1 address 0 to look for memory corruption
+- sanitizes all transactions and reports invalid X,Y and addresses.  Further,
+  any core with an invalid transaction will soft hang at the point of that
+  transaction
+
+It is enabled with:
+
+- ``export TT_METAL_WATCHER=<n>`` where <n> is the number of seconds between status updates; use 0 for the default
+
+The output is logged to the file ``/tmp/metal_watcher.txt``.  The file is re-written each time a new TT device is initialized; optionally, set:
+
+- ``export TT)_METAL_WATCHER_APPEND=1`` to append to the end of the file instead (useful for tests which construct/destruct devices in a loop).
 
 The output file contains a legend to help with deciphering the results.  The contents contain the last waypoint of each of the 5 riscvs encountered as a string of up to 4 characters.  These way points can be inserted into kernel/firmware code with the following, eg:
+
 - ``DEBUG_STATUS('I');``
 - ``DEBUG_STATUS('D', 'E', 'A', 'D');``
