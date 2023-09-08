@@ -29,7 +29,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t in0_block_w,
     uint32_t out_subblock_h, uint32_t out_subblock_w,
     uint32_t per_core_M, uint32_t per_core_N,
-    bool fuse_gelu_activation,
+    std::optional<UnaryWithParam> fused_activation,
     tt_metal::Buffer* in0_buffer, tt_metal::Buffer* in1_buffer, tt_metal::Buffer* bias_buffer, tt_metal::Buffer* out_buffer,
     tt::DataFormat in0_data_format, tt::DataFormat in1_data_format, tt::DataFormat bias_data_format, tt::DataFormat output_data_format
 ) {
@@ -102,13 +102,23 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     // Not exactly half-half; this seems to get slightly better perf for fused qkv and selfout
     // TODO: Experiment with different splits?
+
+    uint32_t half_core = (num_cores_c) / 2;
+    bool split_half = num_cores_c > 2;
+
     CoreRange in0_receiver_in1_receiver_left_half{
         .start={(std::size_t) start_core_x + 1, (std::size_t) start_core_y + 1},
-        .end={(std::size_t) start_core_x + 4, (std::size_t) start_core_y + num_cores_r - 1}};
+        .end={(std::size_t) start_core_x + half_core, (std::size_t) start_core_y + num_cores_r - 1}};
 
     CoreRange in0_receiver_in1_receiver_right_half{
-        .start={(std::size_t) start_core_x + 5, (std::size_t) start_core_y + 1},
-        .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
+        .start={0, 0},
+        .end={0, 0}};
+
+    if (split_half) {
+         in0_receiver_in1_receiver_right_half = {
+             .start={(std::size_t) start_core_x + 1 + half_core, (std::size_t) start_core_y + 1},
+             .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1}};
+    }
 
     /* Uncomment if we don't checkerboard
     CoreRange in0_receiver_in1_receiver{
@@ -297,9 +307,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         mm_kernel_in1_receiver_writer_defines["FUSE_BIAS"] = "1";
         mm_kernel_in1_receiver_writer_other_noc_setup_defines["FUSE_BIAS"] = "1";
     }
-    if (fuse_gelu_activation) {
-        mm_kernel_defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GELU, 1, "GELU", "i"));
-    }
+    if (fused_activation.has_value()) {
+         mm_kernel_defines.merge(eltwise_unary_op_utils::get_defines(fused_activation.value().op_type, fused_activation.value().param, "ACTIVATION", "i"));
+         mm_kernel_defines[fmt::format("{}_ACTIVATION", magic_enum::enum_name(fused_activation.value().op_type).data())] = "1";
+     }
 
     auto mm_kernel_in0_sender_id = tt_metal::CreateDataMovementKernel(
         program,
@@ -327,18 +338,22 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         (CoreRangeSet) (std::set<CoreRange>) {in0_receiver_in1_sender, in0_receiver_in1_receiver_left_half},
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = in0_receiver_compile_time_args});
 
-    auto mm_kernel_in1_receiver_writer_other_noc_setup_id = tt_metal::CreateDataMovementKernel(
-        program,
-        "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
-        in0_receiver_in1_receiver_right_half,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = in1_receiver_writer_compile_time_args, .defines = mm_kernel_in1_receiver_writer_other_noc_setup_defines});
+    KernelID mm_kernel_in1_receiver_writer_other_noc_setup_id = 0;
+    KernelID mm_kernel_in0_receiver_other_noc_setup_id = 0;
 
-    auto mm_kernel_in0_receiver_other_noc_setup_id = tt_metal::CreateDataMovementKernel(
-        program,
-        "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
-        in0_receiver_in1_receiver_right_half,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = in0_receiver_compile_time_args});
+    if (split_half) {
+         mm_kernel_in1_receiver_writer_other_noc_setup_id = tt_metal::CreateDataMovementKernel(
+             program,
+             "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
+             in0_receiver_in1_receiver_right_half,
+             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = in1_receiver_writer_compile_time_args, .defines = mm_kernel_in1_receiver_writer_other_noc_setup_defines});
 
+         mm_kernel_in0_receiver_other_noc_setup_id = tt_metal::CreateDataMovementKernel(
+             program,
+             "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
+             in0_receiver_in1_receiver_right_half,
+             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = in0_receiver_compile_time_args});
+     }
     /* Checkerboard logic
     auto mm_kernel_in0_receiver_ckb_white = tt_metal::CreateDataMovementKernel(
         program,
@@ -774,7 +789,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                 }
 
                 // left half
-                if (core_idx_x <= 4) {
+                if (core_idx_x <= half_core) {
                     tt_metal::SetRuntimeArgs(program, mm_kernel_in0_receiver_id, core, mm_in0_receiver_args);
                     tt_metal::SetRuntimeArgs(program, mm_kernel_in1_receiver_writer_id, core, mm_in1_receiver_writer_args);
                     reader_kernel_ids.push_back(mm_kernel_in0_receiver_id);
@@ -909,8 +924,7 @@ namespace tt {
 namespace tt_metal {
 
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(const Tensor &a, const Tensor &b, const std::optional<const Tensor> bias, Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool fuse_gelu_activation) {
-
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(const Tensor &a, const Tensor &b, const std::optional<const Tensor> bias, Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, std::optional<UnaryWithParam> fused_activation) {
     const auto& ashape = a.shape(), bshape = b.shape();
 
     // CB dataformats
@@ -1000,7 +1014,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(cons
             in0_block_w,
             out_subblock_h, out_subblock_w,
             per_core_M, per_core_N,
-            fuse_gelu_activation,
+            fused_activation,
             in0_buffer, in1_buffer, bias_buffer, out_buffer,
             in0_data_format, in1_data_format, bias_data_format, output_data_format
         );
@@ -1015,8 +1029,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(cons
     return {};
 }
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(const Tensor& a, const Tensor& b, const std::optional<const Tensor> bias, Tensor& output_tensor, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool fuse_gelu_activation) {
-    return matmul_multi_core_reuse_mcast_2d_optimized_(a, b, bias, output_tensor, true, compute_with_storage_grid_size, output_dtype, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch, fuse_gelu_activation);
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(const Tensor& a, const Tensor& b, const std::optional<const Tensor> bias, Tensor& output_tensor, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, std::optional<UnaryWithParam> fused_activation) {
+     return matmul_multi_core_reuse_mcast_2d_optimized_(a, b, bias, output_tensor, true, compute_with_storage_grid_size, output_dtype, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch, fused_activation);
 }
 
 }  // namespace tt_metal

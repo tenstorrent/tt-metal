@@ -27,7 +27,7 @@ def run_bert_large_ff1_matmul_test(
     in1_mem_config,
     bias_mem_config,
     out_mem_config,
-    gelu_activation,
+    fused_activation,
 ):
     if (
         dtype == ttl.tensor.DataType.BFLOAT16
@@ -93,7 +93,7 @@ def run_bert_large_ff1_matmul_test(
         out_subblock_w = 1,
         per_core_M = 12,
         per_core_N = 11,
-        fuse_gelu_activation=gelu_activation,
+        fused_activation=fused_activation,
     )
     t2 = ttl.operations.primary.matmul(
         a_t, b_t, bias=bias_t, program_config=program_config, output_mem_config=out_mem_config,
@@ -117,8 +117,11 @@ def run_bert_large_ff1_matmul_test(
     ref_bmm = torch.matmul(A, B)
     if bias_mem_config is not None:
         ref_bmm = ref_bmm + BIAS
-    if gelu_activation:
-        ref_bmm = torch.nn.functional.gelu(ref_bmm)
+    if fused_activation is not None:
+         if (fused_activation[0] == ttl.tensor.FusibleActivation.GELU):
+             ref_bmm = torch.nn.functional.gelu(ref_bmm)
+         else:
+             assert False, "Unknown activation"
     passing_pcc, output_pcc = comp_pcc(ref_bmm, pyt_got_back_rm, 0.99)
     logger.info(f"Passing={passing_pcc}")
     logger.info(f"Output pcc={output_pcc}")
@@ -127,8 +130,8 @@ def run_bert_large_ff1_matmul_test(
 
 
 @pytest.mark.parametrize(
-    "gelu_activation",
-    (True, False),
+    "activation",
+     ((ttl.tensor.FusibleActivation.GELU, True), None),
     ids=["gelu_activation", "no_activation"],
 )
 @pytest.mark.parametrize(
@@ -175,7 +178,7 @@ def test_bert_large_ff1_matmul_test(
     in1_mem_config,
     bias_mem_config,
     out_mem_config,
-    gelu_activation,
+    activation,
     request,
 ):
     ttl.profiler.set_profiler_location(
@@ -187,7 +190,7 @@ def test_bert_large_ff1_matmul_test(
         in1_mem_config,
         bias_mem_config,
         out_mem_config,
-        gelu_activation,
+        activation,
     )
 
 
@@ -201,7 +204,7 @@ def test_bert_large_ff1_matmul_with_program_cache(use_program_cache):
             dram_mem_config,
             dram_mem_config,
             dram_mem_config,
-            gelu_activation=False,
+            fused_activation=None,
         )
 
     dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
@@ -212,7 +215,7 @@ def test_bert_large_ff1_matmul_with_program_cache(use_program_cache):
             dram_mem_config,
             dram_mem_config,
             dram_mem_config,
-            gelu_activation=True,
+            fused_activation=(ttl.tensor.FusibleActivation.GELU, True),
         )
 
     assert ttl.program_cache.num_entries() == 2

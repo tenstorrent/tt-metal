@@ -33,7 +33,7 @@ def run_bert_large_matmul_test(
     bias_mem_config,
     out_mem_config,
 ):
-    gelu_activation = False
+    gelu_activation = None
 
     if bert_large_op == ttl.tensor.bert_large_fused_qkv_matmul:
         a_shape = [batch, 1, 384, 1024]
@@ -55,7 +55,7 @@ def run_bert_large_matmul_test(
         ):
             pytest.skip("Skipping test since these tensors won't fit on device!")
 
-        gelu_activation = True
+        gelu_activation = (ttl.tensor.FusibleActivation.GELU, True)
         a_shape = [batch, 1, 384, 1024]
         b_shape = [1, 1, 1024, 4096]
         bias_shape = [1, 1, 1, 4096]

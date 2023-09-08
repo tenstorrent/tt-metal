@@ -47,7 +47,7 @@ def feed_forward(
             activation,
             ff1_weighta,
             ff1_biasa,
-            True,
+            (ttl.tensor.FusibleActivation.GELU, True),
             output_mem_config=model_config["OP13_FF1_MM_OUTPUT_MEMCFG"],
             output_dtype=model_config["OP13_FF1_MM_OUTPUT_DTYPE"],
         )

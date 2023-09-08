@@ -207,8 +207,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         mm_kernel_in1_sender_writer_defines["FUSE_BIAS"] = "1";
     }
     if (fuse_gelu_activation) {
-        mm_kernel_defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GELU, 1, "GELU", "i"));
+        mm_kernel_defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GELU, 1, "ACTIVATION", "i"));
+        mm_kernel_defines[fmt::format("{}_ACTIVATION", magic_enum::enum_name(UnaryOpType::GELU).data())] = "1";
     }
+
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
     auto mm_kernel_in0_sender_id = tt_metal::CreateDataMovementKernel(
         program,
