@@ -20,7 +20,7 @@ using std::endl;
 
 std::chrono::seconds tt_cluster::get_device_timeout() {
     int device_timeout = 3600; // seconds
-    const char* timeout_override = std::getenv("TT_BACKEND_TIMEOUT");
+    const char* timeout_override = std::getenv("TT_METAL_BACKEND_TIMEOUT");
     if (timeout_override) {
         device_timeout = atoi(timeout_override);
     }

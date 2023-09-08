@@ -140,19 +140,19 @@ To use debug printing capability, it is first required to start the debug print 
 - Use ``DPRINT << "string" << 1 << SETW(4) << F32(2.0f) << ENDL();`` std::cout-style syntax to print values.
 - For the prints to show up on the host, it is first required to start the host-side server using:
 
-  - ``export TT_DEBUG_PRINT_CORES=<list of cores>``
+  - ``export TT_METAL_DPRINT_CORES=<list of cores>``
   - ``<list of cores>`` is one of:
 
     - single core: ``x,y``
     - multiple cores: ``"(x,y),(x,y)"`` (etc)
     - range of cores: ``"(x,y)-(x,y)"`` (bounding box, inclusive)
 
-- Optionally (for multi-chip parts) ``export TT_DEBUG_PRINT_CHIPS=<list of chips>``
+- Optionally (for multi-chip parts) ``export TT_METAL_DPRINT_CHIPS=<list of chips>``
 
   - use a comma separated list
   - default is 0
 
-- Optionally ``export TT_DEBUG_PRINT_RISCV=<riscv>``
+- Optionally ``export TT_METAL_DPRINT_RISCV=<riscv>``
 
   - ``<riscv>`` is one of:
 
@@ -160,7 +160,7 @@ To use debug printing capability, it is first required to start the debug print 
 
   - default is all riscvs
 
-- Optionally ``export TT_DEBUG_PRINT_FILE=<filename>``
+- Optionally ``export TT_METAL_DPRINT_FILE=<filename>``
 - Note that the core coordinates are currently NOC coordinates (not logical).
 - Since on TRISCs the same code compiles 3 times and executes on 3 threads, you can use the pattern ``MATH(( DPRINT << x << ENDL() ));`` to make prints execute only on one of 3 threads.
 - The two other available macros for pack/unpack threads are ``PACK(( ))`` and ``UNPACK(( ))``

@@ -279,7 +279,7 @@ struct CompileState {
         if (std::getenv("TT_METAL_WATCHER") != nullptr) {
             result += " -DWATCHER_ENABLED";
         }
-        if (std::getenv("TT_DEBUG_PRINT_CORES") != nullptr) {
+        if (std::getenv("TT_METAL_DPRINT_CORES") != nullptr) {
             if (profile_kernel) {
                 log_fatal(tt::LogBuildKernels, "Cannot enable debug printing and profiling");
             }
@@ -379,7 +379,7 @@ struct CompileState {
             linkopts += " -Xlinker \"--just-symbols=" + weakened_elf_name + "\"";
         }
 
-        if (getenv("TT_KERNEL_LINKER_MAP") != nullptr) {
+        if (getenv("TT_METAL_KERNEL_MAP") != nullptr) {
             linkopts += " -Wl,-Map=" + kernel_subdir_ + thread_bin_subdir + "linker.map";
         }
 

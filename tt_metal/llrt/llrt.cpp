@@ -239,7 +239,7 @@ static bool test_load_write_read_risc_binary_imp(
 
     log_debug(tt::LogLLRuntime, "wrote hex to core {}", core.str().c_str());
 
-    if (std::getenv("TT_KERNEL_READBACK_ENABLE") != nullptr) {
+    if (std::getenv("TT_METAL_KERNEL_READBACK_ENABLE") != nullptr) {
         ll_api::memory read_mem = read_mem_from_core(cluster, chip_id, core, mem, local_init_addr);
         log_debug(tt::LogLLRuntime, "read hex back from the core");
         return mem == read_mem;

@@ -131,7 +131,7 @@ class Logger {
 
    private:
     Logger() {
-        static char const* env = std::getenv("LOGGER_TYPES");
+        static char const* env = std::getenv("TT_METAL_LOGGER_TYPES");
         if (env) {
             if (strstr(env, "All")) {
                 mask = 0xFFFFFFFFFFFFFFFF;
@@ -147,7 +147,7 @@ class Logger {
             mask = 0xFFFFFFFFFFFFFFFF;
         }
 
-        static char const* level_env = std::getenv("LOGGER_LEVEL");
+        static char const* level_env = std::getenv("TT_METAL_LOGGER_LEVEL");
         if (level_env) {
             std::string level_str = level_env;
             std::transform(
@@ -163,7 +163,7 @@ class Logger {
         }
 
 #if !defined(UTILS_LOGGER_PYTHON_OSTREAM_REDIRECT) || (UTILS_LOGGER_PYTHON_OSTREAM_REDIRECT == 0)
-        static char const* file_env = std::getenv("LOGGER_FILE");
+        static char const* file_env = std::getenv("TT_METAL_LOGGER_FILE");
         if (file_env)
         {
             log_file.open(file_env);

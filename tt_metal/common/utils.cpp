@@ -16,7 +16,7 @@ namespace utils
         ZoneText( cmd.c_str(), cmd.length());
         int ret;
         static std::mutex io_mutex;
-        if (getenv("TT_BACKEND_DUMP_RUN_CMD") or verbose) {
+        if (getenv("TT_METAL_BACKEND_DUMP_RUN_CMD") or verbose) {
             {
                 std::lock_guard<std::mutex> lk(io_mutex);
                 cout << "===== RUNNING SYSTEM COMMAND:" << std::endl;

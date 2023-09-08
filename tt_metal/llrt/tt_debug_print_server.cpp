@@ -532,14 +532,14 @@ static vector<int> parse_chip_list_env(const char* envvar)
 // The print server is not valid without alive tt_cluster and tt_device
 void tt_start_debug_print_server(tt_cluster* cluster)
 {
-    if (getenv("TT_DEBUG_PRINT_CORES") != nullptr) {
-        vector<CoreCoord> cores = parse_core_range_env("TT_DEBUG_PRINT_CORES");
-        vector<int> chip_ids = parse_chip_list_env("TT_DEBUG_PRINT_CHIPS");
+    if (getenv("TT_METAL_DPRINT_CORES") != nullptr) {
+        vector<CoreCoord> cores = parse_core_range_env("TT_METAL_DPRINT_CORES");
+        vector<int> chip_ids = parse_chip_list_env("TT_METAL_DPRINT_CHIPS");
         if (chip_ids.size() == 0) {
             chip_ids.push_back(0);
         }
         auto riscv_mask = DPRINT_RISCV_BR | DPRINT_RISCV_TR0 | DPRINT_RISCV_TR1 | DPRINT_RISCV_TR2 | DPRINT_RISCV_NC;
-        char *dbg_riscvs = std::getenv("TT_DEBUG_PRINT_RISCVS");
+        char *dbg_riscvs = std::getenv("TT_METAL_DPRINT_RISCVS");
         if (dbg_riscvs != nullptr) {
             if (strcmp(dbg_riscvs, "BR") == 0) {
                 riscv_mask = DPRINT_RISCV_BR;
@@ -555,7 +555,7 @@ void tt_start_debug_print_server(tt_cluster* cluster)
                 tt::log_fatal("Invalid TT_DEBUG_PRINT_RISCV");
             }
         }
-        char *db_file = std::getenv("TT_DEBUG_PRINT_FILE");
+        char *db_file = std::getenv("TT_METAL_DPRINT_FILE");
 
         TT_ASSERT(DebugPrintServerContext::inst == nullptr, "Multiple print servers not allowed");
         TT_ASSERT(DebugPrintServerContext::ProfilerIsRunning == false, "Device side profiler is running, cannot start print server");
