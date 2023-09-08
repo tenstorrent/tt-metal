@@ -48,8 +48,6 @@ volatile uint local_mem_barrier __attribute__((used));
 #define GET_TRISC_RUN_EVAL(x, t) (x)->trisc##t
 #define GET_TRISC_RUN(x, t) GET_TRISC_RUN_EVAL(x, t)
 volatile tt_l1_ptr uint8_t * const trisc_run = &GET_TRISC_RUN((tt_l1_ptr run_sync_message_t *)(MEM_SLAVE_RUN_MAILBOX_ADDRESS), COMPILE_FOR_TRISC);
-volatile tt_l1_ptr uint8_t * const trisc_master_run = &GET_TRISC_RUN((tt_l1_ptr run_sync_message_t *)(MEM_MASTER_RUN_MAILBOX_ADDRESS), COMPILE_FOR_TRISC);
-
 } // namespace ckernel
 
 volatile tt_l1_ptr uint32_t l1_buffer[16] __attribute__ ((section ("l1_data"))) __attribute__ ((aligned (16))) __attribute__((used));
@@ -91,12 +89,11 @@ int main(int argc, char *argv[])
 
     reset_cfg_state_id();
 
-    uint8_t trisc_run_toggle = 0;
     while (1) {
         profiler_mark_time(CC_MAIN_START);
 
         DEBUG_STATUS('W');
-        while (*trisc_run == trisc_run_toggle);
+        while (*trisc_run != RUN_SYNC_MESSAGE_GO);
 
         DEBUG_STATUS('R');
         profiler_mark_time(CC_KERNEL_MAIN_START);
@@ -105,9 +102,8 @@ int main(int argc, char *argv[])
         DEBUG_STATUS('D');
 
         // Signal completion
-        trisc_run_toggle ^= RUN_SYNC_MESSAGE_GO;
         tensix_sync();
-        *trisc_master_run = trisc_run_toggle;
+        *trisc_run = RUN_SYNC_MESSAGE_DONE;
 
         profiler_mark_time(CC_MAIN_END);
     }

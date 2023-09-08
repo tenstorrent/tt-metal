@@ -14,6 +14,7 @@ constexpr uint32_t RUN_SYNC_MESSAGE_INIT = 0x40;
 constexpr uint32_t RUN_SYNC_MESSAGE_GO   = 0x80;
 constexpr uint32_t RUN_SYNC_MESSAGE_DONE = 0;
 constexpr uint32_t RUN_SYNC_MESSAGE_ALL_TRISCS_GO = 0x80808000;
+constexpr uint32_t RUN_SYNC_MESSAGE_ALL_GO = 0x80808080;
 constexpr uint32_t RUN_SYNC_MESSAGE_ALL_SLAVES_DONE = 0;
 
 struct run_sync_message_t {

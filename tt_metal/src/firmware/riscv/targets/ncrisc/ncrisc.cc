@@ -56,20 +56,17 @@ int main(int argc, char *argv[]) {
   risc_init();
   *(volatile tt_l1_ptr uint32_t *)MEM_NCRISC_RESUME_ADDR_MAILBOX_ADDRESS = (uint32_t)ncrisc_resume;
 
-  uint32_t ncrisc_go_toggle = 0;
   while (1) {
       profiler_mark_time(CC_MAIN_START);
 
       DEBUG_STATUS('W');
-      notify_brisc_and_halt(ncrisc_go_toggle);
+      notify_brisc_and_halt(RUN_SYNC_MESSAGE_DONE);
 
       DEBUG_STATUS('R');
       profiler_mark_time(CC_KERNEL_MAIN_START);
       kernel_init();
       profiler_mark_time(CC_KERNEL_MAIN_END);
       DEBUG_STATUS('D');
-
-      ncrisc_go_toggle ^= RUN_SYNC_MESSAGE_GO;
 
       profiler_mark_time(CC_MAIN_END);
   }

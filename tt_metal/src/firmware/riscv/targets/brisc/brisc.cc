@@ -35,7 +35,6 @@ constexpr uint32_t RISCV_IC_TRISC_ALL_MASK = RISCV_IC_TRISC0_MASK | RISCV_IC_TRI
 
 volatile tt_l1_ptr uint32_t * const brisc_run = (volatile tt_l1_ptr uint32_t *)(MEM_RUN_MAILBOX_ADDRESS);
 volatile tt_l1_ptr run_sync_message_t * const slave_run = (volatile tt_l1_ptr run_sync_message_t *)(MEM_SLAVE_RUN_MAILBOX_ADDRESS);
-volatile tt_l1_ptr run_sync_message_t * const master_run = (volatile tt_l1_ptr run_sync_message_t *)(MEM_MASTER_RUN_MAILBOX_ADDRESS);
 volatile tt_l1_ptr uint32_t * const ncrisc_resume_addr = (volatile tt_l1_ptr uint32_t *)MEM_NCRISC_RESUME_ADDR_MAILBOX_ADDRESS;
 
 c_tensix_core core;
@@ -250,13 +249,10 @@ void init_sync_registers() {
     }
 }
 
-inline void deassert_ncrisc_trisc(uint32_t *ncrisc_run_toggle, uint32_t *trisc_run_toggle)
+inline void deassert_ncrisc_trisc()
 {
-    *ncrisc_run_toggle = 0;
-    *trisc_run_toggle = 0;
     // Below sets ncrisc to go so we can wait until it is cleared on first iteration
-    master_run->all = RUN_SYNC_MESSAGE_GO;
-    slave_run->all = 0;
+    slave_run->all = RUN_SYNC_MESSAGE_ALL_SLAVES_DONE;
 
     l1_to_ncrisc_iram_copy();
 
@@ -273,18 +269,16 @@ inline void set_ncrisc_kernel_resume_deassert_address()
     cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = *ncrisc_resume_addr;
 }
 
-inline void run_ncrisc_trisc(uint32_t *ncrisc_run_toggle, uint32_t *trisc_run_toggle)
+inline void run_ncrisc_trisc()
 {
     bool use_triscs = *(volatile tt_l1_ptr uint32_t*)(MEM_ENABLE_TRISC_MAILBOX_ADDRESS);
     if (use_triscs) {
-        *trisc_run_toggle ^= RUN_SYNC_MESSAGE_ALL_TRISCS_GO;
-        slave_run->all = *trisc_run_toggle;
+        slave_run->all = RUN_SYNC_MESSAGE_ALL_TRISCS_GO;
     }
 
     bool use_ncrisc = *(volatile tt_l1_ptr uint32_t*)(MEM_ENABLE_NCRISC_MAILBOX_ADDRESS);
     if (use_ncrisc) {
-        *ncrisc_run_toggle ^= RUN_SYNC_MESSAGE_GO;
-        slave_run->ncrisc = *ncrisc_run_toggle;
+        slave_run->ncrisc = RUN_SYNC_MESSAGE_GO;
 
         // TODO(pgk): don't copy all of iram! 1K cycles?
         l1_to_ncrisc_iram_copy();
@@ -294,10 +288,10 @@ inline void run_ncrisc_trisc(uint32_t *ncrisc_run_toggle, uint32_t *trisc_run_to
     }
 }
 
-inline void wait_ncrisc_trisc(uint32_t ncrisc_run_toggle, uint32_t trisc_run_toggle)
+inline void wait_ncrisc_trisc()
 {
     DEBUG_STATUS('N', 'T', 'W');
-    while (master_run->all != (ncrisc_run_toggle | trisc_run_toggle));
+    while (slave_run->all != RUN_SYNC_MESSAGE_ALL_SLAVES_DONE);
     DEBUG_STATUS('N', 'T', 'D');
 }
 
@@ -324,14 +318,12 @@ int main() {
 
     // Set ncrisc's resume address to 0 so we know when ncrisc has overwritten it
     *ncrisc_resume_addr = 0;
-    uint32_t trisc_run_toggle;
-    uint32_t ncrisc_run_toggle;
-    deassert_ncrisc_trisc(&ncrisc_run_toggle, &trisc_run_toggle);
+    deassert_ncrisc_trisc();
     set_ncrisc_kernel_resume_deassert_address();
 
     // Wait for ncrisc to halt
     DEBUG_STATUS('I', 'N', 'W');
-    while (master_run->ncrisc != RUN_SYNC_MESSAGE_DONE);
+    while (slave_run->ncrisc != RUN_SYNC_MESSAGE_DONE);
     DEBUG_STATUS('I', 'N', 'D');
 
     while (1) {
@@ -349,7 +341,7 @@ int main() {
         volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
         cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK;
 
-        run_ncrisc_trisc(&ncrisc_run_toggle, &trisc_run_toggle);
+        run_ncrisc_trisc();
 
         // Run the BRISC kernel
         DEBUG_STATUS('R');
@@ -358,7 +350,7 @@ int main() {
         profiler_mark_time(CC_KERNEL_MAIN_END);
         DEBUG_STATUS('D');
 
-        wait_ncrisc_trisc(ncrisc_run_toggle, trisc_run_toggle);
+        wait_ncrisc_trisc();
 
         *brisc_run = RUN_MESSAGE_DONE;
 

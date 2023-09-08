@@ -7,11 +7,11 @@
 #include "ckernel_globals.h"
 #include "risc_common.h"
 #include <tensix.h>
-#include "hostdevcommon/common_runtime_address_map.h"
 #include "run_sync.h"
 
 #include "tools/profiler/kernel_profiler.hpp"
 
+#include "debug_status.h"
 #include "debug_print.h"
 
 namespace kernel_profiler {
@@ -31,8 +31,8 @@ volatile uint tt_reg_ptr *mailbox_base[4] = {
     reinterpret_cast<volatile uint tt_reg_ptr *>(TENSIX_MAILBOX0_BASE), reinterpret_cast<volatile uint tt_reg_ptr *>(TENSIX_MAILBOX1_BASE),
     reinterpret_cast<volatile uint tt_reg_ptr *>(TENSIX_MAILBOX2_BASE), reinterpret_cast<volatile uint tt_reg_ptr *>(TENSIX_MAILBOX3_BASE)
 };
-volatile tt_reg_ptr uint *dbg_event_scratch = nullptr;
-tt_reg_ptr uint *regmem = reinterpret_cast<uint *>(REGFILE_BASE);
+volatile tt_l1_ptr uint *dbg_event_scratch = nullptr;
+tt_reg_ptr uint *regmem = reinterpret_cast<tt_reg_ptr uint *>(REGFILE_BASE);
 
 uint32_t cfg_state_id __attribute__((used)) = 0;  // Flip between 0 and 1 to keep state between kernel calls
 uint32_t dest_offset_id __attribute__((used)) = 0; // Flip between 0 and 1 to keep dest pointer between kernel calls
@@ -47,9 +47,7 @@ volatile uint local_mem_barrier __attribute__((used));
 
 #define GET_TRISC_RUN_EVAL(x, t) (x)->trisc##t
 #define GET_TRISC_RUN(x, t) GET_TRISC_RUN_EVAL(x, t)
-volatile uint8_t tt_l1_ptr * const trisc_run = &GET_TRISC_RUN((run_sync_message_t tt_l1_ptr *)(MEM_SLAVE_RUN_MAILBOX_ADDRESS), COMPILE_FOR_TRISC);
-volatile uint8_t tt_l1_ptr * const trisc_master_run = &GET_TRISC_RUN((run_sync_message_t tt_l1_ptr *)(MEM_MASTER_RUN_MAILBOX_ADDRESS), COMPILE_FOR_TRISC);
-
+volatile tt_l1_ptr uint8_t * const trisc_run = &GET_TRISC_RUN((tt_l1_ptr run_sync_message_t *)(MEM_SLAVE_RUN_MAILBOX_ADDRESS), COMPILE_FOR_TRISC);
 } // namespace ckernel
 
 volatile tt_l1_ptr uint32_t l1_buffer[16] __attribute__ ((section ("l1_data"))) __attribute__ ((aligned (16))) __attribute__((used));
@@ -98,12 +96,11 @@ int main(int argc, char *argv[])
         sync_regfile_write(p_gpr_unpack::L1_BUFFER_ADDR);
     }
 
-    uint8_t trisc_run_toggle = 0;
     while (1) {
         profiler_mark_time(CC_MAIN_START);
 
         DEBUG_STATUS('W');
-        while (*trisc_run == trisc_run_toggle);
+        while (*trisc_run != RUN_SYNC_MESSAGE_GO);
 
         DEBUG_STATUS('R');
         profiler_mark_time(CC_KERNEL_MAIN_START);
@@ -112,9 +109,8 @@ int main(int argc, char *argv[])
         DEBUG_STATUS('D');
 
         // Signal completion
-        trisc_run_toggle ^= RUN_SYNC_MESSAGE_GO;
         tensix_sync();
-        *trisc_master_run = trisc_run_toggle;
+        *trisc_run = RUN_SYNC_MESSAGE_DONE;
 
         profiler_mark_time(CC_MAIN_END);
     }
