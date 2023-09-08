@@ -18,6 +18,7 @@ jobs:
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.arch }}
+      TT_METAL_SLOW_DISPATCH_MODE: 1
     environment: dev
     runs-on: model-runner-${{ matrix.arch }}
     steps:
@@ -31,4 +32,4 @@ jobs:
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Run clean + build + all reg tests scripts
         timeout-minutes: 300
-        run: ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.arch }} --pipeline-type frequent
+        run: ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.arch }} --pipeline-type frequent --dispatch-mode slow

@@ -12,16 +12,19 @@ if [[ -z "$ARCH_NAME" ]]; then
   exit 1
 fi
 
-cd $TT_METAL_HOME
+if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then
+  echo "Only Slow Dispatch mode allowed - Must have TT_METAL_SLOW_DISPATCH_MODE set" 1>&2
+  exit 1
+fi
 
+cd $TT_METAL_HOME
 export PYTHONPATH=$TT_METAL_HOME
 
 if [ "$ARCH_NAME" == "grayskull" ]; then
   ./tests/scripts/run_python_api_unit_tests.sh
-  env python tests/scripts/run_tt_metal.py
-  env python tests/scripts/run_tt_eager.py
+  env python tests/scripts/run_tt_metal.py --dispatch-mode slow
+  env python tests/scripts/run_tt_eager.py --dispatch-mode slow
 else
-
   ./tests/scripts/run_python_api_unit_tests_wormhole_b0.sh
   ./build/test/tt_metal/test_bcast --arch $ARCH_NAME
   ./build/test/tt_metal/test_reduce_hw --arch $ARCH_NAME
@@ -33,11 +36,7 @@ else
   ./build/test/tt_metal/test_matmul_single_core --arch $ARCH_NAME
 fi
 
-if [[ -z "$FAST_DISPATCH" ]]; then
-  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests
-else
-  ./build/test/tt_metal/unit_tests_fast_dispatch
-fi
+./build/test/tt_metal/unit_tests
 
 echo "Checking docs build..."
 

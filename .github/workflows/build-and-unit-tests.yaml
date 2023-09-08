@@ -20,6 +20,7 @@ jobs:
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.runner-info.arch }}
+      TT_METAL_SLOW_DISPATCH_MODE: 1
     environment: dev
     runs-on: ["${{ matrix.runner-info.arch }}", "${{ matrix.runner-info.fw }}"]
     steps:
@@ -39,7 +40,7 @@ jobs:
         timeout-minutes: 90
         run: |
           source build/python_env/bin/activate
-          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit
+          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit --dispatch-mode slow
   check-syseng-assets:
     runs-on: ubuntu-latest
     steps:

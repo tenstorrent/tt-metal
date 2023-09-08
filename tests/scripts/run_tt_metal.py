@@ -27,7 +27,7 @@ from tests.scripts.cmdline_args import (
     get_cmdline_args,
 )
 
-TT_METAL_TEST_ENTRIES = (
+TT_METAL_SLOW_DISPATCH_TEST_ENTRIES = (
     TestEntry("tt_metal/tests/test_add_two_ints", "test_add_two_ints"),
     TestEntry("tt_metal/tests/test_bfp8_conversion", "test_bfp8_conversion"),
     TestEntry(
@@ -52,7 +52,6 @@ TT_METAL_TEST_ENTRIES = (
     ),
     TestEntry("tt_metal/tests/test_dataflow_cb", "test_dataflow_cb"),
     # TestEntry("tt_metal/tests/test_datacopy_multi_core_multi_dram", "test_datacopy_multi_core_multi_dram"),  TODO: pls fix
-    TestEntry("tt_metal/tests/test_eltwise_binary", "test_eltwise_binary"),
     TestEntry("tt_metal/tests/test_bcast", "test_bcast"),
     TestEntry("tt_metal/tests/test_matmul_single_tile", "test_matmul_single_tile"),
     TestEntry(
@@ -65,13 +64,10 @@ TT_METAL_TEST_ENTRIES = (
     TestEntry("tt_metal/tests/test_matmul_multi_tile", "test_matmul_multi_tile"),
     TestEntry("tt_metal/tests/test_matmul_large_block", "test_matmul_large_block"),
     TestEntry("tt_metal/tests/test_matmul_single_core", "test_matmul_single_core"),
+    TestEntry("tt_metal/tests/test_matmul_single_core_small", "test_matmul_single_core_small"),
     TestEntry(
         "tt_metal/tests/test_matmul_multi_core_single_dram",
         "test_matmul_multi_core_single_dram",
-    ),
-    TestEntry(
-        "tt_metal/tests/test_matmul_multi_core_multi_dram",
-        "test_matmul_multi_core_multi_dram",
     ),
     TestEntry(
         "tt_metal/tests/test_matmul_multi_core_multi_dram_in0_mcast",
@@ -132,6 +128,32 @@ TT_METAL_TEST_ENTRIES = (
     TestEntry("tt_metal/tests/test_compile_program", "test_compile_program"),
 )
 
+TT_METAL_FAST_DISPATCH_TEST_ENTRIES = (
+    TestEntry("tt_metal/tests/test_eltwise_binary", "test_eltwise_binary"),
+    TestEntry(
+        "tt_metal/tests/test_matmul_multi_core_multi_dram",
+        "test_matmul_multi_core_multi_dram",
+    ),
+)
+
+TT_METAL_COMMON_TEST_ENTRIES = (
+    # Allocator Tests
+    TestEntry(
+        "tt_metal/tests/allocator/test_free_list_allocator_algo",
+        "allocator/test_free_list_allocator_algo",
+    ),
+    TestEntry(
+        "tt_metal/tests/allocator/test_l1_banking_allocator",
+        "allocator/test_l1_banking_allocator",
+    ),
+    # Compile unit tests
+    TestEntry(
+        "tt_metal/tests/test_compile_sets_kernel_binaries",
+        "test_compile_sets_kernel_binaries",
+    ),
+    TestEntry("tt_metal/tests/test_compile_program", "test_compile_program"),
+)
+
 
 PROGRAMMING_EXAMPLE_ENTRIES = (
     TestEntry("programming_examples/loopback", "programming_examples/loopback"),
@@ -166,9 +188,11 @@ def run_tt_cpp_tests(test_entries, timeout, run_single_test):
     return dict(test_and_status_entries)
 
 
-def get_tt_metal_test_entries():
-    return list(TT_METAL_TEST_ENTRIES)
+def get_tt_metal_fast_dispatch_test_entries():
+    return list(TT_METAL_COMMON_TEST_ENTRIES) + list(TT_METAL_FAST_DISPATCH_TEST_ENTRIES)
 
+def get_tt_metal_slow_dispatch_test_entries():
+    return list(TT_METAL_COMMON_TEST_ENTRIES) + list(TT_METAL_SLOW_DISPATCH_TEST_ENTRIES)
 
 def get_programming_example_entries():
     return list(PROGRAMMING_EXAMPLE_ENTRIES)
@@ -211,15 +235,20 @@ def build_programming_example_executable_path(namespace, executable_name, extra_
 if __name__ == "__main__":
     cmdline_args = get_cmdline_args(TestSuiteType.TT_METAL)
 
-    timeout, tt_arch = get_tt_metal_arguments_from_cmdline_args(cmdline_args)
+    timeout, tt_arch, dispatch_mode = get_tt_metal_arguments_from_cmdline_args(cmdline_args)
 
     logger.warning("We are not yet parameterizing tt_metal tests on tt_arch")
 
-    programming_example_entries = get_programming_example_entries()
-
-    pe_test_report = run_programming_examples(programming_example_entries, timeout)
-
-    tt_metal_test_entries = get_tt_metal_test_entries()
+    pe_test_report = {}
+    if dispatch_mode == "slow":
+        logger.info("Running Programming Example tests")
+        programming_example_entries = get_programming_example_entries()
+        pe_test_report = run_programming_examples(programming_example_entries, timeout)
+        logger.info("Running slow-dispatch mode tests")
+        tt_metal_test_entries = get_tt_metal_slow_dispatch_test_entries()
+    else:
+        logger.info("Running fast-dispatch mode tests")
+        tt_metal_test_entries = get_tt_metal_fast_dispatch_test_entries()
 
     llb_test_report = run_tt_cpp_tests(
         tt_metal_test_entries, timeout, run_single_tt_metal_test

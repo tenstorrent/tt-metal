@@ -334,8 +334,7 @@ int main(int argc, char **argv) {
     bool pass = true;
 
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        std::cout << "Test not supported w/ slow dispatch, exiting" << std::endl;
-        exit(0);
+        log_fatal("Test not supported w/ slow dispatch, exiting");
     }
 
     try {

@@ -150,7 +150,7 @@ def get_result_str_from_completed_process_(completed_process: sp.CompletedProces
 def report_tests(test_report):
     assert isinstance(test_report, dict)
 
-    print("Printing test report for fw-dma-test-2 regression")
+    print("Printing test report for tt-metal regression")
     for test_entry, completed_process in test_report.items():
         assert isinstance(completed_process, sp.CompletedProcess)
         result_str = get_result_str_from_completed_process_(completed_process)

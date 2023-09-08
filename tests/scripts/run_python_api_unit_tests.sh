@@ -7,9 +7,9 @@ if [[ -z "$TT_METAL_HOME" ]]; then
   exit 1
 fi
 
-if [[ -z "$FAST_DISPATCH" ]]; then
-  env TT_METAL_SLOW_DISPATCH_MODE=1 pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/
-  env TT_METAL_SLOW_DISPATCH_MODE=1 pytest $(find $TT_METAL_HOME/tests/tt_eager/python_api_testing/sweep_tests/pytests/ -name 'test_*.py' -a ! -name 'test_sweep_conv_with_address_map.py') -vvv
+if [[ ! -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then
+  env pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/
+  env pytest $(find $TT_METAL_HOME/tests/tt_eager/python_api_testing/sweep_tests/pytests/ -name 'test_*.py' -a ! -name 'test_sweep_conv_with_address_map.py') -vvv
 else
   # Need to remove move for time being since failing
   env pytest $(find $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -name 'test_*.py' -a ! -name 'test_move.py') -vvv

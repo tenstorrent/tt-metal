@@ -27,7 +27,7 @@ jobs:
           lfs: true
       - name: Set up dyanmic env vars for build
         run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV && echo "FAST_DISPATCH=1" >> $GITHUB_ENV
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Build tt-metal and libs
         run: make build
       - name: Build tt-metal CPP tests
@@ -36,4 +36,4 @@ jobs:
         timeout-minutes: 90
         run: |
           source build/python_env/bin/activate
-          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit
+          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit --dispatch-mode fast

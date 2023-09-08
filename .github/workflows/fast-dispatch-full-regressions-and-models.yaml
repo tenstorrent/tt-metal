@@ -26,7 +26,7 @@ jobs:
           lfs: true
       - name: Set up dyanmic env vars for build
         run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV && echo "FAST_DISPATCH=1" >> $GITHUB_ENV
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Run clean + build + all reg tests scripts
         timeout-minutes: 300
-        run: ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.arch }} --pipeline-type frequent
+        run: ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.arch }} --pipeline-type frequent --dispatch-mode fast

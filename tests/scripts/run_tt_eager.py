@@ -27,7 +27,7 @@ from tests.scripts.cmdline_args import (
     get_cmdline_args,
 )
 
-TT_EAGER_TEST_ENTRIES = (
+TT_EAGER_COMMON_TEST_ENTRIES = (
     TestEntry(
         "tt_eager/tests/ops/test_eltwise_binary_op", "ops/test_eltwise_binary_op"
     ),
@@ -59,7 +59,6 @@ TT_EAGER_TEST_ENTRIES = (
     TestEntry("tt_eager/tests/ops/test_layernorm_op", "ops/test_layernorm_op"),
     TestEntry("tt_eager/tests/ops/test_softmax_op", "ops/test_softmax_op"),
     TestEntry("tt_eager/tests/ops/test_average_pool", "ops/test_average_pool"),
-    TestEntry("tt_eager/tests/ops/test_sfpu", "ops/test_sfpu"),
     TestEntry(
         "tt_eager/tests/tensors/test_host_device_loopback",
         "tensors/test_host_device_loopback",
@@ -68,11 +67,6 @@ TT_EAGER_TEST_ENTRIES = (
         "tt_eager/tests/tensors/test_copy_and_move", "tensors/test_copy_and_move"
     ),
     # DTX Tests
-    TestEntry(
-        "tt_eager/tests/dtx/test_dtx_tilized_row_to_col_major",
-        "dtx/test_dtx_tilized_row_to_col_major",
-    ),
-    TestEntry("tt_eager/tests/dtx/test_dtx", "dtx/test_dtx"),
     TestEntry("tt_eager/tests/dtx/tensor", "dtx/tensor"),
     TestEntry("tt_eager/tests/dtx/unit_tests/", "dtx/unit_tests"),
     TestEntry("tt_eager/tests/dtx/overlap", "dtx/overlap"),
@@ -85,6 +79,15 @@ TT_EAGER_TEST_ENTRIES = (
     ),
 )
 
+TT_EAGER_SLOW_DISPATCH_TEST_ENTRIES = (
+    TestEntry("tt_eager/tests/ops/test_sfpu", "ops/test_sfpu"),
+    # DTX Tests
+    TestEntry(
+        "tt_eager/tests/dtx/test_dtx_tilized_row_to_col_major",
+        "dtx/test_dtx_tilized_row_to_col_major",
+    ),
+    TestEntry("tt_eager/tests/dtx/test_dtx", "dtx/test_dtx"),
+)
 
 def run_single_tt_eager_test(test_entry, timeout):
     run_test = partial(run_single_test, "tt_eager", timeout=timeout)
@@ -111,16 +114,22 @@ def run_tt_cpp_tests(test_entries, timeout, run_single_test):
     return dict(test_and_status_entries)
 
 
-def get_tt_eager_test_entries():
-    return list(TT_EAGER_TEST_ENTRIES)
+def get_tt_eager_fast_dispatch_test_entries():
+    return list(TT_EAGER_COMMON_TEST_ENTRIES)
+
+def get_tt_eager_slow_dispatch_test_entries():
+    return list(TT_EAGER_COMMON_TEST_ENTRIES) + list(TT_EAGER_SLOW_DISPATCH_TEST_ENTRIES)
 
 
 if __name__ == "__main__":
     cmdline_args = get_cmdline_args(TestSuiteType.TT_EAGER)
 
-    timeout, tt_arch = get_tt_metal_arguments_from_cmdline_args(cmdline_args)
+    timeout, tt_arch, dispatch_mode = get_tt_metal_arguments_from_cmdline_args(cmdline_args)
 
-    tt_eager_test_entries = get_tt_eager_test_entries()
+    if dispatch_mode == "slow":
+        tt_eager_test_entries = get_tt_eager_slow_dispatch_test_entries()
+    else:
+        tt_eager_test_entries = get_tt_eager_fast_dispatch_test_entries()
 
     eager_test_report = run_tt_cpp_tests(
         tt_eager_test_entries, timeout, run_single_tt_eager_test
