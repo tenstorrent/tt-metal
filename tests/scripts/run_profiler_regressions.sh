@@ -8,13 +8,19 @@ run_profiling_test(){
       exit 1
     fi
 
-    echo "This test requires to run in a build with ENABLE_PROFILER=1"
+    echo "Make sure this test runs in a build with ENABLE_PROFILER=1"
 
     if [ "$ARCH_NAME" == "grayskull" ]; then
         source build/python_env/bin/activate
         export PYTHONPATH=$TT_METAL_HOME
 
         TT_METAL_DEVICE_PROFILER=1 pytest $TT_METAL_HOME/tests/tt_metal/tools/profiler/test_device_profiler.py -vvv
+
+        rm -rf $TT_METAL_HOME/tt_metal/tools/profiler/logs/
+        rm -rf $TT_METAL_HOME/tt_metal/tools/profiler/output/
+        $TT_METAL_HOME/tt_metal/tools/profiler/profile_this.py -c "pytest -svvv tests/models/bert_large_performant/unit_tests/test_bert_large_fused_qkv_matmul.py::test_bert_large_fused_qkv_matmul_test[BFLOAT8_B-in0_DRAM-in1_L1-bias_None-out_DRAM]"
+
+        ls $TT_METAL_HOME/tt_metal/tools/profiler/output/ops/BERT_large_fused_qkv_matmul_BFLOAT8_B-in0_DRAM-in1_L1-bias_None-out_DRAM/profile_log_ops.csv
     fi
 }
 
