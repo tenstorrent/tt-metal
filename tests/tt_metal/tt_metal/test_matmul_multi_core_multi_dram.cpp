@@ -372,7 +372,7 @@ int main(int argc, char **argv) {
             shape,
             tt::deprecated::Initialize::RANDOM,
             100,
-            std::chrono::system_clock::now().time_since_epoch().count());
+            10 /* seed */);
         auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32);  // bflaot16 identity
         ////////////////////////////////////////////////////////////////////////////
         //                      Initial Runtime Args Parse
