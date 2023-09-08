@@ -53,6 +53,8 @@ bool test_interleaved_l1_buffer(tt_metal::Device *device, int num_pages_one, int
 int main(int argc, char **argv) {
     bool pass = true;
 
+    auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    tt::log_assert(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
     try {
         ////////////////////////////////////////////////////////////////////////////
         //                      Initial Runtime Args Parse

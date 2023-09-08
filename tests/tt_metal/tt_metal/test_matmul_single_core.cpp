@@ -144,9 +144,8 @@ std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, i
 int main(int argc, char **argv) {
     bool pass = true;
 
-    // Once this test is uplifted to use fast dispatch, this can be removed.
-    char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
-    putenv(env);
+    auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    tt::log_assert(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     try {
         ////////////////////////////////////////////////////////////////////////////

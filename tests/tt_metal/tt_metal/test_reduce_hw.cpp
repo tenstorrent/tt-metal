@@ -28,9 +28,8 @@ using std::string;
 //////////////////////////////////////////////////////////////////////////////////////////
 int main(int argc, char **argv) {
 
-    // Once this test is uplifted to use fast dispatch, this can be removed.
-    char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
-    putenv(env);
+    auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    tt::log_assert(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     bool pass = true;
     bool multibank = true;
