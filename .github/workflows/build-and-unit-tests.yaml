@@ -1,4 +1,4 @@
-name: "[post-commit] all - Post-commit main build and unit tests"
+name: "[post-commit] all - Slow Dispatch post-commit main build and unit tests"
 
 on:
   workflow_dispatch:
