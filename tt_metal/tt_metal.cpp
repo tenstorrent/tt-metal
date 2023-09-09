@@ -501,6 +501,7 @@ void CompileKernel(Device *device, Program &program, Kernel *kernel) {
     kernel->set_binary_path(kernel_path_suffix);
 }
 
+// Just adds blank kernels, doesn't compile them or read binaries
 void AddBlankKernels(Device *device, Program &program) {
     ZoneScoped;
 
@@ -540,12 +541,6 @@ void AddBlankKernels(Device *device, Program &program) {
         KernelID blank_kernel_id = CreateComputeKernel(program, "tt_metal/kernels/compute/blank.cpp", core_range_set);
         blank_ids.push_back(blank_kernel_id);
     }
-
-    for (const auto &blank_kernel_id : blank_ids) {
-        Kernel *blank_kernel = detail::GetKernel(program, blank_kernel_id);
-        CompileKernel(device, program, blank_kernel);
-        blank_kernel->read_binaries(device->pcie_slot());
-    }
 }
 
 bool CompileProgram(Device *device, Program &program) {
@@ -566,8 +561,10 @@ bool CompileProgram(Device *device, Program &program) {
         !(profile_kernel && tt_is_print_server_running()), "Debug print server is running, profiling is not allowed");
     tt_set_profiler_state_for_debug_print(profile_kernel);
 
-    events.emplace_back( detail::async ( [device, &program] { AddBlankKernels(device, program); }) );
+    // add blank kernels to program, we do this serially before we start compiling all kernels in parallel
+    AddBlankKernels(device, program);
 
+    // compile all kernels in parallel, including the blanks
     for (auto kernel_id : program.kernel_ids()) {
         auto kernel = detail::GetKernel(program, kernel_id);
         events.emplace_back ( detail::async ( [kernel, device, &program] {
