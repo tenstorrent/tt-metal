@@ -11,16 +11,37 @@
 
 #include "llrt.hpp"
 #include "watcher.hpp"
+#include "rtoptions.hpp"
 #include "dev_mem_map.h"
 
 // XXXX TODO(PGK): fix include paths so device can export interfaces
 #include "tt_metal/src/firmware/riscv/common/debug_sanitize.h"
-// XXXX TODO(PGK): even worse, create a common header w/ ifdefs to include the right arch
-#include "tt_metal/src/firmware/riscv/grayskull/noc/noc_parameters.h"
+
+#include "noc/noc_parameters.h"
+#include "noc/noc_overlay_parameters.h"
 
 namespace tt {
 namespace llrt {
 namespace watcher {
+
+
+// XXXX TODO(PGK) get these from soc
+#define NOC_DRAM_ADDR_BASE 0
+#define NOC_DRAM_ADDR_SIZE 1073741824
+#define NOC_DRAM_ADDR_END (NOC_DRAM_ADDR_BASE + NOC_DRAM_ADDR_SIZE)
+
+#define DEBUG_VALID_L1_ADDR(a, l) (((a) >= MEM_L1_BASE) && ((a) + (l) <= MEM_L1_BASE + MEM_L1_SIZE))
+
+// TODO(PGK): remove soft reset when fw is downloaded at init
+#define DEBUG_VALID_REG_ADDR(a)                                                        \
+    ((((a) >= NOC_OVERLAY_START_ADDR) &&                                               \
+      ((a) < NOC_OVERLAY_START_ADDR + NOC_STREAM_REG_SPACE_SIZE * NOC_NUM_STREAMS)) || \
+     ((a) == RISCV_DEBUG_REG_SOFT_RESET_0))
+#define DEBUG_VALID_WORKER_ADDR(a, l) (DEBUG_VALID_L1_ADDR(a, l) || (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
+#define DEBUG_VALID_DRAM_ADDR(a, l) (((a) >= NOC_DRAM_ADDR_BASE) && ((a) + (l) <= NOC_DRAM_ADDR_END))
+
+#define DEBUG_VALID_ETH_ADDR(a, l) (((a) >= MEM_ETH_BASE) && ((a) + (l) < MEM_ETH_BASE + MEM_ETH_SIZE))
+
 
 class WatcherDevice {
   public:
@@ -36,7 +57,6 @@ constexpr uint64_t DEBUG_SANITIZE_NOC_SENTINEL_OK_64 = 0xbadabadabadabada;
 constexpr uint32_t DEBUG_SANITIZE_NOC_SENTINEL_OK_32 = 0xbadabada;
 constexpr uint16_t DEBUG_SANITIZE_NOC_SENTINEL_OK_16 = 0xbada;
 constexpr uint32_t N_NOCS = 2;
-constexpr int default_sleep_secs = 2 * 60;
 
 static bool enabled = false;
 static std::mutex watch_mutex;
@@ -277,6 +297,68 @@ static void init_device(tt_cluster *cluster,
     }
 }
 
+static bool coord_found_p(vector<CoreCoord>coords, CoreCoord core) {
+    for (CoreCoord item : coords) {
+        if (item == core) return true;
+    }
+    return false;
+}
+
+static bool coord_found_p(CoreCoord range, CoreCoord core) {
+    return
+        core.x >= 1 && core.x <= range.x &&
+        core.y >= 1 && core.y <= range.y;
+}
+
+static string noc_address(CoreCoord core, uint64_t a, uint32_t l) {
+    std::stringstream ss;
+    ss << "noc{" << core.str() << ", 0x" << std::setfill('0') << std::setw(8) << std::hex << a << ", " << std::dec << l << "}";
+    return ss.str();
+}
+
+static void print_stack_trace (void) {
+    void *array[15];
+
+    int size = backtrace (array, 15);
+    char **strings = backtrace_symbols(array, size);
+    if (strings != NULL) {
+        fprintf(stderr, "Obtained %d stack frames.\n", size);
+        for (int i = 0; i < size; i++) fprintf(stderr, "%s\n", strings[i]);
+    }
+
+    free (strings);
+}
+
+static void watcher_sanitize_host_noc(const char* what,
+                                      tt_SocDescriptor soc_d,
+                                      CoreCoord core,
+                                      uint64_t addr,
+                                      uint32_t lbytes) {
+
+    if (coord_found_p(soc_d.get_pcie_cores(), core)) {
+        log_fatal(LogLLRuntime, "Host watcher: bad {} NOC coord {}", what, core.str());
+    } else if (coord_found_p(soc_d.get_dram_cores(), core)) {
+        if (!DEBUG_VALID_DRAM_ADDR(addr, lbytes)) {
+            print_stack_trace();
+            log_fatal(LogLLRuntime, "Host watcher: bad {} dram address {}", what, noc_address(core, addr, lbytes));
+        }
+    } else if (coord_found_p(soc_d.get_ethernet_cores(), core)) {
+        if (!DEBUG_VALID_ETH_ADDR(addr, lbytes)) {
+            print_stack_trace();
+            log_fatal(LogLLRuntime, "Host watcher: bad {} eth address {}", what, noc_address(core, addr, lbytes));
+        }
+    } else if (coord_found_p(soc_d.grid_size, core)) {
+        if (!DEBUG_VALID_WORKER_ADDR(addr, lbytes)) {
+            print_stack_trace();
+            log_fatal(LogLLRuntime, "Host watcher: bad {} worker address {}", what, noc_address(core, addr, lbytes));
+        }
+    } else {
+        // Bad COORD
+        print_stack_trace();
+        log_fatal(LogLLRuntime, "Host watcher: bad {} NOC coord {}", core.str());
+    }
+}
+
 void watcher_attach(void *dev,
                     tt_cluster *cluster,
                     int pcie_slot,
@@ -285,21 +367,15 @@ void watcher_attach(void *dev,
 
     const std::lock_guard<std::mutex> lock(watcher::watch_mutex);
 
-    const char *enable_str = getenv("TT_METAL_WATCHER");
-    if (!watcher::enabled && enable_str != nullptr) {
+    if (!watcher::enabled && OptionsG.get_watcher_enabled()) {
 
-        init_device(cluster, pcie_slot, get_grid_size, worker_from_logical);
         watcher::f = watcher::create_file();
 
-        int sleep_secs = 0;
-        sscanf(enable_str, "%d", &sleep_secs);
-        int sleep_usecs = ((sleep_secs == 0) ? watcher::default_sleep_secs : sleep_secs) * 1000 * 1000;
-
+        int sleep_usecs = OptionsG.get_watcher_interval() * 1000 * 1000;
         std::thread watcher_thread = std::thread(&watcher::watcher_loop, sleep_usecs);
         watcher_thread.detach();
 
         watcher::enabled = true;
-        log_debug(LogLLRuntime, "Watcher thread spawned");
     }
 
     if (watcher::enabled) {
@@ -307,6 +383,8 @@ void watcher_attach(void *dev,
             // Hmmm, do we want to always open the file so we always get this?
             fprintf(watcher::f, "At %ds attach device %d\n", watcher::get_elapsed_secs(), pcie_slot);
         }
+
+        init_device(cluster, pcie_slot, get_grid_size, worker_from_logical);
 
         std::shared_ptr<watcher::WatcherDevice> wdev(new watcher::WatcherDevice(cluster, pcie_slot, get_grid_size, worker_from_logical));
         watcher::devices.insert(pair<void *, std::shared_ptr<watcher::WatcherDevice>>(dev, wdev));
@@ -323,6 +401,14 @@ void watcher_detach(void *old) {
         fprintf(watcher::f, "At %ds detach device %d\n", watcher::get_elapsed_secs(), pair->second->pcie_slot_);
         watcher::devices.erase(old);
     }
+}
+
+void watcher_sanitize_host_noc_read(tt_SocDescriptor soc_d, CoreCoord core, uint64_t addr, uint32_t lbytes) {
+    watcher_sanitize_host_noc("read", soc_d, core, addr, lbytes);
+}
+
+void watcher_sanitize_host_noc_write(tt_SocDescriptor soc_d, CoreCoord core, uint64_t addr, uint32_t lbytes) {
+    watcher_sanitize_host_noc("write", soc_d, core, addr, lbytes);
 }
 
 } // namespace llrt

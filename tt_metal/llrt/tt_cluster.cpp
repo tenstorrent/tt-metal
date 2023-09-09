@@ -12,6 +12,8 @@
 #include <iostream>
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/debug_print_common.h"
+#include "rtoptions.hpp"
+#include "watcher.hpp"
 
 using std::to_string;
 using std::cout;
@@ -847,6 +849,11 @@ void tt_cluster::write_dram_vec(const std::uint32_t *mem_ptr, uint32_t len, tt_c
 {
     int chip_id = dram_core.chip;
     bool target_is_mmio_capable = ndesc->is_chip_mmio_capable(dram_core.chip);
+
+    if (tt::llrt::OptionsG.get_watcher_enabled()) {
+        tt::llrt::watcher_sanitize_host_noc_write(get_soc_desc(chip_id), {dram_core.x, dram_core.y}, addr, len * sizeof(uint32_t));
+    }
+
     if (target_is_mmio_capable) {
         constexpr bool host_resident = false;
         device->write_vector(mem_ptr, len, dram_core, addr, host_resident, small_access);
@@ -865,6 +872,11 @@ void tt_cluster::read_dram_vec(std::uint32_t *mem_ptr, tt_cxy_pair dram_core, ui
 {
     int chip_id = dram_core.chip;
     bool target_is_mmio_capable = ndesc->is_chip_mmio_capable(dram_core.chip);
+
+    if (tt::llrt::OptionsG.get_watcher_enabled()) {
+        tt::llrt::watcher_sanitize_host_noc_read(get_soc_desc(chip_id), {dram_core.x, dram_core.y}, addr, size_in_bytes);
+    }
+
     if (target_is_mmio_capable || type == TargetDevice::Versim) {
         constexpr bool host_resident = false;
         device->read_vector(mem_ptr, dram_core, addr, size_in_bytes, host_resident, small_access);
