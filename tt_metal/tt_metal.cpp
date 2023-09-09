@@ -134,8 +134,6 @@ bool InitializeDevice(Device *device) {
 
     bool init;
     if (device->initialize()) {
-        tt::llrt::watcher_init(device);
-
         static std::mutex build_mutex;
         static bool global_init_complete = false;
 
@@ -175,7 +173,10 @@ bool InitializeDevice(Device *device) {
             }
         }
 
-        tt::llrt::watcher_attach(device);
+        tt::llrt::watcher_attach(device, device->cluster(), device->pcie_slot(),
+                                 [&, device]() { return device->logical_grid_size(); },
+                                 [&, device](CoreCoord core) { return device->worker_core_from_logical_core(core); }
+                                 );
         init = true;
     } else {
         init = false;

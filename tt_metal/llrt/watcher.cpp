@@ -6,6 +6,8 @@
 #include <unistd.h>
 #include <chrono>
 #include <ctime>
+#include <unordered_map>
+#include <memory>
 
 #include "llrt.hpp"
 #include "watcher.hpp"
@@ -20,6 +22,16 @@ namespace tt {
 namespace llrt {
 namespace watcher {
 
+class WatcherDevice {
+  public:
+    tt_cluster *cluster_;
+    int pcie_slot_;
+    std::function<CoreCoord ()>get_grid_size_;
+    std::function<CoreCoord (CoreCoord)>worker_from_logical_;
+
+    WatcherDevice(tt_cluster *cluster, int pcie_slot, std::function<CoreCoord ()>get_grid_size, std::function<CoreCoord (CoreCoord)>worker_from_logical);
+};
+
 constexpr uint64_t DEBUG_SANITIZE_NOC_SENTINEL_OK_64 = 0xbadabadabadabada;
 constexpr uint32_t DEBUG_SANITIZE_NOC_SENTINEL_OK_32 = 0xbadabada;
 constexpr uint16_t DEBUG_SANITIZE_NOC_SENTINEL_OK_16 = 0xbada;
@@ -28,9 +40,12 @@ constexpr int default_sleep_secs = 2 * 60;
 
 static bool enabled = false;
 static std::mutex watch_mutex;
-static vector<tt_metal::Device *> devices;
+static std::unordered_map<void *, std::shared_ptr<WatcherDevice>> devices;
 static FILE *f = nullptr;
 static std::chrono::time_point start_time = std::chrono::system_clock::now();
+
+WatcherDevice::WatcherDevice(tt_cluster *cluster, int pcie_slot, std::function<CoreCoord ()>get_grid_size, std::function<CoreCoord (CoreCoord)>worker_from_logical) : cluster_(cluster), pcie_slot_(pcie_slot), get_grid_size_(get_grid_size), worker_from_logical_(worker_from_logical) {
+}
 
 static uint32_t get_elapsed_secs() {
     std::chrono::time_point now_time = std::chrono::system_clock::now();
@@ -67,11 +82,11 @@ static FILE * create_file() {
     return f;
 }
 
-static void print_l1_status(FILE *f, tt_metal::Device *dev, CoreCoord core) {
+static void print_l1_status(FILE *f, WatcherDevice *wdev, CoreCoord core) {
 
     // Read L1 address 0, looking for memory corruption
     std::vector<uint32_t> data;
-    data = read_hex_vec_from_core(dev->cluster(), dev->pcie_slot(), core, MEM_L1_BASE, sizeof(uint32_t));
+    data = read_hex_vec_from_core(wdev->cluster_, wdev->pcie_slot_, core, MEM_L1_BASE, sizeof(uint32_t));
     // XXXX TODO(pgk): get this const from llrt (jump to fw insn)
     if (data[0] != 0x2010006f) {
         fprintf(f, "L1[0]=bad 0x%08x ", data[0]);
@@ -136,11 +151,11 @@ static void print_noc_sanity_status(FILE *f, int noc, const debug_sanitize_noc_a
     }
 }
 
-static void print_noc_sanity_status(FILE *f, tt_metal::Device *dev, CoreCoord core) {
+static void print_noc_sanity_status(FILE *f, WatcherDevice *wdev, CoreCoord core) {
 
     // Read L1 address 0, looking for memory corruption
     std::vector<uint32_t> data;
-    data = read_hex_vec_from_core(dev->cluster(), dev->pcie_slot(), core, MEM_DEBUG_SANITIZE_NOC_MAILBOX_ADDRESS, N_NOCS * sizeof(debug_sanitize_noc_addr_t));
+    data = read_hex_vec_from_core(wdev->cluster_, wdev->pcie_slot_, core, MEM_DEBUG_SANITIZE_NOC_MAILBOX_ADDRESS, N_NOCS * sizeof(debug_sanitize_noc_addr_t));
     debug_sanitize_noc_addr_t *san = reinterpret_cast<debug_sanitize_noc_addr_t *>(&data[0]);
 
     for (uint32_t noc = 0; noc < N_NOCS; noc++) {
@@ -148,13 +163,13 @@ static void print_noc_sanity_status(FILE *f, tt_metal::Device *dev, CoreCoord co
     }
 }
 
-static void print_debug_status(FILE *f, tt_metal::Device *dev, CoreCoord core) {
+static void print_debug_status(FILE *f, WatcherDevice *wdev, CoreCoord core) {
 
     // Currently, debug status is redundant to go status for non-brisc
     // Just print brisc status
 
     std::vector<uint32_t> data;
-    data = read_hex_vec_from_core(dev->cluster(), dev->pcie_slot(), core, MEM_DEBUG_STATUS_MAILBOX_START_ADDRESS, MEM_DEBUG_STATUS_MAILBOX_END_ADDRESS - MEM_DEBUG_STATUS_MAILBOX_START_ADDRESS);
+    data = read_hex_vec_from_core(wdev->cluster_, wdev->pcie_slot_, core, MEM_DEBUG_STATUS_MAILBOX_START_ADDRESS, MEM_DEBUG_STATUS_MAILBOX_END_ADDRESS - MEM_DEBUG_STATUS_MAILBOX_START_ADDRESS);
     constexpr int num_riscv_per_core = 5;
     constexpr int num_status_bytes_per_riscv = 4;
     static_assert(MEM_DEBUG_STATUS_MAILBOX_END_ADDRESS - MEM_DEBUG_STATUS_MAILBOX_START_ADDRESS == num_riscv_per_core * num_status_bytes_per_riscv);
@@ -175,14 +190,14 @@ static void print_debug_status(FILE *f, tt_metal::Device *dev, CoreCoord core) {
     fprintf(f, " ");
 }
 
-static void process_core(FILE *f, tt_metal::Device *dev, CoreCoord core) {
+static void process_core(FILE *f, WatcherDevice *wdev, CoreCoord core) {
 
     // Core (x, y): L1[0]=ok  R:RRRR
     fprintf(f, "Core %s: \t", core.str().c_str());
 
-    print_debug_status(f, dev, core);
-    print_l1_status(f, dev, core);
-    print_noc_sanity_status(f, dev, core);
+    print_debug_status(f, wdev, core);
+    print_l1_status(f, wdev, core);
+    print_noc_sanity_status(f, wdev, core);
 
     fprintf(f, "\n");
 
@@ -208,16 +223,17 @@ static void watcher_loop(int sleep_usecs) {
             if (devices.size() == 0) {
                 fprintf(f, "No active devices\n");
             }
-            for (auto const& dev : devices) {
-                log_info(LogLLRuntime, "Watcher checking device {}", dev->pcie_slot());
+            for (auto const& dev_pair : devices) {
+                std::shared_ptr<WatcherDevice>wdev = dev_pair.second;
+                log_info(LogLLRuntime, "Watcher checking device {}", wdev->pcie_slot_);
 
-                CoreCoord grid_size = dev->logical_grid_size();
+                CoreCoord grid_size = wdev->get_grid_size_();
                 for (uint32_t y = 0; y < grid_size.y; y++) {
                     for (uint32_t x = 0; x < grid_size.x; x++) {
                         CoreCoord logical_core(x, y);
-                        CoreCoord worker_core = dev->worker_core_from_logical_core(logical_core);
+                        CoreCoord worker_core = wdev->worker_from_logical_(logical_core);
                         if (worker_core.y != 11 || worker_core.x == 1) {
-                            process_core(f, dev, worker_core);
+                            process_core(f, wdev.get(), worker_core);
                         }
                     }
                 }
@@ -230,71 +246,10 @@ static void watcher_loop(int sleep_usecs) {
 
 } // namespace watcher
 
-void watcher_attach(tt_metal::Device *dev) {
-    const std::lock_guard<std::mutex> lock(watcher::watch_mutex);
-
-    const char *enable_str = getenv("TT_METAL_WATCHER");
-    if (!watcher::enabled && enable_str != nullptr) {
-        watcher::f = watcher::create_file();
-
-        int sleep_secs = 0;
-        sscanf(enable_str, "%d", &sleep_secs);
-        int sleep_usecs = ((sleep_secs == 0) ? watcher::default_sleep_secs : sleep_secs) * 1000 * 1000;
-
-        std::thread watcher = std::thread(&watcher::watcher_loop, sleep_usecs);
-        watcher.detach();
-
-        watcher::enabled = true;
-        log_debug(LogLLRuntime, "Watcher thread spawned");
-    }
-
-    if (watcher::enabled) {
-        if (llrt::watcher::f != nullptr) {
-            // Hmmm, do we want to always open the file so we always get this?
-            fprintf(watcher::f, "At %ds attach device %d\n", watcher::get_elapsed_secs(), dev->pcie_slot());
-        }
-        watcher::devices.push_back(dev);
-    }
-}
-
-void watcher_detach(tt_metal::Device *old) {
-    const std::lock_guard<std::mutex> lock(watcher::watch_mutex);
-
-    if (watcher::enabled) {
-        fprintf(watcher::f, "At %ds detach device %d\n", watcher::get_elapsed_secs(), old->pcie_slot());
-
-        for (vector<tt_metal::Device *>::iterator iter = watcher::devices.begin();
-             iter < watcher::devices.end();
-             iter++) {
-
-            if (*iter == old) {
-                watcher::devices.erase(iter, iter + 1);
-            }
-        }
-    }
-}
-
-void watcher_init(tt_metal::Device *dev) {
-    if (getenv("TT_METAL_WATCHER_DOPE_L1") != nullptr) {
-        uint32_t value = atoi(getenv("TT_METAL_WATCHER_DOPE_L1"));
-
-        log_debug(LogLLRuntime, "Watcher doping L1 with {}", value);
-
-        std::vector<uint32_t> dope;
-        dope.resize(MEM_L1_SIZE / sizeof(uint32_t));
-        for (unsigned int index = 0; index < dope.size(); index++) {
-            dope[index] = value;
-        }
-
-        CoreCoord grid_size = dev->logical_grid_size();
-        for (uint32_t y = 0; y < grid_size.y; y++) {
-            for (uint32_t x = 0; x < grid_size.x; x++) {
-                CoreCoord logical_core(x, y);
-                CoreCoord worker_core = dev->worker_core_from_logical_core(logical_core);
-                tt::llrt::write_hex_vec_to_core(dev->cluster(), dev->pcie_slot(), worker_core, dope, MEM_L1_BASE);
-            }
-        }
-    }
+static void init_device(tt_cluster *cluster,
+                        int pcie_slot,
+                        std::function<CoreCoord ()>get_grid_size,
+                        std::function<CoreCoord (CoreCoord)>worker_from_logical) {
 
     // Initialize debug status values to "unknown"
     std::vector<uint32_t> debug_status_init_val = { 'X', 'X', 'X', 'X', 'X' };
@@ -311,14 +266,62 @@ void watcher_init(tt_metal::Device *dev) {
         data[i].invalid = DebugSanitizeNocInvalidOK;
     }
 
-    CoreCoord grid_size = dev->logical_grid_size();
+    CoreCoord grid_size = get_grid_size();
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord logical_core(x, y);
-            CoreCoord worker_core = dev->worker_core_from_logical_core(logical_core);
-            tt::llrt::write_hex_vec_to_core(dev->cluster(), dev->pcie_slot(), worker_core, debug_status_init_val, MEM_DEBUG_STATUS_MAILBOX_START_ADDRESS);
-            tt::llrt::write_hex_vec_to_core(dev->cluster(), dev->pcie_slot(), worker_core, debug_sanity_init_val, MEM_DEBUG_SANITIZE_NOC_MAILBOX_ADDRESS);
+            CoreCoord worker_core = worker_from_logical(logical_core);
+            tt::llrt::write_hex_vec_to_core(cluster, pcie_slot, worker_core, debug_status_init_val, MEM_DEBUG_STATUS_MAILBOX_START_ADDRESS);
+            tt::llrt::write_hex_vec_to_core(cluster, pcie_slot, worker_core, debug_sanity_init_val, MEM_DEBUG_SANITIZE_NOC_MAILBOX_ADDRESS);
         }
+    }
+}
+
+void watcher_attach(void *dev,
+                    tt_cluster *cluster,
+                    int pcie_slot,
+                    const std::function<CoreCoord ()>& get_grid_size,
+                    const std::function<CoreCoord (CoreCoord)>& worker_from_logical) {
+
+    const std::lock_guard<std::mutex> lock(watcher::watch_mutex);
+
+    const char *enable_str = getenv("TT_METAL_WATCHER");
+    if (!watcher::enabled && enable_str != nullptr) {
+
+        init_device(cluster, pcie_slot, get_grid_size, worker_from_logical);
+        watcher::f = watcher::create_file();
+
+        int sleep_secs = 0;
+        sscanf(enable_str, "%d", &sleep_secs);
+        int sleep_usecs = ((sleep_secs == 0) ? watcher::default_sleep_secs : sleep_secs) * 1000 * 1000;
+
+        std::thread watcher_thread = std::thread(&watcher::watcher_loop, sleep_usecs);
+        watcher_thread.detach();
+
+        watcher::enabled = true;
+        log_debug(LogLLRuntime, "Watcher thread spawned");
+    }
+
+    if (watcher::enabled) {
+        if (llrt::watcher::f != nullptr) {
+            // Hmmm, do we want to always open the file so we always get this?
+            fprintf(watcher::f, "At %ds attach device %d\n", watcher::get_elapsed_secs(), pcie_slot);
+        }
+
+        std::shared_ptr<watcher::WatcherDevice> wdev(new watcher::WatcherDevice(cluster, pcie_slot, get_grid_size, worker_from_logical));
+        watcher::devices.insert(pair<void *, std::shared_ptr<watcher::WatcherDevice>>(dev, wdev));
+    }
+}
+
+void watcher_detach(void *old) {
+
+    const std::lock_guard<std::mutex> lock(watcher::watch_mutex);
+
+    if (watcher::enabled) {
+        auto pair = watcher::devices.find(old);
+        TT_ASSERT(pair != watcher::devices.end());
+        fprintf(watcher::f, "At %ds detach device %d\n", watcher::get_elapsed_secs(), pair->second->pcie_slot_);
+        watcher::devices.erase(old);
     }
 }
 
