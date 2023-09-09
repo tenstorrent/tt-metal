@@ -184,86 +184,86 @@ namespace tt::test::buffer::detail {
 
 TEST_F(SingleDeviceFixture, TestSimpleL1BufferReadOnlyLo) {
     size_t lo_address = this->device_->l1_size() - this->device_->cluster()->get_soc_desc(this->device_->pcie_slot()).l1_bank_size;
-    GTEST_ASSERT_TRUE(SimpleL1ReadOnly(this->device_, lo_address, 4));
-    GTEST_ASSERT_TRUE(SimpleL1ReadOnly(this->device_, lo_address, 8));
-    GTEST_ASSERT_TRUE(SimpleL1ReadOnly(this->device_, lo_address, 16));
-    GTEST_ASSERT_TRUE(SimpleL1ReadOnly(this->device_, lo_address, 32));
-    GTEST_ASSERT_TRUE(SimpleL1ReadOnly(this->device_, lo_address, 1024));
-    GTEST_ASSERT_TRUE(SimpleL1ReadOnly(this->device_, lo_address, 16*1024));
+    ASSERT_TRUE(SimpleL1ReadOnly(this->device_, lo_address, 4));
+    ASSERT_TRUE(SimpleL1ReadOnly(this->device_, lo_address, 8));
+    ASSERT_TRUE(SimpleL1ReadOnly(this->device_, lo_address, 16));
+    ASSERT_TRUE(SimpleL1ReadOnly(this->device_, lo_address, 32));
+    ASSERT_TRUE(SimpleL1ReadOnly(this->device_, lo_address, 1024));
+    ASSERT_TRUE(SimpleL1ReadOnly(this->device_, lo_address, 16*1024));
 }
 TEST_F(SingleDeviceFixture, TestSimpleL1BufferReadOnlyHi) {
     size_t hi_address = this->device_->l1_size() - (16*1024);
-    GTEST_ASSERT_TRUE(SimpleL1ReadOnly(this->device_, hi_address, 4));
-    GTEST_ASSERT_TRUE(SimpleL1ReadOnly(this->device_, hi_address, 8));
-    GTEST_ASSERT_TRUE(SimpleL1ReadOnly(this->device_, hi_address, 16));
-    GTEST_ASSERT_TRUE(SimpleL1ReadOnly(this->device_, hi_address, 32));
-    GTEST_ASSERT_TRUE(SimpleL1ReadOnly(this->device_, hi_address, 1024));
-    GTEST_ASSERT_TRUE(SimpleL1ReadOnly(this->device_, hi_address, 16*1024));
+    ASSERT_TRUE(SimpleL1ReadOnly(this->device_, hi_address, 4));
+    ASSERT_TRUE(SimpleL1ReadOnly(this->device_, hi_address, 8));
+    ASSERT_TRUE(SimpleL1ReadOnly(this->device_, hi_address, 16));
+    ASSERT_TRUE(SimpleL1ReadOnly(this->device_, hi_address, 32));
+    ASSERT_TRUE(SimpleL1ReadOnly(this->device_, hi_address, 1024));
+    ASSERT_TRUE(SimpleL1ReadOnly(this->device_, hi_address, 16*1024));
 }
 TEST_F(SingleDeviceFixture, TestSimpleL1BufferWriteOnlyLo) {
     size_t lo_address = this->device_->l1_size() - this->device_->cluster()->get_soc_desc(this->device_->pcie_slot()).l1_bank_size;
-    GTEST_ASSERT_TRUE(SimpleL1WriteOnly(this->device_, lo_address, 4));
-    GTEST_ASSERT_TRUE(SimpleL1WriteOnly(this->device_, lo_address, 8));
-    GTEST_ASSERT_TRUE(SimpleL1WriteOnly(this->device_, lo_address, 16));
-    GTEST_ASSERT_TRUE(SimpleL1WriteOnly(this->device_, lo_address, 32));
-    GTEST_ASSERT_TRUE(SimpleL1WriteOnly(this->device_, lo_address, 1024));
-    GTEST_ASSERT_TRUE(SimpleL1WriteOnly(this->device_, lo_address, 16*1024));
+    ASSERT_TRUE(SimpleL1WriteOnly(this->device_, lo_address, 4));
+    ASSERT_TRUE(SimpleL1WriteOnly(this->device_, lo_address, 8));
+    ASSERT_TRUE(SimpleL1WriteOnly(this->device_, lo_address, 16));
+    ASSERT_TRUE(SimpleL1WriteOnly(this->device_, lo_address, 32));
+    ASSERT_TRUE(SimpleL1WriteOnly(this->device_, lo_address, 1024));
+    ASSERT_TRUE(SimpleL1WriteOnly(this->device_, lo_address, 16*1024));
 }
 
 TEST_F(SingleDeviceFixture, TestSimpleL1BufferWriteOnlyHi) {
     size_t hi_address = this->device_->l1_size() - (16*1024);
-    GTEST_ASSERT_TRUE(SimpleL1WriteOnly(this->device_, hi_address, 4));
-    GTEST_ASSERT_TRUE(SimpleL1WriteOnly(this->device_, hi_address, 8));
-    GTEST_ASSERT_TRUE(SimpleL1WriteOnly(this->device_, hi_address, 16));
-    GTEST_ASSERT_TRUE(SimpleL1WriteOnly(this->device_, hi_address, 32));
-    GTEST_ASSERT_TRUE(SimpleL1WriteOnly(this->device_, hi_address, 1024));
-    GTEST_ASSERT_TRUE(SimpleL1WriteOnly(this->device_, hi_address, 16*1024));
+    ASSERT_TRUE(SimpleL1WriteOnly(this->device_, hi_address, 4));
+    ASSERT_TRUE(SimpleL1WriteOnly(this->device_, hi_address, 8));
+    ASSERT_TRUE(SimpleL1WriteOnly(this->device_, hi_address, 16));
+    ASSERT_TRUE(SimpleL1WriteOnly(this->device_, hi_address, 32));
+    ASSERT_TRUE(SimpleL1WriteOnly(this->device_, hi_address, 1024));
+    ASSERT_TRUE(SimpleL1WriteOnly(this->device_, hi_address, 16*1024));
 }
 
 TEST_F(SingleDeviceFixture, TestSimpleL1ReadWriteTileLo) {
     size_t cb_address = UNRESERVED_BASE;
     size_t lo_address = 768*1024;
-    GTEST_ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {0, 0}, lo_address + 8*1024, cb_address, lo_address + 16*1024, 2*1024));
-    GTEST_ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {0, 0}, lo_address + 8*1024, cb_address, lo_address + 16*1024, 4*1024));
-    GTEST_ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {0, 0}, lo_address + 8*1024, cb_address, lo_address + 16*1024, 6*1024));
+    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {0, 0}, lo_address + 8*1024, cb_address, lo_address + 16*1024, 2*1024));
+    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {0, 0}, lo_address + 8*1024, cb_address, lo_address + 16*1024, 4*1024));
+    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {0, 0}, lo_address + 8*1024, cb_address, lo_address + 16*1024, 6*1024));
 }
 
 TEST_F(SingleDeviceFixture, TestSimpleL1ReadWriteTileHi) {
     size_t cb_address = UNRESERVED_BASE;
     size_t hi_address = this->device_->l1_size() - (24*1024);
-    GTEST_ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {0, 0}, hi_address + 8*1024, cb_address, hi_address + 16*1024, 2*1024));
-    GTEST_ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {0, 0}, hi_address + 8*1024, cb_address, hi_address + 16*1024, 4*1024));
-    GTEST_ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {0, 0}, hi_address + 8*1024, cb_address, hi_address + 16*1024, 6*1024));
+    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {0, 0}, hi_address + 8*1024, cb_address, hi_address + 16*1024, 2*1024));
+    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {0, 0}, hi_address + 8*1024, cb_address, hi_address + 16*1024, 4*1024));
+    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {0, 0}, hi_address + 8*1024, cb_address, hi_address + 16*1024, 6*1024));
 }
 
 TEST_F(SingleDeviceFixture, TestSimpleL1ReadWritex2y2TileLo) {
     size_t cb_address = UNRESERVED_BASE;
     size_t lo_address = 768*1024;
-    GTEST_ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, lo_address + 8*1024, cb_address, lo_address + 16*1024, 2*1024));
-    GTEST_ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, lo_address + 8*1024, cb_address, lo_address + 16*1024, 4*1024));
-    GTEST_ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, lo_address + 8*1024, cb_address, lo_address + 16*1024, 6*1024));
+    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, lo_address + 8*1024, cb_address, lo_address + 16*1024, 2*1024));
+    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, lo_address + 8*1024, cb_address, lo_address + 16*1024, 4*1024));
+    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, lo_address + 8*1024, cb_address, lo_address + 16*1024, 6*1024));
 }
 
 TEST_F(SingleDeviceFixture, TestSimpleL1ReadWritex2y2TileHi) {
     size_t cb_address = UNRESERVED_BASE;
     size_t hi_address = this->device_->l1_size() - (24*1024);
-    GTEST_ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, hi_address + 8*1024, cb_address, hi_address + 16*1024, 2*1024));
-    GTEST_ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, hi_address + 8*1024, cb_address, hi_address + 16*1024, 4*1024));
-    GTEST_ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, hi_address + 8*1024, cb_address, hi_address + 16*1024, 6*1024));
+    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, hi_address + 8*1024, cb_address, hi_address + 16*1024, 2*1024));
+    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, hi_address + 8*1024, cb_address, hi_address + 16*1024, 4*1024));
+    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, hi_address + 8*1024, cb_address, hi_address + 16*1024, 6*1024));
 }
 
 TEST_F(SingleDeviceFixture, TestBufferL1ReadWriteTileLo) {
     size_t cb_address = UNRESERVED_BASE;
     size_t lo_address = 768*1024;
-    GTEST_ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, lo_address + 8*1024, cb_address, lo_address + 16*1024, 2*1024));
-    GTEST_ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, lo_address + 8*1024, cb_address, lo_address + 16*1024, 4*1024));
-    GTEST_ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, lo_address + 8*1024, cb_address, lo_address + 16*1024, 6*1024));
+    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, lo_address + 8*1024, cb_address, lo_address + 16*1024, 2*1024));
+    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, lo_address + 8*1024, cb_address, lo_address + 16*1024, 4*1024));
+    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, lo_address + 8*1024, cb_address, lo_address + 16*1024, 6*1024));
 }
 
 TEST_F(SingleDeviceFixture, TestBufferL1ReadWriteTileHi) {
     size_t cb_address = UNRESERVED_BASE;
     size_t hi_address = this->device_->l1_size() - (24*1024);
-    GTEST_ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, hi_address + 8*1024, cb_address, hi_address + 16*1024, 2*1024));
-    GTEST_ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, hi_address + 8*1024, cb_address, hi_address + 16*1024, 4*1024));
-    GTEST_ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, hi_address + 8*1024, cb_address, hi_address + 16*1024, 6*1024));
+    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, hi_address + 8*1024, cb_address, hi_address + 16*1024, 2*1024));
+    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, hi_address + 8*1024, cb_address, hi_address + 16*1024, 4*1024));
+    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, hi_address + 8*1024, cb_address, hi_address + 16*1024, 6*1024));
 }

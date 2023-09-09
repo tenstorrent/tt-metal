@@ -48,37 +48,37 @@ namespace tt::test::buffer::detail {
 
 TEST_F(SingleDeviceFixture, TestSimpleDramBufferReadOnlyLo) {
     size_t lo_address = 0;
-    GTEST_ASSERT_TRUE(SimpleDramReadOnly(this->device_, lo_address, 4));
-    GTEST_ASSERT_TRUE(SimpleDramReadOnly(this->device_, lo_address, 8));
-    GTEST_ASSERT_TRUE(SimpleDramReadOnly(this->device_, lo_address, 16));
-    GTEST_ASSERT_TRUE(SimpleDramReadOnly(this->device_, lo_address, 32));
-    GTEST_ASSERT_TRUE(SimpleDramReadOnly(this->device_, lo_address, 1024));
-    GTEST_ASSERT_TRUE(SimpleDramReadOnly(this->device_, lo_address, 16*1024));
+    ASSERT_TRUE(SimpleDramReadOnly(this->device_, lo_address, 4));
+    ASSERT_TRUE(SimpleDramReadOnly(this->device_, lo_address, 8));
+    ASSERT_TRUE(SimpleDramReadOnly(this->device_, lo_address, 16));
+    ASSERT_TRUE(SimpleDramReadOnly(this->device_, lo_address, 32));
+    ASSERT_TRUE(SimpleDramReadOnly(this->device_, lo_address, 1024));
+    ASSERT_TRUE(SimpleDramReadOnly(this->device_, lo_address, 16*1024));
 }
 TEST_F(SingleDeviceFixture, TestSimpleDramBufferReadOnlyHi) {
     size_t hi_address = this->device_->dram_bank_size() - (16*1024);
-    GTEST_ASSERT_TRUE(SimpleDramReadOnly(this->device_, hi_address, 4));
-    GTEST_ASSERT_TRUE(SimpleDramReadOnly(this->device_, hi_address, 8));
-    GTEST_ASSERT_TRUE(SimpleDramReadOnly(this->device_, hi_address, 16));
-    GTEST_ASSERT_TRUE(SimpleDramReadOnly(this->device_, hi_address, 32));
-    GTEST_ASSERT_TRUE(SimpleDramReadOnly(this->device_, hi_address, 1024));
-    GTEST_ASSERT_TRUE(SimpleDramReadOnly(this->device_, hi_address, 16*1024));
+    ASSERT_TRUE(SimpleDramReadOnly(this->device_, hi_address, 4));
+    ASSERT_TRUE(SimpleDramReadOnly(this->device_, hi_address, 8));
+    ASSERT_TRUE(SimpleDramReadOnly(this->device_, hi_address, 16));
+    ASSERT_TRUE(SimpleDramReadOnly(this->device_, hi_address, 32));
+    ASSERT_TRUE(SimpleDramReadOnly(this->device_, hi_address, 1024));
+    ASSERT_TRUE(SimpleDramReadOnly(this->device_, hi_address, 16*1024));
 }
 TEST_F(SingleDeviceFixture, TestSimpleDramBufferWriteOnlyLo) {
     size_t lo_address = 0;
-    GTEST_ASSERT_TRUE(SimpleDramWriteOnly(this->device_, lo_address, 4));
-    GTEST_ASSERT_TRUE(SimpleDramWriteOnly(this->device_, lo_address, 8));
-    GTEST_ASSERT_TRUE(SimpleDramWriteOnly(this->device_, lo_address, 16));
-    GTEST_ASSERT_TRUE(SimpleDramWriteOnly(this->device_, lo_address, 32));
-    GTEST_ASSERT_TRUE(SimpleDramWriteOnly(this->device_, lo_address, 1024));
-    GTEST_ASSERT_TRUE(SimpleDramWriteOnly(this->device_, lo_address, 16*1024));
+    ASSERT_TRUE(SimpleDramWriteOnly(this->device_, lo_address, 4));
+    ASSERT_TRUE(SimpleDramWriteOnly(this->device_, lo_address, 8));
+    ASSERT_TRUE(SimpleDramWriteOnly(this->device_, lo_address, 16));
+    ASSERT_TRUE(SimpleDramWriteOnly(this->device_, lo_address, 32));
+    ASSERT_TRUE(SimpleDramWriteOnly(this->device_, lo_address, 1024));
+    ASSERT_TRUE(SimpleDramWriteOnly(this->device_, lo_address, 16*1024));
 }
 TEST_F(SingleDeviceFixture, TestSimpleDramBufferWriteOnlyHi) {
     size_t hi_address = this->device_->dram_bank_size() - (16*1024);
-    GTEST_ASSERT_TRUE(SimpleDramWriteOnly(this->device_, hi_address, 4));
-    GTEST_ASSERT_TRUE(SimpleDramWriteOnly(this->device_, hi_address, 8));
-    GTEST_ASSERT_TRUE(SimpleDramWriteOnly(this->device_, hi_address, 16));
-    GTEST_ASSERT_TRUE(SimpleDramWriteOnly(this->device_, hi_address, 32));
-    GTEST_ASSERT_TRUE(SimpleDramWriteOnly(this->device_, hi_address, 1024));
-    GTEST_ASSERT_TRUE(SimpleDramWriteOnly(this->device_, hi_address, 16*1024));
+    ASSERT_TRUE(SimpleDramWriteOnly(this->device_, hi_address, 4));
+    ASSERT_TRUE(SimpleDramWriteOnly(this->device_, hi_address, 8));
+    ASSERT_TRUE(SimpleDramWriteOnly(this->device_, hi_address, 16));
+    ASSERT_TRUE(SimpleDramWriteOnly(this->device_, hi_address, 32));
+    ASSERT_TRUE(SimpleDramWriteOnly(this->device_, hi_address, 1024));
+    ASSERT_TRUE(SimpleDramWriteOnly(this->device_, hi_address, 16*1024));
 }
