@@ -279,7 +279,7 @@ int main(int argc, char **argv) {
 
         write_program_runtime_args_to_device(device, program1, reader1_kernel_id, writer1_kernel_id, core, num_tiles, src0_dram_buffer, src1_dram_buffer, dst_dram_buffer);
 
-        pass &= tt_metal::LaunchKernels(device, program1);
+        pass &= tt_metal::LaunchProgram(device, program1);
 
         std::vector<uint32_t> intermediate_result_vec;
         tt_metal::ReadFromBuffer(dst_dram_buffer, intermediate_result_vec);
@@ -307,7 +307,7 @@ int main(int argc, char **argv) {
 
         write_program_runtime_args_to_device(device, program2, reader2_kernel_id, writer2_kernel_id, core, num_tiles, src0_dram_buffer, src1_dram_buffer, dst_dram_buffer);
 
-        pass &= tt_metal::LaunchKernels(device, program2);
+        pass &= tt_metal::LaunchProgram(device, program2);
 
         std::vector<uint32_t> result_vec;
         tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);

@@ -356,7 +356,7 @@ int main(int argc, char **argv) {
             core,
             writer_rt_args);
 
-        pass &= tt_metal::LaunchKernels(device, program);
+        pass &= tt_metal::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
         tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);

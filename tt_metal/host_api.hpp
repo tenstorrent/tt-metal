@@ -45,7 +45,7 @@ class CircularBuffer;
  * |----------------|------------------------------------------------------------------|-----------|-----------------------------------------------------|----------|
  * | device_id      | ID of device to target                                           | int       | 0 to (Device::detect_num_available_devices - 1)     | Yes      |
  * */
-Device *CreateDevice(int device_id);
+Device *CreateDevice(int device_id, const std::vector<uint32_t>& l1_bank_remap = {});
 
 /**
  * Resets device and closes device
@@ -336,7 +336,7 @@ std::vector<uint32_t> GetRuntimeArgs(const Program &program, KernelID kernel_id,
 
 // Launches all kernels on cores specified with kernels in the program.
 // All kernels on a given Tensix core must be launched.
-bool LaunchKernels(Device *device, Program &program, bool stagger_start = false, bool compileProgram = true);
+bool LaunchProgram(Device *device, Program &program, bool stagger_start = false, bool compileProgram = true);
 
 /**
  * Reads a buffer from the device

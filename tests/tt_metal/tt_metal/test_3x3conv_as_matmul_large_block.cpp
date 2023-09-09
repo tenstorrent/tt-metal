@@ -315,7 +315,7 @@ int main(int argc, char **argv) {
         // END DEBUG
 
         std::cout << "DONE WRITING address map TO DEVICE L1. GOING TO LAUNCH KERNELS" << std::endl;
-        pass &= tt_metal::LaunchKernels(device, program);
+        pass &= tt_metal::LaunchProgram(device, program);
         std::cout << "DONE KERNELS. GOING TO READ FROM DRAM." << std::endl;
 
         std::vector<uint32_t> result_uint32;

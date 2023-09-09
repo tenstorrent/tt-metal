@@ -210,7 +210,7 @@ int main(int argc, char **argv) {
 
 
 
-        pass &= tt_metal::LaunchKernels(device, program);
+        pass &= tt_metal::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
         tt_metal::detail::ReadFromDeviceDRAMChannel(

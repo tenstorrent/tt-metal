@@ -90,7 +90,7 @@ int main(int argc, char **argv) {
 
 
 
-        pass &= LaunchKernels(device, program);
+        pass &= LaunchProgram(device, program);
 
         /*
         * Validation & Teardown

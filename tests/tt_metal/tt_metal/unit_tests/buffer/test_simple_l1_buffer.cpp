@@ -99,7 +99,7 @@ namespace tt::test::buffer::detail {
 
 
         writeL1Backdoor(device, core, input_local_address, inputs);
-        tt_metal::LaunchKernels(device, program);
+        tt_metal::LaunchProgram(device, program);
         readL1Backdoor(device, core, input_local_address, byte_size, outputs);
         tt::log_info("input readback inputs[0]={} == readback[0]={}", inputs[0], outputs[0]);
         readL1Backdoor(device, core, output_local_address, byte_size, outputs);

@@ -297,7 +297,7 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
             (std::uint32_t)dram_dst_noc_xy.y,
             M * N});
 
-        pass &= tt_metal::LaunchKernels(device, program);
+        pass &= tt_metal::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
         tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);

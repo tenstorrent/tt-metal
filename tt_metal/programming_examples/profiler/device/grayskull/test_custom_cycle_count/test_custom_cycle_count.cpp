@@ -43,7 +43,7 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count, string run_name = 
 
 
 
-    pass &= tt_metal::LaunchKernels(device, program);
+    pass &= tt_metal::LaunchProgram(device, program);
 
     return pass;
 }

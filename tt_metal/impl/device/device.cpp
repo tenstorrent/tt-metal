@@ -16,7 +16,7 @@ namespace tt {
 
 namespace tt_metal {
 
-Device::Device(tt::ARCH arch, int pcie_slot, const std::vector<uint32_t>& l1_bank_remap) : arch_(arch), pcie_slot_(pcie_slot)
+Device::Device(int device_id, const std::vector<uint32_t>& l1_bank_remap) : id_(device_id)
 {
     ZoneScoped;
     this->initialize(l1_bank_remap);

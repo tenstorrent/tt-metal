@@ -193,7 +193,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
 
         CoreCoord debug_core = {1,1};
 
-        pass &= tt_metal::LaunchKernels(device, program);
+        pass &= tt_metal::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
         tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);
@@ -372,7 +372,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
             (uint32_t) stick_size,
             (uint32_t) log2(stick_size)});
 
-        pass &= tt_metal::LaunchKernels(device, program);
+        pass &= tt_metal::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
         tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);
@@ -510,7 +510,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
 
 
 
-        pass &= tt_metal::LaunchKernels(device, program);
+        pass &= tt_metal::LaunchProgram(device, program);
 
         tt_metal::ReadFromBuffer(dst, readback_buffer);
 
@@ -527,7 +527,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
 
 
 
-        pass &= tt_metal::LaunchKernels(device, program);
+        pass &= tt_metal::LaunchProgram(device, program);
 
         tt_metal::ReadFromBuffer(dst, readback_buffer);
     }

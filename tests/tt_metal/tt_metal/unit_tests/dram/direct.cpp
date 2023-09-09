@@ -73,7 +73,7 @@ bool reader_only(
             (uint32_t)byte_size,
         });
 
-    pass &= tt_metal::LaunchKernels(device, program);
+    pass &= tt_metal::LaunchProgram(device, program);
 
     std::vector<uint32_t> dest_core_data;
     // tt_metal::ReadFromBuffer(l1_buffer, dest_core_data);
@@ -138,7 +138,7 @@ bool writer_only(
             (uint32_t)byte_size,
         });
 
-    pass &= tt_metal::LaunchKernels(device, program);
+    pass &= tt_metal::LaunchProgram(device, program);
 
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
@@ -237,7 +237,7 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
             (uint32_t)test_config.num_tiles,
         });
 
-    pass &= tt_metal::LaunchKernels(device, program);
+    pass &= tt_metal::LaunchProgram(device, program);
 
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
@@ -352,7 +352,7 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
             (uint32_t)test_config.num_tiles,
         });
 
-    pass &= tt_metal::LaunchKernels(device, program);
+    pass &= tt_metal::LaunchProgram(device, program);
 
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::ReadFromBuffer(output_dram_buffer, dest_buffer_data);

@@ -230,7 +230,7 @@ bool test_multi_core_kernel_same_runtime_args(tt_metal::Device *device) {
 
     write_same_runtime_args_to_device(device, program, reader_kernel_id, writer_kernel_id, all_cores, num_tiles, src_dram_buffer, dst_dram_buffer);
 
-    tt_metal::LaunchKernels(device, program);
+    tt_metal::LaunchProgram(device, program);
 
     std::vector<uint32_t> result_vec;
     tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);
@@ -294,7 +294,7 @@ bool test_multi_core_kernel_unique_runtime_args(tt_metal::Device *device) {
     write_unique_writer_runtime_args_to_device(
         device, program, reader_kernel_id, writer_kernel_id, all_cores, core_blocks, num_tiles, src_dram_buffer, dst_dram_buffer_1, dst_dram_buffer_2, dst_dram_buffer_3);
 
-    tt_metal::LaunchKernels(device, program);
+    tt_metal::LaunchProgram(device, program);
 
     std::vector<uint32_t> result_vec_1;
     tt_metal::ReadFromBuffer(dst_dram_buffer_1, result_vec_1);

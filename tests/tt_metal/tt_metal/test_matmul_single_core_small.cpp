@@ -357,7 +357,7 @@ int main(int argc, char **argv) {
 
 
         log_info(LogTest, "Launching kernels");
-        pass &= tt_metal::LaunchKernels(device, program);
+        pass &= tt_metal::LaunchProgram(device, program);
         log_info(LogTest, "Kernels done");
         std::vector<uint32_t> result_vec;
         tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);

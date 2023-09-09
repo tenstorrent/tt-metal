@@ -181,7 +181,7 @@ int main(int argc, char **argv) {
 
 
 
-        pass &= tt_metal::LaunchKernels(device, program);
+        pass &= tt_metal::LaunchProgram(device, program);
 
         // The kernel will view the input as TILED32_4FACES
         vector<uint32_t> result_vec;

@@ -90,7 +90,7 @@ bool load_all_blank_kernels(tt_metal::Device* device) {
     tt_metal::Program program = tt_metal::Program();
 
 
-    pass &= tt_metal::LaunchKernels(device, program);
+    pass &= tt_metal::LaunchProgram(device, program);
     return pass;
 }
 }  // namespace unit_tests::basic::device

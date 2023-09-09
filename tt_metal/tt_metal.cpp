@@ -108,7 +108,7 @@ void CompileKernel(Device *device, Program &program, Kernel *kernel) {
 
     bool cache_hit = true;
     bool path_exists = std::filesystem::exists(build_options.outpath + kernel_path_suffix);
-    if ( detail::enable_persistent_kernel_cache && path_exists ) {
+    if ( enable_persistent_kernel_cache && path_exists ) {
         if ( not detail::HashLookup::inst().exists(kernel_hash) ) detail::HashLookup::inst().add(kernel_hash);
     } else if ( detail::HashLookup::inst().add(kernel_hash) ) {
         cache_hit = false;
@@ -357,7 +357,6 @@ namespace detail {
 
     bool InitializeDevice(Device *device) {
         ZoneScoped;
-        tt::llrt::watcher_init(device);
 
         static std::mutex build_mutex;
         static bool global_init_complete = false;
@@ -399,17 +398,17 @@ namespace detail {
         }
 
         tt::llrt::watcher_attach(device, device->cluster(), device->id(),
-                                 [&, device]() { return device->logical_grid_size(); },
-                                 [&, device](CoreCoord core) { return device->worker_core_from_logical_core(core); },
-                                 get_compile_outpath()
-                                 );
+                                [&, device]() { return device->logical_grid_size(); },
+                                [&, device](CoreCoord core) { return device->worker_core_from_logical_core(core); },
+                                get_compile_outpath()
+                                );
         return true;
     }
 }
 
 
-Device *CreateDevice(tt::ARCH arch, int pcie_slot, const std::vector<uint32_t>& l1_bank_remap) {
-    Device * dev = new Device(arch, pcie_slot, l1_bank_remap);
+Device *CreateDevice(int device_id, const std::vector<uint32_t>& l1_bank_remap) {
+    Device * dev = new Device(device_id, l1_bank_remap);
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
         detail::GLOBAL_CQ = std::make_unique<CommandQueue>(dev);
@@ -654,7 +653,6 @@ void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
 
 void DeallocateBuffer(Buffer &buffer) { buffer.deallocate(); }
 
-namespace detail {
 bool CompileProgram(Device *device, Program &program){
     ZoneScoped;
     TT_ASSERT(
@@ -763,12 +761,12 @@ llrt::TensixRiscsOptions GetRiscOptionFromCoreConfig(bool core_runs_ncrisc, bool
     return risc_option;
 }
 
-bool LaunchKernels(Device *device, Program &program, bool stagger_start, bool compileProgram) {
+bool LaunchProgram(Device *device, Program &program, bool stagger_start, bool compileProgram) {
     bool pass = true;
     {//Profiler scope start
     ZoneScoped;
     detail::DispatchStateCheck( false );
-    detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("LaunchKernels");
+    detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("LaunchProgram");
 
     if (compileProgram) CompileProgram(device, program);
     detail::WriteRuntimeArgsToDevice(device, program);

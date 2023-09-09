@@ -116,7 +116,7 @@ The headers of the columns with their descriptions is below:
 
     - CompileProgram
     - ConfigureDeviceWithProgram
-    - LaunchKernels
+    - LaunchProgram
     - ReadFromDevice
     - WriteToDevice
     - DumpDeviceProfileResults

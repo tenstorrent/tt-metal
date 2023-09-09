@@ -122,7 +122,7 @@ std::vector<Tensor> run_without_program_cache(
         // LaunchKernel automatically dumps device data
         op_profiler::dump_device_profiler_results(device, program);
     } else {
-        LaunchKernels(device, program);
+        LaunchProgram(device, program);
     }
 
     return output_tensors;
@@ -155,7 +155,7 @@ std::vector<Tensor> run_with_program_cache(
         // LaunchKernel automatically dumps device data
         op_profiler::dump_device_profiler_results(device, program);
     } else {
-        LaunchKernels(device, program, false, false);
+        LaunchProgram(device, program, false, false);
     }
 
     return output_tensors;

@@ -125,7 +125,7 @@ int main(int argc, char **argv) {
             (std::uint32_t) address_map.size()});
 
 
-        pass &= tt_metal::LaunchKernels(device, program);
+        pass &= tt_metal::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
         tt_metal::detail::ReadFromDeviceL1(device, core, l1_buffer_addr, dram_buffer_size, result_vec);

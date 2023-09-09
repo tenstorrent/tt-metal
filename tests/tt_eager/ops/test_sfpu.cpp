@@ -186,7 +186,7 @@ bool run_sfpu_test(string sfpu_name) {
 
 
         // tt::tt_metal::tt_gdb(device, 0, program->cores(), program->cores_to_ops());
-        pass &= tt_metal::LaunchKernels(device, program);
+        pass &= tt_metal::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
         tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);

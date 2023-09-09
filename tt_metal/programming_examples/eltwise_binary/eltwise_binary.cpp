@@ -211,7 +211,7 @@ int main(int argc, char **argv) {
 
 
 
-        pass &= LaunchKernels(device, program);
+        pass &= LaunchProgram(device, program);
 
         /*
          * Read in result into a host vector.
@@ -332,7 +332,7 @@ int main(int argc, char **argv) {
          * Execute.
          */
 
-        pass &= LaunchKernels(device, program_mul);
+        pass &= LaunchProgram(device, program_mul);
 
         /*
          * Read the result and compare to a golden result. Record pass/fail

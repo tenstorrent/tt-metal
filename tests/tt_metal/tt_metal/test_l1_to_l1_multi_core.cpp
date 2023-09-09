@@ -111,7 +111,7 @@ int main(int argc, char **argv) {
 
 
 
-        pass &= tt_metal::LaunchKernels(device, program);
+        pass &= tt_metal::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
         for(uint32_t i = 0; i < 10; i++) {

@@ -185,7 +185,7 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
     }
 
 
-    pass &= tt_metal::LaunchKernels(device, program);
+    pass &= tt_metal::LaunchProgram(device, program);
 
     for (const auto &[core, dst_l1_buffer] : core_to_l1_buffer) {
         std::vector<uint32_t> result_vec;
