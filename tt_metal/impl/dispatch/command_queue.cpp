@@ -626,7 +626,7 @@ void send_dispatch_kernel_to_device(Device* device) {
 
     tt::llrt::internal_::setup_riscs_on_specified_core(
         device->cluster(), 0, tt::llrt::TensixRiscsOptions::BRISC_ONLY, {device->worker_core_from_logical_core(dispatch_logical_core)});
-    device->cluster()->set_remote_tensix_risc_reset(tt_cxy_pair(0, device->worker_core_from_logical_core(dispatch_logical_core)), TENSIX_DEASSERT_SOFT_RESET);
+    device->cluster()->set_tensix_risc_reset_on_core(tt_cxy_pair(0, device->worker_core_from_logical_core(dispatch_logical_core)), TENSIX_DEASSERT_SOFT_RESET);
 }
 
 // CommandQueue section

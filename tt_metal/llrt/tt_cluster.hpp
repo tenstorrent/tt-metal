@@ -101,7 +101,7 @@ struct tt_cluster
     void verify_eth_fw();
 
     void assert_risc_reset(const chip_id_t &chip);
-    void set_remote_tensix_risc_reset(const tt_cxy_pair &core, const TensixSoftResetOptions &soft_resets);
+    void set_tensix_risc_reset_on_core(const tt_cxy_pair &core, const TensixSoftResetOptions &soft_resets);
     void deassert_risc_reset(const chip_id_t &target_device_id, bool start_stagger = false);
     void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions);
 

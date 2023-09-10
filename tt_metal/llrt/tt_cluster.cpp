@@ -340,7 +340,7 @@ void tt_cluster::assert_risc_reset(const chip_id_t &chip) {
     device->assert_risc_reset(chip);
 }
 
-void tt_cluster::set_remote_tensix_risc_reset(const tt_cxy_pair &core, const TensixSoftResetOptions &soft_resets) {
+void tt_cluster::set_tensix_risc_reset_on_core(const tt_cxy_pair &core, const TensixSoftResetOptions &soft_resets) {
     if (type == TargetDevice::Silicon) {
         auto valid = soft_resets & ALL_TENSIX_SOFT_RESET;
 

@@ -468,11 +468,11 @@ void run_riscs_on_specified_cores(
     for (const CoreCoord &core_ : cores) {
         tt_cxy_pair core = tt_cxy_pair(chip_id, core_);
         if (stagger_start){
-            cluster->set_remote_tensix_risc_reset(core, TENSIX_DEASSERT_SOFT_RESET);
+            cluster->set_tensix_risc_reset_on_core(core, TENSIX_DEASSERT_SOFT_RESET);
         }
         else
         {
-            cluster->set_remote_tensix_risc_reset(core, TENSIX_DEASSERT_SOFT_RESET_NO_STAGGER);
+            cluster->set_tensix_risc_reset_on_core(core, TENSIX_DEASSERT_SOFT_RESET_NO_STAGGER);
         }
     }
 

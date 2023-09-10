@@ -774,7 +774,7 @@ bool LaunchKernels(Device *device, const Program &program, bool stagger_start) {
     auto logical_cores_used_in_program = program.logical_cores();
     for (const CoreCoord &logical_core : logical_cores_used_in_program) {
         CoreCoord worker_core = device->worker_core_from_logical_core(logical_core);
-        cluster->set_remote_tensix_risc_reset(tt_cxy_pair(device_id, worker_core), soft_reset_option);
+        cluster->set_tensix_risc_reset_on_core(tt_cxy_pair(device_id, worker_core), soft_reset_option);
     }
 
     bool riscs_are_done = false;
@@ -800,7 +800,7 @@ bool LaunchKernels(Device *device, const Program &program, bool stagger_start) {
         auto worker_core = device->worker_core_from_logical_core(logical_core);
         llrt::internal_::setup_riscs_on_specified_core(cluster, device_id, risc_option, worker_core);
         // Reset the cores that were running
-        cluster->set_remote_tensix_risc_reset(tt_cxy_pair(device_id, worker_core), TENSIX_ASSERT_SOFT_RESET);
+        cluster->set_tensix_risc_reset_on_core(tt_cxy_pair(device_id, worker_core), TENSIX_ASSERT_SOFT_RESET);
     }
 
     }//Profiler scope end
