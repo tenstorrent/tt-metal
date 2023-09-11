@@ -1,5 +1,4 @@
-#include "compute_kernel_api.h"
-#include "debug_print.h"
+#include "compute_kernel_api/matmul.h"
 
 namespace NAMESPACE {
 void MAIN {
