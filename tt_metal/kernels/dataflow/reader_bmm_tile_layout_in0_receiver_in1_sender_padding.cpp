@@ -81,12 +81,7 @@ void kernel_main() {
 
     // Fill tile with zeros
     cb_reserve_back(cb_id_in2, 1);
-    uint32_t l1_zeros_addr_in2 = get_write_ptr(cb_id_in2);
-    uint64_t l1_zeros_addr_in2_noc = get_noc_addr(l1_zeros_addr_in2);
-    volatile uint32_t* pad_buffer = reinterpret_cast<volatile uint32_t*>(l1_zeros_addr_in2);
-    for (uint32_t i = 0; i < single_tile_size_bytes >> 2; i++) {
-        pad_buffer[i] = 0;
-    }
+    uint64_t l1_zeros_addr_in2_noc = get_noc_addr(get_write_ptr(cb_id_in2));
 
     volatile tt_l1_ptr uint32_t* in0_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_receiver_semaphore_addr);
 

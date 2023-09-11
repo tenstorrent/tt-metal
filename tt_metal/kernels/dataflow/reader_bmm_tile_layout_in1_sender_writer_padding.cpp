@@ -113,11 +113,7 @@ void kernel_main() {
 
     // Fill tile with zeros
     cb_reserve_back(cb_id_in2, 1);
-    uint32_t l1_zeros_addr_in2 = get_write_ptr(cb_id_in2);
-    volatile tt_l1_ptr uint32_t* pad_buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_zeros_addr_in2);
-    for (uint32_t i = 0; i < in1_single_tile_size_bytes >> 2; i++) {
-        pad_buffer[i] = 0;
-    }
+    uint32_t l1_zeros_addr_in2_noc = get_noc_addr(get_write_ptr(cb_id_in2));
 
     #ifndef SKIP_MCAST
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
@@ -164,8 +160,9 @@ void kernel_main() {
                     if (w < last_block_w) {
                         noc_async_read_tile(in1_tensor_tile_id, s1, l1_write_addr_in1);
                     }
-                    else
-                        noc_async_read(l1_zeros_addr_in2, l1_write_addr_in1, in1_single_tile_size_bytes);
+                    else {
+                        noc_async_read(l1_zeros_addr_in2_noc, l1_write_addr_in1, in1_single_tile_size_bytes);
+                    }
                     l1_write_addr_in1 += in1_single_tile_size_bytes;
                     in1_tensor_tile_id += in1_tensor_stride_w;
                     in1_block_size_bytes += in1_single_tile_size_bytes;
@@ -229,8 +226,9 @@ void kernel_main() {
                     if (w < last_block_w) {
                         noc_async_read_tile(in3_tensor_tile_id, s3, l1_write_addr_in3);
                     }
-                    else
-                        noc_async_read(l1_zeros_addr_in2, l1_write_addr_in3, bias_single_tile_size_bytes);
+                    else {
+                        noc_async_read(l1_zeros_addr_in2_noc, l1_write_addr_in3, bias_single_tile_size_bytes);
+                    }
                     l1_write_addr_in3 += bias_single_tile_size_bytes;
                     in3_tensor_tile_id += in3_tensor_stride_w;
                     in3_block_size_bytes += bias_single_tile_size_bytes;

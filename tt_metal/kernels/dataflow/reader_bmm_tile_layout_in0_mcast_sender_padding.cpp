@@ -71,11 +71,7 @@ void kernel_main() {
 
     // Fill tile with zeros
     cb_reserve_back(cb_id_in2, 1);
-    uint32_t l1_zeros_addr_in2 = get_write_ptr(cb_id_in2);
-    volatile uint32_t* pad_buffer = reinterpret_cast<volatile uint32_t*>(l1_zeros_addr_in2);
-    for (uint32_t i = 0; i < single_tile_size_bytes >> 2; i++) {
-        pad_buffer[i] = 0;
-    }
+    uint32_t l1_zeros_addr_in2_noc = get_noc_addr(get_write_ptr(cb_id_in2));
 
     uint32_t in0_tensor_current_block_start_tile_id = in0_tensor_start_tile_id;
     uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id;
@@ -120,8 +116,9 @@ void kernel_main() {
                     if (h < last_block_h) {
                         noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_in0);
                     }
-                    else
-                        noc_async_read(l1_zeros_addr_in2, l1_write_addr_in0, single_tile_size_bytes);
+                    else {
+                        noc_async_read(l1_zeros_addr_in2_noc, l1_write_addr_in0, single_tile_size_bytes);
+                    }
                     l1_write_addr_in0 += single_tile_size_bytes;
                     in0_tensor_tile_id += in0_tensor_stride_w;
                     in0_block_size_bytes += single_tile_size_bytes;
