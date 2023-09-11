@@ -962,3 +962,100 @@ void tt_cluster::on_destroy(tt_cluster_on_destroy_callback cb) {
 void tt_cluster::on_close_device(tt_cluster_on_close_device_callback cb) {
     on_close_device_callbacks.push_back(cb);
 }
+
+// This barrier works given the assumption that static VCs are used (hardcoded true in UMD)
+// TODO (abhullar): Add API to query whether static VCs are used
+void tt_cluster::set_dram_barrier(chip_id_t chip_id, uint32_t barrier_value) {
+    // Set barrier value
+    for (int channel = 0; channel < this->get_soc_desc(chip_id).get_num_dram_channels(); channel++) {
+        std::vector<uint32_t> barrier_vec = {barrier_value};
+        this->write_dram_vec(barrier_vec, tt_target_dram{chip_id, channel, 0}, DRAM_BARRIER_BASE);
+    }
+
+    // Ensure value has been propagated
+    bool barrier_val_propagated = false;
+    while (not barrier_val_propagated) {
+        barrier_val_propagated = true;
+        for (int channel = 0; channel < this->get_soc_desc(chip_id).get_num_dram_channels(); channel++) {
+            vector<std::uint32_t> barrier_val;
+            this->read_dram_vec(barrier_val, tt_target_dram{chip_id, channel, 0}, DRAM_BARRIER_BASE, sizeof(uint32_t));
+            barrier_val_propagated &= (barrier_val[0] == barrier_value);
+        }
+    }
+}
+
+void tt_cluster::initialize_dram_barrier(chip_id_t chip_id) {
+    this->set_dram_barrier(chip_id, BARRIER_RESET);
+}
+
+void tt_cluster::dram_barrier(chip_id_t chip_id) {
+    this->set_dram_barrier(chip_id, BARRIER_SET);
+    this->set_dram_barrier(chip_id, BARRIER_RESET);
+}
+
+void tt_cluster::set_l1_barrier(chip_id_t chip_id, uint32_t barrier_value) {
+    // TODO (abhullar): Can get rid of logic to skip harvested cores in uplifted UMD branch because descriptor.workers does not included harvested cores
+    const tt_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
+    uint32_t harvested_noc_rows = this->type == tt::TargetDevice::Silicon ? this->get_harvested_rows(chip_id) : 0;
+    static std::vector<unsigned int> noc_row_harvested(soc_desc.grid_size.y, 0);
+    static uint32_t num_harvested_rows = 0;
+    for (unsigned int r = 0; r < soc_desc.grid_size.y; r++) {
+        bool row_harvested = (harvested_noc_rows>>r)&0x1;
+        num_harvested_rows += row_harvested;
+        noc_row_harvested[r] = row_harvested;
+    }
+
+    CoreCoord post_harvested_worker_grid_size = CoreCoord{
+        .x = soc_desc.worker_grid_size.x,
+        .y = soc_desc.worker_grid_size.y - num_harvested_rows,
+    };
+
+    static std::unordered_set<CoreCoord> physical_storage_only_cores;
+    for (const auto& relative_storage_core : soc_desc.storage_cores) {
+        const auto logical_coord = get_core_coord_from_relative(relative_storage_core, post_harvested_worker_grid_size);
+        CoreCoord noc_routing_coord({
+            .x = static_cast<size_t>(soc_desc.worker_log_to_routing_x.at(logical_coord.x)),
+            .y = static_cast<size_t>(soc_desc.worker_log_to_routing_y.at(logical_coord.y)),
+        });
+        while (not soc_desc.is_worker_core(noc_routing_coord)) {
+            noc_routing_coord.y++;
+        }
+        physical_storage_only_cores.insert(noc_routing_coord);
+    }
+
+    static std::vector<CoreCoord> cores_written;
+    for (const CoreCoord &worker_core : soc_desc.workers) {
+        unsigned int row = worker_core.y;
+        if (not noc_row_harvested[row]) {
+            bool is_storage_only_core = physical_storage_only_cores.find(worker_core) != physical_storage_only_cores.end();
+            uint32_t barrier_address = is_storage_only_core ? STORAGE_ONLY_L1_BARRIER_BASE : COMPUTE_L1_BARRIER_BASE;
+            std::vector<uint32_t> barrier_vec = {barrier_value};
+            this->write_dram_vec(barrier_vec, tt_cxy_pair(chip_id, worker_core), barrier_address);
+            cores_written.emplace_back(worker_core);
+        }
+    }
+
+    // Ensure value has been propagated
+    bool barrier_value_propagated = false;
+    while (not barrier_value_propagated) {
+        barrier_value_propagated = true;
+        for (const CoreCoord &worker_core : cores_written) {
+            vector<std::uint32_t> barrier_val;
+            bool is_storage_only_core = physical_storage_only_cores.find(worker_core) != physical_storage_only_cores.end();
+            uint32_t barrier_address = is_storage_only_core ? STORAGE_ONLY_L1_BARRIER_BASE : COMPUTE_L1_BARRIER_BASE;
+            this->read_dram_vec(barrier_val, tt_cxy_pair(chip_id, worker_core), barrier_address, sizeof(uint32_t));
+            barrier_value_propagated &= (barrier_val[0] == barrier_value);
+        }
+    }
+}
+
+void tt_cluster::initialize_l1_barrier(chip_id_t chip_id) {
+    this->set_l1_barrier(chip_id, BARRIER_RESET);
+}
+
+// This barrier works given the assumption that static VCs are used (hardcoded true in UMD)
+// TODO (abhullar): Add API to query whether static VCs are used
+void tt_cluster::l1_barrier(chip_id_t chip_id) {
+    this->set_l1_barrier(chip_id, BARRIER_SET);
+    this->set_l1_barrier(chip_id, BARRIER_RESET);
+}

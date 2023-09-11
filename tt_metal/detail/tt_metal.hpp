@@ -105,6 +105,7 @@ namespace tt::tt_metal{
         {
             bool pass = true;
             device->cluster()->write_dram_vec(host_buffer, tt_target_dram{device->pcie_slot(), dram_channel, 0}, address);
+            device->cluster()->dram_barrier(device->pcie_slot());
             return pass;
         }
 
@@ -144,6 +145,7 @@ namespace tt::tt_metal{
         {
             auto worker_core = device->worker_core_from_logical_core(logical_core);
             llrt::write_hex_vec_to_core(device->cluster(), device->pcie_slot(), worker_core, host_buffer, address);
+            device->cluster()->l1_barrier(device->pcie_slot());
             return true;
         }
 
@@ -151,6 +153,7 @@ namespace tt::tt_metal{
         {
             auto worker_core = device->worker_core_from_logical_core(core);
             llrt::write_graph_interpreter_op_info_to_core(device->cluster(), device->pcie_slot(), worker_core, op_info, op_idx);
+            device->cluster()->l1_barrier(device->pcie_slot());
             return true;
         }
 

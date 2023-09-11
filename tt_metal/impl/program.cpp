@@ -159,7 +159,7 @@ const std::vector<CircularBuffer> Program::circular_buffers_on_core(const CoreCo
 void Program::validate_circular_buffer_region(const Device *device, std::optional<CoreCoord> logical_core) const {
     auto highest_cb_l1_region = [&](const CoreCoord &core) {
         if (this->per_core_cb_config_.find(core) == this->per_core_cb_config_.end()) {
-            return std::make_pair((u64)UNRESERVED_BASE, (u64)UNRESERVED_BASE);
+            return std::make_pair((u64)L1_UNRESERVED_BASE, (u64)L1_UNRESERVED_BASE);
         }
         return this->per_core_cb_config_.at(core).l1_regions.back();
     };

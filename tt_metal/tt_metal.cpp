@@ -356,6 +356,16 @@ void WriteToDevice(const Buffer &buffer, const std::vector<uint32_t> &host_buffe
         bank_index = (bank_index + 1) % num_banks;
         data_index += num_entries_per_page;
     }
+
+    switch (buffer.buffer_type()) {
+        case BufferType::DRAM: {
+            device->cluster()->dram_barrier(device->pcie_slot());
+        } break;
+        case BufferType::L1 : {
+            device->cluster()->l1_barrier(device->pcie_slot());
+        } break;
+        default: TT_ASSERT(false && "Unsupported buffer type!");
+    }
 }
 
 void WriteToBuffer(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
@@ -760,6 +770,9 @@ bool LaunchKernels(Device *device, const Program &program, bool stagger_start) {
 
     auto cluster = device->cluster();
     auto pcie_slot = device->pcie_slot();
+
+    cluster->dram_barrier(pcie_slot);
+    cluster->l1_barrier(pcie_slot);
 
     // Deassert cores used in the program
     TensixSoftResetOptions soft_reset_option = stagger_start ? TENSIX_DEASSERT_SOFT_RESET : TENSIX_DEASSERT_SOFT_RESET_NO_STAGGER;

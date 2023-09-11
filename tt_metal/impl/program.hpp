@@ -83,7 +83,7 @@ class Program {
         // There are multiple ranges because per core L1 regions are not in lockstep but circular buffers spanning multiple cores must share the same address
         // To enable this, circular buffer address is the maximum address amongst all of its target cores
         // This vector is sorted from lower to higher address spaces
-        std::vector<std::pair<u64, u64>> l1_regions = {{UNRESERVED_BASE, UNRESERVED_BASE}};
+        std::vector<std::pair<u64, u64>> l1_regions = {{L1_UNRESERVED_BASE, L1_UNRESERVED_BASE}};
 
         // Sets `indices` at position index
         void add_index(u32 index);

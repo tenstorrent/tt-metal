@@ -179,7 +179,7 @@ TEST_F(MultiDeviceFixture, PingAllLegalL1Cores) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         auto device_ = devices_.at(id);
         {
-            size_t start_byte_address = UNRESERVED_BASE;  // FIXME: Should remove dependency on
+            size_t start_byte_address = L1_UNRESERVED_BASE;  // FIXME: Should remove dependency on
                                                           // hostdevcommon/common_runtime_address_map.h header.
             ASSERT_TRUE(
                 unit_tests::basic::device::l1_ping(device_, 4, start_byte_address, device_->logical_grid_size()));
@@ -218,7 +218,7 @@ TEST_F(MultiDeviceFixture, PingIllegalL1Cores) {
         auto grid_size = device_->logical_grid_size();
         grid_size.x++;
         grid_size.y++;
-        size_t start_byte_address = UNRESERVED_BASE;  // FIXME: Should remove dependency on
+        size_t start_byte_address = L1_UNRESERVED_BASE;  // FIXME: Should remove dependency on
                                                       // hostdevcommon/common_runtime_address_map.h header.
         ASSERT_ANY_THROW(unit_tests::basic::device::l1_ping(device_, 4, start_byte_address, grid_size));
     }
@@ -314,7 +314,7 @@ TEST_F(SingleDeviceFixture, PingIllegalDramChannels) {
 
 TEST_F(SingleDeviceFixture, PingAllLegalL1Cores) {
     {
-        size_t start_byte_address = UNRESERVED_BASE;  // FIXME: Should remove dependency on
+        size_t start_byte_address = L1_UNRESERVED_BASE;  // FIXME: Should remove dependency on
                                                       // hostdevcommon/common_runtime_address_map.h header.
         ASSERT_TRUE(unit_tests::basic::device::l1_ping(device_, 4, start_byte_address, device_->logical_grid_size()));
         ASSERT_TRUE(unit_tests::basic::device::l1_ping(device_, 12, start_byte_address, device_->logical_grid_size()));
@@ -345,6 +345,6 @@ TEST_F(SingleDeviceFixture, PingIllegalL1Cores) {
     grid_size.x++;
     grid_size.y++;
     size_t start_byte_address =
-        UNRESERVED_BASE;  // FIXME: Should remove dependency on hostdevcommon/common_runtime_address_map.h header.
+        L1_UNRESERVED_BASE;  // FIXME: Should remove dependency on hostdevcommon/common_runtime_address_map.h header.
     ASSERT_ANY_THROW(unit_tests::basic::device::l1_ping(device_, 4, start_byte_address, grid_size));
 }

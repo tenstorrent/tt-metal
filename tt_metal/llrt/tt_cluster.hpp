@@ -39,6 +39,9 @@ struct tt_cluster
 
     void enable_ethernet_queue(const chip_id_t &chip, int timeout);
     int remote_arc_msg(const chip_id_t &chip, uint32_t msg_code, bool wait_for_done, uint32_t arg0, uint32_t arg1, int timeout, uint32_t *return_3, uint32_t *return_4);
+    void set_dram_barrier(chip_id_t chip_id, uint32_t barrier_value);
+    void set_l1_barrier(chip_id_t chip_id, uint32_t barrier_value);
+
     public:
     TargetDevice type;
     int target_ai_clk = 0;
@@ -121,6 +124,15 @@ struct tt_cluster
     // any prints will be ignored unless specifically enabled for that core+hart
     // (using tt_start_debug_print_server)
     void reset_debug_print_server_buffers();
+
+    // Writes BARRIER_RESET to all DRAM banks
+    void initialize_dram_barrier(chip_id_t chip_id);
+    // Writes BARRIER_RESET to all L1 banks
+    void initialize_l1_barrier(chip_id_t chip_id);
+
+    void dram_barrier(chip_id_t chip_id);
+    void l1_barrier(chip_id_t chip_id);
+
 };
 
 std::ostream &operator<<(std::ostream &os, tt_target_dram const &dram);

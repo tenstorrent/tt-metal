@@ -18,7 +18,7 @@ TEST_F(SingleDeviceFixture, TestCircularBuffersSequentiallyPlaced) {
     CoreRange cr = {.start = {0, 0}, .end = {0, 0}};
     CoreRangeSet cr_set({cr});
 
-    auto expected_cb_addr = UNRESERVED_BASE;
+    auto expected_cb_addr = L1_UNRESERVED_BASE;
     for (auto cb_id = 0; cb_id < NUM_CIRCULAR_BUFFERS; cb_id++) {
         auto cb = CreateCircularBuffers(program, cb_id, cr_set, cb_config.num_pages, cb_config.page_size, cb_config.data_format);
         EXPECT_EQ(cb.address(), expected_cb_addr);
@@ -38,7 +38,7 @@ TEST_F(SingleDeviceFixture, TestCircularBufferSequentialAcrossAllCores) {
 
     u32 max_num_cbs = 0;
     for (const auto &[core, num_cbs] : core_to_num_cbs) {
-        auto expected_cb_addr = UNRESERVED_BASE;
+        auto expected_cb_addr = L1_UNRESERVED_BASE;
         max_num_cbs = std::max(max_num_cbs, num_cbs);
         for (u32 buffer_id = 0; buffer_id < num_cbs; buffer_id++) {
             auto cb = CreateCircularBuffer(program, buffer_id, core, cb_config.num_pages, cb_config.page_size, cb_config.data_format);
@@ -50,7 +50,7 @@ TEST_F(SingleDeviceFixture, TestCircularBufferSequentialAcrossAllCores) {
     CoreRange cr = {.start = core0, .end = core2};
     CoreRangeSet cr_set({cr});
 
-    auto expected_address = UNRESERVED_BASE + (max_num_cbs * cb_config.page_size);
+    auto expected_address = L1_UNRESERVED_BASE + (max_num_cbs * cb_config.page_size);
     auto multi_core_cb = CreateCircularBuffers(program, NUM_CIRCULAR_BUFFERS - 1, cr_set, cb_config.num_pages, cb_config.page_size, cb_config.data_format);
     EXPECT_EQ(multi_core_cb.address(), expected_address);
 }
@@ -62,7 +62,7 @@ TEST_F(SingleDeviceFixture, TestValidCircularBufferAddress) {
     CoreRange cr = {.start = {0, 0}, .end = {0, 2}};
     CoreRangeSet cr_set({cr});
 
-    u32 expected_cb_addr = UNRESERVED_BASE + (NUM_CIRCULAR_BUFFERS * cb_config.page_size);
+    u32 expected_cb_addr = L1_UNRESERVED_BASE + (NUM_CIRCULAR_BUFFERS * cb_config.page_size);
     auto multi_core_cb = CreateCircularBuffers(program, {16, 24}, cr_set, cb_config.num_pages, cb_config.page_size, cb_config.data_format, expected_cb_addr);
     EXPECT_EQ(multi_core_cb.address(), expected_cb_addr);
 }
@@ -73,7 +73,7 @@ TEST_F(SingleDeviceFixture, TestInvalidCircularBufferAddress) {
 
     CoreCoord core0{.x = 0, .y = 0};
     const static u32 core0_num_cbs = 3;
-    auto expected_core0_cb_addr = UNRESERVED_BASE;
+    auto expected_core0_cb_addr = L1_UNRESERVED_BASE;
     for (u32 buffer_id = 0; buffer_id < core0_num_cbs; buffer_id++) {
         auto cb = CreateCircularBuffer(program, buffer_id, core0, cb_config.num_pages, cb_config.page_size, cb_config.data_format);
         EXPECT_EQ(cb.address(), expected_core0_cb_addr);
@@ -84,7 +84,7 @@ TEST_F(SingleDeviceFixture, TestInvalidCircularBufferAddress) {
     CoreRangeSet cr_set({cr});
 
     constexpr u32 multi_core_cb_index = core0_num_cbs + 1;
-    EXPECT_ANY_THROW(CreateCircularBuffers(program, multi_core_cb_index, cr_set, cb_config.num_pages, cb_config.page_size, cb_config.data_format, UNRESERVED_BASE));
+    EXPECT_ANY_THROW(CreateCircularBuffers(program, multi_core_cb_index, cr_set, cb_config.num_pages, cb_config.page_size, cb_config.data_format, L1_UNRESERVED_BASE));
 }
 
 TEST_F(SingleDeviceFixture, TestCircularBuffersAndL1BuffersCollision) {

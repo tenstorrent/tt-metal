@@ -17,7 +17,7 @@ using namespace tt;
 // helper l1 allocator (same addrs across all cores, real alloc to be per-core)
 uint32_t l1_alloc(uint32_t size_in_bytes) {
     constexpr uint32_t L1_SIZE = 1024*1024;
-    static uint32_t l1_alloc_addr = UNRESERVED_BASE;
+    static uint32_t l1_alloc_addr = L1_UNRESERVED_BASE;
 
     uint32_t addr = l1_alloc_addr;
     TT_ASSERT(addr % 32 == 0); // 32-byte aligned to allow NOC transfers to any allocated address

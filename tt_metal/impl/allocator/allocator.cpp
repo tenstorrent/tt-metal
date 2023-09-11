@@ -102,11 +102,14 @@ void BankManager::dump_blocks(std::ofstream &out) const {
 }
 
 void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &alloc_config) {
+    // Space up to DRAM_UNRESERVED_BASE is reserved for DRAM write barrier
+    u64 offset_bytes = static_cast<u64>(DRAM_UNRESERVED_BASE);
+    u32 dram_bank_size = alloc_config.dram_bank_size - DRAM_UNRESERVED_BASE;
     std::vector<i64> bank_offsets (alloc_config.num_dram_channels);
     for (u32 channel_id = 0; channel_id < alloc_config.num_dram_channels; channel_id++) {
         bank_offsets.at(channel_id) = static_cast<i32>(alloc_config.dram_bank_offsets.at(channel_id));
     }
-    allocator.dram_manager = BankManager(bank_offsets, static_cast<u64>(alloc_config.dram_bank_size));
+    allocator.dram_manager = BankManager(bank_offsets, dram_bank_size, offset_bytes);
     for (u32 bank_id = 0; bank_id < alloc_config.num_dram_channels; bank_id++) {
         allocator.bank_id_to_dram_channel.insert({bank_id, bank_id});
         allocator.dram_channel_to_bank_ids.insert({bank_id, {bank_id}});
@@ -115,9 +118,9 @@ void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &allo
 
 void init_one_bank_per_l1(Allocator &allocator, const AllocatorConfig &alloc_config) {
     u32 num_l1_banks = alloc_config.worker_grid_size.y * alloc_config.worker_grid_size.x;
-    // Space up to UNRESERVED_BASE is reserved for risc binaries, kernel args, debug and perf monitoring tools
-    u64 offset_bytes = static_cast<u64>(UNRESERVED_BASE);
-    u32 l1_bank_size = alloc_config.worker_l1_size - UNRESERVED_BASE;
+    // Space up to L1_UNRESERVED_BASE is reserved for risc binaries, kernel args, debug and perf monitoring tools
+    u64 offset_bytes = static_cast<u64>(L1_UNRESERVED_BASE);
+    u32 l1_bank_size = alloc_config.worker_l1_size - L1_UNRESERVED_BASE;
     std::vector<i64> bank_offsets (num_l1_banks, 0);
     allocator.l1_manager = BankManager(bank_offsets, l1_bank_size, offset_bytes);
 

@@ -32,6 +32,10 @@ void Device::initialize_cluster() {
     this->cluster_->open_device(arch_, target_type_, target_device_ids, sdesc_file);
     this->cluster_->start_device(default_params);
 
+    this->clear_l1_state();
+    this->cluster_->initialize_dram_barrier(pcie_slot_);
+    this->cluster_->initialize_l1_barrier(pcie_slot_);
+
     llrt::utils::log_current_ai_clk(cluster_);
     llrt::assert_reset_for_all_chips(cluster_);
 }
@@ -178,7 +182,6 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
     this->initialize_cluster();
     this->initialize_harvesting_information();
     this->initialize_allocator(l1_bank_remap);
-    this->clear_l1_state();
     tt_start_debug_print_server(this->cluster());
     this->initialized_ = true;
     return true;

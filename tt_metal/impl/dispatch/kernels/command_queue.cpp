@@ -11,7 +11,7 @@ void kernel_main() {
     InterleavedAddrGen<false> l1_addr_gen;
     // Read command from host command queue... l1 read addr since
     // pulling in the actual command into l1
-    static constexpr u32 command_start_addr = UNRESERVED_BASE; // Space between UNRESERVED_BASE -> data_start is for commands
+    static constexpr u32 command_start_addr = L1_UNRESERVED_BASE; // Space between L1_UNRESERVED_BASE -> data_start is for commands
     static constexpr u32 data_start_addr = DEVICE_COMMAND_DATA_ADDR;
 
     // These are totally temporary until PK checks in his changes for
