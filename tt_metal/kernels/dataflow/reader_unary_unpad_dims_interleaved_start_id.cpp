@@ -12,16 +12,9 @@ void kernel_main() {
     const uint32_t start_id                 = get_arg_val<uint32_t>(2);
     const uint32_t num_tiles                = get_arg_val<uint32_t>(3);
 
-
-    uint32_t num_unpadded_tiles[num_dims];
-    uint32_t num_padded_tiles[num_dims];
-    uint32_t id_per_dim[num_dims];
-    for (uint32_t i = 0; i < num_dims; i++) {
-        num_unpadded_tiles[i] = get_arg_val<uint32_t>(4 + i);
-        num_padded_tiles[i] = get_arg_val<uint32_t>(4 + num_dims + i);
-        id_per_dim[i] = get_arg_val<uint32_t>(4 + num_dims + num_dims + i);
-    }
-
+    volatile tt_l1_ptr uint32_t * num_unpadded_tiles = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(4));
+    volatile tt_l1_ptr uint32_t * num_padded_tiles = num_unpadded_tiles + num_dims;
+    volatile tt_l1_ptr uint32_t * id_per_dim = num_padded_tiles + num_dims;
 
     constexpr uint32_t cb_id_in0 = 0;
 

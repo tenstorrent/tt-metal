@@ -77,31 +77,26 @@ std::vector<Tensor> Unpad::create_output_tensors(const std::vector<Tensor> &inpu
 operation::ProgramWithCallbacks Unpad::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
-        return unpad_rm_single_core(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end);
-    } else if (input_tensor_a.layout() == Layout::TILE) {
-        switch(this->get_parallelization_strategy(input_tensors)) {
-            case UnpadOpParallelizationStrategy::MULTI_CORE: return unpad_tile_multi_core(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end);
-            case UnpadOpParallelizationStrategy::SINGLE_CORE:
-            default:
-                return unpad_tile_single_core(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end);
-        }
-    } else {
-        TT_ASSERT(false, "Unsupported layout for unpad");
-        return {};
-    }
+    switch(this->get_parallelization_strategy(input_tensors)) {
+        case UnpadOpParallelizationStrategy::MULTI_CORE:
+            return unpad_multi_core(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end);
+        case UnpadOpParallelizationStrategy::SINGLE_CORE:
+        default:
+            return unpad_single_core(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end);
+    };
 }
 
 UnpadOpParallelizationStrategy Unpad::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
+    uint32_t num_units;
+    auto shape = this->compute_output_shapes(input_tensors).at(0);
     if (input_tensor_a.layout() == Layout::TILE) {
-        auto shape = this->compute_output_shapes(input_tensors).at(0);
-        auto num_tiles = tt::tt_metal::compute_volume(shape) / TILE_HW;
-        if (num_tiles > 1) {
-            return UnpadOpParallelizationStrategy::MULTI_CORE;
-        } else {
-            return UnpadOpParallelizationStrategy::SINGLE_CORE;
-        }
+        num_units = tt::tt_metal::compute_volume(shape) / TILE_HW;
+    } else {
+        num_units = tt::tt_metal::compute_volume(shape) / shape[-1];
+    }
+    if (num_units > 1) {
+        return UnpadOpParallelizationStrategy::MULTI_CORE;
     } else {
         return UnpadOpParallelizationStrategy::SINGLE_CORE;
     }
