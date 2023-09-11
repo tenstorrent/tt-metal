@@ -22,9 +22,20 @@ from models.utility_functions import tilize
     (
         (5, 2, 4, 8),
         (5, 2, 4, 7),
+        ## resnet shapes
+        (1, 1, 784, 2),
+        (8, 1, 2, 64),
+        (1, 1, 1, 64),
     ),
 )
-def test_run_tilize_test(nb, nc, nh, nw, device):
+@pytest.mark.parametrize(
+    "multicore",
+    (
+        False,
+        True,
+    ),
+)
+def test_run_tilize_test(nb, nc, nh, nw, multicore, device):
     nt = nb * nc * nh * nw
     shape = [nb, nc, 32 * nh, 32 * nw]
 
@@ -37,7 +48,7 @@ def test_run_tilize_test(nb, nc, nh, nw, device):
         ttl.tensor.Layout.ROW_MAJOR,
         device,
     )
-    b = ttl.tensor.tilize(a)
+    b = ttl.tensor.tilize(a, use_multicore = multicore)
     c = b.cpu().to_torch().to(torch.float32).reshape(shape).numpy()
 
     tilized_inp = tilize(inp.reshape(*shape))

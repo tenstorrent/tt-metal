@@ -8,7 +8,7 @@
 void kernel_main() {
 
     // Constexpr
-    constexpr uint32_t cb_id_in0                       = 0;
+    constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
     constexpr uint32_t tile_height = 32;
 
     const uint32_t src_addr                   = get_arg_val<uint32_t>(0);
@@ -19,11 +19,11 @@ void kernel_main() {
     const uint32_t num_full_blocks_in_row     = get_arg_val<uint32_t>(5);
     // const uint32_t num_leftover_tiles_in_row  = get_arg_val<uint32_t>(6);
     // const uint32_t leftover_width_in_row      = get_arg_val<uint32_t>(7);
+    const uint32_t start_stick_id = get_arg_val<uint32_t>(8);
 
-    uint32_t stick_id          = 0;
-
-    constexpr bool src0_is_dram          = get_compile_time_arg_val(0) == 1;
+    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
     #define stick_size_is_power_of_two get_compile_time_arg_val(1) == 1
+
     #if (stick_size_is_power_of_two)
     constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(2);
     const InterleavedPow2AddrGen<src0_is_dram> s = {
@@ -44,7 +44,6 @@ void kernel_main() {
         uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
         for (uint32_t k = 0; k < tile_height; k++) {
             uint64_t src_noc_addr = base_src_noc_addr[k];
-
             noc_async_read(src_noc_addr, l1_write_addr, width_size);
             l1_write_addr += width_size;
             base_src_noc_addr[k] += width_size;
@@ -53,7 +52,7 @@ void kernel_main() {
         cb_push_back(cb_id_in0, num_tiles);
     };
 
-
+    uint32_t stick_id = start_stick_id;
     for (uint32_t i = 0; i < num_sticks / tile_height; i++) {
         // Get Base Addresses
         for (uint32_t j = 0; j < tile_height; j++) {
