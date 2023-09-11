@@ -15,7 +15,7 @@ jobs:
       matrix:
         runner-info: [
           {arch: grayskull, fw: "fw-date-2023-06-28"},
-          {arch: wormhole_b0, fw: "fw-date-2023-03-29"},
+          {arch: wormhole_b0, fw: "fw-date-2023-08-08"},
         ]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
