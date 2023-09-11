@@ -51,7 +51,7 @@ class TestEltwiseBinary:
         input_shapes,
         fn_kind,
         output_mem_config,
-        pcie_slot,
+        device,
         function_level_defaults,
     ):
         datagen_func = [
@@ -83,7 +83,7 @@ class TestEltwiseBinary:
         input_shapes,
         fn_kind,
         output_mem_config,
-        pcie_slot,
+        device,
         function_level_defaults,
     ):
         datagen_func = [
@@ -107,7 +107,7 @@ class TestEltwiseBinary:
             input_shapes,
             datagen_func,
             comparison_func,
-            pcie_slot,
+            device,
             test_args,
         )
 
@@ -117,7 +117,7 @@ class TestEltwiseBinary:
         input_shapes,
         output_mem_config,
         cmp_kind,
-        pcie_slot,
+        device,
         function_level_defaults,
     ):
         datagen_func = [
@@ -152,7 +152,7 @@ class TestEltwiseBinary:
         ),
     )
     def test_run_eltwise_binary_log_ops(
-        self, input_shapes, output_mem_config, log_kind, input_range, pcie_slot, function_level_defaults
+        self, input_shapes, output_mem_config, log_kind, input_range, device, function_level_defaults
     ):
         if is_wormhole_b0() and (log_kind in  ["logaddexp2", "ldexp"]) :
             pytest.skip("Not works for WH B0 arch - Skipping")
@@ -169,7 +169,7 @@ class TestEltwiseBinary:
             input_shapes,
             datagen_func,
             comparison_func,
-            pcie_slot,
+            device,
             test_args,
         )
 
@@ -180,7 +180,7 @@ class TestEltwiseBinary:
         input_shapes,
         output_mem_config,
         logical_kind,
-        pcie_slot,
+        device,
         function_level_defaults,
     ):
         datagen_func = [
@@ -202,6 +202,6 @@ class TestEltwiseBinary:
             input_shapes,
             datagen_func,
             comparison_func,
-            pcie_slot,
+            device,
             test_args,
         )
