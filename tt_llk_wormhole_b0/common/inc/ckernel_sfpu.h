@@ -1216,7 +1216,7 @@ inline void cast_fp32_to_fp16a(const int iterations)
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void requant_int32(const int iterations)
+inline void requant_int32(const int iterations, const uint dst_offset)
 {
     // Operand 0 is input to requant (int32)
     // Operand 1 is scaling factor (fp32)
@@ -1227,7 +1227,7 @@ inline void requant_int32(const int iterations)
         //vFloat val = dst_reg[0];
         //dst_reg[0] = float_to_fp16a(val, 0);
         TTI_SFPLOAD(0, 4, 3, 0);        // operand A - int32
-        TTI_SFPLOAD(1, 3, 3, 128);      // operand B - fp32 scaler
+        TT_SFPLOAD(1, 3, 3, dst_offset*64); // operand B - fp32 scaler
         TTI_SFPCAST(0, 0, 0);           // cast int32->fp32
         TTI_SFPMUL(0,1,9,0,0);        // D(A) = A*B, LREG_9 is 0
         TTI_NOP; //TODO: why is nop needed to get correct result?
@@ -1324,7 +1324,7 @@ inline void calculate_sfpu(const int iterations = ITERATIONS, uint param0 = 0, u
         cast_fp32_to_fp16a<APPROXIMATION_MODE, ITERATIONS>(iterations);
     }
     else if constexpr (operation == SfpuType::requant_int32) {
-        requant_int32<APPROXIMATION_MODE, ITERATIONS>(iterations);
+        requant_int32<APPROXIMATION_MODE, ITERATIONS>(iterations, param0);
     }
 }
 
