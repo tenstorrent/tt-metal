@@ -173,64 +173,58 @@ int main(int argc, char **argv) {
     //                      Initial Runtime Args Parse
     ////////////////////////////////////////////////////////////////////////////
     std::vector<std::string> input_args(argv, argv + argc);
-    string profile_device_str = "";
-    string dprint_str = "";
-    string print_tensor_str = "";
-    string debug_str = "";
-    string cb_str = "";
-    string Mt_str = "";
-    string Nt_str = "";
-    string Kt_str = "";
-    string r_str = "";
-    string c_str = "";
-    string validation_str = "";
+    uint32_t profile_device;
+    uint32_t dprint;
+    uint32_t print_tensor;
+    uint32_t debug;
+    uint32_t cb;
+    uint32_t Mt;
+    uint32_t Nt;
+    uint32_t Kt;
+    uint32_t num_cores_r;
+    uint32_t num_cores_c;
+    uint32_t validation;
     string arch_name = "";
     try {
       std::tie(arch_name, input_args) =
           test_args::get_command_option_and_remaining_args(input_args, "--arch",
                                                            "grayskull");
-      std::tie(profile_device_str, input_args) =
-          test_args::get_command_option_and_remaining_args(input_args,
-                                                           "--profile", "0");
-      std::tie(debug_str, input_args) =
-          test_args::get_command_option_and_remaining_args(input_args,
-                                                           "--debug", "0");
-      std::tie(dprint_str, input_args) =
-          test_args::get_command_option_and_remaining_args(input_args,
-                                                           "--dprint", "0");
-      std::tie(print_tensor_str, input_args) =
-          test_args::get_command_option_and_remaining_args(
-              input_args, "--print_tensor", "0");
-      std::tie(Mt_str, input_args) =
-          test_args::get_command_option_and_remaining_args(input_args, "--mt",
-                                                           "1");
-      std::tie(Nt_str, input_args) =
-          test_args::get_command_option_and_remaining_args(input_args, "--nt",
-                                                           "1");
-      std::tie(Kt_str, input_args) =
-          test_args::get_command_option_and_remaining_args(input_args, "--kt",
-                                                           "1");
-      std::tie(r_str, input_args) =
-          test_args::get_command_option_and_remaining_args(input_args, "--r",
-                                                           "1");
-      std::tie(c_str, input_args) =
-          test_args::get_command_option_and_remaining_args(input_args, "--c",
-                                                           "1");
-      std::tie(validation_str, input_args) =
-          test_args::get_command_option_and_remaining_args(input_args,
-                                                           "--validation", "1");
+      std::tie(profile_device, input_args) =
+          test_args::get_command_option_uint32_and_remaining_args(input_args,
+                                                           "--profile", 0);
+      std::tie(debug, input_args) =
+          test_args::get_command_option_uint32_and_remaining_args(input_args,
+                                                           "--debug", 0);
+      std::tie(dprint, input_args) =
+          test_args::get_command_option_uint32_and_remaining_args(input_args,
+                                                           "--dprint", 0);
+      std::tie(print_tensor, input_args) =
+          test_args::get_command_option_uint32_and_remaining_args(
+              input_args, "--print_tensor", 0);
+      std::tie(Mt, input_args) =
+          test_args::get_command_option_uint32_and_remaining_args(input_args, "--mt",
+                                                           1);
+      std::tie(Nt, input_args) =
+          test_args::get_command_option_uint32_and_remaining_args(input_args, "--nt",
+                                                           1);
+      std::tie(Kt, input_args) =
+          test_args::get_command_option_uint32_and_remaining_args(input_args, "--kt",
+                                                           1);
+      std::tie(num_cores_r, input_args) =
+          test_args::get_command_option_uint32_and_remaining_args(input_args, "--r",
+                                                           1);
+      std::tie(num_cores_c, input_args) =
+          test_args::get_command_option_uint32_and_remaining_args(input_args, "--c",
+                                                           1);
+      std::tie(validation, input_args) =
+          test_args::get_command_option_uint32_and_remaining_args(input_args,
+                                                           "--validation", 1);
     } catch (const std::exception &e) {
       log_fatal(tt::LogTest, "Command line arguments found exception",
                 e.what());
     }
 
     const tt::ARCH arch = tt::get_arch_from_string(arch_name);
-    bool profile_device = stoi(profile_device_str);
-    bool dprint = stoi(dprint_str);
-    bool print_tensor = stoi(print_tensor_str);
-    bool validation = stoi(validation_str);
-    bool debug = stoi(debug_str);
-
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -251,13 +245,6 @@ int main(int argc, char **argv) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Inputs Setup
     ////////////////////////////////////////////////////////////////////////////
-
-    int num_cores_r = stoi(r_str);
-    int num_cores_c = stoi(c_str);
-    uint32_t Mt = stoi(Mt_str);
-    uint32_t Nt = stoi(Nt_str);
-    uint32_t Kt = stoi(Kt_str);
-
     if (debug) {
       log_info(LogTest, "row {} x col {} = {} cores", num_cores_r, num_cores_c,
                num_cores_r * num_cores_c);
