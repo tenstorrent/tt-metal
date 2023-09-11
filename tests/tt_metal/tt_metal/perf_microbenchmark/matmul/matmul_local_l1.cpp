@@ -6,11 +6,11 @@
 
 #include "common/bfloat16.hpp"
 #include "test_tiles.hpp"
-// #include "tt_metal/detail/util.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/llrt/tt_debug_print_server.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include "tt_metal/tools/profiler/op_profiler.hpp"
 
 #define LAUNCH
 
@@ -173,7 +173,6 @@ int main(int argc, char **argv) {
     //                      Initial Runtime Args Parse
     ////////////////////////////////////////////////////////////////////////////
     std::vector<std::string> input_args(argv, argv + argc);
-    uint32_t profile_device;
     uint32_t dprint;
     uint32_t print_tensor;
     uint32_t debug;
@@ -189,9 +188,6 @@ int main(int argc, char **argv) {
       std::tie(arch_name, input_args) =
           test_args::get_command_option_and_remaining_args(input_args, "--arch",
                                                            "grayskull");
-      std::tie(profile_device, input_args) =
-          test_args::get_command_option_uint32_and_remaining_args(input_args,
-                                                           "--profile", 0);
       std::tie(debug, input_args) =
           test_args::get_command_option_uint32_and_remaining_args(input_args,
                                                            "--debug", 0);
@@ -230,12 +226,6 @@ int main(int argc, char **argv) {
     ////////////////////////////////////////////////////////////////////////////
     int pci_express_slot = 0;
     tt_metal::Device *device = tt_metal::CreateDevice(arch, pci_express_slot);
-
-    // TODO(jaehoon): check enable_fw_profile_hack removal
-    // if (profile_device) {
-    //  extern bool enable_fw_profile_hack;
-    //  enable_fw_profile_hack = true;
-    //}
     pass &= tt_metal::InitializeDevice(device);
 
     if (dprint) {
@@ -390,37 +380,24 @@ int main(int argc, char **argv) {
                                 .math_approx_mode = false,
                                 .compile_args = compute_kernel_args});
 
-    // TODO(jaehoon): check interface change
-    // pass &= tt_metal::CompileProgram(device, program, profile_device);
     pass &= tt_metal::CompileProgram(device, program);
-
-#ifndef LAUNCH
-    CommandQueue cq(device);
-#endif
-
-    tt::log_assert(program.get_worker_core_range_set().ranges().size() >= 1,
-                   "Invalid core range set");
-    pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
-
-#ifdef LAUNCH
-    log_info(LogTest, "Running {} core test with LaunchKernels",
-             num_cores_r * num_cores_c);
-    pass &= tt_metal::LaunchKernels(device, program);
-#else
-    log_info(LogTest, "Running {} core test with EnqueueProgram",
-             num_cores_r * num_cores_c);
-    EnqueueProgram(cq, program, false);
-    Finish(cq);
-#endif
-
-    if (profile_device) {
-      tt_metal::detail::DumpDeviceProfileResults(device, program);
+    // took from run_operation.cpp
+    const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
+        log_info(LogTest, "calling EnqueueProgram");
+        EnqueueProgram(*::detail::GLOBAL_CQ, program, false);
+        // Only need to dump device data when in dispatch mode
+        // LaunchKernel automatically dumps device data
+        op_profiler::dump_device_profiler_results(device, program);
+    } else {
+        log_info(LogTest, "calling LaunchKernels");
+        ConfigureDeviceWithProgram(device, program);
+        LaunchKernels(device, program);
     }
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Validation & Teardown
     ////////////////////////////////////////////////////////////////////////////
-
     auto golden = select_columns(tensor.get_values(), Mt, Kt, Nt);
     if (validation) {
       log_info(LogTest, "Validation");
