@@ -325,3 +325,13 @@ template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_cast_fp32_to_fp16a_init(const uint operand) {
     llk_math_eltwise_unary_sfpu_init<SfpuType::cast_fp32_to_fp16a, APPROXIMATE>(operand);
 }
+
+template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
+inline void llk_math_eltwise_unary_sfpu_requant_int32(const uint operand, uint dst_index, int vector_mode = (int)Dim::RC) {
+    llk_math_eltwise_unary_sfpu<SfpuType::requant_int32, APPROXIMATE, dst_sync>(operand, dst_index, vector_mode);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_requant_int32_init(const uint operand) {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::requant_int32, APPROXIMATE>(operand);
+}

@@ -114,6 +114,7 @@ enum SfpuType {
     relu_max,
     relu_min,
     cast_fp32_to_fp16a,
+    requant_int32,
     unused,
 };
 }  // namespace ckernel
