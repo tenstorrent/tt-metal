@@ -897,8 +897,11 @@ class ResNet(nn.Module):
             per_core_act_h_ntiles = 16
         elif batch_size == 8:
             act_block_h_datums = 256
-            grid_size = (7, 7)
-            per_core_act_h_ntiles = 64
+            # 7,7 multi core config triggers non-deterministic output
+            # grid_size = (7,7)
+            # per_core_act_h_ntiles = 64
+            grid_size = (7, 8)
+            per_core_act_h_ntiles = 56
         self.conv1 = resnet50_first_conv(
             conv1_weight.reshape(-1).tolist(),
             self.conv1_params,
