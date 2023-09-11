@@ -61,12 +61,15 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-20.04]
-        arch: [grayskull, wormhole_b0]
-    runs-on: ["Linux", "${{ matrix.arch }}"]
+        runner-hw-info: [
+          {arch: grayskull, fw: "fw-date-2023-06-28"},
+          {arch: wormhole_b0, fw: "fw-date-2023-03-29"},
+        ]
+    runs-on: ["Linux", "${{ matrix.runner-hw-info.arch }}", "${{ matrix.runner-hw-info.fw }}"]
     environment: production
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.arch }}
+      ARCH_NAME: ${{ matrix.runner-hw-info.arch }}
     steps:
       - uses: actions/checkout@v3
         with:
@@ -75,7 +78,7 @@ jobs:
           lfs: false
       - uses: actions/download-artifact@v3
         with:
-          name: eager-dist-${{ matrix.os }}-${{ matrix.arch }}
+          name: eager-dist-${{ matrix.os }}-${{ matrix.runner-hw-info.arch }}
       - name: Set up end-to-end tests environment
         run: ./tests/scripts/set_up_end_to_end_tests_env.sh
       - name: Set up dynamic env vars
@@ -91,4 +94,4 @@ jobs:
         run: |
           export PYTHONPATH=$(pwd)
           source tests/end_to_end_tests/env/bin/activate
-          ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.arch }} --pipeline-type eager_package_silicon
+          ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.runner-hw-info.arch }} --pipeline-type eager_package_silicon

@@ -13,12 +13,15 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        arch: [grayskull, wormhole_b0]
+        runner-info: [
+          {arch: grayskull, fw: "fw-date-2023-06-28"},
+          {arch: wormhole_b0, fw: "fw-date-2023-03-29"},
+        ]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.arch }}
+      ARCH_NAME: ${{ matrix.runner-info.arch }}
     environment: dev
-    runs-on: ${{ matrix.arch }}
+    runs-on: ["${{ matrix.runner-info.arch }}", "${{ matrix.runner-info.fw }}"]
     steps:
       - uses: actions/checkout@v3
         with:
