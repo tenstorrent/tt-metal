@@ -12,13 +12,14 @@ import tt_lib as ttl
 from tt_lib.utils import (
     is_close,
 )
+from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0
 
 from models.utility_functions import comp_pcc, pad_by_zero
 
 @pytest.mark.parametrize("shape", [[1, 1, 32, 32], [1, 1, 32, 128]])
 def test_softmax(shape, device):
-    if shape != [1, 1, 32, 32]:
-        logger.warning("Skipping multi-tile case for ongoing debug. need to remove this")
+    if is_wormhole_b0() and shape != [1, 1, 32, 32]:
+        logger.warning("Skipping multi-tile case for WH_B0. Ongoing debug")
         pytest.skip()
     x = torch.randn(shape).bfloat16().float()
     xt = (
@@ -38,8 +39,8 @@ def test_softmax(shape, device):
 
 @pytest.mark.parametrize("shape", [[1, 1, 32, 32], [1, 1, 32, 128]])
 def test_layernorm(shape, device):
-    if shape != [1, 1, 32, 32]:
-        logger.warning("Skipping multi-tile case for ongoing debug. need to remove this")
+    if is_wormhole_b0() and shape != [1, 1, 32, 32]:
+        logger.warning("Skipping multi-tile case for WH_B0. Ongoing debug")
         pytest.skip()
     x = torch.randn(shape).bfloat16().float()
     gamma = torch.randn([shape[-1]]).bfloat16().float()
