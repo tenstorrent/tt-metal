@@ -38,6 +38,7 @@ if is_wormhole_b0():
             "layout": [ttl.tensor.Layout.ROW_MAJOR],
             "input_mem_config": [ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)],
             "output_mem_config": ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+            "use_multicore": False,
         },
     ),
 )
