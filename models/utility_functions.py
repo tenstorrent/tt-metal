@@ -16,11 +16,15 @@ import struct
 from tt_lib.fused_ops.conv import conv as TtConv
 from tt_lib.fallback_ops import fallback_ops
 
+
 ### Math operations ###
 def _nearest_32(x):
     return math.ceil(x / 32) * 32
 
-def nearest_32(x):    # needs refctoring; to match alias called in some scripts (e.g. test_padding_test in unit tests)
+
+def nearest_32(
+    x,
+):  # needs refctoring; to match alias called in some scripts (e.g. test_padding_test in unit tests)
     return _nearest_32(x)
 
 
@@ -49,6 +53,11 @@ def float_to_bits(x):
 ### Profiling ###
 class Profiler:
     def __init__(self):
+        self.start_times = dict()
+        self.times = dict()
+        self.disabled = False
+
+    def clear(self):
         self.start_times = dict()
         self.times = dict()
         self.disabled = False
@@ -953,7 +962,7 @@ def run_conv_on_device_wrapper(
             run_conv_on_device_batch_one(to_device(xx[batch_idx, :, :, :]))
             for batch_idx in range(N)
         ]
-        conv_concat_cpu = fallback_ops.concat(partial_convs,0)
+        conv_concat_cpu = fallback_ops.concat(partial_convs, 0)
         # return tt_lib.tensor.concat(partial_convs,0) # hit problem with autoformat for non-32 size N
         # concat on CPU for batch-size > 1
         return conv_concat_cpu

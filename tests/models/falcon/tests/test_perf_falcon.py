@@ -55,6 +55,9 @@ def run_test_FalconCausalLM_end_to_end(
     model_location_generator,
     expected_inference_time,
 ):
+    # Clear global profiler state before starting measurements
+    profiler.clear()
+
     model_name = model_location_generator(model_version, model_subdir="Falcon")
 
     profiler.start("hugging_face_model_setup")
@@ -190,9 +193,13 @@ def run_test_FalconCausalLM_end_to_end(
                 layer_past_len=kv_cache_len,
                 use_cache=use_cache,
             )
-            logger.info(f"################################################################ prefill")
+            logger.info(
+                f"################################################################ prefill"
+            )
             logger.info(f"kv cache tensor shape: {tt_layer_present[0][0].shape()}")
-            logger.info(f"################################################################")
+            logger.info(
+                f"################################################################"
+            )
             tt_outs.append(tt_out)
         tt_out = tt_outs
 
@@ -205,7 +212,9 @@ def run_test_FalconCausalLM_end_to_end(
             layer_past_len=kv_cache_len,
             use_cache=use_cache,
         )
-        logger.info(f"################################################################ decode")
+        logger.info(
+            f"################################################################ decode"
+        )
         logger.info(f"kv cache tensor shape: {tt_layer_present[0][0].shape()}")
         logger.info(f"################################################################")
     tt_lib.device.Synchronize()
@@ -343,7 +352,7 @@ def run_test_FalconCausalLM_end_to_end(
         expected_compile_time=expected_compile_time,
         expected_inference_time=expected_inference_time,
         comments=comment,
-        inference_time_cpu=cpu_time
+        inference_time_cpu=cpu_time,
     )
 
     compile_time = first_iter_time - second_iter_time
@@ -352,14 +361,12 @@ def run_test_FalconCausalLM_end_to_end(
     assert second_iter_time < expected_inference_time, "Falcon is too slow"
     assert compile_time < expected_compile_time, "Falcon compile time is too slow"
 
-
     if does_pass:
         logger.info("Falcon CausalLM Passed!")
     else:
         logger.warning("Falcon CausalLM Failed!")
         # TODO: Fix PCC for decode and uncomment this
         # assert does_pass, f"PCC value is lower than {pcc}"
-
 
 
 @pytest.mark.models_performance_bare_metal
@@ -372,7 +379,13 @@ def run_test_FalconCausalLM_end_to_end(
         ("decode", 32, 1, 1024, 0.36),
         ("decode", 32, 1, 2047, 0.47),
     ),
-    ids=["prefill_seq128", "prefill_seq256", "decode_batch32", "decode_batch32_1024", "decode_batch32_2047"],
+    ids=[
+        "prefill_seq128",
+        "prefill_seq256",
+        "decode_batch32",
+        "decode_batch32_1024",
+        "decode_batch32_2047",
+    ],
 )
 @pytest.mark.parametrize(
     "num_layers, pcc",
@@ -384,7 +397,7 @@ def run_test_FalconCausalLM_end_to_end(
     ("tiiuae/falcon-7b-instruct",),
     ids=["falcon_7b"],
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-L1", ))
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-L1",))
 def test_perf_bare_metal(
     use_program_cache,
     model_version,
@@ -406,9 +419,9 @@ def test_perf_bare_metal(
     disable_persistent_kernel_cache()
     disable_compilation_reports()
 
-    # tt_lib.profiler.set_profiler_location(
-    #     f"tt_metal/tools/profiler/logs/falcon-7b_{request.node.callspec.id}"
-    # )
+    tt_lib.profiler.set_profiler_location(
+        f"tt_metal/tools/profiler/logs/falcon-7b_{request.node.callspec.id}"
+    )
 
     run_test_FalconCausalLM_end_to_end(
         device,
@@ -424,7 +437,6 @@ def test_perf_bare_metal(
         model_location_generator,
         expected_inference_time,
     )
-
 
 
 # @pytest.mark.parametrize(
@@ -451,6 +463,8 @@ def test_perf_bare_metal(
 @pytest.mark.models_performance_virtual_machine
 def test_perf_virtual_machine():
     pass
+
+
 #     model_config = get_model_config(model_config_str)
 #     tt_cache_path = get_tt_cache_path(model_version)
 
