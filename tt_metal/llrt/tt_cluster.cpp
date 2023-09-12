@@ -460,11 +460,19 @@ void tt_cluster::broadcast_remote_tensix_risc_reset(const chip_id_t &chip, const
 }
 
 void tt_cluster::set_remote_tensix_risc_reset(const tt_cxy_pair &core, const TensixSoftResetOptions &soft_resets) {
-    auto valid = soft_resets & ALL_TENSIX_SOFT_RESET;
+    if (type == TargetDevice::Silicon) {
+        auto valid = soft_resets & ALL_TENSIX_SOFT_RESET;
 
-    std::vector<uint32_t> vec = {(std::underlying_type<TensixSoftResetOptions>::type) valid};
-    write_dram_vec(vec, core, 0xFFB121B0 /* Should get this value from the device */);
-    _mm_sfence();
+        std::vector<uint32_t> vec = {(std::underlying_type<TensixSoftResetOptions>::type) valid};
+        write_dram_vec(vec, core, 0xFFB121B0 /* Should get this value from the device */);
+        _mm_sfence();
+    } else {
+        if ((soft_resets == TENSIX_DEASSERT_SOFT_RESET) or (soft_resets == TENSIX_DEASSERT_SOFT_RESET_NO_STAGGER)) {
+            device->deassert_risc_reset();
+        } else if (soft_resets == TENSIX_ASSERT_SOFT_RESET) {
+            device->assert_risc_reset();
+        }
+    }
 }
 
 void tt_cluster::deassert_risc_reset(bool start_stagger) {
