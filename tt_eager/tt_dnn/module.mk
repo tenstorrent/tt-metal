@@ -2,6 +2,9 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/auto_format.cpp \
 	tt_eager/tt_dnn/op_library/data_transfer/data_transfer_op.cpp \
 	tt_eager/tt_dnn/op_library/layout_conversion/layout_conversion_op.cpp \
+	tt_eager/tt_dnn/op_library/clone/clone_op.cpp \
+	tt_eager/tt_dnn/op_library/clone/single_core/clone_op_single_core.cpp \
+	tt_eager/tt_dnn/op_library/clone/multi_core/clone_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/move/move_op.cpp \
 	tt_eager/tt_dnn/op_library/move/single_core/move_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/move/multi_core/move_op_multi_core.cpp \
