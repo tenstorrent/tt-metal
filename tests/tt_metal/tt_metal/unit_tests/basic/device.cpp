@@ -135,7 +135,7 @@ TEST_F(MultiDeviceFixture, PingAllLegalDramChannels) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         auto device_ = devices_.at(id);
         {
-            size_t start_byte_address = 0;
+            size_t start_byte_address = DRAM_UNRESERVED_BASE;
             ASSERT_TRUE(
                 unit_tests::basic::device::dram_ping(device_, 4, start_byte_address, device_->num_dram_channels()));
             ASSERT_TRUE(
@@ -170,7 +170,7 @@ TEST_F(MultiDeviceFixture, PingIllegalDramChannels) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         auto device_ = devices_.at(id);
         auto num_channels = device_->num_dram_channels() + 1;
-        size_t start_byte_address = 0;
+        size_t start_byte_address = DRAM_UNRESERVED_BASE;
         ASSERT_ANY_THROW(unit_tests::basic::device::dram_ping(device_, 4, start_byte_address, num_channels));
     }
 }
@@ -278,7 +278,7 @@ TEST_F(BasicFixture, SingleDeviceLoadBlankKernels) {
 }
 TEST_F(SingleDeviceFixture, PingAllLegalDramChannels) {
     {
-        size_t start_byte_address = 0;
+        size_t start_byte_address = DRAM_UNRESERVED_BASE;
         ASSERT_TRUE(unit_tests::basic::device::dram_ping(device_, 4, start_byte_address, device_->num_dram_channels()));
         ASSERT_TRUE(
             unit_tests::basic::device::dram_ping(device_, 12, start_byte_address, device_->num_dram_channels()));
@@ -308,7 +308,7 @@ TEST_F(SingleDeviceFixture, PingAllLegalDramChannels) {
 }
 TEST_F(SingleDeviceFixture, PingIllegalDramChannels) {
     auto num_channels = device_->num_dram_channels() + 1;
-    size_t start_byte_address = 0;
+    size_t start_byte_address = DRAM_UNRESERVED_BASE;
     ASSERT_ANY_THROW(unit_tests::basic::device::dram_ping(device_, 4, start_byte_address, num_channels));
 }
 

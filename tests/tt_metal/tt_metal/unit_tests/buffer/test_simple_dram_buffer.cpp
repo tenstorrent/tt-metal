@@ -21,12 +21,12 @@ namespace tt::test::buffer::detail {
         std::vector<uint32_t> inputs =
             generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
         std::vector<uint32_t> outputs;
-        auto buffer = tt::tt_metal::Buffer(device, byte_size, local_address, byte_size, tt::tt_metal::BufferType::DRAM);
-        writeDramBackdoor(device, buffer.dram_channel_from_bank_id(0), buffer.address(), inputs);
-        tt::tt_metal::ReadFromBuffer(buffer, outputs);
+        uint32_t dram_channel = device->dram_channel_from_bank_id(0);
+        writeDramBackdoor(device, dram_channel, local_address, inputs);
+        readDramBackdoor(device, dram_channel, local_address, byte_size, outputs);
         bool pass = (inputs == outputs);
         if (not pass) {
-            tt::log_info("Mismatch at Channel={}, Packet Size(in Bytes)={}", buffer.dram_channel_from_bank_id(0), byte_size);
+            tt::log_info("Mismatch at Channel={}, Packet Size(in Bytes)={}", dram_channel, byte_size);
         }
         return pass;
     }
@@ -34,12 +34,12 @@ namespace tt::test::buffer::detail {
         std::vector<uint32_t> inputs =
             generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
         std::vector<uint32_t> outputs;
-        auto buffer = tt::tt_metal::Buffer(device, byte_size, local_address, byte_size, tt::tt_metal::BufferType::DRAM);
-        tt::tt_metal::WriteToBuffer(buffer, inputs);
-        readDramBackdoor(device, buffer.dram_channel_from_bank_id(0), buffer.address(), byte_size, outputs);
+        uint32_t dram_channel = device->dram_channel_from_bank_id(0);
+        writeDramBackdoor(device, dram_channel, local_address, inputs);
+        readDramBackdoor(device, dram_channel, local_address, byte_size, outputs);
         bool pass = (inputs == outputs);
         if (not pass) {
-            tt::log_info("Mismatch at Channel={}, Packet Size(in Bytes)={}", buffer.dram_channel_from_bank_id(0), byte_size);
+            tt::log_info("Mismatch at Channel={}, Packet Size(in Bytes)={}", dram_channel, byte_size);
         }
         return pass;
     }
@@ -47,7 +47,7 @@ namespace tt::test::buffer::detail {
 
 
 TEST_F(SingleDeviceFixture, TestSimpleDramBufferReadOnlyLo) {
-    size_t lo_address = 0;
+    size_t lo_address = DRAM_UNRESERVED_BASE;
     ASSERT_TRUE(SimpleDramReadOnly(this->device_, lo_address, 4));
     ASSERT_TRUE(SimpleDramReadOnly(this->device_, lo_address, 8));
     ASSERT_TRUE(SimpleDramReadOnly(this->device_, lo_address, 16));
@@ -65,7 +65,7 @@ TEST_F(SingleDeviceFixture, TestSimpleDramBufferReadOnlyHi) {
     ASSERT_TRUE(SimpleDramReadOnly(this->device_, hi_address, 16*1024));
 }
 TEST_F(SingleDeviceFixture, TestSimpleDramBufferWriteOnlyLo) {
-    size_t lo_address = 0;
+    size_t lo_address = DRAM_UNRESERVED_BASE;
     ASSERT_TRUE(SimpleDramWriteOnly(this->device_, lo_address, 4));
     ASSERT_TRUE(SimpleDramWriteOnly(this->device_, lo_address, 8));
     ASSERT_TRUE(SimpleDramWriteOnly(this->device_, lo_address, 16));

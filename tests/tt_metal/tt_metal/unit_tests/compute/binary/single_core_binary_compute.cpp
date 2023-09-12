@@ -35,7 +35,6 @@ const map<string, string> binary_op_name_to_op_kernel = {
 struct SingleCoreBinaryConfig {
     size_t num_tiles = 0;
     size_t tile_byte_size = 0;
-    size_t output_dram_byte_address = 0;
     size_t input_dram_byte_address = 0;
     size_t l1_input_byte_address = 0;
     tt::DataFormat l1_input_data_format = tt::DataFormat::Invalid;
@@ -56,14 +55,16 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
     ////////////////////////////////////////////////////////////////////////////
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     tt_metal::Program program = tt_metal::Program();
-    auto input0_dram_buffer =
-        tt_metal::Buffer(device, byte_size, test_config.input_dram_byte_address, byte_size, tt_metal::BufferType::DRAM);
+    auto input0_dram_buffer = tt_metal::Buffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
+    uint32_t input0_dram_byte_address = input0_dram_buffer.address();
     auto input0_dram_noc_xy = input0_dram_buffer.noc_coordinates();
-    auto input1_dram_buffer = tt_metal::Buffer(
-        device, byte_size, test_config.input_dram_byte_address + byte_size, byte_size, tt_metal::BufferType::DRAM);
+
+    auto input1_dram_buffer = tt_metal::Buffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
+    uint32_t input1_dram_byte_address = input1_dram_buffer.address();
     auto input1_dram_noc_xy = input1_dram_buffer.noc_coordinates();
-    auto output_dram_buffer = tt_metal::Buffer(
-        device, byte_size, test_config.output_dram_byte_address, byte_size, tt_metal::BufferType::DRAM);
+
+    auto output_dram_buffer = tt_metal::Buffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
+    uint32_t output_dram_byte_address = output_dram_buffer.address();
     auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 
     auto l1_input0_cb = tt_metal::CreateCircularBuffer(
@@ -159,10 +160,10 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
         reader_kernel,
         test_config.core,
         {
-            (uint32_t)test_config.input_dram_byte_address,
+            (uint32_t)input0_dram_byte_address,
             (uint32_t)input0_dram_noc_xy.x,
             (uint32_t)input0_dram_noc_xy.y,
-            (uint32_t)(test_config.input_dram_byte_address + byte_size),
+            (uint32_t)input1_dram_byte_address,
             (uint32_t)input1_dram_noc_xy.x,
             (uint32_t)input1_dram_noc_xy.y,
             (uint32_t)test_config.num_tiles,
@@ -172,7 +173,7 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
         writer_kernel,
         test_config.core,
         {
-            (uint32_t)test_config.output_dram_byte_address,
+            (uint32_t)output_dram_byte_address,
             (uint32_t)output_dram_noc_xy.x,
             (uint32_t)output_dram_noc_xy.y,
             (uint32_t)test_config.num_tiles,
@@ -193,8 +194,6 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
 TEST_F(SingleDeviceFixture, BinaryComputeSingleCoreSingleTileAdd) {
     unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
         .tile_byte_size = 2 * 32 * 32,
-        .output_dram_byte_address = 0,
-        .input_dram_byte_address = 16 * 32 * 32,
         .l1_input_byte_address = L1_UNRESERVED_BASE,
         .l1_input_data_format = tt::DataFormat::Float16_b,
         .l1_output_byte_address = L1_UNRESERVED_BASE + 16 * 32 * 32,
@@ -207,8 +206,6 @@ TEST_F(SingleDeviceFixture, BinaryComputeSingleCoreSingleTileAdd) {
 TEST_F(SingleDeviceFixture, BinaryComputeSingleCoreSingleTileSub) {
     unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
         .tile_byte_size = 2 * 32 * 32,
-        .output_dram_byte_address = 0,
-        .input_dram_byte_address = 16 * 32 * 32,
         .l1_input_byte_address = L1_UNRESERVED_BASE,
         .l1_input_data_format = tt::DataFormat::Float16_b,
         .l1_output_byte_address = L1_UNRESERVED_BASE + 16 * 32 * 32,
@@ -221,8 +218,6 @@ TEST_F(SingleDeviceFixture, BinaryComputeSingleCoreSingleTileSub) {
 TEST_F(SingleDeviceFixture, BinaryComputeSingleCoreSingleTileMul) {
     unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
         .tile_byte_size = 2 * 32 * 32,
-        .output_dram_byte_address = 0,
-        .input_dram_byte_address = 16 * 32 * 32,
         .l1_input_byte_address = L1_UNRESERVED_BASE,
         .l1_input_data_format = tt::DataFormat::Float16_b,
         .l1_output_byte_address = L1_UNRESERVED_BASE + 16 * 32 * 32,
@@ -235,8 +230,6 @@ TEST_F(SingleDeviceFixture, BinaryComputeSingleCoreSingleTileMul) {
 TEST_F(SingleDeviceFixture, BinaryComputeSingleCoreMultiTileAdd) {
     unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
         .tile_byte_size = 2 * 32 * 32,
-        .output_dram_byte_address = 0,
-        .input_dram_byte_address = 16 * 32 * 32,
         .l1_input_byte_address = L1_UNRESERVED_BASE,
         .l1_input_data_format = tt::DataFormat::Float16_b,
         .l1_output_byte_address = L1_UNRESERVED_BASE + 16 * 32 * 32,
@@ -249,8 +242,6 @@ TEST_F(SingleDeviceFixture, BinaryComputeSingleCoreMultiTileAdd) {
 TEST_F(SingleDeviceFixture, BinaryComputeSingleCoreMultiTileSub) {
     unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
         .tile_byte_size = 2 * 32 * 32,
-        .output_dram_byte_address = 0,
-        .input_dram_byte_address = 16 * 32 * 32,
         .l1_input_byte_address = L1_UNRESERVED_BASE,
         .l1_input_data_format = tt::DataFormat::Float16_b,
         .l1_output_byte_address = L1_UNRESERVED_BASE + 16 * 32 * 32,
@@ -263,8 +254,6 @@ TEST_F(SingleDeviceFixture, BinaryComputeSingleCoreMultiTileSub) {
 TEST_F(SingleDeviceFixture, BinaryComputeSingleCoreMultiTileMul) {
     unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
         .tile_byte_size = 2 * 32 * 32,
-        .output_dram_byte_address = 0,
-        .input_dram_byte_address = 16 * 32 * 32,
         .l1_input_byte_address = L1_UNRESERVED_BASE,
         .l1_input_data_format = tt::DataFormat::Float16_b,
         .l1_output_byte_address = L1_UNRESERVED_BASE + 16 * 32 * 32,

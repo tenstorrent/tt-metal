@@ -52,9 +52,6 @@ int main(int argc, char **argv) {
         uint32_t num_tiles = 256;
         uint32_t dram_buffer_size_bytes = single_tile_size * num_tiles;
 
-        uint32_t input_dram_buffer_addr = 0;
-        uint32_t output_dram_buffer_addr = 512 * 1024;
-
         // L1 buffer is double buffered
         // We read and write total_l1_buffer_size_tiles / 2 tiles from and to DRAM
         uint32_t l1_buffer_addr = 400 * 1024;
@@ -62,9 +59,11 @@ int main(int argc, char **argv) {
         TT_ASSERT(total_l1_buffer_size_tiles % 2 == 0);
         uint32_t total_l1_buffer_size_bytes = total_l1_buffer_size_tiles * single_tile_size;
 
-        auto input_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_bytes, input_dram_buffer_addr, dram_buffer_size_bytes, tt_metal::BufferType::DRAM);
+        auto input_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_bytes, dram_buffer_size_bytes, tt_metal::BufferType::DRAM);
+        uint32_t input_dram_buffer_addr = input_dram_buffer.address();
 
-        auto output_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_bytes, output_dram_buffer_addr, dram_buffer_size_bytes, tt_metal::BufferType::DRAM);
+        auto output_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_bytes, dram_buffer_size_bytes, tt_metal::BufferType::DRAM);
+        uint32_t output_dram_buffer_addr = output_dram_buffer.address();
 
         auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
         auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();

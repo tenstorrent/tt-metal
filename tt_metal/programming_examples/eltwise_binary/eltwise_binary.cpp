@@ -75,13 +75,12 @@ int main(int argc, char **argv) {
         constexpr uint32_t num_tiles = 2048;
         constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-        constexpr uint32_t dram_buffer_src0_addr = 0;
-        constexpr uint32_t dram_buffer_src1_addr = 256 * 1024 * 1024;
-        constexpr uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
-
-        Buffer src0_dram_buffer = Buffer(device, dram_buffer_size, dram_buffer_src0_addr, dram_buffer_size, BufferType::DRAM);
-        Buffer src1_dram_buffer = Buffer(device, dram_buffer_size, dram_buffer_src1_addr, dram_buffer_size, BufferType::DRAM);
-        Buffer dst_dram_buffer = Buffer(device, dram_buffer_size, dram_buffer_dst_addr, dram_buffer_size, BufferType::DRAM);
+        Buffer src0_dram_buffer = Buffer(device, dram_buffer_size, dram_buffer_size, BufferType::DRAM);
+        const uint32_t dram_buffer_src0_addr = src0_dram_buffer.address();
+        Buffer src1_dram_buffer = Buffer(device, dram_buffer_size, dram_buffer_size, BufferType::DRAM);
+        const uint32_t dram_buffer_src1_addr = src1_dram_buffer.address();
+        Buffer dst_dram_buffer = Buffer(device, dram_buffer_size, dram_buffer_size, BufferType::DRAM);
+        const uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
 
         /*
          * Use circular buffers to set input and output buffers that the

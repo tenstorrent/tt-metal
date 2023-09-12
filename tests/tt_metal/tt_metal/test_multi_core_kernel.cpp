@@ -205,12 +205,10 @@ bool test_multi_core_kernel_same_runtime_args(tt_metal::Device *device) {
     int32_t num_tiles = 2048;
     uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-    uint32_t dram_buffer_src_addr = 0;
-
-    uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
-
-    auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, dram_buffer_size, tt_metal::BufferType::DRAM);
-    auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr, dram_buffer_size, tt_metal::BufferType::DRAM);
+    auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+    uint32_t dram_buffer_src_addr = src_dram_buffer.address();
+    auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+    uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
 
     ////////////////////////////////////////////////////////////////////////////
     //                  Compile Time Args Setup
@@ -266,16 +264,15 @@ bool test_multi_core_kernel_unique_runtime_args(tt_metal::Device *device) {
     int32_t num_tiles = 2048;
     uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-    uint32_t dram_buffer_src_addr = 0;
+    auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+    uint32_t dram_buffer_src_addr = src_dram_buffer.address();
+    auto dst_dram_buffer_1 = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+    uint32_t dram_buffer_dst_addr_1 = dst_dram_buffer_1.address();
+    auto dst_dram_buffer_2 = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+    uint32_t dram_buffer_dst_addr_2 = dst_dram_buffer_2.address();
+    auto dst_dram_buffer_3 = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+    uint32_t dram_buffer_dst_addr_3 = dst_dram_buffer_3.address();
 
-    uint32_t dram_buffer_dst_addr_1 = 512 * 1024 * 1024; // 512 MB (upper half)
-    uint32_t dram_buffer_dst_addr_2 = dram_buffer_dst_addr_1 + dram_buffer_size;
-    uint32_t dram_buffer_dst_addr_3 = dram_buffer_dst_addr_2 + dram_buffer_size;
-
-    auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, dram_buffer_size, tt_metal::BufferType::DRAM);
-    auto dst_dram_buffer_1 = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr_1, dram_buffer_size, tt_metal::BufferType::DRAM);
-    auto dst_dram_buffer_2 = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr_2, dram_buffer_size, tt_metal::BufferType::DRAM);
-    auto dst_dram_buffer_3 = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr_3, dram_buffer_size, tt_metal::BufferType::DRAM);
 
     ////////////////////////////////////////////////////////////////////////////
     //                  Compile Time Args Setup

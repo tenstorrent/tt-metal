@@ -205,21 +205,16 @@ int main(int argc, char **argv) {
         CoreCoord dst_noc_xy;
 
         if (IO_data_in_dram) {
-            uint32_t dram_buffer_addr = 0;
-            TT_ASSERT(dram_buffer_addr + buffer_size <= 1024 * 1024 * 1024); // 1GB
-
-            src_buffer = tt_metal::Buffer(device, buffer_size, dram_buffer_addr, buffer_size, tt_metal::BufferType::DRAM);
-            dst_buffer = tt_metal::Buffer(device, buffer_size, dram_buffer_addr + buffer_size, buffer_size, tt_metal::BufferType::DRAM);
+            src_buffer = tt_metal::Buffer(device, buffer_size, buffer_size, tt_metal::BufferType::DRAM);
+            dst_buffer = tt_metal::Buffer(device, buffer_size, buffer_size, tt_metal::BufferType::DRAM);
 
             src_address = src_buffer.address();
             src_noc_xy = src_buffer.noc_coordinates();
             dst_address = dst_buffer.address();
             dst_noc_xy = dst_buffer.noc_coordinates();
         } else {
-            uint32_t l1_buffer_addr = l1_alloc(buffer_size);
-
-            src_buffer = tt_metal::Buffer(device, buffer_size, l1_buffer_addr, buffer_size, tt_metal::BufferType::L1);
-            dst_buffer = tt_metal::Buffer(device, buffer_size, l1_buffer_addr + buffer_size, buffer_size, tt_metal::BufferType::L1);
+            src_buffer = tt_metal::Buffer(device, buffer_size, buffer_size, tt_metal::BufferType::L1);
+            dst_buffer = tt_metal::Buffer(device, buffer_size, buffer_size, tt_metal::BufferType::L1);
 
             src_address = src_buffer.address();
             src_noc_xy = src_buffer.noc_coordinates();

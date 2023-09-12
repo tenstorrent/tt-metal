@@ -361,11 +361,11 @@ int main(int argc, char **argv) {
                 int core_index = i * num_cores_c + j;
                 CoreCoord core = {(std::size_t) j, (std::size_t) i};
 
-                uint32_t dram_buffer_src0_addr = core_index * per_core_M * K * single_tile_size;
+                uint32_t dram_buffer_src0_addr = (  core_index * per_core_M * K * single_tile_size) + DRAM_UNRESERVED_BASE;
                 int dram_src0_channel_id = 0;
-                uint32_t dram_buffer_src1_addr = core_index * K * per_core_N * single_tile_size;
+                uint32_t dram_buffer_src1_addr = (core_index * K * per_core_N * single_tile_size) + DRAM_UNRESERVED_BASE;
                 int dram_src1_channel_id = 1;
-                uint32_t dram_buffer_dst_addr = core_index * per_core_M * per_core_N * single_tile_size;
+                uint32_t dram_buffer_dst_addr = (core_index * per_core_M * per_core_N * single_tile_size) + DRAM_UNRESERVED_BASE;
                 int dram_dst_channel_id = 2;
 
                 uint32_t dram_buffer_size_act = single_tile_size * per_core_M * K; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
@@ -434,7 +434,7 @@ int main(int argc, char **argv) {
                 auto per_core_golden = get_col_slice(golden_row, num_cores_c, j, per_core_M * 32, N * 32);
                 std::vector<uint32_t> result_vec;
                 int core_index = i * num_cores_c + j;
-                uint32_t dram_buffer_dst_addr = core_index * per_core_M * per_core_N * single_tile_size;
+                uint32_t dram_buffer_dst_addr = (core_index * per_core_M * per_core_N * single_tile_size) + DRAM_UNRESERVED_BASE;
                 int dram_dst_channel_id = 2;
                 tt_metal::detail::ReadFromDeviceDRAMChannel(device, dram_dst_channel_id, dram_buffer_dst_addr, per_core_M * per_core_N * single_tile_size, result_vec);
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);

@@ -24,15 +24,12 @@ tt_metal::Program generate_eltwise_unary_program(Device *device) {
     uint32_t dram_buffer_size =
         single_tile_size * num_tiles;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-    uint32_t dram_buffer_src0_addr = 0;
-
-    uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024;  // 512 MB (upper half)
-
     uint32_t page_size = single_tile_size;
-    auto src0_dram_buffer = tt_metal::Buffer(
-        device, dram_buffer_size, dram_buffer_src0_addr, page_size, tt_metal::BufferType::DRAM);
-    auto dst_dram_buffer = tt_metal::Buffer(
-        device, dram_buffer_size, dram_buffer_dst_addr, page_size, tt_metal::BufferType::DRAM);
+    auto src0_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, page_size, tt_metal::BufferType::DRAM);
+    uint32_t dram_buffer_src0_addr = src0_dram_buffer.address();
+    auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, page_size, tt_metal::BufferType::DRAM);
+    uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
+
 
     auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
     auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
@@ -106,8 +103,8 @@ void test_enqueue_program(std::function<tt_metal::Program(tt_metal::Device *devi
         CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
 
         // Enqueue program inputs
-        Buffer buf(device, NUM_TILES * 2048, 0, 2048, BufferType::DRAM);
-        Buffer out(device, NUM_TILES * 2048, 0, 2048, BufferType::DRAM);
+        Buffer buf(device, NUM_TILES * 2048, 2048, BufferType::DRAM);
+        Buffer out(device, NUM_TILES * 2048, 2048, BufferType::DRAM);
 
         // Absolutely disgusting way to query for the kernel I want to set runtime args for... needs to be cleaned up
         SetRuntimeArgs(program, program.kernels_on_core(worker_core).riscv0_id.value(), worker_core, {out.address(), 0, 0, NUM_TILES});

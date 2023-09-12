@@ -80,9 +80,6 @@ int main(int argc, char **argv) {
         uint32_t single_tile_bytes = 2 * 1024;
         uint32_t dram_buffer_bytes = single_tile_bytes * num_tensor_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-        uint32_t dram_buffer_src0_addr = 0;
-        uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
-
         uint32_t src_page_size = single_tile_bytes;
         uint32_t dst_page_size = single_tile_bytes;
         if (not multibank) {
@@ -90,8 +87,11 @@ int main(int argc, char **argv) {
             dst_page_size = dram_buffer_bytes/(Ht*Wt);
         }
 
-        auto src0_dram_buffer = tt_metal::Buffer(device, dram_buffer_bytes, dram_buffer_src0_addr, src_page_size, tt_metal::BufferType::DRAM);
-        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_bytes/(Ht*Wt), dram_buffer_dst_addr, dst_page_size, tt_metal::BufferType::DRAM);
+        auto src0_dram_buffer = tt_metal::Buffer(device, dram_buffer_bytes, src_page_size, tt_metal::BufferType::DRAM);
+        uint32_t dram_buffer_src0_addr = src0_dram_buffer.address();
+        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_bytes/(Ht*Wt), dst_page_size, tt_metal::BufferType::DRAM);
+        uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
+
         auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
         auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
 

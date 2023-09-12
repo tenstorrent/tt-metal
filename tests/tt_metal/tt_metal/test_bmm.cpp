@@ -60,13 +60,12 @@ int main(int argc, char **argv) {
         uint32_t bytesB = single_tile_size * num_tilesB;
         uint32_t bytesC = single_tile_size * num_tilesC;
 
-        uint32_t dram_buffer_src0_addr = 0;
-        uint32_t dram_buffer_src1_addr = 256 * 1024 * 1024;
-        uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
-
-        auto src0_dram_buffer = tt_metal::Buffer(device, bytesA, dram_buffer_src0_addr, single_tile_size, tt_metal::BufferType::DRAM);
-        auto src1_dram_buffer = tt_metal::Buffer(device, bytesB, dram_buffer_src1_addr, single_tile_size, tt_metal::BufferType::DRAM);
-        auto dst_dram_buffer = tt_metal::Buffer(device, bytesC, dram_buffer_dst_addr, single_tile_size, tt_metal::BufferType::DRAM);
+        auto src0_dram_buffer = tt_metal::Buffer(device, bytesA, single_tile_size, tt_metal::BufferType::DRAM);
+        uint32_t dram_buffer_src0_addr = src0_dram_buffer.address();
+        auto src1_dram_buffer = tt_metal::Buffer(device, bytesB, single_tile_size, tt_metal::BufferType::DRAM);
+        uint32_t dram_buffer_src1_addr = src1_dram_buffer.address();
+        auto dst_dram_buffer = tt_metal::Buffer(device, bytesC, single_tile_size, tt_metal::BufferType::DRAM);
+        uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
 
         uint32_t src0_cb_index = 0;
         uint32_t src0_cb_addr = 200 * 1024;

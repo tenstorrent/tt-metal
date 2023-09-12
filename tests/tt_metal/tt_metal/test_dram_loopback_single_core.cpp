@@ -55,13 +55,13 @@ int main(int argc, char **argv) {
         uint32_t single_tile_size = 2 * 1024;
         uint32_t num_tiles = 50;
         uint32_t dram_buffer_size = single_tile_size * num_tiles;
-        uint32_t input_dram_buffer_addr = 0;
         uint32_t l1_buffer_addr = 400 * 1024;
-        uint32_t output_dram_buffer_addr = 512 * 1024;
 
-        auto input_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, input_dram_buffer_addr, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto input_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+        uint32_t input_dram_buffer_addr = input_dram_buffer.address();
 
-        auto output_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, output_dram_buffer_addr, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto output_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+        uint32_t output_dram_buffer_addr = output_dram_buffer.address();
 
         auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
         auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();

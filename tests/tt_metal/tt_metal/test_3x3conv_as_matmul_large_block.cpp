@@ -153,13 +153,12 @@ int main(int argc, char **argv) {
         uint32_t dram_buffer_src1_size = weights_tilized.size() * sizeof(bfloat16);
         uint32_t dram_buffer_dst_size = M * N * single_tile_size;
 
-        uint32_t dram_buffer_src0_addr = 0;
-        uint32_t dram_buffer_src1_addr = dram_buffer_src0_addr + dram_buffer_src0_size;
-        uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
-
-        auto src0_dram_buffer = tt_metal::Buffer(device, dram_buffer_src0_size, dram_buffer_src0_addr, dram_buffer_src0_size, tt_metal::BufferType::DRAM);
-        auto src1_dram_buffer = tt_metal::Buffer(device, dram_buffer_src1_size, dram_buffer_src1_addr, dram_buffer_src1_size, tt_metal::BufferType::DRAM);
-        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_dst_size, dram_buffer_dst_addr, dram_buffer_dst_size, tt_metal::BufferType::DRAM);
+        auto src0_dram_buffer = tt_metal::Buffer(device, dram_buffer_src0_size, dram_buffer_src0_size, tt_metal::BufferType::DRAM);
+        uint32_t dram_buffer_src0_addr = src0_dram_buffer.address();
+        auto src1_dram_buffer = tt_metal::Buffer(device, dram_buffer_src1_size, dram_buffer_src1_size, tt_metal::BufferType::DRAM);
+        uint32_t dram_buffer_src1_addr = src1_dram_buffer.address();
+        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_dst_size, dram_buffer_dst_size, tt_metal::BufferType::DRAM);
+        uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
 
         auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
         auto dram_src1_noc_xy = src1_dram_buffer.noc_coordinates();

@@ -69,9 +69,8 @@ int main(int argc, char **argv) {
         int num_elements_in_stick_as_packed_uint32 = num_elements_in_stick / 2;
         uint32_t dram_buffer_size =  num_sticks * stick_size; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-        uint32_t dram_buffer_src_addr = 0;
-
-        auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+        uint32_t dram_buffer_src_addr = src_dram_buffer.address();
 
         auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
         assert(src_dram_buffer.size() % (num_cores_r * num_cores_c) == 0);

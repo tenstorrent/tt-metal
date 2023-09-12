@@ -73,12 +73,8 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
     u32 dst_address;
     CoreCoord dst_noc_xy;
 
-    u32 dram_buffer_addr = 0;
-    TT_ASSERT(dram_buffer_addr + buffer_size <= device->dram_bank_size());
-
-    src_buffer = tt_metal::Buffer(device, buffer_size, dram_buffer_addr, buffer_size, tt_metal::BufferType::DRAM);
-    dst_buffer =
-        tt_metal::Buffer(device, buffer_size, dram_buffer_addr + buffer_size, buffer_size, tt_metal::BufferType::DRAM);
+    src_buffer = tt_metal::Buffer(device, buffer_size, buffer_size, tt_metal::BufferType::DRAM);
+    dst_buffer = tt_metal::Buffer(device, buffer_size, buffer_size, tt_metal::BufferType::DRAM);
 
     src_address = src_buffer.address();
     src_noc_xy = src_buffer.noc_coordinates();

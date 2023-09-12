@@ -42,13 +42,13 @@ bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(const tt::AR
         int num_elements_in_stick = 1024;
         int stick_size = num_elements_in_stick * 2;
         int num_elements_in_stick_as_packed_uint32 = num_elements_in_stick / 2;
-        uint32_t dram_buffer_src_addr = 0;
         uint32_t dram_buffer_size =  num_sticks * stick_size; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
         std::vector<uint32_t> src_vec = create_arange_vector_of_bfloat16(
             dram_buffer_size, false);
 
-        auto sticks_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, stick_size, tt_metal::BufferType::DRAM);
+        auto sticks_buffer = tt_metal::Buffer(device, dram_buffer_size, stick_size, tt_metal::BufferType::DRAM);
+        uint32_t dram_buffer_src_addr = sticks_buffer.address();
 
         tt_metal::WriteToBuffer(sticks_buffer, src_vec);
 
@@ -102,12 +102,12 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
 
         uint32_t dram_buffer_size =  num_sticks * stick_size; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-        uint32_t dram_buffer_src_addr = 0;
-        uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
+        auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, stick_size, tt_metal::BufferType::DRAM);
+        uint32_t dram_buffer_src_addr = src_dram_buffer.address();
 
-        auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, stick_size, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+        uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
 
-        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr, dram_buffer_size, tt_metal::BufferType::DRAM);
         auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
 
         // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input CB
@@ -282,12 +282,12 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
 
         uint32_t dram_buffer_size =  num_sticks * stick_size; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-        uint32_t dram_buffer_src_addr = 0;
-        uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024; // 512 MB (upper half)
+        auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, stick_size, tt_metal::BufferType::DRAM);
+        uint32_t dram_buffer_src_addr = src_dram_buffer.address();
 
-        auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, stick_size, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, stick_size, tt_metal::BufferType::DRAM);
+        uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
 
-        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr, stick_size, tt_metal::BufferType::DRAM);
         auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
 
         // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input CB

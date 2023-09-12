@@ -85,10 +85,10 @@ int main(int argc, char **argv) {
         CoreCoord core = {0, 0};
 
         uint32_t dram_buffer_size = 2 * 64 * 64;
-        uint32_t input_dram_buffer_addr = 0;
         uint32_t address_map_l1_addr = 500 * 1024;
 
-        auto input_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, input_dram_buffer_addr, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto input_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+        uint32_t input_dram_buffer_addr = input_dram_buffer.address();
 
         auto l1_b0 = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::L1);
         uint32_t l1_buffer_addr = l1_b0.address();

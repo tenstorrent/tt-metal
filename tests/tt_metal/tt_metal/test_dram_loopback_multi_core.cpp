@@ -76,8 +76,6 @@ int main(int argc, char **argv) {
         uint32_t num_output_tiles = num_input_tiles;
         uint32_t dram_buffer_size =
             single_tile_size * num_output_tiles;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-        uint32_t dram_buffer_src_addr = 0;
-        uint32_t dram_buffer_dst_addr = 512 * 1024 * 1024;  // 512 MB (upper half)
         uint32_t loader_buffer_address = 500 * 1024;
         uint32_t writer_buffer_address = 500 * 1024;
         uint32_t transient_buffer_size_tiles = 4;
@@ -86,9 +84,11 @@ int main(int argc, char **argv) {
 
         TT_ASSERT(num_output_tiles % transient_buffer_size_tiles == 0);
 
-        auto input_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_src_addr, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto input_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+        uint32_t dram_buffer_src_addr = input_dram_buffer.address();
 
-        auto output_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_dst_addr, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto output_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+        uint32_t dram_buffer_dst_addr = output_dram_buffer.address();
 
         auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
         auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();

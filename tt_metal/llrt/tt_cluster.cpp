@@ -967,8 +967,8 @@ void tt_cluster::on_close_device(tt_cluster_on_close_device_callback cb) {
 // TODO (abhullar): Add API to query whether static VCs are used
 void tt_cluster::set_dram_barrier(chip_id_t chip_id, uint32_t barrier_value) {
     // Set barrier value
+    std::vector<uint32_t> barrier_vec = {barrier_value};
     for (int channel = 0; channel < this->get_soc_desc(chip_id).get_num_dram_channels(); channel++) {
-        std::vector<uint32_t> barrier_vec = {barrier_value};
         this->write_dram_vec(barrier_vec, tt_target_dram{chip_id, channel, 0}, DRAM_BARRIER_BASE);
     }
 
@@ -997,8 +997,8 @@ void tt_cluster::set_l1_barrier(chip_id_t chip_id, uint32_t barrier_value) {
     // TODO (abhullar): Can get rid of logic to skip harvested cores in uplifted UMD branch because descriptor.workers does not included harvested cores
     const tt_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
     uint32_t harvested_noc_rows = this->type == tt::TargetDevice::Silicon ? this->get_harvested_rows(chip_id) : 0;
-    static std::vector<unsigned int> noc_row_harvested(soc_desc.grid_size.y, 0);
-    static uint32_t num_harvested_rows = 0;
+    std::vector<unsigned int> noc_row_harvested(soc_desc.grid_size.y, 0);
+    uint32_t num_harvested_rows = 0;
     for (unsigned int r = 0; r < soc_desc.grid_size.y; r++) {
         bool row_harvested = (harvested_noc_rows>>r)&0x1;
         num_harvested_rows += row_harvested;
@@ -1011,25 +1011,27 @@ void tt_cluster::set_l1_barrier(chip_id_t chip_id, uint32_t barrier_value) {
     };
 
     static std::unordered_set<CoreCoord> physical_storage_only_cores;
-    for (const auto& relative_storage_core : soc_desc.storage_cores) {
-        const auto logical_coord = get_core_coord_from_relative(relative_storage_core, post_harvested_worker_grid_size);
-        CoreCoord noc_routing_coord({
-            .x = static_cast<size_t>(soc_desc.worker_log_to_routing_x.at(logical_coord.x)),
-            .y = static_cast<size_t>(soc_desc.worker_log_to_routing_y.at(logical_coord.y)),
-        });
-        while (not soc_desc.is_worker_core(noc_routing_coord)) {
-            noc_routing_coord.y++;
+    if (physical_storage_only_cores.empty()) {
+        for (const auto& relative_storage_core : soc_desc.storage_cores) {
+            const auto logical_coord = get_core_coord_from_relative(relative_storage_core, post_harvested_worker_grid_size);
+            CoreCoord noc_routing_coord({
+                .x = static_cast<size_t>(soc_desc.worker_log_to_routing_x.at(logical_coord.x)),
+                .y = static_cast<size_t>(soc_desc.worker_log_to_routing_y.at(logical_coord.y)),
+            });
+            while (not soc_desc.is_worker_core(noc_routing_coord)) {
+                noc_routing_coord.y++;
+            }
+            physical_storage_only_cores.insert(noc_routing_coord);
         }
-        physical_storage_only_cores.insert(noc_routing_coord);
     }
 
-    static std::vector<CoreCoord> cores_written;
+    std::vector<CoreCoord> cores_written;
+    std::vector<uint32_t> barrier_vec = {barrier_value};
     for (const CoreCoord &worker_core : soc_desc.workers) {
         unsigned int row = worker_core.y;
         if (not noc_row_harvested[row]) {
             bool is_storage_only_core = physical_storage_only_cores.find(worker_core) != physical_storage_only_cores.end();
             uint32_t barrier_address = is_storage_only_core ? STORAGE_ONLY_L1_BARRIER_BASE : COMPUTE_L1_BARRIER_BASE;
-            std::vector<uint32_t> barrier_vec = {barrier_value};
             this->write_dram_vec(barrier_vec, tt_cxy_pair(chip_id, worker_core), barrier_address);
             cores_written.emplace_back(worker_core);
         }

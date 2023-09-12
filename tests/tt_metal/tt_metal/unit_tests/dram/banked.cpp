@@ -26,8 +26,6 @@ struct BankedDramConfig {
     size_t num_tiles = 0;
     size_t size_bytes = 0;
     size_t page_size_bytes = 0;
-    size_t input_dram_byte_address = 0;
-    size_t output_dram_byte_address = 0;
     size_t l1_byte_address = 0;
     tt::DataFormat l1_data_format = tt::DataFormat::Invalid;
     CoreCoord target_core;
@@ -69,12 +67,12 @@ bool dram_reader_cb_writer_dram(
     }
 
     // input
-    auto input_dram_buffer = tt_metal::Buffer(
-        device, cfg.size_bytes, cfg.input_dram_byte_address, input_page_size_bytes, tt_metal::BufferType::DRAM);
+    auto input_dram_buffer = tt_metal::Buffer(device, cfg.size_bytes, input_page_size_bytes, tt_metal::BufferType::DRAM);
+    uint32_t input_dram_byte_address = input_dram_buffer.address();
 
     // output
-    auto output_dram_buffer = tt_metal::Buffer(
-        device, cfg.size_bytes, cfg.output_dram_byte_address, output_page_size_bytes, tt_metal::BufferType::DRAM);
+    auto output_dram_buffer = tt_metal::Buffer(device, cfg.size_bytes, output_page_size_bytes, tt_metal::BufferType::DRAM);
+    uint32_t output_dram_byte_address = output_dram_buffer.address();
 
     // buffer_cb CB
     auto buffer_cb = tt_metal::CreateCircularBuffer(
@@ -104,12 +102,12 @@ bool dram_reader_cb_writer_dram(
 
     if (banked_reader) {
         reader_runtime_args = {
-            (uint32_t)cfg.input_dram_byte_address,
+            (uint32_t)input_dram_byte_address,
             (uint32_t)cfg.num_tiles,
         };
     } else {
         reader_runtime_args = {
-            (uint32_t)cfg.input_dram_byte_address,
+            (uint32_t)input_dram_byte_address,
             (uint32_t)input_dram_buffer.noc_coordinates().x,
             (uint32_t)input_dram_buffer.noc_coordinates().y,
             (uint32_t)cfg.num_tiles,
@@ -117,12 +115,12 @@ bool dram_reader_cb_writer_dram(
     }
     if (banked_writer) {
         writer_runtime_args = {
-            (uint32_t)cfg.output_dram_byte_address,
+            (uint32_t)output_dram_byte_address,
             (uint32_t)cfg.num_tiles,
         };
     } else {
         writer_runtime_args = {
-            (uint32_t)cfg.output_dram_byte_address,
+            (uint32_t)output_dram_byte_address,
             (uint32_t)output_dram_buffer.noc_coordinates().x,
             (uint32_t)output_dram_buffer.noc_coordinates().y,
             (uint32_t)cfg.num_tiles,
@@ -162,8 +160,6 @@ TEST_F(SingleDeviceFixture, SingleCoreBankedReaderOnly) {
         .num_tiles = 1,
         .size_bytes = 1 * 2 * 32 * 32,
         .page_size_bytes = 2 * 32 * 32,
-        .input_dram_byte_address = 0,
-        .output_dram_byte_address = 512 * 1024 * 1204,
         .l1_byte_address = 500 * 32 * 32,
         .l1_data_format = tt::DataFormat::Float16_b,
         .target_core = {.x = 0, .y = 0}};
@@ -192,8 +188,6 @@ TEST_F(SingleDeviceFixture, SingleCoreBankedWriterOnly) {
         .num_tiles = 1,
         .size_bytes = 1 * 2 * 32 * 32,
         .page_size_bytes = 2 * 32 * 32,
-        .input_dram_byte_address = 0,
-        .output_dram_byte_address = 128 * 1024 * 1204,
         .l1_byte_address = 256 * 32 * 32,
         .l1_data_format = tt::DataFormat::Float16_b,
         .target_core = {.x = 0, .y = 0}};
@@ -222,8 +216,6 @@ TEST_F(SingleDeviceFixture, SingleCoreBankedReaderWriterOnly) {
         .num_tiles = 1,
         .size_bytes = 1 * 2 * 32 * 32,
         .page_size_bytes = 2 * 32 * 32,
-        .input_dram_byte_address = 0,
-        .output_dram_byte_address = 128 * 1024 * 1204,
         .l1_byte_address = 256 * 32 * 32,
         .l1_data_format = tt::DataFormat::Float16_b,
         .target_core = {.x = 0, .y = 0}};

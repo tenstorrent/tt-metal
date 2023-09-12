@@ -101,8 +101,6 @@ namespace unit_tests::compute::sfpu {
 struct SfpuConfig {
     size_t num_tiles = 0;
     size_t tile_byte_size = 0;
-    size_t output_dram_byte_address = 0;
-    size_t input_dram_byte_address = 0;
     size_t l1_input_byte_address = 0;
     tt::DataFormat l1_input_data_format = tt::DataFormat::Invalid;
     size_t l1_output_byte_address = 0;
@@ -120,11 +118,11 @@ struct SfpuConfig {
 bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_config) {
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     tt_metal::Program program = tt_metal::Program();
-    auto input_dram_buffer =
-        tt_metal::Buffer(device, byte_size, test_config.input_dram_byte_address, byte_size, tt_metal::BufferType::DRAM);
+    auto input_dram_buffer = tt_metal::Buffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
+    uint32_t input_dram_byte_address = input_dram_buffer.address();
     auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
-    auto output_dram_buffer = tt_metal::Buffer(
-        device, byte_size, test_config.output_dram_byte_address, byte_size, tt_metal::BufferType::DRAM);
+    auto output_dram_buffer = tt_metal::Buffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
+    uint32_t output_dram_byte_address = output_dram_buffer.address();
     auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 
     vector<u32> compute_kernel_args = {
@@ -146,14 +144,14 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
 
     // Same runtime args for every core
     vector<u32> reader_rt_args = {
-        (u32)test_config.input_dram_byte_address,
+        (u32)input_dram_byte_address,
         (u32)input_dram_noc_xy.x,
         (u32)input_dram_noc_xy.y,
         (u32)test_config.num_tiles,
     };
 
     vector<u32> writer_rt_args = {
-        (u32)test_config.output_dram_byte_address,
+        (u32)output_dram_byte_address,
         (u32)output_dram_noc_xy.x,
         (u32)output_dram_noc_xy.y,
         (u32)test_config.num_tiles,
@@ -260,8 +258,6 @@ TEST_P(SingleCoreSingleDeviceSfpuParameterizedFixture, SfpuCompute) {
         unit_tests::compute::sfpu::SfpuConfig test_config = {
             .num_tiles = num_tiles,
             .tile_byte_size = 2 * 32 * 32,
-            .output_dram_byte_address = 0,
-            .input_dram_byte_address = 16 * 32 * 32,
             .l1_input_byte_address = L1_UNRESERVED_BASE,
             .l1_input_data_format = tt::DataFormat::Float16_b,
             .l1_output_byte_address = L1_UNRESERVED_BASE + 16 * 32 * 32,
@@ -312,8 +308,6 @@ TEST_P(SingleCoreSingleDeviceSfpuParameterizedApproxFixture, SfpuCompute) {
         unit_tests::compute::sfpu::SfpuConfig test_config = {
             .num_tiles = num_tiles,
             .tile_byte_size = 2 * 32 * 32,
-            .output_dram_byte_address = 0,
-            .input_dram_byte_address = 16 * 32 * 32,
             .l1_input_byte_address = L1_UNRESERVED_BASE,
             .l1_input_data_format = tt::DataFormat::Float16_b,
             .l1_output_byte_address = L1_UNRESERVED_BASE + 16 * 32 * 32,
@@ -351,8 +345,6 @@ TEST_F(CommandQueueFixture, DISABLED_MultiContinguousCoreSingleTileSfpuApproxCom
     CoreRangeSet core_range_set({core_range});
     unit_tests::compute::sfpu::SfpuConfig test_config = {
         .tile_byte_size = 2 * 32 * 32,
-        .output_dram_byte_address = 0,
-        .input_dram_byte_address = 16 * 32 * 32,
         .l1_input_byte_address = L1_UNRESERVED_BASE,
         .l1_input_data_format = tt::DataFormat::Float16_b,
         .l1_output_byte_address = L1_UNRESERVED_BASE + 16 * 32 * 32,
@@ -393,8 +385,6 @@ TEST_F(CommandQueueFixture, DISABLED_MultiContinguousCoreMultiTileSfpuApproxComp
     CoreRangeSet core_range_set({core_range});
     unit_tests::compute::sfpu::SfpuConfig test_config = {
         .tile_byte_size = 2 * 32 * 32,
-        .output_dram_byte_address = 0,
-        .input_dram_byte_address = 16 * 32 * 32,
         .l1_input_byte_address = L1_UNRESERVED_BASE,
         .l1_input_data_format = tt::DataFormat::Float16_b,
         .l1_output_byte_address = L1_UNRESERVED_BASE + 16 * 32 * 32,
@@ -433,8 +423,6 @@ TEST_F(CommandQueueFixture, DISABLED_MultiContinguousCoreMultiTileSfpuApproxComp
 TEST_F(CommandQueueFixture, DISABLED_AllCoreSingleTileSfpuApproxCompute) {
     unit_tests::compute::sfpu::SfpuConfig test_config = {
         .tile_byte_size = 2 * 32 * 32,
-        .output_dram_byte_address = 0,
-        .input_dram_byte_address = 16 * 32 * 32,
         .l1_input_byte_address = L1_UNRESERVED_BASE,
         .l1_input_data_format = tt::DataFormat::Float16_b,
         .l1_output_byte_address = L1_UNRESERVED_BASE + 16 * 32 * 32,
@@ -476,8 +464,6 @@ TEST_F(CommandQueueFixture, DISABLED_AllCoreSingleTileSfpuApproxCompute) {
 TEST_F(CommandQueueFixture, DISABLED_AllCoreMultiTileSfpuApproxCompute) {
     unit_tests::compute::sfpu::SfpuConfig test_config = {
         .tile_byte_size = 2 * 32 * 32,
-        .output_dram_byte_address = 0,
-        .input_dram_byte_address = 16 * 32 * 32,
         .l1_input_byte_address = L1_UNRESERVED_BASE,
         .l1_input_data_format = tt::DataFormat::Float16_b,
         .l1_output_byte_address = L1_UNRESERVED_BASE + 16 * 32 * 32,

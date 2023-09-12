@@ -29,7 +29,6 @@ namespace unit_tests::dram::direct {
 bool reader_only(
     tt_metal::Device* device,
     const size_t& byte_size,
-    const size_t& dram_byte_address,
     const size_t& l1_byte_address,
     const CoreCoord& reader_core) {
 
@@ -39,8 +38,8 @@ bool reader_only(
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program = tt_metal::Program();
 
-    auto input_dram_buffer =
-        tt_metal::Buffer(device, byte_size, dram_byte_address, byte_size, tt_metal::BufferType::DRAM);
+    auto input_dram_buffer = tt_metal::Buffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
+    uint32_t dram_byte_address = input_dram_buffer.address();
     auto dram_noc_xy = input_dram_buffer.noc_coordinates();
     // TODO (abhullar): Use L1 buffer after bug with L1 banking and writing to < 1 MB is fixed.
     //                  Try this after KM uplifts TLB setup
@@ -93,7 +92,6 @@ bool reader_only(
 bool writer_only(
     tt_metal::Device* device,
     const size_t& byte_size,
-    const size_t& dram_byte_address,
     const size_t& l1_byte_address,
     const CoreCoord& writer_core) {
 
@@ -103,8 +101,8 @@ bool writer_only(
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program = tt_metal::Program();
 
-    auto output_dram_buffer =
-        tt_metal::Buffer(device, byte_size, dram_byte_address, byte_size, tt_metal::BufferType::DRAM);
+    auto output_dram_buffer = tt_metal::Buffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
+    uint32_t dram_byte_address = output_dram_buffer.address();
     auto dram_noc_xy = output_dram_buffer.noc_coordinates();
     auto l1_bank_ids = device->bank_ids_from_logical_core(writer_core);
     // TODO (abhullar): Use L1 buffer after bug with L1 banking and writing to < 1 MB is fixed.
@@ -154,8 +152,6 @@ bool writer_only(
 struct ReaderWriterConfig {
     size_t num_tiles = 0;
     size_t tile_byte_size = 0;
-    size_t output_dram_byte_address = 0;
-    size_t input_dram_byte_address = 0;
     size_t l1_byte_address = 0;
     tt::DataFormat l1_data_format = tt::DataFormat::Invalid;
     CoreCoord core = {};
@@ -174,11 +170,11 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
     ////////////////////////////////////////////////////////////////////////////
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     tt_metal::Program program = tt_metal::Program();
-    auto input_dram_buffer =
-        tt_metal::Buffer(device, byte_size, test_config.input_dram_byte_address, byte_size, tt_metal::BufferType::DRAM);
+    auto input_dram_buffer = tt_metal::Buffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
+    uint32_t input_dram_byte_address = input_dram_buffer.address();
     auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
-    auto output_dram_buffer = tt_metal::Buffer(
-        device, byte_size, test_config.output_dram_byte_address, byte_size, tt_metal::BufferType::DRAM);
+    auto output_dram_buffer = tt_metal::Buffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
+    uint32_t output_dram_byte_address = output_dram_buffer.address();
     auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 
     auto l1_cb = tt_metal::CreateCircularBuffer(
@@ -225,7 +221,7 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
         reader_kernel,
         test_config.core,
         {
-            (uint32_t)test_config.input_dram_byte_address,
+            (uint32_t)input_dram_byte_address,
             (uint32_t)input_dram_noc_xy.x,
             (uint32_t)input_dram_noc_xy.y,
             (uint32_t)test_config.num_tiles,
@@ -235,7 +231,7 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
         writer_kernel,
         test_config.core,
         {
-            (uint32_t)test_config.output_dram_byte_address,
+            (uint32_t)output_dram_byte_address,
             (uint32_t)output_dram_noc_xy.x,
             (uint32_t)output_dram_noc_xy.y,
             (uint32_t)test_config.num_tiles,
@@ -251,8 +247,6 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
 struct ReaderDatacopyWriterConfig {
     size_t num_tiles = 0;
     size_t tile_byte_size = 0;
-    size_t output_dram_byte_address = 0;
-    size_t input_dram_byte_address = 0;
     size_t l1_input_byte_address = 0;
     tt::DataFormat l1_input_data_format = tt::DataFormat::Invalid;
     size_t l1_output_byte_address = 0;
@@ -274,11 +268,11 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
     ////////////////////////////////////////////////////////////////////////////
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     tt_metal::Program program = tt_metal::Program();
-    auto input_dram_buffer =
-        tt_metal::Buffer(device, byte_size, test_config.input_dram_byte_address, byte_size, tt_metal::BufferType::DRAM);
+    auto input_dram_buffer = tt_metal::Buffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
+    uint32_t input_dram_byte_address = input_dram_buffer.address();
     auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
-    auto output_dram_buffer = tt_metal::Buffer(
-        device, byte_size, test_config.output_dram_byte_address, byte_size, tt_metal::BufferType::DRAM);
+    auto output_dram_buffer = tt_metal::Buffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
+    uint32_t output_dram_byte_address = output_dram_buffer.address();
     auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 
     auto l1_input_cb = tt_metal::CreateCircularBuffer(
@@ -342,7 +336,7 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
         reader_kernel,
         test_config.core,
         {
-            (uint32_t)test_config.input_dram_byte_address,
+            (uint32_t)input_dram_byte_address,
             (uint32_t)input_dram_noc_xy.x,
             (uint32_t)input_dram_noc_xy.y,
             (uint32_t)test_config.num_tiles,
@@ -352,7 +346,7 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
         writer_kernel,
         test_config.core,
         {
-            (uint32_t)test_config.output_dram_byte_address,
+            (uint32_t)output_dram_byte_address,
             (uint32_t)output_dram_noc_xy.x,
             (uint32_t)output_dram_noc_xy.y,
             (uint32_t)test_config.num_tiles,
@@ -368,21 +362,19 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
 }  // namespace unit_tests::dram::direct
 
 TEST_F(SingleDeviceFixture, SingleCoreDirectDramReaderOnly) {
-    ASSERT_TRUE(unit_tests::dram::direct::reader_only(device_, 1 * 1024, 0, L1_UNRESERVED_BASE, {.x = 0, .y = 0}));
-    ASSERT_TRUE(unit_tests::dram::direct::reader_only(device_, 2 * 1024, 0, L1_UNRESERVED_BASE, {.x = 0, .y = 0}));
-    ASSERT_TRUE(unit_tests::dram::direct::reader_only(device_, 16 * 1024, 0, L1_UNRESERVED_BASE, {.x = 0, .y = 0}));
+    ASSERT_TRUE(unit_tests::dram::direct::reader_only(device_, 1 * 1024, L1_UNRESERVED_BASE, {.x = 0, .y = 0}));
+    ASSERT_TRUE(unit_tests::dram::direct::reader_only(device_, 2 * 1024, L1_UNRESERVED_BASE, {.x = 0, .y = 0}));
+    ASSERT_TRUE(unit_tests::dram::direct::reader_only(device_, 16 * 1024, L1_UNRESERVED_BASE, {.x = 0, .y = 0}));
 }
 TEST_F(SingleDeviceFixture, SingleCoreDirectDramWriterOnly) {
-    ASSERT_TRUE(unit_tests::dram::direct::writer_only(device_, 1 * 1024, 0, L1_UNRESERVED_BASE, {.x = 0, .y = 0}));
-    ASSERT_TRUE(unit_tests::dram::direct::writer_only(device_, 2 * 1024, 0, L1_UNRESERVED_BASE, {.x = 0, .y = 0}));
-    ASSERT_TRUE(unit_tests::dram::direct::writer_only(device_, 16 * 1024, 0, L1_UNRESERVED_BASE, {.x = 0, .y = 0}));
+    ASSERT_TRUE(unit_tests::dram::direct::writer_only(device_, 1 * 1024, L1_UNRESERVED_BASE, {.x = 0, .y = 0}));
+    ASSERT_TRUE(unit_tests::dram::direct::writer_only(device_, 2 * 1024, L1_UNRESERVED_BASE, {.x = 0, .y = 0}));
+    ASSERT_TRUE(unit_tests::dram::direct::writer_only(device_, 16 * 1024, L1_UNRESERVED_BASE, {.x = 0, .y = 0}));
 }
 TEST_F(SingleDeviceFixture, SingleCoreDirectDramReaderWriter) {
     unit_tests::dram::direct::ReaderWriterConfig test_config = {
         .num_tiles = 1,
         .tile_byte_size = 2 * 32 * 32,
-        .output_dram_byte_address = 0,
-        .input_dram_byte_address = 16 * 32 * 32,
         .l1_byte_address = L1_UNRESERVED_BASE,
         .l1_data_format = tt::DataFormat::Float16_b,
         .core = {.x = 0, .y = 0}};
@@ -397,8 +389,6 @@ TEST_F(SingleDeviceFixture, SingleCoreDirectDramReaderDatacopyWriter) {
     unit_tests::dram::direct::ReaderDatacopyWriterConfig test_config = {
         .num_tiles = 1,
         .tile_byte_size = 2 * 32 * 32,
-        .output_dram_byte_address = 0,
-        .input_dram_byte_address = 16 * 32 * 32,
         .l1_input_byte_address = L1_UNRESERVED_BASE,
         .l1_input_data_format = tt::DataFormat::Float16_b,
         .l1_output_byte_address = L1_UNRESERVED_BASE + 16 * 32 * 32,

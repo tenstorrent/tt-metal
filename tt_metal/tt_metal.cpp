@@ -356,16 +356,6 @@ void WriteToDevice(const Buffer &buffer, const std::vector<uint32_t> &host_buffe
         bank_index = (bank_index + 1) % num_banks;
         data_index += num_entries_per_page;
     }
-
-    switch (buffer.buffer_type()) {
-        case BufferType::DRAM: {
-            device->cluster()->dram_barrier(device->pcie_slot());
-        } break;
-        case BufferType::L1 : {
-            device->cluster()->l1_barrier(device->pcie_slot());
-        } break;
-        default: TT_ASSERT(false && "Unsupported buffer type!");
-    }
 }
 
 void WriteToBuffer(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
@@ -422,9 +412,12 @@ void ReadFromDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
 }
 
 void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
+    Device *device = buffer.device();
+    tt_cluster *cluster = buffer.device()->cluster();
     switch (buffer.buffer_type()) {
         case BufferType::DRAM:
         case BufferType::L1: {
+            if (buffer.buffer_type() == BufferType::DRAM) cluster->dram_barrier(device->pcie_slot()); else cluster->l1_barrier(device->pcie_slot());
             ReadFromDevice(buffer, host_buffer);
         } break;
         case BufferType::SYSTEM_MEMORY: {
