@@ -57,24 +57,24 @@ void kernel_main() {
     };
     #endif
 
+    uint32_t padded_X_size_by_4 = padded_X_size >> 2;
+    uint32_t padded_X_diff_size_by_4 = padded_X_diff_size >> 2;
 
     uint32_t src_stick_id = 0;
     uint32_t dst_stick_id = 0;
     for (uint32_t w = 0; w < num_total_W; w++) {
         for (uint32_t z = 0; z < num_total_Z; z++) {
             for (uint32_t y = 0; y < num_total_Y; y++) {
-
-
                 if (y >= num_unpadded_Y || z >= num_unpadded_Z || w >= num_unpadded_W) {
-                    // pad the tile by reading values from zero buffer in L1
-                    for(uint32_t i = 0; i < padded_X_size / 4; i++) {
+                    // pad the tile with pad_value
+                    for(uint32_t i = 0; i < padded_X_size_by_4; i++) {
                         dst_buffer[i] = pad_value;
                     }
                 } else {
                     uint64_t src_noc_addr = get_noc_addr(src_stick_id, s0);
                     noc_async_read(src_noc_addr, dst_buffer_l1_addr, unpadded_X_size);
                     // Pad Columns first
-                    for(uint32_t i = 0; i < padded_X_diff_size / 4; i++) {
+                    for(uint32_t i = 0; i < padded_X_diff_size_by_4; i++) {
                         dst_pad[i] = pad_value;
                     }
                     noc_async_read_barrier();
