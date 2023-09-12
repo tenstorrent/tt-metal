@@ -349,9 +349,9 @@ void tt_cluster::set_tensix_risc_reset_on_core(const tt_cxy_pair &core, const Te
         _mm_sfence();
     } else {
         if ((soft_resets == TENSIX_DEASSERT_SOFT_RESET) or (soft_resets == TENSIX_DEASSERT_SOFT_RESET_NO_STAGGER)) {
-            device->deassert_risc_reset();
+            device->deassert_risc_reset(*this->target_device_ids.begin());
         } else if (soft_resets == TENSIX_ASSERT_SOFT_RESET) {
-            device->assert_risc_reset();
+            device->assert_risc_reset(core.chip);
         }
     }
 }
