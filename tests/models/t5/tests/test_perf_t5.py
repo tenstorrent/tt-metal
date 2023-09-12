@@ -20,7 +20,7 @@ from models.t5.tt.t5_model import TtT5Model
 BATCH_SIZE=1
 
 
-def run_perf_t5(expected_inference_time, expected_compile_time):
+def run_perf_t5(expected_inference_time, expected_compile_time, device):
     profiler = Profiler()
     disable_persistent_kernel_cache()
     comments = "small"
@@ -29,11 +29,6 @@ def run_perf_t5(expected_inference_time, expected_compile_time):
     cpu_key = "ref_key"
 
     use_attention_mask = True
-
-    # Initialize the device
-    device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
-    tt_lib.device.SetDefaultDevice(device)
 
     tokenizer = AutoTokenizer.from_pretrained("t5-small", model_max_length=32)
     hf_reference_model = T5Model.from_pretrained("t5-small")
@@ -101,7 +96,6 @@ def run_perf_t5(expected_inference_time, expected_compile_time):
     first_iter_time = profiler.get(first_key)
     second_iter_time = profiler.get(second_key)
     cpu_time = profiler.get(cpu_key)
-    tt_lib.device.CloseDevice(device)
     compile_time = first_iter_time - second_iter_time
     prep_report(
         model_name="T5",
@@ -131,8 +125,8 @@ def run_perf_t5(expected_inference_time, expected_compile_time):
         ),
     ),
 )
-def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_compile_time):
-    run_perf_t5(expected_inference_time, expected_compile_time)
+def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_compile_time, device):
+    run_perf_t5(expected_inference_time, expected_compile_time, device)
 
 
 @pytest.mark.models_performance_virtual_machine
@@ -145,5 +139,5 @@ def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_co
         ),
     ),
 )
-def test_perf_virtual_machine(use_program_cache, expected_inference_time, expected_compile_time):
-    run_perf_t5(expected_inference_time, expected_compile_time)
+def test_perf_virtual_machine(use_program_cache, expected_inference_time, expected_compile_time, device):
+    run_perf_t5(expected_inference_time, expected_compile_time, device)

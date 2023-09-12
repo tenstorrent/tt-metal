@@ -21,17 +21,12 @@ from models.trocr.tt.trocr import trocr_causal_llm
 BATCH_SIZE = 1
 
 
-def test_perf(expected_inference_time, expected_compile_time):
+def test_perf(expected_inference_time, expected_compile_time, device):
     profiler = Profiler()
     disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_key"
-
-    # Initialize the device
-    device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
-    tt_lib.device.SetDefaultDevice(device)
 
     processor = TrOCRProcessor.from_pretrained("microsoft/trocr-base-handwritten")
     model = VisionEncoderDecoderModel.from_pretrained(
@@ -77,7 +72,6 @@ def test_perf(expected_inference_time, expected_compile_time):
 
         logger.info(f"trocr inference time: {second_iter_time}")
         logger.info(f"trocr compile time: {compile_time}")
-        tt_lib.device.CloseDevice(device)
         assert second_iter_time < expected_inference_time, "trocr is too slow"
         assert compile_time < expected_compile_time, "trocr compile time is too slow"
 
@@ -93,9 +87,9 @@ def test_perf(expected_inference_time, expected_compile_time):
     ),
 )
 def test_perf_bare_metal(
-    use_program_cache, expected_inference_time, expected_compile_time
+    use_program_cache, expected_inference_time, expected_compile_time, device
 ):
-    test_perf(expected_inference_time, expected_compile_time)
+    test_perf(expected_inference_time, expected_compile_time, device)
 
 
 @pytest.mark.models_performance_virtual_machine
@@ -109,6 +103,6 @@ def test_perf_bare_metal(
     ),
 )
 def test_perf_virtual_machine(
-    use_program_cache, expected_inference_time, expected_compile_time
+    use_program_cache, expected_inference_time, expected_compile_time, device
 ):
-    test_perf(expected_inference_time, expected_compile_time)
+    test_perf(expected_inference_time, expected_compile_time, device)

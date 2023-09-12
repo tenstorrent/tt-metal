@@ -26,7 +26,7 @@ from tt.deit_for_image_classification_with_teacher import deit_for_image_classif
 BATCH_SIZE = 1
 
 
-def run_perf_deit(expected_inference_time, expected_compile_time, hf_cat_image_sample_input):
+def run_perf_deit(expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device):
     disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"
@@ -34,12 +34,6 @@ def run_perf_deit(expected_inference_time, expected_compile_time, hf_cat_image_s
     comments = "distilled-patch16-wteacher"
 
     image = hf_cat_image_sample_input
-
-    # Initialize the device
-    device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
-    tt_lib.device.SetDefaultDevice(device)
-
 
     image_processor = AutoImageProcessor.from_pretrained("facebook/deit-base-distilled-patch16-224")
     HF_model = DeiTForImageClassificationWithTeacher.from_pretrained("facebook/deit-base-distilled-patch16-224")
@@ -69,7 +63,6 @@ def run_perf_deit(expected_inference_time, expected_compile_time, hf_cat_image_s
 
     first_iter_time = profiler.get(first_key)
     second_iter_time = profiler.get(second_key)
-    tt_lib.device.CloseDevice(device)
 
     cpu_time = profiler.get(cpu_key)
     compile_time = first_iter_time - second_iter_time
@@ -100,8 +93,8 @@ def run_perf_deit(expected_inference_time, expected_compile_time, hf_cat_image_s
         ),
     ),
 )
-def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_compile_time, hf_cat_image_sample_input):
-    run_perf_deit(expected_inference_time, expected_compile_time, hf_cat_image_sample_input)
+def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device):
+    run_perf_deit(expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device)
 
 
 @pytest.mark.models_performance_virtual_machine
@@ -113,5 +106,5 @@ def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_co
         ),
     ),
 )
-def test_perf_virtual_machine(use_program_cache, expected_inference_time, expected_compile_time, hf_cat_image_sample_input):
-    run_perf_deit(expected_inference_time, expected_compile_time, hf_cat_image_sample_input)
+def test_perf_virtual_machine(use_program_cache, expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device):
+    run_perf_deit(expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device)

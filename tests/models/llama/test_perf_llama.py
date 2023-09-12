@@ -34,7 +34,8 @@ BATCH_SIZE = 1
 def run_perf_llama(
     expected_inference_time,
     expected_compile_time,
-            ):
+    device
+):
     model_version = "decapoda-research/llama-7b-hf"
     tokenizer_version = "hf-internal-testing/llama-tokenizer"
     batch = 1
@@ -47,12 +48,6 @@ def run_perf_llama(
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_key"
-
-    # Initialize the device
-    device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
-    tt_lib.device.SetDefaultDevice(device)
-
 
     model_name = model_version
     tokenizer_name = tokenizer_version
@@ -114,7 +109,6 @@ def run_perf_llama(
 
     first_iter_time = profiler.get(first_key)
     second_iter_time = profiler.get(second_key)
-    tt_lib.device.CloseDevice(device)
 
     cpu_time = profiler.get(cpu_key)
     compile_time = first_iter_time - second_iter_time
@@ -151,8 +145,9 @@ def test_perf_bare_metal(
     use_program_cache,
     expected_inference_time,
     expected_compile_time,
-            ):
-    run_perf_llama(expected_inference_time, expected_compile_time)
+    device
+):
+    run_perf_llama(expected_inference_time, expected_compile_time, device)
 
 
 @pytest.mark.models_performance_virtual_machine
@@ -169,5 +164,6 @@ def test_perf_virtual_machine(
     use_program_cache,
     expected_inference_time,
     expected_compile_time,
-            ):
-    run_perf_llama(expected_inference_time, expected_compile_time)
+    device
+):
+    run_perf_llama(expected_inference_time, expected_compile_time, device)

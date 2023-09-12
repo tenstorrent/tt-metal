@@ -28,17 +28,12 @@ from loguru import logger
 from tests.models.resnet.metalResnetBlock50 import ResNet, Bottleneck
 
 
-def run_perf_resnet(batch_size, expected_inference_time, expected_compile_time, hf_cat_image_sample_input):
+def run_perf_resnet(batch_size, expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device):
     disable_persistent_kernel_cache()
     first_key = f"first_iter_batchsize{batch_size}"
     second_key = f"second_iter_batchsize{batch_size}"
     cpu_key = f"ref_key_batchsize{batch_size}"
     model_name = "microsoft/resnet-50"
-
-    # Initialize the device
-    device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
-    tt_lib.device.SetDefaultDevice(device)
 
     image = hf_cat_image_sample_input
     image_processor = AutoImageProcessor.from_pretrained(model_name)
@@ -85,7 +80,6 @@ def run_perf_resnet(batch_size, expected_inference_time, expected_compile_time, 
 
     first_iter_time = profiler.get(first_key)
     second_iter_time = profiler.get(second_key)
-    tt_lib.device.CloseDevice(device)
 
     cpu_time = profiler.get(cpu_key)
     compile_time = first_iter_time - second_iter_time
@@ -117,8 +111,8 @@ def run_perf_resnet(batch_size, expected_inference_time, expected_compile_time, 
     ),
 )
 @pytest.mark.skip(reason="Conv disabled in main.")
-def test_perf_bare_metal(use_program_cache, batch_size, expected_inference_time, expected_compile_time, hf_cat_image_sample_input):
-    run_perf_resnet(batch_size, expected_inference_time, expected_compile_time, hf_cat_image_sample_input)
+def test_perf_bare_metal(use_program_cache, batch_size, expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device):
+    run_perf_resnet(batch_size, expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device)
 
 
 @pytest.mark.models_performance_virtual_machine
@@ -131,5 +125,5 @@ def test_perf_bare_metal(use_program_cache, batch_size, expected_inference_time,
     ),
 )
 @pytest.mark.skip(reason="Conv disabled in main.")
-def test_perf_virtual_machine(use_program_cache, batch_size, expected_inference_time, expected_compile_time, hf_cat_image_sample_input):
-    run_perf_resnet(batch_size, expected_inference_time, expected_compile_time, hf_cat_image_sample_input)
+def test_perf_virtual_machine(use_program_cache, batch_size, expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device):
+    run_perf_resnet(batch_size, expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device)

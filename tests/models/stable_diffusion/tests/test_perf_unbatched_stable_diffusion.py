@@ -95,15 +95,11 @@ def make_tt_unet(state_dict, device):
     return tt_unet
 
 
-def run_perf_unbatched_stable_diffusion(expected_inference_time, expected_compile_time):
+def run_perf_unbatched_stable_diffusion(expected_inference_time, expected_compile_time, device):
     profiler = Profiler()
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_iter"
-    # Initialize the device
-    device = ttl.device.CreateDevice(0)
-    ttl.device.InitializeDevice(device)
-    ttl.device.SetDefaultDevice(device)
 
     # 1. Load the autoencoder model which will be used to decode the latents into image space.
     vae = AutoencoderKL.from_pretrained(
@@ -278,7 +274,6 @@ def run_perf_unbatched_stable_diffusion(expected_inference_time, expected_compil
 
     first_iter_time = profiler.get(first_key)
     second_iter_time = profiler.get(second_key)
-    ttl.device.CloseDevice(device)
 
     compile_time = first_iter_time - second_iter_time
 
@@ -321,9 +316,9 @@ def run_perf_unbatched_stable_diffusion(expected_inference_time, expected_compil
     ),
 )
 def test_perf_bare_metal(
-    use_program_cache, expected_inference_time, expected_compile_time
+    use_program_cache, expected_inference_time, expected_compile_time, device
 ):
-    run_perf_unbatched_stable_diffusion(expected_inference_time, expected_compile_time)
+    run_perf_unbatched_stable_diffusion(expected_inference_time, expected_compile_time, device)
 
 @disable_conv_and_concat
 @pytest.mark.models_performance_virtual_machine
@@ -337,6 +332,6 @@ def test_perf_bare_metal(
     ),
 )
 def test_perf_virtual_machine(
-    use_program_cache, expected_inference_time, expected_compile_time
+    use_program_cache, expected_inference_time, expected_compile_time, device
 ):
-    run_perf_unbatched_stable_diffusion(expected_inference_time, expected_compile_time)
+    run_perf_unbatched_stable_diffusion(expected_inference_time, expected_compile_time, device)

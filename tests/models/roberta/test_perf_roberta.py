@@ -34,19 +34,13 @@ from tests.models.roberta.roberta_for_sequence_classification import (
 BATCH_SIZE = 1
 
 
-def run_perf_roberta(expected_inference_time, expected_compile_time):
+def run_perf_roberta(expected_inference_time, expected_compile_time, device):
     profiler = Profiler()
     disable_persistent_kernel_cache()
     comments = "Base Emotion"
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_key"
-
-    # Initialize the device
-    device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
-    tt_lib.device.SetDefaultDevice(device)
-
 
     with torch.no_grad():
         tokenizer = AutoTokenizer.from_pretrained(
@@ -95,7 +89,6 @@ def run_perf_roberta(expected_inference_time, expected_compile_time):
     first_iter_time = profiler.get(first_key)
     second_iter_time = profiler.get(second_key)
     cpu_time = profiler.get(cpu_key)
-    tt_lib.device.CloseDevice(device)
     prep_report(
         model_name="roberta",
         batch_size=BATCH_SIZE,
@@ -125,8 +118,8 @@ def run_perf_roberta(expected_inference_time, expected_compile_time):
         ),
     ),
 )
-def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_compile_time):
-    run_perf_roberta(expected_inference_time, expected_compile_time)
+def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_compile_time, device):
+    run_perf_roberta(expected_inference_time, expected_compile_time, device)
 
 
 @pytest.mark.models_performance_virtual_machine
@@ -138,5 +131,5 @@ def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_co
         ),
     ),
 )
-def test_perf_virtual_machine(use_program_cache, expected_inference_time, expected_compile_time):
-    run_perf_roberta(expected_inference_time, expected_compile_time)
+def test_perf_virtual_machine(use_program_cache, expected_inference_time, expected_compile_time, device):
+    run_perf_roberta(expected_inference_time, expected_compile_time, device)

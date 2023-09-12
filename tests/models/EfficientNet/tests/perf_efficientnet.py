@@ -47,16 +47,12 @@ def test_perf_efficientnet_b0(
     imagenet_sample_input,
     expected_inference_time,
     expected_compile_time,
+    device,
 ):
     disable_compile_cache()
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_key"
-
-    # Initialize the device
-    device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
-    tt_lib.device.SetDefaultDevice(device)
 
     test_input = make_input_tensor(imagenet_sample_input)
 
@@ -96,7 +92,6 @@ def test_perf_efficientnet_b0(
     logger.info(f"efficientnet_b0 inference time: {second_iter_time}")
     logger.info(f"efficientnet_b0 compile time: {compile_time}")
 
-    tt_lib.device.CloseDevice(device)
     assert second_iter_time < expected_inference_time, "efficientnet_b0 is too slow"
     assert (
         compile_time < expected_compile_time
