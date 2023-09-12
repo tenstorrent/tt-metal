@@ -25,8 +25,6 @@ struct Allocator;
 
 namespace allocator {
 
-inline u32 pass_through_address(u32 address) { return address; }
-
 class BankManager {
    public:
     BankManager() {}
@@ -39,8 +37,6 @@ class BankManager {
     i64 bank_offset(u32 bank_id) const;
 
     u64 allocate_buffer(u32 size, u32 page_size, bool bottom_up);
-
-    u64 allocate_buffer_at_address(u32 size, u32 page_size, u32 relative_address, std::function<u32(u32)> adjust_address = pass_through_address);
 
     void deallocate_buffer(u64 address);
 
@@ -92,11 +88,7 @@ std::optional<u64> lowest_occupied_l1_address(const Allocator &allocator, u32 ba
 
 u64 base_alloc(const AllocatorConfig & config, BankManager &bank_manager, u64 size, u64 page_size, bool bottom_up);
 
-u64 base_alloc_at_addr(const AllocatorConfig &config, BankManager &bank_manager, u64 size, u64 page_size, u64 absolute_address);
-
 u64 allocate_buffer(Allocator &allocator, u32 size, u32 page_size, const BufferType &buffer_type, bool bottom_up);
-
-u64 allocate_buffer_at_address(Allocator &allocator, u32 size, u32 page_size, u32 relative_address, const BufferType &buffer_type);
 
 void deallocate_buffer(Allocator &allocator, u64 address, const BufferType &buffer_type);
 

@@ -22,13 +22,6 @@ void validate_buffer_size_and_page_size(u64 size, u64 page_size, const BufferTyp
     TT_ASSERT(page_size % sizeof(u32) == 0, "Page size must be divisible by sizeof(uint32_t) because buffers hold uint32_t values");
 }
 
-Buffer::Buffer(Device *device, u64 size, u64 address, u64 page_size, const BufferType buffer_type)
-    : device_(device), size_(size), address_(address), page_size_(page_size), buffer_type_(buffer_type) {
-    TT_ASSERT(this->device_ != nullptr and this->device_->allocator_ != nullptr);
-    validate_buffer_size_and_page_size(size, page_size, buffer_type);
-    allocator::allocate_buffer_at_address(*this->device_->allocator_, size, page_size, address, buffer_type);
-}
-
 Buffer::Buffer(Device *device, u64 size, u64 page_size, const BufferType buffer_type)
     : device_(device), size_(size), page_size_(page_size), buffer_type_(buffer_type) {
     TT_ASSERT(this->device_ != nullptr and this->device_->allocator_ != nullptr);

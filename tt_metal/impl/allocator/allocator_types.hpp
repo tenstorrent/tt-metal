@@ -55,7 +55,6 @@ namespace allocator {
 struct InitAndAllocFuncs {
     std::function<void(Allocator &, const AllocatorConfig &)> init;
     std::function<u64(const AllocatorConfig &, BankManager &, u64, u64, bool)> alloc;
-    std::function<u64(const AllocatorConfig &, BankManager &, u64, u64, u64)> alloc_at_addr;
 };
 
 // Holds callback functions required by allocators that specify how to initialize the bank managers and what the allocation scheme

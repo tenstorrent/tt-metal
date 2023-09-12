@@ -26,8 +26,6 @@ class Buffer {
    public:
     Buffer() : device_(nullptr) {}
 
-    Buffer(Device *device, u64 size, u64 address, u64 page_size, const BufferType buffer_type);
-
     Buffer(Device *device, u64 size, u64 page_size, const BufferType buffer_type);
 
     Buffer(const Buffer &other);

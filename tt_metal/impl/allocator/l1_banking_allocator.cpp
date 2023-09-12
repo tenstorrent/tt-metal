@@ -115,22 +115,6 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
     allocator.l1_manager = BankManager(bank_id_to_bank_offset, allocatable_l1_size, alloc_offset);
 }
 
-u64 alloc_at_addr_in_compute_and_storage(const AllocatorConfig &config, BankManager &bank_manager, u64 size, u64 page_size, u64 relative_address) {
-    u64 allocatable_l1_size = static_cast<u64>(config.l1_bank_size);
-    u64 alloc_offset = static_cast<u64>(config.worker_l1_size - config.l1_bank_size);
-
-    auto adjust_address = [&](u32 rel_addr){
-        auto starting_bank_offset = bank_manager.bank_offset(0);
-        auto offset_to_cancel_starting_bank_offset = 0 - starting_bank_offset;
-        auto adjusted_addr = relative_address + offset_to_cancel_starting_bank_offset;
-
-        log_assert(adjusted_addr >= alloc_offset, "Invalid address specified: L1 buffers cannot grow past {}, specified address {} does not meet this criteria!", alloc_offset, relative_address);
-        return adjusted_addr;
-    };
-
-    return bank_manager.allocate_buffer_at_address(size, page_size, relative_address, adjust_address);
-}
-
 }   // namespace allocator
 
 L1BankingAllocator::L1BankingAllocator(const AllocatorConfig &alloc_config)
@@ -139,13 +123,11 @@ L1BankingAllocator::L1BankingAllocator(const AllocatorConfig &alloc_config)
         allocator::AllocDescriptor{
             .dram = {
                 .init=allocator::init_one_bank_per_channel,
-                .alloc=allocator::base_alloc,
-                .alloc_at_addr=allocator::base_alloc_at_addr
+                .alloc=allocator::base_alloc
             },
             .l1 = {
                 .init=allocator::init_compute_and_storage_l1_bank_manager,
-                .alloc=allocator::base_alloc,
-                .alloc_at_addr=allocator::alloc_at_addr_in_compute_and_storage
+                .alloc=allocator::base_alloc
             }
         }
     ) {}

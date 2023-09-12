@@ -62,20 +62,6 @@ u64 BankManager::allocate_buffer(u32 size, u32 page_size, bool bottom_up) {
     return address.value();
 }
 
-u64 BankManager::allocate_buffer_at_address(u32 size, u32 page_size, u32 relative_address, std::function<u32(u32)> adjust_address) {
-    u32 num_banks = this->num_banks();
-    // Each page needs to be at a 32B aligned address
-    uint32_t size_per_bank = tt::tt_metal::detail::SizeBytesPerBank(size, page_size, num_banks);
-
-    auto adjusted_address = adjust_address(relative_address);
-
-    auto allocated_address = this->allocator_->allocate_at_address(adjusted_address, size_per_bank);
-    log_assert(allocated_address.has_value(), "Allocating at specified address error: Cannot allocate {} KB sized buffer in banks!", size_per_bank / 1024);
-    log_assert(allocated_address.value() == adjusted_address, "Allocating at specified address error: Allocated address {} is not the same as specified address adjusted for bank {}", allocated_address.value(), adjusted_address);
-
-    return relative_address;
-}
-
 void BankManager::deallocate_buffer(u64 address) {
     this->allocator_->deallocate(address);
 }
@@ -206,27 +192,11 @@ u64 base_alloc(const AllocatorConfig &config, BankManager &bank_manager, u64 siz
     return bank_manager.allocate_buffer(size, page_size, bottom_up);
 }
 
-u64 base_alloc_at_addr(const AllocatorConfig &config, BankManager &bank_manager, u64 size, u64 page_size, u64 relative_address) {
-    return bank_manager.allocate_buffer_at_address(size, page_size, relative_address);
-}
-
 u64 allocate_buffer(Allocator &allocator, u32 size, u32 page_size, const BufferType &buffer_type, bool bottom_up) {
     u64 address = 0;
     switch (buffer_type) {
         case BufferType::DRAM: return allocator.descriptor.dram.alloc(allocator.config, allocator.dram_manager, size, page_size, bottom_up);
         case BufferType::L1: return allocator.descriptor.l1.alloc(allocator.config, allocator.l1_manager, size, page_size, bottom_up);
-        default: {
-            TT_ASSERT(false && "Unsupported buffer type!");
-        }
-    }
-    return address;
-}
-
-u64 allocate_buffer_at_address(Allocator &allocator, u32 size, u32 page_size, u32 relative_address, const BufferType &buffer_type) {
-    u64 address = 0;
-    switch (buffer_type) {
-        case BufferType::DRAM: return allocator.descriptor.dram.alloc_at_addr(allocator.config, allocator.dram_manager, size, page_size, relative_address);
-        case BufferType::L1: return allocator.descriptor.l1.alloc_at_addr(allocator.config, allocator.l1_manager, size, page_size, relative_address);
         default: {
             TT_ASSERT(false && "Unsupported buffer type!");
         }
