@@ -114,6 +114,9 @@ struct MemoryConfig {
     tt::stl::reflection::Attributes attributes() const;
 };
 
+bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b);
+bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b);
+
 using OwnedBuffer = std::variant<
     owned_buffer::Buffer<uint32_t>,
     owned_buffer::Buffer<float>,

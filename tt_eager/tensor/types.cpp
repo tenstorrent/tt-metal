@@ -164,6 +164,15 @@ bool operator!=(const Shape& shape_a, const Shape& shape_b) {
 }
 
 
+bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b) {
+    return config_a.buffer_type == config_b.buffer_type && config_a.interleaved == config_b.interleaved;
+}
+
+bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b){
+    return not (config_a == config_b);
+}
+
+
 tt::stl::reflection::Attributes MemoryConfig::attributes() const {
     return {
         {"interleaved", this->interleaved},

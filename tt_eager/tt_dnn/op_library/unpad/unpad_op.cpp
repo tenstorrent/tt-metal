@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_dnn/op_library/unpad/unpad_op.hpp"
+#include "tt_dnn/op_library/clone/clone_op.hpp"
 #include "tt_dnn/op_library/math.hpp"
 #include "tensor/tensor_utils.hpp"
 
@@ -120,7 +121,11 @@ Tensor unpad(const Tensor &input_tensor_a, const Shape &output_tensor_start, con
         output_tensor_end[3] - output_tensor_start[3] + 1,
     };
     if (input_tensor_a.shape() == output_tensor_shape) {
-        return input_tensor_a;
+        if (input_tensor_a.memory_config() != mem_config) {
+            return clone(input_tensor_a, mem_config);
+        } else {
+            return input_tensor_a;
+        }
     }
     return operation::run_without_autoformat(Unpad{output_tensor_start, output_tensor_end, mem_config}, {input_tensor_a}).at(0);
 
