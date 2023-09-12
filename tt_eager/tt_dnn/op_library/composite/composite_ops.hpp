@@ -111,7 +111,12 @@ Tensor max(const Tensor &input_a,const Tensor &input_b, const MemoryConfig& outp
 //tanhshrink = x - tanh(x)
 Tensor tanhshrink(const Tensor &input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+
 Tensor logical_andi(const Tensor& input_a, float immediate, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+// ∣input−other∣≤ atol+rtol×∣other∣
+Tensor isclose(const Tensor& input_a, const Tensor& input_b, float rtol, float atol, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 
 //addcmul(input,tensor1,tensor2,value)=input+value×tensor1×tensor2
 Tensor addcmul(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c, float value, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);

@@ -1379,3 +1379,49 @@ def gen_arange_args(input_shapes, dtypes, layouts, buffer_types, low=-100, high=
         )
 
         yield input_info
+
+def gen_logical_immediate_args(
+    input_shapes,
+    dtypes,
+    layouts,
+    buffer_types,
+    low=0,
+    high=100,
+    dtype=torch.int32,
+):
+    for input_info in gen_scalar_args(
+        input_shapes,
+        dtypes,
+        layouts,
+        buffer_types,
+        "immediate",
+        low,
+        high,
+        dtype,
+    ):
+        yield input_info
+
+
+
+def gen_logit_args(
+    input_shapes,
+    supported_dtypes,
+    supported_layouts,
+    on_device,
+    low=-1e-6,
+    high=1e6,
+    dtype=torch.bfloat16,
+):
+    for input_info in gen_scalar_args(
+        input_shapes,
+        supported_dtypes,
+        supported_layouts,
+        on_device,
+        "eps",
+        low,
+        high,
+        dtype,
+    ):
+        yield input_info
+
+        

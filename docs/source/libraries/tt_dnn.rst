@@ -346,6 +346,8 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.logical_andi
 
+.. autofunction:: tt_lib.tensor.isclose
+
 Tensor relational operations
 ----------------------------------
 .. autofunction:: tt_lib.tensor.gtz

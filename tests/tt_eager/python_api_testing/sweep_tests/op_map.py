@@ -525,6 +525,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_logical_ori,
         "pytorch_op": pytorch_ops.logical_ori,
     },
+    "eltwise-isclose": {
+        "tt_lib_op": tt_lib_ops.eltwise_isclose,
+        "pytorch_op": pytorch_ops.isclose,
+    },
     # Eltwise ternary
     "eltwise-arange": {
         "tt_lib_op": tt_lib_ops.arange,

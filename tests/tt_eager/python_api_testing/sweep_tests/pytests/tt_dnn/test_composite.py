@@ -10,6 +10,7 @@ from functools import partial
 from itertools import product
 from collections import defaultdict
 from math import pi
+import random
 import numpy as np
 
 f = f"{Path(__file__).parent}"
@@ -33,7 +34,7 @@ reference_pcc = defaultdict(lambda: 0.999)
 reference_pcc["silu"] = 0.9714
 reference_pcc["swish"] = reference_pcc["silu"]
 reference_pcc["softplus"] = 0.9984
-
+reference_pcc["bias_gelu"] = 0.606
 
 def custom_compare(*args, **kwargs):
     function = kwargs.pop("function")
@@ -45,6 +46,7 @@ def custom_compare(*args, **kwargs):
         "logical_noti",
         "logical_not",
         "logical_andi",
+        "is_close",
     ]:
         comparison_func = comparison_funcs.comp_equal
     else:
@@ -110,14 +112,16 @@ if is_wormhole_b0():
                 "logical_xori",
                 "logical_noti",
                 "logical_andi",
+                "logaddexp",
+                "logaddexp2",
+                "bias_gelu",
+                "isclose",
             ),
             shapes,
         )
     ),  # Single core, and multi-core
 )
-def test_run_eltwise_composite_test(
-    fn, input_shapes, device, function_level_defaults
-):
+def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_defaults):
     options = defaultdict(lambda: (-1.0, 1.0))
     options["log1"] = (0.0, 1.0)
     options["polyval"] = (1, 100)
@@ -140,6 +144,7 @@ def test_run_eltwise_composite_test(
     options["atanh"] = (-100, 100)
     options["cosh"] = options["sinh"]
     options["asinh"] = (-100, 100)
+    options["isclose"] = (-100, 100)
     options["acosh"] = (1, 100)
     options["logical_ori"] = (-100, 100)
     options["logical_andi"] = (-100, 100)
@@ -166,6 +171,16 @@ def test_run_eltwise_composite_test(
                 torch.bfloat16,
             )
         ]
+        if fn in ["atanh", "ldexp", "logaddexp2"]:
+            pytest.skip("Not tested for Wormhole - skipping")
+
+    datagen_func = [
+        generation_funcs.gen_func_with_cast(
+            partial(generator, low=options[fn][0], high=options[fn][1]),
+            torch.bfloat16,
+        )
+    ]
+
     num_inputs = 1
     if fn in ["mac", "addcmul", "addcdiv", "lerp_ternary"]:
         num_inputs = 3
@@ -184,6 +199,11 @@ def test_run_eltwise_composite_test(
         "addalpha",
         "logit",
         "logical_xor",
+        "ldexp",
+        "logaddexp",
+        "logaddexp2",
+        "isclose",
+        "bias_gelu",
     ]:
         num_inputs = 2
 
@@ -207,12 +227,16 @@ def test_run_eltwise_composite_test(
         test_args.update({"alpha": np.random.randint(1, 100)})
     elif fn in ["addalpha"]:
         test_args.update({"alpha": np.random.randint(1, 100)})
-    elif fn in ["bias_gelu_unary"]:
+    elif fn in ["bias_gelu_unary","bias_gelu"]:
         test_args.update({"bias": np.random.randint(1, 100)})
     elif fn in ["logit"]:
         test_args.update({"eps": np.random.randint(-1e-6, 1e6)})
     elif fn in ["logical_ori", "logical_andi", "logical_xori", "logical_noti"]:
         test_args.update({"immediate": np.random.randint(0, 100)})
+    elif fn in ["isclose"]:
+        test_args.update(
+            {"rtol": random.choice([1e-3,1e-5,1e-7]), "atol": random.choice([1e-2,1e-4,1e-6])}
+        )
     run_single_pytorch_test(
         "eltwise-%s" % (fn),
         input_shapes,

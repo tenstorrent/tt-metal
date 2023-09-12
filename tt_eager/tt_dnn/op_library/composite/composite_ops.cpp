@@ -513,6 +513,27 @@ Tensor _logical_xor(const Tensor& input_a, const Tensor& input_b, const MemoryCo
     Tensor result = where(in_a_eq_zero, in_b_neq_zero, in_b_eq_zero, output_mem_config);
     return result;
 }
+
+// ∣input−other∣≤ atol+rtol×∣other∣
+Tensor _isclose(const Tensor& input_a, const Tensor& input_b, float rtol, float atol, const MemoryConfig& output_mem_config) {
+    Tensor is_close_lhs = abs(sub(input_a, input_b, std::nullopt, output_mem_config), output_mem_config);
+    Tensor is_close_rhs(input_b);
+    {
+         Tensor mul_result = mul_unary(abs(input_b, output_mem_config), rtol, output_mem_config);
+         is_close_rhs = add_unary(mul_result, atol, output_mem_config);
+    }
+    return where(lte(is_close_lhs, is_close_rhs, std::nullopt, output_mem_config),ones_like(input_a, output_mem_config), zeros_like(input_a, output_mem_config), output_mem_config);
+}
+Tensor isclose(const Tensor& input_a, const Tensor& input_b, float rtol, float atol, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _isclose)(input_a, input_b, rtol, atol, output_mem_config);
+}
+
+//ldexp(input,other)=input * (2^other)
+Tensor _ldexp(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
+    Tensor result = mul(input_a, exp2(input_b, output_mem_config), std::nullopt, output_mem_config);
+    return result;
+}
 Tensor logical_xor(const Tensor &input_a, const Tensor &input_b, const MemoryConfig& output_mem_config)
 {
     return operation::decorate_as_composite(__func__, _logical_xor)(input_a, input_b, output_mem_config);

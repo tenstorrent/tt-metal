@@ -621,6 +621,10 @@ def lerp_binary(x, y, *args, weight, **kwargs):
     return torch.lerp(x, y, weight)
 
 
+def isclose(x, y, *args, rtol, atol, **kwargs):
+    return torch.isclose(x, y, rtol=rtol, atol=atol)
+
+
 def xlogy(x, y, *args, **kwargs):
     return torch.xlogy(x, y)
 
