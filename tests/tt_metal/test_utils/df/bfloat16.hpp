@@ -24,7 +24,7 @@ class bfloat16 {
     uint16_t uint16_data;
 
    public:
-    static const size_t SIZEOF = 2;
+    static constexpr size_t SIZEOF = 2;
 
     bfloat16() : uint16_data(0) {}
 
