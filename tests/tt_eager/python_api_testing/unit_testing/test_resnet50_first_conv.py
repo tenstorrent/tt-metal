@@ -23,13 +23,15 @@ from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
     create_conv_act_tensor_special,
     create_conv_weight_tensor,
     create_conv_weight_tensor_special_special,
+    create_conv_bias_tensor
 )
 import torch
 
 @pytest.mark.parametrize("untilize_out", (False,))
+@pytest.mark.parametrize("has_bias", (True,False))
 @pytest.mark.parametrize("N", (1,2,8))
 @pytest.mark.parametrize("extra_padding_for_32B_alignment", (25,))
-def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignment, device, untilize_out):
+def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignment, device, untilize_out, has_bias):
     (K, C, padded_C, H, W, R, S, padded_S, stride_h, stride_w, pad_h, pad_w) = (
         64,
         3,
@@ -45,6 +47,10 @@ def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignme
         3
     )
 
+    if has_bias and untilize_out:
+        ## bias is only supported without untilize out
+        pytest.skip()
+
     num_iterations = 1  # run twice to test op caching flow for conv op
     for i in range(num_iterations):
         # torch.set_printoptions(threshold=10000)
@@ -53,6 +59,8 @@ def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignme
         A_pyt = torch.randn(a_activation_shape, dtype=torch.bfloat16).float()
         b_weights_shape = [K, C, R, S]
         B_pyt = torch.randn(b_weights_shape, dtype=torch.bfloat16).float()
+        bias_shape = [1, 1, 1, K]
+        bias_pyt = torch.randn(bias_shape)
 
         # Parameters to define block dims
         #[128, 32], [32, 64], [128, 64]
@@ -109,16 +117,28 @@ def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignme
             B_pyt, K, C, R, S, weight_block_h, weight_block_w, padded_S
         )
         B_tiled = B_tiled_host.to(device)
+
+        # Bias
+        bias_cl_host = create_conv_bias_tensor(bias_pyt, 1, K, pad = 0)
+        bias_device = bias_cl_host.to(device)
+
+        if has_bias:
+            bias = torch.flatten(bias_pyt)
+        else:
+            bias = None
+
         # Calculate conv result with golden result. Run Pytorch conv
         out_golden = torch.nn.functional.conv2d(
-            A_pyt, B_pyt, stride=(stride_h, stride_w), padding=(pad_h, pad_w)
+            A_pyt, B_pyt, bias=bias, stride=(stride_h, stride_w), padding=(pad_h, pad_w)
         )
 
         # Run TT metal OP
+        if not has_bias:
+            bias_device = None
         out = ttl.tensor.optimized_conv(
             A_cl_device,
             B_tiled,
-            None,
+            bias_device,
             [R, padded_S, stride_h, stride_w, 0, 0],
             act_block_h,
             act_block_w,
@@ -127,7 +147,7 @@ def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignme
             out_subblock_w,
             K,
             untilize_out,
-            False,
+            has_bias,
             False,
             ttl.tensor.MathFidelity.HiFi4,
             ttl.tensor.OptimizedConvParallelizationConfig(grid_size=grid_size, per_core_act_matrix_height_ntiles=per_core_act_h_ntiles),
@@ -160,7 +180,12 @@ def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignme
         # assert sec_pcc
 
         # Compare against golden
-        passing_pcc, output_pcc = comp_pcc(out_golden, out_result, 0.99)
+        if N == 8:
+            golden_pcc = 0.999 if has_bias else 0.9939
+        else:
+            golden_pcc = 0.9999
+
+        passing_pcc, output_pcc = comp_pcc(out_golden, out_result, golden_pcc)
         print("Passing=", passing_pcc)
         print("Output pcc=", output_pcc)
         assert passing_pcc

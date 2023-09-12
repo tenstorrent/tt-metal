@@ -6,6 +6,10 @@
 #include "dataflow_api.h"
 #include "debug_print.h"
 
+#ifdef FUSE_BIAS
+    #include "kernels/dataflow/reader_bmm_single_core_bias.hpp"
+#endif
+
 FORCE_INLINE void read_weight_blocks_inner_h_dim(uint32_t cb_id_weight,
                         uint32_t num_blocks_weight_h,
                         uint32_t weight_block_num_tiles,
@@ -106,7 +110,6 @@ void kernel_main() {
     constexpr bool out_in_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
     constexpr uint32_t cb_id_weight = get_compile_time_arg_val(2);
-    //constexpr uint32_t log_2_of_output_row_size = get_compile_time_arg_val(3);
 
     const DataFormat out_df = get_dataformat(cb_id_out0);
 
@@ -135,6 +138,19 @@ void kernel_main() {
             weight_stride_h,
             weight_next_block_stride_h);
     //DPRINT << "Read all weights " << ENDL();
+
+    // first read in bias if enabled (done only once for all blocks)
+    #ifdef FUSE_BIAS
+        const uint32_t bias_addr = get_arg_val<uint32_t>(i); i += 1;
+        const uint32_t bias_ntiles = get_arg_val<uint32_t>(i); i += 1;
+
+        constexpr uint32_t bias_cb_id = get_compile_time_arg_val(3);
+        constexpr uint32_t bias_log2_of_pagesize = get_compile_time_arg_val(4);
+        constexpr uint32_t bias_pagesize = get_compile_time_arg_val(5);
+        constexpr uint32_t bias_in_dram = get_compile_time_arg_val(6) == 1;
+
+        read_bias<bias_in_dram>(bias_addr, bias_ntiles, bias_cb_id, bias_log2_of_pagesize, bias_pagesize);
+    #endif
 
     uint32_t out_block_h_start_tile_id = out_start_tile_id;
     uint32_t out_block_h_start_tile_id_h = out_start_tile_id_h;
