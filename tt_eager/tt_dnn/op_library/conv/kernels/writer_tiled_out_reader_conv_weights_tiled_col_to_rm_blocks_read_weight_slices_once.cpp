@@ -79,6 +79,15 @@ void kernel_main() {
     uint32_t weight_next_block_stride_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_next_block_stride_w = get_arg_val<uint32_t>(i); i+=1;
 
+    // Bias args. Unused if bias fusion is not enabled.
+    const uint32_t bias_addr = get_arg_val<uint32_t>(i); i += 1;
+    const uint32_t bias_ntiles = get_arg_val<uint32_t>(i); i += 1;
+
+    uint32_t noop = get_arg_val<uint32_t>(i); i+=1;
+    if(noop) {
+        return;
+    }
+
     constexpr bool out_in_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
     constexpr uint32_t cb_id_weight = get_compile_time_arg_val(2);
@@ -94,8 +103,6 @@ void kernel_main() {
 
         // first read in bias if enabled (done only once for all batches)
     #ifdef FUSE_BIAS
-        const uint32_t bias_addr = get_arg_val<uint32_t>(i); i += 1;
-        const uint32_t bias_ntiles = get_arg_val<uint32_t>(i); i += 1;
 
         constexpr uint32_t bias_cb_id = get_compile_time_arg_val(3);
         constexpr uint32_t bias_log2_of_pagesize = get_compile_time_arg_val(4);

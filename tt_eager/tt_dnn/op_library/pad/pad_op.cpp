@@ -44,12 +44,10 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
     uint32_t cb_npages = 16; // multibuffering
     uint32_t cb_pagesize = (uint32_t) ceil((float) padded_row_size_nbytes / constants::TILE_WIDTH) * constants::TILE_WIDTH;
     DataFormat in_df = datatype_to_dataformat_converter(a.dtype());
-    auto cb = CreateCircularBuffers(program,
-                                    cb_id,
-                                    cores,
-                                    cb_npages,
-                                    cb_npages * cb_pagesize,
-                                    in_df);
+    tt_metal::CircularBufferConfig cb_config = tt_metal::CircularBufferConfig(cb_npages * cb_pagesize, {{cb_id, in_df}})
+		.set_page_size(cb_id, cb_pagesize);
+    auto cb = tt_metal::CreateCircularBuffer(program, cores, cb_config);
+
 
     Buffer *src0_buffer = a.buffer();
     Buffer *dst_buffer = output.buffer();

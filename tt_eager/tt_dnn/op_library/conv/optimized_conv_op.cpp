@@ -361,34 +361,31 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
     uint32_t num_cores_x = p_config.grid_size.x;
     uint32_t num_cores_y = p_config.grid_size.y;
     uint32_t total_num_cores = num_cores_x * num_cores_y;
-    assert(num_cores_x < 11);
+    assert(num_cores_x < 13);
     assert(num_cores_y < 10);
     uint32_t per_core_act_matrix_height_ntiles = p_config.per_core_act_matrix_height_ntiles;
-    //cout << "total_num_cores=" << total_num_cores << endl;
-    //cout << "per_core_act_matrix_height_ntiles=" << per_core_act_matrix_height_ntiles << endl;
-    //cout << "act_matrix_height_ntiles=" << act_matrix_height_ntiles << endl;
-    //cout << "act_block_h_datums=" << act_block_h_datums << endl;
-    assert(total_num_cores * per_core_act_matrix_height_ntiles == act_matrix_height_ntiles);
+    // cout << "total_num_cores=" << total_num_cores << endl;
+    // cout << "per_core_act_matrix_height_ntiles=" << per_core_act_matrix_height_ntiles << endl;
+    // cout << "act_matrix_height_ntiles=" << act_matrix_height_ntiles << endl;
+    // cout << "act_block_h_datums=" << act_block_h_datums << endl;
+    // cout << "num_blocks_act_h=" << num_blocks_act_h << endl;
+    assert(total_num_cores * per_core_act_matrix_height_ntiles >= act_matrix_height_ntiles);
     assert(per_core_act_matrix_height_ntiles % act_block_h_ntiles == 0);
     uint32_t num_blocks_act_h_per_core = per_core_act_matrix_height_ntiles / act_block_h_ntiles;
     if (total_num_cores == 1) {
         num_blocks_act_h_per_core = num_blocks_act_h;
     }
+    // cout << "num_blocks_act_h_per_core=" << num_blocks_act_h_per_core << endl;
+    assert(act_matrix_height_ntiles % per_core_act_matrix_height_ntiles == 0);
+    uint32_t total_active_num_cores = act_matrix_height_ntiles / per_core_act_matrix_height_ntiles;
+    assert(total_active_num_cores <= total_num_cores);
+    uint32_t total_noop_cores = total_num_cores - total_active_num_cores;
 
     bool rn50_first_conv = (conv_act_size_h == 230 && conv_act_size_w == (231 + extra_padding_for_32B_alignment) &&
                             conv_output_size_h == 112 && conv_output_size_w == 112 &&
                             weight_size_h == 7 && weight_size_w == 8 &&
                             stride_h == 2 && stride_w == 2 &&
                             num_blocks_weight_w == 1);
-
-    uint32_t num_weight_cb_tiles = weight_block_h_ntiles * weight_block_w_ntiles * num_blocks_act_w;
-    if (rn50_first_conv) {
-        num_weight_cb_tiles = weight_block_h_ntiles * weight_block_w_ntiles * num_blocks_weight_w * num_blocks_act_w;
-    }
-    uint32_t num_act_cb_tiles = act_block_h_ntiles * act_block_w_ntiles;
-    if (conv_act_size_c < 256) {
-        num_act_cb_tiles = num_act_cb_tiles * 2; // double buffered
-    }
 
     vector<CoreCoord> debug_cores;
     for(uint32_t core_i = 0; core_i < total_num_cores; core_i++) {
@@ -398,7 +395,39 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
     }
 
     CoreRange all_cores = {.start = CoreCoord(0, 0), .end = CoreCoord(num_cores_x - 1, num_cores_y - 1)};
+    assert(total_active_num_cores >= num_cores_x);
+    uint32_t num_active_cores_x = num_cores_x;
+    uint32_t num_active_cores_y_with_full_x = total_active_num_cores / num_cores_x;
+    uint32_t num_active_cores_x_last_y =  total_active_num_cores % num_cores_x;
+    assert((num_active_cores_x * num_active_cores_y_with_full_x) + num_active_cores_x_last_y == total_active_num_cores);
 
+    // cout << "All active cores. Core Ranges:" << endl;
+    // cout << "Core range 1 - (0,0) to (" << num_active_cores_x - 1 << "," << num_active_cores_y_with_full_x - 1 << ")" << endl;
+
+    std::set<CoreRange> all_active_cores_set;
+    all_active_cores_set.insert((CoreRange) {.start = CoreCoord(0, 0), .end = CoreCoord(num_active_cores_x - 1, num_active_cores_y_with_full_x - 1)});
+    if (num_active_cores_x_last_y > 0) {
+        all_active_cores_set.insert((CoreRange) {.start = CoreCoord(0, num_active_cores_y_with_full_x), .end = CoreCoord(num_active_cores_x_last_y - 1, num_active_cores_y_with_full_x)});
+        // cout << "Core range 2 - (0," << num_active_cores_y_with_full_x << ") to (" << num_active_cores_x_last_y - 1 << "," << num_active_cores_y_with_full_x << ")" << endl;
+    }
+    CoreRangeSet all_active_cores(all_active_cores_set);
+    std::set<CoreRange> noop_cores_set;
+    if (total_noop_cores > 0) {
+        assert(total_noop_cores == (num_cores_x - num_active_cores_x_last_y));
+        noop_cores_set.insert((CoreRange) {.start = CoreCoord(num_active_cores_x_last_y, num_active_cores_y_with_full_x), .end = CoreCoord(num_cores_x - 1, num_active_cores_y_with_full_x)});
+        // cout << "Noop core range - (" << num_active_cores_x_last_y << "," << num_active_cores_y_with_full_x << ") to (" << num_cores_x - 1 << "," << num_active_cores_y_with_full_x << ")" << endl;
+
+    }
+    CoreRangeSet noop_cores(noop_cores_set);
+
+    uint32_t num_weight_cb_tiles = weight_block_h_ntiles * weight_block_w_ntiles * num_blocks_act_w;
+    if (rn50_first_conv) {
+        num_weight_cb_tiles = weight_block_h_ntiles * weight_block_w_ntiles * num_blocks_weight_w * num_blocks_act_w;
+    }
+    uint32_t num_act_cb_tiles = act_block_h_ntiles * act_block_w_ntiles;
+    if (conv_act_size_c < 256) {
+        num_act_cb_tiles = num_act_cb_tiles * 2; // double buffered
+    }
     create_CBs(
             program,
             a.device(),
@@ -508,14 +537,24 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
             .compile_args = reader_compile_time_args,
             .defines = reader_defines});
 
-    auto compute = CreateComputeKernel(
+    // Compile compute kernel for active cores only
+    // Compile blank kernel for noop cores
+    auto compute_id = CreateComputeKernel(
         program,
         compute_kernel,
-        all_cores,
+        all_active_cores,
         ComputeConfig{
             .math_fidelity = math_fidelity,
             .compile_args = compute_kernel_args,
             .defines = compute_defines});
+
+    if (total_noop_cores > 0) {
+        auto compute_id = CreateComputeKernel(
+        program,
+        "tt_metal/kernels/compute/blank.cpp",
+        noop_cores);
+    }
+
     vector<KernelID> reader_ids;
     vector<KernelID> writer_ids;
     //tt_start_debug_print_server();
@@ -524,7 +563,15 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
         uint32_t core_y_i = core_i / num_cores_x;
         // cout << "core_x_i=" << core_x_i << ", core_y_i=" << core_y_i << endl;
         CoreRange core = {.start = CoreCoord(core_x_i, core_y_i), .end = CoreCoord(core_x_i, core_y_i)};
-
+        bool noop_core = false;
+        for (const auto & noop_core_range : noop_cores.ranges()) {
+            if (noop_core_range.contains(core)) {
+                // cout << "No op core" << endl;
+                // cout << "core_x_i=" << core_x_i << ", core_y_i=" << core_y_i << endl;
+                noop_core = true;
+                break;
+            }
+        }
         // per core specific args
         uint32_t total_h_start = core_i * per_core_act_matrix_height_ntiles * TILE_HEIGHT;
         uint32_t n_start = total_h_start / (conv_output_size_h * conv_output_size_w);
@@ -552,7 +599,8 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
                 act_block_num_tiles,
                 in_h_start,
                 out_w_start,
-                last_start_in_h_curr_image
+                last_start_in_h_curr_image,
+                (uint32_t) noop_core
             });
         } else {
             reader_rt_args.push_back({
@@ -596,6 +644,7 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
                 out_h_start,
                 out_w_start,
                 total_h_start,
+                (uint32_t) noop_core
             });
         }
 
@@ -640,9 +689,12 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
 
             // bias
             bias_dram_addr,
-            bias_ntiles
+            bias_ntiles,
+
+            (uint32_t) noop_core
         });
 
+        vector<uint32_t> compute_rt_args = {(uint32_t) noop_core};
 
 
         SetRuntimeArgs(
@@ -654,6 +706,7 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
             program, writer_id, core,
             writer_rt_args.back()
         );
+
         reader_ids.push_back(reader_id);
         writer_ids.push_back(writer_id);
 
@@ -680,6 +733,9 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
         auto src_dram_buffer_b = input_buffers.at(1);
 
         auto dst_dram_buffer = output_buffers.at(0);
+        //cout << "conv src address = " << src_dram_buffer_a->address() << ", buffer type = " << (int) src_dram_buffer_a->buffer_type() << ", page size = " << src_dram_buffer_a->page_size() << " , size = " << src_dram_buffer_a->size() << endl;
+        //cout << "conv dst address = " << dst_dram_buffer->address() << ", buffer type = " << (int) dst_dram_buffer->buffer_type() << ", page size = " << dst_dram_buffer->page_size() << " , size = " << dst_dram_buffer->size() << endl;
+
         for(uint32_t core_i = 0; core_i < total_num_cores; core_i++) {
             uint32_t core_x_i = core_i % num_cores_x;
             uint32_t core_y_i = core_i / num_cores_x;
@@ -693,6 +749,7 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
             {
                 auto runtime_args = GetRuntimeArgs(program, writer_kernel_ids[core_i], core);
                 runtime_args[0] = dst_dram_buffer->address();
+
                 runtime_args[1] = src_dram_buffer_b->address();
                 if (has_bias) {
                     auto src_dram_buffer_c = input_buffers.at(2);

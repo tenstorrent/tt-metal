@@ -22,6 +22,11 @@ void kernel_main() {
     uint32_t out_w_start = get_arg_val<uint32_t>(i); i+=1;
     uint32_t last_start_in_h_curr_image = get_arg_val<uint32_t>(i); i+=1;
 
+    uint32_t noop = get_arg_val<uint32_t>(i); i+=1;
+    if(noop) {
+        return;
+    }
+
     constexpr bool act_in_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t stride_h = get_compile_time_arg_val(1);
     constexpr uint32_t stride_w = get_compile_time_arg_val(2);

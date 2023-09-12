@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Type, Union, Optional, List, Callable
-
+import time
 import tt_lib
 import torch
 import torch.nn as nn
@@ -896,19 +896,23 @@ class ResNet(nn.Module):
             grid_size = (7, 7)
             per_core_act_h_ntiles = 16
         elif batch_size == 8:
-            act_block_h_datums = 256
             # 7,7 multi core config triggers non-deterministic output
             # grid_size = (7,7)
             # per_core_act_h_ntiles = 64
-            grid_size = (7, 8)
-            per_core_act_h_ntiles = 56
+            # act_block_h_datums = 256
+            # grid_size = (7,8)
+            # per_core_act_h_ntiles = 56
+            act_block_h_datums = 1024
+            grid_size = (12, 9)
+            per_core_act_h_ntiles = 32
+
         self.conv1 = resnet50_first_conv(
             conv1_weight.reshape(-1).tolist(),
             self.conv1_params,
             self.device,
             [act_block_h_datums, 32],
             [32, 64],
-            [128, 64],
+            [32, 64],
             grid_size,
             per_core_act_h_ntiles,
             conv1_bias.tolist(),
@@ -1262,15 +1266,19 @@ class ResNet(nn.Module):
         )
         # print("A_cl_device shape into OP", x.shape())
         # print("Running conv1")
+        # time.sleep(5)
         x = self.conv1(x)
+        # time.sleep(5)
         # x = x.reshape(1, 1, x.shape()[0]*x.shape()[1]*x.shape()[2], x.shape()[3]);
         # print("Printing relu after conv1")
         # Relu is fused with conv1
         # x = self.relu(x, self.memory_config)
         # tt_lib.device.DumpDeviceMemoryState(self.device)
+        # x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.DRAM))
         x = format_tensor(
             x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config
         )
+        # time.sleep(2)
         x = x.reshape(
             self.conv1_output_shape[0],
             self.conv1_output_shape[1],
@@ -1391,3 +1399,186 @@ class ResNet(nn.Module):
         # profiler.print()
         # print("Done printing profiler")
         return x
+
+    def run_first_part(self, x):
+        extra_padding_for_32B_alignment = 25
+        x = torch.nn.functional.pad(
+            x, (3, 4 + extra_padding_for_32B_alignment, 3, 3, 0, 1)
+        )
+        # permute_key="permute_key"
+        # input_tensor_construct_key="input_tensor_construct_key"
+        # misc_key = "misc_key"
+        # assert x.shape[3] == 224 and x.shape[2] == 224
+        # profiler.start(permute_key)
+
+        # print("padding x shape - ", x.shape)
+        x = torch.permute(x, (0, 2, 3, 1))
+        # profiler.end(permute_key)
+        # profiler.start(input_tensor_construct_key)
+        x = tt_lib.tensor.Tensor(x, tt_lib.tensor.DataType.BFLOAT16)
+        # profiler.end(input_tensor_construct_key)
+
+        original_A_cl_host_shape = x.shape()
+        x = x.reshape(x.shape()[0], x.shape()[1], 1, x.shape()[2] * x.shape()[3])
+        # print("A_cl_host shape after re-shape (only for transfer)", x.shape())
+
+        x = x.to(self.device, self.memory_config)  # to l1
+        # re-shape back to original shape (N, H, W, C)
+        x = x.reshape(
+            original_A_cl_host_shape[0],
+            original_A_cl_host_shape[1],
+            original_A_cl_host_shape[2],
+            original_A_cl_host_shape[3],
+        )
+        # print("A_cl_device shape into OP", x.shape())
+        # print("Running conv1")
+        # time.sleep(5)
+        x = self.conv1(x)
+        # time.sleep(5)
+        # x = x.reshape(1, 1, x.shape()[0]*x.shape()[1]*x.shape()[2], x.shape()[3]);
+        # print("Printing relu after conv1")
+        # Relu is fused with conv1
+        # x = self.relu(x, self.memory_config)
+        # tt_lib.device.DumpDeviceMemoryState(self.device)
+
+        # x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.DRAM))
+        x = format_tensor(
+            x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config
+        )
+        # time.sleep(2)
+        x = x.reshape(
+            self.conv1_output_shape[0],
+            self.conv1_output_shape[1],
+            self.conv1_output_shape[2],
+            self.conv1_output_shape[3],
+        )
+
+        conv1_output_on_host = x.cpu().to_torch().to(torch.float)
+
+        # Permute from nhwc to nchw
+        conv1_output_on_host = torch.transpose(conv1_output_on_host, 2, 3)
+        conv1_output_on_host = torch.transpose(conv1_output_on_host, 1, 2)
+        # print("Running maxpool")
+        # time.sleep(2)
+        x = self.maxpool(x)
+        max_pool_output_on_host = x.cpu().to_torch().to(torch.float)
+        max_pool_output_on_host = torch.reshape(
+            max_pool_output_on_host, self.maxpool_output_shape
+        )
+        # Permute from nhwc to nchw
+        max_pool_output_on_host = torch.transpose(max_pool_output_on_host, 2, 3)
+        max_pool_output_on_host = torch.transpose(max_pool_output_on_host, 1, 2)
+        return conv1_output_on_host, max_pool_output_on_host
+
+        # print("Done maxpool")
+        x = x.reshape(
+            1,
+            1,
+            self.maxpool_output_shape[0]
+            * self.maxpool_output_shape[1]
+            * self.maxpool_output_shape[2],
+            self.maxpool_output_shape[3],
+        )
+        x = format_tensor(x, tt_lib.tensor.Layout.TILE, self.device, self.memory_config)
+
+        x = self.layer1_module1(x)
+        x = self.layer1_module2(x)
+        x = self.layer1_module3(x)
+
+        x = self.layer2_module1(x)
+        x = self.layer2_module2(x)
+        x = self.layer2_module3(x)
+        x = self.layer2_module4(x)
+
+        x = self.layer3_module1(x)
+        x = self.layer3_module2(x)
+        x = self.layer3_module3(x)
+        x = self.layer3_module4(x)
+        x = self.layer3_module5(x)
+        x = self.layer3_module6(x)
+
+        x = self.layer4_module1(x)
+        x = self.layer4_module2(x)
+        x = self.layer4_module3(x)
+
+        x = format_tensor(
+            x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config
+        )
+        x = x.reshape(
+            self.batch_size,
+            x.shape()[1],
+            (int)(x.shape()[2] / self.batch_size),
+            x.shape()[3],
+        )
+
+        unpadded_shape = x.shape()
+        padded_shape = [
+            unpadded_shape[0],
+            unpadded_shape[1],
+            _nearest_32(unpadded_shape[2]),
+            _nearest_32(unpadded_shape[3]),
+        ]
+        x = tt_lib.tensor.pad(
+            x, padded_shape, [0, 0, 0, 0], 0, output_mem_config=self.memory_config
+        )
+        x = tt_lib.tensor.tilize(x, output_mem_config=self.memory_config)
+
+        x = self.avgpool(x, self.memory_config)
+
+        unpadded_shape_end = [
+            x.shape()[0] - 1,
+            x.shape()[1] - 1,
+            1 - 1,
+            x.shape()[3] - 1,
+        ]
+        x = tt_lib.tensor.untilize_with_unpadding(
+            x,
+            output_tensor_end=unpadded_shape_end,
+            output_tensor_start=[0, 0, 0, 0],
+            output_mem_config=self.memory_config,
+        )
+        x = x.reshape(1, x.shape()[1], self.batch_size * x.shape()[2], x.shape()[3])
+
+        unpadded_shape = x.shape()
+        padded_shape = [
+            unpadded_shape[0],
+            unpadded_shape[1],
+            _nearest_32(unpadded_shape[2]),
+            _nearest_32(unpadded_shape[3]),
+        ]
+        x = tt_lib.tensor.pad(
+            x, padded_shape, [0, 0, 0, 0], 0, output_mem_config=self.memory_config
+        )
+        x = tt_lib.tensor.tilize(x, output_mem_config=self.memory_config)
+
+        x = self.fc(x)
+        x = format_tensor(
+            x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config
+        )
+        x = x.reshape(
+            self.batch_size,
+            x.shape()[1],
+            (int)(x.shape()[2] / self.batch_size),
+            x.shape()[3],
+        )
+        x = x.cpu()
+        # assert x.layout() != tt_lib.tensor.Layout.ROW_MAJOR
+        # x = x.to(tt_lib.tensor.Layout.ROW_MAJOR)
+        desired_shape = [x.shape()[0], x.shape()[1], 1, 1000]
+        x = x.unpad(
+            (0, 0, 0, 0),
+            (
+                desired_shape[0] - 1,
+                desired_shape[1] - 1,
+                desired_shape[2] - 1,
+                desired_shape[3] - 1,
+            ),
+        )
+        # tt_to_torch_key = "tt_to_torch_key"
+        # profiler.start(tt_to_torch_key)
+        x = x.to_torch().to(torch.float)
+        # profiler.end(tt_to_torch_key)
+        # print("Printing profiler")
+        # profiler.print()
+        # print("Done printing profiler")
+        return x, conv1_output_on_host, max_pool_output_on_host

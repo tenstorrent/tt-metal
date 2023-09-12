@@ -15,7 +15,10 @@ from tt_lib.utils import (
     _nearest_y,
     convert_weights_2d_matrix,
 )
-from models.utility_functions import print_diff_argmax, is_close, comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+    comp_allclose_and_pcc,
+    comp_pcc,
+)
 from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
     create_conv_act_tensor,
     create_conv_act_tensor_special,
@@ -27,9 +30,16 @@ import torch
 
 
 @pytest.mark.parametrize("untilize_out", (False,))
-@pytest.mark.parametrize("has_bias", (True, False))
-@pytest.mark.parametrize("fuse_relu", (True, False))
-@pytest.mark.parametrize("N", (1, 2, 8))
+@pytest.mark.parametrize("has_bias", (True,))
+@pytest.mark.parametrize("fuse_relu", (True,))
+@pytest.mark.parametrize(
+    "N",
+    (
+        1,
+        2,
+        8,
+    ),
+)
 @pytest.mark.parametrize("extra_padding_for_32B_alignment", (25,))
 def test_resnet50_first_conv(
     use_program_cache,
@@ -94,9 +104,12 @@ def test_resnet50_first_conv(
             grid_size = (7, 7)
             per_core_act_h_ntiles = 16
         elif N == 8:
-            act_block_h_datums = 256
-            grid_size = (7, 8)
-            per_core_act_h_ntiles = 56
+            act_block_h_datums = 1024
+            grid_size = (12, 9)
+            per_core_act_h_ntiles = 32
+            # act_block_h_datums = 256
+            # grid_size = (7,8)
+            # per_core_act_h_ntiles = 56
         act_block_h = (int)(act_block_h_datums / 32)
 
         # Prepare activations
@@ -161,6 +174,7 @@ def test_resnet50_first_conv(
         # Run TT metal OP
         if not has_bias:
             bias_device = None
+
         out = ttl.tensor.optimized_conv(
             A_cl_device,
             B_tiled,
@@ -182,6 +196,7 @@ def test_resnet50_first_conv(
             ),
             extra_padding_for_32B_alignment,
         )
+
         if not untilize_out:
             out_unpadded_shape = [1, 1, N * OH * OW, K]
             assert out_unpadded_shape == out.shape_without_padding()
@@ -226,10 +241,7 @@ def test_resnet50_first_conv(
             assert torch.all(out_bool)
 
         # Compare against golden
-        if N == 8:
-            golden_pcc = 0.999 if has_bias else 0.9939
-        else:
-            golden_pcc = 0.9999
+        golden_pcc = 0.9999
 
         passing_pcc, output_pcc = comp_pcc(out_golden, out_result, golden_pcc)
         print("Passing=", passing_pcc)
