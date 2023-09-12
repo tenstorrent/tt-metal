@@ -82,7 +82,8 @@
 #define MEM_DEBUG_TRISC2_STATUS_MAILBOX_ADDRESS  (MEM_MAILBOX_BASE + 176)  // 4 bytes
 #define MEM_DEBUG_STATUS_MAILBOX_END_ADDRESS     (MEM_MAILBOX_BASE + 180)
 #define MEM_DEBUG_SANITIZE_NOC_MAILBOX_ADDRESS   (MEM_MAILBOX_BASE + 180) // 2 * 16 bytes
-#define MEM_MAILBOX_END                          (MEM_MAILBOX_BASE + 212)
+#define MEM_BARRIER_ADDRESS                      (MEM_MAILBOX_BASE + 212) // 4 bytes
+#define MEM_MAILBOX_END                          (MEM_MAILBOX_BASE + 216)
 
 // XXXX TODO(pgk) remove these when the UMD gets unified and these host
 // dependencies go away

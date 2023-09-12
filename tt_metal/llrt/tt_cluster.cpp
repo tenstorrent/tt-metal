@@ -1005,34 +1005,12 @@ void tt_cluster::set_l1_barrier(chip_id_t chip_id, uint32_t barrier_value) {
         noc_row_harvested[r] = row_harvested;
     }
 
-    CoreCoord post_harvested_worker_grid_size = CoreCoord{
-        .x = soc_desc.worker_grid_size.x,
-        .y = soc_desc.worker_grid_size.y - num_harvested_rows,
-    };
-
-    static std::unordered_set<CoreCoord> physical_storage_only_cores;
-    if (physical_storage_only_cores.empty()) {
-        for (const auto& relative_storage_core : soc_desc.storage_cores) {
-            const auto logical_coord = get_core_coord_from_relative(relative_storage_core, post_harvested_worker_grid_size);
-            CoreCoord noc_routing_coord({
-                .x = static_cast<size_t>(soc_desc.worker_log_to_routing_x.at(logical_coord.x)),
-                .y = static_cast<size_t>(soc_desc.worker_log_to_routing_y.at(logical_coord.y)),
-            });
-            while (not soc_desc.is_worker_core(noc_routing_coord)) {
-                noc_routing_coord.y++;
-            }
-            physical_storage_only_cores.insert(noc_routing_coord);
-        }
-    }
-
     std::vector<CoreCoord> cores_written;
     std::vector<uint32_t> barrier_vec = {barrier_value};
     for (const CoreCoord &worker_core : soc_desc.workers) {
         unsigned int row = worker_core.y;
         if (not noc_row_harvested[row]) {
-            bool is_storage_only_core = physical_storage_only_cores.find(worker_core) != physical_storage_only_cores.end();
-            uint32_t barrier_address = is_storage_only_core ? STORAGE_ONLY_L1_BARRIER_BASE : COMPUTE_L1_BARRIER_BASE;
-            this->write_dram_vec(barrier_vec, tt_cxy_pair(chip_id, worker_core), barrier_address);
+            this->write_dram_vec(barrier_vec, tt_cxy_pair(chip_id, worker_core), MEM_BARRIER_ADDRESS);
             cores_written.emplace_back(worker_core);
         }
     }
@@ -1043,9 +1021,7 @@ void tt_cluster::set_l1_barrier(chip_id_t chip_id, uint32_t barrier_value) {
         barrier_value_propagated = true;
         for (const CoreCoord &worker_core : cores_written) {
             vector<std::uint32_t> barrier_val;
-            bool is_storage_only_core = physical_storage_only_cores.find(worker_core) != physical_storage_only_cores.end();
-            uint32_t barrier_address = is_storage_only_core ? STORAGE_ONLY_L1_BARRIER_BASE : COMPUTE_L1_BARRIER_BASE;
-            this->read_dram_vec(barrier_val, tt_cxy_pair(chip_id, worker_core), barrier_address, sizeof(uint32_t));
+            this->read_dram_vec(barrier_val, tt_cxy_pair(chip_id, worker_core), MEM_BARRIER_ADDRESS, sizeof(uint32_t));
             barrier_value_propagated &= (barrier_val[0] == barrier_value);
         }
     }

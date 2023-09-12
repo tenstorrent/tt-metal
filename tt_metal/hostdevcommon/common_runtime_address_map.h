@@ -36,15 +36,6 @@ constexpr static std::uint32_t SEMAPHORE_ALIGNMENT = 16;
 constexpr static std::uint32_t ALIGNED_SIZE_PER_SEMAPHORE = (((UINT32_WORDS_PER_SEMAPHORE * sizeof(uint32_t)) + SEMAPHORE_ALIGNMENT - 1) / SEMAPHORE_ALIGNMENT) * SEMAPHORE_ALIGNMENT;
 constexpr static std::uint32_t SEMAPHORE_SIZE = NUM_SEMAPHORES * ALIGNED_SIZE_PER_SEMAPHORE;
 
-// L1 write barrier
-// Host writes (4B value) to and reads from this address across all L1s to ensure previous writes have been committed
-constexpr static std::uint32_t L1_BARRIER_ALIGNMENT = 32;
-constexpr static std::uint32_t L1_BARRIER_SIZE = ((sizeof(uint32_t) + L1_BARRIER_ALIGNMENT - 1) / L1_BARRIER_ALIGNMENT) * L1_BARRIER_ALIGNMENT;
-constexpr static std::uint32_t COMPUTE_L1_BARRIER_BASE = SEMAPHORE_BASE + SEMAPHORE_SIZE;
-// Each L1 bank in storage only cores needs to reserve L1_BARRIER_SIZE bytes to hold L1 write barrier
-constexpr static std::uint32_t STORAGE_ONLY_L1_BARRIER_BASE = 0;
-
-
 // Debug printer buffers - A total of 5*PRINT_BUFFER_SIZE starting at PRINT_BUFFER_NC address
 constexpr static std::uint32_t PRINT_BUFFER_SIZE = 204; // per thread
 constexpr static std::uint32_t PRINT_BUFFERS_COUNT = 5; // one for each thread
@@ -56,7 +47,6 @@ constexpr static std::uint32_t PRINT_BUFFER_BR = PRINT_BUFFER_T2 + PRINT_BUFFER_
 constexpr static std::uint32_t CONSTANT_REGISTER_VALUE = PRINT_BUFFER_BR + PRINT_BUFFER_SIZE + 4; // Producer/consumer sync scratch address
 
 constexpr static std::uint32_t L1_UNRESERVED_BASE = 120 * 1024; // Start of unreserved space
-constexpr static std::uint32_t STORAGE_ONLY_UNRESERVED_BASE = STORAGE_ONLY_L1_BARRIER_BASE + L1_BARRIER_SIZE;
 
 // Breakpoint regions
 constexpr static std::uint32_t NCRISC_BREAKPOINT = 109568;
