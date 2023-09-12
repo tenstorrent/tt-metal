@@ -449,7 +449,6 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
     if (fuse_relu) {
         // auto relu_param = UnaryWithParam{.op_type = UnaryOpType.RELU};
         compute_defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::RELU, nullopt, "ACTIVATION", "i"));
-        compute_defines["RELU_ACTIVATION"] = "1";
         if (has_bias) {
             compute_defines["FUSE_BIAS"] = "1";
         }

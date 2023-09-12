@@ -13,9 +13,7 @@
 #include "compute_kernel_api/bcast.h"
 #endif
 
-#ifdef RELU_ACTIVATION
-#include "compute_kernel_api/eltwise_unary/relu.h"
-#endif
+#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 
 #define DEBUG_PRINT 0
 

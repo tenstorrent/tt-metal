@@ -11,7 +11,7 @@
 #ifdef FUSE_BIAS
 #include "compute_kernel_api/bcast.h"
 #endif
-
+#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 
 inline void tilize_in(
     uint32_t in_cb_id,
@@ -214,6 +214,15 @@ void MAIN {
                             mm_init_short();
                             // reconfig unpacker df for srcB
                             // unpack_reconfig_data_format(in1_cb_id, in0_cb_id);
+                        }
+                    #endif
+
+                    #ifdef SFPU_OP_INIT_ACTIVATION
+                        if (last_out) {
+                            SFPU_OP_INIT_ACTIVATION
+                            for (uint32_t i = 0; i < out_subblock_num_tiles; ++ i) {
+                                SFPU_OP_FUNC_ACTIVATION
+                            }
                         }
                     #endif
 

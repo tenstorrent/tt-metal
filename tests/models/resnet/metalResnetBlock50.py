@@ -913,6 +913,7 @@ class ResNet(nn.Module):
             per_core_act_h_ntiles,
             conv1_bias.tolist(),
             8,
+            fuse_relu=True,
         )
         self.conv1_output_shape = compute_conv_output_shape(
             self.conv1_params,
@@ -1264,7 +1265,8 @@ class ResNet(nn.Module):
         x = self.conv1(x)
         # x = x.reshape(1, 1, x.shape()[0]*x.shape()[1]*x.shape()[2], x.shape()[3]);
         # print("Printing relu after conv1")
-        x = self.relu(x, self.memory_config)
+        # Relu is fused with conv1
+        # x = self.relu(x, self.memory_config)
         # tt_lib.device.DumpDeviceMemoryState(self.device)
         x = format_tensor(
             x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config

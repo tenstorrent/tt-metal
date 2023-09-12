@@ -3,8 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from pathlib import Path
-import sys
 
 import numpy as np
 
@@ -23,15 +21,25 @@ from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
     create_conv_act_tensor_special,
     create_conv_weight_tensor,
     create_conv_weight_tensor_special_special,
-    create_conv_bias_tensor
+    create_conv_bias_tensor,
 )
 import torch
 
+
 @pytest.mark.parametrize("untilize_out", (False,))
-@pytest.mark.parametrize("has_bias", (True,False))
-@pytest.mark.parametrize("N", (1,2,8))
+@pytest.mark.parametrize("has_bias", (True, False))
+@pytest.mark.parametrize("fuse_relu", (True, False))
+@pytest.mark.parametrize("N", (1, 2, 8))
 @pytest.mark.parametrize("extra_padding_for_32B_alignment", (25,))
-def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignment, device, untilize_out, has_bias):
+def test_resnet50_first_conv(
+    use_program_cache,
+    N,
+    extra_padding_for_32B_alignment,
+    device,
+    untilize_out,
+    has_bias,
+    fuse_relu,
+):
     (K, C, padded_C, H, W, R, S, padded_S, stride_h, stride_w, pad_h, pad_w) = (
         64,
         3,
@@ -44,7 +52,7 @@ def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignme
         2,
         2,
         3,
-        3
+        3,
     )
 
     if has_bias and untilize_out:
@@ -63,7 +71,7 @@ def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignme
         bias_pyt = torch.randn(bias_shape)
 
         # Parameters to define block dims
-        #[128, 32], [32, 64], [128, 64]
+        # [128, 32], [32, 64], [128, 64]
         assert padded_C * padded_S % 32 == 0
         act_block_w = (int)((padded_C * padded_S) / 32)
         weight_block_h = act_block_w
@@ -77,24 +85,31 @@ def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignme
         print(a_activation_shape)
         print(conv_output_shape)
 
-        if(N == 1):
+        if N == 1:
             act_block_h_datums = 256
-            grid_size = (7,7)
+            grid_size = (7, 7)
             per_core_act_h_ntiles = 8
-        elif(N == 2):
+        elif N == 2:
             act_block_h_datums = 256
-            grid_size = (7,7)
+            grid_size = (7, 7)
             per_core_act_h_ntiles = 16
-        elif(N == 8):
+        elif N == 8:
             act_block_h_datums = 256
-            grid_size = (7,8)
+            grid_size = (7, 8)
             per_core_act_h_ntiles = 56
-        act_block_h = (int) (act_block_h_datums / 32)
+        act_block_h = (int)(act_block_h_datums / 32)
 
         # Prepare activations
 
         A_cl_host = create_conv_act_tensor_special(
-            A_pyt, N, C, H, W, pad_h, pad_w, extra_pad_w_right=1 + extra_padding_for_32B_alignment
+            A_pyt,
+            N,
+            C,
+            H,
+            W,
+            pad_h,
+            pad_w,
+            extra_pad_w_right=1 + extra_padding_for_32B_alignment,
         )
         print("A_cl_host shape", A_cl_host.shape())
         memory_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
@@ -103,13 +118,23 @@ def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignme
         original_A_cl_host_shape = A_cl_host.shape()
 
         # re-shape to (N, H, 1, W*C)
-        A_cl_host = A_cl_host.reshape(A_cl_host.shape()[0], A_cl_host.shape()[1], 1, A_cl_host.shape()[2] * A_cl_host.shape()[3])
+        A_cl_host = A_cl_host.reshape(
+            A_cl_host.shape()[0],
+            A_cl_host.shape()[1],
+            1,
+            A_cl_host.shape()[2] * A_cl_host.shape()[3],
+        )
         print("A_cl_host shape after re-shape (only for transfer)", A_cl_host.shape())
         A_cl_device = A_cl_host.to(device, memory_config)
 
         print(original_A_cl_host_shape)
         # re-shape back to original shape (N, H, W, C)
-        A_cl_device = A_cl_device.reshape(original_A_cl_host_shape[0], original_A_cl_host_shape[1], original_A_cl_host_shape[2], original_A_cl_host_shape[3])
+        A_cl_device = A_cl_device.reshape(
+            original_A_cl_host_shape[0],
+            original_A_cl_host_shape[1],
+            original_A_cl_host_shape[2],
+            original_A_cl_host_shape[3],
+        )
         print("A_cl_device shape into OP", A_cl_device.shape())
 
         # Prepare weights
@@ -119,7 +144,7 @@ def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignme
         B_tiled = B_tiled_host.to(device)
 
         # Bias
-        bias_cl_host = create_conv_bias_tensor(bias_pyt, 1, K, pad = 0)
+        bias_cl_host = create_conv_bias_tensor(bias_pyt, 1, K, pad=0)
         bias_device = bias_cl_host.to(device)
 
         if has_bias:
@@ -131,7 +156,8 @@ def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignme
         out_golden = torch.nn.functional.conv2d(
             A_pyt, B_pyt, bias=bias, stride=(stride_h, stride_w), padding=(pad_h, pad_w)
         )
-
+        if fuse_relu:
+            out_golden = torch.nn.ReLU()(out_golden)
         # Run TT metal OP
         if not has_bias:
             bias_device = None
@@ -148,16 +174,26 @@ def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignme
             K,
             untilize_out,
             has_bias,
-            False,
+            fuse_relu,
             ttl.tensor.MathFidelity.HiFi4,
-            ttl.tensor.OptimizedConvParallelizationConfig(grid_size=grid_size, per_core_act_matrix_height_ntiles=per_core_act_h_ntiles),
-            extra_padding_for_32B_alignment
+            ttl.tensor.OptimizedConvParallelizationConfig(
+                grid_size=grid_size,
+                per_core_act_matrix_height_ntiles=per_core_act_h_ntiles,
+            ),
+            extra_padding_for_32B_alignment,
         )
         if not untilize_out:
-           out_unpadded_shape = [1, 1, N*OH*OW, K]
-           assert out_unpadded_shape == out.shape_without_padding()
-           out = ttl.tensor.format_output_tensor(out, out.shape_without_padding(), device, ttl.tensor.Layout.ROW_MAJOR)
-           out = out.reshape(conv_output_shape[0], conv_output_shape[1], conv_output_shape[2], conv_output_shape[3])
+            out_unpadded_shape = [1, 1, N * OH * OW, K]
+            assert out_unpadded_shape == out.shape_without_padding()
+            out = ttl.tensor.format_output_tensor(
+                out, out.shape_without_padding(), device, ttl.tensor.Layout.ROW_MAJOR
+            )
+            out = out.reshape(
+                conv_output_shape[0],
+                conv_output_shape[1],
+                conv_output_shape[2],
+                conv_output_shape[3],
+            )
         out = out.cpu()
         assert out.shape() == conv_output_shape
         assert out.layout() == ttl.tensor.Layout.ROW_MAJOR
@@ -178,6 +214,16 @@ def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignme
         # out_golden_sec_image = out_golden[1][:][:][:]
         # sec_pcc, _ = comp_pcc(out_golden_sec_image, out_result_sec_image, pcc=0.9998)
         # assert sec_pcc
+
+        # Sanity check for relu
+        if fuse_relu:
+            print("Relu enabled. Check for all values >= 0")
+            out_bool = out_result >= 0
+            out_nonzero = out_result < 0
+            indices = out_nonzero.nonzero()
+            print("Printing non zero indices -")
+            print(indices)
+            assert torch.all(out_bool)
 
         # Compare against golden
         if N == 8:
