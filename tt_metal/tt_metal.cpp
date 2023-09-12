@@ -418,7 +418,7 @@ void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
     switch (buffer.buffer_type()) {
         case BufferType::DRAM:
         case BufferType::L1: {
-            if (buffer.buffer_type() == BufferType::DRAM) cluster->dram_barrier(device->pcie_slot()); else cluster->l1_barrier(device->pcie_slot());
+            if (buffer.buffer_type() == BufferType::DRAM) cluster->dram_barrier(device->id()); else cluster->l1_barrier(device->id());
             ReadFromDevice(buffer, host_buffer);
         } break;
         case BufferType::SYSTEM_MEMORY: {
@@ -766,8 +766,8 @@ bool LaunchKernels(Device *device, const Program &program, bool stagger_start) {
     auto cluster = device->cluster();
     auto device_id = device->id();
 
-    cluster->dram_barrier(pcie_slot);
-    cluster->l1_barrier(pcie_slot);
+    cluster->dram_barrier(device_id);
+    cluster->l1_barrier(device_id);
 
     // Deassert cores used in the program
     TensixSoftResetOptions soft_reset_option = stagger_start ? TENSIX_DEASSERT_SOFT_RESET : TENSIX_DEASSERT_SOFT_RESET_NO_STAGGER;

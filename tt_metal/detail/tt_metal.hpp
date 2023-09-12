@@ -127,7 +127,7 @@ namespace tt::tt_metal{
         inline bool ReadFromDeviceDRAMChannel(Device *device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t> &host_buffer)
         {
             bool pass = true;
-            device->cluster()->dram_barrier(device->pcie_slot());
+            device->cluster()->dram_barrier(device->id());
             device->cluster()->read_dram_vec(host_buffer, tt_target_dram{device->id(), dram_channel, 0}, address, size);
             return pass;
         }
@@ -174,7 +174,7 @@ namespace tt::tt_metal{
          */
         inline bool ReadFromDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t address, uint32_t size, std::vector<uint32_t> &host_buffer)
         {
-            device->cluster()->l1_barrier(device->pcie_slot());
+            device->cluster()->l1_barrier(device->id());
             auto worker_core = device->worker_core_from_logical_core(logical_core);
             host_buffer = llrt::read_hex_vec_from_core(device->cluster(), device->id(), worker_core, address, size);
             return true;

@@ -560,34 +560,21 @@ void tt_cluster::dram_barrier(chip_id_t chip_id) {
 
 void tt_cluster::set_l1_barrier(chip_id_t chip_id, uint32_t barrier_value) {
     _mm_sfence(); // Flush any existing writes to PCIe
-    // TODO (abhullar): Can get rid of logic to skip harvested cores in uplifted UMD branch because descriptor.workers does not included harvested cores
-    const tt_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
-    uint32_t harvested_noc_rows = this->type == tt::TargetDevice::Silicon ? this->get_harvested_rows(chip_id) : 0;
-    std::vector<unsigned int> noc_row_harvested(soc_desc.grid_size.y, 0);
-    uint32_t num_harvested_rows = 0;
-    for (unsigned int r = 0; r < soc_desc.grid_size.y; r++) {
-        bool row_harvested = (harvested_noc_rows>>r)&0x1;
-        num_harvested_rows += row_harvested;
-        noc_row_harvested[r] = row_harvested;
-    }
+    const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 
     std::vector<CoreCoord> cores_written;
     std::vector<uint32_t> barrier_vec = {barrier_value};
-    for (const CoreCoord &worker_core : soc_desc.workers) {
-        unsigned int row = worker_core.y;
-        if (not noc_row_harvested[row]) {
-            this->write_dram_vec(barrier_vec, tt_cxy_pair(chip_id, worker_core), MEM_BARRIER_ADDRESS);
-            cores_written.emplace_back(worker_core);
-        }
+    for (const CoreCoord &physical_worker_core : soc_desc.physical_workers) {
+        this->write_dram_vec(barrier_vec, tt_cxy_pair(chip_id, physical_worker_core), MEM_BARRIER_ADDRESS);
     }
 
     // Ensure value has been propagated
     bool barrier_value_propagated = false;
     while (not barrier_value_propagated) {
         barrier_value_propagated = true;
-        for (const CoreCoord &worker_core : cores_written) {
+        for (const CoreCoord &physical_worker_core : soc_desc.physical_workers) {
             vector<std::uint32_t> barrier_val;
-            this->read_dram_vec(barrier_val, tt_cxy_pair(chip_id, worker_core), MEM_BARRIER_ADDRESS, sizeof(uint32_t));
+            this->read_dram_vec(barrier_val, tt_cxy_pair(chip_id, physical_worker_core), MEM_BARRIER_ADDRESS, sizeof(uint32_t));
             barrier_value_propagated &= (barrier_val[0] == barrier_value);
         }
     }
