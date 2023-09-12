@@ -6,7 +6,7 @@ test-list:
         end-shape: [12, 24, 512, 512]
         interval: [1, 1, 32, 32]
         num-shapes: 2
-        num-samples: 4
+        num-samples: 64
         method: conv
       datagen:
         function: gen_rand
@@ -28,7 +28,7 @@ test-list:
         end-shape: [12, 24, 512, 512]
         interval: [1, 1, 1, 2]
         num-shapes: 2
-        num-samples: 4
+        num-samples: 64
         method: conv
       datagen:
         function: gen_rand
