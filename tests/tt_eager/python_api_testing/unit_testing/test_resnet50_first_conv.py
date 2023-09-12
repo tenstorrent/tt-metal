@@ -79,8 +79,8 @@ def test_resnet50_first_conv(use_program_cache, N, extra_padding_for_32B_alignme
             per_core_act_h_ntiles = 16
         elif(N == 8):
             act_block_h_datums = 256
-            grid_size = (7,7)
-            per_core_act_h_ntiles = 64
+            grid_size = (7,8)
+            per_core_act_h_ntiles = 56
         act_block_h = (int) (act_block_h_datums / 32)
 
         # Prepare activations
