@@ -205,69 +205,64 @@ def run_pytorch_test(args):
             # Set tests parameters --------------------------
 
             ################# RUN TEST SWEEP #################
-            for input_shapes, datagen_funcs in shapes_and_datagen(
-                shape_dict, datagen_dict
+            for input_shapes, datagen_funcs, generated_test_args in shapes_and_datagen(
+                shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, test_tt_layouts, test_buffer_types
             ):
-                for generated_test_args in test_args_gen(input_shapes, test_tt_dtypes, test_tt_layouts, test_mem_configs):
-                    # generated_test_args.update(
-                    #     test_args
-                    # )  # specified test args overrides generated test args
+                # Moved this here so that we don't need to maintain a hardcoded list of headers per op
+                skip_header = results_csv_path.exists()
 
-                    # Moved this here so that we don't need to maintain a hardcoded list of headers per op
-                    skip_header = results_csv_path.exists()
+                with open(results_csv_path, "a", newline="") as results_csv:
+                    results_csv_writer = None
 
-                    with open(results_csv_path, "a", newline="") as results_csv:
-                        results_csv_writer = None
-
-                        if write_to_csv:
-                            results_csv_writer = csv.DictWriter(
-                                results_csv,
-                                fieldnames=get_test_fieldnames(["args"])
-                            )
-                            if not skip_header:
-                                results_csv_writer.writeheader()
-                                results_csv.flush()
-
-                        data_seed = random.randint(0, 20000000) # int(time.time())
-                        torch.manual_seed(data_seed)
-
-                        logger.info(
-                            f"Running with shape: {input_shapes} and seed: {data_seed}"
+                    if write_to_csv:
+                        results_csv_writer = csv.DictWriter(
+                            results_csv,
+                            fieldnames=get_test_fieldnames(["args"])
                         )
+                        if not skip_header:
+                            results_csv_writer.writeheader()
+                            results_csv.flush()
 
-                        test_profiling_key = f"test_sweep_separator - {run_id}"
-                        logger.info(f"Starting profiling test {test_profiling_key}")
-                        tt_lib.profiler.start_profiling(test_profiling_key)
+                    data_seed = random.randint(0, 20000000) # int(time.time())
+                    torch.manual_seed(data_seed)
 
-                        test_pass = run_test_and_save_results(
-                            results_csv_writer,
-                            test_name,
-                            input_shapes,
-                            data_seed,
-                            env_dict,
-                            generated_test_args,
-                            op_map[test_name]["tt_lib_op"],
-                            op_map[test_name]["pytorch_op"],
-                            input_shapes,
-                            datagen_funcs,
-                            comparison_func,
-                            device_id,
-                            generated_test_args,
+                    logger.info(
+                        f"Running with shape: {input_shapes} and seed: {data_seed}"
+                    )
+
+                    test_profiling_key = f"test_sweep_separator - {run_id}"
+                    logger.info(f"Starting profiling test {test_profiling_key}")
+                    tt_lib.profiler.start_profiling(test_profiling_key)
+
+                    test_pass = run_test_and_save_results(
+                        results_csv_writer,
+                        test_name,
+                        input_shapes,
+                        data_seed,
+                        env_dict,
+                        generated_test_args,
+                        op_map[test_name]["tt_lib_op"],
+                        op_map[test_name]["pytorch_op"],
+                        input_shapes,
+                        datagen_funcs,
+                        comparison_func,
+                        device_id,
+                        generated_test_args,
+                    )
+
+                    tt_lib.device.Synchronize()
+                    tt_lib.profiler.stop_profiling(test_profiling_key)
+                    logger.info(f"Stopped profiling test {test_profiling_key}")
+                    run_id += 1
+
+                    results_csv.flush()
+
+                    # Check if test passed
+                    if args.run_tests_for_ci and not test_pass:
+                        logger.error(
+                            f"{test_name} test failed with input shape {input_shapes}."
                         )
-
-                        tt_lib.device.Synchronize()
-                        tt_lib.profiler.stop_profiling(test_profiling_key)
-                        logger.info(f"Stopped profiling test {test_profiling_key}")
-                        run_id += 1
-
-                        results_csv.flush()
-
-                        # Check if test passed
-                        if args.run_tests_for_ci and not test_pass:
-                            logger.error(
-                                f"{test_name} test failed with input shape {input_shapes}."
-                            )
-                            sys.exit(1)
+                        sys.exit(1)
 
             # Unset env variables
             for key, value in old_env_dict.items():

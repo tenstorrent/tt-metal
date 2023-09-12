@@ -117,7 +117,7 @@ def align_to_interval(x, start_val, interval):
     return start_val + dx
 
 
-def shapes_and_datagen(shape_dict, datagen_dict):
+def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, test_tt_layouts, test_buffer_types):
     num_shapes = shape_dict["num-shapes"]
 
     # Datagen functions
@@ -180,36 +180,25 @@ def shapes_and_datagen(shape_dict, datagen_dict):
                 interval = [interval] * num_dims
 
             assert len(interval) == num_dims
+            sample_id = 0
 
-            dim_ranges = [
-                range(start_shape[i], end_shape[i] + interval[i], interval[i])
-                for i in range(num_dims)
-            ]
+            while sample_id < num_samples:
+                shape = []
 
-            sweeps_generator = product(*dim_ranges)
-            total_shapes = functools.reduce(operator.mul, map(len, dim_ranges), 1)
-            idx_list = _get_sample_indices(total_shapes, num_shapes)
+                for i in range(num_dims):
+                    x = random.randint(start_shape[i], end_shape[i])
+                    shape.append(align_to_interval(x, start_shape[i], interval[i]))
 
-            if "split" in shape_dict:
-                split_params = shape_dict["split"]
-                assert len(split_params) == 2
+                input_shapes = [shape] * num_shapes
+                args = test_args_gen(input_shapes, test_tt_dtypes, test_tt_layouts, test_buffer_types)
 
-                split_id, num_splits = split_params
-                assert len(idx_list) % num_splits == 0
-                samples_per_split = len(idx_list) // num_splits
-                idx_list = idx_list[
-                    (split_id - 1) * samples_per_split : split_id * samples_per_split
-                ]
-            idx_list = deque(idx_list)
-            for i, shape in enumerate(sweeps_generator):
-                if i == idx_list[0]:
-                    idx_list.popleft()
-                    if len(idx_list) == 0:
-                        break
-                else:
-                    continue
-                shape = list(shape)
-                yield [shape] * num_shapes, datagen_funcs
+                if shape_dict.get("args-sampling-strategy", "all") == "random":
+                    generated_test_args = random.choice(args)
+                    args = [generated_test_args]
+
+                for generated_test_args in args:
+                    sample_id += 1
+                    yield input_shapes, datagen_funcs, generated_test_args
 
         elif method in ("bcast_h", "bcast_w", "bcast_hw"):
             # Like default, but yield a specific second bcast_shape
