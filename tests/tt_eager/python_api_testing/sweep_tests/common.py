@@ -117,6 +117,28 @@ def align_to_interval(x, start_val, interval):
     return start_val + dx
 
 
+def get_all_shapes(start_shape, end_shape, interval):
+    num_dims = len(start_shape)
+
+    dim_ranges = [
+        range(start_shape[i], end_shape[i] + interval[i], interval[i])
+        for i in range(num_dims)
+    ]
+
+    return list(product(*dim_ranges))
+
+
+def get_random_shape(start_shape, end_shape, interval):
+    num_dims = len(start_shape)
+    shape = []
+
+    for i in range(num_dims):
+        x = random.randint(start_shape[i], end_shape[i])
+        shape.append(align_to_interval(x, start_shape[i], interval[i]))
+
+    return shape
+
+
 def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, test_tt_layouts, test_buffer_types):
     num_shapes = shape_dict["num-shapes"]
 
@@ -146,21 +168,24 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
         ]
 
     # Helper
-    def _get_sample_indices(total_shapes, num_shapes):
-        if num_samples == "all":
-            idx_list = list(range(total_shapes))
-        else:
-            assert num_samples <= total_shapes
-            idx_list = sorted(random.sample(range(total_shapes), num_samples))
-        return idx_list
+    def _gen_args(input_shapes):
+        args = test_args_gen(input_shapes, test_tt_dtypes, test_tt_layouts, test_buffer_types)
+        args = list(args)
+
+        if shape_dict.get("args-sampling-strategy", "random") == "random" and len(args) > 0:
+            generated_test_args = random.choice(args)
+            args = [generated_test_args]
+
+        return args
 
     if "shape-list" in shape_dict:
         # Path for running hardcoded shapes; ignore all other parameters
         shape_list = shape_dict["shape-list"]
         for shape in shape_list:
             assert len(shape) == num_shapes
-            yield shape, datagen_funcs
 
+            for generated_test_args in _gen_args(shape):
+                yield shape, datagen_funcs, generated_test_args
     else:
         start_shape = shape_dict["start-shape"]
         end_shape = shape_dict["end-shape"]
@@ -168,7 +193,42 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
 
         method = shape_dict.get("method", "default")
         num_samples = shape_dict.get("num-samples", "all")
-        bcast_batch = shape_dict.get("bcast-batch", False)
+
+        # Helper method. Generates shaeps and argument. Used in various methods.
+        def _gen_shapes_and_args(start_shape, end_shape, interval, shape_transformator):
+            num_dims = len(start_shape)
+
+            if num_samples == "all":
+                dim_ranges = [
+                    range(start_shape[i], end_shape[i] + interval[i], interval[i])
+                    for i in range(num_dims)
+                ]
+
+                for shape in product(*dim_ranges):
+                    input_shapes = shape_transformator(shape)
+
+                    for generated_test_args in _gen_args(input_shapes):
+                        yield input_shapes, datagen_funcs, generated_test_args
+
+            else:
+                sample_id = 0
+                while sample_id < num_samples:
+                    shape = []
+
+                    for i in range(num_dims):
+                        x = random.randint(start_shape[i], end_shape[i])
+                        shape.append(align_to_interval(x, start_shape[i], interval[i]))
+
+                    input_shapes = shape_transformator(shape)
+                    args = _gen_args(input_shapes)
+
+                    if len(args) == 0:
+                        sample_id += 1
+                        continue
+
+                    for generated_test_args in args:
+                        sample_id += 1
+                        yield input_shapes, datagen_funcs, generated_test_args
 
         if method == "default":
             # Sweep across start-shape to end-shape
@@ -180,31 +240,20 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
                 interval = [interval] * num_dims
 
             assert len(interval) == num_dims
-            sample_id = 0
 
-            while sample_id < num_samples:
-                shape = []
+            def _default_shape_tr(shape):
+                return [list(shape)] * num_shapes
 
-                for i in range(num_dims):
-                    x = random.randint(start_shape[i], end_shape[i])
-                    shape.append(align_to_interval(x, start_shape[i], interval[i]))
-
-                input_shapes = [shape] * num_shapes
-                args = test_args_gen(input_shapes, test_tt_dtypes, test_tt_layouts, test_buffer_types)
-
-                if shape_dict.get("args-sampling-strategy", "all") == "random":
-                    generated_test_args = random.choice(args)
-                    args = [generated_test_args]
-
-                for generated_test_args in args:
-                    sample_id += 1
-                    yield input_shapes, datagen_funcs, generated_test_args
+            for shapes, datagen_funcs, test_args in _gen_shapes_and_args(start_shape, end_shape, interval, _default_shape_tr):
+                yield shapes, datagen_funcs, test_args
 
         elif method in ("bcast_h", "bcast_w", "bcast_hw"):
             # Like default, but yield a specific second bcast_shape
             assert num_shapes == 2
 
             num_dims = len(start_shape)
+            bcast_batch = shape_dict.get("bcast-batch", False)
+
             assert len(end_shape) == num_dims
 
             if not isinstance(interval, list):
@@ -212,35 +261,7 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
 
             assert len(interval) == num_dims
 
-            dim_ranges = [
-                range(start_shape[i], end_shape[i] + interval[i], interval[i])
-                for i in range(num_dims)
-            ]
-
-            sweeps_generator = product(*dim_ranges)
-            total_shapes = functools.reduce(operator.mul, map(len, dim_ranges), 1)
-            idx_list = _get_sample_indices(total_shapes, num_shapes)
-
-            if "split" in shape_dict:
-                split_params = shape_dict["split"]
-                assert len(split_params) == 2
-
-                split_id, num_splits = split_params
-                assert len(idx_list) % num_splits == 0
-                samples_per_split = len(idx_list) // num_splits
-                idx_list = idx_list[
-                    (split_id - 1) * samples_per_split : split_id * samples_per_split
-                ]
-
-            idx_list = deque(idx_list)
-            for i, shape in enumerate(sweeps_generator):
-                if i == idx_list[0]:
-                    idx_list.popleft()
-                    if len(idx_list) == 0:
-                        break
-                else:
-                    continue
-                shape = list(shape)
+            def _gen_bcast_shape(shape):
                 b, c, h, w = shape
                 if method == "bcast_h":
                     bcast_shape = [b, c, 1, w]
@@ -250,7 +271,10 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
                     bcast_shape = [b, c, 1, 1]
                 if bcast_batch:
                     bcast_shape[:-2] = [1] * len(bcast_shape[:-2])
-                yield [shape, bcast_shape], datagen_funcs
+                return [shape, bcast_shape]
+
+            for shapes, datagen_funcs, test_args in _gen_shapes_and_args(start_shape, end_shape, interval, _gen_bcast_shape):
+                yield shapes, datagen_funcs, test_args
 
         elif method == "matmul":
             # start-shape and end-shape are lists of two shapes
@@ -270,102 +294,61 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
                 == num_dims
             )
 
-            for _ in range(num_samples):
-                shape1 = []
+            shape1_start.append(shape2_start[-1])
+            shape1_end.append(shape2_end[-1])
 
-                for i in range(num_dims):
-                    x = random.randint(shape1_start[i], shape1_end[i])
-                    shape1.append(align_to_interval(x, shape1_start[i], interval[i]))
+            def _gen_matmul_shapes(shape):
+                shape1 = [shape[0], shape[1], shape[2], shape[3]]
+                shape2 = [shape[0], shape[1], shape[3], shape[4]]
+                return [shape1, shape2]
 
-                x = random.randint(shape2_start[-1], shape2_end[-1])
-                outer_dim = align_to_interval(x, shape2_start[-1], interval[-1])
-
-                shape2 = [shape1[0], shape1[1], shape1[3], outer_dim]
-                yield [shape1, shape2], datagen_funcs
-
+            for shapes, datagen_funcs, test_args in _gen_shapes_and_args(shape1_start, shape1_end, interval, _gen_matmul_shapes):
+                yield shapes, datagen_funcs, test_args
 
         elif method == "layernorm":
-            # start-shape and end-shape are lists of two shapes
-            # Only supports dim = 4; for the second shape, only the last dim is used
+            assert (len(start_shape) == 4)
+            assert (len(end_shape) == 4)
 
-            shape1_start = start_shape
-            shape1_end = end_shape
-            num_dims = 4
+            def _gen_layernorm_shapes(shape):
+                normalized_shape = [1, 1, 1, shape[3]]
+                return [shape, normalized_shape, normalized_shape]
 
-            assert (
-                len(shape1_start)
-                == num_dims
-            )
-
-            for _ in range(num_samples):
-                shape1 = []
-
-                for i in range(num_dims):
-                    x = random.randint(shape1_start[i], shape1_end[i])
-                    shape1.append(align_to_interval(x, shape1_start[i], interval[i]))
-
-                normalized_shape = [1, 1, 1, shape1[3]]
-
-                yield [shape1, normalized_shape, normalized_shape], datagen_funcs
-
+            for shapes, datagen_funcs, test_args in _gen_shapes_and_args(start_shape, end_shape, interval, _gen_layernorm_shapes):
+                yield shapes, datagen_funcs, test_args
 
         elif method == "add_layernorm":
-            # start-shape and end-shape are lists of two shapes
-            # Only supports dim = 4; for the second shape, only the last dim is used
+            assert len(start_shape) == 4
+            assert len(end_shape) == 4
 
-            shape1_start = start_shape
-            shape1_end = end_shape
-            num_dims = 4
+            def _gen_add_layernorm_shapes(shape):
+                normalized_shape = [1, 1, 1, shape[3]]
+                return [shape, shape, normalized_shape, normalized_shape]
 
-            assert (
-                len(shape1_start)
-                == num_dims
-            )
-
-            for _ in range(num_samples):
-                shape1 = []
-
-                for i in range(num_dims):
-                    x = random.randint(shape1_start[i], shape1_end[i])
-                    shape1.append(align_to_interval(x, shape1_start[i], interval[i]))
-
-                normalized_shape = [1, 1, 1, shape1[3]]
-
-                yield [shape1, shape1, normalized_shape, normalized_shape], datagen_funcs
+            for shapes, datagen_funcs, test_args in _gen_shapes_and_args(start_shape, end_shape, interval, _gen_add_layernorm_shapes):
+                yield shapes, datagen_funcs, test_args
 
         elif method == "conv":
-            # start-shape and end-shape are lists of two shapes
-            # Only supports dim = 4; for the second shape, only the last dim is used
+            assert len(start_shape) == 4
+            assert len(end_shape) == 4
 
-            shape1_start = start_shape
-            shape1_end = end_shape
-            num_dims = 4
-
-            assert (
-                len(shape1_start)
-                == num_dims
-            )
-
-            for _ in range(num_samples):
-                shape1 = []
-
-                for i in range(num_dims):
-                    x = random.randint(shape1_start[i], shape1_end[i])
-                    shape1.append(align_to_interval(x, shape1_start[i], interval[i]))
-
+            def _gen_conv_shapes(shape):
                 conv_shape = [0, 0, 0, 0]
                 conv_shape[0] = 1
-                conv_shape[1] = shape1[1]
+                conv_shape[1] = shape[1]
                 conv_shape[2] = random.randint(1, 4)
                 conv_shape[3] = random.randint(1, 4)
 
-                yield [shape1, conv_shape], datagen_funcs
+                return [shape, conv_shape]
+
+            for shapes, datagen_funcs, test_args in _gen_shapes_and_args(start_shape, end_shape, interval, _gen_conv_shapes):
+                yield shapes, datagen_funcs, test_args
 
         elif method == "linear":
             # start-shape and end-shape are lists of two shapes
             # Only supports dim = 4; for the second shape, only the last dim is used
             assert len(start_shape) == len(end_shape) == 2
             assert num_shapes == 2 or num_shapes == 3
+
             shape1_start, shape2_start = start_shape
             shape1_end, shape2_end = end_shape
 
@@ -383,49 +366,23 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
 
             assert len(interval) == (num_dims + 1)
 
-            dim_ranges = [
-                range(shape1_start[i], shape1_end[i] + interval[i], interval[i])
-                for i in range(num_dims)
-            ]
-            # Add outer dim from last dim of second shape
-            dim_ranges.append(
-                range(shape2_start[-1], shape2_end[-1] + interval[-1], interval[-1])
-            )
+            shape1_start.append(shape2_start[-1])
+            shape1_end.append(shape2_end[-1])
 
-            sweeps_generator = product(*dim_ranges)
-            total_shapes = functools.reduce(operator.mul, map(len, dim_ranges), 1)
-            idx_list = _get_sample_indices(total_shapes, num_shapes)
-
-            if "split" in shape_dict:
-                split_params = shape_dict["split"]
-                assert len(split_params) == 2
-
-                split_id, num_splits = split_params
-                assert len(idx_list) % num_splits == 0
-                samples_per_split = len(idx_list) // num_splits
-                idx_list = idx_list[
-                    (split_id - 1) * samples_per_split : split_id * samples_per_split
-                ]
-
-            idx_list = deque(idx_list)
-            for i, shape in enumerate(sweeps_generator):
-                if i == idx_list[0]:
-                    idx_list.popleft()
-                    if len(idx_list) == 0:
-                        break
-                else:
-                    continue
-                shape = list(shape)
+            def _gen_linear_shapes(shape):
                 b, c, h, w, outer_dim = shape
                 shape1 = [b, c, h, w]
                 shape2 = [1, 1, outer_dim, w]
-
                 shapes = [shape1, shape2]
+
                 if num_shapes == 3:
                     shape3 = [1, 1, 1, outer_dim]
                     shapes.append(shape3)
 
-                yield shapes, datagen_funcs
+                return shapes
+
+            for shapes, datagen_funcs, test_args in _gen_shapes_and_args(shape1_start, shape1_end, interval, _gen_linear_shapes):
+                yield shapes, datagen_funcs, test_args
 
         else:
             raise NotImplementedError("Method {method} is not a valid choice")
