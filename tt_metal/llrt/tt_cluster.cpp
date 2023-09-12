@@ -966,6 +966,7 @@ void tt_cluster::on_close_device(tt_cluster_on_close_device_callback cb) {
 // This barrier works given the assumption that static VCs are used (hardcoded true in UMD)
 // TODO (abhullar): Add API to query whether static VCs are used
 void tt_cluster::set_dram_barrier(chip_id_t chip_id, uint32_t barrier_value) {
+    _mm_sfence(); // Flush any existing writes to PCIe
     // Set barrier value
     std::vector<uint32_t> barrier_vec = {barrier_value};
     for (int channel = 0; channel < this->get_soc_desc(chip_id).get_num_dram_channels(); channel++) {
@@ -994,6 +995,7 @@ void tt_cluster::dram_barrier(chip_id_t chip_id) {
 }
 
 void tt_cluster::set_l1_barrier(chip_id_t chip_id, uint32_t barrier_value) {
+    _mm_sfence(); // Flush any existing writes to PCIe
     // TODO (abhullar): Can get rid of logic to skip harvested cores in uplifted UMD branch because descriptor.workers does not included harvested cores
     const tt_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
     uint32_t harvested_noc_rows = this->type == tt::TargetDevice::Silicon ? this->get_harvested_rows(chip_id) : 0;
