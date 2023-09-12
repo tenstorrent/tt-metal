@@ -18,6 +18,7 @@ inline void llk_math_eltwise_unary_datacopy(uint dst_index) {
     TT_LLK_DUMP("llk_math_eltwise_unary_datacopy<{}, {}, {}, {}>({})", type, src_b_bcast_type, Dst, is_fp32_dest_acc_en, dst_index);
     
     if constexpr (unpack_to_dest) {
+        math_unpack_to_dest_math_ready();
         math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32, true>(dst_index);
         math::math_unpack_to_dest_tile_ready();
     } else {

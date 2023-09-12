@@ -148,10 +148,18 @@ inline void set_math_semaphores()
     t6_semaphore_post<p_stall::MATH|p_stall::WAIT_SFPU>(semaphore::MATH_PACK);
 }
 
+inline void math_unpack_to_dest_math_ready() 
+{
+    t6_semaphore_wait_on_max<p_stall::STALL_SYNC>(semaphore::MATH_DONE);
+    t6_semaphore_post<p_stall::MATH|p_stall::WAIT_SFPU>(semaphore::MATH_DONE);
+    while (semaphore_read(semaphore::MATH_DONE) == 0) {}
+    semaphore_get(semaphore::MATH_DONE); 
+}
+
 inline void math_unpack_to_dest_tile_ready() 
 {
     t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::UNPACK_TO_DEST);
-    t6_semaphore_get<p_stall::NONE>(semaphore::UNPACK_TO_DEST);
+    t6_semaphore_get<p_stall::MATH|p_stall::WAIT_SFPU>(semaphore::UNPACK_TO_DEST);
 }
 
 template <DstTileLayout layout, DstTileShape tile_shape, bool unpack_to_dest = false>

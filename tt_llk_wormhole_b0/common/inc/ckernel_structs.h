@@ -7,13 +7,14 @@ namespace ckernel
 struct semaphore
 {
     constexpr static uint32_t MATH_PACK = 1;   // math <-> pack sync on dest register
-    constexpr static uint32_t UNPACK_TO_DEST = 2; // pack <-> unpack sync on scratch buffer
+    constexpr static uint32_t UNPACK_TO_DEST = 2; // unpack <-> math sync on unpack to dest
     constexpr static uint32_t UNPACK_OPERAND_SYNC = 3; // unpack <-> pack, math sync on operand get/release
     constexpr static uint32_t PACK_DONE = 4; // Wait for beinning and end of each pack-iteration. For recording perf events and inserting delay.
     constexpr static uint32_t UNPACK_SYNC = 5; // trisc <-> unpack sync on hw kernel
     // Wait for beinning and end of each unpack or math iteration. For recording perf events and inserting delay.
     // This semaphore should only be used for either unpack or math. Not both at the same time.
     constexpr static uint32_t UNPACK_MATH_DONE = 6;
+    constexpr static uint32_t MATH_DONE = 7; // wait for math to finish when unpacking to dest
 
     constexpr static uint16_t t6_sem(const uint8_t sem_index)
     {
