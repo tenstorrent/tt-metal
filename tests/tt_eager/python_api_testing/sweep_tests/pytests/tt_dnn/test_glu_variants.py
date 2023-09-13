@@ -49,7 +49,6 @@ if is_wormhole_b0():
 )
 @pytest.mark.parametrize("input_mem_config", input_mem_cfgs)
 @pytest.mark.parametrize("output_mem_config", output_mem_cfgs)
-#@pytest.mark.parametrize("pcie_slot", [0])
 class TestGLUVariants:
     @skip_for_wormhole_b0
     @pytest.mark.parametrize("fn_kind", ["glu", "reglu", "geglu", "swiglu"])
