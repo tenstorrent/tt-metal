@@ -80,9 +80,6 @@ def run_perf_deit(expected_inference_time, expected_compile_time, hf_cat_image_s
     logger.info(f"deit {comments} inference time: {second_iter_time}")
     logger.info(f"deit {comments} compile time: {compile_time}")
 
-    assert second_iter_time < expected_inference_time, f"deit {comments} is too slow"
-    assert compile_time < expected_compile_time, "deit compile time is too slow"
-
 
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(

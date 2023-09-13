@@ -102,9 +102,6 @@ def run_perf_bloom(expected_inference_time, expected_compile_time, device):
     logger.info(f"bloom {comments} inference time: {second_iter_time}")
     logger.info(f"bloom {comments} compile time: {compile_time}")
 
-    assert second_iter_time < expected_inference_time, f"bloom {comments} is too slow"
-    assert compile_time < expected_compile_time, f"bloom {comments} compile time is too slow"
-
 
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(

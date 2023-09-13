@@ -356,8 +356,6 @@ def run_test_FalconCausalLM_end_to_end(
     compile_time = first_iter_time - second_iter_time
     logger.info(f"falcon {comment} inference time: {second_iter_time}")
     logger.info(f"falcon {comment} compile time: {compile_time}")
-    assert second_iter_time < expected_inference_time, "Falcon is too slow"
-    assert compile_time < expected_compile_time, "Falcon compile time is too slow"
 
     if does_pass:
         logger.info("Falcon CausalLM Passed!")

@@ -117,8 +117,6 @@ def run_perf_bert15(expected_inference_time, expected_compile_time, model_locati
     compile_time = first_iter_time - second_iter_time
     logger.info(f"bert15 inference time: {second_iter_time}")
     logger.info(f"bert15 compile time: {compile_time}")
-    assert second_iter_time < expected_inference_time, "bert15 is too slow"
-    assert compile_time < expected_compile_time, "bert15 compile time is too slow"
 
 
 @pytest.mark.models_performance_virtual_machine

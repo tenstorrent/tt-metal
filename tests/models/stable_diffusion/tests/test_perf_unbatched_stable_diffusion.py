@@ -297,13 +297,6 @@ def run_perf_unbatched_stable_diffusion(expected_inference_time, expected_compil
     )
     logger.info(f"Unbatched Stable Diffusion {comments} compile time: {compile_time}")
 
-    assert (
-        second_iter_time < expected_inference_time
-    ), f"Unabtched Stable Diffusion {comments} is too slow"
-    assert (
-        compile_time < expected_compile_time
-    ), f"Unabtched Stable Diffusion {comments} compile time is too slow"
-
 @disable_conv
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(

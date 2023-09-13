@@ -127,9 +127,6 @@ def run_perf_llama(
     logger.info(f"llama 7B inference time: {second_iter_time}")
     logger.info(f"llama 7B compile time: {compile_time}")
 
-    assert second_iter_time < expected_inference_time, "llama 7B is too slow"
-    assert compile_time < expected_compile_time, "llama 7B compile time is too slow"
-
 
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(

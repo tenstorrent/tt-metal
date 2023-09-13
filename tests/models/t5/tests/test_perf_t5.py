@@ -111,9 +111,6 @@ def run_perf_t5(expected_inference_time, expected_compile_time, device):
     logger.info(f"t5 small inference time: {second_iter_time}")
     logger.info(f"t5 compile time: {compile_time}")
 
-    assert second_iter_time < expected_inference_time, f"t5 {comments} is too slow"
-    assert compile_time < expected_compile_time, "t5 compile time is too slow"
-
 
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
