@@ -297,7 +297,7 @@ inline void llk_math_eltwise_unary_sfpu_square_init() {
 }
 
 template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_power(uint dst_index, int vector_mode = Dim::RC, int pow = 0) {
+inline void llk_math_eltwise_unary_sfpu_power(uint dst_index, int pow = 0, int vector_mode = Dim::RC) {
     llk_math_eltwise_unary_sfpu<SfpuType::power, APPROXIMATE, dst_sync>(dst_index, vector_mode, pow);
 }
 

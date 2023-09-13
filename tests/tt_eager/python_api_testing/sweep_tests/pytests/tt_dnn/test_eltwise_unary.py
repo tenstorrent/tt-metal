@@ -473,8 +473,7 @@ class TestEltwiseUnary:
             device,
         )
 
-    @skip_for_wormhole_b0
-    @pytest.mark.parametrize("input_value", [-1.0, 2.0])
+    @pytest.mark.parametrize("input_value", [-1.0, 2.0, 3.0])
     @pytest.mark.parametrize("exponent", [0, 1, 2, 3])
     def test_run_eltwise_power_op(
         self,

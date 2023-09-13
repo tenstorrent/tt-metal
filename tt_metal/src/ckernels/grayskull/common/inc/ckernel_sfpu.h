@@ -510,47 +510,17 @@ union Converter {
 };
 
 template <bool APPROXIMATION_MODE,int ITERATIONS>
-inline void calculate_power_iterative(uint exponent)
+inline void calculate_power_iterative(const uint exponent)
 {
-    for (int d = 0; d < ITERATIONS; d++)
-    {
-        vFloat in = dst_reg[0];
-        vFloat result = in * in;
-        for (uint i = 2; i < exponent; i++) {
-            result *= in;
-        }
-
-        dst_reg[0] = result;
-
-        dst_reg++;
-    }
-}
-
-template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_power(uint exponent)
-{
-
+    #pragma GCC unroll 4
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat in = dst_reg[0];
         vFloat result = 1.0f;
-	    constexpr uint SIZE = 4*sizeof(uint);//till power of 64
-        vFloat b[SIZE] = {1.0f,};
-        // kind of a LUT
-        b[0] = in;
-        #pragma GCC unroll 32
-        for (uint i =  1; i < SIZE; i++) {
-            b[i] = b[i-1]*b[i-1];
+        for (uint i = 0; i < exponent; i++) {
+            result *= in;
         }
-
-        //reduce with product
-        #pragma GCC unroll 32
-        for (uint i = 0; i < SIZE; i++) {
-            if ( exponent & (1<<i) )
-                result *= b[i];
-        }
-
-        dst_reg[0] = result;
+	dst_reg[0]=result;
         dst_reg++;
     }
 }
@@ -1102,11 +1072,7 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
         calculate_dropout<APPROXIMATION_MODE, ITERATIONS>(param0, param1);
     }
     else if constexpr (operation == SfpuType::power) {
-	if ( param0 <= 64 ) {
-	  calculate_power<APPROXIMATION_MODE, ITERATIONS>(param0);
-	} else {
-	  calculate_power_iterative<APPROXIMATION_MODE, ITERATIONS>(param0);
-	}
+	calculate_power_iterative<APPROXIMATION_MODE, ITERATIONS>(param0);
     }
     else if constexpr (operation == SfpuType::square) {
         calculate_square<APPROXIMATION_MODE, ITERATIONS>();
