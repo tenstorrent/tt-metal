@@ -24,11 +24,7 @@ from transformers import AutoTokenizer
     "pcc",
     ((0.99),),
 )
-def test_distilbert_for_question_answering_inference(pcc, reset_seeds):
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
-
+def test_distilbert_for_question_answering_inference(device, pcc):
     tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased-distilled-squad")
     HF_model = HF_DistilBertForQuestionAnswering.from_pretrained(
         "distilbert-base-uncased-distilled-squad"
@@ -82,7 +78,6 @@ def test_distilbert_for_question_answering_inference(pcc, reset_seeds):
 
     logger.info(comp_allclose(torch_output.end_logits, tt_end_logits_torch))
     logger.info(pcc_message)
-    tt_lib.device.CloseDevice(device)
 
     if does_pass_1 and does_pass_2:
         logger.info("DistilBertModel Passed!")

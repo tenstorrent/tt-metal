@@ -31,10 +31,8 @@ from models.utility_functions import (
 )
 
 
-def test_conv_module(model_location_generator):
+def test_conv_module(device, model_location_generator):
     torch.manual_seed(1234)
-    device = tt_lib.device.CreateDevice(0)
-
 
     # Load yolo
     model_path = model_location_generator("models", model_subdir = "Yolo")
@@ -107,7 +105,6 @@ def test_conv_module(model_location_generator):
 
     logger.info(pcc_message)
 
-    tt_lib.device.CloseDevice(device)
 
     if does_pass:
         logger.info("Yolo TtConv Passed!")

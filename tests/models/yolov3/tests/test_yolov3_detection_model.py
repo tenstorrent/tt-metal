@@ -32,10 +32,8 @@ from models.utility_functions import (
 )
 
 
-def test_detection_model(model_location_generator):
+def test_detection_model(device, model_location_generator):
     torch.manual_seed(1234)
-    device = tt_lib.device.CreateDevice(0)
-
 
     # Load yolo
     model_path = model_location_generator("models", model_subdir = "Yolo")
@@ -72,7 +70,6 @@ def test_detection_model(model_location_generator):
         tt_im = torch2tt_tensor(im, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
         tt_out = tt_module(tt_im)
 
-    tt_lib.device.CloseDevice(device)
 
     # Check all outputs PCC
     does_all_pass = True

@@ -129,13 +129,9 @@ def run_test_LlamaAttention_inference(
     ),
 )
 def test_LlamaAttention_inference(
-    model_version, tokenizer_version, batch, seq_len, on_weka, pcc
+    device, model_version, tokenizer_version, batch, seq_len, on_weka, pcc
 ):
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
 
     run_test_LlamaAttention_inference(
         device, model_version, tokenizer_version, batch, seq_len, on_weka, pcc
     )
-    tt_lib.device.CloseDevice(device)

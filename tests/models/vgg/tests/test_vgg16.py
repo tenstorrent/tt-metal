@@ -25,23 +25,17 @@ from vgg_utils import get_shape
 _batch_size = 1
 
 @pytest.mark.parametrize("pcc", ((0.99),),)
-def test_vgg16_inference(pcc, imagenet_sample_input):
+def test_vgg16_inference(device, pcc, imagenet_sample_input):
     image = imagenet_sample_input
 
     batch_size = _batch_size
     with torch.no_grad():
-        # Initialize the device
-        device = tt_lib.device.CreateDevice(0)
-
-        tt_lib.device.SetDefaultDevice(device)
-
-
         torch_vgg = models.vgg16(weights=models.VGG16_Weights.IMAGENET1K_V1)
         torch_vgg.eval()
         torch_output = torch_vgg(image).unsqueeze(1).unsqueeze(1)
 
         # TODO: enable conv on tt device after adding fast dtx transform
-        tt_vgg = vgg16(device, host, disable_conv_on_tt_device=True)
+        tt_vgg = vgg16(device, disable_conv_on_tt_device=True)
 
         tt_image = tt_lib.tensor.Tensor(
             image.reshape(-1).tolist(),
@@ -57,5 +51,4 @@ def test_vgg16_inference(pcc, imagenet_sample_input):
 
         pcc_passing, pcc_output = comp_pcc(torch_output, tt_output, pcc)
         logger.info(f"Output {pcc_output}")
-        tt_lib.device.CloseDevice(device)
         assert pcc_passing, f"Model output does not meet PCC requirement {pcc}."

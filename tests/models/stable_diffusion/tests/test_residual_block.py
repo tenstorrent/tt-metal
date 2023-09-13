@@ -16,7 +16,7 @@ from models.utility_functions import comp_pcc, comp_allclose_and_pcc
 from models.stable_diffusion.tt.residual_block import TtResnetBlock2D
 
 
-def test_run_resnet_inference():
+def test_run_resnet_inference(device):
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
 
@@ -53,12 +53,6 @@ def test_run_resnet_inference():
 
     torch_output = resnet(input, temb.squeeze(0).squeeze(0))
 
-    # Initialize the device
-    device = ttl.device.CreateDevice(0)
-
-    ttl.device.SetDefaultDevice(device)
-
-
     # setup tt model
     tt_resnet = TtResnetBlock2D(in_channels=in_channels,
                             out_channels=out_channels,
@@ -77,6 +71,6 @@ def test_run_resnet_inference():
 
     passing = comp_pcc(torch_output, tt_output)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))
-    ttl.device.CloseDevice(device)
+
     assert passing[0], passing[1:]
     logger.info(f"PASSED {passing[1]}")

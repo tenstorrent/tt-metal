@@ -59,10 +59,7 @@ compile = False # use PyTorch 2.0 to compile the model to be faster
         ),
     ),
 )
-def test_nanogpt_end_to_end(prompt, max_new_tokens, temperature):
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
+def test_nanogpt_end_to_end(prompt, max_new_tokens, temperature, device):
 
     # Prepare input
 
@@ -96,5 +93,3 @@ def test_nanogpt_end_to_end(prompt, max_new_tokens, temperature):
     x = (torch.tensor(start_ids, dtype=torch.long, device='cpu')[None, ...])
     y = tt_model.generate(x, max_new_tokens, temperature, top_k=top_k)
     logger.info(decode(y[0].tolist()))
-
-    tt_lib.device.CloseDevice(device)

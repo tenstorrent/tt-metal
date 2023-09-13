@@ -99,16 +99,11 @@ def make_tt_unet(state_dict, device):
         ),
     ),
 )
-def test_perf(use_program_cache, expected_inference_time, expected_compile_time):
+def test_perf(device, expected_inference_time, expected_compile_time):
     profiler = Profiler()
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_iter"
-
-    # Initialize the device
-    device = ttl.device.CreateDevice(0)
-
-    ttl.device.SetDefaultDevice(device)
 
     # 1. Load the autoencoder model which will be used to decode the latents into image space.
     vae = AutoencoderKL.from_pretrained(
@@ -261,7 +256,6 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time)
 
     first_iter_time = profiler.get(first_key)
     second_iter_time = profiler.get(second_key)
-    ttl.device.CloseDevice(device)
 
     compile_time = first_iter_time - second_iter_time
 

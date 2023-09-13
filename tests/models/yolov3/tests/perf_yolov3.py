@@ -32,18 +32,15 @@ from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, 
 BATCH_SIZE = 1
 
 
-def test_perf(use_program_cache, model_location_generator):
+def test_perf(use_program_cache, model_location_generator, device):
     disable_compile_cache()
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_key"
     comments = "yolov3-fused"
 
-    # Initialize the device
-    torch.manual_seed(1234)
-    device = tt_lib.device.CreateDevice(0)
 
-    tt_lib.device.SetDefaultDevice(device)
+    torch.manual_seed(1234)
 
     # Load yolo
     model_path = model_location_generator("models", model_subdir = "Yolo")
@@ -104,4 +101,3 @@ def test_perf(use_program_cache, model_location_generator):
     prep_report(
         "yolov3", BATCH_SIZE, first_iter_time, second_iter_time, comments, cpu_time
     )
-    tt_lib.device.CloseDevice(device)

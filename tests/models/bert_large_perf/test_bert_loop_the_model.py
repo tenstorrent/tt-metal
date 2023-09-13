@@ -83,11 +83,10 @@ class TtBertForQuestionAnswering(torch.nn.Module):
 
         return hidden_states
 
-def run_bert_question_and_answering_inference(model_version, batch, seq_len, real_input, attention_mask, token_type_ids, pcc, model_location_generator, PERF_CNT):
+def run_bert_question_and_answering_inference(device, model_version, batch, seq_len, real_input, attention_mask, token_type_ids, pcc, model_location_generator, PERF_CNT):
 
     torch.manual_seed(1234)
 
-    device = ttl.device.CreateDevice(0)
 
 
     model_name = str(model_location_generator(model_version, model_subdir = "Bert"))
@@ -207,13 +206,13 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, rea
 
     profiler.end("processing_output_to_string")
 
-    ttl.device.CloseDevice(device)
+
     profiler.print()
 
     assert profiler.get("whole_model") < 61.0
     assert passing_start and passing_end, f"At least one start or end logits don't meet PCC requirement {pcc}"
 
-def test_bert_large_loop_the_model(model_location_generator):
+def test_bert_large_loop_the_model(device, model_location_generator):
 
     model_version = "phiyodr/bert-large-finetuned-squad2"
     batch = 1
@@ -226,4 +225,4 @@ def test_bert_large_loop_the_model(model_location_generator):
 
     disable_persistent_kernel_cache()
 
-    run_bert_question_and_answering_inference(model_version, batch, seq_len, real_input, attention_mask, token_type_ids, pcc, model_location_generator, PERF_CNT)
+    run_bert_question_and_answering_inference(device, model_version, batch, seq_len, real_input, attention_mask, token_type_ids, pcc, model_location_generator, PERF_CNT)

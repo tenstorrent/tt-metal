@@ -21,10 +21,7 @@ from transformers import AutoTokenizer
     "pcc",
     ((0.99),),
 )
-def test_distilbert_embedding_inference(pcc, reset_seeds):
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
+def test_distilbert_embedding_inference(device, pcc):
 
     tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased-distilled-squad")
     HF_model = HF_DistilBertForQuestionAnswering.from_pretrained(
@@ -65,7 +62,6 @@ def test_distilbert_embedding_inference(pcc, reset_seeds):
     logger.info(comp_allclose(torch_output, tt_output_torch))
     logger.info(pcc_message)
 
-    tt_lib.device.CloseDevice(device)
 
     if does_pass:
         logger.info("DistilBertEmbedding Passed!")

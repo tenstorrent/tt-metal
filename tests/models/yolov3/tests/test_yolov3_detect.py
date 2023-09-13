@@ -30,10 +30,8 @@ from models.utility_functions import (
 )
 
 
-def test_detect_module(model_location_generator):
+def test_detect_module(device, model_location_generator):
     torch.manual_seed(1234)
-    device = tt_lib.device.CreateDevice(0)
-
 
     # Load yolo
     model_path = model_location_generator("models", model_subdir = "Yolo")
@@ -93,7 +91,6 @@ def test_detect_module(model_location_generator):
         tt_model.eval()
         tt_out = tt_model(tt_test_input)
 
-    tt_lib.device.CloseDevice(device)
 
     does_all_pass = True
 

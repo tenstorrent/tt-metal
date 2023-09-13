@@ -37,11 +37,7 @@ import pytest
     ],
 )
 @torch.no_grad()
-def test_layer_norm(input_shape, normalized_shape_hint):
-    # Initialize the device
-    device = ttl.device.CreateDevice(0)
-
-
+def test_layer_norm(device, input_shape, normalized_shape_hint):
 
     pcc = 0.99
 
@@ -73,6 +69,6 @@ def test_layer_norm(input_shape, normalized_shape_hint):
 
     passing = comp_pcc(torch_output, tt_output, pcc=pcc)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output, pcc=pcc))
-    ttl.device.CloseDevice(device)
+
     assert passing[0], passing[1:]
     logger.info(f"PASSED {passing[1]}")

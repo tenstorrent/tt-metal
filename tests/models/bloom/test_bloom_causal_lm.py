@@ -21,8 +21,7 @@ from loguru import logger
 import tests.models.bloom.bloom_causal_lm as bloom_causal_lm
 
 
-def test_bloom_causal_lm():
-    device = tt_lib.device.CreateDevice(0)
+def test_bloom_causal_lm(device):
 
 
     hugging_bloom_reference_model = BloomForCausalLM.from_pretrained(
@@ -57,8 +56,3 @@ def test_bloom_causal_lm():
         logger.warning("bloom_causal_lm: Failed!")
 
     assert does_pass
-    tt_lib.device.CloseDevice(device)
-
-
-if __name__ == "__main__":
-    test_bloom_causal_lm()

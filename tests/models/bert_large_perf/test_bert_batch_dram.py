@@ -106,11 +106,10 @@ class TtBertBatchDram(torch.nn.Module):
 
         return tt_out_list
 
-def run_bert_question_and_answering_inference(model_version, batch, seq_len, real_input, attention_mask, token_type_ids, pcc, model_location_generator, PERF_CNT):
+def run_bert_question_and_answering_inference(device, model_version, batch, seq_len, real_input, attention_mask, token_type_ids, pcc, model_location_generator, PERF_CNT):
 
     torch.manual_seed(1234)
 
-    device = ttl.device.CreateDevice(0)
 
 
 
@@ -242,7 +241,7 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, rea
 
     del tt_out_list
 
-    ttl.device.CloseDevice(device)
+
     profiler.print()
 
     # assert profiler.get("whole_model") < 60.0
@@ -254,7 +253,7 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, rea
         ("phiyodr/bert-large-finetuned-squad2", 9, 384, True, True, True, 0.98),
     ),
 )
-def test_bert_batch_dram(model_version, batch, seq_len, real_input, attention_mask, token_type_ids, pcc, model_location_generator):
+def test_bert_batch_dram(device, model_version, batch, seq_len, real_input, attention_mask, token_type_ids, pcc, model_location_generator):
     # This test will run BERT-Large once with cache disabled.
     # Then it will enable cache and run BERT-Large PERF_CNT number of times.
     # Performance is reported only for PERF_CNT number of runs.
@@ -262,4 +261,4 @@ def test_bert_batch_dram(model_version, batch, seq_len, real_input, attention_ma
 
     disable_persistent_kernel_cache()
 
-    run_bert_question_and_answering_inference(model_version, batch, seq_len, real_input, attention_mask, token_type_ids, pcc, model_location_generator, PERF_CNT)
+    run_bert_question_and_answering_inference(device, model_version, batch, seq_len, real_input, attention_mask, token_type_ids, pcc, model_location_generator, PERF_CNT)

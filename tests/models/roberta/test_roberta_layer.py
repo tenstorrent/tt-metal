@@ -29,11 +29,8 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from transformers import RobertaModel
 
 
-def test_roberta_layer_inference():
+def test_roberta_layer_inference(device):
     torch.manual_seed(1234)
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
 
     SELF_ATTN_LAYER_INDEX = 0
     base_address = f"encoder.layer.{SELF_ATTN_LAYER_INDEX}"
@@ -75,7 +72,6 @@ def test_roberta_layer_inference():
     logger.info(comp_allclose(torch_output, tt_output_torch))
     logger.info(pcc_message)
 
-    tt_lib.device.CloseDevice(device)
 
     if does_pass:
         logger.info("RobertaLayer Passed!")
@@ -83,7 +79,3 @@ def test_roberta_layer_inference():
         logger.warning("RobertaLayer Failed!")
 
     assert does_pass
-
-
-if __name__ == "__main__":
-    test_roberta_layer_inference()

@@ -201,11 +201,8 @@ def summarize_stats(t, name):
 
 
 def run_ffn_inference(
-    model_version, batch, seq_len, pcc, model_config, model_location_generator
+    device, model_version, batch, seq_len, pcc, model_config, model_location_generator
 ):
-    device = ttl.device.CreateDevice(0)
-    # Initialize the device
-
 
     model_name = str(model_location_generator(model_version, model_subdir = "Bert"))
 
@@ -242,7 +239,7 @@ def run_ffn_inference(
         tt_out.shape()
     )
 
-    ttl.device.CloseDevice(device)
+
 
     passing, output = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"Output {output}")
@@ -283,6 +280,7 @@ def run_ffn_inference(
     ids=["BERT_LARGE"],
 )
 def test_ffn_inference(
+    device,
     model_version,
     batch,
     seq_len,
@@ -297,6 +295,7 @@ def test_ffn_inference(
         f"tt_metal/tools/profiler/logs/BERT_large_ffn_{request.node.callspec.id}"
     )
     run_ffn_inference(
+        device,
         model_version,
         batch,
         seq_len,

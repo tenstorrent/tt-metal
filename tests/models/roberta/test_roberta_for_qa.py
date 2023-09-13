@@ -34,11 +34,8 @@ from transformers import RobertaForQuestionAnswering
 from transformers import AutoTokenizer
 
 
-def test_roberta_qa_inference():
+def test_roberta_qa_inference(device):
     torch.manual_seed(1234)
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
 
     base_address = f""
 
@@ -111,7 +108,6 @@ def test_roberta_qa_inference():
         logger.info(comp_allclose(torch_output.end_logits, tt_output.end_logits))
         logger.info(pcc_message)
 
-        tt_lib.device.CloseDevice(device)
 
         if does_pass_1 and does_pass_2:
             logger.info("RobertaForQA Passed!")
@@ -119,7 +115,3 @@ def test_roberta_qa_inference():
             logger.warning("RobertaForQA Failed!")
 
         assert does_pass_1 and does_pass_2
-
-
-if __name__ == "__main__":
-    test_roberta_qa_inference()

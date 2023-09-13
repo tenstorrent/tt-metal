@@ -68,11 +68,9 @@ def run_bloom_attention_test(device):
     assert does_pass
 
 
-def test_bloom_attention():
-    device = ttm.device.CreateDevice(0)
-
+def test_bloom_attention(device):
     run_bloom_attention_test(device)
-    ttm.device.CloseDevice(device)
+
 
 
 if __name__ == "__main__":

@@ -26,10 +26,7 @@ from models.ssd.tt.ssd_regression_head import (
     "pcc",
     ((0.99),),
 )
-def test_ssd_backbone_inference(pcc, reset_seeds):
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
+def test_ssd_backbone_inference(device, pcc, reset_seeds):
 
     torch_model = pretrained(weights=SSDLite320_MobileNet_V3_Large_Weights.DEFAULT)
     torch_model.eval()
@@ -94,7 +91,6 @@ def test_ssd_backbone_inference(pcc, reset_seeds):
     logger.info(comp_allclose(torch_output, tt_output_torch))
     logger.info(pcc_message)
 
-    tt_lib.device.CloseDevice(device)
 
     if does_pass:
         logger.info("SSDRegressionhead Passed!")

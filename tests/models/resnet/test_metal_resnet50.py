@@ -18,7 +18,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 
 @pytest.mark.parametrize("batch_size", [1,2,8])
 @pytest.mark.skip(reason="Conv disabled in main.")
-def test_run_resnet50_inference(use_program_cache, batch_size, imagenet_sample_input):
+def test_run_resnet50_inference(device, batch_size, imagenet_sample_input):
     image1 = imagenet_sample_input
     image = image1
     for i in range(batch_size-1):
@@ -26,10 +26,6 @@ def test_run_resnet50_inference(use_program_cache, batch_size, imagenet_sample_i
     with torch.no_grad():
         torch.manual_seed(1234)
 
-        # Initialize the device
-        device = tt_lib.device.CreateDevice(0)
-
-        tt_lib.device.SetDefaultDevice(device)
         tt_lib.device.EnableMemoryReports()
 
         torch_resnet50 = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
@@ -60,7 +56,6 @@ def test_run_resnet50_inference(use_program_cache, batch_size, imagenet_sample_i
 
         passing, info = comp_allclose_and_pcc(torch_output, tt_output, pcc=0.985)
         logger.info(info)
-        tt_lib.device.CloseDevice(device)
         passing_pcc, _ = comp_pcc(torch_output, tt_output, pcc=0.985)
         assert passing_pcc
         #assert passing # fails because of torch.allclose

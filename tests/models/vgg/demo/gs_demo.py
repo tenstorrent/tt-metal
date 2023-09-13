@@ -25,19 +25,12 @@ _batch_size = 1
 
 
 
-def test_gs_demo(imagenet_sample_input, imagenet_label_dict):
+def test_gs_demo(device, imagenet_sample_input, imagenet_label_dict):
     image = imagenet_sample_input
     class_labels = imagenet_label_dict
 
     batch_size = _batch_size
     with torch.no_grad():
-        # Initialize the device
-        device = tt_lib.device.CreateDevice(0)
-
-        tt_lib.device.SetDefaultDevice(device)
-
-
-
         # TODO: enable conv on tt device after adding fast dtx transform
         tt_vgg = vgg16(device, host, disable_conv_on_tt_device=True)
 
@@ -56,5 +49,3 @@ def test_gs_demo(imagenet_sample_input, imagenet_label_dict):
         logger.info(
             f"GS's predicted Output: {class_labels[torch.argmax(tt_output).item()]}\n"
         )
-
-        tt_lib.device.CloseDevice(device)

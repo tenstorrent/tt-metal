@@ -27,12 +27,8 @@ from models.vovnet.tt.vovnet import vovnet_for_image_classification
     (("hf_hub:timm/ese_vovnet19b_dw.ra_in1k"),),
 )
 def test_vovnet_model_inference(
-    imagenet_sample_input, imagenet_label_dict, model_name, reset_seeds
+    device, imagenet_sample_input, imagenet_label_dict, model_name, reset_seeds
 ):
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
-
 
     model = timm.create_model(model_name, pretrained=True)
 
@@ -57,4 +53,3 @@ def test_vovnet_model_inference(
 
     save_image(imagenet_sample_input, "vonet_input.jpg")
     logger.info("Input image is saved for reference as vovnet_input.jpg")
-    tt_lib.device.CloseDevice(device)

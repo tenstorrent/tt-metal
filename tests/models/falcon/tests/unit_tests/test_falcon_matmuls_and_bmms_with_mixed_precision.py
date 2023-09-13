@@ -19,6 +19,7 @@ def run_falcon_matmul_test(
     in0_mem_config,
     in1_mem_config,
     out_mem_config,
+    device
 ):
     pcc = 0.99
     if out_dtype == ttl.tensor.DataType.BFLOAT8_B:
@@ -91,8 +92,6 @@ def run_falcon_matmul_test(
         raise NotImplementedError(f"falcon matmul op is undefined!")
 
     torch.manual_seed(1234)
-    device = ttl.device.CreateDevice(0)
-
 
     A = torch.randn(a_shape)
     B = torch.randn(b_shape) - 0.95
@@ -138,7 +137,7 @@ def run_falcon_matmul_test(
     passing_pcc, output_pcc = comp_pcc(ref_bmm, pyt_got_back_rm, pcc)
     logger.info(f"Passing={passing_pcc}")
     logger.info(f"Output pcc={output_pcc}")
-    ttl.device.CloseDevice(device)
+
     assert passing_pcc
 
 
@@ -195,6 +194,7 @@ def test_falcon_matmul(
     in1_mem_config,
     out_mem_config,
     request,
+    device
 ):
     ttl.profiler.set_profiler_location(
         f"tt_metal/tools/profiler/logs/falcon_{request.node.callspec.id}"
@@ -208,4 +208,5 @@ def test_falcon_matmul(
         in0_mem_config,
         in1_mem_config,
         out_mem_config,
+        device
     )

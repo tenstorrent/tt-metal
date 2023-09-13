@@ -20,11 +20,8 @@ from models.EfficientNet.tt.efficientnet_model import reference_efficientnet_lit
 
 
 def run_efficientnet_mbconv(
-    state_dict, base_address, reference_module, mb_conv_config, is_lite
+    device, state_dict, base_address, reference_module, mb_conv_config, is_lite
 ):
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
 
     torch.manual_seed(0)
     test_input = torch.rand(1, mb_conv_config.input_channels, 64, 64)
@@ -45,7 +42,6 @@ def run_efficientnet_mbconv(
 
     tt_out = tt_module(test_input)
     tt_out = tt2torch_tensor(tt_out)
-    tt_lib.device.CloseDevice(device)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)
     logger.info(pcc_message)
@@ -58,7 +54,7 @@ def run_efficientnet_mbconv(
     assert does_pass
 
 
-def test_efficientnet_mbconv_b0():
+def test_efficientnet_mbconv_b0(device):
     reference_model = torchvision.models.efficientnet_b0(pretrained=True)
     reference_model.eval()
 
@@ -80,7 +76,7 @@ def test_efficientnet_mbconv_b0():
     )
 
 
-def test_efficientnet_mbconv_lite0():
+def test_efficientnet_mbconv_lite0(device):
     reference_model = reference_efficientnet_lite0()
 
     mb_conv_config = MBConvConfig(
@@ -101,7 +97,7 @@ def test_efficientnet_mbconv_lite0():
     )
 
 
-def test_efficientnet_mbconv_v2_s():
+def test_efficientnet_mbconv_v2_s(device):
     reference_model = torchvision.models.efficientnet_v2_s(pretrained=True)
     reference_model.eval()
 

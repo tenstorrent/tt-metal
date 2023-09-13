@@ -19,7 +19,7 @@ import tt_lib
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 from deit_for_image_classification import deit_for_image_classification
 
-def test_gs_demo(hf_cat_image_sample_input):
+def test_gs_demo(hf_cat_image_sample_input, device):
     image = hf_cat_image_sample_input
 
     image_processor = AutoImageProcessor.from_pretrained("facebook/deit-base-distilled-patch16-224")
@@ -27,11 +27,6 @@ def test_gs_demo(hf_cat_image_sample_input):
 
     torch_model = DeiTForImageClassification.from_pretrained("facebook/deit-base-distilled-patch16-224")
     torch_model.eval()
-
-    # Initialize the device
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
 
     tt_inputs = torch_to_tt_tensor_rm(inputs["pixel_values"], device, put_on_device=False)
     tt_model = deit_for_image_classification(device)
@@ -46,4 +41,3 @@ def test_gs_demo(hf_cat_image_sample_input):
 
     logger.info(f"Input image saved as deit_without_teacher_gs_input_image.jpg")
     logger.info(f"TT's prediction: {torch_model.config.id2label[predicted_label]}.")
-    tt_lib.device.CloseDevice(device)

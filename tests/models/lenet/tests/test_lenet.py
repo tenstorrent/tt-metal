@@ -26,16 +26,11 @@ from models.utility_functions import comp_pcc, torch2tt_tensor
     ((0.99),),
 )
 def test_lenet_inference(
-    pcc, mnist_sample_input, model_location_generator, reset_seeds
+    device, pcc, mnist_sample_input, model_location_generator, reset_seeds
 ):
     num_classes = 10
     batch_size = 1
     with torch.no_grad():
-        # Initialize the device
-        device = tt_lib.device.CreateDevice(0)
-
-        tt_lib.device.SetDefaultDevice(device)
-
 
         # Initialize Torch model
         pt_model_path = model_location_generator("model.pt", model_subdir = "LeNet")
@@ -60,5 +55,3 @@ def test_lenet_inference(
         pcc_passing, pcc_output = comp_pcc(torch_output, tt_output, pcc)
         logger.info(f"Output {pcc_output}")
         assert pcc_passing, f"Model output does not meet PCC requirement {pcc}."
-
-    tt_lib.device.CloseDevice(device)

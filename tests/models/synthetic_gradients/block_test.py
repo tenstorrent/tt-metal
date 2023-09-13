@@ -173,9 +173,5 @@ def run_block_inference(in_features, out_features, device):
     full_test_result, output = comp_allclose_and_pcc(output_full_torch[0], output_full_tt_untilized)
     print('\n\n', 'atol/rtol:', full_test_result, '| output:', output, '\n\n')
 
-def test_run_block_inference():
-    # Initialize the device
-    device = ttl.device.CreateDevice(0)
-
+def test_run_block_inference(device):
     run_block_inference(1024, 256, device)
-    ttl.device.CloseDevice(device)

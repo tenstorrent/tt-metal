@@ -76,11 +76,9 @@ def run_bloom_causal_lm_test(device):
     assert does_pass
 
 
-def test_bloom_causal_lm():
-    device = ttm.device.CreateDevice(0)
-
+def test_bloom_causal_lm(device):
     run_bloom_causal_lm_test(device)
-    ttm.device.CloseDevice(device)
+
 
 
 if __name__ == "__main__":

@@ -29,7 +29,7 @@ from models.stable_diffusion.tt.experimental_ops import UseDeviceConv
 
 @pytest.mark.parametrize("index", [1]) #FIXME: failing 0, 2 with L1 error.
 def test_run_cross_attn_down_block_real_input_inference(
-    index, model_location_generator
+    device, index, model_location_generator
 ):
     pipe = StableDiffusionPipeline.from_pretrained(
         "CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32
@@ -73,11 +73,6 @@ def test_run_cross_attn_down_block_real_input_inference(
         cross_attention_kwargs=cross_attention_kwargs,
     )
 
-    # Initialize the device
-    device = ttl.device.CreateDevice(0)
-
-    ttl.device.SetDefaultDevice(device)
-
     tt_sample = torch_to_tt_tensor_rm(sample, device, put_on_device=False)
     tt_emb = torch_to_tt_tensor_rm(
         emb.unsqueeze(0).unsqueeze(0), device, put_on_device=False
@@ -106,12 +101,12 @@ def test_run_cross_attn_down_block_real_input_inference(
 
     passing = comp_pcc(torch_output, tt_output)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))
-    ttl.device.CloseDevice(device)
+
     assert passing[0], passing[1:]
     logger.info(f"PASSED {passing[1]}")
 
 
-def test_run_cross_attn_down_block_inference():
+def test_run_cross_attn_down_block_inference(device):
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained(
         "CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32
@@ -162,11 +157,6 @@ def test_run_cross_attn_down_block_inference():
         cross_attention_kwargs=cross_attention_kwargs,
     )
 
-    # Initialize the device
-    device = ttl.device.CreateDevice(0)
-
-    ttl.device.SetDefaultDevice(device)
-
     tt_cross_attn_down_block = TtCrossAttnDownBlock2D(
         in_channels=in_channels,
         out_channels=out_channels,
@@ -209,6 +199,6 @@ def test_run_cross_attn_down_block_inference():
 
     passing = comp_pcc(torch_output, tt_output, pcc=0.95)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))
-    ttl.device.CloseDevice(device)
+
     assert passing[0], passing[1:]
     logger.info(f"PASSED {passing[1]}")

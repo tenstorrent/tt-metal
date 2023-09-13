@@ -71,11 +71,9 @@ def run_bloom_block_test(device):
     assert do_all_blocks_pass
 
 
-def test_bloom_block():
-    device = tt_lib.device.CreateDevice(0)
+def test_bloom_block(device):
 
     run_bloom_block_test(device)
-    tt_lib.device.CloseDevice(device)
 
 
 if __name__ == "__main__":

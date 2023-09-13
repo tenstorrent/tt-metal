@@ -30,11 +30,7 @@ from tt.effective_se_module import (
     "pcc",
     ((0.99),),
 )
-def test_effective_se_module_inference(pcc, reset_seeds):
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
-
+def test_effective_se_module_inference(device, pcc, reset_seeds):
 
     base_address = f"stages.0.blocks.0.attn"
 
@@ -71,7 +67,6 @@ def test_effective_se_module_inference(pcc, reset_seeds):
     logger.info(comp_allclose(model_output, tt_output_torch))
     logger.info(pcc_message)
 
-    tt_lib.device.CloseDevice(device)
 
     if passing:
         logger.info("EffectiveSEModule Passed!")

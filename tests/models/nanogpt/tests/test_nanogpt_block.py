@@ -38,10 +38,7 @@ from models.utility_functions import (
         ),
     ),
 )
-def test_nanogpt_block(pcc):
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
+def test_nanogpt_block(device, pcc):
 
     model_hf = GPT2LMHeadModel.from_pretrained('gpt2')
     sd = model_hf.state_dict()
@@ -90,5 +87,3 @@ def test_nanogpt_block(pcc):
         logger.warning("nanogpt_block: Failed!")
 
     assert does_pass
-
-    tt_lib.device.CloseDevice(device)

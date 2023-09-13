@@ -19,10 +19,9 @@ import torch
 
 
 def run_bert_large_pre_softmax_bmm_test(
-    dtype, in0_mem_config, in1_mem_config, out_mem_config
+    device, dtype, in0_mem_config, in1_mem_config, out_mem_config
 ):
     torch.manual_seed(1234)
-    device = ttl.device.CreateDevice(0)
 
     a_shape = [9, 16, 384, 64]
     b_shape = [9, 16, 64, 384]
@@ -68,7 +67,7 @@ def run_bert_large_pre_softmax_bmm_test(
     passing_pcc, output_pcc = comp_pcc(ref_bmm, pyt_got_back_rm, 0.99)
     logger.info(f"Passing={passing_pcc}")
     logger.info(f"Output pcc={output_pcc}")
-    ttl.device.CloseDevice(device)
+
     assert passing_pcc
 
 
@@ -105,28 +104,28 @@ import pytest
     ids=["BFLOAT8_B", "BFLOAT16"],
 )
 def test_bert_large_pre_softmax_bmm_test(
-    dtype, in0_mem_config, in1_mem_config, out_mem_config, request
+    device, dtype, in0_mem_config, in1_mem_config, out_mem_config, request
 ):
     ttl.profiler.set_profiler_location(
         f"tt_metal/tools/profiler/logs/BERT_large_pre_softmax_bmm_{request.node.callspec.id}"
     )
     run_bert_large_pre_softmax_bmm_test(
-        dtype, in0_mem_config, in1_mem_config, out_mem_config
+        device, dtype, in0_mem_config, in1_mem_config, out_mem_config
     )
 
 
-def test_bert_large_pre_softmax_bmm_with_program_cache(use_program_cache):
+def test_bert_large_pre_softmax_bmm_with_program_cache(device,use_program_cache):
     dtype = ttl.tensor.DataType.BFLOAT8_B
     dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
     for _ in range(2):
         run_bert_large_pre_softmax_bmm_test(
-            dtype, dram_mem_config, dram_mem_config, dram_mem_config
+            device, dtype, dram_mem_config, dram_mem_config, dram_mem_config
         )
 
     dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
     for _ in range(2):
         run_bert_large_pre_softmax_bmm_test(
-            dtype, dram_mem_config, dram_mem_config, dram_mem_config
+            device, dtype, dram_mem_config, dram_mem_config, dram_mem_config
         )
 
     assert ttl.program_cache.num_entries() == 2

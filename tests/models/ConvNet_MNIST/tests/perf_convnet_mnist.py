@@ -27,15 +27,11 @@ from models.ConvNet_MNIST.convnet_mnist_utils import get_test_data
         ),
     ),
 )
-def test_perf(use_program_cache, expected_inference_time, expected_compile_time):
+def test_perf(use_program_cache, expected_inference_time, expected_compile_time, device):
     disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_key"
-
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
 
     tt_model, pt_model = convnet_mnist(device)
     test_input, images = get_test_data(64)

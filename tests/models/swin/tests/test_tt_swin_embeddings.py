@@ -27,11 +27,7 @@ from transformers import SwinModel
     "pcc",
     ((0.99),),
 )
-def test_swin_embeddings_inference(imagenet_sample_input, pcc, reset_seeds):
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
-
+def test_swin_embeddings_inference(device, imagenet_sample_input, pcc, reset_seeds):
 
     image = imagenet_sample_input
     base_address = f"embeddings"
@@ -71,7 +67,6 @@ def test_swin_embeddings_inference(imagenet_sample_input, pcc, reset_seeds):
     logger.info(comp_allclose(torch_output[0], tt_output_torch))
     logger.info(pcc_message)
 
-    tt_lib.device.CloseDevice(device)
     if does_pass:
         logger.info("SwinEmbedding Passed!")
     else:

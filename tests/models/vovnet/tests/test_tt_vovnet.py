@@ -27,12 +27,7 @@ from models.vovnet.tt.vovnet import vovnet_for_image_classification
     "model_name, pcc",
     (("hf_hub:timm/ese_vovnet19b_dw.ra_in1k", 0.99),),
 )
-def test_vovnet_model_inference(pcc, imagenet_sample_input, model_name, reset_seeds):
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
-
-
+def test_vovnet_model_inference(device, pcc, imagenet_sample_input, model_name, reset_seeds):
     model = timm.create_model(model_name, pretrained=True)
 
     torch_model = model
@@ -54,7 +49,6 @@ def test_vovnet_model_inference(pcc, imagenet_sample_input, model_name, reset_se
     logger.info(comp_allclose(model_output, tt_output_torch))
     logger.info(pcc_message)
 
-    tt_lib.device.CloseDevice(device)
 
     if passing:
         logger.info("VoVNet Passed!")

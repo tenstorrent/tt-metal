@@ -24,7 +24,7 @@ from deit_config import DeiTConfig
 from deit_embeddings import DeiTEmbeddings
 
 
-def test_deit_embeddings_inference(hf_cat_image_sample_input, pcc=0.99):
+def test_deit_embeddings_inference(device, hf_cat_image_sample_input, pcc=0.99):
 
     # setup pytorch model
     model = DeiTModel.from_pretrained("facebook/deit-base-distilled-patch16-224")
@@ -44,12 +44,6 @@ def test_deit_embeddings_inference(hf_cat_image_sample_input, pcc=0.99):
 
     torch_output = torch_embeddings(input_image, bool_masked_pos)
 
-    # Initialize the device
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
-
-
     # setup tt model
     tt_embeddings = DeiTEmbeddings(DeiTConfig(),
                                     base_address,
@@ -61,5 +55,4 @@ def test_deit_embeddings_inference(hf_cat_image_sample_input, pcc=0.99):
     pcc_passing, _ = comp_pcc(torch_output, tt_output, pcc)
     _, pcc_output = comp_allclose_and_pcc(torch_output, tt_output, pcc)
     logger.info(f"Output {pcc_output}")
-    tt_lib.device.CloseDevice(device)
     assert(pcc_passing), f"Failed! Low pcc: {pcc}."

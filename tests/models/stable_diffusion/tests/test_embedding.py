@@ -16,7 +16,7 @@ from models.utility_functions import comp_pcc, comp_allclose_and_pcc
 from models.stable_diffusion.tt.embeddings import TtTimestepEmbedding
 
 
-def test_run_embedding_inference():
+def test_run_embedding_inference(device):
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
     unet = pipe.unet
@@ -33,12 +33,6 @@ def test_run_embedding_inference():
 
     #execute torch
     torch_output = time_embedding(t_emb.squeeze(0).squeeze(0))
-
-    # Initialize the device
-    device = ttl.device.CreateDevice(0)
-
-    ttl.device.SetDefaultDevice(device)
-
 
     # setup tt models
     tt_input = torch_to_tt_tensor_rm(t_emb, device, put_on_device=False)
@@ -57,6 +51,5 @@ def test_run_embedding_inference():
 
     passing = comp_pcc(torch_output, tt_output)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))
-    ttl.device.CloseDevice(device)
     assert passing[0], passing[1:]
     logger.info(f"PASSED {passing[1]}")

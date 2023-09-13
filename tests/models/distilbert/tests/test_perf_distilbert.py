@@ -33,17 +33,12 @@ BATCH_SIZE = 1
         ),
     ),
 )
-def test_perf(use_program_cache, expected_inference_time, expected_compile_time):
+def test_perf(device, expected_inference_time, expected_compile_time):
     profiler = Profiler()
     disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_key"
-
-    # Initialize the device
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
 
     tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased-distilled-squad")
     HF_model = HF_DistilBertForQuestionAnswering.from_pretrained(
@@ -100,6 +95,5 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time)
 
     logger.info(f"distilbert inference time: {second_iter_time}")
     logger.info(f"distilbert compile time: {compile_time}")
-    tt_lib.device.CloseDevice(device)
     assert second_iter_time < expected_inference_time, "distilbert is too slow"
     assert compile_time < expected_compile_time, "distilbert compile time is too slow"

@@ -26,11 +26,7 @@ from tests.models.swin.tt.swin import *
     "model_name",
     (("microsoft/swin-tiny-patch4-window7-224"),),
 )
-def test_gs_demo(imagenet_sample_input, model_name):
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
-
+def test_gs_demo(device,  imagenet_sample_input, model_name):
 
     image = imagenet_sample_input
 
@@ -57,5 +53,3 @@ def test_gs_demo(imagenet_sample_input, model_name):
 
         save_image(imagenet_sample_input, "swin_input.jpg")
         logger.info("Input image is saved for reference as swin_input.jpg")
-
-    tt_lib.device.CloseDevice(device)

@@ -24,7 +24,7 @@ from deit_config import DeiTConfig
 from deit_encoder import TtDeiTEncoder
 
 
-def test_deit_encoder_inference(pcc = 0.97):
+def test_deit_encoder_inference(device, pcc = 0.97):
     # setup pytorch model
     model = DeiTModel.from_pretrained("facebook/deit-base-distilled-patch16-224")
     model.eval()
@@ -46,11 +46,6 @@ def test_deit_encoder_inference(pcc = 0.97):
                                 output_hidden_states,
                                 return_dict)[0]
 
-    # Initialize the device
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
-
     # setup tt model
     tt_encoder = TtDeiTEncoder(DeiTConfig(),
                                 device,
@@ -64,5 +59,4 @@ def test_deit_encoder_inference(pcc = 0.97):
     pcc_passing, _ = comp_pcc(torch_output, tt_output, pcc)
     _, pcc_output = comp_allclose_and_pcc(torch_output, tt_output, pcc)
     logger.info(f"Output {pcc_output}")
-    tt_lib.device.CloseDevice(device)
     assert(pcc_passing), f"Failed! Low pcc: {pcc}."

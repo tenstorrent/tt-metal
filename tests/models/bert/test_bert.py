@@ -80,11 +80,10 @@ class TtBertForQuestionAnswering(TtBertShared):
         encoder_output = super().forward(input_ids, attention_mask, token_type_ids)
         return self.qa_linear(encoder_output)
 
-def run_bert_question_and_answering_inference(model_version, batch, seq_len, real_input, attention_mask, token_type_ids, pcc, model_location_generator):
+def run_bert_question_and_answering_inference(device, model_version, batch, seq_len, real_input, attention_mask, token_type_ids, pcc, model_location_generator):
 
     torch.manual_seed(1234)
 
-    device = ttl.device.CreateDevice(0)
 
 
     model_name = str(model_location_generator(model_version, model_subdir = "Bert"))
@@ -143,7 +142,7 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, rea
         tt_out = tt_bert_model(bert_input).cpu()
     tt_untilized_output = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(batch, 1, seq_len, -1)
 
-    ttl.device.CloseDevice(device)
+
 
     tt_start_logits = tt_untilized_output[..., :, 0].squeeze(1)
     tt_end_logits = tt_untilized_output[..., :, 1].squeeze(1)
@@ -212,7 +211,7 @@ def run_bert_question_and_answering_inference(model_version, batch, seq_len, rea
         ("phiyodr/bert-large-finetuned-squad2", 1, 384, True, True, True, 0.98) # Placeholder PCC until issues are resolved
     ),
 )
-def test_bert_question_and_answering_inference(model_version, batch, seq_len, real_input, attention_mask, token_type_ids, pcc, model_location_generator):
+def test_bert_question_and_answering_inference(device, model_version, batch, seq_len, real_input, attention_mask, token_type_ids, pcc, model_location_generator):
 
     # enable_persistent_kernel_cache()
-    run_bert_question_and_answering_inference(model_version, batch, seq_len, real_input, attention_mask, token_type_ids, pcc, model_location_generator)
+    run_bert_question_and_answering_inference(device, model_version, batch, seq_len, real_input, attention_mask, token_type_ids, pcc, model_location_generator)

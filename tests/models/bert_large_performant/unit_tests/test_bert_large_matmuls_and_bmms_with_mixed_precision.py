@@ -30,6 +30,7 @@ def run_bert_large_matmul_test(
     in1_mem_config,
     bias_mem_config,
     out_mem_config,
+    device,
 ):
     gelu_activation = None
 
@@ -78,7 +79,6 @@ def run_bert_large_matmul_test(
         raise NotImplementedError(f"bert_large matmul op is undefined!")
 
     torch.manual_seed(1234)
-    device = ttl.device.CreateDevice(0)
 
 
     A = torch.randn(a_shape)
@@ -158,7 +158,7 @@ def run_bert_large_matmul_test(
     passing_pcc, output_pcc = comp_pcc(ref_bmm, pyt_got_back_rm, 0.99)
     logger.info(f"Passing={passing_pcc}")
     logger.info(f"Output pcc={output_pcc}")
-    ttl.device.CloseDevice(device)
+
     assert passing_pcc
 
 
@@ -171,6 +171,7 @@ def run_bert_large_bmm_test(
     in0_mem_config,
     in1_mem_config,
     out_mem_config,
+    device,
 ):
     if bert_large_op == ttl.tensor.bert_large_pre_softmax_bmm:
         a_shape = [batch, 16, 384, 64]
@@ -196,7 +197,6 @@ def run_bert_large_bmm_test(
         raise NotImplementedError(f"bert_large bmm op is undefined!")
 
     torch.manual_seed(1234)
-    device = ttl.device.CreateDevice(0)
 
 
     A = torch.randn(a_shape)
@@ -255,7 +255,7 @@ def run_bert_large_bmm_test(
     passing_pcc, output_pcc = comp_pcc(ref_bmm, pyt_got_back_rm, 0.99)
     logger.info(f"Passing={passing_pcc}")
     logger.info(f"Output pcc={output_pcc}")
-    ttl.device.CloseDevice(device)
+
     assert passing_pcc
 
 
@@ -329,6 +329,7 @@ def test_bert_large_matmul(
     bias_mem_config,
     out_mem_config,
     request,
+    device,
 ):
     ttl.profiler.set_profiler_location(
         f"tt_metal/tools/profiler/logs/BERT_large_{request.node.callspec.id}"
@@ -344,6 +345,7 @@ def test_bert_large_matmul(
         in1_mem_config,
         bias_mem_config,
         out_mem_config,
+        device,
     )
 
 
@@ -403,6 +405,7 @@ def test_bert_large_bmm(
     in1_mem_config,
     out_mem_config,
     request,
+    device,
 ):
     ttl.profiler.set_profiler_location(
         f"tt_metal/tools/profiler/logs/BERT_large_{request.node.callspec.id}"
@@ -416,4 +419,5 @@ def test_bert_large_bmm(
         in0_mem_config,
         in1_mem_config,
         out_mem_config,
+        device,
     )

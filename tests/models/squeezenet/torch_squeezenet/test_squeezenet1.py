@@ -26,13 +26,10 @@ from squeezenet import squeezenet1_0
 _batch_size = 1
 
 @pytest.mark.parametrize("fuse_ops", [False, True], ids=['Not Fused', 'Ops Fused'])
-def test_squeezenet1_inference(fuse_ops, imagenet_sample_input):
+def test_squeezenet1_inference(device, fuse_ops, imagenet_sample_input):
     image = imagenet_sample_input
     batch_size = _batch_size
     with torch.no_grad():
-        # Initialize the device
-        device = ttl.device.CreateDevice(0)
-
 
         torch_squeezenet = models.squeezenet1_0(weights=models.SqueezeNet1_0_Weights.IMAGENET1K_V1)
 
@@ -61,7 +58,6 @@ def test_squeezenet1_inference(fuse_ops, imagenet_sample_input):
         tt_output = tt_squeezenet(image)
 
         passing = comp_pcc(torch_output, tt_output)
-        tt_lib.device.CloseDevice(device)
         assert passing[0], passing[1:]
 
     logger.info(f"PASSED {passing[1]}")

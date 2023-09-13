@@ -24,7 +24,7 @@ from deit_config import DeiTConfig
 from deit_for_image_classification import TtDeiTForImageClassification
 
 
-def test_deit_for_image_classification_inference(hf_cat_image_sample_input, pcc=0.95):
+def test_deit_for_image_classification_inference(device, hf_cat_image_sample_input, pcc=0.95):
 
     with torch.no_grad():
         image = hf_cat_image_sample_input
@@ -40,11 +40,6 @@ def test_deit_for_image_classification_inference(hf_cat_image_sample_input, pcc=
 
         torch_output = torch_model(**inputs).logits
 
-        # Initialize the device
-        device = tt_lib.device.CreateDevice(0)
-
-        tt_lib.device.SetDefaultDevice(device)
-
         tt_inputs = torch_to_tt_tensor_rm(inputs["pixel_values"], device, put_on_device=False)
         tt_model = TtDeiTForImageClassification(config,
                                                 device=device,
@@ -58,5 +53,4 @@ def test_deit_for_image_classification_inference(hf_cat_image_sample_input, pcc=
         pcc_passing, _ = comp_pcc(torch_output, tt_output, pcc)
         _, pcc_output = comp_allclose_and_pcc(torch_output, tt_output, pcc)
         logger.info(f"Output {pcc_output}")
-        tt_lib.device.CloseDevice(device)
         assert(pcc_passing), f"Failed! Low pcc: {pcc}."

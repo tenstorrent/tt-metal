@@ -241,9 +241,5 @@ def run_full_inference(in_features, hidden_features, out_features, device):
     print('\n\n', 'atol/rtol 2:',  layer2_test_result, '| output:', output, '\n\n')
 
 
-def test_run_full_inference():
-    # Initialize the device
-    device = ttl.device.CreateDevice(0)
-
+def test_run_full_inference(device):
     run_full_inference(1024, 256, 32, device)
-    ttl.device.CloseDevice(device)

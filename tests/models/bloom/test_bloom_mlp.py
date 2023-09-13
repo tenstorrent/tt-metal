@@ -62,12 +62,6 @@ def run_bloom_mlp_test(device):
     assert does_pass
 
 
-def test_bloom_mlp():
-    device = tt_lib.device.CreateDevice(0)
+def test_bloom_mlp(device):
 
     run_bloom_mlp_test(device)
-    tt_lib.device.CloseDevice(device)
-
-
-if __name__ == "__main__":
-    test_bloom_mlp()

@@ -26,10 +26,8 @@ from transformers import SwinModel
     "pcc",
     ((0.99),),
 )
-def test_swin_patch_embeddings_inference(pcc, reset_seeds):
-    device = tt_lib.device.CreateDevice(0)
+def test_swin_patch_embeddings_inference(device, pcc, reset_seeds):
 
-    tt_lib.device.SetDefaultDevice(device)
     base_address = f"embeddings.patch_embeddings"
 
     model = SwinModel.from_pretrained("microsoft/swin-tiny-patch4-window7-224")
@@ -63,7 +61,6 @@ def test_swin_patch_embeddings_inference(pcc, reset_seeds):
     logger.info(comp_allclose(torch_output[0], tt_output_torch))
     logger.info(pcc_message)
 
-    tt_lib.device.CloseDevice(device)
     if does_pass:
         logger.info("SwinPatchEmbedding Passed!")
     else:

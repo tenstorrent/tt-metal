@@ -26,14 +26,11 @@ _batch_size = 1
 
 
 @pytest.mark.parametrize("fuse_ops", [False, True], ids=['Not Fused', 'Ops Fused'])
-def test_mobilenetv2_inference(fuse_ops, imagenet_sample_input):
+def test_mobilenetv2_inference(fuse_ops, imagenet_sample_input, device):
     image = imagenet_sample_input
     batch_size = _batch_size
 
     with torch.no_grad():
-        # Initialize the device
-        device = tt_lib.device.CreateDevice(0)
-
 
         image_processor = transformers.AutoImageProcessor.from_pretrained("google/mobilenet_v2_1.0_224")
         torch_model = transformers.MobileNetV2Model.from_pretrained("google/mobilenet_v2_1.0_224")
@@ -67,7 +64,6 @@ def test_mobilenetv2_inference(fuse_ops, imagenet_sample_input):
         tt_output = tt_model(image)[0]
 
         passing = comp_pcc(torch_output, tt_output)
-        tt_lib.device.CloseDevice(device)
         assert passing[0], passing[1:]
 
     logger.info(f"PASSED {passing[1]}")

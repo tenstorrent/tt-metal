@@ -31,11 +31,8 @@ from models.utility_functions import (
 )
 
 
-def test_concat_module(model_location_generator):
+def test_concat_module(device, model_location_generator):
     torch.manual_seed(1234)
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
 
     # Load yolo
     model_path = model_location_generator("models", model_subdir = "Yolo")
@@ -81,7 +78,6 @@ def test_concat_module(model_location_generator):
     _, comp_out = comp_allclose_and_pcc(pred, tt_output_torch)
     logger.info(comp_out)
 
-    tt_lib.device.CloseDevice(device)
 
     if does_pass:
         logger.info("Yolo TtConcat Passed!")

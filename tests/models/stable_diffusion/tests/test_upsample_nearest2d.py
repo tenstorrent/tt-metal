@@ -16,12 +16,7 @@ from models.utility_functions import (
 from models.stable_diffusion.tt.upsample_nearest2d import TtUpsampleNearest2d
 
 
-def test_run_upsample_nearest_inference():
-    # Initialize the device
-    device = ttl.device.CreateDevice(0)
-
-    ttl.device.SetDefaultDevice(device)
-
+def test_run_upsample_nearest_inference(device):
 
     # synthesize the input
     input_shape = [1, 1, 32, 32]
@@ -36,6 +31,6 @@ def test_run_upsample_nearest_inference():
 
     passing = comp_pcc(torch_output, tt_output)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))
-    ttl.device.CloseDevice(device)
+
     assert passing[0], passing[1:]
     logger.info(f"PASSED {passing[1]}")

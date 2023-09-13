@@ -19,7 +19,7 @@ from models.stable_diffusion.tt.experimental_ops import UseDeviceConv
 
 #low PCC for value 2, 3: 0.9851282356324425 etc.
 @pytest.mark.parametrize("index", [1,2,3])
-def test_run_cross_attn_up_block_real_input_inference(index, model_location_generator):
+def test_run_cross_attn_up_block_real_input_inference(device, index, model_location_generator):
     pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
     unet = pipe.unet
     unet.eval()
@@ -59,12 +59,6 @@ def test_run_cross_attn_up_block_real_input_inference(index, model_location_gene
                         upsample_size=upsample_size,
                         )
 
-    # Initialize the device
-    device = ttl.device.CreateDevice(0)
-
-    ttl.device.SetDefaultDevice(device)
-
-
     tt_cross_attn_up_block = TtCrossAttnUpBlock2D(**kwargs,
                                             state_dict=state_dict,
                                             base_address=base_address)
@@ -86,13 +80,13 @@ def test_run_cross_attn_up_block_real_input_inference(index, model_location_gene
 
     passing = comp_pcc(torch_output, tt_output, pcc=0.98 )
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))
-    ttl.device.CloseDevice(device)
+
     assert passing[0], passing[1:]
     logger.info(f"PASSED {passing[1]}")
 
 # test_run_cross_attn_up_block_inference_new(1)
 #low PCC for on device = 0.90
-def test_run_cross_attn_up_block_inference():
+def test_run_cross_attn_up_block_inference(device):
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
     unet = pipe.unet
@@ -152,12 +146,6 @@ def test_run_cross_attn_up_block_inference():
                         upsample_size=upsample_size,
                         )
 
-    # Initialize the device
-    device = ttl.device.CreateDevice(0)
-
-    ttl.device.SetDefaultDevice(device)
-
-
     tt_cross_attn_up_block = TtCrossAttnUpBlock2D(
                             in_channels = in_channels,
                             out_channels = out_channels,
@@ -201,6 +189,6 @@ def test_run_cross_attn_up_block_inference():
 
     passing = comp_pcc(torch_output, tt_output, pcc=0.90) #was 0.97 before
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))
-    ttl.device.CloseDevice(device)
+
     assert passing[0], passing[1:]
     logger.info(f"PASSED {passing[1]}")

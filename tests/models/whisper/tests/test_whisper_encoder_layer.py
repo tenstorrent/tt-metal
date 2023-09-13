@@ -103,17 +103,10 @@ def run_whisper_encoder_layer(layer, device, for_audio_classification=False):
     assert does_pass
 
 
-def test_WhipserEncoderLayer_inference():
+def test_WhipserEncoderLayer_inference(device):
     torch.manual_seed(1234)
-    device = tt_lib.device.CreateDevice(0)
-
     run_whisper_encoder_layer(layer=0, device=device)
-    tt_lib.device.CloseDevice(device)
 
-
-def test_WhisperEncoderLayerForAudioClassification_inference():
+def test_WhisperEncoderLayerForAudioClassification_inference(device):
     torch.manual_seed(1234)
-    device = tt_lib.device.CreateDevice(0)
-
     run_whisper_encoder_layer(layer=0, device=device, for_audio_classification=True)
-    tt_lib.device.CloseDevice(device)

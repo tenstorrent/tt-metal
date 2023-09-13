@@ -219,7 +219,7 @@ def ref_layernorm(x, eps, gamma, beta, H, W):
     return lnorm(x)
 
 if __name__ == "__main__":
-    # Initialize the device
+
     device = device.CreateDevice(0)
 
 

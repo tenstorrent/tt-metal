@@ -30,12 +30,7 @@ from hrnet.tt.basicblock import TtBasicBlock
     "model_name, pcc",
     (("hrnet_w18_small", 0.99),),
 )
-def test_hrnet_module_inference(model_name, pcc, reset_seeds):
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
-
-
+def test_hrnet_module_inference(device, model_name, pcc, reset_seeds):
     HR_MODULE_INDEX = 0
     base_address = f"stage2.{HR_MODULE_INDEX}"
     model = timm.create_model(model_name, pretrained=True)
@@ -80,7 +75,6 @@ def test_hrnet_module_inference(model_name, pcc, reset_seeds):
         logger.info(comp_allclose(torch_outputs[i], tt_outputs_torch[i]))
         logger.info(pcc_message)
 
-    tt_lib.device.CloseDevice(device)
     if all(does_pass_list):
         logger.info("HighResolutionModule Passed!")
     else:

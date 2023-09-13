@@ -94,11 +94,7 @@ def make_tt_unet(state_dict, device):
     return tt_unet
 
 
-def test_unbatched_stable_diffusion():
-    # Initialize the device
-    device = ttl.device.CreateDevice(0)
-
-    ttl.device.SetDefaultDevice(device)
+def test_unbatched_stable_diffusion(device):
 
     # 1. Load the autoencoder model which will be used to decode the latents into image space.
     vae = AutoencoderKL.from_pretrained(
@@ -269,7 +265,7 @@ def test_unbatched_stable_diffusion():
     pcc_res = comp_allclose_and_pcc(latents, tt_latents)
     logger.info(pcc_res)
 
-    ttl.device.CloseDevice(device)
+
 
     if does_pass:
         logger.info("Unbatched Stable Diffusion Passed!")

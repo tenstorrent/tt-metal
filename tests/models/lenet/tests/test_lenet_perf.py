@@ -33,7 +33,7 @@ from lenet_utils import load_torch_lenet, prepare_image
     ((0.99, 2),),
 )
 def test_lenet_perf_inference(
-    pcc, PERF_CNT, mnist_sample_input, model_location_generator, reset_seeds
+    device, pcc, PERF_CNT, mnist_sample_input, model_location_generator, reset_seeds
 ):
     disable_persistent_kernel_cache()
     image = prepare_image(mnist_sample_input)
@@ -41,11 +41,6 @@ def test_lenet_perf_inference(
     batch_size = 1
 
     with torch.no_grad():
-        # Initialize the device
-        device = tt_lib.device.CreateDevice(0)
-
-        tt_lib.device.SetDefaultDevice(device)
-
 
         # Initialize Torch model
         pt_model_path = model_location_generator("model.pt", model_subdir = "LeNet")
@@ -84,6 +79,5 @@ def test_lenet_perf_inference(
         logger.info(f"Output {pcc_output}")
         assert pcc_passing, f"Model output does not meet PCC requirement {pcc}."
 
-        tt_lib.device.CloseDevice(device)
 
         profiler.print()

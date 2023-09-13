@@ -43,12 +43,6 @@ def run_bloom_merge_heads_test(device, num_heads, hidden_size, num_attention_hea
     assert does_pass
 
 
-def test_bloom_merge_heads():
-    device = tt_lib.device.CreateDevice(0)
+def test_bloom_merge_heads(device):
 
     run_bloom_merge_heads_test(device, 32, 1024, 32)
-    tt_lib.device.CloseDevice(device)
-
-
-if __name__ == "__main__":
-    test_bloom_merge_heads()

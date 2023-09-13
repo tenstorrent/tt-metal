@@ -31,12 +31,7 @@ from transformers import AutoFeatureExtractor
     "model_name, pcc",
     (("microsoft/swin-tiny-patch4-window7-224", 0.99),),
 )
-def test_swin_image_classification_inference(imagenet_sample_input, model_name, pcc, reset_seeds):
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
-
-
+def test_swin_image_classification_inference(device, imagenet_sample_input, model_name, pcc, reset_seeds):
     feature_extractor = AutoFeatureExtractor.from_pretrained(model_name)
     model = HF_SwinForImageClassification.from_pretrained(model_name)
 
@@ -72,7 +67,6 @@ def test_swin_image_classification_inference(imagenet_sample_input, model_name, 
         logger.info(comp_allclose(torch_output.logits, tt_output_torch))
         logger.info(pcc_message)
 
-        tt_lib.device.CloseDevice(device)
 
         if does_pass:
             logger.info("SwinForImageClassification Passed!")

@@ -27,10 +27,7 @@ from models.trocr.tt.trocr_embed_tokens import TtTrOCREmbedTokens
     "pcc",
     ((0.99),),
 )
-def test_trocr_embed_tokens_inference(pcc, reset_seeds):
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
+def test_trocr_embed_tokens_inference(device, pcc, reset_seeds):
 
     with torch.no_grad():
         model = VisionEncoderDecoderModel.from_pretrained(
@@ -66,7 +63,6 @@ def test_trocr_embed_tokens_inference(pcc, reset_seeds):
         logger.info(comp_allclose(model_output, tt_output_torch))
         logger.info(pcc_message)
 
-        tt_lib.device.CloseDevice(device)
         if passing:
             logger.info("TrOCREmbedTokens Passed!")
         else:

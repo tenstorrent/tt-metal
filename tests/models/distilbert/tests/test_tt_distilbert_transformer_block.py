@@ -21,11 +21,7 @@ from transformers import (
     "pcc",
     ((0.99),),
 )
-def test_distilbert_transformer_block_inference(pcc, reset_seeds):
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
-
+def test_distilbert_transformer_block_inference(device, pcc):
     HF_model = HF_DistilBertForQuestionAnswering.from_pretrained(
         "distilbert-base-uncased-distilled-squad"
     )
@@ -60,7 +56,6 @@ def test_distilbert_transformer_block_inference(pcc, reset_seeds):
     logger.info(comp_allclose(torch_output[0], tt_output_torch))
     logger.info(pcc_message)
 
-    tt_lib.device.CloseDevice(device)
 
     if does_pass:
         logger.info("DistilBertTransformerBlock Passed!")

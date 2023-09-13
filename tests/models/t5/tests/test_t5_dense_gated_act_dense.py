@@ -60,9 +60,7 @@ def run_test_T5DenseGatedActDense_inference(device):
     assert does_pass
 
 
-def test_T5DenseGatedActDense_inference():
-    device = tt_lib.device.CreateDevice(0)
+def test_T5DenseGatedActDense_inference(device):
 
 
     run_test_T5DenseGatedActDense_inference(device)
-    tt_lib.device.CloseDevice(device)

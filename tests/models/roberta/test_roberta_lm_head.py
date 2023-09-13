@@ -30,11 +30,8 @@ from transformers import AutoTokenizer
 from dataclasses import dataclass
 
 
-def test_roberta_lm_head():
+def test_roberta_lm_head(device):
     torch.manual_seed(1234)
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
 
     base_address = f"lm_head"
 
@@ -69,7 +66,6 @@ def test_roberta_lm_head():
     logger.info(comp_allclose(torch_output, tt_output_torch))
     logger.info(pcc_message)
 
-    tt_lib.device.CloseDevice(device)
 
     if does_pass:
         logger.info("RobertaLMHead Passed!")
@@ -77,7 +73,3 @@ def test_roberta_lm_head():
         logger.warning("RobertaLMHead Failed!")
 
     assert does_pass
-
-
-if __name__ == "__main__":
-    test_roberta_lm_head()

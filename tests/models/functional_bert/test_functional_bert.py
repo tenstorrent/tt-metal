@@ -453,6 +453,7 @@ def run_bert_question_and_answering_inference(
     model_name,
     batch_size,
     sequence_size,
+    device
 ):
     enable_persistent_kernel_cache()
 
@@ -482,9 +483,6 @@ def run_bert_question_and_answering_inference(
     )
 
     # Run TT Model
-    device = ttl.device.CreateDevice(0)
-
-
     parameters_config = ParametersConfig(
         linear_weight_dtype=DataType.BFLOAT8_B,
         linear_bias_dtype=DataType.BFLOAT8_B,
@@ -529,7 +527,7 @@ def run_bert_question_and_answering_inference(
         logger.info(f"{index}: Samples per second: {1 / duration * batch_size}")
     tt_output = tt_output.cpu().to_torch().squeeze(1).to(torch.float32)[:, :, :2]
 
-    ttl.device.CloseDevice(device)
+
 
     # assert torch.allclose(torch_output, tt_output)
 
@@ -542,6 +540,7 @@ def test_bert(
     use_program_cache,
     batch_size,
     sequence_size,
+    device
 ):
     model_name = "phiyodr/bert-large-finetuned-squad2"
 
@@ -549,4 +548,5 @@ def test_bert(
         model_name,
         batch_size,
         sequence_size,
+        device
     )

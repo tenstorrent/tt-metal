@@ -13,7 +13,7 @@ import tt_lib as ttl
 from models.stable_diffusion.tt.feedforward import TtFeedForward
 
 
-def test_feedforward_inference():
+def test_feedforward_inference(device):
     # synthesize the input
     dim = 1280
     dropout = 0
@@ -30,12 +30,6 @@ def test_feedforward_inference():
     ff = pipe.unet.mid_block.attentions[0].transformer_blocks[0].ff
     torch_output = ff(input)
 
-    # Initialize the device
-    device = ttl.device.CreateDevice(0)
-
-    ttl.device.SetDefaultDevice(device)
-
-
     # setup tt model
     tt_ff = TtFeedForward(dim=dim, dropout=dropout, activation_fn=act, final_dropout=False, state_dict=state_dict, device=device)
     ttl.device.Synchronize()
@@ -45,6 +39,6 @@ def test_feedforward_inference():
 
     passing = comp_pcc(torch_output, tt_output)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))
-    ttl.device.CloseDevice(device)
+
     assert passing[0], passing[1:]
     logger.info(f"PASSED {passing[1]}")

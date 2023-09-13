@@ -12,12 +12,7 @@ from models.stable_diffusion.tt.unet_2d_blocks import TtUNetMidBlock2DCrossAttn
 from loguru import logger
 import pytest
 
-def test_run_unet_mid_block_real_input_inference(model_location_generator):
-    # Initialize the device
-    device = ttl.device.CreateDevice(0)
-
-    ttl.device.SetDefaultDevice(device)
-
+def test_run_unet_mid_block_real_input_inference(device, model_location_generator):
 
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
@@ -77,12 +72,12 @@ def test_run_unet_mid_block_real_input_inference(model_location_generator):
 
     passing = comp_pcc(torch_output, tt_output)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))
-    ttl.device.CloseDevice(device)
+
     assert passing[0], passing[1:]
     logger.info(f"PASSED {passing[1]}")
 
 #lower PCC: 0.9890321746745357")
-def test_run_unet_mid_block_inference():
+def test_run_unet_mid_block_inference(device):
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
     unet = pipe.unet
@@ -127,12 +122,6 @@ def test_run_unet_mid_block_inference():
                         cross_attention_kwargs=cross_attention_kwargs
                         )
 
-    # Initialize the device
-    device = ttl.device.CreateDevice(0)
-
-    ttl.device.SetDefaultDevice(device)
-
-
     tt_mid_block = TtUNetMidBlock2DCrossAttn(
                     in_channels=in_channels,
                     temb_channels=temb_channels,
@@ -159,6 +148,6 @@ def test_run_unet_mid_block_inference():
 
     passing = comp_pcc(torch_output, tt_output, pcc=0.98)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))
-    ttl.device.CloseDevice(device)
+
     assert passing[0], passing[1:]
     logger.info(f"PASSED {passing[1]}")

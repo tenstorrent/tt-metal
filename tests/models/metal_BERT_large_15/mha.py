@@ -253,11 +253,8 @@ class PytorchMultiHeadAttentionModel(torch.nn.Module):
 
 
 def run_mha_inference(
-    model_version, batch, seq_len, pcc, model_config, model_location_generator
+    device, model_version, batch, seq_len, pcc, model_config, model_location_generator
 ):
-    device = ttl.device.CreateDevice(0)
-    # Initialize the device
-
 
     model_name = str(model_location_generator(model_version, model_subdir = "Bert"))
 
@@ -312,7 +309,7 @@ def run_mha_inference(
         tt_out.shape()
     )
 
-    ttl.device.CloseDevice(device)
+
 
     passing, output = comp_pcc(pytorch_out, tt_out1, pcc)
     logger.info(f"Output {output}")
@@ -356,6 +353,7 @@ def run_mha_inference(
     ids=["BERT_LARGE"],
 )
 def test_mha_inference(
+    device,
     model_version,
     batch,
     seq_len,
@@ -371,6 +369,7 @@ def test_mha_inference(
     )
 
     run_mha_inference(
+        device,
         model_version,
         batch,
         seq_len,

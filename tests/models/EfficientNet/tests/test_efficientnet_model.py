@@ -53,6 +53,7 @@ def make_input_tensor(imagenet_sample_input, resize=256, crop=224):
 
 
 def run_efficientnet_model_test(
+    device,
     reference_model_class,
     tt_model_class,
     imagenet_sample_input,
@@ -61,9 +62,6 @@ def run_efficientnet_model_test(
     resize=256,
     crop=224,
 ):
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
 
     refence_model = reference_model_class(pretrained=True)
     torch.manual_seed(0)
@@ -88,7 +86,6 @@ def run_efficientnet_model_test(
         tt_out = tt_model(test_input)
         tt_out = tt2torch_tensor(tt_out)
 
-    tt_lib.device.CloseDevice(device)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, pcc)
     logger.info(pcc_message)
@@ -101,38 +98,38 @@ def run_efficientnet_model_test(
     assert does_pass
 
 
-def test_efficientnet_b0_model_synt(imagenet_sample_input):
-    run_efficientnet_model_test(
+def test_efficientnet_b0_model_synt(device,imagenet_sample_input):
+    run_efficientnet_model_test( device,
         torchvision.models.efficientnet_b0, efficientnet_b0, imagenet_sample_input
     )
 
 
-def test_efficientnet_b1_model_synt(imagenet_sample_input):
-    run_efficientnet_model_test(
+def test_efficientnet_b1_model_synt(device,imagenet_sample_input):
+    run_efficientnet_model_test( device,
         torchvision.models.efficientnet_b1, efficientnet_b1, imagenet_sample_input, 0.97
     )
 
 
-def test_efficientnet_b2_model_synt(imagenet_sample_input):
-    run_efficientnet_model_test(
+def test_efficientnet_b2_model_synt(device,imagenet_sample_input):
+    run_efficientnet_model_test( device,
         torchvision.models.efficientnet_b2, efficientnet_b2, imagenet_sample_input
     )
 
 
-def test_efficientnet_b3_model_synt(imagenet_sample_input):
-    run_efficientnet_model_test(
+def test_efficientnet_b3_model_synt(device,imagenet_sample_input):
+    run_efficientnet_model_test( device
         torchvision.models.efficientnet_b3, efficientnet_b3, imagenet_sample_input
     )
 
 
-def test_efficientnet_b4_model_synt(imagenet_sample_input):
-    run_efficientnet_model_test(
+def test_efficientnet_b4_model_synt(device,imagenet_sample_input):
+    run_efficientnet_model_test( device,
         torchvision.models.efficientnet_b4, efficientnet_b4, imagenet_sample_input
     )
 
 
-def test_efficientnet_b5_model_synt(imagenet_sample_input):
-    run_efficientnet_model_test(
+def test_efficientnet_b5_model_synt(device,imagenet_sample_input):
+    run_efficientnet_model_test( device,
         torchvision.models.efficientnet_b5, efficientnet_b5, imagenet_sample_input
     )
 

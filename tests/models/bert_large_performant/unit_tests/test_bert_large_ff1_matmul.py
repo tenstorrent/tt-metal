@@ -20,6 +20,7 @@ import pytest
 
 
 def run_bert_large_ff1_matmul_test(
+    device,
     dtype,
     in0_mem_config,
     in1_mem_config,
@@ -38,7 +39,6 @@ def run_bert_large_ff1_matmul_test(
         pytest.skip("Skipping test since these tensors won't fit on device!")
 
     torch.manual_seed(1234)
-    device = ttl.device.CreateDevice(0)
 
     a_shape = [9, 1, 384, 1024]
     b_shape = [1, 1, 1024, 4096]
@@ -123,7 +123,7 @@ def run_bert_large_ff1_matmul_test(
     passing_pcc, output_pcc = comp_pcc(ref_bmm, pyt_got_back_rm, 0.99)
     logger.info(f"Passing={passing_pcc}")
     logger.info(f"Output pcc={output_pcc}")
-    ttl.device.CloseDevice(device)
+
     assert passing_pcc
 
 
@@ -171,6 +171,7 @@ def run_bert_large_ff1_matmul_test(
     ids=["BFLOAT8_B", "BFLOAT16"],
 )
 def test_bert_large_ff1_matmul_test(
+    device,
     dtype,
     in0_mem_config,
     in1_mem_config,
@@ -183,6 +184,7 @@ def test_bert_large_ff1_matmul_test(
         f"tt_metal/tools/profiler/logs/BERT_large_ff1_matmul_{request.node.callspec.id}"
     )
     run_bert_large_ff1_matmul_test(
+        device,
         dtype,
         in0_mem_config,
         in1_mem_config,
@@ -192,11 +194,12 @@ def test_bert_large_ff1_matmul_test(
     )
 
 
-def test_bert_large_ff1_matmul_with_program_cache(use_program_cache):
+def test_bert_large_ff1_matmul_with_program_cache(device,use_program_cache):
     dtype = ttl.tensor.DataType.BFLOAT8_B
     dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
     for _ in range(2):
         run_bert_large_ff1_matmul_test(
+            device,
             dtype,
             dram_mem_config,
             dram_mem_config,
@@ -208,6 +211,7 @@ def test_bert_large_ff1_matmul_with_program_cache(use_program_cache):
     dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
     for _ in range(2):
         run_bert_large_ff1_matmul_test(
+            device,
             dtype,
             dram_mem_config,
             dram_mem_config,

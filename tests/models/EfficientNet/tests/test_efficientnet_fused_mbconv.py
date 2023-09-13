@@ -18,10 +18,7 @@ from models.EfficientNet.tt.efficientnet_fused_mbconv import (
 )
 
 
-def test_efficientnet_fused_mbconv():
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
+def test_efficientnet_fused_mbconv(device):
 
     refence_model = torchvision.models.efficientnet_v2_s(pretrained=True)
     refence_model.eval()
@@ -54,7 +51,6 @@ def test_efficientnet_fused_mbconv():
 
     tt_out = tt_module(test_input)
     tt_out = tt2torch_tensor(tt_out)
-    tt_lib.device.CloseDevice(device)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)
     logger.info(pcc_message)

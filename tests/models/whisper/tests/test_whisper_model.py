@@ -107,9 +107,6 @@ def run_whisper_model(device):
     assert does_pass
 
 
-def test_WhipserModel_inference():
+def test_WhipserModel_inference(device):
     torch.manual_seed(1234)
-    device = tt_lib.device.CreateDevice(0)
-
     run_whisper_model(device=device)
-    tt_lib.device.CloseDevice(device)

@@ -295,10 +295,10 @@ def run_bert_question_and_answering_inference(
     model_location_generator,
     qas_sample,
     num_samples,
+    device,
 ):
     torch.manual_seed(1234)
 
-    device = ttl.device.CreateDevice(0)
 
 
 
@@ -368,11 +368,11 @@ def run_bert_question_and_answering_inference(
 
     profiler.end("processing_output_to_string")
 
-    ttl.device.CloseDevice(device)
+
     profiler.print()
 
 
-def test_bert_sample_qas(model_location_generator):
+def test_bert_sample_qas(device, model_location_generator):
     model_version = "phiyodr/bert-large-finetuned-squad2"
     batch = 1
     seq_len = 384
@@ -399,4 +399,5 @@ def test_bert_sample_qas(model_location_generator):
         model_location_generator,
         qas_sample,
         num_samples,
+        device,
     )

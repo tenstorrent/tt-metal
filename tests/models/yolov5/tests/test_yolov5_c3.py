@@ -23,10 +23,7 @@ from models.utility_functions import (
     comp_pcc,
 )
 
-
-def test_Yolov5_c3():
-    device = tt_lib.device.CreateDevice(0)
-
+def test_Yolov5_c3(device):
 
     weights = "tests/models/yolov5/reference/yolov5s.pt"
     dnn = False
@@ -61,7 +58,6 @@ def test_Yolov5_c3():
 
     tt_out = tt_module(test_input)
     tt_out = tt2torch_tensor(tt_out)
-    tt_lib.device.CloseDevice(device)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)
     logger.info(pcc_message)

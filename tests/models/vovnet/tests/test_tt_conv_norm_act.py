@@ -27,11 +27,7 @@ from tt.conv_norm_act import TtConvNormAct
     "pcc",
     ((0.99),),
 )
-def test_vovnet_conv_norm_act_inference(pcc, imagenet_sample_input, reset_seeds):
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
-
+def test_vovnet_conv_norm_act_inference(device, pcc, imagenet_sample_input, reset_seeds):
 
     base_address = f"stem.0"
 
@@ -71,7 +67,6 @@ def test_vovnet_conv_norm_act_inference(pcc, imagenet_sample_input, reset_seeds)
     logger.info(comp_allclose(model_output, tt_output_torch))
     logger.info(pcc_message)
 
-    tt_lib.device.CloseDevice(device)
     if passing:
         logger.info("ConvNormAct Passed!")
     else:

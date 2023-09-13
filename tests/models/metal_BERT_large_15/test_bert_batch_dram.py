@@ -181,11 +181,9 @@ def run_bert_question_and_answering_inference(
     model_config,
     model_location_generator,
     PERF_CNT,
+    device
 ):
     torch.manual_seed(1234)
-
-    device = ttl.device.CreateDevice(0)
-
 
     model_name = str(model_location_generator(model_version, model_subdir = "Bert"))
     tokenizer_name = str(model_location_generator(model_version, model_subdir = "Bert"))
@@ -347,7 +345,7 @@ def run_bert_question_and_answering_inference(
 
     del tt_out
 
-    ttl.device.CloseDevice(device)
+
     profiler.print()
 
     # assert profiler.get("whole_model") < 60.0
@@ -402,6 +400,7 @@ def test_bert_batch_dram(
     model_config_str,
     model_location_generator,
     request,
+    device
 ):
     model_config = get_model_config(model_config_str)
 
@@ -428,6 +427,7 @@ def test_bert_batch_dram(
         model_config,
         model_location_generator,
         PERF_CNT,
+        device
     )
 
 
@@ -476,6 +476,7 @@ def test_bert_batch_dram_with_program_cache(
     model_config_str,
     model_location_generator,
     request,
+    device
 ):
     model_config = get_model_config(model_config_str)
 
@@ -502,6 +503,7 @@ def test_bert_batch_dram_with_program_cache(
         model_config,
         model_location_generator,
         PERF_CNT,
+        device
     )
 
     if batch == 8 and model_config_str == "MIXED_PRECISION_BATCH8":

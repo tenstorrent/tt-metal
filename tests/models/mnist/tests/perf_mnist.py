@@ -28,15 +28,11 @@ from models.utility_functions import profiler, prep_report
         ),
     ),
 )
-def test_perf(use_program_cache, expected_inference_time, expected_compile_time):
+def test_perf(device, expected_inference_time, expected_compile_time):
     disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_key"
-
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
 
     # Data preprocessing/loading
     transform = transforms.Compose([transforms.ToTensor()])
@@ -77,7 +73,6 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time)
     second_iter_time = profiler.get(second_key)
     cpu_time = profiler.get(cpu_key)
     compile_time = first_iter_time - second_iter_time
-    tt_lib.device.CloseDevice(device)
 
     prep_report("mnist", 1, first_iter_time, second_iter_time, "", cpu_time)
 

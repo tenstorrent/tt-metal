@@ -40,12 +40,6 @@ def run_bloom_gelu_forward_test(device):
     assert does_pass
 
 
-def test_bloom_gelu_forward():
-    device = tt_lib.device.CreateDevice(0)
+def test_bloom_gelu_forward(device):
 
     run_bloom_gelu_forward_test(device)
-    tt_lib.device.CloseDevice(device)
-
-
-if __name__ == "__main__":
-    test_bloom_gelu_forward()

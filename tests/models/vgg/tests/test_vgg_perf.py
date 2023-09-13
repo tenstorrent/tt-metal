@@ -30,18 +30,12 @@ from tt.vgg import *
 _batch_size = 1
 
 @pytest.mark.parametrize("pcc, PERF_CNT", ((0.99, 2),),)
-def test_vgg_inference(pcc, PERF_CNT, imagenet_sample_input, imagenet_label_dict):
+def test_vgg_inference(device, pcc, PERF_CNT, imagenet_sample_input, imagenet_label_dict):
     disable_persistent_kernel_cache()
     image = imagenet_sample_input
     class_labels = imagenet_label_dict
     batch_size = _batch_size
     with torch.no_grad():
-        # Initialize the device
-        device = tt_lib.device.CreateDevice(0)
-
-        tt_lib.device.SetDefaultDevice(device)
-
-
         torch_vgg = models.vgg16(weights=models.VGG16_Weights.IMAGENET1K_V1)
 
         torch_vgg.eval()
@@ -88,7 +82,6 @@ def test_vgg_inference(pcc, PERF_CNT, imagenet_sample_input, imagenet_label_dict
         logger.info(f"Output {pcc_output}")
         assert pcc_passing, f"Model output does not meet PCC requirement {pcc}."
 
-        tt_lib.device.CloseDevice(device)
 
         profiler.print()
         assert profiler.get("tt_vgg model") < 30.0

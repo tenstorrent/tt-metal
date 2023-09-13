@@ -16,7 +16,7 @@ from models.utility_functions import comp_pcc, comp_allclose_and_pcc
 from models.vit.tt.modeling_vit import TtViTModel
 
 
-def test_vit_model(imagenet_sample_input, pcc=0.95):
+def test_vit_model(device, imagenet_sample_input, pcc=0.95):
     image = imagenet_sample_input
     head_mask = None
     output_attentions = None
@@ -41,12 +41,6 @@ def test_vit_model(imagenet_sample_input, pcc=0.95):
             interpolate_pos_encoding,
             return_dict,
         )[0]
-
-        # Initialize the device
-        device = tt_lib.device.CreateDevice(0)
-
-        tt_lib.device.SetDefaultDevice(device)
-
 
         tt_image = torch_to_tt_tensor_rm(image, device, put_on_device=False)
         tt_layer = TtViTModel(

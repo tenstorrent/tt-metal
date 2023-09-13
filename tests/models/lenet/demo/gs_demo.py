@@ -21,17 +21,12 @@ from tt.lenet import lenet5
 from lenet_utils import load_torch_lenet, prepare_image
 
 
-def test_gs_demo(mnist_sample_input, model_location_generator):
+def test_gs_demo(device, mnist_sample_input, model_location_generator):
     sample_image = mnist_sample_input
     image = prepare_image(sample_image)
     num_classes = 10
     batch_size = 1
     with torch.no_grad():
-        # Initialize the device
-        device = tt_lib.device.CreateDevice(0)
-
-        tt_lib.device.SetDefaultDevice(device)
-
 
         tt_lenet = lenet5(num_classes, device, model_location_generator)
 
@@ -51,5 +46,3 @@ def test_gs_demo(mnist_sample_input, model_location_generator):
         sample_image.save("input_image.jpg")
         logger.info(f"Input image saved as input_image.jpg.")
         logger.info(f"GS's predicted Output: {tt_predicted[0][0][0]}.")
-
-        tt_lib.device.CloseDevice(device)

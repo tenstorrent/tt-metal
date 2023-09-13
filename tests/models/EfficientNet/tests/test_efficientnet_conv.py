@@ -19,9 +19,7 @@ from models.EfficientNet.tt.efficientnet_conv import (
 from models.EfficientNet.tt.efficientnet_model import reference_efficientnet_lite0
 
 
-def run_efficientnet_conv2d(state_dict, base_address, reference_module):
-    device = tt_lib.device.CreateDevice(0)
-
+def run_efficientnet_conv2d(state_dict, base_address, reference_module, device):
 
     in_channels = reference_module.in_channels
     out_channels = reference_module.out_channels
@@ -62,7 +60,6 @@ def run_efficientnet_conv2d(state_dict, base_address, reference_module):
     )
     tt_out = tt_module(test_input)
     tt_out = tt2torch_tensor(tt_out)
-    tt_lib.device.CloseDevice(device)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)
     logger.info(pcc_message)
@@ -75,7 +72,7 @@ def run_efficientnet_conv2d(state_dict, base_address, reference_module):
     assert does_pass
 
 
-def test_efficientnet_conv2d_b0():
+def test_efficientnet_conv2d_b0(device):
     reference_model = torchvision.models.efficientnet_b0(pretrained=True)
     reference_model.eval()
 
@@ -83,24 +80,24 @@ def test_efficientnet_conv2d_b0():
         state_dict=reference_model.state_dict(),
         base_address=f"features.0.0",
         reference_module=reference_model.features[0][0],
+        device
     )
 
 
-def test_efficientnet_conv2d_lite0():
+def test_efficientnet_conv2d_lite0(device):
     reference_model = reference_efficientnet_lite0()
 
     run_efficientnet_conv2d(
         state_dict=reference_model.state_dict(),
         base_address=f"stem.0",
         reference_module=reference_model.stem[0],
+        device
     )
 
 
 def run_efficientnet_conv_norm_activation(
-    state_dict, conv_base_address, bn_base_address, reference_module, is_lite
+    device, state_dict, conv_base_address, bn_base_address, reference_module, is_lite
 ):
-    device = tt_lib.device.CreateDevice(0)
-
 
     in_channels = reference_module[0].in_channels
     out_channels = reference_module[0].out_channels
@@ -146,7 +143,6 @@ def run_efficientnet_conv_norm_activation(
     )
     tt_out = tt_module(test_input)
     tt_out = tt2torch_tensor(tt_out)
-    tt_lib.device.CloseDevice(device)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)
     logger.info(pcc_message)
@@ -159,11 +155,12 @@ def run_efficientnet_conv_norm_activation(
     assert does_pass
 
 
-def test_efficientnet_conv_norm_activation_b0():
+def test_efficientnet_conv_norm_activation_b0(device):
     reference_model = torchvision.models.efficientnet_b0(pretrained=True)
     reference_model.eval()
 
     run_efficientnet_conv_norm_activation(
+        device,
         state_dict=reference_model.state_dict(),
         conv_base_address=f"features.0.0",
         bn_base_address=f"features.0.1",
@@ -172,10 +169,11 @@ def test_efficientnet_conv_norm_activation_b0():
     )
 
 
-def test_efficientnet_conv_norm_activation_lite0():
+def test_efficientnet_conv_norm_activation_lite0(device):
     reference_model = reference_efficientnet_lite0()
 
     run_efficientnet_conv_norm_activation(
+        device,
         state_dict=reference_model.state_dict(),
         conv_base_address=f"stem.0",
         bn_base_address=f"stem.1",

@@ -27,10 +27,9 @@ import tt_lib
     "pcc",
     ((0.99),),
 )
-def test_ssd_mobilenetv3_features_inference(pcc, reset_seeds):
-    device = tt_lib.device.CreateDevice(0)
+def test_ssd_mobilenetv3_features_inference(device, pcc, reset_seeds):
 
-    tt_lib.device.SetDefaultDevice(device)
+
 
     torch_model = pretrained(weights=SSDLite320_MobileNet_V3_Large_Weights.DEFAULT)
     torch_model.eval()
@@ -61,7 +60,6 @@ def test_ssd_mobilenetv3_features_inference(pcc, reset_seeds):
     logger.info(comp_allclose(torch_output, tt_output_torch))
     logger.info(pcc_message)
 
-    tt_lib.device.CloseDevice(device)
 
     if does_pass:
         logger.info("SSDMobilenetV3Features Passed!")

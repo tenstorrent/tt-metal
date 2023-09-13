@@ -31,7 +31,7 @@ final_dropout: False
 #############End of Basic Transformer#############
 '''
 
-def test_run_basic_transformer_inference():
+def test_run_basic_transformer_inference(device):
     # synthesize the input
     only_cross_attention = False
     dim = 320
@@ -58,12 +58,6 @@ def test_run_basic_transformer_inference():
     basic_transformer = pipe.unet.down_blocks[0].attentions[0].transformer_blocks[0]
     torch_output = basic_transformer(input.squeeze(0), encoder_hidden_states.squeeze(0))
 
-    # Initialize the device
-    device = ttl.device.CreateDevice(0)
-
-    ttl.device.SetDefaultDevice(device)
-
-
     # setup tt model
     tt_input = torch_to_tt_tensor(input, device)
     tt_encoder_hidden_states = torch_to_tt_tensor_rm(encoder_hidden_states, device, put_on_device=False)
@@ -87,7 +81,7 @@ def test_run_basic_transformer_inference():
 
     passing = comp_pcc(torch_output, tt_output)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))
-    ttl.device.CloseDevice(device)
+
     assert passing[0], passing[1:]
     logger.info(f"PASSED {passing[1]}")
 
@@ -160,12 +154,6 @@ def test_run_transformer_inference():
 
     torch_output = transformer(input, encoder_hidden_states.squeeze(0)).sample
 
-    # Initialize the device
-    device = ttl.device.CreateDevice(0)
-
-    ttl.device.SetDefaultDevice(device)
-
-
     # setup tt model
     tt_input = torch_to_tt_tensor_rm(input, device, put_on_device=False)
     tt_encoder_hidden_states = torch_to_tt_tensor_rm(encoder_hidden_states, device, put_on_device=False)
@@ -184,6 +172,6 @@ def test_run_transformer_inference():
 
     passing = comp_pcc(torch_output, tt_output)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))
-    ttl.device.CloseDevice(device)
+
     assert passing[0], passing[1:]
     logger.info(f"PASSED {passing[1]}")

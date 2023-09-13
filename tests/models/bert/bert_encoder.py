@@ -71,10 +71,10 @@ class PytorchBertEncoder(torch.nn.Module):
         return self.bert_encoder(x)[0]
 
 
-def run_bert_encoder_inference(model_version, batch, seq_len, pcc, model_location_generator):
+def run_bert_encoder_inference(device, model_version, batch, seq_len, pcc, model_location_generator):
 
-    device = ttl.device.CreateDevice(0)
-    # Initialize the device
+
+
 
 
     model_name = str(model_location_generator(model_version, model_subdir = "Bert"))
@@ -96,7 +96,7 @@ def run_bert_encoder_inference(model_version, batch, seq_len, pcc, model_locatio
     tt_out = tt_bert_encoder_model(tt_bert_encoder_input).cpu()
     tt_out = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
-    ttl.device.CloseDevice(device)
+
 
     passing, output = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"Output {output}")
@@ -115,6 +115,6 @@ def run_bert_encoder_inference(model_version, batch, seq_len, pcc, model_locatio
         ("phiyodr/bert-large-finetuned-squad2", 1, 384, 0.99)
     ),
 )
-def test_bert_encoder_inference(model_version, batch, seq_len, pcc, model_location_generator):
+def test_bert_encoder_inference(device, model_version, batch, seq_len, pcc, model_location_generator):
 
-    run_bert_encoder_inference(model_version, batch, seq_len, pcc, model_location_generator)
+    run_bert_encoder_inference(device, model_version, batch, seq_len, pcc, model_location_generator)

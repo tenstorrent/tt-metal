@@ -64,9 +64,6 @@ def run_linear_test(in_features, out_features, device):
     print('\n\n', 'atol/rtol:', test_results, '| output:', output, '\n\n')
 
 
-def test_linear_test():
-    # Initialize the device
-    device = ttl.device.CreateDevice(0)
+def test_linear_test(device):
 
     run_linear_test(1024, 256, device)
-    ttl.device.CloseDevice(device)

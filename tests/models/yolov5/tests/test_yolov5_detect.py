@@ -23,9 +23,7 @@ from models.utility_functions import (
 )
 
 
-def test_Yolov5_detect():
-    device = tt_lib.device.CreateDevice(0)
-
+def test_Yolov5_detect(device):
 
     weights = "tests/models/yolov5/reference/yolov5s.pt"
     dnn = False
@@ -83,7 +81,6 @@ def test_Yolov5_detect():
         tt_module.eval()
         tt_out = tt_module(test_input)
 
-    tt_lib.device.CloseDevice(device)
 
     does_all_pass, pcc_message = comp_pcc(pt_out[0], tt_out[0], 0.99)
     logger.info(f"out[0] PCC: {pcc_message}")

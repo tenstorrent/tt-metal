@@ -29,12 +29,7 @@ from hrnet.tt.basicblock import (
     "model_name, pcc",
     (("hrnet_w18_small", 0.99),),
 )
-def test_hrnet_basic_block_inference(model_name, pcc, reset_seeds):
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
-
-
+def test_hrnet_basic_block_inference(device, model_name, pcc, reset_seeds):
     BASIC_BLOCK_LAYER_INDEX = 0
     base_address = f"stage2.{BASIC_BLOCK_LAYER_INDEX}.branches.{BASIC_BLOCK_LAYER_INDEX}.{BASIC_BLOCK_LAYER_INDEX}"
     model = timm.create_model(model_name, pretrained=True)
@@ -67,7 +62,6 @@ def test_hrnet_basic_block_inference(model_name, pcc, reset_seeds):
     logger.info(comp_allclose(torch_output, tt_output_torch))
     logger.info(pcc_message)
 
-    tt_lib.device.CloseDevice(device)
     if does_pass:
         logger.info("BasicBlock Passed!")
     else:

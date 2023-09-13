@@ -64,12 +64,5 @@ def run_baddbmm_test(device):
     assert does_pass
 
 
-def test_baddbmm():
-    device = tt_lib.device.CreateDevice(0)
-
+def test_baddbmm(device):
     run_baddbmm_test(device)
-    tt_lib.device.CloseDevice(device)
-
-
-if __name__ == "__main__":
-    test_baddbmm()

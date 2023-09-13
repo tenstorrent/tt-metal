@@ -26,11 +26,7 @@ from hrnet.tt.hrnet_model import hrnet_w18_small
     "model_name, pcc",
     (("hrnet_w18_small", 0.99),),
 )
-def test_hrnet_model_inference(model_name, pcc, imagenet_sample_input, reset_seeds):
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
-
+def test_hrnet_model_inference(device, model_name, pcc, imagenet_sample_input, reset_seeds):
 
     torch_model = timm.create_model(model_name, pretrained=True)
 
@@ -47,7 +43,6 @@ def test_hrnet_model_inference(model_name, pcc, imagenet_sample_input, reset_see
     logger.info(comp_allclose(torch_output, tt_output_torch))
     logger.info(pcc_message)
 
-    tt_lib.device.CloseDevice(device)
     if passing:
         logger.info("HRNetForImageClassification Passed!")
     else:

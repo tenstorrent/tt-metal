@@ -29,12 +29,7 @@ from hrnet.tt.bottleneck import (
     "model_name, pcc",
     (("hrnet_w18_small", 0.99),),
 )
-def test_hrnet_bottleneck_inference(model_name, pcc, reset_seeds):
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
-
-
+def test_hrnet_bottleneck_inference(device, model_name, pcc, reset_seeds):
     BOTTLENECK_LAYER_INDEX = 0
     base_address = f"layer1.{BOTTLENECK_LAYER_INDEX}"
     model = timm.create_model(model_name, pretrained=True)
@@ -65,7 +60,6 @@ def test_hrnet_bottleneck_inference(model_name, pcc, reset_seeds):
     logger.info(comp_allclose(torch_output, tt_output_torch))
     logger.info(pcc_message)
 
-    tt_lib.device.CloseDevice(device)
     if does_pass:
         logger.info("Bottleneck Passed!")
     else:

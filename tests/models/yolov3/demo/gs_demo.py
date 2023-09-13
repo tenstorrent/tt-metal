@@ -38,9 +38,8 @@ from tests.models.yolov3.reference.utils.plots import (
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 
-def test_gs_demo(model_location_generator):
+def test_gs_demo(model_location_generator, device):
     torch.manual_seed(1234)
-    device = tt_lib.device.CreateDevice(0)
 
 
     # Load yolo
@@ -135,5 +134,3 @@ def test_gs_demo(model_location_generator):
 
     logger.info(f"Input image saved as {save_path_input}")
     logger.info(f"Result image saved as {save_path_output}")
-
-    tt_lib.device.CloseDevice(device)

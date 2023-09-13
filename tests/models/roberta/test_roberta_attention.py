@@ -28,10 +28,8 @@ from tests.models.roberta.roberta_attention import TtRobertaAttention
 from transformers import RobertaModel
 
 
-def test_roberta_attention_inference():
+def test_roberta_attention_inference(device):
     torch.manual_seed(1234)
-    device = tt_lib.device.CreateDevice(0)
-
 
     SELF_ATTN_LAYER_INDEX = 0
     base_address = f"encoder.layer.{SELF_ATTN_LAYER_INDEX}.attention"
@@ -70,7 +68,6 @@ def test_roberta_attention_inference():
     logger.info(comp_allclose(torch_output[0], tt_output_torch))
     logger.info(pcc_message)
 
-    tt_lib.device.CloseDevice(device)
 
     if does_pass:
         logger.info("RobertaAttention Passed!")

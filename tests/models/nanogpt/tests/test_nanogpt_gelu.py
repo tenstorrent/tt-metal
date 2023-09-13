@@ -36,10 +36,7 @@ from models.utility_functions import (
         ),
     ),
 )
-def test_nanogpt_gelu_inference(pcc):
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
+def test_nanogpt_gelu_inference(pcc, device):
 
     torch.manual_seed(0)
     test_in = torch.rand(1, 43, 768)
@@ -53,7 +50,6 @@ def test_nanogpt_gelu_inference(pcc):
     does_pass, pcc_message = comp_pcc(pt_out, tt_out_converted, pcc)
     logger.info(pcc_message)
 
-    tt_lib.device.CloseDevice(device)
 
     if does_pass:
         logger.info("nanogpt_gelu: Passed!")

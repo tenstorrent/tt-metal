@@ -29,17 +29,12 @@ from models.utility_functions import (
 BATCH_SIZE = 1
 
 
-def test_perf():
+def test_perf(device):
     profiler = Profiler()
     disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_key"
-
-    # Initialize the device
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
 
     refence_model = DetectMultiBackend(
         weights="tests/models/yolov5/reference/yolov5s.pt",
@@ -78,4 +73,3 @@ def test_perf():
     prep_report(
         "yolov5", BATCH_SIZE, first_iter_time, second_iter_time, "yolov5s", cpu_time
     )
-    tt_lib.device.CloseDevice(device)

@@ -545,10 +545,8 @@ def run_generate(sample, device):
         return tt_transcription
 
 
-def test_WhipserForConditionalGeneration_inference():
+def test_WhipserForConditionalGeneration_inference(device):
     torch.manual_seed(1234)
-    device = tt_lib.device.CreateDevice(0)
-
 
     sample = 0
     correct_transcription = " Mr. Quilter is the apostle of the middle classes, and we are glad to welcome his gospel."
@@ -557,7 +555,6 @@ def test_WhipserForConditionalGeneration_inference():
     # correct_transcription = " He has grave doubts whether Sir Frederick Leighton's work is really Greek after all, and can discover in it but little of rocky Ithaca."
 
     tt_transcription = run_generate(sample=sample, device=device)
-    tt_lib.device.CloseDevice(device)
 
     logger.info(tt_transcription)
     logger.info(correct_transcription)

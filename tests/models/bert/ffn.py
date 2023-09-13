@@ -101,10 +101,10 @@ def summarize_stats(t, name):
     print(f"max {max}")
     print()
 
-def run_ffn_inference(model_version, batch, seq_len, pcc, model_location_generator):
+def run_ffn_inference(device, model_version, batch, seq_len, pcc, model_location_generator):
 
-    device = ttl.device.CreateDevice(0)
-    # Initialize the device
+
+
 
 
     model_name = str(model_location_generator(model_version, model_subdir = "Bert"))
@@ -126,7 +126,7 @@ def run_ffn_inference(model_version, batch, seq_len, pcc, model_location_generat
     tt_out = tt_ffn_model(tilized_ffn_input).cpu()
     tt_out = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
-    ttl.device.CloseDevice(device)
+
 
     passing, output = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"Output {output}")
@@ -158,6 +158,6 @@ def run_ffn_inference(model_version, batch, seq_len, pcc, model_location_generat
         ("phiyodr/bert-large-finetuned-squad2", 1, 384, 0.99)
     ),
 )
-def test_ffn_inference(model_version, batch, seq_len, pcc, model_location_generator):
+def test_ffn_inference(device, model_version, batch, seq_len, pcc, model_location_generator):
 
-    run_ffn_inference(model_version, batch, seq_len, pcc, model_location_generator)
+    run_ffn_inference(device, model_version, batch, seq_len, pcc, model_location_generator)

@@ -35,7 +35,7 @@ def run_groupnorm_tests(
 ):
     torch.manual_seed(1234)
 
-    # Initialize the device
+
     tensor = ttl.tensor
     dev = device
 

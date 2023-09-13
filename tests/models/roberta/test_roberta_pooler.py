@@ -30,10 +30,8 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from transformers import RobertaModel
 
 
-def test_roberta_pooler_inference():
+def test_roberta_pooler_inference(device):
     torch.manual_seed(1234)
-    device = tt_lib.device.CreateDevice(0)
-
 
     base_address = f"pooler"
 
@@ -67,7 +65,6 @@ def test_roberta_pooler_inference():
     logger.info(comp_allclose(torch_output, tt_output_torch))
     logger.info(pcc_message)
 
-    tt_lib.device.CloseDevice(device)
 
     if does_pass:
         logger.info("RobertaPooler Passed!")

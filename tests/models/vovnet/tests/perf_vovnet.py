@@ -26,17 +26,12 @@ from models.vovnet.tt.vovnet import vovnet_for_image_classification
 BATCH_SIZE = 1
 
 
-def test_perf(imagenet_sample_input):
+def test_perf(device, imagenet_sample_input):
     profiler = Profiler()
     disable_persistent_kernel_cache()
     first_key = "Execution time of vovnet first run"
     second_key = "Execution time of vovnet second run"
     cpu_key = "Execution time of reference model"
-
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
-
 
     torch_model = timm.create_model(
         "hf_hub:timm/ese_vovnet19b_dw.ra_in1k", pretrained=True
@@ -78,4 +73,3 @@ def test_perf(imagenet_sample_input):
     prep_report(
         "vovnet", BATCH_SIZE, first_iter_time, second_iter_time, "vovnet", cpu_time
     )
-    tt_lib.device.CloseDevice(device)

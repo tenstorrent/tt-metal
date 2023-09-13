@@ -33,7 +33,7 @@ BATCH_SIZE = 1
     ),
 )
 def test_perf(
-    use_program_cache,
+    device,
     expected_inference_time,
     expected_compile_time,
     imagenet_sample_input,
@@ -43,11 +43,6 @@ def test_perf(
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_key"
-
-    # Initialize the device
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
 
     torch_model = pretrained(weights=SSDLite320_MobileNet_V3_Large_Weights.DEFAULT)
     torch_model.eval()
@@ -82,6 +77,5 @@ def test_perf(
 
     logger.info(f"SSD inference time: {second_iter_time}")
     logger.info(f"SSD compile time: {compile_time}")
-    tt_lib.device.CloseDevice(device)
     assert second_iter_time < expected_inference_time, "SSD is too slow"
     assert compile_time < expected_compile_time, "SSD compile time is too slow"

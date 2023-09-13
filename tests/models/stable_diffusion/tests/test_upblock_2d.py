@@ -13,12 +13,7 @@ from models.utility_functions import comp_pcc, comp_allclose_and_pcc
 from models.stable_diffusion.tt.upblock_2d import TtUpBlock2D
 import pytest
 
-def test_run_upblock_real_input_inference(model_location_generator):
-    # Initialize the device
-    device = ttl.device.CreateDevice(0)
-
-    ttl.device.SetDefaultDevice(device)
-
+def test_run_upblock_real_input_inference(device, model_location_generator):
 
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
@@ -64,16 +59,11 @@ def test_run_upblock_real_input_inference(model_location_generator):
     ttl.device.Synchronize()
     passing = comp_pcc(torch_output, tt_output,pcc=0.988)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))
-    ttl.device.CloseDevice(device)
+
     assert passing[0], passing[1:]
     logger.info(f"PASSED {passing[1]}")
 
-def test_run_upblock_inference():
-    # Initialize the device
-    device = ttl.device.CreateDevice(0)
-
-    ttl.device.SetDefaultDevice(device)
-
+def test_run_upblock_inference(device):
 
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
@@ -123,6 +113,6 @@ def test_run_upblock_inference():
 
     passing = comp_pcc(torch_output, tt_output,pcc=0.97)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))
-    ttl.device.CloseDevice(device)
+
     assert passing[0], passing[1:]
     logger.info(f"PASSED {passing[1]}")

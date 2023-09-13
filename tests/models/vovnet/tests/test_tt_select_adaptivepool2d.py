@@ -28,11 +28,7 @@ from models.vovnet.tt.select_adaptive_pool2d import (
     "pcc",
     ((0.99),),
 )
-def test_select_adaptive_pool2d_inference(pcc, reset_seeds):
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
-
+def test_select_adaptive_pool2d_inference(device, pcc, reset_seeds):
 
     base_address = f"head.globa_lpool"
     model = timm.create_model("hf_hub:timm/ese_vovnet19b_dw.ra_in1k", pretrained=True)
@@ -64,7 +60,6 @@ def test_select_adaptive_pool2d_inference(pcc, reset_seeds):
     logger.info(comp_allclose(model_output, tt_output_torch))
     logger.info(pcc_message)
 
-    tt_lib.device.CloseDevice(device)
     if passing:
         logger.info("SelectAdaptivePool2d Passed!")
     else:

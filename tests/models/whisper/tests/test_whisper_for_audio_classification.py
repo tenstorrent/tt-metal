@@ -94,9 +94,6 @@ def run_whisper_for_audio_classification(device):
         assert does_pass
 
 
-def test_WhipserForAudioClassification_inference():
+def test_WhipserForAudioClassification_inference(device):
     torch.manual_seed(1234)
-    device = tt_lib.device.CreateDevice(0)
-
     run_whisper_for_audio_classification(device=device)
-    tt_lib.device.CloseDevice(device)

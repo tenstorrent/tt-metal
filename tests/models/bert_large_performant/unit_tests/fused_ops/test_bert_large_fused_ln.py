@@ -77,13 +77,12 @@ def ref_layernorm(x, eps, gamma, beta, H, W):
     return lnorm(x)
 
 
-def run_layernorm_tests(test_id, batch, dtype, in0_mem_config, out_mem_config):
+def run_layernorm_tests(dev, test_id, batch, dtype, in0_mem_config, out_mem_config):
     torch.manual_seed(1234)
 
-    # Initialize the device
+
     tensor = ttl.tensor
     device = ttl.device
-    dev = device.CreateDevice(0)
 
 
     epsf = 1e-2
@@ -184,7 +183,7 @@ def run_layernorm_tests(test_id, batch, dtype, in0_mem_config, out_mem_config):
 
             assert is_close(tt_got_back, ref_lnorm)
 
-    device.CloseDevice(dev)
+
 
 
 import pytest
@@ -226,9 +225,9 @@ import pytest
     ids=["LN", "LN_G", "LN_GB", "add_LN_GB"],
 )
 def test_layernorm_test(
-    test_id, batch, dtype, in0_mem_config, out_mem_config, request
+    dev, test_id, batch, dtype, in0_mem_config, out_mem_config, request
 ):
     ttl.profiler.set_profiler_location(
         f"tt_metal/tools/profiler/logs/BERT_large_fused_layernorm_{request.node.callspec.id}"
     )
-    run_layernorm_tests(test_id, batch, dtype, in0_mem_config, out_mem_config)
+    run_layernorm_tests(dev, test_id, batch, dtype, in0_mem_config, out_mem_config)

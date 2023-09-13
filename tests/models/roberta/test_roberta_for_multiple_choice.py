@@ -31,16 +31,12 @@ from transformers import RobertaForMultipleChoice
 from transformers import AutoTokenizer
 
 
-def test_roberta_for_multiple_choice():
+def test_roberta_for_multiple_choice(device):
     """
     RoBERTa for multiple choice is loading roberta-base pre-trained model,
     because there are no official weights for RobertaForMultipleChoice
     """
     torch.manual_seed(1234)
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
-
     base_address = ""
 
     with torch.no_grad():
@@ -107,7 +103,6 @@ def test_roberta_for_multiple_choice():
         logger.info(allclose_message)
         logger.info(pcc_message)
 
-        tt_lib.device.CloseDevice(device)
 
         if does_pass:
             logger.info("RobertaForMultipleChoice Passed!")
@@ -115,7 +110,3 @@ def test_roberta_for_multiple_choice():
             logger.warning("RobertaForMultipleChoice Failed!")
 
         assert does_pass
-
-
-if __name__ == "__main__":
-    test_roberta_for_multiple_choice()

@@ -24,7 +24,7 @@ from deit_config import DeiTConfig
 from deit_model import TtDeiTModel
 
 
-def test_deit_model_inference(hf_cat_image_sample_input, pcc = 0.95):
+def test_deit_model_inference(device, hf_cat_image_sample_input, pcc = 0.95):
 
     head_mask = None
     output_attentions = None
@@ -56,12 +56,6 @@ def test_deit_model_inference(hf_cat_image_sample_input, pcc = 0.95):
                                    output_hidden_states,
                                    return_dict)[0]
 
-        # Initialize the device
-        device = tt_lib.device.CreateDevice(0)
-
-        tt_lib.device.SetDefaultDevice(device)
-
-
         # setup tt model
         tt_image = torch_to_tt_tensor_rm(input_image, device, put_on_device=False)
         tt_model = TtDeiTModel(config,
@@ -85,5 +79,4 @@ def test_deit_model_inference(hf_cat_image_sample_input, pcc = 0.95):
         pcc_passing, _ = comp_pcc(torch_output, tt_output, pcc)
         _, pcc_output = comp_allclose_and_pcc(torch_output, tt_output, pcc)
         logger.info(f"Output {pcc_output}")
-        tt_lib.device.CloseDevice(device)
         assert(pcc_passing), f"Failed! Low pcc: {pcc}."

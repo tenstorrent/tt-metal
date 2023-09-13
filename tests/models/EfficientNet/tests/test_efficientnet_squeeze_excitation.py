@@ -17,10 +17,7 @@ from models.EfficientNet.tt.efficientnet_squeeze_excitation import (
 )
 
 
-def test_efficientnet_squeeze_excitation_b0():
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
+def test_efficientnet_squeeze_excitation_b0(device):
 
     refence_model = torchvision.models.efficientnet_b0(pretrained=True)
     refence_model.eval()
@@ -52,7 +49,6 @@ def test_efficientnet_squeeze_excitation_b0():
     )
     tt_out = tt_module(test_input)
     tt_out = tt2torch_tensor(tt_out)
-    tt_lib.device.CloseDevice(device)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)
     logger.info(pcc_message)
@@ -65,10 +61,7 @@ def test_efficientnet_squeeze_excitation_b0():
     assert does_pass
 
 
-def test_efficientnet_squeeze_excitation_v2_s():
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
+def test_efficientnet_squeeze_excitation_v2_s(device):
 
     refence_model = torchvision.models.efficientnet_v2_s(pretrained=True)
     refence_model.eval()
@@ -101,7 +94,6 @@ def test_efficientnet_squeeze_excitation_v2_s():
     )
     tt_out = tt_module(test_input)
     tt_out = tt2torch_tensor(tt_out)
-    tt_lib.device.CloseDevice(device)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)
     logger.info(pcc_message)

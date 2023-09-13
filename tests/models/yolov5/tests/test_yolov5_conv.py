@@ -25,9 +25,7 @@ from models.utility_functions import (
 )
 
 
-def test_Yolov5_Conv2D():
-    device = tt_lib.device.CreateDevice(0)
-
+def test_Yolov5_Conv2D(device):
 
     weights = "tests/models/yolov5/reference/yolov5s.pt"
     dnn = False
@@ -81,7 +79,6 @@ def test_Yolov5_Conv2D():
     tt_out = tt_out.to(tt_lib.tensor.Layout.ROW_MAJOR)
 
     tt_out = tt2torch_tensor(tt_out)
-    tt_lib.device.CloseDevice(device)
 
     logger.debug(f"pt_out shape {pt_out.shape}")
     logger.debug(f"tt_out shape {tt_out.shape}")
@@ -97,8 +94,7 @@ def test_Yolov5_Conv2D():
     assert does_pass
 
 
-def test_Yolov5_Silu():
-    device = tt_lib.device.CreateDevice(0)
+def test_Yolov5_Silu(device):
 
 
     weights = "tests/models/yolov5/reference/yolov5s.pt"
@@ -120,7 +116,6 @@ def test_Yolov5_Silu():
     tt_out = fallback_ops.silu(test_input)
 
     tt_out = tt2torch_tensor(tt_out)
-    tt_lib.device.CloseDevice(device)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)
     logger.info(pcc_message)
@@ -133,8 +128,7 @@ def test_Yolov5_Silu():
     assert does_pass
 
 
-def test_Yolov5_conv():
-    device = tt_lib.device.CreateDevice(0)
+def test_Yolov5_conv(device):
 
 
     weights = "tests/models/yolov5/reference/yolov5s.pt"
@@ -188,7 +182,6 @@ def test_Yolov5_conv():
 
     tt_out = tt_module(test_input)
     tt_out = tt2torch_tensor(tt_out)
-    tt_lib.device.CloseDevice(device)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)
     logger.info(pcc_message)
@@ -201,8 +194,7 @@ def test_Yolov5_conv():
     assert does_pass
 
 
-def test_Yolov5_Conv2D_real():
-    device = tt_lib.device.CreateDevice(0)
+def test_Yolov5_Conv2D_real(device):
 
 
     weights = "tests/models/yolov5/reference/yolov5s.pt"
@@ -258,7 +250,6 @@ def test_Yolov5_Conv2D_real():
     tt_out = tt_out.to(tt_lib.tensor.Layout.ROW_MAJOR)
 
     tt_out = tt2torch_tensor(tt_out)
-    tt_lib.device.CloseDevice(device)
 
     logger.debug(f"pt_out shape {pt_out.shape}")
     logger.debug(f"tt_out shape {tt_out.shape}")

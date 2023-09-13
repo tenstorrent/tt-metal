@@ -25,10 +25,7 @@ from hrnet.tt.hrnet_model import hrnet_w18_small
     "model_name",
     (("hrnet_w18_small"),),
 )
-def test_gs_demo(imagenet_sample_input, imagenet_label_dict, model_name, reset_seeds):
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
+def test_gs_demo(device, imagenet_sample_input, imagenet_label_dict, model_name, reset_seeds):
 
     tt_model = hrnet_w18_small(device, host, multi_scale_output=True)
 
@@ -44,4 +41,3 @@ def test_gs_demo(imagenet_sample_input, imagenet_label_dict, model_name, reset_s
 
     save_image(imagenet_sample_input, "hrnet_input.jpg")
     logger.info("Input image is saved for reference as hrnet_input.jpg")
-    tt_lib.device.CloseDevice(device)

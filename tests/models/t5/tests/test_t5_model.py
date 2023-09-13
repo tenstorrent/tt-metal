@@ -82,24 +82,18 @@ def run_test_T5Model_inference(device, use_attention_mask, model_name):
     assert does_pass
 
 
-def test_T5Model_inference_t5_small():
-    device = tt_lib.device.CreateDevice(0)
+def test_T5Model_inference_t5_small(device):
 
     run_test_T5Model_inference(device, use_attention_mask=True, model_name="t5-small")
-    tt_lib.device.CloseDevice(device)
 
 
-def test_T5Model_inference_flan_t5_small():
-    device = tt_lib.device.CreateDevice(0)
+def test_T5Model_inference_flan_t5_small(device):
 
     run_test_T5Model_inference(
         device, use_attention_mask=True, model_name="google/flan-t5-small"
     )
-    tt_lib.device.CloseDevice(device)
 
 
-def test_T5Model_inference_t5_base():
-    device = tt_lib.device.CreateDevice(0)
+def test_T5Model_inference_t5_base(device):
 
     run_test_T5Model_inference(device, use_attention_mask=True, model_name="t5-base")
-    tt_lib.device.CloseDevice(device)

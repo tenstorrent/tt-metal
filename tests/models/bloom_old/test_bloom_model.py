@@ -80,12 +80,5 @@ def run_bloom_model_test(device):
     assert does_pass
 
 
-def test_bloom_model():
-    device = ttm.device.CreateDevice(0)
-
+def test_bloom_model(device):
     run_bloom_model_test(device)
-    ttm.device.CloseDevice(device)
-
-
-if __name__ == "__main__":
-    test_bloom_model()

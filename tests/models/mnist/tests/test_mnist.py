@@ -13,10 +13,7 @@ from models.utility_functions import torch2tt_tensor, tt2torch_tensor, \
     get_oom_of_float
 from models.mnist.tt.mnist_model import mnist_model
 
-
-def test_mnist_inference():
-    device = tt_lib.device.CreateDevice(0)
-
+def test_mnist_inference(device):
 
     # Data preprocessing/loading
     transform = transforms.Compose([transforms.ToTensor()])
@@ -38,7 +35,6 @@ def test_mnist_inference():
         tt_output = tt_model(tt_input)
         tt_output = tt2torch_tensor(tt_output)
 
-        tt_lib.device.CloseDevice(device)
 
     pcc_passing, pcc_output = comp_pcc(pt_output, tt_output, 0.99)
     logger.info(f"Output {pcc_output}")

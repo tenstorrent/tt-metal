@@ -59,17 +59,13 @@ def run_test_T5DenseActDense_inference(device, model_name, input_h, input_w):
     assert does_pass
 
 
-def test_T5DenseActDense_inference_t5_small():
-    device = tt_lib.device.CreateDevice(0)
+def test_T5DenseActDense_inference_t5_small(device):
 
 
     run_test_T5DenseActDense_inference(device, "t5-small", 64, 512)
-    tt_lib.device.CloseDevice(device)
 
 
-def test_T5DenseActDense_inference_t5_base():
-    device = tt_lib.device.CreateDevice(0)
+def test_T5DenseActDense_inference_t5_base(device):
 
 
     run_test_T5DenseActDense_inference(device, "t5-base", 64, 768)
-    tt_lib.device.CloseDevice(device)

@@ -37,11 +37,7 @@ from models.utility_functions import (
         ),
     ),
 )
-def test_nanogpt_mlp(pcc):
-    device = tt_lib.device.CreateDevice(0)
-
-
-
+def test_nanogpt_mlp(pcc, device):
 
     model_hf = GPT2LMHeadModel.from_pretrained('gpt2')
     sd = model_hf.state_dict()
@@ -85,7 +81,6 @@ def test_nanogpt_mlp(pcc):
     does_pass, pcc_message = comp_pcc(pt_out, tt_out_converted, 0.99)
     logger.info(pcc_message)
 
-    tt_lib.device.CloseDevice(device)
 
     if does_pass:
         logger.info("nanogpt_mlp: Passed!")

@@ -27,12 +27,7 @@ from tests.models.vovnet.tt.osa_stage import TtOsaStage
     "pcc",
     ((0.99),),
 )
-def test_osa_stage_inference(pcc, reset_seeds):
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
-
-
+def test_osa_stage_inference(device, pcc, reset_seeds):
     STAGE_INDEX = 0
 
     base_address = f"stages.{STAGE_INDEX}"
@@ -69,7 +64,6 @@ def test_osa_stage_inference(pcc, reset_seeds):
     logger.info(comp_allclose(model_output, tt_output_torch))
     logger.info(pcc_message)
 
-    tt_lib.device.CloseDevice(device)
     if passing:
         logger.info("OsaStage Passed!")
     else:

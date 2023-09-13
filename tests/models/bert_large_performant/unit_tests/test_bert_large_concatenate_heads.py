@@ -18,9 +18,8 @@ from models.utility_functions import (
 import torch
 
 
-def run_bert_large_concatenate_heads_test(batch, dtype, in0_mem_config, out_mem_config):
+def run_bert_large_concatenate_heads_test(device, batch, dtype, in0_mem_config, out_mem_config):
     torch.manual_seed(1234)
-    device = ttl.device.CreateDevice(0)
 
     a_shape = [batch, 16, 384, 64]
 
@@ -56,7 +55,7 @@ def run_bert_large_concatenate_heads_test(batch, dtype, in0_mem_config, out_mem_
     logger.info(f"output pcc={output_pcc}")
     assert passing_pcc
 
-    ttl.device.CloseDevice(device)
+
 
 
 import pytest
@@ -93,22 +92,22 @@ import pytest
     ],
 )
 def test_bert_large_concatenate_heads_test(
-    batch, dtype, in0_mem_config, out_mem_config, request
+    device, batch, dtype, in0_mem_config, out_mem_config, request
 ):
     ttl.profiler.set_profiler_location(
         f"tt_metal/tools/profiler/logs/BERT_large_concat_heads_tm_{request.node.callspec.id}"
     )
-    run_bert_large_concatenate_heads_test(batch, dtype, in0_mem_config, out_mem_config)
+    run_bert_large_concatenate_heads_test(device, batch, dtype, in0_mem_config, out_mem_config)
 
 
-def test_bert_large_concatenate_heads_with_program_cache(use_program_cache):
+def test_bert_large_concatenate_heads_with_program_cache(device,use_program_cache ):
     dtype = ttl.tensor.DataType.BFLOAT8_B
     dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
     for _ in range(2):
-        run_bert_large_concatenate_heads_test(9, dtype, dram_mem_config, dram_mem_config)
+        run_bert_large_concatenate_heads_test(device, 9, dtype, dram_mem_config, dram_mem_config)
 
     dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
     for _ in range(2):
-        run_bert_large_concatenate_heads_test(9, dtype, dram_mem_config, dram_mem_config)
+        run_bert_large_concatenate_heads_test(device, 9, dtype, dram_mem_config, dram_mem_config)
 
     assert ttl.program_cache.num_entries() == 2

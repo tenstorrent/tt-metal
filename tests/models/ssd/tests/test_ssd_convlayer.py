@@ -24,10 +24,7 @@ from torchvision.models.detection import (
     "pcc",
     ((0.99),),
 )
-def test_ssd_convlayer_inference(pcc, imagenet_sample_input, reset_seeds):
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
+def test_ssd_convlayer_inference(device, pcc, imagenet_sample_input, reset_seeds):
 
     TV_model = pretrained(weights=SSDLite320_MobileNet_V3_Large_Weights.DEFAULT)
     TV_model.eval()
@@ -68,7 +65,6 @@ def test_ssd_convlayer_inference(pcc, imagenet_sample_input, reset_seeds):
     logger.info(comp_allclose(torch_output, tt_output_torch))
     logger.info(pcc_message)
 
-    tt_lib.device.CloseDevice(device)
 
     if does_pass:
         logger.info("SSDConvlayer Passed!")

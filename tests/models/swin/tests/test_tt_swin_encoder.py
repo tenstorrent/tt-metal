@@ -26,11 +26,7 @@ from transformers import SwinModel
     "pcc",
     ((0.99),),
 )
-def test_swin_encoder_inference(pcc, reset_seeds):
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
-
+def test_swin_encoder_inference(device, pcc, reset_seeds):
 
     base_address = f"encoder"
 
@@ -73,7 +69,6 @@ def test_swin_encoder_inference(pcc, reset_seeds):
     logger.info(comp_allclose(torch_output.last_hidden_state, tt_output_torch))
     logger.info(pcc_message)
 
-    tt_lib.device.CloseDevice(device)
     if does_pass:
         logger.info("SwinEncoder Passed!")
     else:

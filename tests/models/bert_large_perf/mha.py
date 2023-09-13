@@ -260,10 +260,10 @@ class PytorchMultiHeadAttentionModel(torch.nn.Module):
         return result
 
 
-def run_mha_inference(model_version, batch, seq_len, pcc, model_location_generator):
+def run_mha_inference(device, model_version, batch, seq_len, pcc, model_location_generator):
 
-    device = ttl.device.CreateDevice(0)
-    # Initialize the device
+
+
 
 
 
@@ -285,7 +285,7 @@ def run_mha_inference(model_version, batch, seq_len, pcc, model_location_generat
     tt_out = tt_mha_model(tt_mha_input).cpu()
     tt_out1 = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
-    ttl.device.CloseDevice(device)
+
 
     passing, output = comp_pcc(pytorch_out, tt_out1, pcc)
     logger.info(f"Output {output}")
@@ -306,8 +306,8 @@ def run_mha_inference(model_version, batch, seq_len, pcc, model_location_generat
         ("phiyodr/bert-large-finetuned-squad2", 1, 384, 0.99)
     ),
 )
-def test_mha_inference(model_version, batch, seq_len, pcc, model_location_generator):
+def test_mha_inference(device, model_version, batch, seq_len, pcc, model_location_generator):
 
     # enable_persistent_kernel_cache()
 
-    run_mha_inference(model_version, batch, seq_len, pcc, model_location_generator)
+    run_mha_inference(device, model_version, batch, seq_len, pcc, model_location_generator)

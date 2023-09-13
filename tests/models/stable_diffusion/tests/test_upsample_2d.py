@@ -17,7 +17,7 @@ from models.utility_functions import (
 )
 from models.stable_diffusion.tt.upsample_2d import TtUpsample2D
 
-def test_run_upsample2d_inference():
+def test_run_upsample2d_inference(device):
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
 
@@ -32,13 +32,6 @@ def test_run_upsample2d_inference():
     in_channels = 1280
     out_channels = 1280
     torch_output = resnet_upsampler(input)
-
-
-    # Initialize the device
-    device = ttl.device.CreateDevice(0)
-
-    ttl.device.SetDefaultDevice(device)
-
 
     tt_input = torch_to_tt_tensor(input, device)
 
@@ -56,6 +49,6 @@ def test_run_upsample2d_inference():
 
     passing = comp_pcc(torch_output, tt_output)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))
-    ttl.device.CloseDevice(device)
+
     assert passing[0], passing[1:]
     logger.info(f"PASSED {passing[1]}")

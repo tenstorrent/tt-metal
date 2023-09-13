@@ -44,11 +44,7 @@ from models.utility_functions import (
         ),
     ),
 )
-def test_nanogpt_model_real(pcc, prompt):
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
-
+def test_nanogpt_model_real(pcc, prompt, device):
 
     # Prepare input
 
@@ -98,7 +94,6 @@ def test_nanogpt_model_real(pcc, prompt):
     does_pass, pcc_message = comp_pcc(pt_out[0], tt_out_converted, 0.99)
     logger.info(pcc_message)
 
-    tt_lib.device.CloseDevice(device)
 
     if does_pass:
         logger.info("nanogpt_model_real: Passed!")

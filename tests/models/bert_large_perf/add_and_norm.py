@@ -57,10 +57,10 @@ class PytorchAddAndNormModel(torch.nn.Module):
         out = self.layernorm(a + b)
         return out
 
-def run_add_and_norm_inference(model_version, batch, seq_len, pcc, model_location_generator):
+def run_add_and_norm_inference(device, model_version, batch, seq_len, pcc, model_location_generator):
 
-    device = ttl.device.CreateDevice(0)
-    # Initialize the device
+
+
 
 
 
@@ -90,7 +90,7 @@ def run_add_and_norm_inference(model_version, batch, seq_len, pcc, model_locatio
     tt_out = tt_add_and_norm_model(tt_add_and_norm_input_a, tt_add_and_norm_input_b).cpu()
     tt_out = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
-    ttl.device.CloseDevice(device)
+
 
     passing, output = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"Output {output}")
@@ -108,6 +108,6 @@ def run_add_and_norm_inference(model_version, batch, seq_len, pcc, model_locatio
         ("phiyodr/bert-large-finetuned-squad2", 1, 384, 0.99)
     ),
 )
-def test_add_and_norm_inference(model_version, batch, seq_len, pcc, model_location_generator):
+def test_add_and_norm_inference(device, model_version, batch, seq_len, pcc, model_location_generator):
 
-    run_add_and_norm_inference(model_version, batch, seq_len, pcc, model_location_generator)
+    run_add_and_norm_inference(device, model_version, batch, seq_len, pcc, model_location_generator)

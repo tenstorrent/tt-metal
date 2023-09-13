@@ -31,12 +31,8 @@ from transformers import RobertaForSequenceClassification
 from transformers import AutoTokenizer
 
 
-def test_roberta_classification_head():
+def test_roberta_classification_head(device):
     torch.manual_seed(1234)
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
-
     base_address = f"classifier"
     with torch.no_grad():
         model = RobertaForSequenceClassification.from_pretrained(
@@ -71,7 +67,6 @@ def test_roberta_classification_head():
         logger.info(comp_allclose(torch_output, tt_output_torch))
         logger.info(pcc_message)
 
-        tt_lib.device.CloseDevice(device)
 
         if does_pass:
             logger.info("RobertaClassificationHead Passed!")

@@ -122,10 +122,8 @@ def test_llamaCausallm_inference(
     max_position_embeddings,
     on_weka,
     pcc,
+    device
 ):
-    # Initialize the device
-    device = ttl.device.CreateDevice(0)
-
 
     run_test_llamaCausallm_inference(
         device,
@@ -139,4 +137,3 @@ def test_llamaCausallm_inference(
         on_weka,
         pcc,
     )
-    ttl.device.CloseDevice(device)

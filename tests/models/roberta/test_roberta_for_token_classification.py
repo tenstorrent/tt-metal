@@ -31,11 +31,8 @@ from transformers import RobertaForTokenClassification
 from transformers import AutoTokenizer
 
 
-def test_roberta_for_token_classification():
+def test_roberta_for_token_classification(device):
     torch.manual_seed(1234)
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
 
     base_address = ""
 
@@ -100,7 +97,6 @@ def test_roberta_for_token_classification():
         logger.info(comp_allclose(torch_output, tt_output_torch))
         logger.info(pcc_message)
 
-        tt_lib.device.CloseDevice(device)
 
         if does_pass:
             logger.info("RobertaForTokenClassification Passed!")
@@ -108,7 +104,3 @@ def test_roberta_for_token_classification():
             logger.warning("RobertaForTokenClassification Failed!")
 
         assert does_pass
-
-
-if __name__ == "__main__":
-    test_roberta_for_token_classification()

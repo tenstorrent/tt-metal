@@ -74,11 +74,9 @@ def run_bloom_block_test(device):
     assert do_all_blocks_pass
 
 
-def test_bloom_block():
-    device = ttm.device.CreateDevice(0)
-
+def test_bloom_block(device):
     run_bloom_block_test(device)
-    ttm.device.CloseDevice(device)
+
 
 
 if __name__ == "__main__":

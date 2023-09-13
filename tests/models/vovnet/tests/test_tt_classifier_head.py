@@ -26,11 +26,7 @@ from models.vovnet.tt.classifier_head import TtClassifierHead
     "pcc",
     ((0.99),),
 )
-def test_classifier_head_inference(pcc, reset_seeds):
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
-
+def test_classifier_head_inference(device, pcc, reset_seeds):
 
     base_address = f"head"
     model = timm.create_model("hf_hub:timm/ese_vovnet19b_dw.ra_in1k", pretrained=True)
@@ -65,7 +61,6 @@ def test_classifier_head_inference(pcc, reset_seeds):
     logger.info(comp_allclose(model_output, tt_output_torch))
     logger.info(pcc_message)
 
-    tt_lib.device.CloseDevice(device)
     if passing:
         logger.info("ClassifierHead Passed!")
     else:

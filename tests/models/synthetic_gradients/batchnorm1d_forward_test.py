@@ -10,11 +10,6 @@ import tt_lib as ttl
 from models.utility_functions import tilize_to_list, untilize, comp_allclose_and_pcc, comp_pcc
 from tt_lib.utils import pad_activation, pad_weight
 
-def create_global_variables():
-    global device
-    device = ttl.device.CreateDevice(0)
-    global host
-
 
 
 # tt_metal
@@ -153,7 +148,7 @@ class PytorchBatchNorm1D(nn.Module):
         return bn1_out
 
 # run
-def run_btchnorm_forward(bn_size):
+def run_batchnorm_forward(device,bn_size):
     epsilon = 1e-5
 
     inputs = torch.FloatTensor(2, bn_size).uniform_(-1., 1.).requires_grad_(True)
@@ -227,9 +222,5 @@ def run_btchnorm_forward(bn_size):
     assert float(pcc[1][5:]) > 0.99, f'pcc is lower than 0.99: {float(pcc[1][5:])}'
 
 
-def test_batchnorm_inference():
-    # Initialize the device
-    create_global_variables()
-
-    run_btchnorm_forward(32)
-    ttl.device.CloseDevice(device)
+def test_batchnorm_inference(device):
+    run_batchnorm_forward(device, 32)

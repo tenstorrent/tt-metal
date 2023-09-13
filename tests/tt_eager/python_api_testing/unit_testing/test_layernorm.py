@@ -81,7 +81,7 @@ def ref_layernorm(x, eps, gamma, beta, H, W):
 def run_layernorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device):
     torch.manual_seed(1234)
 
-    # Initialize the device
+
     tensor = ttl.tensor
     dev = device
 

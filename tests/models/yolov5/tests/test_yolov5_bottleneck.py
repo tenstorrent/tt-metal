@@ -24,10 +24,7 @@ from models.utility_functions import (
 )
 
 
-def test_Yolov5_bottleneck():
-    device = tt_lib.device.CreateDevice(0)
-
-
+def test_Yolov5_bottleneck(device):
     weights = "tests/models/yolov5/reference/yolov5s.pt"
     dnn = False
     data = None
@@ -65,7 +62,6 @@ def test_Yolov5_bottleneck():
 
     tt_out = tt_module(test_input)
     tt_out = tt2torch_tensor(tt_out)
-    tt_lib.device.CloseDevice(device)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)
     logger.info(pcc_message)

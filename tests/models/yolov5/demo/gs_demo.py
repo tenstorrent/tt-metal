@@ -53,10 +53,7 @@ def download_images(path, imgsz):
     image.save(path / "input_image.jpg")
 
 
-def test_detection_model():
-    device = tt_lib.device.CreateDevice(0)
-
-
+def test_detection_model(device):
     refence_model = DetectMultiBackend(
         ROOT / "yolov5s.pt",
         device=torch.device("cpu"),
@@ -147,4 +144,3 @@ def test_detection_model():
                 cv2.imwrite(save_path, im0)
 
     logger.info(f"Result image saved on {save_path}")
-    tt_lib.device.CloseDevice(device)

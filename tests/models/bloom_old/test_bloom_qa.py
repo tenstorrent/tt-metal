@@ -98,12 +98,5 @@ def run_bloom_qa_inference(device):
     assert does_pass
 
 
-def test_bloom_qa():
-    device = ttm.device.CreateDevice(0)
-
+def test_bloom_qa(device):
     run_bloom_qa_inference(device)
-    ttm.device.CloseDevice(device)
-
-
-if __name__ == "__main__":
-    test_bloom_qa()

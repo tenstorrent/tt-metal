@@ -31,10 +31,8 @@ from models.utility_functions import (
 )
 
 
-def test_conv2d_module(model_location_generator):
+def test_conv2d_module(device, model_location_generator):
     torch.manual_seed(1234)
-    device = tt_lib.device.CreateDevice(0)
-
 
     INDEX = 0
     base_address = f"model.model.{INDEX}.conv"
@@ -106,7 +104,6 @@ def test_conv2d_module(model_location_generator):
     tt_out = tt_out.to(tt_lib.tensor.Layout.ROW_MAJOR)
 
     tt_out = tt2torch_tensor(tt_out)
-    tt_lib.device.CloseDevice(device)
 
     logger.debug(f"pt_out shape {pt_out.shape}")
     logger.debug(f"tt_out shape {tt_out.shape}")

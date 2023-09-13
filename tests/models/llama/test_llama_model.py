@@ -125,12 +125,8 @@ def test_Llama_inference(
     max_position_embeddings,
     on_weka,
     pcc,
+    device
 ):
-    # Initialize the device
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
-
 
     run_test_Llama_inference(
         device,
@@ -143,4 +139,3 @@ def test_Llama_inference(
         on_weka,
         pcc,
     )
-    tt_lib.device.CloseDevice(device)

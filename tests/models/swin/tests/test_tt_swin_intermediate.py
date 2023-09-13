@@ -27,11 +27,7 @@ from transformers import SwinModel
     "pcc",
     ((0.99),),
 )
-def test_swin_intermediate_inference(pcc, reset_seeds):
-    device = tt_lib.device.CreateDevice(0)
-
-    tt_lib.device.SetDefaultDevice(device)
-
+def test_swin_intermediate_inference(device, pcc, reset_seeds):
 
     INTERMEDIATE_LAYER_INDEX = 0
     base_address = f"encoder.layers.{INTERMEDIATE_LAYER_INDEX}.blocks.{INTERMEDIATE_LAYER_INDEX}.intermediate"
@@ -75,7 +71,6 @@ def test_swin_intermediate_inference(pcc, reset_seeds):
     logger.info(comp_allclose(torch_output, tt_output_torch))
     logger.info(pcc_message)
 
-    tt_lib.device.CloseDevice(device)
 
     if does_pass:
         logger.info("SwinIntermediate Passed!")

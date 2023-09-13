@@ -31,10 +31,8 @@ from models.utility_functions import (
 )
 
 
-def test_bottleneck_module(model_location_generator):
+def test_bottleneck_module(model_location_generator, device):
     torch.manual_seed(1234)
-    device = tt_lib.device.CreateDevice(0)
-
 
     # Load yolo
     model_path = model_location_generator("models", model_subdir = "Yolo")
@@ -82,7 +80,6 @@ def test_bottleneck_module(model_location_generator):
     does_pass, pcc_message = comp_pcc(pred, tt_output_torch, 0.98)
     logger.info(pcc_message)
 
-    tt_lib.device.CloseDevice(device)
 
     if does_pass:
         logger.info("Yolo TtBottleneck Passed!")

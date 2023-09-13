@@ -19,10 +19,9 @@ import torch
 
 
 def run_split_fused_qkv_and_split_heads_test(
-    batch, dtype, in0_mem_config, out_mem_config
+    device, batch, dtype, in0_mem_config, out_mem_config
 ):
     torch.manual_seed(1234)
-    device = ttl.device.CreateDevice(0)
 
     a_shape = [batch, 1, 384, 3072]
 
@@ -81,7 +80,7 @@ def run_split_fused_qkv_and_split_heads_test(
     logger.info(f"V output pcc={output_pcc_v}")
     assert passing_pcc_v
 
-    ttl.device.CloseDevice(device)
+
 
 
 import pytest
@@ -118,30 +117,30 @@ import pytest
     ],
 )
 def test_split_fused_qkv_and_split_heads_test(
-    batch, dtype, in0_mem_config, out_mem_config, request
+    device,batch, dtype, in0_mem_config, out_mem_config, request
 ):
     ttl.profiler.set_profiler_location(
         f"tt_metal/tools/profiler/logs/BERT_large_create_qvk_heads_tm_{request.node.callspec.id}"
     )
     run_split_fused_qkv_and_split_heads_test(
-        batch, dtype, in0_mem_config, out_mem_config
+        device,batch, dtype, in0_mem_config, out_mem_config
     )
 
 
 def test_split_fused_qkv_and_split_heads_with_program_cache(
-    use_program_cache,
+    device, use_program_cache
 ):
     dtype = ttl.tensor.DataType.BFLOAT8_B
     dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
     for _ in range(2):
         run_split_fused_qkv_and_split_heads_test(
-            9, dtype, dram_mem_config, dram_mem_config
+            device, 9, dtype, dram_mem_config, dram_mem_config
         )
 
     dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
     for _ in range(2):
         run_split_fused_qkv_and_split_heads_test(
-            9, dtype, dram_mem_config, dram_mem_config
+            device, 9, dtype, dram_mem_config, dram_mem_config
         )
 
     assert ttl.program_cache.num_entries() == 2

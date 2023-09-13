@@ -13,7 +13,7 @@ from models.utility_functions import comp_pcc, comp_allclose_and_pcc
 from models.stable_diffusion.tt.cross_attention import TtCrossAttention
 
 
-def test_cross_attn_inference():
+def test_cross_attn_inference(device):
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
     unet = pipe.unet
@@ -45,11 +45,6 @@ def test_cross_attn_inference():
     encoder_hidden_states = encoder_hidden_states.squeeze(0) if encoder_hidden_states is not None else None
     torch_output = cross_attn(input.squeeze(0), encoder_hidden_states)
 
-    # Initialize the device
-    device = ttl.device.CreateDevice(0)
-
-    ttl.device.SetDefaultDevice(device)
-
     # setup tt model
     tt_cross_attn = TtCrossAttention(query_dim=query_dim,
                                     heads = heads,
@@ -70,6 +65,6 @@ def test_cross_attn_inference():
 
     passing = comp_pcc(torch_output, tt_output)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))
-    ttl.device.CloseDevice(device)
+
     assert passing[0], passing[1:]
     logger.info(f"PASSED {passing[1]}")

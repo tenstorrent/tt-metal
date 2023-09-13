@@ -169,9 +169,6 @@ def run_whisper_decoder_layer(layer, device):
     assert does_pass
 
 
-def test_WhipserDecoderLayer_inference():
+def test_WhipserDecoderLayer_inference(device):
     torch.manual_seed(1234)
-    device = tt_lib.device.CreateDevice(0)
-
     run_whisper_decoder_layer(layer=0, device=device)
-    tt_lib.device.CloseDevice(device)

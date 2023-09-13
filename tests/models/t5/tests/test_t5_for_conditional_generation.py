@@ -15,7 +15,7 @@ from models.generation_utils import run_generate
 from models.utility_functions import comp_pcc
 
 
-def run_T5ForConditionalGeneration(model_constructor, model_name):
+def run_T5ForConditionalGeneration(device, model_constructor, model_name):
     input_sentance = "translate English to German: The house is wonderful."
     if model_name == "t5-small":
         correct_output = "Das Haus ist wunderbar."
@@ -57,7 +57,6 @@ def run_T5ForConditionalGeneration(model_constructor, model_name):
     #     correct_output = "bob greene: it's another rainy Sunday afternoon. he's wasting his time. he says he's hanging around waiting for you. but nothing ever happens. greene: i wonder if he'll ever get to see you again. he"
 
     tokenizer = AutoTokenizer.from_pretrained(model_name, model_max_length=32)
-    device = tt_lib.device.CreateDevice(0)
 
 
     pt_output_sentance = run_generate(
@@ -83,19 +82,18 @@ def run_T5ForConditionalGeneration(model_constructor, model_name):
     logger.info(f"Pt Decoded output: {pt_output_sentance}")
     logger.info(f"Tt Decoded output: {tt_output_sentance}")
 
-    tt_lib.device.CloseDevice(device)
     assert tt_output_sentance == correct_output
 
 
-def test_T5ForConditionalGeneration_t5_small():
-    run_T5ForConditionalGeneration(t5_small_for_conditional_generation, "t5-small")
+def test_T5ForConditionalGeneration_t5_small(device):
+    run_T5ForConditionalGeneration(device, t5_small_for_conditional_generation, "t5-small")
 
 
-def test_T5ForConditionalGeneration_flan_t5_small():
+def test_T5ForConditionalGeneration_flan_t5_small(device):
     run_T5ForConditionalGeneration(
-        flan_t5_small_for_conditional_generation, "google/flan-t5-small"
+        device, flan_t5_small_for_conditional_generation, "google/flan-t5-small"
     )
 
 
-def test_T5ForConditionalGeneration_t5_base():
-    run_T5ForConditionalGeneration(t5_base_for_conditional_generation, "t5-base")
+def test_T5ForConditionalGeneration_t5_base(device):
+    run_T5ForConditionalGeneration(device, t5_base_for_conditional_generation, "t5-base")
