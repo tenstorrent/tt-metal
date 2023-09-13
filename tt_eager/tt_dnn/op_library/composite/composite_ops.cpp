@@ -886,7 +886,7 @@ Tensor outer(Tensor& a, Tensor& b, const MemoryConfig& output_mem_config) {
 
 // Gated Linear Unit activation: matmul(split[0],sigmoid(split[1]))
 Tensor glu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
-    TT_ASSERT( dim == -1 || dim == 3, "last dime GLU only supported at this time ");
+    TT_ASSERT( dim == -1 || dim == 3, "last dim GLU only supported at this time ");
     if ( dim == -1 ) dim = 3;
     std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input_a,output_mem_config);
     Tensor sigmoid_b = sigmoid(ab[1], output_mem_config);
@@ -896,7 +896,7 @@ Tensor glu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& ou
 
 // ReLU Gated Linear Unit activation: matmul(split[0],relu(split[1]))
 Tensor reglu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
-    TT_ASSERT( dim == -1 || dim == 3, "last dime GLU only supported at this time ");
+    TT_ASSERT( dim == -1 || dim == 3, "last dim REGLU only supported at this time ");
     if ( dim == -1 ) dim = 3;    
     std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input_a,output_mem_config);
     Tensor relu_b = relu(ab[1], output_mem_config);
@@ -906,7 +906,7 @@ Tensor reglu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& 
 
 // Gaussian Error Gated Linear Unit activation: matmul(split[0],gelu(split[1]))
 Tensor geglu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
-    TT_ASSERT( dim == -1 || dim == 3, "last dime GLU only supported at this time "); 
+    TT_ASSERT( dim == -1 || dim == 3, "last dim GEGLU only supported at this time "); 
     if ( dim == -1 ) dim = 3;   
     std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input_a,output_mem_config);
     constexpr bool fast_appx = true;
@@ -917,7 +917,7 @@ Tensor geglu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& 
 
 // Swish Gated Linear Unit activation: matmul(split[0],swish(split[1]))
 Tensor swiglu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
-    TT_ASSERT( dim == -1 || dim == 3, "last dime GLU only supported at this time ");
+    TT_ASSERT( dim == -1 || dim == 3, "last dim SWIGLU only supported at this time ");
     if ( dim == -1 ) dim = 3;    
     std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input_a,output_mem_config);
     Tensor swish_b = swish(ab[1], output_mem_config);
