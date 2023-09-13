@@ -51,6 +51,9 @@ inline bool update_macro_defines(UnaryOpType op_type,std::map<std::string,std::s
   case UnaryOpType::SQRT:
     defines["SFPU_OP_SQRT_INCLUDE"] = "1";
     break;
+  case UnaryOpType::ERFINV:
+    defines["SFPU_OP_ERFINV_INCLUDE"] = "1";
+    break;
   case UnaryOpType::ERFC:
   case UnaryOpType::ERF:
     defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
@@ -121,6 +124,7 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, stri
         case UnaryOpType::ISNEGINF: op_init_and_name = {"isneginf_tile_init();", fmt::format("isneginf_tile({});", idst)}; break;
         case UnaryOpType::ISNAN: op_init_and_name = {"isnan_tile_init();", fmt::format("isnan_tile({});", idst)}; break;
         case UnaryOpType::LOGICAL_NOT_UNARY: op_init_and_name = {"logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile({});", idst)}; break;
+        case UnaryOpType::ERFINV: op_init_and_name = {"erfinv_tile_init();", fmt::format("erfinv_tile({});", idst)}; break;
         case UnaryOpType::LOG10:
             // log10[x] = log[x]/log[10] = log[x]*0.4342944819032518; FP32@U32 0x3ede5bd9; FP16@U16 0x36f3;
             op_init_and_name = {"log_with_base_tile_init();", fmt::format("log_with_base_tile({}, 0x36f3u);", idst)}; break;

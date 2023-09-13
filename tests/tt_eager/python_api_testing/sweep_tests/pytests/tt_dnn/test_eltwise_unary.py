@@ -119,10 +119,41 @@ class TestEltwiseUnary:
             test_args,
         )
 
+    @skip_for_wormhole_b0
+    @pytest.mark.parametrize(
+        "fn_kind",
+        ["erfinv"],
+    )
+    def test_run_eltwise_erfinv_op(
+        self,
+        fn_kind,
+        device,
+        input_shapes,
+        function_level_defaults,
+        input_mem_config,
+        output_mem_config,
+    ):
+        datagen_func = [
+            generation_funcs.gen_func_with_cast(
+                partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16
+            )
+        ]
+        test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
+        comparison_func = comparison_funcs.comp_pcc
+        run_single_pytorch_test(
+            f"eltwise-{fn_kind}",
+            input_shapes,
+            datagen_func,
+            comparison_func,
+            device,
+            test_args,
+
+        )
+
     @pytest.mark.parametrize(
         "fn_kind",
         ["logical_not_unary"],
-    )
+   )
     def test_run_eltwise_not_op(
         self,
         fn_kind,

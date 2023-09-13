@@ -420,6 +420,10 @@ def erfc(x, *args, **kwargs):
     return torch.erfc(x)
 
 
+def erfinv(x, *args, **kwargs):
+    return torch.erfinv(x)
+
+
 def hardsigmoid(x, *args, **kwargs):
     return torch.nn.functional.hardsigmoid(x)
 
