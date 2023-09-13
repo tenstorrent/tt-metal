@@ -67,10 +67,7 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
 
     std::map<string, string> eltwise_defines = eltwise_binary_op_utils::get_defines(op_type, fused_activations);
 
-    if (eltwise_defines.find("SFPU_OP_INIT_PRE_0") != eltwise_defines.end() ||
-        eltwise_defines.find("SFPU_OP_INIT_PRE_IN1_0") != eltwise_defines.end() ||
-        eltwise_defines.find("SFPU_OP_INIT_PRE_IN2_0") != eltwise_defines.end())  //.contains("SFPU_OP_INIT_PRE_0")) => c++20 support
-    {
+    if (eltwise_defines.find("SFPU_OP_INIT_PRE_IN0_0") != eltwise_defines.end()) {
         auto cb_interm = tt_metal::CreateCircularBuffers(
             program,
             CB::c_intermed0,
@@ -79,17 +76,16 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
             1 * src0_single_tile_size,
             src0_cb_data_format
         );
-        if (eltwise_defines.find("SFPU_OP_INIT_PRE_0") != eltwise_defines.end())
-        {
-            auto cb_interm2 = tt_metal::CreateCircularBuffers(
-                program,
-                CB::c_intermed1,
-                all_cores,
-                1,
-                1 * src1_single_tile_size,
-                src1_cb_data_format
-            );
-        }
+    }
+    if (eltwise_defines.find("SFPU_OP_INIT_PRE_IN1_0") != eltwise_defines.end()) {
+        auto cb_interm2 = tt_metal::CreateCircularBuffers(
+            program,
+            CB::c_intermed1,
+            all_cores,
+            1,
+            1 * src1_single_tile_size,
+            src1_cb_data_format
+        );
     }
 
     uint32_t output_cb_index = 16; // output operands start at index 16

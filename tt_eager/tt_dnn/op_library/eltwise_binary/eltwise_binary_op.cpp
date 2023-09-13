@@ -52,27 +52,29 @@ std::map<string, string> get_defines(BinaryOpType op_type, const std::optional<s
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GELU, 0));
             break;
         case BinaryOpType::LOGADDEXP:
-            // PRE_0 ====> Applies prescaling for both the inputs
-            // PRE_IN1_0 ===> Applies prescaling for first input
-            // PRE_IN2_0 ====> Applies prescaling for second input
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP, {}, "PRE_0"));
+            // PRE_IN0_0 ===> Applies prescaling for first input
+            // PRE_IN1_0 ====> Applies prescaling for second input
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP, {}, "PRE_IN0_0"));
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP, {}, "PRE_IN1_0"));
             op_name = "add_tiles";
             op_code = "0";
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::LOG));
             break;
         case BinaryOpType::LOGICAL_OR:
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::NEZ, {}, "PRE_0"));
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::NEZ, {}, "PRE_IN0_0"));
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::NEZ, {}, "PRE_IN1_0"));
             op_name = "add_tiles";
             op_code = "0";
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GTZ));
 	    break;
         case BinaryOpType::LDEXP:
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP2, {}, "PRE_IN2_0"));
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP2, {}, "PRE_IN1_0"));
             op_name = "mul_tiles";
             op_code = "2";
             break;
         case BinaryOpType::LOGADDEXP2:
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP2, {}, "PRE_0"));
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP2, {}, "PRE_IN0_0"));
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP2, {}, "PRE_IN1_0"));
             op_name = "add_tiles";
             op_code = "0";
             defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::LOG2));
