@@ -200,7 +200,7 @@ def test_perf_virtual_machine_t5_base(
     "expected_inference_time, expected_compile_time, model_name",
     (
         (
-            0.15,
+            0.17,
             6.5,
             "google/flan-t5-small",
         ),

@@ -23,8 +23,9 @@ def t5_shape_tt(
     device,
 ) -> tt_lib.tensor.Tensor:
     # Layout of states is Layout.TILE
-    states = tt_to_torch_tensor(states)
-    states = torch_to_tt_tensor_rm(states, device, put_on_device=True)
+    state = tt_to_torch_tensor(states)
+    states.deallocate()
+    states = torch_to_tt_tensor_rm(state, device, put_on_device=True)
     tt_out = tt_lib.tensor.reshape(states, batch_size, -1, n_heads, key_value_proj_dim)
     tt_out = tt_lib.tensor.transpose_hc(tt_out)
     return tt_out
@@ -33,6 +34,9 @@ def t5_shape_tt(
 def t5_unshape_tt(
     states: tt_lib.tensor.Tensor, batch_size: int, inner_dim: int, device
 ):
+    state = tt_to_torch_tensor(states)
+    states.deallocate()
+    states = torch_to_tt_tensor_rm(state, device, put_on_device=True)
     states = tt_lib.tensor.transpose_hc(states)
     tt_out = tt_lib.tensor.reshape(states, 1, batch_size, -1, inner_dim)
     return tt_out
@@ -57,6 +61,9 @@ class TtT5Attention(nn.Module):
         self.n_heads = config.num_heads
         self.inner_dim = self.n_heads * self.key_value_proj_dim
         self.device = device
+        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(
+            True, tt_lib.tensor.BufferType.L1
+        )
 
         self.q_weights = torch_to_tt_tensor_rm(
             state_dict[f"{base_address}.q.weight"], self.device, put_on_device=True
@@ -65,6 +72,7 @@ class TtT5Attention(nn.Module):
             self.q_weights.shape()[-1],
             self.q_weights.shape()[-2],
             self.q_weights,
+            output_mem_config=self.out_mem_config_l1,
         )
 
         self.k_weights = torch_to_tt_tensor_rm(
@@ -74,6 +82,7 @@ class TtT5Attention(nn.Module):
             self.k_weights.shape()[-1],
             self.k_weights.shape()[-2],
             self.k_weights,
+            output_mem_config=self.out_mem_config_l1,
         )
 
         self.v_weights = torch_to_tt_tensor_rm(
@@ -83,15 +92,18 @@ class TtT5Attention(nn.Module):
             self.v_weights.shape()[-1],
             self.v_weights.shape()[-2],
             self.v_weights,
+            output_mem_config=self.out_mem_config_l1,
         )
 
         self.o_weights = torch_to_tt_tensor_rm(
             state_dict[f"{base_address}.o.weight"], self.device, put_on_device=True
         )
+
         self.output = TtLinear(
             self.o_weights.shape()[-1],
             self.o_weights.shape()[-2],
             self.o_weights,
+            output_mem_config=self.out_mem_config_l1,
         )
 
         if self.has_relative_attention_bias:
@@ -153,19 +165,8 @@ class TtT5Attention(nn.Module):
 
     def compute_bias_const(self, query_length, key_length):
         context_position = tt_lib.tensor.arange(0, query_length, 1).to(self.device)
-        context_position = tt_lib.tensor.permute(
-            context_position,
-            0,
-            1,
-            3,
-            2,
-        )
-        memory_position = tt_lib.tensor.arange(
-            0,
-            key_length,
-            1,
-        ).to(self.device)
-
+        context_position = tt_lib.tensor.permute(context_position, 0, 1, 3, 2)
+        memory_position = tt_lib.tensor.arange(0, key_length, 1).to(self.device)
         memory_position = (
             tt_to_torch_tensor(memory_position).squeeze(0).squeeze(0).long()
         )
@@ -184,13 +185,7 @@ class TtT5Attention(nn.Module):
         )
         values = self.relative_attention_bias(relative_position_bucket)
         values = torch_to_tt_tensor_rm(values, self.device, put_on_device=True)
-        value = tt_lib.tensor.permute(
-            values,
-            0,
-            3,
-            1,
-            2,
-        )
+        value = tt_lib.tensor.permute(values, 0, 3, 1, 2)
         values = tt_to_torch_tensor(value)
         return values
 
@@ -233,22 +228,18 @@ class TtT5Attention(nn.Module):
 
         def project(hidden_states, proj_layer, key_value_states, past_key_value):
             if key_value_states is None:
-                layer = proj_layer(hidden_states.to(self.device))
-                hidden_states = shape(layer)
+                hidden_states = shape(proj_layer(hidden_states.to(self.device)))
 
             elif past_key_value is None:
-                layer = proj_layer(key_value_states.to(self.device))
-                hidden_states = shape(layer)
+                hidden_states = shape(proj_layer(key_value_states.to(self.device)))
 
             if past_key_value is not None:
                 if key_value_states is None:
                     hidden_states = tt_lib.tensor.concat(
-                        [past_key_value, hidden_states],
-                        dim=2,
+                        [past_key_value, hidden_states], dim=2
                     )
                 elif past_key_value.shape[2] != key_value_states.shape()[2]:
-                    layer = proj_layer(key_value_states.to(self.device))
-                    hidden_states = shape(layer)
+                    hidden_states = shape(proj_layer(key_value_states.to(self.device)))
                 else:
                     hidden_states = past_key_value
             return hidden_states
@@ -264,6 +255,7 @@ class TtT5Attention(nn.Module):
             key_value_states,
             past_key_value[0] if past_key_value is not None else None,
         )
+
         value_states = project(
             hidden_states,
             self.value,
@@ -271,13 +263,12 @@ class TtT5Attention(nn.Module):
             past_key_value[1] if past_key_value is not None else None,
         )
 
-        transposed_key_states = tt_lib.tensor.transpose(
-            key_states,
-        )
+        transposed_key_states = tt_lib.tensor.transpose(key_states)
 
         scores = tt_lib.tensor.bmm(
             query_states,
             transposed_key_states,
+            output_mem_config=self.out_mem_config_l1,
         )
 
         if (
@@ -291,6 +282,7 @@ class TtT5Attention(nn.Module):
             if not self.has_relative_attention_bias:
                 position_bias = tt_lib.tensor.zeros(
                     (1, self.n_heads, real_seq_length, key_length),
+                    output_mem_config=self.out_mem_config_l1,
                 )
 
                 if self.gradient_checkpointing and self.training:
@@ -313,22 +305,49 @@ class TtT5Attention(nn.Module):
                 mask = torch_to_tt_tensor_rm(mask, self.device, put_on_device=True)
 
                 if position_bias.shape()[-2] == mask.shape()[-2]:
-                    position_bias = tt_lib.tensor.permute(position_bias, 0, 3, 1, 2)
-                    mask = tt_lib.tensor.permute(mask, 0, 3, 1, 2)
+                    position_bias = tt_lib.tensor.permute(
+                        position_bias,
+                        0,
+                        3,
+                        1,
+                        2,
+                        output_mem_config=self.out_mem_config_l1,
+                    )
+                    mask = tt_lib.tensor.permute(
+                        mask, 0, 3, 1, 2, output_mem_config=self.out_mem_config_l1
+                    )
                     position_bias = tt_lib.tensor.bcast(
                         position_bias,
                         mask,
                         tt_lib.tensor.BcastOpMath.ADD,
                         tt_lib.tensor.BcastOpDim.H,
+                        output_mem_config=self.out_mem_config_l1,
                     )
                 else:
-                    position_bias = tt_lib.tensor.permute(position_bias, 0, 3, 1, 2)
-                    mask = tt_lib.tensor.permute(mask, 0, 3, 1, 2)
+                    position_bias = tt_lib.tensor.permute(
+                        position_bias,
+                        0,
+                        3,
+                        1,
+                        2,
+                        output_mem_config=self.out_mem_config_l1,
+                    )
+
+                    mask = tt_lib.tensor.permute(
+                        mask,
+                        0,
+                        3,
+                        1,
+                        2,
+                        output_mem_config=self.out_mem_config_l1,
+                    )
+
                     position_bias = tt_lib.tensor.bcast(
                         position_bias,
                         mask,
                         tt_lib.tensor.BcastOpMath.ADD,
                         tt_lib.tensor.BcastOpDim.HW,
+                        output_mem_config=self.out_mem_config_l1,
                     )
 
                 position_bias = tt_lib.tensor.permute(
@@ -337,6 +356,7 @@ class TtT5Attention(nn.Module):
                     2,
                     3,
                     1,
+                    output_mem_config=self.out_mem_config_l1,
                 )
 
             else:
@@ -353,21 +373,17 @@ class TtT5Attention(nn.Module):
             self.cached_real_seq_length = real_seq_length
             self.cached_key_length = key_length
 
-        score = tt_lib.tensor.add(
-            scores,
-            position_bias,
-        )
-        attn_weights = tt_lib.operations.primary.softmax_in_place(score)
+        scores = tt_lib.tensor.add(scores, position_bias)
+
+        attn_weights = tt_lib.operations.primary.softmax_in_place(scores)
 
         if layer_head_mask is not None:
             attn_weights = tt_lib.tensor.mul(
-                attn_weights,
-                layer_head_mask,
+                attn_weights, layer_head_mask, output_mem_config=self.out_mem_config_l1
             )
 
         attn_output = tt_lib.tensor.bmm(
-            attn_weights,
-            value_states,
+            attn_weights, value_states, output_mem_config=self.out_mem_config_l1
         )
 
         attn_output = unshape(attn_output)

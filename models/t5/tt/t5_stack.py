@@ -28,6 +28,10 @@ class TtT5Stack(nn.Module):
     def __init__(self, config, state_dict, base_address, device, embed_tokens=None):
         super().__init__()
 
+        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(
+            True, tt_lib.tensor.BufferType.L1
+        )
+
         self.config = config
         self.embed_tokens = embed_tokens
         self.is_decoder = config.is_decoder
@@ -83,10 +87,12 @@ class TtT5Stack(nn.Module):
                     tt_lib.tensor.ones(
                         (batch_size, seq_length, prefix_seq_len),
                         dtype=causal_mask.dtype,
+                        output_mem_config=self.out_mem_config_l1,
                     ),
                     causal_mask,
                 ],
                 axis=-1,
+                output_mem_config=self.out_mem_config_l1,
             )
 
         extended_attention_mask = (

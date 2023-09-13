@@ -58,6 +58,10 @@ class TtT5ForConditionalGeneration(nn.Module):
         encoder_config.use_cache = False
         encoder_config.is_encoder_decoder = False
 
+        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(
+            True, tt_lib.tensor.BufferType.L1
+        )
+
         self.encoder = TtT5Stack(
             encoder_config, state_dict, "encoder", device, self.shared
         )
@@ -210,10 +214,16 @@ class TtT5ForConditionalGeneration(nn.Module):
 
         if self.config.tie_word_embeddings:
             sequence_output = tt_lib.tensor.mul_unary(
-                sequence_output, (self.model_dim**-0.5)
+                sequence_output,
+                (self.model_dim**-0.5),
+                output_mem_config=self.out_mem_config_l1,
             )
 
-        lm_logits = tt_lib.tensor.matmul(sequence_output, self.lm_head_weights)
+        lm_logits = tt_lib.tensor.matmul(
+            sequence_output,
+            self.lm_head_weights,
+            output_mem_config=self.out_mem_config_l1,
+        )
         loss = None
 
         # Back to torch

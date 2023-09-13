@@ -12,6 +12,10 @@ class TtT5DenseActDense(nn.Module):
     def __init__(self, config, state_dict, base_address, device):
         super().__init__()
 
+        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(
+            True, tt_lib.tensor.BufferType.L1
+        )
+
         self.out_proj_wi_weights = torch_to_tt_tensor_rm(
             state_dict[f"{base_address}.wi.weight"], device, put_on_device=True
         )
@@ -28,6 +32,7 @@ class TtT5DenseActDense(nn.Module):
             config.d_ff,
             config.d_model,
             self.out_proj_w0_weights,
+            output_mem_config=self.out_mem_config_l1,
         )
 
         self.act = tt_lib.tensor.relu

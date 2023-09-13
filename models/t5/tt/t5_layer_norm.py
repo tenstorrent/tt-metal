@@ -19,6 +19,8 @@ class TtT5LayerNorm(torch.nn.Module):
 
     def forward(self, hidden_states: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         result = tt_lib.tensor.rmsnorm(
-            hidden_states, self.variance_epsilon, self.weight
+            hidden_states,
+            self.variance_epsilon,
+            self.weight,
         )
         return result
