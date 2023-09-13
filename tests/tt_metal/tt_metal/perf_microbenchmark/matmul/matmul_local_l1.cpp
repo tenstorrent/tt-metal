@@ -199,19 +199,19 @@ int main(int argc, char **argv) {
               input_args, "--print_tensor", 0);
       std::tie(Mt, input_args) =
           test_args::get_command_option_uint32_and_remaining_args(input_args, "--mt",
-                                                           1);
+                                                           72);
       std::tie(Nt, input_args) =
           test_args::get_command_option_uint32_and_remaining_args(input_args, "--nt",
-                                                           1);
+                                                           96);
       std::tie(Kt, input_args) =
           test_args::get_command_option_uint32_and_remaining_args(input_args, "--kt",
-                                                           1);
+                                                           24);
       std::tie(num_cores_r, input_args) =
           test_args::get_command_option_uint32_and_remaining_args(input_args, "--r",
-                                                           1);
+                                                           9);
       std::tie(num_cores_c, input_args) =
           test_args::get_command_option_uint32_and_remaining_args(input_args, "--c",
-                                                           1);
+                                                           12);
       std::tie(validation, input_args) =
           test_args::get_command_option_uint32_and_remaining_args(input_args,
                                                            "--validation", 1);

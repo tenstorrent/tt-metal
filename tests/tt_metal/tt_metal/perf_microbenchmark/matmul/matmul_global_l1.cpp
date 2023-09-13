@@ -944,13 +944,13 @@ int main(int argc, char** argv) {
           input_args, "--print_tensor", 0);
       std::tie(Mt, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(input_args, "--mt",
-          108);
+          72);
       std::tie(Nt, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(input_args, "--nt",
           96);
       std::tie(Kt, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(input_args, "--kt",
-          32);
+          24);
       std::tie(num_cores_y, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(input_args, "--r",
           9);
@@ -968,7 +968,7 @@ int main(int argc, char** argv) {
           2);
       std::tie(per_core_Mt, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(input_args, "--per_core_mt",
-          12);
+          8);
       std::tie(per_core_Nt, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(input_args, "--per_core_nt",
           8);
