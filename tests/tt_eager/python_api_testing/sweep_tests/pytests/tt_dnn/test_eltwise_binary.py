@@ -78,7 +78,7 @@ class TestEltwiseBinary:
         )
 
     @pytest.mark.parametrize("fn_kind", ["bias_gelu",])
-    def test_run_eltwise_binary_ops_2(
+    def test_run_eltwise_binary_bias_ops(
         self,
         input_shapes,
         fn_kind,
