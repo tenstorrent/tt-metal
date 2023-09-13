@@ -74,12 +74,13 @@ static uint32_t get_elapsed_secs() {
     return (uint32_t)elapsed_secs.count();
 }
 
-static FILE * create_file() {
+static FILE * create_file(const string& log_path) {
 
     FILE *f;
 
     const char *fmode = getenv("TT_METAL_WATCHER_APPEND") ? "a" : "w";
-    if ((f = fopen("/tmp/metal_watcher.txt", fmode)) == nullptr) {
+    string fname = log_path + "watcher.log";
+    if ((f = fopen(fname.c_str(), fmode)) == nullptr) {
         log_fatal(LogLLRuntime, "Watcher failed to create log file\n");
         exit(1);
     }
@@ -416,13 +417,14 @@ void watcher_attach(void *dev,
                     tt_cluster *cluster,
                     int pcie_slot,
                     const std::function<CoreCoord ()>& get_grid_size,
-                    const std::function<CoreCoord (CoreCoord)>& worker_from_logical) {
+                    const std::function<CoreCoord (CoreCoord)>& worker_from_logical,
+                    const string& log_path) {
 
     const std::lock_guard<std::mutex> lock(watcher::watch_mutex);
 
     if (!watcher::enabled && OptionsG.get_watcher_enabled()) {
 
-        watcher::logfile = watcher::create_file();
+        watcher::logfile = watcher::create_file(log_path);
 
         int sleep_usecs = OptionsG.get_watcher_interval() * 1000 * 1000;
         std::thread watcher_thread = std::thread(&watcher::watcher_loop, sleep_usecs);

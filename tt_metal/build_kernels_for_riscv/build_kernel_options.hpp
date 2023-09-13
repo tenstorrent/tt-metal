@@ -55,6 +55,14 @@ class build_kernel_for_riscv_options_t
 };
 
 // TODO: llrt needs these but doesn't link against build_kernels_for_riscv.cpp
+inline const std::string get_compile_outpath() {
+    return tt::utils::get_root_dir() + "/built/";
+}
+
+inline const std::string get_device_compile_outpath(int pcie_slot) {
+    return tt::utils::get_root_dir() + "/built/" + std::to_string(pcie_slot) + "/";
+}
+
 inline const std::string get_firmware_compile_outpath(int pcie_slot) {
     return tt::utils::get_root_dir() + "/built/" + std::to_string(pcie_slot) + "/firmware/";
 }

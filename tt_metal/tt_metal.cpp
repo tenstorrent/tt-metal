@@ -175,7 +175,8 @@ bool InitializeDevice(Device *device) {
 
         tt::llrt::watcher_attach(device, device->cluster(), device->pcie_slot(),
                                  [&, device]() { return device->logical_grid_size(); },
-                                 [&, device](CoreCoord core) { return device->worker_core_from_logical_core(core); }
+                                 [&, device](CoreCoord core) { return device->worker_core_from_logical_core(core); },
+                                 get_compile_outpath()
                                  );
         init = true;
     } else {
