@@ -475,6 +475,21 @@ static CompileState pre_compile_for_risc(
     return ctx;
 }
 
+static void build_failure(RISCID thread,
+                          string op,
+                          string cmd,
+                          string logfile)
+{
+    string thread_name = RISCID_to_string(thread);
+    log_info(tt::LogBuildKernels, "{}RISC {} failure -- cmd: {}", thread_name, op, cmd);
+    string cat = "cat " + logfile;
+    // XXXX PGK(TODO) not portable
+    if (system(cat.c_str())) {
+        log_fatal(tt::LogBuildKernels, "Failed system comand {}", cat);
+    }
+    log_fatal(tt::LogBuildKernels, "{}RISC build failed", thread_name);
+}
+
 static void compile_for_risc(
     RISCID risc_id,
     tt::build_kernel_for_riscv_options_t* build_opts,
@@ -568,8 +583,7 @@ static void compile_for_risc(
         auto lambda = [gpp_cmd, ctx]() {
             log_debug(tt::LogBuildKernels, "    g++ compile cmd: {}", gpp_cmd);
             if (!tt::utils::run_command(gpp_cmd, ctx.log_file, false)) {
-                log_fatal(tt::LogBuildKernels, "{}RISC Build failed -- cmd: {}", RISCID_to_string(ctx.hwthread), gpp_cmd);
-                exit(1);
+                build_failure(ctx.hwthread, "compiile", gpp_cmd, ctx.log_file);
             }
         };
         std::thread t(lambda);
@@ -615,8 +629,7 @@ void link_for_risc(RISCID risc_id,
     vector<string> link = ctx.get_link_cmd(objls);
     log_debug(tt::LogBuildKernels, "    g++ link cmd: {}", pushd_cmd + link[0]);
     if (!tt::utils::run_command(pushd_cmd + link[0], ctx.log_file, false)) {
-        log_fatal(tt::LogBuildKernels, "{}RISC link failed -- cmd: {}", RISCID_to_string(ctx.hwthread), link[0]);
-        exit(1);
+        build_failure(ctx.hwthread, "link", link[0], ctx.log_file);
     }
 
     pushd_cmd = string("cd ") + ctx.kernel_subdir_ + ctx.thread_bin_subdir + " && "; // TODO(AP): Optimize
@@ -629,7 +642,6 @@ void link_for_risc(RISCID risc_id,
         log_debug(tt::LogBuildKernels, "    objcopy cmd: {}", weaken_cmd);
         if (!tt::utils::run_command(weaken_cmd, ctx.log_file, false)) {
             log_fatal(tt::LogBuildKernels, "{}RISC objcopy failed -- cmd: {}", RISCID_to_string(ctx.hwthread), weaken_cmd);
-            exit(1);
         }
     }
 }
