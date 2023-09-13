@@ -6,12 +6,10 @@ Overview
 
 SFPI is the programming interface to the SFPU.  It consists of a C++ wrapper
 around a RISCV GCC compiler base which has been extended with vector data types and
-__builtin intrinsics to generate SFPU instructions.  SFPI is supported on Grayskull
-and Wormhole version B0.
+__builtin intrinsics to generate SFPU instructions.  The wrapper provides a
+C++ like interface for programming.
 
-The primary design goal of the wrapper is for all but the SFPU instructions to
-compile to nothing so as to incur zero runtime overhead. Another goal is to,
-over time, push functionality out of the wrapper and into the compiler.
+SFPI is supported on Grayskull and Wormhole.
 
 Compiler Options/Flags
 ======================
@@ -61,7 +59,7 @@ Before going into details, below is a simple example of SFPI code:
         // This emits a loadi (into tmp), loadi (as a temp for 1.2F) and a mad
         vFloat tmp = s2vFloat16a(value);
         dst_reg[5] = a * tmp + 1.2F;
-    
+
         v_if ((a >= 4.0F && a < 8.0F) || (a >= 12.0F && a < 16.0F)) {
             vInt b = exexp_nodebias(a);
             b &= 0xAA;
@@ -71,7 +69,7 @@ Before going into details, below is a simple example of SFPI code:
             v_endif;
         } v_elseif (a == s2vFloat16a(3.0F) {
             // RISCV branch
-            if (take_abs) { 
+            if (take_abs) {
                 dst_reg[7] = abs(a);
             } else {
                 dst_reg[7] = a;
@@ -299,7 +297,7 @@ Returns the result of the computation ''A * ABS(v) + B''.  The ''lut_sgn'' varia
 
     vInt lz(Vec v)
 
-Returns the count of leading (left-most) zeros of ''v''.  
+Returns the count of leading (left-most) zeros of ''v''.
 
 .. code-block:: c++
 
@@ -359,11 +357,11 @@ Returns the count of leading (left-most) zeros of ''v'' ignoring the sign bit.
     vUInt float_to_int16(vFloat in, int round_mode = 1)
 
 Returns the rounded value performing round-to-even when ''round_mode'' is 0 and stochastic rounding when ''round_mode'' is 1.
-    
+
 Immediate Floating Point Values
 -------------------------------
 
-Assigning a float to a vFloat behaves slightly different on Grayskull vs Wormhole. 
+Assigning a float to a vFloat behaves slightly different on Grayskull vs Wormhole.
 On Grayskull, the value is interpreted as an fp16b; use the conversion routines below
 to explicitly specify the format.  On Wormhole, the floating point value is converted
 to an fp16a, fp16b, or fp32 by first looking to see if the range fits in fp16b
@@ -492,7 +490,7 @@ free up and re-use registers and is a good way to correct a spilling error.
 Grayskull has 4 general purpose LRegs, Wormhole has 8.
 
 Optimizer
----------   
+---------
 
 There is a basic optimizer in place.  The optimization philosophy to date is to enable the programmer
 to write optimal code.  This is different from mainstream compilers which may generate optimal code
@@ -557,8 +555,31 @@ values to fp16a, fp16b and the LUT instruction's fp8 as well as the other way
 (integer to float/fp16a/fp16b/fp8).  This is useful for writing optimal code or
 looking through assembly dumps.
 
-Pitfalls/Oddities
-=================
+Pitfalls/Oddities/Limitations
+=============================
+
+Arrays/Storing to Memory
+------------------------
+The SFPU can only read/write vectors to/from the destination register, it
+cannot read/write them to memory.  Therefore, SFPI does not support arrays of
+vectors.  Using arrays may work if the optimizer is able to optimize out the
+loads/stores, however, this is brittle and so is not recommended.  Storing a
+vector to memory will result in an error similar to the following:
+
+.. code-block:: c++
+
+    tt-metal/tt_metal/src/ckernels/sfpi/include/sfpi.h:792:7: error: cannot write sfpu vector to memory
+      792 |     v = (initialized) ? __builtin_rvtt_sfpassign_lv(v, in) : in;
+          |       ^
+    /tt-metal/tt_metal/src/ckernels/sfpi/include/sfpi.h:792:7: error: cannot write sfpu vector to memory
+
+
+Function Calls
+--------------
+
+There is no abi and none of the vector types can be passed on the stack.
+Therefore, all function calls must be inlined.  To ensure this use
+``sfpi_inline``, which is defined to ``__attribute__((always_inline))`` on GCC.
 
 Register Spilling
 -----------------
@@ -575,24 +596,10 @@ Unfortunately, many errors are attributed to the code in the wrapper rather than
 being written.  For example, using an unitialized variable would show an error at a macro
 called by a wrapper function before showing the line number in the user's code.
 
-Function Calls
---------------
-
-There is no abi and none of the vector types can be passed on the stack.
-Therefore, all function calls must be inlined.  To ensure this use
-``sfpi_inline``, which is defined to ``__attribute__((always_inline))`` on GCC.
-
-Unnecessary Moves
------------------
-
-The gcc compiler occasionally moves a value from one register to another
-for no apparent reason.  At this point it appears there is nothing that can
-be done about this besides hoping that the issue is fixed in a future version
-of gcc.
-
 Limitations
 -----------
 
   * Forgetting a ``v_endif`` results in mismatched {} error which can be confusing (however, catches the case where a ``v_endif`` is missing!)
-  * In general, incorrect use of vector operations (e.g., passing a scalar instead of a vector) result in warnings/errors within the wrapper rather than in the calling code
+  * In general, incorrect use of vector operations (e.g., accidentally using a scalar argument instead of a vector) results in warnings/errors within the wrapper rather than in the calling code
   * Keeping too many variables alive at once (4 on GS) requires register spilling which is not implemented and causes a compiler abort
+  * The gcc compiler occasionally moves a value from one register to another for no apparent reason.  At this point it appears there is nothing that can be done about this besides hoping that the issue is fixed in a future version of gcc.
