@@ -211,7 +211,6 @@ operation::ProgramWithCallbacks unpad_rm_multi_core(const Tensor &a, Tensor& out
 
 operation::ProgramWithCallbacks unpad_tile_multi_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end) {
 
-
     const Shape output_shape = output.shape();
 
     tt_metal::Program program = tt_metal::Program();
