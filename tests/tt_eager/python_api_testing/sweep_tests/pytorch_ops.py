@@ -180,6 +180,10 @@ def abs(x, *args, **kwargs):
     return x.abs()
 
 
+def isfinite(x, *args, **kwargs):
+    return torch.isfinite(x)
+
+
 def isinf(x, *args, **kwargs):
     return torch.isinf(x)
 

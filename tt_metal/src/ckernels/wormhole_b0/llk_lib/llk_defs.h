@@ -145,6 +145,7 @@ enum SfpuType {
     erf,
     erfc,
     rsqrt,
+    isfinite,
     isinf,
     isposinf,
     isneginf,

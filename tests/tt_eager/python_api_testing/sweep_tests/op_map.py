@@ -154,6 +154,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_abs,
         "pytorch_op": pytorch_ops.abs,
     },
+    "eltwise-isfinite": {
+        "tt_lib_op": tt_lib_ops.eltwise_isfinite,
+        "pytorch_op": pytorch_ops.isfinite,
+    },
     "eltwise-isinf": {
         "tt_lib_op": tt_lib_ops.eltwise_isinf,
         "pytorch_op": pytorch_ops.isinf,
@@ -735,11 +739,11 @@ op_map = {
         "tt_lib_op": tt_lib_ops.activation_reglu,
         "pytorch_op": pytorch_ops.activation_reglu,
     },
-   "activation_geglu": {
+    "activation_geglu": {
         "tt_lib_op": tt_lib_ops.activation_geglu,
         "pytorch_op": pytorch_ops.activation_geglu,
     },
-   "activation_swiglu": {
+    "activation_swiglu": {
         "tt_lib_op": tt_lib_ops.activation_swiglu,
         "pytorch_op": pytorch_ops.activation_swiglu,
     },

@@ -137,6 +137,7 @@ enum SfpuType
   atan,
   erf,
   erfc,
+  isfinite,
   isinf,
   isposinf,
   isneginf,

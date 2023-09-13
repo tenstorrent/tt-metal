@@ -45,4 +45,13 @@ ALWI void isnan_tile(uint32_t idst) {
 ALWI void isnan_tile_init() {
     MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::isnan, true>() ));
 }
+
+//isfinite
+ALWI void isfinite_tile(uint32_t idst) {
+    MATH((ckernel::sfpu::llk_math_eltwise_unary_sfpu_isfinite<true, SyncHalf>(idst) ));
+}
+
+ALWI void isfinite_tile_init() {
+    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::isfinite, true>() ));
+}
 } // namespace ckernel

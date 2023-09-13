@@ -69,6 +69,7 @@ inline bool update_macro_defines(UnaryOpType op_type,std::map<std::string,std::s
   case UnaryOpType::ISNAN:
   case UnaryOpType::ISNEGINF:
   case UnaryOpType::ISPOSINF:
+  case UnaryOpType::ISFINITE:
     defines["SFPU_OP_ISINF_ISNAN_INCLUDE"]="1";
     return true;
   case UnaryOpType::LOGICAL_NOT_UNARY:
@@ -114,6 +115,7 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, stri
         case UnaryOpType::SIGNBIT: op_init_and_name = {"signbit_tile_init();", fmt::format("signbit_tile({});", idst)}; break;
         case UnaryOpType::SIN: op_init_and_name = {"sin_tile_init();", fmt::format("sin_tile({});", idst)}; break;
         case UnaryOpType::COS: op_init_and_name = {"cos_tile_init();", fmt::format("cos_tile({});", idst)}; break;
+        case UnaryOpType::ISFINITE: op_init_and_name = {"isfinite_tile_init();", fmt::format("isfinite_tile({});", idst)}; break;
         case UnaryOpType::ISINF: op_init_and_name = {"isinf_tile_init();", fmt::format("isinf_tile({});", idst)}; break;
         case UnaryOpType::ISPOSINF: op_init_and_name = {"isposinf_tile_init();", fmt::format("isposinf_tile({});", idst)}; break;
         case UnaryOpType::ISNEGINF: op_init_and_name = {"isneginf_tile_init();", fmt::format("isneginf_tile({});", idst)}; break;

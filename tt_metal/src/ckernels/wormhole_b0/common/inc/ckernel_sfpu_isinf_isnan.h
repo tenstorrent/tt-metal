@@ -12,6 +12,26 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_isfinite()
+{
+    // SFPU microcode
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        vFloat v = dst_reg[0];
+        v_if (v == std::numeric_limits<float>::infinity() || v == -std::numeric_limits<float>::infinity() ||
+              v == std::numeric_limits<float>::quiet_NaN() || v == std::numeric_limits<float>::signaling_NaN()) {
+            v = 0.0f;
+        }v_else {
+            v = 1.0f;
+        }v_endif;
+
+        dst_reg[0] = v;
+        dst_reg++;
+    }
+}
+
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_isinf()
 {
     // SFPU microcode
@@ -95,6 +115,9 @@ inline void calculate_sfpu_isinf_isnan() {
     else if constexpr (operation == SfpuType::isnan) {
         calculate_isnan<APPROXIMATION_MODE, ITERATIONS>();
     }
+    else if constexpr (operation == SfpuType::isfinite) {
+        calculate_isfinite<APPROXIMATION_MODE, ITERATIONS>();
+    }
 }
 
 //isinf
@@ -130,6 +153,15 @@ template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
 inline void llk_math_eltwise_unary_sfpu_isnan(uint dst_index) {
     llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
                                 (ckernel::sfpu::calculate_sfpu_isinf_isnan<SfpuType::isnan, APPROXIMATE>,
+                                dst_index);
+
+}
+
+//isfinite
+template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
+inline void llk_math_eltwise_unary_sfpu_isfinite(uint dst_index) {
+    llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
+                                (ckernel::sfpu::calculate_sfpu_isinf_isnan<SfpuType::isfinite, APPROXIMATE>,
                                 dst_index);
 
 }

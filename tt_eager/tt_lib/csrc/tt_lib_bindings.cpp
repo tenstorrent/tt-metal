@@ -1266,6 +1266,7 @@ void TensorModule(py::module &m_tensor) {
     detail::bind_unary_op(m_tensor, "sin", tt::tt_metal::sin, R"doc(Returns tensor with the sine of elements of the input tensor ``{0}``.)doc");
     detail::bind_unary_op(m_tensor, "cos", tt::tt_metal::cos, R"doc(Returns tensor with the cosine of elements of the input tensor ``{0}``.)doc");
     detail::bind_unary_op(m_tensor, "abs", abs, R"doc(Returns tensor with elementwise absolute value of the input tensor ``{0}``.)doc");
+    detail::bind_unary_op(m_tensor, "isfinite", isfinite, R"doc(Returns boolean tensor that is True where input tensor ``{0}``, is finite and False elsewhere.)doc");
     detail::bind_unary_op(m_tensor, "isinf", isinf, R"doc(Returns boolean tensor that is True where input tensor ``{0}``, is infinite and False elsewhere.)doc");
     detail::bind_unary_op(m_tensor, "isposinf", isposinf, R"doc(Returns each element of input tensor ``{0}``, is positive infinity or not.)doc");
     detail::bind_unary_op(m_tensor, "isneginf", isneginf, R"doc(Returns each element of input tensor ``{0}``, is negative infinity or not.)doc");
@@ -1300,18 +1301,18 @@ void TensorModule(py::module &m_tensor) {
         m_tensor, "geglu", &geglu,
 	py::arg("dim") = -1,
         R"doc(Applies the Gaussian Error Gated Linear Units function to the elements of the input tensor ``{0}`` split along dim ``{1}``.)doc",
-	R"doc(dimension to split)doc"	
-    );    
+	R"doc(dimension to split)doc"
+    );
     detail::bind_unary_op_with_param(
         m_tensor, "reglu", &reglu,
         py::arg("dim") = -1,
         R"doc(Applies the Rectified Linear Gated Linear Units (ReGLU) function to the elements of the input tensor ``{0}`` split along dim ``{1}``.)doc",
-	R"doc(dimension to split)doc"	       
+	R"doc(dimension to split)doc"
     );
     detail::bind_unary_op_with_param(
         m_tensor, "swiglu", &swiglu,
         py::arg("dim") = -1,
-        R"doc(Applies the Swish Gated Linear Units (SwiGLU) function to the elements of the input tensor ``{0}`` split along dim ``{1}``.)doc",	
+        R"doc(Applies the Swish Gated Linear Units (SwiGLU) function to the elements of the input tensor ``{0}`` split along dim ``{1}``.)doc",
 	R"doc(dimension to split)doc"
     );
     detail::bind_unary_op_with_param(
