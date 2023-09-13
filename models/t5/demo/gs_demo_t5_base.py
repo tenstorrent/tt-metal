@@ -1,8 +1,6 @@
-"""
-SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
-SPDX-License-Identifier: Apache-2.0
-"""
+# SPDX-License-Identifier: Apache-2.0
 
 from models.t5.tt.t5_for_conditional_generation import (
     t5_base_for_conditional_generation,

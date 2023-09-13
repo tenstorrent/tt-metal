@@ -1,8 +1,6 @@
-"""
-SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
-SPDX-License-Identifier: Apache-2.0
-"""
+# SPDX-License-Identifier: Apache-2.0
 
 """
     This file parses ops reports and puts them together with a cleaner format.

@@ -1,8 +1,6 @@
-"""
-SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
-SPDX-License-Identifier: Apache-2.0
-"""
+# SPDX-License-Identifier: Apache-2.0
 
 from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import torch_to_tt_tensor_rm

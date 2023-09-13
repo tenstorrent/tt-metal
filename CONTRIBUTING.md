@@ -177,14 +177,12 @@ If you are using a machine with bare metal machine specs, please use
 - Every source file must have the appropriate SPDX header at the top following
   the [Linux conventions](https://elixir.bootlin.com/linux/v6.5.1/source/Documentation/process/license-rules.rst#L71)
   for C/C++ header files, C/C++ source files, RST files, ASM files, and
-  scripts. For Python files, we are to use the triple quotes convention:
+  scripts. For Python files, we are to use this convention:
 
   ```
-  """
-  SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+  # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
-  SPDX-License-Identifier: Apache-2.0
-  """
+  # SPDX-License-Identifier: Apache-2.0
   ```
 
 ### CI/CD Guidelines

@@ -1,8 +1,6 @@
-"""
-SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
-SPDX-License-Identifier: Apache-2.0
-"""
+# SPDX-License-Identifier: Apache-2.0
 
 # evaluate the base gpt2
 # n_layer=48, n_head=25, n_embd=1600

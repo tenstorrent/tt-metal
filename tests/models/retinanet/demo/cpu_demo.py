@@ -1,8 +1,6 @@
-"""
-SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
-SPDX-License-Identifier: Apache-2.0
-"""
+# SPDX-License-Identifier: Apache-2.0
 
 import torch
 from torchvision.models.detection import retinanet_resnet50_fpn_v2

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-# Copyright (C) 2023, TensTorrent, Inc.
-# All Rights Reserved
+
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
 
 import argparse
 import os
@@ -68,8 +70,8 @@ class BashScript:
         echo "Running command ${0} for {1}/{2} iteration"
         {0}  {1}
         i=$(( $i + 1 ))
-    s                          
-    done 
+    s
+    done
     """
 
     start_sh_fmt = """
@@ -81,7 +83,7 @@ class BashScript:
     source ./build/python_env/bin/activate
     cd ${TT_METAL_HOME}
     export PYTHONPATH=${TT_METAL_HOME}:${PYTHONPATH}
-    (python_env) tt-admin@e09cs04:~/muthu-tt-metal$ 
+    (python_env) tt-admin@e09cs04:~/muthu-tt-metal$
     """
 
     def __init__(self, env):
