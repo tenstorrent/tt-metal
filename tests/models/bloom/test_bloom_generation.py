@@ -307,9 +307,7 @@ def run_generate(input_sentance, run_tt_model, device):
     return tokenizer.decode(input_ids[0], skip_special_tokens=True)
 
 
-def test_run_generate():
-    device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+def test_run_generate(device):
     tt_lib.device.SetDefaultDevice(device)
 
     output_sentance_night = run_generate(
@@ -317,5 +315,3 @@ def test_run_generate():
     )
 
     logger.info(f"Decoded output night: {output_sentance_night}")
-
-    tt_lib.device.CloseDevice(device)

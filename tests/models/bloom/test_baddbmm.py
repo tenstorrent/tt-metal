@@ -21,9 +21,7 @@ from models.bloom.tt.baddbmm import TtBaddbmm
     "pcc",
     ((0.99),),
 )
-def test_baddbmm(pcc, reset_seeds):
-    device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+def test_baddbmm(pcc, reset_seeds, device):
     tt_lib.device.SetDefaultDevice(device)
 
     input = torch.randn(16, 62, 62)
@@ -46,8 +44,6 @@ def test_baddbmm(pcc, reset_seeds):
 
     logger.info(comp_allclose(pt_out, tt_out_converted))
     logger.info(pcc_message)
-
-    tt_lib.device.CloseDevice(device)
 
     if does_pass:
         logger.info("baddbmm: Passed!")

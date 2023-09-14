@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
 
 import pytest
 from transformers import BloomForCausalLM
@@ -22,10 +21,7 @@ from models.bloom.tt.bloom_mlp import TtBloomMLP
     "pcc",
     ((0.99),),
 )
-def test_bloom_mlp(pcc, reset_seeds):
-    device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
-
+def test_bloom_mlp(pcc, reset_seeds, device):
     # Prepare input
     hugging_bloom_reference_model = BloomForCausalLM.from_pretrained(
         "bigscience/bloom-560m"
@@ -61,8 +57,6 @@ def test_bloom_mlp(pcc, reset_seeds):
 
     logger.info(comp_allclose(pt_out, tt_out_converted))
     logger.info(pcc_message)
-
-    tt_lib.device.CloseDevice(device)
 
     if does_pass:
         logger.info("bloom_mlp: Passed!")

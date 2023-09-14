@@ -17,9 +17,7 @@ from models.bloom.tt.bloom_causal_lm import TtBloomForCausalLM
     "pcc",
     ((0.99),),
 )
-def test_bloom_causal_lm(pcc, reset_seeds):
-    device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+def test_bloom_causal_lm(pcc, reset_seeds, device):
     tt_lib.device.SetDefaultDevice(device)
 
     hugging_bloom_reference_model = BloomForCausalLM.from_pretrained(
@@ -53,8 +51,6 @@ def test_bloom_causal_lm(pcc, reset_seeds):
 
     logger.info(comp_allclose(pt_out, tt_out))
     logger.info(pcc_message)
-
-    tt_lib.device.CloseDevice(device)
 
     if does_pass:
         logger.info("bloom_causal_lm: Passed!")

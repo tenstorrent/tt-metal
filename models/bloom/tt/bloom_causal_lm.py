@@ -32,6 +32,7 @@ class TtBloomForCausalLM(nn.Module):
         self.config = config
         self.state_dict = state_dict
         self.device = device
+        self.mem_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
 
         self.use_return_dict = False
         self.transformer = bloom_model.TtBloomModel(
@@ -137,10 +138,15 @@ class TtBloomForCausalLM(nn.Module):
             loss_fct = CrossEntropyLoss()
             loss = loss_fct(
                 shift_logits=tt_lib.tensor.reshape(
-                    shift_logits, 1, 1, batch_size * seq_length, vocab_size
+                    shift_logits,
+                    1,
+                    1,
+                    batch_size * seq_length,
+                    vocab_size,
+                    self.mem_config,
                 ),
                 shift_labels=tt_lib.tensor.reshape(
-                    shift_labels, 1, 1, 1, batch_size * seq_length
+                    shift_labels, 1, 1, 1, batch_size * seq_length, self.mem_config
                 ),
             )
             lm_logits = torch_to_tt_tensor_rm(lm_logits, device=self.device)

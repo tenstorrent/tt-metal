@@ -32,6 +32,7 @@ class TtBloomForQuestionAnswering(nn.Module):
         self.config = config
         self.state_dict = state_dict
         self.device = device
+        self.mem_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
 
         self.transformer = TtBloomModel(
             self.config, self.state_dict, "transformer", self.device
@@ -49,6 +50,7 @@ class TtBloomForQuestionAnswering(nn.Module):
             self.qa_outputs_weight.shape()[-2],
             self.qa_outputs_weight,
             self.qa_outputs_bias,
+            output_mem_config=self.mem_config,
         )
 
     def forward(

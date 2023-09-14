@@ -43,13 +43,16 @@ def merge_heads(
     hidden_size: int,
     num_attention_heads: int,
 ) -> tt_lib.tensor.Tensor:
+    mem_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
     head_dim = hidden_size // num_attention_heads
 
     _, batch_size_and_num_heads, seq_length, _ = x.shape()
     batch_size = batch_size_and_num_heads // num_heads
 
-    x = tt_lib.tensor.reshape(x, batch_size, num_heads, seq_length, head_dim)
-    x = tt_lib.tensor.permute(x, 0, 2, 1, 3)
+    x = tt_lib.tensor.reshape(
+        x, batch_size, num_heads, seq_length, head_dim, mem_config
+    )
+    x = tt_lib.tensor.permute(x, 0, 2, 1, 3, mem_config)
 
     """ Using fallback_ops.reshape, because of the limitation on operands of reshape to be TILE Layout.
         Since the shape gets modified, we cannot pad and unpad to use tt_lib.reshape """
@@ -64,6 +67,7 @@ class TtBloomAttention(nn.Module):
         self.state_dict = state_dict
         self.base_address = base_address
         self.config = config
+        self.mem_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
 
         self.hidden_size = config.hidden_size
         self.num_heads = config.n_head
@@ -92,6 +96,7 @@ class TtBloomAttention(nn.Module):
             self.query_key_value_weight.shape()[-2],
             self.query_key_value_weight,
             self.query_key_value_bias,
+            self.mem_config,
         )
 
         self.dense_weight = torch_to_tt_tensor_rm(
@@ -107,6 +112,7 @@ class TtBloomAttention(nn.Module):
             self.dense_weight.shape()[-2],
             self.dense_weight,
             self.dense_bias,
+            self.mem_config,
         )
 
         self.baddbmm = TtBaddbmm(self.device)
@@ -117,7 +123,9 @@ class TtBloomAttention(nn.Module):
                 return self.alpha
 
         alpha_beta_shape = [1, self.num_heads, q_length, q_length]
-        self.alpha = tt_lib.tensor.full(alpha_beta_shape, self.inv_norm_factor)
+        self.alpha = tt_lib.tensor.full(
+            alpha_beta_shape, self.inv_norm_factor, output_mem_config=self.mem_config
+        )
         return self.alpha
 
     def forward(
@@ -144,21 +152,40 @@ class TtBloomAttention(nn.Module):
 
         batch_size, q_length, _, _ = query_layer.shape()
 
-        query_layer = tt_lib.tensor.transpose(query_layer, 1, 2)
+        query_layer = tt_lib.tensor.transpose(
+            query_layer, 1, 2, output_mem_config=self.mem_config
+        )
 
         reshaped_query_layer = tt_lib.tensor.reshape(
-            query_layer, 1, batch_size * self.num_heads, q_length, self.head_dim
+            query_layer,
+            1,
+            batch_size * self.num_heads,
+            q_length,
+            self.head_dim,
+            self.mem_config,
         )
 
-        key_layer = tt_lib.tensor.permute(key_layer, 0, 2, 3, 1)
+        key_layer = tt_lib.tensor.permute(key_layer, 0, 2, 3, 1, self.mem_config)
 
         reshaped_key_layer = tt_lib.tensor.reshape(
-            key_layer, 1, batch_size * self.num_heads, self.head_dim, q_length
+            key_layer,
+            1,
+            batch_size * self.num_heads,
+            self.head_dim,
+            q_length,
+            self.mem_config,
         )
 
-        value_layer = tt_lib.tensor.transpose(value_layer, 1, 2)
+        value_layer = tt_lib.tensor.transpose(
+            value_layer, 1, 2, output_mem_config=self.mem_config
+        )
         reshaped_value_layer = tt_lib.tensor.reshape(
-            value_layer, 1, batch_size * self.num_heads, q_length, self.head_dim
+            value_layer,
+            1,
+            batch_size * self.num_heads,
+            q_length,
+            self.head_dim,
+            self.mem_config,
         )
 
         _, _, _, kv_length = reshaped_key_layer.shape()
@@ -172,7 +199,12 @@ class TtBloomAttention(nn.Module):
         )
 
         attention_scores = tt_lib.tensor.reshape(
-            matmul_result, batch_size, self.num_heads, q_length, kv_length
+            matmul_result,
+            batch_size,
+            self.num_heads,
+            q_length,
+            kv_length,
+            self.mem_config,
         )
         attention_scores = tt_to_torch_tensor(attention_scores)
 
@@ -193,14 +225,21 @@ class TtBloomAttention(nn.Module):
         attention_probs = fallback_ops.softmax(attn_weights, dim=-1)
 
         if head_mask is not None:
-            attention_probs = tt_lib.tensor.mul(attention_probs, head_mask)
+            attention_probs = tt_lib.tensor.mul(
+                attention_probs, head_mask, output_mem_config=self.mem_config
+            )
 
         attention_probs_reshaped = tt_lib.tensor.reshape(
-            attention_probs, 1, batch_size * self.num_heads, q_length, kv_length
+            attention_probs,
+            1,
+            batch_size * self.num_heads,
+            q_length,
+            kv_length,
+            self.mem_config,
         )
 
         context_layer = tt_lib.tensor.bmm(
-            attention_probs_reshaped, reshaped_value_layer
+            attention_probs_reshaped, reshaped_value_layer, self.mem_config
         )
 
         tt_context_layer = merge_heads(
@@ -209,7 +248,9 @@ class TtBloomAttention(nn.Module):
 
         output_tensor = self.dense(tt_context_layer)
 
-        output_tensor = tt_lib.tensor.add(residual, output_tensor)
+        output_tensor = tt_lib.tensor.add(
+            residual, output_tensor, output_mem_config=self.mem_config
+        )
 
         outputs = (output_tensor, present)
 

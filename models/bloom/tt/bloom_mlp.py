@@ -19,6 +19,7 @@ class TtBloomMLP(nn.Module):
         self.state_dict = state_dict
         self.base_address = base_address
         self.device = device
+        self.mem_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
 
         self.hidden_size = config.hidden_size
         self.training = False
@@ -36,6 +37,7 @@ class TtBloomMLP(nn.Module):
             self.dense_h_to_4h_weight.shape()[-2],
             self.dense_h_to_4h_weight,
             self.dense_h_to_4h_bias,
+            self.mem_config,
         )
 
         self.dense_4h_to_h_weight = torch_to_tt_tensor_rm(
@@ -51,6 +53,7 @@ class TtBloomMLP(nn.Module):
             self.dense_4h_to_h_weight.shape()[-2],
             self.dense_4h_to_h_weight,
             self.dense_4h_to_h_bias,
+            self.mem_config,
         )
 
     def forward(
@@ -58,8 +61,12 @@ class TtBloomMLP(nn.Module):
         hidden_states: tt_lib.tensor.Tensor,
         residual: tt_lib.tensor.Tensor,
     ) -> tt_lib.tensor.Tensor:
-        hidden_states = tt_lib.tensor.gelu(self.dense_h_to_4h(hidden_states))
+        hidden_states = tt_lib.tensor.gelu(
+            self.dense_h_to_4h(hidden_states), output_mem_config=self.mem_config
+        )
         intermediate_output = self.dense_4h_to_h(hidden_states)
-        output = tt_lib.tensor.add(intermediate_output, residual)
+        output = tt_lib.tensor.add(
+            intermediate_output, residual, output_mem_config=self.mem_config
+        )
 
         return output

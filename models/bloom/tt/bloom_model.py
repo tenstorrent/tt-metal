@@ -31,6 +31,7 @@ class TtBaseModelOutputWithPastAndCrossAttentions:
 def _make_causal_mask(
     input_ids_shape: torch.Size, device: torch.device, past_key_values_length: int
 ) -> torch.BoolTensor:
+    mem_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
     batch_size, target_length = input_ids_shape
     mask = torch.empty(
         (target_length, target_length + past_key_values_length),
@@ -38,7 +39,7 @@ def _make_causal_mask(
         device=device,
     )
 
-    seq_ids = tt_lib.tensor.arange(0, target_length, 1)
+    seq_ids = tt_lib.tensor.arange(0, target_length, 1, output_mem_config=mem_config)
     seq_ids = tt_to_torch_tensor(seq_ids).squeeze(0).squeeze(0).squeeze(0)
     mask[:, past_key_values_length:] = seq_ids[:, None] < seq_ids[None, :]
 
@@ -62,6 +63,7 @@ def _expand_mask(mask: torch.Tensor, tgt_length: int) -> torch.BoolTensor:
 def build_alibi_tensor(
     attention_mask: tt_lib.tensor.Tensor, num_heads: int, dtype: torch.dtype, device
 ) -> tt_lib.tensor.Tensor:
+    mem_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
     _, _, batch_size, seq_length = attention_mask.shape()
     closest_power_of_2 = 2 ** math.floor(math.log2(num_heads))
 
@@ -70,7 +72,9 @@ def build_alibi_tensor(
         dtype=torch.float32,
     )
 
-    powers = tt_lib.tensor.arange(1, 1 + closest_power_of_2, 1)
+    powers = tt_lib.tensor.arange(
+        1, 1 + closest_power_of_2, 1, output_mem_config=mem_config
+    )
     powers = tt_to_torch_tensor(powers)
     powers = powers.type(torch.int32)
     slopes = torch.pow(base, powers)
@@ -85,18 +89,21 @@ def build_alibi_tensor(
             1,
             1 + 2 * num_remaining_heads,
             2,
+            output_mem_config=mem_config,
         )
         extra_powers = tt_to_torch_tensor(extra_powers).type(torch.int32)
         temp = torch.pow(extra_base, extra_powers)
         temp = torch_to_tt_tensor_rm(temp, device)
         slopes = torch_to_tt_tensor_rm(slopes, device)
-        slopes = tt_lib.tensor.concat(slopes, temp, dim=0)
+        slopes = tt_lib.tensor.concat(slopes, temp, dim=0, output_mem_config=mem_config)
 
     attention_mask = tt_to_torch_tensor(attention_mask).squeeze(0).squeeze(0)
     arange_tensor = ((attention_mask.cumsum(dim=-1) - 1) * attention_mask)[:, None, :]
     alibi = slopes[..., None] * arange_tensor
     alibi = torch_to_tt_tensor_rm(alibi.squeeze(0), device)
-    alibi = tt_lib.tensor.reshape(alibi, 1, batch_size * num_heads, 1, seq_length)
+    alibi = tt_lib.tensor.reshape(
+        alibi, 1, batch_size * num_heads, 1, seq_length, mem_config
+    )
     alibi = tt_to_torch_tensor(alibi).squeeze(0)
     alibi = alibi.repeat(1, seq_length, 1)
     alibi = torch_to_tt_tensor_rm(alibi, device, put_on_device=True)
@@ -112,6 +119,7 @@ class TtBloomModel(nn.Module):
         self.state_dict = state_dict
         self.base_address = base_address
         self.device = device
+        self.mem_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
 
         self.embed_dim = config.hidden_size
         self.num_heads = config.n_head
@@ -270,7 +278,8 @@ class TtBloomModel(nn.Module):
 
         if attention_mask is None:
             attention_mask = tt_lib.tensor.ones(
-                ([1, 1, batch_size, seq_length_with_past])
+                ([1, 1, batch_size, seq_length_with_past]),
+                output_mem_config=self.mem_config,
             )
 
         alibi = self.build_alibi_tensor(

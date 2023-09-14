@@ -33,9 +33,7 @@ def run_perf_bloom(expected_inference_time, expected_compile_time, device):
     tokenizer_name = "bigscience/bloom-560m"
     comments = "560M"
 
-    HF_model_top = BloomForCausalLM.from_pretrained(
-        model_name, torchscript=False
-    )
+    HF_model_top = BloomForCausalLM.from_pretrained(model_name, torchscript=False)
     HF_model_top.eval()
 
     config = HF_model_top.config
@@ -107,7 +105,9 @@ def run_perf_bloom(expected_inference_time, expected_compile_time, device):
         ),
     ),
 )
-def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_compile_time, device):
+def test_perf_bare_metal(
+    use_program_cache, expected_inference_time, expected_compile_time, device
+):
     run_perf_bloom(expected_inference_time, expected_compile_time, device)
 
 
@@ -121,5 +121,7 @@ def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_co
         ),
     ),
 )
-def test_perf_virtual_machine(use_program_cache, expected_inference_time, expected_compile_time, device):
+def test_perf_virtual_machine(
+    use_program_cache, expected_inference_time, expected_compile_time, device
+):
     run_perf_bloom(expected_inference_time, expected_compile_time, device)
