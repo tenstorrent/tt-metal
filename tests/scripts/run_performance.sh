@@ -34,6 +34,8 @@ run_perf_models() {
 
     env pytest models/experimental/bloom/tests -m $pipeline_type
 
+    env pytest tests/models/nanogpt -m $pipeline_type
+
     ## Merge all the generated reports
     env python models/merge_perf_results.py
 }

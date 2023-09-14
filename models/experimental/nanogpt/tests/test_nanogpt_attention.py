@@ -21,9 +21,8 @@ from models.utility_functions import (
 
 @pytest.mark.parametrize(
     "pcc",
-    ((0.99,),),
+    ((0.99),),
 )
-
 def test_nanogpt_attn(device, pcc, reset_seeds):
 
     # Prepare input
