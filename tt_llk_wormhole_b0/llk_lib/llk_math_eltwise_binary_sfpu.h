@@ -101,7 +101,11 @@ inline void llk_math_eltwise_binary_sfpu_init(
     const uint operand, uint param0 = 0, uint param1 = 0, uint param2 = 0, uint param3 = 0, uint param4 = 0, uint param5 = 0) {
     TT_LLK_DUMP("llk_math_eltwise_binary_sfpu_init<{}, {}>({}, {}, {}, {}, {}, {})", sfpu_op, APPROXIMATE, param0, param1, param2, param3, param4, param5);
     eltwise_binary_sfpu_configure_addrmod< sfpu_op >();
-    sfpu::sfpu_init<APPROXIMATE>(sfpu_op);
+    if constexpr (sfpu_op == SfpuType::requant_int32) {
+        sfpu::sfpu_init<APPROXIMATE>(sfpu_op, param1);
+    } else {
+        sfpu::sfpu_init<APPROXIMATE>(sfpu_op);
+    }
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
@@ -116,6 +120,6 @@ inline void llk_math_eltwise_binary_sfpu_requant_int32(const uint operand, uint 
 }
 
 template <bool APPROXIMATE>
-inline void llk_math_eltwise_binary_sfpu_requant_int32_init(const uint operand) {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::requant_int32, APPROXIMATE>(operand);
+inline void llk_math_eltwise_binary_sfpu_requant_int32_init(const uint operand, const uint zero_point) {
+    llk_math_eltwise_binary_sfpu_init<SfpuType::requant_int32, APPROXIMATE>(operand, 0, zero_point);
 }

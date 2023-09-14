@@ -309,6 +309,9 @@ inline void sfpu_init(SfpuType operation, uint param0 = 0)
     case SfpuType::dropout:
         init_dropout_seed(param0);
         break;
+    case SfpuType::requant_int32:
+        sfpu_load_imm32(2,param0);
+        break;
     default:
         // Should result in compile time error??
         break;
@@ -1229,7 +1232,7 @@ inline void requant_int32(const int iterations, const uint dst_offset)
         TTI_SFPLOAD(0, 4, 3, 0);        // operand A - int32
         TT_SFPLOAD(1, 3, 3, dst_offset*64); // operand B - fp32 scaler
         TTI_SFPCAST(0, 0, 0);           // cast int32->fp32
-        TTI_SFPMUL(0,1,9,0,0);        // D(A) = A*B, LREG_9 is 0
+        TTI_SFPMAD(0,1,2,0,0);        // D(A) = A*B+C, LREG[2] = zero_point
         TTI_NOP; //TODO: why is nop needed to get correct result?
         TTI_SFP_STOCH_RND(0,0,9,0,0,3); // fp32->int8, descale value is zero (LREG_9)
         TTI_SFPSTORE(0,4,3,0);          // LREG_0 -> dest as int32
