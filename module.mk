@@ -93,7 +93,8 @@ LDFLAGS ?= $(CONFIG_LDFLAGS) -Wl,-rpath,$(PREFIX)/lib -L$(LIBDIR)/tools -L$(LIBD
 	-lboost_system \
 	-lboost_regex \
 	-lpthread \
-	-latomic
+	-latomic \
+	-lhwloc
 SHARED_LIB_FLAGS = -shared -fPIC
 STATIC_LIB_FLAGS = -fPIC
 ifeq ($(findstring clang,$(CC)),clang)
