@@ -7,7 +7,7 @@ echo "Info: An error here likely means devices cannot be found"
 
 tt-smi -s
 
-reset_output=$(tt-smi -wr all)
+reset_output=$(tt-smi -wr all wait)
 
 echo "${reset_output}"
 
