@@ -101,6 +101,8 @@ static FILE * create_file(const string& log_path) {
     fprintf(f, "\tnoc<n>:<risc>{a, l}=an L1 address used by NOC<n> by <riscv> (eg, local src address)\n");
     fprintf(f, "\tnoc<n>:<riscv>{(x,y), a, l}=NOC<n> unicast address used by <riscv>\n");
     fprintf(f, "\tnoc<n>:<riscv>{(x1,y1)-(x2,y2), a, l}=NOC<n> multicast address used by <riscv>\n");
+    fprintf(f, "\trmsg:<c>=brisc run message, I=init, G=go, D=done; N/n and T/t are enable/disable NCRISC/TRISC\n");
+    fprintf(f, "\tsmsg:<c>=slave run message, one of I, G, D for NCRISC, TRISC0, TRISC1, TRISC2\n");
     fprintf(f, "\n");
 
     return f;
@@ -192,22 +194,46 @@ static void dump_noc_sanity_status(FILE *f, WatcherDevice *wdev, CoreCoord core)
     }
 }
 
+static void dump_run_state(FILE *f, uint32_t state) {
+    char code = 'U';
+    if (state == RUN_MESSAGE_INIT) code = 'I';
+    else if (state == RUN_MESSAGE_GO) code = 'G';
+    else if (state == RUN_MESSAGE_DONE) code = 'D';
+    if (code == 'U') {
+        fprintf(f, "rmb:U(%d)", state);
+    } else {
+        fprintf(f, "rmb:%c", code);
+    }
+}
+
 static void dump_run_mailboxes(FILE *f, WatcherDevice *wdev, CoreCoord core) {
 
     std::vector<uint32_t> data;
 
-    data = read_hex_vec_from_core(wdev->cluster_, wdev->device_id_, core, MEM_RUN_MAILBOX_ADDRESS, sizeof(uint32_t));
-    // TODO(pgk): fix
-#if 0
-    char code = 'U';
-    if (data[0] == INIT_VALUE) code = 'I';
-    if (data[0] == DONE_VALUE) code = 'D';
-    if (code == 'U') {
-        fprintf(f, "rmb:U(%d) ", data[0]);
-    } else {
-        fprintf(f, "rmb:%c ", code);
-    }
-#endif
+    data = read_hex_vec_from_core(wdev->cluster_, wdev->device_id_, core, MEM_RUN_MAILBOX_ADDRESS, sizeof(uint32_t) * 4);
+    uint32_t run = data[0];
+    uint32_t enable_ncrisc = data[1];
+    uint32_t enable_trisc = data[2];
+
+
+    fprintf(f, "rmsg:");
+    dump_run_state(f, run);
+    if (enable_ncrisc) fprintf(f, "N");
+    else fprintf(f, "n");
+    if (enable_trisc) fprintf(f, "T");
+    else fprintf(f, "t");
+
+    fprintf(f, " ");
+
+    data = read_hex_vec_from_core(wdev->cluster_, wdev->device_id_, core, MEM_SLAVE_RUN_MAILBOX_ADDRESS, sizeof(uint32_t));
+    uint32_t slave_run = data[0];
+    fprintf(f, "smsg:");
+    dump_run_state(f, slave_run & 0xff);
+    dump_run_state(f, (slave_run >> 8) & 0xff);
+    dump_run_state(f, (slave_run >> 16) & 0xff);
+    dump_run_state(f, (slave_run >> 24) & 0xff);
+
+    fprintf(f, " ");
 }
 
 static void dump_debug_status(FILE *f, WatcherDevice *wdev, CoreCoord core) {
