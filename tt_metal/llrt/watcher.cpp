@@ -82,8 +82,9 @@ static FILE * create_file(const string& log_path) {
     string fname = log_path + "watcher.log";
     if ((f = fopen(fname.c_str(), fmode)) == nullptr) {
         log_fatal(LogLLRuntime, "Watcher failed to create log file\n");
-        exit(1);
     }
+    log_info(LogLLRuntime, "Watcher log file: {}", fname);
+
     fprintf(f, "At %ds starting\n", watcher::get_elapsed_secs());
     fprintf(f, "Legend:\n");
     fprintf(f, "\tComma separated list specifices waypoint for BRISC,NCRISC,TRISC0,TRISC1,TRISC2\n");
@@ -131,8 +132,8 @@ static const char * get_sanity_riscv_name(uint32_t type)
         return "trisc2";
     default:
         log_fatal(LogLLRuntime, "Watcher unexpected riscv type {}", type);
-        exit(-1);
     }
+    return nullptr;
 }
 
 static void dump_noc_sanity_status(FILE *f, int noc, const debug_sanitize_noc_addr_t* san) {
@@ -143,11 +144,12 @@ static void dump_noc_sanity_status(FILE *f, int noc, const debug_sanitize_noc_ad
             san->len != DEBUG_SANITIZE_NOC_SENTINEL_OK_32 ||
             san->which != DEBUG_SANITIZE_NOC_SENTINEL_OK_16) {
             log_fatal(LogLLRuntime, "Watcher unexpected noc debug state, reported valid got (addr,len,which)=({},{},{})", san->addr, san->len, san->which);
-            exit(-1);
         }
         break;
     case DebugSanitizeNocInvalidL1:
         fprintf(f, "noc%d:%s{0x%08lx, %d} ", noc, get_sanity_riscv_name(san->which), san->addr, san->len);
+        fflush(f);
+        log_fatal(LogLLRuntime, "Watcher stopped the device due to bad NOC L1/reg address, see log");;
         break;
     case DebugSanitizeNocInvalidUnicast:
         fprintf(f, "noc%d:%s{(%02ld,%02ld) 0x%08lx, %d} ",
@@ -156,6 +158,8 @@ static void dump_noc_sanity_status(FILE *f, int noc, const debug_sanitize_noc_ad
                 NOC_UNICAST_ADDR_X(san->addr),
                 NOC_UNICAST_ADDR_Y(san->addr),
                 NOC_LOCAL_ADDR_OFFSET(san->addr), san->len);
+        fflush(f);
+        log_fatal(LogLLRuntime, "Watcher stopped the device due to bad NOC unicast transaction, see log");;
         break;
     case DebugSanitizeNocInvalidMulticast:
         fprintf(f, "noc%d:%s{(%02ld,%02ld)-(%02ld,%02ld) 0x%08lx, %d} ",
@@ -166,10 +170,11 @@ static void dump_noc_sanity_status(FILE *f, int noc, const debug_sanitize_noc_ad
                 NOC_MCAST_ADDR_END_X(san->addr),
                 NOC_MCAST_ADDR_END_Y(san->addr),
                 NOC_LOCAL_ADDR_OFFSET(san->addr), san->len);
+        fflush(f);
+        log_fatal(LogLLRuntime, "Watcher stopped the device due to bad NOC multicast transaction, see log");;
         break;
     default:
-        log_fatal(LogLLRuntime, "Watcher unexpected noc debug state: {}\n", san->invalid);
-        exit(-1);
+        log_fatal(LogLLRuntime, "Watcher unexpected noc debug state, unknown failure code: {}\n", san->invalid);
     }
 }
 

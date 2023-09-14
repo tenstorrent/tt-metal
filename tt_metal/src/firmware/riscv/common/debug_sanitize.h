@@ -49,7 +49,7 @@ extern uint8_t loading_noc;
 #include "noc_parameters.h"
 #include "noc_overlay_parameters.h"
 
-#define DEBUG_VALID_L1_ADDR(a, l) ((a >= MEM_L1_BASE) && (a + l <= MEM_L1_BASE + MEM_L1_SIZE))
+#define DEBUG_VALID_L1_ADDR(a, l) ((a >= MEM_L1_BASE) && (a + l <= MEM_L1_BASE + MEM_L1_SIZE) && ((a) + (l) > (a)))
 
 // TODO(PGK): remove soft reset when fw is downloaded at init
 #define DEBUG_VALID_REG_ADDR(a)                                                        \
@@ -57,8 +57,8 @@ extern uint8_t loading_noc;
       ((a) < NOC_OVERLAY_START_ADDR + NOC_STREAM_REG_SPACE_SIZE * NOC_NUM_STREAMS)) || \
      ((a) == RISCV_DEBUG_REG_SOFT_RESET_0))
 #define DEBUG_VALID_WORKER_ADDR(a, l) (DEBUG_VALID_L1_ADDR(a, l) || (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
-#define DEBUG_VALID_PCIE_ADDR(a, l) (((a) >= NOC_PCIE_ADDR_BASE) && ((a) + (l) <= NOC_PCIE_ADDR_END))
-#define DEBUG_VALID_DRAM_ADDR(a, l) (((a) >= NOC_DRAM_ADDR_BASE) && ((a) + (l) <= NOC_DRAM_ADDR_END))
+#define DEBUG_VALID_PCIE_ADDR(a, l) (((a) >= NOC_PCIE_ADDR_BASE) && ((a) + (l) <= NOC_PCIE_ADDR_END) && ((a) + (l) > (a)))
+#define DEBUG_VALID_DRAM_ADDR(a, l) (((a) >= NOC_DRAM_ADDR_BASE) && ((a) + (l) <= NOC_DRAM_ADDR_END) && ((a) + (l) > (a)))
 
 #define DEBUG_VALID_ETH_ADDR(a, l) (((a) >= MEM_ETH_BASE) && ((a) + (l) < MEM_ETH_BASE + MEM_ETH_SIZE))
 
