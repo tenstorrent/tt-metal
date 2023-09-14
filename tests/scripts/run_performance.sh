@@ -16,7 +16,7 @@ run_perf_models() {
 
     env pytest tests/models/vit/tests -m $pipeline_type
 
-    env pytest tests/models/llama -m $pipeline_type
+    env pytest tests/models/llama_old -m $pipeline_type
 
     env pytest tests/models/roberta -m $pipeline_type
 

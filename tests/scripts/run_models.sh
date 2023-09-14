@@ -52,10 +52,10 @@ env pytest tests/models/synthetic_gradients -k linear_test
 env pytest tests/models/synthetic_gradients -k block_test
 env pytest tests/models/synthetic_gradients -k full_inference
 
-env pytest tests/models/llama -k llama_layer_norm
-env pytest tests/models/llama -k llama_mlp
-env pytest tests/models/llama -k llama_attention
-env pytest tests/models/llama -k llama_decoder
+env pytest tests/models/llama_old -k llama_layer_norm
+env pytest tests/models/llama_old -k llama_mlp
+env pytest tests/models/llama_old -k llama_attention
+env pytest tests/models/llama_old -k llama_decoder
 
 env pytest tests/models/falcon/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT16-L1-falcon_7b-layers_32-prefill_seq128]
 env pytest tests/models/falcon/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT16-L1-falcon_7b-layers_32-decode_batch32]
