@@ -43,6 +43,8 @@ inline void llk_math_eltwise_unary_sfpu(
     uint param3 = 0,
     uint param4 = 0,
     uint param5 = 0) {
+    TT_LLK_DUMP("llk_math_eltwise_unary_sfpu<{}, {}, {}>({}, {}, {}, {}, {}, {}, {}, {}, {})", (int)sfpu_op, APPROXIMATE, Dst, operand, dst_index, vector_mode, param0, param1, param2, param3, param4, param5);
+    
     constexpr int ITERATIONS = 8;
     if constexpr ((Dst == DstSync::SyncTile16) || (Dst == DstSync::SyncTile2)) {
         math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(math_sync_tile_dst_index);
