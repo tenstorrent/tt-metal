@@ -295,10 +295,10 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "-s",
-        "--pcie-slot",
+        "--device-id",
         default=0,
         type=int,
-        help="Virtual PCIE slot of GS device to run on",
+        help="Id of the device to run on",
     )
     parser.add_argument(
         "-e",
