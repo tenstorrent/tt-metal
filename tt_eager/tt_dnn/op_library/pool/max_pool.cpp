@@ -161,7 +161,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core(const Tensor &input, Tens
     // Construct const buffer with -INF
     uint32_t const_buffer_size = 32;
     auto minus_inf_const_buffer = owned_buffer::create(std::vector<bfloat16>(const_buffer_size, bfloat16(0xf7ff)));
-    const Tensor minus_inf_const_tensor = Tensor(OwnedStorage{minus_inf_const_buffer}, Shape({1, 1, 1, const_buffer_size}), DataType::BFLOAT16, Layout::ROW_MAJOR).to(device);
+    const Tensor minus_inf_const_tensor = Tensor(OwnedStorage{minus_inf_const_buffer}, Shape({1, 1, 1, const_buffer_size}), DataType::BFLOAT16, Layout::ROW_MAJOR).to(device, MemoryConfig{.interleaved = true, .buffer_type = BufferType::L1});
     auto minus_inf_const_tensor_addr = minus_inf_const_tensor.buffer()->address();
 
     #if 0
