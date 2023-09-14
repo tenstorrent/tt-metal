@@ -112,8 +112,6 @@ if is_wormhole_b0():
                 "logical_xori",
                 "logical_noti",
                 "logical_andi",
-                "logaddexp",
-                "logaddexp2",
                 "bias_gelu",
                 "isclose",
             ),
@@ -171,16 +169,6 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
                 torch.bfloat16,
             )
         ]
-        if fn in ["atanh", "ldexp", "logaddexp2"]:
-            pytest.skip("Not tested for Wormhole - skipping")
-
-    datagen_func = [
-        generation_funcs.gen_func_with_cast(
-            partial(generator, low=options[fn][0], high=options[fn][1]),
-            torch.bfloat16,
-        )
-    ]
-
     num_inputs = 1
     if fn in ["mac", "addcmul", "addcdiv", "lerp_ternary"]:
         num_inputs = 3
@@ -190,7 +178,6 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
         "max",
         "lerp_binary",
         "xlogy",
-        "ldexp",
         "subalpha",
         "addalpha",
         "bias_gelu_unary",
@@ -199,9 +186,6 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
         "addalpha",
         "logit",
         "logical_xor",
-        "ldexp",
-        "logaddexp",
-        "logaddexp2",
         "isclose",
         "bias_gelu",
     ]:
