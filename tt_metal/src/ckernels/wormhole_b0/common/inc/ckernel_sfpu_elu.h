@@ -9,16 +9,15 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "noc_nonblocking_api.h"
-#include "ckernel_sfpu.h"
-#include "llk_math_eltwise_unary_sfpu_1_param.h"
+
+#include "sfpi.h"
+#include "ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_converter.h"
 
 using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
-
-//template <bool APPROXIMATION_MODE>
-//inline void sfpu_init(SfpuType operation, uint param0 = 0)
 
 
 template <bool APPROXIMATION_MODE>
@@ -45,14 +44,10 @@ inline void calculate_elu(uint slope)
     }
 }
 
-
-template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_elu(uint dst_index, uint param0 = 0) {
-    llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE, Dst>
-                                (ckernel::sfpu::calculate_elu<APPROXIMATE>,
-				 dst_index, Dim::RC, param0);
+template <bool APPROXIMATION_MODE>
+void elu_init() {
+    ;
 }
-
 
 }  // namespace sfpu
 }  // namespace ckernel

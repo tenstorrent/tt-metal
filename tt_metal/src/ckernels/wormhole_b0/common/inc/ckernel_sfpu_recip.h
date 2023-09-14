@@ -78,5 +78,11 @@ inline void calculate_reciprocal()
     }
 }
 
+template <bool APPROXIMATION_MODE>
+void recip_init() {
+    vConstFloatPrgm0 = 1.442695f; // ln2_recip
+    vConstFloatPrgm1 = 2.0f;
+}
+
 } // namespace sfpu
 } // namespace ckernel

@@ -8,10 +8,11 @@
 
 
 #include "llk_math_eltwise_unary_sfpu_common_includes.h"
+#include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_1_param.h"
 #include "ckernel_sfpu_exp.h"
 
-using namespace ckernel;
+namespace ckernel {
 
 // New LLK SFPU APIs
 
@@ -30,5 +31,7 @@ inline void llk_math_eltwise_unary_sfpu_exponential(uint dst_index, int vector_m
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_exponential_init() {
-    sfpu::exp_init<APPROXIMATE>();
+    llk_math_eltwise_unary_sfpu_init<APPROXIMATE>(sfpu::exp_init<APPROXIMATE>);
+}
+
 }

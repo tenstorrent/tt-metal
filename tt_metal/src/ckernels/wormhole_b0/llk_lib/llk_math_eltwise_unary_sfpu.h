@@ -17,7 +17,8 @@
 #include "ckernel_globals.h"
 #include "ckernel_sfpu.h"
 
-using namespace ckernel;
+namespace ckernel {
+
 template <SfpuType sfpu_type>
 void static_assert_sfpu_type_dependent() {
     static_assert(sfpu_type == SfpuType::unused, "sfpu_type exception");
@@ -347,28 +348,6 @@ inline void llk_math_eltwise_unary_sfpu_cast_fp32_to_fp16a_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::cast_fp32_to_fp16a, APPROXIMATE>();
 }
 
-//Leaky Relu
-template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_leaky_relu(uint dst_index,uint param0) {
-    llk_math_eltwise_unary_sfpu<SfpuType::lrelu, APPROXIMATE, dst_sync>(dst_index,param0);
-}
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_leaky_relu_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::lrelu, APPROXIMATE>();
-}
-
-//ELU
-template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_elu(uint dst_index,uint param0) {
-    llk_math_eltwise_unary_sfpu<SfpuType::elu, APPROXIMATE, dst_sync>(dst_index,param0);
-}
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_elu_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::elu, APPROXIMATE>();
-}
-
 //EXP2
 template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
 inline void llk_math_eltwise_unary_sfpu_exp2(uint dst_index) {
@@ -433,4 +412,6 @@ inline void llk_math_eltwise_unary_sfpu_acos(uint dst_index) {
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_acos_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::acos, APPROXIMATE>();
+}
+
 }

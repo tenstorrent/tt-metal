@@ -6,9 +6,11 @@
 
 #pragma once
 #include "llk_math_eltwise_unary_sfpu_common_includes.h"
+#include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_0_param.h"
 #include "ckernel_sfpu_sqrt.h"
-using namespace ckernel;
+
+namespace ckernel {
 
 // New LLK SFPU APIs
 
@@ -25,11 +27,7 @@ inline void llk_math_eltwise_unary_sfpu_sqrt(uint dst_index, int vector_mode = D
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_sqrt_init() {
-    addr_mod_t{
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 0},
-    }.set(ADDR_MOD_7);
-    ckernel::sfpu::sqrt_init<APPROXIMATE>();
-    math::reset_counters(p_setrwc::SET_ABD_F);
+    llk_math_eltwise_unary_sfpu_init<APPROXIMATE>(sfpu::sqrt_init<APPROXIMATE>);
+}
+
 }

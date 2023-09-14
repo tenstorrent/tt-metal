@@ -9,7 +9,6 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "noc_nonblocking_api.h"
-#include "llk_math_eltwise_unary_sfpu_1_param.h"
 
 using namespace sfpi;
 
@@ -65,37 +64,22 @@ inline void calculate_erfc() {
 }
 
 template <SfpuType operation, bool APPROXIMATION_MODE>
-inline void calculate_sfpu_erf_erfc(
-    uint param0 = 0) {
+inline void calculate_sfpu_erf_erfc() {
     if constexpr (operation == SfpuType::erf) {
-        if (param0) {
-	  calculate_erf<true>();
-        } else {
-	  calculate_erf<false>();
-        }
+        calculate_erf<APPROXIMATION_MODE>();
     } else if constexpr (operation == SfpuType::erfc) {
-        if (param0) {
-	  calculate_erfc<true>();
-        } else {
-	  calculate_erfc<false>();
-        }
+        calculate_erfc<APPROXIMATION_MODE>();
     }
 }
 
-template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_erf(uint dst_index, int param0 = 0) {
-    llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE, Dst>
-                                (ckernel::sfpu::calculate_sfpu_erf_erfc<SfpuType::erf,APPROXIMATE>,
-				 ckernel::sfpu::calculate_sfpu_erf_erfc<SfpuType::erf,APPROXIMATE>,
-				 dst_index, Dim::RC, param0);
+template <bool APPROXIMATION_MODE>
+void erf_init() {
+    ;
 }
 
-template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_erfc(uint dst_index, int param0 = 0) {
-    llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE, Dst>
-                                (ckernel::sfpu::calculate_sfpu_erf_erfc<SfpuType::erfc,APPROXIMATE>,
-				 ckernel::sfpu::calculate_sfpu_erf_erfc<SfpuType::erfc,APPROXIMATE>,
-				 dst_index, Dim::RC, param0);
+template <bool APPROXIMATION_MODE>
+void erfc_init() {
+    ;
 }
 
 }  // namespace sfpu

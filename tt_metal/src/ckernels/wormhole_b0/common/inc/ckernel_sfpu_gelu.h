@@ -13,7 +13,6 @@
 #include "sfpi.h"
 #include "ckernel_sfpu_cdf.h"
 #include "ckernel_sfpu_exp.h"
-#include "ckernel_sfpu_recip.h"
 
 using namespace sfpi;
 
@@ -22,7 +21,7 @@ namespace ckernel
 namespace sfpu
 {
 
-  template <int ITERATIONS>
+template <int ITERATIONS>
 inline void calculate_gelu_appx()
 {
 
@@ -71,46 +70,43 @@ inline void calculate_gelu_appx()
     l_reg[LRegs::LReg6] = l6;
 }
 
-template <bool APPROXIMATION_MODE,int ITERATIONS>
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_gelu()
 {
     if constexpr (APPROXIMATION_MODE) {
-	calculate_gelu_appx<ITERATIONS>();
+	    calculate_gelu_appx<ITERATIONS>();
     } else {
-      constexpr bool scaled = true;
-      // SFPU microcode
-      for (int d = 0; d < ITERATIONS; d++)
-	{
-	  vFloat val = dst_reg[0];
-	  vFloat result = calculate_cdf_appx(val,scaled);
-	  dst_reg[0] = result;
-	  dst_reg++;
-	}
+        constexpr bool scaled = true;
+        // SFPU microcode
+        for (int d = 0; d < ITERATIONS; d++) {
+            vFloat val = dst_reg[0];
+            vFloat result = calculate_cdf_appx(val,scaled);
+            dst_reg[0] = result;
+            dst_reg++;
+	    }
     }
 }
 
 template <bool APPROXIMATION_MODE>
-void gelu_init(){
+void gelu_init() {
     vConstFloatPrgm0 = 0.5f;
+    if constexpr (APPROXIMATION_MODE) {
+        sfpu_load_imm32(0,0x37E7322B);
+        //sfpu_load_imm32(4,0xB122A3AE);
+        sfpu_load_imm32(4,0xB12286D8);
+
+
+        sfpu_load_imm32(1,0x38E138F3);
+        sfpu_load_imm32(5,0xB437B479);
+
+        sfpu_load_imm32(2,0x38003852);
+        sfpu_load_imm32(6,0x7c00afa4);
+    }
 }
 
 
 template <bool APPROXIMATION_MODE>
-void gelu_appx_init(){
-    sfpu_load_imm32(0,0x37E7322B);
-    //sfpu_load_imm32(4,0xB122A3AE);
-    sfpu_load_imm32(4,0xB12286D8);
-
-
-    sfpu_load_imm32(1,0x38E138F3);
-    sfpu_load_imm32(5,0xB437B479);
-
-    sfpu_load_imm32(2,0x38003852);
-    sfpu_load_imm32(6,0x7c00afa4);
-}
-
-template <bool APPROXIMATION_MODE>
-void gelu_derivative_init(){
+void gelu_derivative_init() {
     vConstFloatPrgm0 = 1.442695f; // ln2_recip
     vConstFloatPrgm1 = 2.0f;
     vConstFloatPrgm2 = 0.863281f;
@@ -195,7 +191,7 @@ inline vFloat calculate_gelu_core(vFloat in)
     return result;
 }
 
-template <bool APPROXIMATION_MODE,int ITERATIONS>
+template <bool APPROXIMATION_MODE,int ITERATIONS = 8>
 inline void calculate_gelu_derivative()
 {
     if constexpr (APPROXIMATION_MODE) {
@@ -260,8 +256,6 @@ inline void calculate_gelu_derivative()
         l_reg[LRegs::LReg1] = l1;
     }
 }
-
-
 
 } // namespace sfpu
 } // namespace ckernel

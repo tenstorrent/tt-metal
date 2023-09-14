@@ -44,7 +44,7 @@ if is_wormhole_b0():
 @pytest.mark.parametrize("output_mem_config", output_mem_cfgs)
 class TestEltwiseBinary:
     @pytest.mark.parametrize("fn_kind", ["add", "sub", "mul", "squared_difference"])
-    def test_run_eltwise_binary_ops_1(
+    def test_run_eltwise_binary_ops(
         self,
         input_shapes,
         fn_kind,

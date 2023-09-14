@@ -250,7 +250,7 @@ MatmulParallelizationStrategy get_parallelization_strategy(const std::vector<Ten
     }
 }
 
-tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool fuse_batch, bool fuse_gelu_activation) {
+tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool fuse_batch, std::optional<UnaryWithParam> fused_activation) {
     auto device = input_tensor_a.device();
     auto grid_size = device->compute_with_storage_grid_size();
     uint32_t M = fuse_batch ? input_tensor_a.shape()[0] * input_tensor_a.shape()[1] * input_tensor_a.shape()[-2] : input_tensor_a.shape()[-2];
@@ -276,7 +276,7 @@ tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_
         .per_core_M = per_core_M,
         .per_core_N = per_core_N,
         .fuse_batch = fuse_batch,
-        .fuse_gelu_activation = fuse_gelu_activation,
+        .fused_activation = fused_activation,
     };
 }
 
@@ -488,7 +488,7 @@ Tensor falcon_dense_4h_to_h_matmul(const Tensor &input_tensor_a, const Tensor &i
     return operations::primary::matmul_1d(input_tensor_a, input_tensor_b, bias, program_config, mem_config, output_dtype);
 }
 
-Tensor falcon_dense_h_to_4h_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, bool fuse_gelu_activation, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype) {
+Tensor falcon_dense_h_to_4h_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, std::optional<UnaryWithParam> fused_activation, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype) {
     auto seq_len = input_tensor_a.shape()[2];
     if (seq_len > 1024) {
         // TODO: Check support for seq_len == 128, 256, 512, ..., 2048
@@ -498,7 +498,7 @@ Tensor falcon_dense_h_to_4h_matmul(const Tensor &input_tensor_a, const Tensor &i
         TT_ASSERT((input_tensor_b.shape() == Shape({1, 1, 4544, 18176})), "Unsupported input shape");
         return operation::run_with_autoformat(Matmul{.bcast_batch=true, .output_mem_config=mem_config, .output_dtype=output_dtype.value_or(input_tensor_a.dtype())}, {input_tensor_a, input_tensor_b}).at(0);
     } else {
-        auto program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, true, fuse_gelu_activation);
+        auto program_config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, true, fused_activation);
         return operations::primary::matmul_1d(input_tensor_a, input_tensor_b, bias, program_config, mem_config, output_dtype);
     }
 }
@@ -560,7 +560,7 @@ tt::stl::reflection::Attributes MatmulMultiCoreReuseMultiCast1DProgramConfig::at
         {"per_core_M",  this->per_core_M},
         {"per_core_N",  this->per_core_N},
         {"fuse_batch",  this->fuse_batch},
-        {"fuse_gelu_activation",  this->fuse_gelu_activation},
+        {"fused_activation",  this->fused_activation},
     };
 }
 
@@ -600,11 +600,6 @@ void Matmul::validate(
                 TT_ASSERT((input_tensor_a.shape()[-1] / TILE_WIDTH) % program_config.in0_block_w == 0, "Kt must be divisible by in0_block_w");
                 TT_ASSERT(program_config.per_core_M % program_config.out_subblock_h == 0, "per_core_M must be divisible by out_subblock_h");
                 TT_ASSERT(program_config.per_core_N % program_config.out_subblock_w == 0, "per_core_N must be divisible by out_subblock_w");
-            }
-            if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig>) {
-                 if (program_config.fused_activation.has_value()) {
-                     TT_ASSERT(program_config.fused_activation.value().op_type == UnaryOpType::GELU || program_config.fused_activation.value().op_type == UnaryOpType::RELU);
-                 }
             }
         },
         this->program_config
@@ -689,7 +684,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.compute_with_storage_grid_size,
                     output_dtype, math_fidelity,
                     program_config.in0_block_w, program_config.out_subblock_h, program_config.out_subblock_w,
-                    program_config.per_core_M, program_config.per_core_N, program_config.fuse_batch, program_config.fuse_gelu_activation
+                    program_config.per_core_M, program_config.per_core_N, program_config.fuse_batch, program_config.fused_activation
                 );
             } else {
                 TT_THROW("Unrecognized Config");

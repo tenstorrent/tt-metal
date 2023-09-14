@@ -880,7 +880,7 @@ class TestEltwiseUnary:
     @pytest.mark.parametrize(
         "fn_kind", ["isinf", "isposinf", "isneginf", "isnan", "isfinite"]
     )
-    def test_run_eltwise_arc_inf_nan_ops(
+    def test_run_eltwise_inf_nan_ops(
         self,
         input_shapes,
         fn_kind,

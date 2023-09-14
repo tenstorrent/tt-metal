@@ -9,27 +9,11 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "noc_nonblocking_api.h"
-#include "llk_math_eltwise_unary_sfpu_0_param.h"
 
 using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
-
-template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_i0_op(uint dst_index, int vector_mode) {
-    llk_math_eltwise_unary_sfpu<SfpuType::i0, APPROXIMATE, dst_sync>(dst_index, vector_mode);
-}
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_i0_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::i0, APPROXIMATE>();
-}
-
-void i0_init() {
-ckernel::sfpu::llk_math_eltwise_unary_sfpu_i0_init<false>();
-}
-
 
 #define POLYVAL10(coef10, coef9, coef8, coef7, coef6, coef5, coef4, coef3, coef2, coef1, coef0, t4)  ((coef0 + (coef1 + (coef2 + (coef3 + (coef4 + (coef5 + (coef6 + (coef7 + (coef8 + (coef9 + coef10 * t4) * t4) * t4) * t4) * t4) * t4) * t4) * t4 ) * t4) * t4)*t4)
 template <bool APPROXIMATION_MODE>
@@ -51,13 +35,9 @@ inline void calculate_i0()
 
 }
 
-
-template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_i0_op(uint dst_index) {
-    llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
-                                (ckernel::sfpu::calculate_i0<APPROXIMATE>,
-				 ckernel::sfpu::calculate_i0<APPROXIMATE>,
-				 dst_index, Dim::RC);
+template <bool APPROXIMATION_MODE>
+void i0_init() {
+    ;
 }
 
 }  // namespace sfpu

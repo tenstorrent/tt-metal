@@ -6,25 +6,7 @@
 
 #define ELTWISE_OP_CODE 0 // TODO(AP): temporary - refactor
 
-#if SFPU_OP_ERF_ERFC_INCLUDE
-#include "compute_kernel_api/eltwise_unary/erf_erfc.h"
-#endif
-
-#if SFPU_OP_EXP_INCLUDE
-#include "compute_kernel_api/eltwise_unary/exp.h"
-#endif
-
-#if SFPU_OP_GELU_INCLUDE
-#include "compute_kernel_api/eltwise_unary/gelu.h"
-#endif
-
-#if SFPU_OP_RECIP_INCLUDE
-#include "compute_kernel_api/eltwise_unary/recip.h"
-#endif
-
-#if SFPU_OP_SQRT_INCLUDE
-#include "compute_kernel_api/eltwise_unary/sqrt.h"
-#endif
+#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api.h"

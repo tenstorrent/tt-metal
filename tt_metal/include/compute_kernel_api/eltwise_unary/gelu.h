@@ -27,12 +27,12 @@ ALWI void gelu_tile_init() {
 /**
  *  Please refer to documentation for exp_tile.
  */
-ALWI void gelu_tile(uint32_t idst,bool fast_and_approx=true) {
-  if (fast_and_approx) {
-    MATH(( llk_math_eltwise_unary_sfpu_gelu<true, SyncHalf>(idst) ));
-  } else {
-    MATH(( llk_math_eltwise_unary_sfpu_gelu<false, SyncHalf>(idst) ));
-  }
+ALWI void gelu_tile(uint32_t idst, bool fast_and_approx=true) {
+    if (fast_and_approx) {
+        MATH(( llk_math_eltwise_unary_sfpu_gelu<true, SyncHalf>(idst) ));
+    } else {
+        MATH(( llk_math_eltwise_unary_sfpu_gelu<false, SyncHalf>(idst) ));
+    }
 }
 
 

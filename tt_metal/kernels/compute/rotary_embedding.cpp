@@ -9,7 +9,6 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
-#include "compute_kernel_api.h"
 
 ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
 ALWI void REL() { release_dst(tt::DstMode::Half); }

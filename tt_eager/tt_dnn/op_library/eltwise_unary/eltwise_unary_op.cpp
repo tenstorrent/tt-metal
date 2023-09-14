@@ -36,55 +36,54 @@ public:
 
 
 // update split eltwise ops include macros
-inline bool update_macro_defines(UnaryOpType op_type,std::map<std::string,std::string>& defines) {
-  switch( op_type) {
-  case UnaryOpType::EXP:
-  case UnaryOpType::EXP2:
-    defines["SFPU_OP_EXP_INCLUDE"] = "1";
-    break;
-  case UnaryOpType::GELU:
-    defines["SFPU_OP_GELU_INCLUDE"] = "1";
-    break;
-  case UnaryOpType::RECIP:
-    defines["SFPU_OP_RECIP_INCLUDE"] = "1";
-    break;
-  case UnaryOpType::SQRT:
-    defines["SFPU_OP_SQRT_INCLUDE"] = "1";
-    break;
-  case UnaryOpType::ERFINV:
-    defines["SFPU_OP_ERFINV_INCLUDE"] = "1";
-    break;
-  case UnaryOpType::ERFC:
-  case UnaryOpType::ERF:
-    defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
-    return true;
-  case UnaryOpType::ELU:
-    defines["SFPU_OP_ELU_INCLUDE"] = "1";
-    return true;
-  case UnaryOpType::RELU:
-  case UnaryOpType::RELU6:
-  case UnaryOpType::RELU_MAX:
-  case UnaryOpType::RELU_MIN:
-  case UnaryOpType::LEAKY_RELU:
-    defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
-    return true;
-  case UnaryOpType::ISINF:
-  case UnaryOpType::ISNAN:
-  case UnaryOpType::ISNEGINF:
-  case UnaryOpType::ISPOSINF:
-  case UnaryOpType::ISFINITE:
-    defines["SFPU_OP_ISINF_ISNAN_INCLUDE"]="1";
-    return true;
-  case UnaryOpType::LOGICAL_NOT_UNARY:
-    defines["SFPU_OP_LOGICAL_NOT_NOTI_INCLUDE"]="1";
-    return true;
-  case UnaryOpType::I0:
-    defines["SFPU_OP_I0_INCLUDE"]="1";
-    return true;
-  default:
-    break;
-  };
-  return false;
+void update_macro_defines(UnaryOpType op_type, std::map<std::string,std::string>& defines) {
+    switch( op_type) {
+        case UnaryOpType::EXP:
+            defines["SFPU_OP_EXP_INCLUDE"] = "1";
+            break;
+        case UnaryOpType::GELU:
+            defines["SFPU_OP_GELU_INCLUDE"] = "1";
+            break;
+        case UnaryOpType::RECIP:
+            defines["SFPU_OP_RECIP_INCLUDE"] = "1";
+            break;
+        case UnaryOpType::SQRT:
+            defines["SFPU_OP_SQRT_INCLUDE"] = "1";
+            break;
+        case UnaryOpType::ERFINV:
+            defines["SFPU_OP_ERFINV_INCLUDE"] = "1";
+            break;
+        case UnaryOpType::ERFC:
+        case UnaryOpType::ERF:
+            defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
+            break;
+        case UnaryOpType::ELU:
+            defines["SFPU_OP_ELU_INCLUDE"] = "1";
+            break;
+        case UnaryOpType::RELU:
+        case UnaryOpType::RELU6:
+        case UnaryOpType::RELU_MAX:
+        case UnaryOpType::RELU_MIN:
+        case UnaryOpType::LEAKY_RELU:
+            defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
+            break;
+        case UnaryOpType::ISINF:
+        case UnaryOpType::ISNAN:
+        case UnaryOpType::ISNEGINF:
+        case UnaryOpType::ISPOSINF:
+        case UnaryOpType::ISFINITE:
+            defines["SFPU_OP_ISINF_ISNAN_INCLUDE"]="1";
+            break;
+        case UnaryOpType::LOGICAL_NOT_UNARY:
+            defines["SFPU_OP_LOGICAL_NOT_NOTI_INCLUDE"]="1";
+            break;
+        case UnaryOpType::I0:
+            defines["SFPU_OP_I0_INCLUDE"]="1";
+            break;
+        default:
+            defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"]="1";
+            break;
+    };
 }
 
 std::pair<string, string> get_op_init_and_func_parameterized(UnaryOpType op_type, float param0, string idst) {
@@ -100,8 +99,8 @@ std::pair<string, string> get_op_init_and_func_parameterized(UnaryOpType op_type
         case UnaryOpType::GELU: op_init_and_name = {"gelu_tile_init();", fmt::format("gelu_tile({}, {}u);", idst, std::to_string((uint32_t)param0))}; break;
         case UnaryOpType::RSQRT: op_init_and_name = {"rsqrt_tile_init();",  fmt::format("rsqrt_tile({}, {}u);", idst, std::to_string((uint32_t)param0))}; break;
         case UnaryOpType::HEAVISIDE: op_init_and_name = {"heaviside_tile_init();", fmt::format("heaviside_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
-        case UnaryOpType::ERF: op_init_and_name = {"erf_tile_init();", fmt::format("erf_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
-        case UnaryOpType::ERFC: op_init_and_name = {"erfc_tile_init();", fmt::format("erfc_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
+        case UnaryOpType::ERF: op_init_and_name = {"erf_tile_init();", fmt::format("erf_tile({}, {}u);", idst, std::to_string((uint32_t)param0))}; break;
+        case UnaryOpType::ERFC: op_init_and_name = {"erfc_tile_init();", fmt::format("erfc_tile({}, {}u);", idst, std::to_string((uint32_t)param0))}; break;
         default:
         TT_ASSERT( false && "unexpected parameterized type");
     };
@@ -113,7 +112,7 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, stri
     switch (op_type) {
         case UnaryOpType::EXP: op_init_and_name = {"exp_tile_init();", fmt::format("exp_tile({});", idst)}; break;
         case UnaryOpType::RECIP: op_init_and_name = {"recip_tile_init();", fmt::format("recip_tile({});", idst)}; break;
-        case UnaryOpType::RELU: op_init_and_name = {"relu_min_tile_init();", fmt::format("relu_min_tile({}, 0x0u);", idst)}; break;
+        case UnaryOpType::RELU: op_init_and_name = {"relu_tile_init();", fmt::format("relu_tile({});", idst)}; break;
         case UnaryOpType::SQRT: op_init_and_name = {"sqrt_tile_init();", fmt::format("sqrt_tile({});", idst)}; break;
         case UnaryOpType::SIGMOID: op_init_and_name = {"sigmoid_tile_init();", fmt::format("sigmoid_tile({});", idst)}; break;
         case UnaryOpType::LOG: op_init_and_name = {"log_tile_init();", fmt::format("log_tile({});", idst)}; break;
@@ -178,30 +177,20 @@ bool get_op_approx_mode(UnaryOpType op_type) {
     }
 }
 
-
-static
-std::map<string, string> get_defines_impl(std::string init_def, std::string func_def, std::string op_init, std::string op_func) {
+std::map<string, string> get_defines_impl(UnaryOpType op_type, std::optional<float> param0, std::string idst, std::string init_def, std::string func_def) {
+    std::pair<string, string> op_init_and_name = get_op_init_and_func(op_type, param0, idst);
     std::map<string, string> defines = {
-        {init_def, op_init},
-        {func_def, op_func},
-        {"SFPU_OP_ERF_ERFC_INCLUDE","0"}, //include guards for split eltwise ops
-        {"SFPU_OP_ELU_INCLUDE","0"}, //include guards for split eltwise ops
-	    {"SFPU_OP_RELU_FAMILY_INCLUDE","0"}, //include guards for RELU family ops
-        {"SFPU_OP_ISINF_ISNAN_INCLUDE","0"}
+        {init_def, op_init_and_name.first},
+        {func_def, op_init_and_name.second}
     };
+    update_macro_defines(op_type, defines);
     return defines;
 }
 
 std::map<string, string> get_defines(UnaryOpType op_type, std::optional<float> param0, std::string id, std::string idst) {
-    std::pair<string, string> op_init_and_name = get_op_init_and_func(op_type, param0, idst);
     std::string init_def = fmt::format("SFPU_OP_INIT_{}", id);
     std::string func_def = fmt::format("SFPU_OP_FUNC_{}", id);
-    std::map<std::string,std::string> defines = get_defines_impl(init_def, func_def, op_init_and_name.first, op_init_and_name.second);
-    // update split eltwise ops include macros
-
-    update_macro_defines(op_type, defines);
-
-    return defines;
+    return get_defines_impl(op_type, param0, idst, init_def, func_def);
 }
 
 
@@ -217,12 +206,7 @@ std::map<string, string> get_block_defines(const std::vector<UnaryWithParam> op_
         std::string init_def = fmt::format("SFPU_OP_CHAIN_{}_INIT_{}", block_id, i);
         std::string func_def = fmt::format("SFPU_OP_CHAIN_{}_FUNC_{}", block_id, i);
         block_define += init_def + " " + func_def + " ";
-        auto op_init_and_name = get_op_init_and_func(op_chain[i].op_type, op_chain[i].param, idst);
-        block_defines.merge(get_defines_impl(init_def, func_def, op_init_and_name.first, op_init_and_name.second));
-    }
-    for (uint32_t i = 0; i<op_chain.size(); i++) {
-        auto op_type = op_chain[i].op_type;
-	    update_macro_defines(op_type,block_defines);
+        block_defines.merge(get_defines_impl(op_chain[i].op_type, op_chain[i].param, idst, init_def, func_def));
     }
     block_defines[fmt::format("SFPU_OP_CHAIN_{}", block_id)] = block_define;
     return block_defines;
@@ -237,7 +221,7 @@ namespace tt_metal {
 
 void EltwiseUnary::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    TT_ASSERT(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to eltwise unnary need to be on device!");
+    TT_ASSERT(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to eltwise unary need to be on device!");
     TT_ASSERT(input_tensor_a.buffer() != nullptr , "Operands to eltwise unary need to be allocated in buffers on device!");
     TT_ASSERT((input_tensor_a.layout() == Layout::TILE), "Inputs to eltwise unary must be tilized");
     TT_ASSERT(input_tensor_a.dtype() == DataType::BFLOAT16);

@@ -305,9 +305,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         mm_kernel_in1_receiver_writer_other_noc_setup_defines["FUSE_BIAS"] = "1";
     }
     if (fused_activation.has_value()) {
-         mm_kernel_defines.merge(eltwise_unary_op_utils::get_defines(fused_activation.value().op_type, fused_activation.value().param, "ACTIVATION", "i"));
-         mm_kernel_defines[fmt::format("{}_ACTIVATION", magic_enum::enum_name(fused_activation.value().op_type).data())] = "1";
-     }
+        mm_kernel_defines.merge(eltwise_unary_op_utils::get_defines(fused_activation.value().op_type, fused_activation.value().param, "ACTIVATION", "i"));
+    }
 
     auto mm_kernel_in0_sender_id = tt_metal::CreateDataMovementKernel(
         program,

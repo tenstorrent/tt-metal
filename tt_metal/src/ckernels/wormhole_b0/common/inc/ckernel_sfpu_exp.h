@@ -105,22 +105,97 @@ void calculate_exponential(uint exp_base_scale_factor = 0)
 }
 
 template <bool APPROXIMATION_MODE>
-void exp_init(){
+sfpi_inline vFloat calculate_exponential_body(vFloat in)
+{
+    vFloat out;
 
-    if constexpr(APPROXIMATION_MODE) {
+    if constexpr (APPROXIMATION_MODE)
+    {
+        constexpr int FRAC_BITS = 3;
+        constexpr uint SP_BIAS = 127 << FRAC_BITS;
+
+        // * by 1/ln2 and add convert to 7.3 FxP format
+        vFloat vConstLn2Recip = vConstFloatPrgm0;
+        vFloat conv = in * vConstLn2Recip;
+
+        // Clear exp bits
+        vInt c23_73 = p_exp::C23_73;
+        vInt tmp = reinterpret<vInt>(conv) - c23_73;
+
+        // Add bias
+        tmp += SP_BIAS;
+
+        // SHL to move integer bits to exponent
+        out = reinterpret<vFloat>(tmp << (10 - FRAC_BITS));
+    }
+    else
+    {
+        // Force sign to 0 (make number positive)
+        out = sfpu_exp(setsgn(in, 0));
+
+        v_if (in < 0) {
+            out = sfpu_reciprocal(out);
+        }
+        v_endif;
+    }
+
+    return out;
+}
+
+
+template <bool APPROXIMATION_MODE, bool ZERO_NEGATIVE>
+sfpi_inline vFloat calculate_exponential_body_improved(vFloat val)
+{
+    vFloat out;
+    if constexpr (APPROXIMATION_MODE)
+    {
+        // * by 1/ln2 and add convert to 7.3 FxP format
+        vFloat vConstLn2Recip = vConstFloatPrgm0;
+        vFloat c23_73 = vConstFloatPrgm1;
+        vInt adj_exp = vConstIntPrgm2;
+        val = val * vConstLn2Recip + c23_73;
+
+        // Remove Exponent of 7 and bias the Mantissa to 127.
+        vInt val_short = adj_exp + reinterpret<vInt>(val);
+
+        // SHL to move integer bits to exponent
+        val_short <<= 10 - p_exp::FRAC_BITS;
+        out = reinterpret<vFloat>(val_short);
+
+        // Needed for fused kernels such as math_row_softmax_tables which call calculate_exponential()
+        // without using Relu in Packer to clamp -ve Infinity to 0.
+        if constexpr (ZERO_NEGATIVE)
+        {
+            v_if (val_short < 0) {
+                out = vConst0;
+            }
+            v_endif;
+        }
+    }
+    else
+    {
+        // Force sign to 0 (make number positive)
+        out = sfpu_exp(setsgn(val, 0));
+        v_if (val < 0) {
+            out = sfpu_reciprocal(out);
+        }
+        v_endif;
+    }
+    return out;
+}
+
+template <bool APPROXIMATION_MODE>
+void exp_init() {
+
+    if constexpr (APPROXIMATION_MODE) {
         vConstFloatPrgm0 = 1.442695f; // ln2_recip
         vConstFloatPrgm1 = s2vFloat16b(p_exp::C23_73);
         vConstFloatPrgm2 = s2vFloat16b(p_exp::ADJ_EXP);
     }
     else{
-        vConstFloatPrgm0 = 0.692871f; // ln2
-        // XXXXX could do these to higher precision
-        vConstFloatPrgm1 = 0.1058f;
-        vConstFloatPrgm2 = -0.7166f;
-        vConstFloatPrgm0 = s2vFloat16b(0x5f37);
-        vConstIntPrgm0 = 0xb400;
-        vConstIntPrgm1 = 0x1; // binary 0b1 - used to extract LSB
-
+        vConstFloatPrgm0 = 1.442695f; // ln2_recip
+        vConstFloatPrgm1 = 2.0f;
+        vConstFloatPrgm2 = 0.863281f;
     }
 }
 

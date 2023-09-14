@@ -13,7 +13,6 @@
 #include "sfpi.h"
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_cdf.h"
-#include "ckernel_sfpu_recip.h"
 
 using namespace sfpi;
 
@@ -75,22 +74,21 @@ inline void calculate_gelu()
 {
 
     if constexpr (APPROXIMATION_MODE) {
-	calculate_gelu_appx<APPROXIMATION_MODE,ITERATIONS>();
+	    calculate_gelu_appx<APPROXIMATION_MODE,ITERATIONS>();
     } else {
-      constexpr bool scaled = true;
-      // SFPU microcode
-      for (int d = 0; d < ITERATIONS; d++)
-	{
-	  vFloat val = dst_reg[0];
-	  vFloat result = calculate_cdf_appx(val,scaled);
-	  dst_reg[0] = result;
-	  dst_reg++;
-	}
+        constexpr bool scaled = true;
+        // SFPU microcode
+        for (int d = 0; d < ITERATIONS; d++) {
+            vFloat val = dst_reg[0];
+            vFloat result = calculate_cdf_appx(val,scaled);
+            dst_reg[0] = result;
+            dst_reg++;
+	    }
     }
 }
 
 template <bool APPROXIMATION_MODE>
-void gelu_init(){
+void gelu_init() {
     uint imm0;
     uint imm1;
     uint imm2;
@@ -161,7 +159,12 @@ inline void calculate_gelu_derivative()
     }
 }
 
-
+template <bool APPROXIMATION_MODE>
+void gelu_derivative_init() {
+    if constexpr(APPROXIMATION_MODE) {
+        TTI_SFPLOADI(p_sfpu::LREG2, 0, p_exp::ADJ_EXP);
+    }
+}
 
 } // namespace sfpu
 } // namespace ckernel

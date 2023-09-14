@@ -53,52 +53,8 @@
 #define UNPACK(x)
 #endif
 
-#include "compute_kernel_api/eltwise_unary/exp.h"
-//#include "compute_kernel_api/eltwise_unary/gelu.h"
-//#include "compute_kernel_api/eltwise_unary/recip.h"
-//#include "compute_kernel_api/eltwise_unary/sqrt.h"
-//#include "compute_kernel_api/bcast.h"
-//#include "compute_kernel_api/cb_api.h"
-//#include "compute_kernel_api/eltwise_binary.h"
-//#include "compute_kernel_api/matmul.h"
-//#include "compute_kernel_api/pack.h"
-//#include "compute_kernel_api/reduce.h"
-//#include "compute_kernel_api/reg_api.h"
-//#include "compute_kernel_api/tile_move_copy.h"
-//#include "compute_kernel_api/tilize.h"
-//#include "compute_kernel_api/transpose_wh.h"
-//#include "compute_kernel_api/unpack.h"
-//#include "compute_kernel_api/untilize.h"
 
 namespace ckernel {
-
-ALWI void unary_op_init_common(uint32_t icb)
-{
-    UNPACK(( llk_setup_operands() ));
-    #ifdef ARCH_GRAYSKULL
-    UNPACK(( llk_unpack_A_init<BroadcastType::NONE>() ));
-    UNPACK(( llk_unpack_A_hw_configure_disaggregated<BroadcastType::NONE>(icb) ));
-    #else
-    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()  ));
-    UNPACK(( llk_unpack_A_hw_configure_disaggregated<>(icb) ));
-    #endif
-
-    PACK(( llk_pack_init() ));
-    PACK(( llk_pack_hw_configure_disaggregated<false>(16) ));
-    PACK(( llk_setup_outputs() ));
-    PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::RowMajor, false>() ));
-
-    #ifdef ARCH_GRAYSKULL
-    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, false>() ));
-    #else
-    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0, icb) ));
-    #endif
-    MATH(( llk_math_pack_sync_init<SYNC>() ));
-}
-
-ALWI void init_sfpu(uint32_t icb) {
-    unary_op_init_common(icb);
-}
 
 ALWI void rsqrt_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_rsqrt_init<APPROX>() ));
@@ -291,7 +247,6 @@ ALWI void get_next_op_info(tt::op_info_t& op_info)
 
 ALWI void graph_interpreter_init() // TODO(AP): probably duplicated, remove
 {
-    MATH(( llk_math_eltwise_unary_sfpu_exponential_init<APPROX>() ));
     MATH(( llk_math_pack_sync_init<SyncHalf>() ));
     PACK(( llk_pack_init() ));
     PACK(( llk_setup_outputs() ));

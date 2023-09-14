@@ -9,7 +9,8 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "noc_nonblocking_api.h"
-#include "llk_math_eltwise_unary_sfpu_1_param.h"
+
+#include "sfpi.h"
 
 using namespace sfpi;
 
@@ -65,37 +66,22 @@ inline void calculate_erfc() {
 }
 
 template <SfpuType operation, bool APPROXIMATION_MODE, int ITERATIONS=4>
-inline void calculate_sfpu_erf_erfc(
-    uint param0 = 0) {
+inline void calculate_sfpu_erf_erfc() {
     if constexpr (operation == SfpuType::erf) {
-        if (param0) {
-            calculate_erf<true, ITERATIONS>();
-        } else {
-            calculate_erf<false, ITERATIONS>();
-        }
+        calculate_erf<APPROXIMATION_MODE, ITERATIONS>();
     } else if constexpr (operation == SfpuType::erfc) {
-        if (param0) {
-            calculate_erfc<true, ITERATIONS>();
-        } else {
-            calculate_erfc<false, ITERATIONS>();
-        }
+        calculate_erfc<APPROXIMATION_MODE, ITERATIONS>();
     }
 }
 
-template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_erf(uint dst_index, int param0 = 0, int vector_mode = Dim::RC) {
-    llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE, Dst>
-                                (ckernel::sfpu::calculate_sfpu_erf_erfc<SfpuType::erf,APPROXIMATE,1>,
-                                ckernel::sfpu::calculate_sfpu_erf_erfc<SfpuType::erf,APPROXIMATE>,
-                                dst_index, vector_mode, param0);
+template <bool APPROXIMATION_MODE>
+void erf_init() {
+    ;
 }
 
-template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_erfc(uint dst_index, int param0 = 0, int vector_mode = Dim::RC) {
-    llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE, Dst>
-                                (ckernel::sfpu::calculate_sfpu_erf_erfc<SfpuType::erfc,APPROXIMATE>,
-                                ckernel::sfpu::calculate_sfpu_erf_erfc<SfpuType::erfc,APPROXIMATE>,
-                                dst_index, vector_mode, param0);
+template <bool APPROXIMATION_MODE>
+void erfc_init() {
+    ;
 }
 
 }  // namespace sfpu

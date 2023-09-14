@@ -11,6 +11,7 @@
 #include "noc_nonblocking_api.h"
 
 #include "sfpi.h"
+
 using namespace sfpi;
 
 namespace ckernel
@@ -18,7 +19,10 @@ namespace ckernel
 namespace sfpu
 {
 
-
+template <bool APPROXIMATION_MODE>
+void reciprocal_init() {
+    ;
+}
 
 template <bool save_reg, int max_iter = 3>
 sfpi_inline vFloat sfpu_reciprocal(const vFloat in)

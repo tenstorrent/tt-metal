@@ -11,8 +11,6 @@
 #include "noc_nonblocking_api.h"
 
 #include "sfpi.h"
-#include "ckernel_sfpu_exp.h"
-#include "ckernel_sfpu_recip.h"
 
 using namespace sfpi;
 

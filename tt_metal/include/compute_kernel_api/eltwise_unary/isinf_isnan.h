@@ -8,7 +8,7 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "ckernel_sfpu_isinf_isnan.h"
+#include "llk_math_eltwise_unary_sfpu_isinf_isnan.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -18,46 +18,46 @@
 namespace ckernel {
 //isinf
 ALWI void isinf_tile(uint32_t idst) {
-    MATH((ckernel::sfpu::llk_math_eltwise_unary_sfpu_isinf<true, SyncHalf>(idst)));
+    MATH((llk_math_eltwise_unary_sfpu_isinf<APPROX, SyncHalf>(idst)));
 }
 
 ALWI void isinf_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::isinf, true>() ));
+    MATH((llk_math_eltwise_unary_sfpu_isinf_init<APPROX>() ));
 }
 
 //isposinf
 ALWI void isposinf_tile(uint32_t idst) {
-    MATH((ckernel::sfpu::llk_math_eltwise_unary_sfpu_isposinf<true, SyncHalf>(idst) ));
+    MATH((llk_math_eltwise_unary_sfpu_isposinf<APPROX, SyncHalf>(idst) ));
 }
 
 ALWI void isposinf_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::isposinf, true>() ));
+    MATH((llk_math_eltwise_unary_sfpu_isposinf_init<APPROX>() ));
 }
 
 //isneginf
 ALWI void isneginf_tile(uint32_t idst) {
-    MATH((ckernel::sfpu::llk_math_eltwise_unary_sfpu_isneginf<true, SyncHalf>(idst) ));
+    MATH((llk_math_eltwise_unary_sfpu_isneginf<APPROX, SyncHalf>(idst) ));
 }
 
 ALWI void isneginf_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::isneginf, true>() ));
+    MATH((llk_math_eltwise_unary_sfpu_isneginf_init<APPROX>() ));
 }
 
 //isnan
 ALWI void isnan_tile(uint32_t idst) {
-    MATH((ckernel::sfpu::llk_math_eltwise_unary_sfpu_isnan<true, SyncHalf>(idst) ));
+    MATH((llk_math_eltwise_unary_sfpu_isnan<APPROX, SyncHalf>(idst) ));
 }
 
 ALWI void isnan_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::isnan, true>() ));
+    MATH((llk_math_eltwise_unary_sfpu_isnan_init<APPROX>() ));
 }
 
 //isfinite
 ALWI void isfinite_tile(uint32_t idst) {
-    MATH((ckernel::sfpu::llk_math_eltwise_unary_sfpu_isfinite<true, SyncHalf>(idst) ));
+    MATH((llk_math_eltwise_unary_sfpu_isfinite<APPROX, SyncHalf>(idst) ));
 }
 
 ALWI void isfinite_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::isfinite, true>() ));
+    MATH((llk_math_eltwise_unary_sfpu_isfinite_init<APPROX>() ));
 }
 } // namespace ckernel

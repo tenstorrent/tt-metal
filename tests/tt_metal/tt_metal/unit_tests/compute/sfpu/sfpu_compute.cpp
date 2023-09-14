@@ -28,7 +28,7 @@ namespace unit_tests::sfpu_util {
 
 const map<string, std::map<string, string>> sfpu_op_to_op_name = {
     // FIXME: #1157
-    {"relu", {{"SFPU_OP_CHAIN_0", "relu_min_tile_init(); relu_min_tile(0,0x0);"}}},
+    {"relu", {{"SFPU_OP_CHAIN_0", "relu_tile_init(); relu_tile(0);"}}},
     {"exponential", {{"SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);"}}},
     {"reciprocal", {{"SFPU_OP_CHAIN_0", "recip_tile_init(); recip_tile(0);"}}},
     {"gelu", {{"SFPU_OP_CHAIN_0", "gelu_tile_init(); gelu_tile(0);"}}},
@@ -198,6 +198,7 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
         sfpu_defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
         sfpu_defines["SFPU_OP_ELU_INCLUDE"] = "1";
         sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
+        sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"]="1";
 
         auto sfpu_kernel = tt_metal::CreateComputeKernel(
             program,

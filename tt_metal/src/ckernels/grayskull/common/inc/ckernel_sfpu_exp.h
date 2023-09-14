@@ -11,8 +11,8 @@
 #include "noc_nonblocking_api.h"
 
 #include "sfpi.h"
-
 #include "ckernel_sfpu_recip.h"
+
 using namespace sfpi;
 
 namespace ckernel
@@ -118,7 +118,7 @@ inline void calculate_exponential(int16_t exp_base_scale_factor = 0)
 
 
 template <bool APPROXIMATION_MODE>
-void exp_init(){
+void exp_init() {
     if constexpr(APPROXIMATION_MODE) {
         TTI_SFPLOADI(p_sfpu::LREG0, 0, p_exp::C23_73);
         TTI_SFPLOADI(p_sfpu::LREG2, 0, p_exp::ADJ_EXP);

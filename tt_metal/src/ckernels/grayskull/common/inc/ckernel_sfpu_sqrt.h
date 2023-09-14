@@ -11,6 +11,7 @@
 #include "noc_nonblocking_api.h"
 
 #include "sfpi.h"
+
 using namespace sfpi;
 
 namespace ckernel
@@ -65,7 +66,7 @@ inline void calculate_sqrt()
     }
 }
 template <bool APPROXIMATION_MODE>
-void sqrt_init(){
+void sqrt_init() {
     if (APPROXIMATION_MODE) {
         TTI_SFPLOADI(2, 0, 127 << 7);
     }

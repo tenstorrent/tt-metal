@@ -15,12 +15,10 @@
 #include "llk_format_conversions.h"
 #include "llk_math_common.h"
 #include "llk_param_structs.h"
-#include "llk_math_eltwise_unary_sfpu_exp.h"
-#include "llk_math_eltwise_unary_sfpu_gelu.h"
-#include "llk_math_eltwise_unary_sfpu_recip.h"
-#include "llk_math_eltwise_unary_sfpu_sqrt.h"
 
-using namespace ckernel;
+
+namespace ckernel {
+
 template <SfpuType sfpu_type>
 void static_assert_sfpu_type_dependent() {
     static_assert(sfpu_type == SfpuType::unused, "sfpu_type exception");
@@ -397,4 +395,6 @@ inline void llk_math_eltwise_unary_sfpu_acos(uint dst_index, int vector_mode = D
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_acos_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::acos, APPROXIMATE>();
+}
+
 }

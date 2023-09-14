@@ -7,15 +7,16 @@
 #pragma once
 
 #include "llk_math_eltwise_unary_sfpu_common_includes.h"
+#include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_0_param.h"
 #include "ckernel_sfpu_recip.h"
-using namespace ckernel;
+
+namespace ckernel {
 
 // New LLK SFPU APIs
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
 inline void llk_math_eltwise_unary_sfpu_reciprocal(uint dst_index, int vector_mode = Dim::RC) {
-	constexpr bool zero_negative = true;
     constexpr int first_iterations = 1;
     llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
                                 (ckernel::sfpu::calculate_reciprocal<APPROXIMATE, first_iterations>,
@@ -26,12 +27,7 @@ inline void llk_math_eltwise_unary_sfpu_reciprocal(uint dst_index, int vector_mo
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_reciprocal_init() {
-    addr_mod_t{
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 0},
-    }.set(ADDR_MOD_7);
-    vConstFloatPrgm0 = 1.442695f; // ln2_recip
-    vConstFloatPrgm1 = 2.0f;
-    math::reset_counters(p_setrwc::SET_ABD_F);
+    llk_math_eltwise_unary_sfpu_init<APPROXIMATE>(sfpu::recip_init<APPROXIMATE>);
+}
+
 }

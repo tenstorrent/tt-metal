@@ -9,26 +9,13 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "noc_nonblocking_api.h"
-#include "llk_math_eltwise_unary_sfpu_0_param.h"
 
+#include "sfpi.h"
 using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_logical_not_unary_op(uint dst_index, int vector_mode) {
-    llk_math_eltwise_unary_sfpu<SfpuType::logical_not_unary, APPROXIMATE, dst_sync>(dst_index, vector_mode);
-}
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_logical_not_unary_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::logical_not_unary, APPROXIMATE>();
-}
-
-void logical_not_unary_init() {
-ckernel::sfpu::llk_math_eltwise_unary_sfpu_logical_not_unary_init<false>();
-}
 
 template <bool APPROXIMATION_MODE>
 inline void calculate_logical_not_unary()
@@ -46,12 +33,9 @@ inline void calculate_logical_not_unary()
     }
 }
 
-template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_logical_not_unary_op(uint dst_index) {
-    llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
-                                (ckernel::sfpu::calculate_logical_not_unary<APPROXIMATE>,
-				 ckernel::sfpu::calculate_logical_not_unary<APPROXIMATE>,
-				 dst_index, Dim::RC);
+template <bool APPROXIMATION_MODE>
+void logical_not_unary_init() {
+    ;
 }
 
 }  // namespace sfpu
