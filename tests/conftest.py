@@ -67,10 +67,10 @@ def pytest_addoption(parser):
         help="Target arch, ex. grayskull, wormhole_b0",
     )
     parser.addoption(
-        "--chip-id",
+        "--device-id",
         type=int,
         default=0,
-        help="Target chip id",
+        help="Target device id",
     )
 
 
@@ -225,7 +225,7 @@ def device(request):
     import tt_lib as ttl
 
     silicon_arch_name = request.config.getoption("tt_arch")
-    chip_id = request.config.getoption("chip_id")
+    device_id = request.config.getoption("device_id")
 
     arch = getattr(ttl.device.Arch, silicon_arch_name.upper())
 
@@ -233,7 +233,7 @@ def device(request):
         dispatch = os.environ.pop("TT_METAL_SLOW_DISPATCH_MODE", None)
         os.environ["TT_METAL_SLOW_DISPATCH_MODE"] = "1"
 
-    device = ttl.device.CreateDevice(chip_id)
+    device = ttl.device.CreateDevice(device_id)
     ttl.device.InitializeDevice(device)
     ttl.device.SetDefaultDevice(device)
 
