@@ -166,9 +166,17 @@ bool operator!=(const Shape& shape_a, const Shape& shape_b) {
     return not (shape_a == shape_b);
 }
 
+bool MemoryConfig::is_sharded() const {
+    switch (this->memory_layout) {
+        case TensorMemoryLayout::HEIGHT_SHARDED:
+            return true;
+        default:
+            return false;
+    }
+}
 
 bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b) {
-    return config_a.buffer_type == config_b.buffer_type && config_a.interleaved == config_b.interleaved;
+    return config_a.buffer_type == config_b.buffer_type && config_a.memory_layout == config_b.memory_layout;
 }
 
 bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b){
@@ -178,7 +186,7 @@ bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b){
 
 tt::stl::reflection::Attributes MemoryConfig::attributes() const {
     return {
-        {"interleaved", this->interleaved},
+        {"memory_layout", this->memory_layout},
         {"buffer_type", this->buffer_type},
     };
 }
@@ -198,6 +206,13 @@ tt::stl::reflection::Attributes DeviceStorage::attributes() const {
 
 tt::stl::reflection::Attributes BorrowedStorage::attributes() const {
     return {};
+}
+
+tt::stl::reflection::Attributes ShardSpec::attributes() const {
+    return {
+        {"shard_grid", this->shard_grid.str()},
+        {"shard_shape", "(" + std::to_string(this->shard_shape.first) + ", " + std::to_string(this->shard_shape.second) + ")"},
+    };
 }
 
 }  // namespace tt_metal

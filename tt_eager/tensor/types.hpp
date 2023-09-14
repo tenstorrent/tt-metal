@@ -41,6 +41,14 @@ enum class StorageType {
     BORROWED,  // for storing torch/numpy/etc tensors
 };
 
+enum class TensorMemoryLayout {
+    INTERLEAVED,
+    SINGLE_BANK,
+    HEIGHT_SHARDED,
+};
+
+
+
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
 
 
@@ -111,8 +119,9 @@ bool operator==(const Shape& shape_a, const Shape& shape_b);
 bool operator!=(const Shape& shape_a, const Shape& shape_b);
 
 struct MemoryConfig {
-    bool interleaved = true;    // Interleave the data across multiple DRAM banks
+    TensorMemoryLayout memory_layout = TensorMemoryLayout::INTERLEAVED;    // Interleave the data across multiple banks
     BufferType buffer_type = BufferType::DRAM; // Can be either DRAM or L1
+    bool is_sharded() const;
     tt::stl::reflection::Attributes attributes() const;
 };
 
@@ -203,6 +212,13 @@ template<typename T>
 constexpr void raise_unsupported_storage() {
     static_assert(detail::unsupported_storage<T>, "Unsupported Storage");
 }
+
+struct ShardSpec {
+    CoreRangeSet shard_grid;
+    std::pair<uint32_t, uint32_t> shard_shape;
+    tt::stl::reflection::Attributes attributes() const;
+};
+
 
 }  // namespace tt_metal
 

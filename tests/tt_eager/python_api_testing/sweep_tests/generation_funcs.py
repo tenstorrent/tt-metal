@@ -29,8 +29,8 @@ supported_tt_buffer_types = [
 ]
 
 supported_mem_configs = [
-    ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
-    ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
+    ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+    ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
 ]
 
 
@@ -229,7 +229,7 @@ def gen_tensor_pad_args(
             "layout": [ttl.tensor.Layout.ROW_MAJOR],
             "input_mem_config": [None],
             "output_mem_config": ttl.tensor.MemoryConfig(
-                True, ttl.tensor.BufferType.DRAM
+                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
             ),
         }
     )
@@ -256,7 +256,7 @@ def gen_tensor_unpad_args(
             "layout": [ttl.tensor.Layout.ROW_MAJOR],
             "input_mem_config": [None],
             "output_mem_config": ttl.tensor.MemoryConfig(
-                True, ttl.tensor.BufferType.DRAM
+                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
             ),
         }
     )
@@ -279,7 +279,7 @@ def gen_pad_to_tile_args(
         "dtype": [ttl.tensor.DataType.BFLOAT16],
         "layout": [ttl.tensor.Layout.ROW_MAJOR],
         "input_mem_config": [None],
-        "output_mem_config": ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+        "output_mem_config": ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
     }
 
     return [test_args]
@@ -304,7 +304,7 @@ def gen_unpad_from_tile_args(
         "dtype": [ttl.tensor.DataType.BFLOAT16],
         "layout": [ttl.tensor.Layout.ROW_MAJOR],
         "input_mem_config": [None],
-        "output_mem_config": ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+        "output_mem_config": ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
     }
 
     return [test_args]
@@ -319,7 +319,7 @@ def gen_default_dtype_layout_device(
 
     for input_shape in input_shapes:
         dtype.append(ttl.tensor.DataType.BFLOAT16)
-        input_mem_config.append(ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM))
+        input_mem_config.append(ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM))
 
         if input_shape[-2] % 32 == 0 and input_shape[-1] % 32 == 0:
             layout.append(ttl.tensor.Layout.TILE)
@@ -332,7 +332,7 @@ def gen_default_dtype_layout_device(
             "layout": layout,
             "input_mem_config": input_mem_config,
             "output_mem_config": ttl.tensor.MemoryConfig(
-                True, ttl.tensor.BufferType.DRAM
+                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
             ),
         }
     ]
@@ -345,8 +345,8 @@ def gen_default_dtype_layout_rm_device(
         {
             "dtype": [ttl.tensor.DataType.BFLOAT16] * len(input_shapes),
             "layout": [ttl.tensor.Layout.ROW_MAJOR] * len(input_shapes),
-            "input_mem_config": [ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)] * len(input_shapes),
-            "output_mem_config": ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+            "input_mem_config": [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)] * len(input_shapes),
+            "output_mem_config": ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         }
     ]
 
@@ -588,7 +588,7 @@ def gen_reshape_args(
     input_shapes,
     dtypes=[[ttl.tensor.DataType.BFLOAT16]],
     layouts=[[ttl.tensor.Layout.TILE]],
-    mem_configs=[[ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)]],
+    mem_configs=[[ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)]],
     max_out_shapes=2,
 ):
     vol = (

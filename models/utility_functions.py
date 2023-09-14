@@ -149,7 +149,7 @@ def torch2tt_tensor(
     py_tensor: torch.Tensor,
     tt_device,
     tt_layout=tt_lib.tensor.Layout.TILE,
-    tt_memory_config=tt_lib.tensor.MemoryConfig(True),
+    tt_memory_config=tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED),
     tt_dtype=tt_lib.tensor.DataType.BFLOAT16,
 ):
     size = list(py_tensor.size())
@@ -216,7 +216,7 @@ def torch_to_tt_tensor(py_tensor, device):
 def pad_by_zero(
     x: torch.Tensor,
     device,
-    tt_memory_config=tt_lib.tensor.MemoryConfig(True),
+    tt_memory_config=tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED),
     tt_dtype=tt_lib.tensor.DataType.BFLOAT16,
 ):
     initial_shape = x.shape

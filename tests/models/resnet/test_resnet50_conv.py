@@ -411,7 +411,7 @@ def test_resnet50_conv(
         assert C % 32 == 0
         assert K % 32 == 0
         torch.manual_seed(0)
-        memory_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
+        memory_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
         conv_input_shape = [N, C, H, W]
         conv_weight_shape = [K, C, R, S]
         conv_bias_shape = [1, 1, 1, K]

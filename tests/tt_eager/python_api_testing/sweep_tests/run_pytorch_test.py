@@ -40,8 +40,8 @@ LAYOUTS_TT_DICT = {
 }
 
 MEM_CONFIGS_TT_DICT = {
-    "DRAM": tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.DRAM),
-    "L1": tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1),
+    "DRAM": tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
+    "L1": tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1),
     "SYSTEM_MEMORY": None,
 }
 

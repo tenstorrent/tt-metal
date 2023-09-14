@@ -36,7 +36,9 @@ def ResnetLinear(
     weight: tt_lib.tensor.Tensor,
     bias: Optional[tt_lib.tensor.Tensor] = None,
     transpose: bool = True,
-    output_mem_config=tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.DRAM),
+    output_mem_config=tt_lib.tensor.MemoryConfig(
+        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+    ),
     device=None,
 ):
     """
@@ -521,11 +523,13 @@ class Bottleneck(nn.Module):
         self.storage_in_dram = storage_in_dram
         if self.storage_in_dram:
             self.memory_config = tt_lib.tensor.MemoryConfig(
-                True, tt_lib.tensor.BufferType.DRAM
+                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED,
+                tt_lib.tensor.BufferType.DRAM,
             )
         else:
             self.memory_config = tt_lib.tensor.MemoryConfig(
-                True, tt_lib.tensor.BufferType.L1
+                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED,
+                tt_lib.tensor.BufferType.L1,
             )
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
@@ -836,11 +840,13 @@ class ResNet(nn.Module):
         self.batch_size = batch_size
         if self.storage_in_dram:
             self.memory_config = tt_lib.tensor.MemoryConfig(
-                True, tt_lib.tensor.BufferType.DRAM
+                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED,
+                tt_lib.tensor.BufferType.DRAM,
             )
         else:
             self.memory_config = tt_lib.tensor.MemoryConfig(
-                True, tt_lib.tensor.BufferType.L1
+                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED,
+                tt_lib.tensor.BufferType.L1,
             )
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
@@ -1282,7 +1288,7 @@ class ResNet(nn.Module):
         # Relu is fused with conv1
         # x = self.relu(x, self.memory_config)
         # tt_lib.device.DumpDeviceMemoryState(self.device)
-        # x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.DRAM))
+        # x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM))
         x = format_tensor(
             x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config
         )
@@ -1469,7 +1475,7 @@ class ResNet(nn.Module):
         # x = self.relu(x, self.memory_config)
         # tt_lib.device.DumpDeviceMemoryState(self.device)
 
-        # x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.DRAM))
+        # x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM))
         x = format_tensor(
             x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config
         )

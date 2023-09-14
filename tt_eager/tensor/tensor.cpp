@@ -25,8 +25,8 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor::Tensor(const Storage& storage, const Shape& shape, DataType dtype, Layout layout)
-    : storage_(storage), shape_(shape), dtype_(dtype), layout_(layout) {
+Tensor::Tensor(const Storage& storage, const Shape& shape, DataType dtype, Layout layout, std::optional<ShardSpec> shard_spec)
+    : storage_(storage), shape_(shape), dtype_(dtype), layout_(layout), shard_spec_(shard_spec) {
     std::visit(
         [&] (auto&& storage) {
             using StorageType = std::decay_t<decltype(storage)>;
@@ -48,6 +48,8 @@ Tensor::Tensor(const Storage& storage, const Shape& shape, DataType dtype, Layou
         this->storage_
     );
 }
+
+Tensor::Tensor(const Storage& storage, const Shape& shape, DataType dtype, Layout layout) : Tensor(storage, shape, dtype, layout, std::nullopt) {}
 
 Tensor::~Tensor() {
     this->deallocate();
@@ -249,6 +251,7 @@ tt::stl::reflection::Attributes Tensor::attributes() const {
         {"shape", this->shape_},
         {"dtype", this->dtype_},
         {"layout", this->layout_},
+        {"shard_spec", this->shard_spec_},
     };
 }
 
@@ -257,6 +260,41 @@ Tensor create_device_tensor(const Shape& shape, DataType data_type, Layout layou
     uint32_t packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
     auto device_buffer = tensor_impl::allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config);
     return Tensor(DeviceStorage{device_buffer, device, memory_config}, shape, data_type, layout);
+}
+
+Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config, ShardSpec shard_spec) {
+    ZoneScoped;
+    TT_ASSERT(memory_config.is_sharded());
+    TT_ASSERT(memory_config.buffer_type == BufferType::L1);
+    auto shard_grid = shard_spec.shard_grid;
+    auto shard_shape = shard_spec.shard_shape;
+
+    // TODO: Assert for Contiguous RM Cores
+    uint32_t num_cores = 0;
+    for (const auto& core_range : shard_grid.ranges()) {
+        num_cores += core_range.size();
+    }
+
+    uint32_t num_shards;
+    if (memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        uint32_t total_height = tt_metal::compute_volume(shape) / shape[-1];
+        TT_ASSERT(total_height % shard_shape.first == 0 && shape[-1] == shard_shape.second);
+        num_shards = total_height / shard_shape.first;
+    } else {
+        TT_ASSERT("Unsupported sharding scheme");
+    }
+
+    TT_ASSERT(num_shards == num_cores, "Number of shards must match number of cores");
+
+    if (layout == Layout::TILE) {
+        TT_ASSERT((shard_shape.first % TILE_HEIGHT == 0 && shard_shape.second % TILE_WIDTH == 0), "Shard shape must be tile sized");
+    }
+
+    uint32_t shard_size = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(Shape({shard_shape.first, shard_shape.second}), data_type));
+
+    uint32_t packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
+    auto device_buffer = tensor_impl::allocate_sharded_buffer_on_device(packed_size_in_bytes, device, shard_size, memory_config);
+    return Tensor(DeviceStorage{device_buffer, device, memory_config}, shape, data_type, layout, shard_spec);
 }
 
 }  // namespace tt_metal

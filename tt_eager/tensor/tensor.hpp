@@ -31,6 +31,7 @@ class Tensor {
         // ======================================================================================
         //                                  Hi Level APIs
         // ======================================================================================
+        Tensor(const Storage& storage, const Shape& shape, DataType dtype, Layout layout, std::optional<ShardSpec> shard_spec);
         Tensor(const Storage& storage, const Shape& shape, DataType dtype, Layout layout);
 
         Tensor(const Tensor &other) = default;
@@ -43,7 +44,7 @@ class Tensor {
 
         void deallocate();
 
-        Tensor to(Device *target_device, const MemoryConfig &mem_config={.interleaved=true}) const;
+        Tensor to(Device *target_device, const MemoryConfig &mem_config={.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) const;
 
         Tensor to(Layout target_layout) const;
 
@@ -75,6 +76,7 @@ class Tensor {
         const Shape& shape() const { return this->shape_; }
         DataType dtype() const { return this->dtype_; }
         Layout layout() const { return this->layout_; }
+        const std::optional<ShardSpec>& shard_spec() const { return this->shard_spec_; }
 
         // ======================================================================================
         //                                      Extra Helper Functions
@@ -102,9 +104,13 @@ class Tensor {
         Shape shape_;
         DataType dtype_;
         Layout layout_;
+        std::optional<ShardSpec> shard_spec_;
+
 };
 
-Tensor create_device_tensor(const Shape& shape, DataType dtype, Layout layout, Device *device, const MemoryConfig& memory_config = {.interleaved=true});
+Tensor create_device_tensor(const Shape& shape, DataType dtype, Layout layout, Device *device, const MemoryConfig& memory_config = {.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED});
+
+Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config, ShardSpec shard_spec);
 
 }  // namespace tt_metal
 

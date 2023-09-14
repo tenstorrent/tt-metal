@@ -237,10 +237,16 @@ def run_perf_unbatched_stable_diffusion(
             tt_unconditioned, device, put_on_device=False
         )
         tt_conditioned = tt_conditioned.to(
-            device, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
+            device,
+            ttl.tensor.MemoryConfig(
+                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
+            ),
         )
         tt_unconditioned = tt_unconditioned.to(
-            device, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
+            device,
+            ttl.tensor.MemoryConfig(
+                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
+            ),
         )
 
         tt_text_embeddings = torch_to_tt_tensor_rm(
@@ -302,6 +308,7 @@ def run_perf_unbatched_stable_diffusion(
         f"Unbatched Stable Diffusion {comments} inference time: {second_iter_time}"
     )
     logger.info(f"Unbatched Stable Diffusion {comments} compile time: {compile_time}")
+
 
 @disable_conv
 @pytest.mark.models_performance_bare_metal

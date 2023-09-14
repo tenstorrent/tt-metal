@@ -13,7 +13,7 @@ def convert_to_datatype_on_device(x, target_dtype, host, device):
 
     logger.warning(f"Converting tensor {x.shape()} from {x.dtype()} to {target_dtype}!")
 
-    mem_config = ttl.tensor.MemoryConfig(True, x.memory_config().buffer_type)
+    mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, x.memory_config().buffer_type)
     x = x.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     x = (
         ttl.tensor.Tensor(x, target_dtype)

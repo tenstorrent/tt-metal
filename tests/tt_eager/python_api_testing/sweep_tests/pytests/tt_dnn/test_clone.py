@@ -22,8 +22,8 @@ shapes = [
     [[1, 3, 320, 384]],  # Multi core
 ]
 output_mem_configs = [
-    ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
-    ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
+    ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+    ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
 ]
 
 
@@ -31,8 +31,8 @@ output_mem_configs = [
 @pytest.mark.parametrize(
     "output_mem_config",
     [
-        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
     ],
     ids=["DRAM", "L1"],
 )

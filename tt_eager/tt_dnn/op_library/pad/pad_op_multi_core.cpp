@@ -144,7 +144,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
     const Tensor pad_value_const_tensor = Tensor(OwnedStorage{pad_value_const_buffer},
                                                  Shape({1, 1, 1, pad_value_const_buffer_size}),
                                                  DataType::BFLOAT16, Layout::ROW_MAJOR)
-                                            .to(device, MemoryConfig{.interleaved = true, .buffer_type = BufferType::L1});
+                                            .to(device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::L1});
     auto pad_value_const_tensor_addr = pad_value_const_tensor.buffer()->address();
 
     // uint32_t ntiles_h = output_tensor_shape[0] * output_tensor_shape[1] * output_tensor_shape[2] / TILE_HEIGHT;

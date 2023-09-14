@@ -110,7 +110,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                                  Shape({1, 1, 1, const_buffer_size}),
                                                  DataType::BFLOAT16,
                                                  Layout::ROW_MAJOR)
-                                            .to(device, MemoryConfig{.interleaved = true,
+                                            .to(device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED,
                                                                      .buffer_type = BufferType::L1});
     auto minus_inf_const_tensor_addr = minus_inf_const_tensor.buffer()->address();
 

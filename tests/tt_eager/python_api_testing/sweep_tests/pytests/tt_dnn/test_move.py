@@ -23,8 +23,8 @@ shapes = [
         [[1, 3, 320, 384]],  # Multi core
 ]
 output_mem_configs = [
-    ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
-    ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
+    ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+    ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
 ]
 if is_wormhole_b0():
     del shapes[1:]
@@ -35,7 +35,7 @@ if is_wormhole_b0():
     shapes
 )
 @pytest.mark.parametrize(
-    "input_mem_config", [ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)]
+    "input_mem_config", [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)]
 )
 @pytest.mark.parametrize(
     "output_mem_config",

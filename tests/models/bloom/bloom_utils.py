@@ -6,7 +6,9 @@ import torch
 import json
 import tt_lib
 
-mem_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
+mem_config = tt_lib.tensor.MemoryConfig(
+    tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+)
 
 
 def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):

@@ -131,7 +131,7 @@ def test_run_generic_conv(
         # Prepare activations
         A_cl_host = create_conv_act_tensor(A_pyt, 1, C, H, W)
         if run_conv_with_address_map:
-            A = A_cl_host.to(device, ttl.tensor.MemoryConfig(False))
+            A = A_cl_host.to(device, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.SINGLE_BANK))
         else:
             A = A_cl_host.to(device)
 
@@ -140,7 +140,7 @@ def test_run_generic_conv(
             B_pyt, K, C, R, S, weight_block_h, weight_block_w
         )
         if run_conv_with_address_map:
-            B_tiled = B_tiled_host.to(device, ttl.tensor.MemoryConfig(False))
+            B_tiled = B_tiled_host.to(device, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.SINGLE_BANK))
         else:
             B_tiled = B_tiled_host.to(device)
 

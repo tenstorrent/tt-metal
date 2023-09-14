@@ -135,9 +135,9 @@ def run_falcon_attn_matmul_test(
     "in0_mem_config, in1_mem_config, out_mem_config",
     (
         (
-            ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
-            ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
-            ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         ),
     ),
     ids=["DRAM"],

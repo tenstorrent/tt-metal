@@ -416,7 +416,7 @@ namespace tt::tt_metal::detail
 
                         py_tensor = torch.randn((1, 1, 32, 32))
                         tt_device = tt_lib.device.CreateDevice(0)
-                        mem_config = tt_lib.tensor.MemoryConfig(False)
+                        mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.SINGLE_BANK)
                         // ...
                         tt_lib.tensor.Tensor(
                             py_tensor.reshape(-1).tolist(),
@@ -458,7 +458,7 @@ namespace tt::tt_metal::detail
             )
             .def("to", [](const Tensor &self, Device *device, const MemoryConfig &mem_config) {
                 return self.to(device, mem_config);
-            }, py::arg().noconvert(), py::arg("mem_config").noconvert() = MemoryConfig{.interleaved = true}, py::keep_alive<0, 2>(), R"doc(
+            }, py::arg().noconvert(), py::arg("mem_config").noconvert() = MemoryConfig{.memory_layout=TensorMemoryLayout::INTERLEAVED}, py::keep_alive<0, 2>(), R"doc(
                 Move TT Tensor from host device to TT accelerator device.
 
                 Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B (in TILE layout) are supported on device.

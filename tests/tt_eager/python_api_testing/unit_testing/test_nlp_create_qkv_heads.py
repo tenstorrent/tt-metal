@@ -71,16 +71,16 @@ def run_nlp_create_qkv_heads_test(
 @pytest.mark.parametrize(
     "out_mem_config",
     (
-        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
     ),
     ids=["out_DRAM", "out_L1"],
 )
 @pytest.mark.parametrize(
     "in0_mem_config",
     (
-        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
     ),
     ids=["in0_DRAM", "in0_L1"],
 )
@@ -111,13 +111,13 @@ def test_nlp_create_qkv_heads_test(
 
 def test_nlp_create_qkv_heads_with_program_cache(use_program_cache, device):
     dtype = ttl.tensor.DataType.BFLOAT8_B
-    dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
+    dram_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
     for _ in range(2):
         run_nlp_create_qkv_heads_test(
             1, 32, dtype, dram_mem_config, dram_mem_config, device
         )
 
-    dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
+    dram_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
     for _ in range(2):
         run_nlp_create_qkv_heads_test(
             1, 32, dtype, dram_mem_config, dram_mem_config, device

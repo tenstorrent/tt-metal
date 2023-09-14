@@ -224,6 +224,8 @@ void validate_on_device_dtype_and_layout(Device *device, DataType dtype, Layout 
 // ======================================================================================
 //                           Data reader, writer, and initializers
 // ======================================================================================
+DeviceBuffer allocate_sharded_buffer_on_device(uint32_t buffer_size_bytes, Device *device, uint32_t shard_size, const MemoryConfig& memory_config);
+
 DeviceBuffer allocate_buffer_on_device(
     uint32_t buffer_size_bytes,
     Device *device,
@@ -256,7 +258,7 @@ inline void write_data_to_device_buffer(const BufferType<T>& data_to_write, Devi
     // And effectively get rid of any additional allocation
 
     if (data_type == DataType::BFLOAT16) {
-        if (memory_config.interleaved) {
+        if (memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED) {
             TT_ASSERT(shape[3] % 2 == 0, "Input tensor width must be a multiple of 2 to pack interleaved row major data");
         } else {
             TT_ASSERT(compute_volume(shape) % 2 == 0, "Input tensor volume must be a multiple of 2 to pack contiguous data");
@@ -337,6 +339,7 @@ inline Tensor to_host(const Tensor &tensor) {
     auto device_buffer = tensor.buffer();
     auto device = tensor.device();
     TT_ASSERT(device != nullptr && "Need device to be set copy data from device to host!");
+    TT_ASSERT(!tensor.memory_config().is_sharded(), "Sharded tensors cannot be directly read from device");
     uint32_t size_in_bytes = device_buffer->size();
     auto data_vec = read_data_from_device<T>(tensor, size_in_bytes);
     auto output_buffer = owned_buffer::create<T>(std::move(data_vec));
@@ -351,6 +354,7 @@ inline Tensor to_device(const Tensor &tensor, Device *target_device, const Memor
     }
     TT_ASSERT(target_device != nullptr && "Need target device in order to move tensor to device!");
     TT_ASSERT(tensor.is_allocated() && "Need data to exist in order to move it to device");
+    TT_ASSERT(!memory_config.is_sharded(), "Sharded tensors cannot be directly written from device");
 
     auto shape = tensor.shape();
     auto data_type = tensor.dtype();

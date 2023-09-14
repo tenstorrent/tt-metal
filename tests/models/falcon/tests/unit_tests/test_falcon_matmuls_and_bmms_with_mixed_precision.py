@@ -52,9 +52,9 @@ def run_falcon_matmul_test(
             logger.warning(
                 f"For seq_len: {seq_len}, in0_dtype: {in0_dtype}, in1_dtype: {in1_dtype}, and out_dtype: {out_dtype}, L1 space is not enough. Running with in0, in1, and out on DRAM instead!"
             )
-            in0_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
-            in1_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
-            out_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
+            in0_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+            in1_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+            out_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
     elif falcon_op == ttl.tensor.falcon_dense_h_to_4h_matmul:
         a_shape = [1, 1, seq_len, 4544]
         b_shape = [1, 1, 4544, 18176]
@@ -64,9 +64,9 @@ def run_falcon_matmul_test(
             logger.warning(
                 f"For seq_len: {seq_len}, in0_dtype: {in0_dtype}, in1_dtype: {in1_dtype}, and out_dtype: {out_dtype}, L1 space is not enough. Running with in0, in1, and out on DRAM instead!"
             )
-            in0_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
-            in1_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
-            out_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
+            in0_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+            in1_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+            out_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
     elif falcon_op == ttl.tensor.falcon_lm_head_matmul:
         a_shape = [1, 1, seq_len, 4544]
         b_shape = [1, 1, 4544, 65024]
@@ -85,9 +85,9 @@ def run_falcon_matmul_test(
             logger.warning(
                 f"For seq_len: {seq_len}, in0_dtype: {in0_dtype}, in1_dtype: {in1_dtype}, and out_dtype: {out_dtype}, L1 space is not enough. Running with in0, in1, and out on DRAM instead!"
             )
-            in0_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
-            in1_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
-            out_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
+            in0_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+            in1_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+            out_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
     else:
         raise NotImplementedError(f"falcon matmul op is undefined!")
 
@@ -146,9 +146,9 @@ def run_falcon_matmul_test(
     "in0_mem_config, in1_mem_config, out_mem_config",
     (
         (
-            ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
-            ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
-            ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
         ),
     ),
     ids=["weights_DRAM"],

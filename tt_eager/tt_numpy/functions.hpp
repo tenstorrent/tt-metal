@@ -46,7 +46,7 @@ constexpr static DataType get_data_type() {
 }
 
 template<typename T>
-static Tensor full(const Shape& shape, T value, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
+static Tensor full(const Shape& shape, T value, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     constexpr DataType data_type = detail::get_data_type<T>();
     auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(shape));
     std::fill(std::begin(owned_buffer), std::end(owned_buffer), value);
@@ -60,7 +60,7 @@ static Tensor full(const Shape& shape, T value, const Layout layout = Layout::RO
 } // namespace detail
 
 template<typename T>
-static Tensor full(const Shape& shape, const T value, const DataType data_type, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
+static Tensor full(const Shape& shape, const T value, const DataType data_type, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     switch (data_type) {
         case DataType::UINT32: {
             return detail::full<uint32_t>(shape, uint32_t(value), layout, device, output_mem_config);
@@ -76,11 +76,11 @@ static Tensor full(const Shape& shape, const T value, const DataType data_type, 
     }
 }
 
-static Tensor zeros(const Shape& shape, const DataType data_type = DataType::BFLOAT16, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
+static Tensor zeros(const Shape& shape, const DataType data_type = DataType::BFLOAT16, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     return full(shape, 0.0f, data_type, layout, device, output_mem_config);
 }
 
-static Tensor ones(const Shape& shape, const DataType data_type = DataType::BFLOAT16, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
+static Tensor ones(const Shape& shape, const DataType data_type = DataType::BFLOAT16, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     return full(shape, 1.0f, data_type, layout, device, output_mem_config);
 }
 
@@ -114,7 +114,7 @@ static Tensor ones_like(const Tensor& input_tensor, std::optional<DataType> data
 }
 
 template<typename T>
-static Tensor arange(int64_t start, int64_t stop, int64_t step, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = MemoryConfig{.interleaved = true}) {
+static Tensor arange(int64_t start, int64_t stop, int64_t step, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     constexpr DataType data_type = detail::get_data_type<T>();
     // Current implementation restrictions
     TT_ASSERT(step > 0, "Step must be greater than 0");

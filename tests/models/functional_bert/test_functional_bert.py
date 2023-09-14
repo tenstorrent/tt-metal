@@ -36,7 +36,7 @@ class MatmulConfig:
     program_config: ttl.operations.primary.MatmulProgramConfig = (
         ttl.operations.primary.MatmulDefaultProgramConfig()
     )
-    output_mem_config: MemoryConfig = MemoryConfig(True, BufferType.DRAM)
+    output_mem_config: MemoryConfig = MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, BufferType.DRAM)
     output_dtype: Optional[DataType] = None
 
 
@@ -202,7 +202,7 @@ def tt_encoder(
             parameters[
                 f"bert.encoder.layer.{encoder_index}.attention.output.LayerNorm.bias"
             ],
-            output_mem_config=MemoryConfig(True, BufferType.L1),
+            output_mem_config=MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, BufferType.L1),
         )
     )
     hidden_states.deallocate()
@@ -222,7 +222,7 @@ def tt_encoder(
         1e-12,
         parameters[f"bert.encoder.layer.{encoder_index}.output.LayerNorm.weight"],
         parameters[f"bert.encoder.layer.{encoder_index}.output.LayerNorm.bias"],
-        output_mem_config=MemoryConfig(True, BufferType.L1),
+        output_mem_config=MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, BufferType.L1),
     )
     multi_head_attention_add_and_layer_norm_output.deallocate()
 
@@ -247,14 +247,14 @@ def tt_bert_preprocess_inputs(
     embeddings = (
         ttl.tensor.Tensor(embeddings.unsqueeze(1), DataType.BFLOAT16)
         .to(ttl.tensor.Layout.TILE)
-        .to(kwargs["device"], MemoryConfig(True, BufferType.L1))
+        .to(kwargs["device"], MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, BufferType.L1))
     )
     encoder_input = ttl.operations.primary.layernorm(
         embeddings,
         1e-12,
         parameters["bert.embeddings.LayerNorm.weight"],
         parameters["bert.embeddings.LayerNorm.bias"],
-        output_mem_config=MemoryConfig(True, BufferType.L1),
+        output_mem_config=MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, BufferType.L1),
     )
     embeddings.deallocate()
     encoder_input = ttl.tensor.move(encoder_input)
@@ -264,7 +264,7 @@ def tt_bert_preprocess_inputs(
     attention_mask = (
         ttl.tensor.Tensor(attention_mask, DataType.BFLOAT16)
         .to(ttl.tensor.Layout.TILE)
-        .to(kwargs["device"], MemoryConfig(True, BufferType.L1))
+        .to(kwargs["device"], MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, BufferType.L1))
     )
 
     return encoder_input, attention_mask
@@ -316,7 +316,7 @@ def tt_bert_for_question_answering(
         bert_output,
         parameters["qa_outputs.weight"],
         bias=parameters["qa_outputs.bias"],
-        output_mem_config=MemoryConfig(True, BufferType.L1),
+        output_mem_config=MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, BufferType.L1),
     )
     return qa_outputs
 
@@ -363,7 +363,7 @@ def create_bert_multi_head_attention_config(batch_size):
                 per_core_N=8,
                 fused_activation=None,
             ),
-            output_mem_config=MemoryConfig(True, BufferType.L1),
+            output_mem_config=MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, BufferType.L1),
             output_dtype=DataType.BFLOAT8_B,
         ),
         queue_by_key_matmul_config=MatmulConfig(
@@ -377,7 +377,7 @@ def create_bert_multi_head_attention_config(batch_size):
                     per_core_N=12,
                 )
             ),
-            output_mem_config=MemoryConfig(True, BufferType.L1),
+            output_mem_config=MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, BufferType.L1),
             output_dtype=DataType.BFLOAT16,
         ),
         attention_probs_by_value_matmul_config=MatmulConfig(
@@ -389,7 +389,7 @@ def create_bert_multi_head_attention_config(batch_size):
                 per_core_M=12,
                 per_core_N=2,
             ),
-            output_mem_config=MemoryConfig(True, BufferType.L1),
+            output_mem_config=MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, BufferType.L1),
             output_dtype=DataType.BFLOAT8_B,
         ),
         self_output_matmul_config=MatmulConfig(
@@ -404,13 +404,13 @@ def create_bert_multi_head_attention_config(batch_size):
                     fused_activation=None,
                 )
             ),
-            output_mem_config=MemoryConfig(True, BufferType.L1),
+            output_mem_config=MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, BufferType.L1),
             output_dtype=DataType.BFLOAT16,
         ),
         split_fused_qkv_and_split_heads_output_mem_config=MemoryConfig(
             True, BufferType.L1
         ),
-        concatenate_heads_output_mem_config=MemoryConfig(True, BufferType.L1),
+        concatenate_heads_output_mem_config=MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, BufferType.L1),
     )
 
 
@@ -428,7 +428,7 @@ def create_bert_feedforward_config(batch_size):
                     fused_activation=(ttl.tensor.FusibleActivation.GELU, True),
                 )
             ),
-            output_mem_config=MemoryConfig(True, BufferType.L1),
+            output_mem_config=MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, BufferType.L1),
             output_dtype=DataType.BFLOAT8_B,
         ),
         ff2_matmul_config=MatmulConfig(
@@ -443,7 +443,7 @@ def create_bert_feedforward_config(batch_size):
                     fused_activation=None,
                 )
             ),
-            output_mem_config=MemoryConfig(True, BufferType.L1),
+            output_mem_config=MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, BufferType.L1),
             output_dtype=DataType.BFLOAT16,
         ),
     )

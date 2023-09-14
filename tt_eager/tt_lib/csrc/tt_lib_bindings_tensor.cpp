@@ -94,6 +94,8 @@ void TensorModule(py::module &m_tensor) {
 
     detail::export_enum<MathFidelity>(m_tensor);
 
+    detail::export_enum<TensorMemoryLayout>(m_tensor);
+
     py::enum_<BufferType>(m_tensor, "BufferType")
         .value("DRAM", BufferType::DRAM)
         .value("L1", BufferType::L1);
@@ -134,11 +136,11 @@ void TensorModule(py::module &m_tensor) {
     pyMemoryConfig
         .def(
             py::init<>(
-                [](bool interleaved, BufferType buffer_type) {
-                    return MemoryConfig{.interleaved=interleaved, .buffer_type=buffer_type};
+                [](TensorMemoryLayout memory_layout, BufferType buffer_type) {
+                    return MemoryConfig{.memory_layout=memory_layout, .buffer_type=buffer_type};
                 }
             ),
-            py::arg("interleaved") = true,
+            py::arg("memory_layout") = TensorMemoryLayout::INTERLEAVED,
             py::arg("buffer_type") = BufferType::DRAM, R"doc(
                 Create MemoryConfig class.
                 If interleaved is set to True, tensor data will be interleaved across multiple DRAM banks on TT Accelerator device.
@@ -148,14 +150,18 @@ void TensorModule(py::module &m_tensor) {
 
                 .. code-block:: python
 
-                    mem_config = tt_lib.tensor.MemoryConfig(False)
+                    mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.SINGLE_BANK)
             )doc"
         )
         .def("__repr__", [](const MemoryConfig &memory_config) -> std::string {
             return fmt::format("{}", memory_config);
         }
         )
-        .def_readonly("interleaved", &MemoryConfig::interleaved, "Whether tensor data is interleaved across mulitple DRAM channels")
+        .def("is_sharded", &MemoryConfig::is_sharded, "Whether tensor data is sharded across multiple cores in L1")
+        .def_property_readonly("interleaved", [](const MemoryConfig &memory_config) {
+            return memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED;
+        }, "Whether tensor data is interleaved across multiple DRAM channels"
+        )
         .def_readonly("buffer_type", &MemoryConfig::buffer_type, "Buffer type to store tensor data. Can be DRAM or L1")
         .def(py::self == py::self)
         .def(py::self != py::self);

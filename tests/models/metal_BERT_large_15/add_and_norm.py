@@ -107,7 +107,7 @@ class TtAddAndNormModel(torch.nn.Module):
         self.eps = config.layer_norm_eps
 
     def forward(self, a, b):
-        out_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
+        out_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
         fused_result = ttl.tensor.add_layernorm(
             a, b, self.eps, self.gamma_, self.beta_, out_mem_config
         )

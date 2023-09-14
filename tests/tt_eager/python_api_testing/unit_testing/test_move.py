@@ -68,12 +68,12 @@ if is_wormhole_b0():
     "in0_mem_config, output_mem_config",
     (
         (
-            ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
-            ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         ),
         (
-            ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
-            ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
         ),
     ),
     ids=["DRAM", "L1"],
@@ -89,8 +89,8 @@ def test_move_op(test_id, shape, dtype, in0_mem_config, output_mem_config, devic
     run_move_op(test_id, shape, dtype, in0_mem_config, output_mem_config, device)
 
 def test_move_op_with_program_cache(use_program_cache, device):
-    in0_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
-    output_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
+    in0_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    output_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
     dtype = ttl.tensor.DataType.BFLOAT16
     shape = [1, 3, 320, 384]
 

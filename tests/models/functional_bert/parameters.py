@@ -54,7 +54,7 @@ def preprocess_layernorm_parameter(parameters_config, parameter, **kwargs):
     parameter = pad_tensor(parameter, height_multiple=1, width_multiple=TILE_WIDTH)
     parameter = parameter.reshape((1, 1, -1, TILE_WIDTH))
     tensor = ttl.tensor.Tensor(parameter, parameters_config.layernorm_parameter_dtype)
-    tensor = tensor.to(kwargs["device"], MemoryConfig(True, BufferType.L1))
+    tensor = tensor.to(kwargs["device"], MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, BufferType.L1))
     return tensor
 
 

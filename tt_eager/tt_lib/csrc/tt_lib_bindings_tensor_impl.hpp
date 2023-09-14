@@ -17,7 +17,7 @@ void bind_op_with_mem_config(py::module_ &module, std::string op_name, Func &&f,
         const std::string mem_config_name = "output_mem_config";
         docstring += fmt::format(R"doc(
             "{0}", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is {1} in {2}", "No")doc",
-            mem_config_name, operation::DEFAULT_OUTPUT_MEMORY_CONFIG.interleaved ? "interleaved" : "non-interleaved", magic_enum::enum_name(operation::DEFAULT_OUTPUT_MEMORY_CONFIG.buffer_type)
+            mem_config_name, magic_enum::enum_name(operation::DEFAULT_OUTPUT_MEMORY_CONFIG.memory_layout), magic_enum::enum_name(operation::DEFAULT_OUTPUT_MEMORY_CONFIG.buffer_type)
         );
         module.def(op_name.c_str(), f,
             std::forward<Extra>(extra)..., py::arg(mem_config_name.c_str()).noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, docstring.c_str()

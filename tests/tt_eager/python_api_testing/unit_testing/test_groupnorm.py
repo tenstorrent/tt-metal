@@ -136,12 +136,12 @@ def run_groupnorm_tests(
 
 @pytest.mark.parametrize(
     "out_mem_config",
-    (ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),),
+    (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),),
     ids=["out_DRAM"],
 )
 @pytest.mark.parametrize(
     "in0_mem_config",
-    (ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),),
+    (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),),
     ids=["in0_DRAM"],
 )
 @pytest.mark.parametrize(
