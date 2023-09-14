@@ -113,7 +113,9 @@ static void dump_l1_status(FILE *f, WatcherDevice *wdev, CoreCoord core) {
     data = read_hex_vec_from_core(wdev->cluster_, wdev->device_id_, core, MEM_L1_BASE, sizeof(uint32_t));
     // XXXX TODO(pgk): get this const from llrt (jump to fw insn)
     if (data[0] != 0x2010006f) {
-        fprintf(f, "L1[0]=bad 0x%08x ", data[0]);
+        fprintf(f, "L1[0]=bad value 0x%08x ", data[0]);
+        fflush(f);
+        log_fatal(LogLLRuntime, "Watcher found corruption at L1 location 0, see log");
     }
 }
 
@@ -147,22 +149,22 @@ static void dump_noc_sanity_status(FILE *f, int noc, const debug_sanitize_noc_ad
         }
         break;
     case DebugSanitizeNocInvalidL1:
-        fprintf(f, "noc%d:%s{0x%08lx, %d} ", noc, get_sanity_riscv_name(san->which), san->addr, san->len);
+        fprintf(f, "noc%d:%s{0x%08lx, %d}", noc, get_sanity_riscv_name(san->which), san->addr, san->len);
         fflush(f);
-        log_fatal(LogLLRuntime, "Watcher stopped the device due to bad NOC L1/reg address, see log");;
+        log_fatal(LogLLRuntime, "Watcher stopped the device due to bad NOC L1/reg address, see log");
         break;
     case DebugSanitizeNocInvalidUnicast:
-        fprintf(f, "noc%d:%s{(%02ld,%02ld) 0x%08lx, %d} ",
+        fprintf(f, "noc%d:%s{(%02ld,%02ld) 0x%08lx, %d}",
                 noc,
                 get_sanity_riscv_name(san->which),
                 NOC_UNICAST_ADDR_X(san->addr),
                 NOC_UNICAST_ADDR_Y(san->addr),
                 NOC_LOCAL_ADDR_OFFSET(san->addr), san->len);
         fflush(f);
-        log_fatal(LogLLRuntime, "Watcher stopped the device due to bad NOC unicast transaction, see log");;
+        log_fatal(LogLLRuntime, "Watcher stopped the device due to bad NOC unicast transaction, see log");
         break;
     case DebugSanitizeNocInvalidMulticast:
-        fprintf(f, "noc%d:%s{(%02ld,%02ld)-(%02ld,%02ld) 0x%08lx, %d} ",
+        fprintf(f, "noc%d:%s{(%02ld,%02ld)-(%02ld,%02ld) 0x%08lx, %d}",
                 noc,
                 get_sanity_riscv_name(san->which),
                 NOC_MCAST_ADDR_START_X(san->addr),
@@ -171,7 +173,7 @@ static void dump_noc_sanity_status(FILE *f, int noc, const debug_sanitize_noc_ad
                 NOC_MCAST_ADDR_END_Y(san->addr),
                 NOC_LOCAL_ADDR_OFFSET(san->addr), san->len);
         fflush(f);
-        log_fatal(LogLLRuntime, "Watcher stopped the device due to bad NOC multicast transaction, see log");;
+        log_fatal(LogLLRuntime, "Watcher stopped the device due to bad NOC multicast transaction, see log");
         break;
     default:
         log_fatal(LogLLRuntime, "Watcher unexpected noc debug state, unknown failure code: {}\n", san->invalid);
@@ -198,9 +200,9 @@ static void dump_run_mailboxes(FILE *f, WatcherDevice *wdev, CoreCoord core) {
     if (data[0] == INIT_VALUE) code = 'I';
     if (data[0] == DONE_VALUE) code = 'D';
     if (code == 'U') {
-        fprintf(f, " rmb:U(%d) ", data[0]);
+        fprintf(f, "rmb:U(%d) ", data[0]);
     } else {
-        fprintf(f, " rmb:%c ", code);
+        fprintf(f, "rmb:%c ", code);
     }
 }
 
@@ -341,7 +343,7 @@ static void init_device(tt_cluster *cluster,
     for (int i = 0; i < watcher::N_NOCS; i++) {
         data[i].addr = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_64;
         data[i].len = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_32;
-        data[i].which = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16;;
+        data[i].which = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16;
         data[i].invalid = DebugSanitizeNocInvalidOK;
     }
 
