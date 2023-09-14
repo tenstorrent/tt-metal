@@ -32,7 +32,7 @@ from hrnet.tt.basicblock import TtBasicBlock
 )
 def test_hrnet_module_inference(model_name, pcc, reset_seeds):
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
 

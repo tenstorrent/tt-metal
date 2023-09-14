@@ -177,7 +177,7 @@ def run_bert_question_and_answering_inference(
     torch.manual_seed(1234)
 
     device = ttl.device.CreateDevice(0)
-    ttl.device.InitializeDevice(device)
+
 
 
     model_name = str(model_location_generator(model_version, model_subdir = "Bert"))

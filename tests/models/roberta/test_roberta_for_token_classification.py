@@ -34,7 +34,7 @@ from transformers import AutoTokenizer
 def test_roberta_for_token_classification():
     torch.manual_seed(1234)
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
     base_address = ""

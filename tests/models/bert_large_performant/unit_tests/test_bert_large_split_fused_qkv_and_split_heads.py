@@ -23,7 +23,7 @@ def run_split_fused_qkv_and_split_heads_test(
 ):
     torch.manual_seed(1234)
     device = ttl.device.CreateDevice(0)
-    ttl.device.InitializeDevice(device)
+
     a_shape = [batch, 1, 384, 3072]
 
     A = torch.randn(a_shape)

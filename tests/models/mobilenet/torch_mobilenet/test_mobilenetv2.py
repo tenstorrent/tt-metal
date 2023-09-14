@@ -33,7 +33,7 @@ def test_mobilenetv2_inference(fuse_ops, imagenet_sample_input):
     with torch.no_grad():
         # Initialize the device
         device = tt_lib.device.CreateDevice(0)
-        tt_lib.device.InitializeDevice(device)
+
 
         image_processor = transformers.AutoImageProcessor.from_pretrained("google/mobilenet_v2_1.0_224")
         torch_model = transformers.MobileNetV2Model.from_pretrained("google/mobilenet_v2_1.0_224")

@@ -76,7 +76,7 @@ def run_bloom_block_test(device):
 
 def test_bloom_block():
     device = ttm.device.CreateDevice(0)
-    ttm.device.InitializeDevice(device)
+
     run_bloom_block_test(device)
     ttm.device.CloseDevice(device)
 

@@ -33,7 +33,7 @@ def test_vit_attention(pcc=0.99):
 
         # Initialize the device
         device = tt_lib.device.CreateDevice(0)
-        tt_lib.device.InitializeDevice(device)
+
         tt_lib.device.SetDefaultDevice(device)
 
         tt_hidden_state = torch_to_tt_tensor_rm(

@@ -23,7 +23,7 @@ def run_bert_large_post_softmax_bmm_test(
 ):
     torch.manual_seed(1234)
     device = ttl.device.CreateDevice(0)
-    ttl.device.InitializeDevice(device)
+
     a_shape = [
         9,
         16,

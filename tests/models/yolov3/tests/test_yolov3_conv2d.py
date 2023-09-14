@@ -34,7 +34,7 @@ from models.utility_functions import (
 def test_conv2d_module(model_location_generator):
     torch.manual_seed(1234)
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
 
     INDEX = 0
     base_address = f"model.model.{INDEX}.conv"

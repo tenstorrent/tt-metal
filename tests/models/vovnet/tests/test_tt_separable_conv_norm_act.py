@@ -32,7 +32,7 @@ from tt.separable_conv_norm_act import (
 )
 def test_separable_conv_norm_act_inference(pcc, reset_seeds):
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
 

@@ -230,7 +230,7 @@ def run_mnist_inference():
 def test_run_mnist_inference():
     # Initialize the device
     device = ttl.device.CreateDevice(0)
-    ttl.device.InitializeDevice(device)
+
 
     run_mnist_inference()
     ttl.device.CloseDevice(device)

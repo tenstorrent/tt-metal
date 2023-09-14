@@ -29,7 +29,7 @@ import tt_lib
 )
 def test_ssd_mobilenetv3_features_inference(pcc, reset_seeds):
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
     torch_model = pretrained(weights=SSDLite320_MobileNet_V3_Large_Weights.DEFAULT)

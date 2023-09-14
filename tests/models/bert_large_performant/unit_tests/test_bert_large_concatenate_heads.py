@@ -21,7 +21,7 @@ import torch
 def run_bert_large_concatenate_heads_test(batch, dtype, in0_mem_config, out_mem_config):
     torch.manual_seed(1234)
     device = ttl.device.CreateDevice(0)
-    ttl.device.InitializeDevice(device)
+
     a_shape = [batch, 16, 384, 64]
 
     A = torch.randn(a_shape)

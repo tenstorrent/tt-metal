@@ -18,7 +18,7 @@ from models.stable_diffusion.tt.downblock_2d import TtDownBlock2D
 def test_run_downblock_real_input_inference(model_location_generator):
     # Initialize the device
     device = ttl.device.CreateDevice(0)
-    ttl.device.InitializeDevice(device)
+
     ttl.device.SetDefaultDevice(device)
 
 
@@ -68,7 +68,7 @@ def test_run_downblock_real_input_inference(model_location_generator):
 def test_run_downblock_inference():
     # Initialize the device
     device = ttl.device.CreateDevice(0)
-    ttl.device.InitializeDevice(device)
+
     ttl.device.SetDefaultDevice(device)
 
 

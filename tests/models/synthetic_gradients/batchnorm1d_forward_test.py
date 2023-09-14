@@ -230,6 +230,6 @@ def run_btchnorm_forward(bn_size):
 def test_batchnorm_inference():
     # Initialize the device
     create_global_variables()
-    ttl.device.InitializeDevice(device)
+
     run_btchnorm_forward(32)
     ttl.device.CloseDevice(device)

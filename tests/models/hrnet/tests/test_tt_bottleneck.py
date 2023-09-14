@@ -31,7 +31,7 @@ from hrnet.tt.bottleneck import (
 )
 def test_hrnet_bottleneck_inference(model_name, pcc, reset_seeds):
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
 

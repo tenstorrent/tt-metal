@@ -63,7 +63,7 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=
 
 # TT init
 tt_device = ttm.device.CreateDevice(0)
-ttm.device.InitializeDevice(tt_device)
+
 
 # model
 if init_from == 'resume':

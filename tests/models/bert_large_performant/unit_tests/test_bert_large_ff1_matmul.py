@@ -39,7 +39,7 @@ def run_bert_large_ff1_matmul_test(
 
     torch.manual_seed(1234)
     device = ttl.device.CreateDevice(0)
-    ttl.device.InitializeDevice(device)
+
     a_shape = [9, 1, 384, 1024]
     b_shape = [1, 1, 1024, 4096]
     bias_shape = [1, 1, 1, 4096]

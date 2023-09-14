@@ -176,6 +176,6 @@ def run_block_inference(in_features, out_features, device):
 def test_run_block_inference():
     # Initialize the device
     device = ttl.device.CreateDevice(0)
-    ttl.device.InitializeDevice(device)
+
     run_block_inference(1024, 256, device)
     ttl.device.CloseDevice(device)

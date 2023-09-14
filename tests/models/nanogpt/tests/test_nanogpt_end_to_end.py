@@ -61,7 +61,7 @@ compile = False # use PyTorch 2.0 to compile the model to be faster
 )
 def test_nanogpt_end_to_end(prompt, max_new_tokens, temperature):
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
     # Prepare input

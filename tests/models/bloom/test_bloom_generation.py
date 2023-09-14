@@ -333,7 +333,7 @@ def run_generate(input_sentance, run_tt_model, device):
 
 if __name__ == "__main__":
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
 
     output_sentance_night = run_generate(
         "It was a dark and stormy night", run_tt_model=True, device=device

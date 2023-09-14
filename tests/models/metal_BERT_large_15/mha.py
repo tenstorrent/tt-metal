@@ -257,7 +257,7 @@ def run_mha_inference(
 ):
     device = ttl.device.CreateDevice(0)
     # Initialize the device
-    ttl.device.InitializeDevice(device)
+
 
     model_name = str(model_location_generator(model_version, model_subdir = "Bert"))
 

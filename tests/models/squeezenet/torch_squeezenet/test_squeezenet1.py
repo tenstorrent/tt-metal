@@ -32,7 +32,7 @@ def test_squeezenet1_inference(fuse_ops, imagenet_sample_input):
     with torch.no_grad():
         # Initialize the device
         device = ttl.device.CreateDevice(0)
-        ttl.device.InitializeDevice(device)
+
 
         torch_squeezenet = models.squeezenet1_0(weights=models.SqueezeNet1_0_Weights.IMAGENET1K_V1)
 

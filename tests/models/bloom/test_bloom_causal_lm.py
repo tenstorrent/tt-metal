@@ -23,7 +23,7 @@ import tests.models.bloom.bloom_causal_lm as bloom_causal_lm
 
 def test_bloom_causal_lm():
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
 
     hugging_bloom_reference_model = BloomForCausalLM.from_pretrained(
         "bigscience/bloom-560m", torchscript=False

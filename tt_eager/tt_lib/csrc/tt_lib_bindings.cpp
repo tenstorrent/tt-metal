@@ -2880,15 +2880,6 @@ void DeviceModule(py::module &m_device) {
         | device_id        | Device index           | int                 |                              | Yes      |
         +------------------+------------------------+---------------------+------------------------------+----------+
     )doc");
-    m_device.def("InitializeDevice", [](Device* dev){}, R"doc(
-        Initialize instance of TT accelerator device.
-
-        +-------------------+--------------------------------------------------------+----------------------------------+-------------------------------------------+----------+
-        |  Argument         |                 Description                            |       Data type                  |           Valid range                     | Required |
-        +===================+========================================================+==================================+============================================+=========+
-        | device            | Device to initialize                                   | tt_lib.device.Device             |                                           | Yes      |
-        +-------------------+--------------------------------------------------------+----------------------------------+-------------------------------------------+----------+
-    )doc");
     m_device.def("CloseDevice", &CloseDevice, R"doc(
         Reset an instance of TT accelerator device to default state and relinquish connection to device.
 

@@ -98,6 +98,6 @@ def run_whisper_decoder(device):
 def test_WhipserDecoder_inference():
     torch.manual_seed(1234)
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     run_whisper_decoder(device=device)
     tt_lib.device.CloseDevice(device)

@@ -20,7 +20,7 @@ from models.trocr.trocr_utils import GenerationMixin
 )
 def test_trocr_causal_llm_inference(pcc, reset_seeds):
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
     with torch.no_grad():

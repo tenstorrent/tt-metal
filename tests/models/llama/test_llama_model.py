@@ -128,7 +128,7 @@ def test_Llama_inference(
 ):
     # Initialize the device
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
 

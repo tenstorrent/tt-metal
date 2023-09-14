@@ -40,7 +40,7 @@ from models.utility_functions import (
 )
 def test_nanogpt_block(pcc):
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
     model_hf = GPT2LMHeadModel.from_pretrained('gpt2')

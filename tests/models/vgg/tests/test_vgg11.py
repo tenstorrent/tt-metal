@@ -33,7 +33,7 @@ def test_vgg11_inference(pcc, imagenet_sample_input):
     with torch.no_grad():
         # Initialize the device
         device = tt_lib.device.CreateDevice(0)
-        tt_lib.device.InitializeDevice(device)
+
         tt_lib.device.SetDefaultDevice(device)
 
 

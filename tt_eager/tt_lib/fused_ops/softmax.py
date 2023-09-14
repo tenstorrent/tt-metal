@@ -48,7 +48,7 @@ def ref_stable_softmax(x):
 
 if __name__ == "__main__":
     device = device.CreateDevice(0)
-    device.InitializeDevice(device)
+
 
     H, W = 64, 96
     torch.manual_seed(123)

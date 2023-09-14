@@ -25,7 +25,7 @@ from models.utility_functions import (
 
 def test_Yolov5_detect():
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
 
     weights = "tests/models/yolov5/reference/yolov5s.pt"
     dnn = False

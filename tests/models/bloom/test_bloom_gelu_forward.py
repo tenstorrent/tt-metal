@@ -42,7 +42,7 @@ def run_bloom_gelu_forward_test(device):
 
 def test_bloom_gelu_forward():
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     run_bloom_gelu_forward_test(device)
     tt_lib.device.CloseDevice(device)
 

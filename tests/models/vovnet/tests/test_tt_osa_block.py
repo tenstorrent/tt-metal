@@ -29,7 +29,7 @@ from tests.models.vovnet.tt.osa_block import TtOsaBlock
 )
 def test_osa_block_inference(pcc, reset_seeds):
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
     STAGE_INDEX = 0

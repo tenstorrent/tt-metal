@@ -113,6 +113,6 @@ def run_btchnorm_inference(bn_size, device):
 def test_batchnorm_inference():
     # Initialize the device
     device = ttl.device.CreateDevice(0)
-    ttl.device.InitializeDevice(device)
+
     run_btchnorm_inference(1024, device)
     ttl.device.CloseDevice(device)

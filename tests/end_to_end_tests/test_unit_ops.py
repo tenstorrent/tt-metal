@@ -11,7 +11,7 @@ import tt_lib
 @pytest.mark.eager_package_silicon
 def test_tile_major_reshape_sweep(reset_seeds, first_grayskull_device):
     device = first_grayskull_device
-    tt_lib.device.InitializeDevice(device)
+
 
     N = 3
     C = 5

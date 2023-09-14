@@ -26,7 +26,7 @@ from transformers import AutoTokenizer
 )
 def test_distilbert_for_question_answering_inference(pcc, reset_seeds):
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
     tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased-distilled-squad")

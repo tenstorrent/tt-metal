@@ -99,7 +99,7 @@ def make_tt_unet(state_dict):
 def demo():
     # Initialize the device
     device = ttl.device.CreateDevice(0)
-    ttl.device.InitializeDevice(device)
+
     ttl.device.SetDefaultDevice(device)
     # enable_persistent_kernel_cache()
     disable_persistent_kernel_cache()

@@ -548,7 +548,7 @@ def run_generate(sample, device):
 def test_WhipserForConditionalGeneration_inference():
     torch.manual_seed(1234)
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
 
     sample = 0
     correct_transcription = " Mr. Quilter is the apostle of the middle classes, and we are glad to welcome his gospel."

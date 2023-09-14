@@ -17,7 +17,7 @@ def setup_host_and_device(func):
         output = None
         if device is None:
             device = ttl.device.CreateDevice(device_id)
-            ttl.device.InitializeDevice(device)
+
             ttl.device.SetDefaultDevice(device)
             try:
                 output = func(*args, device=device, **kwargs)

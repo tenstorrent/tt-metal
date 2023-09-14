@@ -39,7 +39,7 @@ from models.utility_functions import (
 )
 def test_nanogpt_mlp(pcc):
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
 
 
 

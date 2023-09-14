@@ -29,7 +29,7 @@ from transformers import SwinModel
 )
 def test_swin_stage_inference(pcc, reset_seeds):
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
     STAGE_LAYER_INDEX = 0

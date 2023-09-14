@@ -125,7 +125,7 @@ def test_llamaCausallm_inference(
 ):
     # Initialize the device
     device = ttl.device.CreateDevice(0)
-    ttl.device.InitializeDevice(device)
+
 
     run_test_llamaCausallm_inference(
         device,

@@ -42,7 +42,7 @@ def test_perf(use_program_cache, model_location_generator):
     # Initialize the device
     torch.manual_seed(1234)
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
     # Load yolo

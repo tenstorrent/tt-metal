@@ -34,7 +34,7 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time)
     cpu_key = "ref_key"
 
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
     tt_model, pt_model = convnet_mnist(device)

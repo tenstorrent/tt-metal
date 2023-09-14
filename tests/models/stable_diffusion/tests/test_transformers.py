@@ -60,7 +60,7 @@ def test_run_basic_transformer_inference():
 
     # Initialize the device
     device = ttl.device.CreateDevice(0)
-    ttl.device.InitializeDevice(device)
+
     ttl.device.SetDefaultDevice(device)
 
 
@@ -162,7 +162,7 @@ def test_run_transformer_inference():
 
     # Initialize the device
     device = ttl.device.CreateDevice(0)
-    ttl.device.InitializeDevice(device)
+
     ttl.device.SetDefaultDevice(device)
 
 

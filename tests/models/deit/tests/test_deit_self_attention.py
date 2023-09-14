@@ -48,7 +48,7 @@ def test_deit_self_attention_inference(pcc = 0.99):
 
     # Initialize the device
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
 

@@ -46,7 +46,7 @@ from models.utility_functions import (
 )
 def test_nanogpt_model_real(pcc, prompt):
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
 

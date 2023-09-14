@@ -33,7 +33,7 @@ from transformers import RobertaModel
 def test_roberta_encoder_inference():
     torch.manual_seed(1234)
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     base_address = f"encoder"
 
     model = RobertaModel.from_pretrained("roberta-base")

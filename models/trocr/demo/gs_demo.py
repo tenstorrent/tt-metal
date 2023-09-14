@@ -20,7 +20,7 @@ from models.trocr.tt.trocr import trocr_causal_llm
 )
 def test_gs_demo(model_name):
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
     processor = TrOCRProcessor.from_pretrained(model_name)

@@ -62,7 +62,7 @@ def run_efficientnet_model_test(
     crop=224,
 ):
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
     refence_model = reference_model_class(pretrained=True)

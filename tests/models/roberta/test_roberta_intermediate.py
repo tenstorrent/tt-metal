@@ -33,7 +33,7 @@ from transformers import RobertaModel
 def test_roberta_intermediate_inference():
     torch.manual_seed(1234)
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
     SELF_ATTN_LAYER_INDEX = 0

@@ -29,7 +29,7 @@ from tests.models.vovnet.tt.osa_stage import TtOsaStage
 )
 def test_osa_stage_inference(pcc, reset_seeds):
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
 

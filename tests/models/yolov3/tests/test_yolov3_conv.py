@@ -34,7 +34,7 @@ from models.utility_functions import (
 def test_conv_module(model_location_generator):
     torch.manual_seed(1234)
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
 
     # Load yolo
     model_path = model_location_generator("models", model_subdir = "Yolo")

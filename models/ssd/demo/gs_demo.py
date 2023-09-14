@@ -15,7 +15,7 @@ from PIL import Image
 
 def test_gs_demo():
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
     image = Image.open("models/sample_data/huggingface_cat_image.jpg")

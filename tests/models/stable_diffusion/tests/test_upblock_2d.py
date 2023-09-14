@@ -16,7 +16,7 @@ import pytest
 def test_run_upblock_real_input_inference(model_location_generator):
     # Initialize the device
     device = ttl.device.CreateDevice(0)
-    ttl.device.InitializeDevice(device)
+
     ttl.device.SetDefaultDevice(device)
 
 
@@ -71,7 +71,7 @@ def test_run_upblock_real_input_inference(model_location_generator):
 def test_run_upblock_inference():
     # Initialize the device
     device = ttl.device.CreateDevice(0)
-    ttl.device.InitializeDevice(device)
+
     ttl.device.SetDefaultDevice(device)
 
 

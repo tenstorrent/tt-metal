@@ -26,7 +26,7 @@ from torchvision.models.detection import (
 )
 def test_ssd_convlayer_inference(pcc, imagenet_sample_input, reset_seeds):
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
     TV_model = pretrained(weights=SSDLite320_MobileNet_V3_Large_Weights.DEFAULT)

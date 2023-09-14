@@ -38,7 +38,7 @@ def test_roberta_for_multiple_choice():
     """
     torch.manual_seed(1234)
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
     base_address = ""

@@ -42,7 +42,7 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time)
 
     # Initialize the device
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
     tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased-distilled-squad")

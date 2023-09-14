@@ -23,7 +23,7 @@ from transformers import (
 )
 def test_distilbert_ffn_inference(pcc, reset_seeds):
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
     HF_model = HF_DistilBertForQuestionAnswering.from_pretrained(

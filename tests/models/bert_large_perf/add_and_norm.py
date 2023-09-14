@@ -61,7 +61,7 @@ def run_add_and_norm_inference(model_version, batch, seq_len, pcc, model_locatio
 
     device = ttl.device.CreateDevice(0)
     # Initialize the device
-    ttl.device.InitializeDevice(device)
+
 
 
     model_name = str(model_location_generator(model_version, model_subdir = "Bert"))

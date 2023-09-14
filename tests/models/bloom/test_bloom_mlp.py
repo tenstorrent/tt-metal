@@ -64,7 +64,7 @@ def run_bloom_mlp_test(device):
 
 def test_bloom_mlp():
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     run_bloom_mlp_test(device)
     tt_lib.device.CloseDevice(device)
 

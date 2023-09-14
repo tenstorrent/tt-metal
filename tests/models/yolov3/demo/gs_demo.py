@@ -41,7 +41,7 @@ from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 def test_gs_demo(model_location_generator):
     torch.manual_seed(1234)
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
 
     # Load yolo
     model_path = model_location_generator("models", model_subdir = "Yolo")

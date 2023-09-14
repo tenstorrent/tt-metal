@@ -30,7 +30,7 @@ from tests.models.vovnet.tt.sequential_append_list import (
 )
 def test_sequential_append_list_inference(pcc, reset_seeds):
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
 

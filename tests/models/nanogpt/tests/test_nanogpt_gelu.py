@@ -38,7 +38,7 @@ from models.utility_functions import (
 )
 def test_nanogpt_gelu_inference(pcc):
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
     torch.manual_seed(0)

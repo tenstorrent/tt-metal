@@ -79,7 +79,7 @@ def run_bert_large_matmul_test(
 
     torch.manual_seed(1234)
     device = ttl.device.CreateDevice(0)
-    ttl.device.InitializeDevice(device)
+
 
     A = torch.randn(a_shape)
     B = torch.randn(b_shape) - 0.95
@@ -197,7 +197,7 @@ def run_bert_large_bmm_test(
 
     torch.manual_seed(1234)
     device = ttl.device.CreateDevice(0)
-    ttl.device.InitializeDevice(device)
+
 
     A = torch.randn(a_shape)
     B = torch.randn(b_shape) - 0.95

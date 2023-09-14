@@ -34,7 +34,7 @@ def test_perf(imagenet_sample_input):
     cpu_key = "Execution time of reference model"
 
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
 

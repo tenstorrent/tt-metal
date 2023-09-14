@@ -20,7 +20,7 @@ from models.EfficientNet.tt.efficientnet_fused_mbconv import (
 
 def test_efficientnet_fused_mbconv():
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
     refence_model = torchvision.models.efficientnet_v2_s(pretrained=True)

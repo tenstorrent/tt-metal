@@ -140,7 +140,7 @@ def test_LlamaDecoder_inference(
 ):
     # Initialize the device
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
     run_test_LlamaDecoder_inference(

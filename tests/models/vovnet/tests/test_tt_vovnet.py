@@ -29,7 +29,7 @@ from models.vovnet.tt.vovnet import vovnet_for_image_classification
 )
 def test_vovnet_model_inference(pcc, imagenet_sample_input, model_name, reset_seeds):
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
 

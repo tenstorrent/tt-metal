@@ -483,7 +483,7 @@ def run_bert_question_and_answering_inference(
 
     # Run TT Model
     device = ttl.device.CreateDevice(0)
-    ttl.device.InitializeDevice(device)
+
 
     parameters_config = ParametersConfig(
         linear_weight_dtype=DataType.BFLOAT8_B,

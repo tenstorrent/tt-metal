@@ -40,7 +40,7 @@ import pytest
 def test_layer_norm(input_shape, normalized_shape_hint):
     # Initialize the device
     device = ttl.device.CreateDevice(0)
-    ttl.device.InitializeDevice(device)
+
 
 
     pcc = 0.99

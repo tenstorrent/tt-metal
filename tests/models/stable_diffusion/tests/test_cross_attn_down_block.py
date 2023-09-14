@@ -75,7 +75,7 @@ def test_run_cross_attn_down_block_real_input_inference(
 
     # Initialize the device
     device = ttl.device.CreateDevice(0)
-    ttl.device.InitializeDevice(device)
+
     ttl.device.SetDefaultDevice(device)
 
     tt_sample = torch_to_tt_tensor_rm(sample, device, put_on_device=False)
@@ -164,7 +164,7 @@ def test_run_cross_attn_down_block_inference():
 
     # Initialize the device
     device = ttl.device.CreateDevice(0)
-    ttl.device.InitializeDevice(device)
+
     ttl.device.SetDefaultDevice(device)
 
     tt_cross_attn_down_block = TtCrossAttnDownBlock2D(

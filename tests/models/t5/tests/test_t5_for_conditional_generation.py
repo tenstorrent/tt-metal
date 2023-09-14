@@ -58,7 +58,7 @@ def run_T5ForConditionalGeneration(model_constructor, model_name):
 
     tokenizer = AutoTokenizer.from_pretrained(model_name, model_max_length=32)
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
 
     pt_output_sentance = run_generate(
         input_sentance,

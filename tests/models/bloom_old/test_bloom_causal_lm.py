@@ -78,7 +78,7 @@ def run_bloom_causal_lm_test(device):
 
 def test_bloom_causal_lm():
     device = ttm.device.CreateDevice(0)
-    ttm.device.InitializeDevice(device)
+
     run_bloom_causal_lm_test(device)
     ttm.device.CloseDevice(device)
 

@@ -30,7 +30,7 @@ def test_run_resnet18_inference(fold_batchnorm, imagenet_sample_input):
 
         # Initialize the device
         device = tt_lib.device.CreateDevice(0)
-        tt_lib.device.InitializeDevice(device)
+
         tt_lib.device.SetDefaultDevice(device)
 
         torch_resnet = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)

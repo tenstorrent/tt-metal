@@ -221,7 +221,7 @@ def ref_layernorm(x, eps, gamma, beta, H, W):
 if __name__ == "__main__":
     # Initialize the device
     device = device.CreateDevice(0)
-    device.InitializeDevice(device)
+
 
 
     H = 64

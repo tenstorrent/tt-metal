@@ -27,7 +27,7 @@ from models.utility_functions import (
 
 def test_Yolov5_Conv2D():
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
 
     weights = "tests/models/yolov5/reference/yolov5s.pt"
     dnn = False
@@ -99,7 +99,7 @@ def test_Yolov5_Conv2D():
 
 def test_Yolov5_Silu():
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
 
     weights = "tests/models/yolov5/reference/yolov5s.pt"
     dnn = False
@@ -135,7 +135,7 @@ def test_Yolov5_Silu():
 
 def test_Yolov5_conv():
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
 
     weights = "tests/models/yolov5/reference/yolov5s.pt"
     dnn = False
@@ -203,7 +203,7 @@ def test_Yolov5_conv():
 
 def test_Yolov5_Conv2D_real():
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
 
     weights = "tests/models/yolov5/reference/yolov5s.pt"
     dnn = False

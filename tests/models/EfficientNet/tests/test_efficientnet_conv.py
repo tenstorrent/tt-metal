@@ -21,7 +21,7 @@ from models.EfficientNet.tt.efficientnet_model import reference_efficientnet_lit
 
 def run_efficientnet_conv2d(state_dict, base_address, reference_module):
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
 
     in_channels = reference_module.in_channels
     out_channels = reference_module.out_channels
@@ -100,7 +100,7 @@ def run_efficientnet_conv_norm_activation(
     state_dict, conv_base_address, bn_base_address, reference_module, is_lite
 ):
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
 
     in_channels = reference_module[0].in_channels
     out_channels = reference_module[0].out_channels

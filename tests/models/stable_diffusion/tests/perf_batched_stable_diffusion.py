@@ -107,7 +107,7 @@ def test_perf(use_program_cache, expected_inference_time, expected_compile_time)
 
     # Initialize the device
     device = ttl.device.CreateDevice(0)
-    ttl.device.InitializeDevice(device)
+
     ttl.device.SetDefaultDevice(device)
 
     # 1. Load the autoencoder model which will be used to decode the latents into image space.

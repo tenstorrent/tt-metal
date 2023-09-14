@@ -67,6 +67,6 @@ def run_linear_test(in_features, out_features, device):
 def test_linear_test():
     # Initialize the device
     device = ttl.device.CreateDevice(0)
-    ttl.device.InitializeDevice(device)
+
     run_linear_test(1024, 256, device)
     ttl.device.CloseDevice(device)

@@ -36,7 +36,7 @@ def test_run_embedding_inference():
 
     # Initialize the device
     device = ttl.device.CreateDevice(0)
-    ttl.device.InitializeDevice(device)
+
     ttl.device.SetDefaultDevice(device)
 
 

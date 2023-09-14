@@ -33,7 +33,7 @@ from transformers import AutoFeatureExtractor
 )
 def test_swin_image_classification_inference(imagenet_sample_input, model_name, pcc, reset_seeds):
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
 

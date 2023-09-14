@@ -55,7 +55,7 @@ def test_run_resnet_inference():
 
     # Initialize the device
     device = ttl.device.CreateDevice(0)
-    ttl.device.InitializeDevice(device)
+
     ttl.device.SetDefaultDevice(device)
 
 

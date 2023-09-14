@@ -25,7 +25,7 @@ from models.ssd.tt.ssd_mobilenetv3_stemlayer import TtMobileNetV3Stem
 )
 def test_ssd_stem_inference(pcc, reset_seeds):
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
     torch_model = pretrained(weights=SSDLite320_MobileNet_V3_Large_Weights.DEFAULT)

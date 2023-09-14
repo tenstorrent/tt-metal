@@ -28,7 +28,7 @@ from tests.models.swin.tt.swin import *
 )
 def test_gs_demo(imagenet_sample_input, model_name):
     device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.InitializeDevice(device)
+
     tt_lib.device.SetDefaultDevice(device)
 
 
