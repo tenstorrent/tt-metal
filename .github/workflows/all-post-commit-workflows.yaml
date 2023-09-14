@@ -16,3 +16,6 @@ jobs:
   run-profiler-regression:
     uses: ./.github/workflows/run-profiler-regression.yaml
     secrets: inherit
+  run-eager-package-main:
+    uses: ./.github/workflows/eager-package-main.yaml
+    secrets: inherit

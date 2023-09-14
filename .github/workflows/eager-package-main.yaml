@@ -1,8 +1,9 @@
 ---
-name: eager - Package on main
+name: "[post-commit] eager - Package on main"
 
 on:
   workflow_dispatch:
+  workflow_call:
   push:
     branches: ["main"]
 

@@ -237,6 +237,7 @@ If you are using a machine with bare metal machine specs, please use
   - Pass post-commit tests.
   - Pass model performance tests.
   - Pass profiler regression post-commit tests.
+  - Pass Python packaging post-commit tests.
   - Pass any acceptance criteria mandated in the original issue.
   - Pass any testing criteria mandated by codeowners whose modules are relevant
     for the PR.
