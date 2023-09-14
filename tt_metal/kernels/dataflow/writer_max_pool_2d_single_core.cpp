@@ -5,19 +5,22 @@
 #include <cstdint>
 #include "dataflow_api.h"
 
+#include "debug_print.h"
+
 // #include "debug_print.h"
 // SliceRange srt = SliceRange{ .h0 = 0, .h1 = 32, .hs = 8, .w0 = 0, .w1 = 32, .ws = 8 };
 // SliceRange srr = SliceRange{ .h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1 = 64, .ws = 2 };
 // SliceRange srr2 = SliceRange{ .h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1 = 64, .ws = 2 };
 
 /**
- * Max-pool 2D. Highly Unoptimized!!
+ * Max-pool 2D.
  */
 void kernel_main() {
     const uint32_t out_addr = get_arg_val<uint32_t>(1);
     const int32_t out_h = get_arg_val<int32_t>(10);
     const int32_t out_w = get_arg_val<int32_t>(11);
     const uint32_t out_nbytes_c = get_arg_val<uint32_t>(15);
+    const uint32_t out_ntiles_c = get_arg_val<uint32_t>(21);
     const uint32_t out_cb_pagesize = get_arg_val<uint32_t>(23);
     const uint32_t out_w_loop_count = get_arg_val<uint32_t>(25);
     const uint32_t nbatch = get_arg_val<uint32_t>(27);
@@ -43,7 +46,7 @@ void kernel_main() {
         // for every output pixel
         for (uint32_t out_h_i = start_out_h_i; out_h_i < end_out_h_i; ++ out_h_i) {
             for (uint32_t out_w_i = 0; out_w_i < out_w_loop_count; ++ out_w_i) {
-                cb_wait_front(out_cb_id, out_nelems * 2);
+                cb_wait_front(out_cb_id, out_nelems * out_ntiles_c);
                 // kernel_profiler::mark_time(13);
                 uint32_t out_l1_read_addr = get_read_ptr(out_cb_id);
                 for (uint32_t out_elem_i = 0; out_elem_i < out_nelems; ++ out_elem_i) {
@@ -81,7 +84,7 @@ void kernel_main() {
                 }
                 noc_async_write_barrier();
                 // kernel_profiler::mark_time(14);
-                cb_pop_front(out_cb_id, out_nelems * 2);
+                cb_pop_front(out_cb_id, out_nelems * out_ntiles_c);
             }
         }
         batch_offset += out_hw;

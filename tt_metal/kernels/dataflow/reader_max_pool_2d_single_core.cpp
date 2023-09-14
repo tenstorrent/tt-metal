@@ -14,7 +14,7 @@
 // WARNING: Use with caution as there's no memory protection. Make sure size is within limits
 inline bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {
     // simplest impl:
-    volatile uint16_t* ptr = reinterpret_cast<volatile uint16_t*>(begin_addr);
+    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(begin_addr);
     for (uint32_t i = 0; i < n; ++ i) {
         ptr[i] = val;
     }
@@ -53,9 +53,6 @@ inline bool fill_with_val_async(const InterleavedPow2AddrGenFast<false>& s_const
  * TODO [AS]: reuse data moved to L1 instead of reading every time
  */
 void kernel_main() {
-
-    // DPRINT << "THIS IS THE READER STARTING!!" << ENDL();
-
     // input tensor address
     const uint32_t in_addr = get_arg_val<uint32_t>(0);
     // arg 1 is skipped
@@ -83,8 +80,8 @@ void kernel_main() {
     // input tensor height / width / channels
     const int32_t in_h = get_arg_val<int32_t>(16);
 
-    //const int32_t in_w = get_arg_val<int32_t>(17);
-    const int32_t in_w = 112;                           // TODO: make sure this is correct
+    const int32_t in_w = get_arg_val<int32_t>(17);
+    // const int32_t in_w = 112;                           // TODO: make sure this is correct
 
     const int32_t in_c = get_arg_val<int32_t>(19);
     // input CB page szie
@@ -113,10 +110,8 @@ void kernel_main() {
     constexpr uint32_t out_nelems = get_compile_time_arg_val(3);
     constexpr bool use_pow2 = get_compile_time_arg_val(4) == 1;
 
-    // constexpr uint32_t stride_h = get_compile_time_arg_val(5);
-    // constexpr uint32_t stride_w = get_compile_time_arg_val(6);
-    constexpr uint32_t stride_h = 2;
-    constexpr uint32_t stride_w = 2;
+    constexpr uint32_t stride_h = get_compile_time_arg_val(5);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(6);
 
     constexpr uint32_t in_cb_id = tt::CB::c_in0;
     constexpr uint32_t in_scalar_cb_id = tt::CB::c_in1;
@@ -139,18 +134,15 @@ void kernel_main() {
     fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_HW, bf16_one_u16);
     cb_push_back(in_scalar_cb_id, 1);
 
-    uint32_t start_in_row_id = 0;
-    uint32_t out_row_id = 0;
-
     // fill in_cb_id rows with -inf
     uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
     const InterleavedPow2AddrGenFast<false> s_const = {     // NOTE: This is always in L1 (hardcoded in host)
         .bank_base_address = minus_inf_buffer_addr,
-        .log_base_2_of_page_size = 6        // TODO: generalize?, currently hardcorded for 1 row of 32 16b values
+        .log_base_2_of_page_size = in_log_base_2_of_page_size        // TODO: generalize?, currently hardcorded for 1 row of 32 16b values
     };
-    uint32_t row_nbytes = 64;
+    // uint32_t row_nbytes = 64;
     // uint64_t minus_inf_in_noc_addr = get_noc_addr(src_row_id, s_const);
-    fill_with_val_async(s_const, in_l1_write_addr, in_cb_nrows, row_nbytes);
+    fill_with_val_async(s_const, in_l1_write_addr, in_cb_nrows, in_nbytes_c);
     noc_async_read_barrier();
 
     kernel_profiler::mark_time(8);
@@ -211,6 +203,4 @@ void kernel_main() {
         }
         batch_offset += in_hw;
     }
-
-    // DPRINT << "READER IS DONE" << ENDL();
 } // kernel_main()

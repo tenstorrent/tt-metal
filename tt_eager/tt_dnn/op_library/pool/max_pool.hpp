@@ -9,6 +9,10 @@
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 
+inline uint32_t ceil_multiple_of(uint32_t n, uint32_t m) {
+    return (uint32_t) ceil((float) n / m) * m;
+}
+
 namespace tt {
 namespace tt_metal {
 
@@ -30,6 +34,24 @@ struct MaxPool {
     tt::stl::reflection::Attributes attributes() const;
 };
 
+operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Tensor& output,
+                                                        uint32_t in_h, uint32_t in_w,
+                                                        uint32_t out_h, uint32_t out_w,
+                                                        uint32_t kernel_size_h, uint32_t kernel_size_w,
+                                                        uint32_t stride_h, uint32_t stride_w,
+                                                        uint32_t pad_h, uint32_t pad_w,
+                                                        uint32_t dilation_h, uint32_t dilation_w,
+                                                        const MemoryConfig& out_mem_config,
+                                                        uint32_t nblocks);
+operation::ProgramWithCallbacks max_pool_2d_multi_core(const Tensor &input, Tensor& output,
+                                                       uint32_t in_h, uint32_t in_w,
+                                                       uint32_t out_h, uint32_t out_w,
+                                                       uint32_t kernel_size_h, uint32_t kernel_size_w,
+                                                       uint32_t stride_h, uint32_t stride_w,
+                                                       uint32_t pad_h, uint32_t pad_w,
+                                                       uint32_t dilation_h, uint32_t dilation_w,
+                                                       const MemoryConfig& out_mem_config,
+                                                       uint32_t nblocks);
 Tensor max_pool2d(const Tensor &input,
                   uint32_t in_h, uint32_t in_w,
                   uint32_t kernel_size_h, uint32_t kernel_size_w,

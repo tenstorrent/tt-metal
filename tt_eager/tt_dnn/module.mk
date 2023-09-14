@@ -23,6 +23,8 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/fully_connected/fully_connected_op.cpp \
 	tt_eager/tt_dnn/op_library/pool/average_pool.cpp \
 	tt_eager/tt_dnn/op_library/pool/max_pool.cpp \
+	tt_eager/tt_dnn/op_library/pool/max_pool_single_core.cpp \
+	tt_eager/tt_dnn/op_library/pool/max_pool_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/transpose/transpose_op.cpp \
 	tt_eager/tt_dnn/op_library/transpose/wh_multi_core/transpose_wh_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/transpose/hc_multi_core/transpose_hc_op_multi_core.cpp \
