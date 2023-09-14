@@ -206,7 +206,6 @@ class TestEltwiseUnary:
             test_args,
         )
 
-    @skip_for_wormhole_b0
     @pytest.mark.parametrize("fast_and_appx", [True, False])
     def test_run_eltwise_rsqrt_op(
         self,
@@ -275,7 +274,6 @@ class TestEltwiseUnary:
             device,
         )
 
-    @skip_for_wormhole_b0
     @pytest.mark.parametrize(
         "exp_type, input_range, comparison_func",
         (

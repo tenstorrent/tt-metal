@@ -82,6 +82,8 @@ inline void configure_programmable_constants(SfpuType operation)
     case SfpuType::gelu:
         vConstFloatPrgm0 = 0.5f;
         break;
+    case SfpuType::expm1:
+    case SfpuType::exp2:
     case SfpuType::exponential:
         if (APPROXIMATION_MODE) {
             vConstFloatPrgm0 = 1.442695f; // ln2_recip
@@ -95,6 +97,8 @@ inline void configure_programmable_constants(SfpuType operation)
         vConstFloatPrgm2 = 0.863281f;
 
         // Fall through
+    case SfpuType::rsqrt:
+    case SfpuType::atan:
     case SfpuType::reciprocal:
         vConstFloatPrgm0 = 1.442695f; // ln2_recip
         vConstFloatPrgm1 = 2.0f;
@@ -292,6 +296,48 @@ sfpi_inline vFloat calculate_exponential_body(vFloat in)
     return out;
 }
 
+
+template <bool APPROXIMATION_MODE, bool ZERO_NEGATIVE>
+sfpi_inline vFloat calculate_exponential_body_improved(vFloat val)
+{
+    vFloat out;
+    if constexpr (APPROXIMATION_MODE)
+    {
+        // * by 1/ln2 and add convert to 7.3 FxP format
+        vFloat vConstLn2Recip = vConstFloatPrgm0;
+        vFloat c23_73 = vConstFloatPrgm1;
+        vInt adj_exp = vConstIntPrgm2;
+        val = val * vConstLn2Recip + c23_73;
+
+        // Remove Exponent of 7 and bias the Mantissa to 127.
+        vInt val_short = adj_exp + reinterpret<vInt>(val);
+
+        // SHL to move integer bits to exponent
+        val_short <<= 10 - p_exp::FRAC_BITS;
+        out = reinterpret<vFloat>(val_short);
+
+        // Needed for fused kernels such as math_row_softmax_tables which call calculate_exponential()
+        // without using Relu in Packer to clamp -ve Infinity to 0.
+        if constexpr (ZERO_NEGATIVE)
+        {
+            v_if (val_short < 0) {
+                out = vConst0;
+            }
+            v_endif;
+        }
+    }
+    else
+    {
+        // Force sign to 0 (make number positive)
+        out = sfpu_exp(setsgn(val, 0));
+        v_if (val < 0) {
+            out = sfpu_reciprocal(out);
+        }
+        v_endif;
+    }
+    return out;
+}
+
 /*
 template <bool APPROXIMATION_MODE, bool ZERO_NEGATIVE, bool SCALE_EN>
 void calculate_cube(uint16_t exp_base_scale_factor = 0)
@@ -319,7 +365,7 @@ inline void calculate_rsqrt()
     {
 
         vFloat in = dst_reg[0];
-        vFloat result = sfpu_reciprocal<false>(in);
+        vFloat result = sfpu_reciprocal(in);
 
         for (int r = 0; r < RECIPROCAL_ITERATIONS; r++)
         {
@@ -750,9 +796,9 @@ inline void calculate_exp2()
         vFloat v = dst_reg[0];
         // log(2) = 0.6931471805;
         v = v * 0.6931471805f;
-	// exp = e^(v)
-	vFloat exp = calculate_exponential_body<APPROXIMATION_MODE>(v);
-	dst_reg[0] = exp;
+	    // exp = e^(v)
+	    vFloat exp = calculate_exponential_body_improved<APPROXIMATION_MODE, true>(v);
+	    dst_reg[0] = exp;
         dst_reg++;
     }
 }
@@ -943,7 +989,7 @@ inline void calculate_expm1()
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat v = dst_reg[0];
-        v = calculate_exponential_body<APPROXIMATION_MODE>(v);
+        v = calculate_exponential_body_improved<APPROXIMATION_MODE, true>(v);
         dst_reg[0] = v - 1.0f;
         dst_reg++;
     }
@@ -959,7 +1005,7 @@ sfpi_inline vFloat sfpu_atan_maclaurin_series(vFloat val)
         dst_reg[0] = sfpi::abs(val)  ;
     }
     v_else{
-        dst_reg[0] =  sfpu_reciprocal<true>(sfpi::abs(val));
+        dst_reg[0] =  sfpu_reciprocal(sfpi::abs(val));
     }
     v_endif;
 
