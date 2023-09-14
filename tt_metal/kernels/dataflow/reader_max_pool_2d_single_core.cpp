@@ -21,7 +21,6 @@ inline bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {
     return true;
 }
 
-template<bool is_in_dram>
 inline bool fill_with_val_async(uint64_t in_noc_addr, uint32_t begin_addr, int32_t nrows, uint32_t row_nbytes) {
     uint32_t curr_addr = begin_addr;
     for (int32_t row_i = 0; row_i < nrows; ++ row_i) {
@@ -145,14 +144,14 @@ void kernel_main() {
 
     // fill in_cb_id rows with -inf
     uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
-    const InterleavedPow2AddrGen<is_in_dram> s_const = {
+    const InterleavedPow2AddrGen<true> s_const = {
         .bank_base_address = minus_inf_buffer_addr,
         .log_base_2_of_page_size = 6        // TODO: generalize, currently hardcorded for 1 row of 32 16b values
     };
     uint32_t row_nbytes = 64;
     uint32_t src_row_id = 0;
     uint64_t minus_inf_in_noc_addr = get_noc_addr(src_row_id, s_const);
-    fill_with_val_async<is_in_dram>(minus_inf_in_noc_addr, in_l1_write_addr, in_cb_nrows, row_nbytes);  //, minus_inf_buffer_nbytes);
+    fill_with_val_async(minus_inf_in_noc_addr, in_l1_write_addr, in_cb_nrows, row_nbytes);  //, minus_inf_buffer_nbytes);
     noc_async_read_barrier();
 
     kernel_profiler::mark_time(8);
@@ -201,7 +200,7 @@ void kernel_main() {
                     // TODO: this should be handled by untilize + edge pad (previous OP)
                     if (read_rows < window_hw) {
                         // if needed, fill the remainining (window_hw - read_row_id) with -INF
-                        fill_with_val_async<is_in_dram>(minus_inf_in_noc_addr, curr_in_l1_write_addr, window_hw - read_rows, in_nbytes_c);  //, minus_inf_buffer_nbytes);
+                        fill_with_val_async(minus_inf_in_noc_addr, curr_in_l1_write_addr, window_hw - read_rows, in_nbytes_c);  //, minus_inf_buffer_nbytes);
                     }
                     in_l1_write_addr += in_cb_pagesize;
                     curr_start_w += stride_w; // increment by stride_w
