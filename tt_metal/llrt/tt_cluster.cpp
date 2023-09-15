@@ -539,7 +539,7 @@ void tt_cluster::set_dram_barrier(chip_id_t chip_id, uint32_t barrier_value) {
     }
 
     // sfence is sufficient to flush WC buffers, ensures the reads from barrier are not just hitting the cache
-    _mm_fence();
+    _mm_sfence();
 
     // Loop until value written is readback from each DRAM bank
     bool barrier_val_propagated = false;
