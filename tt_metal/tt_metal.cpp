@@ -164,24 +164,7 @@ void AddBlankKernels(Device *device, Program &program) {
     }
 }
 
-void DownloadFirmware(Device *device, CoreCoord phys_core) {
-    ZoneScoped;
-    for (int riscv_id = 0; riscv_id < 5; riscv_id++) {
-        string fname;
-        switch (riscv_id) {
-            case 0:
-                fname = "brisc/brisc.hex";
-                tt::llrt::program_brisc_startup_addr(device->cluster(), device->id(), phys_core);
-                break;
-            case 1: fname = "ncrisc/ncrisc.hex"; break;
-            case 2: fname = "tensix_thread0/tensix_thread0.hex"; break;
-            case 3: fname = "tensix_thread1/tensix_thread1.hex"; break;
-            case 4: fname = "tensix_thread2/tensix_thread2.hex"; break;
-        }
-        tt::llrt::test_load_write_read_risc_binary(
-            device->cluster(), fname, device->id(), phys_core, riscv_id, true);
-    }
-}
+
 
 std::optional<uint32_t> get_semaphore_address(const Program &program, const CoreRange &core_range) {
     std::optional<uint32_t> address;
@@ -354,56 +337,6 @@ namespace detail {
     {
         enable_persistent_kernel_cache = false;
     }
-
-    bool InitializeDevice(Device *device) {
-        ZoneScoped;
-
-        static std::mutex build_mutex;
-        static bool global_init_complete = false;
-
-        {
-            // Need a lock here to prevent the race of building mulitple times
-            const std::lock_guard<std::mutex> lock(build_mutex);
-            if (!global_init_complete) {
-                build_kernel_for_riscv_options_t build_options(device->id());
-                detail::GenerateDeviceHeaders(device, &build_options, "");
-                std::string arch_name = tt::get_string_lowercase(device->arch());
-                generate_binaries_params_t default_params;
-                generate_binaries_all_riscs(&build_options,
-                                            "",
-                                            arch_name,
-                                            default_params);
-
-                global_init_complete = true;
-            }
-        }
-
-        // Download to worker cores
-        CoreCoord grid_size = device->logical_grid_size();
-        int num_download_fws = 0;
-        for (uint32_t y = 0; y < grid_size.y; y++) {
-            for (uint32_t x = 0; x < grid_size.x; x++) {
-                CoreCoord logical_core(x, y);
-                CoreCoord phys_core = device->worker_core_from_logical_core(logical_core);
-                DownloadFirmware(device, phys_core);
-                num_download_fws++;
-
-                // This is ugly
-                // Enable ncrisc/trisc on worker cores since device dispatch
-                // expects this.  Non device-dispatch will override and device
-                // dispatch will set up the dispatch cores appropriately
-                tt::llrt::enable_ncrisc(device->cluster(), device->id(), phys_core);
-                tt::llrt::enable_triscs(device->cluster(), device->id(), phys_core);
-            }
-        }
-
-        tt::llrt::watcher_attach(device, device->cluster(), device->id(),
-                                [&, device]() { return device->logical_grid_size(); },
-                                [&, device](CoreCoord core) { return device->worker_core_from_logical_core(core); },
-                                get_compile_outpath()
-                                );
-        return true;
-    }
 }
 
 
@@ -417,7 +350,6 @@ Device *CreateDevice(int device_id, const std::vector<uint32_t>& l1_bank_remap) 
 }
 
 bool CloseDevice(Device *device) {
-    tt::llrt::watcher_detach(device);
     // Needed to ensure that GLOBAL_CQ doesn't contain a closed device
     if (detail::GLOBAL_CQ) {
         detail::GLOBAL_CQ.reset(nullptr);

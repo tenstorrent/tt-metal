@@ -53,19 +53,6 @@ namespace tt::tt_metal{
         bool ConfigureDeviceWithProgram(Device *device, const Program &program);
 
         /**
-         * Initializes a device by creating a tt_cluster object and memory manager. Puts device into reset.
-         *
-         * Currently device has a 1:1 mapping with tt_cluster
-         *
-         * Return value: bool
-         *
-         * | Argument                    | Description                                 | Type                 | Valid Range         | Required |
-         * |-----------------------------|---------------------------------------------|----------------------|---------------------|----------|
-         * | device                      | Pointer to device object                    | Device *             |                     | Yes      |
-         */
-        bool InitializeDevice(Device *device);
-
-        /**
          * Read device side profiler data and dump results into device side CSV log
          *
          * Return value: void
