@@ -537,6 +537,8 @@ void tt_cluster::set_dram_barrier(chip_id_t chip_id, uint32_t barrier_value) {
         this->write_dram_vec(barrier_vec, tt_target_dram{chip_id, channel, 0}, DRAM_BARRIER_BASE);
     }
 
+    _mm_sfence(); // Flush write to barrier
+
     // Ensure value has been propagated
     bool barrier_val_propagated = false;
     while (not barrier_val_propagated) {
@@ -567,6 +569,8 @@ void tt_cluster::set_l1_barrier(chip_id_t chip_id, uint32_t barrier_value) {
     for (const CoreCoord &physical_worker_core : soc_desc.physical_workers) {
         this->write_dram_vec(barrier_vec, tt_cxy_pair(chip_id, physical_worker_core), MEM_BARRIER_ADDRESS);
     }
+
+    _mm_sfence(); // Flush write to barrier
 
     // Ensure value has been propagated
     bool barrier_value_propagated = false;
