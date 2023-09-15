@@ -15,51 +15,30 @@ from models.utility_functions import (
 )
 
 
-class UseDeviceConcat:
-    READY = True
-
-
 class UseDeviceConv:
     READY = True
 
-def disable_concat(fn):
-    @wraps(fn)
-    def __wrapper__(*args,**kwargs):
-        with DisableDeviceConvAndConcat(use_concat=False,use_conv=True) as _:
-            values = fn(*args,**kwargs)
-        return values
-    return __wrapper__
 
 def disable_conv(fn):
     @wraps(fn)
     def __wrapper__(*args,**kwargs):
-        with DisableDeviceConvAndConcat(use_concat=True,use_conv=False) as _:
+        with DisableDeviceConv(use_conv=False) as _:
             values = fn(*args,**kwargs)
         return values
     return __wrapper__
 
-def disable_conv_and_concat(fn):
-    @wraps(fn)
-    def __wrapper__(*args,**kwargs):
-        with DisableDeviceConvAndConcat() as _:
-            values = fn(*args,**kwargs)
-        return values
-    return __wrapper__
-
-class DisableDeviceConvAndConcat(AbstractContextManager):
+class DisableDeviceConv(AbstractContextManager):
     """useful for testing"""
 
-    def __init__(self,use_conv=False,use_concat=False):
-        self.state = [UseDeviceConcat.READY, UseDeviceConv.READY]
+    def __init__(self,use_conv=False):
+        self.state = [UseDeviceConv.READY]
         UseDeviceConv.READY = use_conv
-        UseDeviceConcat.READY = use_concat
-        logger.debug('Disabled Device Conv, and Concat operators.')
+        logger.debug('Disabled Device Conv operators.')
 
 
     def __exit__(self, exc_type, exc_value, traceback):
-        UseDeviceConcat.READY = self.state[0]
-        UseDeviceConv.READY = self.state[1]
-        logger.debug('Restored Device Conv, and Concat operators.')
+        UseDeviceConv.READY = self.state[0]
+        logger.debug('Restored Device Conv operators.')
         del self.state
 
 
@@ -132,26 +111,15 @@ def Conv2d(*args, **kwargs):
 
     return fallback_ops.Conv2d(*args, **kwargs)
 
-
-def concat(*args, **kwargs):
+def concat(tensors, dim=0):
     device = ttl.device.GetDefaultDevice()
-    if UseDeviceConcat.READY:
-        dim = kwargs.get("dim", 0)
+    new_tensors = []
+    for t in tensors:
+        if torch.is_tensor(t):
+            t = ttl.tensor.Tensor(t, ttl.tensor.DataType.BFLOAT16).to(device)
+        assert isinstance(t, ttl.tensor.Tensor)
+        if t.storage_type() != ttl.tensor.StorageType.DEVICE:
+            t = t.to(device)
+        new_tensors.append(t)
 
-
-        #force move tensor to the Device.
-        #breakpoint()
-        _args = copy.copy(args[0])
-        for idx,_ in enumerate(args[0]):
-            if not isinstance(_,ttl.tensor.Tensor):
-                #cannot convert torch tensor to device tensor
-                _args[idx] = ttl.tensor.Tensor(_.reshape(-1).tolist(),_.shape,ttl.tensor.Layout.ROW_MAJOR).to(device) #,ttl.tensor.TILE)
-                #raise ValueError("all tensors need to be on device for concat")
-            _args[idx] = _
-            assert isinstance(_args[idx],ttl.tensor.Tensor)
-            if _args[idx].storage_type() != ttl.tensor.StorageType.DEVICE:
-                _args[idx] = _args[idx].to(device)
-
-        return ttl.tensor.concat(*_args, dim)
-
-    return fallback_ops.concat(*args, **kwargs)
+    return ttl.tensor.concat(new_tensors, dim)

@@ -947,23 +947,12 @@ def run_conv_on_device_wrapper(
         else:
             xx = x
 
-        def to_device(_):
-            assert isinstance(_, torch.Tensor)
-            return tt_lib.tensor.Tensor(
-                _.reshape(-1).tolist(),
-                [1, C, H, W],
-                x.dtype(),
-                tt_lib.tensor.Layout.ROW_MAJOR,
-            )
-
         partial_convs = [
-            run_conv_on_device_batch_one(to_device(xx[batch_idx, :, :, :]))
+            run_conv_on_device_batch_one(torch_to_tt_tensor_rm(xx[batch_idx, :, :, :], device))
             for batch_idx in range(N)
         ]
-        conv_concat_cpu = fallback_ops.concat(partial_convs, 0)
-        # return tt_lib.tensor.concat(partial_convs,0) # hit problem with autoformat for non-32 size N
-        # concat on CPU for batch-size > 1
-        return conv_concat_cpu
+        conv_concat = tt_lib.tensor.concat(partial_convs, 0)
+        return conv_concat
 
     def run_conv_on_device_batch_one(x):
         [N, C, H, W] = x.shape()
