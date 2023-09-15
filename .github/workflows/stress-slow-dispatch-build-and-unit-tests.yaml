@@ -13,15 +13,18 @@ jobs:
       fail-fast: false
       matrix:
         runner-info: [
-          {arch: grayskull, fw: "fw-date-2023-06-28"},
-          {arch: wormhole_b0, fw: "fw-date-2023-08-08"},
+          {arch: grayskull, runs-on: ["stress-grayskull", "cloud-virtual-machine"], fw: "fw-date-2023-06-28", machine-type: "virtual_machine"},
+          {arch: grayskull, runs-on: ["stress-grayskull", "self-reset"], fw: "fw-date-2023-06-28", machine-type: "bare_metal"},
+
+          # {arch: wormhole_b0, runs-on: ["stress-wormhole_b0", "cloud-virtual-machine"], fw: "fw-date-2023-08-08", machine-type: "virtual_machine"},
+          {arch: wormhole_b0, runs-on: ["stress-wormhole_b0", "self-reset"], fw: "fw-date-2023-08-08", machine-type: "bare_metal"},
         ]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.runner-info.arch }}
       TT_METAL_SLOW_DISPATCH_MODE: 1
     environment: dev
-    runs-on: ["stress-${{ matrix.runner-info.arch }}", "${{ matrix.runner-info.fw }}"]
+    runs-on: ${{ matrix.runner-info.runs-on }}
     steps:
       - uses: actions/checkout@v3
         with:
