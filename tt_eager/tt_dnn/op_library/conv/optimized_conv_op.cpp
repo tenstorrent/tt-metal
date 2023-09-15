@@ -364,28 +364,65 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
     assert(num_cores_x < 13);
     assert(num_cores_y < 10);
     uint32_t per_core_act_matrix_height_ntiles = p_config.per_core_act_matrix_height_ntiles;
+    uint32_t per_core_weight_matrix_width_ntiles = p_config.per_core_weight_matrix_width_ntiles;
     // cout << "total_num_cores=" << total_num_cores << endl;
     // cout << "per_core_act_matrix_height_ntiles=" << per_core_act_matrix_height_ntiles << endl;
     // cout << "act_matrix_height_ntiles=" << act_matrix_height_ntiles << endl;
     // cout << "act_block_h_datums=" << act_block_h_datums << endl;
     // cout << "num_blocks_act_h=" << num_blocks_act_h << endl;
-    assert(total_num_cores * per_core_act_matrix_height_ntiles >= act_matrix_height_ntiles);
+    bool weight_width_sliced = per_core_weight_matrix_width_ntiles < weight_matrix_width_ntiles;
+    assert(weight_matrix_width_ntiles % per_core_weight_matrix_width_ntiles == 0);
+    assert(per_core_weight_matrix_width_ntiles % weight_block_w_ntiles == 0);
+    uint32_t num_blocks_weight_w_per_core = per_core_weight_matrix_width_ntiles / weight_block_w_ntiles;
+    if (not weight_width_sliced) {
+        assert(num_blocks_weight_w_per_core == num_blocks_weight_w);
+    }
+    uint32_t num_weight_slices_width = weight_matrix_width_ntiles / per_core_weight_matrix_width_ntiles;
+    assert(num_cores_y % num_weight_slices_width == 0);
+    uint32_t num_cores_y_per_weight_slice_width = num_cores_y / num_weight_slices_width;
+    uint32_t total_num_cores_per_weight_slice = num_cores_y_per_weight_slice_width * num_cores_x;
+    if (weight_width_sliced) {
+        assert(total_num_cores_per_weight_slice * per_core_act_matrix_height_ntiles == act_matrix_height_ntiles);
+    }
+    else {
+        assert(total_num_cores * per_core_act_matrix_height_ntiles >= act_matrix_height_ntiles);
+    }
     assert(per_core_act_matrix_height_ntiles % act_block_h_ntiles == 0);
     uint32_t num_blocks_act_h_per_core = per_core_act_matrix_height_ntiles / act_block_h_ntiles;
-    if (total_num_cores == 1) {
-        num_blocks_act_h_per_core = num_blocks_act_h;
+    bool act_height_sliced = per_core_act_matrix_height_ntiles < act_matrix_height_ntiles;
+    if (not act_height_sliced) {
+        assert(num_blocks_act_h_per_core == num_blocks_act_h);
+        assert(num_cores_x == 1);
     }
     // cout << "num_blocks_act_h_per_core=" << num_blocks_act_h_per_core << endl;
     assert(act_matrix_height_ntiles % per_core_act_matrix_height_ntiles == 0);
-    uint32_t total_active_num_cores = act_matrix_height_ntiles / per_core_act_matrix_height_ntiles;
-    assert(total_active_num_cores <= total_num_cores);
-    uint32_t total_noop_cores = total_num_cores - total_active_num_cores;
+    uint32_t total_active_num_cores_per_weight_slice = act_matrix_height_ntiles / per_core_act_matrix_height_ntiles;
+    assert(total_active_num_cores_per_weight_slice <= total_num_cores_per_weight_slice);
+    uint32_t total_noop_cores = total_num_cores_per_weight_slice - total_active_num_cores_per_weight_slice;
+    uint32_t total_active_num_cores = total_active_num_cores_per_weight_slice * num_weight_slices_width;
+    if (weight_width_sliced) {
+        assert(total_noop_cores == 0);
+        assert(total_active_num_cores == total_num_cores);
+    }
+    // cout << "act_matrix_height_ntiles=" << act_matrix_height_ntiles << endl;
+    // cout << "per_core_act_matrix_height_ntiles=" << per_core_act_matrix_height_ntiles << endl;
+    // cout << "total_active_num_cores_per_weight_slice="<< total_active_num_cores_per_weight_slice <<  endl;
+    // cout << "num weight slices = " <<  num_weight_slices_width << endl;
+    // cout << "total num active cores" << total_active_num_cores << endl;
+    if (has_bias) {
+    assert(bias_ntiles % num_weight_slices_width == 0);
+    assert(bias_ntiles == weight_matrix_width_ntiles);
+    }
+    uint32_t bias_ntiles_per_core = bias_ntiles / num_weight_slices_width;
 
     bool rn50_first_conv = (conv_act_size_h == 230 && conv_act_size_w == (231 + extra_padding_for_32B_alignment) &&
                             conv_output_size_h == 112 && conv_output_size_w == 112 &&
                             weight_size_h == 7 && weight_size_w == 8 &&
                             stride_h == 2 && stride_w == 2 &&
                             num_blocks_weight_w == 1);
+    if (rn50_first_conv) {
+        assert(not weight_width_sliced); // weight width slicing not supported for rn50 first conv
+    }
 
     vector<CoreCoord> debug_cores;
     for(uint32_t core_i = 0; core_i < total_num_cores; core_i++) {
@@ -440,7 +477,7 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
             act_block_h_ntiles * weight_block_w_ntiles * 2, // writer output cb, double bufferred
             num_bytes_of_df,
             untilize_out,
-            bias_ntiles,
+            bias_ntiles_per_core,
             has_bias);
 
     string reader_kernel;
@@ -505,7 +542,7 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
 
         num_blocks_act_h_per_core,
         num_blocks_act_w,
-        num_blocks_weight_w,
+        num_blocks_weight_w_per_core,
 
         out_subblock_h_ntiles,
         out_subblock_w_ntiles,
@@ -514,7 +551,7 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
         true,
         untilize_out,
 
-        bias_ntiles
+        bias_ntiles_per_core
     };
     auto writer_id = CreateDataMovementKernel(
     program,
@@ -573,13 +610,34 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
             }
         }
         // per core specific args
-        uint32_t total_h_start = core_i * per_core_act_matrix_height_ntiles * TILE_HEIGHT;
+        uint32_t act_slice_i = core_i % (num_cores_y_per_weight_slice_width * num_cores_x);
+        uint32_t weight_slice_i = core_i / (num_cores_y_per_weight_slice_width * num_cores_x);
+        uint32_t total_h_start = act_slice_i * per_core_act_matrix_height_ntiles * TILE_HEIGHT;
         uint32_t n_start = total_h_start / (conv_output_size_h * conv_output_size_w);
         uint32_t matrix_h_start = total_h_start % (conv_output_size_h * conv_output_size_w);
         uint32_t out_h_start = matrix_h_start / conv_output_size_w;
         uint32_t out_w_start = matrix_h_start % conv_output_size_w;
         uint32_t in_h_start = (n_start * conv_act_size_h) + out_h_start * stride_h;
         uint32_t last_start_in_h_curr_image = 222 + (n_start * conv_act_size_h);
+        uint32_t out_start_tile_id = (act_slice_i * per_core_act_matrix_height_ntiles * weight_matrix_width_ntiles) + (weight_slice_i * per_core_weight_matrix_width_ntiles);
+        uint32_t out_start_tile_id_h = act_slice_i * per_core_act_matrix_height_ntiles;
+        uint32_t out_start_tile_id_w = weight_slice_i * per_core_weight_matrix_width_ntiles;
+        uint32_t bias_tile_offset = weight_slice_i * per_core_weight_matrix_width_ntiles;
+        if (has_bias) {
+            assert(bias_tile_offset < bias_ntiles);
+        }
+        // cout << "act_slice_i=" << act_slice_i << endl;
+        // cout << "weight_slice_i=" << weight_slice_i << endl;
+        // cout << "core_i=" << core_i << endl;
+        // cout << "num_blocks_act_h_per_core=" << num_blocks_act_h_per_core << endl;
+        // cout << "num_blocks_weight_w_per_core=" << num_blocks_weight_w_per_core << endl;
+        // cout << "bias_tile_offset=" << bias_tile_offset << endl;
+        // cout << "out_start_tile_id=" << out_start_tile_id << endl;
+        // cout << "out_start_tile_id_w=" << out_start_tile_id_w << endl;
+        // cout << "per_core_act_matrix_height_ntiles=" << per_core_act_matrix_height_ntiles << endl;
+        // cout << "weight_matrix_width_ntiles=" << weight_matrix_width_ntiles <<  endl;
+        // cout << "out_start_tile_id_h=" << out_start_tile_id_h << endl;
+        // cout << endl;
         // cout << "total_h_start=" << total_h_start << endl;
         // cout << "in_h_start=" << in_h_start << endl;
         // cout << "out_h_start=" << out_h_start << endl;
@@ -622,7 +680,7 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
                 conv_output_size_w,
                 num_blocks_act_h_per_core, // per core
                 num_blocks_act_w,
-                num_blocks_weight_w,
+                num_blocks_weight_w_per_core,
                 num_groups,
 
                 act_matrix_height_unpadded,
@@ -648,17 +706,10 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
             });
         }
 
-
-        uint32_t out_start_tile_id = core_i * per_core_act_matrix_height_ntiles * weight_matrix_width_ntiles;
-        uint32_t out_start_tile_id_h = core_i * per_core_act_matrix_height_ntiles;
-        // cout << "out_start_tile_id=" << out_start_tile_id << endl;
-        // cout << "per_core_act_matrix_height_ntiles=" << per_core_act_matrix_height_ntiles << endl;
-        // cout << "weight_matrix_width_ntiles=" << weight_matrix_width_ntiles <<  endl;
-        // cout << "out_start_tile_id_h=" << out_start_tile_id_h << endl;
-
         writer_rt_args.push_back({
             out_dram_addr,
             weight_dram_addr,
+            bias_dram_addr,
 
             output_width_num_tiles, // out_next_tile_stride_h
             1, // out_next_tile_stride_w
@@ -672,12 +723,13 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
             act_block_h_ntiles / out_subblock_h_ntiles, // out_num_subblocks_h
             weight_block_w_ntiles / out_subblock_w_ntiles,   // out_num_subblocks_w
             num_blocks_act_h_per_core, // out_num_blocks_h
-            num_blocks_weight_w, // out_num_blocks_w
+            num_blocks_weight_w_per_core, // out_num_blocks_w
             act_block_h_ntiles, // out_block_height_num_tiles
             output_height_num_tiles, // out_height_num_tiles without block shape padding
             output_width_num_tiles, // out_width_num_tiles withoug block shape padding
             out_start_tile_id,
             out_start_tile_id_h,
+            out_start_tile_id_w,
 
             num_blocks_act_w, // = number of blocks of weight in height dim
             weight_block_num_tiles,
@@ -688,13 +740,11 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
             weight_block_w_ntiles, // weight_next_block_stride_w
 
             // bias
-            bias_dram_addr,
-            bias_ntiles,
+            bias_ntiles_per_core,
+            bias_tile_offset,
 
             (uint32_t) noop_core
         });
-
-        vector<uint32_t> compute_rt_args = {(uint32_t) noop_core};
 
 
         SetRuntimeArgs(
@@ -749,12 +799,11 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
             {
                 auto runtime_args = GetRuntimeArgs(program, writer_kernel_ids[core_i], core);
                 runtime_args[0] = dst_dram_buffer->address();
-
                 runtime_args[1] = src_dram_buffer_b->address();
                 if (has_bias) {
                     auto src_dram_buffer_c = input_buffers.at(2);
                     TT_ASSERT(src_dram_buffer_c != nullptr);
-                    runtime_args[27] = src_dram_buffer_c->address();
+                    runtime_args[2] = src_dram_buffer_c->address();
                 }
                 SetRuntimeArgs(program, writer_kernel_ids[core_i], core, runtime_args);
             }

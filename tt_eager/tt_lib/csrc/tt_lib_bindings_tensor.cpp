@@ -207,18 +207,21 @@ void TensorModule(py::module &m_tensor) {
             py::init<>(
                 [] (
                     std::tuple<std::size_t, std::size_t> grid_size,
-                    uint32_t per_core_act_matrix_height_ntiles
+                    uint32_t per_core_act_matrix_height_ntiles,
+                    uint32_t per_core_weight_matrix_width_ntiles
                 ) {
                     return OptimizedConvParallelizationConfig{
                         .grid_size={std::get<0>(grid_size), std::get<1>(grid_size)},
-                        .per_core_act_matrix_height_ntiles=per_core_act_matrix_height_ntiles
+                        .per_core_act_matrix_height_ntiles=per_core_act_matrix_height_ntiles,
+                        .per_core_weight_matrix_width_ntiles=per_core_weight_matrix_width_ntiles
                     };
 
                 }
             ),
             py::kw_only(),
             py::arg("grid_size").noconvert(),
-            py::arg("per_core_act_matrix_height_ntiles").noconvert()
+            py::arg("per_core_act_matrix_height_ntiles").noconvert(),
+            py::arg("per_core_weight_matrix_width_ntiles").noconvert()
         );
 
     m_tensor.def("optimized_conv", &optimized_conv,

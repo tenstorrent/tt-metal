@@ -78,6 +78,8 @@ void kernel_main() {
     uint32_t i = 0;
     uint32_t out_addr = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i); i+=1;
+    // Bias args. Unused if bias fusion is not enabled.
+    const uint32_t bias_addr = get_arg_val<uint32_t>(i); i += 1;
 
     uint32_t out_next_tile_stride_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t out_next_tile_stride_w = get_arg_val<uint32_t>(i); i+=1;
@@ -97,6 +99,7 @@ void kernel_main() {
     uint32_t out_width_num_tiles = get_arg_val<uint32_t>(i); i+=1;
     uint32_t out_start_tile_id = get_arg_val<uint32_t>(i); i+=1;
     uint32_t out_start_tile_id_h = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t out_start_tile_id_w = get_arg_val<uint32_t>(i); i+=1;
 
     uint32_t num_blocks_weight_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_block_num_tiles = get_arg_val<uint32_t>(i); i+=1;
@@ -107,8 +110,8 @@ void kernel_main() {
     uint32_t weight_next_block_stride_w = get_arg_val<uint32_t>(i); i+=1;
 
     // Bias args. Unused if bias fusion is not enabled.
-    const uint32_t bias_addr = get_arg_val<uint32_t>(i); i += 1;
     const uint32_t bias_ntiles = get_arg_val<uint32_t>(i); i += 1;
+    const uint32_t bias_tile_offset = get_arg_val<uint32_t>(i); i += 1;
 
     uint32_t noop = get_arg_val<uint32_t>(i); i+=1;
     if(noop) {

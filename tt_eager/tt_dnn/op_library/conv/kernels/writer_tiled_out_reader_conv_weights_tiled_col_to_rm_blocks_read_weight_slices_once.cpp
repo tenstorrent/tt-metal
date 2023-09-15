@@ -51,6 +51,8 @@ void kernel_main() {
     uint32_t i = 0;
     uint32_t out_addr = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i); i+=1;
+    // Bias arg. Unused if bias fusion is not enabled.
+    const uint32_t bias_addr = get_arg_val<uint32_t>(i); i += 1;
 
     uint32_t out_next_tile_stride_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t out_next_tile_stride_w = get_arg_val<uint32_t>(i); i+=1;
@@ -70,6 +72,7 @@ void kernel_main() {
     uint32_t out_width_num_tiles = get_arg_val<uint32_t>(i); i+=1;
     uint32_t out_start_tile_id = get_arg_val<uint32_t>(i); i+=1;
     uint32_t out_start_tile_id_h = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t out_start_tile_id_w = get_arg_val<uint32_t>(i); i+=1;
 
     uint32_t num_blocks_weight_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_block_num_tiles = get_arg_val<uint32_t>(i); i+=1;
@@ -79,9 +82,9 @@ void kernel_main() {
     uint32_t weight_next_block_stride_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_next_block_stride_w = get_arg_val<uint32_t>(i); i+=1;
 
-    // Bias args. Unused if bias fusion is not enabled.
-    const uint32_t bias_addr = get_arg_val<uint32_t>(i); i += 1;
+    // Bias arg. Unused if bias fusion is not enabled.
     const uint32_t bias_ntiles = get_arg_val<uint32_t>(i); i += 1;
+    const uint32_t bias_tile_offset = get_arg_val<uint32_t>(i); i += 1;
 
     uint32_t noop = get_arg_val<uint32_t>(i); i+=1;
     if(noop) {
@@ -109,7 +112,7 @@ void kernel_main() {
         constexpr uint32_t bias_pagesize = get_compile_time_arg_val(5);
         constexpr uint32_t bias_in_dram = get_compile_time_arg_val(6) == 1;
 
-        read_bias<bias_in_dram>(bias_addr, bias_ntiles, bias_cb_id, bias_log2_of_pagesize, bias_pagesize);
+        read_bias_with_offset<bias_in_dram>(bias_addr, bias_tile_offset, bias_ntiles, bias_cb_id, bias_log2_of_pagesize, bias_pagesize);
     #endif
 
     // DPRINT << "tile_nbytes - " << tile_nbytes << ENDL();
@@ -150,8 +153,9 @@ void kernel_main() {
     // Write out col major blocks in row major layout to output
     uint32_t out_block_w_start_tile_id = out_start_tile_id;
     //DPRINT << "out_start_tile_id=" << out_start_tile_id << ENDL();
-    uint32_t out_block_w_start_tile_id_w = 0;
-    uint32_t weight_start_tile_id = 0;
+    uint32_t out_block_w_start_tile_id_w = out_start_tile_id_w;
+    uint32_t weight_start_tile_id = out_start_tile_id_w;
+    //DPRINT << "weight_start_tile_id=" << weight_start_tile_id << ENDL();
     for (uint32_t bw = 0; bw < out_num_blocks_w; bw++) {
 
         // read weight blocks inner dim
