@@ -222,7 +222,7 @@ debug.  It:
 It is enabled with:
 
 - ``export TT_METAL_WATCHER=<n>`` where <n> is the number of seconds between status updates; use 0 for the default
-- optionally ``export TT)_METAL_WATCHER_APPEND=1`` to append to the end of the file instead (useful for tests which construct/destruct devices in a loop)
+- optionally ``export TT_METAL_WATCHER_APPEND=1`` to append to the end of the file instead (useful for tests which construct/destruct devices in a loop)
 
 The output file contains a legend to help with deciphering the results.  The contents contain the last waypoint of each of the 5 riscvs encountered as a string of up to 4 characters.  These way points can be inserted into kernel/firmware code with the following, eg:
 
