@@ -128,6 +128,23 @@ run_models_performance_virtual_machine_pipeline_tests() {
     run_models_performance "$tt_arch" "$pipeline_type"
 }
 
+run_stress_post_commit_pipeline_tests() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    # Switch to modules only soon
+    # run_module_tests "$tt_arch" "llrt" "$pipeline_type"
+    end=$((SECONDS+86400))
+    while [ $SECONDS -lt $end ]; do
+        if [[ $dispatch_mode == "slow" ]]; then
+            ./tests/scripts/run_pre_post_commit_regressions_slow_dispatch.sh
+        else
+            ./tests/scripts/run_pre_post_commit_regressions_fast_dispatch.sh
+        fi
+    done
+}
+
 run_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
@@ -149,6 +166,8 @@ run_pipeline_tests() {
         run_models_performance_bare_metal_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "models_performance_virtual_machine" ]]; then
         run_models_performance_virtual_machine_pipeline_tests "$tt_arch" "$pipeline_type"
+    elif [[ $pipeline_type == "stress_post_commit" ]]; then
+        run_stress_post_commit_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     else
         echo "Unknown pipeline: $pipeline_type"
         exit 1

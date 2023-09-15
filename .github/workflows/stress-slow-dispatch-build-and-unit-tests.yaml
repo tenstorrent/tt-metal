@@ -1,0 +1,42 @@
+name: "[stress] all - Stress test Slow Dispatch post-commit main build and unit tests"
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"
+
+jobs:
+  stress-build-and-unit-tests:
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        runner-info: [
+          {arch: grayskull, fw: "fw-date-2023-06-28"},
+          {arch: wormhole_b0, fw: "fw-date-2023-08-08"},
+        ]
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ matrix.runner-info.arch }}
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+    environment: dev
+    runs-on: ["stress-${{ matrix.runner-info.arch }}", "${{ matrix.runner-info.fw }}"]
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+          token: ${{ secrets.CHECKOUT_TOKEN }}
+          lfs: true
+      - name: Set up dyanmic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - name: Build tt-metal and libs
+        run: make build
+      - name: Build tt-metal CPP tests
+        run: make tests
+      - name: Run pre/post regression tests in a loop
+        timeout-minutes: 1450
+        run: |
+          source build/python_env/bin/activate
+          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type stress_post_commit --dispatch-mode slow
