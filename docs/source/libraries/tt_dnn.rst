@@ -350,6 +350,8 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.isclose
 
+.. autofunction:: tt_lib.tensor.i0
+
 Tensor relational operations
 ----------------------------------
 .. autofunction:: tt_lib.tensor.gtz

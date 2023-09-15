@@ -148,6 +148,11 @@ def logical_not_unary(x, *args, **kwargs):
     return result
 
 
+def i0(x, *args, **kwargs):
+    result = torch.i0(x)
+    return result
+
+
 def cosh(x, *args, **kwargs):
     result = torch.cosh(x)
     return result

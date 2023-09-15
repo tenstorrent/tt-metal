@@ -144,6 +144,7 @@ enum SfpuType
   isnan,
   logical_not_unary,
   erfinv,
+  i0,
   unused
 };
 

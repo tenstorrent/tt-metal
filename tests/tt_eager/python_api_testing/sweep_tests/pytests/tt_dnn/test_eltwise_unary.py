@@ -147,13 +147,12 @@ class TestEltwiseUnary:
             comparison_func,
             device,
             test_args,
-
         )
 
     @pytest.mark.parametrize(
         "fn_kind",
         ["logical_not_unary"],
-   )
+    )
     def test_run_eltwise_not_op(
         self,
         fn_kind,
@@ -226,6 +225,33 @@ class TestEltwiseUnary:
         comparison_func = comparison_funcs.comp_pcc
         run_single_pytorch_test(
             f"eltwise-rsqrt",
+            input_shapes,
+            datagen_func,
+            comparison_func,
+            device,
+            test_args,
+        )
+
+    @pytest.mark.parametrize("fast_and_appx", [True, False])
+    def test_run_eltwise_i0_op(
+        self,
+        input_shapes,
+        fast_and_appx,
+        device,
+        function_level_defaults,
+        input_mem_config,
+        output_mem_config,
+    ):
+        datagen_func = [
+            generation_funcs.gen_func_with_cast(
+                partial(generation_funcs.gen_rand, low=-10, high=10), torch.bfloat16
+            )
+        ]
+        test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
+        test_args["fast_and_appx"] = fast_and_appx
+        comparison_func = comparison_funcs.comp_pcc
+        run_single_pytorch_test(
+            f"eltwise-i0",
             input_shapes,
             datagen_func,
             comparison_func,

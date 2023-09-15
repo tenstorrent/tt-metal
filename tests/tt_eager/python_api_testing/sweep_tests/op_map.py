@@ -108,6 +108,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_logical_not_unary,
         "pytorch_op": pytorch_ops.logical_not_unary,
     },
+    "eltwise-i0": {
+        "tt_lib_op": tt_lib_ops.eltwise_i0,
+        "pytorch_op": pytorch_ops.i0,
+    },
     "eltwise-logical_noti": {
         "tt_lib_op": tt_lib_ops.eltwise_logical_noti,
         "pytorch_op": pytorch_ops.logical_noti,
