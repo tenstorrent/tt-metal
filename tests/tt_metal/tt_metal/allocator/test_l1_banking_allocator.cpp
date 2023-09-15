@@ -29,14 +29,6 @@ std::vector<uint32_t> get_logical_compute_and_storage_core_bank_ids(tt_metal::De
     return device->bank_ids_from_logical_core(logical_core);
 }
 
-std::vector<uint32_t> get_logical_storage_core_bank_ids(tt_metal::Device *device) {
-    auto soc_desc = device->cluster()->get_soc_desc(device->id());
-    auto logical_grid_size = device->logical_grid_size();
-    auto storage_core_rel_coord = soc_desc.storage_cores.at(0);
-    auto logical_core = get_core_coord_from_relative(storage_core_rel_coord, logical_grid_size);
-    return device->bank_ids_from_logical_core(logical_core);
-}
-
 bool test_l1_buffers_allocated_top_down(tt_metal::Device *device, BufferKeeper &buffers) {
     bool pass = true;
 

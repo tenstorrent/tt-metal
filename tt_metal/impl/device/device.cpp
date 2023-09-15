@@ -104,11 +104,13 @@ void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
     }
     for (const auto& core : soc_desc.storage_cores) {
         const auto logical_coord = get_core_coord_from_relative(core, this->logical_grid_size());
+        this->storage_only_cores_.insert(logical_coord);
         const auto noc_coord = this->worker_core_from_logical_core(logical_coord);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::StorageOnly;
     }
     for (const auto& core : soc_desc.dispatch_cores) {
         const auto logical_coord = get_core_coord_from_relative(core, this->logical_grid_size());
+        this->dispatch_cores_.insert(logical_coord);
         const auto noc_coord = this->worker_core_from_logical_core(logical_coord);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::Dispatch;
     }
@@ -144,7 +146,7 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
 
 bool Device::close() {
     log_info(tt::LogMetal, "Closing device {}", this->id_);
-    TT_ASSERT(this->initialized_, "Cannot close device {} that has not been initialized!", this->id_);    
+    TT_ASSERT(this->initialized_, "Cannot close device {} that has not been initialized!", this->id_);
     tt_stop_debug_print_server(this->cluster());
     this->cluster()->assert_risc_reset(id_);
     this->clear_l1_state();

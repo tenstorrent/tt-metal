@@ -82,6 +82,12 @@ class Device {
 
     void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out) const;
 
+    // Set of logical storage only core coordinates
+    const std::unordered_set<CoreCoord> &storage_only_cores() const { return this->storage_only_cores_; }
+
+    // Set of logical dispatch core coordinates
+    const std::unordered_set<CoreCoord> &dispatch_cores() const { return this->dispatch_cores_; }
+
    private:
     void check_allocator_is_initialized() const;
 
@@ -110,6 +116,9 @@ class Device {
     int id_;
     std::unique_ptr<Allocator> allocator_ = nullptr;
     bool initialized_ = false;
+
+    std::unordered_set<CoreCoord> storage_only_cores_;
+    std::unordered_set<CoreCoord> dispatch_cores_;
 };
 
 }  // namespace tt_metal

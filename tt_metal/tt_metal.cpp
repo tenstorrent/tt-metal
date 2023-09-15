@@ -665,9 +665,8 @@ bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
     }
 
     // Skip loading of blank kernels to storage cores
-    for (const auto &core : device->cluster()->get_soc_desc(device->id()).storage_cores) {
-        const auto logical_coord = get_core_coord_from_relative(core, device->logical_grid_size());
-        worker_cores.insert(device->worker_core_from_logical_core(logical_coord));
+    for (const CoreCoord &logical_storage_core : device->storage_only_cores()) {
+        worker_cores.insert(device->worker_core_from_logical_core(logical_storage_core));
     }
 
     // Load blank kernel to all riscs of all cores excluding those in worker_cores
