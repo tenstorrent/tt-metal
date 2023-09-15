@@ -119,16 +119,12 @@ bool l1_reader_cb_writer_l1(Device* device, const BankedL1Config& cfg, const boo
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    pass &= CompileProgram(device, program);
     auto input_packed = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, cfg.size_bytes / sizeof(uint32_t));
     WriteToBuffer(input_buffer, input_packed);
-
-    pass &= ConfigureDeviceWithProgram(device, program);
     SetRuntimeArgs(program, reader_kernel, cfg.logical_core, reader_runtime_args);
     SetRuntimeArgs(program, writer_kernel, cfg.logical_core, writer_runtime_args);
-    WriteRuntimeArgsToDevice(device, program);
 
-    pass &= LaunchKernels(device, program);
+    pass &= LaunchProgram(device, program);
 
     std::vector<uint32_t> reread_input_packed;
     ReadFromBuffer(input_buffer, reread_input_packed);
@@ -218,11 +214,8 @@ bool l1_reader_datacopy_l1_writer(Device* device, const BankedL1Config& cfg) {
     ////////////////////////////////////////////////////////////////////////////
     auto noc_coord = device->worker_core_from_logical_core(cfg.logical_core);
 
-    // StartDebugPrintServer(device, {CoreCoord(1, 1), noc_coord});
-    pass &= CompileProgram(device, program);
     WriteToBuffer(input_buffer, input_packed);
 
-    pass &= ConfigureDeviceWithProgram(device, program);
     SetRuntimeArgs(
         program,
         reader_kernel,
@@ -239,8 +232,7 @@ bool l1_reader_datacopy_l1_writer(Device* device, const BankedL1Config& cfg) {
             (uint32_t)output_buffer.address(),
             (uint32_t)cfg.num_tiles,
         });
-    WriteRuntimeArgsToDevice(device, program);
-    pass &= LaunchKernels(device, program);
+    pass &= LaunchProgram(device, program);
 
     std::vector<uint32_t> dest_buffer_data;
     ReadFromBuffer(output_buffer, dest_buffer_data);
