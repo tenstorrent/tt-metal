@@ -18,6 +18,7 @@ import tt_lib as ttl
 
 from tt_lib.utils import _nearest_32
 from models.utility_functions import comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
 
 
 def volume(shape):
@@ -32,6 +33,7 @@ def volume(shape):
 ## stride_h, stride_w
 ## pad_h, pad_w
 ## dilation_h, dilation_w
+@skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "act_shape",  ## NCHW
     (

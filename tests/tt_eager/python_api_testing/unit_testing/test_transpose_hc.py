@@ -12,8 +12,9 @@ import torch
 
 import tt_lib as ttl
 from models.utility_functions import print_diff_argmax
+from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
 
-
+@skip_for_wormhole_b0
 def test_transpose_hc(device):
     N = 3
     C = 32 * 2

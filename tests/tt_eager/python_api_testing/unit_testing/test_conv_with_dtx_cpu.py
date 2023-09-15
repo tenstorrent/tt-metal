@@ -6,6 +6,7 @@ import pytest
 from pathlib import Path
 import sys
 
+
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/../..")
 
@@ -33,7 +34,6 @@ from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
 )
 
 import torch
-
 
 @pytest.mark.parametrize(
     "K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w",

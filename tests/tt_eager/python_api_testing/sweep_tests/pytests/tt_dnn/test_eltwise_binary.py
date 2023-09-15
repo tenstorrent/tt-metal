@@ -35,7 +35,7 @@ if is_wormhole_b0():
     shapes = [
         shapes[0],
     ]
-    del output_mem_cfgs[1:]
+    #del output_mem_cfgs[1:]
 
 @pytest.mark.parametrize(
     "input_shapes",

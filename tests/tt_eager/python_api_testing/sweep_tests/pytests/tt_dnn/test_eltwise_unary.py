@@ -43,9 +43,9 @@ if is_wormhole_b0():
     input_mem_cfgs = [
         input_mem_cfgs[0],
     ]
-    output_mem_cfgs = [
-        output_mem_cfgs[0],
-    ]
+    #output_mem_cfgs = [
+    #    output_mem_cfgs[0],
+    #]
 
 
 @pytest.mark.parametrize(

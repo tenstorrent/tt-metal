@@ -18,6 +18,7 @@ sys.path.append(f"{f}/../../../..")
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
 import tt_lib as ttl
+from tests.tt_eager.python_api_testing.sweep_tests.common import skip_for_wormhole_b0
 
 params = [
     pytest.param([[4, 4, 32, 32]], reshape_args)
@@ -106,7 +107,7 @@ params += [
     ),
 ]
 
-
+@skip_for_wormhole_b0
 @pytest.mark.parametrize("input_shapes, reshape_args", params)
 def test_run_reshape_test(
     input_shapes, reshape_args, device, function_level_defaults

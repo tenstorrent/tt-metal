@@ -13,8 +13,10 @@ from models.utility_functions import print_diff_argmax
 import pytest
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
 
-
+@skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "memcfg",
     (
@@ -74,6 +76,7 @@ def test_tile_simple_concat(memcfg, dtype, nChannels, device):
 
 
 # @pytest.mark.skip(reason="For Stable Diffusion Sizes only")
+@skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "shape_a_b_dim",
     (

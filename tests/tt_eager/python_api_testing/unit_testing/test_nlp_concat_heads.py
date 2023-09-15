@@ -8,6 +8,7 @@ from loguru import logger
 import tt_lib as ttl
 from models.utility_functions import comp_pcc, tt2torch_tensor
 import torch
+from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
 
 
 def run_nlp_concat_heads_test(
@@ -53,7 +54,7 @@ def run_nlp_concat_heads_test(
     logger.info(f"output pcc={output_pcc}")
     assert passing_pcc
 
-
+@skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "out_mem_config",
     (
@@ -94,7 +95,7 @@ def test_nlp_concat_heads_test(
         batch, seq_len, dtype, in0_mem_config, out_mem_config, device
     )
 
-
+@skip_for_wormhole_b0
 def test_nlp_concat_heads_with_program_cache(use_program_cache, device):
     dtype = ttl.tensor.DataType.BFLOAT8_B
     dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)

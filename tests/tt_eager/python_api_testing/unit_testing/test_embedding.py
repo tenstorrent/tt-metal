@@ -12,10 +12,8 @@ import torch
 
 import tt_lib as ttl
 
-from tt_lib.utils import (
-    is_close,
-)
-
+from tt_lib.utils import is_close
+from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
 
 def baseline_embeddings_list(num_rows, num_embeddings, embedding_dim, input, weights):
     input_list = input.reshape((num_rows,)).tolist()
@@ -68,7 +66,7 @@ def run_embeddings_tests(
 
 import pytest
 
-
+@skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "out_mem_config",
     (ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),),

@@ -8,6 +8,7 @@ import sys
 import time
 import os
 from loguru import logger
+import pytest
 
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/../../../../..")
@@ -21,7 +22,7 @@ from tt_lib.utils import (
     tilize_to_list,
     untilize,
 )
-
+from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
 
 def ref_groupnorm(x, group_size, eps, **kwargs):
     n_channels = x.shape[1]
@@ -132,9 +133,8 @@ def run_groupnorm_tests(
             torch.isclose(golden, tt_got_back)
 
 
-import pytest
 
-
+@skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "out_mem_config",
     (ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),),

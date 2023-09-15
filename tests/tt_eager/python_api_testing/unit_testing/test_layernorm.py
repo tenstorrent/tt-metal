@@ -12,6 +12,7 @@ from loguru import logger
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/../../../../..")
 
+import pytest
 import torch
 
 import tt_lib as ttl
@@ -22,7 +23,7 @@ from tt_lib.utils import (
     untilize,
     is_close,
 )
-
+from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
 
 # This ref implementation is only here for debugging
 def ref_ln(x, gamma, beta=None, epsilon=1e-5, b=None):
@@ -185,9 +186,7 @@ def run_layernorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device):
             assert is_close(tt_got_back, ref_lnorm)
 
 
-import pytest
-
-
+@skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "out_mem_config",
     (

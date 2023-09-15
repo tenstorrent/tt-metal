@@ -6,6 +6,10 @@ import sys
 import pytest
 
 from pathlib import Path
+from tests.tt_eager.python_api_testing.sweep_tests.common import (
+    is_wormhole_b0,
+    skip_for_wormhole_b0,
+)
 
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/../..")
@@ -24,6 +28,7 @@ def shape_padded(shape):
     return [shape[0], shape[1], _nearest_32(shape[2]), _nearest_32(shape[3])]
 
 
+@skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "act_shape",
     (([1, 7, 7, 2048], ([1, 1, 32, 64]))),

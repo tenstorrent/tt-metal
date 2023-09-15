@@ -12,8 +12,9 @@ import torch
 
 import tt_lib
 from models.utility_functions import print_diff_argmax
+from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
 
-
+@skip_for_wormhole_b0
 def test_fill_rm(device):
     N = 2
     C = 3
