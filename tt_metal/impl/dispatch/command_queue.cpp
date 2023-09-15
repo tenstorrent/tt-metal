@@ -831,12 +831,12 @@ void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& src, bool
     cq.enqueue_write_buffer(buffer, src, blocking);
 }
 
-void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking, bool compileProgram) {
+void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
     detail::DispatchStateCheck(true);
     const char* COMPARE_DISPATCH_DEVICE_TO_HOST = std::getenv("TT_METAL_COMPARE_DISPATCH_DEVICE_TO_HOST");
     const char* DISPATCH_MAP_DUMP = std::getenv("TT_METAL_DISPATCH_MAP_DUMP");
 
-    if (compileProgram) CompileProgram(cq.device, program);
+    CompileProgram(cq.device, program);
 
     if (COMPARE_DISPATCH_DEVICE_TO_HOST != nullptr) {
         TT_ASSERT(

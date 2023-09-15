@@ -248,7 +248,7 @@ class CommandQueue {
 
     friend void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& dst, bool blocking);
     friend void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& src, bool blocking);
-    friend void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking, bool compileProgram);
+    friend void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
     friend void Finish(CommandQueue& cq);
 };
 

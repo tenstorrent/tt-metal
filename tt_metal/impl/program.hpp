@@ -76,6 +76,10 @@ class Program {
 
     std::vector<std::string> cores_to_ops() const;
 
+    bool compile(Device * device);
+
+    void invalidate() { compile_needed_ = true; }
+
    private:
     struct CircularBufferConfig {
         // Tracks which circular buffer indices are being used
@@ -107,6 +111,7 @@ class Program {
     std::map<CoreCoord, CircularBufferConfig> per_core_cb_config_;
     std::vector<Semaphore> semaphores_;
     CoreRangeSet worker_crs_;
+    bool compile_needed_;
 
     friend const CircularBuffer &CreateCircularBuffers(
         Program &program,
@@ -131,6 +136,9 @@ class Program {
     void add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t init_value);
 
     void validate_circular_buffer_region(const Device *device, std::optional<CoreCoord> logical_core) const;
+    void add_blank_kernels(Device *device);
+
+    void set_cb_data_fmt( Device *device, Kernel *kernel, build_kernel_for_riscv_options_t &build_options) const;
 };
 
 }  // namespace tt_metal

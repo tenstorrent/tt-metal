@@ -336,7 +336,7 @@ std::vector<uint32_t> GetRuntimeArgs(const Program &program, KernelID kernel_id,
 
 // Launches all kernels on cores specified with kernels in the program.
 // All kernels on a given Tensix core must be launched.
-bool LaunchProgram(Device *device, Program &program, bool stagger_start = false, bool compileProgram = true);
+bool LaunchProgram(Device *device, Program &program, bool stagger_start = false);
 
 /**
  * Reads a buffer from the device
@@ -377,7 +377,7 @@ void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& src, bool
  * | program      | The program we are writing to the device                               | Program &                     |                                    | Yes      |
  * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
  */
-void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking, bool compileProgram = true);
+void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
 
 /**
  * Blocks until all previously dispatched commands on the device have completed
