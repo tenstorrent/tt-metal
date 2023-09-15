@@ -67,6 +67,8 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/split/split_tiled.cpp \
 	tt_eager/tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.cpp \
 	tt_eager/tt_dnn/op_library/operation_history.cpp \
+	tt_eager/tt_dnn/op_library/concat/multi_core/concat_op_multi_core.cpp \
+	tt_eager/tt_dnn/op_library/concat/single_core/concat_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/concat/concat_op.cpp \
 	tt_eager/tt_dnn/op_library/nlp_tms/nlp_tms.cpp \
 	tt_eager/tt_dnn/op_library/nlp_tms/nlp_create_qkv_heads.cpp \

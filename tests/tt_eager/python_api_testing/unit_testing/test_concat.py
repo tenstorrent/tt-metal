@@ -11,10 +11,17 @@ import torch
 import tt_lib as ttl
 from models.utility_functions import print_diff_argmax
 import pytest
+from loguru import logger
 
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+    comp_pcc,
+    comp_equal,
+)
+from tests.tt_eager.python_api_testing.sweep_tests.common import (
+    is_wormhole_b0,
+    skip_for_wormhole_b0,
+)
+
 
 @skip_for_wormhole_b0
 @pytest.mark.parametrize(
@@ -29,34 +36,15 @@ from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0,
     "dtype", ((ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B))
 )
 @pytest.mark.parametrize("nChannels", ((2, 3, 4)))
-def test_tile_simple_concat(memcfg, dtype, nChannels, device):
-    torch.manual_seed(0)
-    N = nChannels
-    C = nChannels
-    H = 32
-    W = 32
-    x = torch.arange(0, N * C * H * W).reshape((N, C, H, W))
+def test_tile_simple_concat(memcfg, dtype, nChannels, device, function_level_defaults):
+    input_shape = torch.Size([nChannels, nChannels, 32, 32])
+    x = torch.arange(0, input_shape.numel()).reshape(input_shape).bfloat16()
 
-    N = nChannels
-    C = nChannels
-    H = 32
-    W = 32
-    y = 1 + torch.arange(0, N * C * H * W).reshape((N, C, H, W))
+    y = (1 + torch.arange(0, input_shape.numel()).reshape(input_shape)).bfloat16()
 
     xtt = (
-        ttl.tensor.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            dtype,
-            ttl.tensor.Layout.ROW_MAJOR,
-        )
-        .to(ttl.tensor.Layout.TILE)
-        .to(device, memcfg),
-        ttl.tensor.Tensor(
-            y.reshape(-1).tolist(), y.shape, dtype, ttl.tensor.Layout.ROW_MAJOR
-        )
-        .to(ttl.tensor.Layout.TILE)
-        .to(device, memcfg),
+        ttl.tensor.Tensor(x, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttl.tensor.Tensor(y, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
 
     dim = 3
@@ -65,20 +53,23 @@ def test_tile_simple_concat(memcfg, dtype, nChannels, device):
     tt_cpu = torch.concat([x, y], dim)
     assert tt_cpu.shape == torch.Size(output_shape)
 
-    tt = ttl.tensor.concat([xtt[0], xtt[1]], dim)
+    tt = ttl.tensor.concat(xtt, dim)
     assert tt.shape() == output_shape
     xtt_data = tt.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
-    tt_dev = xtt_data.to_torch().to(torch.bfloat16)
-    # debug_show(output_shape[2],tt_dev,tt_cpu)
-    # print_diff_argmax(tt_dev, tt_cpu)
+    tt_dev = xtt_data.to_torch()
 
-    assert comp_pcc(tt_cpu, tt_dev)[0]
+    if dtype == ttl.tensor.DataType.BFLOAT8_B:
+        passing, output = comp_pcc(tt_cpu, tt_dev)
+    else:
+        passing, output = comp_equal(tt_cpu, tt_dev)
+    logger.info(output)
+    assert passing
 
 
 # @pytest.mark.skip(reason="For Stable Diffusion Sizes only")
 @skip_for_wormhole_b0
 @pytest.mark.parametrize(
-    "shape_a_b_dim",
+    "shape_a, shape_b, dim",
     (
         ((1, 1, 32, 32), (1, 1, 32, 32), 3),
         ((1, 1, 32, 64), (1, 1, 32, 128), 3),
@@ -95,36 +86,22 @@ def test_tile_simple_concat(memcfg, dtype, nChannels, device):
         ((2, 320, 32, 32), (2, 320, 32, 32), 1),
     ),
 )
-def test_tile_simple_dim3_concat(shape_a_b_dim, device):
-    shape_a, shape_b, dim = shape_a_b_dim
-    torch.manual_seed(0)
+def test_tile_concat(shape_a, shape_b, dim, device, function_level_defaults):
+    shape_a = torch.Size(shape_a)
 
-    N = shape_a[0]  # 1x1x64x32
-    C = shape_a[1]
-    H = shape_a[2]
-    Wx = shape_a[3]
-    Wy = shape_b[3]
+    x = torch.arange(0, shape_a.numel()).reshape(shape_a).to(torch.bfloat16)
 
-    x = torch.arange(0, N * C * H * Wx).reshape((N, C, H, Wx)).to(torch.bfloat16)
-
-    N = shape_b[0]  # 1x1x64x32
-    C = shape_b[1]
-    H = shape_b[2]
-    Wy = shape_b[3]
-    y = torch.arange(0, N * C * H * Wy).reshape((N, C, H, Wy)).to(torch.bfloat16)
+    shape_b = torch.Size(shape_b)
+    y = torch.arange(0, shape_b.numel()).reshape(shape_b).to(torch.bfloat16)
 
     xtt = (
         ttl.tensor.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
+            x,
             ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
         ).to(device),
         ttl.tensor.Tensor(
-            y.reshape(-1).tolist(),
-            y.shape,
+            y,
             ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
         ).to(device),
     )
 
@@ -137,15 +114,41 @@ def test_tile_simple_dim3_concat(shape_a_b_dim, device):
     assert tt.shape() == output_shape
     tt_dev = tt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
 
-    assert torch.equal(tt_cpu, tt_dev)
+    passing, output = comp_equal(tt_cpu, tt_dev)
+    logger.info(output)
+    assert passing
 
-    assert comp_pcc(tt_cpu, tt_dev)[0]
 
+@pytest.mark.parametrize(
+    "shapes, dim",
+    (
+        (((1, 2, 64, 64),), -1),
+        (((1, 1, 64, 64), (1, 1, 128, 64)), -2),
+        (((1, 1, 32, 128), (1, 1, 32, 64), (1, 1, 32, 256)), -1),
+        (((2, 4, 32, 1280), (2, 3, 32, 1280), (2, 5, 32, 1280), (2, 8, 32, 1280)), 1),
+    ),
+)
+def test_multi_input_concat(shapes, dim, device, function_level_defaults):
+    inputs = []
+    tt_inputs = []
+    for i in range(len(shapes)):
+        shape = torch.Size(shapes[i])
+        inputs.append(
+            i + torch.arange(0, shape.numel()).reshape(shape).to(torch.bfloat16)
+        )
+        tt_inputs.append(
+            ttl.tensor.Tensor(
+                inputs[i],
+                ttl.tensor.DataType.BFLOAT16,
+            ).to(device)
+        )
 
-def debug_show(H_cols, tt_dev, tt_cpu):
-    for row in range(H_cols):
-        print(f"\t [row {row}]\n\t------- cpu -----")
-        print(tt_cpu[:, :, row, :])
-        print(f"\t ------- device -----")
-        print(tt_dev[:, :, row, :])
-        print("--" * 40)
+    tt_cpu = torch.concat(inputs, dim)
+
+    tt = ttl.tensor.concat(tt_inputs, dim)
+
+    tt_dev = tt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+
+    passing, output = comp_equal(tt_cpu, tt_dev)
+    logger.info(output)
+    assert passing

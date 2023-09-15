@@ -2053,35 +2053,18 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     // *** tensor manipulation ***
-    m_tensor.def("concat", py::overload_cast<Tensor&, Tensor&, uint32_t, const MemoryConfig&>(&concat),
-        py::arg("input").noconvert(), py::arg("other").noconvert(), py::arg("dim"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-        Concatenates shape of tensors ``arg0`` and ``arg1`` to new shape ``[W, Z, Y, X]`` along the specified dimension ``arg2``.
-
-        Input tensors must be on device, in ROW MAJOR or TILE layout, and have BFLOAT16 data type.
-
-        Output tensor will be on device, in same layout, and have BFLOAT16 data type.
-
-        .. csv-table::
-            :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-            "input", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X], where concat dim %32=0", "Yes"
-            "other", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X], where concat dim %32=0", "Yes"
-            "dim", "dimension of concat", "int", "", "Yes"
-            "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-    )doc");
-
-    m_tensor.def("concat", py::overload_cast<std::vector<Tensor>&, uint32_t, const MemoryConfig&>(&concat),
-        py::arg("input_tensors").noconvert(), py::arg("dim"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+    m_tensor.def("concat", &concat,
+        py::arg("input_tensors").noconvert(), py::arg("dim") = 0, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Concatenates shape of tensors ``arg0`` and ``arg1`` to new shape ``[W, Z, Y, X]`` along the specified dimension ``arg1``.
 
-        Input tensors must be on device, in ROW MAJOR or TILE layout, and have BFLOAT16 data type.
+        Input tensors must be on device, in ROW MAJOR or TILE layout, and have matching data type.
 
-        Output tensor will be on device, in same layout, and have BFLOAT16 data type.
+        Output tensor will be on device, in same layout, and have same data type.
 
         .. csv-table::
             :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
-            "input_tensors", "Input tensors to concat", "List of Tensors", "Tensors of shape [W, Z, Y, X], where concat dim %32=0", "Yes"
+            "input_tensors", "Input tensors to concat", "List of Tensors", "Tensors of shape [W, Z, Y, X], where Y or X must be a multiple of 32 if they are the concat dim", "Yes"
             "dim", "dimension of concat", "int", "", "Yes"
             "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
     )doc");
