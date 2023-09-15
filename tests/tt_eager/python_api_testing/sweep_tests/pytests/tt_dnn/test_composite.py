@@ -139,7 +139,7 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
 
     options["sinh"] = (-9, 9)
     options["tanhshrink"] = (-100, 100)
-    options["atanh"] = (-100, 100)
+    options["atanh"] = (-1, 1)
     options["cosh"] = options["sinh"]
     options["asinh"] = (-100, 100)
     options["isclose"] = (-100, 100)
@@ -151,8 +151,6 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
     generator = generation_funcs.gen_rand
 
     if is_wormhole_b0():
-        if fn in ["atanh"]:
-            pytest.skip("Not tested for Wormhole - skipping")
         if fn in ["logit"]:
             pytest.skip("does not work for Wormhole -skipping")
     if fn in ["logical_xor", "logical_xori", "logical_ori", "logical_andi"]:

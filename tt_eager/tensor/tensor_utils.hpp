@@ -37,6 +37,9 @@ namespace tt_metal {
         }
         return volume;
     }
+
+   bool is_arch_gs(const tt::ARCH& arch);
+   bool is_arch_whb0(const tt::ARCH& arch);  
 }
 
 }

@@ -152,8 +152,6 @@ class TestEltwiseBinary:
     def test_run_eltwise_binary_log_ops(
         self, input_shapes, output_mem_config, log_kind, input_range, device, function_level_defaults
     ):
-        if is_wormhole_b0() and (log_kind in  ["logaddexp2", "ldexp"]) :
-            pytest.skip("Not works for WH B0 arch - Skipping")
         datagen_func = [
             generation_funcs.gen_func_with_cast(
                 partial(generation_funcs.gen_rand, **input_range), torch.bfloat16

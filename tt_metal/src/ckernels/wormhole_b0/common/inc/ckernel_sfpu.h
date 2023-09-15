@@ -103,7 +103,7 @@ inline void configure_programmable_constants(SfpuType operation)
         vConstFloatPrgm0 = 1.442695f; // ln2_recip
         vConstFloatPrgm1 = 2.0f;
         break;
-
+    case SfpuType::log_with_base:
     case SfpuType::log:
         // ln2
         vConstFloatPrgm0 = 0.692871f; // ln2
@@ -1273,7 +1273,7 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
         calculate_dropout<APPROXIMATION_MODE, ITERATIONS>(param0, param1);
     }
     else if constexpr (operation == SfpuType::power) {
-	calculate_power_iterative<APPROXIMATION_MODE, ITERATIONS>(param0);	  
+	calculate_power_iterative<APPROXIMATION_MODE, ITERATIONS>(param0);
     }
     else if constexpr (operation == SfpuType::square) {
         calculate_square<APPROXIMATION_MODE, ITERATIONS>();

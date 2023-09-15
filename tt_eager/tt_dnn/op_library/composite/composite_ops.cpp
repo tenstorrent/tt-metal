@@ -8,6 +8,7 @@
 #include "tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
 #include "tt_numpy/functions.hpp"
+#include "tt_eager/tensor/tensor_utils.hpp"
 
 namespace tt {
 
@@ -442,10 +443,21 @@ Tensor _atanh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
      }
     // Input is -1 > value > 1, output is nan
     // Input is -1 < value < 1, output is atanh(input)
-    Tensor t_nan = mul_unary(comp_result, std::nanf(""), output_mem_config);
-    Tensor abs_temp = sub_unary(abs(input_a, output_mem_config), 1.0f, output_mem_config);
-    Tensor result = where(ltz(abs_temp, output_mem_config), comp_result, t_nan, output_mem_config);
+
+#define ATANH_IMPL \
+    Tensor abs_temp = sub_unary(abs(input_a, output_mem_config), 1.0f, output_mem_config); \
+    Tensor result = where(ltz(abs_temp, output_mem_config), comp_result, t_nan, output_mem_config); \
     return result;
+    
+    if (is_arch_whb0(input_a.device()->arch())) {
+      Tensor  t_nan  = full_like(comp_result, std::nanf(""), output_mem_config);
+      ATANH_IMPL
+    } else {
+      Tensor  t_nan = mul_unary(comp_result, std::nanf(""), output_mem_config);
+      ATANH_IMPL
+    }
+    
+#undef ATANH_IMPL
 }
 Tensor atanh(const Tensor &input_a, const MemoryConfig& output_mem_config)
 {
@@ -918,7 +930,7 @@ Tensor glu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& ou
 // ReLU Gated Linear Unit activation: matmul(split[0],relu(split[1]))
 Tensor reglu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
     TT_ASSERT( dim == -1 || dim == 3, "last dim REGLU only supported at this time ");
-    if ( dim == -1 ) dim = 3;    
+    if ( dim == -1 ) dim = 3;
     std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input_a,output_mem_config);
     Tensor relu_b = relu(ab[1], output_mem_config);
     Tensor reglu_result = mul(ab[0], relu_b, std::nullopt, output_mem_config);
@@ -927,8 +939,8 @@ Tensor reglu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& 
 
 // Gaussian Error Gated Linear Unit activation: matmul(split[0],gelu(split[1]))
 Tensor geglu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
-    TT_ASSERT( dim == -1 || dim == 3, "last dim GEGLU only supported at this time "); 
-    if ( dim == -1 ) dim = 3;   
+    TT_ASSERT( dim == -1 || dim == 3, "last dim GEGLU only supported at this time ");
+    if ( dim == -1 ) dim = 3;
     std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input_a,output_mem_config);
     constexpr bool fast_appx = true;
     Tensor gelu_b = gelu(ab[1], fast_appx, output_mem_config);
@@ -939,7 +951,7 @@ Tensor geglu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& 
 // Swish Gated Linear Unit activation: matmul(split[0],swish(split[1]))
 Tensor swiglu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
     TT_ASSERT( dim == -1 || dim == 3, "last dim SWIGLU only supported at this time ");
-    if ( dim == -1 ) dim = 3;    
+    if ( dim == -1 ) dim = 3;
     std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input_a,output_mem_config);
     Tensor swish_b = swish(ab[1], output_mem_config);
     Tensor swiglu_result = mul(ab[0], swish_b, std::nullopt, output_mem_config);

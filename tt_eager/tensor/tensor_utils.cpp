@@ -146,6 +146,15 @@ const Shape infer_dims_for_reshape(int N, int C, int H, int W, uint32_t old_volu
     return {(uint32_t)N, (uint32_t)C, (uint32_t)H, (uint32_t)W};
 }
 
+  bool is_arch_gs(const tt::ARCH& arch) {
+    return arch == tt::ARCH::GRAYSKULL;
+  }
+
+  bool is_arch_whb0(const tt::ARCH& arch) {
+    return arch == tt::ARCH::WORMHOLE_B0;
+  }  
+  
+  
 }
 
 }
