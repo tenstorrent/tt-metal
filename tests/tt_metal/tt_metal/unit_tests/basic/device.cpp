@@ -346,3 +346,42 @@ TEST_F(SingleDeviceFixture, PingIllegalL1Cores) {
         L1_UNRESERVED_BASE;  // FIXME: Should remove dependency on hostdevcommon/common_runtime_address_map.h header.
     ASSERT_ANY_THROW(unit_tests::basic::device::l1_ping(device_, 4, start_byte_address, grid_size));
 }
+
+// This test ensures that no logical core maps to a harvested row
+TEST_F(BasicFixture, ValidateLogicalToPhysicalCoreCoordMapping) {
+    size_t num_devices = tt_metal::Device::detect_num_available_devices();
+    for (int device_id = 0; device_id < num_devices; device_id++) {
+        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+        ASSERT_TRUE(tt_metal::InitializeDevice(device));
+        tt_cluster *cluster = device->cluster();
+        uint32_t harvested_rows_mask = cluster->get_harvested_rows(device_id);
+        log_info(LogTest, "Device {} harvesting mask {}", device_id, harvested_rows_mask);
+        std::unordered_set<int> harvested_rows;
+        int row_coordinate = 0;
+        int tmp = harvested_rows_mask;
+        string delim = "";
+        string harvested_row_str;
+        while (tmp) {
+            if (tmp & 1) {
+                harvested_rows.insert(row_coordinate);
+                harvested_row_str += delim + std::to_string(row_coordinate);
+                delim = ", ";
+            }
+            tmp = tmp >> 1;
+            row_coordinate++;
+        }
+
+        log_info(LogTest, "Device {} has {} harvested rows. Physical harvested row coordinates are: {}", device_id, harvested_rows.size(), harvested_row_str);
+
+        CoreCoord logical_grid_size = device->logical_grid_size();
+        for (int x = 0; x < logical_grid_size.x; x++) {
+            for (int y = 0; y < logical_grid_size.y; y++) {
+                CoreCoord logical_core_coord(x, y);
+                CoreCoord physical_core_coord = device->worker_core_from_logical_core(logical_core_coord);
+                ASSERT_TRUE(harvested_rows.find(physical_core_coord.y) == harvested_rows.end());
+            }
+        }
+
+        tt_metal::CloseDevice(device);
+    }
+}
