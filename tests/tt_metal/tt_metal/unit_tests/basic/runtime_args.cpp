@@ -28,7 +28,7 @@ Program init_compile_and_configure_program(Device *device, const CoreRangeSet &c
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
-    CompileProgram(device, program);
+    detail::CompileProgram(device, program);
     return std::move(program);
 }
 

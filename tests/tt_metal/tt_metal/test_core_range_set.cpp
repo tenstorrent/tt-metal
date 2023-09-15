@@ -148,7 +148,7 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
 
     check_program_is_mapped_to_correct_cores(program, core_range_set, compute_kernel_args);
 
-    pass &= tt_metal::CompileProgram(device, program);
+    pass &= tt_metal::detail::CompileProgram(device, program);
 
     pass &= tt_metal::detail::ConfigureDeviceWithProgram(device, program);
 

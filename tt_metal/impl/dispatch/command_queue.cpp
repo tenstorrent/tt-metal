@@ -612,7 +612,7 @@ void send_dispatch_kernel_to_device(Device* device) {
         }
     );
 
-    CompileProgram(device, dispatch_program);
+    detail::CompileProgram(device, dispatch_program);
     tt::tt_metal::detail::ConfigureDeviceWithProgram(device, dispatch_program);
 
     u32 fifo_addr = (HOST_CQ_FINISH_PTR + 32) >> 4;
@@ -836,7 +836,7 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
     const char* COMPARE_DISPATCH_DEVICE_TO_HOST = std::getenv("TT_METAL_COMPARE_DISPATCH_DEVICE_TO_HOST");
     const char* DISPATCH_MAP_DUMP = std::getenv("TT_METAL_DISPATCH_MAP_DUMP");
 
-    CompileProgram(cq.device, program);
+    detail::CompileProgram(cq.device, program);
 
     if (COMPARE_DISPATCH_DEVICE_TO_HOST != nullptr) {
         TT_ASSERT(

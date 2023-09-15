@@ -162,6 +162,12 @@ namespace detail {
             }
         }
     }
+
+    bool CompileProgram(Device *device, Program &program){
+        ZoneScoped;
+        return program.compile(device);
+    }
+
 }
 
 Device *CreateDevice(int device_id, const std::vector<uint32_t>& l1_bank_remap) {
@@ -409,10 +415,6 @@ void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
 
 void DeallocateBuffer(Buffer &buffer) { buffer.deallocate(); }
 
-bool CompileProgram(Device *device, Program &program){
-    ZoneScoped;
-    return program.compile(device);
-}
 
 void ConfigureKernelGroup(const Program &program, const KernelGroup &kernel_group, Device *device, const CoreCoord &logical_core) {
     if (kernel_group.compute_id.has_value()) {
@@ -477,7 +479,7 @@ bool LaunchProgram(Device *device, Program &program, bool stagger_start) {
     ZoneScoped;
     detail::DispatchStateCheck( false );
     detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("LaunchProgram");
-    CompileProgram(device, program);
+    detail::CompileProgram(device, program);
     detail::WriteRuntimeArgsToDevice(device, program);
     detail::ConfigureDeviceWithProgram(device, program);
     auto cluster = device->cluster();
