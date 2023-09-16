@@ -91,12 +91,6 @@ namespace detail {
 
             ConfigureKernelGroup(program, kernel_group, device, logical_core); // PROF_BEGIN("CONF_KERN") PROF_END("CONF_KERN")
 
-            // Initialize registers to INVALID
-            constexpr static uint32_t INVALID = 0x4321;  // PROF_BEGIN("WRITE_HEX")
-            uint32_t stream_register_address = STREAM_REG_ADDR(0, 24);
-            llrt::write_hex_vec_to_core(
-                cluster, device_id, worker_core, {INVALID}, stream_register_address);  // PROF_END("WRITE_HEX")
-
             auto cbs_on_core = program.circular_buffers_on_core(logical_core);         // PROF_BEGIN("CBS")
             for (auto circular_buffer : cbs_on_core) {
                 for (auto buffer_index : circular_buffer.buffer_indices()) {
@@ -490,7 +484,7 @@ bool LaunchProgram(Device *device, Program &program, bool stagger_start) {
     // don't get the GO mailbox (eg, storage cores) have all landed
     cluster->l1_barrier(device->id());
 
-    auto logical_cores_used_in_program = program.logical_cores();
+    std::vector<CoreCoord> logical_cores_used_in_program = program.logical_cores();
     std::vector<uint32_t> run_mailbox_go_val = {RUN_MESSAGE_GO};
     for (const auto &logical_core : logical_cores_used_in_program) {
         // XXXX move this to llrt
@@ -498,13 +492,34 @@ bool LaunchProgram(Device *device, Program &program, bool stagger_start) {
         tt::llrt::write_hex_vec_to_core(cluster, device_id, worker_core, run_mailbox_go_val, MEM_RUN_MAILBOX_ADDRESS);
     }
 
-    bool riscs_are_done = false;
-    while (not riscs_are_done) {
-        riscs_are_done = true;
-        for (const auto &logical_core : logical_cores_used_in_program) {
+    // Wait for all cores to be done
+
+    // get all the cores that need to be polled
+    std::unordered_set<CoreCoord> not_done_cores(logical_cores_used_in_program.begin(), logical_cores_used_in_program.end());
+
+    // poll the cores until the set of not done cores is empty
+    while (!not_done_cores.empty()) {
+        // Print not-done cores
+        string not_done_cores_str = "Not done logical cores: ";
+        for (const auto &core : not_done_cores) {
+            not_done_cores_str += (core.str() + " ");
+        }
+        not_done_cores_str += "\n";
+        log_debug(tt::LogMetal, not_done_cores_str.c_str());
+
+        for (auto it = not_done_cores.begin(); it != not_done_cores.end(); ) {
+            const auto &logical_core = *it;
+
             auto worker_core = device->worker_core_from_logical_core(logical_core);
-            riscs_are_done &=
-                llrt::internal_::check_if_riscs_on_specified_core_done(cluster, device_id, worker_core);
+
+            bool is_done = llrt::internal_::check_if_riscs_on_specified_core_done(cluster, device_id, worker_core);
+
+            if (is_done) {
+                log_debug(tt::LogMetal, "Logical core just done: {}", logical_core.str());
+                it = not_done_cores.erase(it);
+            } else {
+                ++it;
+            }
         }
     }
 
