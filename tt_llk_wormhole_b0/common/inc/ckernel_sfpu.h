@@ -376,7 +376,7 @@ void calculate_cube(uint16_t exp_base_scale_factor = 0)
 }
 */
 
-template <bool APPROXIMATION_MODE, bool ZERO_NEGATIVE, bool SCALE_EN, int ITERATIONS>
+template <bool APPROXIMATION_MODE, bool SCALE_EN, int ITERATIONS>
 void calculate_exponential(const int iterations, uint16_t exp_base_scale_factor = 0)
 {
     // Unroll 8 best for approx, unroll 0 for precise, compiler figures this out
@@ -406,16 +406,6 @@ void calculate_exponential(const int iterations, uint16_t exp_base_scale_factor 
                 // SHL to move integer bits to exponent
                 val_short <<= 10 - p_exp::FRAC_BITS;
                 dst_reg[0] = reinterpret<vFloat>(val_short);
-
-                // Needed for fused kernels such as math_row_softmax_tables which call calculate_exponential()
-                // without using Relu in Packer to clamp -ve Infinity to 0.
-                if constexpr (ZERO_NEGATIVE)
-                {
-                    v_if (val_short < 0) {
-                        dst_reg[0] = vConst0;
-                    }
-                    v_endif;
-                }
             }
             v_endif;
         }
@@ -1279,10 +1269,10 @@ template <SfpuType operation, bool APPROXIMATION_MODE, int SfpuType_PARAM=0, int
 inline void calculate_sfpu(const int iterations = ITERATIONS, uint param0 = 0, uint param1 = 0, uint param2 = 0, uint param3 = 0, uint param4 = 0, uint param5 = 0)
 {
     if constexpr (operation == SfpuType::exponential) {
-        calculate_exponential<APPROXIMATION_MODE, APPROXIMATION_MODE, false, ITERATIONS>(iterations, param0);
+        calculate_exponential<APPROXIMATION_MODE, false, ITERATIONS>(iterations, param0);
     }
     else if constexpr (operation == SfpuType::exp_with_base) {
-        calculate_exponential<APPROXIMATION_MODE, false, true, ITERATIONS>(iterations, param0);
+        calculate_exponential<APPROXIMATION_MODE, true, ITERATIONS>(iterations, param0);
     }
     else if constexpr (operation == SfpuType::tanh) {
         calculate_tanh<APPROXIMATION_MODE, ITERATIONS>(iterations);
