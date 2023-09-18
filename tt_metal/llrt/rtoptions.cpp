@@ -17,7 +17,7 @@ namespace llrt {
 // env state
 RunTimeOptions OptionsG;
 
-RunTimeOptions::RunTimeOptions() : watcher_interval(0) {
+RunTimeOptions::RunTimeOptions() : watcher_interval(0), watcher_dump_all(false) {
 
     const char *watcher_enable_str = getenv("TT_METAL_WATCHER");
     if (watcher_enable_str != nullptr) {
@@ -25,6 +25,11 @@ RunTimeOptions::RunTimeOptions() : watcher_interval(0) {
         sscanf(watcher_enable_str, "%d", &sleep_secs);
         constexpr int watcher_default_sleep_secs = 2 * 60;
         watcher_interval = (sleep_secs == 0) ? watcher_default_sleep_secs : sleep_secs;
+    }
+
+    const char *watcher_dump_all_str = getenv("TT_METAL_WATCHER_DUMP_ALL");
+    if (watcher_dump_all_str != nullptr) {
+        watcher_dump_all = true;
     }
 }
 

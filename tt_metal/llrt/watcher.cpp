@@ -264,7 +264,7 @@ static void dump_debug_status(FILE *f, WatcherDevice *wdev, CoreCoord core) {
     fprintf(f, " ");
 }
 
-static void dump_cb_state(FILE *f, WatcherDevice *wdev, CoreCoord core) {
+static void dump_sync_regs(FILE *f, WatcherDevice *wdev, CoreCoord core) {
 
     // Read back all of the stream state, most of it is unused
     std::vector<uint32_t> data;
@@ -287,7 +287,7 @@ static void dump_cb_state(FILE *f, WatcherDevice *wdev, CoreCoord core) {
     }
 }
 
-static void dump_core(FILE *f, WatcherDevice *wdev, CoreCoord core) {
+static void dump_core(FILE *f, WatcherDevice *wdev, CoreCoord core, bool dump_all) {
 
     // Core (x, y): L1[0]=ok  R:RRRR
     fprintf(f, "Core %s: \t", core.str().c_str());
@@ -301,14 +301,19 @@ static void dump_core(FILE *f, WatcherDevice *wdev, CoreCoord core) {
 
     // Dump state always available
     dump_run_mailboxes(f, wdev, core);
-    dump_cb_state(f, wdev, core);
+    if (dump_all || OptionsG.get_watcher_dump_all()) {
+        // Reading registers while running can cause hangs, only read if
+        // requested explicitly
+        dump_sync_regs(f, wdev, core);
+    }
 
     fprintf(f, "\n");
 
     fflush(f);
 }
 
-static void  __attribute__((noinline)) dump(FILE *f) {
+// noinline so that this fn exists to be called from dgb
+static void  __attribute__((noinline)) dump(FILE *f, bool dump_all) {
     for (auto const& dev_pair : devices) {
         std::shared_ptr<WatcherDevice>wdev = dev_pair.second;
 
@@ -322,7 +327,7 @@ static void  __attribute__((noinline)) dump(FILE *f) {
                 CoreCoord logical_core(x, y);
                 CoreCoord worker_core = wdev->worker_from_logical_(logical_core);
                 if (wdev->storage_only_cores_().find(logical_core) == wdev->storage_only_cores_().end()) {
-                    dump_core(f, wdev.get(), worker_core);
+                    dump_core(f, wdev.get(), worker_core, dump_all);
                 }
             }
         }
@@ -349,7 +354,7 @@ static void watcher_loop(int sleep_usecs) {
                 fprintf(logfile, "No active devices\n");
             }
 
-            dump(logfile);
+            dump(logfile, false);
 
             fprintf(logfile, "\n");
         }
