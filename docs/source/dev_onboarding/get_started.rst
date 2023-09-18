@@ -70,3 +70,21 @@ Please refer to the
 <https://github.com/tenstorrent-metal/tt-metal/blob/main/CONTRIBUTING.md>`_ for
 instructions and expectations for running regressions before you merge changes
 into main.
+
+
+Warm Resetting `Wormhole B0` (WH B0) Board
+------------------------------------------
+On a board machine running ``$ tt-smi --version && tt-smi`` successfully indicates the board maybe still warm-reset.
+
+::
+
+   $ tt-smi -wr wait all
+
+
+Warm Resetting `Grayskull` (GS) Board
+-------------------------------------
+On a board machine running ``$ tt-smi --version && tt-smi`` successfully indicates the board maybe still warm-reset.
+
+::
+
+   $ tt-smi -tr all

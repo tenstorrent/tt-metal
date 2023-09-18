@@ -28,7 +28,7 @@ Community
 ---------
 
 We have a `discussion board
-<https://github.com/orgs/tenstorrent-metal/discussions>`_ on GitHub where
+<https://github.com/tenstorrent-metal/tt-metal/discussions>`_ on GitHub where
 members can bounce ideas off each other and discuss the project.
 
 Please refer to the `code of conduct
