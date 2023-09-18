@@ -18,6 +18,7 @@ struct Pad {
     const Shape input_tensor_start;
     const float pad_value;
     const MemoryConfig output_mem_config;
+    const bool use_multicore;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -26,7 +27,17 @@ struct Pad {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-Tensor pad(const Tensor &input_tensor_a, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
+                                                     Tensor &output,
+                                                     const Shape &output_tensor_shape,
+                                                     const Shape &input_tensor_start,
+                                                     const float pad_value);
+operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
+                                                                Tensor &output,
+                                                                const Shape &output_tensor_shape,
+                                                                const Shape &input_tensor_start,
+                                                                const float pad_value);
+Tensor pad(const Tensor &input_tensor_a, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, bool use_multicore = false);
 
 struct PadOnHost {
     const Shape output_tensor_shape;

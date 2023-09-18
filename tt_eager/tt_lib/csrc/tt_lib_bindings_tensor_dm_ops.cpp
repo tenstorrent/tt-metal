@@ -175,10 +175,16 @@ namespace tt::tt_metal::detail{
         )doc");
 
         m_tensor.def("pad",
-            [] (const Tensor &input_tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value, const MemoryConfig& output_mem_config) {
-                return pad(input_tensor, output_tensor_shape, input_tensor_start, pad_value, output_mem_config);
+            [] (const Tensor &input_tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value, const MemoryConfig& output_mem_config, bool use_multicore) {
+                return pad(input_tensor, output_tensor_shape, input_tensor_start, pad_value, output_mem_config, use_multicore);
             },
-            py::arg("input").noconvert(), py::arg("output_tensor_shape").noconvert(), py::arg("input_tensor_start"), py::arg("pad_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            py::arg("input").noconvert(),
+            py::arg("output_tensor_shape").noconvert(),
+            py::arg("input_tensor_start"),
+            py::arg("pad_value"),
+            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            py::arg("use_multicore") = true,
+            R"doc(
             Pad TT Tensor with given pad value ``arg2``.
 
             The input tensor must be in ROW_MAJOR or TILE layout.

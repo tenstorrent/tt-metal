@@ -1342,7 +1342,12 @@ class ResNet(nn.Module):
             _nearest_32(unpadded_shape[3]),
         ]
         x = tt_lib.tensor.pad(
-            x, padded_shape, [0, 0, 0, 0], 0, output_mem_config=self.memory_config
+            x,
+            padded_shape,
+            [0, 0, 0, 0],
+            0,
+            output_mem_config=self.memory_config,
+            use_multicore=True,
         )
         x = tt_lib.tensor.tilize(x, output_mem_config=self.memory_config)
 
@@ -1370,7 +1375,12 @@ class ResNet(nn.Module):
             _nearest_32(unpadded_shape[3]),
         ]
         x = tt_lib.tensor.pad(
-            x, padded_shape, [0, 0, 0, 0], 0, output_mem_config=self.memory_config
+            x,
+            padded_shape,
+            [0, 0, 0, 0],
+            0,
+            output_mem_config=self.memory_config,
+            use_multicore=True,
         )
         x = tt_lib.tensor.tilize(x, output_mem_config=self.memory_config)
 

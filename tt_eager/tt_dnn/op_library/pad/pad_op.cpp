@@ -42,7 +42,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
     CoreRange cores = {.start = {0, 0}, .end = {0, 0}};
     uint32_t cb_id = CB::c_in0;
     uint32_t cb_npages = 16; // multibuffering
-    uint32_t cb_pagesize = (uint32_t) ceil((float) padded_row_size_nbytes / constants::TILE_WIDTH) * constants::TILE_WIDTH;
+    uint32_t cb_pagesize = round_up(padded_row_size_nbytes, constants::TILE_WIDTH);
     DataFormat in_df = datatype_to_dataformat_converter(a.dtype());
     tt_metal::CircularBufferConfig cb_config = tt_metal::CircularBufferConfig(cb_npages * cb_pagesize, {{cb_id, in_df}})
 		.set_page_size(cb_id, cb_pagesize);
@@ -106,6 +106,8 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
     }
     #endif
 
+    uint32_t start_src_stick_id = 0;
+    uint32_t start_dst_stick_id = 0;
     vector<uint32_t> reader_rt_args = {src0_buffer->address(),
                                        dst_buffer->address(),
                                        a.shape()[0],
@@ -121,7 +123,19 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
                                        padded_row_diff_size_nbytes,
                                        pad_value_const_tensor_addr,
                                        pad_value_const_buffer_nbytes,
-                                       packed_pad_value};
+                                       packed_pad_value,
+                                       start_src_stick_id,
+                                       start_dst_stick_id,
+                                       0,
+                                       0,
+                                       0,
+                                       output_shape[2],
+                                       a.shape()[2],
+                                       unpadded_row_size_nbytes,
+                                       padded_row_size_nbytes,
+                                       0,
+                                       output.shape()[0]
+                                       };
     vector<uint32_t> writer_rt_args = reader_rt_args;
     SetRuntimeArgs(program,
                    reader_kernel_id,
@@ -555,10 +569,15 @@ operation::ProgramWithCallbacks Pad::create_program(const std::vector<Tensor>& i
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
-        // return pad_rm(input_tensor, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
-        // return pad_rm_opt(input_tensor, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
-        return pad_rm_reader_writer(input_tensor, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
+        if (use_multicore) {
+            return pad_rm_reader_writer_multi_core(input_tensor, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
+        } else {
+            return pad_rm_reader_writer(input_tensor, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
+        }
     } else if (input_tensor.layout() == Layout::TILE) {
+        if (this->use_multicore) {
+            log_warning(LogType::LogOp, "TILE layout does not have multicore implementation yet. Falling back to 1 core.");
+        }
         return pad_tile(input_tensor, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
     } else {
         TT_ASSERT(false, "Unsupported layout for pad");
@@ -575,11 +594,11 @@ tt::stl::reflection::Attributes Pad::attributes() const {
     };
 }
 
-Tensor pad(const Tensor &input_tensor, const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value, const MemoryConfig& mem_config) {
+Tensor pad(const Tensor &input_tensor, const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value, const MemoryConfig& mem_config, bool use_multicore) {
     if (input_tensor.shape() == output_tensor_shape) {
         return input_tensor;
     }
-    return operation::run_without_autoformat(Pad{output_tensor_shape, input_tensor_start, pad_value, mem_config}, {input_tensor}).at(0);
+    return operation::run_without_autoformat(Pad{output_tensor_shape, input_tensor_start, pad_value, mem_config, use_multicore}, {input_tensor}).at(0);
 
 }
 
