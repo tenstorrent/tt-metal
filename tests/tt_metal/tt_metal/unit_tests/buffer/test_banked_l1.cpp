@@ -150,17 +150,16 @@ bool l1_reader_datacopy_l1_writer(Device* device, const BankedL1Config& cfg) {
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
     Program program = Program();
-    auto input_buffer = Buffer(device, cfg.size_bytes, cfg.page_size_bytes, BufferType::L1);
-    auto output_buffer = Buffer(device, cfg.size_bytes, cfg.page_size_bytes, BufferType::L1);
+    auto input_buffer = Buffer(device, cfg.size_bytes, cfg.page_size_bytes, cfg.input_buffer_type);
+    auto output_buffer = Buffer(device, cfg.size_bytes, cfg.page_size_bytes, cfg.output_buffer_type);
 
-    std::cout << "Input buffer addr " << input_buffer.address() << " size: " << input_buffer.size() << " page size " << input_buffer.page_size()
-              << " output buffer addr " << output_buffer.address() << " size: " << output_buffer.size() << " page size " << output_buffer.page_size() << std::endl;
-
+    TT_ASSERT(cfg.num_tiles * cfg.page_size_bytes == cfg.size_bytes);
+    constexpr uint32_t num_pages_cb = 1;
     auto l1_input_cb = CreateCircularBuffer(
         program,
         input0_cb_index,
         cfg.logical_core,
-        cfg.num_tiles,
+        num_pages_cb,
         cfg.page_size_bytes,
         cfg.l1_data_format
     );
@@ -168,12 +167,10 @@ bool l1_reader_datacopy_l1_writer(Device* device, const BankedL1Config& cfg) {
         program,
         output_cb_index,
         cfg.logical_core,
-        cfg.num_tiles,
+        num_pages_cb,
         cfg.page_size_bytes,
         cfg.l1_data_format
     );
-
-    std::cout << "input cb addr " << l1_input_cb.address() << " output cb address " << l1_output_cb.address() << std::endl;
 
     bool input_is_dram = cfg.input_buffer_type == BufferType::DRAM;
     bool output_is_dram = cfg.output_buffer_type == BufferType::DRAM;
@@ -185,7 +182,7 @@ bool l1_reader_datacopy_l1_writer(Device* device, const BankedL1Config& cfg) {
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_1_default,
-            .compile_args = {input0_cb_index, uint32_t(cfg.page_size_bytes), uint32_t(input_is_dram)}});
+            .compile_args = {input0_cb_index, uint32_t(input_buffer.page_size()), (uint32_t)input_is_dram}});
 
     auto writer_kernel = CreateDataMovementKernel(
         program,
@@ -194,7 +191,7 @@ bool l1_reader_datacopy_l1_writer(Device* device, const BankedL1Config& cfg) {
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
-            .compile_args = {output_cb_index, uint32_t(cfg.page_size_bytes), uint32_t(output_is_dram)}});
+            .compile_args = {output_cb_index, uint32_t(output_buffer.page_size()), (uint32_t)output_is_dram}});
 
     vector<uint32_t> compute_kernel_args = {
         uint(cfg.num_tiles)  // per_core_tile_cnt
@@ -208,11 +205,12 @@ bool l1_reader_datacopy_l1_writer(Device* device, const BankedL1Config& cfg) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation
     ////////////////////////////////////////////////////////////////////////////
-    auto input_packed = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, cfg.size_bytes / sizeof(uint32_t));
+    std::vector<uint32_t> input_packed = tt::test_utils::generate_packed_uniform_random_vector<uint32_t, tt::test_utils::df::bfloat16>(
+        -1.0f, 1.0f, cfg.size_bytes / tt::test_utils::df::bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+
     ////////////////////////////////////////////////////////////////////////////
-    //                      Compile and Execute Application
+    //                      Compile and Execute Appli   cation
     ////////////////////////////////////////////////////////////////////////////
-    auto noc_coord = device->worker_core_from_logical_core(cfg.logical_core);
 
     WriteToBuffer(input_buffer, input_packed);
 
@@ -223,7 +221,8 @@ bool l1_reader_datacopy_l1_writer(Device* device, const BankedL1Config& cfg) {
         {
             (uint32_t)input_buffer.address(),
             (uint32_t)cfg.num_tiles,
-        });
+        }
+    );
     SetRuntimeArgs(
         program,
         writer_kernel,
@@ -231,35 +230,13 @@ bool l1_reader_datacopy_l1_writer(Device* device, const BankedL1Config& cfg) {
         {
             (uint32_t)output_buffer.address(),
             (uint32_t)cfg.num_tiles,
-        });
+        }
+    );
     pass &= LaunchProgram(device, program);
 
     std::vector<uint32_t> dest_buffer_data;
     ReadFromBuffer(output_buffer, dest_buffer_data);
     pass &= input_packed == dest_buffer_data;
-
-    std::vector<uint32_t> cb_data;
-    detail::ReadFromDeviceL1(device, cfg.logical_core, l1_input_cb.address(), l1_input_cb.size(), cb_data);
-
-    std::vector<uint32_t> o_cb_data;
-    detail::ReadFromDeviceL1(device, cfg.logical_core, l1_output_cb.address(), l1_output_cb.size(), o_cb_data);
-
-    if (not pass) {
-        std::cout << "------- INPUT PACKED -------" << std::endl;
-        tt::test_utils::print_vector_fixed_numel_per_row(input_packed, 32);
-        std::cout << "------- INPUT CB DATA -------" << std::endl;
-        tt::test_utils::print_vector_fixed_numel_per_row(cb_data, 32);
-        std::cout << "------- OUTPUT CB DATA -------" << std::endl;
-        tt::test_utils::print_vector_fixed_numel_per_row(o_cb_data, 32);
-        std::cout << "------- OUTPUT PACKED -------" << std::endl;
-        tt::test_utils::print_vector_fixed_numel_per_row(dest_buffer_data, 32);
-
-        // std::cout << "------- L1 -------" << std::endl;
-        // std::vector<uint32_t> l1_data;
-        // detail::ReadFromDeviceL1(device, cfg.logical_core, 0, device->l1_size(), l1_data);
-        // tt::test_utils::print_vector_fixed_numel_per_row(l1_data, 32);
-
-    }
 
     return pass;
 }
@@ -377,16 +354,12 @@ TEST_F(SingleDeviceFixture, TestSingleCoreMultiTileBankedL1ReaderAndDramWriter) 
     }
 }
 
-// TODO (abhullar): This test is related to #2283
-// https://github.com/tenstorrent-metal/tt-metal/issues/2283
-TEST_F(SingleDeviceFixture, DISABLED_TestSingleCoreMultiTileBankedL1ReaderDataCopyL1Writer) {
+TEST_F(SingleDeviceFixture, TestSingleCoreMultiTileBankedL1ReaderDataCopyL1Writer) {
     BankedL1Config test_config;
-    // size_t num_tiles = this->device_->num_banks(BufferType::L1);
-    // TT_ASSERT(num_tiles % 2 == 0);
-    size_t num_tiles = 1;
+    size_t num_tiles = this->device_->num_banks(BufferType::L1);
+    TT_ASSERT(num_tiles % 2 == 0);
     size_t tile_increment = num_tiles / 2;
-    u32 num_iterations = 1;
-    //u32 num_iterations = 6;
+    u32 num_iterations = 6;
     u32 index = 0;
     test_config.logical_core = this->device_->logical_core_from_bank_id(0);
     while (index < num_iterations) {
