@@ -40,6 +40,10 @@ struct TilizeWithValPadding {
     tt::stl::reflection::Attributes attributes() const;
 };
 
+operation::ProgramWithCallbacks tilize_multi_core(const Tensor &a, Tensor& output);
+operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& output);
+operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor &a, Tensor& output, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value);
+
 Tensor tilize (const Tensor &a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, bool use_multicore = true);
 Tensor tilize_with_zero_padding (const Tensor &a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 Tensor tilize_with_val_padding (const Tensor &a, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
