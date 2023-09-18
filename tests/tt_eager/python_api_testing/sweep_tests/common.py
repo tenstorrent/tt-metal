@@ -172,6 +172,7 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
         args = test_args_gen(input_shapes, test_tt_dtypes, test_tt_layouts, test_buffer_types)
         args = list(args)
 
+        # Default "args-sampling-strategy" is "all". If random is not specified test will be run for all generated args
         if shape_dict.get("args-sampling-strategy", "random") == "random" and len(args) > 0:
             generated_test_args = random.choice(args)
             args = [generated_test_args]

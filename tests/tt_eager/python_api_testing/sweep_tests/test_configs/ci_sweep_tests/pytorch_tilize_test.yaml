@@ -6,7 +6,8 @@ test-list:
         end-shape: [12, 24, 512, 512]
         interval: [1, 1, 32, 32]
         num-shapes: 1
-        num-samples: 16
+        num-samples: 128
+        args-sampling-strategy: "random"
       datagen:
         function: gen_rand
         args:
