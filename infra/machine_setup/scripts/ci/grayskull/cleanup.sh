@@ -36,7 +36,7 @@ WEKA_CHECK_DIR="/mnt/MLPerf/bit_error_tests"
 if [ -d $WEKA_CHECK_DIR ]; then
   echo "Weka check passed"
 else
-  echo "$WEKA_CHECK_DIR does exist - Weka is likely disconnected from this runner, rebooting"
+  echo "$WEKA_CHECK_DIR does exist - Weka is likely disconnected from this runner. Rebooting"
   sudo reboot
 fi
 
