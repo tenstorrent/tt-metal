@@ -95,6 +95,7 @@ Device::Device(int device_id, const std::vector<uint32_t>& l1_bank_remap) : id_(
     tt::llrt::watcher_attach(this, cluster, this->id(),
                              [&, this]() { return this->logical_grid_size(); },
                              [&, this](CoreCoord core) { return this->worker_core_from_logical_core(core); },
+                             [&, this]() -> const std::unordered_set<CoreCoord>& { return this->storage_only_cores(); },
                              get_compile_outpath()
                              );
 }

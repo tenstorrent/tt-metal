@@ -49,8 +49,9 @@ class WatcherDevice {
     int device_id_;
     std::function<CoreCoord ()>get_grid_size_;
     std::function<CoreCoord (CoreCoord)>worker_from_logical_;
+    std::function<const std::unordered_set<CoreCoord> &()> storage_only_cores_;
 
-    WatcherDevice(tt_cluster *cluster, int device_id, std::function<CoreCoord ()>get_grid_size, std::function<CoreCoord (CoreCoord)>worker_from_logical);
+    WatcherDevice(tt_cluster *cluster, int device_id, std::function<CoreCoord ()>get_grid_size, std::function<CoreCoord (CoreCoord)>worker_from_logical, std::function<const std::unordered_set<CoreCoord> &()>storage_only_cores);
 };
 
 constexpr uint64_t DEBUG_SANITIZE_NOC_SENTINEL_OK_64 = 0xbadabadabadabada;
@@ -64,7 +65,7 @@ static std::unordered_map<void *, std::shared_ptr<WatcherDevice>> devices;
 static FILE *logfile = nullptr;
 static std::chrono::time_point start_time = std::chrono::system_clock::now();
 
-WatcherDevice::WatcherDevice(tt_cluster *cluster, int device_id, std::function<CoreCoord ()>get_grid_size, std::function<CoreCoord (CoreCoord)>worker_from_logical) : cluster_(cluster), device_id_(device_id), get_grid_size_(get_grid_size), worker_from_logical_(worker_from_logical) {
+WatcherDevice::WatcherDevice(tt_cluster *cluster, int device_id, std::function<CoreCoord ()>get_grid_size, std::function<CoreCoord (CoreCoord)>worker_from_logical, std::function<const std::unordered_set<CoreCoord> &()> storage_only_cores) : cluster_(cluster), device_id_(device_id), get_grid_size_(get_grid_size), worker_from_logical_(worker_from_logical), storage_only_cores_(storage_only_cores) {
 }
 
 static uint32_t get_elapsed_secs() {
@@ -320,7 +321,7 @@ static void  __attribute__((noinline)) dump(FILE *f) {
             for (uint32_t x = 0; x < grid_size.x; x++) {
                 CoreCoord logical_core(x, y);
                 CoreCoord worker_core = wdev->worker_from_logical_(logical_core);
-                if (worker_core.y != 11 || worker_core.x == 1) {
+                if (wdev->storage_only_cores_().find(logical_core) == wdev->storage_only_cores_().end()) {
                     dump_core(f, wdev.get(), worker_core);
                 }
             }
@@ -455,6 +456,7 @@ void watcher_attach(void *dev,
                     int device_id,
                     const std::function<CoreCoord ()>& get_grid_size,
                     const std::function<CoreCoord (CoreCoord)>& worker_from_logical,
+                    const std::function<const std::unordered_set<CoreCoord> &()>& storage_only_cores,
                     const string& log_path) {
 
     const std::lock_guard<std::mutex> lock(watcher::watch_mutex);
@@ -480,7 +482,7 @@ void watcher_attach(void *dev,
 
     // Always register the device w/ watcher, even if disabled
     // This allows dump() to be called from debugger
-    std::shared_ptr<watcher::WatcherDevice> wdev(new watcher::WatcherDevice(cluster, device_id, get_grid_size, worker_from_logical));
+    std::shared_ptr<watcher::WatcherDevice> wdev(new watcher::WatcherDevice(cluster, device_id, get_grid_size, worker_from_logical, storage_only_cores));
     watcher::devices.insert(pair<void *, std::shared_ptr<watcher::WatcherDevice>>(dev, wdev));
 }
 
