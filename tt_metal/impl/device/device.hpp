@@ -88,6 +88,7 @@ class Device {
 
     // Set of logical dispatch core coordinates
     const std::set<CoreCoord> &dispatch_cores() const { return this->dispatch_cores_; }
+    void deallocate_buffers();
 
    private:
     void check_allocator_is_initialized() const;

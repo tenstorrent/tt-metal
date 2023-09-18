@@ -231,6 +231,7 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
 bool Device::close() {
     log_info(tt::LogMetal, "Closing device {}", this->id_);
     TT_ASSERT(this->initialized_, "Cannot close device {} that has not been initialized!", this->id_);
+    this->deallocate_buffers();
     tt::llrt::watcher_detach(this);
     tt_stop_debug_print_server(this->cluster());
     this->cluster()->assert_risc_reset(id_);
@@ -391,6 +392,10 @@ allocator::Statistics Device::get_memory_allocation_statistics(const BufferType 
 void Device::dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out) const {
     this->check_allocator_is_initialized();
     return allocator::dump_memory_blocks(*this->allocator_, buffer_type, out);
+}
+
+void Device::deallocate_buffers(){
+    allocator::deallocate_buffers(*allocator_);
 }
 
 }  // namespace tt_metal

@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <functional>
 #include <vector>
+#include <unordered_set>
 
 #include "allocator_types.hpp"
 #include "common/assert.hpp"
@@ -39,6 +40,7 @@ class BankManager {
     u64 allocate_buffer(u32 size, u32 page_size, bool bottom_up);
 
     void deallocate_buffer(u64 address);
+    void deallocate_all();
 
     void clear();
 
@@ -53,6 +55,7 @@ class BankManager {
 
     // Types of buffers allocated in the banks
     BufferType buffer_type_;
+    std::unordered_set<u64> allocated_buffers_;
     // This is to store offsets for any banks that share a core or node (dram in wh/storage core), so we can view all banks using only bank_id
     // Set to 0 for cores/nodes with only 1 bank
     std::unordered_map<u32, i64> bank_id_to_bank_offset_;
@@ -93,6 +96,7 @@ u64 base_alloc(const AllocatorConfig & config, BankManager &bank_manager, u64 si
 u64 allocate_buffer(Allocator &allocator, u32 size, u32 page_size, const BufferType &buffer_type, bool bottom_up);
 
 void deallocate_buffer(Allocator &allocator, u64 address, const BufferType &buffer_type);
+void deallocate_buffers(Allocator &allocator);
 
 void clear(Allocator &allocatator);
 

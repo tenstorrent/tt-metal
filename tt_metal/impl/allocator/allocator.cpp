@@ -61,13 +61,21 @@ u64 BankManager::allocate_buffer(u32 size, u32 page_size, bool bottom_up) {
     if (not address.has_value()) {
         log_fatal(tt::LogMetal, "Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to store {} B", size, magic_enum::enum_name(this->buffer_type_), num_banks, size_per_bank);
     }
-
+    allocated_buffers_.insert(address.value());
     return address.value();
 }
 
 void BankManager::deallocate_buffer(u64 address) {
     this->allocator_->deallocate(address);
 }
+
+void BankManager::deallocate_all(){
+    for (u64 addr : this->allocated_buffers_)
+    {
+        this->allocator_->deallocate(addr);
+    }
+}
+
 
 void BankManager::clear() {
     this->allocator_->clear();
@@ -219,6 +227,11 @@ void deallocate_buffer(Allocator &allocator, u64 address, const BufferType &buff
             TT_ASSERT(false && "Unsupported buffer type!");
         }
     }
+}
+
+void deallocate_buffers(Allocator &allocator) {
+    allocator.dram_manager.deallocate_all();
+    allocator.l1_manager.deallocate_all();
 }
 
 void clear(Allocator &allocator) {
