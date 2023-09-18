@@ -13,7 +13,11 @@
 
 #include "tt_stl/reflection.hpp"
 
+#include "tt_dnn/op_library/work_split.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
+
+#include "tensor/tensor_utils.hpp"
+
 using namespace tt::constants;
 namespace tt {
 
@@ -67,7 +71,8 @@ void create_CBs(tt_metal::Program &program,
                                 uint32_t num_bytes_for_df,
                                 bool untilize_out,
                                 uint32_t bias_ntiles = 0,
-                                bool with_bias = false) {
+                                bool with_bias = false,
+                                std::optional<uint32_t> output_cb_address = std::nullopt) {
 
     uint32_t single_tile_size = num_bytes_for_df * 1024;
 
@@ -103,6 +108,9 @@ void create_CBs(tt_metal::Program &program,
 
         CircularBufferConfig cb_output_config = CircularBufferConfig(num_writer_output_tiles * single_tile_size, {{out0_cb, tt::DataFormat::Float16_b}})
 		    .set_page_size(out0_cb, single_tile_size);
+        if (output_cb_address.has_value()) {
+            cb_output_config = cb_output_config.set_globally_allocated_address(output_cb_address.value());
+        }
         auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
     } else {
         CoreRangeSet cores(std::set<CoreRange>({core}));
@@ -113,6 +121,9 @@ void create_CBs(tt_metal::Program &program,
         CircularBufferConfig cb_matmul_partials_config = CircularBufferConfig(num_output_tiles * single_tile_size, cb_output_data_format_spec)
 		    .set_page_size(out0_cb, single_tile_size)
             .set_page_size(matmul_partials_cb, single_tile_size);
+        if (output_cb_address.has_value()) {
+            cb_matmul_partials_config = cb_matmul_partials_config.set_globally_allocated_address(output_cb_address.value());
+        }
         auto cb_matmul_partials = tt_metal::CreateCircularBuffer(program, cores, cb_matmul_partials_config);
     }
 
@@ -489,6 +500,11 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
     // if (!(conv_output_size_w == 14 || conv_output_size_w == 7)) {
     //     writer_output_block_num_tiles = writer_output_block_num_tiles * 2;
     // }
+
+    std::optional<uint32_t> output_cb_address = std::nullopt;
+    if (output.memory_config().is_sharded()) {
+        output_cb_address = output.buffer()->address();
+    }
     create_CBs(
             program,
             a.device(),
@@ -502,7 +518,8 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
             num_bytes_of_df,
             untilize_out,
             bias_ntiles_per_core,
-            has_bias);
+            has_bias,
+            output_cb_address);
 
     string reader_kernel;
     string writer_kernel;
@@ -529,10 +546,13 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
             (uint32_t) conv_act_size_c * num_bytes_of_df, (uint32_t) std::log2(conv_act_size_c * num_bytes_of_df), extra_padding_for_32B_alignment};
 
     // define for bias
-    std::map<string, string> all_defines;
+    std::map<string, string> writer_defines;
     std::map<string, string> compute_defines;
+    if (output.memory_config().is_sharded()) {
+        writer_defines["SHARDED_OUT"] = "1";
+    }
     if (has_bias) {
-        all_defines["FUSE_BIAS"] = "1";
+        writer_defines["FUSE_BIAS"] = "1";
         compute_defines["FUSE_BIAS"] = "1";
     }
 
@@ -585,7 +605,7 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
         .processor = DataMovementProcessor::RISCV_0,
         .noc = NOC::RISCV_0_default,
         .compile_args = writer_compile_time_args,
-        .defines = all_defines});
+        .defines = writer_defines});
 
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(a.dtype());
     auto reader_id = CreateDataMovementKernel(
@@ -849,7 +869,8 @@ Tensor optimized_conv(const Tensor& a,
             MathFidelity math_fidelity,
             const OptimizedConvParallelizationConfig& parallelization_config,
             const OptimizedConvBlockConfig& block_config,
-            uint32_t extra_padding_for_32B_alignment) {
+            uint32_t extra_padding_for_32B_alignment,
+            std::optional<MemoryConfig> output_mem_config) {
     TT_ASSERT(!untilize_out, "Optimized conv only supports tiled out");
     TT_ASSERT(b.layout() == Layout::TILE); // Weights should already be formatted
     auto padded_a_shape = Shape({a.shape()[0], a.shape()[1], a.shape()[2], round_up(a.shape()[3], 16)});
@@ -861,8 +882,11 @@ Tensor optimized_conv(const Tensor& a,
         input_bias_format_params = {.pad_shape=bias.value().shape(), .pad_value=0, .target_layout=Layout::TILE};
     }
     auto output_layout = untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
+    if (output_mem_config.has_value()) {
+        TT_ASSERT((output_mem_config.value().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || output_mem_config.value() == a.memory_config()));
+    }
     return operation::run_without_autoformat(
-        OptimizedConv(conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment
+        OptimizedConv(conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_mem_config.value_or(a.memory_config())
         ),
         {a, b},
         {bias}).at(0);
@@ -910,8 +934,24 @@ std::vector<Shape> OptimizedConv::compute_output_shapes(const std::vector<Tensor
 
 std::vector<Tensor> OptimizedConv::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
+    const auto& weight_tensor = input_tensors.at(1);
     auto output_layout = this->untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), output_layout, input_tensor.memory_config());
+    if (this->output_mem_config.is_sharded()) {
+        // Move asserts to validate
+        // Asserts to check for height sharding
+        TT_ASSERT(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+        TT_ASSERT(this->parallelization_config.per_core_weight_matrix_width_ntiles == (weight_tensor.shape()[-1] / TILE_WIDTH));
+        auto output_shape = this->compute_output_shapes(input_tensors).at(0);
+        uint32_t total_height_tiles = tt_metal::compute_volume(output_shape) / output_shape[-1] / TILE_HEIGHT;
+        uint32_t num_cores = total_height_tiles / this->parallelization_config.per_core_out_matrix_height_ntiles;
+        CoreRangeSet shard_grid = num_cores_to_corerange_set(num_cores, this->parallelization_config.grid_size, true);
+
+        std::pair<uint32_t, uint32_t> shard_shape = {this->parallelization_config.per_core_out_matrix_height_ntiles * TILE_HEIGHT, output_shape[-1]};
+        auto shard_spec = ShardSpec{.shard_grid=shard_grid, .shard_shape=shard_shape};
+        return {create_sharded_device_tensor(output_shape, input_tensor.dtype(), output_layout, input_tensor.device(), this->output_mem_config, shard_spec)};
+
+    }
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), output_layout, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks OptimizedConv::create_program(const std::vector<Tensor>& input_tensors,

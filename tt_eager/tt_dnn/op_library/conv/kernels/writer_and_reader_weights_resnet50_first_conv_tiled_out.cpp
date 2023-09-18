@@ -162,6 +162,7 @@ void kernel_main() {
         read_bias<bias_in_dram>(bias_addr, bias_ntiles, bias_cb_id, bias_log2_of_pagesize, bias_pagesize);
     #endif
 
+    #ifndef SHARDED_OUT
     uint32_t out_block_h_start_tile_id = out_start_tile_id;
     uint32_t out_block_h_start_tile_id_h = out_start_tile_id_h;
     for(uint32_t bh = 0; bh < out_num_blocks_h; bh++) {
@@ -214,4 +215,8 @@ void kernel_main() {
         out_block_h_start_tile_id += out_next_block_stride_h;
         out_block_h_start_tile_id_h += out_block_height_num_tiles;
     } // out_num_blocks_h
+
+    #else
+    cb_wait_front(cb_id_out0, out_subblock_tile_count * out_num_subblocks_h * out_num_subblocks_w * out_num_blocks_w * out_num_blocks_h);
+    #endif
 }
