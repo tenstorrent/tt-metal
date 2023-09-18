@@ -237,9 +237,8 @@ void cb_push_back(const int32_t operand, const int32_t num_pages) {
  *
  * | Argument  | Description                          | Type     | Valid Range | Required |
  * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
- * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31 | True     | | num_tiles | The number of
- * tiles to be popped     | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that
- * fit into the CB) | True     |
+ * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31 | True     |
+ * | num_tiles | The number of tiles to be popped     | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  */
 FORCE_INLINE
 void cb_pop_front(int32_t operand, int32_t num_pages) {
@@ -338,9 +337,8 @@ inline void wait_for_sync_register_value(uint32_t addr, int32_t val) {
  *
  * | Argument  | Description                          | Type     | Valid Range | Required |
  * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
- * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31 | True     | | num_tiles | The number of free
- * tiles to wait for | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit
- * into the CB) |          |
+ * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31     | True     |
+ * | num_tiles | The number of free tiles to wait for | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  */
 FORCE_INLINE
 void cb_reserve_back(int32_t operand, int32_t num_pages) {
@@ -849,10 +847,9 @@ std::uint64_t get_noc_addr(std::uint32_t addr) {
  *
  * | Argument          | Description                                        | Data type | Valid range | required |
  * |-------------------|----------------------------------------------------|-----------|------------------------------------------|----------|
- * | src_noc_addr      | Encoding of the source DRAM location (x,y)+address | uint64_t  | DOX-TODO(insert ref to explain
- * valid coords) | Yes      | | dst_local_l1_addr | Address in local L1 memory                         | uint32_t  |
- * 0..1MB                                   | Yes      | | size              | Size of data transfer in bytes | uint32_t
- * | 0..1MB                                   | Yes      |
+ * | src_noc_addr      | Encoding of the source DRAM location (x,y)+address | uint64_t  | DOX-TODO(ref to explain valid coords)    | Yes      |
+ * | dst_local_l1_addr | Address in local L1 memory                         | uint32_t  | 0..1MB                                   | Yes      |
+ * | size              | Size of data transfer in bytes                     | uint32_t  | 0..1MB                                   | Yes      |
  */
 FORCE_INLINE
 void noc_async_read(std::uint64_t src_noc_addr, std::uint32_t dst_local_l1_addr, std::uint32_t size) {
@@ -891,10 +888,9 @@ FORCE_INLINE void noc_async_read_tile(
  *
  * | Argument          | Description                                             | Type     | Valid Range | Required |
  * |-------------------|---------------------------------------------------------|----------|-----------------------------------------------------------|----------|
- * | src_local_l1_addr | Source address in local L1 memory                       | uint32_t | 0..1MB | True     | |
- * dst_noc_addr      | Encoding of the destination DRAM location (x,y)+address | uint64_t | DOX-TODO(insert a reference
- * to what constitutes valid coords) | True     | | size              | Size of data transfer in bytes | uint32_t |
- * 0..1MB                                                    | True     |
+ * | src_local_l1_addr | Source address in local L1 memory                       | uint32_t | 0..1MB | True     |
+ * | dst_noc_addr      | Encoding of the destination DRAM location (x,y)+address | uint64_t | DOX-TODO(insert a reference  to what constitutes valid coords) | True     |
+ * | size              | Size of data transfer in bytes | uint32_t | 0..1MB                                                    | True     |
  */
 FORCE_INLINE
 void noc_async_write(std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size) {
@@ -962,15 +958,12 @@ void noc_semaphore_set_remote(std::uint32_t src_local_l1_addr, std::uint64_t dst
  *
  * Return value: None
  *
- * | Argument               | Description                                                              | Type     |
- * Valid Range                                                   | Required |
+ * | Argument               | Description                                                              | Type     | Valid Range                                                   | Required |
  * |------------------------|--------------------------------------------------------------------------|----------|---------------------------------------------------------------|----------|
- * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t |
- * 0..1MB                                                        | True     | | dst_noc_addr_multicast | Encoding of the
- * destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | DOX-TODO(insert a reference to what constitutes
- * valid coords) | True     | | size                   | Size of data transfer in bytes | uint32_t | 0..1MB | True     |
- * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t |
- * 0..119                                                        | True     |
+ * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                                        | True     |
+ * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
+ * | size                   | Size of data transfer in bytes | uint32_t | 0..1MB | True     |
+ * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t | 0..119                                                        | True     |
  */
 FORCE_INLINE
 void noc_async_write_multicast(
@@ -1007,14 +1000,11 @@ void noc_async_write_multicast(
  *
  * Return value: None
  *
- * | Argument               | Description                                                              | Type     |
- * Valid Range                                               | Required |
+ * | Argument               | Description                                                              | Type     | Valid Range                                               | Required |
  * |------------------------|--------------------------------------------------------------------------|----------|-----------------------------------------------------------|----------|
- * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t |
- * 0..1MB                                                    | True     | | dst_noc_addr_multicast | Encoding of the
- * destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | DOX-TODO(insert a reference to what constitutes
- * valid coords) | True     | | num_dests              | Number of destinations that the multicast source is targetting
- * | uint32_t | 0..119                                                    | True     |
+ * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                                    | True     |
+ * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
+ * | num_dests              | Number of destinations that the multicast source is targetting | uint32_t | 0..119                                                    | True     |
  */
 FORCE_INLINE
 void noc_semaphore_set_multicast(
@@ -1097,8 +1087,7 @@ void noc_async_write_barrier() {
  *
  * Return value: None
  *
- * | Argument  | Description                                                    | Type     | Valid Range        |
- * Required |
+ * | Argument  | Description                                                    | Type     | Valid Range        | Required |
  * |-----------|----------------------------------------------------------------|----------|--------------------|----------|
  * | sem_addr  | Semaphore address in local L1 memory                           | uint32_t | 0..1MB             | True |
  * | val       | The target value of the semaphore                              | uint32_t | Any uint32_t value | True |
@@ -1119,8 +1108,7 @@ void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
  *
  * Return value: None
  *
- * | Argument  | Description                                                    | Type     | Valid Range        |
- * Required |
+ * | Argument  | Description                                                    | Type     | Valid Range        | Required |
  * |-----------|----------------------------------------------------------------|----------|--------------------|----------|
  * | sem_addr  | Semaphore address in local L1 memory                           | uint32_t | 0..1MB             | True |
  * | val       | Value to set the semaphore to                                  | uint32_t | Any uint32_t value | True |
@@ -1141,9 +1129,8 @@ void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
  *
  * | Argument  | Description                                                    | Type     | Valid Range | Required |
  * |-----------|----------------------------------------------------------------|----------|-----------------------------------------------------------|----------|
- * | addr      | Encoding of the destination location (x,y)+address             | uint64_t | DOX-TODO(insert a reference
- * to what constitutes valid coords) | True     | | incr      | The value to increment by | uint32_t | Any uint32_t
- * value                                        | True     |
+ * | addr      | Encoding of the destination location (x,y)+address             | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
+ * | incr      | The value to increment by | uint32_t | Any uint32_t value                                        | True     |
  */
 FORCE_INLINE
 void noc_semaphore_inc(uint64_t addr, uint32_t incr) {
