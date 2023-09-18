@@ -19,7 +19,18 @@ namespace tt {
 namespace tt_metal {
 
 Kernel::Kernel(const std::string &kernel_path_file_name, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &compile_args, const std::map<std::string, std::string> &defines) :
-    id_(reinterpret_cast<uintptr_t>(this)), kernel_path_file_name_(kernel_path_file_name), core_range_set_(core_range_set), compile_time_args_(compile_args), defines_(defines) {}
+    id_(reinterpret_cast<uintptr_t>(this)), kernel_path_file_name_(kernel_path_file_name), core_range_set_(core_range_set), compile_time_args_(compile_args), defines_(defines) {
+    for (auto core_range : this->core_range_set_.ranges()) {
+        auto start = core_range.start;
+        auto end = core_range.end;
+        for (auto x = start.x; x <= end.x; x++) {
+            for (auto y = start.y; y <= end.y; y++) {
+                CoreCoord logical_core({.x=x, .y=y});
+                this->logical_cores_.insert(logical_core);
+            }
+        }
+    }
+}
 
 std::string Kernel::name() const {
     auto pos_of_name = kernel_path_file_name_.rfind("/") + 1;
@@ -28,20 +39,7 @@ std::string Kernel::name() const {
     return kernel_name;
 }
 
-std::set<CoreCoord> Kernel::logical_cores() const {
-    std::set<CoreCoord> cores;
-    for (auto core_range : this->core_range_set_.ranges()) {
-        auto start = core_range.start;
-        auto end = core_range.end;
-        for (auto x = start.x; x <= end.x; x++) {
-            for (auto y = start.y; y <= end.y; y++) {
-                CoreCoord logical_core({.x=x, .y=y});
-                cores.insert(logical_core);
-            }
-        }
-    }
-    return cores;
-}
+const std::set<CoreCoord> &Kernel::logical_cores() const { return this->logical_cores_; }
 
 std::vector<CoreRange> Kernel::logical_coreranges() const {
     auto crs = this->core_range_set_.ranges();

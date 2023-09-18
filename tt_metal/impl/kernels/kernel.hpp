@@ -38,7 +38,7 @@ class Kernel {
 
     CoreRangeSet core_range_set() const { return core_range_set_; }
 
-    std::set<CoreCoord> logical_cores() const;
+    const std::set<CoreCoord> &logical_cores() const;
 
     std::vector<CoreRange> logical_coreranges() const;
 
@@ -78,6 +78,7 @@ class Kernel {
     std::vector<u32> compile_time_args_;
     std::map<CoreCoord, std::vector<u32>> core_to_runtime_args_;
     std::map<std::string, std::string> defines_;        // preprocessor defines. this is to be able to generate generic instances.
+    std::set<CoreCoord> logical_cores_;
 
     virtual uint8_t expected_num_binaries() const = 0;
 
