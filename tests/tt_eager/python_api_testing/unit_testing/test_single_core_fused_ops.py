@@ -16,6 +16,7 @@ from models.utility_functions import comp_pcc, pad_by_zero
 
 @pytest.mark.parametrize("shape", [[1, 1, 32, 32], [1, 1, 32, 128]])
 def test_softmax(shape, device):
+    torch.manual_seed(1234)
     if is_wormhole_b0() and shape != [1, 1, 32, 32]:
         logger.warning("Skipping multi-tile case for WH_B0. Ongoing debug")
         pytest.skip()
@@ -31,12 +32,13 @@ def test_softmax(shape, device):
 
     pt_out = torch.nn.functional.softmax(x, dim=-1)
 
-    passing, output = comp_pcc(pt_out, tt_got_back, 0.9)
+    passing, output = comp_pcc(pt_out, tt_got_back, 0.95752)
     logger.info(output)
     assert passing
 
 @pytest.mark.parametrize("shape", [[1, 1, 32, 32], [1, 1, 32, 128]])
 def test_layernorm(shape, device):
+    torch.manual_seed(1234)
     if is_wormhole_b0() and shape != [1, 1, 32, 32]:
         logger.warning("Skipping multi-tile case for WH_B0. Ongoing debug")
         pytest.skip()
@@ -58,6 +60,6 @@ def test_layernorm(shape, device):
 
     pt_out = torch.nn.functional.layer_norm(x, x.shape[-1:], gamma, beta, 1e-5)
 
-    passing, output = comp_pcc(pt_out, tt_got_back, 0.9)
+    passing, output = comp_pcc(pt_out, tt_got_back, 0.98630)
     logger.info(output)
     assert passing
