@@ -71,8 +71,7 @@ Device::Device(int device_id, const std::vector<uint32_t>& l1_bank_remap) : id_(
             CoreCoord logical_core(x, y);
             CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
 
-            // TODO(AG): create consts for these or an api to query
-            if (worker_core.y != 11 || worker_core.x == 1) {
+            if (this->storage_only_cores_.find(logical_core) == this->storage_only_cores_.end()) {
                 DownloadFirmware(this, worker_core);
                 tt::llrt::write_hex_vec_to_core(cluster, this->id(), worker_core, run_mailbox_init_val, RUN_MAILBOX_ADDR);
             }
@@ -87,8 +86,7 @@ Device::Device(int device_id, const std::vector<uint32_t>& l1_bank_remap) : id_(
             CoreCoord logical_core(x, y);
             CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
 
-            // TODO(AG): create consts for these or an api to query
-            if (worker_core.y != 11 || worker_core.x == 1) {
+            if (this->storage_only_cores_.find(logical_core) == this->storage_only_cores_.end()) {
                 cluster->set_tensix_risc_reset_on_core(tt_cxy_pair(this->id(), worker_core), TENSIX_DEASSERT_SOFT_RESET_NO_STAGGER);
             }
         }
@@ -116,10 +114,10 @@ size_t Device::detect_num_available_devices(const TargetDevice target_type) {
 void Device::initialize_cluster() {
     ZoneScoped;
     this->clear_l1_state();
-    this->cluster()->initialize_dram_barrier(this->id_);
-    this->cluster()->initialize_l1_barrier(this->id_);
     llrt::utils::log_current_ai_clk(this->cluster(), this->id_);
     this->cluster()->assert_risc_reset(this->id_);
+    this->cluster()->initialize_dram_barrier(this->id_);
+    this->cluster()->initialize_l1_barrier(this->id_);
 }
 
 void Device::initialize_dispatch_and_banking_information() {
@@ -236,6 +234,7 @@ bool Device::close() {
     tt_stop_debug_print_server(this->cluster());
     this->cluster()->assert_risc_reset(id_);
     this->clear_l1_state();
+    this->cluster()->l1_barrier(id_);
     allocator::clear(*this->allocator_);
     this->initialized_ = false;
     return true;
