@@ -228,6 +228,36 @@ TEST_F(CommandQueueFixture, TestAutoInsertedBlankBriscKernelInDeviceDispatchMode
     Finish(*tt::tt_metal::detail::GLOBAL_CQ);
 }
 
+TEST_F(CommandQueueFixture, ComputeRuntimeArgs) {
+
+    Program program;
+
+    CoreRange cr = {.start = {0, 0}, .end = {0, 0}};
+    CoreRangeSet cr_set({cr});
+
+    auto compute_kernel_id = CreateComputeKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/increment_runtime_arg.cpp",
+        cr_set,
+        tt::tt_metal::ComputeConfig{});
+
+
+    std::vector<uint32_t> initial_runtime_args = {101, 202};
+    SetRuntimeArgs(program, program.kernel_ids().at(0), cr_set, initial_runtime_args);
+    EnqueueProgram(*tt::tt_metal::detail::GLOBAL_CQ, program, false);
+    Finish(*tt::tt_metal::detail::GLOBAL_CQ);
+
+    std::vector<uint32_t> increments = {87, 216};
+    std::vector<uint32_t> written_args;
+    CoreCoord logical_core(0,0);
+    tt::tt_metal::detail::ReadFromDeviceL1(
+        this->device_, logical_core, TRISC_L1_ARG_BASE, initial_runtime_args.size() * sizeof(uint32_t), written_args);
+    for(int i=0; i<initial_runtime_args.size(); i++){
+        bool got_expected_result = (written_args[i] == (initial_runtime_args[i] + increments[i]));
+        EXPECT_TRUE(got_expected_result);
+    }
+}
+
 }  // end namespace single_core_tests
 
 namespace multicore_tests {

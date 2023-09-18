@@ -142,6 +142,10 @@ namespace detail {
                 case RISCV::NCRISC: {
                     l1_arg_base = NCRISC_L1_ARG_BASE;
                 } break;
+                case RISCV::COMPUTE: {
+                    l1_arg_base = TRISC_L1_ARG_BASE;
+                }
+                break;
                 default: log_assert(false, "Unsupported {} processor does not support runtime args", riscv);
             }
             return l1_arg_base;

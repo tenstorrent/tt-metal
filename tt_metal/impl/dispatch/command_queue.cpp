@@ -473,6 +473,7 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(u32 runtime_a
             switch (riscv) {
                 case tt::RISCV::BRISC: dst = BRISC_L1_ARG_BASE; break;
                 case tt::RISCV::NCRISC: dst = NCRISC_L1_ARG_BASE; break;
+                case tt::RISCV::COMPUTE: dst = TRISC_L1_ARG_BASE; break;
                 default: TT_THROW("Invalid RISCV for runtime args");
             }
 

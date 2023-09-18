@@ -109,8 +109,8 @@ std::pair<u64, u64> DataMovementKernel::get_runtime_args_range() const {
 }
 
 std::pair<u64, u64> ComputeKernel::get_runtime_args_range() const {
-    log_assert(false, "Compute kernels do not support runtime args!");
-    return {0, 0};
+    std::pair<u64, u64> arg_base_to_result_base = {TRISC_L1_ARG_BASE, TRISC_L1_ARG_BASE + 1024};
+    return arg_base_to_result_base;
 }
 
 void Kernel::set_runtime_args(const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args) {

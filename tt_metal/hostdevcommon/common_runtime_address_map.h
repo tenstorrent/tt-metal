@@ -19,12 +19,13 @@ constexpr static std::uint32_t BRISC_L1_ARG_BASE = 101 * 1024;
 constexpr static std::uint32_t BRISC_L1_RESULT_BASE = 102 * 1024;
 constexpr static std::uint32_t NCRISC_L1_ARG_BASE = 103 * 1024;
 constexpr static std::uint32_t NCRISC_L1_RESULT_BASE = 104 * 1024;
+constexpr static std::uint32_t TRISC_L1_ARG_BASE = 105 * 1024;
 
 // config for 32 L1 buffers is at addr BUFFER_CONFIG_BASE
 // 12 bytes for each buffer: (addr, size, size_in_tiles)
 // addr and size are in 16B words (byte address >> 4)
 // this is a total of 32 * 3 * 4 = 384B
-constexpr static std::uint32_t CIRCULAR_BUFFER_CONFIG_BASE = 105 * 1024;
+constexpr static std::uint32_t CIRCULAR_BUFFER_CONFIG_BASE = 106 * 1024;
 constexpr static std::uint32_t NUM_CIRCULAR_BUFFERS = 32;
 constexpr static std::uint32_t UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG = 4;
 constexpr static std::uint32_t CIRCULAR_BUFFER_CONFIG_SIZE = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
@@ -40,7 +41,7 @@ constexpr static std::uint32_t SEMAPHORE_SIZE = NUM_SEMAPHORES * ALIGNED_SIZE_PE
 // Debug printer buffers - A total of 5*PRINT_BUFFER_SIZE starting at PRINT_BUFFER_NC address
 constexpr static std::uint32_t PRINT_BUFFER_SIZE = 204; // per thread
 constexpr static std::uint32_t PRINT_BUFFERS_COUNT = 5; // one for each thread
-constexpr static std::uint32_t PRINT_BUFFER_NC = 106 * 1024; // NCRISC, address in bytes
+constexpr static std::uint32_t PRINT_BUFFER_NC = 107 * 1024; // NCRISC, address in bytes
 constexpr static std::uint32_t PRINT_BUFFER_T0 = PRINT_BUFFER_NC + PRINT_BUFFER_SIZE; // TRISC0
 constexpr static std::uint32_t PRINT_BUFFER_T1 = PRINT_BUFFER_T0 + PRINT_BUFFER_SIZE; // TRISC1
 constexpr static std::uint32_t PRINT_BUFFER_T2 = PRINT_BUFFER_T1 + PRINT_BUFFER_SIZE; // TRISC2
