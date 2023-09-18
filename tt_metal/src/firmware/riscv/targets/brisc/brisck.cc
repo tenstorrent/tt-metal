@@ -17,6 +17,7 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "dataflow_api.h"
 #include "debug_print.h"
+#include "noc_addr_ranges_gen.h"
 
 #include <kernel.cpp>
 
@@ -71,11 +72,12 @@ void kernel_launch() {
     // FW needs to notify device dispatcher when we are done
     // Some information needed is known here, pass it back
     kernel_noc_id_var = loading_noc;
+
 #if defined(TT_METAL_SLOW_DISPATCH_MODE)
     dispatch_addr = 0;
 #else
-    dispatch_addr = (my_x[loading_noc] == NOC_X(1) && my_y[loading_noc] == NOC_Y(11)) ?
+    dispatch_addr = (my_x[loading_noc] == NOC_X(DISPATCH_CORE_X) && my_y[loading_noc] == NOC_Y(DISPATCH_CORE_Y)) ?
         0 :
-        get_noc_addr(1, 11, DISPATCH_MESSAGE_ADDR);
+        get_noc_addr(DISPATCH_CORE_X, DISPATCH_CORE_Y, DISPATCH_MESSAGE_ADDR);
 #endif
 }

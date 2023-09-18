@@ -588,9 +588,10 @@ void send_dispatch_kernel_to_device(Device* device) {
     // TT-metal, don't like the fact that I'm writing this from scratch
 
     Program dispatch_program = Program();
-    CoreCoord dispatch_logical_core = {0, 9};
+    CoreCoord dispatch_logical_core = *device->dispatch_cores().begin();
     vector<CoreCoord> pcie_cores = device->cluster()->get_soc_desc(device->id()).pcie_cores;
     TT_ASSERT(pcie_cores.size() == 1, "Should only have one pcie core");
+
     std::map<string, string> dispatch_defines = {
         {"IS_DISPATCH_KERNEL", ""},
         {"PCIE_NOC_X", std::to_string(pcie_cores[0].x)},

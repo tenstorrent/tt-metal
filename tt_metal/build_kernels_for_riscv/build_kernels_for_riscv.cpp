@@ -258,9 +258,10 @@ struct CompileState {
         }
 
         if (is_ncrisc() or is_brisc()) {
-            for (const auto &[def, val]: kernel_defines)
+            for (const auto &[def, val]: kernel_defines) {
                 result += " -D" + def + "=" + val + " ";
-        }
+            }
+        } 
 
         if (perf_dump_level != 0 || is_trisc()) // TODO(AP): double check
             result += " -DPERF_DUMP_LEVEL=" + to_string(perf_dump_level);
@@ -287,6 +288,7 @@ struct CompileState {
         }
 
         result += " -DLOCAL_MEM_EN=0 ";
+
         return result;
     }
 
@@ -1116,7 +1118,10 @@ static string generate_noc_addr_ranges_string(
     const std::vector<CoreCoord>& dram_cores,
     const std::vector<CoreCoord>& ethernet_cores,
     CoreCoord grid_size,
-    const std::vector<uint32_t>& harvested) {
+    const std::vector<uint32_t>& harvested_rows,
+    const vector<CoreCoord>& dispatch_cores) {
+
+    tt::log_assert(dispatch_cores.size() == 1, "Only 1 dispatch core supported so far");
 
     stringstream ss;
     ss << "/*" << endl;
@@ -1155,11 +1160,11 @@ static string generate_noc_addr_ranges_string(
     ss << endl;
 
     ss << "#define NOC_HARVESTED_Y_P(y)";
-    if (harvested.size() == 0) {
+    if (harvested_rows.size() == 0) {
         ss << " false" << endl;
     } else {
         string join = " \\\n    ( \\\n";
-        for (const auto& y : harvested) {
+        for (const auto& y : harvested_rows) {
             ss << join << "     (NOC_Y((y)) == " << y << ")";
             join = " || \\\n";
         }
@@ -1183,6 +1188,9 @@ static string generate_noc_addr_ranges_string(
     ss << "       (y) >= NOC_Y((uint32_t)" << grid_size.y - 1<< "))))";
     ss << endl;
 
+    ss << "#define DISPATCH_CORE_X " << dispatch_cores[0].x << endl;
+    ss << "#define DISPATCH_CORE_Y " << dispatch_cores[0].y << endl;
+
     return ss.str();
 }
 
@@ -1197,10 +1205,11 @@ void generate_noc_addr_ranges_header(
     const std::vector<CoreCoord>& dram_cores,
     const std::vector<CoreCoord>& ethernet_cores,
     CoreCoord grid_size,
-    const std::vector<uint32_t>& harvested) {
+    const std::vector<uint32_t>& harvested_rows,
+    const vector<CoreCoord>& dispatch_cores) {
 
     string output_string = generate_noc_addr_ranges_string(pcie_addr_base, pcie_addr_size, dram_addr_base, dram_addr_size,
-                                                           pcie_cores, dram_cores, ethernet_cores, grid_size, harvested);
+                                                           pcie_cores, dram_cores, ethernet_cores, grid_size, harvested_rows, dispatch_cores);
 
     string full_path = build_kernel_for_riscv_options->outpath;
     full_path += out_dir_path;

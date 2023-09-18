@@ -113,7 +113,8 @@ void generate_noc_addr_ranges_header(
     const std::vector<CoreCoord>& dram_cores,
     const std::vector<CoreCoord>& ethernet_cores,
     CoreCoord grid_size,
-    const std::vector<uint32_t>& harvested);
+    const std::vector<uint32_t>& harvested_rows,
+    const std::vector<CoreCoord>& dispatch_cores);
 
 void generate_descriptors(
     tt::build_kernel_for_riscv_options_t* opts, const std::string &op_dir);

@@ -266,14 +266,16 @@ namespace tt::tt_metal{
 
             // Determine which noc-coords are harvested
             // TODO(PGK/Almeet): fix this w/ new UMD
-            vector<uint32_t> harvested;
+            vector<uint32_t> harvested_rows;
             uint32_t harvested_noc_rows = device->cluster()->get_harvested_rows(device->id());
             for (uint32_t y = 0; y < soc_d.grid_size.y; y++) {
                 bool row_harvested = (harvested_noc_rows >> y) & 0x1;
                 if (row_harvested) {
-                    harvested.push_back(y);
+                    harvested_rows.push_back(y);
                 }
             }
+
+            CoreCoord dispatch_logical_core = device->worker_core_from_logical_core(*device->dispatch_cores().begin());
 
             // XXXX TODO(PGK): get addr range values from device descriptor...
             generate_noc_addr_ranges_header (
@@ -285,7 +287,8 @@ namespace tt::tt_metal{
                 soc_d.get_dram_cores(),
                 soc_d.get_ethernet_cores(),
                 soc_d.grid_size,
-                harvested);
+                harvested_rows,
+                {dispatch_logical_core});
         }
 
         inline DataMovementConfig GetDataMovementConfig(const Program &program, const std::string &file_name, const CoreRangeSet &core_ranges, const std::optional<DataMovementConfig> &dm_config) {
