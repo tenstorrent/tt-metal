@@ -138,8 +138,8 @@ To see logs related to operation infastructure, use the following environment va
 
 .. code-block::
 
-    export LOGGER_TYPES=Op
-    export LOGGER_LEVEL=Debug
+    export TT_METAL_LOGGER_TYPES=Op
+    export TT_METAL_LOGGER_LEVEL=Debug
 
 The logs will print currently running op and information related to program caching. i.e.:
 
