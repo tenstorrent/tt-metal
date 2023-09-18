@@ -29,8 +29,8 @@ class BankManager {
    public:
     BankManager() {}
 
-    BankManager(const std::vector<i64> &bank_descriptors, u64 size_bytes, u64 alloc_offset=0);
-    BankManager(const std::unordered_map<u32, i64> &bank_id_to_descriptor, u64 size_bytes, u64 alloc_offset=0);
+    BankManager(const BufferType &buffer_type, const std::vector<i64> &bank_descriptors, u64 size_bytes, u64 alloc_offset=0);
+    BankManager(const BufferType &buffer_type, const std::unordered_map<u32, i64> &bank_id_to_descriptor, u64 size_bytes, u64 alloc_offset=0);
 
     u32 num_banks() const;
 
@@ -51,6 +51,8 @@ class BankManager {
    private:
     constexpr static u32 min_allocation_size_bytes_ = 32;
 
+    // Types of buffers allocated in the banks
+    BufferType buffer_type_;
     // This is to store offsets for any banks that share a core or node (dram in wh/storage core), so we can view all banks using only bank_id
     // Set to 0 for cores/nodes with only 1 bank
     std::unordered_map<u32, i64> bank_id_to_bank_offset_;

@@ -8,6 +8,7 @@
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
+#include "third_party/magic_enum/magic_enum.hpp"
 
 namespace tt {
 
@@ -25,7 +26,7 @@ void BankManager::init_allocator(u64 size_bytes, u64 offset) {
     );
 }
 
-BankManager::BankManager(const std::vector<i64> &bank_offsets, u64 size_bytes, u64 alloc_offset) {
+BankManager::BankManager(const BufferType &buffer_type, const std::vector<i64> &bank_offsets, u64 size_bytes, u64 alloc_offset) : buffer_type_(buffer_type) {
     unsigned int bank_id = 0;
     for (const auto bank_offset : bank_offsets) {
         this->bank_id_to_bank_offset_.insert({bank_id, bank_offset});
@@ -34,7 +35,7 @@ BankManager::BankManager(const std::vector<i64> &bank_offsets, u64 size_bytes, u
     this->init_allocator(size_bytes, alloc_offset);
 }
 
-BankManager::BankManager(const std::unordered_map<u32, i64> &bank_id_to_bank_offset, u64 size_bytes, u64 alloc_offset) : bank_id_to_bank_offset_(bank_id_to_bank_offset) {
+BankManager::BankManager(const BufferType &buffer_type, const std::unordered_map<u32, i64> &bank_id_to_bank_offset, u64 size_bytes, u64 alloc_offset) : buffer_type_(buffer_type), bank_id_to_bank_offset_(bank_id_to_bank_offset) {
     this->init_allocator(size_bytes, alloc_offset);
 }
 
@@ -57,7 +58,9 @@ u64 BankManager::allocate_buffer(u32 size, u32 page_size, bool bottom_up) {
     uint32_t size_per_bank = tt::tt_metal::detail::SizeBytesPerBank(size, page_size, num_banks);
 
     auto address = this->allocator_->allocate(size_per_bank, bottom_up);
-    log_assert(address.has_value(), "Cannot allocate {} KB sized buffer in banks!", size_per_bank / 1024);
+    if (not address.has_value()) {
+        log_fatal(tt::LogMetal, "Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to store {} B", size, magic_enum::enum_name(this->buffer_type_), num_banks, size_per_bank);
+    }
 
     return address.value();
 }
@@ -95,7 +98,7 @@ void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &allo
     for (u32 channel_id = 0; channel_id < alloc_config.num_dram_channels; channel_id++) {
         bank_offsets.at(channel_id) = static_cast<i32>(alloc_config.dram_bank_offsets.at(channel_id));
     }
-    allocator.dram_manager = BankManager(bank_offsets, dram_bank_size, offset_bytes);
+    allocator.dram_manager = BankManager(BufferType::DRAM, bank_offsets, dram_bank_size, offset_bytes);
     for (u32 bank_id = 0; bank_id < alloc_config.num_dram_channels; bank_id++) {
         allocator.bank_id_to_dram_channel.insert({bank_id, bank_id});
         allocator.dram_channel_to_bank_ids.insert({bank_id, {bank_id}});
@@ -108,7 +111,7 @@ void init_one_bank_per_l1(Allocator &allocator, const AllocatorConfig &alloc_con
     u64 offset_bytes = static_cast<u64>(L1_UNRESERVED_BASE);
     u32 l1_bank_size = alloc_config.worker_l1_size - L1_UNRESERVED_BASE;
     std::vector<i64> bank_offsets (num_l1_banks, 0);
-    allocator.l1_manager = BankManager(bank_offsets, l1_bank_size, offset_bytes);
+    allocator.l1_manager = BankManager(BufferType::L1, bank_offsets, l1_bank_size, offset_bytes);
 
     u32 bank_id = 0;
     for (u32 y = 0; y < alloc_config.worker_grid_size.y; y++) {
