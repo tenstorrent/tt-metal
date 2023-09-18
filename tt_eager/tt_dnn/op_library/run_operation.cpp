@@ -62,8 +62,8 @@ std::vector<Tensor> generic_create_output_tensors(
 
 namespace detail {
 
-void override_runtime_args(
-    const OverrideRuntimeArgsCallback& override_runtime_args_callback,
+void override_addresses(
+    const OverrideAddressesCallback& override_addresses_callback,
     const Program &program,
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -83,7 +83,7 @@ void override_runtime_args(
         output_buffers.push_back(tensor.buffer());
     }
 
-    override_runtime_args_callback(program, input_buffers, output_buffers);
+    override_addresses_callback(program, input_buffers, output_buffers);
 }
 
 void setup_profiler(const HostOperation& operation, const std::vector<Tensor>& input_tensors) {
@@ -143,10 +143,18 @@ std::vector<Tensor> run_with_program_cache(
     TT_ASSERT(program_with_callbacks.supports_program_cache());
 
     auto& program = program_with_callbacks.program;
-    override_runtime_args(
-        program_with_callbacks.override_runtime_args_callback.value(),
-        program, input_tensors, optional_input_tensors, output_tensors
-    );
+    if (program_with_callbacks.override_addresses_callback.has_value()) {
+        auto override_addresses_callback = program_with_callbacks.override_addresses_callback.value();
+        override_addresses(
+            override_addresses_callback,
+            program, input_tensors, optional_input_tensors, output_tensors
+        );
+    }
+
+    if (program_with_callbacks.override_runtime_arguments_callback.has_value()) {
+        auto override_runtime_arguments_callback = program_with_callbacks.override_runtime_arguments_callback.value();
+        operation.override_runtime_arguments(override_runtime_arguments_callback, program, input_tensors, optional_input_tensors, output_tensors);
+    }
 
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {

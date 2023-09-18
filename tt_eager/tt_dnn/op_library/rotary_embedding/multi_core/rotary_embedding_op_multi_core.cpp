@@ -334,44 +334,76 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(const Tensor &input,
         num_tiles_written += num_rows_per_core * Wt;
     }
 
-    auto override_runtime_args_callback = [
+    auto override_runtime_arguments_callback = [
             unary_reader_kernel_id,
             unary_writer_kernel_id,
             num_cores,
-            num_cores_y
+            num_cores_y,
+            core_group_1,
+            num_rows_per_core_group_1,
+            core_group_2,
+            num_rows_per_core_group_2,
+            Wbytes,
+            Wt,
+            HtWt
         ]
     (
-        const Program &program,
-        const std::vector<Buffer*>& input_buffers,
-        const std::vector<Buffer*>& output_buffers
+        const void* operation,
+        const Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>&,
+        const std::vector<Tensor>& output_tensors
     ) {
 
-        auto src_buffer = input_buffers.at(0);
-        auto cos_buffer = input_buffers.at(1);
-        auto sin_buffer = input_buffers.at(2);
+        const auto token_idx = static_cast<const RotaryEmbedding*>(operation)->token_idx;
 
-        auto dst_buffer = output_buffers.at(0);
+        auto src_buffer = input_tensors.at(0).buffer();
+        auto cos_buffer = input_tensors.at(1).buffer();
+        auto sin_buffer = input_tensors.at(2).buffer();
 
-        for (uint32_t i = 0; i < num_cores; i++){
+        auto dst_buffer = output_tensors.at(0).buffer();
+
+        uint32_t cos_sin_offset = 0;
+        uint32_t cos_sin_start_id = 0;
+        if (token_idx.has_value()) {
+            cos_sin_offset = token_idx.value() % TILE_HEIGHT * Wbytes;
+            cos_sin_start_id = token_idx.value() / TILE_HEIGHT * Wt;
+        }
+
+        for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
+            uint32_t num_rows_per_core;
+            if (core_group_1.core_coord_in_core_ranges(core)) {
+                num_rows_per_core = num_rows_per_core_group_1;
+            } else if (core_group_2.core_coord_in_core_ranges(core)) {
+                num_rows_per_core = num_rows_per_core_group_2;
+            } else {
+                TT_ASSERT(false, "Core not in specified core ranges");
+            }
+            if (!token_idx.has_value()) {
+                cos_sin_start_id = num_tiles_written % HtWt;
+            }
 
             {
                 auto runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
                 runtime_args[0] = src_buffer->address();
                 runtime_args[1] = cos_buffer->address();
                 runtime_args[2] = sin_buffer->address();
+                runtime_args[6] = cos_sin_start_id;
                 SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
             }
 
             {
                 auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
                 runtime_args[0] = dst_buffer->address();
+                runtime_args[3] = cos_sin_offset;
                 SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
             }
+            num_tiles_written += num_rows_per_core * Wt;
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
 
 }  // namespace tt_metal

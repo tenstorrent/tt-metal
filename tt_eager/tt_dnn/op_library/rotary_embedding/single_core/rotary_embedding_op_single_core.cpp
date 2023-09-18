@@ -311,17 +311,33 @@ operation::ProgramWithCallbacks rotary_embedding_single_core(const Tensor &input
         }
     );
 
-    auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
-        const Program &program,
-        const std::vector<Buffer*>& input_buffers,
-        const std::vector<Buffer*>& output_buffers
+    auto override_runtime_arguments_callback = [
+        unary_reader_kernel_id,
+        unary_writer_kernel_id,
+        Wbytes,
+        Wt
+    ](
+        const void* operation,
+        const Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>&,
+        const std::vector<Tensor>& output_tensors
     ) {
 
-        auto src_buffer = input_buffers.at(0);
-        auto cos_buffer = input_buffers.at(1);
-        auto sin_buffer = input_buffers.at(2);
+        const auto token_idx = static_cast<const RotaryEmbedding*>(operation)->token_idx;
 
-        auto dst_buffer = output_buffers.at(0);
+        auto src_buffer = input_tensors.at(0).buffer();
+        auto cos_buffer = input_tensors.at(1).buffer();
+        auto sin_buffer = input_tensors.at(2).buffer();
+
+        auto dst_buffer = output_tensors.at(0).buffer();
+
+        uint32_t cos_sin_offset = 0;
+        uint32_t cos_sin_start_id = 0;
+        if (token_idx.has_value()) {
+            cos_sin_offset = token_idx.value() % TILE_HEIGHT * Wbytes;
+            cos_sin_start_id = token_idx.value() / TILE_HEIGHT * Wt;
+        }
 
         CoreCoord core = {0, 0};
 
@@ -330,17 +346,19 @@ operation::ProgramWithCallbacks rotary_embedding_single_core(const Tensor &input
             runtime_args[0] = src_buffer->address();
             runtime_args[1] = cos_buffer->address();
             runtime_args[2] = sin_buffer->address();
+            runtime_args[6] = cos_sin_start_id;
             SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
         }
 
         {
             auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
+            runtime_args[3] = cos_sin_offset;
             SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
 
 }  // namespace tt_metal

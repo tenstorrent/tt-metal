@@ -42,6 +42,9 @@ struct RotaryEmbedding {
         const std::vector<Tensor> &input_tensors,
         std::vector<Tensor> &output_tensors) const;
     tt::stl::reflection::Attributes attributes() const;
+
+    const operation::Hash compute_program_hash(
+        const std::vector<Tensor> &input_tensors) const;
 };
 
 inline Tensor rotary_embedding(const Tensor& input_tensor, const Tensor& cos, const Tensor& sin, std::optional<uint32_t> token_idx = std::nullopt, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {

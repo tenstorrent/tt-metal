@@ -23,14 +23,23 @@ namespace operation {
 
 using Hash = std::string; // TODO(arakhmati): switch to an integral type?
 
-using OverrideRuntimeArgsCallback = std::function<void(const Program &program, const std::vector<Buffer*>&, const std::vector<Buffer*>&)>;
+using OverrideAddressesCallback = std::function<void(const Program&, const std::vector<Buffer*>&, const std::vector<Buffer*>&)>;
+
+using OverrideRuntimeArgumentsCallback = std::function<void(
+    const void* operation,
+    const Program&,
+    const std::vector<Tensor>&,
+    const std::vector<std::optional<const Tensor>>&,
+    const std::vector<Tensor>&
+)>;
 
 struct ProgramWithCallbacks {
     Program program{};
-    std::optional<OverrideRuntimeArgsCallback> override_runtime_args_callback = std::nullopt;
+    std::optional<OverrideAddressesCallback> override_addresses_callback = std::nullopt;
+    std::optional<OverrideRuntimeArgumentsCallback> override_runtime_arguments_callback = std::nullopt;
 
     bool supports_program_cache() const {
-        return this->override_runtime_args_callback.has_value();
+        return this->override_addresses_callback.has_value() or this->override_runtime_arguments_callback.has_value();
     }
 };
 
@@ -107,6 +116,18 @@ constexpr bool implements_create_program_with_optional_input_tensors() {
         const std::vector<Tensor>&,
         const std::vector<std::optional<const Tensor>>&,
         std::vector<Tensor>&
+    >{};
+}
+
+template<class T, class... Args>
+using has_compute_program_hash_t = decltype(std::declval<T>().compute_program_hash(std::declval<Args>()...));
+
+template<class T>
+constexpr bool implements_compute_program_hash() {
+    return std::experimental::is_detected<
+        has_compute_program_hash_t,
+        T,
+        const std::vector<Tensor>&
     >{};
 }
 
@@ -206,6 +227,7 @@ struct DeviceOperation {
     const std::function<const std::vector<Shape>(const std::vector<Tensor>&)> compute_output_shapes;
     const std::function<const std::vector<Tensor>(const std::vector<Tensor>&)> create_output_tensors;
     const std::function<ProgramWithCallbacks(const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&, std::vector<Tensor>&)> create_program;
+    const std::function<void(OverrideRuntimeArgumentsCallback&, const Program&, const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&, std::vector<Tensor>&)> override_runtime_arguments;
     const std::function<const Hash(const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&)> compute_program_hash;
     const std::function<const ProfilerInfo(const std::vector<Tensor> &input_tensors)> create_profiler_info;
     const std::function<const tt::stl::reflection::Attributes()> attributes;
@@ -271,10 +293,28 @@ struct DeviceOperation {
                 }
             }
         },
-        compute_program_hash{
-            [this] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) -> const std::string {
+        override_runtime_arguments{
+            [this] (
+                OverrideRuntimeArgumentsCallback& override_runtime_arguments_callback,
+                const Program& program,
+                const std::vector<Tensor>& input_tensors,
+                const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+                std::vector<Tensor>& output_tensors
+            ) {
                 auto operation = std::any_cast<const T&>(this->type_erased_operation);
-                if constexpr (detail::implements_create_program<T>()) {
+                override_runtime_arguments_callback(&operation, program, input_tensors, optional_input_tensors, output_tensors);
+            }
+        },
+        compute_program_hash{
+            [this] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) -> const Hash {
+                auto operation = std::any_cast<const T&>(this->type_erased_operation);
+
+                if constexpr (detail::implements_compute_program_hash<T>()) {
+                    static_assert(detail::implements_create_program<T>());
+                    TT_ASSERT(optional_input_tensors.empty());
+                    return operation.compute_program_hash(input_tensors);
+                }
+                else if constexpr (detail::implements_create_program<T>()) {
                     TT_ASSERT(optional_input_tensors.empty());
                     return fmt::format(
                         "{}_{}",
