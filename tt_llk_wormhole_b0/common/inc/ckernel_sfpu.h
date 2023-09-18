@@ -310,6 +310,7 @@ inline void sfpu_init(SfpuType operation, uint param0 = 0)
         init_dropout_seed(param0);
         break;
     case SfpuType::requant_int32:
+    case SfpuType::dequant_int32:
         sfpu_load_imm32(2,param0);
         break;
     default:
@@ -1221,8 +1222,9 @@ inline void cast_fp32_to_fp16a(const int iterations)
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void requant_int32(const int iterations, const uint dst_offset)
 {
-    // Operand 0 is input to requant (int32)
-    // Operand 1 is scaling factor (fp32)
+    // Operand A is input to requant (int32)
+    // Operand B is scaling factor (fp32)
+    // Operand C is zero-point constant (fp32)
     // Output is int32 scaled to int8 range
     #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
@@ -1236,6 +1238,30 @@ inline void requant_int32(const int iterations, const uint dst_offset)
         TTI_NOP; //TODO: why is nop needed to get correct result?
         TTI_SFP_STOCH_RND(0,0,9,0,0,3); // fp32->int8, descale value is zero (LREG_9)
         TTI_SFPSTORE(0,4,3,0);          // LREG_0 -> dest as int32
+        dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void dequant_int32(const int iterations, const uint dst_offset)
+{
+    // Operand A[LREG0] is input to dequant (int32)
+    // Operand B[LREG1] is scaling factor (fp32)
+    // Operand C[LREG2] is zero-point constant (fp32)
+    // Output = (A + (-C)) * B (fp32)
+    #pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        //vFloat val = dst_reg[0];
+        //dst_reg[0] = float_to_fp16a(val, 0);
+        TTI_SFPLOAD(0, 4, 3, 0);        // operand A - int32
+        TT_SFPLOAD(1, 3, 3, dst_offset*64); // operand B - fp32 scaler
+        TTI_SFPCAST(0, 0, 0);           // cast int32->fp32
+        TTI_SFPADD(0,10,2,0,0);        // D(A)) = A+(-C), LREG[10] is 1, SFPADD = LREG_A*LREG_B+LREG_C
+        TTI_NOP;
+        TTI_SFPMUL(0,1,9,0,0);        // D(A)) = (A+(-C))*B, LREG[9] is zero
+        TTI_NOP; 
+        TTI_SFPSTORE(0,3,3,0);          // LREG_0 -> dest as fp32
         dst_reg++;
     }
 }
@@ -1328,6 +1354,9 @@ inline void calculate_sfpu(const int iterations = ITERATIONS, uint param0 = 0, u
     }
     else if constexpr (operation == SfpuType::requant_int32) {
         requant_int32<APPROXIMATION_MODE, ITERATIONS>(iterations, param0);
+    }
+    else if constexpr (operation == SfpuType::dequant_int32) {
+        dequant_int32<APPROXIMATION_MODE, ITERATIONS>(iterations, param0);
     }
 }
 

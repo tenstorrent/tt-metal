@@ -259,6 +259,7 @@ namespace ckernel::packer
       dest_rd_ctrl.val = 0;
       dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = ((uint)pack_src_format[output_id] == (uint)DataFormat::Int8) | 
                                                       ((uint)pack_src_format[output_id] == (uint)DataFormat::Int32) |
+                                                      ((uint)pack_src_format[output_id] == (uint)DataFormat::Float32) |
                                                       (is_fp32_dest_acc_en ? 1 : 0);
       cfg[PCK_DEST_RD_CTRL_Read_32b_data_ADDR32] = dest_rd_ctrl.val;
 

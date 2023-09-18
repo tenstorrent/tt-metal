@@ -31,7 +31,8 @@ inline void eltwise_binary_sfpu_configure_mop();
 template <SfpuType sfpu_op, bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
 inline void llk_math_eltwise_binary_sfpu(
     const uint operand,
-    uint dst_index, 
+    uint dst_index_a, 
+    uint dst_index_b, 
     int vector_mode = (int)Dim::RC,
     uint param0 = 0,
     uint param1 = 0,
@@ -40,6 +41,8 @@ inline void llk_math_eltwise_binary_sfpu(
     uint param4 = 0,
     uint param5 = 0) {
     constexpr int ITERATIONS = 8;
+    uint dst_index = (dst_index_a <= dst_index_b) ? dst_index_a : dst_index_b;
+    param0 = (dst_index_a > dst_index_b) ? dst_index_a-dst_index_b : dst_index_b-dst_index_a;
     if constexpr ((Dst == DstSync::SyncTile16) || (Dst == DstSync::SyncTile2)) {
         math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(math_sync_tile_dst_index);
     } else {
@@ -102,7 +105,9 @@ inline void llk_math_eltwise_binary_sfpu_init(
     TT_LLK_DUMP("llk_math_eltwise_binary_sfpu_init<{}, {}>({}, {}, {}, {}, {}, {})", sfpu_op, APPROXIMATE, param0, param1, param2, param3, param4, param5);
     eltwise_binary_sfpu_configure_addrmod< sfpu_op >();
     if constexpr (sfpu_op == SfpuType::requant_int32) {
-        sfpu::sfpu_init<APPROXIMATE>(sfpu_op, param1);
+        sfpu::sfpu_init<APPROXIMATE>(sfpu_op, param0);
+    } else if constexpr (sfpu_op == SfpuType::dequant_int32) {
+        sfpu::sfpu_init<APPROXIMATE>(sfpu_op, param0);
     } else {
         sfpu::sfpu_init<APPROXIMATE>(sfpu_op);
     }
@@ -114,12 +119,20 @@ inline void llk_math_eltwise_binary_sfpu_init(
 
 template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
 inline void llk_math_eltwise_binary_sfpu_requant_int32(const uint operand, uint dst_index_a, uint dst_index_b, int vector_mode = (int)Dim::RC) {
-    uint dst_index = (dst_index_a <= dst_index_b) ? dst_index_a : dst_index_b;
-    uint param0 = (dst_index_a > dst_index_b) ? dst_index_a-dst_index_b : dst_index_b-dst_index_a;
-    llk_math_eltwise_binary_sfpu<SfpuType::requant_int32, APPROXIMATE, dst_sync>(operand, dst_index, vector_mode, param0);
+    llk_math_eltwise_binary_sfpu<SfpuType::requant_int32, APPROXIMATE, dst_sync>(operand, dst_index_a, dst_index_b, vector_mode);
 }
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_requant_int32_init(const uint operand, const uint zero_point) {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::requant_int32, APPROXIMATE>(operand, 0, zero_point);
+    llk_math_eltwise_binary_sfpu_init<SfpuType::requant_int32, APPROXIMATE>(operand, zero_point);
+}
+
+template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
+inline void llk_math_eltwise_binary_sfpu_dequant_int32(const uint operand, uint dst_index_a, uint dst_index_b, int vector_mode = (int)Dim::RC) {
+    llk_math_eltwise_binary_sfpu<SfpuType::dequant_int32, APPROXIMATE, dst_sync>(operand, dst_index_a, dst_index_b, vector_mode);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_binary_sfpu_dequant_int32_init(const uint operand, const uint zero_point) {
+    llk_math_eltwise_binary_sfpu_init<SfpuType::dequant_int32, APPROXIMATE>(operand, zero_point);
 }
