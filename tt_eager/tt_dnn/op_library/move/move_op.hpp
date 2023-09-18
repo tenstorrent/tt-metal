@@ -95,7 +95,7 @@ inline Tensor move(Tensor& input_tensor, std::optional<MemoryConfig>& mem_config
     MoveOpParallelizationStrategy move_op_parallelization_strategy = MoveOpParallelizationStrategy::SINGLE_CORE;
     if (num_tiles > 1 and non_overlap) {
         move_op_parallelization_strategy = MoveOpParallelizationStrategy::MULTI_CORE;
-    } else if (num_tiles > 1 and (not non_overlap) and fits_in_cb) {
+    } else if (num_tiles > 1 and (not non_overlap) and fits_in_cb and compute_with_storage_grid_size.x > 1 and compute_with_storage_grid_size.y > 1) {
         move_op_parallelization_strategy = MoveOpParallelizationStrategy::MULTI_CORE_OVERLAP;
     }
 
