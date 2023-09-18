@@ -112,20 +112,41 @@ operation::ProgramWithCallbacks fill_cache_multi_core(const Tensor& cache_tensor
             unary_reader_kernel_id,
             unary_writer_kernel_id,
             num_cores,
-            num_cores_y
+            num_cores_y,
+            core_group_1,
+            num_tiles_per_core_group_1,
+            core_group_2,
+            num_tiles_per_core_group_2,
+            cache_HtWt,
+            cache_Wt
         ]
     (
-        const Program &program,
-        const std::vector<Buffer*>& input_buffers,
-        const std::vector<Buffer*>& output_buffers
+        const void* operation,
+        const Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>&,
+        const std::vector<Tensor>& output_tensors
     ) {
+        const auto batch_idx = static_cast<const UpdateCache*>(operation)->batch_idx;
+        const auto update_idx = static_cast<const UpdateCache*>(operation)->update_idx;
 
-        auto src_buffer = input_buffers.at(1);
+        uint32_t update_idxt = update_idx / TILE_HEIGHT;
+        uint32_t start_idx = batch_idx * cache_HtWt + update_idxt * cache_Wt;
 
-        auto dst_buffer = input_buffers.at(0);
+        auto src_buffer = input_tensors.at(1).buffer();
+
+        auto dst_buffer = input_tensors.at(0).buffer();
 
         for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
+            uint32_t num_tiles_per_core;
+            if (core_group_1.core_coord_in_core_ranges(core)) {
+                num_tiles_per_core = num_tiles_per_core_group_1;
+            } else if (core_group_2.core_coord_in_core_ranges(core)) {
+                num_tiles_per_core = num_tiles_per_core_group_2;
+            } else {
+                TT_ASSERT(false, "Core not in specified core ranges");
+            }
 
             {
                 auto runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
@@ -136,12 +157,14 @@ operation::ProgramWithCallbacks fill_cache_multi_core(const Tensor& cache_tensor
             {
                 auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
                 runtime_args[0] = dst_buffer->address();
+                runtime_args[2] = start_idx + num_tiles_written;
                 SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
             }
+            num_tiles_written += num_tiles_per_core;
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};
 }
 
 }  // namespace tt_metal

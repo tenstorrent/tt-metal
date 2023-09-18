@@ -94,6 +94,15 @@ tt::stl::reflection::Attributes UpdateCache::attributes() const {
     };
 }
 
+const operation::Hash UpdateCache::compute_program_hash(
+    const std::vector<Tensor> &input_tensors) const {
+    return fmt::format(
+        "UpdateCache(op_type={})_{}",
+        this->op_type,
+        fmt::join(std::begin(input_tensors), std::end(input_tensors), "_")
+    );
+}
+
 }  // namespace tt_metal
 
 }  // namespace tt

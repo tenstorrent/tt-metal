@@ -171,15 +171,26 @@ operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_ten
         }
     );
 
-    auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
-        const Program &program,
-        const std::vector<Buffer*>& input_buffers,
-        const std::vector<Buffer*>& output_buffers
+    auto override_runtime_arguments_callback = [
+        unary_reader_kernel_id,
+        unary_writer_kernel_id,
+        Wbytes,
+        Wt
+    ](
+        const void* operation,
+        const Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>&,
+        const std::vector<Tensor>& output_tensors
     ) {
+        const auto update_idx = static_cast<const UpdateCache*>(operation)->update_idx;
 
-        auto src_buffer = input_buffers.at(1);
+        uint32_t tile_update_offset = update_idx % TILE_HEIGHT * Wbytes;
+        uint32_t cache_tile_idx = update_idx / TILE_HEIGHT * Wt;
 
-        auto dst_buffer = input_buffers.at(0);
+        auto src_buffer = input_tensors.at(1).buffer();
+
+        auto dst_buffer = input_tensors.at(0).buffer();
 
         CoreCoord core = {0, 0};
 
@@ -187,17 +198,20 @@ operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_ten
             auto runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
             runtime_args[1] = src_buffer->address();
+            runtime_args[5] = cache_tile_idx;
             SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
         }
 
         {
             auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
+            runtime_args[5] = cache_tile_idx;
+            runtime_args[6] = tile_update_offset;
             SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
 
 
@@ -275,15 +289,27 @@ operation::ProgramWithCallbacks fill_cache_single_core(const Tensor& cache_tenso
         }
     );
 
-    auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
-        const Program &program,
-        const std::vector<Buffer*>& input_buffers,
-        const std::vector<Buffer*>& output_buffers
+    auto override_runtime_arguments_callback = [
+        unary_reader_kernel_id,
+        unary_writer_kernel_id,
+        cache_HtWt,
+        cache_Wt
+    ](
+        const void* operation,
+        const Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>&,
+        const std::vector<Tensor>& output_tensors
     ) {
+        const auto batch_idx = static_cast<const UpdateCache*>(operation)->batch_idx;
+        const auto update_idx = static_cast<const UpdateCache*>(operation)->update_idx;
 
-        auto src_buffer = input_buffers.at(1);
+        uint32_t update_idxt = update_idx / TILE_HEIGHT;
+        uint32_t start_idx = batch_idx * cache_HtWt + update_idxt * cache_Wt;
 
-        auto dst_buffer = input_buffers.at(0);
+        auto src_buffer = input_tensors.at(1).buffer();
+
+        auto dst_buffer = input_tensors.at(0).buffer();
 
         CoreCoord core = {0, 0};
 
@@ -296,11 +322,12 @@ operation::ProgramWithCallbacks fill_cache_single_core(const Tensor& cache_tenso
         {
             auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
+            runtime_args[2] = start_idx;
             SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
 
 }  // namespace tt_metal
