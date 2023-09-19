@@ -3,23 +3,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import sys
 import torch
 import tt_lib as ttl
-from pathlib import Path
 from functools import partial
 
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
 
-
-
-from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
-from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
-from tests.tt_eager.python_api_testing.sweep_tests.common import skip_for_wormhole_b0, is_wormhole_b0
+from tests.tt_eager.python_api_testing.sweep_tests import (
+    comparison_funcs,
+    generation_funcs,
+)
+from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
+    run_single_pytorch_test,
+)
+from tests.tt_eager.python_api_testing.sweep_tests.common import (
+    is_wormhole_b0,
+)
 
 shapes_mm = [
     # Single core (won't be hit after padding is added for multicast)
@@ -50,12 +48,12 @@ shapes_mm = [
 if is_wormhole_b0():
     del shapes_mm[1:]
 
+
+@pytest.mark.parametrize("input_shapes", shapes_mm)
 @pytest.mark.parametrize(
-    "input_shapes",
-    shapes_mm
-)
-@pytest.mark.parametrize(
-    "dtype", (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B)
+    "dtype",
+    (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B),
+    ids=["BFLOAT16", "BFLOAT8_B"],
 )
 def test_run_matmul_test(input_shapes, device, dtype, function_level_defaults):
     datagen_func = [
@@ -74,9 +72,12 @@ def test_run_matmul_test(input_shapes, device, dtype, function_level_defaults):
             "dtype": [dtype, dtype],
             "layout": [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
             "buffer_type": [ttl.tensor.BufferType.DRAM, ttl.tensor.BufferType.DRAM],
-            "output_mem_config": ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+            "output_mem_config": ttl.tensor.MemoryConfig(
+                True, ttl.tensor.BufferType.DRAM
+            ),
         },
     )
+
 
 shapes_bmm = [
     # Single core (won't be hit after padding is added for multicast)
@@ -106,12 +107,12 @@ shapes_bmm = [
 if is_wormhole_b0():
     del shapes_bmm[1:]
 
+
+@pytest.mark.parametrize("input_shapes", shapes_bmm)
 @pytest.mark.parametrize(
-    "input_shapes,",
-    shapes_bmm
-)
-@pytest.mark.parametrize(
-    "dtype", (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B)
+    "dtype",
+    (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B),
+    ids=["BFLOAT16", "BFLOAT8_B"],
 )
 def test_run_bmm_test(input_shapes, device, dtype, function_level_defaults):
     datagen_func = [
@@ -130,6 +131,8 @@ def test_run_bmm_test(input_shapes, device, dtype, function_level_defaults):
             "dtype": [dtype, dtype],
             "layout": [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
             "buffer_type": [ttl.tensor.BufferType.DRAM, ttl.tensor.BufferType.DRAM],
-            "output_mem_config": ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+            "output_mem_config": ttl.tensor.MemoryConfig(
+                True, ttl.tensor.BufferType.DRAM
+            ),
         },
     )
