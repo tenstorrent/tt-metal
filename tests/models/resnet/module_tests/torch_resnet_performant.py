@@ -8,9 +8,11 @@ from torch import Tensor
 from typing import Type, Union, Optional, Callable, Tuple
 
 
-def fold_bn_to_conv(conv: torch.nn.Conv2d, bn: torch.nn.BatchNorm2d) -> Tuple[nn.Parameter]:
+def fold_bn_to_conv(
+    conv: torch.nn.Conv2d, bn: torch.nn.BatchNorm2d
+) -> Tuple[nn.Parameter]:
     # Note: this function is not used, however I am keeping it for reference
-    epsilon = bn.eps # Crucially important to use batchnorm's eps
+    epsilon = bn.eps  # Crucially important to use batchnorm's eps
 
     bn_weight = bn.weight.unsqueeze(1).unsqueeze(1).unsqueeze(1)
     bn_running_var = bn.running_var.unsqueeze(1).unsqueeze(1).unsqueeze(1)
@@ -21,7 +23,10 @@ def fold_bn_to_conv(conv: torch.nn.Conv2d, bn: torch.nn.BatchNorm2d) -> Tuple[nn
     bn_running_mean = bn.running_mean.unsqueeze(1).unsqueeze(1).unsqueeze(1)
     bn_bias = bn.bias.unsqueeze(1).unsqueeze(1).unsqueeze(1)
 
-    bias = -(bn_weight) * (bn_running_mean / torch.sqrt(bn_running_var + epsilon)) + bn_bias
+    bias = (
+        -(bn_weight) * (bn_running_mean / torch.sqrt(bn_running_var + epsilon))
+        + bn_bias
+    )
 
     bias = bias.squeeze(-1).squeeze(-1).squeeze(-1)
 
@@ -42,7 +47,7 @@ class Bottleneck(nn.Module):
         dilation: int = 1,
         norm_layer: Optional[Callable[..., nn.Module]] = None,
         state_dict=None,
-        base_address=""
+        base_address="",
     ) -> None:
         super().__init__()
         self.base_address = base_address
@@ -50,45 +55,78 @@ class Bottleneck(nn.Module):
             norm_layer = nn.BatchNorm2d
         width = int(planes * (base_width / 64.0)) * groups
         # Both self.conv2 and self.downsample layers downsample the input when stride != 1
-        self.conv1 = conv1x1(inplanes, width, state_dict=state_dict, base_address=f"{base_address}.conv1")
+        self.conv1 = conv1x1(
+            inplanes, width, state_dict=state_dict, base_address=f"{base_address}.conv1"
+        )
         self.bn1 = norm_layer(width)
         self.bn1.weight = nn.Parameter(state_dict[f"{self.base_address}.bn1.weight"])
         self.bn1.bias = nn.Parameter(state_dict[f"{self.base_address}.bn1.bias"])
-        self.bn1.running_mean = nn.Parameter(state_dict[f"{self.base_address}.bn1.running_mean"])
-        self.bn1.running_var = nn.Parameter(state_dict[f"{self.base_address}.bn1.running_var"])
-        self.bn1.num_batches_tracked = nn.Parameter(state_dict[f"{self.base_address}.bn1.num_batches_tracked"], requires_grad=False)
+        self.bn1.running_mean = nn.Parameter(
+            state_dict[f"{self.base_address}.bn1.running_mean"]
+        )
+        self.bn1.running_var = nn.Parameter(
+            state_dict[f"{self.base_address}.bn1.running_var"]
+        )
+        self.bn1.num_batches_tracked = nn.Parameter(
+            state_dict[f"{self.base_address}.bn1.num_batches_tracked"],
+            requires_grad=False,
+        )
         self.bn1.eval()
 
         self.conv1.weight, self.conv1.bias = fold_bn_to_conv(self.conv1, self.bn1)
 
-        self.conv2 = conv3x3(width, width, stride, groups, dilation, state_dict=state_dict, base_address=f"{self.base_address}.conv2")
+        self.conv2 = conv3x3(
+            width,
+            width,
+            stride,
+            groups,
+            dilation,
+            state_dict=state_dict,
+            base_address=f"{self.base_address}.conv2",
+        )
         self.bn2 = norm_layer(width)
         self.bn2.weight = nn.Parameter(state_dict[f"{self.base_address}.bn2.weight"])
         self.bn2.bias = nn.Parameter(state_dict[f"{self.base_address}.bn2.bias"])
-        self.bn2.running_mean = nn.Parameter(state_dict[f"{self.base_address}.bn2.running_mean"])
-        self.bn2.running_var = nn.Parameter(state_dict[f"{self.base_address}.bn2.running_var"])
-        self.bn2.num_batches_tracked = nn.Parameter(state_dict[f"{self.base_address}.bn2.num_batches_tracked"], requires_grad=False)
+        self.bn2.running_mean = nn.Parameter(
+            state_dict[f"{self.base_address}.bn2.running_mean"]
+        )
+        self.bn2.running_var = nn.Parameter(
+            state_dict[f"{self.base_address}.bn2.running_var"]
+        )
+        self.bn2.num_batches_tracked = nn.Parameter(
+            state_dict[f"{self.base_address}.bn2.num_batches_tracked"],
+            requires_grad=False,
+        )
         self.bn2.eval()
 
         self.conv2.weight, self.conv2.bias = fold_bn_to_conv(self.conv2, self.bn2)
 
-
-        self.conv3 = conv1x1(width, planes * self.expansion, state_dict=state_dict, base_address=f"{base_address}.conv3")
+        self.conv3 = conv1x1(
+            width,
+            planes * self.expansion,
+            state_dict=state_dict,
+            base_address=f"{base_address}.conv3",
+        )
         self.bn3 = norm_layer(planes * self.expansion)
         self.bn3.weight = nn.Parameter(state_dict[f"{self.base_address}.bn3.weight"])
         self.bn3.bias = nn.Parameter(state_dict[f"{self.base_address}.bn3.bias"])
-        self.bn3.running_mean = nn.Parameter(state_dict[f"{self.base_address}.bn3.running_mean"])
-        self.bn3.running_var = nn.Parameter(state_dict[f"{self.base_address}.bn3.running_var"])
-        self.bn3.num_batches_tracked = nn.Parameter(state_dict[f"{self.base_address}.bn3.num_batches_tracked"], requires_grad=False)
+        self.bn3.running_mean = nn.Parameter(
+            state_dict[f"{self.base_address}.bn3.running_mean"]
+        )
+        self.bn3.running_var = nn.Parameter(
+            state_dict[f"{self.base_address}.bn3.running_var"]
+        )
+        self.bn3.num_batches_tracked = nn.Parameter(
+            state_dict[f"{self.base_address}.bn3.num_batches_tracked"],
+            requires_grad=False,
+        )
         self.bn3.eval()
 
         self.conv3.weight, self.conv3.bias = fold_bn_to_conv(self.conv3, self.bn3)
 
-
         self.relu = nn.ReLU(inplace=True)
         self.downsample = downsample
         self.stride = stride
-
 
     def forward(self, x: Tensor) -> Tensor:
         identity = x
@@ -125,8 +163,8 @@ class BasicBlock(nn.Module):
         base_width: int = 64,
         dilation: int = 1,
         norm_layer: Optional[Callable[..., nn.Module]] = None,
-        state_dict = None,
-        base_address = None
+        state_dict=None,
+        base_address=None,
     ) -> None:
         super().__init__()
         self.base_address = base_address
@@ -137,33 +175,54 @@ class BasicBlock(nn.Module):
         if dilation > 1:
             raise NotImplementedError("Dilation > 1 not supported in BasicBlock")
         # Both self.conv1 and self.downsample layers downsample the input when stride != 1
-        self.conv1 = conv3x3(inplanes, planes, stride, state_dict=state_dict, base_address=f"{base_address}.conv1")
+        self.conv1 = conv3x3(
+            inplanes,
+            planes,
+            stride,
+            state_dict=state_dict,
+            base_address=f"{base_address}.conv1",
+        )
         self.bn1 = norm_layer(planes)
         self.bn1.weight = nn.Parameter(state_dict[f"{self.base_address}.bn1.weight"])
         self.bn1.bias = nn.Parameter(state_dict[f"{self.base_address}.bn1.bias"])
-        self.bn1.running_mean = nn.Parameter(state_dict[f"{self.base_address}.bn1.running_mean"])
-        self.bn1.running_var = nn.Parameter(state_dict[f"{self.base_address}.bn1.running_var"])
-        self.bn1.num_batches_tracked = nn.Parameter(state_dict[f"{self.base_address}.bn1.num_batches_tracked"], requires_grad=False)
+        self.bn1.running_mean = nn.Parameter(
+            state_dict[f"{self.base_address}.bn1.running_mean"]
+        )
+        self.bn1.running_var = nn.Parameter(
+            state_dict[f"{self.base_address}.bn1.running_var"]
+        )
+        self.bn1.num_batches_tracked = nn.Parameter(
+            state_dict[f"{self.base_address}.bn1.num_batches_tracked"],
+            requires_grad=False,
+        )
         self.bn1.eval()
 
         self.conv1.weight, self.conv1.bias = fold_bn_to_conv(self.conv1, self.bn1)
 
         self.relu = nn.ReLU(inplace=True)
 
-        self.conv2 = conv3x3(planes, planes, state_dict=state_dict, base_address=f"{base_address}.conv2")
+        self.conv2 = conv3x3(
+            planes, planes, state_dict=state_dict, base_address=f"{base_address}.conv2"
+        )
         self.bn2 = norm_layer(planes)
         self.bn2.weight = nn.Parameter(state_dict[f"{self.base_address}.bn2.weight"])
         self.bn2.bias = nn.Parameter(state_dict[f"{self.base_address}.bn2.bias"])
-        self.bn2.running_mean = nn.Parameter(state_dict[f"{self.base_address}.bn2.running_mean"])
-        self.bn2.running_var = nn.Parameter(state_dict[f"{self.base_address}.bn2.running_var"])
-        self.bn2.num_batches_tracked = nn.Parameter(state_dict[f"{self.base_address}.bn2.num_batches_tracked"], requires_grad=False)
+        self.bn2.running_mean = nn.Parameter(
+            state_dict[f"{self.base_address}.bn2.running_mean"]
+        )
+        self.bn2.running_var = nn.Parameter(
+            state_dict[f"{self.base_address}.bn2.running_var"]
+        )
+        self.bn2.num_batches_tracked = nn.Parameter(
+            state_dict[f"{self.base_address}.bn2.num_batches_tracked"],
+            requires_grad=False,
+        )
         self.bn2.eval()
 
         self.conv2.weight, self.conv2.bias = fold_bn_to_conv(self.conv2, self.bn2)
 
         self.downsample = downsample
         self.stride = stride
-
 
     def forward(self, x: Tensor) -> Tensor:
         identity = x
@@ -184,9 +243,17 @@ class BasicBlock(nn.Module):
         return out
 
 
-def conv3x3(in_planes: int, out_planes: int, stride: int = 1, groups: int = 1, dilation: int = 1, state_dict=None, base_address=None) -> nn.Conv2d:
+def conv3x3(
+    in_planes: int,
+    out_planes: int,
+    stride: int = 1,
+    groups: int = 1,
+    dilation: int = 1,
+    state_dict=None,
+    base_address=None,
+) -> nn.Conv2d:
     """3x3 convolution with padding"""
-    conv =  nn.Conv2d(
+    conv = nn.Conv2d(
         in_planes,
         out_planes,
         kernel_size=3,
@@ -200,9 +267,11 @@ def conv3x3(in_planes: int, out_planes: int, stride: int = 1, groups: int = 1, d
     return conv
 
 
-def conv1x1(in_planes: int, out_planes: int, stride: int = 1, state_dict=None, base_address=None) -> nn.Conv2d:
+def conv1x1(
+    in_planes: int, out_planes: int, stride: int = 1, state_dict=None, base_address=None
+) -> nn.Conv2d:
     """1x1 convolution"""
-    conv =  nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
+    conv = nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
     conv.weight = nn.Parameter(state_dict[f"{base_address}.weight"])
     return conv
 
@@ -214,8 +283,8 @@ def _make_layer(
     stride: int = 1,
     dilate: bool = False,
     name: str = None,
-    state_dict=None
-    ) -> nn.Sequential:
+    state_dict=None,
+) -> nn.Sequential:
     # norm_layer = self._norm_layer
     norm_layer = nn.BatchNorm2d
     inplanes = 64
@@ -229,14 +298,25 @@ def _make_layer(
     if stride != 1 or inplanes != planes * block.expansion:
         nl = norm_layer(planes * block.expansion)
         downsample = nn.Sequential(
-            conv1x1(inplanes, planes * block.expansion, stride, state_dict=state_dict, base_address=f"{name}.0.downsample.0"),
+            conv1x1(
+                inplanes,
+                planes * block.expansion,
+                stride,
+                state_dict=state_dict,
+                base_address=f"{name}.0.downsample.0",
+            ),
             # nl, # folded
         )
         nl.weight = nn.Parameter(state_dict[f"{name}.0.downsample.1.weight"])
         nl.bias = nn.Parameter(state_dict[f"{name}.0.downsample.1.bias"])
-        nl.running_mean = nn.Parameter(state_dict[f"{name}.0.downsample.1.running_mean"])
+        nl.running_mean = nn.Parameter(
+            state_dict[f"{name}.0.downsample.1.running_mean"]
+        )
         nl.running_var = nn.Parameter(state_dict[f"{name}.0.downsample.1.running_var"])
-        nl.num_batches_tracked = nn.Parameter(state_dict[f"{name}.0.downsample.1.num_batches_tracked"], requires_grad=False)
+        nl.num_batches_tracked = nn.Parameter(
+            state_dict[f"{name}.0.downsample.1.num_batches_tracked"],
+            requires_grad=False,
+        )
         nl.eval()
 
         downsample[0].weight, downsample[0].bias = fold_bn_to_conv(downsample[0], nl)
@@ -254,7 +334,7 @@ def _make_layer(
             previous_dilation,
             norm_layer,
             state_dict=state_dict,
-            base_address=f"{name}.0"
+            base_address=f"{name}.0",
         )
     )
     inplanes = planes * block.expansion
@@ -268,7 +348,7 @@ def _make_layer(
                 dilation=dilation,
                 norm_layer=norm_layer,
                 state_dict=state_dict,
-                base_address=f"{name}.{_}"
+                base_address=f"{name}.{_}",
             )
         )
 

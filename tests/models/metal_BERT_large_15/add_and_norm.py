@@ -25,7 +25,11 @@ from tests.models.metal_BERT_large_15.fused_ops.layernorm import (
     create_var_scaler,
 )
 from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
-from models.utility_functions import enable_persistent_kernel_cache, comp_pcc, comp_allclose
+from models.utility_functions import (
+    enable_persistent_kernel_cache,
+    comp_pcc,
+    comp_allclose,
+)
 
 
 class TtAddAndNormModel(torch.nn.Module):
@@ -133,8 +137,7 @@ class PytorchAddAndNormModel(torch.nn.Module):
 def run_add_and_norm_inference(
     device, model_version, batch, seq_len, pcc, model_location_generator
 ):
-
-    model_name = str(model_location_generator(model_version, model_subdir = "Bert"))
+    model_name = str(model_location_generator(model_version, model_subdir="Bert"))
 
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(
         model_name, torchscript=False
@@ -182,11 +185,7 @@ def run_add_and_norm_inference(
     tt_out = tt_add_and_norm_model(tt_add_and_norm_input_a, tt_add_and_norm_input_b).to(
         host
     )
-    tt_out = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(
-        tt_out.shape()
-    )
-
-
+    tt_out = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(tt_out.shape())
 
     passing, output = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"Output {output}")

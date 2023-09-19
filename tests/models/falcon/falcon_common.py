@@ -22,5 +22,10 @@ class PytorchFalconCausalLM(torch.nn.Module):
 
     def forward(self, input_ids, past_key_values, use_cache):
         # this method is returning the logits
-        result = self.model(input_ids=input_ids, past_key_values=past_key_values, use_cache=use_cache, return_dict=False)
+        result = self.model(
+            input_ids=input_ids,
+            past_key_values=past_key_values,
+            use_cache=use_cache,
+            return_dict=False,
+        )
         return result

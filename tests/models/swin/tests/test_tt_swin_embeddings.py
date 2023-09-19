@@ -28,7 +28,6 @@ from transformers import SwinModel
     ((0.99),),
 )
 def test_swin_embeddings_inference(device, imagenet_sample_input, pcc, reset_seeds):
-
     image = imagenet_sample_input
     base_address = f"embeddings"
 

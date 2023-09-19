@@ -71,7 +71,6 @@ def test_ssd_inference(device, pcc, imagenet_sample_input, reset_seeds):
     logger.info(comp_allclose(torch_output[0]["boxes"], tt_output[0]["boxes"]))
     logger.info(pcc_boxes)
 
-
     if score_pass and labels_pass and boxes_pass:
         logger.info("SSD Passed!")
 

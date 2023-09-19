@@ -21,7 +21,10 @@ import tiktoken
 
 from transformers import GPT2LMHeadModel
 
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+    comp_allclose,
+    comp_pcc,
+)
 
 from loguru import logger
 import tests.models.nanogpt.tt.nanogpt_block as nanogpt_block
@@ -35,20 +38,15 @@ from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
 
+
 @pytest.mark.parametrize(
     "pcc, prompt",
-    (
-        (
-            0.99,
-            "How are you?"
-        ),
-    ),
+    ((0.99, "How are you?"),),
 )
 def test_nanogpt_model_real(pcc, prompt, device):
-
     # Prepare input
 
-    model_hf = GPT2LMHeadModel.from_pretrained('gpt2')
+    model_hf = GPT2LMHeadModel.from_pretrained("gpt2")
     sd = model_hf.state_dict()
     model_hf.eval()
     torch.manual_seed(0)
@@ -60,40 +58,36 @@ def test_nanogpt_model_real(pcc, prompt, device):
 
     start_ids = encode(prompt)
 
-    x = (torch.tensor(start_ids, dtype=torch.long, device='cpu')[None, ...])
+    x = torch.tensor(start_ids, dtype=torch.long, device="cpu")[None, ...]
 
     x = x if x.size(1) <= block_size else x[:, -block_size:]
-
 
     pt_model = model_hf
     pt_out = pt_model.forward(x)
 
-    model_type = 'gpt2'
+    model_type = "gpt2"
 
     config_args = {
-        'gpt2':         dict(n_layer=12, n_head=12, n_embd=768),  # 124M params
+        "gpt2": dict(n_layer=12, n_head=12, n_embd=768),  # 124M params
     }[model_type]
 
-    config_args['vocab_size'] = 50257 # always 50257 for GPT model checkpoints
-    config_args['block_size'] = 1024 # always 1024 for GPT model checkpoints
-    config_args['bias'] = True # always True for GPT model checkpoints
+    config_args["vocab_size"] = 50257  # always 50257 for GPT model checkpoints
+    config_args["block_size"] = 1024  # always 1024 for GPT model checkpoints
+    config_args["bias"] = True  # always True for GPT model checkpoints
 
     config = GPTConfig(**config_args)
 
     tt_test_in = torch2tt_tensor(x, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
 
     tt_model = nanogpt_model.TtGPT(config, sd, device)
-    #tt_model = nanogpt_model.nanogpt(device)
+    # tt_model = nanogpt_model.nanogpt(device)
 
-    tt_out = tt_model.forward(
-        x
-    )
+    tt_out = tt_model.forward(x)
 
     tt_out_converted = tt2torch_tensor(tt_out[0])
 
     does_pass, pcc_message = comp_pcc(pt_out[0], tt_out_converted, 0.99)
     logger.info(pcc_message)
-
 
     if does_pass:
         logger.info("nanogpt_model_real: Passed!")

@@ -25,7 +25,10 @@ from tests.models.roberta.roberta_for_multiple_choice import (
 )
 import tt_lib
 from tt_lib.fallback_ops import fallback_ops
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+    comp_allclose,
+    comp_pcc,
+)
 
 from transformers import RobertaForMultipleChoice
 from transformers import AutoTokenizer
@@ -99,10 +102,11 @@ def test_roberta_for_multiple_choice(device):
         )
 
         # Temporarily change passing codition to allclose until layernorm accuracy is updated
-        does_pass, allclose_message = comp_allclose(torch_outputs.logits, tt_output_to_torch, 0, 0.008)
+        does_pass, allclose_message = comp_allclose(
+            torch_outputs.logits, tt_output_to_torch, 0, 0.008
+        )
         logger.info(allclose_message)
         logger.info(pcc_message)
-
 
         if does_pass:
             logger.info("RobertaForMultipleChoice Passed!")

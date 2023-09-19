@@ -18,7 +18,10 @@ import tt_lib
 
 from transformers import BloomForCausalLM, BloomTokenizerFast
 from transformers.generation.configuration_utils import GenerationConfig
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+    comp_allclose,
+    comp_pcc,
+)
 
 from loguru import logger
 import tests.models.bloom.bloom_causal_lm as bloom_causal_lm
@@ -333,7 +336,6 @@ def run_generate(input_sentance, run_tt_model, device):
 
 if __name__ == "__main__":
     device = tt_lib.device.CreateDevice(0)
-
 
     output_sentance_night = run_generate(
         "It was a dark and stormy night", run_tt_model=True, device=device

@@ -14,9 +14,12 @@ from models.utility_functions import comp_allclose_and_pcc, comp_pcc
 
 from models.stable_diffusion.tt.downsample_2d import TtDownsample2D
 
+
 def test_run_downsample2d_inference(device):
     # setup pytorch model
-    pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
+    pipe = StableDiffusionPipeline.from_pretrained(
+        "CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32
+    )
     unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()
@@ -24,7 +27,7 @@ def test_run_downsample2d_inference(device):
     resnet_downsampler = unet_downblock.downsamplers[0]
 
     # synthesize the input
-    input_shape =  [1, 320, 32, 32]
+    input_shape = [1, 320, 32, 32]
     input = torch.randn(input_shape)
     in_channels = 320
     out_channels = 320
@@ -35,7 +38,13 @@ def test_run_downsample2d_inference(device):
     # setup tt models
     tt_input = torch_to_tt_tensor(input, device)
 
-    tt_down = TtDownsample2D(channels=in_channels, out_channels=out_channels, use_conv=True, state_dict=state_dict, base_address="down_blocks.0.downsamplers.0")
+    tt_down = TtDownsample2D(
+        channels=in_channels,
+        out_channels=out_channels,
+        use_conv=True,
+        state_dict=state_dict,
+        base_address="down_blocks.0.downsamplers.0",
+    )
     tt_out = tt_down(tt_input)
     ttl.device.Synchronize()
     tt_output = tt_to_torch_tensor(tt_out)

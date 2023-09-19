@@ -27,6 +27,7 @@ class BlazePose(BlazeDetector):
     Based on code from https://github.com/tkat0/PyTorch_BlazeFace/ and
     https://github.com/google/mediapipe/
     """
+
     def __init__(self):
         super(BlazePose, self).__init__()
 
@@ -47,31 +48,35 @@ class BlazePose(BlazeDetector):
         # These settings are for converting detections to ROIs which can then
         # be extracted and feed into the landmark network
         # use mediapipe/calculators/util/alignment_points_to_rects_calculator.cc
-        self.detection2roi_method = 'alignment'
+        self.detection2roi_method = "alignment"
         # mediapipe/modules/pose_landmark/pose_detection_to_roi.pbtxt
         self.kp1 = 2
         self.kp2 = 3
         self.theta0 = 90 * np.pi / 180
         self.dscale = 1.5
-        self.dy = 0.
+        self.dy = 0.0
 
         self._define_layers()
 
     def _define_layers(self):
         self.backbone1 = nn.Sequential(
-            nn.Conv2d(in_channels=3, out_channels=48, kernel_size=5, stride=1, padding=2, bias=True),
+            nn.Conv2d(
+                in_channels=3,
+                out_channels=48,
+                kernel_size=5,
+                stride=1,
+                padding=2,
+                bias=True,
+            ),
             nn.ReLU(inplace=True),
-
             BlazeBlock(48, 48, 5),
             BlazeBlock(48, 48, 5),
             BlazeBlock(48, 48, 5),
             BlazeBlock(48, 64, 5, 2, skip_proj=True),
-
             BlazeBlock(64, 64, 5),
             BlazeBlock(64, 64, 5),
             BlazeBlock(64, 64, 5),
             BlazeBlock(64, 96, 5, 2, skip_proj=True),
-
             BlazeBlock(96, 96, 5),
             BlazeBlock(96, 96, 5),
             BlazeBlock(96, 96, 5),
@@ -79,7 +84,6 @@ class BlazePose(BlazeDetector):
             BlazeBlock(96, 96, 5),
             BlazeBlock(96, 96, 5),
             BlazeBlock(96, 128, 5, 2, skip_proj=True),
-
             BlazeBlock(128, 128, 5),
             BlazeBlock(128, 128, 5),
             BlazeBlock(128, 128, 5),
@@ -87,7 +91,6 @@ class BlazePose(BlazeDetector):
             BlazeBlock(128, 128, 5),
             BlazeBlock(128, 128, 5),
             BlazeBlock(128, 128, 5),
-
         )
 
         self.backbone2 = nn.Sequential(
@@ -98,7 +101,6 @@ class BlazePose(BlazeDetector):
             BlazeBlock(256, 256, 5),
             BlazeBlock(256, 256, 5),
             BlazeBlock(256, 256, 5),
-
         )
 
         self.classifier_8 = nn.Conv2d(128, 2, 1, bias=True)
@@ -112,7 +114,7 @@ class BlazePose(BlazeDetector):
         # than PyTorch, so do it manually.
         # x = F.pad(x, (1, 2, 1, 2), "constant", 0)
 
-        b = x.shape[0]      # batch size, needed for reshaping later
+        b = x.shape[0]  # batch size, needed for reshaping later
 
         x = self.backbone1(x)
         h = self.backbone2(x)

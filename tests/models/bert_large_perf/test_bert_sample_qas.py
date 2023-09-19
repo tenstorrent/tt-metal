@@ -299,11 +299,8 @@ def run_bert_question_and_answering_inference(
 ):
     torch.manual_seed(1234)
 
-
-
-
-    model_name = str(model_location_generator(model_version, model_subdir = "Bert"))
-    tokenizer_name = str(model_location_generator(model_version, model_subdir = "Bert"))
+    model_name = str(model_location_generator(model_version, model_subdir="Bert"))
+    tokenizer_name = str(model_location_generator(model_version, model_subdir="Bert"))
 
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(
         model_name, torchscript=False
@@ -347,7 +344,11 @@ def run_bert_question_and_answering_inference(
         answers = samples[i]["answers"]
 
         tt_out = tt_out.cpu()
-        tt_untilized_output = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(batch, 1, seq_len, -1)
+        tt_untilized_output = (
+            tt_out.to(ttl.tensor.Layout.ROW_MAJOR)
+            .to_torch()
+            .reshape(batch, 1, seq_len, -1)
+        )
 
         tt_start_logits = tt_untilized_output[..., :, 0].squeeze(1)
         tt_end_logits = tt_untilized_output[..., :, 1].squeeze(1)
@@ -368,7 +369,6 @@ def run_bert_question_and_answering_inference(
 
     profiler.end("processing_output_to_string")
 
-
     profiler.print()
 
 
@@ -381,9 +381,7 @@ def test_bert_sample_qas(device, model_location_generator):
     pcc = 0.98
     num_samples = 10
 
-    qas_sample = DataSampler(
-        "./tests/models/bert_large_perf/dev-v2.0.json"
-    )
+    qas_sample = DataSampler("./tests/models/bert_large_perf/dev-v2.0.json")
 
     logger.warning(
         "This test uses binary and compile cache. The cache needs to be filled before running this test."

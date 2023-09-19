@@ -26,7 +26,10 @@ from transformers import (
     PreTrainedModel,
 )
 
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+    comp_allclose,
+    comp_pcc,
+)
 from tests.models.llama.llama_model import TtLlamaShared, TtLlamaModel
 
 
@@ -125,9 +128,8 @@ def test_Llama_inference(
     max_position_embeddings,
     on_weka,
     pcc,
-    device
+    device,
 ):
-
     run_test_Llama_inference(
         device,
         model_version,

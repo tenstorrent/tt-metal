@@ -29,7 +29,6 @@ from tt_lib.fallback_ops import fallback_ops
 from dataclasses import dataclass
 
 
-
 @dataclass
 class TtMultipleChoiceModelOutput:
     loss: tt_lib.tensor.Tensor = None
@@ -71,10 +70,14 @@ class TtRobertaForMultipleChoice(nn.Module):
 
     def linear(self, x, weight, bias):
         weight = tt_lib.tensor.transpose(weight)
-        x = tt_lib.tensor.matmul(x, weight, output_mem_config = self.mem_config)
+        x = tt_lib.tensor.matmul(x, weight, output_mem_config=self.mem_config)
         if bias is not None:
             x = tt_lib.tensor.bcast(
-                x, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H, output_mem_config = self.mem_config
+                x,
+                bias,
+                tt_lib.tensor.BcastOpMath.ADD,
+                tt_lib.tensor.BcastOpDim.H,
+                output_mem_config=self.mem_config,
             )
         return x
 

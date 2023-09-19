@@ -32,7 +32,6 @@ from models.utility_functions import (
 
 
 def test_Yolov5_concat(device):
-
     weights = "tests/models/yolov5/reference/yolov5s.pt"
     dnn = False
     data = None

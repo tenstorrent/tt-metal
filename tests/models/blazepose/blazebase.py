@@ -10,7 +10,7 @@ import torch.nn.functional as F
 
 
 def resize_pad(img):
-    """ resize and pad images to be input to the detectors
+    """resize and pad images to be input to the detectors
 
     The face and palm detector networks take 256x256 and 128x128 images
     as input. As such the input image is padded and resized to fit the
@@ -24,7 +24,7 @@ def resize_pad(img):
     """
 
     size0 = img.shape
-    if size0[0]>=size0[1]:
+    if size0[0] >= size0[1]:
         h1 = 256
         w1 = 256 * size0[1] // size0[0]
         padh = 0
@@ -36,19 +36,19 @@ def resize_pad(img):
         padh = 256 - h1
         padw = 0
         scale = size0[0] / h1
-    padh1 = padh//2
-    padh2 = padh//2 + padh%2
-    padw1 = padw//2
-    padw2 = padw//2 + padw%2
-    img1 = cv2.resize(img, (w1,h1))
-    img1 = np.pad(img1, ((padh1, padh2), (padw1, padw2), (0,0)))
+    padh1 = padh // 2
+    padh2 = padh // 2 + padh % 2
+    padw1 = padw // 2
+    padw2 = padw // 2 + padw % 2
+    img1 = cv2.resize(img, (w1, h1))
+    img1 = np.pad(img1, ((padh1, padh2), (padw1, padw2), (0, 0)))
     pad = (int(padh1 * scale), int(padw1 * scale))
-    img2 = cv2.resize(img1, (128,128))
+    img2 = cv2.resize(img1, (128, 128))
     return img1, img2, scale, pad
 
 
 def denormalize_detections(detections, scale, pad):
-    """ maps detection coordinates from [0,1] to image coordinates
+    """maps detection coordinates from [0,1] to image coordinates
 
     The face and palm detector networks take 256x256 and 128x128 images
     as input. As such the input image is padded and resized to fit the
@@ -74,10 +74,16 @@ def denormalize_detections(detections, scale, pad):
     return detections
 
 
-
-
 class BlazeBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, act='relu', skip_proj=False):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size=3,
+        stride=1,
+        act="relu",
+        skip_proj=False,
+    ):
         super(BlazeBlock, self).__init__()
 
         self.stride = stride
@@ -93,29 +99,47 @@ class BlazeBlock(nn.Module):
             padding = (kernel_size - 1) // 2
 
         self.convs = nn.Sequential(
-            nn.Conv2d(in_channels=in_channels, out_channels=in_channels,
-                      kernel_size=kernel_size, stride=stride, padding=padding,
-                      groups=in_channels, bias=True),
-            nn.Conv2d(in_channels=in_channels, out_channels=out_channels,
-                      kernel_size=1, stride=1, padding=0, bias=True),
+            nn.Conv2d(
+                in_channels=in_channels,
+                out_channels=in_channels,
+                kernel_size=kernel_size,
+                stride=stride,
+                padding=padding,
+                groups=in_channels,
+                bias=True,
+            ),
+            nn.Conv2d(
+                in_channels=in_channels,
+                out_channels=out_channels,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                bias=True,
+            ),
         )
 
         if skip_proj:
-            self.skip_proj = nn.Conv2d(in_channels=in_channels, out_channels=out_channels,
-                      kernel_size=1, stride=1, padding=0, bias=True)
+            self.skip_proj = nn.Conv2d(
+                in_channels=in_channels,
+                out_channels=out_channels,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                bias=True,
+            )
         else:
             self.skip_proj = None
 
-        if act == 'relu':
+        if act == "relu":
             self.act = nn.ReLU(inplace=True)
-        elif act == 'prelu':
+        elif act == "prelu":
             self.act = nn.PReLU(out_channels)
         else:
-            raise NotImplementedError("unknown activation %s"%act)
+            raise NotImplementedError("unknown activation %s" % act)
 
     def forward(self, x):
         if self.stride == 2:
-            if self.kernel_size==3:
+            if self.kernel_size == 3:
                 h = F.pad(x, (0, 2, 0, 2), "constant", 0)
             else:
                 h = F.pad(x, (1, 2, 1, 2), "constant", 0)
@@ -128,7 +152,6 @@ class BlazeBlock(nn.Module):
         elif self.channel_pad > 0:
             x = F.pad(x, (0, 0, 0, 0, 0, self.channel_pad), "constant", 0)
 
-
         return self.act(self.convs(h) + x)
 
 
@@ -139,11 +162,23 @@ class FinalBlazeBlock(nn.Module):
         # TFLite uses slightly different padding than PyTorch
         # on the depthwise conv layer when the stride is 2.
         self.convs = nn.Sequential(
-            nn.Conv2d(in_channels=channels, out_channels=channels,
-                      kernel_size=kernel_size, stride=2, padding=0,
-                      groups=channels, bias=True),
-            nn.Conv2d(in_channels=channels, out_channels=channels,
-                      kernel_size=1, stride=1, padding=0, bias=True),
+            nn.Conv2d(
+                in_channels=channels,
+                out_channels=channels,
+                kernel_size=kernel_size,
+                stride=2,
+                padding=0,
+                groups=channels,
+                bias=True,
+            ),
+            nn.Conv2d(
+                in_channels=channels,
+                out_channels=channels,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                bias=True,
+            ),
         )
 
         self.act = nn.ReLU(inplace=True)
@@ -155,7 +190,7 @@ class FinalBlazeBlock(nn.Module):
 
 
 class BlazeBase(nn.Module):
-    """ Base class for media pipe models. """
+    """Base class for media pipe models."""
 
     def _device(self):
         """Which device (CPU or GPU) is being used by this model?"""
@@ -167,40 +202,44 @@ class BlazeBase(nn.Module):
 
 
 class BlazeLandmark(BlazeBase):
-    """ Base class for landmark models. """
+    """Base class for landmark models."""
 
     def extract_roi(self, frame, xc, yc, theta, scale):
-
         # take points on unit square and transform them according to the roi
-        points = torch.tensor([[-1, -1, 1, 1],
-                            [-1, 1, -1, 1]], device=scale.device).view(1,2,4)
-        points = points * scale.view(-1,1,1)/2
+        points = torch.tensor(
+            [[-1, -1, 1, 1], [-1, 1, -1, 1]], device=scale.device
+        ).view(1, 2, 4)
+        points = points * scale.view(-1, 1, 1) / 2
         theta = theta.view(-1, 1, 1)
-        R = torch.cat((
-            torch.cat((torch.cos(theta), -torch.sin(theta)), 2),
-            torch.cat((torch.sin(theta), torch.cos(theta)), 2),
-            ), 1)
-        center = torch.cat((xc.view(-1,1,1), yc.view(-1,1,1)), 1)
+        R = torch.cat(
+            (
+                torch.cat((torch.cos(theta), -torch.sin(theta)), 2),
+                torch.cat((torch.sin(theta), torch.cos(theta)), 2),
+            ),
+            1,
+        )
+        center = torch.cat((xc.view(-1, 1, 1), yc.view(-1, 1, 1)), 1)
         points = R @ points + center
 
         # use the points to compute the affine transform that maps
         # these points back to the output square
         res = self.resolution
-        points1 = np.array([[0, 0, res-1],
-                            [0, res-1, 0]], dtype=np.float32).T
+        points1 = np.array([[0, 0, res - 1], [0, res - 1, 0]], dtype=np.float32).T
         affines = []
         imgs = []
         for i in range(points.shape[0]):
             pts = points[i, :, :3].cpu().numpy().T
             M = cv2.getAffineTransform(pts, points1)
-            img = cv2.warpAffine(frame, M, (res,res))#, borderValue=127.5)
+            img = cv2.warpAffine(frame, M, (res, res))  # , borderValue=127.5)
             img = torch.tensor(img, device=scale.device)
             imgs.append(img)
-            affine = cv2.invertAffineTransform(M).astype('float32')
+            affine = cv2.invertAffineTransform(M).astype("float32")
             affine = torch.tensor(affine, device=scale.device)
             affines.append(affine)
         if imgs:
-            imgs = torch.stack(imgs).permute(0,3,1,2).float() / 255.#/ 127.5 - 1.0
+            imgs = (
+                torch.stack(imgs).permute(0, 3, 1, 2).float() / 255.0
+            )  # / 127.5 - 1.0
             affines = torch.stack(affines)
         else:
             imgs = torch.zeros((0, 3, res, res), device=scale.device)
@@ -209,31 +248,33 @@ class BlazeLandmark(BlazeBase):
         return imgs, affines, points
 
     def denormalize_landmarks(self, landmarks, affines):
-        landmarks[:,:,:2] *= self.resolution
+        landmarks[:, :, :2] *= self.resolution
         for i in range(len(landmarks)):
             landmark, affine = landmarks[i], affines[i]
-            landmark = (affine[:,:2] @ landmark[:,:2].T + affine[:,2:]).T
-            landmarks[i,:,:2] = landmark
+            landmark = (affine[:, :2] @ landmark[:, :2].T + affine[:, 2:]).T
+            landmarks[i, :, :2] = landmark
         return landmarks
 
 
-
 class BlazeDetector(BlazeBase):
-    """ Base class for detector models.
+    """Base class for detector models.
 
     Based on code from https://github.com/tkat0/PyTorch_BlazeFace/ and
     https://github.com/hollance/BlazeFace-PyTorch and
     https://github.com/google/mediapipe/
     """
+
     def load_anchors(self, path):
-        self.anchors = torch.tensor(np.load(path), dtype=torch.float32, device=self._device())
-        assert(self.anchors.ndimension() == 2)
-        assert(self.anchors.shape[0] == self.num_anchors)
-        assert(self.anchors.shape[1] == 4)
+        self.anchors = torch.tensor(
+            np.load(path), dtype=torch.float32, device=self._device()
+        )
+        assert self.anchors.ndimension() == 2
+        assert self.anchors.shape[0] == self.num_anchors
+        assert self.anchors.shape[1] == 4
 
     def _preprocess(self, x):
         """Converts the image pixels to the range [-1, 1]."""
-        return x.float() / 255.# 127.5 - 1.0
+        return x.float() / 255.0  # 127.5 - 1.0
 
     def predict_on_image(self, img):
         """Makes a prediction on a single image.
@@ -290,14 +331,17 @@ class BlazeDetector(BlazeBase):
         filtered_detections = []
         for i in range(len(detections)):
             faces = self._weighted_non_max_suppression(detections[i])
-            faces = torch.stack(faces) if len(faces) > 0 else torch.zeros((0, self.num_coords+1))
+            faces = (
+                torch.stack(faces)
+                if len(faces) > 0
+                else torch.zeros((0, self.num_coords + 1))
+            )
             filtered_detections.append(faces)
 
         return filtered_detections
 
-
     def detection2roi(self, detection):
-        """ Convert detections from detector to an oriented bounding box.
+        """Convert detections from detector to an oriented bounding box.
 
         Adapted from:
         # mediapipe/modules/face_landmark/face_detection_front_detection_to_roi.pbtxt
@@ -308,37 +352,37 @@ class BlazeDetector(BlazeBase):
         and shifted by dscale and dy.
 
         """
-        if self.detection2roi_method == 'box':
+        if self.detection2roi_method == "box":
             # compute box center and scale
             # use mediapipe/calculators/util/detections_to_rects_calculator.cc
-            xc = (detection[:,1] + detection[:,3]) / 2
-            yc = (detection[:,0] + detection[:,2]) / 2
-            scale = (detection[:,3] - detection[:,1]) # assumes square boxes
+            xc = (detection[:, 1] + detection[:, 3]) / 2
+            yc = (detection[:, 0] + detection[:, 2]) / 2
+            scale = detection[:, 3] - detection[:, 1]  # assumes square boxes
 
-        elif self.detection2roi_method == 'alignment':
+        elif self.detection2roi_method == "alignment":
             # compute box center and scale
             # use mediapipe/calculators/util/alignment_points_to_rects_calculator.cc
-            xc = detection[:,4+2*self.kp1]
-            yc = detection[:,4+2*self.kp1+1]
-            x1 = detection[:,4+2*self.kp2]
-            y1 = detection[:,4+2*self.kp2+1]
-            scale = ((xc-x1)**2 + (yc-y1)**2).sqrt() * 2
+            xc = detection[:, 4 + 2 * self.kp1]
+            yc = detection[:, 4 + 2 * self.kp1 + 1]
+            x1 = detection[:, 4 + 2 * self.kp2]
+            y1 = detection[:, 4 + 2 * self.kp2 + 1]
+            scale = ((xc - x1) ** 2 + (yc - y1) ** 2).sqrt() * 2
         else:
             raise NotImplementedError(
-                "detection2roi_method [%s] not supported"%self.detection2roi_method)
+                "detection2roi_method [%s] not supported" % self.detection2roi_method
+            )
 
         yc += self.dy * scale
         scale *= self.dscale
 
         # compute box rotation
-        x0 = detection[:,4+2*self.kp1]
-        y0 = detection[:,4+2*self.kp1+1]
-        x1 = detection[:,4+2*self.kp2]
-        y1 = detection[:,4+2*self.kp2+1]
-        #theta = np.arctan2(y0-y1, x0-x1) - self.theta0
-        theta = torch.atan2(y0-y1, x0-x1) - self.theta0
+        x0 = detection[:, 4 + 2 * self.kp1]
+        y0 = detection[:, 4 + 2 * self.kp1 + 1]
+        x1 = detection[:, 4 + 2 * self.kp2]
+        y1 = detection[:, 4 + 2 * self.kp2 + 1]
+        # theta = np.arctan2(y0-y1, x0-x1) - self.theta0
+        theta = torch.atan2(y0 - y1, x0 - x1) - self.theta0
         return xc, yc, scale, theta
-
 
     def _tensors_to_detections(self, raw_box_tensor, raw_score_tensor, anchors):
         """The output of the neural network is a tensor of shape (b, 896, 16)
@@ -396,16 +440,21 @@ class BlazeDetector(BlazeBase):
         w = raw_boxes[..., 2] / self.w_scale * anchors[:, 2]
         h = raw_boxes[..., 3] / self.h_scale * anchors[:, 3]
 
-        boxes[..., 0] = y_center - h / 2.  # ymin
-        boxes[..., 1] = x_center - w / 2.  # xmin
-        boxes[..., 2] = y_center + h / 2.  # ymax
-        boxes[..., 3] = x_center + w / 2.  # xmax
+        boxes[..., 0] = y_center - h / 2.0  # ymin
+        boxes[..., 1] = x_center - w / 2.0  # xmin
+        boxes[..., 2] = y_center + h / 2.0  # ymax
+        boxes[..., 3] = x_center + w / 2.0  # xmax
 
         for k in range(self.num_keypoints):
-            offset = 4 + k*2
-            keypoint_x = raw_boxes[..., offset    ] / self.x_scale * anchors[:, 2] + anchors[:, 0]
-            keypoint_y = raw_boxes[..., offset + 1] / self.y_scale * anchors[:, 3] + anchors[:, 1]
-            boxes[..., offset    ] = keypoint_x
+            offset = 4 + k * 2
+            keypoint_x = (
+                raw_boxes[..., offset] / self.x_scale * anchors[:, 2] + anchors[:, 0]
+            )
+            keypoint_y = (
+                raw_boxes[..., offset + 1] / self.y_scale * anchors[:, 3]
+                + anchors[:, 1]
+            )
+            boxes[..., offset] = keypoint_x
             boxes[..., offset + 1] = keypoint_y
 
         return boxes
@@ -429,7 +478,8 @@ class BlazeDetector(BlazeBase):
         mediapipe/calculators/util/non_max_suppression_calculator.cc
         mediapipe/calculators/util/non_max_suppression_calculator.proto
         """
-        if len(detections) == 0: return []
+        if len(detections) == 0:
+            return []
 
         output_detections = []
 
@@ -456,11 +506,11 @@ class BlazeDetector(BlazeBase):
             # detections, weighted by their confidence scores.
             weighted_detection = detection.clone()
             if len(overlapping) > 1:
-                coordinates = detections[overlapping, :self.num_coords]
-                scores = detections[overlapping, self.num_coords:self.num_coords+1]
+                coordinates = detections[overlapping, : self.num_coords]
+                scores = detections[overlapping, self.num_coords : self.num_coords + 1]
                 total_score = scores.sum()
                 weighted = (coordinates * scores).sum(dim=0) / total_score
-                weighted_detection[:self.num_coords] = weighted
+                weighted_detection[: self.num_coords] = weighted
                 weighted_detection[self.num_coords] = total_score / len(overlapping)
 
             output_detections.append(weighted_detection)
@@ -470,8 +520,9 @@ class BlazeDetector(BlazeBase):
 
 # IOU code from https://github.com/amdegroot/ssd.pytorch/blob/master/layers/box_utils.py
 
+
 def intersect(box_a, box_b):
-    """ We resize both tensors to [A,B,2] without new malloc:
+    """We resize both tensors to [A,B,2] without new malloc:
     [A,2] -> [A,1,2] -> [A,B,2]
     [B,2] -> [1,B,2] -> [A,B,2]
     Then we compute the area of intersect between box_a and box_b.
@@ -483,10 +534,14 @@ def intersect(box_a, box_b):
     """
     A = box_a.size(0)
     B = box_b.size(0)
-    max_xy = torch.min(box_a[:, 2:].unsqueeze(1).expand(A, B, 2),
-                       box_b[:, 2:].unsqueeze(0).expand(A, B, 2))
-    min_xy = torch.max(box_a[:, :2].unsqueeze(1).expand(A, B, 2),
-                       box_b[:, :2].unsqueeze(0).expand(A, B, 2))
+    max_xy = torch.min(
+        box_a[:, 2:].unsqueeze(1).expand(A, B, 2),
+        box_b[:, 2:].unsqueeze(0).expand(A, B, 2),
+    )
+    min_xy = torch.max(
+        box_a[:, :2].unsqueeze(1).expand(A, B, 2),
+        box_b[:, :2].unsqueeze(0).expand(A, B, 2),
+    )
     inter = torch.clamp((max_xy - min_xy), min=0)
     return inter[:, :, 0] * inter[:, :, 1]
 
@@ -504,10 +559,16 @@ def jaccard(box_a, box_b):
         jaccard overlap: (tensor) Shape: [box_a.size(0), box_b.size(0)]
     """
     inter = intersect(box_a, box_b)
-    area_a = ((box_a[:, 2]-box_a[:, 0]) *
-              (box_a[:, 3]-box_a[:, 1])).unsqueeze(1).expand_as(inter)  # [A,B]
-    area_b = ((box_b[:, 2]-box_b[:, 0]) *
-              (box_b[:, 3]-box_b[:, 1])).unsqueeze(0).expand_as(inter)  # [A,B]
+    area_a = (
+        ((box_a[:, 2] - box_a[:, 0]) * (box_a[:, 3] - box_a[:, 1]))
+        .unsqueeze(1)
+        .expand_as(inter)
+    )  # [A,B]
+    area_b = (
+        ((box_b[:, 2] - box_b[:, 0]) * (box_b[:, 3] - box_b[:, 1]))
+        .unsqueeze(0)
+        .expand_as(inter)
+    )  # [A,B]
     union = area_a + area_b - inter
     return inter / union  # [A,B]
 

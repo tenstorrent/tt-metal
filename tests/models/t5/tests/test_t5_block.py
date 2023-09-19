@@ -64,15 +64,12 @@ def run_test_T5Block_inference(device, model_name, input_h, input_w):
 
 
 def test_T5Block_inference_t5_small(device):
-
     run_test_T5Block_inference(device, "t5-small", 64, 512)
 
 
 def test_T5Block_inference_flan_t5_small(device):
-
     run_test_T5Block_inference(device, "google/flan-t5-small", 64, 512)
 
 
 def test_T5Block_inference_t5_base(device):
-
     run_test_T5Block_inference(device, "t5-base", 64, 768)

@@ -158,14 +158,19 @@ from typing import Optional, Tuple, Union
 #         return self._convert_to_bloom_cache(reordered_past)
 
 
-class TtBloomForCausalLM():
-
+class TtBloomForCausalLM:
     def __init__(self, config, state_dict, device):
         self.use_return_dict = False
-        self.transformer = bloom_model.TtBloomModel(config, state_dict, f"transformer", device)
+        self.transformer = bloom_model.TtBloomModel(
+            config, state_dict, f"transformer", device
+        )
 
-        self.lm_head_weight = bloom_utils.tt_load_layer_weights("lm_head.weight", state_dict)
-        self.lm_head= TtLinear(config.hidden_size, config.vocab_size, self.lm_head_weight, None, device)
+        self.lm_head_weight = bloom_utils.tt_load_layer_weights(
+            "lm_head.weight", state_dict
+        )
+        self.lm_head = TtLinear(
+            config.hidden_size, config.vocab_size, self.lm_head_weight, None, device
+        )
 
     def get_output_embeddings(self):
         return self.lm_head
@@ -238,7 +243,8 @@ class TtBloomForCausalLM():
 
         return_dict = return_dict if return_dict is not None else self.use_return_dict
 
-        transformer_outputs = self.transformer.forward(device,
+        transformer_outputs = self.transformer.forward(
+            device,
             input_ids,
             past_key_values=past_key_values,
             attention_mask=attention_mask,
@@ -268,7 +274,8 @@ class TtBloomForCausalLM():
             # Flatten the tokens
             loss_fct = CrossEntropyLoss()
             loss = loss_fct(
-                shift_logits.view(batch_size * seq_length, vocab_size), shift_labels.view(batch_size * seq_length)
+                shift_logits.view(batch_size * seq_length, vocab_size),
+                shift_labels.view(batch_size * seq_length),
             )
 
         if not return_dict:
@@ -284,7 +291,9 @@ class TtBloomForCausalLM():
         )
 
     def _reorder_cache(
-        self, past: Tuple[Tuple[torch.Tensor, torch.Tensor], ...], beam_idx: torch.LongTensor
+        self,
+        past: Tuple[Tuple[torch.Tensor, torch.Tensor], ...],
+        beam_idx: torch.LongTensor,
     ) -> Tuple[Tuple[torch.Tensor, torch.Tensor], ...]:
         """
         This function is used to re-order the `past_key_values` cache if [`~PreTrainedModel.beam_search`] or
@@ -292,11 +301,15 @@ class TtBloomForCausalLM():
         beam_idx at every generation step.
         Output shares the same memory storage as `past`.
         """
-        standardized_past = self._convert_to_standard_cache(past, batch_size=len(beam_idx))
+        standardized_past = self._convert_to_standard_cache(
+            past, batch_size=len(beam_idx)
+        )
 
         # Get a copy of `beam_idx` on all the devices where we need those indices.
         device_to_beam_idx = {
-            past_state.device: beam_idx.to(past_state.device) for layer_past in past for past_state in layer_past
+            past_state.device: beam_idx.to(past_state.device)
+            for layer_past in past
+            for past_state in layer_past
         }
         reordered_past = tuple(
             (

@@ -4,6 +4,7 @@
 
 import tt_lib
 
+
 def tt_linear(weight: tt_lib.tensor, bias: tt_lib.tensor, device):
     """Perform a linear operation on the input tensor using transposed weight and bias."""
 

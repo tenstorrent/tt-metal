@@ -27,8 +27,9 @@ from tt.conv_norm_act import TtConvNormAct
     "pcc",
     ((0.99),),
 )
-def test_vovnet_conv_norm_act_inference(device, pcc, imagenet_sample_input, reset_seeds):
-
+def test_vovnet_conv_norm_act_inference(
+    device, pcc, imagenet_sample_input, reset_seeds
+):
     base_address = f"stem.0"
 
     model = timm.create_model("hf_hub:timm/ese_vovnet19b_dw.ra_in1k", pretrained=True)

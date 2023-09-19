@@ -29,7 +29,6 @@ from transformers import SwinModel
     ((0.99),),
 )
 def test_swin_attention_inference(device, pcc, reset_seeds):
-
     ATTN_LAYER_INDEX = 0
     base_address = (
         f"encoder.layers.{ATTN_LAYER_INDEX}.blocks.{ATTN_LAYER_INDEX}.attention"

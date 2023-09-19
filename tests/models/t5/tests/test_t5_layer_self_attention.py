@@ -65,10 +65,8 @@ def run_test_T5LayerSelfAttention_inference(device, model_name, input_h, input_w
 
 
 def test_T5LayerSelfAttention_inference_t5_small(device):
-
     run_test_T5LayerSelfAttention_inference(device, "t5-small", 64, 512)
 
 
 def test_T5LayerSelfAttention_inference_flan_t5_small(device):
-
     run_test_T5LayerSelfAttention_inference(device, "google/flan-t5-small", 64, 512)

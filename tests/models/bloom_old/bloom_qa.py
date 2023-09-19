@@ -95,10 +95,11 @@ from typing import Optional
 #         )
 
 
-class TtBloomForQuestionAnswering():
-
+class TtBloomForQuestionAnswering:
     def __init__(self, config, state_dict, device):
-        self.transformer = bloom_model.TtBloomModel(config, state_dict, "transformer", device)
+        self.transformer = bloom_model.TtBloomModel(
+            config, state_dict, "transformer", device
+        )
 
         # Tt Linear
         # self.qa_outputs_weight = bloom_utils.tt_load_layer_weights("qa_outputs.weight", state_dict)
@@ -108,8 +109,12 @@ class TtBloomForQuestionAnswering():
         # self.qa_outputs = TtLinear(config.hidden_size, out_features, self.qa_outputs_weight, self.qa_outputs_bias, device)
 
         self.qa_outputs = torch.nn.Linear(config.hidden_size, 2)
-        self.qa_outputs.weight = bloom_utils.pt_load_layer_weights("qa_outputs.weight", state_dict)
-        self.qa_outputs.bias = bloom_utils.pt_load_layer_weights("qa_outputs.bias", state_dict)
+        self.qa_outputs.weight = bloom_utils.pt_load_layer_weights(
+            "qa_outputs.weight", state_dict
+        )
+        self.qa_outputs.bias = bloom_utils.pt_load_layer_weights(
+            "qa_outputs.bias", state_dict
+        )
 
     def forward(
         self,
@@ -141,13 +146,13 @@ class TtBloomForQuestionAnswering():
         outputs = self.transformer.forward(
             device,
             input_ids,
-            attention_mask = attention_mask,
-            position_ids = position_ids,
-            head_mask = head_mask,
-            inputs_embeds = inputs_embeds,
-            output_attentions = output_attentions,
-            output_hidden_states = output_hidden_states,
-            return_dict = return_dict
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            head_mask=head_mask,
+            inputs_embeds=inputs_embeds,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
         )
 
         sequence_output = outputs[0]

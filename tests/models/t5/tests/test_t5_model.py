@@ -83,17 +83,14 @@ def run_test_T5Model_inference(device, use_attention_mask, model_name):
 
 
 def test_T5Model_inference_t5_small(device):
-
     run_test_T5Model_inference(device, use_attention_mask=True, model_name="t5-small")
 
 
 def test_T5Model_inference_flan_t5_small(device):
-
     run_test_T5Model_inference(
         device, use_attention_mask=True, model_name="google/flan-t5-small"
     )
 
 
 def test_T5Model_inference_t5_base(device):
-
     run_test_T5Model_inference(device, use_attention_mask=True, model_name="t5-base")

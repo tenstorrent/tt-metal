@@ -181,12 +181,12 @@ def run_bert_question_and_answering_inference(
     model_config,
     model_location_generator,
     PERF_CNT,
-    device
+    device,
 ):
     torch.manual_seed(1234)
 
-    model_name = str(model_location_generator(model_version, model_subdir = "Bert"))
-    tokenizer_name = str(model_location_generator(model_version, model_subdir = "Bert"))
+    model_name = str(model_location_generator(model_version, model_subdir="Bert"))
+    tokenizer_name = str(model_location_generator(model_version, model_subdir="Bert"))
 
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(
         model_name, torchscript=False
@@ -284,7 +284,13 @@ def run_bert_question_and_answering_inference(
     # output postprocessing
     profiler.start("processing_output_to_string")
 
-    tt_untilized_output = tt_out.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(batch, 1, seq_len, -1).to(torch.float32)
+    tt_untilized_output = (
+        tt_out.cpu()
+        .to(ttl.tensor.Layout.ROW_MAJOR)
+        .to_torch()
+        .reshape(batch, 1, seq_len, -1)
+        .to(torch.float32)
+    )
 
     tt_start_logits = tt_untilized_output[..., :, 0].squeeze(1)
     tt_end_logits = tt_untilized_output[..., :, 1].squeeze(1)
@@ -345,7 +351,6 @@ def run_bert_question_and_answering_inference(
 
     del tt_out
 
-
     profiler.print()
 
     # assert profiler.get("whole_model") < 60.0
@@ -400,7 +405,7 @@ def test_bert_batch_dram(
     model_config_str,
     model_location_generator,
     request,
-    device
+    device,
 ):
     model_config = get_model_config(model_config_str)
 
@@ -427,7 +432,7 @@ def test_bert_batch_dram(
         model_config,
         model_location_generator,
         PERF_CNT,
-        device
+        device,
     )
 
 
@@ -476,7 +481,7 @@ def test_bert_batch_dram_with_program_cache(
     model_config_str,
     model_location_generator,
     request,
-    device
+    device,
 ):
     model_config = get_model_config(model_config_str)
 
@@ -503,7 +508,7 @@ def test_bert_batch_dram_with_program_cache(
         model_config,
         model_location_generator,
         PERF_CNT,
-        device
+        device,
     )
 
     if batch == 8 and model_config_str == "MIXED_PRECISION_BATCH8":

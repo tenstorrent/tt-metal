@@ -26,6 +26,7 @@ from models.utility_functions import pad_by_zero
 import tt_lib
 from tt_lib.fallback_ops import fallback_ops
 
+
 # Copied from transformers.models.bert.modeling_bert.BertPooler
 class TtRobertaPooler(nn.Module):
     def __init__(
@@ -56,7 +57,11 @@ class TtRobertaPooler(nn.Module):
         weight = tt_lib.tensor.transpose(weight)
         x = tt_lib.tensor.matmul(x, weight, self.mem_config)
         x = tt_lib.tensor.bcast(
-            x, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H, self.mem_config
+            x,
+            bias,
+            tt_lib.tensor.BcastOpMath.ADD,
+            tt_lib.tensor.BcastOpDim.H,
+            self.mem_config,
         )
         return x
 

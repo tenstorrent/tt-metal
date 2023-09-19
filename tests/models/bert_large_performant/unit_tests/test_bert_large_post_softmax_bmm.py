@@ -121,7 +121,7 @@ def test_bert_large_post_softmax_bmm_test(
     )
 
 
-def test_bert_large_post_softmax_bmm_with_program_cache(device,use_program_cache):
+def test_bert_large_post_softmax_bmm_with_program_cache(device, use_program_cache):
     dtype = ttl.tensor.DataType.BFLOAT8_B
     dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
     for _ in range(2):

@@ -16,10 +16,7 @@ from loguru import logger
 
 from models.utility_functions import torch_to_tt_tensor, tt_to_torch_tensor
 
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose_and_pcc
-)
+from models.utility_functions import comp_pcc, comp_allclose_and_pcc
 
 import tt_lib as ttl
 
@@ -28,7 +25,13 @@ import pytest
 
 @pytest.mark.parametrize(
     "input_shape",
-    [[1, 1, 32, 32], [1, 2, 1024, 320], [1, 2, 64, 1280], [1, 2, 256, 640], [1, 1, 16, 1024]],
+    [
+        [1, 1, 32, 32],
+        [1, 2, 1024, 320],
+        [1, 2, 64, 1280],
+        [1, 2, 256, 640],
+        [1, 1, 16, 1024],
+    ],
 )
 @pytest.mark.parametrize(
     "normalized_shape_hint",
@@ -38,7 +41,6 @@ import pytest
 )
 @torch.no_grad()
 def test_layer_norm(device, input_shape, normalized_shape_hint):
-
     pcc = 0.99
 
     N, C, H, W = input_shape
@@ -47,11 +49,11 @@ def test_layer_norm(device, input_shape, normalized_shape_hint):
     eps = 1e-3
 
     xt = ttl.tensor.Tensor(
-            x.reshape(-1).tolist(),
-            input_shape,  # [N,C,H,W],
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR
-        )
+        x.reshape(-1).tolist(),
+        input_shape,  # [N,C,H,W],
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
     if H % 32 == 0:
         xt = xt.to(ttl.tensor.Layout.TILE)
 

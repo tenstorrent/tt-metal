@@ -85,16 +85,20 @@ def run_bert_large_ff1_matmul_test(
         bias_t = None
 
     program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size = (12, a_t.shape()[0]),
-        in0_block_w = 4,
-        out_subblock_h = 6,
-        out_subblock_w = 1,
-        per_core_M = 12,
-        per_core_N = 11,
+        compute_with_storage_grid_size=(12, a_t.shape()[0]),
+        in0_block_w=4,
+        out_subblock_h=6,
+        out_subblock_w=1,
+        per_core_M=12,
+        per_core_N=11,
         fused_activation=fused_activation,
     )
     t2 = ttl.operations.primary.matmul(
-        a_t, b_t, bias=bias_t, program_config=program_config, output_mem_config=out_mem_config,
+        a_t,
+        b_t,
+        bias=bias_t,
+        program_config=program_config,
+        output_mem_config=out_mem_config,
     )
     # Check memory of inputs and outputs
     assert a_t.memory_config().buffer_type == in0_mem_config.buffer_type
@@ -116,10 +120,10 @@ def run_bert_large_ff1_matmul_test(
     if bias_mem_config is not None:
         ref_bmm = ref_bmm + BIAS
     if fused_activation is not None:
-         if (fused_activation[0] == ttl.tensor.FusibleActivation.GELU):
-             ref_bmm = torch.nn.functional.gelu(ref_bmm)
-         else:
-             assert False, "Unknown activation"
+        if fused_activation[0] == ttl.tensor.FusibleActivation.GELU:
+            ref_bmm = torch.nn.functional.gelu(ref_bmm)
+        else:
+            assert False, "Unknown activation"
     passing_pcc, output_pcc = comp_pcc(ref_bmm, pyt_got_back_rm, 0.99)
     logger.info(f"Passing={passing_pcc}")
     logger.info(f"Output pcc={output_pcc}")
@@ -129,7 +133,7 @@ def run_bert_large_ff1_matmul_test(
 
 @pytest.mark.parametrize(
     "activation",
-     ((ttl.tensor.FusibleActivation.GELU, True), None),
+    ((ttl.tensor.FusibleActivation.GELU, True), None),
     ids=["gelu_activation", "no_activation"],
 )
 @pytest.mark.parametrize(
@@ -194,7 +198,7 @@ def test_bert_large_ff1_matmul_test(
     )
 
 
-def test_bert_large_ff1_matmul_with_program_cache(device,use_program_cache):
+def test_bert_large_ff1_matmul_with_program_cache(device, use_program_cache):
     dtype = ttl.tensor.DataType.BFLOAT8_B
     dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
     for _ in range(2):

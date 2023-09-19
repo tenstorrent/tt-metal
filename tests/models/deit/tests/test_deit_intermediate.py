@@ -4,6 +4,7 @@
 
 from pathlib import Path
 import sys
+
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}")
 sys.path.append(f"{f}/../tt")
@@ -20,7 +21,11 @@ from loguru import logger
 
 
 import tt_lib
-from models.utility_functions import torch_to_tt_tensor, torch_to_tt_tensor_rm, tt_to_torch_tensor
+from models.utility_functions import (
+    torch_to_tt_tensor,
+    torch_to_tt_tensor_rm,
+    tt_to_torch_tensor,
+)
 from models.utility_functions import comp_pcc, comp_allclose_and_pcc
 
 from deit_config import DeiTConfig
@@ -36,10 +41,10 @@ def test_deit_intermediate_inference(device, pcc=0.99):
     state_dict = model.state_dict()
 
     # synthesize the input
-    base_address= 'encoder.layer.0.intermediate'
+    base_address = "encoder.layer.0.intermediate"
     torch_intermediate = model.encoder.layer[0].intermediate
 
-    input_shape =  torch.Size([1, 198, 768])
+    input_shape = torch.Size([1, 198, 768])
     hidden_state = torch.randn(input_shape)
 
     torch_output = torch_intermediate(hidden_state)
@@ -54,4 +59,4 @@ def test_deit_intermediate_inference(device, pcc=0.99):
     pcc_passing, _ = comp_pcc(torch_output, tt_output, pcc)
     _, pcc_output = comp_allclose_and_pcc(torch_output, tt_output, pcc)
     logger.info(f"Output {pcc_output}")
-    assert(pcc_passing), f"Failed! Low pcc: {pcc}."
+    assert pcc_passing, f"Failed! Low pcc: {pcc}."

@@ -8,12 +8,20 @@ from loguru import logger
 
 
 import tt_lib as ttl
-from models.utility_functions import torch_to_tt_tensor, tt_to_torch_tensor, torch_to_tt_tensor_rm
+from models.utility_functions import (
+    torch_to_tt_tensor,
+    tt_to_torch_tensor,
+    torch_to_tt_tensor_rm,
+)
 from models.utility_functions import comp_pcc, comp_allclose_and_pcc
-from models.stable_diffusion.tt.transformer_2d import TtBasicTransformerBlock, TtTransformer2DModel
+from models.stable_diffusion.tt.transformer_2d import (
+    TtBasicTransformerBlock,
+    TtTransformer2DModel,
+)
 
 import pytest
-'''
+
+"""
 torch.Size([2, 4096, 320]) torch.Size([2, 77, 768]) None
 #############Basic Transformer#############
 only_cross_attention: False
@@ -29,7 +37,8 @@ upcast_attention: False
 norm_elementwise_affine: True
 final_dropout: False
 #############End of Basic Transformer#############
-'''
+"""
+
 
 def test_run_basic_transformer_inference(device):
     # synthesize the input
@@ -45,13 +54,15 @@ def test_run_basic_transformer_inference(device):
     upcast_attention = False
     norm_elementwise_affine = True
     final_dropout: False
-    input_shape  = [1, 2, 4096, 320]
-    encoder_hidden_states_shape  = [1, 2, 77, 768]
+    input_shape = [1, 2, 4096, 320]
+    encoder_hidden_states_shape = [1, 2, 77, 768]
     input = torch.randn(input_shape) * 0.01
     encoder_hidden_states = torch.randn(encoder_hidden_states_shape)
 
     # setup pytorch model
-    pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
+    pipe = StableDiffusionPipeline.from_pretrained(
+        "CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32
+    )
     unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()
@@ -60,19 +71,21 @@ def test_run_basic_transformer_inference(device):
 
     # setup tt model
     tt_input = torch_to_tt_tensor(input, device)
-    tt_encoder_hidden_states = torch_to_tt_tensor_rm(encoder_hidden_states, device, put_on_device=False)
+    tt_encoder_hidden_states = torch_to_tt_tensor_rm(
+        encoder_hidden_states, device, put_on_device=False
+    )
 
     tt_basic_transformer = TtBasicTransformerBlock(
-        dim = dim,
-        num_attention_heads = num_attention_heads,
-        attention_head_dim = attention_head_dim,
-        cross_attention_dim = cross_attention_dim,
-        only_cross_attention = only_cross_attention,
-        upcast_attention = False,
-
+        dim=dim,
+        num_attention_heads=num_attention_heads,
+        attention_head_dim=attention_head_dim,
+        cross_attention_dim=cross_attention_dim,
+        only_cross_attention=only_cross_attention,
+        upcast_attention=False,
         device=device,
         state_dict=state_dict,
-        base_address="down_blocks.0.attentions.0.transformer_blocks.0",)
+        base_address="down_blocks.0.attentions.0.transformer_blocks.0",
+    )
 
     tt_basic_transformer.eval()
     tt_out = tt_basic_transformer(tt_input, tt_encoder_hidden_states)
@@ -85,9 +98,12 @@ def test_run_basic_transformer_inference(device):
     assert passing[0], passing[1:]
     logger.info(f"PASSED {passing[1]}")
 
+
 def test_run_transformer_inference():
     # setup pytorch model
-    pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
+    pipe = StableDiffusionPipeline.from_pretrained(
+        "CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32
+    )
     unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()
@@ -116,9 +132,9 @@ def test_run_transformer_inference():
         norm_type = "layer_norm"
         norm_elementwise_affine = True
         input_shape = [2, 1280, 16, 16]
-        D = 77 # manually padded to 96
+        D = 77  # manually padded to 96
         # D = 96
-        encoder_hidden_states_shape  = [1, 2, D, 768]
+        encoder_hidden_states_shape = [1, 2, D, 768]
         input = torch.randn(input_shape) * 0.01
         encoder_hidden_states = torch.randn(encoder_hidden_states_shape)
         base_address = "up_blocks.1.attentions.0"
@@ -137,35 +153,37 @@ def test_run_transformer_inference():
         sample_size = None
         num_vector_embeds = None
         patch_size = None
-        activation_fn = 'geglu'
+        activation_fn = "geglu"
         num_embeds_ada_norm = None
         use_linear_projection = False
         only_cross_attention = False
         upcast_attention = False
-        norm_type = 'layer_norm'
+        norm_type = "layer_norm"
         norm_elementwise_affine = True
         input_shape = (2, 1280, 8, 8)
-        encoder_hidden_states_shape  = [1, 2, 77, 768]
+        encoder_hidden_states_shape = [1, 2, 77, 768]
         input = torch.randn(input_shape) * 0.01
         encoder_hidden_states = torch.randn(encoder_hidden_states_shape)
         base_address = "mid_block.attentions.0"
         transformer = pipe.unet.mid_block.attentions[0]
 
-
     torch_output = transformer(input, encoder_hidden_states.squeeze(0)).sample
 
     # setup tt model
     tt_input = torch_to_tt_tensor_rm(input, device, put_on_device=False)
-    tt_encoder_hidden_states = torch_to_tt_tensor_rm(encoder_hidden_states, device, put_on_device=False)
+    tt_encoder_hidden_states = torch_to_tt_tensor_rm(
+        encoder_hidden_states, device, put_on_device=False
+    )
 
     tt_transformer = TtTransformer2DModel(
-        in_channels = in_channels,
-        num_attention_heads = num_attention_heads,
-        attention_head_dim = attention_head_dim,
-        cross_attention_dim = cross_attention_dim,
+        in_channels=in_channels,
+        num_attention_heads=num_attention_heads,
+        attention_head_dim=attention_head_dim,
+        cross_attention_dim=cross_attention_dim,
         device=device,
         state_dict=state_dict,
-        base_address=base_address,)
+        base_address=base_address,
+    )
     ttl.device.Synchronize()
     tt_out = tt_transformer(tt_input, tt_encoder_hidden_states)
     tt_output = tt_to_torch_tensor(tt_out)

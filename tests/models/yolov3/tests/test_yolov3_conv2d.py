@@ -38,8 +38,8 @@ def test_conv2d_module(device, model_location_generator):
     base_address = f"model.model.{INDEX}.conv"
 
     # Load yolo
-    model_path = model_location_generator("models", model_subdir = "Yolo")
-    data_path = model_location_generator("data", model_subdir = "Yolo")
+    model_path = model_location_generator("models", model_subdir="Yolo")
+    data_path = model_location_generator("data", model_subdir="Yolo")
 
     data_image_path = str(data_path / "images")
     data_coco = str(data_path / "coco128.yaml")

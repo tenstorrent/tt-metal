@@ -16,7 +16,9 @@ from diffusers import (
     DPMSolverMultistepScheduler,
 )
 from diffusers import LMSDiscreteScheduler
-from models.stable_diffusion.tt.unet_2d_condition import UNet2DConditionModel as tt_unet_condition
+from models.stable_diffusion.tt.unet_2d_condition import (
+    UNet2DConditionModel as tt_unet_condition,
+)
 from models.stable_diffusion.tt.experimental_ops import UseDeviceConv
 
 import tt_lib as ttl
@@ -95,8 +97,8 @@ def make_tt_unet(state_dict):
     )
     return tt_unet
 
-def test_batched_stable_diffusion(device):
 
+def test_batched_stable_diffusion(device):
     # 1. Load the autoencoder model which will be used to decode the latents into image space.
     vae = AutoencoderKL.from_pretrained(
         "CompVis/stable-diffusion-v1-4", subfolder="vae"
@@ -245,8 +247,6 @@ def test_batched_stable_diffusion(device):
     does_pass, pcc_message = comp_pcc(latents, tt_latents, pcc=0.99)
     pcc_res = comp_allclose_and_pcc(latents, tt_latents)
     logger.info(pcc_res)
-
-
 
     if does_pass:
         logger.info("Batched Stable Diffusion Passed!")

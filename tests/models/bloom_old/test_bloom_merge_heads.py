@@ -4,6 +4,7 @@
 
 from pathlib import Path
 import sys
+
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
 sys.path.append(f"{f}/../..")
@@ -13,7 +14,10 @@ sys.path.append(f"{f}/../../../..")
 import torch
 import tt_lib as ttm
 from models.utility_functions import print_diff_argmax
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+    comp_allclose,
+    comp_pcc,
+)
 
 from loguru import logger
 import tests.models.bloom_old.bloom_utils as bloom_utils
@@ -24,8 +28,12 @@ def run_bloom_merge_heads_test(device, num_heads, hidden_size, num_attention_hea
     torch.manual_seed(0)
     test_in = torch.rand(4096, 128, 32)
 
-    pt_out = bloom_attention_merge_heads.merge_heads(test_in, num_heads, hidden_size, num_attention_heads)
-    tt_out = bloom_attention_merge_heads.tt_merge_heads(test_in, num_heads, hidden_size, num_attention_heads, device)
+    pt_out = bloom_attention_merge_heads.merge_heads(
+        test_in, num_heads, hidden_size, num_attention_heads
+    )
+    tt_out = bloom_attention_merge_heads.tt_merge_heads(
+        test_in, num_heads, hidden_size, num_attention_heads, device
+    )
 
     tt_out_converted = bloom_utils.tt2torch_tensor(tt_out)
 

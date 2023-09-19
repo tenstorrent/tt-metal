@@ -24,7 +24,10 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from collections import OrderedDict
 
 from tests.models.llama.llama_utils import *
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+    comp_allclose,
+    comp_pcc,
+)
 from tests.models.llama.llama_mlp import TtLlamaMLP
 
 
@@ -112,7 +115,6 @@ def run_test_LlamaMLP_inference(
 def test_LlamaMLP_inference(
     device, model_version, tokenizer_version, batch, seq_len, on_weka, pcc
 ):
-
     run_test_LlamaMLP_inference(
         device, model_version, tokenizer_version, batch, seq_len, on_weka, pcc
     )

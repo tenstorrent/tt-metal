@@ -167,16 +167,24 @@ def make_layers(
                         conv2d_bias,
                     )
                 else:
-                    weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.{ind}.weight"], device=device, put_on_device=False)
-                    bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.{ind}.bias"], device=device, put_on_device=False)
+                    weight = torch_to_tt_tensor_rm(
+                        state_dict[f"{base_address}.{ind}.weight"],
+                        device=device,
+                        put_on_device=False,
+                    )
+                    bias = torch_to_tt_tensor_rm(
+                        state_dict[f"{base_address}.{ind}.bias"],
+                        device=device,
+                        put_on_device=False,
+                    )
                     conv2d = fallback_ops.Conv2d(
-                                weights=weight,
-                                biases=bias,
-                                in_channels=in_channels,
-                                out_channels=v,
-                                kernel_size=3,
-                                padding=1
-                                )
+                        weights=weight,
+                        biases=bias,
+                        in_channels=in_channels,
+                        out_channels=v,
+                        kernel_size=3,
+                        padding=1,
+                    )
 
                 layers += [conv2d, tt_lib.tensor.relu]
             else:
@@ -238,15 +246,15 @@ cfgs: Dict[str, List[Union[str, int]]] = {
 
 def _vgg(features, init_weights, device, state_dict, base_address=""):
     return TtVGG(
-                features,
-                init_weights=init_weights,
-                device=device,
-                state_dict=state_dict,
-                base_address=base_address
-                )
+        features,
+        init_weights=init_weights,
+        device=device,
+        state_dict=state_dict,
+        base_address=base_address,
+    )
+
 
 def vgg16(device, disable_conv_on_tt_device=True) -> TtVGG:
-
     torch_vgg = models.vgg16(weights=models.VGG16_Weights.IMAGENET1K_V1)
     torch_vgg.eval()
     state_dict = torch_vgg.state_dict()
@@ -264,8 +272,8 @@ def vgg16(device, disable_conv_on_tt_device=True) -> TtVGG:
     )
     return model
 
-def vgg11(device, disable_conv_on_tt_device=True) -> TtVGG:
 
+def vgg11(device, disable_conv_on_tt_device=True) -> TtVGG:
     torch_vgg = models.vgg11(weights=models.VGG11_Weights.IMAGENET1K_V1)
     torch_vgg.eval()
     state_dict = torch_vgg.state_dict()

@@ -19,14 +19,21 @@ from loguru import logger
 import pytest
 import tt_lib
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, profiler
-from models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache
+from models.utility_functions import (
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+)
 from models.utility_functions import prep_report
-from tt.deit_for_image_classification_with_teacher import deit_for_image_classification_with_teacher
+from tt.deit_for_image_classification_with_teacher import (
+    deit_for_image_classification_with_teacher,
+)
 
 BATCH_SIZE = 1
 
 
-def run_perf_deit(expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device):
+def run_perf_deit(
+    expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device
+):
     disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"
@@ -35,8 +42,12 @@ def run_perf_deit(expected_inference_time, expected_compile_time, hf_cat_image_s
 
     image = hf_cat_image_sample_input
 
-    image_processor = AutoImageProcessor.from_pretrained("facebook/deit-base-distilled-patch16-224")
-    HF_model = DeiTForImageClassificationWithTeacher.from_pretrained("facebook/deit-base-distilled-patch16-224")
+    image_processor = AutoImageProcessor.from_pretrained(
+        "facebook/deit-base-distilled-patch16-224"
+    )
+    HF_model = DeiTForImageClassificationWithTeacher.from_pretrained(
+        "facebook/deit-base-distilled-patch16-224"
+    )
     inputs = image_processor(image, return_tensors="pt")
 
     tt_inputs = torch_to_tt_tensor_rm(
@@ -74,7 +85,7 @@ def run_perf_deit(expected_inference_time, expected_compile_time, hf_cat_image_s
         expected_compile_time=expected_compile_time,
         expected_inference_time=expected_inference_time,
         comments=comments,
-        inference_time_cpu=cpu_time
+        inference_time_cpu=cpu_time,
     )
 
     logger.info(f"deit {comments} inference time: {second_iter_time}")
@@ -85,23 +96,47 @@ def run_perf_deit(expected_inference_time, expected_compile_time, hf_cat_image_s
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (2.0,
-         18,
+        (
+            2.0,
+            18,
         ),
     ),
 )
-def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device):
-    run_perf_deit(expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device)
+def test_perf_bare_metal(
+    use_program_cache,
+    expected_inference_time,
+    expected_compile_time,
+    hf_cat_image_sample_input,
+    device,
+):
+    run_perf_deit(
+        expected_inference_time,
+        expected_compile_time,
+        hf_cat_image_sample_input,
+        device,
+    )
 
 
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (2.6,
-         19.5,
+        (
+            2.6,
+            19.5,
         ),
     ),
 )
-def test_perf_virtual_machine(use_program_cache, expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device):
-    run_perf_deit(expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device)
+def test_perf_virtual_machine(
+    use_program_cache,
+    expected_inference_time,
+    expected_compile_time,
+    hf_cat_image_sample_input,
+    device,
+):
+    run_perf_deit(
+        expected_inference_time,
+        expected_compile_time,
+        hf_cat_image_sample_input,
+        device,
+    )

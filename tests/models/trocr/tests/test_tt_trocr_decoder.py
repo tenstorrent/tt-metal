@@ -28,7 +28,6 @@ from models.trocr.tt.trocr_decoder import TtTrOCRDecoder
     ((0.99),),
 )
 def test_trocr_decoder_inference(device, pcc, reset_seeds):
-
     with torch.no_grad():
         model = VisionEncoderDecoderModel.from_pretrained(
             "microsoft/trocr-base-handwritten"

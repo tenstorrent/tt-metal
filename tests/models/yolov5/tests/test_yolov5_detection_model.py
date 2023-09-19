@@ -44,7 +44,6 @@ def download_images(path, imgsz):
 
 
 def test_Yolov5_detection_model(device):
-
     weights = "tests/models/yolov5/reference/yolov5s.pt"
     dnn = False
     data = None
@@ -84,7 +83,6 @@ def test_Yolov5_detection_model(device):
     with torch.no_grad():
         tt_module.eval()
         tt_out = tt_module(test_input)
-
 
     does_all_pass, pcc_message = comp_pcc(pt_out[0], tt_out[0], 0.99)
     logger.info(f"out[0] PCC: {pcc_message}")

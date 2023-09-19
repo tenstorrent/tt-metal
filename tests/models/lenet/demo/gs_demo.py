@@ -27,7 +27,6 @@ def test_gs_demo(device, mnist_sample_input, model_location_generator):
     num_classes = 10
     batch_size = 1
     with torch.no_grad():
-
         tt_lenet = lenet5(num_classes, device, model_location_generator)
 
         tt_image = tt_lib.tensor.Tensor(

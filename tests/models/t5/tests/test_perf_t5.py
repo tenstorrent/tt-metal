@@ -17,7 +17,7 @@ from models.utility_functions import (
 )
 from models.t5.tt.t5_model import TtT5Model
 
-BATCH_SIZE=1
+BATCH_SIZE = 1
 
 
 def run_perf_t5(expected_inference_time, expected_compile_time, device):
@@ -105,7 +105,7 @@ def run_perf_t5(expected_inference_time, expected_compile_time, device):
         expected_compile_time=expected_compile_time,
         expected_inference_time=expected_inference_time,
         comments=comments,
-        inference_time_cpu=cpu_time
+        inference_time_cpu=cpu_time,
     )
 
     logger.info(f"t5 small inference time: {second_iter_time}")
@@ -122,7 +122,9 @@ def run_perf_t5(expected_inference_time, expected_compile_time, device):
         ),
     ),
 )
-def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_compile_time, device):
+def test_perf_bare_metal(
+    use_program_cache, expected_inference_time, expected_compile_time, device
+):
     run_perf_t5(expected_inference_time, expected_compile_time, device)
 
 
@@ -136,5 +138,7 @@ def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_co
         ),
     ),
 )
-def test_perf_virtual_machine(use_program_cache, expected_inference_time, expected_compile_time, device):
+def test_perf_virtual_machine(
+    use_program_cache, expected_inference_time, expected_compile_time, device
+):
     run_perf_t5(expected_inference_time, expected_compile_time, device)

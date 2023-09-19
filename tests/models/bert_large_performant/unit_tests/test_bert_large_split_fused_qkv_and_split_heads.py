@@ -38,7 +38,9 @@ def run_split_fused_qkv_and_split_heads_test(
         .to(device, in0_mem_config)
     )
 
-    q, k, v = ttl.operations.primary.transformers.split_fused_qkv_and_split_heads(a_t, ttl.tensor.CoreCoord(12, 9), out_mem_config)
+    q, k, v = ttl.operations.primary.transformers.split_fused_qkv_and_split_heads(
+        a_t, ttl.tensor.CoreCoord(12, 9), out_mem_config
+    )
 
     # Check memory of inputs and outputs
     assert a_t.memory_config().buffer_type == in0_mem_config.buffer_type
@@ -79,8 +81,6 @@ def run_split_fused_qkv_and_split_heads_test(
     logger.info(f"V passing={passing_pcc_v}")
     logger.info(f"V output pcc={output_pcc_v}")
     assert passing_pcc_v
-
-
 
 
 import pytest
@@ -127,9 +127,7 @@ def test_split_fused_qkv_and_split_heads(
     )
 
 
-def test_split_fused_qkv_and_split_heads_with_program_cache(
-    device, use_program_cache
-):
+def test_split_fused_qkv_and_split_heads_with_program_cache(device, use_program_cache):
     dtype = ttl.tensor.DataType.BFLOAT8_B
     dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
     for _ in range(2):

@@ -13,7 +13,10 @@ sys.path.append(f"{f}/../../../..")
 
 import torch
 import tt_lib
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+    comp_allclose,
+    comp_pcc,
+)
 
 from loguru import logger
 import tests.models.bloom.bloom_utils as bloom_utils
@@ -44,5 +47,4 @@ def run_bloom_merge_heads_test(device, num_heads, hidden_size, num_attention_hea
 
 
 def test_bloom_merge_heads(device):
-
     run_bloom_merge_heads_test(device, 32, 1024, 32)

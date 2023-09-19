@@ -24,7 +24,6 @@ from transformers import (
     ((0.99),),
 )
 def test_distilbert_multihead_self_attention_inference(device, pcc):
-
     HF_model = HF_DistilBertForQuestionAnswering.from_pretrained(
         "distilbert-base-uncased-distilled-squad"
     )
@@ -62,7 +61,6 @@ def test_distilbert_multihead_self_attention_inference(device, pcc):
 
     logger.info(comp_allclose(torch_output[0], tt_output_torch))
     logger.info(pcc_message)
-
 
     if does_pass:
         logger.info("DistilBertMultiHeadSelfAttention Passed!")

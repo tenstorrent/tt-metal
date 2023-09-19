@@ -80,7 +80,6 @@ def run_bert_large_matmul_test(
 
     torch.manual_seed(1234)
 
-
     A = torch.randn(a_shape)
     B = torch.randn(b_shape) - 0.95
     BIAS = torch.randint(-20, 20, bias_shape, dtype=torch.float)
@@ -197,7 +196,6 @@ def run_bert_large_bmm_test(
         raise NotImplementedError(f"bert_large bmm op is undefined!")
 
     torch.manual_seed(1234)
-
 
     A = torch.randn(a_shape)
     B = torch.randn(b_shape) - 0.95

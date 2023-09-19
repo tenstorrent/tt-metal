@@ -22,7 +22,6 @@ from transformers import (
     ((0.99),),
 )
 def test_distilbert_transformer_inference(pcc, device):
-
     HF_model = HF_DistilBertForQuestionAnswering.from_pretrained(
         "distilbert-base-uncased-distilled-squad"
     )
@@ -58,7 +57,6 @@ def test_distilbert_transformer_inference(pcc, device):
 
     logger.info(comp_allclose(torch_output, tt_output_torch))
     logger.info(pcc_message)
-
 
     if does_pass:
         logger.info("DistilBertTransformer Passed!")

@@ -29,8 +29,14 @@ from tt.vgg import *
 
 _batch_size = 1
 
-@pytest.mark.parametrize("pcc, PERF_CNT", ((0.99, 2),),)
-def test_vgg_inference(device, pcc, PERF_CNT, imagenet_sample_input, imagenet_label_dict):
+
+@pytest.mark.parametrize(
+    "pcc, PERF_CNT",
+    ((0.99, 2),),
+)
+def test_vgg_inference(
+    device, pcc, PERF_CNT, imagenet_sample_input, imagenet_label_dict
+):
     disable_persistent_kernel_cache()
     image = imagenet_sample_input
     class_labels = imagenet_label_dict
@@ -81,7 +87,6 @@ def test_vgg_inference(device, pcc, PERF_CNT, imagenet_sample_input, imagenet_la
         pcc_passing, pcc_output = comp_pcc(torch_output, tt_output, pcc)
         logger.info(f"Output {pcc_output}")
         assert pcc_passing, f"Model output does not meet PCC requirement {pcc}."
-
 
         profiler.print()
         assert profiler.get("tt_vgg model") < 30.0

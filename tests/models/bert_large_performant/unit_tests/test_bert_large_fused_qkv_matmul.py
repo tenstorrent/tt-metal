@@ -135,7 +135,13 @@ def run_bert_large_fused_qkv_matmul_test(
     ids=["BFLOAT8_B", "BFLOAT16"],
 )
 def test_bert_large_fused_qkv_matmul_test(
-    device, dtype, in0_mem_config, in1_mem_config, bias_mem_config, out_mem_config, request
+    device,
+    dtype,
+    in0_mem_config,
+    in1_mem_config,
+    bias_mem_config,
+    out_mem_config,
+    request,
 ):
     ttl.profiler.set_profiler_location(
         f"tt_metal/tools/profiler/logs/BERT_large_fused_qkv_matmul_{request.node.callspec.id}"
@@ -145,18 +151,28 @@ def test_bert_large_fused_qkv_matmul_test(
     )
 
 
-def test_bert_large_fused_qkv_matmul_with_program_cache(device,use_program_cache):
+def test_bert_large_fused_qkv_matmul_with_program_cache(device, use_program_cache):
     dtype = ttl.tensor.DataType.BFLOAT8_B
     dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)
     for _ in range(2):
         run_bert_large_fused_qkv_matmul_test(
-            device, dtype, dram_mem_config, dram_mem_config, dram_mem_config, dram_mem_config
+            device,
+            dtype,
+            dram_mem_config,
+            dram_mem_config,
+            dram_mem_config,
+            dram_mem_config,
         )
 
     dram_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
     for _ in range(2):
         run_bert_large_fused_qkv_matmul_test(
-            device, dtype, dram_mem_config, dram_mem_config, dram_mem_config, dram_mem_config
+            device,
+            dtype,
+            dram_mem_config,
+            dram_mem_config,
+            dram_mem_config,
+            dram_mem_config,
         )
 
     assert ttl.program_cache.num_entries() == 2

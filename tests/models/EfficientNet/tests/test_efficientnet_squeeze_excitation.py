@@ -18,7 +18,6 @@ from models.EfficientNet.tt.efficientnet_squeeze_excitation import (
 
 
 def test_efficientnet_squeeze_excitation_b0(device):
-
     refence_model = torchvision.models.efficientnet_b0(pretrained=True)
     refence_model.eval()
 
@@ -62,7 +61,6 @@ def test_efficientnet_squeeze_excitation_b0(device):
 
 
 def test_efficientnet_squeeze_excitation_v2_s(device):
-
     refence_model = torchvision.models.efficientnet_v2_s(pretrained=True)
     refence_model.eval()
 

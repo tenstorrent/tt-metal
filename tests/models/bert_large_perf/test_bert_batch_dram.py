@@ -8,6 +8,7 @@ import torch
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 import sys
 from pathlib import Path
+
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/../../..")
 sys.path.append(f"{f}/../../../..")
@@ -18,7 +19,13 @@ from tests.models.bert_large_perf.embeddings import PytorchEmbeddings
 from tests.models.bert_large_perf.bert_encoder import TtBertEncoder
 from tests.models.bert_large_perf.fused_ops.linear import Linear
 from tt_lib.utils import pad_activation, pad_weight
-from models.utility_functions import enable_persistent_kernel_cache, comp_allclose_and_pcc, comp_pcc, comp_allclose, disable_persistent_kernel_cache
+from models.utility_functions import (
+    enable_persistent_kernel_cache,
+    comp_allclose_and_pcc,
+    comp_pcc,
+    comp_allclose,
+    disable_persistent_kernel_cache,
+)
 from models.utility_functions import profiler
 from tests.models.bert_large_perf.fused_ops.layernorm import create_var_scaler
 
@@ -36,18 +43,41 @@ class TtBertBatchDram(torch.nn.Module):
 
         # So far on CPU until we add embeddings support on device
         self.embeddings = PytorchEmbeddings(hugging_face_reference_model)
-        self.get_extended_attention_mask = hugging_face_reference_model.get_extended_attention_mask
+        self.get_extended_attention_mask = (
+            hugging_face_reference_model.get_extended_attention_mask
+        )
 
-
-
-        self.encoders = torch.nn.ModuleList([TtBertEncoder(config, encoder_idx, state_dict, var_scaler, device) for encoder_idx in range(config.num_hidden_layers)])
+        self.encoders = torch.nn.ModuleList(
+            [
+                TtBertEncoder(config, encoder_idx, state_dict, var_scaler, device)
+                for encoder_idx in range(config.num_hidden_layers)
+            ]
+        )
 
         num_classes, hidden_size = state_dict["qa_outputs.weight"].shape
 
         weight = pad_weight(state_dict["qa_outputs.weight"])
-        weight = ttl.tensor.Tensor(weight.reshape(-1).tolist(), weight.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
-        bias   = pad_weight(state_dict["qa_outputs.bias"])
-        bias = ttl.tensor.Tensor(bias.reshape(-1).tolist(), bias.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE).to(device)
+        weight = (
+            ttl.tensor.Tensor(
+                weight.reshape(-1).tolist(),
+                weight.shape,
+                ttl.tensor.DataType.BFLOAT16,
+                ttl.tensor.Layout.ROW_MAJOR,
+            )
+            .to(ttl.tensor.Layout.TILE)
+            .to(device)
+        )
+        bias = pad_weight(state_dict["qa_outputs.bias"])
+        bias = (
+            ttl.tensor.Tensor(
+                bias.reshape(-1).tolist(),
+                bias.shape,
+                ttl.tensor.DataType.BFLOAT16,
+                ttl.tensor.Layout.ROW_MAJOR,
+            )
+            .to(ttl.tensor.Layout.TILE)
+            .to(device)
+        )
 
         # QA linear
         self.qa_linear = Linear(hidden_size, 32, weight, bias, device)
@@ -55,28 +85,46 @@ class TtBertBatchDram(torch.nn.Module):
         self.device = device
 
     def forward(self, PERF_CNT, input_ids, attention_mask=None, token_type_ids=None):
-
         for i in range(PERF_CNT):
             profiler.start("_calc_embeddings")
 
             embeddings = self.embeddings(input_ids, token_type_ids)
             if attention_mask is not None:
-                extended_attention_mask = self.get_extended_attention_mask(attention_mask, input_ids.shape)
-                extended_attention_mask = torch.clamp(extended_attention_mask, -100000) # Limit neg value that goes into exp
+                extended_attention_mask = self.get_extended_attention_mask(
+                    attention_mask, input_ids.shape
+                )
+                extended_attention_mask = torch.clamp(
+                    extended_attention_mask, -100000
+                )  # Limit neg value that goes into exp
                 extended_attention_mask = pad_activation(extended_attention_mask)
-                tt_attention_mask = ttl.tensor.Tensor(extended_attention_mask.reshape(-1).tolist(), extended_attention_mask.shape, ttl.tensor.DataType.BFLOAT16,  ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
+                tt_attention_mask = ttl.tensor.Tensor(
+                    extended_attention_mask.reshape(-1).tolist(),
+                    extended_attention_mask.shape,
+                    ttl.tensor.DataType.BFLOAT16,
+                    ttl.tensor.Layout.ROW_MAJOR,
+                ).to(ttl.tensor.Layout.TILE)
                 tt_attention_mask = tt_attention_mask.to(self.device)
             else:
                 tt_attention_mask = attention_mask
 
-            #Add to list mask
+            # Add to list mask
             self.tt_attention_mask_list.append(tt_attention_mask)
 
             # Convert to ll buda tensor
             pad_embeddings = pad_activation(embeddings)
-            tt_embeddings = ttl.tensor.Tensor(pad_embeddings.reshape(-1).tolist(), (pad_embeddings.shape[0], 1, pad_embeddings.shape[-2], pad_embeddings.shape[-1]), ttl.tensor.DataType.BFLOAT16,  ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
+            tt_embeddings = ttl.tensor.Tensor(
+                pad_embeddings.reshape(-1).tolist(),
+                (
+                    pad_embeddings.shape[0],
+                    1,
+                    pad_embeddings.shape[-2],
+                    pad_embeddings.shape[-1],
+                ),
+                ttl.tensor.DataType.BFLOAT16,
+                ttl.tensor.Layout.ROW_MAJOR,
+            ).to(ttl.tensor.Layout.TILE)
             tt_embeddings = tt_embeddings.to(self.device)
-            hidden_states = tt_embeddings # pad_embeddings #
+            hidden_states = tt_embeddings  # pad_embeddings #
 
             self.hidden_states_list.append(hidden_states)
             profiler.end("_calc_embeddings")
@@ -106,36 +154,69 @@ class TtBertBatchDram(torch.nn.Module):
 
         return tt_out_list
 
-def run_bert_question_and_answering_inference(device, model_version, batch, seq_len, real_input, attention_mask, token_type_ids, pcc, model_location_generator, PERF_CNT):
 
+def run_bert_question_and_answering_inference(
+    device,
+    model_version,
+    batch,
+    seq_len,
+    real_input,
+    attention_mask,
+    token_type_ids,
+    pcc,
+    model_location_generator,
+    PERF_CNT,
+):
     torch.manual_seed(1234)
 
+    model_name = str(model_location_generator(model_version, model_subdir="Bert"))
+    tokenizer_name = str(model_location_generator(model_version, model_subdir="Bert"))
 
-
-
-    model_name = str(model_location_generator(model_version, model_subdir = "Bert"))
-    tokenizer_name = str(model_location_generator(model_version, model_subdir = "Bert"))
-
-    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
+    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(
+        model_name, torchscript=False
+    )
     hugging_face_reference_model.eval()
-    var_scaler = create_var_scaler(seq_len, hugging_face_reference_model.config.hidden_size, hugging_face_reference_model.config.layer_norm_eps, device)
-    tt_bert_model = TtBertBatchDram(hugging_face_reference_model.config, hugging_face_reference_model, var_scaler, device)
+    var_scaler = create_var_scaler(
+        seq_len,
+        hugging_face_reference_model.config.hidden_size,
+        hugging_face_reference_model.config.layer_norm_eps,
+        device,
+    )
+    tt_bert_model = TtBertBatchDram(
+        hugging_face_reference_model.config,
+        hugging_face_reference_model,
+        var_scaler,
+        device,
+    )
 
     profiler.start("processing_of_input")
 
     if real_input:
         tokenizer = BertTokenizer.from_pretrained(tokenizer_name)
-        context = batch * ["Johann Joachim Winckelmann was a German art historian and archaeologist. He was a pioneering Hellenist who first articulated the difference between Greek, Greco-Roman and Roman art. The prophet and founding hero of modern archaeology, Winckelmann was one of the founders of scientific archaeology and first applied the categories of style on a large, systematic basis to the history of art."]
+        context = batch * [
+            "Johann Joachim Winckelmann was a German art historian and archaeologist. He was a pioneering Hellenist who first articulated the difference between Greek, Greco-Roman and Roman art. The prophet and founding hero of modern archaeology, Winckelmann was one of the founders of scientific archaeology and first applied the categories of style on a large, systematic basis to the history of art."
+        ]
         question = batch * ["What discipline did Winkelmann create?"]
-        bert_input = tokenizer.batch_encode_plus(zip(question, context), max_length=seq_len, padding="max_length", truncation=True, return_attention_mask=attention_mask, return_token_type_ids=token_type_ids, return_tensors="pt")
-        nlp = pipeline("question-answering", model=hugging_face_reference_model, tokenizer=tokenizer)
+        bert_input = tokenizer.batch_encode_plus(
+            zip(question, context),
+            max_length=seq_len,
+            padding="max_length",
+            truncation=True,
+            return_attention_mask=attention_mask,
+            return_token_type_ids=token_type_ids,
+            return_tensors="pt",
+        )
+        nlp = pipeline(
+            "question-answering",
+            model=hugging_face_reference_model,
+            tokenizer=tokenizer,
+        )
         pl_answer = nlp(question=question, context=context)
 
         preprocess_params, _, postprocess_params = nlp._sanitize_parameters()
         preprocess_params["max_seq_len"] = seq_len
         input_q = {"context": context, "question": question}
         examples = nlp._args_parser(input_q)
-
 
         single_inputs = []
         for i in range(batch):
@@ -144,7 +225,7 @@ def run_bert_question_and_answering_inference(device, model_version, batch, seq_
                 "data": (
                     model_input["input_ids"],
                     model_input["attention_mask"] if attention_mask else None,
-                    model_input["token_type_ids"] if token_type_ids else None
+                    model_input["token_type_ids"] if token_type_ids else None,
                 ),
                 "example": model_input["example"],
                 "inputs": model_input,
@@ -152,10 +233,10 @@ def run_bert_question_and_answering_inference(device, model_version, batch, seq_
             single_inputs.append(single_input)
     else:
         if 1:
-            bert_input = torch.arange(seq_len*batch).reshape(batch, seq_len)
+            bert_input = torch.arange(seq_len * batch).reshape(batch, seq_len)
         else:
             # batch identical sequences for debugging
-            oneseq = [torch.arange(seq_len)]*batch
+            oneseq = [torch.arange(seq_len)] * batch
             bert_input = torch.stack(oneseq)
             bert_input = bert_input.reshape(batch, seq_len)
 
@@ -173,7 +254,9 @@ def run_bert_question_and_answering_inference(device, model_version, batch, seq_
 
     # the first inference pass
     tt_out = tt_out_list[0].cpu()
-    tt_untilized_output = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(batch, 1, seq_len, -1)
+    tt_untilized_output = (
+        tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(batch, 1, seq_len, -1)
+    )
 
     print(f"Enable profiler and enable binary and compile cache")
     profiler.enable()
@@ -192,7 +275,11 @@ def run_bert_question_and_answering_inference(device, model_version, batch, seq_
         profiler.start("processing_output_to_string")
 
         tt_out = tt_out_list[i].cpu()
-        tt_untilized_output = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(batch, 1, seq_len, -1)
+        tt_untilized_output = (
+            tt_out.to(ttl.tensor.Layout.ROW_MAJOR)
+            .to_torch()
+            .reshape(batch, 1, seq_len, -1)
+        )
 
         tt_start_logits = tt_untilized_output[..., :, 0].squeeze(1)
         tt_end_logits = tt_untilized_output[..., :, 1].squeeze(1)
@@ -202,14 +289,18 @@ def run_bert_question_and_answering_inference(device, model_version, batch, seq_
 
         passing_start, output = comp_pcc(pt_start_logits, tt_start_logits, pcc)
         logger.info(f"Start Logits {output}")
-        _, output = comp_allclose(pt_start_logits, tt_start_logits, 0.5, 0.5) # Only interested in reporting atol/rtol, using PCC for pass/fail
+        _, output = comp_allclose(
+            pt_start_logits, tt_start_logits, 0.5, 0.5
+        )  # Only interested in reporting atol/rtol, using PCC for pass/fail
         logger.info(f"Start Logits {output}")
         if not passing_start:
             logger.error(f"Start Logits PCC < {pcc}")
 
         passing_end, output = comp_pcc(pt_end_logits, tt_end_logits, pcc)
         logger.info(f"End Logits {output}")
-        _, output = comp_allclose(pt_end_logits, tt_end_logits, 0.5, 0.5) # Only interested in reporting atol/rtol, using PCC for pass/fail
+        _, output = comp_allclose(
+            pt_end_logits, tt_end_logits, 0.5, 0.5
+        )  # Only interested in reporting atol/rtol, using PCC for pass/fail
         logger.info(f"End Logits {output}")
         if not passing_end:
             logger.error(f"End Logits PCC < {pcc}")
@@ -241,19 +332,29 @@ def run_bert_question_and_answering_inference(device, model_version, batch, seq_
 
     del tt_out_list
 
-
     profiler.print()
 
     # assert profiler.get("whole_model") < 60.0
-    assert passing_start and passing_end, f"At least one start or end logits don't meet PCC requirement {pcc}"
+    assert (
+        passing_start and passing_end
+    ), f"At least one start or end logits don't meet PCC requirement {pcc}"
+
 
 @pytest.mark.parametrize(
     "model_version, batch, seq_len, real_input, attention_mask, token_type_ids, pcc",
-    (
-        ("phiyodr/bert-large-finetuned-squad2", 9, 384, True, True, True, 0.98),
-    ),
+    (("phiyodr/bert-large-finetuned-squad2", 9, 384, True, True, True, 0.98),),
 )
-def test_bert_batch_dram(device, model_version, batch, seq_len, real_input, attention_mask, token_type_ids, pcc, model_location_generator):
+def test_bert_batch_dram(
+    device,
+    model_version,
+    batch,
+    seq_len,
+    real_input,
+    attention_mask,
+    token_type_ids,
+    pcc,
+    model_location_generator,
+):
     # This test will run BERT-Large once with cache disabled.
     # Then it will enable cache and run BERT-Large PERF_CNT number of times.
     # Performance is reported only for PERF_CNT number of runs.
@@ -261,4 +362,15 @@ def test_bert_batch_dram(device, model_version, batch, seq_len, real_input, atte
 
     disable_persistent_kernel_cache()
 
-    run_bert_question_and_answering_inference(device, model_version, batch, seq_len, real_input, attention_mask, token_type_ids, pcc, model_location_generator, PERF_CNT)
+    run_bert_question_and_answering_inference(
+        device,
+        model_version,
+        batch,
+        seq_len,
+        real_input,
+        attention_mask,
+        token_type_ids,
+        pcc,
+        model_location_generator,
+        PERF_CNT,
+    )

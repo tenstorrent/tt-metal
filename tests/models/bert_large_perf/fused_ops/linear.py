@@ -5,7 +5,14 @@
 from typing import List, Union, Optional
 from tt_lib import tensor
 
-def Linear(in_features: int, out_features: int, weight: tensor.Tensor, bias: Optional[tensor.Tensor], device):
+
+def Linear(
+    in_features: int,
+    out_features: int,
+    weight: tensor.Tensor,
+    bias: Optional[tensor.Tensor],
+    device,
+):
     """
     Returns a function that performs a Linear operation with optional bias.
 
@@ -37,7 +44,9 @@ def Linear(in_features: int, out_features: int, weight: tensor.Tensor, bias: Opt
         output = tensor.matmul(activation, weight_T)
 
         if bias is not None:
-            output_plus_bias = tensor.bcast(output, bias, tensor.BcastOpMath.ADD, tensor.BcastOpDim.H)
+            output_plus_bias = tensor.bcast(
+                output, bias, tensor.BcastOpMath.ADD, tensor.BcastOpDim.H
+            )
             return output_plus_bias
 
         return output

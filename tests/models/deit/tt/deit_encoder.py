@@ -13,10 +13,17 @@ from tests.models.deit.tt.deit_layer import TtDeiTLayer
 
 
 class TtDeiTEncoder(nn.Module):
-    def __init__(self, config: DeiTConfig(), device, state_dict=None, base_address="") -> None:
+    def __init__(
+        self, config: DeiTConfig(), device, state_dict=None, base_address=""
+    ) -> None:
         super().__init__()
         self.config = config
-        self.layer = nn.ModuleList([TtDeiTLayer(config, device, state_dict, f"{base_address}.layer.{_}") for _ in range(config.num_hidden_layers)])
+        self.layer = nn.ModuleList(
+            [
+                TtDeiTLayer(config, device, state_dict, f"{base_address}.layer.{_}")
+                for _ in range(config.num_hidden_layers)
+            ]
+        )
 
         self.gradient_checkpointing = False
 
@@ -28,7 +35,6 @@ class TtDeiTEncoder(nn.Module):
         output_hidden_states: bool = False,
         return_dict: bool = True,
     ) -> Union[tuple]:
-
         all_hidden_states = () if output_hidden_states else None
         all_self_attentions = () if output_attentions else None
 
@@ -41,7 +47,9 @@ class TtDeiTEncoder(nn.Module):
             if self.gradient_checkpointing and self.training:
                 assert False, "No support for training yet!"
             else:
-                layer_outputs = layer_module(hidden_states, layer_head_mask, output_attentions)
+                layer_outputs = layer_module(
+                    hidden_states, layer_head_mask, output_attentions
+                )
 
             hidden_states = layer_outputs[0]
 
@@ -51,6 +59,10 @@ class TtDeiTEncoder(nn.Module):
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
 
-        output = tuple(v for v in [hidden_states, all_hidden_states, all_self_attentions] if v is not None)
+        output = tuple(
+            v
+            for v in [hidden_states, all_hidden_states, all_self_attentions]
+            if v is not None
+        )
 
         return output

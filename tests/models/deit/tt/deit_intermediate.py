@@ -4,6 +4,7 @@
 
 from pathlib import Path
 import sys
+
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}")
 sys.path.append(f"{f}/../")
@@ -24,13 +25,22 @@ from models.utility_functions import torch_to_tt_tensor_rm
 import tt_lib
 from helper_funcs import Linear as TtLinear
 
+
 class TtDeiTIntermediate(nn.Module):
-    def __init__(self, config: DeiTConfig(), device, state_dict=None, base_address="") -> None:
+    def __init__(
+        self, config: DeiTConfig(), device, state_dict=None, base_address=""
+    ) -> None:
         super().__init__()
 
-        dense_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.dense.weight"], device)
-        dense_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.dense.bias"], device)
-        self.dense = TtLinear(config.hidden_size, config.intermediate_size, dense_weight, dense_bias)
+        dense_weight = torch_to_tt_tensor_rm(
+            state_dict[f"{base_address}.dense.weight"], device
+        )
+        dense_bias = torch_to_tt_tensor_rm(
+            state_dict[f"{base_address}.dense.bias"], device
+        )
+        self.dense = TtLinear(
+            config.hidden_size, config.intermediate_size, dense_weight, dense_bias
+        )
 
         if isinstance(config.hidden_act, str):
             self.intermediate_act_fn = ACT2FN[config.hidden_act]

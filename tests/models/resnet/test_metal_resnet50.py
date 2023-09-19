@@ -13,15 +13,18 @@ import tt_lib
 from datetime import datetime
 
 from tests.models.resnet.metalResnetBlock50 import ResNet, Bottleneck
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose_and_pcc, comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+    comp_allclose_and_pcc,
+    comp_pcc,
+)
 
 
-@pytest.mark.parametrize("batch_size", [1,2,8])
+@pytest.mark.parametrize("batch_size", [1, 2, 8])
 @pytest.mark.skip(reason="Conv disabled in main.")
 def test_run_resnet50_inference(device, batch_size, imagenet_sample_input):
     image1 = imagenet_sample_input
     image = image1
-    for i in range(batch_size-1):
+    for i in range(batch_size - 1):
         image = torch.cat((image, image1), dim=0)
     with torch.no_grad():
         torch.manual_seed(1234)
@@ -34,13 +37,16 @@ def test_run_resnet50_inference(device, batch_size, imagenet_sample_input):
         state_dict = torch_resnet50.state_dict()
         storage_in_dram = False
         # run once to compile ops
-        tt_resnet50 = ResNet(Bottleneck, [3, 4, 6, 3],
-                        device=device,
-                        state_dict=state_dict,
-                        base_address="",
-                        fold_batchnorm=True,
-                        storage_in_dram=storage_in_dram,
-                        batch_size=batch_size)
+        tt_resnet50 = ResNet(
+            Bottleneck,
+            [3, 4, 6, 3],
+            device=device,
+            state_dict=state_dict,
+            base_address="",
+            fold_batchnorm=True,
+            storage_in_dram=storage_in_dram,
+            batch_size=batch_size,
+        )
 
         torch_output = torch_resnet50(image).unsqueeze(1).unsqueeze(1)
         tt_output = tt_resnet50(image)
@@ -58,4 +64,4 @@ def test_run_resnet50_inference(device, batch_size, imagenet_sample_input):
         logger.info(info)
         passing_pcc, _ = comp_pcc(torch_output, tt_output, pcc=0.985)
         assert passing_pcc
-        #assert passing # fails because of torch.allclose
+        # assert passing # fails because of torch.allclose

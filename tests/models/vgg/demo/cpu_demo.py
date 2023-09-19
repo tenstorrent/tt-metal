@@ -26,7 +26,6 @@ def test_cpu_demo(imagenet_sample_input, imagenet_label_dict):
 
     batch_size = _batch_size
     with torch.no_grad():
-
         torch_vgg = models.vgg16(weights=models.VGG16_Weights.IMAGENET1K_V1)
         torch_vgg.eval()
         torch_output = torch_vgg(image).unsqueeze(1).unsqueeze(1)

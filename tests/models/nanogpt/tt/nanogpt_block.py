@@ -23,6 +23,7 @@ from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
 
+
 class TtBlock(nn.Module):
     def __init__(self, config: GPTConfig(), state_dict, base_address, device):
         super().__init__()
@@ -31,10 +32,14 @@ class TtBlock(nn.Module):
         self.config = config
 
         self.beta_1 = torch2tt_tensor(
-            state_dict[f"{base_address}.ln_1.bias"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
+            state_dict[f"{base_address}.ln_1.bias"],
+            device,
+            tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
         )
         self.gamma_1 = torch2tt_tensor(
-            state_dict[f"{base_address}.ln_1.weight"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
+            state_dict[f"{base_address}.ln_1.weight"],
+            device,
+            tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
         )
 
         self.ln_1 = fallback_ops.LayerNorm(
@@ -49,17 +54,23 @@ class TtBlock(nn.Module):
         )
 
         self.beta_2 = torch2tt_tensor(
-            state_dict[f"{base_address}.ln_2.bias"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
+            state_dict[f"{base_address}.ln_2.bias"],
+            device,
+            tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
         )
         self.gamma_2 = torch2tt_tensor(
-            state_dict[f"{base_address}.ln_2.weight"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
+            state_dict[f"{base_address}.ln_2.weight"],
+            device,
+            tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
         )
 
         self.ln_2 = fallback_ops.LayerNorm(
             self.gamma_2, self.beta_2, eps=1e-5, normalized_shape=config.n_embd
         )
 
-        self.mlp = nanogpt_mlp.TtMLP(f"{base_address}.mlp", self.config, state_dict, device)
+        self.mlp = nanogpt_mlp.TtMLP(
+            f"{base_address}.mlp", self.config, state_dict, device
+        )
 
     def forward(self, x):
         tmp = self.attn.forward(self.ln_1(x))

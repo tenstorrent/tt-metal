@@ -25,17 +25,16 @@ from transformers import (
 from tests.models.llama.llama_model import TtLlamaModel
 import tt_lib
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, Profiler
-from models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache
+from models.utility_functions import (
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+)
 from models.utility_functions import prep_report
 
 BATCH_SIZE = 1
 
 
-def run_perf_llama(
-    expected_inference_time,
-    expected_compile_time,
-    device
-):
+def run_perf_llama(expected_inference_time, expected_compile_time, device):
     model_version = "decapoda-research/llama-7b-hf"
     tokenizer_version = "hf-internal-testing/llama-tokenizer"
     batch = 1
@@ -121,7 +120,7 @@ def run_perf_llama(
         expected_compile_time=expected_compile_time,
         expected_inference_time=expected_inference_time,
         comments="7B",
-        inference_time_cpu=cpu_time
+        inference_time_cpu=cpu_time,
     )
 
     logger.info(f"llama 7B inference time: {second_iter_time}")
@@ -131,18 +130,10 @@ def run_perf_llama(
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
-    (
-        (
-            0.22,
-            10
-        ),
-    ),
+    ((0.22, 10),),
 )
 def test_perf_bare_metal(
-    use_program_cache,
-    expected_inference_time,
-    expected_compile_time,
-    device
+    use_program_cache, expected_inference_time, expected_compile_time, device
 ):
     run_perf_llama(expected_inference_time, expected_compile_time, device)
 
@@ -158,9 +149,6 @@ def test_perf_bare_metal(
     ),
 )
 def test_perf_virtual_machine(
-    use_program_cache,
-    expected_inference_time,
-    expected_compile_time,
-    device
+    use_program_cache, expected_inference_time, expected_compile_time, device
 ):
     run_perf_llama(expected_inference_time, expected_compile_time, device)

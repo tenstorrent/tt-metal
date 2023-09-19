@@ -5,6 +5,7 @@
 
 from pathlib import Path
 import sys
+
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
 sys.path.append(f"{f}/../..")
@@ -16,7 +17,7 @@ from typing import Set, List, Tuple
 
 import tt_lib
 from tt_lib import tensor
-from models.utility_functions import  torch_to_tt_tensor_rm
+from models.utility_functions import torch_to_tt_tensor_rm
 
 
 def find_pruneable_heads_and_indices(
@@ -36,7 +37,9 @@ def find_pruneable_heads_and_indices(
         into account and the indices of rows/columns to keep in the layer weight.
     """
     mask = torch.ones(n_heads, head_size)
-    heads = set(heads) - already_pruned_heads  # Convert to set and remove already pruned heads
+    heads = (
+        set(heads) - already_pruned_heads
+    )  # Convert to set and remove already pruned heads
     for head in heads:
         # Compute how many pruned heads are before the head and move the index accordingly
         head = head - sum(1 if h < head else 0 for h in already_pruned_heads)
@@ -46,7 +49,9 @@ def find_pruneable_heads_and_indices(
     return heads, index
 
 
-def prune_linear_layer(layer: nn.Linear, index: torch.LongTensor, dim: int = 0) -> nn.Linear:
+def prune_linear_layer(
+    layer: nn.Linear, index: torch.LongTensor, dim: int = 0
+) -> nn.Linear:
     """
     Prune a linear layer to keep only entries in index.
 
@@ -69,7 +74,9 @@ def prune_linear_layer(layer: nn.Linear, index: torch.LongTensor, dim: int = 0) 
             b = layer.bias[index].clone().detach()
     new_size = list(layer.weight.size())
     new_size[dim] = len(index)
-    new_layer = nn.Linear(new_size[1], new_size[0], bias=layer.bias is not None).to(layer.weight.device)
+    new_layer = nn.Linear(new_size[1], new_size[0], bias=layer.bias is not None).to(
+        layer.weight.device
+    )
     new_layer.weight.requires_grad = False
     new_layer.weight.copy_(W.contiguous())
     new_layer.weight.requires_grad = True
@@ -78,7 +85,6 @@ def prune_linear_layer(layer: nn.Linear, index: torch.LongTensor, dim: int = 0) 
         new_layer.bias.copy_(b.contiguous())
         new_layer.bias.requires_grad = True
     return new_layer
-
 
 
 def make_address(base_address, op_name):

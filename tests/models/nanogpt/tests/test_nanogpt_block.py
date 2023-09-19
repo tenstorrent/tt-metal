@@ -17,7 +17,10 @@ import pytest
 
 from transformers import GPT2LMHeadModel
 
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+    comp_allclose,
+    comp_pcc,
+)
 
 from loguru import logger
 import tests.models.nanogpt.tt.nanogpt_block as nanogpt_block
@@ -30,17 +33,13 @@ from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
 
+
 @pytest.mark.parametrize(
     "pcc",
-    (
-        (
-            0.99,
-        ),
-    ),
+    ((0.99,),),
 )
 def test_nanogpt_block(device, pcc):
-
-    model_hf = GPT2LMHeadModel.from_pretrained('gpt2')
+    model_hf = GPT2LMHeadModel.from_pretrained("gpt2")
     sd = model_hf.state_dict()
     model_hf.eval()
     block = 0
@@ -50,31 +49,28 @@ def test_nanogpt_block(device, pcc):
 
     test_in = torch.rand(1, 60, 768)
 
-
     pt_block = model_hf.transformer.h[block]
     pt_out = pt_block.forward(test_in)
 
-
-    model_type = 'gpt2'
+    model_type = "gpt2"
 
     config_args = {
-        'gpt2':         dict(n_layer=12, n_head=12, n_embd=768),  # 124M params
+        "gpt2": dict(n_layer=12, n_head=12, n_embd=768),  # 124M params
     }[model_type]
 
-    config_args['vocab_size'] = 50257 # always 50257 for GPT model checkpoints
-    config_args['block_size'] = 1024 # always 1024 for GPT model checkpoints
-    config_args['bias'] = True # always True for GPT model checkpoints
+    config_args["vocab_size"] = 50257  # always 50257 for GPT model checkpoints
+    config_args["block_size"] = 1024  # always 1024 for GPT model checkpoints
+    config_args["bias"] = True  # always True for GPT model checkpoints
 
     config = GPTConfig(**config_args)
 
-
-    tt_test_in = torch2tt_tensor(test_in, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+    tt_test_in = torch2tt_tensor(
+        test_in, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
+    )
 
     tt_block = nanogpt_block.TtBlock(config, sd, base_address, device)
 
-    tt_out = tt_block.forward(
-        tt_test_in
-    )
+    tt_out = tt_block.forward(tt_test_in)
 
     tt_out_converted = tt2torch_tensor(tt_out)
 

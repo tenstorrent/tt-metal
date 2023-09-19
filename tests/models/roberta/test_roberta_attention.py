@@ -22,7 +22,10 @@ from tests.models.roberta.roberta_common import (
 )
 import tt_lib
 from tt_lib.fallback_ops import fallback_ops
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+    comp_allclose,
+    comp_pcc,
+)
 
 from tests.models.roberta.roberta_attention import TtRobertaAttention
 from transformers import RobertaModel
@@ -67,7 +70,6 @@ def test_roberta_attention_inference(device):
 
     logger.info(comp_allclose(torch_output[0], tt_output_torch))
     logger.info(pcc_message)
-
 
     if does_pass:
         logger.info("RobertaAttention Passed!")

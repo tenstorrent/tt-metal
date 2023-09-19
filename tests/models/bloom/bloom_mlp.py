@@ -86,7 +86,7 @@ class TtBloomMLP(torch.nn.Module):
             self.tt_bias_mlp_h4h,
             tt_lib.tensor.BcastOpMath.ADD,
             tt_lib.tensor.BcastOpDim.H,
-            self.mem_config
+            self.mem_config,
         )
 
         if self.use_tt_gelu:
@@ -104,11 +104,13 @@ class TtBloomMLP(torch.nn.Module):
             self.tt_bias_mlp_4hh,
             tt_lib.tensor.BcastOpMath.ADD,
             tt_lib.tensor.BcastOpDim.H,
-            self.mem_config
+            self.mem_config,
         )
 
         # Dropout is used in training only
         # intermediate_output = F.dropout(intermediate_output, p=self.hidden_dropout, training=self.training)
-        output = tt_lib.tensor.add(residual, intermediate_output, output_mem_config = self.mem_config)
+        output = tt_lib.tensor.add(
+            residual, intermediate_output, output_mem_config=self.mem_config
+        )
 
         return output

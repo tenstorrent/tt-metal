@@ -4,6 +4,7 @@
 
 from pathlib import Path
 import sys
+
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
 sys.path.append(f"{f}/../..")
@@ -15,15 +16,18 @@ import tt_lib as ttm
 
 from transformers import BloomForCausalLM
 from models.utility_functions import print_diff_argmax
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+    comp_allclose,
+    comp_pcc,
+)
 
 from loguru import logger
 
 import tests.models.bloom_old.bloom_utils as bloom_utils
 import tests.models.bloom_old.bloom_gelu_forward as bloom_gelu_forward
 
-def run_bloom_gelu_forward_test(device):
 
+def run_bloom_gelu_forward_test(device):
     # Prepare input
     torch.manual_seed(0)
     test_in = torch.rand(1, 1, 256, 256) / 256
@@ -46,7 +50,6 @@ def run_bloom_gelu_forward_test(device):
         logger.info("bloom_gelu_forward: Passed!")
     else:
         logger.warning("bloom_gelu_forward: Failed!")
-
 
     assert does_pass
 

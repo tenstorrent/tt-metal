@@ -56,7 +56,6 @@ def test_distilbert_transformer_block_inference(device, pcc):
     logger.info(comp_allclose(torch_output[0], tt_output_torch))
     logger.info(pcc_message)
 
-
     if does_pass:
         logger.info("DistilBertTransformerBlock Passed!")
 

@@ -13,26 +13,43 @@ from tt_lib.fallback_ops import fallback_ops
 
 from tests.models.deit.tt.deit_patch_embeddings import DeiTPatchEmbeddings
 
-class DeiTEmbeddings(nn.Module):
 
-    def __init__(self, config: DeiTConfig(), base_address: str, state_dict: dict, use_mask_token: bool = False) -> None:
+class DeiTEmbeddings(nn.Module):
+    def __init__(
+        self,
+        config: DeiTConfig(),
+        base_address: str,
+        state_dict: dict,
+        use_mask_token: bool = False,
+    ) -> None:
         super().__init__()
 
         self.cls_token = nn.Parameter(state_dict[f"{base_address}.cls_token"])
-        self.distillation_token = nn.Parameter(state_dict[f"{base_address}.distillation_token"])
-        self.mask_token = nn.Parameter(state_dict[f"{base_address}.mask_token"]) if use_mask_token else None
+        self.distillation_token = nn.Parameter(
+            state_dict[f"{base_address}.distillation_token"]
+        )
+        self.mask_token = (
+            nn.Parameter(state_dict[f"{base_address}.mask_token"])
+            if use_mask_token
+            else None
+        )
 
-        self.patch_embeddings = DeiTPatchEmbeddings(config,
-                                                    state_dict=state_dict,
-                                                    base_address=f"{base_address}.patch_embeddings")
+        self.patch_embeddings = DeiTPatchEmbeddings(
+            config,
+            state_dict=state_dict,
+            base_address=f"{base_address}.patch_embeddings",
+        )
 
         num_patches = self.patch_embeddings.num_patches
-        self.position_embeddings = nn.Parameter(state_dict[f"{base_address}.position_embeddings"])
+        self.position_embeddings = nn.Parameter(
+            state_dict[f"{base_address}.position_embeddings"]
+        )
 
-    def forward(self,
-                pixel_values: torch.Tensor,
-                bool_masked_pos: Optional[torch.BoolTensor] = None) -> torch.Tensor:
-
+    def forward(
+        self,
+        pixel_values: torch.Tensor,
+        bool_masked_pos: Optional[torch.BoolTensor] = None,
+    ) -> torch.Tensor:
         embeddings = self.patch_embeddings(pixel_values)
         batch_size, seq_length, _ = embeddings.size()
 

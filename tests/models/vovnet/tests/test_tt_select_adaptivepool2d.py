@@ -29,7 +29,6 @@ from models.vovnet.tt.select_adaptive_pool2d import (
     ((0.99),),
 )
 def test_select_adaptive_pool2d_inference(device, pcc, reset_seeds):
-
     base_address = f"head.globa_lpool"
     model = timm.create_model("hf_hub:timm/ese_vovnet19b_dw.ra_in1k", pretrained=True)
 

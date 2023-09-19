@@ -4,6 +4,7 @@
 
 from pathlib import Path
 import sys
+
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}")
 sys.path.append(f"{f}/..")
@@ -18,7 +19,10 @@ import pytest
 import tt_lib
 
 from tests.models.resnet.genericResnetBlock import ResNet, Bottleneck
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose_and_pcc, comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+    comp_allclose_and_pcc,
+    comp_pcc,
+)
 
 
 @pytest.mark.parametrize("fold_batchnorm", [True], ids=["Batchnorm folded"])
@@ -34,12 +38,14 @@ def test_run_resnet50_inference(device, fold_batchnorm, imagenet_sample_input):
 
         state_dict = torch_resnet50.state_dict()
 
-        tt_resnet50 = ResNet(Bottleneck, [3, 4, 6, 3],
-                        device=device,
-                        state_dict=state_dict,
-                        base_address="",
-                        fold_batchnorm=fold_batchnorm)
-
+        tt_resnet50 = ResNet(
+            Bottleneck,
+            [3, 4, 6, 3],
+            device=device,
+            state_dict=state_dict,
+            base_address="",
+            fold_batchnorm=fold_batchnorm,
+        )
 
         torch_output = torch_resnet50(image).unsqueeze(1).unsqueeze(1)
         tt_output = tt_resnet50(image)

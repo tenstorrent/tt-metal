@@ -203,8 +203,7 @@ def summarize_stats(t, name):
 def run_ffn_inference(
     device, model_version, batch, seq_len, pcc, model_config, model_location_generator
 ):
-
-    model_name = str(model_location_generator(model_version, model_subdir = "Bert"))
+    model_name = str(model_location_generator(model_version, model_subdir="Bert"))
 
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(
         model_name, torchscript=False
@@ -235,11 +234,7 @@ def run_ffn_inference(
     )
 
     tt_out = tt_ffn_model(tilized_ffn_input).cpu()
-    tt_out = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(
-        tt_out.shape()
-    )
-
-
+    tt_out = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(tt_out.shape())
 
     passing, output = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"Output {output}")

@@ -10,8 +10,8 @@ import tt_lib as ttl
 
 from models.utility_functions import tilize_to_list, untilize, comp_allclose_and_pcc
 
-def ttLinear(weight, bias):
 
+def ttLinear(weight, bias):
     def linear_(activation):
         weight_T = ttl.tensor.transpose(weight)
         output = ttl.tensor.matmul(activation, weight_T)
@@ -19,6 +19,7 @@ def ttLinear(weight, bias):
         return output_plus_bias
 
     return linear_
+
 
 def torchLinear(in_features, out_features, weight, bias):
     linear_torch = torch.nn.Linear(out_features, in_features)
@@ -29,7 +30,6 @@ def torchLinear(in_features, out_features, weight, bias):
 
 
 def run_linear_test(in_features, out_features, device):
-
     # torch
     torch_input_tensor = torch.randn(1, in_features)
     weight = torch.randn(out_features, in_features)
@@ -47,23 +47,42 @@ def run_linear_test(in_features, out_features, device):
     inputs_targ = torch.zeros(1, 1, 32, inputs_reshape.shape[3])
     inputs_targ[:, :, :1, :] = inputs_reshape
     tilized_inputs = tilize_to_list(inputs_targ)
-    inputs_tt = ttl.tensor.Tensor(tilized_inputs, inputs_targ.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
+    inputs_tt = ttl.tensor.Tensor(
+        tilized_inputs,
+        inputs_targ.shape,
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.TILE,
+        device,
+    )
 
     weight_tt = tilize_to_list(weight_tt)
     bias_tt = tilize_to_list(bias_tt)
-    weight_tt = ttl.tensor.Tensor(weight_tt, [1, 1, out_features, in_features], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE,  device )
-    bias_tt = ttl.tensor.Tensor(bias_tt, [1, 1, 32, out_features],  ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE,  device)
+    weight_tt = ttl.tensor.Tensor(
+        weight_tt,
+        [1, 1, out_features, in_features],
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.TILE,
+        device,
+    )
+    bias_tt = ttl.tensor.Tensor(
+        bias_tt,
+        [1, 1, 32, out_features],
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.TILE,
+        device,
+    )
 
     linear_tt = ttLinear(weight_tt, bias_tt)
     output_tt = linear_tt(inputs_tt)
-    output_tt = untilize(torch.Tensor(output_tt.cpu().to_torch()).reshape(output_tt.shape()))
+    output_tt = untilize(
+        torch.Tensor(output_tt.cpu().to_torch()).reshape(output_tt.shape())
+    )
     output_tt = output_tt[0, 0, 0, :]
 
     test_results, output = comp_allclose_and_pcc(output_torch, output_tt)
 
-    print('\n\n', 'atol/rtol:', test_results, '| output:', output, '\n\n')
+    print("\n\n", "atol/rtol:", test_results, "| output:", output, "\n\n")
 
 
 def test_linear_test(device):
-
     run_linear_test(1024, 256, device)

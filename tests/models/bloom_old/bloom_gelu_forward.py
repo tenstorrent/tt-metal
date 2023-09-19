@@ -4,6 +4,7 @@
 
 from pathlib import Path
 import sys
+
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
 sys.path.append(f"{f}/../..")
@@ -16,7 +17,10 @@ import math
 from torch.nn import functional as F
 
 import tt_lib as ttm
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+    comp_allclose,
+    comp_pcc,
+)
 import numpy as np
 import tests.models.bloom_old.bloom_utils as bloom_utils
 
@@ -45,18 +49,18 @@ def tt_bloom_gelu_forward(x, device):
     k3 = torch.full(x.shape(), 0.79788456)
     tt_k3 = bloom_utils.torch2tt_tensor(k3, device)
 
-    #0.5*x
-    factor1 = ttm.tensor.mul(tt_k1, z) # exp(z)
+    # 0.5*x
+    factor1 = ttm.tensor.mul(tt_k1, z)  # exp(z)
 
-    #x*x
+    # x*x
     pow2 = ttm.tensor.mul(z, z)
 
-    #(x + 0.044715 * torch.pow(x, 3)))
-    #torch.pow(x, 3))
+    # (x + 0.044715 * torch.pow(x, 3)))
+    # torch.pow(x, 3))
     pow3 = ttm.tensor.mul(pow2, z)
     factor3 = ttm.tensor.mul(tt_k2, pow3)
 
-    #(x + 0.044715 * torch.pow(x, 3)))
+    # (x + 0.044715 * torch.pow(x, 3)))
     factor3 = ttm.tensor.add(factor3, z)
 
     sumtanh = ttm.tensor.mul(tt_k3, factor3)

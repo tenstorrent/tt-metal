@@ -9,10 +9,10 @@ import torch.nn.functional as F
 
 from blazebase import BlazeLandmark, BlazeBlock
 
-class BlazePoseLandmark(BlazeLandmark):
-    """The hand landmark model from MediaPipe.
 
-    """
+class BlazePoseLandmark(BlazeLandmark):
+    """The hand landmark model from MediaPipe."""
+
     def __init__(self):
         super(BlazePoseLandmark, self).__init__()
 
@@ -23,9 +23,15 @@ class BlazePoseLandmark(BlazeLandmark):
 
     def _define_layers(self):
         self.backbone1 = nn.Sequential(
-            nn.Conv2d(in_channels=3, out_channels=24, kernel_size=3, stride=2, padding=0, bias=True),
+            nn.Conv2d(
+                in_channels=3,
+                out_channels=24,
+                kernel_size=3,
+                stride=2,
+                padding=0,
+                bias=True,
+            ),
             nn.ReLU(inplace=True),
-
             BlazeBlock(24, 24, 3),
             BlazeBlock(24, 24, 3),
         )
@@ -142,7 +148,6 @@ class BlazePoseLandmark(BlazeLandmark):
             BlazeBlock(288, 288, 3),
             BlazeBlock(288, 288, 3),
             BlazeBlock(288, 288, 3),
-
             BlazeBlock(288, 288, 3, 2),
             BlazeBlock(288, 288, 3),
             BlazeBlock(288, 288, 3),
@@ -179,7 +184,11 @@ class BlazePoseLandmark(BlazeLandmark):
     def forward(self, x):
         batch = x.shape[0]
         if batch == 0:
-            return torch.zeros((0,)), torch.zeros((0,31,4)), torch.zeros((0, 128,128))
+            return (
+                torch.zeros((0,)),
+                torch.zeros((0, 31, 4)),
+                torch.zeros((0, 128, 128)),
+            )
 
         x = F.pad(x, (0, 1, 0, 1), "constant", 0)
 
@@ -189,11 +198,11 @@ class BlazePoseLandmark(BlazeLandmark):
         w = self.backbone4(z)
         v = self.backbone5(w)
 
-        w1 = self.up2(w) + F.interpolate(self.up1(v), scale_factor=2, mode='bilinear')
-        z1 = self.up3(z) + F.interpolate(w1, scale_factor=2, mode='bilinear')
-        y1 = self.up4(y) + F.interpolate(z1, scale_factor=2, mode='bilinear')
+        w1 = self.up2(w) + F.interpolate(self.up1(v), scale_factor=2, mode="bilinear")
+        z1 = self.up3(z) + F.interpolate(w1, scale_factor=2, mode="bilinear")
+        y1 = self.up4(y) + F.interpolate(z1, scale_factor=2, mode="bilinear")
 
-        seg = self.up9(x) + F.interpolate(self.up8(y1), scale_factor=2, mode='bilinear')
+        seg = self.up9(x) + F.interpolate(self.up8(y1), scale_factor=2, mode="bilinear")
         seg = self.segmentation(self.block6(seg)).squeeze(1)
 
         out = self.block1(y1) + self.up5(z)
@@ -202,6 +211,6 @@ class BlazePoseLandmark(BlazeLandmark):
         out = self.block4(out)
         out = self.block5(out)
         flag = self.flag(out).view(-1).sigmoid()
-        landmarks = self.landmarks(out).view(batch,31,4) / 256
+        landmarks = self.landmarks(out).view(batch, 31, 4) / 256
 
         return flag, landmarks, seg

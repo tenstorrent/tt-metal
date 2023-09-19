@@ -4,6 +4,7 @@
 
 from pathlib import Path
 import sys
+
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
 sys.path.append(f"{f}/../..")
@@ -15,7 +16,10 @@ import tt_lib as ttm
 
 from transformers import BloomForCausalLM
 from models.utility_functions import print_diff_argmax
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+    comp_allclose,
+    comp_pcc,
+)
 
 from loguru import logger
 
@@ -25,8 +29,9 @@ import tests.models.bloom_old.bloom_block as bloom_block
 
 
 def run_bloom_block_test(device):
-
-    hugging_bloom_reference_model = BloomForCausalLM.from_pretrained("bigscience/bloom-560m", torchscript=False)
+    hugging_bloom_reference_model = BloomForCausalLM.from_pretrained(
+        "bigscience/bloom-560m", torchscript=False
+    )
     hugging_bloom_reference_model.eval()
 
     do_all_blocks_pass = True
@@ -38,7 +43,9 @@ def run_bloom_block_test(device):
         hidden_size = config.hidden_size
         n_head = config.n_head
 
-        tt_bloom_block = bloom_block.TtBloomBlock(config, state_dict, base_address, device)
+        tt_bloom_block = bloom_block.TtBloomBlock(
+            config, state_dict, base_address, device
+        )
         pt_bloom_block = hugging_bloom_reference_model.transformer.h[block]
 
         torch.manual_seed(0)

@@ -74,7 +74,6 @@ def run_whisper_model(device):
             input_features=input_features, decoder_input_ids=decoder_input_ids
         )
 
-
     tt_whisper = TtWhisperModel(
         state_dict=state_dict, device=device, config=pytorch_model.config
     )

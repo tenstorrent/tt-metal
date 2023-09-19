@@ -27,7 +27,6 @@ from models.vovnet.tt.classifier_head import TtClassifierHead
     ((0.99),),
 )
 def test_classifier_head_inference(device, pcc, reset_seeds):
-
     base_address = f"head"
     model = timm.create_model("hf_hub:timm/ese_vovnet19b_dw.ra_in1k", pretrained=True)
 

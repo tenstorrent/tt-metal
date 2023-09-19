@@ -9,14 +9,20 @@ from loguru import logger
 import pytest
 import tt_lib
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
-from models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache
+from models.utility_functions import (
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+)
 from models.utility_functions import prep_report, Profiler
 
 from tests.models.vgg.tt.vgg import *
 
 BATCH_SIZE = 1
 
-def run_perf_vgg(imagenet_sample_input, expected_inference_time, expected_compile_time, device):
+
+def run_perf_vgg(
+    imagenet_sample_input, expected_inference_time, expected_compile_time, device
+):
     profiler = Profiler()
     disable_persistent_kernel_cache()
     first_key = "first_iter"
@@ -69,7 +75,7 @@ def run_perf_vgg(imagenet_sample_input, expected_inference_time, expected_compil
         expected_compile_time=expected_compile_time,
         expected_inference_time=expected_inference_time,
         comments=comments,
-        inference_time_cpu=cpu_time
+        inference_time_cpu=cpu_time,
     )
 
     logger.info(f"vgg inference time: {second_iter_time}")
@@ -80,23 +86,41 @@ def run_perf_vgg(imagenet_sample_input, expected_inference_time, expected_compil
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (3.1,
-         14,
+        (
+            3.1,
+            14,
         ),
     ),
 )
-def test_perf_bare_metal(use_program_cache, imagenet_sample_input, expected_inference_time, expected_compile_time, device):
-    run_perf_vgg(imagenet_sample_input, expected_inference_time, expected_compile_time, device)
+def test_perf_bare_metal(
+    use_program_cache,
+    imagenet_sample_input,
+    expected_inference_time,
+    expected_compile_time,
+    device,
+):
+    run_perf_vgg(
+        imagenet_sample_input, expected_inference_time, expected_compile_time, device
+    )
 
 
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (5.3,
-         15,
+        (
+            5.3,
+            15,
         ),
     ),
 )
-def test_perf_virtual_machine(use_program_cache, imagenet_sample_input, expected_inference_time, expected_compile_time, device):
-    run_perf_vgg(imagenet_sample_input, expected_inference_time, expected_compile_time, device)
+def test_perf_virtual_machine(
+    use_program_cache,
+    imagenet_sample_input,
+    expected_inference_time,
+    expected_compile_time,
+    device,
+):
+    run_perf_vgg(
+        imagenet_sample_input, expected_inference_time, expected_compile_time, device
+    )

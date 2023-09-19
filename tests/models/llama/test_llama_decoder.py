@@ -29,7 +29,10 @@ from tests.models.llama.llama_utils import *
 from tests.models.llama.llama_mlp import TtLlamaMLP
 from tests.models.llama.llama_attention import TtLlamaAttention
 from tests.models.llama.llama_layer_norm import TtLlamaRMSNorm
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+    comp_allclose,
+    comp_pcc,
+)
 from tests.models.llama.llama_decoder import TtLlamaDecoderLayer
 
 
@@ -138,7 +141,6 @@ def run_test_LlamaDecoder_inference(
 def test_LlamaDecoder_inference(
     device, model_version, tokenizer_version, batch, seq_len, decoder_id, on_weka, pcc
 ):
-
     run_test_LlamaDecoder_inference(
         device,
         model_version,

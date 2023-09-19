@@ -34,8 +34,8 @@ def test_detect_module(device, model_location_generator):
     torch.manual_seed(1234)
 
     # Load yolo
-    model_path = model_location_generator("models", model_subdir = "Yolo")
-    data_path = model_location_generator("data", model_subdir = "Yolo")
+    model_path = model_location_generator("models", model_subdir="Yolo")
+    data_path = model_location_generator("data", model_subdir="Yolo")
 
     data_image_path = str(data_path / "images")
     data_coco = str(data_path / "coco128.yaml")
@@ -90,7 +90,6 @@ def test_detect_module(device, model_location_generator):
     with torch.no_grad():
         tt_model.eval()
         tt_out = tt_model(tt_test_input)
-
 
     does_all_pass = True
 

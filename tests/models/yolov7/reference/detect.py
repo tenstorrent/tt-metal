@@ -46,8 +46,8 @@ def test_detect(model_location_generator):
     half = device.type != "cpu"  # half precision only supported on CUDA
 
     # Load model
-    model_path = model_location_generator("models", model_subdir = "Yolo")
-    data_path = model_location_generator("data", model_subdir = "Yolo")
+    model_path = model_location_generator("models", model_subdir="Yolo")
+    data_path = model_location_generator("data", model_subdir="Yolo")
 
     data_image_path = str(data_path / "images/horses.jpg")
     weights = str(model_path / "yolov7.pt")

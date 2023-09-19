@@ -29,7 +29,6 @@ from tests.models.vovnet.tt.sequential_append_list import (
     ((0.99),),
 )
 def test_sequential_append_list_inference(device, pcc, reset_seeds):
-
     STAGE_INDEX = 0
     BLOCK_INDEX = 0
 
@@ -59,7 +58,6 @@ def test_sequential_append_list_inference(device, pcc, reset_seeds):
 
     logger.info(comp_allclose(model_output, tt_output_torch))
     logger.info(pcc_message)
-
 
     if passing:
         logger.info("SequntialAppendList Passed!")

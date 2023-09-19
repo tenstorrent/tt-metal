@@ -29,7 +29,6 @@ from models.vovnet.tt.vovnet import vovnet_for_image_classification
 def test_vovnet_model_inference(
     device, imagenet_sample_input, imagenet_label_dict, model_name, reset_seeds
 ):
-
     model = timm.create_model(model_name, pretrained=True)
 
     torch_model = model

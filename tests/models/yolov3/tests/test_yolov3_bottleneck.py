@@ -35,8 +35,8 @@ def test_bottleneck_module(model_location_generator, device):
     torch.manual_seed(1234)
 
     # Load yolo
-    model_path = model_location_generator("models", model_subdir = "Yolo")
-    data_path = model_location_generator("data", model_subdir = "Yolo")
+    model_path = model_location_generator("models", model_subdir="Yolo")
+    data_path = model_location_generator("data", model_subdir="Yolo")
 
     data_image_path = str(data_path / "images")
     data_coco = str(data_path / "coco128.yaml")
@@ -79,7 +79,6 @@ def test_bottleneck_module(model_location_generator, device):
 
     does_pass, pcc_message = comp_pcc(pred, tt_output_torch, 0.98)
     logger.info(pcc_message)
-
 
     if does_pass:
         logger.info("Yolo TtBottleneck Passed!")

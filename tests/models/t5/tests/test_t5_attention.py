@@ -201,53 +201,44 @@ def run_test_T5Attention_inference(
 
 
 def test_t5_shape(device):
-
     run_test_t5_shape(device)
 
 
 def test_transpose(device):
-
     run_test_transpose(device)
 
 
 def test_matmul(device):
-
     run_test_matmul(device)
 
 
 def test_softmax(device):
-
     run_test_softmax(device)
 
 
 def test_t5_unshape(device):
-
     run_test_t5_unshape(device)
 
 
 def test_T5Attention_block_0_no_mask_t5_small(device):
-
     run_test_T5Attention_inference(
         device, block=0, use_mask=False, model_name="t5-small", input_h=32, input_w=512
     )
 
 
 def test_T5Attention_block_2_no_mask_t5_small(device):
-
     run_test_T5Attention_inference(
         device, block=2, use_mask=False, model_name="t5-small", input_h=32, input_w=512
     )
 
 
 def test_T5Attention_block_0_with_mask_t5_small(device):
-
     run_test_T5Attention_inference(
         device, block=0, use_mask=True, model_name="t5-small", input_h=32, input_w=512
     )
 
 
 def test_T5Attention_block_0_no_mask_flan_t5_small(device):
-
     run_test_T5Attention_inference(
         device,
         block=0,
@@ -259,7 +250,6 @@ def test_T5Attention_block_0_no_mask_flan_t5_small(device):
 
 
 def test_T5Attention_block_0_no_mask_t5_base(device):
-
     run_test_T5Attention_inference(
         device, block=0, use_mask=False, model_name="t5-base", input_h=32, input_w=768
     )

@@ -6,7 +6,6 @@ import tt_lib as ttm
 
 
 def tt_baddbmm(device, input, batch1, batch2, beta=1.0, alpha=1.0) -> ttm.tensor.Tensor:
-
     if beta != 1.0:
         input = ttm.tensor.mul(beta, input)
 

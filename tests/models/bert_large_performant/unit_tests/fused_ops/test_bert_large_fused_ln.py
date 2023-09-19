@@ -80,7 +80,6 @@ def ref_layernorm(x, eps, gamma, beta, H, W):
 def run_layernorm_tests(device, test_id, batch, dtype, in0_mem_config, out_mem_config):
     torch.manual_seed(1234)
 
-
     tensor = ttl.tensor
 
     epsf = 1e-2
@@ -145,10 +144,14 @@ def run_layernorm_tests(device, test_id, batch, dtype, in0_mem_config, out_mem_c
 
             if test_id == 0:
                 logger.info("Running LN_NOGB")
-                ttz = ttl.operations.primary.layernorm(ttx, epsf, None, None, output_mem_config=out_mem_config)
+                ttz = ttl.operations.primary.layernorm(
+                    ttx, epsf, None, None, output_mem_config=out_mem_config
+                )
             elif test_id == 1:
                 logger.info("Running LN_G")
-                ttz = ttl.operations.primary.layernorm(ttx, epsf, ttgamma, None, output_mem_config=out_mem_config)
+                ttz = ttl.operations.primary.layernorm(
+                    ttx, epsf, ttgamma, None, output_mem_config=out_mem_config
+                )
             elif test_id == 2:
                 logger.info("Running LN_GB")
                 ttz = ttl.operations.primary.layernorm(
@@ -180,8 +183,6 @@ def run_layernorm_tests(device, test_id, batch, dtype, in0_mem_config, out_mem_c
             time.sleep(0.3)  # sleep to avoid print intermixing with kernel prints
 
             assert is_close(tt_got_back, ref_lnorm)
-
-
 
 
 import pytest

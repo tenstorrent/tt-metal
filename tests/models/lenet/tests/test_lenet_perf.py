@@ -22,7 +22,7 @@ from models.utility_functions import (
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
     comp_pcc,
-    torch2tt_tensor
+    torch2tt_tensor,
 )
 from tt.lenet import lenet5
 from lenet_utils import load_torch_lenet, prepare_image
@@ -41,9 +41,8 @@ def test_lenet_perf_inference(
     batch_size = 1
 
     with torch.no_grad():
-
         # Initialize Torch model
-        pt_model_path = model_location_generator("model.pt", model_subdir = "LeNet")
+        pt_model_path = model_location_generator("model.pt", model_subdir="LeNet")
         torch_LeNet, _ = load_torch_lenet(pt_model_path, num_classes)
 
         # Initialize TT model
@@ -78,6 +77,5 @@ def test_lenet_perf_inference(
         pcc_passing, pcc_output = comp_pcc(torch_output, tt_output, pcc)
         logger.info(f"Output {pcc_output}")
         assert pcc_passing, f"Model output does not meet PCC requirement {pcc}."
-
 
         profiler.print()

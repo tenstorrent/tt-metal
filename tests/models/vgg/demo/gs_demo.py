@@ -24,7 +24,6 @@ from tt.vgg import *
 _batch_size = 1
 
 
-
 def test_gs_demo(device, imagenet_sample_input, imagenet_label_dict):
     image = imagenet_sample_input
     class_labels = imagenet_label_dict

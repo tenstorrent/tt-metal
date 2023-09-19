@@ -103,11 +103,8 @@ def run_softmax_tests(dev, test_id, batch, dtype, in0_mem_config):
     torch.manual_seed(123)
     random.seed(123)
 
-
     tensor = ttl.tensor
     device = ttl.device
-
-
 
     test_dims = ((batch, 1, 6144, 384),)
     for N, C, H, W in test_dims:
@@ -132,8 +129,10 @@ def run_softmax_tests(dev, test_id, batch, dtype, in0_mem_config):
                 torch_attn_mask, tt_attn_mask = generate_attn_mask(
                     N, C, W, dev, -4.2 * 1, dtype, in0_mem_config
                 )
-                t1_fused = ttl.operations.primary.transformers.scale_mask_softmax_in_place(
-                    t0, tt_scale, tt_attn_mask
+                t1_fused = (
+                    ttl.operations.primary.transformers.scale_mask_softmax_in_place(
+                        t0, tt_scale, tt_attn_mask
+                    )
                 )
                 ref_sm = ref_scale_mask_softmax(torch_scale, torch_attn_mask, x)
             elif test_id == 1:
@@ -150,8 +149,6 @@ def run_softmax_tests(dev, test_id, batch, dtype, in0_mem_config):
 
             assert is_close(tt_unt, ref_sm, rtol=5e-2, atol=5e-2)
             # print_diff_argmax(tt_unt, ref_sm)
-
-
 
 
 import pytest
@@ -183,7 +180,9 @@ import pytest
     (0, 1),
     ids=["scale_mask_softmax", "softmax"],
 )
-def test_bert_large_softmax_test(device, test_id, batch, dtype, in0_mem_config, request):
+def test_bert_large_softmax_test(
+    device, test_id, batch, dtype, in0_mem_config, request
+):
     ttl.profiler.set_profiler_location(
         f"tt_metal/tools/profiler/logs/BERT_large_fused_softmax_{request.node.callspec.id}"
     )

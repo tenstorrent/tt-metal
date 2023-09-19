@@ -18,7 +18,9 @@ from models.utility_functions import (
 )
 from models.utility_functions import prep_report, Profiler
 import tt_lib as ttl
-from models.stable_diffusion.tt.unet_2d_condition import UNet2DConditionModel as tt_unet_condition
+from models.stable_diffusion.tt.unet_2d_condition import (
+    UNet2DConditionModel as tt_unet_condition,
+)
 from models.stable_diffusion.tt.experimental_ops import UseDeviceConv
 
 NUM_INFERENCE_STEPS = 2  # Number of denoising steps
@@ -94,8 +96,8 @@ def make_tt_unet(state_dict, device):
     "expected_inference_time, expected_compile_time",
     (
         (
-            135,#was 108s before
-            135,#was 85s before
+            135,  # was 108s before
+            135,  # was 85s before
         ),
     ),
 )

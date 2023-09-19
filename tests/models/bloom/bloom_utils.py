@@ -5,7 +5,9 @@
 import torch
 import json
 import tt_lib
+
 mem_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
+
 
 def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
     size = list(py_tensor.size())
@@ -13,13 +15,14 @@ def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
     while len(size) < 4:
         size.insert(0, 1)
 
-    tt_tensor = tt_lib.tensor.Tensor(py_tensor.reshape(size), tt_lib.tensor.DataType.BFLOAT16).to(tt_device)
+    tt_tensor = tt_lib.tensor.Tensor(
+        py_tensor.reshape(size), tt_lib.tensor.DataType.BFLOAT16
+    ).to(tt_device)
 
     return tt_tensor
 
 
 def tt2torch_tensor(tt_tensor):
-
     tt_output = tt_tensor.cpu()
     if tt_output.layout() != tt_lib.tensor.Layout.ROW_MAJOR:
         tt_output = tt_output.to(tt_lib.tensor.Layout.ROW_MAJOR)
@@ -51,7 +54,7 @@ def tt_matmul(t1, t2, device, on_torch=False):
         t1 = tt2torch_tensor(t1)
         t2 = tt2torch_tensor(t2)
 
-        res = torch.matmul(t1, t2, output_mem_config = mem_config)
+        res = torch.matmul(t1, t2, output_mem_config=mem_config)
         return torch2tt_tensor(res, device)
     else:
         return tt_lib.tensor.bmm(t1, t2, mem_config)

@@ -36,8 +36,8 @@ def test_detection_model(device, model_location_generator):
     torch.manual_seed(1234)
 
     # Load yolo
-    model_path = model_location_generator("models", model_subdir = "Yolo")
-    data_path = model_location_generator("data", model_subdir = "Yolo")
+    model_path = model_location_generator("models", model_subdir="Yolo")
+    data_path = model_location_generator("data", model_subdir="Yolo")
     data_image_path = str(data_path / "images")
     data_coco = str(data_path / "coco128.yaml")
     weights_loc = str(model_path / "yolov3.pt")
@@ -69,7 +69,6 @@ def test_detection_model(device, model_location_generator):
         # Inference- fused tt
         tt_im = torch2tt_tensor(im, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
         tt_out = tt_module(tt_im)
-
 
     # Check all outputs PCC
     does_all_pass = True

@@ -58,7 +58,6 @@ def run_T5ForConditionalGeneration(device, model_constructor, model_name):
 
     tokenizer = AutoTokenizer.from_pretrained(model_name, model_max_length=32)
 
-
     pt_output_sentance = run_generate(
         input_sentance,
         tokenizer,
@@ -86,7 +85,9 @@ def run_T5ForConditionalGeneration(device, model_constructor, model_name):
 
 
 def test_T5ForConditionalGeneration_t5_small(device):
-    run_T5ForConditionalGeneration(device, t5_small_for_conditional_generation, "t5-small")
+    run_T5ForConditionalGeneration(
+        device, t5_small_for_conditional_generation, "t5-small"
+    )
 
 
 def test_T5ForConditionalGeneration_flan_t5_small(device):
@@ -96,4 +97,6 @@ def test_T5ForConditionalGeneration_flan_t5_small(device):
 
 
 def test_T5ForConditionalGeneration_t5_base(device):
-    run_T5ForConditionalGeneration(device, t5_base_for_conditional_generation, "t5-base")
+    run_T5ForConditionalGeneration(
+        device, t5_base_for_conditional_generation, "t5-base"
+    )

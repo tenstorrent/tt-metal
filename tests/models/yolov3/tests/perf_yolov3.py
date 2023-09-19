@@ -26,8 +26,14 @@ from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
-from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, profiler, \
-    disable_compile_cache, enable_compile_cache, prep_report
+from models.utility_functions import (
+    torch_to_tt_tensor_rm,
+    tt_to_torch_tensor,
+    profiler,
+    disable_compile_cache,
+    enable_compile_cache,
+    prep_report,
+)
 
 BATCH_SIZE = 1
 
@@ -39,12 +45,11 @@ def test_perf(use_program_cache, model_location_generator, device):
     cpu_key = "ref_key"
     comments = "yolov3-fused"
 
-
     torch.manual_seed(1234)
 
     # Load yolo
-    model_path = model_location_generator("models", model_subdir = "Yolo")
-    data_path = model_location_generator("data", model_subdir = "Yolo")
+    model_path = model_location_generator("models", model_subdir="Yolo")
+    data_path = model_location_generator("data", model_subdir="Yolo")
 
     data_image_path = str(data_path / "images")
     data_coco = str(data_path / "coco128.yaml")

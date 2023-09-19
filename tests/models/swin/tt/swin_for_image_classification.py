@@ -32,9 +32,7 @@ class TtSwinForImageClassification(nn.Module):
         self.config = config
         self.device = device
         self.num_labels = self.config.num_labels
-        self.swin = TtSwinModel(
-            self.config, state_dict, base_address, self.device
-        )
+        self.swin = TtSwinModel(self.config, state_dict, base_address, self.device)
 
         self.weight = torch_to_tt_tensor_rm(
             state_dict["classifier.weight"], self.device
@@ -61,7 +59,6 @@ class TtSwinForImageClassification(nn.Module):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, TtSwinImageClassifierOutput]:
-
         return_dict = (
             return_dict if return_dict is not None else self.config.use_return_dict
         )

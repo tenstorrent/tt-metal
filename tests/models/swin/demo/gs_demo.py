@@ -26,8 +26,7 @@ from tests.models.swin.tt.swin import *
     "model_name",
     (("microsoft/swin-tiny-patch4-window7-224"),),
 )
-def test_gs_demo(device,  imagenet_sample_input, model_name):
-
+def test_gs_demo(device, imagenet_sample_input, model_name):
     image = imagenet_sample_input
 
     feature_extractor = AutoFeatureExtractor.from_pretrained(model_name)
@@ -43,9 +42,7 @@ def test_gs_demo(device,  imagenet_sample_input, model_name):
         tt_pixel_values = torch_to_tt_tensor_rm(tt_pixel_values, device)
         tt_output = tt_model(tt_pixel_values)
 
-        tt_output_torch = (
-            tt_to_torch_tensor(tt_output.logits).squeeze(0).squeeze(0)
-        )
+        tt_output_torch = tt_to_torch_tensor(tt_output.logits).squeeze(0).squeeze(0)
 
         predicted_label = tt_output_torch.argmax(-1).item()
         logger.info("GS's Predicted Output")

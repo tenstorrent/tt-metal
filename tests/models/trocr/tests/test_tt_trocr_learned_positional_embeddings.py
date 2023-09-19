@@ -29,7 +29,6 @@ from models.trocr.tt.trocr_learned_positional_embeddings import (
     ((0.99),),
 )
 def test_trocr_attention_inference(device, pcc, reset_seeds):
-
     with torch.no_grad():
         model = VisionEncoderDecoderModel.from_pretrained(
             "microsoft/trocr-base-handwritten"

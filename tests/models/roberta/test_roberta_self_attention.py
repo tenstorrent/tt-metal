@@ -22,7 +22,10 @@ import tt_lib
 from tests.models.roberta.roberta_self_attention import (
     TtRobertaSelfAttention,
 )
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+    comp_allclose,
+    comp_pcc,
+)
 from transformers import RobertaModel
 
 
@@ -64,7 +67,6 @@ def test_roberta_self_attention_inference(device):
 
     logger.info(comp_allclose(torch_output[0], tt_output_torch))
     logger.info(pcc_message)
-
 
     if does_pass:
         logger.info("RobertaSelfAttention Passed!")

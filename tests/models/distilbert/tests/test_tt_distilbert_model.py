@@ -17,6 +17,7 @@ from transformers import (
 )
 from transformers import AutoTokenizer
 
+
 @pytest.mark.parametrize(
     "pcc",
     ((0.99),),
@@ -45,7 +46,9 @@ def test_distilbert_model_inference(device, pcc):
     )
 
     inputs = tokenizer(question, context, return_tensors="pt")
-    tt_attn_mask = torch_to_tt_tensor_rm(inputs.attention_mask, device, put_on_device=False)
+    tt_attn_mask = torch_to_tt_tensor_rm(
+        inputs.attention_mask, device, put_on_device=False
+    )
 
     with torch.no_grad():
         torch_output = torch_model(**inputs)
@@ -62,7 +65,6 @@ def test_distilbert_model_inference(device, pcc):
 
     logger.info(comp_allclose(torch_output, tt_output_torch))
     logger.info(pcc_message)
-
 
     if does_pass:
         logger.info("DistilBertModel Passed!")

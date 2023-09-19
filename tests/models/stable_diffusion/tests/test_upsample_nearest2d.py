@@ -17,7 +17,6 @@ from models.stable_diffusion.tt.upsample_nearest2d import TtUpsampleNearest2d
 
 
 def test_run_upsample_nearest_inference(device):
-
     # synthesize the input
     input_shape = [1, 1, 32, 32]
     input = torch.randn(input_shape)

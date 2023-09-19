@@ -4,6 +4,7 @@
 
 from pathlib import Path
 import sys
+
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}")
 sys.path.append(f"{f}/..")
@@ -18,9 +19,15 @@ import pytest
 from tests.models.resnet.genericResnetBlock import ResNet, BasicBlock
 import tt_lib
 
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose_and_pcc, comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+    comp_allclose_and_pcc,
+    comp_pcc,
+)
 
-@pytest.mark.skip(reason="Hanging post commit 8/24/23 debug war room session, see PR#2297, PR#2301")
+
+@pytest.mark.skip(
+    reason="Hanging post commit 8/24/23 debug war room session, see PR#2297, PR#2301"
+)
 @pytest.mark.parametrize("fold_batchnorm", [True], ids=["Batchnorm folded"])
 def test_run_resnet18_inference(device, fold_batchnorm, imagenet_sample_input):
     image = imagenet_sample_input
@@ -33,11 +40,14 @@ def test_run_resnet18_inference(device, fold_batchnorm, imagenet_sample_input):
 
         state_dict = torch_resnet.state_dict()
 
-        tt_resnet18 = ResNet(BasicBlock, [2, 2, 2, 2],
-                        device=device,
-                        state_dict=state_dict,
-                        base_address="",
-                        fold_batchnorm=fold_batchnorm)
+        tt_resnet18 = ResNet(
+            BasicBlock,
+            [2, 2, 2, 2],
+            device=device,
+            state_dict=state_dict,
+            base_address="",
+            fold_batchnorm=fold_batchnorm,
+        )
 
         torch_output = torch_resnet(image).unsqueeze(1).unsqueeze(1)
         tt_output = tt_resnet18(image)

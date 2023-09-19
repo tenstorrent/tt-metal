@@ -7,6 +7,7 @@ from loguru import logger
 import math
 from pathlib import Path
 import sys
+
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
 sys.path.append(f"{f}/../..")
@@ -20,7 +21,12 @@ import numpy as np
 import tt_lib as ttl
 from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from tt_lib.fused_ops.softmax import softmax
-from models.utility_functions import enable_persistent_kernel_cache, comp_pcc, comp_allclose, profiler
+from models.utility_functions import (
+    enable_persistent_kernel_cache,
+    comp_pcc,
+    comp_allclose,
+    profiler,
+)
 
 
 def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
@@ -29,18 +35,21 @@ def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
     while len(size) < 4:
         size.insert(0, 1)
 
-    tt_tensor = ttl.tensor.Tensor(
-        py_tensor.reshape(-1).tolist(),
-        size,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
-    ).to(ttl.tensor.Layout.TILE).to(tt_device)
+    tt_tensor = (
+        ttl.tensor.Tensor(
+            py_tensor.reshape(-1).tolist(),
+            size,
+            ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.Layout.ROW_MAJOR,
+        )
+        .to(ttl.tensor.Layout.TILE)
+        .to(tt_device)
+    )
 
     return tt_tensor
 
 
 def tt2torch_tensor(tt_tensor):
-
     tt_output = tt_tensor.cpu()
     if tt_output.layout() != ttl.tensor.Layout.ROW_MAJOR:
         tt_output = tt_output.to(ttl.tensor.Layout.ROW_MAJOR)
@@ -67,7 +76,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
         [1, 1, 32, 32],
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.Layout.TILE,
-        device
+        device,
     )
 
     def make_attention_heads(x):
@@ -81,7 +90,13 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             #        return x.permute(0, 2, 1, 3)
 
             untilized_x = ttl.tensor.untilize(x)
-            reshaped_unt = ttl.tensor.reshape(untilized_x, x.shape()[0], x.shape()[2], num_heads, x.shape()[3] // num_heads)
+            reshaped_unt = ttl.tensor.reshape(
+                untilized_x,
+                x.shape()[0],
+                x.shape()[2],
+                num_heads,
+                x.shape()[3] // num_heads,
+            )
 
             # N, 128, 2, 64
             transposed = ttl.tensor.transpose_hc(reshaped_unt)
@@ -94,13 +109,15 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             x,
             reciprocal_of_sqrt_hidden_dim_tensor,
             ttl.tensor.BcastOpMath.MUL,
-            ttl.tensor.BcastOpDim.HW
+            ttl.tensor.BcastOpDim.HW,
         )
 
     def op1_qkv_fused(activation, qkv_weight, qkv_bias):
         # profiler.start("___op1_qkv_fused")
         qkv = ttl.tensor.matmul(activation, qkv_weight)
-        qkv = ttl.tensor.bcast(qkv, qkv_bias, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H)
+        qkv = ttl.tensor.bcast(
+            qkv, qkv_bias, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H
+        )
         # profiler.end("___op1_qkv_fused")
 
         return qkv
@@ -159,15 +176,22 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
         # profiler.start("___op8_scale_mask_softmax")
 
         N, C, H, W = qkt.shape()
-        new_shape = [N, 1, C*H, W]
+        new_shape = [N, 1, C * H, W]
         ttl.tensor.reshape(qkt, *new_shape)
         attention_score_input = multiply_by_sqrt_hidden_dim(qkt)
 
-        if (attention_mask is not None):
-            attention_score_input = ttl.tensor.bcast(attention_score_input, attention_mask, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H)
+        if attention_mask is not None:
+            attention_score_input = ttl.tensor.bcast(
+                attention_score_input,
+                attention_mask,
+                ttl.tensor.BcastOpMath.ADD,
+                ttl.tensor.BcastOpDim.H,
+            )
 
         attention_scores = softmax(attention_score_input)
-        ttl.tensor.reshape(attention_scores, N, C, H, W) # Reshape back to original shape
+        ttl.tensor.reshape(
+            attention_scores, N, C, H, W
+        )  # Reshape back to original shape
         # profiler.end("___op8_scale_mask_softmax")
 
         return attention_scores
@@ -197,14 +221,15 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             # profiler.start("___op10_unmake_attention_heads")
             ctx = ttl.tensor.transpose_hc(x)
             ushape = ctx.shape()
-            reshaped = ttl.tensor.reshape(ctx, ushape[0], 1, ushape[1], ushape[2]*ushape[3])
+            reshaped = ttl.tensor.reshape(
+                ctx, ushape[0], 1, ushape[1], ushape[2] * ushape[3]
+            )
             retval = ttl.tensor.tilize(reshaped)
             # profiler.end("___op10_unmake_attention_heads")
 
             return retval
 
     def mha_(activation, attention_mask):
-
         # profiler.start("__mha")
         qkv = op1_qkv_fused(activation, qkv_weight, qkv_bias)
         Q, K, V = op2_split(qkv)
@@ -219,7 +244,9 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
         attention_scores = op8_scale_mask_softmax(qkt, attention_mask)
         weighted_activation = op9_bmm(attention_scores, V_heads)
 
-        res = op10_unmake_attention_heads(weighted_activation) # [N, num heads, seq len, hid size / num heads] -> [N, seq len, hid size]
+        res = op10_unmake_attention_heads(
+            weighted_activation
+        )  # [N, num heads, seq len, hid size / num heads] -> [N, seq len, hid size]
         # profiler.end("__mha")
 
         return res
@@ -230,17 +257,31 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
 class TtMultiHeadAttentionModel(torch.nn.Module):
     def __init__(self, config, encoder_idx, state_dict, device):
         super().__init__()
-        qw = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.query.weight"])
-        qb = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.query.bias"])
-        kw = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.key.weight"])
-        kb = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.key.bias"])
-        vw = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.value.weight"])
-        vb = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.value.bias"])
+        qw = pad_weight(
+            state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.query.weight"]
+        )
+        qb = pad_weight(
+            state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.query.bias"]
+        )
+        kw = pad_weight(
+            state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.key.weight"]
+        )
+        kb = pad_weight(
+            state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.key.bias"]
+        )
+        vw = pad_weight(
+            state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.value.weight"]
+        )
+        vb = pad_weight(
+            state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.value.bias"]
+        )
 
         # Hidden dim
         hidden_dim = qw.shape[-1]
 
-        self.mha = mha(qw, qb, kw, kb, vw, vb, hidden_dim, config.num_attention_heads, device)
+        self.mha = mha(
+            qw, qb, kw, kb, vw, vb, hidden_dim, config.num_attention_heads, device
+        )
 
     def forward(self, activation, attention_mask=None):
         result = self.mha(activation, attention_mask)
@@ -260,36 +301,47 @@ class PytorchMultiHeadAttentionModel(torch.nn.Module):
         return result
 
 
-def run_mha_inference(device, model_version, batch, seq_len, pcc, model_location_generator):
+def run_mha_inference(
+    device, model_version, batch, seq_len, pcc, model_location_generator
+):
+    model_name = str(model_location_generator(model_version, model_subdir="Bert"))
 
-
-
-
-
-
-    model_name = str(model_location_generator(model_version, model_subdir = "Bert"))
-
-    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
-    tt_mha_model = TtMultiHeadAttentionModel(hugging_face_reference_model.config, 0, hugging_face_reference_model.state_dict(), device)
+    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(
+        model_name, torchscript=False
+    )
+    tt_mha_model = TtMultiHeadAttentionModel(
+        hugging_face_reference_model.config,
+        0,
+        hugging_face_reference_model.state_dict(),
+        device,
+    )
     pytorch_mha_model = PytorchMultiHeadAttentionModel(hugging_face_reference_model)
 
     # Prepare input
     torch.manual_seed(0)
-    mha_input = (torch.rand(batch, 1, seq_len, hugging_face_reference_model.config.hidden_size) * 2) - 1
+    mha_input = (
+        torch.rand(batch, 1, seq_len, hugging_face_reference_model.config.hidden_size)
+        * 2
+    ) - 1
     pytorch_out = pytorch_mha_model(mha_input.squeeze(1)).unsqueeze(1)
 
     pad_mha_input = pad_activation(mha_input)
-    tt_mha_input = ttl.tensor.Tensor(pad_mha_input.reshape(-1).tolist(), pad_mha_input.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
+    tt_mha_input = ttl.tensor.Tensor(
+        pad_mha_input.reshape(-1).tolist(),
+        pad_mha_input.shape,
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.ROW_MAJOR,
+    ).to(ttl.tensor.Layout.TILE)
     tt_mha_input = tt_mha_input.to(device)
 
     tt_out = tt_mha_model(tt_mha_input).cpu()
     tt_out1 = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
-
-
     passing, output = comp_pcc(pytorch_out, tt_out1, pcc)
     logger.info(f"Output {output}")
-    _, output = comp_allclose(pytorch_out, tt_out1, 0.5, 0.5) # Only interested in reporting atol/rtol, using PCC for pass/fail
+    _, output = comp_allclose(
+        pytorch_out, tt_out1, 0.5, 0.5
+    )  # Only interested in reporting atol/rtol, using PCC for pass/fail
     logger.info(f"Output {output}")
     if not passing:
         logger.error(f"Output PCC < {pcc}")
@@ -303,11 +355,14 @@ def run_mha_inference(device, model_version, batch, seq_len, pcc, model_location
     (
         ("mrm8488/bert-tiny-finetuned-squadv2", 1, 128, 0.99),
         ("phiyodr/bert-base-finetuned-squad2", 1, 128, 0.99),
-        ("phiyodr/bert-large-finetuned-squad2", 1, 384, 0.99)
+        ("phiyodr/bert-large-finetuned-squad2", 1, 384, 0.99),
     ),
 )
-def test_mha_inference(device, model_version, batch, seq_len, pcc, model_location_generator):
-
+def test_mha_inference(
+    device, model_version, batch, seq_len, pcc, model_location_generator
+):
     # enable_persistent_kernel_cache()
 
-    run_mha_inference(device, model_version, batch, seq_len, pcc, model_location_generator)
+    run_mha_inference(
+        device, model_version, batch, seq_len, pcc, model_location_generator
+    )

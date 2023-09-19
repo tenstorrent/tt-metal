@@ -20,7 +20,6 @@ from models.EfficientNet.tt.efficientnet_model import reference_efficientnet_lit
 
 
 def run_efficientnet_conv2d(state_dict, base_address, reference_module, device):
-
     in_channels = reference_module.in_channels
     out_channels = reference_module.out_channels
     kernel_size = reference_module.kernel_size
@@ -80,7 +79,7 @@ def test_efficientnet_conv2d_b0(device):
         state_dict=reference_model.state_dict(),
         base_address=f"features.0.0",
         reference_module=reference_model.features[0][0],
-        device=device
+        device=device,
     )
 
 
@@ -91,14 +90,13 @@ def test_efficientnet_conv2d_lite0(device):
         state_dict=reference_model.state_dict(),
         base_address=f"stem.0",
         reference_module=reference_model.stem[0],
-        device=device
+        device=device,
     )
 
 
 def run_efficientnet_conv_norm_activation(
     device, state_dict, conv_base_address, bn_base_address, reference_module, is_lite
 ):
-
     in_channels = reference_module[0].in_channels
     out_channels = reference_module[0].out_channels
     kernel_size = reference_module[0].kernel_size

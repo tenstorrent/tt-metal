@@ -27,7 +27,9 @@ from models.ConvNet_MNIST.convnet_mnist_utils import get_test_data
         ),
     ),
 )
-def test_perf(use_program_cache, expected_inference_time, expected_compile_time, device):
+def test_perf(
+    use_program_cache, expected_inference_time, expected_compile_time, device
+):
     disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"

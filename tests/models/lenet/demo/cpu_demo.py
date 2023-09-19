@@ -24,7 +24,7 @@ def test_cpu_demo(mnist_sample_input, model_location_generator):
     num_classes = 10
     batch_size = 1
     with torch.no_grad():
-        pt_model_path = model_location_generator("model.pt", model_subdir = "LeNet")
+        pt_model_path = model_location_generator("model.pt", model_subdir="LeNet")
         torch_LeNet, state_dict = load_torch_lenet(pt_model_path, num_classes)
 
         torch_output = torch_LeNet(image).unsqueeze(1).unsqueeze(1)

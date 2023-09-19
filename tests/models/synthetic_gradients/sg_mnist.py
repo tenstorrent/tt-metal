@@ -11,13 +11,20 @@ from torch.utils.data import DataLoader
 from torchvision import transforms, datasets
 
 import tt_lib as ttl
-from models.utility_functions import pad_activation, pad_weight, tilize_to_list, get_oom_of_float, is_close
+from models.utility_functions import (
+    pad_activation,
+    pad_weight,
+    tilize_to_list,
+    get_oom_of_float,
+    is_close,
+)
 
 input_dim = 1024
 hidden_dim = 256
 output_dim = 10
 batch_size = 1
 eps = 1e-3
+
 
 class TtMnistModel(nn.Module):
     def __init__(self, state_dict):
@@ -56,7 +63,7 @@ class TtMnistModel(nn.Module):
         self.lin2 = TtLinear(256, 256, fc2_weight, fc2_bias, device)
         self.lin3 = TtLinear(256, 32, fc3_weight, fc3_bias, device)
 
-       # Extract batch norm params from state dict
+        # Extract batch norm params from state dict
         gamma1 = pad_weight(state_dict["batchnorm1d_1.weight"])
         beta1 = pad_weight(state_dict["batchnorm1d_1.bias"])
 
@@ -93,8 +100,11 @@ class TtMnistModel(nn.Module):
         running_var3 = pad_weight(state_dict["batchnorm1d_3.running_var"])
 
         # Get shapes
-        print('running mean size before padding:', state_dict["batchnorm1d_1.running_mean"].shape)
-        print('running mean size after padding:', running_mean1.shape)
+        print(
+            "running mean size before padding:",
+            state_dict["batchnorm1d_1.running_mean"].shape,
+        )
+        print("running mean size after padding:", running_mean1.shape)
 
         running_mean1_shape = running_mean1.shape
         running_mean2_shape = running_mean2.shape
@@ -111,15 +121,20 @@ class TtMnistModel(nn.Module):
         running_var3 = tilize_to_list(running_var3)
 
         ### defining batch norms
-        self.batchnorm1d_1 = batchnorm1d_inference(gamma1, beta1, running_mean1, running_var1, eps, gamma1_shape, device)
-        self.batchnorm1d_2 = batchnorm1d_inference(gamma2, beta2, running_mean2, running_var2, eps, gamma2_shape, device)
-        self.batchnorm1d_3 = batchnorm1d_inference(gamma3, beta3, running_mean3, running_var3, eps, gamma3_shape, device)
+        self.batchnorm1d_1 = batchnorm1d_inference(
+            gamma1, beta1, running_mean1, running_var1, eps, gamma1_shape, device
+        )
+        self.batchnorm1d_2 = batchnorm1d_inference(
+            gamma2, beta2, running_mean2, running_var2, eps, gamma2_shape, device
+        )
+        self.batchnorm1d_3 = batchnorm1d_inference(
+            gamma3, beta3, running_mean3, running_var3, eps, gamma3_shape, device
+        )
 
         self.TtRelu = ttl.tensor.relu
 
     # tt forwrd
     def forward(self, X):
-
         x, labels = X
 
         # Flatten tensor
@@ -130,7 +145,9 @@ class TtMnistModel(nn.Module):
         x_ = tilize_to_list(x)
 
         # x is a pytorch tensor,... need to convert to a buda tensor
-        inp = ttl.tensor.Tensor(x_, x.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
+        inp = ttl.tensor.Tensor(
+            x_, x.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device
+        )
         breakpoint()
         lin1_out = self.lin1(inp)
         bn1_out = self.batchnorm1d_1(lin1_out)
@@ -149,10 +166,13 @@ class TtMnistModel(nn.Module):
 
         # Make pytorch tensor... since we had to pad the output, we need
         # to only retrieve the 10 values that represent actual classes
-        lin3_out_cpu_pytorch = torch.Tensor(lin3_out_cpu.to_torch()).reshape(lin3_out_cpu.shape())[:, 0, 0, :10]
+        lin3_out_cpu_pytorch = torch.Tensor(lin3_out_cpu.to_torch()).reshape(
+            lin3_out_cpu.shape()
+        )[:, 0, 0, :10]
         out = nn.functional.softmax(lin3_out_cpu_pytorch)
 
         return out
+
 
 class PytorchMnistModel(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, state_dict):
@@ -177,15 +197,15 @@ class PytorchMnistModel(nn.Module):
         x = x.view(x.shape[0], -1)
 
         lin1_out = self.linear1(x)
-        bn1_out =  self.batchnorm1d_1(lin1_out)
+        bn1_out = self.batchnorm1d_1(lin1_out)
         relu1_out = self.relu1(bn1_out)
 
         lin2_out = self.linear2(relu1_out)
-        bn2_out =  self.batchnorm1d_2(lin2_out)
+        bn2_out = self.batchnorm1d_2(lin2_out)
         relu2_out = self.relu1(bn2_out)
 
         lin3_out = self.linear3(relu2_out)
-        bn3_out =  self.batchnorm1d_3(lin3_out)
+        bn3_out = self.batchnorm1d_3(lin3_out)
         relu3_out = self.relu3(bn3_out)
 
         out = nn.functional.softmax(relu3_out)
@@ -196,14 +216,18 @@ class PytorchMnistModel(nn.Module):
 def run_mnist_inference():
     # Data preprocessing/loading
     transform = transforms.Compose([transforms.ToTensor()])
-    test_dataset = datasets.MNIST(root="data", train=False, transform=transform, download=True)
+    test_dataset = datasets.MNIST(
+        root="data", train=False, transform=transform, download=True
+    )
     dataloader = DataLoader(test_dataset, batch_size=batch_size)
 
     # Trained to 63% accuracy
     state_dict = torch.load(f"{Path(__file__).parent}/lfs/synthetic_grads/bn1d_32.pt")
 
     tt_mnist_model = TtMnistModel(state_dict)
-    pytorch_mnist_model = PytorchMnistModel(input_dim, hidden_dim, output_dim, state_dict)
+    pytorch_mnist_model = PytorchMnistModel(
+        input_dim, hidden_dim, output_dim, state_dict
+    )
     pytorch_mnist_model.eval()
 
     first_input = next(iter(dataloader))
@@ -212,21 +236,21 @@ def run_mnist_inference():
     tt_out = tt_mnist_model(first_input)
     pytorch_out = pytorch_mnist_model(first_input)
 
-    print('tt_out:', tt_out)
-    print('pytorch_out:', pytorch_out)
-    #assert (tt_out.topk(10).indices == pytorch_out.topk(10).indices).all(), "The outputs from device and pytorch must have the same topk indices"
-    print('tt out topk:', tt_out.topk(10))
-    print('pytorch out topk:', pytorch_out.topk(10))
+    print("tt_out:", tt_out)
+    print("pytorch_out:", pytorch_out)
+    # assert (tt_out.topk(10).indices == pytorch_out.topk(10).indices).all(), "The outputs from device and pytorch must have the same topk indices"
+    print("tt out topk:", tt_out.topk(10))
+    print("pytorch out topk:", pytorch_out.topk(10))
 
     # Check that the scale of each output is the same
     tt_out_oom = get_oom_of_float(tt_out.tolist()[0])
     pytorch_out_oom = get_oom_of_float(pytorch_out.tolist()[0])
 
     close_or_far = is_close(pytorch_out, tt_out)
-    print('close or far?', close_or_far)
+    print("close or far?", close_or_far)
     breakpoint()
-    #assert tt_out_oom == pytorch_out_oom, "The order of magnitudes of the outputs must be the same"
+    # assert tt_out_oom == pytorch_out_oom, "The order of magnitudes of the outputs must be the same"
+
 
 def test_run_mnist_inference(device):
-
     run_mnist_inference()

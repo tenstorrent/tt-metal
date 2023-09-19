@@ -25,7 +25,11 @@ from vgg_utils import get_shape
 
 _batch_size = 1
 
-@pytest.mark.parametrize("pcc", ((0.99),),)
+
+@pytest.mark.parametrize(
+    "pcc",
+    ((0.99),),
+)
 def test_vgg11_inference(device, pcc, imagenet_sample_input):
     image = imagenet_sample_input
 

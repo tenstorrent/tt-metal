@@ -20,15 +20,27 @@ from transformers import AutoImageProcessor
 import pytest
 import tt_lib
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, profiler
-from models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache
+from models.utility_functions import (
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+)
 from models.utility_functions import prep_report
 
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+    comp_allclose,
+    comp_pcc,
+)
 from loguru import logger
 from tests.models.resnet.metalResnetBlock50 import ResNet, Bottleneck
 
 
-def run_perf_resnet(batch_size, expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device):
+def run_perf_resnet(
+    batch_size,
+    expected_inference_time,
+    expected_compile_time,
+    hf_cat_image_sample_input,
+    device,
+):
     disable_persistent_kernel_cache()
     first_key = f"first_iter_batchsize{batch_size}"
     second_key = f"second_iter_batchsize{batch_size}"
@@ -40,10 +52,12 @@ def run_perf_resnet(batch_size, expected_inference_time, expected_compile_time, 
     inputs = image_processor(image, return_tensors="pt")
 
     inputs = inputs["pixel_values"]
-    comments = f"{list(inputs.shape)[-2]}x{list(inputs.shape)[-1]}_batchsize{batch_size}"
+    comments = (
+        f"{list(inputs.shape)[-2]}x{list(inputs.shape)[-1]}_batchsize{batch_size}"
+    )
 
     inputs1 = inputs
-    for i in range(batch_size-1):
+    for i in range(batch_size - 1):
         inputs = torch.cat((inputs, inputs1), dim=0)
 
     torch_resnet50 = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
@@ -51,14 +65,16 @@ def run_perf_resnet(batch_size, expected_inference_time, expected_compile_time, 
 
     state_dict = torch_resnet50.state_dict()
 
-    tt_resnet50 = ResNet(Bottleneck, [3, 4, 6, 3],
-                    device=device,
-                    state_dict=state_dict,
-                    base_address="",
-                    fold_batchnorm=True,
-                    storage_in_dram=False,
-                    batch_size=batch_size)
-
+    tt_resnet50 = ResNet(
+        Bottleneck,
+        [3, 4, 6, 3],
+        device=device,
+        state_dict=state_dict,
+        base_address="",
+        fold_batchnorm=True,
+        storage_in_dram=False,
+        batch_size=batch_size,
+    )
 
     with torch.no_grad():
         profiler.start(cpu_key)
@@ -70,13 +86,12 @@ def run_perf_resnet(batch_size, expected_inference_time, expected_compile_time, 
         tt_lib.device.Synchronize()
         profiler.end(first_key)
 
-        #enable_persistent_kernel_cache()
+        # enable_persistent_kernel_cache()
 
         profiler.start(second_key)
         tt_output = tt_resnet50(inputs)
         tt_lib.device.Synchronize()
         profiler.end(second_key)
-
 
     first_iter_time = profiler.get(first_key)
     second_iter_time = profiler.get(second_key)
@@ -91,13 +106,13 @@ def run_perf_resnet(batch_size, expected_inference_time, expected_compile_time, 
         expected_compile_time=expected_compile_time,
         expected_inference_time=expected_inference_time,
         comments=comments,
-        inference_time_cpu=cpu_time
+        inference_time_cpu=cpu_time,
     )
 
     logger.info(f"resnet50 {comments} inference time: {second_iter_time}")
     logger.info(f"resnet50 compile time: {compile_time}")
 
-    #assert second_iter_time < expected_inference_time, f"resnet50 {comments} is too slow"
+    # assert second_iter_time < expected_inference_time, f"resnet50 {comments} is too slow"
     assert compile_time < expected_compile_time, "resnet50 compile time is too slow"
 
 
@@ -111,8 +126,21 @@ def run_perf_resnet(batch_size, expected_inference_time, expected_compile_time, 
     ),
 )
 @pytest.mark.skip(reason="Conv disabled in main.")
-def test_perf_bare_metal(use_program_cache, batch_size, expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device):
-    run_perf_resnet(batch_size, expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device)
+def test_perf_bare_metal(
+    use_program_cache,
+    batch_size,
+    expected_inference_time,
+    expected_compile_time,
+    hf_cat_image_sample_input,
+    device,
+):
+    run_perf_resnet(
+        batch_size,
+        expected_inference_time,
+        expected_compile_time,
+        hf_cat_image_sample_input,
+        device,
+    )
 
 
 @pytest.mark.models_performance_virtual_machine
@@ -125,5 +153,18 @@ def test_perf_bare_metal(use_program_cache, batch_size, expected_inference_time,
     ),
 )
 @pytest.mark.skip(reason="Conv disabled in main.")
-def test_perf_virtual_machine(use_program_cache, batch_size, expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device):
-    run_perf_resnet(batch_size, expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device)
+def test_perf_virtual_machine(
+    use_program_cache,
+    batch_size,
+    expected_inference_time,
+    expected_compile_time,
+    hf_cat_image_sample_input,
+    device,
+):
+    run_perf_resnet(
+        batch_size,
+        expected_inference_time,
+        expected_compile_time,
+        hf_cat_image_sample_input,
+        device,
+    )

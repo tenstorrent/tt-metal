@@ -22,7 +22,6 @@ from models.EfficientNet.tt.efficientnet_model import reference_efficientnet_lit
 def run_efficientnet_mbconv(
     device, state_dict, base_address, reference_module, mb_conv_config, is_lite
 ):
-
     torch.manual_seed(0)
     test_input = torch.rand(1, mb_conv_config.input_channels, 64, 64)
     pt_out = reference_module(test_input)

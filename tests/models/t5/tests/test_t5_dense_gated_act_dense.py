@@ -61,6 +61,4 @@ def run_test_T5DenseGatedActDense_inference(device):
 
 
 def test_T5DenseGatedActDense_inference(device):
-
-
     run_test_T5DenseGatedActDense_inference(device)

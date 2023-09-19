@@ -20,8 +20,14 @@ from datasets import load_dataset
 from loguru import logger
 import pytest
 import tt_lib
-from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, Profiler, \
-         disable_persistent_kernel_cache, enable_persistent_kernel_cache, prep_report
+from models.utility_functions import (
+    torch_to_tt_tensor_rm,
+    tt_to_torch_tensor,
+    Profiler,
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    prep_report,
+)
 
 from tests.models.roberta.roberta_common import (
     torch2tt_tensor,
@@ -97,7 +103,7 @@ def run_perf_roberta(expected_inference_time, expected_compile_time, device):
         expected_compile_time=expected_compile_time,
         expected_inference_time=expected_inference_time,
         comments=comments,
-        inference_time_cpu=cpu_time
+        inference_time_cpu=cpu_time,
     )
 
     compile_time = first_iter_time - second_iter_time
@@ -110,12 +116,15 @@ def run_perf_roberta(expected_inference_time, expected_compile_time, device):
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (0.45,
-         17,
+        (
+            0.45,
+            17,
         ),
     ),
 )
-def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_compile_time, device):
+def test_perf_bare_metal(
+    use_program_cache, expected_inference_time, expected_compile_time, device
+):
     run_perf_roberta(expected_inference_time, expected_compile_time, device)
 
 
@@ -123,10 +132,13 @@ def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_co
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (0.75,
-         17.5,
+        (
+            0.75,
+            17.5,
         ),
     ),
 )
-def test_perf_virtual_machine(use_program_cache, expected_inference_time, expected_compile_time, device):
+def test_perf_virtual_machine(
+    use_program_cache, expected_inference_time, expected_compile_time, device
+):
     run_perf_roberta(expected_inference_time, expected_compile_time, device)

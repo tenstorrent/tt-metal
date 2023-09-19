@@ -22,14 +22,16 @@ import pytest
 
 from transformers import GPT2LMHeadModel
 
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+    comp_allclose,
+    comp_pcc,
+)
 
 from loguru import logger
 import tests.models.nanogpt.tt.nanogpt_block as nanogpt_block
 import tests.models.nanogpt.tt.nanogpt_attention as nanogpt_attention
 import tests.models.nanogpt.tt.nanogpt_model as nanogpt_model
 from tests.models.nanogpt.tt.nanogpt_config import GPTConfig
-
 
 
 from models.utility_functions import (
@@ -39,15 +41,20 @@ from models.utility_functions import (
 )
 
 # -----------------------------------------------------------------------------
-start = "\n" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
-max_new_tokens = 20 # number of tokens generated in each sample
-temperature = 0.8 # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
-top_k = None # retain only the top_k most likely tokens, clamp others to have 0 probability
+start = "\n"  # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
+max_new_tokens = 20  # number of tokens generated in each sample
+temperature = (
+    0.8  # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
+)
+top_k = (
+    None  # retain only the top_k most likely tokens, clamp others to have 0 probability
+)
 seed = 1337
-device_select = 'cpu' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1', etc.
-dtype = 'bfloat16' # 'float32' or 'bfloat16' or 'float16'
-compile = False # use PyTorch 2.0 to compile the model to be faster
+device_select = "cpu"  # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1', etc.
+dtype = "bfloat16"  # 'float32' or 'bfloat16' or 'float16'
+compile = False  # use PyTorch 2.0 to compile the model to be faster
 # -----------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize(
     "prompt, max_new_tokens, temperature",
@@ -60,24 +67,22 @@ compile = False # use PyTorch 2.0 to compile the model to be faster
     ),
 )
 def test_nanogpt_end_to_end(prompt, max_new_tokens, temperature, device):
-
     # Prepare input
 
-    model_hf = GPT2LMHeadModel.from_pretrained('gpt2')
+    model_hf = GPT2LMHeadModel.from_pretrained("gpt2")
     sd = model_hf.state_dict()
     model_hf.eval()
     torch.manual_seed(0)
 
-
-    model_type = 'gpt2'
+    model_type = "gpt2"
 
     config_args = {
-        'gpt2':         dict(n_layer=12, n_head=12, n_embd=768),  # 124M params
+        "gpt2": dict(n_layer=12, n_head=12, n_embd=768),  # 124M params
     }[model_type]
 
-    config_args['vocab_size'] = 50257 # always 50257 for GPT model checkpoints
-    config_args['block_size'] = 1024 # always 1024 for GPT model checkpoints
-    config_args['bias'] = True # always True for GPT model checkpoints
+    config_args["vocab_size"] = 50257  # always 50257 for GPT model checkpoints
+    config_args["block_size"] = 1024  # always 1024 for GPT model checkpoints
+    config_args["bias"] = True  # always True for GPT model checkpoints
 
     config = GPTConfig(**config_args)
 
@@ -90,6 +95,6 @@ def test_nanogpt_end_to_end(prompt, max_new_tokens, temperature, device):
     text = prompt
     start_ids = encode(text)
 
-    x = (torch.tensor(start_ids, dtype=torch.long, device='cpu')[None, ...])
+    x = torch.tensor(start_ids, dtype=torch.long, device="cpu")[None, ...]
     y = tt_model.generate(x, max_new_tokens, temperature, top_k=top_k)
     logger.info(decode(y[0].tolist()))

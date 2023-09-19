@@ -26,8 +26,7 @@ from models.stable_diffusion.tt.unet_2d_blocks import TtCrossAttnDownBlock2D
 from models.stable_diffusion.tt.experimental_ops import UseDeviceConv
 
 
-
-@pytest.mark.parametrize("index", [1]) #FIXME: failing 0, 2 with L1 error.
+@pytest.mark.parametrize("index", [1])  # FIXME: failing 0, 2 with L1 error.
 def test_run_cross_attn_down_block_real_input_inference(
     device, index, model_location_generator
 ):
@@ -38,16 +37,18 @@ def test_run_cross_attn_down_block_real_input_inference(
     unet.eval()
     state_dict = unet.state_dict()
 
-    dir_path = model_location_generator(
-        "tensor_files", model_subdir="StableDiffusion"
-    )
+    dir_path = model_location_generator("tensor_files", model_subdir="StableDiffusion")
     attr_path = f"{dir_path}/CrossAttnDownBlock2D_inp__attr__block_{index}.pt"
     attention_mask_path = (
         f"{dir_path}/CrossAttnDownBlock2D_inp__attention_mask__block_{index}.pt"
     )
-    cross_attn_kwargs_path = f"{dir_path}/CrossAttnDownBlock2D_inp__cross_attention_kwargs__block_{index}.pt"
+    cross_attn_kwargs_path = (
+        f"{dir_path}/CrossAttnDownBlock2D_inp__cross_attention_kwargs__block_{index}.pt"
+    )
     emb_path = f"{dir_path}/CrossAttnDownBlock2D_inp__emb__block_{index}.pt"
-    encoder_hidden_states_path = f"{dir_path}/CrossAttnDownBlock2D_inp__encoder_hidden_states__block_{index}.pt"
+    encoder_hidden_states_path = (
+        f"{dir_path}/CrossAttnDownBlock2D_inp__encoder_hidden_states__block_{index}.pt"
+    )
     sample_path = f"{dir_path}/CrossAttnDownBlock2D_inp__sample__block_{index}.pt"
 
     map_location = torch.device("cpu")

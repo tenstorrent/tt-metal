@@ -17,12 +17,12 @@ from transformers import (
 )
 from transformers import AutoTokenizer
 
+
 @pytest.mark.parametrize(
     "pcc",
     ((0.99),),
 )
 def test_distilbert_embedding_inference(device, pcc):
-
     tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased-distilled-squad")
     HF_model = HF_DistilBertForQuestionAnswering.from_pretrained(
         "distilbert-base-uncased-distilled-squad"
@@ -46,7 +46,6 @@ def test_distilbert_embedding_inference(device, pcc):
 
     inputs = tokenizer(question, context, return_tensors="pt")
 
-
     with torch.no_grad():
         torch_output = torch_model(inputs.input_ids)
         """
@@ -61,7 +60,6 @@ def test_distilbert_embedding_inference(device, pcc):
 
     logger.info(comp_allclose(torch_output, tt_output_torch))
     logger.info(pcc_message)
-
 
     if does_pass:
         logger.info("DistilBertEmbedding Passed!")

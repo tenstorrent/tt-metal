@@ -200,8 +200,7 @@ class PytorchBertEncoder(torch.nn.Module):
 def run_bert_encoder_inference(
     device, model_version, batch, seq_len, pcc, model_config, model_location_generator
 ):
-
-    model_name = str(model_location_generator(model_version, model_subdir = "Bert"))
+    model_name = str(model_location_generator(model_version, model_subdir="Bert"))
 
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(
         model_name, torchscript=False
@@ -254,11 +253,7 @@ def run_bert_encoder_inference(
 
     tt_out = tt_bert_encoder_model(tt_bert_encoder_input, tt_bert_attention_mask).cpu()
 
-    tt_out = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(
-        tt_out.shape()
-    )
-
-
+    tt_out = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(tt_out.shape())
 
     passing, output = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"Output {output}")

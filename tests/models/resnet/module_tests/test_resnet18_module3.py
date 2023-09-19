@@ -4,6 +4,7 @@
 
 from pathlib import Path
 import sys
+
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}")
 sys.path.append(f"{f}/..")
@@ -26,27 +27,36 @@ from torch_resnet import _make_layer, BasicBlock
 from models.utility_functions import comp_allclose_and_pcc, comp_pcc
 
 
-batch_size=1
+batch_size = 1
 
-@pytest.mark.parametrize("fuse_ops", [False, True], ids=['Not Fused', "Ops Fused"])
+
+@pytest.mark.parametrize("fuse_ops", [False, True], ids=["Not Fused", "Ops Fused"])
 def test_resnet18_module3(fuse_ops, imagenet_sample_input):
     image = imagenet_sample_input
     with torch.no_grad():
-
         torch_resnet = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
         torch_resnet.eval()
         state_dict = torch_resnet.state_dict()
         torch_module3 = torch_resnet.layer3
 
-        layer3 = _make_layer(BasicBlock, 256, 2, name="layer3", stride=2, dilate=False, state_dict=state_dict)
+        layer3 = _make_layer(
+            BasicBlock,
+            256,
+            2,
+            name="layer3",
+            stride=2,
+            dilate=False,
+            state_dict=state_dict,
+        )
         layer3.eval()
 
         if fuse_ops:
-            modules_to_fuse = [['0.conv1', '0.bn1', '0.relu1'], ['0.conv2', '0.bn2']]
-            modules_to_fuse.extend([['1.conv1', '1.bn1', '1.relu1'], ['1.conv2', '1.bn2']])
-            modules_to_fuse.extend([['0.downsample.0', '0.downsample.1']])
+            modules_to_fuse = [["0.conv1", "0.bn1", "0.relu1"], ["0.conv2", "0.bn2"]]
+            modules_to_fuse.extend(
+                [["1.conv1", "1.bn1", "1.relu1"], ["1.conv2", "1.bn2"]]
+            )
+            modules_to_fuse.extend([["0.downsample.0", "0.downsample.1"]])
             layer3 = torch.ao.quantization.fuse_modules(layer3, modules_to_fuse)
-
 
         transformed_input = torch_resnet.conv1(image)
         transformed_input = torch_resnet.bn1(transformed_input)

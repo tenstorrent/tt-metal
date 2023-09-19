@@ -4,6 +4,7 @@
 
 from pathlib import Path
 import sys
+
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}")
 sys.path.append(f"{f}/../tt")
@@ -20,7 +21,11 @@ from torch import nn
 from loguru import logger
 
 import tt_lib
-from models.utility_functions import torch_to_tt_tensor, torch_to_tt_tensor_rm, tt_to_torch_tensor
+from models.utility_functions import (
+    torch_to_tt_tensor,
+    torch_to_tt_tensor_rm,
+    tt_to_torch_tensor,
+)
 from models.utility_functions import comp_pcc, comp_allclose_and_pcc
 
 from deit_config import DeiTConfig
@@ -30,18 +35,17 @@ from deit_layer import TtDeiTLayer
 
 
 def test_deit_layer_inference(device, pcc=0.99):
-
     # setup pytorch model
     model = DeiTModel.from_pretrained("facebook/deit-base-distilled-patch16-224")
     model.eval()
     state_dict = model.state_dict()
 
     # synthesize the input
-    base_address= 'encoder.layer.0'
+    base_address = "encoder.layer.0"
     torch_layer = model.encoder.layer[0]
     head_mask = None
     output_attentions = False
-    input_shape =  torch.Size([1, 1, 198, 768])
+    input_shape = torch.Size([1, 1, 198, 768])
     hidden_state = torch.randn(input_shape)
 
     torch_output = torch_layer(hidden_state.squeeze(0), head_mask, output_attentions)[0]
@@ -56,4 +60,4 @@ def test_deit_layer_inference(device, pcc=0.99):
     pcc_passing, _ = comp_pcc(torch_output, tt_output, pcc)
     _, pcc_output = comp_allclose_and_pcc(torch_output, tt_output, pcc)
     logger.info(f"Output {pcc_output}")
-    assert(pcc_passing), f"Failed! Low pcc: {pcc}."
+    assert pcc_passing, f"Failed! Low pcc: {pcc}."

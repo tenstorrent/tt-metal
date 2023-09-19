@@ -26,7 +26,6 @@ from models.utility_functions import (
 
 
 def test_Yolov5_Conv2D(device):
-
     weights = "tests/models/yolov5/reference/yolov5s.pt"
     dnn = False
     data = None
@@ -95,8 +94,6 @@ def test_Yolov5_Conv2D(device):
 
 
 def test_Yolov5_Silu(device):
-
-
     weights = "tests/models/yolov5/reference/yolov5s.pt"
     dnn = False
     data = None
@@ -129,8 +126,6 @@ def test_Yolov5_Silu(device):
 
 
 def test_Yolov5_conv(device):
-
-
     weights = "tests/models/yolov5/reference/yolov5s.pt"
     dnn = False
     data = None
@@ -195,8 +190,6 @@ def test_Yolov5_conv(device):
 
 
 def test_Yolov5_Conv2D_real(device):
-
-
     weights = "tests/models/yolov5/reference/yolov5s.pt"
     dnn = False
     data = None

@@ -173,12 +173,12 @@ def run_bert_question_and_answering_inference(
     pcc,
     model_location_generator,
     PERF_CNT,
-    device
+    device,
 ):
     torch.manual_seed(1234)
 
-    model_name = str(model_location_generator(model_version, model_subdir = "Bert"))
-    tokenizer_name = str(model_location_generator(model_version, model_subdir = "Bert"))
+    model_name = str(model_location_generator(model_version, model_subdir="Bert"))
+    tokenizer_name = str(model_location_generator(model_version, model_subdir="Bert"))
 
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(
         model_name, torchscript=False
@@ -253,7 +253,9 @@ def run_bert_question_and_answering_inference(
 
     # the first inference pass
     tt_out = tt_out_list[0].cpu()
-    tt_untilized_output = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(batch, 1, seq_len, -1)
+    tt_untilized_output = (
+        tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(batch, 1, seq_len, -1)
+    )
 
     logger.info(f"Enable profiler and enable binary and compile cache")
     profiler.enable()
@@ -272,7 +274,11 @@ def run_bert_question_and_answering_inference(
         profiler.start("processing_output_to_string")
 
         tt_out = tt_out_list[i].cpu()
-        tt_untilized_output = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(batch, 1, seq_len, -1)
+        tt_untilized_output = (
+            tt_out.to(ttl.tensor.Layout.ROW_MAJOR)
+            .to_torch()
+            .reshape(batch, 1, seq_len, -1)
+        )
 
         tt_start_logits = tt_untilized_output[..., :, 0].squeeze(1)
         tt_end_logits = tt_untilized_output[..., :, 1].squeeze(1)
@@ -324,7 +330,6 @@ def run_bert_question_and_answering_inference(
 
     profiler.print()
 
-
     assert profiler.get("whole_model") < 70.0
     assert (
         passing_start and passing_end
@@ -353,5 +358,5 @@ def test_bert_constant_prop(model_location_generator, device):
         pcc,
         model_location_generator,
         PERF_CNT,
-        device
+        device,
     )

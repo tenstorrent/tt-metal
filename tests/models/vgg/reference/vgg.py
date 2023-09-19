@@ -11,14 +11,61 @@ import torch.nn as nn
 cfgs: Dict[str, List[Union[str, int]]] = {
     "A": [64, "M", 128, "M", 256, 256, "M", 512, 512, "M", 512, 512, "M"],
     "B": [64, 64, "M", 128, 128, "M", 256, 256, "M", 512, 512, "M", 512, 512, "M"],
-    "D": [64, 64, "M", 128, 128, "M", 256, 256, 256, "M", 512, 512, 512, "M", 512, 512, 512, "M"],
-    "E": [64, 64, "M", 128, 128, "M", 256, 256, 256, 256, "M", 512, 512, 512, 512, "M", 512, 512, 512, 512, "M"],
+    "D": [
+        64,
+        64,
+        "M",
+        128,
+        128,
+        "M",
+        256,
+        256,
+        256,
+        "M",
+        512,
+        512,
+        512,
+        "M",
+        512,
+        512,
+        512,
+        "M",
+    ],
+    "E": [
+        64,
+        64,
+        "M",
+        128,
+        128,
+        "M",
+        256,
+        256,
+        256,
+        256,
+        "M",
+        512,
+        512,
+        512,
+        512,
+        "M",
+        512,
+        512,
+        512,
+        512,
+        "M",
+    ],
 }
 
 
 class VGG(nn.Module):
     def __init__(
-        self, features: nn.Module, num_classes: int = 1000, init_weights: bool = True, dropout: float = 0.5, state_dict=None, base_address=""
+        self,
+        features: nn.Module,
+        num_classes: int = 1000,
+        init_weights: bool = True,
+        dropout: float = 0.5,
+        state_dict=None,
+        base_address="",
     ) -> None:
         super().__init__()
         self.state_dict = state_dict
@@ -28,13 +75,13 @@ class VGG(nn.Module):
         self.avgpool = nn.AdaptiveAvgPool2d((7, 7))
 
         self.classifier = nn.Sequential(
-            nn.Linear(512 * 7 * 7, 4096), # 0
-            nn.ReLU(True),                # 1
-            nn.Dropout(p=dropout),        # 2
-            nn.Linear(4096, 4096),        # 3
-            nn.ReLU(True),                # 4
-            nn.Dropout(p=dropout),        # 5
-            nn.Linear(4096, num_classes), # 6
+            nn.Linear(512 * 7 * 7, 4096),  # 0
+            nn.ReLU(True),  # 1
+            nn.Dropout(p=dropout),  # 2
+            nn.Linear(4096, 4096),  # 3
+            nn.ReLU(True),  # 4
+            nn.Dropout(p=dropout),  # 5
+            nn.Linear(4096, num_classes),  # 6
         )
 
         self.classifier[0].weight = nn.Parameter(state_dict["classifier.0.weight"])
@@ -54,7 +101,12 @@ class VGG(nn.Module):
         return x
 
 
-def make_layers(cfg: List[Union[str, int]], batch_norm: bool = False, state_dict=None, base_address="features") -> nn.Sequential:
+def make_layers(
+    cfg: List[Union[str, int]],
+    batch_norm: bool = False,
+    state_dict=None,
+    base_address="features",
+) -> nn.Sequential:
     layers: List[nn.Module] = []
     in_channels = 3
 
@@ -71,14 +123,29 @@ def make_layers(cfg: List[Union[str, int]], batch_norm: bool = False, state_dict
                 conv_ind = len(layers) - 3
                 bn_ind = len(layers) - 2
 
-                conv2d.weight = nn.Parameter(state_dict[f"{base_address}.{conv_ind}.weight"])
-                conv2d.bias = nn.Parameter(state_dict[f"{base_address}.{conv_ind}.bias"])
+                conv2d.weight = nn.Parameter(
+                    state_dict[f"{base_address}.{conv_ind}.weight"]
+                )
+                conv2d.bias = nn.Parameter(
+                    state_dict[f"{base_address}.{conv_ind}.bias"]
+                )
 
-                layers[bn_ind].weight = nn.Parameter(state_dict[f"{base_address}.{bn_ind}.weight"])
-                layers[bn_ind].bias = nn.Parameter(state_dict[f"{base_address}.{bn_ind}.bias"])
-                layers[bn_ind].running_mean = nn.Parameter(state_dict[f"{base_address}.{bn_ind}.running_mean"])
-                layers[bn_ind].running_var = nn.Parameter(state_dict[f"{base_address}.{bn_ind}.running_var"])
-                layers[bn_ind].num_batches_tracked = nn.Parameter(state_dict[f"{base_address}.{bn_ind}.num_batches_tracked"], requires_grad=False)
+                layers[bn_ind].weight = nn.Parameter(
+                    state_dict[f"{base_address}.{bn_ind}.weight"]
+                )
+                layers[bn_ind].bias = nn.Parameter(
+                    state_dict[f"{base_address}.{bn_ind}.bias"]
+                )
+                layers[bn_ind].running_mean = nn.Parameter(
+                    state_dict[f"{base_address}.{bn_ind}.running_mean"]
+                )
+                layers[bn_ind].running_var = nn.Parameter(
+                    state_dict[f"{base_address}.{bn_ind}.running_var"]
+                )
+                layers[bn_ind].num_batches_tracked = nn.Parameter(
+                    state_dict[f"{base_address}.{bn_ind}.num_batches_tracked"],
+                    requires_grad=False,
+                )
                 layers[bn_ind].eval()
             else:
                 layers += [conv2d, nn.ReLU(inplace=True)]
@@ -91,13 +158,28 @@ def make_layers(cfg: List[Union[str, int]], batch_norm: bool = False, state_dict
 
 
 def _vgg(cfg: str, batch_norm: bool, state_dict) -> VGG:
-    model = VGG(make_layers(cfgs[cfg], batch_norm=batch_norm, state_dict=state_dict, ), state_dict=state_dict)
+    model = VGG(
+        make_layers(
+            cfgs[cfg],
+            batch_norm=batch_norm,
+            state_dict=state_dict,
+        ),
+        state_dict=state_dict,
+    )
     return model
 
 
 def vgg16(state_dict) -> VGG:
-    return _vgg("D", False, state_dict,)
+    return _vgg(
+        "D",
+        False,
+        state_dict,
+    )
 
 
 def vgg16_bn(state_dict) -> VGG:
-    return _vgg("D", True, state_dict, )
+    return _vgg(
+        "D",
+        True,
+        state_dict,
+    )

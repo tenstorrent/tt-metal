@@ -31,9 +31,8 @@ def test_lenet_inference(
     num_classes = 10
     batch_size = 1
     with torch.no_grad():
-
         # Initialize Torch model
-        pt_model_path = model_location_generator("model.pt", model_subdir = "LeNet")
+        pt_model_path = model_location_generator("model.pt", model_subdir="LeNet")
         torch_LeNet, _ = load_torch_lenet(pt_model_path, num_classes)
 
         # Initialize TT model

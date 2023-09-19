@@ -28,7 +28,6 @@ from models.trocr.tt.trocr_embed_tokens import TtTrOCREmbedTokens
     ((0.99),),
 )
 def test_trocr_embed_tokens_inference(device, pcc, reset_seeds):
-
     with torch.no_grad():
         model = VisionEncoderDecoderModel.from_pretrained(
             "microsoft/trocr-base-handwritten"

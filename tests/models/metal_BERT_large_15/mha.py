@@ -20,7 +20,12 @@ import numpy as np
 
 import tt_lib as ttl
 from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
-from models.utility_functions import enable_persistent_kernel_cache, comp_pcc, comp_allclose, profiler
+from models.utility_functions import (
+    enable_persistent_kernel_cache,
+    comp_pcc,
+    comp_allclose,
+    profiler,
+)
 
 from tests.models.metal_BERT_large_15.model_config import get_model_config
 
@@ -46,13 +51,12 @@ def torch2tt_tensor(py_tensor: torch.Tensor, tt_device, dtype, mem_config):
 
 
 def tt2torch_tensor(tt_tensor):
-
     tt_output = tt_tensor.cpu()
     if tt_output.layout() != ttl.tensor.Layout.ROW_MAJOR:
         tt_output = tt_output.to(ttl.tensor.Layout.ROW_MAJOR)
     dtype = {
-        ttl.tensor.DataType.FLOAT32:   torch.float,
-        ttl.tensor.DataType.BFLOAT16:  torch.bfloat16,
+        ttl.tensor.DataType.FLOAT32: torch.float,
+        ttl.tensor.DataType.BFLOAT16: torch.bfloat16,
         ttl.tensor.DataType.BFLOAT8_B: torch.float,
     }[tt_tensor.dtype()]
 
@@ -102,8 +106,14 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, model_config):
 
     def op2to6_create_qkv_heads(qkv):
         # profiler.start("___op2to6_create_qkv_heads")
-        q_heads, kt_heads, v_heads = ttl.operations.primary.transformers.split_fused_qkv_and_split_heads(
-            qkv, ttl.tensor.CoreCoord(12, 9), output_mem_config=model_config["OP2TO6_SPLIT_QKV_HEADS_OUTPUT_MEMCFG"]
+        (
+            q_heads,
+            kt_heads,
+            v_heads,
+        ) = ttl.operations.primary.transformers.split_fused_qkv_and_split_heads(
+            qkv,
+            ttl.tensor.CoreCoord(12, 9),
+            output_mem_config=model_config["OP2TO6_SPLIT_QKV_HEADS_OUTPUT_MEMCFG"],
         )
         # profiler.end("___op2to6_create_qkv_heads")
 
@@ -128,8 +138,10 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, model_config):
         # Input and output tensors of this fused op is: [9, 1, 6144, 384] instead of [9, 16, 384, 384]
         # No-op reshapes are handled within pre-softmax (op 7) and post-softmax bmms (op 9)
         if attention_mask is not None:
-            attention_scores = ttl.operations.primary.transformers.scale_mask_softmax_in_place(
-                qkt, freciprocal_of_sqrt_hidden_dim, attention_mask
+            attention_scores = (
+                ttl.operations.primary.transformers.scale_mask_softmax_in_place(
+                    qkt, freciprocal_of_sqrt_hidden_dim, attention_mask
+                )
             )
         else:
             # No pass in mha sub-graph or full bert encoder uses this anymore
@@ -160,7 +172,11 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, model_config):
         else:
             # profiler.start("___op10_unmake_attention_heads")
             retval = ttl.operations.primary.transformers.concatenate_heads(
-                x, ttl.tensor.CoreCoord(12, 9), output_mem_config=model_config["OP10_CONCATENATE_ATTENTION_HEADS_OUTPUT_MEMCFG"]
+                x,
+                ttl.tensor.CoreCoord(12, 9),
+                output_mem_config=model_config[
+                    "OP10_CONCATENATE_ATTENTION_HEADS_OUTPUT_MEMCFG"
+                ],
             )
             # profiler.end("___op10_unmake_attention_heads")
 
@@ -255,8 +271,7 @@ class PytorchMultiHeadAttentionModel(torch.nn.Module):
 def run_mha_inference(
     device, model_version, batch, seq_len, pcc, model_config, model_location_generator
 ):
-
-    model_name = str(model_location_generator(model_version, model_subdir = "Bert"))
+    model_name = str(model_location_generator(model_version, model_subdir="Bert"))
 
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(
         model_name, torchscript=False
@@ -305,11 +320,7 @@ def run_mha_inference(
     )
 
     tt_out = tt_mha_model(tt_mha_input, tt_bert_attention_mask).cpu()
-    tt_out1 = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(
-        tt_out.shape()
-    )
-
-
+    tt_out1 = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(tt_out.shape())
 
     passing, output = comp_pcc(pytorch_out, tt_out1, pcc)
     logger.info(f"Output {output}")

@@ -16,7 +16,6 @@ from typing import Optional, Tuple, Union
 from models.utility_functions import pad_by_zero
 
 
-
 def split_heads(
     fused_qkv: torch.Tensor, num_heads, head_dim
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -224,12 +223,10 @@ class TtBloomAttention(torch.nn.Module):
             state_dict[f"{base_address}.query_key_value.bias"], device
         )[0]
 
-        self.weight_d = pad_by_zero(
-            state_dict[f"{base_address}.dense.weight"], device
-        )[0]
-        self.bias_d = pad_by_zero(
-            state_dict[f"{base_address}.dense.bias"], device
-        )[0]
+        self.weight_d = pad_by_zero(state_dict[f"{base_address}.dense.weight"], device)[
+            0
+        ]
+        self.bias_d = pad_by_zero(state_dict[f"{base_address}.dense.bias"], device)[0]
 
         # Transpose the weights
         self.weight_q = tt_lib.tensor.transpose(self.weight_q)
@@ -272,7 +269,7 @@ class TtBloomAttention(torch.nn.Module):
             self.bias_q,
             tt_lib.tensor.BcastOpMath.ADD,
             tt_lib.tensor.BcastOpDim.H,
-            self.mem_config
+            self.mem_config,
         )
         fused_qkv = bloom_utils.tt2torch_tensor(fused_qkv)
 
@@ -367,12 +364,14 @@ class TtBloomAttention(torch.nn.Module):
             self.bias_d,
             tt_lib.tensor.BcastOpMath.ADD,
             tt_lib.tensor.BcastOpDim.H,
-            self.mem_config
+            self.mem_config,
         )
 
         # Dropout is used in training only
         # output_tensor = F.dropout(output_tensor, p=self.hidden_dropout, training=False)
-        output_tensor = tt_lib.tensor.add(residual, output_tensor, output_mem_config = self.mem_config)
+        output_tensor = tt_lib.tensor.add(
+            residual, output_tensor, output_mem_config=self.mem_config
+        )
 
         outputs = (output_tensor, present)
 

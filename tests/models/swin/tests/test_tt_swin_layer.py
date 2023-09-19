@@ -29,7 +29,6 @@ from transformers import SwinModel
     ((0.99),),
 )
 def test_swin_layer_inference(device, pcc, reset_seeds):
-
     LAYER_INDEX = 0
     base_address = f"encoder.layers.{LAYER_INDEX}.blocks.{LAYER_INDEX}"
 

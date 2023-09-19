@@ -450,10 +450,7 @@ def create_bert_feedforward_config(batch_size):
 
 
 def run_bert_question_and_answering_inference(
-    model_name,
-    batch_size,
-    sequence_size,
-    device
+    model_name, batch_size, sequence_size, device
 ):
     enable_persistent_kernel_cache()
 
@@ -527,8 +524,6 @@ def run_bert_question_and_answering_inference(
         logger.info(f"{index}: Samples per second: {1 / duration * batch_size}")
     tt_output = tt_output.cpu().to_torch().squeeze(1).to(torch.float32)[:, :, :2]
 
-
-
     # assert torch.allclose(torch_output, tt_output)
 
     disable_persistent_kernel_cache()
@@ -536,17 +531,9 @@ def run_bert_question_and_answering_inference(
 
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [384])
-def test_bert(
-    use_program_cache,
-    batch_size,
-    sequence_size,
-    device
-):
+def test_bert(use_program_cache, batch_size, sequence_size, device):
     model_name = "phiyodr/bert-large-finetuned-squad2"
 
     run_bert_question_and_answering_inference(
-        model_name,
-        batch_size,
-        sequence_size,
-        device
+        model_name, batch_size, sequence_size, device
     )

@@ -50,10 +50,12 @@ token_type_ids = True
 model_config_str = "MIXED_PRECISION_BATCH8"
 
 
-def run_perf_bert15(expected_inference_time, expected_compile_time, model_location_generator, device):
+def run_perf_bert15(
+    expected_inference_time, expected_compile_time, model_location_generator, device
+):
     model_config = get_model_config(model_config_str)
-    model_name = str(model_location_generator(model_version, model_subdir = "Bert"))
-    tokenizer_name = str(model_location_generator(model_version, model_subdir = "Bert"))
+    model_name = str(model_location_generator(model_version, model_subdir="Bert"))
+    tokenizer_name = str(model_location_generator(model_version, model_subdir="Bert"))
 
     disable_persistent_kernel_cache()
     first_key = "first_iter"
@@ -112,7 +114,7 @@ def run_perf_bert15(expected_inference_time, expected_compile_time, model_locati
         expected_compile_time=expected_compile_time,
         expected_inference_time=expected_inference_time,
         comments=comments,
-        inference_time_cpu=cpu_time
+        inference_time_cpu=cpu_time,
     )
     compile_time = first_iter_time - second_iter_time
     logger.info(f"bert15 inference time: {second_iter_time}")
@@ -124,8 +126,16 @@ def run_perf_bert15(expected_inference_time, expected_compile_time, model_locati
     "expected_inference_time, expected_compile_time",
     ([0.15, 11],),
 )
-def test_perf_virtual_machine(use_program_cache, expected_inference_time, expected_compile_time, model_location_generator, device):
-    run_perf_bert15(expected_inference_time, expected_compile_time, model_location_generator, device)
+def test_perf_virtual_machine(
+    use_program_cache,
+    expected_inference_time,
+    expected_compile_time,
+    model_location_generator,
+    device,
+):
+    run_perf_bert15(
+        expected_inference_time, expected_compile_time, model_location_generator, device
+    )
 
 
 @pytest.mark.models_performance_bare_metal
@@ -133,5 +143,13 @@ def test_perf_virtual_machine(use_program_cache, expected_inference_time, expect
     "expected_inference_time, expected_compile_time",
     ([0.08, 8.5],),
 )
-def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_compile_time, model_location_generator, device):
-    run_perf_bert15(expected_inference_time, expected_compile_time, model_location_generator, device)
+def test_perf_bare_metal(
+    use_program_cache,
+    expected_inference_time,
+    expected_compile_time,
+    model_location_generator,
+    device,
+):
+    run_perf_bert15(
+        expected_inference_time, expected_compile_time, model_location_generator, device
+    )

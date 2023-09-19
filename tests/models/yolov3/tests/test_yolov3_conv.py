@@ -35,8 +35,8 @@ def test_conv_module(device, model_location_generator):
     torch.manual_seed(1234)
 
     # Load yolo
-    model_path = model_location_generator("models", model_subdir = "Yolo")
-    data_path = model_location_generator("data", model_subdir = "Yolo")
+    model_path = model_location_generator("models", model_subdir="Yolo")
+    data_path = model_location_generator("data", model_subdir="Yolo")
 
     data_image_path = str(data_path / "images")
     data_coco = str(data_path / "coco128.yaml")
@@ -104,7 +104,6 @@ def test_conv_module(device, model_location_generator):
     does_pass, pcc_message = comp_pcc(pt_out, tt_output_torch)
 
     logger.info(pcc_message)
-
 
     if does_pass:
         logger.info("Yolo TtConv Passed!")

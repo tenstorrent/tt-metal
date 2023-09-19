@@ -9,6 +9,7 @@ import torch
 from torch import Tensor, nn
 import tt_lib
 
+
 class GELUActivation(nn.Module):
     """
     Original Implementation of the GELU activation function in Google BERT repo when initially created. For
@@ -31,7 +32,6 @@ class GELUActivation(nn.Module):
         return self.act(input)
 
 
-
 class ClassInstantier(OrderedDict):
     def __getitem__(self, key):
         content = super().__getitem__(key)
@@ -49,7 +49,9 @@ def get_activation(activation_string):
     if activation_string in ACT2FN:
         return ACT2FN[activation_string]
     else:
-        raise KeyError(f"function {activation_string} not found in ACT2FN mapping {list(ACT2FN.keys())}")
+        raise KeyError(
+            f"function {activation_string} not found in ACT2FN mapping {list(ACT2FN.keys())}"
+        )
 
 
 # For backwards compatibility with: from activations import gelu_python

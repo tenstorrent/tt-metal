@@ -13,7 +13,8 @@ from transformers import AutoTokenizer
 import torch.nn.functional as F
 
 from tests.python_api_testing.models.falcon.reference.hf_modeling_falcon import (
-    FalconForCausalLM,)
+    FalconForCausalLM,
+)
 import time
 
 falcon1b = "tiiuae/falcon-rw-1b"

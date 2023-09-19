@@ -19,11 +19,17 @@ from loguru import logger
 import pytest
 import tt_lib
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, profiler
-from models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache
+from models.utility_functions import (
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+)
 from models.utility_functions import prep_report
 
 from transformers import BloomForCausalLM, BloomTokenizerFast
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+    comp_allclose,
+    comp_pcc,
+)
 
 from loguru import logger
 
@@ -43,9 +49,7 @@ def run_perf_bloom(expected_inference_time, expected_compile_time, device):
     tokenizer_name = "bigscience/bloom-560m"
     comments = "560M"
 
-    HF_model_top = BloomForCausalLM.from_pretrained(
-        model_name, torchscript=False
-    )
+    HF_model_top = BloomForCausalLM.from_pretrained(model_name, torchscript=False)
     HF_model_top.eval()
 
     config = HF_model_top.config
@@ -82,7 +86,6 @@ def run_perf_bloom(expected_inference_time, expected_compile_time, device):
         profiler.end(second_key)
         del tt_output
 
-
     first_iter_time = profiler.get(first_key)
     second_iter_time = profiler.get(second_key)
 
@@ -96,7 +99,7 @@ def run_perf_bloom(expected_inference_time, expected_compile_time, device):
         expected_compile_time=expected_compile_time,
         expected_inference_time=expected_inference_time,
         comments=comments,
-        inference_time_cpu=cpu_time
+        inference_time_cpu=cpu_time,
     )
 
     logger.info(f"bloom {comments} inference time: {second_iter_time}")
@@ -107,12 +110,15 @@ def run_perf_bloom(expected_inference_time, expected_compile_time, device):
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (1.51,
-         16,
+        (
+            1.51,
+            16,
         ),
     ),
 )
-def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_compile_time, device):
+def test_perf_bare_metal(
+    use_program_cache, expected_inference_time, expected_compile_time, device
+):
     run_perf_bloom(expected_inference_time, expected_compile_time, device)
 
 
@@ -120,10 +126,13 @@ def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_co
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (1.75,
-         20,
+        (
+            1.75,
+            20,
         ),
     ),
 )
-def test_perf_virtual_machine(use_program_cache, expected_inference_time, expected_compile_time, device):
+def test_perf_virtual_machine(
+    use_program_cache, expected_inference_time, expected_compile_time, device
+):
     run_perf_bloom(expected_inference_time, expected_compile_time, device)

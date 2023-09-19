@@ -112,7 +112,7 @@ def test_FalconMLP_inference(
     pcc,
     model_config_str,
     model_location_generator,
-    device
+    device,
 ):
     model_config = get_model_config(model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)

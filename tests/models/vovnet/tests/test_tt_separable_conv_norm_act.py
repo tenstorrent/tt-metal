@@ -31,7 +31,6 @@ from tt.separable_conv_norm_act import (
     ((0.99),),
 )
 def test_separable_conv_norm_act_inference(device, pcc, reset_seeds):
-
     base_address = f"stem.1"
 
     model = timm.create_model("hf_hub:timm/ese_vovnet19b_dw.ra_in1k", pretrained=True)
@@ -69,7 +68,6 @@ def test_separable_conv_norm_act_inference(device, pcc, reset_seeds):
 
     logger.info(comp_allclose(model_output, tt_output_torch))
     logger.info(pcc_message)
-
 
     if passing:
         logger.info("SeparableConvNormAct Passed!")

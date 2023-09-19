@@ -34,6 +34,7 @@ which produce either 25 kp (for upper-body model, which is released in MediaPipe
 This implementations is only for upper-body model.
 """
 
+
 def model_location_generator(rel_path):
     internal_weka_path = Path("/mnt/MLPerf")
     has_internal_weka = (internal_weka_path / "bit_error_tests").exists()
@@ -43,10 +44,11 @@ def model_location_generator(rel_path):
     else:
         return Path("/opt/tt-metal-models") / rel_path
 
+
 model_path = model_location_generator("tt_dnn-models/Blazepose/models/")
 DETECTOR_MODEL = str(model_path / "blazepose.pth")
-LANDMARK_MODEL = str(model_path /"blazepose_landmark.pth")
-ANCHORS =  str(model_path /"anchors_pose.npy")
+LANDMARK_MODEL = str(model_path / "blazepose_landmark.pth")
+ANCHORS = str(model_path / "anchors_pose.npy")
 
 data_path = model_location_generator("tt_dnn-models/Blazepose/data/")
 IMAGE_FILE = str(data_path / "yoga.jpg")
@@ -59,7 +61,7 @@ pose_detector = BlazePose()
 
 pose_detector.load_weights(DETECTOR_MODEL)
 pose_detector.load_anchors(ANCHORS)
-#pose_detector.state_dict()
+# pose_detector.state_dict()
 
 pose_regressor = BlazePoseLandmark()
 pose_regressor.load_weights(LANDMARK_MODEL)
@@ -67,7 +69,7 @@ pose_regressor.load_weights(LANDMARK_MODEL)
 image = cv2.imread(IMAGE_FILE)
 image_height, image_width, _ = image.shape
 
-frame = np.ascontiguousarray(image[:,::-1,::-1])
+frame = np.ascontiguousarray(image[:, ::-1, ::-1])
 
 img1, img2, scale, pad = resize_pad(frame)
 
@@ -103,7 +105,7 @@ draw_roi(frame, box)
 
 for i in range(len(flags)):
     landmark, flag = landmarks[i], flags[i]
-    if flag>.5:
+    if flag > 0.5:
         draw_landmarks(frame, landmark, POSE_CONNECTIONS, size=2)
 
 # Save image:

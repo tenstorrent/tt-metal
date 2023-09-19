@@ -20,13 +20,19 @@ import pytest
 import tt_lib
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 from models.utility_functions import Profiler
-from models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache, prep_report
+from models.utility_functions import (
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    prep_report,
+)
 from models.vit.tt.modeling_vit import vit_for_image_classification
 
 BATCH_SIZE = 1
 
 
-def run_perf_vit(expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device):
+def run_perf_vit(
+    expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device
+):
     profiler = Profiler()
     disable_persistent_kernel_cache()
     first_key = "first_iter"
@@ -45,7 +51,9 @@ def run_perf_vit(expected_inference_time, expected_compile_time, hf_cat_image_sa
         inputs["pixel_values"], device, put_on_device=False
     )
 
-    tt_inputs = tt_inputs.to(device, tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1))
+    tt_inputs = tt_inputs.to(
+        device, tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
+    )
     tt_model = vit_for_image_classification(device)
 
     with torch.no_grad():
@@ -77,7 +85,7 @@ def run_perf_vit(expected_inference_time, expected_compile_time, hf_cat_image_sa
         expected_compile_time=expected_compile_time,
         expected_inference_time=expected_inference_time,
         comments="base-patch16",
-        inference_time_cpu=cpu_time
+        inference_time_cpu=cpu_time,
     )
 
     compile_time = first_iter_time - second_iter_time
@@ -88,23 +96,47 @@ def run_perf_vit(expected_inference_time, expected_compile_time, hf_cat_image_sa
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (2.1,
-        16,
+        (
+            2.1,
+            16,
         ),
     ),
 )
-def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device):
-    run_perf_vit(expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device)
+def test_perf_bare_metal(
+    use_program_cache,
+    expected_inference_time,
+    expected_compile_time,
+    hf_cat_image_sample_input,
+    device,
+):
+    run_perf_vit(
+        expected_inference_time,
+        expected_compile_time,
+        hf_cat_image_sample_input,
+        device,
+    )
 
 
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
-        (2.7,
-        17.5,
+        (
+            2.7,
+            17.5,
         ),
     ),
 )
-def test_perf_virtual_machine(use_program_cache, expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device):
-    run_perf_vit(expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device)
+def test_perf_virtual_machine(
+    use_program_cache,
+    expected_inference_time,
+    expected_compile_time,
+    hf_cat_image_sample_input,
+    device,
+):
+    run_perf_vit(
+        expected_inference_time,
+        expected_compile_time,
+        hf_cat_image_sample_input,
+        device,
+    )

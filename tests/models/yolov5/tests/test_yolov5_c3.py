@@ -23,8 +23,8 @@ from models.utility_functions import (
     comp_pcc,
 )
 
-def test_Yolov5_c3(device):
 
+def test_Yolov5_c3(device):
     weights = "tests/models/yolov5/reference/yolov5s.pt"
     dnn = False
     data = None

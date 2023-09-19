@@ -17,9 +17,12 @@ from models.utility_functions import (
 )
 from models.stable_diffusion.tt.upsample_2d import TtUpsample2D
 
+
 def test_run_upsample2d_inference(device):
     # setup pytorch model
-    pipe = StableDiffusionPipeline.from_pretrained('CompVis/stable-diffusion-v1-4', torch_dtype=torch.float32)
+    pipe = StableDiffusionPipeline.from_pretrained(
+        "CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32
+    )
 
     unet = pipe.unet
     unet.eval()
@@ -27,7 +30,7 @@ def test_run_upsample2d_inference(device):
     unet_upblock = pipe.unet.up_blocks[0]
     resnet_upsampler = unet_upblock.upsamplers[0]
 
-    input_shape =  [1, 1280, 32, 32]
+    input_shape = [1, 1280, 32, 32]
     input = torch.randn(input_shape)
     in_channels = 1280
     out_channels = 1280
@@ -35,15 +38,16 @@ def test_run_upsample2d_inference(device):
 
     tt_input = torch_to_tt_tensor(input, device)
 
-    tt_up = TtUpsample2D(channels=in_channels,
-                        out_channels=out_channels,
-                        use_conv=True,
-                        use_conv_transpose=False,
-                        name="conv",
-                        state_dict=state_dict,
-                        base_address="up_blocks.0.upsamplers.0")
+    tt_up = TtUpsample2D(
+        channels=in_channels,
+        out_channels=out_channels,
+        use_conv=True,
+        use_conv_transpose=False,
+        name="conv",
+        state_dict=state_dict,
+        base_address="up_blocks.0.upsamplers.0",
+    )
     tt_out = tt_up(tt_input)
-
 
     tt_output = tt_to_torch_tensor(tt_out)
 

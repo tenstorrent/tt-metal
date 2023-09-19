@@ -124,7 +124,6 @@ class TtSwinModel(nn.Module):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, TtSwinModelOutput]:
-
         output_attentions = (
             output_attentions
             if output_attentions is not None

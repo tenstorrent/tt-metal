@@ -4,6 +4,7 @@
 
 from pathlib import Path
 import sys
+
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
 sys.path.append(f"{f}/../..")
@@ -15,7 +16,10 @@ import tt_lib as ttm
 
 from transformers import BloomForCausalLM, BloomTokenizerFast
 from models.utility_functions import print_diff_argmax
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+    comp_allclose,
+    comp_pcc,
+)
 
 from loguru import logger
 
@@ -31,14 +35,16 @@ def pad_input_32(tensor, value):
 
     padded_len = ((len // 32) + 1) * 32
 
-    pad_tensor = (value * torch.ones(tensor.shape[0], padded_len-len)).to(torch.long)
+    pad_tensor = (value * torch.ones(tensor.shape[0], padded_len - len)).to(torch.long)
     tensor = torch.cat([tensor, pad_tensor], dim=1)
 
     return tensor
 
 
 def run_bloom_model_test(device):
-    hugging_bloom_reference_model = BloomForCausalLM.from_pretrained("bigscience/bloom-560m", torchscript=False)
+    hugging_bloom_reference_model = BloomForCausalLM.from_pretrained(
+        "bigscience/bloom-560m", torchscript=False
+    )
     hugging_bloom_reference_model.eval()
 
     config = hugging_bloom_reference_model.config

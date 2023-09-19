@@ -172,7 +172,9 @@ class TtLlamaAttention(nn.Module):
             self.o_weights.shape()[-1], self.o_weights.shape()[-2], self.o_weights
         )
 
-        self.scalar = pad_by_zero(torch.Tensor([1/math.sqrt(self.head_dim)]), self.device)[0]
+        self.scalar = pad_by_zero(
+            torch.Tensor([1 / math.sqrt(self.head_dim)]), self.device
+        )[0]
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return (
@@ -252,7 +254,9 @@ class TtLlamaAttention(nn.Module):
         mul = tt_lib.tensor.bmm(query_states_tt, key_states_tt_transposed)
 
         # TODO: Fuse into softmax
-        attn_weights = tt_lib.tensor.bcast(mul, self.scalar, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.HW)
+        attn_weights = tt_lib.tensor.bcast(
+            mul, self.scalar, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.HW
+        )
 
         if attn_weights.shape() != [bsz, self.num_heads, q_len, kv_seq_len]:
             raise ValueError(

@@ -4,6 +4,7 @@
 
 from pathlib import Path
 import sys
+
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
 sys.path.append(f"{f}/../..")
@@ -23,9 +24,10 @@ import tests.models.bloom_old.bloom_mlp as bloom_mlp
 
 
 def run_bloom_mlp_test(device):
-
     # Prepare input
-    hugging_bloom_reference_model = BloomForCausalLM.from_pretrained("bigscience/bloom-560m", torchscript=False)
+    hugging_bloom_reference_model = BloomForCausalLM.from_pretrained(
+        "bigscience/bloom-560m", torchscript=False
+    )
     hugging_bloom_reference_model.eval()
 
     block = 6
@@ -40,7 +42,11 @@ def run_bloom_mlp_test(device):
     res = torch.rand(1, 1, 64, hidden_size)
 
     tt_mlp = bloom_mlp.TtBloomMLP(config, state_dict, base_address, device)
-    tt_out = tt_mlp.forward(bloom_utils.torch2tt_tensor(test_in, device), bloom_utils.torch2tt_tensor(res, device), device)
+    tt_out = tt_mlp.forward(
+        bloom_utils.torch2tt_tensor(test_in, device),
+        bloom_utils.torch2tt_tensor(res, device),
+        device,
+    )
 
     pt_mlp = hugging_bloom_reference_model.transformer.h[block].mlp
     pt_out = pt_mlp.forward(test_in, res)

@@ -26,6 +26,7 @@ from models.stable_diffusion.tt.unet_2d_condition import (
     UNet2DConditionModel as tt_unet_condition,
 )
 from models.stable_diffusion.tt.experimental_ops import UseDeviceConv, disable_conv
+
 NUM_INFERENCE_STEPS = 2  # Number of denoising steps
 BATCH_SIZE = 1
 
@@ -95,7 +96,9 @@ def make_tt_unet(state_dict, device):
     return tt_unet
 
 
-def run_perf_unbatched_stable_diffusion(expected_inference_time, expected_compile_time, device):
+def run_perf_unbatched_stable_diffusion(
+    expected_inference_time, expected_compile_time, device
+):
     profiler = Profiler()
     first_key = "first_iter"
     second_key = "second_iter"
@@ -233,8 +236,12 @@ def run_perf_unbatched_stable_diffusion(expected_inference_time, expected_compil
         tt_unconditioned = torch_to_tt_tensor_rm(
             tt_unconditioned, device, put_on_device=False
         )
-        tt_conditioned = tt_conditioned.to(device, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1))
-        tt_unconditioned = tt_unconditioned.to(device, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1))
+        tt_conditioned = tt_conditioned.to(
+            device, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
+        )
+        tt_unconditioned = tt_unconditioned.to(
+            device, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
+        )
 
         tt_text_embeddings = torch_to_tt_tensor_rm(
             text_embeddings, device, put_on_device=False
@@ -288,9 +295,8 @@ def run_perf_unbatched_stable_diffusion(expected_inference_time, expected_compil
         expected_compile_time=expected_compile_time,
         expected_inference_time=expected_inference_time,
         comments=comments,
-        inference_time_cpu=cpu_time
+        inference_time_cpu=cpu_time,
     )
-
 
     logger.info(
         f"Unbatched Stable Diffusion {comments} inference time: {second_iter_time}"
@@ -311,7 +317,10 @@ def run_perf_unbatched_stable_diffusion(expected_inference_time, expected_compil
 def test_perf_bare_metal(
     use_program_cache, expected_inference_time, expected_compile_time, device
 ):
-    run_perf_unbatched_stable_diffusion(expected_inference_time, expected_compile_time, device)
+    run_perf_unbatched_stable_diffusion(
+        expected_inference_time, expected_compile_time, device
+    )
+
 
 @disable_conv
 @pytest.mark.models_performance_virtual_machine
@@ -327,4 +336,6 @@ def test_perf_bare_metal(
 def test_perf_virtual_machine(
     use_program_cache, expected_inference_time, expected_compile_time, device
 ):
-    run_perf_unbatched_stable_diffusion(expected_inference_time, expected_compile_time, device)
+    run_perf_unbatched_stable_diffusion(
+        expected_inference_time, expected_compile_time, device
+    )

@@ -27,7 +27,6 @@ from transformers import SwinModel
     ((0.99),),
 )
 def test_swin_patch_embeddings_inference(device, pcc, reset_seeds):
-
     base_address = f"embeddings.patch_embeddings"
 
     model = SwinModel.from_pretrained("microsoft/swin-tiny-patch4-window7-224")

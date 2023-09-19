@@ -27,7 +27,6 @@ from transformers import SwinModel
     ((0.99),),
 )
 def test_swin_patch_merging_inference(device, pcc, reset_seeds):
-
     PATCH_MERGING_LAYER_INDEX = 0
     base_address = f"encoder.layers.{PATCH_MERGING_LAYER_INDEX}"
 

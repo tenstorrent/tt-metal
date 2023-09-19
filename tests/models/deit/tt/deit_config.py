@@ -6,7 +6,6 @@ from torch import nn
 
 
 class DeiTConfig(nn.Module):
-
     model_type = "deit"
 
     def __init__(

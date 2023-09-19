@@ -15,7 +15,12 @@ import timm
 
 import pytest
 import tt_lib
-from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, disable_persistent_kernel_cache, enable_persistent_kernel_cache
+from models.utility_functions import (
+    torch_to_tt_tensor_rm,
+    tt_to_torch_tensor,
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+)
 from models.utility_functions import Profiler, prep_report
 
 from hrnet.tt.hrnet_model import hrnet_w18_small
@@ -32,7 +37,9 @@ BATCH_SIZE = 1
         ),
     ),
 )
-def test_perf(device, expected_inference_time, expected_compile_time, imagenet_sample_input):
+def test_perf(
+    device, expected_inference_time, expected_compile_time, imagenet_sample_input
+):
     profiler = Profiler()
     disable_persistent_kernel_cache()
     first_key = "first_iter"

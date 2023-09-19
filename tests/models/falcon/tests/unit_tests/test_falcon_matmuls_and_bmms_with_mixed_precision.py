@@ -19,7 +19,7 @@ def run_falcon_matmul_test(
     in0_mem_config,
     in1_mem_config,
     out_mem_config,
-    device
+    device,
 ):
     pcc = 0.99
     if out_dtype == ttl.tensor.DataType.BFLOAT8_B:
@@ -194,7 +194,7 @@ def test_falcon_matmul(
     in1_mem_config,
     out_mem_config,
     request,
-    device
+    device,
 ):
     ttl.profiler.set_profiler_location(
         f"tt_metal/tools/profiler/logs/falcon_{request.node.callspec.id}"
@@ -208,5 +208,5 @@ def test_falcon_matmul(
         in0_mem_config,
         in1_mem_config,
         out_mem_config,
-        device
+        device,
     )

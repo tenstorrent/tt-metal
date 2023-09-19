@@ -19,7 +19,6 @@ from models.EfficientNet.tt.efficientnet_fused_mbconv import (
 
 
 def test_efficientnet_fused_mbconv(device):
-
     refence_model = torchvision.models.efficientnet_v2_s(pretrained=True)
     refence_model.eval()
     refence_module = refence_model.features[2][0]

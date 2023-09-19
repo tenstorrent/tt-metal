@@ -8,13 +8,16 @@ from torchvision import transforms, datasets
 from loguru import logger
 import tt_lib
 
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, \
-    comp_pcc, \
-    get_oom_of_float
+from models.utility_functions import (
+    torch2tt_tensor,
+    tt2torch_tensor,
+    comp_pcc,
+    get_oom_of_float,
+)
 from models.mnist.tt.mnist_model import mnist_model
 
-def test_mnist_inference(device):
 
+def test_mnist_inference(device):
     # Data preprocessing/loading
     transform = transforms.Compose([transforms.ToTensor()])
     test_dataset = datasets.MNIST(
@@ -34,7 +37,6 @@ def test_mnist_inference(device):
         pt_output = pt_model(test_input)
         tt_output = tt_model(tt_input)
         tt_output = tt2torch_tensor(tt_output)
-
 
     pcc_passing, pcc_output = comp_pcc(pt_output, tt_output, 0.99)
     logger.info(f"Output {pcc_output}")

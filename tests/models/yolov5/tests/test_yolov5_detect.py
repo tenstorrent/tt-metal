@@ -24,7 +24,6 @@ from models.utility_functions import (
 
 
 def test_Yolov5_detect(device):
-
     weights = "tests/models/yolov5/reference/yolov5s.pt"
     dnn = False
     data = None
@@ -80,7 +79,6 @@ def test_Yolov5_detect(device):
     with torch.no_grad():
         tt_module.eval()
         tt_out = tt_module(test_input)
-
 
     does_all_pass, pcc_message = comp_pcc(pt_out[0], tt_out[0], 0.99)
     logger.info(f"out[0] PCC: {pcc_message}")

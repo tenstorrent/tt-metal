@@ -108,9 +108,8 @@ def run_perf_whisper(expected_inference_time, expected_compile_time, device):
         expected_compile_time=expected_compile_time,
         expected_inference_time=expected_inference_time,
         comments=comments,
-        inference_time_cpu=cpu_time
+        inference_time_cpu=cpu_time,
     )
-
 
     logger.info(f"whisper tiny inference time: {second_iter_time}")
     logger.info(f"whisper compile time: {compile_time}")
