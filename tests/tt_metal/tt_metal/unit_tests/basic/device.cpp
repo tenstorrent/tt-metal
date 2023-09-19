@@ -399,21 +399,23 @@ TEST_F(SingleDeviceFixture, ValidateKernelDoesNotTargetHarvestedCores) {
     uint32_t num_l1_banks = this->device_->num_banks(BufferType::L1);
     std::vector<uint32_t> host_input(1);
     std::map<uint32_t, uint32_t> bank_id_to_value;
+    uint32_t l1_address = this->device_->l1_size() - 2048;
     for (uint32_t bank_id = 0; bank_id < num_l1_banks; bank_id++) {
         host_input[0] = bank_id + 1;
         bank_id_to_value[bank_id] = host_input.at(0);
         CoreCoord logical_core = this->device_->logical_core_from_bank_id(bank_id);
-        tt_metal::detail::WriteToDeviceL1(this->device_, logical_core, L1_UNRESERVED_BASE, host_input);
+        uint32_t write_address = l1_address + this->device_->l1_bank_offset_from_bank_id(bank_id);
+        tt_metal::detail::WriteToDeviceL1(this->device_, logical_core, write_address, host_input);
     }
 
     tt_metal::Program program = tt_metal::Program();
     string kernel_name = "tests/tt_metal/tt_metal/test_kernels/ping_legal_l1s.cpp";
     CoreCoord logical_target_core = CoreCoord({.x = 0, .y = 0});
-    uint32_t intermediate_l1_addr = L1_UNRESERVED_BASE + 2048;
+    uint32_t intermediate_l1_addr = L1_UNRESERVED_BASE;
     uint32_t size_bytes = host_input.size() * sizeof(uint32_t);
     tt_metal::KernelID kernel_id = tt_metal::CreateDataMovementKernel(
         program, kernel_name, logical_target_core,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::NOC_0, .compile_args = {uint32_t(L1_UNRESERVED_BASE), intermediate_l1_addr, size_bytes}}
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::NOC_0, .compile_args = {l1_address, intermediate_l1_addr, size_bytes}}
     );
 
     ASSERT_TRUE(tt_metal::LaunchProgram(this->device_, program));
@@ -421,7 +423,8 @@ TEST_F(SingleDeviceFixture, ValidateKernelDoesNotTargetHarvestedCores) {
     std::vector<uint32_t> output;
     for (uint32_t bank_id = 0; bank_id < num_l1_banks; bank_id++) {
         CoreCoord logical_core = this->device_->logical_core_from_bank_id(bank_id);
-        tt_metal::detail::ReadFromDeviceL1(this->device_, logical_core, L1_UNRESERVED_BASE, size_bytes, output);
+        uint32_t read_address = l1_address + this->device_->l1_bank_offset_from_bank_id(bank_id);
+        tt_metal::detail::ReadFromDeviceL1(this->device_, logical_core, read_address, size_bytes, output);
         ASSERT_TRUE(output.size() == host_input.size());
         uint32_t expected_value = bank_id_to_value.at(bank_id) + 1; // ping_legal_l1s kernel increments each value it reads
         ASSERT_TRUE(output.at(0) == expected_value) << "Logical core " + logical_core.str() + " should have " + std::to_string(expected_value) + " but got " + std::to_string(output.at(0));

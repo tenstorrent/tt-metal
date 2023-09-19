@@ -7,7 +7,7 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    constexpr std::uint32_t l1_address = get_compile_time_arg_val(0);
+    constexpr std::uint32_t base_l1_address = get_compile_time_arg_val(0);
     constexpr std::uint32_t intermediate_l1_addr = get_compile_time_arg_val(1);
     constexpr std::uint32_t size_bytes = get_compile_time_arg_val(2);
 
@@ -15,6 +15,7 @@ void kernel_main() {
         uint32_t bank_id = id & (NUM_L1_BANKS - 1);
         uint32_t noc_x = l1_bank_to_noc_x[bank_id];
         uint32_t noc_y = l1_bank_to_noc_y[bank_id];
+        uint32_t l1_address = base_l1_address + bank_to_l1_offset[bank_id];
 
         uint64_t noc_addr = get_noc_addr(noc_x, noc_y, l1_address);
 
