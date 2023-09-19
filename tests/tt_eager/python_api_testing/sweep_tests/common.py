@@ -299,8 +299,8 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
             shape1_end.append(shape2_end[-1])
 
             def _gen_matmul_shapes(shape):
-                shape1 = [1, 1, shape[2], shape[3]]
-                shape2 = [1, 1, shape[3], shape[4]]
+                shape1 = [shape[0], shape[1], shape[2], shape[3]]
+                shape2 = [shape[0], shape[1], shape[3], shape[4]]
                 return [shape1, shape2]
 
             for shapes, datagen_funcs, test_args in _gen_shapes_and_args(shape1_start, shape1_end, interval, _gen_matmul_shapes):
