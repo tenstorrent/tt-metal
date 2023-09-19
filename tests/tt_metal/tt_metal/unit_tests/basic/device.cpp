@@ -347,12 +347,16 @@ TEST_F(SingleDeviceFixture, PingIllegalL1Cores) {
     ASSERT_ANY_THROW(unit_tests::basic::device::l1_ping(device_, 4, start_byte_address, grid_size));
 }
 
+// Harvesting tests
+
 // This test ensures that no logical core maps to a harvested row
-TEST_F(BasicFixture, ValidateLogicalToPhysicalCoreCoordMapping) {
+TEST_F(BasicFixture, ValidateLogicalToPhysicalCoreCoordHostMapping) {
     size_t num_devices = tt_metal::Device::detect_num_available_devices();
+    ASSERT_TRUE(num_devices > 0);
+    tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+    num_devices = (arch == tt::ARCH::GRAYSKULL) ? 1 : num_devices;
     for (int device_id = 0; device_id < num_devices; device_id++) {
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
-        ASSERT_TRUE(tt_metal::InitializeDevice(device));
         tt_cluster *cluster = device->cluster();
         uint32_t harvested_rows_mask = cluster->get_harvested_rows(device_id);
         log_info(LogTest, "Device {} harvesting mask {}", device_id, harvested_rows_mask);
@@ -383,5 +387,43 @@ TEST_F(BasicFixture, ValidateLogicalToPhysicalCoreCoordMapping) {
         }
 
         tt_metal::CloseDevice(device);
+    }
+}
+
+// Test methodology:
+// 1. Host write single uint32_t value to each L1 bank
+// 2. Launch a kernel to read and increment the value in each bank
+// 3. Host validates that the value from step 1 has been incremented
+// Purpose of this test is to ensure that L1 reader/writer APIs do not target harvested cores
+TEST_F(SingleDeviceFixture, ValidateKernelDoesNotTargetHarvestedCores) {
+    uint32_t num_l1_banks = this->device_->num_banks(BufferType::L1);
+    std::vector<uint32_t> host_input(1);
+    std::map<uint32_t, uint32_t> bank_id_to_value;
+    for (uint32_t bank_id = 0; bank_id < num_l1_banks; bank_id++) {
+        host_input[0] = bank_id + 1;
+        bank_id_to_value[bank_id] = host_input.at(0);
+        CoreCoord logical_core = this->device_->logical_core_from_bank_id(bank_id);
+        tt_metal::detail::WriteToDeviceL1(this->device_, logical_core, L1_UNRESERVED_BASE, host_input);
+    }
+
+    tt_metal::Program program = tt_metal::Program();
+    string kernel_name = "tests/tt_metal/tt_metal/test_kernels/ping_legal_l1s.cpp";
+    CoreCoord logical_target_core = CoreCoord({.x = 0, .y = 0});
+    uint32_t intermediate_l1_addr = L1_UNRESERVED_BASE + 2048;
+    uint32_t size_bytes = host_input.size() * sizeof(uint32_t);
+    tt_metal::KernelID kernel_id = tt_metal::CreateDataMovementKernel(
+        program, kernel_name, logical_target_core,
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::NOC_0, .compile_args = {uint32_t(L1_UNRESERVED_BASE), intermediate_l1_addr, size_bytes}}
+    );
+
+    ASSERT_TRUE(tt_metal::LaunchProgram(this->device_, program));
+
+    std::vector<uint32_t> output;
+    for (uint32_t bank_id = 0; bank_id < num_l1_banks; bank_id++) {
+        CoreCoord logical_core = this->device_->logical_core_from_bank_id(bank_id);
+        tt_metal::detail::ReadFromDeviceL1(this->device_, logical_core, L1_UNRESERVED_BASE, size_bytes, output);
+        ASSERT_TRUE(output.size() == host_input.size());
+        uint32_t expected_value = bank_id_to_value.at(bank_id) + 1; // ping_legal_l1s kernel increments each value it reads
+        ASSERT_TRUE(output.at(0) == expected_value) << "Logical core " + logical_core.str() + " should have " + std::to_string(expected_value) + " but got " + std::to_string(output.at(0));
     }
 }
