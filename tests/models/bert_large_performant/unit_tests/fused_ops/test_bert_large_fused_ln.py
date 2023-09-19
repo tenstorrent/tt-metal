@@ -77,13 +77,11 @@ def ref_layernorm(x, eps, gamma, beta, H, W):
     return lnorm(x)
 
 
-def run_layernorm_tests(dev, test_id, batch, dtype, in0_mem_config, out_mem_config):
+def run_layernorm_tests(device, test_id, batch, dtype, in0_mem_config, out_mem_config):
     torch.manual_seed(1234)
 
 
     tensor = ttl.tensor
-    device = ttl.device
-
 
     epsf = 1e-2
 
@@ -107,7 +105,7 @@ def run_layernorm_tests(dev, test_id, batch, dtype, in0_mem_config, out_mem_conf
                     gammah32.shape,
                     dtype,
                     tensor.Layout.ROW_MAJOR,
-                    dev,
+                    device,
                     in0_mem_config,
                 )
             if test_id >= 2:
@@ -118,7 +116,7 @@ def run_layernorm_tests(dev, test_id, batch, dtype, in0_mem_config, out_mem_conf
                     betah32.shape,
                     dtype,
                     tensor.Layout.ROW_MAJOR,
-                    dev,
+                    device,
                     in0_mem_config,
                 )
 
@@ -133,7 +131,7 @@ def run_layernorm_tests(dev, test_id, batch, dtype, in0_mem_config, out_mem_conf
                 [N, C, H, W],
                 dtype,
                 tensor.Layout.TILE,
-                dev,
+                device,
                 in0_mem_config,
             )
             tty = tensor.Tensor(
@@ -141,7 +139,7 @@ def run_layernorm_tests(dev, test_id, batch, dtype, in0_mem_config, out_mem_conf
                 [N, C, H, W],
                 dtype,
                 tensor.Layout.TILE,
-                dev,
+                device,
                 in0_mem_config,
             )
 
@@ -225,9 +223,9 @@ import pytest
     ids=["LN", "LN_G", "LN_GB", "add_LN_GB"],
 )
 def test_layernorm_test(
-    dev, test_id, batch, dtype, in0_mem_config, out_mem_config, request
+    device, test_id, batch, dtype, in0_mem_config, out_mem_config, request
 ):
     ttl.profiler.set_profiler_location(
         f"tt_metal/tools/profiler/logs/BERT_large_fused_layernorm_{request.node.callspec.id}"
     )
-    run_layernorm_tests(dev, test_id, batch, dtype, in0_mem_config, out_mem_config)
+    run_layernorm_tests(device, test_id, batch, dtype, in0_mem_config, out_mem_config)

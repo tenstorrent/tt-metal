@@ -80,7 +80,7 @@ def test_efficientnet_conv2d_b0(device):
         state_dict=reference_model.state_dict(),
         base_address=f"features.0.0",
         reference_module=reference_model.features[0][0],
-        device
+        device=device
     )
 
 
@@ -91,7 +91,7 @@ def test_efficientnet_conv2d_lite0(device):
         state_dict=reference_model.state_dict(),
         base_address=f"stem.0",
         reference_module=reference_model.stem[0],
-        device
+        device=device
     )
 
 
