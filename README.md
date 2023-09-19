@@ -98,16 +98,16 @@ We assume that you have the following accelerator-level dependencies:
 For Grayskull:
 
 - At least 1 unharvested E150 attached to a PCIe x16 slot
-- TTKMD (Tenstorrent kernel-mode driver) v1.20.1
+- TTKMD (Tenstorrent kernel-mode driver) v1.23
 - ``tt-flash`` 2023-06-28
 - ``tt-smi`` tt-smi_2023-06-16-0283a02404487eea or above
 
 For Wormhole B0:
 
 - At least 1 N150 or N300 attached via PCIe
-- TTKMD (Tenstorrent kernel-mode driver) v1.20.1
-- ``tt-flash`` 2023-03-29
-- ``tt-smi`` tt-smi-wh-8.4.0.0_2023-06-29-96bed10da092442c or above
+- TTKMD (Tenstorrent kernel-mode driver) v1.23
+- ``tt-flash`` 2023-08-08 (7.D)
+- ``tt-smi`` tt-smi-8.6.0.0_2023-08-22-492ad2b9ef82a243 or above
 
 #### Ubuntu
 
