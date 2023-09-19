@@ -82,6 +82,7 @@ tests/scripts/run_performance.sh @ashayestehmanesh
 # **/tt_dnn/op_library/bmm/ @mywoodstock @TT-BrianLiu @tt-aho
 # **/tt_dnn/op_library/bmm/**/module.mk @tt-rkim @mywoodstock @TT-BrianLiu @tt-aho
 tt_eager/tt_dnn/op_library/composite/ @muthutt
+tt_eager/tt_dnn/op_library/complex/ @muthutt
 
 # eager - python api
 # **/tt_lib/
