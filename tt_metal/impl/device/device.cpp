@@ -293,7 +293,12 @@ CoreCoord Device::compute_with_storage_grid_size() const {
     if (not cluster_is_initialized()) {
         TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
     }
-    return this->cluster()->get_soc_desc(id_).compute_with_storage_grid_size;
+    const char *TT_METAL_SINGLE_CORE_MODE = std::getenv("TT_METAL_SINGLE_CORE_MODE");
+    if (TT_METAL_SINGLE_CORE_MODE == nullptr) {
+        return this->cluster()->get_soc_desc(id_).compute_with_storage_grid_size;
+    } else {
+        return {1, 1};
+    }
 }
 
 CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) const {
