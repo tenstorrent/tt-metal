@@ -3,10 +3,11 @@ name: "[stress] all - Stress test Slow Dispatch post-commit main build and unit 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 3 * * *"
+    - cron: "0 4 * * *"
 
 jobs:
   stress-build-and-unit-tests:
+    timeout-minutes: 1440
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -16,7 +17,7 @@ jobs:
           {arch: grayskull, runs-on: ["stress-grayskull", "cloud-virtual-machine"], fw: "fw-date-2023-06-28", machine-type: "virtual_machine"},
           {arch: grayskull, runs-on: ["stress-grayskull", "self-reset"], fw: "fw-date-2023-06-28", machine-type: "bare_metal"},
 
-          # {arch: wormhole_b0, runs-on: ["stress-wormhole_b0", "cloud-virtual-machine"], fw: "fw-date-2023-08-08", machine-type: "virtual_machine"},
+          {arch: wormhole_b0, runs-on: ["stress-wormhole_b0", "cloud-virtual-machine"], fw: "fw-date-2023-08-08", machine-type: "virtual_machine"},
           {arch: wormhole_b0, runs-on: ["stress-wormhole_b0", "self-reset"], fw: "fw-date-2023-08-08", machine-type: "bare_metal"},
         ]
     env:
@@ -39,7 +40,6 @@ jobs:
       - name: Build tt-metal CPP tests
         run: make tests
       - name: Run pre/post regression tests in a loop
-        timeout-minutes: 1450
         run: |
           source build/python_env/bin/activate
           ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type stress_post_commit --dispatch-mode slow

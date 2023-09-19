@@ -133,15 +133,25 @@ run_stress_post_commit_pipeline_tests() {
     local pipeline_type=$2
     local dispatch_mode=$3
 
-    # Switch to modules only soon
-    # run_module_tests "$tt_arch" "llrt" "$pipeline_type"
-    end=$((SECONDS+86400))
-    while [ $SECONDS -lt $end ]; do
+    # Run for 23.5h to allow next run to kick off
+    RUNTIME_MAX=84600
+
+    if [[ $tt_arch == "grayskull" ]]; then
+        suite_duration=2700
+    elif [[ $tt_arch == "wormhole_b0" ]]; then
+        suite_duration=900
+    fi
+
+    max_duration=$((RUNTIME_MAX-suite_duration))
+    iter=1
+    while [ $SECONDS -lt $max_duration ]; do
+        echo "Info: [stress] Doing iteration $iter"
         if [[ $dispatch_mode == "slow" ]]; then
             ./tests/scripts/run_pre_post_commit_regressions_slow_dispatch.sh
         else
             ./tests/scripts/run_pre_post_commit_regressions_fast_dispatch.sh
         fi
+        iter=$((iter+1))
     done
 }
 
