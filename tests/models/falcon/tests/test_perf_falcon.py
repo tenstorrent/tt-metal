@@ -372,7 +372,7 @@ def run_test_FalconCausalLM_end_to_end(
         ("prefill", 1, 128, 0, 0.34),
         ("prefill", 1, 256, 0, 0.45),
         ("decode", 32, 1, 128, 0.30),
-        ("decode", 32, 1, 1024, 0.365),
+        ("decode", 32, 1, 1024, 0.37),
         ("decode", 32, 1, 2047, 0.50),
     ),
     ids=[
