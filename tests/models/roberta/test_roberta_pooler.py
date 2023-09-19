@@ -72,7 +72,3 @@ def test_roberta_pooler_inference(device):
         logger.warning("RobertaPooler Failed!")
 
     assert does_pass
-
-
-if __name__ == "__main__":
-    test_roberta_pooler_inference()

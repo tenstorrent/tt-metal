@@ -74,7 +74,3 @@ def test_roberta_classification_head(device):
             logger.warning("RobertaClassificationHead Failed!")
 
         assert does_pass
-
-
-if __name__ == "__main__":
-    test_roberta_classification_head()

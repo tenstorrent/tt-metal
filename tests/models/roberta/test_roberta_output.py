@@ -79,7 +79,3 @@ def test_roberta_output_inference(device):
         logger.warning("RobertaOutput Failed!")
 
     assert does_pass
-
-
-if __name__ == "__main__":
-    test_roberta_output_inference()

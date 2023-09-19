@@ -75,7 +75,3 @@ def test_roberta_attention_inference(device):
         logger.warning("RobertaAttention Failed!")
 
     assert does_pass
-
-
-if __name__ == "__main__":
-    test_roberta_attention_inference()

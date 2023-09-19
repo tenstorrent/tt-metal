@@ -62,8 +62,3 @@ def run_bloom_mlp_test(device):
 
 def test_bloom_mlp(device):
     run_bloom_mlp_test(device)
-
-
-
-if __name__ == "__main__":
-    test_bloom_mlp()

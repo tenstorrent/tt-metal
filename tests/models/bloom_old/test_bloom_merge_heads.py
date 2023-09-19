@@ -45,8 +45,3 @@ def run_bloom_merge_heads_test(device, num_heads, hidden_size, num_attention_hea
 
 def test_bloom_merge_heads(device):
     run_bloom_merge_heads_test(device, 32, 1024, 32)
-
-
-
-if __name__ == "__main__":
-    test_bloom_merge_heads()

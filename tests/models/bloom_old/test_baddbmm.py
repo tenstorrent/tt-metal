@@ -64,8 +64,3 @@ def run_baddbmm_test(device):
 
 def test_baddbmm(device):
     run_baddbmm_test(device)
-
-
-
-if __name__ == "__main__":
-    test_baddbmm()

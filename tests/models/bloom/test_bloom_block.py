@@ -72,9 +72,4 @@ def run_bloom_block_test(device):
 
 
 def test_bloom_block(device):
-
     run_bloom_block_test(device)
-
-
-if __name__ == "__main__":
-    test_bloom_block()

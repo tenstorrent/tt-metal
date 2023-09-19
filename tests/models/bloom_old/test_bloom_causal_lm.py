@@ -78,8 +78,3 @@ def run_bloom_causal_lm_test(device):
 
 def test_bloom_causal_lm(device):
     run_bloom_causal_lm_test(device)
-
-
-
-if __name__ == "__main__":
-    test_bloom_causal_lm()

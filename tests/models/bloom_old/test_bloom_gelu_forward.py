@@ -53,8 +53,3 @@ def run_bloom_gelu_forward_test(device):
 
 def test_bloom_gelu_forward(device):
     run_bloom_gelu_forward_test(device)
-
-
-
-if __name__ == "__main__":
-    test_bloom_gelu_forward()

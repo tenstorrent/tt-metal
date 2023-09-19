@@ -70,8 +70,3 @@ def run_bloom_attention_test(device):
 
 def test_bloom_attention(device):
     run_bloom_attention_test(device)
-
-
-
-if __name__ == "__main__":
-    test_bloom_attention()
