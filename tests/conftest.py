@@ -221,7 +221,7 @@ def reset_tensix(request, silicon_arch_name):
 
 
 @pytest.fixture(scope="session")
-def device(request):
+def device_init_destroy(request):
     import tt_lib as ttl
 
     silicon_arch_name = request.config.getoption("tt_arch")
@@ -270,13 +270,11 @@ def local_device(request):
         if dispatch is not None:
             os.environ["TT_METAL_SLOW_DISPATCH_MODE"] = dispatch
 
-# @pytest.fixture(scope="function")
-# def device():
-#     import tt_lib as ttl
-#     os.print("Deallocating all buffers on default device!!")
-#     device = ttl.device.GetDefaultDevice()
-#     device.DeallocateBuffers()
-#     yield
+def device(device_init_destroy):
+    import tt_lib as ttl
+    device = ttl.device.GetDefaultDevice()
+    yield device
+    ttl.device.DeallocateBuffers(device)
 
 
 @pytest.fixture(autouse=True)
