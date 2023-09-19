@@ -911,3 +911,26 @@ class TestEltwiseUnary:
             comparison_func,
             device,
         )
+
+    def test_run_eltwise_tan_op(
+        self,
+        input_shapes,
+        device,
+        function_level_defaults,
+        input_mem_config,
+        output_mem_config,
+    ):
+        datagen_func = [
+            generation_funcs.gen_func_with_cast(
+                partial(generation_funcs.gen_rand, low=-1.45, high=1.45),
+                torch.bfloat16,
+            )
+        ]
+        comparison_func = comparison_funcs.comp_pcc
+        run_single_pytorch_test(
+            "eltwise-tan",
+            input_shapes,
+            datagen_func,
+            comparison_func,
+            device,
+        )

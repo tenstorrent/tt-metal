@@ -473,6 +473,10 @@ def asin(x, *args, **kwargs):
     return torch.asin(x)
 
 
+def tan(x, *args, **kwargs):
+    return torch.tan(x)
+
+
 def atan(x, *args, **kwargs):
     return torch.atan(x)
 

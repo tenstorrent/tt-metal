@@ -128,6 +128,7 @@ enum SfpuType {
     max,
     sine,
     cosine,
+    tan,
     relu_max,
     relu_min,
     cast_fp32_to_fp16a,

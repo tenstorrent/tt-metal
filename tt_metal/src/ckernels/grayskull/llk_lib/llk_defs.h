@@ -125,6 +125,7 @@ enum SfpuType
   min,
   sine,
   cosine,
+  tan,
   relu_min,
   relu_max,
   elu,

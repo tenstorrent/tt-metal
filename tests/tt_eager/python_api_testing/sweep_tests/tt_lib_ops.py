@@ -2613,6 +2613,7 @@ def eltwise_bias_gelu_unary(
 # eltwise_softmax_in_place = make_eltwise_unary_op(ttl.tensor.softmax_in_place)
 eltwise_cos = make_eltwise_unary_op(ttl.tensor.cos)
 eltwise_sin = make_eltwise_unary_op(ttl.tensor.sin)
+eltwise_tan = make_eltwise_unary_op(ttl.tensor.tan)
 eltwise_acos = make_eltwise_unary_op(ttl.tensor.acos)
 eltwise_asin = make_eltwise_unary_op(ttl.tensor.asin)
 eltwise_atan = make_eltwise_unary_op(ttl.tensor.atan)

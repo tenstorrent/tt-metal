@@ -236,6 +236,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_sin,
         "pytorch_op": pytorch_ops.sin,
     },
+    "eltwise-tan": {
+        "tt_lib_op": tt_lib_ops.eltwise_tan,
+        "pytorch_op": pytorch_ops.tan,
+    },
     "eltwise-asin": {
         "tt_lib_op": tt_lib_ops.eltwise_asin,
         "pytorch_op": pytorch_ops.asin,

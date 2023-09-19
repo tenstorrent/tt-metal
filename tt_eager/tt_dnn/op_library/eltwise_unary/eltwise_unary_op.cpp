@@ -80,6 +80,9 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string,std::string>
         case UnaryOpType::I0:
             defines["SFPU_OP_I0_INCLUDE"]="1";
             break;
+        case UnaryOpType::TAN:
+            defines["SFPU_OP_TRIG_FAMILY_INCLUDE"]="1";
+            break;
         default:
             defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"]="1";
             break;
@@ -163,6 +166,8 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, stri
             op_init_and_name = {"acos_tile_init();", fmt::format("acos_tile({});", idst)}; break;
         case UnaryOpType::ATAN:
             op_init_and_name = {"atan_tile_init();", fmt::format("atan_tile({});", idst)}; break;
+        case UnaryOpType::TAN:
+            op_init_and_name = {"tan_tile_init();", fmt::format("tan_tile({});", idst)}; break;
         case UnaryOpType::RELU6:
             op_init_and_name = {"relu_max_tile_init();", fmt::format("relu_max_tile({}, 0x40c00000u);", idst)}; break;
         default: TT_ASSERT(false && "Undefined non-parametrized op type");

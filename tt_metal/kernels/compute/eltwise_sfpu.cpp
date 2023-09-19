@@ -8,6 +8,9 @@
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 
+#if SFPU_OP_TRIG_FAMILY_INCLUDE
+#include "compute_kernel_api/eltwise_unary/trigonometry.h"
+#endif
 namespace NAMESPACE {
 void MAIN {
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);

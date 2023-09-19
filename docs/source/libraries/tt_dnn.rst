@@ -567,6 +567,8 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.erfc
 
+.. autofunction:: tt_lib.tensor.tan
+
 .. autofunction:: tt_lib.tensor.logical_or
 
 .. autofunction:: tt_lib.tensor.logical_ori
