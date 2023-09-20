@@ -221,7 +221,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
                                                                      .buffer_type = BufferType::L1});
     auto minus_inf_const_tensor_addr = minus_inf_const_tensor.buffer()->address();
 
-    #if 1
+    #if 0
     {   // debug
         log_debug("in_cb :: PS = {}, NP = {}", in_cb_pagesize, in_cb_npages);
         log_debug("in_scalar_cb :: PS = {}, NP = {}", in_scalar_cb_pagesize, in_scalar_cb_npages);
