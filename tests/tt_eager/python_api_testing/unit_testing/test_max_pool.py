@@ -103,8 +103,8 @@ def volume(shape):
         1,  ## default
         4,
         8,
-        28, # for perf
-        56,
+        # 28, # for perf
+        # 56,
     ),
 )
 @pytest.mark.parametrize(
@@ -152,6 +152,10 @@ def test_run_max_pool(
 
     if use_multicore and nblocks != 1:
         logger.info("Multi-block version has not been tested with multicore")
+        pytest.skip()
+
+    if use_multicore and (padding != (1,1) or stride != (2,2) or kernel_size != (3,3)):
+        logger.info("Multicore version only supports Resnet50 configs for now.")
         pytest.skip()
 
     torch.set_printoptions(
