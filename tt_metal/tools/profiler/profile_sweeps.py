@@ -1,17 +1,37 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+#! /usr/bin/env python3
+"""
+SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
-# SPDX-License-Identifier: Apache-2.0
+SPDX-License-Identifier: Apache-2.0
+"""
+
 
 import os
+import sys
 import time
 import subprocess
+import click
 from glob import glob
 from loguru import logger
 from tt_metal.tools.profiler.profile_this import (
     test_profiler_build,
     profile_command,
-    get_log_locations,
 )
+
+
+ENVS = dict(os.environ)
+TT_METAL_HOME = ENVS["TT_METAL_HOME"]
+LOG_LOCATIONS_RECORD = "tt_metal/tools/profiler/logs/.locations.log"
+
+
+def get_log_locations ():
+    logLocations = []
+    with open(LOG_LOCATIONS_RECORD, "r") as recordFile:
+        for line in recordFile.readlines():
+            logLocation = line.strip()
+            if os.path.isdir(f"{TT_METAL_HOME}/{logLocation}"):
+                logLocations.append(logLocation)
+    return logLocations
 
 
 def post_process(outputLocation=None):
@@ -29,10 +49,10 @@ def post_process(outputLocation=None):
         logger.info(f"Post processed {testName} with results saved in {outputLocation}")
 
 
-directory = "tests/tt_eager/python_api_testing/sweep_tests/test_configs/ci_sweep_tests"
-result_folder = "/home/ubuntu/tt-metal/ng-test-sweeps/"
-
-if __name__ == "__main__":
+@click.command()
+@click.option("-d", "--directory", type=str, help="Directory with test files")
+@click.option("-r", "--result", type=str, help="Directory to save results")
+def main(directory, result):
     if test_profiler_build():
         logger.info(f"Profiler build flag is set")
     else:
@@ -44,14 +64,8 @@ if __name__ == "__main__":
 
     for txt_file in txt_files:
         basename = os.path.splitext(os.path.basename(txt_file))[0]
-        command = f"python tests/tt_eager/python_api_testing/sweep_tests/run_pytorch_test.py -i {txt_file} -o {result_folder}{basename}"
-        profile_output_folder = f"{result_folder}{basename}/profile"
-
-        # if basename == "pytorch_add_layernorm_test":
-        #     do_run = True
-
-        # if basename == "pytorch_eltwise_asinh_test":
-        #     break
+        command = f"python tests/tt_eager/python_api_testing/sweep_tests/run_pytorch_test.py -i {txt_file} -o {result}{basename}"
+        profile_output_folder = f"{result}{basename}/profile"
 
         if do_run:
             print(command)
@@ -67,9 +81,11 @@ if __name__ == "__main__":
             profile_command(command)
             duration = time.time() - start
 
-            post_process(f"{result_folder}{basename}/profile")
+            post_process(f"{result}{basename}/profile")
 
-            with open(f"{result_folder}{basename}/total_time.txt", "w") as file:
+            with open(f"{result}{basename}/total_time.txt", "w") as file:
                 file.write(f"{duration:.2f}")
 
-            # break
+
+if __name__ == "__main__":
+    main()
