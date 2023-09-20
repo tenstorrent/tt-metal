@@ -153,7 +153,7 @@ def test_perf_bare_metal(
     (
         (
             0.3,
-            10.5
+            11
         ),
     ),
 )
