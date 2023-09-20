@@ -245,6 +245,7 @@ def device_init_destroy(request):
         if dispatch is not None:
             os.environ["TT_METAL_SLOW_DISPATCH_MODE"] = dispatch
 
+@pytest.fixture(scope="function")
 def device(device_init_destroy):
     import tt_lib as ttl
     device = ttl.device.GetDefaultDevice()
