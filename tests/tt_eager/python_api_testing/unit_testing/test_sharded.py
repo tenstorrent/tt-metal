@@ -19,6 +19,7 @@ def test_sharded_tile(device):
     C = 1
     H = 100352
     W = 64
+    num_cores = 98
     x = torch.arange(N * C * H * W).reshape((N, C, H, W)).bfloat16().float()
 
     xt = (
@@ -39,7 +40,7 @@ def test_sharded_tile(device):
     )
 
     yt = ttl.tensor.interleaved_to_sharded(
-        xt, 98, [1024, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
+        xt, num_cores, [H // num_cores, W], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
     )
 
     zt = ttl.tensor.sharded_to_interleaved(
@@ -62,6 +63,7 @@ def test_sharded_rm(device):
     C = 1
     H = 100352
     W = 64
+    num_cores = 98
     x = torch.arange(N * C * H * W).reshape((N, C, H, W)).bfloat16().float()
 
     xt = ttl.tensor.Tensor(
@@ -78,7 +80,7 @@ def test_sharded_rm(device):
     )
 
     yt = ttl.tensor.interleaved_to_sharded(
-        xt, 98, [1024, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
+        xt, num_cores, [H // num_cores, W], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
     )
 
     zt = ttl.tensor.sharded_to_interleaved(
@@ -105,7 +107,6 @@ def test_sharded_rm(device):
 def test_sharded_untilize(H, num_cores, in_sharded, out_sharded, device):
     N = 1
     C = 1
-    H = H
     W = 64
     if out_sharded and not in_sharded and H == 100352:
         pytest.skip("Unsupported config for sharding")
@@ -141,7 +142,7 @@ def test_sharded_untilize(H, num_cores, in_sharded, out_sharded, device):
         xt = ttl.tensor.interleaved_to_sharded(
             xt,
             num_cores,
-            [H // num_cores, 64],
+            [H // num_cores, W],
             ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
         )
 
@@ -188,7 +189,7 @@ def test_sharded_tilize(H, num_cores, device):
     yt = ttl.tensor.interleaved_to_sharded(
         xt,
         num_cores,
-        [H // num_cores, 64],
+        [H // num_cores, W],
         ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
     )
 
@@ -217,20 +218,59 @@ def test_sharded_tilize(H, num_cores, device):
     assert passing
 
 
-def test_sharded_matmul(device):
-    in0_shape = [1, 1, 25088, 64]
-    in1_shape = [1, 1, 64, 64]
-    bias_shape = [1, 1, 1, 64]
+@pytest.mark.parametrize(
+    "in0_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"]
+)
+@pytest.mark.parametrize(
+    "out_sharded", [True, False], ids=["out_sharded", "out_unsharded"]
+)
+@pytest.mark.parametrize("M, num_cores", [[25088, 98]])
+@pytest.mark.parametrize("N", [64, 256])
+def test_sharded_matmul(device, in0_sharded, out_sharded, M, N, num_cores):
+    K = 64
+    in0_shape = [1, 1, M, K]
+    in1_shape = [1, 1, K, N]
+    bias_shape = [1, 1, 1, N]
+
+    interleaved_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+    sharded_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
 
     in0 = torch.randn(in0_shape).bfloat16().float()
     in1 = torch.randn(in1_shape).bfloat16().float()
     bias = torch.randn(bias_shape).bfloat16().float()
 
-    in0_t = torch2tt_tensor(in0, device)
-    in1_t = torch2tt_tensor(in1, device)
-    bias_t = pad_by_zero(bias, device)[0]
+    in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config)
+    in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config)
+    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config)[0]
 
-    output_t = ttl.tensor.resnet_matmul(in0_t, in1_t, bias_t)
+    output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
+
+    if in0_sharded:
+        in0_t = ttl.tensor.interleaved_to_sharded(
+            in0_t,
+            num_cores,
+            [M // num_cores, K],
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        )
+
+    program_config = ttl.operations.primary.get_mcast_1d_config(
+        in0_t, in1_t, True, None, False, out_sharded
+    )
+    output_t = ttl.operations.primary.matmul_1d(
+        in0_t,
+        in1_t,
+        bias=bias_t,
+        program_config=program_config,
+        output_mem_config=output_mem_config,
+    )
+    if out_sharded:
+        output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
     pt_out = in0 @ in1 + bias
 
     tt_out = tt2torch_tensor(output_t)

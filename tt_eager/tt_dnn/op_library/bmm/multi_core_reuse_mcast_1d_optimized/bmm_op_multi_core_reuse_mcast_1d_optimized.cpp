@@ -518,7 +518,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     uint32_t per_core_M, uint32_t per_core_N,
     std::optional<UnaryWithParam> fused_activation,
     tt_metal::Buffer* in0_buffer, tt_metal::Buffer* in1_buffer, tt_metal::Buffer* bias_buffer, tt_metal::Buffer* out_buffer,
-    tt::DataFormat in0_data_format, tt::DataFormat in1_data_format, tt::DataFormat bias_data_format, tt::DataFormat output_data_format
+    tt::DataFormat in0_data_format, tt::DataFormat in1_data_format, tt::DataFormat bias_data_format, tt::DataFormat output_data_format,
+    std::optional<uint32_t> in0_address, std::optional<uint32_t> output_address
 ) {
 
     tt_metal::Program program{};
@@ -529,7 +530,13 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_data_format);
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
-    uint32_t in0_CB_tiles = in0_block_tiles * 2; // double buffer
+    uint32_t in0_CB_tiles;
+    if (in0_address.has_value()) {
+        uint32_t in0_num_blocks = K / in0_block_w;
+        in0_CB_tiles = in0_num_blocks * in0_block_tiles * B;
+    } else {
+        in0_CB_tiles = in0_block_tiles * 2; // double buffer
+    }
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
     uint32_t in1_block_tiles = per_core_N * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles * 2; // double buffer
@@ -731,6 +738,13 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     if (fused_activation.has_value()) {
         mm_kernel_defines.merge(eltwise_unary_op_utils::get_defines(fused_activation.value().op_type, fused_activation.value().param, "ACTIVATION", "i"));
     }
+    if (in0_address.has_value()) {
+        mm_kernel_in0_sender_defines["IN0_SHARDED"] = "1";
+    }
+    if (output_address.has_value()) {
+        mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
+        mm_kernel_in1_receiver_writer_defines["OUT_SHARDED"] = "1";
+    }
 
     mm_kernel_in0_sender_defines["SKIP_MCAST"] = "1";
     auto mm_kernel_in0_sender_id = tt_metal::CreateDataMovementKernel(
@@ -798,6 +812,9 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     uint32_t src0_cb_index = 0;
     tt_metal::CircularBufferConfig src0_cb_config = tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
 		.set_page_size(src0_cb_index, in0_single_tile_size);
+    if (in0_address.has_value()) {
+        src0_cb_config = src0_cb_config.set_globally_allocated_address(in0_address.value());
+    }
 	auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
 
     uint32_t src1_cb_index = 1;
@@ -814,6 +831,9 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     tt_metal::CircularBufferConfig output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
 		.set_page_size(output_cb_index, output_single_tile_size)
         .set_page_size(interm0_cb_index, output_single_tile_size);
+    if (output_address.has_value()) {
+        output_cb_config = output_cb_config.set_globally_allocated_address(output_address.value());
+    }
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
 
     if (bias_buffer != nullptr) {
@@ -1128,6 +1148,14 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(cons
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
+    std::optional<uint32_t> a_addr = std::nullopt;
+    std::optional<uint32_t> out_addr = std::nullopt;
+    if (a.memory_config().is_sharded()) {
+        a_addr = a.buffer()->address();
+    }
+    if (output.memory_config().is_sharded()) {
+        out_addr = output.buffer()->address();
+    }
 
     if (mcast_in0) {
         return reuse_mcast_1d_optimized_helpers::create_program_mcast_in0(
@@ -1155,7 +1183,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(cons
             per_core_M, per_core_N,
             fused_activation,
             in0_buffer, in1_buffer, bias_buffer, out_buffer,
-            in0_data_format, in1_data_format, bias_data_format, output_data_format
+            in0_data_format, in1_data_format, bias_data_format, output_data_format,
+            a_addr, out_addr
         );
     }
 }

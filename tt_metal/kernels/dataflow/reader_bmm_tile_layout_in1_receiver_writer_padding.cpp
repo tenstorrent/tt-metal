@@ -132,6 +132,7 @@ void kernel_main() {
             }
         #endif
 
+        #ifndef OUT_SHARDED
         // WRITER
         uint32_t out_tensor_sbh_start_tile_id = out_tensor_start_tile_id;
         for(uint32_t sbh = 0; sbh < out_num_nonzero_subblocks_h; sbh++) {
@@ -180,5 +181,10 @@ void kernel_main() {
         cb_wait_front(cb_id_out0, padded_block_tiles_h_skip);
         cb_pop_front(cb_id_out0, padded_block_tiles_h_skip);
         out_tensor_start_tile_id += MtNt;
+        #endif
     }
+
+    #if OUT_SHARDED
+    cb_wait_front(cb_id_out0, batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
+    #endif
 }
