@@ -11,27 +11,11 @@ using namespace ckernel;
 // It is defined in hlk_defs.cpp
 void setup_kernel();
 
-// These functions set up things which are needed before we process a single input.
-// Number of inputs corresponds to input_count field in netlist.
-inline __attribute__ ((always_inline)) void pre_input_processing(const int input_iteration);
-inline __attribute__ ((always_inline)) void post_input_processing();
-
-// Todo: move this somewhere else :)
 #if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK)
-    #if defined(HLK_START_PROCESSING_INPUTS)
-         #undef HLK_START_PROCESSING_INPUTS
-    #endif
-
-    #if defined(HLK_END_PROCESSING_INPUTS)
-        #undef HLK_END_PROCESSING_INPUTS
-    #endif
-
     #if defined(TT_HLK_ALWAYS_INLINE)
         #undef TT_HLK_ALWAYS_INLINE
     #endif
 
-    #define HLK_START_PROCESSING_INPUTS for (int input_iteration = 0; input_iteration < arg_loop_count; input_iteration++) { pre_input_processing(input_iteration);
-    #define HLK_END_PROCESSING_INPUTS post_input_processing(); }
     #define TT_HLK_ALWAYS_INLINE inline __attribute__ ((always_inline))
 #endif
 
@@ -80,7 +64,7 @@ uint run_kernel() {
     trisc_l1_mailbox_write((HLKC_MATH << 16) | KERNEL_IN_PROGRESS);
     zeroacc();
     setup_kernel();
-    hlk_main(nullptr, &hlk_args);
+    hlk_process_all_inputs<hlk_args_t>(nullptr, &hlk_args, arg_loop_count);
 #endif
 
 #ifdef UCK_CHLKC_PACK
@@ -88,7 +72,7 @@ uint run_kernel() {
     regfile[p_gpr::DBG_CKID] = HLKC_PACK;
     trisc_l1_mailbox_write((HLKC_PACK << 16) | KERNEL_IN_PROGRESS);
     setup_kernel();
-    hlk_main(nullptr, &hlk_args);
+    hlk_process_all_inputs<hlk_args_t>(nullptr, &hlk_args, arg_loop_count);
 #endif
 
 #ifdef UCK_CHLKC_UNPACK
@@ -97,7 +81,7 @@ uint run_kernel() {
     trisc_l1_mailbox_write((HLKC_UNPACK << 16) | KERNEL_IN_PROGRESS);
     zerosrc();
     setup_kernel();
-    hlk_main(nullptr, &hlk_args);
+    hlk_process_all_inputs<hlk_args_t>(nullptr, &hlk_args, arg_loop_count);
 #endif
 
 return 0;
