@@ -1,6 +1,6 @@
 ---
 test-list:
-  - eltwise-zeros_like:
+  - eltwise-zeros:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [12, 24, 512, 512]
@@ -16,13 +16,13 @@ test-list:
       comparison:
         function: comp_equal
       args-gen: gen_dtype_layout_device
-      output-file: eltwise_zeros_like_sweep.csv
+      output-file: eltwise_zeros_sweep.csv
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16", "BFLOAT8_B"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM"]
-  - eltwise-zeros_like:
+  - eltwise-zeros:
       shape:
         start-shape: [1, 1, 2, 2]
         end-shape: [12, 24, 512, 512]
@@ -38,7 +38,7 @@ test-list:
       comparison:
         function: comp_equal
       args-gen: gen_dtype_layout_device
-      output-file: eltwise_zeros_like_sweep.csv
+      output-file: eltwise_zeros_sweep.csv
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]

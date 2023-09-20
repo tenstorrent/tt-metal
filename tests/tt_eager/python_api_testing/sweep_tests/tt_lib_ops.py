@@ -1717,7 +1717,6 @@ eltwise_logical_or = make_binary_op(ttl.tensor.logical_or)
 matmul = make_binary_op(ttl.tensor.matmul)
 outer = make_binary_op(ttl.tensor.outer)
 bmm = make_binary_op(ttl.tensor.bmm)
-eltwise_bias_gelu = make_binary_op(ttl.tensor.bias_gelu)
 
 eltwise_isfinite = make_unary_op(ttl.tensor.isfinite)
 eltwise_isinf = make_unary_op(ttl.tensor.isinf)
@@ -1845,7 +1844,9 @@ def unpad_from_tile(
 
 
 @setup_host_and_device
-def activation_glu(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+def activation_glu(
+    x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+):
     dim = kwargs.get("dim", -1)
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.glu(t0, dim, output_mem_config=output_mem_config)
