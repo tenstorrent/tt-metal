@@ -130,8 +130,8 @@ def resnet50_1x1_conv_as_matmul(weight: List[Union[int, float]], conv_params, de
 
     return conv_
 
-def resnet50_optimized_conv(weight: List[Union[int, float]], conv_params, device, act_block_shape_hw, weight_block_shape_hw, outsubblock_shape_hw,
-                            grid_size, per_core_act_matrix_h_ntiles, per_core_weight_matrix_w_ntiles, bias, fuse_relu=False):
+def resnet50_optimized_conv(weight: List[Union[int, float]], conv_params, device, act_block_shape_hw, weight_block_shape_hw, outsubblock_shape_hw, out_block_shape_h,
+                            grid_size, per_core_out_matrix_h_ntiles, per_core_weight_matrix_w_ntiles, bias, fuse_relu=False):
     """
     Returns a function that performs a Convolution. Bias is fused with conv.
     """
@@ -145,6 +145,7 @@ def resnet50_optimized_conv(weight: List[Union[int, float]], conv_params, device
     assert act_block_shape_hw[0] % 32 == 0
     assert act_block_shape_hw[1] % 32 == 0
 
+    out_block_h = (int) (out_block_shape_h / 32)
     act_block_h = (int) (act_block_shape_hw[0]/32)
     act_block_w =(int) (act_block_shape_hw[1]/32)
     weight_block_h = act_block_w
@@ -181,14 +182,20 @@ def resnet50_optimized_conv(weight: List[Union[int, float]], conv_params, device
 
     def conv_(activation):
         #assert(activation.layout() == tensor.Layout.ROW_MAJOR)
-        output = tensor.optimized_conv(activation, weight_on_device, bias_on_device, [R,S,U,V,P_H,P_W], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w, K, False, True, fuse_relu, tensor.MathFidelity.HiFi4,
-                                       tensor.OptimizedConvParallelizationConfig(grid_size=grid_size, per_core_act_matrix_height_ntiles=per_core_act_matrix_h_ntiles, per_core_weight_matrix_width_ntiles=per_core_weight_matrix_w_ntiles),)
+        output = tensor.optimized_conv(activation, weight_on_device, bias_on_device, [R,S,U,V,P_H,P_W], K, False, True, fuse_relu, tensor.MathFidelity.HiFi4,
+                                       tensor.OptimizedConvParallelizationConfig(grid_size=grid_size, per_core_out_matrix_height_ntiles=per_core_out_matrix_h_ntiles, per_core_weight_matrix_width_ntiles=per_core_weight_matrix_w_ntiles),
+                                       tensor.OptimizedConvBlockConfig(act_block_h_ntiles=act_block_h,
+                                                act_block_w_ntiles=act_block_w,
+                                                weight_block_w_ntiles=weight_block_w,
+                                                out_block_h_ntiles=out_block_h,
+                                                out_subblock_h_ntiles=out_subblock_h,
+                                                out_subblock_w_ntiles=out_subblock_w))
         #assert(output.storage_type() == tensor.StorageType.DEVICE)
         return output
 
     return conv_
 
-def resnet50_first_conv(weight: List[Union[int, float]], conv_params, device, act_block_shape_hw, weight_block_shape_hw, outsubblock_shape_hw, grid_size, per_core_act_matrix_h_ntiles, bias, padded_filter_window_width, fuse_relu=False):
+def resnet50_first_conv(weight: List[Union[int, float]], conv_params, device, act_block_shape_hw, weight_block_shape_hw, outsubblock_shape_hw, out_block_shape_h, grid_size, per_core_out_matrix_h_ntiles, bias, padded_filter_window_width, fuse_relu=False):
     """
     Returns a function that performs a Convolution. Bias is fused with conv.
     """
@@ -203,6 +210,7 @@ def resnet50_first_conv(weight: List[Union[int, float]], conv_params, device, ac
     assert act_block_shape_hw[0] % 32 == 0
     assert act_block_shape_hw[1] % 32 == 0
 
+    out_block_h = (int) (out_block_shape_h / 32)
     act_block_h = (int) (act_block_shape_hw[0]/32)
     act_block_w =(int) (act_block_shape_hw[1]/32)
     weight_block_h = act_block_w
@@ -244,8 +252,14 @@ def resnet50_first_conv(weight: List[Union[int, float]], conv_params, device, ac
     P_W = 0
     def conv_(activation):
         #assert(activation.layout() == tensor.Layout.ROW_MAJOR)
-        output_plus_bias = tensor.optimized_conv(activation, weight_on_device, bias_on_device, [R,padded_filter_window_width,U,V,P_H,P_W], act_block_h, act_block_w, weight_block_w, out_subblock_h, out_subblock_w, K, False, True, fuse_relu, tensor.MathFidelity.HiFi4,
-                                       tensor.OptimizedConvParallelizationConfig(grid_size=grid_size, per_core_act_matrix_height_ntiles=per_core_act_matrix_h_ntiles,per_core_weight_matrix_width_ntiles=per_core_weight_matrix_w_ntiles), extra_padding_for_32B_alignment)
+        output_plus_bias = tensor.optimized_conv(activation, weight_on_device, bias_on_device, [R,padded_filter_window_width,U,V,P_H,P_W], K, False, True, fuse_relu, tensor.MathFidelity.HiFi4,
+                                       tensor.OptimizedConvParallelizationConfig(grid_size=grid_size, per_core_out_matrix_height_ntiles=per_core_out_matrix_h_ntiles, per_core_weight_matrix_width_ntiles=per_core_weight_matrix_w_ntiles),
+                                       tensor.OptimizedConvBlockConfig(act_block_h_ntiles=act_block_h,
+                                                act_block_w_ntiles=act_block_w,
+                                                weight_block_w_ntiles=weight_block_w,
+                                                out_block_h_ntiles=out_block_h,
+                                                out_subblock_h_ntiles=out_subblock_h,
+                                                out_subblock_w_ntiles=out_subblock_w), extra_padding_for_32B_alignment)
         #assert(output.storage_type() == tensor.StorageType.DEVICE)
         #assert output.layout() == tensor.Layout.TILE
         return output_plus_bias

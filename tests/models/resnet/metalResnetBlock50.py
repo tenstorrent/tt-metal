@@ -437,44 +437,44 @@ hardcoded_matmul_config_conv = {
 
 hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv = {
     1: {
-        (3136, 64): [64, 64, 64, 64, (7, 7), 64, 64],
-        (800, 128): [32, 128, 32, 64, (5, 5), 32, 128],
-        (224, 256): [32, 128, 32, 128, (1, 7), 32, 256],
-        (64, 512): [32, 64, 32, 64, (1, 2), 32, 512],
+        (3136, 64): [64, 64, 64, 64, 64, (7, 7), 64, 64],
+        (800, 128): [32, 128, 32, 64, 32, (5, 5), 32, 128],
+        (224, 256): [32, 128, 32, 128, 32, (1, 7), 32, 256],
+        (64, 512): [32, 64, 32, 64, 32, (1, 2), 32, 512],
     },
     2: {
-        (6272, 64): [128, 64, 128, 64, (7, 7), 128, 64],
-        (1568, 128): [32, 128, 32, 64, (7, 7), 32, 128],
-        (416, 256): [64, 128, 64, 128, (7, 1), 64, 256],
-        (128, 512): [32, 64, 32, 64, (1, 4), 32, 512],
+        (6272, 64): [128, 64, 128, 64, 128, (7, 7), 128, 64],
+        (1568, 128): [32, 128, 32, 64, 32, (7, 7), 32, 128],
+        (416, 256): [64, 128, 64, 128, 64, (7, 1), 64, 256],
+        (128, 512): [32, 64, 32, 64, 32, (1, 4), 32, 512],
     },
     8: {
-        (25088, 64): [128, 64, 128, 64, (7, 7), 512, 64],
-        (6272, 128): [64, 128, 64, 64, (7, 7), 128, 128],
-        (1568, 256): [32, 128, 32, 128, (7, 7), 32, 256],
-        (416, 512): [64, 32, 64, 32, (7, 8), 64, 64],
+        (25088, 64): [128, 64, 128, 64, 128, (7, 7), 512, 64],
+        (6272, 128): [64, 128, 64, 64, 64, (7, 7), 128, 128],
+        (1568, 256): [160, 32, 32, 32, 160, (10, 8), 160, 32],
+        (416, 512): [64, 32, 32, 32, 64, (7, 8), 64, 64],
     },
 }
 
 # With double buffered input CB, these shapes work -
 hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_downsample_conv = {
     1: {
-        (3136, 256): [64, 64, 64, 64, (7, 7), 64, 256],
-        (800, 512): [32, 64, 32, 64, (5, 5), 32, 512],
-        (224, 1024): [32, 128, 32, 64, (1, 7), 32, 1024],
-        (64, 2048): [32, 128, 32, 64, (1, 2), 32, 2048],
+        (3136, 256): [64, 64, 64, 64, 64, (7, 7), 64, 256],
+        (800, 512): [32, 64, 32, 64, 32, (5, 5), 32, 512],
+        (224, 1024): [32, 128, 32, 64, 32, (1, 7), 32, 1024],
+        (64, 2048): [32, 128, 32, 64, 32, (1, 2), 32, 2048],
     },
     2: {
-        (6272, 256): [128, 64, 128, 64, (7, 7), 128, 256],
-        (1568, 512): [32, 64, 32, 64, (7, 7), 32, 512],
-        (416, 1024): [64, 128, 64, 64, (7, 1), 64, 1024],
-        (128, 2048): [64, 128, 64, 64, (1, 2), 64, 2048],
+        (6272, 256): [128, 64, 128, 64, 128, (7, 7), 128, 256],
+        (1568, 512): [32, 64, 32, 64, 32, (7, 7), 32, 512],
+        (416, 1024): [64, 128, 64, 64, 64, (7, 1), 64, 1024],
+        (128, 2048): [64, 128, 64, 64, 64, (1, 2), 64, 2048],
     },
     8: {
-        (25088, 256): [128, 64, 128, 64, (7, 7), 512, 256],
-        (6272, 512): [128, 64, 128, 64, (7, 7), 128, 512],
-        (1568, 1024): [32, 128, 32, 64, (7, 7), 32, 1024],
-        (416, 2048): [64, 128, 64, 64, (7, 1), 64, 2048],
+        (25088, 256): [128, 64, 128, 64, 128, (7, 7), 512, 256],
+        (6272, 512): [128, 64, 128, 64, 128, (7, 7), 128, 512],
+        (1568, 1024): [32, 128, 32, 64, 32, (7, 7), 32, 1024],
+        (416, 2048): [64, 128, 32, 64, 64, (7, 8), 64, 256],
     },
 }
 
@@ -669,6 +669,7 @@ class Bottleneck(nn.Module):
             weight_block_w_datums,
             out_subblock_h_datums,
             out_subblock_w_datums,
+            out_block_h_datums,
             grid_size,
             per_core_act_h,
             per_core_weight_w,
@@ -687,6 +688,7 @@ class Bottleneck(nn.Module):
             [act_block_h_datums, width * 3],
             [width * 3, weight_block_w_datums],
             [out_subblock_h_datums, out_subblock_w_datums],
+            out_block_h_datums,
             grid_size,
             per_core_act_h_ntiles,
             per_core_weight_w_ntiles,
@@ -772,8 +774,12 @@ class Bottleneck(nn.Module):
         # conv1 is 1x1 conv
         # print("Running conv1")
         out = self.conv1(x)
+        # print("conv1 output shape - ", self.conv1_output_shape)
+        # print("Running ds or nop")
+        ds_out = self.downsample_or_noop(x)
         # Relu after conv1 is fused with the 1x1 conv (matmul)
         # out = self.relu(out, self.memory_config)
+        # print("Running untilize op")
         out = format_tensor(
             out, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config
         )
@@ -783,6 +789,7 @@ class Bottleneck(nn.Module):
             self.conv1_output_shape[2],
             self.conv1_output_shape[3],
         )
+
         # print("Running conv2")
         out = self.conv2(out)
         # out = self.relu(out, self.memory_config)  ## fused with conv2
@@ -790,18 +797,10 @@ class Bottleneck(nn.Module):
         # print("Running conv3")
         out = self.conv3(out)
 
-        # if self.downsample_conv_on_tt is not None:
-        #     if(self.downsample_params[2] != 1 or self.downsample_params[4] != 1 or self.downsample_params[6] != 0):
-        #         x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
-        #         x = x.reshape(self.module_input_shape[0], self.module_input_shape[1], self.module_input_shape[2], self.module_input_shape[3])
-        #     identity = self.downsample_conv_on_tt(x)
-        # print("Running downsample or nop")
-        x = self.downsample_or_noop(x)
-
         fused_activations = [tt_lib.tensor.FusibleActivation.RELU]
         # print("Running eltwise add")
         out = tt_lib.tensor.add_without_autoformat(
-            out, x, fused_activations, output_mem_config=self.memory_config
+            out, ds_out, fused_activations, output_mem_config=self.memory_config
         )
         # out = self.relu(out, self.memory_config)
         return out
@@ -916,6 +915,7 @@ class ResNet(nn.Module):
             [act_block_h_datums, 32],
             [32, 64],
             [32, 64],
+            act_block_h_datums,
             grid_size,
             per_core_act_h_ntiles,
             conv1_bias.tolist(),
@@ -1137,6 +1137,7 @@ class ResNet(nn.Module):
                 weight_block_w_datums,
                 out_subblock_h_datums,
                 out_subblock_w_datums,
+                out_block_h_datums,
                 grid_size,
                 per_core_act_h,
                 per_core_act_w,
@@ -1188,6 +1189,7 @@ class ResNet(nn.Module):
                     [act_block_h_datums, self.inplanes],
                     [self.inplanes, weight_block_w_datums],
                     [out_subblock_h_datums, out_subblock_w_datums],
+                    out_block_h_datums,
                     grid_size,
                     per_core_act_h_ntiles,
                     per_core_act_w_ntiles,

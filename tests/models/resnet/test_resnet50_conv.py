@@ -318,22 +318,22 @@ hardcoded_matmul_config_conv = {
 
 hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv = {
     1: {
-        (3136, 64): [64, 64, 64, 64, (7, 7), 64, 64],
-        (800, 128): [32, 128, 32, 64, (5, 5), 32, 128],
-        (224, 256): [32, 128, 32, 128, (1, 7), 32, 256],
-        (64, 512): [32, 64, 32, 64, (1, 2), 32, 512],
+        (3136, 64): [64, 64, 64, 64, 64, (7, 7), 64, 64],
+        (800, 128): [32, 128, 32, 64, 32, (5, 5), 32, 128],
+        (224, 256): [32, 128, 32, 128, 32, (1, 7), 32, 256],
+        (64, 512): [32, 64, 32, 64, 32, (1, 2), 32, 512],
     },
     2: {
-        (6272, 64): [128, 64, 128, 64, (7, 7), 128, 64],
-        (1568, 128): [32, 128, 32, 64, (7, 7), 32, 128],
-        (416, 256): [64, 128, 64, 128, (7, 1), 64, 256],
-        (128, 512): [32, 64, 32, 64, (1, 4), 32, 512],
+        (6272, 64): [128, 64, 128, 64, 128, (7, 7), 128, 64],
+        (1568, 128): [32, 128, 32, 64, 32, (7, 7), 32, 128],
+        (416, 256): [64, 128, 64, 128, 64, (7, 1), 64, 256],
+        (128, 512): [32, 64, 32, 64, 32, (1, 4), 32, 512],
     },
     8: {
-        (25088, 64): [128, 64, 128, 64, (7, 7), 512, 64],
-        (6272, 128): [64, 128, 64, 64, (7, 7), 128, 128],
-        (1568, 256): [32, 128, 32, 128, (7, 7), 32, 256],
-        (416, 512): [64, 32, 64, 32, (7, 8), 64, 64],
+        (25088, 64): [128, 64, 128, 64, 128, (7, 7), 512, 64],
+        (6272, 128): [64, 128, 64, 64, 64, (7, 7), 128, 128],
+        (1568, 256): [224, 32, 32, 32, 224, (7, 8), 224, 32],
+        (416, 512): [64, 32, 32, 32, 64, (7, 8), 64, 64],
     },
 }
 
@@ -379,7 +379,7 @@ hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv = {
             0,
             0,
         ),  # slightly slower with new matmul but less than old matmul + bias computation time
-        # 3x3 convs in rn50 (not complete list)
+        # # 3x3 convs in rn50 (not complete list)
         (64, 64, 56, 56, 3, 3, 1, 1, 1, 1),
         (256, 256, 28, 28, 3, 3, 2, 2, 1, 1),
         (256, 256, 14, 14, 3, 3, 1, 1, 1, 1),
@@ -475,14 +475,15 @@ def test_resnet50_conv(
                 weight_block_w_datums,
                 out_subblock_h_datums,
                 out_subblock_w_datums,
+                out_block_h_datums,
                 grid_size,
-                per_core_act_matrix_h,
+                per_core_out_matrix_h,
                 per_core_weight_matrix_w,
             ] = hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv[N][
                 (conv_as_mm_padded_act_height, K)
             ]
-            assert per_core_act_matrix_h % 32 == 0
-            per_core_act_matrix_h_ntiles = (int)(per_core_act_matrix_h / 32)
+            assert per_core_out_matrix_h % 32 == 0
+            per_core_out_matrix_h_ntiles = (int)(per_core_out_matrix_h / 32)
             per_core_weight_matrix_w_ntiles = (int)(per_core_weight_matrix_w / 32)
             conv = resnet50_optimized_conv(
                 conv_weight_pyt.reshape(-1).tolist(),
@@ -491,8 +492,9 @@ def test_resnet50_conv(
                 [act_block_h_datums, C * S],
                 [C * S, weight_block_w_datums],
                 [out_subblock_h_datums, out_subblock_w_datums],
+                out_block_h_datums,
                 grid_size,
-                per_core_act_matrix_h_ntiles,
+                per_core_out_matrix_h_ntiles,
                 per_core_weight_matrix_w_ntiles,
                 conv_bias_pyt.reshape(-1).tolist(),
             )

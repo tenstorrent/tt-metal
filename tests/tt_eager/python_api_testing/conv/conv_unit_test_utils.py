@@ -34,11 +34,12 @@ def create_conv_act_tensor(torch_tensor, N, C, H, W, pad_h=0, pad_w=0, extra_pad
     tt_tensor = tt_tensor.pad(act_shape_height_width_channel_padded, (0,h_start,w_start,0), 0.0)
     return tt_tensor
 
-def create_conv_bias_tensor(torch_tensor, N, K, pad=0):
+def create_conv_bias_tensor(torch_tensor, N, K, padded_K, pad=0):
     # Padded input shape
     bias_shape = [N, 1, 1, K]
+    bias_padded_shape = [N, 1, 1, padded_K]
     # bias_shape_padded = [N, 1, 1, _nearest_y(C, 16)]
-    tt_tensor = ttl.tensor.Tensor(torch.flatten(torch_tensor).tolist(), bias_shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR)
+    tt_tensor = ttl.tensor.Tensor(torch.flatten(torch_tensor).tolist(), bias_shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).pad(bias_padded_shape, (0,0,0,0), 0.0)
     tt_tensor = tt_tensor.pad_to_tile(pad).to(ttl.tensor.Layout.TILE)
     print (f'tt_tensor shape: {tt_tensor.shape()}')
     return tt_tensor

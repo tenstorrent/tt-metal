@@ -145,7 +145,7 @@ def test_run_generic_conv(
             B_tiled = B_tiled_host.to(device)
 
         # Bias
-        bias_cl_host = create_conv_bias_tensor(bias_pyt, 1, K, pad = 0)
+        bias_cl_host = create_conv_bias_tensor(bias_pyt, 1, K, _nearest_y(K, weight_block_w*32), pad = 0)
         bias_device = bias_cl_host.to(device)
 
         if has_bias:

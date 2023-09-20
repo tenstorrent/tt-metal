@@ -98,19 +98,20 @@ def test_resnet50_first_conv(
         if N == 1:
             act_block_h_datums = 256
             grid_size = (7, 7)
-            per_core_act_h_ntiles = 8
+            per_core_out_h_ntiles = 8
         elif N == 2:
             act_block_h_datums = 256
             grid_size = (7, 7)
-            per_core_act_h_ntiles = 16
+            per_core_out_h_ntiles = 16
         elif N == 8:
             act_block_h_datums = 1024
             grid_size = (12, 9)
-            per_core_act_h_ntiles = 32
+            per_core_out_h_ntiles = 32
             # act_block_h_datums = 256
             # grid_size = (7,8)
-            # per_core_act_h_ntiles = 56
+            # per_core_out_h_ntiles = 56
         act_block_h = (int)(act_block_h_datums / 32)
+        out_block_h = act_block_h
 
         # Prepare activations
 
@@ -157,7 +158,9 @@ def test_resnet50_first_conv(
         B_tiled = B_tiled_host.to(device)
 
         # Bias
-        bias_cl_host = create_conv_bias_tensor(bias_pyt, 1, K, pad=0)
+        bias_cl_host = create_conv_bias_tensor(
+            bias_pyt, 1, K, _nearest_y(K, weight_block_w * 32), pad=0
+        )
         bias_device = bias_cl_host.to(device)
 
         if has_bias:
@@ -180,11 +183,6 @@ def test_resnet50_first_conv(
             B_tiled,
             bias_device,
             [R, padded_S, stride_h, stride_w, 0, 0],
-            act_block_h,
-            act_block_w,
-            weight_block_w,
-            out_subblock_h,
-            out_subblock_w,
             K,
             untilize_out,
             has_bias,
@@ -192,8 +190,16 @@ def test_resnet50_first_conv(
             ttl.tensor.MathFidelity.HiFi4,
             ttl.tensor.OptimizedConvParallelizationConfig(
                 grid_size=grid_size,
-                per_core_act_matrix_height_ntiles=per_core_act_h_ntiles,
+                per_core_out_matrix_height_ntiles=per_core_out_h_ntiles,
                 per_core_weight_matrix_width_ntiles=per_core_weight_matrix_w_ntiles,
+            ),
+            ttl.tensor.OptimizedConvBlockConfig(
+                act_block_h_ntiles=act_block_h,
+                act_block_w_ntiles=act_block_w,
+                weight_block_w_ntiles=weight_block_w,
+                out_block_h_ntiles=out_block_h,
+                out_subblock_h_ntiles=out_subblock_h,
+                out_subblock_w_ntiles=out_subblock_w,
             ),
             extra_padding_for_32B_alignment,
         )

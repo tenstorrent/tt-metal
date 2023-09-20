@@ -33,21 +33,21 @@ import torch
 @pytest.mark.parametrize(
     "K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w",
     (
-        (32, 32, 2, 2, 1, 1, 1, 1, 0, 0),
-        (32, 3, 100, 100, 3, 3, 1, 1, 0, 0),
+        (64, 32, 2, 2, 1, 1, 1, 1, 0, 0),
+        (64, 3, 100, 100, 3, 3, 1, 1, 0, 0),
         (64, 32, 2, 2, 1, 1, 1, 1, 0, 0),
         # channels = 3 padding
-        (32, 3, 5, 5, 1, 1, 1, 1, 0, 0),
+        (64, 3, 5, 5, 1, 1, 1, 1, 0, 0),
         # w/ conv padding
-        (32, 32, 5, 5, 1, 1, 1, 1, 1, 1),
+        (64, 32, 5, 5, 1, 1, 1, 1, 1, 1),
         # Hat = 1, Wat = 1, Wbt = 1
-        (32, 32, 5, 5, 1, 1, 1, 1, 0, 0),
+        (64, 32, 5, 5, 1, 1, 1, 1, 0, 0),
         # Hat = 2, Wat = 1, Wbt = 1
-        (32, 32, 8, 8, 1, 1, 1, 1, 0, 0),
+        (64, 32, 8, 8, 1, 1, 1, 1, 0, 0),
         # Hat = 1, Wat = 2, Wbt = 1
-        (32, 64, 5, 5, 1, 1, 1, 1, 0, 0),
+        (64, 64, 5, 5, 1, 1, 1, 1, 0, 0),
         # Hat = 2, Wat = 2, Wbt = 1
-        (32, 64, 8, 8, 1, 1, 1, 1, 0, 0),
+        (64, 64, 8, 8, 1, 1, 1, 1, 0, 0),
         # Hat = 1, Wat = 1, Wbt = 2
         (64, 32, 5, 5, 1, 1, 1, 1, 0, 0),
         # Hat = 1, Wat = 2, Wbt = 2
@@ -85,7 +85,7 @@ def test_run_optimized_conv(
     if has_bias and untilize_out:
         ## bias is only supported without untilize out
         pytest.skip()
-
+    assert(K % 32 == 0)
     num_iterations = 2  # run twice to test op caching flow for conv op
     for i in range(num_iterations):
         # torch.set_printoptions(threshold=10000)
@@ -106,6 +106,7 @@ def test_run_optimized_conv(
 
         # Parameters to define block dims
         act_block_h = 4
+        out_block_h = 4
         act_block_w = (int)((_nearest_32(_nearest_y(C, 16) * S))/32)
         weight_block_h = act_block_w
         weight_block_w = 2
@@ -115,7 +116,8 @@ def test_run_optimized_conv(
         OH = ((int)((H - R + 2 * pad_h) / stride_h)) + 1
         OW = ((int)((W - S + 2 * pad_w) / stride_w)) + 1
         conv_output_shape = [N, OH, OW, K]
-        act_matrix_height_ntiles = (int) (_nearest_y(N*OH*OW, act_block_h*32) / 32)
+        out_matrix_height_ntiles = (int) (_nearest_y(N*OH*OW, out_block_h*32) / 32)
+        weight_matrix_width_ntiles = (int) (_nearest_y(K, weight_block_w*32) / 32)
         # Prepare activations
         A_cl_host = create_conv_act_tensor(A_pyt, N, C, H, W)
         A = A_cl_host.to(device)
@@ -127,7 +129,7 @@ def test_run_optimized_conv(
         B_tiled = B_tiled_host.to(device)
 
         # Bias
-        bias_cl_host = create_conv_bias_tensor(bias_pyt, 1, K, pad = 0)
+        bias_cl_host = create_conv_bias_tensor(bias_pyt, 1, K, _nearest_y(K, weight_block_w*32), pad = 0)
         bias_device = bias_cl_host.to(device)
 
         if has_bias:
@@ -150,17 +152,18 @@ def test_run_optimized_conv(
             B_tiled,
             bias_device,
             [R, S, stride_h, stride_w, pad_h, pad_w],
-            act_block_h,
-            act_block_w,
-            weight_block_w,
-            out_subblock_h,
-            out_subblock_w,
             K,
             untilize_out,
             has_bias,
             fuse_relu,
             ttl.tensor.MathFidelity.HiFi4,
-            ttl.tensor.OptimizedConvParallelizationConfig(grid_size=(1,1), per_core_act_matrix_height_ntiles=act_matrix_height_ntiles),
+            ttl.tensor.OptimizedConvParallelizationConfig(grid_size=(1,1), per_core_out_matrix_height_ntiles=out_matrix_height_ntiles, per_core_weight_matrix_width_ntiles=weight_matrix_width_ntiles),
+            ttl.tensor.OptimizedConvBlockConfig(act_block_h_ntiles=act_block_h,
+                                                act_block_w_ntiles=act_block_w,
+                                                weight_block_w_ntiles=weight_block_w,
+                                                out_block_h_ntiles=out_block_h,
+                                                out_subblock_h_ntiles=out_subblock_h,
+                                                out_subblock_w_ntiles=out_subblock_w)
             )
         if not untilize_out:
            out_unpadded_shape = [1, 1, N*OH*OW, K]

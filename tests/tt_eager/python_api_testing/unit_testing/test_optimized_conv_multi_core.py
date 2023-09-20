@@ -31,7 +31,7 @@ import torch
 @pytest.mark.parametrize("fuse_relu", (False,))
 @pytest.mark.parametrize("N", (1,))
 @pytest.mark.parametrize(
-    "K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w, act_block_h, num_cores_x, num_cores_y, per_core_act_matrix_h_ntiles",
+    "K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w, act_block_h, num_cores_x, num_cores_y, per_core_out_matrix_h_ntiles, per_core_weight_matrix_w_ntiles",
     (
         # (32, 32, 2, 2, 1, 1, 1, 1, 0, 0),
         # (32, 3, 100, 100, 3, 3, 1, 1, 0, 0),
@@ -63,7 +63,7 @@ import torch
         # # num blocks weight w = 4, num blocks act h = 4, num blocks act w = 3
         # (16 * 32, 32, 24, 24, 3, 3, 1, 1, 0, 0),
         #(32, 32, 16, 16, 1, 1, 1, 1, 0, 0, 2, 1, 4, 2),
-        (64, 32, 16, 16, 1, 1, 1, 1, 0, 0, 2, 1, 4, 2),
+        (64, 32, 16, 16, 1, 1, 1, 1, 0, 0, 1, 1, 4, 2, 2),
     ),
 )
 def test_run_optimized_conv(
@@ -82,7 +82,8 @@ def test_run_optimized_conv(
     act_block_h,
     num_cores_x,
     num_cores_y,
-    per_core_act_matrix_h_ntiles,
+    per_core_out_matrix_h_ntiles,
+    per_core_weight_matrix_w_ntiles,
     untilize_out,
     has_bias,
     fuse_relu,
@@ -117,6 +118,7 @@ def test_run_optimized_conv(
         weight_block_w = 1
         out_subblock_h = 1
         out_subblock_w = 1
+        out_block_h = act_block_h * 2
 
         OH = ((int)((H - R + 2 * pad_h) / stride_h)) + 1
         OW = ((int)((W - S + 2 * pad_w) / stride_w)) + 1
@@ -133,7 +135,7 @@ def test_run_optimized_conv(
         B_tiled = B_tiled_host.to(device)
 
         # Bias
-        bias_cl_host = create_conv_bias_tensor(bias_pyt, 1, K, pad = 0)
+        bias_cl_host = create_conv_bias_tensor(bias_pyt, 1, K, _nearest_y(K, weight_block_w*32), pad = 0)
         bias_device = bias_cl_host.to(device)
 
         if has_bias:
@@ -156,17 +158,20 @@ def test_run_optimized_conv(
             B_tiled,
             bias_device,
             [R, S, stride_h, stride_w, pad_h, pad_w],
-            act_block_h,
-            act_block_w,
-            weight_block_w,
-            out_subblock_h,
-            out_subblock_w,
             K,
             untilize_out,
             has_bias,
             fuse_relu,
             ttl.tensor.MathFidelity.HiFi4,
-            ttl.tensor.OptimizedConvParallelizationConfig(grid_size=(num_cores_x,num_cores_y), per_core_act_matrix_height_ntiles=per_core_act_matrix_h_ntiles),
+            ttl.tensor.OptimizedConvParallelizationConfig(grid_size=(num_cores_x,num_cores_y),
+                                                          per_core_out_matrix_height_ntiles=per_core_out_matrix_h_ntiles,
+                                                          per_core_weight_matrix_width_ntiles=per_core_weight_matrix_w_ntiles),
+            ttl.tensor.OptimizedConvBlockConfig(act_block_h_ntiles=act_block_h,
+                                                act_block_w_ntiles=act_block_w,
+                                                weight_block_w_ntiles=weight_block_w,
+                                                out_block_h_ntiles=out_block_h,
+                                                out_subblock_h_ntiles=out_subblock_h,
+                                                out_subblock_w_ntiles=out_subblock_w)
             )
         if not untilize_out:
            out_unpadded_shape = [1, 1, N*OH*OW, K]

@@ -20,7 +20,7 @@ enum class OptimizedConvOpParallelizationStrategy {
 
 struct OptimizedConvParallelizationConfig {
     CoreCoord grid_size; // (x,y)
-    uint32_t per_core_act_matrix_height_ntiles;
+    uint32_t per_core_out_matrix_height_ntiles;
     uint32_t per_core_weight_matrix_width_ntiles;
     // std::size_t in0_block_w;
     // std::size_t out_subblock_h;
@@ -31,25 +31,30 @@ struct OptimizedConvParallelizationConfig {
     tt::stl::reflection::Attributes attributes() const;
 };
 
+struct OptimizedConvBlockConfig {
+    uint32_t act_block_h_ntiles;
+    uint32_t act_block_w_ntiles;
+    uint32_t weight_block_w_ntiles;
+    uint32_t out_block_h_ntiles;
+    uint32_t out_subblock_h_ntiles;
+    uint32_t out_subblock_w_ntiles;
+    tt::stl::reflection::Attributes attributes() const;
+};
+
 struct OptimizedConv {
     OptimizedConvParallelizationConfig parallelization_config;
+    OptimizedConvBlockConfig block_config;
     const std::vector<int> conv_params;
-    const uint32_t act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels;
+    const uint32_t output_channels;
     bool untilize_out, has_bias, fuse_relu;
     MathFidelity math_fidelity;
     uint32_t extra_padding_for_32B_alignment;
-    OptimizedConv(uint32_t act_bh, uint32_t act_bw,
-        uint32_t weight_bw, uint32_t out_sh,
-        uint32_t out_sw, const std::vector<int>&c_params,
+    OptimizedConv(const std::vector<int>&c_params,
         uint32_t output_channels, bool untile_out,
         bool has_bias, bool fuse_relu,
         MathFidelity mfidelity, const OptimizedConvParallelizationConfig& p_config,
+        const OptimizedConvBlockConfig& b_config,
         uint32_t e_padding_for_32B_alignment) :
-            act_block_h_ntiles(act_bh),
-            act_block_w_ntiles(act_bw),
-            weight_block_w_ntiles(weight_bw),
-            out_subblock_h_ntiles(out_sh),
-            out_subblock_w_ntiles(out_sw),
             output_channels(output_channels),
             conv_params(c_params),
             untilize_out(untile_out),
@@ -57,6 +62,7 @@ struct OptimizedConv {
             fuse_relu(fuse_relu),
             math_fidelity(mfidelity),
             parallelization_config(p_config),
+            block_config(b_config),
             extra_padding_for_32B_alignment(e_padding_for_32B_alignment) {}
 
     void validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
@@ -66,8 +72,11 @@ struct OptimizedConv {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-Tensor optimized_conv(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
-             uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, MathFidelity math_fidelity, const OptimizedConvParallelizationConfig& parallelization_config, uint32_t extra_padding_for_32B_alignment=0);
+Tensor optimized_conv(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias,
+    const vector<int> conv_params, uint32_t output_channels,
+    bool untilize_out, bool has_bias, bool fuse_relu, MathFidelity math_fidelity,
+    const OptimizedConvParallelizationConfig& parallelization_config,
+    const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment=0);
 
 }  // namespace tt_metal
 
