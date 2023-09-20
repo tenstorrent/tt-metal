@@ -17,9 +17,6 @@ from models.utility_functions import comp_pcc, pad_by_zero
 @pytest.mark.parametrize("shape", [[1, 1, 32, 32], [1, 1, 32, 128]])
 def test_softmax(shape, device):
     torch.manual_seed(1234)
-    if is_wormhole_b0() and shape != [1, 1, 32, 32]:
-        logger.warning("Skipping multi-tile case for WH_B0. Ongoing debug")
-        pytest.skip()
     x = torch.randn(shape).bfloat16().float()
     xt = (
         ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16)
@@ -39,9 +36,6 @@ def test_softmax(shape, device):
 @pytest.mark.parametrize("shape", [[1, 1, 32, 32], [1, 1, 32, 128]])
 def test_layernorm(shape, device):
     torch.manual_seed(1234)
-    if is_wormhole_b0() and shape != [1, 1, 32, 32]:
-        logger.warning("Skipping multi-tile case for WH_B0. Ongoing debug")
-        pytest.skip()
     x = torch.randn(shape).bfloat16().float()
     gamma = torch.randn([shape[-1]]).bfloat16().float()
     beta = torch.randn([shape[-1]]).bfloat16().float()

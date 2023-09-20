@@ -611,6 +611,7 @@ struct InterleavedAddrGenFast {
 #ifdef IS_NOT_POW2_NUM_DRAM_BANKS
             dest_addr = MUL_WITH_TILE_SIZE((uint)this->data_format, udivsi3_const_divisor<NUM_DRAM_BANKS>(id)) +
                         this->bank_base_address;
+            dest_addr += bank_to_dram_offset[bank_id];
 #else
             dest_addr = MUL_WITH_TILE_SIZE((uint)this->data_format, id >> LOG_BASE_2_OF_NUM_DRAM_BANKS) +
                         this->bank_base_address;
