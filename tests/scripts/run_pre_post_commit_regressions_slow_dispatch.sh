@@ -22,13 +22,12 @@ export PYTHONPATH=$TT_METAL_HOME
 
 if [ "$ARCH_NAME" == "grayskull" ]; then
   ./tests/scripts/run_python_api_unit_tests.sh
+  ./tests/scripts/run_python_api_sweep_tests.sh
+  ./tests/scripts/run_python_api_model_tests.sh
 else
   ./tests/scripts/run_python_api_unit_tests_wormhole_b0.sh
 fi
-
-env python tests/scripts/run_tt_metal.py --dispatch-mode slow
-env python tests/scripts/run_tt_eager.py --dispatch-mode slow
-./build/test/tt_metal/unit_tests
+./tests/scripts/run_unit_tests.sh
 
 echo "Checking docs build..."
 

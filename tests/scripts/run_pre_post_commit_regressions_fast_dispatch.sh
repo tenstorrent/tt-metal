@@ -22,6 +22,9 @@ export PYTHONPATH=$TT_METAL_HOME
 
 if [ "$ARCH_NAME" == "grayskull" ]; then
   ./tests/scripts/run_python_api_unit_tests.sh
+  ./tests/scripts/run_python_api_sweep_tests.sh
+  ./tests/scripts/run_python_api_model_tests.sh
+  ./tests/scripts/run_unit_tests.sh
 else
   ./tests/scripts/run_python_api_unit_tests_wormhole_b0.sh
 fi

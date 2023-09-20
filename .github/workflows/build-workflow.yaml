@@ -1,0 +1,50 @@
+name: "build TTMetal library and environment"
+
+# on:
+#   workflow_call:
+#     inputs:
+#       environment:
+#         required: True
+#         type: string
+#       os:
+#         required: True
+#         type: string
+
+jobs:
+  build-lib:
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        arch: ["grayskull", "wormhole_b0"]
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ matrix.arch }}
+    environment: ${{ inputs.environment }}
+    runs-on: Ubuntu-20.04
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+          token: ${{ secrets.CHECKOUT_TOKEN }}
+          lfs: true
+      - uses: ./.github/actions/install-metal-deps
+        with:
+          os: ${{ inputs.os }}
+      - uses: ./.github/actions/install-metal-dev-deps
+        with:
+          os: ${{ inputs.os }}
+      - name: Set up dyanmic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - name: Build tt-metal and libs
+        run: make build
+      - name: Prune for smaller artifact
+        run: rm -rf .git && rm -rf build/obj
+      - name: zip TTMetal src and tests
+        run: base=$(basename $PWD) && cd .. && tar -czf ttm.tar.gz $base && mv ttm.tar.gz $base
+      - uses: actions/upload-artifact@v3
+        with:
+          name: TTMetal_build_${{ matrix.arch}}
+          path: ttm.tar.gz

@@ -7,22 +7,52 @@ on:
   workflow_call:
 
 jobs:
-  build-and-unit-tests-fast-dispatch:
+  run-unit-tests-fast-dispatch:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
         arch: [grayskull, wormhole_b0]
+        testsuite: [./tests/scripts/run_python_api_unit_tests.sh, ./tests/scripts/run_python_api_sweep_tests.sh, ./tests/scripts/run_python_api_model_tests.sh]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.arch }}
     environment: dev
     runs-on: ${{ matrix.arch }}
     steps:
+      # - uses: actions/download-artifact@v3
+      #   with:
+      #     name: TTMetal_build_${{ matrix.arch}}
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@main
-        with:
-          token: ${{ secrets.CHECKOUT_TOKEN }}
+      - name: Set up dyanmic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - name: Build tt-metal and libs
+        run: make build
+      - name: Run pre/post regression tests
+        timeout-minutes: 90
+        run: |
+          source build/python_env/bin/activate
+          ${{ matrix.testsuite }}
+  run-unit-tests-fast-dispatch-cpp:
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        arch: [grayskull, wormhole_b0]
+        testsuite: [./tests/scripts/run_unit_tests.sh]
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ matrix.arch }}
+    environment: dev
+    runs-on: ${{ matrix.arch }}
+    steps:
+      # - uses: actions/download-artifact@v3
+      #   with:
+      #     name: TTMetal_build_${{ matrix.arch}}
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@main
       - name: Set up dyanmic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
@@ -34,4 +64,4 @@ jobs:
         timeout-minutes: 90
         run: |
           source build/python_env/bin/activate
-          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit --dispatch-mode fast
+          ${{ matrix.testsuite }}
