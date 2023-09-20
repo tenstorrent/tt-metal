@@ -30,6 +30,7 @@
 #include "tt_dnn/op_library/nlp_tms/nlp_tms.hpp"
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
+#include "tt_dnn/op_library/clone/clone_op.hpp"
 #include "tt_dnn/op_library/move/move_op.hpp"
 #include "tt_dnn/op_library/rotate_half/rotate_half_op.hpp"
 #include "tt_dnn/op_library/rotary_embedding/rotary_embedding_op.hpp"
@@ -1230,6 +1231,8 @@ void TensorModule(py::module &m_tensor) {
 
         Auto formatting is disabled. Both input tensors must have TILE layout. Output tensor will have TILE layout.)doc"
     );
+
+    detail::bind_unary_op(m_tensor, "clone", &clone, R"doc(  Returns a new tensor which is a new copy of input tensor ``{0}``.)doc");
 
     detail::bind_unary_op(m_tensor, "mean_hw", tt::tt_metal::mean_hw, R"doc(  Returns a new tensor with the variance of the input tensor ``{0}`` on H,W axes.)doc");
     detail::bind_unary_op(m_tensor, "var_hw", tt::tt_metal::var_hw, R"doc(  Returns a new tensor with the variance of the input tensor ``{0}`` on H,W axes.)doc");

@@ -416,6 +416,7 @@ but in general retaining the data.
 
 Tensor creation operations
 --------------------------
+
 .. autofunction:: tt_lib.tensor.arange
 
 .. autofunction:: tt_lib.tensor.full
@@ -439,6 +440,11 @@ Broadcast and Reduce
 .. autofunction:: tt_lib.tensor.bcast
 
 .. autofunction:: tt_lib.tensor.reduce
+
+Other Operations
+----------------
+
+.. autofunction:: tt_lib.tensor.clone
 
 Fallback Operations
 ===================

@@ -108,6 +108,33 @@ def linear(
 #################### TT-DNN ####################
 ################################################
 @setup_host_and_device
+def clone(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    buffer_type,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype[0],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
+
+    t1 = ttl.tensor.clone(t0, output_mem_config=output_mem_config)
+    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+
+    return output
+
+
+@setup_host_and_device
 def move(
     x,
     *args,

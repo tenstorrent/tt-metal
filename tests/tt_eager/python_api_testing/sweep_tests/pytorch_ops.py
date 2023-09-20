@@ -26,6 +26,10 @@ def linear(x, weight, bias=None, *args, **kwargs):
 ################################################
 #################### TT-DNN ####################
 ################################################
+def clone(x, *args, **kwargs):
+    return x
+
+
 def move(x, *args, **kwargs):
     return x
 
