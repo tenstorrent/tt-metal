@@ -446,7 +446,7 @@ TEST_F(SingleDeviceFixture, TestSingleCoreMultiTileBankedL1ReaderDataCopyL1Write
     }
 }
 
-TEST_F(SingleDeviceFixture, TestSingleCoreMultiTileBankedDramReaderDataCopyL1Writer) {
+TEST_F(SingleDeviceFixture, TestSingleCoreMultiTileBankedDramReaderDataCopyDramWriter) {
     BankedConfig test_config;
     size_t num_tiles = this->device_->num_banks(BufferType::DRAM);
     TT_ASSERT(num_tiles % 2 == 0);
@@ -455,6 +455,43 @@ TEST_F(SingleDeviceFixture, TestSingleCoreMultiTileBankedDramReaderDataCopyL1Wri
     u32 index = 0;
     test_config.input_buffer_type = BufferType::DRAM;
     test_config.output_buffer_type = BufferType::DRAM;
+    while (index < num_iterations) {
+        test_config.num_tiles = num_tiles;
+        test_config.size_bytes = test_config.num_tiles * 2 * 32 * 32;
+        EXPECT_TRUE(local_test_functions::reader_datacopy_writer(this->device_, test_config));
+        num_tiles += tile_increment;
+        index++;
+    }
+}
+
+TEST_F(SingleDeviceFixture, TestSingleCoreMultiTileBankedL1ReaderDataCopyDramWriter) {
+    BankedConfig test_config;
+    size_t num_tiles = this->device_->num_banks(BufferType::L1);
+    TT_ASSERT(num_tiles % 2 == 0);
+    size_t tile_increment = num_tiles / 2;
+    u32 num_iterations = 6;
+    u32 index = 0;
+    test_config.logical_core = this->device_->logical_core_from_bank_id(0);
+    test_config.input_buffer_type = BufferType::L1;
+    test_config.output_buffer_type = BufferType::DRAM;
+    while (index < num_iterations) {
+        test_config.num_tiles = num_tiles;
+        test_config.size_bytes = test_config.num_tiles * 2 * 32 * 32;
+        EXPECT_TRUE(local_test_functions::reader_datacopy_writer(this->device_, test_config));
+        num_tiles += tile_increment;
+        index++;
+    }
+}
+
+TEST_F(SingleDeviceFixture, TestSingleCoreMultiTileBankedDramReaderDataCopyL1Writer) {
+    BankedConfig test_config;
+    size_t num_tiles = this->device_->num_banks(BufferType::L1);
+    TT_ASSERT(num_tiles % 2 == 0);
+    size_t tile_increment = num_tiles / 2;
+    u32 num_iterations = 6;
+    u32 index = 0;
+    test_config.input_buffer_type = BufferType::DRAM;
+    test_config.output_buffer_type = BufferType::L1;
     while (index < num_iterations) {
         test_config.num_tiles = num_tiles;
         test_config.size_bytes = test_config.num_tiles * 2 * 32 * 32;
