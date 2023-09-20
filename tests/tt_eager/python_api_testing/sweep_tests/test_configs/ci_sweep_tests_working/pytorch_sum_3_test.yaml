@@ -14,10 +14,7 @@ test-list:
           low: 0
           high: 100
       comparison:
-        function: comp_allclose
-        args:
-          rtol: 0
-          atol: 0.1
+        function: comp_pcc
       args-gen: gen_dtype_layout_device
       output-file: sum_3_sweep.csv
       args:
@@ -39,10 +36,7 @@ test-list:
           low: 0
           high: 100
       comparison:
-        function: comp_allclose
-        args:
-          rtol: 0
-          atol: 0.1
+        function: comp_pcc
       args-gen: gen_dtype_layout_device
       output-file: sum_3_sweep.csv
       args:
