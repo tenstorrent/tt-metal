@@ -1,6 +1,6 @@
 ---
 test-list:
-  - eltwise-zeros_like:
+  - pad:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [12, 24, 512, 512]
@@ -10,19 +10,20 @@ test-list:
         args-sampling-strategy: "all"
       datagen:
         function: gen_rand
+        dtype: bfloat16
         args:
           low: -100
           high: 100
       comparison:
         function: comp_equal
-      args-gen: gen_dtype_layout_device
-      output-file: eltwise_zeros_like_sweep.csv
+      args-gen: gen_pad_args
+      output-file: pad_sweep.csv
       args:
         data-layout: ["TILE"]
-        data-type: ["BFLOAT16", "BFLOAT8_B"]
+        data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM"]
-  - eltwise-zeros_like:
+  - pad:
       shape:
         start-shape: [1, 1, 2, 2]
         end-shape: [12, 24, 512, 512]
@@ -32,13 +33,14 @@ test-list:
         args-sampling-strategy: "all"
       datagen:
         function: gen_rand
+        dtype: bfloat16
         args:
           low: -100
           high: 100
       comparison:
         function: comp_equal
-      args-gen: gen_dtype_layout_device
-      output-file: eltwise_zeros_like_sweep.csv
+      args-gen: gen_pad_args
+      output-file: pad_sweep.csv
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]
