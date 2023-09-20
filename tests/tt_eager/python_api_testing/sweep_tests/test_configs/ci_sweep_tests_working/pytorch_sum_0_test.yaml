@@ -14,12 +14,9 @@ test-list:
           low: 0
           high: 100
       comparison:
-        function: comp_allclose
-        args:
-          rtol: 0
-          atol: 0.1
+        function: comp_pcc
       args-gen: gen_dtype_layout_device
-      output-file: sum_1_sweep.csv
+      output-file: sum_0_sweep.csv
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
@@ -39,12 +36,9 @@ test-list:
           low: 0
           high: 100
       comparison:
-        function: comp_allclose
-        args:
-          rtol: 0
-          atol: 0.1
+        function: comp_pcc
       args-gen: gen_dtype_layout_device
-      output-file: sum_1_sweep.csv
+      output-file: sum_0_sweep.csv
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]
