@@ -80,17 +80,14 @@ namespace tt::tt_metal::detail{
         )doc");
 
         m_tensor.def("permute", &permute,
-            py::arg("input").noconvert(), py::arg("W"), py::arg("Z"), py::arg("Y"), py::arg("X"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-            Returns a tensor that is input tensor ``arg0`` with its dimensions permuted to new order ``[arg1, arg2, arg3, arg4]``.
+            py::arg("input").noconvert(), py::arg("dims"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            Returns a tensor that is input tensor ``arg0`` with its dimensions permuted to new order ``dims``.
 
             .. csv-table::
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
                 "input", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "W", "Dim to become W", "int", "Unique value between [0, num dims)", "Yes"
-                "Z", "Dim to become Z", "int", "Unique value between [0, num dims)", "Yes"
-                "Y", "Dim to become Y", "int", "Unique value between [0, num dims)", "Yes"
-                "X", "Dim to become X", "int", "Unique value between [0, num dims)", "Yes"
+                "dims", "The desired ordering of dimensions", "List[int]", "All indices within input tensor rank", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
@@ -375,7 +372,7 @@ namespace tt::tt_metal::detail{
             +----------+----------------------------+----------------------------+---------------------------------+----------+
         )doc");
 
-        m_tensor.def("transpose", py::overload_cast<const Tensor&, uint, uint, const MemoryConfig&>(&transpose),
+        m_tensor.def("transpose", py::overload_cast<const Tensor&, std::int64_t, std::int64_t, const MemoryConfig&>(&transpose),
         py::arg("input").noconvert(), py::arg("dim0"), py::arg("dim1"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``arg1`` and ``arg2`` are swapped.
 
@@ -387,8 +384,8 @@ namespace tt::tt_metal::detail{
             :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
             "input", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-            "dim0", "dimension to transpose", "uint", "0, 1, 2, or 3", "Yes"
-            "dim1", "dimension to transpose", "uint", "0, 1, 2, or 3", "Yes"
+            "dim0", "dimension to transpose", "int", "Index within input tensor rank", "Yes"
+            "dim1", "dimension to transpose", "int", "Index within input tensor rank", "Yes"
             "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
        )doc");
 
