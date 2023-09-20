@@ -112,6 +112,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_i0,
         "pytorch_op": pytorch_ops.i0,
     },
+    "eltwise-lgamma": {
+        "tt_lib_op": tt_lib_ops.eltwise_lgamma,
+        "pytorch_op": pytorch_ops.lgamma,
+    },
     "eltwise-logical_noti": {
         "tt_lib_op": tt_lib_ops.eltwise_logical_noti,
         "pytorch_op": pytorch_ops.logical_noti,

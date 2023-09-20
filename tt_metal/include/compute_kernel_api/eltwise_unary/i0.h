@@ -16,7 +16,7 @@
 #endif
 
 namespace ckernel {
-//logical_not
+//i0
 ALWI void i0_tile(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_i0_op<APPROX, SyncHalf>(idst)));
 }

@@ -342,6 +342,8 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.logit
 
+.. autofunction:: tt_lib.tensor.lgamma
+
 .. autofunction:: tt_lib.tensor.logical_and
 
 .. autofunction:: tt_lib.tensor.logical_andi

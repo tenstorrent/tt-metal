@@ -129,6 +129,54 @@ Tensor tanhshrink(const Tensor& a, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _tanhshrink)(a, output_mem_config);
 }
 
+Tensor _lgamma(const Tensor& x, const MemoryConfig& output_mem_config) {
+    Tensor result(x);
+    {
+        Tensor t(x);
+        {
+            Tensor temp_log(x);
+            {
+                Tensor temp(x);
+                Tensor input = sub_unary(x, 1.0f, output_mem_config);
+                {
+                    Tensor z1 = mul_unary(recip(add_unary(input, 1.0f, output_mem_config), output_mem_config), 76.18009172947146f, output_mem_config);
+                    temp = add_unary(z1, 1.0f, output_mem_config);
+
+                    z1 = mul_unary(recip(add_unary(input, 2.0f, output_mem_config), output_mem_config), -86.50532032941677f, output_mem_config);
+                    temp = add(temp, z1, std::nullopt, output_mem_config);
+
+                    z1 = mul_unary(recip(add_unary(input, 3.0f, output_mem_config), output_mem_config), 24.01409824083091f, output_mem_config);
+                    temp = add(temp, z1, std::nullopt, output_mem_config);
+
+                    z1 = mul_unary(recip(add_unary(input, 4.0f, output_mem_config), output_mem_config), -1.231739572450155f, output_mem_config);
+                    temp = add(temp, z1, std::nullopt, output_mem_config);
+
+                    z1 = mul_unary(recip(add_unary(input, 5.0f, output_mem_config), output_mem_config), 0.1208650973866179e-2f, output_mem_config);
+                    temp = add(temp, z1, std::nullopt, output_mem_config);
+
+                    z1 = mul_unary(recip(add_unary(input, 6.0f, output_mem_config), output_mem_config), -0.5395239384953e-5f, output_mem_config);
+                    temp = add(temp, z1, std::nullopt, output_mem_config);
+                }
+                {
+                    Tensor t_log(x);
+                    {
+                        t = add_unary(input, 5.5f, output_mem_config);
+                        t_log = log(t, output_mem_config);
+                    }
+                    temp_log = log(temp, output_mem_config);
+                    result = add_unary(mul(add_unary(input, 0.5f, output_mem_config), t_log, std::nullopt, output_mem_config), 0.918938531357171f, output_mem_config);
+                }
+            }
+            result = add(result, temp_log, std::nullopt, output_mem_config);
+        }
+        result = sub(result, t, std::nullopt, output_mem_config);
+    }
+    return result;
+}
+Tensor lgamma(const Tensor& a, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _lgamma)(a, output_mem_config);
+}
+
 //mish[x] = x*tanh[softplus[x]]
 //use transformation y = x*tanh[softplus[x]] by broadcast
 //Ref: https://krutikabapat.github.io/Swish-Vs-Mish-Latest-Activation-Functions/
