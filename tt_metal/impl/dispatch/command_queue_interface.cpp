@@ -46,7 +46,7 @@ void SystemMemoryWriter::cq_write(Device* device, vector<u32>& data, u32 write_p
 }
 
 void SystemMemoryWriter::send_write_ptr(Device* device) {
-    CoreCoord dispatch_core = {1, 11};
+    static CoreCoord dispatch_core = device->worker_core_from_logical_core(*device->dispatch_cores().begin());
     u32 chip_id = 0;  // TODO(agrebenisan): Remove hard-coding
 
     _mm_sfence();
@@ -58,7 +58,7 @@ void SystemMemoryWriter::send_write_ptr(Device* device) {
 }
 
 void SystemMemoryWriter::send_write_toggle(Device* device) {
-    CoreCoord dispatch_core = {1, 11};
+    static CoreCoord dispatch_core = device->worker_core_from_logical_core(*device->dispatch_cores().begin());
     u32 chip_id = 0;  // TODO(agrebenisan): Remove hard-coding
 
     _mm_sfence();

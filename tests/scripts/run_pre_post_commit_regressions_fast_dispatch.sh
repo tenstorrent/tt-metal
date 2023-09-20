@@ -26,8 +26,8 @@ if [ "$ARCH_NAME" == "grayskull" ]; then
   env python tests/scripts/run_tt_eager.py --dispatch-mode fast
   ./build/test/tt_metal/unit_tests_fast_dispatch
 else
-  echo "Wormhole_b0 doesn't support fast dispatch yet"
-  exit 1
+  ./tests/scripts/run_python_api_unit_tests_wormhole_b0.sh
+  ./build/test/tt_metal/unit_tests_fast_dispatch
 fi
 
 

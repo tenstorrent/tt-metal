@@ -20,13 +20,16 @@ void kernel_main() {
     // they will know how to let me know they have finished
     *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(DISPATCH_MESSAGE_REMOTE_SENDER_ADDR) = get_noc_addr(DISPATCH_MESSAGE_ADDR);
 
+    constexpr static u64 pcie_core_noc_encoding = u64(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32;
+
     while (true) {
         volatile tt_l1_ptr u32* command_ptr = reinterpret_cast<volatile tt_l1_ptr u32*>(command_start_addr);
 
         cq_wait_front();
+
         // Hardcoded for time being, need to clean this up
-        u64 src_noc_addr = get_noc_addr(PCIE_NOC_X, PCIE_NOC_Y, cq_read_interface.fifo_rd_ptr << 4);
-        noc_async_read(src_noc_addr, u32(command_start_addr), NUM_16B_WORDS_IN_DEVICE_COMMAND << 4);
+        u64 src_noc_addr = pcie_core_noc_encoding | (cq_read_interface.fifo_rd_ptr << 4);
+        noc_async_read(src_noc_addr, command_start_addr, NUM_16B_WORDS_IN_DEVICE_COMMAND << 4);
         noc_async_read_barrier();
 
         // Control data

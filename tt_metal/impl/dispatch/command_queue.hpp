@@ -20,7 +20,7 @@
 #include "tt_metal/common/base.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tt_metal/impl/program.hpp"
-#include "tt_metal/src/firmware/riscv/grayskull/noc/noc_parameters.h"
+#include "noc/noc_parameters.h"
 
 
 namespace tt::tt_metal {
@@ -105,10 +105,6 @@ string EnqueueCommandTypeToString(EnqueueCommandType ctype);
 // TEMPORARY! TODO(agrebenisan): need to use proper macro based on loading noc
 #define NOC_X(x) x
 #define NOC_Y(y) y
-
-#define NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end)                                          \
-    ((x_start) << (2 * NOC_ADDR_NODE_ID_BITS)) | ((y_start) << (3 * NOC_ADDR_NODE_ID_BITS)) | (x_end) | \
-        ((y_end) << (NOC_ADDR_NODE_ID_BITS))
 
 u32 noc_coord_to_u32(CoreCoord coord);
 

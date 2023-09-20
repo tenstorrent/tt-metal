@@ -1242,8 +1242,8 @@ FORCE_INLINE
 void cq_wait_front() {
     DEBUG_STATUS('N', 'Q', 'W');
     while (cq_read_interface.fifo_rd_ptr == get_cq_write_ptr()[0] and
-           cq_read_interface.fifo_rd_toggle == get_cq_write_toggle()[0])
-        ;
+           cq_read_interface.fifo_rd_toggle == get_cq_write_toggle()[0]) {
+    }
     DEBUG_STATUS('N', 'Q', 'D');
 }
 
@@ -1261,8 +1261,8 @@ void notify_host_of_cq_read_pointer() {
 
 FORCE_INLINE
 void notify_host_of_cq_read_toggle() {
-    u64 pcie_address = get_noc_addr(0, 4, HOST_CQ_READ_TOGGLE_PTR);  // For now, we are writing to host hugepages at
-                                                                     // offset 0 (nothing else currently writing to it)
+    constexpr static u64 pcie_core_noc_encoding = u64(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32;
+    u64 pcie_address = pcie_core_noc_encoding | HOST_CQ_READ_TOGGLE_PTR;
     cq_read_interface.fifo_rd_toggle = not cq_read_interface.fifo_rd_toggle;
     volatile tt_l1_ptr u32* rd_toggle_ptr = get_cq_read_toggle();
     rd_toggle_ptr[0] = cq_read_interface.fifo_rd_toggle;

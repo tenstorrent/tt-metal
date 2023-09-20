@@ -190,6 +190,7 @@ TEST_F(CommandQueueFixture, TestArbitrarySizedWrite) {
 }
 
 TEST_F(CommandQueueFixture, TestWrapHostHugepageOnEnqueueReadBuffer) {
+
     BufferConfig buf_config = {.num_pages = 524270, .page_size = 2048, .buftype = BufferType::DRAM};
 
     EXPECT_TRUE(local_test_functions::test_EnqueueWrap_on_EnqueueReadBuffer(this->device_, *tt::tt_metal::detail::GLOBAL_CQ, buf_config));
@@ -265,6 +266,8 @@ TEST_F(CommandQueueFixture, WritesToRandomBufferTypeAndThenReads) {
 }
 
 TEST_F(CommandQueueFixture, StressWrapTest) {
+
+
     BufferStressTestConfig config = {
         .page_size = 4096, .max_num_pages_per_buffer = 2000, .num_iterations = 10000, .num_unique_vectors = 20};
     EXPECT_TRUE(

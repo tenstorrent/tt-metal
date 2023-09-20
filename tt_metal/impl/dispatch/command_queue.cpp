@@ -16,7 +16,7 @@ namespace tt::tt_metal {
 
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
-u64 get_noc_multicast_encoding(const CoreCoord& top_left, const CoreCoord& bottom_right) {
+u32 get_noc_multicast_encoding(const CoreCoord& top_left, const CoreCoord& bottom_right) {
     return NOC_MULTICAST_ENCODING(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
 }
 

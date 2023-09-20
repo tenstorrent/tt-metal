@@ -174,12 +174,10 @@ FORCE_INLINE void write_program_section(
     // Write different parts of that program section to different worker cores
     for (u32 write = 0; write < num_writes; write++) {
         u32 src = command_ptr[0];
-
         u32 dst = command_ptr[1];
         u32 dst_noc = command_ptr[2];
         u32 transfer_size = command_ptr[3];
         u32 num_receivers = command_ptr[4];
-
         command_ptr += 5;
 
 #ifdef TT_METAL_DISPATCH_MAP_DUMP
@@ -187,13 +185,13 @@ FORCE_INLINE void write_program_section(
         for (u32 i = 0; i < transfer_size; i += sizeof(u32)) {
             // DPRINT << *reinterpret_cast<volatile tt_l1_ptr u32*>(src + i) << ENDL();
         }
-        #else
+#else
         noc_async_write_multicast(src, u64(dst_noc) << 32 | dst, transfer_size, num_receivers);
-        #endif
+#endif
     }
-    #ifndef TT_METAL_DISPATCH_MAP_DUMP
+#ifndef TT_METAL_DISPATCH_MAP_DUMP
     noc_async_write_barrier();
-    #endif
+#endif
 }
 
 FORCE_INLINE void write_program(u32 num_program_relays, volatile tt_l1_ptr u32*& command_ptr) {
@@ -225,6 +223,7 @@ FORCE_INLINE void launch_program(u32 num_workers, u32 num_multicast_messages, vo
 
     volatile tt_l1_ptr uint32_t* message_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(DISPATCH_MESSAGE_ADDR);
     *message_addr_ptr = 0;
+
     for (u32 i = 0; i < num_multicast_messages * 2; i += 2) {
         u64 worker_core_noc_coord = u64(command_ptr[i]) << 32;
         u32 num_messages = command_ptr[i + 1];
@@ -250,7 +249,8 @@ FORCE_INLINE void finish_program(u32 finish) {
 
     volatile tt_l1_ptr u32* finish_ptr = get_cq_finish_ptr();
     finish_ptr[0] = 1;
-    uint64_t finish_noc_addr = get_noc_addr(PCIE_NOC_X, PCIE_NOC_Y, HOST_CQ_FINISH_PTR);
+    constexpr static u64 pcie_core_noc_encoding = u64(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32;
+    u64 finish_noc_addr = pcie_core_noc_encoding | HOST_CQ_FINISH_PTR;
     noc_async_write(u32(finish_ptr), finish_noc_addr, 4);
     noc_async_write_barrier();
     finish_ptr[0] = 0;

@@ -24,11 +24,6 @@ class CommandQueueFixture : public ::testing::Test {
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
 
-        if (this->arch_ != tt::ARCH::GRAYSKULL) {
-            tt::log_info("Skipping since this fast dispatch suite can only be run with GS");
-            GTEST_SKIP();
-        }
-
         const int device_id = 0;
         this->device_ = tt::tt_metal::CreateDevice(device_id);
 
@@ -36,9 +31,6 @@ class CommandQueueFixture : public ::testing::Test {
     }
 
     void TearDown() override {
-        if (this->arch_ != tt::ARCH::GRAYSKULL) {
-            GTEST_SKIP();
-        }
         tt::tt_metal::CloseDevice(this->device_);
     }
 };
