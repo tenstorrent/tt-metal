@@ -135,14 +135,16 @@ void kernel_main() {
 
     int32_t out_h_i = core_out_h_i_start;
     int32_t out_w_i = core_out_w_i_start;
+    int32_t stride_w_multiples = stride_w * out_w_i;
+    int32_t stride_h_multiples = stride_h * out_h_i;
     for (uint32_t stick = 0; stick < nsticks_per_core_by_nblocks; ++ stick) {
         cb_reserve_back(in_cb_id, out_nelems);
         uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
         for (uint32_t block = 0; block < out_nelems; ++ block) {
             // for given stick (out_w_i, out_h_i), calculate:
             //      start_h, start_w, end_h, end_w for window on input
-            int32_t start_w = stride_w * out_w_i - pad_w;
-            int32_t start_h = stride_h * out_h_i - pad_h;
+            int32_t start_w = stride_w_multiples - pad_w;
+            int32_t start_h = stride_h_multiples - pad_h;
             int32_t end_w = start_w + window_w;
             int32_t end_h = start_h + window_h;
             // sanitize the values on edges
@@ -156,9 +158,10 @@ void kernel_main() {
             // read at most window_hw input rows into CB
             int32_t read_rows = 0;
             uint32_t curr_in_l1_write_addr = in_l1_write_addr;
-            for (int32_t h = start_h; h < end_h; ++ h) {
+            uint32_t in_w_multiples = in_w * start_h;
+            for (int32_t h = start_h; h < end_h; ++ h, in_w_multiples += in_w) {
                 for (int32_t w = start_w; w < end_w; ++ w) {
-                    uint32_t in_hw_row_id = core_offset_in_row_id + h * in_w + w;
+                    uint32_t in_hw_row_id = core_offset_in_row_id + in_w_multiples + w;
                     // DPRINT << in_hw_row_id << " ";
                     s_in.noc_async_read_page(in_hw_row_id, curr_in_l1_write_addr);
                     curr_in_l1_write_addr += in_nbytes_c;
@@ -176,11 +179,15 @@ void kernel_main() {
 
             // increment to next stick
             ++ out_w_i;
+            stride_w_multiples += stride_w;
             if (out_w_i == out_w) {
                 out_w_i = 0;
+                stride_w_multiples = 0;
                 ++ out_h_i;
+                stride_h_multiples += stride_h;
                 if (out_h_i == out_h) {
                     out_h_i = 0;    // new batch starts
+                    stride_h_multiples = 0;
                     core_offset_in_row_id += in_hw;
                 }
             }
