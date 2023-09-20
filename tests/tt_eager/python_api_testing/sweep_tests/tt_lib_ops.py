@@ -1867,62 +1867,6 @@ def unpad_from_tile(
 
 
 @setup_host_and_device
-def eltwise_loagaddexp(x, y, args, scalar, device, dtype, layout, buffer_type, output_mem_config, *kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype[0],
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout[0])
-    t0 = tensor_to_device(t0, device, buffer_type[0])
-
-    t1 = ttl.tensor.Tensor(
-        y.reshape(-1).tolist(),
-        y.shape,
-        dtype[1],
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t1 = t1.to(layout[1])
-    t1 = tensor_to_device(t1, device, buffer_type[1])
-
-    t2 = ttl.tensor.logaddexp(t0, t1, output_mem_config)
-
-    output = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-    return output
-
-
-@setup_host_and_device
-def eltwise_loagaddexp2(x, y, args, scalar, device, dtype, layout, buffer_type, output_mem_config, *kwargs):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype[0],
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t0 = t0.to(layout[0])
-    t0 = tensor_to_device(t0, device, buffer_type[0])
-
-    t1 = ttl.tensor.Tensor(
-        y.reshape(-1).tolist(),
-        y.shape,
-        dtype[1],
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-
-    t1 = t1.to(layout[1])
-    t1 = tensor_to_device(t1, device, buffer_type[1])
-
-    t2 = ttl.tensor.logaddexp2(t0, t1, output_mem_config)
-
-    output = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-    return output
-
-
-@setup_host_and_device
 def activation_glu(
     x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
 ):
