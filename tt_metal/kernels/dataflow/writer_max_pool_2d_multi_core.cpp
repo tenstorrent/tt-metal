@@ -6,10 +6,8 @@
 #include "dataflow_api.h"
 
 // #include "debug_print.h"
-
-// #include "debug_print.h"
-SliceRange srt = SliceRange{ .h0 = 0, .h1 = 32, .hs = 8, .w0 = 0, .w1 = 32, .ws = 8 };
-SliceRange srr = SliceRange{ .h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1 };
+// SliceRange srt = SliceRange{ .h0 = 0, .h1 = 32, .hs = 8, .w0 = 0, .w1 = 32, .ws = 8 };
+// SliceRange srr = SliceRange{ .h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1 };
 // SliceRange srr2 = SliceRange{ .h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1 = 64, .ws = 2 };
 
 /**
@@ -40,16 +38,18 @@ void kernel_main() {
         .page_size = out_nbytes_c   // TODO: Ensure this is 32B aligned
     };
 
-    uint32_t npixels_per_core = get_arg_val<uint32_t>(40);
+    uint32_t nsticks_per_core = get_arg_val<uint32_t>(40);
     uint32_t core_offset_out_row_id = get_arg_val<uint32_t>(41);
+    uint32_t nsticks_per_core_by_nblocks = get_arg_val<uint32_t>(42);
+
     uint32_t out_row_id = 0;
-    for (uint32_t pixel = 0; pixel < npixels_per_core / out_nelems; ++ pixel) {
+    for (uint32_t stick = 0; stick < nsticks_per_core_by_nblocks; ++ stick) {
         cb_wait_front(out_cb_id, out_nelems * out_ntiles_c);
         uint32_t out_l1_read_addr = get_read_ptr(out_cb_id);
-        // DPRINT << TileSlice(out_cb_id, 0, srr, true, true);
         for (uint32_t out_elem_i = 0; out_elem_i < out_nelems; ++ out_elem_i) {
-            // TODO [AS]: skip OOB indices when out_nelems is not multiple of out_w
-            // DPRINT << "WRITING OUT ROW: " << core_offset_out_row_id + out_row_id << ENDL();
+            // Write as tiled tensor, need to handle each face.
+            // NOTE: this assumes that the stick size is 64 (2 tiles width)
+
             uint64_t out_noc_addr = get_noc_addr(core_offset_out_row_id + out_row_id, s_out);
 
             // tile 0

@@ -933,61 +933,13 @@ class ResNet(nn.Module):
         )
         self.relu = tt_lib.tensor.relu_without_autoformat
         # self.maxpool = fallback_ops.MaxPool2d(kernel_size=3, stride=2, padding=1, channels_last=True, reshape_2d=True)
-        self.maxpool = TtMaxPool(
-            self.device,
-            kernel_size=3,
-            stride=2,
-            padding=1,
-            output_mem_config=self.memory_config,
-            nblocks=8,
-            channels_last=True,
-            reshape_2d=True,
-        )
-        self.maxpool_output_shape = compute_max_pool_shape(
-            3, 2, 1, self.conv1_output_shape
-        )
-        self.layer1, self.layer1_output_shape = self._make_layer(
-            block,
-            64,
-            layers[0],
-            name="layer1",
-            state_dict=state_dict,
-            layer_input_shape=self.maxpool_output_shape,
-            batch_size=batch_size,
-        )
-        self.layer2, self.layer2_output_shape = self._make_layer(
-            block,
-            128,
-            layers[1],
-            stride=2,
-            dilate=replace_stride_with_dilation[0],
-            name="layer2",
-            state_dict=state_dict,
-            layer_input_shape=self.layer1_output_shape,
-            batch_size=batch_size,
-        )
-        self.layer3, self.layer3_output_shape = self._make_layer(
-            block,
-            256,
-            layers[2],
-            stride=2,
-            dilate=replace_stride_with_dilation[1],
-            name="layer3",
-            state_dict=state_dict,
-            layer_input_shape=self.layer2_output_shape,
-            batch_size=batch_size,
-        )
-        self.layer4, self.layer4_output_shape = self._make_layer(
-            block,
-            512,
-            layers[3],
-            stride=2,
-            dilate=replace_stride_with_dilation[2],
-            name="layer4",
-            state_dict=state_dict,
-            layer_input_shape=self.layer3_output_shape,
-            batch_size=batch_size,
-        )
+        # self.maxpool = TtMaxPool(self.device, kernel_size=3, stride=2, padding=1, output_mem_config=self.memory_config, nblocks=8, channels_last=True, reshape_2d=True)
+        self.maxpool = TtMaxPool(self.device, kernel_size=3, stride=2, padding=1, output_mem_config=self.memory_config, nblocks=1, channels_last=True, reshape_2d=True)
+        self.maxpool_output_shape = compute_max_pool_shape(3, 2, 1, self.conv1_output_shape)
+        self.layer1, self.layer1_output_shape = self._make_layer(block, 64, layers[0], name="layer1", state_dict=state_dict, layer_input_shape=self.maxpool_output_shape, batch_size=batch_size)
+        self.layer2, self.layer2_output_shape = self._make_layer(block, 128, layers[1], stride=2, dilate=replace_stride_with_dilation[0], name="layer2", state_dict=state_dict, layer_input_shape=self.layer1_output_shape, batch_size=batch_size)
+        self.layer3, self.layer3_output_shape = self._make_layer(block, 256, layers[2], stride=2, dilate=replace_stride_with_dilation[1], name="layer3", state_dict=state_dict, layer_input_shape=self.layer2_output_shape, batch_size=batch_size)
+        self.layer4, self.layer4_output_shape = self._make_layer(block, 512, layers[3], stride=2, dilate=replace_stride_with_dilation[2], name="layer4", state_dict=state_dict, layer_input_shape=self.layer3_output_shape, batch_size=batch_size)
 
         # All modules in RN50 are unrolled here. One variable for each module. Only specific number of modules supported - layers MUST equal to [3, 4, 6, 3]
         assert layers == [3, 4, 6, 3]

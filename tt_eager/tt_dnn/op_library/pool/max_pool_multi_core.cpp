@@ -134,14 +134,6 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
     Shape input_shape = input.shape();
     Shape output_shape = output.shape();
 
-    // log_debug("SHAPES: input = {}, output = {}", input_shape, output_shape);
-
-    #if DEBUG_SERVER == 1
-        // start debug server
-        auto debug_core = CoreCoord(1, 1);
-        tt_start_debug_print_server(device->cluster(), {0}, {debug_core});
-    #endif
-
     // NOTE: input is assumed to be in {N, 1, H * W, C }
 
     // TODO [AS]: Support other data formats??
@@ -177,6 +169,9 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
     auto grid_size = device->compute_with_storage_grid_size();
     auto [ncores, all_cores, core_range, core_range_cliff, in_nhw_per_core, in_nhw_per_core_cliff, out_nhw_per_core, out_nhw_per_core_cliff] = max_pool_helpers::get_decomposition_nhw(grid_size, in_nhw, out_nhw);
     uint32_t ncores_w = grid_size.x;
+
+    // TODO: support generic nblocks
+    TT_ASSERT(out_nhw_per_core % nblocks == 0, "number of sticks per core ({}) should be divisible by nblocks ({})", out_nhw_per_core, nblocks);
 
     // CBs
     uint32_t multi_buffering_factor = 2;
@@ -226,7 +221,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
                                                                      .buffer_type = BufferType::L1});
     auto minus_inf_const_tensor_addr = minus_inf_const_tensor.buffer()->address();
 
-    #if 0
+    #if 1
     {   // debug
         log_debug("in_cb :: PS = {}, NP = {}", in_cb_pagesize, in_cb_npages);
         log_debug("in_scalar_cb :: PS = {}, NP = {}", in_scalar_cb_pagesize, in_scalar_cb_npages);
@@ -307,8 +302,9 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
                                             0,          // core_offset_in_row_id
                                             0,          // core_out_w_i_start
                                             0,          // core_out_h_i_start
-                                            out_nhw_per_core,    // npixels_per_core
+                                            out_nhw_per_core,    // nsticks_per_core
                                             0,          // core_offset_out_row_id
+                                            out_nhw_per_core / nblocks,     // loop count with blocks
                                             };
     auto reader_config = DataMovementConfig{.processor = DataMovementProcessor::RISCV_1,
                                             .noc = NOC::RISCV_1_default,
@@ -348,6 +344,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
                                             nbatch,
                                             out_nhw_per_core,
                                             out_nhw_per_core,
+                                            out_nhw_per_core / nblocks,     // loop count with blocks
                                             };
     auto compute_ct_args_cliff = compute_ct_args;
     auto reduce_op = ReduceOpMath::MAX;

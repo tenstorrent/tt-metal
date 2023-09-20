@@ -110,6 +110,7 @@ void MAIN {
     const uint32_t nbatch = get_compile_time_arg_val(10);
     const uint32_t out_h_per_core = get_compile_time_arg_val(11);
     const uint32_t nsticks_per_core = get_compile_time_arg_val(12);
+    const uint32_t nsticks_per_core_by_nblocks = get_compile_time_arg_val(13);
 
     tilize_init(in_cb_id, in_ntiles_hwc, in_tiled_cb_id);
 
@@ -121,7 +122,7 @@ void MAIN {
     #endif
 
     cb_wait_front(in_scalar_cb_id, 1);
-    for (uint32_t i = 0; i < nsticks_per_core; ++ i) {
+    for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; ++ i) {
         // NOTE: Assuming in_ntiles_hw < 8 for now.
         // TODO: subblocking to support this.
         kernel_profiler::mark_time(11);

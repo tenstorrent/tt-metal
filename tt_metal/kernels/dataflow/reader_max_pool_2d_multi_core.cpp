@@ -7,8 +7,8 @@
 
 // #include "debug_print.h"
 
-SliceRange srr = SliceRange{ .h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1 };
-SliceRange srt = SliceRange{ .h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 8, .ws = 1 };
+// SliceRange srr = SliceRange{ .h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1 };
+// SliceRange srt = SliceRange{ .h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 8, .ws = 1 };
 
 // Fill an L1 buffer with the given val
 // WARNING: Use with caution as there's no memory protection. Make sure size is within limits
@@ -129,59 +129,63 @@ void kernel_main() {
 
     uint32_t core_out_w_i_start = get_arg_val<int32_t>(38);
     uint32_t core_out_h_i_start = get_arg_val<int32_t>(39);
-    uint32_t npixels_per_core = get_arg_val<uint32_t>(40);
+    uint32_t nsticks_per_core = get_arg_val<uint32_t>(40);
+
+    uint32_t nsticks_per_core_by_nblocks = get_arg_val<uint32_t>(42);
 
     int32_t out_h_i = core_out_h_i_start;
     int32_t out_w_i = core_out_w_i_start;
-    for (uint32_t pixel = 0; pixel < npixels_per_core; ++ pixel) {
-        // for given pixel (out_w_i, out_h_i), calculate:
-        //      start_h, start_w, end_h, end_w for window on input
-        int32_t start_w = stride_w * out_w_i - pad_w;
-        int32_t start_h = stride_h * out_h_i - pad_h;
-        int32_t end_w = start_w + window_w;
-        int32_t end_h = start_h + window_h;
-        // sanitize the values on edges
-        start_w = start_w < 0 ? 0 : start_w;
-        start_h = start_h < 0 ? 0 : start_h;
-        end_w = end_w > in_w ? in_w : end_w;
-        end_h = end_h > in_h ? in_h : end_h;
-
-        // DPRINT << "READ for stick " << pixel << " = " << (uint) out_w_i << "," << (uint) out_h_i << " :: " << (uint) start_w << "," << (uint) start_h << "..." << (uint) end_w << "," << (uint) end_h << ENDL();
-
-        // read at most window_hw input rows into CB
+    for (uint32_t stick = 0; stick < nsticks_per_core_by_nblocks; ++ stick) {
         cb_reserve_back(in_cb_id, out_nelems);
-        int32_t read_rows = 0;
-        uint32_t curr_in_l1_write_addr = get_write_ptr(in_cb_id);
-        for (int32_t h = start_h; h < end_h; ++ h) {
-            for (int32_t w = start_w; w < end_w; ++ w) {
-                uint32_t in_hw_row_id = core_offset_in_row_id + h * in_w + w;
-                // DPRINT << in_hw_row_id << " ";
-                s_in.noc_async_read_page(in_hw_row_id, curr_in_l1_write_addr);
-                curr_in_l1_write_addr += in_nbytes_c;
-                ++ read_rows;
+        uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
+        for (uint32_t block = 0; block < out_nelems; ++ block) {
+            // for given stick (out_w_i, out_h_i), calculate:
+            //      start_h, start_w, end_h, end_w for window on input
+            int32_t start_w = stride_w * out_w_i - pad_w;
+            int32_t start_h = stride_h * out_h_i - pad_h;
+            int32_t end_w = start_w + window_w;
+            int32_t end_h = start_h + window_h;
+            // sanitize the values on edges
+            start_w = start_w < 0 ? 0 : start_w;
+            start_h = start_h < 0 ? 0 : start_h;
+            end_w = end_w > in_w ? in_w : end_w;
+            end_h = end_h > in_h ? in_h : end_h;
+
+            // DPRINT << "READ for stick " << stick << " = " << (uint) out_w_i << "," << (uint) out_h_i << " :: " << (uint) start_w << "," << (uint) start_h << "..." << (uint) end_w << "," << (uint) end_h << ENDL();
+
+            // read at most window_hw input rows into CB
+            int32_t read_rows = 0;
+            uint32_t curr_in_l1_write_addr = in_l1_write_addr;
+            for (int32_t h = start_h; h < end_h; ++ h) {
+                for (int32_t w = start_w; w < end_w; ++ w) {
+                    uint32_t in_hw_row_id = core_offset_in_row_id + h * in_w + w;
+                    // DPRINT << in_hw_row_id << " ";
+                    s_in.noc_async_read_page(in_hw_row_id, curr_in_l1_write_addr);
+                    curr_in_l1_write_addr += in_nbytes_c;
+                    ++ read_rows;
+                }
+            }
+            // DPRINT << ENDL();
+            // DPRINT << TileSlice(in_cb_id, 0, srt, true, false);
+            // TODO: this should be handled by untilize + edge pad (previous OP)
+            if (read_rows < window_hw) {
+                // if needed, fill the remainining (window_hw - read_row_id) with -INF
+                fill_with_val_async(s_const, curr_in_l1_write_addr, window_hw - read_rows, in_nbytes_c);
+            }
+            in_l1_write_addr += in_cb_pagesize;
+
+            // increment to next stick
+            ++ out_w_i;
+            if (out_w_i == out_w) {
+                out_w_i = 0;
+                ++ out_h_i;
+                if (out_h_i == out_h) {
+                    out_h_i = 0;    // new batch starts
+                    core_offset_in_row_id += in_hw;
+                }
             }
         }
-        // DPRINT << ENDL();
-        // DPRINT << TileSlice(in_cb_id, 0, srt, true, false);
-        // TODO: this should be handled by untilize + edge pad (previous OP)
-        if (read_rows < window_hw) {
-            // if needed, fill the remainining (window_hw - read_row_id) with -INF
-            fill_with_val_async(s_const, curr_in_l1_write_addr, window_hw - read_rows, in_nbytes_c);
-        }
-        in_l1_write_addr += in_cb_pagesize;
-
         noc_async_read_barrier();
         cb_push_back(in_cb_id, out_nelems);
-
-        // increment to next pixel
-        ++ out_w_i;
-        if (out_w_i == out_w) {
-            out_w_i = 0;
-            ++ out_h_i;
-            if (out_h_i == out_h) {
-                out_h_i = 0;    // new batch starts
-                core_offset_in_row_id += in_hw;
-            }
-        }
     }
 } // kernel_main()

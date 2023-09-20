@@ -18,7 +18,10 @@ import tt_lib as ttl
 
 from tt_lib.utils import _nearest_32
 from models.utility_functions import comp_pcc
-from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
+from tests.tt_eager.python_api_testing.sweep_tests.common import (
+    is_wormhole_b0,
+    skip_for_wormhole_b0,
+)
 
 
 def volume(shape):
@@ -37,21 +40,17 @@ def volume(shape):
 @pytest.mark.parametrize(
     "act_shape",  ## NCHW
     (
-        (   ## [1, 32, 32, 32],
+        (  ## [1, 32, 32, 32],
             [1, 64, 64, 64],
             [1, 64, 112, 112],
-
             [2, 64, 64, 64],
             [8, 64, 64, 64],
             [8, 64, 128, 128],
-
             [4, 64, 112, 112],
             [8, 64, 112, 112],
-
             # [9, 32, 32, 32],
             # [9, 64, 64, 64],
             # [9, 1, 128, 128],
-
             # [16, 32, 32, 32],
             # [16, 64, 64, 64],
             # [16, 64, 112, 112],
@@ -109,7 +108,7 @@ def volume(shape):
 )
 @pytest.mark.parametrize(
     "use_multicore",
-    ( False, True ),
+    (False, True),
 )
 # @pytest.mark.skip(reason="Hanging. Abhinav to fix later.")
 def test_run_max_pool(
@@ -150,11 +149,13 @@ def test_run_max_pool(
         logger.info("Current maxpool writer needs nchannels to be 64!")
         pytest.skip()
 
-    if use_multicore and nblocks != 1:
-        logger.info("Multi-block version has not been tested with multicore")
-        pytest.skip()
+    # if use_multicore and nblocks != 1:
+    #     logger.info("Multi-block version has not been tested with multicore")
+    #     pytest.skip()
 
-    if use_multicore and (padding != (1,1) or stride != (2,2) or kernel_size != (3,3)):
+    if use_multicore and (
+        padding != (1, 1) or stride != (2, 2) or kernel_size != (3, 3)
+    ):
         logger.info("Multicore version only supports Resnet50 configs for now.")
         pytest.skip()
 
@@ -208,7 +209,7 @@ def test_run_max_pool(
         dilation_w,
         out_mem_config,
         nblocks,
-        use_multicore
+        use_multicore,
     )
     out_padded = out_padded.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
 
