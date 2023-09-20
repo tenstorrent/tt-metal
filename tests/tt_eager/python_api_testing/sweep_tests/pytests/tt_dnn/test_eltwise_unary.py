@@ -877,7 +877,6 @@ class TestEltwiseUnary:
             test_args,
         )
 
-    @skip_for_wormhole_b0
     @pytest.mark.parametrize(
         "fn_kind", ["isinf", "isposinf", "isneginf", "isnan", "isfinite"]
     )

@@ -24,10 +24,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.common import (
 from functools import partial
 
 
-def is_DRAM(memcfg: ttl.tensor.MemoryConfig):
-    return memcfg.buffer_type == ttl.tensor.BufferType.DRAM
-
-
 class Complex:
     def __init__(self, input_shape: torch.Size):
         val = 1 + torch.arange(0, input_shape.numel()).reshape(input_shape).bfloat16()
@@ -94,8 +90,6 @@ class Complex:
 )
 @pytest.mark.parametrize("dtype", ((ttl.tensor.DataType.BFLOAT16,)))
 def test_level1_real(memcfg, dtype, device, function_level_defaults):
-    if is_wormhole_b0() and is_DRAM(memcfg):
-        pytest.skip("[REAL]: skip for DRAM inputs on WH B0")
     input_shape = torch.Size([1, 1, 32, 64])
     # check real
     x = Complex(input_shape)
@@ -123,8 +117,6 @@ def test_level1_real(memcfg, dtype, device, function_level_defaults):
 @pytest.mark.parametrize("dtype", ((ttl.tensor.DataType.BFLOAT16,)))
 @pytest.mark.parametrize("layout", ((ttl.tensor.Layout.ROW_MAJOR,)))
 def test_level1_imag(memcfg, dtype, device, function_level_defaults, layout):
-    if is_wormhole_b0() and is_DRAM(memcfg):
-        pytest.skip("[IMAG]: skip with DRAM inputs on WH B0")
     input_shape = torch.Size([1, 1, 32, 64])
     # check imag
     x = Complex(input_shape)
@@ -155,11 +147,7 @@ def test_level1_abs(memcfg, dtype, device, function_level_defaults, layout):
     tt_dev = ttl.tensor.complex_abs(xtt, memcfg)
     tt_dev = tt_dev.cpu().to(layout).to_torch()
     tt_cpu = x.abs()
-    if is_wormhole_b0() and is_DRAM(memcfg):
-        pytest.skip("[ABS] skip for wormhole b0  and DRAM")
-        passing, output = comp_pcc(tt_cpu, tt_dev, pcc=0.70)
-    else:
-        passing, output = comp_pcc(tt_cpu, tt_dev)
+    passing, output = comp_pcc(tt_cpu, tt_dev)
     logger.info(output)
     assert passing
 
@@ -186,7 +174,6 @@ def test_level1_conj(memcfg, dtype, device, function_level_defaults):
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     tt_cpu = x.conj().metal
     if is_wormhole_b0():
-        pytest.skip("[CONJ] skip for wormhole b0  since we see a PCC of -0.7 so odd!")
         passing, output = comp_pcc(tt_cpu, tt_dev, pcc=0.8)
     else:
         passing, output = comp_pcc(tt_cpu, tt_dev)
@@ -225,9 +212,6 @@ def test_level1_add(memcfg, dtype, device, function_level_defaults):
 
     tt_cpu = x.add(y).metal
 
-    if is_wormhole_b0():
-        pytest.skip("[ADD]: skip assert on WH B0")
-
     passing, output = comp_pcc(tt_cpu, tt_dev)
     logger.info(output)
     assert passing
@@ -263,9 +247,6 @@ def test_level1_sub(memcfg, dtype, device, function_level_defaults):
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
     tt_cpu = x.sub(y).metal
-
-    if is_wormhole_b0():
-        pytest.skip("[SUB]: skip assert on WH B0")
 
     passing, output = comp_pcc(tt_cpu, tt_dev)
     logger.info(output)
@@ -303,8 +284,6 @@ def test_level1_mul(memcfg, dtype, device, function_level_defaults):
 
     tt_cpu = x.mul(y).metal
 
-    if is_wormhole_b0():
-        pytest.skip("[MUL] test not asserted for WH B0")
     passing, output = comp_pcc(tt_cpu, tt_dev, pcc=0.96)
     logger.info(output)
     assert passing
@@ -342,7 +321,7 @@ def test_level1_div(memcfg, dtype, device, function_level_defaults):
     tt_cpu = y.div(x).metal
 
     if is_wormhole_b0():
-        pytest.skip("[DIV]: skip assertion for this test on WH B0")
+        pass  # pytest.skip("[DIV]: skip assertion for this test on WH B0")
 
     passing, output = comp_pcc(tt_cpu, tt_dev, pcc=0.96)
     logger.info(output)
@@ -375,7 +354,7 @@ def test_level1_recip(memcfg, dtype, device, function_level_defaults):
     tt_cpu = x.recip().metal
 
     if is_wormhole_b0():
-        pytest.skip("[RECIP]: skip assertion for this test on WH B0")
+        pass  # pytest.skip("[RECIP]: skip assertion for this test on WH B0")
 
     passing, output = comp_pcc(tt_cpu, tt_dev, pcc=0.96)
     logger.info(output)

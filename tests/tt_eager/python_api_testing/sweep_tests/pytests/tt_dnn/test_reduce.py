@@ -143,7 +143,6 @@ shapes4 = (
 if is_wormhole_b0():
     shapes4 = (shapes4[0],)
 
-@skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "input_shapes",
     shapes4

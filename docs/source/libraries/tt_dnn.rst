@@ -516,6 +516,34 @@ base operations together.
 
 .. autofunction:: tt_lib.fused_ops.add_and_norm.AddAndNorm
 
+
+Complex Operations
+------------------
+ We use the following Tensor representation for complex tensors on device; we support complex tensor **x** as  N,H,W,C rank-4 tensor with last dim of size divisible by 2 to represent real and imaginary components
+  * with indices [:,:,:,0:N/2] being real, and
+  * with indices [:,:,:,N/2:N] being imaginary.
+
+The following functions are available,
+
+
+Complex arithmetic can be carried out for multiply, divide, add and subtract as follows:
+
+.. autofunction:: tt_lib.tensor.complex_mul
+
+.. autofunction:: tt_lib.tensor.complex_div
+
+and then unary operations for,
+
+.. autofunction:: tt_lib.tensor.real
+
+.. autofunction:: tt_lib.tensor.imag
+
+.. autofunction:: tt_lib.tensor.complex_abs
+
+.. autofunction:: tt_lib.tensor.conj
+
+.. autofunction:: tt_lib.tensor.complex_recip
+
 Other Operations
 ----------------
 
