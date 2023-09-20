@@ -127,7 +127,7 @@ def test_embeddings(
     dtype,
     in0_mem_config,
     out_mem_config,
-    local_device,
+    device,
     tilized
 ):
     run_embeddings_tests(
@@ -138,6 +138,6 @@ def test_embeddings(
         dtype,
         in0_mem_config,
         out_mem_config,
-        local_device,
+        device,
         tilized
     )
