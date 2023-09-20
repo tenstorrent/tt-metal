@@ -37,15 +37,20 @@ def volume(shape):
 @pytest.mark.parametrize(
     "act_shape",  ## NCHW
     (
-        (   [1, 32, 32, 32],
+        (   ## [1, 32, 32, 32],
             [1, 64, 64, 64],
             [1, 64, 112, 112],
-            [1, 1, 128, 128],
 
-            [9, 32, 32, 32],
-            [9, 64, 64, 64],
-            [9, 64, 112, 112],
-            [9, 1, 128, 128],
+            [2, 64, 64, 64],
+            [8, 64, 64, 64],
+            [8, 64, 128, 128],
+
+            [4, 64, 112, 112],
+            [8, 64, 112, 112],
+
+            # [9, 32, 32, 32],
+            # [9, 64, 64, 64],
+            # [9, 1, 128, 128],
 
             # [16, 32, 32, 32],
             # [16, 64, 64, 64],
@@ -106,7 +111,7 @@ def volume(shape):
     "use_multicore",
     ( False, True ),
 )
-@pytest.mark.skip(reason="Hanging. Abhinav to fix later.")
+# @pytest.mark.skip(reason="Hanging. Abhinav to fix later.")
 def test_run_max_pool(
     act_shape,
     kernel_size,
@@ -141,6 +146,14 @@ def test_run_max_pool(
         logger.info(f"Unsupported case when out_w ({out_w}) % nblocks ({nblocks}) != 0")
         pytest.skip()
 
+    if in_c != 64:
+        logger.info("Current maxpool writer needs nchannels to be 64!")
+        pytest.skip()
+
+    if use_multicore and nblocks != 1:
+        logger.info("Multi-block version has not been tested with multicore")
+        pytest.skip()
+
     torch.set_printoptions(
         precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32
     )
@@ -148,14 +161,15 @@ def test_run_max_pool(
     torch.manual_seed(0)
 
     ## construct the tensor in NCHW shape
-    act = torch.randn(act_shape, dtype=torch.bfloat16).float()
-    # act = torch.zeros(act_shape, dtype=torch.bfloat16).float()
-    # act = torch.ones(act_shape, dtype=torch.bfloat16).float()
-    # act = torch.arange(0, volume(act_shape), dtype=torch.bfloat16).reshape(act_shape).float()
-    # for c in range(act_shape[1]):
-    #     for h in range(act_shape[2]):
-    #         for w in range(act_shape[3]):
-    #             act[0, c, h, w] = c + h + w
+    act = torch.randn(act_shape, dtype=torch.bfloat16)
+    # act = torch.zeros(act_shape, dtype=torch.bfloat16)
+    # act = torch.ones(act_shape, dtype=torch.bfloat16)
+    # act = torch.arange(0, volume(act_shape), dtype=torch.bfloat16).reshape(act_shape)
+    # for n in range(act_shape[0]):
+    #     for c in range(act_shape[1]):
+    #         for h in range(act_shape[2]):
+    #             for w in range(act_shape[3]):
+    #                 act[n, c, h, w] = n + c + h + w
 
     ## this op expects input tensor as { N, 1, H * W, C }, so rearrange and reshape tensor
     ## but before that, make sure in_c is multiple of tile width
@@ -210,9 +224,8 @@ def test_run_max_pool(
     )(act)
 
     ## test for equivalance
-    out_pytorch = out_pytorch.reshape(golden_pytorch.shape).float()
-    ## TODO AS: this should be passing
-    # assert torch.allclose(out_pytorch, golden_pytorch)  ##, rtol=1e-01, atol=1e-01)
+    out_pytorch = out_pytorch.reshape(golden_pytorch.shape)
+    assert torch.allclose(out_pytorch, golden_pytorch)  ##, rtol=1e-01, atol=1e-01)
     passing_pcc, output_pcc = comp_pcc(golden_pytorch, out_pytorch)
     logger.info(f"Passing PCC = {passing_pcc}")
     logger.info(f"Output PCC = {output_pcc}")

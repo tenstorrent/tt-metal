@@ -83,7 +83,7 @@ operation::ProgramWithCallbacks MaxPool::create_program(const std::vector<Tensor
                                         out_mem_config_,
                                         nblocks_)};
     } else {
-        return {max_pool_2d_multi_core(input, output,
+        return {max_pool_2d_multi_core_generic(input, output,
                                        in_h_, in_w_,
                                        out_h_, out_w_,
                                        kernel_size_h_, kernel_size_w_,
