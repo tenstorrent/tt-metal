@@ -8,8 +8,10 @@ import torch
 import tt_lib as ttl
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
+    comp_pcc,
 )
 from loguru import logger
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
 
 
 def test_sharded_tile(device):
@@ -212,4 +214,27 @@ def test_sharded_tilize(H, num_cores, device):
     passing, output = comp_equal(x, tt_got_back)
     logger.info(output)
 
+    assert passing
+
+
+def test_sharded_matmul(device):
+    in0_shape = [1, 1, 25088, 64]
+    in1_shape = [1, 1, 64, 64]
+    bias_shape = [1, 1, 1, 64]
+
+    in0 = torch.randn(in0_shape).bfloat16().float()
+    in1 = torch.randn(in1_shape).bfloat16().float()
+    bias = torch.randn(bias_shape).bfloat16().float()
+
+    in0_t = torch2tt_tensor(in0, device)
+    in1_t = torch2tt_tensor(in1, device)
+    bias_t = pad_by_zero(bias, device)[0]
+
+    output_t = ttl.tensor.resnet_matmul(in0_t, in1_t, bias_t)
+    pt_out = in0 @ in1 + bias
+
+    tt_out = tt2torch_tensor(output_t)
+
+    passing, output = comp_pcc(pt_out, tt_out)
+    logger.info(output)
     assert passing

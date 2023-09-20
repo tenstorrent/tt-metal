@@ -53,23 +53,24 @@ void kernel_main() {
     constexpr uint32_t in1_mcast_sender_semaphore_addr    = get_compile_time_arg_val(11);
     constexpr uint32_t in1_mcast_receiver_semaphore_addr  = get_compile_time_arg_val(12);
     constexpr uint32_t in1_mcast_num_dests                = get_compile_time_arg_val(13);
+    constexpr uint32_t in1_mcast_num_cores                = get_compile_time_arg_val(14);
     // batch args
-    constexpr uint32_t KtNt                               = get_compile_time_arg_val(14);
-    constexpr uint32_t batch                              = get_compile_time_arg_val(15);
-    constexpr uint32_t bcast_B                            = get_compile_time_arg_val(16);
+    constexpr uint32_t KtNt                               = get_compile_time_arg_val(15);
+    constexpr uint32_t batch                              = get_compile_time_arg_val(16);
+    constexpr uint32_t bcast_B                            = get_compile_time_arg_val(17);
 
     // WRITER
     // out tensor args
-    constexpr uint32_t out_tensor_stride_w                = get_compile_time_arg_val(17);
-    constexpr uint32_t out_tensor_stride_h                = get_compile_time_arg_val(18);
-    constexpr uint32_t out_tensor_next_subblock_stride_w  = get_compile_time_arg_val(19);
-    constexpr uint32_t out_tensor_next_subblock_stride_h  = get_compile_time_arg_val(20);
+    constexpr uint32_t out_tensor_stride_w                = get_compile_time_arg_val(18);
+    constexpr uint32_t out_tensor_stride_h                = get_compile_time_arg_val(19);
+    constexpr uint32_t out_tensor_next_subblock_stride_w  = get_compile_time_arg_val(20);
+    constexpr uint32_t out_tensor_next_subblock_stride_h  = get_compile_time_arg_val(21);
     // out subblock args
-    constexpr uint32_t out_subblock_w                     = get_compile_time_arg_val(21);
-    constexpr uint32_t out_subblock_h                     = get_compile_time_arg_val(22);
-    constexpr uint32_t out_subblock_tile_count            = get_compile_time_arg_val(23);
+    constexpr uint32_t out_subblock_w                     = get_compile_time_arg_val(22);
+    constexpr uint32_t out_subblock_h                     = get_compile_time_arg_val(23);
+    constexpr uint32_t out_subblock_tile_count            = get_compile_time_arg_val(24);
     // batch args
-    constexpr uint32_t MtNt                               = get_compile_time_arg_val(24); // if 0
+    constexpr uint32_t MtNt                               = get_compile_time_arg_val(25); // if 0
     // Don't need batch; same as batch from READER args
 
     #ifdef FUSE_BIAS
@@ -79,13 +80,14 @@ void kernel_main() {
         uint32_t in3_mcast_dest_noc_start_x         = get_arg_val<uint32_t>(16);
         uint32_t in3_mcast_dest_noc_end_x           = get_arg_val<uint32_t>(17);
         // in3 mcast args
-        constexpr bool in3_is_dram                            = get_compile_time_arg_val(25) == 1;
-        constexpr uint32_t in3_tensor_stride_w                = get_compile_time_arg_val(26);
-        constexpr uint32_t in3_mcast_dest_noc_start_y         = get_compile_time_arg_val(27);
-        constexpr uint32_t in3_mcast_dest_noc_end_y           = get_compile_time_arg_val(28);
-        constexpr uint32_t in3_mcast_sender_semaphore_addr    = get_compile_time_arg_val(29);
-        constexpr uint32_t in3_mcast_receiver_semaphore_addr  = get_compile_time_arg_val(30);
-        constexpr uint32_t in3_mcast_num_dests                = get_compile_time_arg_val(31);
+        constexpr bool in3_is_dram                            = get_compile_time_arg_val(26) == 1;
+        constexpr uint32_t in3_tensor_stride_w                = get_compile_time_arg_val(27);
+        constexpr uint32_t in3_mcast_dest_noc_start_y         = get_compile_time_arg_val(28);
+        constexpr uint32_t in3_mcast_dest_noc_end_y           = get_compile_time_arg_val(29);
+        constexpr uint32_t in3_mcast_sender_semaphore_addr    = get_compile_time_arg_val(30);
+        constexpr uint32_t in3_mcast_receiver_semaphore_addr  = get_compile_time_arg_val(31);
+        constexpr uint32_t in3_mcast_num_dests                = get_compile_time_arg_val(32);
+        constexpr uint32_t in3_mcast_num_cores                = get_compile_time_arg_val(33);
 
         constexpr uint32_t cb_id_in3 = 3;
         const uint32_t bias_single_tile_size_bytes = get_tile_size(cb_id_in3);
@@ -181,7 +183,7 @@ void kernel_main() {
             in1_mcast_dest_noc_end_y,
             in1_start_address);
             // num_dests must not include source, since we are NOT really doing a local copy!
-            noc_async_write_multicast(in1_start_address, in1_multicast_data_addr, in1_block_size_bytes, in1_mcast_num_dests);
+            noc_async_write_multicast(in1_start_address, in1_multicast_data_addr, in1_block_size_bytes, in1_mcast_num_cores);
 
             // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same cmd_buf
             // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
@@ -194,7 +196,7 @@ void kernel_main() {
             in1_mcast_dest_noc_end_y,
             in1_mcast_receiver_semaphore_addr);
             // num_dests must not include source, since we are NOT really doing a local copy!
-            noc_semaphore_set_multicast(in1_mcast_receiver_semaphore_addr, in1_mcast_receiver_semaphore_noc_addr, in1_mcast_num_dests);
+            noc_semaphore_set_multicast(in1_mcast_receiver_semaphore_addr, in1_mcast_receiver_semaphore_noc_addr, in1_mcast_num_cores);
 
             #endif
 
@@ -241,8 +243,7 @@ void kernel_main() {
                 in3_mcast_dest_noc_end_y,
                 in3_start_address);
                 // num_dests must not include source, since we are NOT really doing a local copy!
-                noc_async_write_multicast(in3_start_address, in3_multicast_data_addr, in3_block_size_bytes, in3_mcast_num_dests);
-
+                noc_async_write_multicast(in3_start_address, in3_multicast_data_addr, in3_block_size_bytes, in3_mcast_num_cores);
                 // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same cmd_buf
                 // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
 
@@ -254,7 +255,7 @@ void kernel_main() {
                 in3_mcast_dest_noc_end_y,
                 in3_mcast_receiver_semaphore_addr);
                 // num_dests must not include source, since we are NOT really doing a local copy!
-                noc_semaphore_set_multicast(in3_mcast_receiver_semaphore_addr, in3_mcast_receiver_semaphore_noc_addr, in3_mcast_num_dests);
+                noc_semaphore_set_multicast(in3_mcast_receiver_semaphore_addr, in3_mcast_receiver_semaphore_noc_addr, in3_mcast_num_cores);
 
                 #endif
 

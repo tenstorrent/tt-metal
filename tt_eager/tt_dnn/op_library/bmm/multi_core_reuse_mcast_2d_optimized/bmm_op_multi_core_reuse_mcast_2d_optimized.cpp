@@ -193,6 +193,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             (std::uint32_t)  in0_mcast_sender_semaphore,
             (std::uint32_t)  in0_mcast_receiver_semaphore,
             (std::uint32_t)  (num_cores_c - 1), // in0_mcast_num_dests
+            (std::uint32_t)  (num_cores_c - 1), // in0_mcast_num_cores
             // batch args
             (std::uint32_t)  M * K, // MtKt
             (std::uint32_t)  B // batch
@@ -219,6 +220,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             (std::uint32_t)  in1_mcast_sender_semaphore,
             (std::uint32_t)  in1_mcast_receiver_semaphore,
             (std::uint32_t)  (num_cores_r - 1), // in1_mcast_num_dests
+            (std::uint32_t)  (num_cores_r - 1), // in1_mcast_num_cores
             // batch args
             (std::uint32_t)  K * N, // KtNt
             (std::uint32_t)  B, // batch
@@ -244,9 +246,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)  1);
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)  bottom_right_core_physical.y); // in1_mcast_dest_noc_start_y
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)  top_left_core_plus_one_physical.y); // in1_mcast_dest_noc_end_y
-        in1_sender_writer_compile_time_args.push_back((std::uint32_t)  in1_mcast_sender_semaphore);
-        in1_sender_writer_compile_time_args.push_back((std::uint32_t)  in1_mcast_receiver_semaphore);
+        in1_sender_writer_compile_time_args.push_back((std::uint32_t)  in3_mcast_sender_semaphore);
+        in1_sender_writer_compile_time_args.push_back((std::uint32_t)  in3_mcast_receiver_semaphore);
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)  (num_cores_r - 1)); // in1_mcast_num_dests
+        in1_sender_writer_compile_time_args.push_back((std::uint32_t)  (num_cores_r - 1)); // in1_mcast_num_cores
     }
     std::vector<uint32_t> in0_receiver_compile_time_args = {
             // in0 block args

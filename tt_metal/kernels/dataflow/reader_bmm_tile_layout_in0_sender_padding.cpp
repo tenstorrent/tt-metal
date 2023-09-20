@@ -37,9 +37,10 @@ void kernel_main() {
     constexpr uint32_t in0_mcast_sender_semaphore_addr    = get_compile_time_arg_val(10);
     constexpr uint32_t in0_mcast_receiver_semaphore_addr  = get_compile_time_arg_val(11);
     constexpr uint32_t in0_mcast_num_dests                = get_compile_time_arg_val(12);
+    constexpr uint32_t in0_mcast_num_cores                = get_compile_time_arg_val(13);
     // batch args
-    constexpr uint32_t MtKt                               = get_compile_time_arg_val(13); // if 0
-    constexpr uint32_t batch                              = get_compile_time_arg_val(14);
+    constexpr uint32_t MtKt                               = get_compile_time_arg_val(14); // if 0
+    constexpr uint32_t batch                              = get_compile_time_arg_val(15);
 
 
     constexpr uint32_t cb_id_in0 = 0;
@@ -50,12 +51,14 @@ void kernel_main() {
 
     uint32_t l1_write_addr_in0;
 
+    #ifndef SKIP_MCAST
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
     volatile tt_l1_ptr uint32_t* in0_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_receiver_semaphore_addr);
     *(in0_mcast_receiver_semaphore_addr_ptr) = VALID;
     // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
     // to receive the mcast
     volatile tt_l1_ptr uint32_t* in0_mcast_sender_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_sender_semaphore_addr);
+    #endif
 
     const InterleavedAddrGenFast<in0_is_dram> s0 = {
         .bank_base_address = in0_tensor_addr,
@@ -92,6 +95,7 @@ void kernel_main() {
             // Barrier! make sure the reads are done
             noc_async_read_barrier();
 
+            #ifndef SKIP_MCAST
             // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr (i.e. its value should be in0_mcast_num_dests), then reset
             // the semaphore_addr value back to zero for the next block
             noc_semaphore_wait(in0_mcast_sender_semaphore_addr_ptr, in0_mcast_num_dests);
@@ -105,7 +109,7 @@ void kernel_main() {
             in0_mcast_dest_noc_start_y,
             in0_start_address);
             // num_dests must not include source, since we are NOT really doing a local copy!
-            noc_async_write_multicast(in0_start_address, in0_multicast_data_addr, in0_block_size_bytes, in0_mcast_num_dests);
+            noc_async_write_multicast(in0_start_address, in0_multicast_data_addr, in0_block_size_bytes, in0_mcast_num_cores);
 
             // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same cmd_buf
             // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
@@ -118,7 +122,8 @@ void kernel_main() {
             in0_mcast_dest_noc_start_y,
             in0_mcast_receiver_semaphore_addr);
             // num_dests must not include source, since we are NOT really doing a local copy!
-            noc_semaphore_set_multicast(in0_mcast_receiver_semaphore_addr, in0_mcast_receiver_semaphore_noc_addr, in0_mcast_num_dests);
+            noc_semaphore_set_multicast(in0_mcast_receiver_semaphore_addr, in0_mcast_receiver_semaphore_noc_addr, in0_mcast_num_cores);
+            #endif
 
             cb_push_back(cb_id_in0, in0_block_num_tiles);
         }

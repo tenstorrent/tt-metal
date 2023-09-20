@@ -250,12 +250,19 @@ MatmulParallelizationStrategy get_parallelization_strategy(const std::vector<Ten
     }
 }
 
-tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool fuse_batch, std::optional<UnaryWithParam> fused_activation) {
+tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool fuse_batch, std::optional<UnaryWithParam> fused_activation, bool mcast_in0) {
     auto device = input_tensor_a.device();
     auto grid_size = device->compute_with_storage_grid_size();
     uint32_t M = fuse_batch ? input_tensor_a.shape()[0] * input_tensor_a.shape()[1] * input_tensor_a.shape()[-2] : input_tensor_a.shape()[-2];
-    uint32_t per_core_M = M / TILE_HEIGHT;
-    uint32_t per_core_N = div_up(div_up(input_tensor_b.shape()[-1], grid_size.x * grid_size.y), TILE_WIDTH);
+    uint32_t N = input_tensor_b.shape()[-1];
+    uint32_t per_core_M, per_core_N;
+    if (mcast_in0) {
+        per_core_M = M / TILE_HEIGHT;
+        per_core_N = div_up(div_up(N, grid_size.x * grid_size.y), TILE_WIDTH);
+    } else {
+        per_core_M = div_up(div_up(M, grid_size.x * grid_size.y), TILE_HEIGHT);
+        per_core_N = N / TILE_WIDTH;
+    }
     uint32_t out_subblock_h, out_subblock_w;
     bool params_found = false;
     for (auto &subblock_hw : bmm_op_utils::SUBBLOCK_HW_CHOICES) {
@@ -277,6 +284,7 @@ tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_
         .per_core_N = per_core_N,
         .fuse_batch = fuse_batch,
         .fused_activation = fused_activation,
+        .mcast_in0 = mcast_in0
     };
 }
 
@@ -523,7 +531,7 @@ Tensor falcon_lm_head_matmul(const Tensor &input_tensor_a, const Tensor &input_t
  * Resnet50 matmul with fused batch
  */
 Tensor resnet_matmul(const Tensor& input_a, const Tensor& input_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config,std::optional<const DataType> output_dtype) {
-    auto program_config = bmm_op_utils::get_mcast_1d_config(input_a, input_b, true);
+    auto program_config = bmm_op_utils::get_mcast_1d_config(input_a, input_b, true, std::nullopt, false);
     return operations::primary::matmul_1d(input_a, input_b, bias, program_config, mem_config, output_dtype);
 }
 
@@ -570,6 +578,7 @@ tt::stl::reflection::Attributes MatmulMultiCoreReuseMultiCast1DProgramConfig::at
         {"per_core_N",  this->per_core_N},
         {"fuse_batch",  this->fuse_batch},
         {"fused_activation",  this->fused_activation},
+        {"mcast_in0",  this->mcast_in0},
     };
 }
 
@@ -693,7 +702,8 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.compute_with_storage_grid_size,
                     output_dtype, math_fidelity,
                     program_config.in0_block_w, program_config.out_subblock_h, program_config.out_subblock_w,
-                    program_config.per_core_M, program_config.per_core_N, program_config.fuse_batch, program_config.fused_activation
+                    program_config.per_core_M, program_config.per_core_N, program_config.fuse_batch, program_config.fused_activation,
+                    program_config.mcast_in0
                 );
             } else {
                 TT_THROW("Unrecognized Config");
