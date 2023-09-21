@@ -15,7 +15,7 @@ void MAIN {
     uint32_t Wt = get_compile_time_arg_val(1);
     uint32_t NC = get_compile_time_arg_val(2);
 
-    reduce_init_v2<true>(REDUCE_OP, REDUCE_DIM, tt::CB::c_in0, tt::CB::c_in2);
+    reduce_init<true>(REDUCE_OP, REDUCE_DIM, tt::CB::c_in0, tt::CB::c_in2);
     cb_wait_front(tt::CB::c_in2, 1); // scaler tile from the reader
 
     for (uint32_t nc = 0; nc < NC; nc++) {
@@ -30,7 +30,7 @@ void MAIN {
             for(uint32_t ht = 0; ht < Ht; ++ht) {
                 cb_wait_front(tt::CB::c_in0, onetile);
                 // REDUCE_OP is expected to come from add_define
-                reduce_tile_v2(REDUCE_OP, REDUCE_DIM, tt::CB::c_in0, tt::CB::c_in2, 0, 0, reduce_dst_idx);
+                reduce_tile(REDUCE_OP, REDUCE_DIM, tt::CB::c_in0, tt::CB::c_in2, 0, 0, reduce_dst_idx);
                 cb_pop_front(tt::CB::c_in0, onetile);
             }
 
