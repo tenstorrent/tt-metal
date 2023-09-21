@@ -24,11 +24,9 @@ jobs:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ inputs.arch }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@main
         with:
-          submodules: recursive
           token: ${{ secrets.CHECKOUT_TOKEN }}
-          lfs: true
           fetch-depth: 0
       - uses: ./.github/actions/install-metal-deps
         with:

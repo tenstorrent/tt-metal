@@ -24,7 +24,7 @@ jobs:
     environment: dev
     runs-on: ["${{ matrix.runner-info.arch }}", "${{ matrix.runner-info.fw }}"]
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@rkim/2804-lfs
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@main
         with:
           token: ${{ secrets.CHECKOUT_TOKEN }}
       - name: Set up dyanmic env vars for build
