@@ -8,6 +8,7 @@ from loguru import logger
 
 import tt_lib as ttl
 from models.utility_functions import comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.common import skip_for_wormhole_b0
 
 
 def rotate_half(x):
@@ -29,6 +30,7 @@ def apply_rotary_pos_emb(x, cos_cached, sin_cached, token_idx=None):
     return x_embed
 
 
+@skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "W, Z, Y, X",
     ([1, 1, 128, 64], [1, 71, 128, 64], [32, 1, 32, 64], [32, 71, 32, 64]),
@@ -70,6 +72,7 @@ def test_rotary_embedding_prefill(W, Z, Y, X, cache_size, device):
     assert p
 
 
+@skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "W, Z, Y, X",
     ([1, 1, 32, 64], [1, 71, 32, 64], [1, 1, 64, 64], [1, 71, 64, 64]),

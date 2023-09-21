@@ -6,10 +6,6 @@ import sys
 import pytest
 
 from pathlib import Path
-from tests.tt_eager.python_api_testing.sweep_tests.common import (
-    is_wormhole_b0,
-    skip_for_wormhole_b0,
-)
 
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/../..")
@@ -20,6 +16,8 @@ import tt_lib as ttl
 
 from tt_lib.utils import _nearest_32
 from models.utility_functions import comp_pcc
+
+from tests.tt_eager.python_api_testing.sweep_tests.common import skip_for_wormhole_b0
 
 TILE_HEIGHT = TILE_WIDTH = 32
 

@@ -26,6 +26,7 @@ fi
 env TT_METAL_SINGLE_CORE_MODE=1 pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_matmul.py::test_run_matmul_test -k BFLOAT16
 env TT_METAL_SINGLE_CORE_MODE=1 pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_unpad.py
 
+if [ "$ARCH_NAME" != "wormhole_b0" ]; then
 # Tests for tensors in L1
 pytest $TT_METAL_HOME/tests/models/bert_large_performant/unit_tests/test_bert_large*matmul* -k in0_L1-in1_L1-bias_L1-out_L1
 pytest $TT_METAL_HOME/tests/models/bert_large_performant/unit_tests/test_bert_large*bmm* -k in0_L1-in1_L1-out_L1
@@ -52,3 +53,4 @@ pytest $TT_METAL_HOME/tests/models/resnet/test_resnet18.py
 pytest $TT_METAL_HOME/tests/models/falcon/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py -k "seq_len_128 and in0_BFLOAT16-in1_BFLOAT8_B-out_BFLOAT16-weights_DRAM"
 pytest $TT_METAL_HOME/tests/models/falcon/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py -k "seq_len_512 and in0_BFLOAT16-in1_BFLOAT8_B-out_BFLOAT16-weights_DRAM"
 pytest $TT_METAL_HOME/tests/models/falcon/tests/unit_tests/test_falcon_attn_matmul.py
+fi

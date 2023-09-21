@@ -119,6 +119,7 @@ def test_tile_concat(shape_a, shape_b, dim, device, function_level_defaults):
     assert passing
 
 
+@skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "shapes, dim",
     (

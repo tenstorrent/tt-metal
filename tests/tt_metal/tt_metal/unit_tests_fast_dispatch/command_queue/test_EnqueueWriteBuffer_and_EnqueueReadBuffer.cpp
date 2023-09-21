@@ -266,7 +266,12 @@ TEST_F(CommandQueueFixture, WritesToRandomBufferTypeAndThenReads) {
 }
 
 TEST_F(CommandQueueFixture, StressWrapTest) {
-
+    const char* arch = getenv("ARCH_NAME");
+    if ( strcasecmp(arch,"wormhole_b0") == 0 ) {
+      tt::log_info("cannot run this test on WH B0");
+      GTEST_SKIP();
+      return; //skip for WH B0
+    }
 
     BufferStressTestConfig config = {
         .page_size = 4096, .max_num_pages_per_buffer = 2000, .num_iterations = 10000, .num_unique_vectors = 20};
