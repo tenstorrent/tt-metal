@@ -338,8 +338,11 @@ int main(int argc, char **argv) {
     }
 
     try {
-        int num_cores_r = 9;
-        int num_cores_c = 12;
+        int device_id = 0;
+        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+
+        int num_cores_r = device->logical_grid_size().y - 1;
+        int num_cores_c = device->logical_grid_size().x;
         uint32_t M = 16 * num_cores_r;
         uint32_t K = 16 * 12;
         uint32_t N = 16 * num_cores_c;
@@ -385,11 +388,7 @@ int main(int argc, char **argv) {
             log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
         }
         const tt::ARCH arch = tt::get_arch_from_string(arch_name);
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Device Setup
-        ////////////////////////////////////////////////////////////////////////////
-        int device_id = 0;
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
