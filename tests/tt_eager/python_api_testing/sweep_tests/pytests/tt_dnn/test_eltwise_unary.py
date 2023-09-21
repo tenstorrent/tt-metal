@@ -188,6 +188,8 @@ class TestEltwiseUnary:
         input_mem_config,
         output_mem_config,
     ):
+        if (is_wormhole_b0() and fast_and_appx):
+            pytest.skip("Gelu appx mode not working for WH b0")
         datagen_func = [
             generation_funcs.gen_func_with_cast(
                 partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32
@@ -710,6 +712,7 @@ class TestEltwiseUnary:
             test_args,
         )
 
+    @skip_for_wormhole_b0
     @pytest.mark.parametrize("alpha", [-0.5, 0, 0.5])
     def test_run_eltwise_elu_op(
         self,

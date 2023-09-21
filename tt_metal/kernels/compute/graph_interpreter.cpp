@@ -48,7 +48,7 @@ void MAIN {
                 recip_tile(0);
             } else if (op_info.op_code == (int)tt::OpCode::Gelu) { // 2
                 gelu_tile_init();
-                gelu_tile(0);
+                gelu_tile(0, false);
             } else if (op_info.op_code == (int)tt::OpCode::Add) { // 3
                 add_tiles_init();
                 add_tiles(op_info.cb_in0_id, op_info.cb_in1_id, 0, 0, 0);

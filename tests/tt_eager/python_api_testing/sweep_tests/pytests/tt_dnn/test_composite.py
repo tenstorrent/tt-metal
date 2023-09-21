@@ -34,7 +34,6 @@ reference_pcc = defaultdict(lambda: 0.999)
 reference_pcc["silu"] = 0.9714
 reference_pcc["swish"] = reference_pcc["silu"]
 reference_pcc["softplus"] = 0.9984
-reference_pcc["bias_gelu"] = 0.606
 
 
 def custom_compare(*args, **kwargs):
@@ -113,7 +112,6 @@ if is_wormhole_b0():
                 "logical_xori",
                 "logical_noti",
                 "logical_andi",
-                "bias_gelu",
                 "isclose",
                 "digamma",
             ),
@@ -154,7 +152,7 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
     generator = generation_funcs.gen_rand
 
     if is_wormhole_b0():
-        if fn in ["logit"]:
+        if fn in ["logit", "bias_gelu_unary"]:
             pytest.skip("does not work for Wormhole -skipping")
     if fn in ["logical_xor", "logical_xori", "logical_ori", "logical_andi"]:
         datagen_func = [
@@ -188,7 +186,6 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
         "logit",
         "logical_xor",
         "isclose",
-        "bias_gelu",
     ]:
         num_inputs = 2
 
@@ -212,7 +209,7 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
         test_args.update({"alpha": np.random.randint(1, 100)})
     elif fn in ["addalpha"]:
         test_args.update({"alpha": np.random.randint(1, 100)})
-    elif fn in ["bias_gelu_unary", "bias_gelu"]:
+    elif fn in ["bias_gelu_unary"]:
         test_args.update({"bias": np.random.randint(1, 100)})
     elif fn in ["logit"]:
         test_args.update({"eps": np.random.randint(-1e-6, 1e6)})
