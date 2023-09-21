@@ -258,7 +258,7 @@ void create_CBs_for_fused_matmul(tt_metal::Program &program, tt_metal::Device* d
     }
 }
 
-bool test_matmul_large_block(tt_metal::Device *device, const tt::ARCH& arch, bool activations_rm, bool output_rm) {
+bool test_matmul_large_block(tt_metal::Device *device, bool activations_rm, bool output_rm) {
     bool pass = true;
 
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -489,32 +489,26 @@ int main(int argc, char **argv) {
     //                      Initial Runtime Args Parse
     ////////////////////////////////////////////////////////////////////////////
     std::vector<std::string> input_args(argv, argv + argc);
-    string arch_name = "";
-    try {
-        std::tie(arch_name, input_args) =
-            test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
-    } catch (const std::exception& e) {
-        log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
-    }
-    const tt::ARCH arch = tt::get_arch_from_string(arch_name);
 
     int device_id = 0;
     tt_metal::Device *device =
         tt_metal::CreateDevice(device_id);
 
 
-
-    // Row major input, tilized output
-    pass &= test_matmul_large_block(device, arch, true, false);
-
-    // Row major input, untilized output
-    pass &= test_matmul_large_block(device, arch, true, true);
-
     // Tilized input, tilized output
-    pass &= test_matmul_large_block(device, arch, false, false);
+    pass &= test_matmul_large_block(device, false, false);
 
-    // Tilized input, untilized output
-    pass &= test_matmul_large_block(device, arch, false, true);
+    // Not supported yet for Wormhole
+    if (device->arch() == tt::ARCH::GRAYSKULL) {
+        // Row major input, tilized output
+        pass &= test_matmul_large_block(device, true, false);
+
+        // Row major input, untilized output
+        pass &= test_matmul_large_block(device, true, true);
+
+        // Tilized input, untilized output
+        pass &= test_matmul_large_block(device, false, true);
+    }
 
     pass &= tt_metal::CloseDevice(device);;
 
