@@ -34,7 +34,7 @@ inline void calculate_elu(uint slope)
         vFloat v = dst_reg[0];
 
         v_if (v < 0.0f) {
-         vFloat v_exp = calculate_exponential_body_improved<true,zero_negative>(v);
+         vFloat v_exp = calculate_exponential_body_improved<true, zero_negative>(v);
 
          v = s*(v_exp - 1.0f);
         }
@@ -48,9 +48,10 @@ inline void calculate_elu(uint slope)
 
 template <bool APPROXIMATION_MODE>
 void elu_init() {
-    if constexpr(APPROXIMATION_MODE) {
-        TTI_SFPLOADI(p_sfpu::LREG2, 0, p_exp::ADJ_EXP);
-    }
+    // This should be for approx mode, but we run out of registers if we try
+    // to run non-approx mode, so approx and non-approx mode will be the same for GS
+    // For WH there are correct approx and non-approx modes
+    TTI_SFPLOADI(p_sfpu::LREG2, 0, p_exp::ADJ_EXP);
 }
 
 }  // namespace sfpu

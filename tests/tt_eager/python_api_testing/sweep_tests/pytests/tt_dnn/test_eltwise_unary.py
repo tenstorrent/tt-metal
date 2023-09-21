@@ -712,7 +712,6 @@ class TestEltwiseUnary:
             test_args,
         )
 
-    @skip_for_wormhole_b0
     @pytest.mark.parametrize("alpha", [-0.5, 0, 0.5])
     def test_run_eltwise_elu_op(
         self,
@@ -737,8 +736,7 @@ class TestEltwiseUnary:
             }
         )
         comparison_func = comparison_funcs.comp_pcc
-        if is_wormhole_b0():
-            comparison_func = partial(comparison_func, pcc=0.889)
+
         run_single_pytorch_test(
             "eltwise-elu",
             input_shapes,
