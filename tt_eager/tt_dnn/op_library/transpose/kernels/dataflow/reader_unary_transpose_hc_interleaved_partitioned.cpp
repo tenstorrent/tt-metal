@@ -16,22 +16,22 @@ inline u32 TADDR(u32 ti) {
 
 void kernel_main() {
     u32 src0_addr = get_arg_val<uint32_t>(0);
-    u32 start_id  = get_arg_val<uint32_t>(1);
-    u32 num_tiles = get_arg_val<uint32_t>(2);
-    u32 batch_addr = get_arg_val<uint32_t>(3);
-    u32 h = get_arg_val<uint32_t>(4);
-    u32 htWT = get_arg_val<uint32_t>(5);
-    u32 ct = get_arg_val<uint32_t>(6);
-    u32 ctoffs = get_arg_val<uint32_t>(7);
-    u32 wt = get_arg_val<uint32_t>(8);
+    u32 WT = get_arg_val<uint32_t>(1);
+    u32 H = get_arg_val<uint32_t>(2);
+    u32 CT = get_arg_val<uint32_t>(3);
+    u32 HW_bytes = get_arg_val<uint32_t>(4);
+    u32 CHW_bytes = get_arg_val<uint32_t>(5);
+    u32 start_id  = get_arg_val<uint32_t>(6);
+    u32 num_tiles = get_arg_val<uint32_t>(7);
+    u32 batch_addr = get_arg_val<uint32_t>(8);
+    u32 h = get_arg_val<uint32_t>(9);
+    u32 htWT = get_arg_val<uint32_t>(10);
+    u32 ct = get_arg_val<uint32_t>(11);
+    u32 ctoffs = get_arg_val<uint32_t>(12);
+    u32 wt = get_arg_val<uint32_t>(13);
 
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t WT = get_compile_time_arg_val(1);
-    constexpr uint32_t H = get_compile_time_arg_val(2);
-    constexpr uint32_t CT = get_compile_time_arg_val(3);
-    constexpr uint32_t HW_bytes = get_compile_time_arg_val(4);
-    constexpr uint32_t CHW_bytes = get_compile_time_arg_val(5);
-    constexpr u32 SUBTILE_LINE_BYTES = get_compile_time_arg_val(6);
+    constexpr u32 SUBTILE_LINE_BYTES = get_compile_time_arg_val(1);
 
     constexpr u32 onetile = 1;
     constexpr uint32_t cb_id_in0 = 0;

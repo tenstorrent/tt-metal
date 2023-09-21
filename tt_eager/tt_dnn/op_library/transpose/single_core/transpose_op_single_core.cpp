@@ -15,16 +15,33 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor& output) {
+std::vector< std::vector<uint32_t> >  get_runtime_args_wh(const Tensor &input_tensor,
+                                                       Tensor &output_tensor
+                                                        )
+{
 
-    const auto shape = a.shape();
-    u32 W = shape[3], H = shape[2], NC = shape[1]*shape[0];
+    auto input_shape = input_tensor.shape();
+    auto output_shape = output_tensor.shape();
+    u32 W = input_shape[3], H = input_shape[2], NC = input_shape[1]*input_shape[0];
     u32 HW = H*W;
 
     u32 Wt = W/TILE_WIDTH;
     u32 Ht = H/TILE_HEIGHT;
 
-    uint32_t num_tensor_tiles = a.volume() / TILE_HW;
+    uint32_t num_tensor_tiles = input_tensor.volume() / TILE_HW;
+    std::vector<uint32_t> reader_runtime_args = {input_tensor.buffer()->address(),
+                                                NC, Ht, Wt, Ht*Wt,
+                                                };
+    std::vector<uint32_t> compute_runtime_args = {num_tensor_tiles};
+    std::vector<uint32_t> writer_runtime_args =   {output_tensor.buffer()->address(),num_tensor_tiles, 0};
+    return {reader_runtime_args, compute_runtime_args, writer_runtime_args};
+
+}
+
+
+operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor& output) {
+
+    const auto shape = a.shape();
 
     tt_metal::Program program = tt_metal::Program();
 
@@ -66,6 +83,8 @@ operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor
         (std::uint32_t) output_cb_index,
         (std::uint32_t) dst_is_dram
     };
+
+    //TODO: move this kernel, currently being used in reduce, can't move to op library
     tt_metal::KernelID reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/reader_unary_transpose_wh_interleaved.cpp",
@@ -78,73 +97,79 @@ operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
-    vector<uint32_t> compute_args = {
-        num_tensor_tiles
-    };
+
 
     auto eltwise_binary_kernel_id = tt_metal::CreateComputeKernel(
         program,
-        "tt_metal/kernels/compute/transpose_wh.cpp",
+        "tt_eager/tt_dnn/op_library/transpose/kernels/compute/transpose_wh.cpp",
         core,
-        tt_metal::ComputeConfig{.compile_args = compute_args}
+        tt_metal::ComputeConfig{}
     );
+
+    auto all_runtime_args = get_runtime_args_wh(a, output);
 
     tt_metal::SetRuntimeArgs(
         program,
         reader_kernel_id,
         core,
-        {
-            src0_buffer->address(),
-            NC, Ht, Wt, Ht*Wt,
-        }
+        all_runtime_args[0]
+    );
+
+    tt_metal::SetRuntimeArgs(
+        program,
+        eltwise_binary_kernel_id,
+        core,
+        all_runtime_args[1]
     );
 
     tt_metal::SetRuntimeArgs(
         program,
         writer_kernel_id,
         core,
-        {
-            dst_buffer->address(),
-            num_tensor_tiles, 0
-        }
+        all_runtime_args[2]
     );
 
-    auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id](
-        const Program &program,
-        const std::vector<Buffer*>& input_buffers,
-        const std::vector<Buffer*>& output_buffers
+    auto override_runtime_args_callback = [reader_kernel_id, eltwise_binary_kernel_id, writer_kernel_id](
+        const void* operation,
+        const Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>> & ,
+        const std::vector<Tensor>& output_tensors
     ) {
 
-        auto src_buffer = input_buffers.at(0);
+        auto src_tensor = input_tensors.at(0);
 
-        auto dst_buffer = output_buffers.at(0);
+        auto dst_tensor = output_tensors.at(0);
+
+        auto all_runtime_args = get_runtime_args_wh(src_tensor, dst_tensor);
 
         CoreCoord core = {0, 0};
 
         {
-            auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = src_buffer->address();
-            SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
+            SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args[0]);
         }
 
         {
-            auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = dst_buffer->address();
-            SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
+            SetRuntimeArgs(program, eltwise_binary_kernel_id, core, all_runtime_args[1]);
+        }
+
+        {
+            SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args[2]);
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};
+
 }
 
-operation::ProgramWithCallbacks transpose_hc_single_core(const Tensor &a, Tensor &output) {
+std::pair< std::vector<uint32_t>, std::vector<uint32_t> > get_runtime_args_hc(const Tensor &input_tensor, Tensor &output_tensor){
 
-    const auto shape = a.shape();
-    u32 W = shape[3], H = shape[2], C = shape[1], N = shape[0];
+    const auto input_shape = input_tensor.shape();
+    u32 W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
     u32 HW = H*W;
-    u32 HW_bytes = HW * a.element_size();
+    u32 HW_bytes = HW * input_tensor.element_size();
     u32 CHW = C*H*W;
-    u32 CHW_bytes = CHW * a.element_size();
+    u32 CHW_bytes = CHW * input_tensor.element_size();
 
     u32 Wt = W/TILE_WIDTH;
     u32 Ht = H/TILE_HEIGHT;
@@ -152,10 +177,33 @@ operation::ProgramWithCallbacks transpose_hc_single_core(const Tensor &a, Tensor
     u32 CtHWt = Ct*H*Wt;
     u32 CtWt = Ct * Wt;
 
+    uint32_t num_tensor_tiles = input_tensor.volume() / TILE_HW;
+
+    std::vector<uint32_t> reader_runtime_args = {
+            input_tensor.buffer()->address(),
+            (std::uint32_t) Wt,
+            (std::uint32_t) H,
+            (std::uint32_t) Ct,
+            (std::uint32_t) HW_bytes,
+            (std::uint32_t) CHW_bytes,
+            0, num_tensor_tiles,
+            0, 0, 0, 0, 0, 0
+            };
+
+    std::vector<uint32_t> writer_runtime_args = {output_tensor.buffer()->address(), num_tensor_tiles};
+
+    return {reader_runtime_args, writer_runtime_args};
+
+}
+
+operation::ProgramWithCallbacks transpose_hc_single_core(const Tensor &a, Tensor &output) {
+    std::cout << "Transopose HC single core " << std::endl;
+
+
+
     // 16 is size of face row
     u32 sub_tile_line_bytes = 16 * a.element_size();
 
-    uint32_t num_tensor_tiles = a.volume() / TILE_HW;
 
     tt_metal::Program program = tt_metal::Program();
 
@@ -184,11 +232,6 @@ operation::ProgramWithCallbacks transpose_hc_single_core(const Tensor &a, Tensor
     bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t) src0_is_dram,
-        (std::uint32_t) Wt,
-        (std::uint32_t) H,
-        (std::uint32_t) Ct,
-        (std::uint32_t) HW_bytes,
-        (std::uint32_t) CHW_bytes,
         (std::uint32_t) sub_tile_line_bytes
     };
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
@@ -199,7 +242,7 @@ operation::ProgramWithCallbacks transpose_hc_single_core(const Tensor &a, Tensor
 
     tt_metal::KernelID reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_unary_transpose_hc_interleaved_partitioned.cpp",
+        "tt_eager/tt_dnn/op_library/transpose/kernels/dataflow/reader_unary_transpose_hc_interleaved_partitioned.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
@@ -209,62 +252,55 @@ operation::ProgramWithCallbacks transpose_hc_single_core(const Tensor &a, Tensor
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
+
+    auto all_runtime_args = get_runtime_args_hc(a, output);
+
     tt_metal::SetRuntimeArgs(
         program,
         reader_kernel_id,
         core,
-        {
-            src0_buffer->address(),
-            0, num_tensor_tiles,
-            0, 0, 0, 0, 0, 0
-        }
+        all_runtime_args.first
     );
 
     tt_metal::SetRuntimeArgs(
         program,
         writer_kernel_id,
         core,
-        {
-            dst_buffer->address(),
-            num_tensor_tiles, 0
-        }
+        all_runtime_args.second
     );
 
     auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id](
-        const Program &program,
-        const std::vector<Buffer*>& input_buffers,
-        const std::vector<Buffer*>& output_buffers
+        const void* operation,
+        const Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>> & ,
+        const std::vector<Tensor>& output_tensors
     ) {
 
-        auto src_dram_buffer = input_buffers.at(0);
+        auto src_tensor = input_tensors.at(0);
 
-        auto dst_dram_buffer = output_buffers.at(0);
+        auto dst_tensor = output_tensors.at(0);
+
+        auto all_runtime_args = get_runtime_args_hc(src_tensor, dst_tensor);
 
         CoreCoord core = {0, 0};
 
         {
-            auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = src_dram_buffer->address();
-            SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
+            SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args.first);
         }
 
         {
-            auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = dst_dram_buffer->address();
-            SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
+            SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args.second);
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};
 }
 
-operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor &output) {
+std::pair< std::vector<uint32_t>, std::vector<uint32_t> > get_runtime_args_cn(const Tensor &input_tensor, Tensor &output_tensor){
 
-    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to transpose_cn needs to be on device!");
-    TT_ASSERT(a.buffer() != nullptr, "Operand to transpose_cn needs to be allocated in a buffer on device!");
-
-    const auto shape = a.shape();
-    u32 W = shape[3], H = shape[2], C = shape[1], N = shape[0];
+    const auto input_shape = input_tensor.shape();
+    u32 W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
 
     u32 Wt = W/TILE_WIDTH;
     u32 Ht = H/TILE_HEIGHT;
@@ -273,6 +309,21 @@ operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor
     uint32_t HtWt = Ht * Wt;
     uint32_t CHtWt = C * HtWt;
     uint32_t NCHtWt = num_tensor_tiles;
+
+    std::vector<uint32_t> reader_runtime_args =  {input_tensor.buffer()->address(),
+                                                N, C, Ht, Wt, HtWt, CHtWt, NCHtWt};
+
+    std::vector<uint32_t> writer_runtime_args = {output_tensor.buffer()->address(),
+            num_tensor_tiles, 0};
+    return {reader_runtime_args, writer_runtime_args};
+}
+
+operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor &output) {
+
+    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to transpose_cn needs to be on device!");
+    TT_ASSERT(a.buffer() != nullptr, "Operand to transpose_cn needs to be allocated in a buffer on device!");
+
+
 
     tt_metal::Program program = tt_metal::Program();
 
@@ -286,7 +337,6 @@ operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
 
-    Shape output_shape = output.shape();
 
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -307,7 +357,7 @@ operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor
 
     tt_metal::KernelID reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_unary_transpose_cn_interleaved.cpp",
+        "tt_eager/tt_dnn/op_library/transpose/kernels/dataflow/reader_unary_transpose_cn_interleaved.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
@@ -317,52 +367,47 @@ operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
+    auto all_runtime_args = get_runtime_args_cn(a, output);
+
     tt_metal::SetRuntimeArgs(
         program,
         reader_kernel_id,
         core,
-        {
-            src0_buffer->address(),
-            N, C, Ht, Wt, HtWt, CHtWt, NCHtWt
-        }
+        all_runtime_args.first
     );
 
     tt_metal::SetRuntimeArgs(
         program,
         writer_kernel_id,
         core,
-        {
-            dst_buffer->address(),
-            num_tensor_tiles, 0
-        }
+        all_runtime_args.second
     );
 
     auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id](
-        const Program &program,
-        const std::vector<Buffer*>& input_buffers,
-        const std::vector<Buffer*>& output_buffers
+        const void* operation,
+        const Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>> & ,
+        const std::vector<Tensor>& output_tensors
     ) {
 
-        auto src_dram_buffer = input_buffers.at(0);
+        auto src_tensor = input_tensors.at(0);
 
-        auto dst_dram_buffer = output_buffers.at(0);
+        auto dst_tensor = output_tensors.at(0);
 
+        auto all_runtime_args = get_runtime_args_cn(src_tensor, dst_tensor);
         CoreCoord core = {0, 0};
 
         {
-            auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = src_dram_buffer->address();
-            SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
+            SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args.first);
         }
 
         {
-            auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = dst_dram_buffer->address();
-            SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
+            SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args.second);
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};
 }
 
 

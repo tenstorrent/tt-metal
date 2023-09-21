@@ -13,10 +13,15 @@ void kernel_main() {
     uint32_t start_wt  = get_arg_val<uint32_t>(4);
 
 
+    uint32_t Ht  = get_arg_val<uint32_t>(5);
+    uint32_t Wt  = get_arg_val<uint32_t>(6);
+    uint32_t HtWt  = get_arg_val<uint32_t>(7);
+
+
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t Ht  = get_compile_time_arg_val(1);
-    constexpr uint32_t Wt  = get_compile_time_arg_val(2);
-    constexpr uint32_t HtWt  = get_compile_time_arg_val(3);
+    //uint32_t Ht  = (uint32_t)get_compile_time_arg_val(1);
+    //uint32_t Wt  = (uint32_t)get_compile_time_arg_val(2);
+    //uint32_t HtWt  = (uint32_t)get_compile_time_arg_val(3);
 
     constexpr uint32_t cb_id_in0 = 0;
 

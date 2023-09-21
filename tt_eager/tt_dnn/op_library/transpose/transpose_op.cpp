@@ -114,8 +114,23 @@ tt::stl::reflection::Attributes Transpose::attributes() const {
     };
 }
 
-inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const MemoryConfig& output_mem_config) {
+const operation::Hash Transpose::compute_program_hash(
+    const std::vector<Tensor> &input_tensors) const {
+    auto input_tensor = input_tensors.at(0);
+    auto input_mem_config = input_tensor.memory_config();
+    auto output_mem_config = this->output_mem_config;
+    auto dtype = input_tensor.dtype();
+    return fmt::format(
+        "Transpose(input_mem_config={}_output_mem_config={}_dtype={}_transpose_dim={}_parallelization_strategy={})",
+        input_mem_config,
+        output_mem_config,
+        dtype,
+        this->dim,
+        get_parallelization_strategy(input_tensors)
+    );
+}
 
+inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const MemoryConfig& output_mem_config) {
     bool pad_c = false;
     bool pad_n = false;
     switch (transpose_dim) {
