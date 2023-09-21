@@ -67,7 +67,7 @@ int main(int argc, char **argv) {
         // set up the program
 
         // saturate DRAM
-        uint32_t num_cores = 12;
+        uint32_t num_cores = device->logical_grid_size().x;
         uint32_t num_tiles = 64 * 1024;
         uint32_t block_size_tiles = 16;
         uint32_t num_blocks_in_CB = 2;
