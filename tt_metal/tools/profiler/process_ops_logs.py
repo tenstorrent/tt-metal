@@ -112,11 +112,11 @@ def append_device_time_data(opCandidatePath, call_count, timeDataDict):
         cores.remove("DEVICE")
 
         delta_time = end_ts - start_ts
-        delta_time_ns = delta_time / setup.coreFreq
+        delta_time_ns = delta_time * 1000 / devicesData["deviceInfo"]["freq"]
 
         timeDataDict["DEVICE START CYCLE"] = start_ts
         timeDataDict["DEVICE END CYCLE"] = end_ts
-        timeDataDict["DEVICE DURATION [ns]"] = int(delta_time_ns)
+        timeDataDict["DEVICE DURATION [ns]"] = round(delta_time_ns)
         timeDataDict["CORE COUNT"] = len(cores)
     else:
         timeDataDict["DEVICE START CYCLE"] = "-"
@@ -404,7 +404,7 @@ def print_ops_csv(ops, opsFolder, outputFolder, date, nameAppend):
         opsList = []
         for op, opCalls in ops.items():
             for opCall in opCalls:
-                opCall["OP CODE"] = " "*opCall["CALL DEPTH"] + op
+                opCall["OP CODE"] = " " * opCall["CALL DEPTH"] + op
                 opsList.append(opCall)
 
         opsList.sort(key=lambda item: item[SORT_KEY])

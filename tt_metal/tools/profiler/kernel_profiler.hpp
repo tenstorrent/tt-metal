@@ -40,11 +40,11 @@ namespace kernel_profiler{
     {
 #if defined(PROFILE_KERNEL)
 #if defined(COMPILE_FOR_NCRISC) | defined(COMPILE_FOR_BRISC)
-        uint32_t time_L = reg_read_barrier(RISCV_DEBUG_REG_WALL_CLOCK_L);
-        uint32_t time_H = reg_read_barrier(RISCV_DEBUG_REG_WALL_CLOCK_H);
+        uint32_t time_L = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+        uint32_t time_H = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
 #else
-        uint32_t time_L = ckernel::reg_read_barrier(RISCV_DEBUG_REG_WALL_CLOCK_L);
-        uint32_t time_H = ckernel::reg_read_barrier(RISCV_DEBUG_REG_WALL_CLOCK_H);
+        uint32_t time_L = ckernel::reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+        uint32_t time_H = ckernel::reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
 #endif
 
         // Either buffer has room for more markers or the end of FW marker is place on the last marker spot

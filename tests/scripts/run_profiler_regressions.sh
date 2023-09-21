@@ -10,7 +10,6 @@ run_profiling_test(){
 
     echo "Make sure this test runs in a build with ENABLE_PROFILER=1"
 
-    if [ "$ARCH_NAME" == "grayskull" ]; then
         source build/python_env/bin/activate
         export PYTHONPATH=$TT_METAL_HOME
 
@@ -18,10 +17,12 @@ run_profiling_test(){
 
         rm -rf $TT_METAL_HOME/tt_metal/tools/profiler/logs/
         rm -rf $TT_METAL_HOME/tt_metal/tools/profiler/output/
-        $TT_METAL_HOME/tt_metal/tools/profiler/profile_this.py -c "pytest -svvv tests/models/bert_large_performant/unit_tests/test_bert_large_fused_qkv_matmul.py::test_bert_large_fused_qkv_matmul_test[BFLOAT8_B-in0_DRAM-in1_L1-bias_None-out_DRAM]"
+        $TT_METAL_HOME/tt_metal/tools/profiler/profile_this.py -c "pytest -svvv $TT_METAL_HOME/tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_composite.py::test_run_eltwise_composite_test[lerp_binary-input_shapes0]"
 
-        ls $TT_METAL_HOME/tt_metal/tools/profiler/output/ops/BERT_large_fused_qkv_matmul_BFLOAT8_B-in0_DRAM-in1_L1-bias_None-out_DRAM/profile_log_ops.csv
-    fi
+        ls $TT_METAL_HOME/tt_metal/tools/profiler/output/ops/default/profile_log_ops.csv
+
+        rm -rf $TT_METAL_HOME/tt_metal/tools/profiler/logs/
+        rm -rf $TT_METAL_HOME/tt_metal/tools/profiler/output/
 }
 
 run_post_proc_test(){

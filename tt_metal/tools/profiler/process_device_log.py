@@ -126,10 +126,11 @@ class TupleEncoder(json.JSONEncoder):
     def iterencode(self, obj):
         return super().iterencode(self._preprocess_tuple(obj))
 
+
 def print_chrome_tracing_json(devicesData, setup):
     chromeTraces = []
     riscToNum = {
-        "BRISC" : 1,
+        "BRISC": 1,
         "NCRISC": 2,
         "TRISC_0": 3,
         "TRISC_1": 4,
@@ -137,28 +138,31 @@ def print_chrome_tracing_json(devicesData, setup):
     }
     for device in devicesData["devices"].keys():
         minTime = devicesData["devices"][device]["metadata"]["global_min"]["ts"]
-        for timerID, timestamp, risc, core in devicesData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["timeseries"]:
-            x,y = core
-            traceID = riscToNum[risc]+x*100+y*10000
+        for timerID, timestamp, risc, core in devicesData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"][
+            "timeseries"
+        ]:
+            x, y = core
+            traceID = riscToNum[risc] + x * 100 + y * 10000
             phaseType = ""
             if timerID in [1]:
                 phaseType = "B"
                 chromeTraces.append(
-                    {"name": f"{risc}", "cat": "PERF", "ph": phaseType, "pid": traceID, "tid": traceID, "ts": minTime})
+                    {"name": f"{risc}", "cat": "PERF", "ph": phaseType, "pid": traceID, "tid": traceID, "ts": minTime}
+                )
             elif timerID in [4]:
                 phaseType = "E"
 
                 chromeTraces.append(
-                    {"name": f"{risc}", "cat": "PERF", "ph": phaseType, "pid": traceID, "tid": traceID, "ts": timestamp})
+                    {"name": f"{risc}", "cat": "PERF", "ph": phaseType, "pid": traceID, "tid": traceID, "ts": timestamp}
+                )
 
-            chromeTraces.append({"name": "thread_name", "ph": "M", "pid": traceID, "tid": traceID,
-                                 "args": {
-                                     "name" : f"{core}"
-                                 }
-                                })
+            chromeTraces.append(
+                {"name": "thread_name", "ph": "M", "pid": traceID, "tid": traceID, "args": {"name": f"{core}"}}
+            )
 
     with open(f"{setup.outputFolder}/{setup.deviceChromeTracing}", "w") as devicesDataJson:
         json.dump(chromeTraces, devicesDataJson, indent=2, cls=TupleEncoder, sort_keys=True)
+
 
 def print_json(devicesData, setup):
     with open(f"{setup.outputFolder}/{setup.deviceAnalysisData}", "w") as devicesDataJson:
@@ -168,12 +172,12 @@ def print_json(devicesData, setup):
 def print_rearranged_csv(devicesData, setup, freqText=None):
     timerIDLabels = setup.timerIDLabels[1:5]
     if not freqText:
-        freqText = setup.coreFreq
+        freqText = devicesData["deviceInfo"]["freq"]
     with open(f"{setup.outputFolder}/{setup.deviceRearranged}", "w") as timersCSV:
         for chipID, deviceData in devicesData["devices"].items():
             timeWriter = csv.writer(timersCSV, delimiter=",")
 
-            timeWriter.writerow(["Clock Frequency [GHz]", freqText])
+            timeWriter.writerow(["Clock Frequency [MHz]", freqText])
             timeWriter.writerow(["PCIe slot", chipID])
             timeWriter.writerow(
                 ["core x", "core y"]
@@ -197,96 +201,104 @@ def analyze_stats(timerStats, timerStatsCores):
         print(f"Please reboot the host to make sure the device is not in a bad reset state")
 
 
+def is_print_supported(devicesData):
+    return devicesData["deviceInfo"]["arch"] == "grayskull"
+
+
 def print_stats_outfile(devicesData, setup):
-    original_stdout = sys.stdout
-    with open(f"{setup.outputFolder}/{setup.deviceStatsTXT}", "w") as statsFile:
-        sys.stdout = statsFile
-        print_stats(devicesData, setup)
-        sys.stdout = original_stdout
+    if is_print_supported(devicesData):
+        original_stdout = sys.stdout
+        with open(f"{setup.outputFolder}/{setup.deviceStatsTXT}", "w") as statsFile:
+            sys.stdout = statsFile
+            print_stats(devicesData, setup)
+            sys.stdout = original_stdout
 
 
 def print_stats(devicesData, setup):
-    numberWidth = 17
-    for chipID, deviceData in devicesData["devices"].items():
-        for analysis in setup.timerAnalysis.keys():
-            if (
-                "analysis" in deviceData["cores"]["DEVICE"].keys()
-                and analysis in deviceData["cores"]["DEVICE"]["analysis"].keys()
-            ):
-                assert "stats" in deviceData["cores"]["DEVICE"]["analysis"][analysis].keys()
-                stats = deviceData["cores"]["DEVICE"]["analysis"][analysis]["stats"]
-                print()
-                print(f"=================== {analysis} ===================")
-                if stats["Count"] > 1:
-                    for stat in setup.displayStats:
-                        print(f"{stat:>12} [cycles] = {stats[stat]:>10,.0f}")
-                else:
-                    print(f"{'Duration':>12} [cycles] = {stats['Max']:>10,.0f}")
-                print()
-                if setup.timerAnalysis[analysis]["across"] in ["risc", "core"]:
-                    for core_y in range(-3, 11):
-                        # Print row number
-                        if core_y > -1 and core_y < 5:
-                            print(f"{core_y:>2}|| ", end="")
-                        elif core_y > 5:
-                            print(f"{core_y-1:>2}|| ", end="")
-                        else:
-                            print(f"{' ':>4} ", end="")
-
-                        for core_x in range(-1, 12):
-                            if core_x > -1:
-                                if core_y == -3:
-                                    print(f"{core_x:>{numberWidth}}", end="")
-                                elif core_y == -2:
-                                    print(f"{'=':=>{numberWidth}}", end="")
-                                elif core_y == -1:
-                                    if core_x in [0, 3, 6, 9]:
-                                        print(f"{f'DRAM{int(core_x/3)}':>{numberWidth}}", end="")
-                                    else:
-                                        print(f"{'---':>{numberWidth}}", end="")
-                                elif core_y != 5:
-                                    core = (core_x, core_y)
-                                    if core_y > 5:
-                                        core = (core_x, core_y - 1)
-                                    noCoreData = True
-                                    if core in deviceData["cores"].keys():
-                                        for risc, riscData in deviceData["cores"][core]["riscs"].items():
-                                            if (
-                                                "analysis" in riscData.keys()
-                                                and analysis in riscData["analysis"].keys()
-                                            ):
-                                                stats = riscData["analysis"][analysis]["stats"]
-                                                plusMinus = (stats["Max"] - stats["Min"]) // 2
-                                                median = stats["Median"]
-                                                tmpStr = f"{median:,.0f}"
-                                                if stats["Count"] > 1:
-                                                    tmpStr = "{tmpStr}{sign}{plusMinus:,}".format(
-                                                        tmpStr=tmpStr, sign="\u00B1", plusMinus=plusMinus
-                                                    )
-                                                print(f"{tmpStr:>{numberWidth}}", end="")
-                                                noCoreData = False
-                                    if noCoreData:
-                                        print(f"{'X':>{numberWidth}}", end="")
-                                else:
-                                    if core_x in [0, 3, 6, 9]:
-                                        print(f"{f'DRAM{4 + int(core_x/3)}':>{numberWidth}}", end="")
-                                    else:
-                                        print(f"{'---':>{numberWidth}}", end="")
-
+    if not is_print_supported(devicesData):
+        print(f"{devicesData['deviceInfo']['arch']} stat print is not supported")
+    else:
+        numberWidth = 17
+        for chipID, deviceData in devicesData["devices"].items():
+            for analysis in setup.timerAnalysis.keys():
+                if (
+                    "analysis" in deviceData["cores"]["DEVICE"].keys()
+                    and analysis in deviceData["cores"]["DEVICE"]["analysis"].keys()
+                ):
+                    assert "stats" in deviceData["cores"]["DEVICE"]["analysis"][analysis].keys()
+                    stats = deviceData["cores"]["DEVICE"]["analysis"][analysis]["stats"]
+                    print()
+                    print(f"=================== {analysis} ===================")
+                    if stats["Count"] > 1:
+                        for stat in setup.displayStats:
+                            print(f"{stat:>12} [cycles] = {stats[stat]:>10,.0f}")
+                    else:
+                        print(f"{'Duration':>12} [cycles] = {stats['Max']:>10,.0f}")
+                    print()
+                    if setup.timerAnalysis[analysis]["across"] in ["risc", "core"]:
+                        for core_y in range(-3, 11):
+                            # Print row number
+                            if core_y > -1 and core_y < 5:
+                                print(f"{core_y:>2}|| ", end="")
+                            elif core_y > 5:
+                                print(f"{core_y-1:>2}|| ", end="")
                             else:
-                                if core_y == 1:
-                                    print("ARC", end="")
-                                elif core_y == 3:
-                                    print("PCI", end="")
-                                elif core_y > -1:
-                                    print("---", end="")
-                                else:
-                                    print("   ", end="")
+                                print(f"{' ':>4} ", end="")
 
+                            for core_x in range(-1, 12):
+                                if core_x > -1:
+                                    if core_y == -3:
+                                        print(f"{core_x:>{numberWidth}}", end="")
+                                    elif core_y == -2:
+                                        print(f"{'=':=>{numberWidth}}", end="")
+                                    elif core_y == -1:
+                                        if core_x in [0, 3, 6, 9]:
+                                            print(f"{f'DRAM{int(core_x/3)}':>{numberWidth}}", end="")
+                                        else:
+                                            print(f"{'---':>{numberWidth}}", end="")
+                                    elif core_y != 5:
+                                        core = (core_x, core_y)
+                                        if core_y > 5:
+                                            core = (core_x, core_y - 1)
+                                        noCoreData = True
+                                        if core in deviceData["cores"].keys():
+                                            for risc, riscData in deviceData["cores"][core]["riscs"].items():
+                                                if (
+                                                    "analysis" in riscData.keys()
+                                                    and analysis in riscData["analysis"].keys()
+                                                ):
+                                                    stats = riscData["analysis"][analysis]["stats"]
+                                                    plusMinus = (stats["Max"] - stats["Min"]) // 2
+                                                    median = stats["Median"]
+                                                    tmpStr = f"{median:,.0f}"
+                                                    if stats["Count"] > 1:
+                                                        tmpStr = "{tmpStr}{sign}{plusMinus:,}".format(
+                                                            tmpStr=tmpStr, sign="\u00B1", plusMinus=plusMinus
+                                                        )
+                                                    print(f"{tmpStr:>{numberWidth}}", end="")
+                                                    noCoreData = False
+                                        if noCoreData:
+                                            print(f"{'X':>{numberWidth}}", end="")
+                                    else:
+                                        if core_x in [0, 3, 6, 9]:
+                                            print(f"{f'DRAM{4 + int(core_x/3)}':>{numberWidth}}", end="")
+                                        else:
+                                            print(f"{'---':>{numberWidth}}", end="")
+
+                                else:
+                                    if core_y == 1:
+                                        print("ARC", end="")
+                                    elif core_y == 3:
+                                        print("PCI", end="")
+                                    elif core_y > -1:
+                                        print("---", end="")
+                                    else:
+                                        print("   ", end="")
+
+                            print()
                         print()
-                    print()
-                    print()
-                    print()
+                        print()
+                        print()
 
 
 def print_help():
@@ -294,6 +306,17 @@ def print_help():
     print("e.g. : process_device_log.py test_add_two_ints")
     print("Or run default by providing no args")
     print("e.g. : process_device_log.py")
+
+
+def extract_device_info(deviceInfo):
+    if "Chip clock is at " in deviceInfo[0]:
+        return "grayskull", 1200
+    elif "ARCH" in deviceInfo[0]:
+        arch = deviceInfo[0].split(":")[-1].strip(" \n")
+        freq = deviceInfo[1].split(":")[-1].strip(" \n")
+        return arch, int(freq)
+    else:
+        raise Exception
 
 
 def import_device_profile_log(logPath):
@@ -328,7 +351,8 @@ def import_device_profile_log(logPath):
                     }
 
             elif lineCount == 0:
-                assert "Chip clock is at " in row[0], f"CSV {logPath} has bad header format"
+                arch, freq = extract_device_info(row)
+                devicesData.update(dict(deviceInfo=dict(arch=arch, freq=freq)))
     # Sort all timeseries and find global min timestamp
     globalMinTS = (1 << 64) - 1
     globalMinRisc = "BRISC"
@@ -1004,7 +1028,6 @@ def main(setup, device_input_log, output_folder, port, no_print_stats, no_webapp
     except Exception:
         print("ERROR: Bad device profile log format", file=sys.stderr)
         sys.exit(1)
-
 
     prepare_output_folder(setup)
 

@@ -16,13 +16,13 @@ TT_METAL_PATH = f"{REPO_PATH}/tt_metal"
 PROFILER_DIR = f"{TT_METAL_PATH}/tools/profiler/"
 PROFILER_LOG_DIR = f"{PROFILER_DIR}/logs/"
 PROFILER_OUT_DIR = f"{PROFILER_DIR}/output/device"
-GS_PROG_EXMP_DIR = "programming_examples/profiler/device/grayskull"
+GS_PROG_EXMP_DIR = "programming_examples/profiler"
 
 
 def run_device_profiler_test(doubleRun=False, setup=False):
     name = inspect.stack()[1].function
     profilerRun = os.system(
-        f"cd {REPO_PATH} && " f"make {GS_PROG_EXMP_DIR}/{name} && " f"rm -rf {PROFILER_LOG_DIR}/profile_log_device.csv && " f"build/{GS_PROG_EXMP_DIR}/{name}"
+        f"cd {REPO_PATH} && " f"rm -rf {PROFILER_LOG_DIR}/profile_log_device.csv && " f"build/{GS_PROG_EXMP_DIR}/{name}"
     )
     assert profilerRun == 0
 
@@ -77,12 +77,17 @@ def test_custom_cycle_count():
 
 
 def test_full_buffer():
-    REF_COUNT = 3780  # 108(compute cores) x 5(riscs) x 7(buffer size in marker)
-    REF_RISC_COUNT = 5
+    REF_COUNT_DICT = {
+        "grayskull" : [3780],  # 108(compute cores) x 5(riscs) x 7(buffer size in marker)
+        "wormhole_b0" : [2520, 2240, 1960]  # [72,64,56](compute cores) x 5(riscs) x 7(buffer size in marker)
+    }
+
+    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
+    assert ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys()
 
     devicesData = run_device_profiler_test(setup=True)
 
     stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
-    riscCount = 0
+
     assert "Marker Repeat" in stats.keys(), "Wrong device analysis format"
-    assert stats["Marker Repeat"]["stats"]["Count"] == REF_COUNT, "Wrong Marker Repeat count"
+    assert stats["Marker Repeat"]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"

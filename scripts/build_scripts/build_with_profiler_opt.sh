@@ -19,8 +19,7 @@ if [[ -z "$ARCH_NAME" ]]; then
     exit 1
 fi
 
-if [ "$ARCH_NAME" == "grayskull" ]; then
-    remove_default_log_locations
-    make clean
-    make build ENABLE_PROFILER=1
-fi
+remove_default_log_locations
+make clean
+make build ENABLE_PROFILER=1
+make programming_examples

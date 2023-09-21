@@ -14,8 +14,9 @@ ENVS = dict(os.environ)
 TT_METAL_HOME = ENVS["TT_METAL_HOME"]
 LOG_LOCATIONS_RECORD = "tt_metal/tools/profiler/logs/.locations.log"
 
+
 def test_profiler_build():
-    tmpLocation ="tt_metal/tools/profiler/tmp"
+    tmpLocation = "tt_metal/tools/profiler/tmp"
     os.system(f"rm -rf {tmpLocation}")
     ret = False
 
@@ -29,6 +30,7 @@ def test_profiler_build():
     os.system(f"rm -rf {tmpLocation}")
     return ret
 
+
 def profile_command(test_command):
     currentEnvs = dict(os.environ)
     currentEnvs["TT_METAL_DEVICE_PROFILER"] = "1"
@@ -40,7 +42,7 @@ def profile_command(test_command):
     subprocess.run([test_command], shell=True, check=True, env=currentEnvs)
 
 
-def get_log_locations ():
+def get_log_locations():
     logLocations = []
     with open(LOG_LOCATIONS_RECORD, "r") as recordFile:
         for line in recordFile.readlines():
@@ -77,6 +79,7 @@ def main(command):
     if command:
         profile_command(command)
         post_process()
+
 
 if __name__ == "__main__":
     main()

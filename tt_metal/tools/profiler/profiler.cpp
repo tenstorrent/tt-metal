@@ -136,7 +136,7 @@ void Profiler::dumpDeviceResultToFile(
     if (device_new_log || !std::filesystem::exists(log_path))
     {
         log_file.open(log_path);
-        log_file << "Chip clock is at 1.2 GHz" << std::endl;
+        log_file << "ARCH: " << get_string_lowercase(device_architecture) << ", CHIP_FREQ[MHz]: " << device_core_frequency << std::endl;
         log_file << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset]" << std::endl;
         device_new_log = false;
     }
@@ -208,11 +208,19 @@ void Profiler::setOutputDir(const std::string& new_output_dir)
 #endif
 }
 
+void Profiler::setDeviceArchitecture(tt::ARCH device_arch)
+{
+#if defined(PROFILER)
+    device_architecture = device_arch;
+#endif
+}
+
 void Profiler::dumpDeviceResults (
         tt_cluster *cluster,
         int device_id,
         const vector<CoreCoord> &worker_cores){
 #if defined(PROFILER)
+    device_core_frequency = cluster -> get_device_aiclk(device_id);
     for (const auto &worker_core : worker_cores) {
         readRiscProfilerResults(
             cluster,

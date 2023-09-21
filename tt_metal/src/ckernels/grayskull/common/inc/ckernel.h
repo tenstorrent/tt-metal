@@ -208,12 +208,17 @@ inline void mem_barrier(uint32_t data)
 // https://yyz-gitlab.local.tenstorrent.com/tenstorrent/tensix/issues/976)
 // Read from register followed by dummy write of readback data to local memory
 // Will flush all prev reads
-inline uint reg_read_barrier(uint32_t addr)
+inline __attribute__((always_inline)) uint32_t reg_read_barrier(uint32_t addr)
 {
     volatile uint *p_reg = reinterpret_cast<volatile uint *> (addr);
     uint data = p_reg[0];
     local_mem_barrier = data;
     return data;
+}
+
+inline __attribute__((always_inline)) uint32_t reg_read(uint32_t addr)
+{
+    return reg_read_barrier(addr);
 }
 
 

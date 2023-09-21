@@ -32,6 +32,7 @@ void DumpDeviceProfileResults(Device *device, const Program &program) {
             device->worker_cores_from_logical_cores(program.logical_cores());
         auto cluster = device->cluster();
         auto device_id = device->id();
+        tt_metal_profiler.setDeviceArchitecture(device->arch());
         tt_metal_profiler.dumpDeviceResults(cluster, device_id, worker_cores_used_in_program);
     }
 #endif

@@ -44,6 +44,11 @@ def test_full_buffer_nc_risc():
 
 
 @run_test
+def test_grayskull_new_header():
+    pass
+
+
+@run_test
 def test_large():
     pass
 
@@ -85,4 +90,14 @@ def test_out_of_order():
 
 @run_test
 def test_very_long_launch_delta():
+    pass
+
+
+@run_test
+def test_wormhole_multi_core():
+    pass
+
+
+@run_test
+def test_wormhole_single_core():
     pass

@@ -106,12 +106,17 @@ inline __attribute__((always_inline)) uint32_t buf_ptr_dec_wrap(uint32_t buf_ptr
   return result;
 }
 
-inline uint32_t reg_read_barrier(uint32_t addr)
+inline __attribute__((always_inline)) uint32_t reg_read_barrier(uint32_t addr)
 {
     volatile tt_reg_ptr uint32_t *p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t *> (addr);
     uint32_t data = p_reg[0];
     local_mem_barrier = data;
     return data;
+}
+
+inline __attribute__((always_inline)) uint32_t reg_read(uint32_t addr)
+{
+    return reg_read_barrier(addr);
 }
 
 inline uint32_t reg_read_barrier_l1(uint32_t addr)

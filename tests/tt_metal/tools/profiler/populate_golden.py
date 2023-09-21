@@ -1,8 +1,9 @@
+#! /usr/bin/env python3
+
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
-#! /usr/bin/env python3
 
 import os, sys
 import re
@@ -20,7 +21,11 @@ GOLDEN_LOGS_DIR = f"{TT_METAL_PATH}/third_party/lfs/profiler/tests/golden/device
 TEST_DEVICE_LOGS_PATH = f"{REPO_PATH}/tests/tt_metal/tools/profiler/test_device_logs.py"
 PROFILER_DIR = f"{TT_METAL_PATH}/tools/profiler/"
 
-TEST_FILE_IMPORTS = """# THIS FILE IS AUTO-GENERATED
+TEST_FILE_IMPORTS = """# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+# THIS FILE IS AUTO-GENERATED
 # Refer to the profiler README to learn how to generate this file using populate_golden.py
 
 from tests.tt_metal.tools.profiler.device_log_run import run_test

@@ -36,9 +36,7 @@ if __name__ == "__main__":
     if test_profiler_build():
         logger.info(f"Profiler build flag is set")
     else:
-        assert (
-            False
-        ), "Need to build with the profiler flag enabled. i.e. make build ENABLE_PROFILER=1"
+        assert False, "Need to build with the profiler flag enabled. i.e. make build ENABLE_PROFILER=1"
 
     txt_files = glob(os.path.join(directory, "*.yaml"))
     txt_files.sort()
@@ -63,9 +61,7 @@ if __name__ == "__main__":
                 shell=True,
                 check=True,
             )
-            subprocess.run(
-                ["rm -rf tt_metal/tools/profiler/logs/ops"], shell=True, check=True
-            )
+            subprocess.run(["rm -rf tt_metal/tools/profiler/logs/ops"], shell=True, check=True)
 
             start = time.time()
             profile_command(command)

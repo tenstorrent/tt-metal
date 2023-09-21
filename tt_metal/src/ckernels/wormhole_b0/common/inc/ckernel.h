@@ -208,7 +208,7 @@ inline void mop_run(const uint8_t type, const uint8_t count)
 // https://yyz-gitlab.local.tenstorrent.com/tenstorrent/tensix/issues/976
 // now handled by the compiler)
 // workaround is needed only for GS
-inline uint reg_read(uint32_t addr)
+inline __attribute__((always_inline)) uint32_t reg_read(uint32_t addr)
 {
     volatile uint tt_reg_ptr *p_reg = reinterpret_cast<volatile uint tt_reg_ptr *> (addr);
     return p_reg[0];

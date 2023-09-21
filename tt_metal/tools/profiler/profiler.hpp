@@ -48,6 +48,12 @@ class Profiler {
         // Recreate device side log file with header
         bool device_new_log;
 
+        // Device architecture
+        tt::ARCH device_architecture;
+
+        // Device frequency
+        int device_core_frequency;
+
         // Output Dir for Profile Logs
         std::filesystem::path output_dir;
 
@@ -91,6 +97,9 @@ class Profiler {
 
         //Set the device side file flag
         void setDeviceNewLogFlag(bool new_log_flag);
+
+        //Set the device architecture
+        void setDeviceArchitecture(tt::ARCH device_arch);
 
         //Change the output dir of the profile logs
         void setOutputDir(const std::string& new_output_dir);

@@ -95,8 +95,6 @@ class default_setup(metaclass=MergeMetaclass):
 
     timerIDLabels = [(0, "Start"), (1, "Firmware Start"), (2, "Kernel start"), (3, "Kernel End"), (4, "Firmware End")]
 
-    coreFreq = 1.2  # GHz
-
     displayStats = ["Count", "Average", "Max", "Median", "Min"]
 
     plotBaseHeight = 200
