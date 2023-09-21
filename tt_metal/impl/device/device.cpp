@@ -100,16 +100,12 @@ Device::Device(int device_id, const std::vector<uint32_t>& l1_bank_remap) : id_(
                              );
 }
 
-size_t Device::detect_num_available_devices(const TargetDevice target_type) {
-    switch (target_type) {
-        case TargetDevice::Silicon:
-            return tt_SiliconDevice::detect_available_device_ids(true).size();
-        case TargetDevice::Versim:
-            return 1;
-        default:
-            TT_ASSERT(false, "Unsupported target type!");
-    }
-    return 0;
+size_t Device::detect_num_available_devices() {
+#ifdef TT_METAL_VERSIM_DISABLED
+    return detail::ClusterWrapper::inst().number_of_chips();
+#else
+    return 1;
+#endif
 }
 
 void Device::initialize_cluster() {
@@ -249,18 +245,18 @@ Device::~Device() {
 }
 
 bool Device::cluster_is_initialized() const {
-    return detail::ClusterWrapper::inst(this->target_type_).cluster() != nullptr;
+    return detail::ClusterWrapper::inst().cluster() != nullptr;
 }
 
 tt_cluster *Device::cluster() const {
     if (not this->cluster_is_initialized()) {
         TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
     }
-    return detail::ClusterWrapper::inst(this->target_type_).cluster();
+    return detail::ClusterWrapper::inst().cluster();
 }
 
 tt::ARCH Device::arch() const {
-    return detect_arch(this->id_);
+    return detail::ClusterWrapper::inst().arch();
 }
 
 int Device::num_dram_channels() const {

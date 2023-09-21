@@ -367,33 +367,56 @@ namespace tt::tt_metal{
             ClusterWrapper(const ClusterWrapper&) = delete;
             ClusterWrapper(ClusterWrapper&& other) noexcept = delete;
 
-            static const ClusterWrapper& inst(const TargetDevice &target_type) {
-                static ClusterWrapper inst(target_type);
+            static const ClusterWrapper& inst() {
+                static ClusterWrapper inst;
                 return inst;
             }
 
             tt_cluster *cluster() const { return this->cluster_.get(); }
 
-           private:
-            ClusterWrapper(const TargetDevice &target_type) {
-                ZoneScoped;
-                this->cluster_ = std::make_unique<tt_cluster>();
+            size_t number_of_chips() const { return this->cluster_desc_->get_number_of_chips(); }
 
-                std::vector<chip_id_t> avail_device_ids = tt_SiliconDevice::detect_available_device_ids(true, false);
-                tt::ARCH arch = detect_arch(avail_device_ids.at(0));
-                for (int dev_index = 1; dev_index < avail_device_ids.size(); dev_index++) {
-                    chip_id_t device_id = avail_device_ids.at(dev_index);
+            tt::ARCH arch() const { return this->arch_; }
+
+           private:
+            ClusterWrapper() {
+                ZoneScoped;
+
+                TargetDevice target_type;
+#ifdef TT_METAL_VERSIM_DISABLED
+                target_type = TargetDevice::Silicon;
+#else
+                target_type = TargetDevice::Versim;
+#endif
+
+                std::vector<chip_id_t> physical_mmio_device_ids = tt_SiliconDevice::detect_available_device_ids(true, false);
+                this->arch_ = detect_arch(physical_mmio_device_ids.at(0));
+                for (int dev_index = 1; dev_index < physical_mmio_device_ids.size(); dev_index++) {
+                    chip_id_t device_id = physical_mmio_device_ids.at(dev_index);
                     tt::ARCH detected_arch = detect_arch(device_id);
-                    TT_ASSERT(arch == detected_arch, "Expected all devices to be {} but device {} is {}", get_arch_str(arch), device_id, get_arch_str(detected_arch));
+                    TT_ASSERT(this->arch_ == detected_arch, "Expected all devices to be {} but device {} is {}", get_arch_str(this->arch_), device_id, get_arch_str(detected_arch));
                 }
 
-                std::set<chip_id_t> device_ids(avail_device_ids.begin(), avail_device_ids.end());
+                const std::string sdesc_file = get_soc_description_file(this->arch_, target_type);
+                const std::string cluster_desc_path = (this->arch_ == tt::ARCH::WORMHOLE_B0) ? GetClusterDescYAML().string() : "";
 
-                const std::string sdesc_file = get_soc_description_file(arch, target_type);
-                const std::string ndesc_path = (arch == tt::ARCH::WORMHOLE_B0) ? GetClusterDescYAML().string() : "";
+                std::set<chip_id_t> logical_device_ids;
+                if (cluster_desc_path == "") {
+                    // All Grayskull devices are MMIO mapped so physical_mmio_device_ids correspond to all available devices
+                    for (chip_id_t logical_mmio_device_id = 0; logical_mmio_device_id < physical_mmio_device_ids.size(); logical_mmio_device_id++) {
+                        logical_device_ids.insert(logical_mmio_device_id);
+                    }
+                    this->cluster_desc_ = tt_ClusterDescriptor::create_for_grayskull_cluster(logical_device_ids);
+                } else {
+                    this->cluster_desc_ = tt_ClusterDescriptor::create_from_yaml(cluster_desc_path);
+                    for (chip_id_t logical_device_id = 0; logical_device_id < this->cluster_desc_->get_number_of_chips(); logical_device_id++) {
+                        logical_device_ids.insert(logical_device_id);
+                    }
+                }
 
                 // init UMD with all available device IDs
-                this->cluster_->open_device(arch, target_type, device_ids, sdesc_file, ndesc_path);
+                this->cluster_ = std::make_unique<tt_cluster>();
+                this->cluster_->open_device(this->arch_, target_type, logical_device_ids, sdesc_file, cluster_desc_path);
 
                 tt_device_params default_params;
                 if (getenv("TT_METAL_VERSIM_DUMP_CORES")) {
@@ -409,6 +432,12 @@ namespace tt::tt_metal{
             }
 
             std::unique_ptr<tt_cluster> cluster_ = nullptr;
+            // Need to hold reference to cluster descriptor to detect total number of devices available in cluster
+            // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped devices
+            std::unique_ptr<tt_ClusterDescriptor> cluster_desc_;
+            // `detect_arch` API expects physical device ID but there are no APIs to translate logical device ID to physical
+            // So we hold reference to arch after querying UMD for available physical MMIO device IDs
+            tt::ARCH arch_;
         };
     }
 }

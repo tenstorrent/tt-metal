@@ -27,7 +27,7 @@ using on_close_device_callback = std::function<void ()>;
 // A physical PCIexpress Tenstorrent device
 class Device {
    public:
-    static size_t detect_num_available_devices(const TargetDevice target_type = TargetDevice::Silicon);
+    static size_t detect_num_available_devices();
     friend void tt_gdb(Device* device, int chip_id, const vector<CoreCoord> cores, vector<string> ops);
     Device () = delete;
     Device(int device_id, const std::vector<uint32_t>& l1_bank_remap = {});
