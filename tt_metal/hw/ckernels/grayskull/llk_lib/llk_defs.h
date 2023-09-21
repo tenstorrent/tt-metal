@@ -144,6 +144,7 @@ enum SfpuType
   logical_not_unary,
   erfinv,
   i0,
+  mask,
   silu,
   unused
 };
