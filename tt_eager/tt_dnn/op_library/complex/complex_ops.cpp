@@ -18,13 +18,13 @@ namespace tt_metal {
 
   Tensor mk_complex(const Tensor& input_r, const Tensor& input_i, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> inputs = {input_r,input_i};
-    return concat(inputs, 3,output_mem_config);
+    return concat(inputs, -1, output_mem_config);
   }
 
   namespace utility {
     bool is_complex_shape(const Tensor& input) {
       const Shape& shape = input.shape();
-      return shape[3]%2 == 0; //last dim should be partitionable
+      return shape[-1]%(2*TILE_WIDTH) == 0; //last dim should be partitionable
     }
   }
 

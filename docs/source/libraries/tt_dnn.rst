@@ -521,7 +521,7 @@ base operations together.
 
 Complex Operations
 ------------------
- We use the following Tensor representation for complex tensors on device; we support complex tensor **x** as  N,H,W,C rank-4 tensor with last dim of size divisible by 2 to represent real and imaginary components
+ We use the following Tensor representation for complex tensors on device; we support complex tensor **x** as  N,H,W,C rank-4 tensor with last dim of size divisible by 64 to represent real and imaginary components
   * with indices [:,:,:,0:N/2] being real, and
   * with indices [:,:,:,N/2:N] being imaginary.
 

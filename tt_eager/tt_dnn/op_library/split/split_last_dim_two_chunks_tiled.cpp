@@ -292,6 +292,8 @@ std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor &input_tensor, 
     }
 
     auto input_shape = input_tensor.shape();
+    TT_ASSERT(input_shape[-1] % TILE_WIDTH == 0, "Split last dim currently only supported tile sized widths");
+
     auto padded_input_shape = AutoFormat::pad_to_tile_shape(input_shape);
     if (AutoFormat::check_input_tensor_format(input_tensor, padded_input_shape)) {
         return operation::run(op, {input_tensor});
