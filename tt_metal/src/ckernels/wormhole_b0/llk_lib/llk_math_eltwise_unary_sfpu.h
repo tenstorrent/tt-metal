@@ -158,26 +158,6 @@ inline void llk_math_eltwise_unary_sfpu_tanh_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::tanh, APPROXIMATE>();
 }
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_sin_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::sine, APPROXIMATE>();
-}
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_cos_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::cosine, APPROXIMATE>();
-}
-
-template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_sin(uint dst_index) {
-    llk_math_eltwise_unary_sfpu<SfpuType::sine, APPROXIMATE, dst_sync>(dst_index);
-}
-
-template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_cos(uint dst_index) {
-    llk_math_eltwise_unary_sfpu<SfpuType::cosine, APPROXIMATE, dst_sync>(dst_index);
-}
-
 //sign
 template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
 inline void llk_math_eltwise_unary_sfpu_sign(uint dst_index) {
@@ -306,27 +286,6 @@ template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_power_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::power, APPROXIMATE>();
 }
-
-template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_sine(uint dst_index, int vector_mode = Dim::RC) {
-    llk_math_eltwise_unary_sfpu<SfpuType::sine, APPROXIMATE, dst_sync>(dst_index, vector_mode);
-}
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_sine_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::sine, APPROXIMATE>();
-}
-
-template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_cosine(uint dst_index, int vector_mode = Dim::RC) {
-    llk_math_eltwise_unary_sfpu<SfpuType::cosine, APPROXIMATE, dst_sync>(dst_index, vector_mode);
-}
-
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_cosine_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::cosine, APPROXIMATE>();
-}
-
 
 template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
 inline void llk_math_eltwise_unary_sfpu_abs(uint dst_index, int vector_mode = Dim::RC) {

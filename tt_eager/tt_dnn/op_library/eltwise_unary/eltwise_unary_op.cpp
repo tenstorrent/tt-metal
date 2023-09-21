@@ -80,6 +80,8 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string,std::string>
         case UnaryOpType::I0:
             defines["SFPU_OP_I0_INCLUDE"]="1";
             break;
+        case UnaryOpType::COS:
+        case UnaryOpType::SIN:
         case UnaryOpType::TAN:
             defines["SFPU_OP_TRIG_FAMILY_INCLUDE"]="1";
             break;

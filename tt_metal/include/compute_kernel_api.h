@@ -122,30 +122,12 @@ ALWI void signbit_tile(uint32_t idst) {
     MATH(( llk_math_eltwise_unary_sfpu_signbit<APPROX, SyncHalf>(idst) ));
 }
 
-ALWI void sin_tile_init() {
-    MATH(( llk_math_eltwise_unary_sfpu_sin_init<APPROX>() ));
-}
-
-ALWI void cos_tile_init() {
-    MATH(( llk_math_eltwise_unary_sfpu_cos_init<APPROX>() ));
-}
-
 /**
  *  Please refer to documentation for exp_tile.
  */
 ALWI void tanh_tile(uint32_t idst) {
     MATH(( llk_math_eltwise_unary_sfpu_tanh<APPROX, SyncHalf>(idst) ));
 }
-
-ALWI void sin_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpu_sin<APPROX, SyncHalf>(idst) ));
-}
-
-ALWI void cos_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpu_cos<APPROX, SyncHalf>(idst) ));
-}
-
-
 
 //abs
 ALWI void abs_tile(uint32_t idst) {
