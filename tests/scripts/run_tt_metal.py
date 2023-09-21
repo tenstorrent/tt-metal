@@ -98,7 +98,7 @@ TT_METAL_SLOW_DISPATCH_TEST_ENTRIES = (
         "test_generic_binary_reader_matmul_large_block",
     ),
     TestEntry("tt_metal/tests/test_transpose_hc", "test_transpose_hc"),
-    void_for_whb0(TestEntry("tt_metal/tests/test_transpose_wh", "test_transpose_wh")),
+    TestEntry("tt_metal/tests/test_transpose_wh", "test_transpose_wh"),
     TestEntry("tt_metal/tests/test_reduce_h", "test_reduce_h"),
     TestEntry("tt_metal/tests/test_reduce_w", "test_reduce_w"),
     TestEntry("tt_metal/tests/test_reduce_hw", "test_reduce_hw"),
