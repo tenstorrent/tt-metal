@@ -891,10 +891,11 @@ inline void calculate_silu()
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_mask()
 {
+    bool exponent_size_8 = true;
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat mask = dst_reg[16];
-        v_if(mask <= 0.0F) {
+        v_if(sfpu_is_fp16_zero(mask, exponent_size_8)) {
             dst_reg[0] = 0;
         }
         v_endif;
