@@ -91,6 +91,11 @@ class Device {
     void deallocate_buffers();
 
    private:
+    enum class ActiveState {
+        UNINITIALIZED = 0,
+        INACTIVE = 1,
+        ACTIVE = 2,
+    };
     void check_allocator_is_initialized() const;
 
     // Checks that the given arch is on the given pci_slot and that it's responding
@@ -117,6 +122,9 @@ class Device {
     static constexpr TargetDevice target_type_ = TargetDevice::Versim;
 #endif
     static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
+    static std::vector<enum ActiveState>active_devices_;
+    bool activate_device_in_list();
+    std::mutex active_devices_lock_;
     int id_;
     std::unique_ptr<Allocator> allocator_ = nullptr;
     bool initialized_ = false;

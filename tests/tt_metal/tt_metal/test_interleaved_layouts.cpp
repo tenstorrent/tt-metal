@@ -55,6 +55,7 @@ bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(const tt::AR
         tt_metal::ReadFromBuffer(sticks_buffer, dst_vec);
 
         pass &= (src_vec == dst_vec);
+        pass &= tt_metal::CloseDevice(device);
     } catch (const std::exception &e) {
         pass = false;
         // Capture the exception error message
@@ -533,6 +534,8 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
     }
 
     pass = (host_buffer == readback_buffer);
+
+    pass &= tt_metal::CloseDevice(device);
 
     TT_ASSERT(pass);
 

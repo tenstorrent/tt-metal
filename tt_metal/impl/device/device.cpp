@@ -16,6 +16,8 @@ namespace tt {
 
 namespace tt_metal {
 
+std::vector<enum Device::ActiveState>Device::active_devices_;
+
 Device::Device(int device_id, const std::vector<uint32_t>& l1_bank_remap) : id_(device_id)
 {
     ZoneScoped;
@@ -200,13 +202,31 @@ void Device::clear_l1_state() {
     }
 }
 
+bool Device::activate_device_in_list() {
+    bool already_initialized;
+    const std::lock_guard<std::mutex> lock(active_devices_lock_);
+    if (this->active_devices_.size() < this->id_ + 1) {
+        this->active_devices_.resize(this->id_ + 1);
+        already_initialized = false;
+    } else if (this->active_devices_[this->id_] == ActiveState::ACTIVE) {
+        log_fatal("Cannot re-initialize device {}, must first call close()", this->id_);
+    } else {
+        already_initialized = true;
+    }
+    this->active_devices_[this->id_] = ActiveState::ACTIVE;
+
+    return already_initialized;
+}
+
 bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
     ZoneScoped;
     log_info(tt::LogMetal, "Initializing device {}", this->id_);
-    TT_ASSERT(not this->initialized_, "Device {} has already been initialized!", this->id_);
+    bool already_initialized = this->activate_device_in_list();
     this->initialize_cluster();
     this->initialize_allocator(l1_bank_remap);
-    this->initialize_build();
+    if (!already_initialized) {
+        this->initialize_build();
+    }
     this->initialize_hardware();
     tt_start_debug_print_server(this->cluster());
     llrt::watcher_attach(this, this->cluster(), this->id(),
@@ -215,13 +235,16 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
                          [&, this]() -> const std::set<CoreCoord>& { return this->storage_only_cores(); },
                          get_compile_outpath()
                          );
+
     this->initialized_ = true;
     return true;
 }
 
 bool Device::close() {
     log_info(tt::LogMetal, "Closing device {}", this->id_);
-    TT_ASSERT(this->initialized_, "Cannot close device {} that has not been initialized!", this->id_);
+    if (not this->initialized_) {
+        log_fatal("Cannot close device {} that has not been initialized!", this->id_);
+    }
     this->deallocate_buffers();
     llrt::watcher_detach(this);
     tt_stop_debug_print_server(this->cluster());
@@ -229,6 +252,10 @@ bool Device::close() {
     this->clear_l1_state();
     this->cluster()->l1_barrier(id_);
     allocator::clear(*this->allocator_);
+
+    const std::lock_guard<std::mutex> lock(active_devices_lock_);
+    this->active_devices_[this->id_] = ActiveState::INACTIVE;
+
     this->initialized_ = false;
     return true;
 }
