@@ -3,6 +3,14 @@ echo Current date / time is $(date)
 echo "Info: Trying tt-smi -s to see if we have devices..."
 echo "Info: An error here likely means devices cannot be found"
 
+# Do not error out yet on non-zero exit code because we need to check
+# SMI output
+set_e_was_enabled=false
+if [[ "$-" == *e* ]]; then
+  set_e_was_enabled=true
+  set +e
+fi
+
 smi_result=$(tt-smi -s)
 
 if [[ $? != 0 ]]; then
