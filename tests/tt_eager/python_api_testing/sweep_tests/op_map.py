@@ -160,6 +160,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_abs,
         "pytorch_op": pytorch_ops.abs,
     },
+    "eltwise-digamma": {
+        "tt_lib_op": tt_lib_ops.eltwise_digamma,
+        "pytorch_op": pytorch_ops.digamma,
+    },
     "eltwise-isfinite": {
         "tt_lib_op": tt_lib_ops.eltwise_isfinite,
         "pytorch_op": pytorch_ops.isfinite,

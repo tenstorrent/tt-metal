@@ -219,6 +219,9 @@ Tensor logical_xori(const Tensor& input_a, float immediate, const MemoryConfig& 
 //sinh(x) = (exp(x) - exp(-x))/2
 Tensor sinh(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+//digamma
+Tensor digamma(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 //cosh(x) = (exp(x) + exp(-x))/2
 Tensor cosh(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 

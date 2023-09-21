@@ -187,6 +187,10 @@ def abs(x, *args, **kwargs):
     return x.abs()
 
 
+def digamma(x, *args, **kwargs):
+    return torch.digamma(x)
+
+
 def isfinite(x, *args, **kwargs):
     return torch.isfinite(x)
 

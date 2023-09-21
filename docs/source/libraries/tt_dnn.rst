@@ -352,6 +352,8 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.i0
 
+.. autofunction:: tt_lib.tensor.digamma
+
 Tensor relational operations
 ----------------------------------
 .. autofunction:: tt_lib.tensor.gtz

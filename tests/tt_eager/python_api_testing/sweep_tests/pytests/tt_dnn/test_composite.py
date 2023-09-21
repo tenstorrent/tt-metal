@@ -36,6 +36,7 @@ reference_pcc["swish"] = reference_pcc["silu"]
 reference_pcc["softplus"] = 0.9984
 reference_pcc["bias_gelu"] = 0.606
 
+
 def custom_compare(*args, **kwargs):
     function = kwargs.pop("function")
     if function in [
@@ -114,6 +115,7 @@ if is_wormhole_b0():
                 "logical_andi",
                 "bias_gelu",
                 "isclose",
+                "digamma",
             ),
             shapes,
         )
@@ -136,6 +138,7 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
     options["softshrink"] = (-100, 100)
     options["leaky_shrink"] = (-100, 100)
     options["softsign"] = (1, 100)
+    options["digamma"] = (1, 1000)
 
     options["sinh"] = (-9, 9)
     options["tanhshrink"] = (-100, 100)
@@ -209,7 +212,7 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
         test_args.update({"alpha": np.random.randint(1, 100)})
     elif fn in ["addalpha"]:
         test_args.update({"alpha": np.random.randint(1, 100)})
-    elif fn in ["bias_gelu_unary","bias_gelu"]:
+    elif fn in ["bias_gelu_unary", "bias_gelu"]:
         test_args.update({"bias": np.random.randint(1, 100)})
     elif fn in ["logit"]:
         test_args.update({"eps": np.random.randint(-1e-6, 1e6)})
@@ -217,7 +220,10 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
         test_args.update({"immediate": np.random.randint(0, 100)})
     elif fn in ["isclose"]:
         test_args.update(
-            {"rtol": random.choice([1e-3,1e-5,1e-7]), "atol": random.choice([1e-2,1e-4,1e-6])}
+            {
+                "rtol": random.choice([1e-3, 1e-5, 1e-7]),
+                "atol": random.choice([1e-2, 1e-4, 1e-6]),
+            }
         )
     run_single_pytorch_test(
         "eltwise-%s" % (fn),

@@ -448,7 +448,7 @@ Tensor _atanh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
     Tensor abs_temp = sub_unary(abs(input_a, output_mem_config), 1.0f, output_mem_config); \
     Tensor result = where(ltz(abs_temp, output_mem_config), comp_result, t_nan, output_mem_config); \
     return result;
-    
+
     if (is_arch_whb0(input_a.device()->arch())) {
       Tensor  t_nan  = full_like(comp_result, std::nanf(""), output_mem_config);
       ATANH_IMPL
@@ -456,7 +456,7 @@ Tensor _atanh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
       Tensor  t_nan = mul_unary(comp_result, std::nanf(""), output_mem_config);
       ATANH_IMPL
     }
-    
+
 #undef ATANH_IMPL
 }
 Tensor atanh(const Tensor &input_a, const MemoryConfig& output_mem_config)
@@ -793,6 +793,49 @@ Tensor _threshold(const Tensor &input_a, float threshold, float value, const Mem
 Tensor threshold(const Tensor& input_a, float threshold, float value, const MemoryConfig& output_mem_config)
 {
     return operation::decorate_as_composite(__func__, _threshold)(input_a, threshold, value, output_mem_config);
+}
+
+// TODO: In future will uplift the op once the floor and tan has supported.
+//digamma support for the range of (1, inf)
+Tensor _digamma(const Tensor &input_a, const MemoryConfig& output_mem_config) {
+    Tensor t_log_out = log(input_a, output_mem_config); //negative log is not useful here
+
+    // 1/2(z)
+    Tensor output =  mul_unary(recip(input_a, output_mem_config), 0.5f, output_mem_config);
+    Tensor tmp = square(recip(input_a, output_mem_config), output_mem_config);
+    Tensor val_square = tmp;
+    // (1/12) * x^2
+    output = sub(output, mul_unary(tmp, 0.083333333f, output_mem_config),std::nullopt, output_mem_config);
+
+    // (1/120) * x^4
+    tmp = mul(tmp, val_square, std::nullopt, output_mem_config);
+    output = add(output, mul_unary(tmp, 0.008333333333333333f, output_mem_config),std::nullopt, output_mem_config);
+
+    //(1/252) * x^6
+    tmp = mul(tmp, val_square, std::nullopt, output_mem_config);
+    output = sub(output, mul_unary(tmp, 0.003968253968253968f, output_mem_config),std::nullopt, output_mem_config);
+
+    // (1/240) *x^8
+    tmp = mul(tmp, val_square, std::nullopt, output_mem_config);
+    output = add(output, mul_unary(tmp, 0.004166666666666667f, output_mem_config),std::nullopt, output_mem_config);
+
+    //(1/132) * x^10
+    tmp = mul(tmp, val_square, std::nullopt, output_mem_config);
+    output = sub(output, mul_unary(tmp, 0.007575757575757576, output_mem_config),std::nullopt, output_mem_config);
+
+    //(691/32760) * x^12
+    tmp = mul(tmp, val_square, std::nullopt, output_mem_config);
+    output = add(output, mul_unary(tmp, 0.021092796092796094, output_mem_config),std::nullopt, output_mem_config);
+
+    //(1/12) * x^14
+    tmp = mul(tmp, val_square, std::nullopt, output_mem_config);
+    output = sub(output, mul_unary(tmp, 0.08333333333333333, output_mem_config),std::nullopt, output_mem_config);
+
+    return sub(t_log_out, output, std::nullopt, output_mem_config);
+}
+Tensor digamma(const Tensor& input_a, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _digamma)(input_a, output_mem_config);
 }
 
 //cbrt(a) = pow(a,1/3) or (cbrt(a))**3 = a.
