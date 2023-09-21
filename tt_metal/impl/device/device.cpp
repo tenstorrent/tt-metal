@@ -16,88 +16,10 @@ namespace tt {
 
 namespace tt_metal {
 
-namespace{
-    void DownloadFirmware(Device *device, CoreCoord phys_core) {
-        ZoneScoped;
-        for (int riscv_id = 0; riscv_id < 5; riscv_id++) {
-            string fname;
-            switch (riscv_id) {
-                case 0:
-                    fname = "brisc/brisc.hex";
-                    tt::llrt::program_brisc_startup_addr(device->cluster(), device->id(), phys_core);
-                    break;
-                case 1: fname = "ncrisc/ncrisc.hex"; break;
-                case 2: fname = "tensix_thread0/tensix_thread0.hex"; break;
-                case 3: fname = "tensix_thread1/tensix_thread1.hex"; break;
-                case 4: fname = "tensix_thread2/tensix_thread2.hex"; break;
-            }
-            tt::llrt::test_load_write_read_risc_binary(
-                device->cluster(), fname, device->id(), phys_core, riscv_id, true);
-        }
-    }
-}
-
 Device::Device(int device_id, const std::vector<uint32_t>& l1_bank_remap) : id_(device_id)
 {
     ZoneScoped;
     this->initialize(l1_bank_remap);
-    static std::mutex build_mutex;
-    static bool global_init_complete = false;
-
-    {
-        // XXXX TODO(pgk); this code is wrong for multi-device
-        // Need a lock here to prevent the race of building mulitple times
-        const std::lock_guard<std::mutex> lock(build_mutex);
-        if (!global_init_complete) {
-            build_kernel_for_riscv_options_t build_options(this->id());
-            detail::GenerateDeviceHeaders(this, &build_options, "");
-            std::string arch_name = tt::get_string_lowercase(this->arch());
-            generate_binaries_params_t default_params;
-            generate_binaries_all_riscs(&build_options,
-                                        "",
-                                        arch_name,
-                                        default_params);
-
-            global_init_complete = true;
-        }
-    }
-
-    // Download to worker cores
-    tt_cluster *cluster = this->cluster();
-    std::vector<uint32_t> run_mailbox_init_val = {RUN_MESSAGE_INIT};
-    CoreCoord grid_size = this->logical_grid_size();
-    for (uint32_t y = 0; y < grid_size.y; y++) {
-        for (uint32_t x = 0; x < grid_size.x; x++) {
-            CoreCoord logical_core(x, y);
-            CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
-
-            if (this->storage_only_cores_.find(logical_core) == this->storage_only_cores_.end()) {
-                DownloadFirmware(this, worker_core);
-                tt::llrt::write_hex_vec_to_core(cluster, this->id(), worker_core, run_mailbox_init_val, RUN_MAILBOX_ADDR);
-            }
-        }
-    }
-
-    // Barrier between L1 writes above and deassert below
-    cluster->l1_barrier(this->id());
-
-    for (uint32_t y = 0; y < grid_size.y; y++) {
-        for (uint32_t x = 0; x < grid_size.x; x++) {
-            CoreCoord logical_core(x, y);
-            CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
-
-            if (this->storage_only_cores_.find(logical_core) == this->storage_only_cores_.end()) {
-                cluster->deassert_risc_reset_at_core(tt_cxy_pair(this->id(), worker_core));
-            }
-        }
-    }
-
-    tt::llrt::watcher_attach(this, cluster, this->id(),
-                             [&, this]() { return this->logical_grid_size(); },
-                             [&, this](CoreCoord core) { return this->worker_core_from_logical_core(core); },
-                             [&, this]() -> const std::set<CoreCoord>& { return this->storage_only_cores(); },
-                             get_compile_outpath()
-                             );
 }
 
 size_t Device::detect_num_available_devices() {
@@ -200,6 +122,71 @@ void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
     this->allocator_ = std::make_unique<L1BankingAllocator>(config);
 }
 
+void Device::initialize_build() {
+    ZoneScoped;
+    build_kernel_for_riscv_options_t build_options(this->id());
+    detail::GenerateDeviceHeaders(this, &build_options, "");
+    std::string arch_name = tt::get_string_lowercase(this->arch());
+    generate_binaries_params_t default_params;
+    generate_binaries_all_riscs(&build_options,
+                                "",
+                                arch_name,
+                                default_params);
+}
+
+void Device::initialize_firmware(CoreCoord phys_core) {
+    ZoneScoped;
+    for (int riscv_id = 0; riscv_id < 5; riscv_id++) {
+        string fname;
+        switch (riscv_id) {
+        case 0:
+            fname = "brisc/brisc.hex";
+            llrt::program_brisc_startup_addr(this->cluster(), this->id(), phys_core);
+            break;
+        case 1: fname = "ncrisc/ncrisc.hex"; break;
+        case 2: fname = "tensix_thread0/tensix_thread0.hex"; break;
+        case 3: fname = "tensix_thread1/tensix_thread1.hex"; break;
+        case 4: fname = "tensix_thread2/tensix_thread2.hex"; break;
+        }
+        llrt::test_load_write_read_risc_binary(this->cluster(), fname, this->id(), phys_core, riscv_id, true);
+    }
+}
+
+void Device::initialize_hardware() {
+    ZoneScoped;
+
+    // Download to worker cores
+    tt_cluster *cluster = this->cluster();
+    std::vector<uint32_t> run_mailbox_init_val = {RUN_MESSAGE_INIT};
+    CoreCoord grid_size = this->logical_grid_size();
+    for (uint32_t y = 0; y < grid_size.y; y++) {
+        for (uint32_t x = 0; x < grid_size.x; x++) {
+            CoreCoord logical_core(x, y);
+            CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
+
+            if (this->storage_only_cores_.find(logical_core) == this->storage_only_cores_.end()) {
+                this->initialize_firmware(worker_core);
+                llrt::write_hex_vec_to_core(cluster, this->id(), worker_core, run_mailbox_init_val, RUN_MAILBOX_ADDR);
+            }
+        }
+    }
+
+    // Barrier between L1 writes above and deassert below
+    cluster->l1_barrier(this->id());
+
+    // Deassert worker cores
+    for (uint32_t y = 0; y < grid_size.y; y++) {
+        for (uint32_t x = 0; x < grid_size.x; x++) {
+            CoreCoord logical_core(x, y);
+            CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
+
+            if (this->storage_only_cores_.find(logical_core) == this->storage_only_cores_.end()) {
+                cluster->deassert_risc_reset_at_core(tt_cxy_pair(this->id(), worker_core));
+            }
+        }
+    }
+}
+
 void Device::clear_l1_state() {
     CoreCoord logical_grid_size = this->logical_grid_size();
     TT_ASSERT(this->l1_size() % sizeof(uint32_t) == 0);
@@ -219,7 +206,15 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
     TT_ASSERT(not this->initialized_, "Device {} has already been initialized!", this->id_);
     this->initialize_cluster();
     this->initialize_allocator(l1_bank_remap);
+    this->initialize_build();
+    this->initialize_hardware();
     tt_start_debug_print_server(this->cluster());
+    llrt::watcher_attach(this, this->cluster(), this->id(),
+                         [&, this]() { return this->logical_grid_size(); },
+                         [&, this](CoreCoord core) { return this->worker_core_from_logical_core(core); },
+                         [&, this]() -> const std::set<CoreCoord>& { return this->storage_only_cores(); },
+                         get_compile_outpath()
+                         );
     this->initialized_ = true;
     return true;
 }
@@ -228,7 +223,7 @@ bool Device::close() {
     log_info(tt::LogMetal, "Closing device {}", this->id_);
     TT_ASSERT(this->initialized_, "Cannot close device {} that has not been initialized!", this->id_);
     this->deallocate_buffers();
-    tt::llrt::watcher_detach(this);
+    llrt::watcher_detach(this);
     tt_stop_debug_print_server(this->cluster());
     this->cluster()->assert_risc_reset(id_);
     this->clear_l1_state();

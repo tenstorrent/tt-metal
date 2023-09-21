@@ -99,6 +99,9 @@ class Device {
     void initialize_cluster();
     void initialize_allocator(const std::vector<uint32_t>& l1_bank_remap = {});
     void initialize_dispatch_and_banking_information();
+    void initialize_build();
+    void initialize_firmware(CoreCoord phys_core);
+    void initialize_hardware();
     void clear_l1_state();
     // Puts device into reset
     bool close();
