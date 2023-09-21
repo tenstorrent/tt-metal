@@ -10,6 +10,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
+#include "tt_dnn/op_library/work_split.hpp"
 
 using namespace tt::constants;
 
@@ -111,9 +112,41 @@ tt::stl::reflection::Attributes Unpad::attributes() const {
     };
 }
 
+const operation::Hash Unpad::compute_program_hash (
+    const std::vector<Tensor> &input_tensors) const {
+    auto input_tensor = input_tensors.at(0);
+    tt_metal::Device *device = input_tensor.device();
+    auto input_mem_config = input_tensor.memory_config();
+    auto output_mem_config = this->output_mem_config;
+    auto dtype = input_tensor.dtype();
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto num_dims = input_tensor.shape().rank();
+
+
+    std::string rm_width = "TILE";
+    if(input_tensor.layout() == Layout::ROW_MAJOR){
+        rm_width = fmt::format("{}", input_tensor.shape()[3]);
+    }
+
+    auto str = fmt::format(
+        "Unpad(input_rank={}_input_layout={}_input_mem_config={}_output_mem_config={}_dtype={}_parallelization_strategy={}_rm_width={})",
+        num_dims,
+        input_tensor.layout(),
+        input_mem_config,
+        output_mem_config,
+        dtype,
+        get_parallelization_strategy(input_tensors),
+        rm_width
+
+    );
+    return str;
+
+}
+
 Tensor unpad(const Tensor &input_tensor_a, const Shape &output_tensor_start, const Shape &output_tensor_end, const MemoryConfig& mem_config) {
     // No-op (Will do a tensor copy)
     // TODO: We need to run asserts before this
+    auto input_tensor_shape = input_tensor_a.shape();
     const Shape output_tensor_shape = {
         output_tensor_end[0] - output_tensor_start[0] + 1,
         output_tensor_end[1] - output_tensor_start[1] + 1,
@@ -127,7 +160,8 @@ Tensor unpad(const Tensor &input_tensor_a, const Shape &output_tensor_start, con
             return input_tensor_a;
         }
     }
-    return operation::run_without_autoformat(Unpad{output_tensor_start, output_tensor_end, mem_config}, {input_tensor_a}).at(0);
+
+    return operation::run_without_autoformat(Unpad{output_tensor_start, output_tensor_end, mem_config, output_tensor_shape, input_tensor_shape}, {input_tensor_a}).at(0);
 
 }
 
