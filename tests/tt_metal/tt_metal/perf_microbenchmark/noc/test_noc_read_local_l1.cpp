@@ -67,16 +67,16 @@ int main(int argc, char **argv) {
               input_args, "--print_tensor", 0);
       std::tie(Nt, input_args) =
           test_args::get_command_option_uint32_and_remaining_args(input_args, "--nt",
-                                                           256);
+                                                           1);
       std::tie(cb_n, input_args) =
           test_args::get_command_option_uint32_and_remaining_args(input_args, "--cb",
                                                            1);
       std::tie(num_cores_r, input_args) =
           test_args::get_command_option_uint32_and_remaining_args(input_args, "--r",
-                                                           9);
+                                                           1);
       std::tie(num_cores_c, input_args) =
           test_args::get_command_option_uint32_and_remaining_args(input_args, "--c",
-                                                           12);
+                                                           1);
       std::tie(validation, input_args) =
           test_args::get_command_option_uint32_and_remaining_args(input_args,
                                                            "--validation", 1);
