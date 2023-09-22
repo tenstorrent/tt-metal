@@ -54,13 +54,6 @@ volatile tt_l1_ptr uint32_t l1_buffer[16] __attribute__ ((section ("l1_data"))) 
 
 using namespace ckernel;
 
-inline void profiler_mark_time(uint32_t timer_id)
-{
-#if defined(PROFILER_OPTIONS) && (PROFILER_OPTIONS & MAIN_FUNCT_MARKER)
-    kernel_profiler::mark_time(timer_id);
-#endif
-}
-
 int main(int argc, char *argv[])
 {
     DEBUG_STATUS('I');
@@ -69,7 +62,6 @@ int main(int argc, char *argv[])
     int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
     l1_to_local_mem_copy((uint *)__ldm_data_start, local_l1_start_addr, num_words);
 
-    kernel_profiler::init_profiler();
 
     FWEVENT("Launching production env kernels");
 
@@ -96,22 +88,27 @@ int main(int argc, char *argv[])
         sync_regfile_write(p_gpr_unpack::L1_BUFFER_ADDR);
     }
 
+
+    // Cleanup profiler buffer incase we never get the go message
+    kernel_profiler::init_profiler();
     while (1) {
-        profiler_mark_time(CC_MAIN_START);
 
         DEBUG_STATUS('W');
         while (*trisc_run != RUN_SYNC_MESSAGE_GO);
 
+        kernel_profiler::init_profiler();
+        kernel_profiler::mark_time(CC_MAIN_START);
+
         DEBUG_STATUS('R');
-        profiler_mark_time(CC_KERNEL_MAIN_START);
+        kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
         kernel_init();
-        profiler_mark_time(CC_KERNEL_MAIN_END);
+        kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
         DEBUG_STATUS('D');
 
         // Signal completion
         tensix_sync();
         *trisc_run = RUN_SYNC_MESSAGE_DONE;
 
-        profiler_mark_time(CC_MAIN_END);
+        kernel_profiler::mark_time(CC_MAIN_END);
     }
 }
