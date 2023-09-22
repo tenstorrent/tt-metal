@@ -1086,19 +1086,13 @@ int main(int argc, char** argv) {
       tt::DataFormat::Float16_b, tt::DataFormat::Float16_b, tt::DataFormat::Float16_b, tt::DataFormat::Float16_b
     );
 
-    std::chrono::duration<double, std::nano> duration;
-
     pass &= tt_metal::CompileProgram(device, program);
     // took from run_operation.cpp
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
       log_info(LogTest, "calling EnqueueProgram");
-
-      auto start = std::chrono::high_resolution_clock::now();
       EnqueueProgram(*::detail::GLOBAL_CQ, program, false);
       Finish(*::detail::GLOBAL_CQ);
-      auto end = std::chrono::high_resolution_clock::now();
-      duration = end - start;
       // Only need to dump device data when in dispatch mode
       // LaunchKernel automatically dumps device data
       op_profiler::dump_device_profiler_results(device, program);
@@ -1107,19 +1101,8 @@ int main(int argc, char** argv) {
       log_info(LogTest, "calling LaunchKernels");
       ConfigureDeviceWithProgram(device, program);
       WriteRuntimeArgsToDevice(device, program);
-      auto start = std::chrono::high_resolution_clock::now();
       LaunchKernels(device, program);
-      auto end = std::chrono::high_resolution_clock::now();
-      duration = end - start;
     }
-
-    uint64_t num_of_matmul_ops = (2 * static_cast<uint64_t>(Kt) * 32 - 1) * (static_cast<uint64_t>(Mt) * static_cast<uint64_t>(Nt) * 1024);
-    if (debug) {
-      log_info(LogTest, "number of matmul ops: {}", num_of_matmul_ops);
-    }
-
-    double tflops = static_cast<double>(num_of_matmul_ops) / duration.count() / 1000;
-    log_info(LogTest, "time duration: {} ns, TFLOPS {}", duration.count(), tflops);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Validation & Teardown
