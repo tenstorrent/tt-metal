@@ -12,6 +12,7 @@ TT_LIB_SRCS = \
 	tt_eager/tt_lib/csrc/tt_lib_bindings_tensor_pytensor.cpp \
 	tt_eager/tt_lib/csrc/tt_lib_bindings_tensor_dm_ops.cpp \
 	tt_eager/tt_lib/csrc/tt_lib_bindings_tensor_custom_bmm_ops.cpp \
+	tt_eager/tt_lib/csrc/tt_lib_bindings_tensor_xary_ops.cpp \
 
 TT_LIB_OBJS = $(addprefix $(OBJDIR)/, $(TT_LIB_SRCS:.cpp=.o))
 TT_LIB_DEPS = $(addprefix $(OBJDIR)/, $(TT_LIB_SRCS:.cpp=.d))
