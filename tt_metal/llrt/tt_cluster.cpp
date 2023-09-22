@@ -29,85 +29,10 @@ static constexpr unsigned int MEM_SMALL_READ_WRITE_TLB  = DEVICE_DATA.TLB_BASE_I
 static constexpr uint32_t DYNAMIC_TLB_BASE_INDEX = DEVICE_DATA.MEM_LARGE_READ_TLB + 1;
 #endif
 
-
-std::chrono::seconds tt_cluster::get_device_timeout() {
-    int device_timeout = 3600; // seconds
-    const char* timeout_override = std::getenv("TT_METAL_BACKEND_TIMEOUT");
-    if (timeout_override) {
-        device_timeout = atoi(timeout_override);
-    }
-    return std::chrono::seconds{device_timeout};
-}
-
-std::chrono::seconds tt_cluster::get_device_duration() {
-    high_resolution_clock::time_point device_current_time;
-    device_current_time = high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::seconds>(device_current_time - device_reset_time);
-    return duration;
-}
-
-int tt_cluster::get_num_chips() {
-    return get_all_chips().size();
-}
-
-std::unordered_set<chip_id_t> tt_cluster::get_all_chips() {
-    return ndesc->get_all_chips();
-}
-
-std::set<chip_id_t> tt_cluster::get_all_mmio_chips() {
-    return device->get_target_mmio_device_ids();
-}
-
-void tt_cluster::dump_wall_clock_mailbox(std::string output_dir) {
-    bool is_output_dir_populated = output_dir.find("tt_build") != std::string::npos;
-    if (is_output_dir_populated) {
-        for (auto device_id : target_device_ids){
-            string output_path = output_dir + "/wall_clock_device_";
-            output_path += to_string(device_id) + ".yaml";
-            tt::log_info(tt::LogLLRuntime, "Reading wall-clock mailbox for device {}, output yaml path {}", device_id, output_path);
-            std::ofstream output_file(output_path);
-            const int mailbox_base_addr = MEM_WALL_CLOCK_MAILBOX_ADDRESS;
-            const int num_mailbox_32_regs = 4;
-            const int mailbox_size = num_mailbox_32_regs * 4;
-            for (auto &worker_core : get_soc_desc(device_id).workers) {
-                int core_x = worker_core.x;
-                int core_y = worker_core.y;
-                std::string core_id = std::to_string(core_x) + "-" + std::to_string(core_y);
-                output_file << core_id << ":" << std::endl;
-
-                std::vector<uint32_t> mailbox_events;
-                read_dram_vec(mailbox_events, tt_cxy_pair(device_id, core_x, core_y), mailbox_base_addr, mailbox_size);
-                assert(mailbox_events.size() == num_mailbox_32_regs);
-                uint64_t start_time = (uint64_t(mailbox_events[1]) << 32) + mailbox_events[0];
-                uint64_t end_time = (uint64_t(mailbox_events[3]) << 32) + mailbox_events[2];
-                output_file << "        " << std::left << std::setw(12) << "start: " << start_time << std::endl;
-                output_file << "        " << std::left << std::setw(12) << "end: " << end_time << std::endl;
-                output_file << "        " << std::left << std::setw(12) << "runtime: " << end_time - start_time
-                            << std::endl;
-            }
-            output_file.close();
-        }
-    }
-}
-
 // clean up bad system resource state that may be carried over
 void tt_cluster::clean_system_resources() {
     TT_ASSERT(device != nullptr ,  "Device not initialized, make sure compile is done before running!");
     device->clean_system_resources();
-}
-
-void tt_cluster::verify_eth_fw() {
-    const std::unordered_set<chip_id_t> &all_chips = ndesc->get_all_chips();
-    for (const chip_id_t &chip : all_chips) {
-        std::vector<uint32_t> mem_vector;
-        std::vector<uint32_t> fw_versions;
-
-        for (CoreCoord &eth_core : get_soc_desc(chip).ethernet_cores) {
-            read_dram_vec(mem_vector, tt_cxy_pair(chip, eth_core), eth_l1_mem::address_map::FW_VERSION_ADDR, 4);
-            fw_versions.push_back(mem_vector.at(0));
-        }
-        verify_sw_fw_versions(chip, SW_VERSION, fw_versions);
-    }
 }
 
 int extract_chip_id_from_sdesc_path(std::filesystem::path sdesc_path) {
@@ -141,16 +66,6 @@ void tt_cluster::open_device(
 #endif
     target_device_ids = target_devices;
 
-    if (ndesc_path == "") {
-        ndesc = tt_cluster_description::create_for_grayskull_cluster(target_devices);
-    } else {
-        ndesc = tt_cluster_description::create_from_yaml(ndesc_path);
-    }
-    tt::log_info(tt::LogDevice, "Network descriptor loaded {}", ndesc_path);
-
-    // TT_ASSERT(sdesc_per_chip.size());
-    TT_ASSERT(ndesc != nullptr);
-
     if (target_type == TargetDevice::Silicon) {
         // This is the target/desired number of mem channels per arch/device. Silicon driver will attempt to open
         // this many hugepages as channels, and assert if workload uses more than available.
@@ -170,20 +85,6 @@ void tt_cluster::open_device(
     type = target_type;
     TT_ASSERT(type == TargetDevice::Versim or type == TargetDevice::Silicon);
     sdesc_per_chip = get_metal_desc_from_tt_desc(device->get_virtual_soc_descriptors(), device->get_harvesting_masks_for_soc_descriptors());
-
-    if (device) {
-        // if (get_num_chips() != tt::MAX_AVAILABLE_CHIPS) {
-        //     if (arch == tt::ARCH::WORMHOLE || arch == tt::ARCH::WORMHOLE_B0) {
-        //         TT_ASSERT(device->get_number_of_chips_in_cluster() >= 1, "Must have at least one detected chip available on device!");
-        //     } else {
-        //         //TT_ASSERT(get_num_chips() <= device->get_number_of_chips_in_cluster(), "Requested number of chips through machine descriptor is bigger than number of chips available on device!");
-        //     }
-        // }
-    }
-}
-
-std::map<int, int> tt_cluster::get_all_device_aiclks(){
-    return device->get_clocks();
 }
 
 int tt_cluster::get_device_aiclk(const chip_id_t &chip_id) {
@@ -317,8 +218,6 @@ void tt_cluster::start_device(const tt_device_params &device_params) {
     }
 
     device->start_device(device_params);
-
-    device_reset_time = high_resolution_clock::now();
 }
 
 void tt_cluster::close_device() {
@@ -354,8 +253,6 @@ void tt_cluster::deassert_risc_reset(const chip_id_t &target_device_id, bool sta
         TT_ASSERT(not start_stagger, "UMD currently does not support staggered deassert of RISC reset");
         device->deassert_risc_reset(target_device_id);
     }
-    device_reset_time = high_resolution_clock::now();
-    deasserted_risc_reset = false;
 }
 
 inline uint64_t get_sys_addr(uint32_t chip_x, uint32_t chip_y, uint32_t noc_x, uint32_t noc_y, uint64_t offset) {
@@ -464,50 +361,6 @@ void tt_cluster::read_sysmem_vec(vector<uint32_t> &vec, uint64_t addr, uint32_t 
     device->read_from_sysmem(vec, addr, channel, size, src_device_id);
 }
 
-void *tt_cluster::channel_0_address(std::uint32_t offset, std::uint32_t device_id) const {
-    TT_ASSERT(ndesc->is_chip_mmio_capable(device_id), "Cannot call channel_0_address for non-MMIO device");
-    return device->channel_0_address(offset, device_id);
-}
-
-// void *tt_cluster::host_dma_address(std::uint64_t offset, chip_id_t src_device_id) const {
-//     return device->host_dma_address(offset, src_device_id);
-// }
-
-void tt_cluster::verify_sw_fw_versions(
-    int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions) {
-    tt_version sw(sw_version), fw_first_eth_core(fw_versions.at(0));
-    tt::log_info(
-        tt::LogDevice,
-        "Software version {}, Ethernet FW version {} (Device {})",
-        sw.str(),
-        fw_first_eth_core.str(),
-        device_id);
-    for (std::uint32_t &fw_version : fw_versions) {
-        tt_version fw(fw_version);
-
-        TT_ASSERT(fw == fw_first_eth_core, "FW versions are not the same across different ethernet cores");
-        TT_ASSERT(sw.major == fw.major, "SW/FW major version number out of sync");
-        TT_ASSERT(sw.minor <= fw.minor, "SW version is newer than FW version");
-    }
-}
-
-std::ostream &operator<<(std::ostream &os, tt_target_dram const &dram) {
-    os << "Target DRAM chip = " << std::get<0>(dram) << ", chan = " << std::get<1>(dram) << ", subchan = " << std::get<2>(dram);
-    return os;
-}
-
-bool check_dram_core_exists(const std::vector<std::vector<CoreCoord>> &all_dram_cores, CoreCoord target_core) {
-    bool dram_core_exists = false;
-    for (const auto &dram_cores_in_channel : all_dram_cores) {
-        for (auto dram_core : dram_cores_in_channel) {
-            if (dram_core.x == target_core.x && dram_core.y == target_core.y) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
 void tt_cluster::on_destroy(tt_cluster_on_destroy_callback cb) {
     on_destroy_callbacks.push_back(cb);
 }
@@ -595,4 +448,9 @@ void tt_cluster::l1_barrier(chip_id_t chip_id) {
     this->set_l1_barrier(chip_id, BARRIER_SET);
     // Resets L1 mailbox to a known value
     this->set_l1_barrier(chip_id, BARRIER_RESET);
+}
+
+std::ostream &operator<<(std::ostream &os, tt_target_dram const &dram) {
+    os << "Target DRAM chip = " << std::get<0>(dram) << ", chan = " << std::get<1>(dram) << ", subchan = " << std::get<2>(dram);
+    return os;
 }

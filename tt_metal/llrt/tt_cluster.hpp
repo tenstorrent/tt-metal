@@ -25,10 +25,6 @@
 
 #include "dev_mem_map.h"
 
-static constexpr std::uint32_t SW_VERSION = 0x00020000;
-using tt_cluster_description = tt_ClusterDescriptor;
-using std::chrono::high_resolution_clock;
-
 using tt_target_dram = std::tuple<int, int, int>;
 using tt::TargetDevice;
 using tt::DEVICE;
@@ -42,8 +38,7 @@ struct tt_cluster
     private:
     std::unique_ptr<tt_device> device;
     std::unordered_map<chip_id_t, metal_SocDescriptor> sdesc_per_chip = {};
-    std::unique_ptr<tt_cluster_description> ndesc;
-    high_resolution_clock::time_point device_reset_time;
+
     std::set<chip_id_t> target_device_ids;
     vector<tt_cluster_on_destroy_callback> on_destroy_callbacks;
     vector<tt_cluster_on_close_device_callback> on_close_device_callbacks;
@@ -68,29 +63,15 @@ struct tt_cluster
 
     public:
     TargetDevice type;
-    int target_ai_clk = 0;
-    bool deasserted_risc_reset;
-    tt_cluster() : device(nullptr), type(TargetDevice::Invalid), deasserted_risc_reset(false) {};
+    tt_cluster() : device(nullptr), type(TargetDevice::Invalid) {};
     ~tt_cluster() { for (auto cb: on_destroy_callbacks) cb(this); }
 
     // adds a specified callback to the list of callbacks to be called on destroy of this cluster instance
     void on_destroy(tt_cluster_on_destroy_callback callback);
     void on_close_device(tt_cluster_on_close_device_callback callback);
 
-    std::chrono::seconds get_device_timeout();
-    std::chrono::seconds get_device_duration();
-
-    int get_num_chips();
-    std::unordered_set<chip_id_t> get_all_chips();
-
-    std::set<chip_id_t> get_all_mmio_chips();
-
     metal_SocDescriptor& get_soc_desc(chip_id_t chip) { return sdesc_per_chip.at(chip); }
     uint32_t get_harvested_rows(chip_id_t chip) { return device->harvested_rows_per_target.at(chip); }
-
-    tt_cluster_description *get_cluster_desc() { return ndesc.get(); }
-
-    void dump_wall_clock_mailbox(std::string output_dir);
 
     //! device driver and misc apis
     void clean_system_resources();
@@ -105,12 +86,10 @@ struct tt_cluster
 
     void start_device(const tt_device_params &device_params);
     void close_device();
-    void verify_eth_fw();
 
     void assert_risc_reset(const chip_id_t &chip);
     void deassert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord);
     void deassert_risc_reset(const chip_id_t &target_device_id, bool start_stagger = false);
-    void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions);
 
     void write_dram_vec(vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, bool small_access = false);
     void read_dram_vec(vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, uint32_t size, bool small_access = false);
@@ -124,13 +103,7 @@ struct tt_cluster
     void write_sysmem_vec(vector<uint32_t> &vec, uint64_t addr, chip_id_t src_device_id);
     void read_sysmem_vec(vector<uint32_t> &vec, uint64_t addr, uint32_t size, chip_id_t src_device_id);
 
-    //! address translation
-    void *channel_0_address(std::uint32_t offset, std::uint32_t device_id) const;
-    //void *host_dma_address(std::uint64_t offset, chip_id_t src_device_id) const;
-
-    std::map<int, int> get_all_device_aiclks();
     int get_device_aiclk(const chip_id_t &chip_id);
-    // void set_power_state(tt_DevicePowerState state);
 
     // will write a value for each core+hart's debug buffer, indicating that by default
     // any prints will be ignored unless specifically enabled for that core+hart
@@ -148,4 +121,3 @@ struct tt_cluster
 };
 
 std::ostream &operator<<(std::ostream &os, tt_target_dram const &dram);
-bool check_dram_core_exists(const std::vector<std::vector<CoreCoord>> &all_dram_cores, CoreCoord target_core);

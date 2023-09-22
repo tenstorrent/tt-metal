@@ -84,27 +84,6 @@ ll_api::memory get_risc_binary(string path, int chip_id, bool fw_build) {
     return mem;
 }
 
-// This deasserts reset for all BRISCs (on all devices, all cores), but not other RISC processors (NCRISC, TRISC)
-// Every core gets valid FW (blank kernel if nothing is running on the core) before being taken out ot reset
-// This avoids the issue of cores running garbahe out of their L1
-// TODO: deassert reset only for used BRISCs (needs a new deassert function w/ a list of core to de-assert)
-// void deassert_brisc_reset_for_all_chips_all_cores(tt_cluster *cluster, bool stagger_start) {
-//     cluster->deassert_risc_reset(stagger_start);
-//     log_debug(tt::LogLLRuntime, "deasserted reset for all BRISCs");
-// }
-
-// TODO: try using "stop" method from device instead, it's the proper way of asserting reset
-void assert_reset_for_all_chips(tt_cluster *cluster) {
-    TT_ASSERT((cluster->type == tt::TargetDevice::Silicon) or (cluster->type == tt::TargetDevice::Versim));
-
-    if (cluster->type == tt::TargetDevice::Silicon) {
-        log_debug(tt::LogLLRuntime, "Starting resets for {} chips", cluster->get_num_chips());
-        for (const chip_id_t &chip_id : cluster->get_all_chips()) {
-            cluster->assert_risc_reset(chip_id);
-        }
-    }
-}
-
 // CoreCoord core --> NOC coordinates ("functional workers" from the SOC descriptor)
 // NOC coord is also synonymous to routing / physical coord
 // dram_channel id (0..7) for GS is also mapped to NOC coords in the SOC descriptor

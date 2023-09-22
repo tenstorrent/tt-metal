@@ -76,18 +76,7 @@ using CircularBufferConfigVec = std::vector<uint32_t>;
 // TODO: clean-up epoch_loader / epoch_binary -- a bunch of functions there should not be member functions
 ll_api::memory get_risc_binary(string path, int chip_id, bool fw_build);
 
-// TODO: de-asserting reset properly
-//  this deasserts reset for all BRISCs (on all devices, all cores), but not other RISC processors (NCRISC, TRISC)
-// even though it deasserts reset for all the BRISCs, we are only loading  BRISC for a single core ("core")
-// this is unsafe, since BRISCs for which we haven't loaded FW are now running garbage out of their L1
-// proper solution:
-// a) load dummy BRISC FW to unused cores, and keep using the function that de-asserts all BRISCs (easier, we can load
-// blank kernel and disable NCRISC loading) b) de-assert reset only for used BRISCs (needs a new deassert function w/ a
-// list of core to de-assert) (harder)
-// void deassert_brisc_reset_for_all_chips_all_cores(tt_cluster *cluster, bool stagger_start = false);
-
 // TODO: try using "stop" method from device instead, it's the proper way of asserting reset
-void assert_reset_for_all_chips(tt_cluster *cluster);
 
 // CoreCoord core --> NOC coordinates ("functional workers" from the SOC descriptor)
 // NOC coord is also synonymous to routing / physical coord
