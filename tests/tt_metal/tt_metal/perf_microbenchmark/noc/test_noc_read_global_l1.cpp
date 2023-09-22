@@ -284,7 +284,6 @@ int main(int argc, char **argv) {
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
       log_info(LogTest, "calling EnqueueProgram");
       EnqueueProgram(*::detail::GLOBAL_CQ, program, false);
-      Finish(*::detail::GLOBAL_CQ);
       // Only need to dump device data when in dispatch mode
       // LaunchKernel automatically dumps device data
       op_profiler::dump_device_profiler_results(device, program);
