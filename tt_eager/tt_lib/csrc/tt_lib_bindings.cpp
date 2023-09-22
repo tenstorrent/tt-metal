@@ -23,8 +23,6 @@ namespace tt {
 
 namespace tt_metal {
 
-
-
 void DeviceModule(py::module &m_device) {
     py::enum_<tt::ARCH>(m_device, "Arch", "Enum of types of Tenstorrent accelerator devices.")
         .value("GRAYSKULL", tt::ARCH::GRAYSKULL)
