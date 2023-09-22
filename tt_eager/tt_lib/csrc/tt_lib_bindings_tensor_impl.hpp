@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #pragma once
 
 #include "tt_lib_bindings.hpp"
@@ -6,54 +10,6 @@
 namespace tt::tt_metal{
 
 namespace detail {
-
-// template<class T>
-// struct DataTypeToFormatType {
-//     using type = T;
-// };
-
-// template<>
-// struct DataTypeToFormatType<bfloat16> {
-//     using type = uint16_t;
-// };
-
-// template<class CppType, class DataType, class PyType>
-// void implement_buffer_protocol(PyType& py_buffer_t) {
-//     py_buffer_t
-//         .def(
-//             "__getitem__",
-//             [](const CppType& self, std::size_t index) {
-//                 return self[index];
-//             }
-//         )
-//         .def(
-//             "__len__",
-//             [](const CppType& self) {
-//                 return self.size();
-//             }
-//         )
-//         .def(
-//             "__iter__",
-//             [](const CppType& self) {
-//                 return py::make_iterator(self.begin(), self.end());
-//             },
-//             py::keep_alive<0, 1>()
-//         )
-//         .def_buffer(
-//             [](CppType& self) -> py::buffer_info {
-//                 using FormatType = typename DataTypeToFormatType<DataType>::type;
-//                 return py::buffer_info(
-//                     self.begin(),                                /* Pointer to buffer */
-//                     sizeof(DataType),                            /* Size of one scalar */
-//                     py::format_descriptor<FormatType>::format(), /* Python struct-style format descriptor */
-//                     1,                                           /* Number of dimensions */
-//                     { self.size() },                             /* Buffer dimensions */
-//                     { sizeof(DataType) }                         /* Strides (in bytes) for each index */
-//                 );
-//             }
-//         );
-// };
-
 
 template <bool mem_config_arg = true, typename Func, typename... Extra>
 void bind_op_with_mem_config(py::module_ &module, std::string op_name, Func &&f, std::string docstring, Extra&&... extra) {
