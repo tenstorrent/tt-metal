@@ -8,16 +8,11 @@
 #pragma once
 
 #include <string>
-#include <regex>
 #include <set>
-#include <utility>
 #include <optional>
 
 #include "common/assert.hpp"
 #include "third_party/umd/device/tt_xy_pair.h"
-
-// #include <boost/functional/hash.hpp>
-// #include <command_assembler/xy_pair.h>
 
 using std::pair;
 
