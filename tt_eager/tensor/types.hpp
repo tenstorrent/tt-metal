@@ -102,6 +102,8 @@ class Shape {
     const Padding& padding() const;
     const Shape without_padding() const;
 
+    const uint32_t get_normalized_index(std::int64_t index) const;
+
     tt::stl::reflection::Attributes attributes() const;
 };
 

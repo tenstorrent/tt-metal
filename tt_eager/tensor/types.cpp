@@ -88,15 +88,11 @@ Shape::Shape(const Shape& other, const Padding& padding) : dimensions_(other.dim
 uint32_t Shape::rank() const { return this->rank_; }
 
 uint32_t& Shape::operator[](const std::int64_t index) {
-    auto rank = this->rank_;
-    auto normalized_index = index >= 0 ? index : rank + index;
-    TT_ASSERT(normalized_index >= 0 and normalized_index < rank, fmt::format("0 <= {} < {}", normalized_index, rank));
+    auto normalized_index = this->get_normalized_index(index);
     return this->dimensions_[normalized_index];
 }
 const uint32_t& Shape::operator[](const std::int64_t index) const {
-    auto rank = this->rank_;
-    auto normalized_index = index >= 0 ? index : rank + index;
-    TT_ASSERT(normalized_index >= 0 and normalized_index < rank, fmt::format("0 <= {} < {}", normalized_index, rank));
+    auto normalized_index = this->get_normalized_index(index);
     return this->dimensions_[normalized_index];
 }
 
@@ -117,6 +113,13 @@ const Shape Shape::without_padding() const {
         shape_without_padding.push_back(new_dimension);
     }
     return Shape(shape_without_padding);
+}
+
+const uint32_t Shape::get_normalized_index(std::int64_t index) const {
+    auto rank = this->rank_;
+    auto normalized_index = index >= 0 ? index : rank + index;
+    TT_ASSERT(normalized_index >= 0 and normalized_index < rank, fmt::format("0 <= {} < {}", normalized_index, rank));
+    return normalized_index;
 }
 
 tt::stl::reflection::Attributes Shape::attributes() const {
