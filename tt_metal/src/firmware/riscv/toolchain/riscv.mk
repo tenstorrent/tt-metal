@@ -14,7 +14,6 @@
 # - INCLUDES: additional include directories other than your source directories
 # - OUTPUT_DIR: subdirectory for all outputs and temporary files, will be created if necessary (out)
 # - FIRMWARE_NAME: firmware file name (firmware)
-# - INFO_NAME: basename for ancillary files such as fwlog and debug info
 # - FIRMWARE_START: start address of firmware (includes magic variables such as TEST_MAILBOX) (0)
 #
 # Targets you can extend: all, extras, clean. Use "::" instead of ":".
@@ -49,16 +48,7 @@ CXX_LANG_FLAGS ?= -Wall -Werror -std=c++17 -Wno-unknown-pragmas -fno-use-cxa-ate
 DEFINES ?=
 SOURCES ?= main.cpp
 
-DISABLE_FWLOG ?= 1
 CKDEBUG ?= 0
-
-ifeq ($(DISABLE_FWLOG),0)
-	DEFINES += -D ENABLE_FWLOG
-endif
-
-ifeq ($(CKDEBUG),1)
-	DEFINES += -D ENABLE_FWLOG
-endif
 
 ifeq ($(FW_GPR_ANNOTATION),1)
 	DEFINES += -D FW_GPR_ANNOTATION
@@ -233,20 +223,7 @@ $(OUTFW).bin: $(OUTFW).elf
 $(OUTFW).map: $(OUTFW).elf
 	$(OBJDUMP) -Stg $< > $@
 
-# Create a file that maps where we log in firmware source to what is being logged
-# IMPROVE: handle multiple source files
-$(OUTPUT_DIR)/$(INFO_NAME).fwlog: $(OUTFW).elf
-	python3 $(TT_METAL_HOME)/src/firmware/riscv/toolchain/fwlog.py --depfile $(OUTPUT_DIR)/$(INFO_NAME).d > $@
-
 CKERNEL_DEPS := $(wildcard $(CKERNELS_DIR)/$(ARCH_NAME)/src/out/*.d)
-
-$(OUTPUT_DIR)/ckernel.fwlog: $(OUTFW).elf $(CKERNEL_DEPS) $(OUTPUT_DIR)/ckernel.d
-	python3 $(TT_METAL_HOME)/src/firmware/riscv/toolchain/fwlog.py --depfile $(OUTPUT_DIR)/ckernel.d > $@.tmp
-	python3 $(TT_METAL_HOME)/src/firmware/riscv/toolchain/fwlog.py --depfile $(CKERNEL_DEPS) --path=$(CKERNELS_DIR)/$(ARCH_NAME)/src >> $@.tmp
-#	common .cc files that are not in any dependenecies
-	python3 $(TT_METAL_HOME)/src/firmware/riscv/toolchain/fwlog.py --depfile $(CKERNELS_DIR)/$(ARCH_NAME)/common/src/fwlog_list --path=$(CKERNELS_DIR)/$(ARCH_NAME)/common/src >> $@.tmp
-	sort -u $@.tmp > $@   # uniquify
-	rm -f $@.tmp
 
 # Create a map between source files and the PC
 $(OUTPUT_DIR)/$(INFO_NAME)-decodedline.txt: $(OUTFW).elf
@@ -268,7 +245,6 @@ clean2::
 	rm $(EXTRA_OBJECTS) $(SILENT_ERRORS)
 	rm $(EXTRA_OBJECTS:.o=.d) $(SILENT_ERRORS)
 	rmdir $(OUTPUT_DIR) $(SILENT_ERRORS)
-	rm $(OUTPUT_DIR)/$(INFO_NAME).fwlog $(OUTPUT_DIR)/$(INFO_NAME)-decodedline.txt $(OUTPUT_DIR)/$(INFO_NAME)-debuginfo.txt $(OUTPUT_DIR)/$(INFO_NAME)-symbols.txt $(SILENT_ERRORS)
 	rm -rf $(GEN_DIR) $(SILENT_ERRORS)
 
 extras::

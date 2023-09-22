@@ -62,8 +62,6 @@ int main(int argc, char *argv[])
     int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
     l1_to_local_mem_copy((uint*)__ldm_data_start, local_l1_start_addr, num_words);
 
-    FWEVENT("Launching production env kernels");
-
     // Initialize GPRs to all 0s
     for (int i = 0; i < 64; i++)
         regfile[i] = 0;

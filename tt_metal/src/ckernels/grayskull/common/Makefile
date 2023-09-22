@@ -43,8 +43,6 @@ INCLUDES = \
 	-I$(FIRMWARE_RISCV_INC_DIR)/$(ARCH_NAME)/noc \
 	-I$(CKERNEL_INC_DIR)/gen/out # needed for ckernel_ops.h
 
-DISABLE_FWLOG ?= 1
-
 # provide in command line or kernel makefile
 RISCV_TOOLCHAIN_DIR = $(TT_METAL_HOME)/src/firmware/riscv/toolchain
 SOURCES ?=

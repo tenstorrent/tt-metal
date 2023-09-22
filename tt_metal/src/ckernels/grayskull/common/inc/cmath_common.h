@@ -168,7 +168,6 @@ inline void clear_dst_reg_addr()
 
 inline void math_dest_wait()
 {
-    FWLOG0("XX math_full_dest_sync()->wait for whole dest available");
     TTI_SEMWAIT(p_stall::STALL_MATH, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_MAX);
 }
 

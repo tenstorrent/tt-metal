@@ -58,7 +58,6 @@ inline void wait_for_stream_messages(const regp p_stream_reg, const uint count)
     do
     {
         c = read_stream_register(p_stream_reg, STREAM_NUM_MSGS_RECEIVED_REG_INDEX);
-        FWLOG2("Waiting for %d stream_messages; Current messages: %d", count, c);
     } while (c < count);
 }
 
@@ -71,7 +70,6 @@ inline void wait_for_N_stream_messages(const regp p_stream_reg, const uint num_m
         uint32_t num_msg = read_stream_register(p_stream_reg, STREAM_NUM_MSGS_RECEIVED_REG_INDEX);
         c = num_msg + (msg_info_wr - msg_info);
         // wait while we receive all the tiles from this stream
-        FWLOG2("Waiting for %d stream_messages; Current messages: %d", num_messages, c);
     } while (c < num_messages);
 }
 
@@ -79,14 +77,12 @@ inline void wait_for_stream_phase(const regp p_stream_reg, const uint phase_id)
 {
     if (phase_id == 0)
     {
-        FWLOG0("Warning: Skipping phase_id check!!");
         return;
     }
     uint p = 0;
     do
     {
         p = read_stream_register(p_stream_reg, STREAM_CURR_PHASE_REG_INDEX);
-        FWLOG2("curr phase: %d, waiting for stream_phase: %d", p, phase_id);
     } while (p != phase_id);
 }
 
@@ -113,18 +109,10 @@ inline stream_tile_info_t read_stream_info(const uint tile_index, const regp p_s
 
     TileHeader_u header;
 
-    FWLOG1("[0 ] activations base address: 0x%x", base_address);
-    FWLOG1("[1 ] tile size w/o header    : 0x%x", read_stream_register(p_stream_reg, STREAM_RECEIVER_MSG_INFO_REG_INDEX + n * 6 + 1)); //-> message size (tile n size without header)
     header.val[0] = read_stream_register(p_stream_reg, STREAM_RECEIVER_MSG_INFO_REG_INDEX + n * 6 + 2); //-> tile n size including header and tile id (15:0 size, 31:16 tile id)
-    FWLOG1("[2a] tile size with header   : 0x%x", (header.val[0] & 0xFFFF));
     FWASSERT("Tile size must be != 0", (header.val[0] & 0xFFFF) != 0);
-    FWLOG1("[2b] tile id                 : 0x%x", header.val[0] >> 16);
     header.val[1] = read_stream_register(p_stream_reg, STREAM_RECEIVER_MSG_INFO_REG_INDEX + n * 6 + 3); //-> tile n meta data size and format
-    FWLOG1("[3a] meta data size          : 0x%x", (header.val[1] & 0xFFFF));
-    FWLOG1("[3b] data format             : 0x%x", ((header.val[1] >> 16) & 0xF));
-    FWLOG1("[3c] uncompressed            : 0x%x", ((header.val[1] >> 20) & 0x1));
     header.val[2] = read_stream_zero_mask(p_stream_reg, n); //-> 32-bit zero mask
-    FWLOG1("[4 ] zero mask               : 0x%x", header.val[2]);
     //read_stream_register(p_stream_reg, STREAM_RECEIVER_MSG_INFO_REG_INDEX + n * 6 + 5); //-> Reserved
 
     return stream_tile_info_t{base_address, header.header};
@@ -138,12 +126,8 @@ inline uint read_dis_zero_compress_group_info(const regp p_stream_reg)
 // Return the offset of a tile given it's tile id and table address
 inline uint32_t get_indexed_offset(const uint tile_id, const uint weights_offset, const uint table_addr)
 {
-    //FWLOG1("Weight base address: 0x%x", params[2]);
-    //FWLOG1("Weight base address: 0x%x", params[2] << 4);
     const uint16_t *weight_offset_table = reinterpret_cast<uint16_t *>(table_addr << 4);
     uint weight_offset = weight_offset_table[tile_id + weights_offset];
-    FWLOG1("Weight table index: %d", tile_id + weights_offset);
-    FWLOG1("Weight offset: 0x%x", weight_offset);
     return weight_offset;
 }
 
@@ -249,7 +233,6 @@ namespace ckernel::stream
         do
         {
             c = read_stream_register(stream_reg, STREAM_NUM_MSGS_RECEIVED_REG_INDEX);
-            FWLOG2("Waiting for %d stream_messages; Current messages: %d", count, c);
         } while (c < count);
     }
 
@@ -321,7 +304,6 @@ namespace ckernel::stream
     inline std::uint8_t* get_stream_msg_ptr(const regp stream_reg) {
       auto base_addr = read_stream_register(stream_reg, STREAM_BUF_START_REG_INDEX) << 4;
       auto rdptr = read_stream_register(stream_reg, STREAM_RD_PTR_REG_INDEX) << 4;
-      FWLOG2("base_addr: %d, rdptr: %d", base_addr, rdptr);
       auto tile_addr = base_addr + rdptr;
       return reinterpret_cast<std::uint8_t*>(tile_addr);
     }

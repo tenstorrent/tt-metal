@@ -185,7 +185,6 @@ inline void clear_addr_mod_base()
 
 inline void math_dest_wait()
 {
-    FWLOG0("XX math_full_dest_sync()->wait for whole dest available");
     TTI_SEMWAIT(p_stall::STALL_MATH|p_stall::STALL_SFPU, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_MAX);
 }
 

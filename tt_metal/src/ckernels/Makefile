@@ -34,8 +34,6 @@ ifeq ($(SPILL_DRAM), 1)
 DEFINES += $(addprefix -DSPILL_DRAM=, $(SPILL_DRAM))
 endif
 
-DISABLE_FWLOG ?= 1
-
 # provide in command line or kernel makefile
 SOURCES ?=
 SOURCES += $(wildcard $(CKERNELS_COMMON_OUT_DIR)/*.o)
@@ -72,9 +70,9 @@ endif
 include $(FIRMWARE_RISCV_DIR)/toolchain/riscv_link_only.mk
 
 ifeq ($(MAKE_FW_MAP),1)
-all :: $(OUTPUT_DIR)/$(FIRMWARE_NAME).hex $(OUTPUT_DIR)/$(FIRMWARE_NAME).map $(OUTPUT_DIR)/ckernel.fwlog $(OUTPUT_DIR)/firmware-decodedline.txt $(OUTPUT_DIR)/firmware-debuginfo.txt $(OUTPUT_DIR)/firmware-symbols.txt $(OUTPUT_DIR)/$(FIRMWARE_NAME).map
+all :: $(OUTPUT_DIR)/$(FIRMWARE_NAME).hex $(OUTPUT_DIR)/$(FIRMWARE_NAME).map $(OUTPUT_DIR)/firmware-decodedline.txt $(OUTPUT_DIR)/firmware-debuginfo.txt $(OUTPUT_DIR)/firmware-symbols.txt $(OUTPUT_DIR)/$(FIRMWARE_NAME).map
 else
-all :: $(OUTPUT_DIR)/$(FIRMWARE_NAME).hex $(OUTPUT_DIR)/ckernel.fwlog $(OUTPUT_DIR)/firmware-decodedline.txt $(OUTPUT_DIR)/firmware-debuginfo.txt $(OUTPUT_DIR)/firmware-symbols.txt
+all :: $(OUTPUT_DIR)/$(FIRMWARE_NAME).hex $(OUTPUT_DIR)/firmware-decodedline.txt $(OUTPUT_DIR)/firmware-debuginfo.txt $(OUTPUT_DIR)/firmware-symbols.txt
 endif
 
 linker_scripts: $(LINKER_SCRIPT)

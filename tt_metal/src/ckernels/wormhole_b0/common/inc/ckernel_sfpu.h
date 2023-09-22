@@ -57,16 +57,12 @@ sfpi_inline vInt sfpu_is_fp16_zero(const vFloat& v, uint exponent_size_8)
 }
 
 inline void init_dropout_seed(uint16_t p2){
-    FWLOG1("calculate_dropout() -- input seed:%x", p2);
-
     uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(0, 0, NOC_NODE_ID);
 
     uint16_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
     uint16_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
 
     uint16_t per_tensix_input_seed = p2 ^ (my_x << my_y);
-
-    FWLOG1("calculate_dropout() -- calculated seed:%x", per_tensix_input_seed);
 
     vInt result = l_reg[LRegs::LReg3];
 
@@ -342,9 +338,6 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_dropout(uint prob, uint scale)
 {
     // SFPU microcode
-
-    FWLOG1("calculate_dropout() -- prob:%x", prob);
-    FWLOG1("calculate_dropout() -- scale:%x", scale);
 
     vUInt rand = l_reg[LRegs::LReg3];
 
