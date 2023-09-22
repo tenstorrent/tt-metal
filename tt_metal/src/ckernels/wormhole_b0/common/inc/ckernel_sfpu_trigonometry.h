@@ -8,8 +8,8 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "sfpi.h"
 #include "noc_nonblocking_api.h"
-#include "llk_math_eltwise_unary_sfpu_0_param.h"
 
 using namespace sfpi;
 
@@ -17,11 +17,9 @@ namespace ckernel {
 
 namespace sfpu {
 
-
 template <bool APPROXIMATION_MODE>
 sfpi_inline vFloat sfpu_tangent_maclaurin_series(vFloat val)
 {
-    // For input [-1:1]
     // Mclauren series
     // tan(x) = x + (x^3)/3 + (2x^5)/15 + (17x^7)/315 + (62x^9)/2835 + (1382x^11)/155925 + (21844x^13)/6081075 + ...
 
@@ -65,7 +63,7 @@ inline void calculate_tangent()
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat v = dst_reg[0];
-        // Range Reduction: It will help us to cover more input range
+        //Periodic, Range Reduction: To cover more input range
         v_if(v > PI_2){
             v = v - PI;
         }v_elseif(v < -PI_2){
@@ -221,30 +219,19 @@ inline void calculate_sfpu_trig() {
     }
 }
 
-
-template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_sine_op(uint dst_index) {
-    llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
-                                (ckernel::sfpu::calculate_sfpu_trig<SfpuType::sine, APPROXIMATE>,
-                                ckernel::sfpu::calculate_sfpu_trig<SfpuType::sine, APPROXIMATE>,
-                                dst_index, Dim::RC);
+template <bool APPROXIMATION_MODE>
+void sine_init() {
+    ;
 }
 
-template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_cosine_op(uint dst_index) {
-    llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
-                                (ckernel::sfpu::calculate_sfpu_trig<SfpuType::cosine, APPROXIMATE>,
-                                ckernel::sfpu::calculate_sfpu_trig<SfpuType::cosine, APPROXIMATE>,
-                                dst_index, Dim::RC);
+template <bool APPROXIMATION_MODE>
+void cosine_init() {
+    ;
 }
 
-template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_tan_op(uint dst_index) {
-    llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
-                                (ckernel::sfpu::calculate_sfpu_trig<SfpuType::tan, APPROXIMATE>,
-                                ckernel::sfpu::calculate_sfpu_trig<SfpuType::tan, APPROXIMATE>,
-                                dst_index, Dim::RC);
-
+template <bool APPROXIMATION_MODE>
+void tan_init() {
+    ;
 }
 }  // namespace sfpu
 }  // namespace ckernel
