@@ -113,6 +113,9 @@ Tensor tanhshrink(const Tensor &input_a, const MemoryConfig& output_mem_config =
 
 Tensor lgamma(const Tensor &input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+//multivariate log-gamma function
+Tensor multigammaln(const Tensor& a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 Tensor logical_andi(const Tensor& input_a, float immediate, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 // ∣input−other∣≤ atol+rtol×∣other∣

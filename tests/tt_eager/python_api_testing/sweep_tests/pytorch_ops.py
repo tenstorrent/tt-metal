@@ -505,6 +505,10 @@ def lgamma(x, *args, **kwargs):
     return torch.lgamma(x)
 
 
+def multigammaln(x, *args, **kwargs):
+    return torch.special.multigammaln(x, 4)
+
+
 def logical_andi(x, *args, **kwargs):
     value = kwargs.pop("immediate")
     result = torch.logical_and(x, torch.tensor(value, dtype=torch.int32))

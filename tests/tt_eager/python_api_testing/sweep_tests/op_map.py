@@ -192,6 +192,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_sign,
         "pytorch_op": pytorch_ops.sign,
     },
+    "eltwise-multigammaln": {
+        "tt_lib_op": tt_lib_ops.eltwise_multigammaln,
+        "pytorch_op": pytorch_ops.multigammaln,
+    },
     "eltwise-silu": {
         "tt_lib_op": tt_lib_ops.eltwise_silu,
         "pytorch_op": pytorch_ops.silu,

@@ -170,11 +170,37 @@ Tensor _lgamma(const Tensor& x, const MemoryConfig& output_mem_config) {
             result = add(result, temp_log, std::nullopt, output_mem_config);
         }
         result = sub(result, t, std::nullopt, output_mem_config);
+        {
+            Tensor t_zero  = zeros_like(x, output_mem_config);
+            {
+                Tensor t_one   = ones_like(x, output_mem_config);
+                result = where(eq(x, t_one, std::nullopt, output_mem_config), t_zero, result, output_mem_config);
+            }
+            {
+                Tensor t_two = mk_filled_tensor_like(x, 2.0f, output_mem_config);
+                result = where(eq(x, t_two, std::nullopt, output_mem_config), t_zero, result, output_mem_config);
+            }
+        }
     }
     return result;
 }
 Tensor lgamma(const Tensor& a, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _lgamma)(a, output_mem_config);
+}
+
+//multivariate log-gamma function
+//Ref : https://pytorch.org/docs/stable/special.html#torch.special.multigammaln
+Tensor _multigammaln(const Tensor& x, const MemoryConfig& output_mem_config) {
+    Tensor result = lgamma(x, output_mem_config);
+    result = add(result, lgamma(sub_unary(x, 0.5f, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+    result = add(result, lgamma(sub_unary(x, 1.0f, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+    result = add(result, lgamma(sub_unary(x, 1.5f, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+    result = add_unary(result, 3.434189657547f, output_mem_config);
+    return result;
+}
+
+Tensor multigammaln(const Tensor& a, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _multigammaln)(a, output_mem_config);
 }
 
 //mish[x] = x*tanh[softplus[x]]

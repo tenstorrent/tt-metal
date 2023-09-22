@@ -116,6 +116,7 @@ if is_wormhole_b0():
                 "isclose",
                 "digamma",
                 "lgamma",
+                "multigammaln",
             ),
             shapes,
         )
@@ -139,7 +140,8 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
     options["leaky_shrink"] = (-100, 100)
     options["softsign"] = (1, 100)
     options["digamma"] = (1, 1000)
-    options["lgamma"] = (1, 1e32)
+    options["lgamma"] = (0.1, 1e32)
+    options["multigammaln"] = (1.6, 1e32)
 
     options["sinh"] = (-9, 9)
     options["tanhshrink"] = (-100, 100)

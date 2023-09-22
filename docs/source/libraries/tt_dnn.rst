@@ -350,6 +350,8 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.erfinv
 
+.. autofunction:: tt_lib.tensor.multigammaln
+
 .. autofunction:: tt_lib.tensor.isclose
 
 .. autofunction:: tt_lib.tensor.i0

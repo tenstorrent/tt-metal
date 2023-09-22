@@ -1,5 +1,5 @@
 test-list:
-  eltwise-lgamma:
+  eltwise-multigammaln:
     shape:
       start-shape: [1, 1, 1, 2]
       end-shape: [2, 2, 2048, 2048]
@@ -9,10 +9,10 @@ test-list:
     datagen:
       function: gen_rand
       args:
-        low: 0.1
+        low: 1.6
         high: 1000
       dtype: bfloat16
     comparison:
       function: comp_pcc
     args-gen: gen_dtype_layout_device
-    output-file: eltwise_lgamma_sweep.csv
+    output-file: eltwise_multigammaln_sweep.csv

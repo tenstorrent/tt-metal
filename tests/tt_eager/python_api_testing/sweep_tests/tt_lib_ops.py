@@ -315,28 +315,6 @@ def eltwise_leaky_relu(
 
 
 @setup_host_and_device
-def eltwise_bias_gelu(
-    x, *args, bias, device, dtype, layout, buffer_type, output_mem_config, **kwargs
-):
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype[0],
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-    t0 = t0.to(layout[0])
-
-    t_bias = ttl.tensor.full_like(t0, bias)
-    t0 = tensor_to_device(t0, device, buffer_type[0])
-    t_bias = tensor_to_device(t_bias, device, buffer_type[0])
-
-    t1 = ttl.tensor.bias_gelu(t0, t_bias, output_mem_config=output_mem_config)
-
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-    return output
-
-
-@setup_host_and_device
 def eltwise_logical_noti(
     x, *args, immediate, device, dtype, layout, buffer_type, output_mem_config, **kwargs
 ):
@@ -2625,6 +2603,7 @@ eltwise_asinh = make_eltwise_unary_op(ttl.tensor.asinh)
 eltwise_acosh = make_eltwise_unary_op(ttl.tensor.acosh)
 eltwise_tanhshrink = make_eltwise_unary_op(ttl.tensor.tanhshrink)
 eltwise_lgamma = make_eltwise_unary_op(ttl.tensor.lgamma)
+eltwise_multigammaln = make_eltwise_unary_op(ttl.tensor.multigammaln)
 eltwise_softsign = make_eltwise_unary_op(ttl.tensor.softsign)
 eltwise_relu = make_eltwise_unary_op(ttl.tensor.relu)
 eltwise_relu6 = make_eltwise_unary_op(ttl.tensor.relu6)
@@ -2698,6 +2677,7 @@ def make_eltwise_binary_op(ttl_tensor_binop):
 eltwise_add = make_eltwise_binary_op(ttl.tensor.add)
 eltwise_sub = make_eltwise_binary_op(ttl.tensor.sub)
 eltwise_mul = make_eltwise_binary_op(ttl.tensor.mul)
+eltwise_bias_gelu = make_eltwise_binary_op(ttl.tensor.bias_gelu)
 eltwise_squared_difference = make_eltwise_binary_op(ttl.tensor.squared_difference)
 eltwise_hypot = make_eltwise_binary_op(ttl.tensor.hypot)
 eltwise_atan2 = make_eltwise_binary_op(ttl.tensor.atan2)

@@ -95,11 +95,10 @@ class TestEltwiseBinary:
         )[0]
         test_args.update(
             {
-                "bias": 0.5,
                 "output_mem_config": output_mem_config,
             }
         )
-        comparison_func = partial(comparison_funcs.comp_pcc,pcc=0.60)
+        comparison_func = comparison_funcs.comp_pcc
         run_single_pytorch_test(
             f"eltwise-{fn_kind}",
             input_shapes,
