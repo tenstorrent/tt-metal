@@ -11,6 +11,9 @@
 */
 #pragma once
 
+#define MAIN_FUNCT_MARKER   (1U << 0)
+#define KERNEL_FUNCT_MARKER (1U << 1)
+
 #define CC_MAIN_START          1U
 #define CC_KERNEL_MAIN_START   2U
 #define CC_KERNEL_MAIN_END     3U
