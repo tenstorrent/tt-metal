@@ -52,7 +52,6 @@ struct metal_SocDescriptor : public tt_SocDescriptor {
   private:
   void generate_physical_descriptors_from_virtual(uint32_t harvesting_mask);
   void load_dram_metadata_from_device_descriptor();
-  void map_workers_to_dram_banks();
 };
 
 void load_dispatch_and_banking_config(metal_SocDescriptor &soc_descriptor, uint32_t num_harvested_noc_rows);

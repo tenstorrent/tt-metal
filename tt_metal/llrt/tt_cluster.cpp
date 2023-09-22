@@ -340,20 +340,9 @@ void tt_cluster::assert_risc_reset(const chip_id_t &chip) {
     device->assert_risc_reset(chip);
 }
 
-void tt_cluster::set_tensix_risc_reset_on_core(const tt_cxy_pair &core, const TensixSoftResetOptions &soft_resets) {
-    if (type == TargetDevice::Silicon) {
-        auto valid = soft_resets & ALL_TENSIX_SOFT_RESET;
-
-        std::vector<uint32_t> vec = {(std::underlying_type<TensixSoftResetOptions>::type) valid};
-        write_dram_vec(vec, core, 0xFFB121B0 /* Should get this value from the device */);
-        _mm_sfence();
-    } else {
-        if ((soft_resets == TENSIX_DEASSERT_SOFT_RESET) or (soft_resets == TENSIX_DEASSERT_SOFT_RESET_NO_STAGGER)) {
-            device->deassert_risc_reset(*this->target_device_ids.begin());
-        } else if (soft_resets == TENSIX_ASSERT_SOFT_RESET) {
-            device->assert_risc_reset(core.chip);
-        }
-    }
+void tt_cluster::deassert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord) {
+    tt_cxy_pair virtual_chip_coord = this->convert_physical_cxy_to_virtual(physical_chip_coord);
+    device->deassert_risc_reset_at_core(virtual_chip_coord);
 }
 
 void tt_cluster::deassert_risc_reset(const chip_id_t &target_device_id, bool start_stagger) {
@@ -530,7 +519,7 @@ void tt_cluster::on_close_device(tt_cluster_on_close_device_callback cb) {
 // This barrier mimics a DRAM flush since there is no flush available for PCIe device
 // It is used to ensure all previous writes to DRAM have been posted by writing to a specific address in DRAM and then polling until the written value is successfully readback
 void tt_cluster::set_dram_barrier(chip_id_t chip_id, uint32_t barrier_value) {
-    _mm_sfence(); // Flush any existing writes to PCIe
+    tt_driver_atomics::sfence(); // Flush any existing writes to PCIe
 
     // Write a value to reserved address in DRAM that is used for host-to-device synchronization
     std::vector<uint32_t> barrier_vec = {barrier_value};
@@ -539,7 +528,7 @@ void tt_cluster::set_dram_barrier(chip_id_t chip_id, uint32_t barrier_value) {
     }
 
     // sfence is sufficient to flush WC buffers, ensures the reads from barrier are not just hitting the cache
-    _mm_sfence();
+    tt_driver_atomics::sfence();
 
     // Loop until value written is readback from each DRAM bank
     bool barrier_val_propagated = false;
@@ -569,7 +558,7 @@ void tt_cluster::dram_barrier(chip_id_t chip_id) {
 // This barrier mimics a L1 flush since there is no flush available for PCIe device
 // It is used to ensure all previous writes to L1 have been posted by writing to a specific address in L1 and then polling until the written value is successfully readback
 void tt_cluster::set_l1_barrier(chip_id_t chip_id, uint32_t barrier_value) {
-    _mm_sfence(); // Flush any existing writes to PCIe
+    tt_driver_atomics::sfence(); // Flush any existing writes to PCIe
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 
     // Write a value to mailbox in L1 that is exclusively used for host-to-device synchronization
@@ -580,7 +569,7 @@ void tt_cluster::set_l1_barrier(chip_id_t chip_id, uint32_t barrier_value) {
     }
 
     // sfence is sufficient to flush WC buffers, ensures the reads from barrier are not just hitting the cache
-    _mm_sfence();
+    tt_driver_atomics::sfence();
 
     // Loop until value written to L1 mailbox is readback from each L1
     bool barrier_value_propagated = false;

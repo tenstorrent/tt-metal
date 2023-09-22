@@ -49,24 +49,24 @@ void SystemMemoryWriter::send_write_ptr(Device* device) {
     static CoreCoord dispatch_core = device->worker_core_from_logical_core(*device->dispatch_cores().begin());
     u32 chip_id = 0;  // TODO(agrebenisan): Remove hard-coding
 
-    _mm_sfence();
+    tt_driver_atomics::sfence();
 
     tt::llrt::write_hex_vec_to_core(
         device->cluster(), chip_id, dispatch_core, {this->cq_write_interface.fifo_wr_ptr}, CQ_WRITE_PTR, false);
 
-    _mm_sfence();
+    tt_driver_atomics::sfence();
 }
 
 void SystemMemoryWriter::send_write_toggle(Device* device) {
     static CoreCoord dispatch_core = device->worker_core_from_logical_core(*device->dispatch_cores().begin());
     u32 chip_id = 0;  // TODO(agrebenisan): Remove hard-coding
 
-    _mm_sfence();
+    tt_driver_atomics::sfence();
 
     tt::llrt::write_hex_vec_to_core(
         device->cluster(), chip_id, dispatch_core, {this->cq_write_interface.fifo_wr_toggle}, CQ_WRITE_TOGGLE, true);
 
-    _mm_sfence();
+    tt_driver_atomics::sfence();
 }
 
 void SystemMemoryWriter::cq_push_back(Device* device, u32 push_size_B) {

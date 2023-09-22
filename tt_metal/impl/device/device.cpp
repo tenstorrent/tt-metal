@@ -87,7 +87,7 @@ Device::Device(int device_id, const std::vector<uint32_t>& l1_bank_remap) : id_(
             CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
 
             if (this->storage_only_cores_.find(logical_core) == this->storage_only_cores_.end()) {
-                cluster->set_tensix_risc_reset_on_core(tt_cxy_pair(this->id(), worker_core), TENSIX_DEASSERT_SOFT_RESET_NO_STAGGER);
+                cluster->deassert_risc_reset_at_core(tt_cxy_pair(this->id(), worker_core));
             }
         }
     }

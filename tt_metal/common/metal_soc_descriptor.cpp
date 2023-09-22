@@ -81,48 +81,6 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
   this->dram_address_offsets = device_descriptor_yaml["dram_address_offsets"].as<std::vector<size_t>>();
 }
 
-// Determines which core will write perf-events on which dram-bank.
-// Creates a map of dram cores to worker cores, in the order that they will get dumped.
-void metal_SocDescriptor::map_workers_to_dram_banks() {
-  for (CoreCoord worker: this->workers) {
-    TT_ASSERT(this->dram_cores.size() > 0, "No DRAM channels detected");
-    // Initialize target dram core to the first dram.
-    CoreCoord target_dram_bank = this->dram_cores.at(0).at(0);
-    std::vector<std::vector<CoreCoord>> dram_cores_per_channel;
-    if (this->arch == tt::ARCH::WORMHOLE || this->arch == tt::ARCH::WORMHOLE_B0) {
-      // Wormhole DRAM has two 1GB banks per each of the 6 channels. Metal interprets this as 12 banks
-      for (int channel = 0; channel < this->dram_cores.size(); channel+=2) {
-        dram_cores_per_channel.push_back({this->dram_cores.at(channel).at(0)});
-      }
-    } else {
-      dram_cores_per_channel = this->dram_cores;
-    }
-    for (const auto &dram_cores : dram_cores_per_channel) {
-      for (CoreCoord dram: dram_cores) {
-        int diff_x = worker.x - dram.x;
-        int diff_y = worker.y - dram.y;
-        // Represents a dram core that comes "before" this worker.
-        if (diff_x >= 0 && diff_y >= 0) {
-          int diff_dram_x = worker.x - target_dram_bank.x;
-          int diff_dram_y = worker.y - target_dram_bank.y;
-          // If initial dram core comes after the worker, swap it with this dram.
-          if (diff_dram_x < 0 || diff_dram_y < 0) {
-            target_dram_bank = dram;
-            // If both target dram core and current dram core come before the worker, choose the one that's closer.
-          } else if (diff_x + diff_y < diff_dram_x + diff_dram_y) {
-            target_dram_bank = dram;
-          }
-        }
-      }
-    }
-    if (this->perf_dram_bank_to_workers.find(target_dram_bank) == this->perf_dram_bank_to_workers.end()) {
-      this->perf_dram_bank_to_workers.insert(std::pair<CoreCoord, std::vector<CoreCoord>>(target_dram_bank, {worker}));
-    } else {
-      this->perf_dram_bank_to_workers[target_dram_bank].push_back(worker);
-    }
-  }
-}
-
 void metal_SocDescriptor::generate_physical_descriptors_from_virtual(uint32_t harvesting_mask) {
   if (harvesting_mask == 0) {
     this->worker_log_to_physical_routing_x = this->worker_log_to_routing_x;
@@ -204,7 +162,6 @@ metal_SocDescriptor::metal_SocDescriptor(const tt_SocDescriptor& other, uint32_t
   this->trisc_sizes = {MEM_TRISC0_SIZE, MEM_TRISC1_SIZE, MEM_TRISC2_SIZE};  // TODO: Read trisc size from yaml
   this->generate_physical_descriptors_from_virtual(harvesting_mask);
   this->load_dram_metadata_from_device_descriptor();
-  this->map_workers_to_dram_banks();
 }
 
 const std::string get_product_name(tt::ARCH arch, uint32_t num_harvested_noc_rows) {
