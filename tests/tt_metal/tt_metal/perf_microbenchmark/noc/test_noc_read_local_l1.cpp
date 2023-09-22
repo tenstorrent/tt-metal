@@ -10,7 +10,6 @@
 #include "tt_metal/llrt/tt_debug_print_server.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
 
 using namespace tt;
 
@@ -43,55 +42,71 @@ int main(int argc, char **argv) {
     //                      Initial Runtime Args Parse
     ////////////////////////////////////////////////////////////////////////////
     std::vector<std::string> input_args(argv, argv + argc);
-    uint32_t dprint;
-    uint32_t print_tensor;
-    uint32_t debug;
-    uint32_t cb_n;
-    uint32_t Nt;
-    uint32_t num_cores_r;
-    uint32_t num_cores_c;
-    uint32_t validation;
+    string profile_device_str = "";
+    string dprint_str = "";
+    string print_tensor_str = "";
+    string debug_str = "";
+    string cb_str = "";
+    string n_str = "";
+    string r_str = "";
+    string c_str = "";
+    string validation_str = "";
     string arch_name = "";
     try {
       std::tie(arch_name, input_args) =
           test_args::get_command_option_and_remaining_args(input_args, "--arch",
                                                            "grayskull");
-      std::tie(debug, input_args) =
-          test_args::get_command_option_uint32_and_remaining_args(input_args,
-                                                           "--debug", 0);
-      std::tie(dprint, input_args) =
-          test_args::get_command_option_uint32_and_remaining_args(input_args,
-                                                           "--dprint", 0);
-      std::tie(print_tensor, input_args) =
-          test_args::get_command_option_uint32_and_remaining_args(
-              input_args, "--print_tensor", 0);
-      std::tie(Nt, input_args) =
-          test_args::get_command_option_uint32_and_remaining_args(input_args, "--nt",
-                                                           1);
-      std::tie(cb_n, input_args) =
-          test_args::get_command_option_uint32_and_remaining_args(input_args, "--cb",
-                                                           1);
-      std::tie(num_cores_r, input_args) =
-          test_args::get_command_option_uint32_and_remaining_args(input_args, "--r",
-                                                           1);
-      std::tie(num_cores_c, input_args) =
-          test_args::get_command_option_uint32_and_remaining_args(input_args, "--c",
-                                                           1);
-      std::tie(validation, input_args) =
-          test_args::get_command_option_uint32_and_remaining_args(input_args,
-                                                           "--validation", 1);
+      std::tie(profile_device_str, input_args) =
+          test_args::get_command_option_and_remaining_args(input_args,
+                                                           "--profile", "0");
+      std::tie(debug_str, input_args) =
+          test_args::get_command_option_and_remaining_args(input_args,
+                                                           "--debug", "0");
+      std::tie(dprint_str, input_args) =
+          test_args::get_command_option_and_remaining_args(input_args,
+                                                           "--dprint", "0");
+      std::tie(print_tensor_str, input_args) =
+          test_args::get_command_option_and_remaining_args(
+              input_args, "--print_tensor", "0");
+
+      std::tie(n_str, input_args) =
+          test_args::get_command_option_and_remaining_args(input_args, "--n",
+                                                           "1");
+      std::tie(cb_str, input_args) =
+          test_args::get_command_option_and_remaining_args(input_args, "--cb",
+                                                           "1");
+      std::tie(r_str, input_args) =
+          test_args::get_command_option_and_remaining_args(input_args, "--r",
+                                                           "1");
+      std::tie(c_str, input_args) =
+          test_args::get_command_option_and_remaining_args(input_args, "--c",
+                                                           "1");
+      std::tie(validation_str, input_args) =
+          test_args::get_command_option_and_remaining_args(input_args,
+                                                           "--validation", "1");
     } catch (const std::exception &e) {
       log_fatal(tt::LogTest, "Command line arguments found exception",
                 e.what());
     }
 
     const tt::ARCH arch = tt::get_arch_from_string(arch_name);
+    int profile_device = stoi(profile_device_str);
+    int dprint = stoi(dprint_str);
+    int print_tensor = stoi(print_tensor_str);
+    int validation = stoi(validation_str);
+    bool debug = stoi(debug_str);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     int pci_express_slot = 0;
     tt_metal::Device *device = tt_metal::CreateDevice(arch, pci_express_slot);
+
+    // TODO(jaehoon): check enable_fw_profile_hack removal
+    //if (profile_device) {
+    //  extern bool enable_fw_profile_hack;
+    //  enable_fw_profile_hack = true;
+    //}
     pass &= tt_metal::InitializeDevice(device);
 
     if (dprint) {
@@ -101,19 +116,26 @@ int main(int argc, char **argv) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
+
+    int num_cores_r = stoi(r_str);
+    int num_cores_c = stoi(c_str);
+    uint32_t n = stoi(n_str);
+    uint32_t cb_n = stoi(cb_str);
+    uint32_t N = n;
+
     // for convenience
-    if (Nt % cb_n != 0) {
+    if (N % cb_n != 0) {
       log_error(LogTest,
                 "activations({} tiles) should be divided cb buffer ({} tiles)",
-                Nt, cb_n);
+                N, cb_n);
       TT_ASSERT(false);
     }
 
     tt::DataFormat data_format = tt::DataFormat::Float16_b;
     uint32_t single_tile_size = 2 * 1024;
-    log_info(LogTest, "Activations = {}x{}", Nt * 32, 32);
+    log_info(LogTest, "Activations = {}x{}", N * 32, 32);
 
-    SHAPE shape = {1, 1, Nt * 32, 32};
+    SHAPE shape = {1, 1, N * 32, 32};
 
     std::vector<tt::deprecated::Tensor<bfloat16>> tensors;
     for (int r = 0; r < num_cores_r; ++r) {
@@ -162,12 +184,12 @@ int main(int argc, char **argv) {
         data_format, dst_cb_addr);
 
     u32 activations_addr = dst_cb_addr + (cb_tiles * single_tile_size);
-    uint32_t total_tiles_size_bytes = Nt * single_tile_size;
+    uint32_t total_tiles_size_bytes = N * single_tile_size;
     log_info(LogTest,
              "dst_cb_addr {} / {} index {} tiles, activations_addr {} / {} "
              "index {} tiles",
              dst_cb_addr, dst_cb_addr / 1024, cb_tiles, activations_addr,
-             activations_addr / 1024, Nt);
+             activations_addr / 1024, N);
 
     if (activations_addr + total_tiles_size_bytes > 1024 * 1024) {
       log_error(LogTest, "cb and activations buffer exceeds local L1 size");
@@ -207,11 +229,15 @@ int main(int argc, char **argv) {
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt_metal::NOC::RISCV_1_default});
 
+    // TODO(jaehoon): check interface change
+    //pass &= tt_metal::CompileProgram(device, program, profile_device);
     pass &= tt_metal::CompileProgram(device, program);
     tt::log_assert(program.get_worker_core_range_set().ranges().size() >= 1,
                    "Invalid core range set");
 
-    auto num_blocks = Nt / cb_n;
+    pass &= tt_metal::ConfigureDeviceWithProgram(device, program);
+
+    auto num_blocks = N / cb_n;
     for (int r = 0; r < num_cores_r; ++r) {
       for (int c = 0; c < num_cores_c; ++c) {
         CoreCoord core = {(size_t)c, (size_t)r};
@@ -226,26 +252,19 @@ int main(int argc, char **argv) {
                                   (uint32_t)phy_core.y, num_blocks, cb_n});
       }
     }
+    tt_metal::WriteRuntimeArgsToDevice(device, program);
 
     log_info(LogTest, "Running {} core test", num_cores_r * num_cores_c);
-    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
-      log_info(LogTest, "calling EnqueueProgram");
-      EnqueueProgram(*::detail::GLOBAL_CQ, program, false);
-      // Only need to dump device data when in dispatch mode
-      // LaunchKernel automatically dumps device data
-      op_profiler::dump_device_profiler_results(device, program);
-    }
-    else {
-      log_info(LogTest, "calling LaunchKernels");
-      tt_metal::ConfigureDeviceWithProgram(device, program);
-      tt_metal::WriteRuntimeArgsToDevice(device, program);
-      pass &= tt_metal::LaunchKernels(device, program);
+    pass &= tt_metal::LaunchKernels(device, program);
+
+    if (profile_device) {
+      tt_metal::detail::DumpDeviceProfileResults(device, program);
     }
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Validation & Teardown
     ////////////////////////////////////////////////////////////////////////////
+
     if (validation) {
       log_info(LogTest, "Validation");
       for (int r = 0; r < num_cores_r; ++r) {
@@ -256,7 +275,7 @@ int main(int argc, char **argv) {
                                      cb_tiles * single_tile_size, result_vec);
           auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
           auto sliced_tensor = slice(tensors[r * num_cores_c + c].get_values(),
-                                     (Nt - cb_tiles) * 1024, Nt * 1024 - 1);
+                                     (N - cb_tiles) * 1024, N * 1024 - 1);
 
           if (print_tensor) {
             print_vec(result_bfp16, 32, 32,
