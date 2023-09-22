@@ -280,7 +280,6 @@ namespace tt::tt_metal::detail{
             R"doc("coefficients value with highest degree first", "List of float", "List size > 0")doc"
         );
 
-
         // *** bcast binary tied to unary ***
         detail::bind_unary_op(m_tensor, "add1", &add1, R"doc(Returns tensor with the addition of one with input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "neg", &neg, R"doc(Returns tensor with the negate all of elements of the input tensor ``{0}``.)doc");
