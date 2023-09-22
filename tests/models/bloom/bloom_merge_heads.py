@@ -36,7 +36,7 @@ def tt_merge_heads(
     )
 
     # batch_size, num_heads, seq_length, head_dim -> batch_size, seq_length, num_heads, head_dim
-    tt_permuted = tt_lib.tensor.permute(tt_reshaped, 0, 2, 1, 3)
+    tt_permuted = tt_lib.tensor.permute(tt_reshaped, (0, 2, 1, 3))
 
     # reshape - fallback
     reshaped_2 = fallback_ops.reshape(

@@ -1025,7 +1025,7 @@ def permute(
     x, *args, device, dtype, layout, input_mem_config, output_mem_config, permute_dims, **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.permute(t0, *permute_dims, output_mem_config=output_mem_config)
+    t1 = ttl.tensor.permute(t0, permute_dims, output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 

@@ -126,7 +126,7 @@ class TtViTSelfAttention(nn.Module):
             self.attention_head_size,
         )
         x = tt_lib.fallback_ops.reshape(x, *new_x_shape)
-        return tt_lib.tensor.permute(x, 0, 2, 1, 3)
+        return tt_lib.tensor.permute(x, (0, 2, 1, 3))
 
     def forward(
         self,
@@ -161,7 +161,7 @@ class TtViTSelfAttention(nn.Module):
 
         context_layer = tt_lib.tensor.bmm(attention_probs, value_layer)
 
-        context_layer = tt_lib.tensor.permute(context_layer, 0, 2, 1, 3)
+        context_layer = tt_lib.tensor.permute(context_layer, (0, 2, 1, 3))
         new_context_layer_shape = (
             (1,) + tuple(context_layer.shape()[:-2]) + (self.all_head_size,)
         )

@@ -441,7 +441,7 @@ class TtHighResolutionNet(nn.Module):
             y = module(y)
 
         y = self.avg_pool2d(y)
-        y = tt_lib.tensor.permute(y, 0, 3, 2, 1)
+        y = tt_lib.tensor.permute(y, (0, 3, 2, 1))
         y = self.classifier(y)
 
         return y

@@ -34,7 +34,7 @@ operation::ProgramWithCallbacks concat_single_core(const std::vector<Tensor> &in
 
 // Ref: https://pytorch.org/docs/stable/generated/torch.cat.html#torch.cat
 // Notes: Non-empty tensors provided must have the same shape, except in the cat dimension.
-Tensor concat(std::vector<Tensor> &input_tensors, int32_t dim = 0, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor concat(std::vector<Tensor> &input_tensors, std::int64_t dim = 0, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace tt_metal
 

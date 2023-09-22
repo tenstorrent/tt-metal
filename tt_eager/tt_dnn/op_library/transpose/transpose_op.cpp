@@ -173,67 +173,46 @@ Tensor transpose_wh(const Tensor &a, const MemoryConfig& output_mem_config) { re
 Tensor transpose_hc(const Tensor &a, const MemoryConfig& output_mem_config) { return transpose_(a, TransposeOpDim::HC, output_mem_config); }
 Tensor transpose_cn(const Tensor &a, const MemoryConfig& output_mem_config) { return transpose_(a, TransposeOpDim::CN, output_mem_config); }
 
-Tensor transpose_nh(const Tensor &a, const MemoryConfig& output_mem_config) { return permute(a,2,1,0,3, output_mem_config); }
-Tensor transpose_nw(const Tensor &a, const MemoryConfig& output_mem_config) { return permute(a,3,1,2,0, output_mem_config); }
-Tensor transpose_cw(const Tensor &a, const MemoryConfig& output_mem_config) { return permute(a,0,3,2,1, output_mem_config); }
+Tensor transpose_nh(const Tensor &a, const MemoryConfig& output_mem_config) { return permute(a, {2, 1, 0, 3}, output_mem_config); }
+Tensor transpose_nw(const Tensor &a, const MemoryConfig& output_mem_config) { return permute(a, {3, 1, 2, 0}, output_mem_config); }
+Tensor transpose_cw(const Tensor &a, const MemoryConfig& output_mem_config) { return permute(a, {0, 3, 2, 1}, output_mem_config); }
 
-Tensor transpose(const Tensor &a, uint dim1, uint dim2, const MemoryConfig& output_mem_config) {
-    TT_ASSERT( dim1 <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
-    TT_ASSERT( dim2 <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
+Tensor transpose(const Tensor &a, std::int64_t dim1, std::int64_t dim2, const MemoryConfig& output_mem_config) {
+    uint32_t normalized_dim1 = a.shape().get_normalized_index(dim1);
+    uint32_t normalized_dim2 = a.shape().get_normalized_index(dim2);
 
-    if ( dim1 == dim2 ) {
+    TT_ASSERT( normalized_dim1 <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
+    TT_ASSERT( normalized_dim2 <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
+
+    if ( normalized_dim1 == normalized_dim2 ) {
         return a;
     }
 
-    uint _t = dim1;
-    if ( dim1 > dim2 ) {
-        dim1 = dim2;
-        dim2 = _t;
+    if ( normalized_dim1 > normalized_dim2 ) {
+        std::swap(normalized_dim1, normalized_dim2);
     }
-
-    TT_ASSERT(dim2 > dim1,"expected order");
 
     // N C H W
     // 0 1 2 3
 
-    if ( dim2 == 3 && dim1 == 0 ) {
+    if ( normalized_dim2 == 3 && normalized_dim1 == 0 ) {
         return transpose_nw(a);
-    } else if (dim2 == 3 && dim1 == 1) {
+    } else if (normalized_dim2 == 3 && normalized_dim1 == 1) {
         return transpose_cw(a);
-    } else if (dim2 == 3 && dim1 == 2) {
+    } else if (normalized_dim2 == 3 && normalized_dim1 == 2) {
         return transpose_wh(a);
-    } else if (dim2 == 2 && dim1 == 0) {
+    } else if (normalized_dim2 == 2 && normalized_dim1 == 0) {
         return transpose_nh(a);
-    } else if (dim2 == 2 && dim1 == 1) {
+    } else if (normalized_dim2 == 2 && normalized_dim1 == 1) {
         return transpose_hc(a);
-    } else if (dim2 == 1 && dim1 == 0) {
+    } else if (normalized_dim2 == 1 && normalized_dim1 == 0) {
         return transpose_cn(a);
+    } else {
+        TT_ASSERT(false, "Unsupported transpose dims");
     }
-    TT_ASSERT(false,"unreachable");
     return a;
 }
 
-Tensor transpose(const Tensor &a, std::array<uint32_t,2> dim_a_b, const MemoryConfig& output_mem_config) {
-    return transpose(a, dim_a_b[0], dim_a_b[1], output_mem_config);
-}
-
-// provide access to transposes on a [n,c,h,w] ranked tensor @a
-Tensor transpose(const Tensor &a, char dim_a, char dim_b, const MemoryConfig& output_mem_config) {
-
-    auto char_to_int_dim = [](char &char_dim) {
-        switch(tolower(char_dim)) {
-            case 'w': return 3;
-            case 'h': return 2;
-            case 'c': return 1;
-            case 'n': return 0;
-            default: TT_ASSERT("Unknown dim specified");
-        }
-        return 0;
-    };
-
-    uint32_t dim1 = char_to_int_dim(dim_a), dim2 = char_to_int_dim(dim_b);
-    return transpose(a, dim1, dim2, output_mem_config);
-}
 
 }  // namespace tt_metal
 

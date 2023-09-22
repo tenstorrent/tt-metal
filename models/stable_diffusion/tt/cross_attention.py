@@ -125,7 +125,7 @@ class TtCrossAttention(nn.Module):
         head_size = self.heads
         _, batch_size, seq_len, dim = tensor.shape()
         tensor = fallback_ops.reshape(tensor, batch_size // head_size, head_size, seq_len, dim)
-        tensor = ttl.tensor.permute(tensor, 0, 2, 1, 3)
+        tensor = ttl.tensor.permute(tensor, (0, 2, 1, 3))
         tensor = fallback_ops.reshape(tensor, 1, batch_size // head_size, seq_len, dim * head_size)
         return tensor
 
@@ -133,7 +133,7 @@ class TtCrossAttention(nn.Module):
         head_size = self.heads
         _, batch_size, seq_len, dim = tensor.shape()
         tensor = fallback_ops.reshape(tensor, batch_size, seq_len, head_size, dim // head_size)
-        tensor = ttl.tensor.permute(tensor, 0, 2, 1, 3)
+        tensor = ttl.tensor.permute(tensor, (0, 2, 1, 3))
         tensor = fallback_ops.reshape(tensor, 1, batch_size * head_size, seq_len, dim // head_size)
         return tensor
 

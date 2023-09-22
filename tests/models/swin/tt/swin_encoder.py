@@ -87,7 +87,7 @@ class TtSwinEncoder(nn.Module):
                 hidden_states, batch_size, *input_dimensions, hidden_size
             )
             reshaped_hidden_state = tt_lib.tensor.permute(
-                reshaped_hidden_state, 0, 3, 1, 2
+                reshaped_hidden_state, (0, 3, 1, 2)
             )
             all_hidden_states += (hidden_states,)
             all_reshaped_hidden_states += (reshaped_hidden_state,)
@@ -141,7 +141,7 @@ class TtSwinEncoder(nn.Module):
                     hidden_size,
                 )
                 reshaped_hidden_state = tt_lib.tensor.permute(
-                    reshaped_hidden_state, 0, 3, 1, 2
+                    reshaped_hidden_state, (0, 3, 1, 2)
                 )
                 all_hidden_states += (hidden_states_before_downsampling,)
                 all_reshaped_hidden_states += (reshaped_hidden_state,)
@@ -152,7 +152,7 @@ class TtSwinEncoder(nn.Module):
                     reshaped_hidden_state, batch_size, *input_dimensions, hidden_size
                 )
                 reshaped_hidden_state = tt_lib.tensor.permute(
-                    reshaped_hidden_state, 0, 3, 1, 2
+                    reshaped_hidden_state, (0, 3, 1, 2)
                 )
                 all_hidden_states += (hidden_states,)
                 all_reshaped_hidden_states += (reshaped_hidden_state,)

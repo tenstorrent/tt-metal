@@ -497,13 +497,13 @@ class TtTransformer2DModel(nn.Module):
 
                 inner_dim = hidden_states.shape()[1]
 
-                hidden_states = ttl.tensor.permute(hidden_states, 0, 2, 3, 1)
+                hidden_states = ttl.tensor.permute(hidden_states, (0, 2, 3, 1))
                 hidden_states = fallback_ops.reshape(
                     hidden_states, 1, batch, height * width, inner_dim
                 )
             else:
                 inner_dim = hidden_states.shape()[1]
-                hidden_states = ttl.tensor.permute(hidden_states, 0, 2, 3, 1)
+                hidden_states = ttl.tensor.permute(hidden_states, (0, 2, 3, 1))
                 hidden_states = fallback_ops.reshape(
                     hidden_states, 1, batch, height * width, inner_dim
                 )
@@ -526,7 +526,7 @@ class TtTransformer2DModel(nn.Module):
                 hidden_states = fallback_ops.reshape(
                     hidden_states, batch, height, width, inner_dim
                 )
-                hidden_states = ttl.tensor.permute(hidden_states, 0, 3, 1, 2)
+                hidden_states = ttl.tensor.permute(hidden_states, (0, 3, 1, 2))
 
                 hidden_states = self.proj_out(hidden_states)
             else:
@@ -534,7 +534,7 @@ class TtTransformer2DModel(nn.Module):
                 hidden_states = fallback_ops.reshape(
                     hidden_states, batch, height, width, inner_dim
                 )
-                hidden_states = ttl.tensor.permute(hidden_states, 0, 3, 1, 2)
+                hidden_states = ttl.tensor.permute(hidden_states, (0, 3, 1, 2))
 
             output = ttl.tensor.add(hidden_states, residual,)
 

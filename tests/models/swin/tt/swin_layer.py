@@ -196,7 +196,7 @@ class TtSwinLayer(nn.Module):
         if attn_mask is not None:
             attn_mask = attn_mask.to(hidden_states_windows.device())
 
-        hidden_states_windows = tt_lib.tensor.permute(hidden_states_windows, 3, 0, 1, 2)
+        hidden_states_windows = tt_lib.tensor.permute(hidden_states_windows, (3, 0, 1, 2))
         attention_outputs = self.attention(
             hidden_states_windows,
             attn_mask,

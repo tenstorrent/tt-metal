@@ -71,11 +71,10 @@ operation::ProgramWithCallbacks Concat::create_program(
     };
 }
 
-Tensor concat(std::vector<Tensor> &input_tensors, int32_t dim, const MemoryConfig& output_mem_config) {
+Tensor concat(std::vector<Tensor> &input_tensors, std::int64_t dim, const MemoryConfig& output_mem_config) {
     TT_ASSERT(input_tensors.size() > 0, "need 1 or more tensors");
     uint32_t ref_rank = input_tensors[0].shape().rank();
-    uint32_t normalized_dim = dim >= 0 ? dim : ref_rank + dim;
-    TT_ASSERT((normalized_dim >= 0 and normalized_dim < ref_rank), "Specified dim is out of range");
+    uint32_t normalized_dim =  input_tensors[0].shape().get_normalized_index(dim);
     if (normalized_dim == ref_rank - 1) {
         for (const auto& input_tensor : input_tensors) {
             TT_ASSERT(input_tensor.shape()[dim] % TILE_WIDTH == 0);

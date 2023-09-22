@@ -19,7 +19,7 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor permute_(const Tensor &a, uint32_t N, uint32_t C, uint32_t H, uint32_t W, const MemoryConfig& output_mem_config) {
+Tensor permute_(const Tensor &a, std::vector<uint32_t> dims, const MemoryConfig& output_mem_config) {
     Device * device;
 
     // Get the device
@@ -29,6 +29,9 @@ Tensor permute_(const Tensor &a, uint32_t N, uint32_t C, uint32_t H, uint32_t W,
     } else {
         device = a.device();
     }
+
+    TT_ASSERT(dims.size() == 4, "Only 4D tensor are supported for permute.");
+    uint32_t N = dims[0], C = dims[1], H = dims[2], W = dims[3];
 
     bool pad_n = H == 0 || W == 0;
     bool pad_c = H == 1 || W == 1;
@@ -99,8 +102,11 @@ Tensor permute_(const Tensor &a, uint32_t N, uint32_t C, uint32_t H, uint32_t W,
     return AutoFormat::format_output_tensor(output, out_shape, device, Layout::TILE);
 }
 
-Tensor permute(const Tensor &a, uint32_t N, uint32_t C, uint32_t H, uint32_t W, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, permute_)(a, N, C, H, W, output_mem_config);
+Tensor permute(const Tensor &a, std::vector<std::int64_t> dims, const MemoryConfig& output_mem_config) {
+
+    std::vector<uint32_t> normalized_dims(dims.size());
+    std::transform(dims.begin(), dims.end(), normalized_dims.begin(), [a](std::int64_t idx) {return a.shape().get_normalized_index(idx);});
+    return operation::decorate_as_composite(__func__, permute_)(a, normalized_dims, output_mem_config);
 }
 
 }  // namespace tt_metal
