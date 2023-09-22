@@ -7,6 +7,8 @@ TT_LIB_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast  -fno-var-tracking
 TT_LIB_SRCS = \
 	tt_eager/tt_lib/csrc/tt_lib_bindings.cpp \
 	tt_eager/tt_lib/csrc/type_caster.cpp \
+	tt_eager/tt_lib/csrc/tt_lib_bindings_tensor.cpp \
+	tt_eager/tt_lib/csrc/tt_lib_bindings_tensor_elemwise_ops.cpp \
 
 TT_LIB_OBJS = $(addprefix $(OBJDIR)/, $(TT_LIB_SRCS:.cpp=.o))
 TT_LIB_DEPS = $(addprefix $(OBJDIR)/, $(TT_LIB_SRCS:.cpp=.d))

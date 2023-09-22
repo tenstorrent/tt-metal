@@ -8,6 +8,5 @@
 #include <pybind11/stl.h>
 
 #include "tt_metal/host_api.hpp"
-#include "tensor/tensor.hpp"
 
 namespace py = pybind11;
