@@ -498,8 +498,11 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(u32 runtime_a
     const CoreCoord& pcie_core = pcie_cores.at(0);
 
     u32 host_noc_addr = noc_coord_to_u32({pcie_core.x, pcie_core.y});
-    command.add_read_multi_write_instruction(
-        runtime_args_src, host_noc_addr, data_size_in_bytes, trailing_write_commands);
+
+    if (data_size_in_bytes) {
+        command.add_read_multi_write_instruction(
+            runtime_args_src, host_noc_addr, data_size_in_bytes, trailing_write_commands);
+    }
 
     command.set_data_size_in_bytes(data_size_in_bytes);
     return command;
