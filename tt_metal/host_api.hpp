@@ -8,10 +8,8 @@
 
 #include <optional>
 #include <variant>
-#include <vector>
-#include "common/core_coord.h"
-#include "tt_metal/impl/kernels/kernel_types.hpp"
-#include "tt_metal/common/tt_backend_api_types.hpp"
+#include "tt_metal/impl/program.hpp"
+#include "tt_metal/impl/buffers/buffer.hpp"
 
 /** @file */
 
@@ -29,8 +27,6 @@ namespace tt {
 
 namespace tt_metal {
 
-class Program;
-class Buffer;
 class Host;
 class Device;
 class CommandQueue;
@@ -201,6 +197,7 @@ const CircularBuffer &CreateCircularBuffers(
  * | Argument      | Description                                          | Type                                                  | Valid Range                                              | Required |
  * |---------------|------------------------------------------------------|-------------------------------------------------------|----------------------------------------------------------|----------|
  * | program       | The program to which semaphore will be added to      | Program &                                             |                                                          | Yes      |
+ * | device        | The device where the semaphore resides               | Device *                                              |                                                          | Yes      |
  * | core_range    | Range of the Tensix co-ordinates using the semaphore | const CoreRange & (std::pair<CoreCoord, CoreCoord>)   | Pair of logical coords where first coord <= second coord | Yes      |
  * | initial_value | Initial value of the semaphore                       | uint32_t                                              |                                                          | Yes      |
  */
@@ -214,6 +211,7 @@ uint32_t CreateSemaphore(Program &program, const CoreRange &core_range, uint32_t
  * | Argument       | Description                                                 | Type                   | Valid Range                                               | Required |
  * |----------------|-------------------------------------------------------------|------------------------|-----------------------------------------------------------|----------|
  * | program        | The program to which semaphore will be added to             | Program &              |                                                           | Yes      |
+ * | device         | The device where the semaphore resides                      | Device *               |                                                           | Yes      |
  * | core_range_set    | Set of Range of the Tensix co-ordinates using the semaphore | const CoreRangeSet &   | Pairs of logical coords where first coord <= second coord | Yes      |
  * | initial_value  | Initial value of the semaphore                              | uint32_t               |                                                           | Yes      |
  */
@@ -332,7 +330,7 @@ bool LaunchProgram(Device *device, Program &program, bool stagger_start = false)
  * | dst          | The vector where the results that are read will be stored              | vector<u32> &                 |                                    | Yes      |
  * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
  */
-void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, std::vector<std::uint32_t>& dst, bool blocking);
+void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& dst, bool blocking);
 
 /**
  * Writes a buffer to the device
@@ -346,7 +344,7 @@ void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, std::vector<std::uint32
  * | dst          | The vector we are writing to the device                                | vector<u32> &                 |                                    | Yes      |
  * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
  */
-void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, std::vector<std::uint32_t>& src, bool blocking);
+void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& src, bool blocking);
 
 /**
  * Writes a program to the device and launches it

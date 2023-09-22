@@ -6,8 +6,10 @@
 
 #pragma once
 
+#include <vector>
 #include <ostream>
 
+#include "common/logger.hpp"
 #include "constants.hpp"
 
 enum class MathFidelity : uint8_t
