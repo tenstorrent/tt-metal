@@ -62,9 +62,9 @@ TT_METAL_SLOW_DISPATCH_TEST_ENTRIES = (
         "test_matmul_single_tile_output_in_l1",
     ),
     TestEntry("tt_metal/tests/test_matmul_multi_tile", "test_matmul_multi_tile"),
-    void_for_whb0(
-        TestEntry("tt_metal/tests/test_matmul_large_block", "test_matmul_large_block")
-    ),
+
+    TestEntry("tt_metal/tests/test_matmul_large_block", "test_matmul_large_block"),
+
     TestEntry("tt_metal/tests/test_matmul_single_core", "test_matmul_single_core"),
     TestEntry(
         "tt_metal/tests/test_matmul_single_core_small", "test_matmul_single_core_small"
@@ -75,23 +75,21 @@ TT_METAL_SLOW_DISPATCH_TEST_ENTRIES = (
             "test_matmul_multi_core_single_dram",
         )
     ),
-    void_for_whb0(
-        TestEntry(
-            "tt_metal/tests/test_matmul_multi_core_multi_dram_in0_mcast",
-            "test_matmul_multi_core_multi_dram_in0_mcast",
-        )
+
+    TestEntry(
+        "tt_metal/tests/test_matmul_multi_core_multi_dram_in0_mcast",
+        "test_matmul_multi_core_multi_dram_in0_mcast",
     ),
-    void_for_whb0(
-        TestEntry(
-            "tt_metal/tests/test_matmul_multi_core_multi_dram_in1_mcast",
-            "test_matmul_multi_core_multi_dram_in1_mcast",
-        )
+
+
+    TestEntry(
+        "tt_metal/tests/test_matmul_multi_core_multi_dram_in1_mcast",
+        "test_matmul_multi_core_multi_dram_in1_mcast",
     ),
-    void_for_whb0(
-        TestEntry(
-            "tt_metal/tests/test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast",
-            "test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast",
-        )
+
+    TestEntry(
+        "tt_metal/tests/test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast",
+        "test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast",
     ),
     TestEntry(
         "tt_metal/tests/test_generic_binary_reader_matmul_large_block",
