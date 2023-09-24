@@ -88,7 +88,7 @@ int main(int argc, char **argv) {
          */
         constexpr uint32_t src0_cb_index = CB::c_in0;
         constexpr uint32_t num_input_tiles = 2;
-        CircularBuffer cb_src0 = CreateCircularBuffer(
+        CircularBufferID cb_src0 = CreateCircularBuffer(
             program,
             src0_cb_index,
             core,
@@ -98,7 +98,7 @@ int main(int argc, char **argv) {
         );
 
         constexpr uint32_t src1_cb_index = CB::c_in1;
-        CircularBuffer cb_src1 = CreateCircularBuffer(
+        CircularBufferID cb_src1 = CreateCircularBuffer(
             program,
             src1_cb_index,
             core,
@@ -109,7 +109,7 @@ int main(int argc, char **argv) {
 
         constexpr uint32_t output_cb_index = CB::c_out0;
         constexpr uint32_t num_output_tiles = 2;
-        CircularBuffer cb_output = CreateCircularBuffer(
+        CircularBufferID cb_output = CreateCircularBuffer(
             program,
             output_cb_index,
             core,

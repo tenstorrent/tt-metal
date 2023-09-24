@@ -10,28 +10,27 @@ void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(1);
     uint32_t start_id = get_arg_val<uint32_t>(2);
     uint32_t num_tiles = get_arg_val<uint32_t>(3);
-    uint32_t l1_address = get_arg_val<uint32_t>(4);
-    uint32_t semaphore_addr = get_arg_val<uint32_t>(5);
-    uint32_t controller_noc_x = get_arg_val<uint32_t>(6);
-    uint32_t controller_noc_y = get_arg_val<uint32_t>(7);
-    uint32_t control_value = get_arg_val<uint32_t>(8);
-    bool is_controller = get_arg_val<uint32_t>(9) == 1;
-    uint32_t range_0_start_noc_x = get_arg_val<uint32_t>(10);
-    uint32_t range_0_start_noc_y = get_arg_val<uint32_t>(11);
-    uint32_t range_0_end_noc_x = get_arg_val<uint32_t>(12);
-    uint32_t range_0_end_noc_y = get_arg_val<uint32_t>(13);
-    uint32_t range_0_size = get_arg_val<uint32_t>(14);
-    uint32_t range_1_start_noc_x = get_arg_val<uint32_t>(15);
-    uint32_t range_1_start_noc_y = get_arg_val<uint32_t>(16);
-    uint32_t range_1_end_noc_x = get_arg_val<uint32_t>(17);
-    uint32_t range_1_end_noc_y = get_arg_val<uint32_t>(18);
-    uint32_t range_1_size = get_arg_val<uint32_t>(19);
-    uint32_t range_2_start_noc_x = get_arg_val<uint32_t>(20);
-    uint32_t range_2_start_noc_y = get_arg_val<uint32_t>(21);
-    uint32_t range_2_end_noc_x = get_arg_val<uint32_t>(22);
-    uint32_t range_2_end_noc_y = get_arg_val<uint32_t>(23);
-    uint32_t range_2_size = get_arg_val<uint32_t>(24);
-    bool do_third_multicast = get_arg_val<uint32_t>(25) == 1;
+    uint32_t semaphore_addr = get_arg_val<uint32_t>(4);
+    uint32_t controller_noc_x = get_arg_val<uint32_t>(5);
+    uint32_t controller_noc_y = get_arg_val<uint32_t>(6);
+    uint32_t control_value = get_arg_val<uint32_t>(7);
+    bool is_controller = get_arg_val<uint32_t>(8) == 1;
+    uint32_t range_0_start_noc_x = get_arg_val<uint32_t>(9);
+    uint32_t range_0_start_noc_y = get_arg_val<uint32_t>(10);
+    uint32_t range_0_end_noc_x = get_arg_val<uint32_t>(11);
+    uint32_t range_0_end_noc_y = get_arg_val<uint32_t>(12);
+    uint32_t range_0_size = get_arg_val<uint32_t>(13);
+    uint32_t range_1_start_noc_x = get_arg_val<uint32_t>(14);
+    uint32_t range_1_start_noc_y = get_arg_val<uint32_t>(15);
+    uint32_t range_1_end_noc_x = get_arg_val<uint32_t>(16);
+    uint32_t range_1_end_noc_y = get_arg_val<uint32_t>(17);
+    uint32_t range_1_size = get_arg_val<uint32_t>(18);
+    uint32_t range_2_start_noc_x = get_arg_val<uint32_t>(19);
+    uint32_t range_2_start_noc_y = get_arg_val<uint32_t>(20);
+    uint32_t range_2_end_noc_x = get_arg_val<uint32_t>(21);
+    uint32_t range_2_end_noc_y = get_arg_val<uint32_t>(22);
+    uint32_t range_2_size = get_arg_val<uint32_t>(23);
+    bool do_third_multicast = get_arg_val<uint32_t>(24) == 1;
 
     constexpr uint32_t cb_id = get_compile_time_arg_val(0);
     constexpr bool src_is_dram = get_compile_time_arg_val(1) == 1;
@@ -60,12 +59,14 @@ void kernel_main() {
     };
 
     // read a ublock of tiles from src to CB
-    uint32_t l1_write_addr = l1_address;
+    cb_reserve_back(cb_id, num_tiles);
+    uint32_t l1_write_addr = get_write_ptr(cb_id);
     for (uint32_t i = start_id; i < start_id + num_tiles; i += ublock_size_tiles) {
         noc_async_read_tile(i, src_addrgen, l1_write_addr);
         noc_async_read_barrier();
         l1_write_addr += tile_bytes;
     }
+    cb_push_back(cb_id, num_tiles);
 
     if (is_controller) {
         noc_semaphore_wait(semaphore_addr_ptr, control_value);
@@ -87,10 +88,12 @@ void kernel_main() {
         noc_semaphore_wait(semaphore_addr_ptr, control_value);
     }
 
-    uint32_t l1_read_addr = l1_address;
+    cb_wait_front(cb_id, num_tiles);
+    uint32_t l1_read_addr = get_read_ptr(cb_id);
     for (uint32_t i = start_id; i < start_id + num_tiles; i += ublock_size_tiles) {
         noc_async_write_tile(i, dst_addrgen, l1_read_addr);
         noc_async_write_barrier();
         l1_read_addr += tile_bytes;
     }
+    cb_pop_front(cb_id, num_tiles);
 }

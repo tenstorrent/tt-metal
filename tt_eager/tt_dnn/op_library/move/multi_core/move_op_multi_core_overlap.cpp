@@ -136,7 +136,6 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
             dst_buffer->address(),
             tiles_handled_per_core,
             num_tiles_per_core,
-            cb.address(),
             semaphore_addr,
             (uint32_t)noc_controller.x,
             (uint32_t)noc_controller.y,

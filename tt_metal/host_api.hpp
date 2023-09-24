@@ -99,7 +99,7 @@ KernelID CreateComputeKernel(Program &program, const std::string &file_name, con
 /**
  * Creates a Circular Buffer (CBs) in L1 memory at specified address and core and adds it to the program. L1 allocator reserves size_in_bytes bytes at manually specified addresses.
  *
- * Return value: CircularBuffer *
+ * Return value: Circular Buffer ID (uintptr_t)
  *
  * | Argument      | Description                                                                    | Type               | Valid Range                             | Required |
  * |---------------|--------------------------------------------------------------------------------|--------------------|-----------------------------------------|----------|
@@ -111,7 +111,7 @@ KernelID CreateComputeKernel(Program &program, const std::string &file_name, con
  * | data_format   | The format of the data to be stored in the CB                                  | DataFormat enum    | DataFormat::Float16_b                   | True     |
  * | l1_address    | Address at which the CB buffer will reside                                     | optional<uint32_t>           | 200 kB to 1MB (DOX-TODO: in bytes)          | False     |
  */
-const CircularBuffer &CreateCircularBuffer(
+CircularBufferID CreateCircularBuffer(
     Program &program,
     uint32_t buffer_index,
     const CoreCoord &core,
@@ -123,7 +123,7 @@ const CircularBuffer &CreateCircularBuffer(
 /**
  * Creates Circular Buffers (CBs) in L1 memory of all cores within core range (inclusive) at specified address and adds it to the program. L1 allocator reserves size_in_bytes bytes at manually specified addresses.
  *
- * Return value: CircularBuffer *
+ * Return value: Circular Buffer ID (uintptr_t)
  *
  * | Argument      | Description                                                                    | Type               | Valid Range                             | Required |
  * |---------------|--------------------------------------------------------------------------------|--------------------|-----------------------------------------|----------|
@@ -135,7 +135,7 @@ const CircularBuffer &CreateCircularBuffer(
  * | data_format   | The format of the data to be stored in the CB                                  | DataFormat enum    | DataFormat::Float16_b                   | True     |
  * | l1_address    | Address at which the CB buffer will reside                                     | optional<uint32_t>           | 200 kB to 1MB (DOX-TODO: in bytes)          | False     |
  */
-const CircularBuffer &CreateCircularBuffers(
+CircularBufferID CreateCircularBuffers(
     Program &program,
     uint32_t buffer_index,
     const CoreRange &core_range,
@@ -147,7 +147,7 @@ const CircularBuffer &CreateCircularBuffers(
 /**
  * Creates Circular Buffers (CBs) in L1 memory of all cores within set of core ranges (inclusive) at specified address and adds it to the program. L1 allocator reserves size_in_bytes bytes at manually specified addresses.
  *
- * Return value: CircularBuffer *
+ * Return value: Circular Buffer ID (uintptr_t)
  *
  * | Argument      | Description                                                                    | Type               | Valid Range                             | Required |
  * |---------------|--------------------------------------------------------------------------------|--------------------|-----------------------------------------|----------|
@@ -159,7 +159,7 @@ const CircularBuffer &CreateCircularBuffers(
  * | data_format   | The format of the data to be stored in the CB                                  | DataFormat enum    | DataFormat::Float16_b                   | True     |
  * | l1_address    | Address at which the CB buffer will reside                                     | optional<uint32_t>           | 200 kB to 1MB (DOX-TODO: in bytes)          | False     |
  */
-const CircularBuffer &CreateCircularBuffers(
+CircularBufferID CreateCircularBuffers(
     Program &program,
     uint32_t buffer_index,
     const CoreRangeSet &core_range_set,
@@ -171,7 +171,7 @@ const CircularBuffer &CreateCircularBuffers(
 /**
  * Creates Circular Buffers (CBs) in L1 memory of all cores within set of core ranges (inclusive) at specified address and adds it to the program. L1 allocator reserves size_in_bytes bytes at manually specified addresses.
  *
- * Return value: CircularBuffer *
+ * Return value: Circular Buffer ID (uintptr_t)
  *
  * | Argument      | Description                                                                    | Type               | Valid Range                             | Required |
  * |---------------|--------------------------------------------------------------------------------|--------------------|-----------------------------------------|----------|
@@ -183,7 +183,7 @@ const CircularBuffer &CreateCircularBuffers(
  * | data_format   | The format of the data to be stored in the CB                                  | DataFormat enum    | DataFormat::Float16_b                   | True     |
  * | l1_address    | Address at which the CB buffer will reside                                     | optional<uint32_t>           | 200 kB to 1MB (DOX-TODO: in bytes)          | True     |
  */
-const CircularBuffer &CreateCircularBuffers(
+CircularBufferID CreateCircularBuffers(
     Program &program,
     const std::set<uint32_t> &buffer_indices,
     const CoreRangeSet &core_range_set,

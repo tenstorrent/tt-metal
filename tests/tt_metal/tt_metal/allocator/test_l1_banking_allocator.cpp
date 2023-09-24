@@ -81,7 +81,8 @@ bool test_circular_buffers_allocated_bottom_up(tt_metal::Device *device, tt_meta
         num_input_tiles * single_tile_size,
         tt::DataFormat::Float16_b
     );
-    pass &= cb_src0.address() == L1_UNRESERVED_BASE;
+    // TODO Almeet: Do we want to expose an API to get cb address after doing cb allocation?
+    // pass &= cb_src0.address() == L1_UNRESERVED_BASE;
 
     constexpr uint32_t src1_cb_index = CB::c_in1;
     auto cb_src1 = tt_metal::CreateCircularBuffer(
@@ -92,7 +93,8 @@ bool test_circular_buffers_allocated_bottom_up(tt_metal::Device *device, tt_meta
         num_input_tiles * single_tile_size,
         tt::DataFormat::Float16_b
     );
-    pass &= (cb_src1.address() == (cb_src0.address() + cb_src0.size()));
+    // TODO Almeet: Do we want to expose an API to get cb address after doing cb allocation?
+    // pass &= (cb_src1.address() == (cb_src0.address() + cb_src0.size()));
 
     constexpr uint32_t output_cb_index = CB::c_out0;
     constexpr uint32_t num_output_tiles = 2;
@@ -104,7 +106,8 @@ bool test_circular_buffers_allocated_bottom_up(tt_metal::Device *device, tt_meta
         num_output_tiles * single_tile_size,
         tt::DataFormat::Float16_b
     );
-    pass &= (cb_output.address() == (cb_src1.address() + cb_src1.size()));
+    // TODO Almeet: Do we want to expose an API to get cb address after doing cb allocation?
+    // pass &= (cb_output.address() == (cb_src1.address() + cb_src1.size()));
 
     return pass;
 }
@@ -141,7 +144,8 @@ bool test_circular_buffers_allowed_to_grow_past_512KB(tt_metal::Device *device, 
         num_input_tiles * single_tile_size,
         tt::DataFormat::Float16_b
     );
-    pass &= cb_src0.address() == (L1_UNRESERVED_BASE + ((4 * 1024) * 3));
+    // TODO Almeet: Do we want to expose an API to get cb address after doing cb allocation?
+    // pass &= cb_src0.address() == (L1_UNRESERVED_BASE + ((4 * 1024) * 3));
 
     return pass;
 }
@@ -198,6 +202,7 @@ int main(int argc, char **argv) {
         // |               bank 0              |            bank 1            |
         // |        | 256 KB | 64 KB | 128 KB  |    | 256 KB | 64 KB | 128 KB |
         // --------------------------------------------------------------------
+        // TODO ALMEET: Move this to unit test for circular buffer allocation
         pass &= test_circular_buffers_allocated_bottom_up(device, program);
 
         // tries to allocate a buffer larger than 512 KB - (256 + 64 + 128) KB in compute and storage core
@@ -216,6 +221,7 @@ int main(int argc, char **argv) {
         // |        | 256 KB | 64 KB | 128 KB  |    | 256 KB | 64 KB | 128 KB |
         // --------------------------------------------------------------------
         // --------------------------------------------------------------------
+        // TODO ALMEET: Move this to unit test for circular buffer allocation
         pass &= test_circular_buffers_allowed_to_grow_past_512KB(device, program);
 
         ////////////////////////////////////////////////////////////////////////////

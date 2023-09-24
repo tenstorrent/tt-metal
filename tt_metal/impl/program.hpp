@@ -113,7 +113,7 @@ class Program {
     CoreRangeSet worker_crs_;
     bool compile_needed_;
 
-    friend const CircularBuffer &CreateCircularBuffers(
+    friend CircularBufferID CreateCircularBuffers(
         Program &program,
         const std::set<uint32_t> &buffer_indices,
         const CoreRangeSet &core_range_set,
@@ -131,7 +131,7 @@ class Program {
     void add_kernel(Kernel *kernel);
     Kernel *get_kernel(KernelID kernel_id) const;
 
-    const CircularBuffer &add_circular_buffer(const CoreRangeSet &core_range_set, const std::set<u32> &indices, u32 num_tiles, u32 size_bytes, const DataFormat &data_format, std::optional<u32> address);
+    CircularBufferID add_circular_buffer(const CoreRangeSet &core_range_set, const std::set<u32> &indices, u32 num_tiles, u32 size_bytes, const DataFormat &data_format, std::optional<u32> address);
 
     void add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t init_value);
 

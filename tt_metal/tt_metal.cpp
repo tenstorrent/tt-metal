@@ -212,7 +212,7 @@ KernelID CreateComputeKernel(Program &program, const std::string &file_name, con
     return kernel->id();
 }
 
-const CircularBuffer &CreateCircularBuffer(
+CircularBufferID CreateCircularBuffer(
     Program &program,
     uint32_t buffer_index,
     const CoreCoord &core,
@@ -231,7 +231,7 @@ const CircularBuffer &CreateCircularBuffer(
         l1_address);
 }
 
-const CircularBuffer &CreateCircularBuffers(
+CircularBufferID CreateCircularBuffers(
     Program &program,
     uint32_t buffer_index,
     const CoreRange &core_range,
@@ -249,7 +249,7 @@ const CircularBuffer &CreateCircularBuffers(
         l1_address);
 }
 
-const CircularBuffer &CreateCircularBuffers(
+CircularBufferID CreateCircularBuffers(
     Program &program,
     uint32_t buffer_index,
     const CoreRangeSet &core_range_set,
@@ -261,7 +261,7 @@ const CircularBuffer &CreateCircularBuffers(
         program, std::set<u32>({buffer_index}), core_range_set, num_tiles, size_in_bytes, data_format, l1_address);
 }
 
-const CircularBuffer &CreateCircularBuffers(
+CircularBufferID CreateCircularBuffers(
     Program &program,
     const std::set<uint32_t> &buffer_indices,
     const CoreRangeSet &core_range_set,

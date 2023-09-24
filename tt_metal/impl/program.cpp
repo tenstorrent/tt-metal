@@ -202,7 +202,7 @@ void Program::CircularBufferConfig::mark_address(u64 address, u64 size) {
     }
 }
 
-const CircularBuffer &Program::add_circular_buffer(const CoreRangeSet &core_range_set, const std::set<u32> &indices, u32 num_tiles, u32 size_bytes, const DataFormat &data_format, std::optional<u32> address) {
+CircularBufferID Program::add_circular_buffer(const CoreRangeSet &core_range_set, const std::set<u32> &indices, u32 num_tiles, u32 size_bytes, const DataFormat &data_format, std::optional<u32> address) {
     log_assert(
         indices.size() <= NUM_CIRCULAR_BUFFERS,
         "Invalid number of circular buffers: Requested number of circular buffers ({}) exceeds max number of circular buffers per core ({})", indices.size(), NUM_CIRCULAR_BUFFERS
@@ -241,7 +241,7 @@ const CircularBuffer &Program::add_circular_buffer(const CoreRangeSet &core_rang
     }
     this->invalidate();
     this->circular_buffers_.emplace_back(CircularBuffer(core_range_set, indices, num_tiles, size_bytes, computed_addr.value(), data_format));
-    return this->circular_buffers_.back();
+    return this->circular_buffers_.back().id();
 }
 
 const std::vector<CircularBuffer> Program::circular_buffers_on_core(const CoreCoord &core) const {

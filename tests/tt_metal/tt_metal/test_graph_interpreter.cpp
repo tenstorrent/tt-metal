@@ -499,9 +499,9 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
         {
             OpCode op_code = tt::OpCode::Add;
 
-            uint32_t in0 = *cb_src0.buffer_indices().begin();
-            uint32_t in1 = *cb_src1.buffer_indices().begin();
-            uint32_t out = *cb_interm0.buffer_indices().begin();
+            uint32_t in0 = src0_cb_index;
+            uint32_t in1 = src1_cb_index;
+            uint32_t out = interm0_cb_index;
 
             uint32_t pop_input = 1;
 
@@ -522,9 +522,9 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
         {
             OpCode op_code = tt::OpCode::Gelu;
 
-            uint32_t in0 = *cb_interm0.buffer_indices().begin();
-            uint32_t in1 = *cb_interm1.buffer_indices().begin();
-            uint32_t out = *cb_output.buffer_indices().begin();
+            uint32_t in0 = interm0_cb_index;
+            uint32_t in1 = interm1_cb_index;
+            uint32_t out = ouput_cb_index;
 
             uint32_t pop_input = 1;
 
@@ -652,7 +652,7 @@ bool run_forked_binary_test() {
 
         std::vector<tt_metal::Buffer> src_dram_buffers;
 
-        std::vector<tt_metal::CircularBuffer> src_cb_buffers;
+        std::vector<uint32_t> src_cb_buffer_indices;
         uint32_t src_cb_index = 0;
         uint32_t src_cb_addr = 200 * 1024;
         for (uint32_t i = 0; i < num_dram_channels; i++){
@@ -667,7 +667,7 @@ bool run_forked_binary_test() {
                 tt::DataFormat::Float16_b,
                 src_cb_addr
             );
-            src_cb_buffers.push_back(src_cb);
+            src_cb_buffer_indices.push_back(src_cb_index);
             src_cb_index++;
             src_cb_addr += 100 * 1024;
         }
@@ -685,7 +685,7 @@ bool run_forked_binary_test() {
             output_cb_addr
         );
 
-        std::vector<tt_metal::CircularBuffer> interm_cb_buffers;
+        std::vector<uint32_t> interm_cb_buffer_indices;
         uint32_t interm_cb_index = 24;
         uint32_t interm_cb_addr = 800 * 1024;
         for (uint32_t i = 0; i < 3; i++){
@@ -698,7 +698,7 @@ bool run_forked_binary_test() {
                 tt::DataFormat::Float16_b,
                 interm_cb_addr
             );
-            interm_cb_buffers.push_back(interm_cb);
+            interm_cb_buffer_indices.push_back(interm_cb);
             interm_cb_index++;
             interm_cb_addr += 100 * 1024;
         }
@@ -765,10 +765,10 @@ bool run_forked_binary_test() {
             uint32_t in0;
             uint32_t in1;
             uint32_t out;
-            in0 = *src_cb_buffers[0].buffer_indices().begin();
-            in1 = *src_cb_buffers[1].buffer_indices().begin();
+            in0 = src_cb_buffer_indices[0];
+            in1 = src_cb_buffer_indices[1];
 
-            out = *interm_cb_buffers[0].buffer_indices().begin();
+            out = interm_cb_buffer_indices[0];
             uint32_t pop_input0 = 0;
             uint32_t pop_input1 = 1;
 
@@ -793,10 +793,10 @@ bool run_forked_binary_test() {
             uint32_t in0;
             uint32_t in1;
             uint32_t out;
-            in0 = *src_cb_buffers[2].buffer_indices().begin();
-            in1 = *src_cb_buffers[3].buffer_indices().begin();
+            in0 = src_cb_buffer_indices[2];
+            in1 = src_cb_buffer_indices[3];
 
-            out = *interm_cb_buffers[1].buffer_indices().begin();
+            out = interm_cb_buffer_indices[1];
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 0;
 
@@ -821,9 +821,9 @@ bool run_forked_binary_test() {
             uint32_t in0;
             uint32_t in1;
             uint32_t out;
-            in0 = *src_cb_buffers[3].buffer_indices().begin();
-            in1 = *src_cb_buffers[4].buffer_indices().begin();
-            out = *interm_cb_buffers[2].buffer_indices().begin();
+            in0 = src_cb_buffer_indices[3];
+            in1 = src_cb_buffer_indices[4];
+            out = interm_cb_buffer_indices[2];
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 1;
             op_info_t op_info = {
@@ -847,10 +847,10 @@ bool run_forked_binary_test() {
             uint32_t in0;
             uint32_t in1;
             uint32_t out;
-            in0 = *interm_cb_buffers[0].buffer_indices().begin();
-            in1 = *interm_cb_buffers[1].buffer_indices().begin();
+            in0 = interm_cb_buffer_indices[0];
+            in1 = interm_cb_buffer_indices[1];
 
-            out = *interm_cb_buffers[0].buffer_indices().begin();
+            out = interm_cb_buffer_indices[0];
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 0;
 
@@ -875,10 +875,10 @@ bool run_forked_binary_test() {
             uint32_t in0;
             uint32_t in1;
             uint32_t out;
-            in0 = *interm_cb_buffers[1].buffer_indices().begin();
-            in1 = *interm_cb_buffers[2].buffer_indices().begin();
+            in0 = interm_cb_buffer_indices[1];
+            in1 = interm_cb_buffer_indices[2];
 
-            out = *interm_cb_buffers[2].buffer_indices().begin();
+            out = interm_cb_buffer_indices[2];
             uint32_t pop_input0 = 0;
             uint32_t pop_input1 = 1;
 
@@ -903,10 +903,10 @@ bool run_forked_binary_test() {
             uint32_t in0;
             uint32_t in1;
             uint32_t out;
-            in0 = *interm_cb_buffers[1].buffer_indices().begin();
-            in1 = *interm_cb_buffers[2].buffer_indices().begin();
+            in0 = interm_cb_buffer_indices[1];
+            in1 = interm_cb_buffer_indices[2];
 
-            out = *interm_cb_buffers[1].buffer_indices().begin();
+            out = interm_cb_buffer_indices[1];
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 1;
 
@@ -931,10 +931,10 @@ bool run_forked_binary_test() {
             uint32_t in0;
             uint32_t in1;
             uint32_t out;
-            in0 = *interm_cb_buffers[0].buffer_indices().begin();
-            in1 = *interm_cb_buffers[1].buffer_indices().begin();
+            in0 = interm_cb_buffer_indices[0];
+            in1 = interm_cb_buffer_indices[1];
 
-            out = *interm_cb_buffers[0].buffer_indices().begin();
+            out = interm_cb_buffer_indices[0];
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 1;
 
@@ -959,10 +959,10 @@ bool run_forked_binary_test() {
             uint32_t in0;
             uint32_t in1;
             uint32_t out;
-            in0 = *interm_cb_buffers[0].buffer_indices().begin();
-            in1 = *interm_cb_buffers[0].buffer_indices().begin();
+            in0 = interm_cb_buffer_indices[0];
+            in1 = interm_cb_buffer_indices[0];
 
-            out = *interm_cb_buffers[0].buffer_indices().begin();
+            out = interm_cb_buffer_indices[0];
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 0;
 
@@ -987,10 +987,10 @@ bool run_forked_binary_test() {
             uint32_t in0;
             uint32_t in1;
             uint32_t out;
-            in0 = *src_cb_buffers[0].buffer_indices().begin();
-            in1 = *interm_cb_buffers[0].buffer_indices().begin();
+            in0 = src_cb_buffer_indices[0];
+            in1 = interm_cb_buffer_indices[0];
 
-            out = *interm_cb_buffers[1].buffer_indices().begin();
+            out = interm_cb_buffer_indices[1];
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 0;
 
@@ -1015,10 +1015,10 @@ bool run_forked_binary_test() {
             uint32_t in0;
             uint32_t in1;
             uint32_t out;
-            in0 = *interm_cb_buffers[0].buffer_indices().begin();
-            in1 = *interm_cb_buffers[1].buffer_indices().begin();
+            in0 = interm_cb_buffer_indices[0];
+            in1 = interm_cb_buffer_indices[1];
 
-            out = *output_cb_buffer.buffer_indices().begin();
+            out = output_cb_index;
             uint32_t pop_input0 = 1;
             uint32_t pop_input1 = 1;
 

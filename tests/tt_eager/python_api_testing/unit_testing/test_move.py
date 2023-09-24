@@ -20,7 +20,6 @@ import torch
 
 def run_move_op(test_id, shape, dtype, in0_mem_config, output_mem_config, device):
     """
-    For overlap, every test case should (for now) default to single-core.
     For non_overlap, multi-core is run for num_tiles > 1.
     """
     torch.manual_seed(1234)

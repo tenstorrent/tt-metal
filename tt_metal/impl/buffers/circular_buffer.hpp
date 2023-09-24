@@ -9,6 +9,7 @@
 #include "common/tt_backend_api_types.hpp"
 #include "common/core_coord.h"
 #include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/buffers/circular_buffer_types.hpp"
 
 namespace tt {
 
@@ -16,7 +17,7 @@ namespace tt_metal {
 
 class CircularBuffer {
    public:
-    CircularBuffer() : core_range_set_({}), num_tiles_(0), size_(0), address_(0), data_format_(DataFormat::Invalid) {}
+    CircularBuffer() : id_(reinterpret_cast<uintptr_t>(this)), core_range_set_({}), num_tiles_(0), size_(0), address_(0), data_format_(DataFormat::Invalid) {}
 
     CircularBuffer(
         const CoreRangeSet &core_range_set,
@@ -26,11 +27,7 @@ class CircularBuffer {
         u32 address,
         DataFormat data_format);
 
-    CircularBuffer(const CircularBuffer &other) = default;
-    CircularBuffer& operator=(const CircularBuffer &other) = default;
-
-    CircularBuffer(CircularBuffer &&other) = default;
-    CircularBuffer& operator=(CircularBuffer &&other) = default;
+    const CircularBufferID id() const { return id_; }
 
     CoreRangeSet core_range_set() const { return core_range_set_; }
 
@@ -49,6 +46,7 @@ class CircularBuffer {
     bool is_on_logical_core(const CoreCoord &logical_core) const;
 
    private:
+    const uintptr_t id_;
     CoreRangeSet core_range_set_;
     std::set<u32> buffer_indices_;        // Buffer IDs unique within a Tensix core (0 to 32)
     u32 num_tiles_;                             // Size in tiles

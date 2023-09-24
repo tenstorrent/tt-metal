@@ -26,7 +26,7 @@ CircularBuffer::CircularBuffer(
     u32 size_in_bytes,
     u32 address,
     DataFormat data_format) :
-    core_range_set_(core_range_set), buffer_indices_(buffer_indices), num_tiles_(num_tiles), size_(size_in_bytes), address_(address), data_format_(data_format) {
+    id_(reinterpret_cast<uintptr_t>(this)), core_range_set_(core_range_set), buffer_indices_(buffer_indices), num_tiles_(num_tiles), size_(size_in_bytes), address_(address), data_format_(data_format) {
     validate_buffer_indices(buffer_indices);
 }
 
