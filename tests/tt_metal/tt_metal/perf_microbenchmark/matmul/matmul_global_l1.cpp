@@ -1162,11 +1162,11 @@ int main(int argc, char** argv) {
         (l1_in1 == 0) ? (BufferType::DRAM) : (BufferType::L1);
     BufferType out_buffer_type =
         (l1_out == 0) ? (BufferType::DRAM) : (BufferType::L1);
-    auto in0_buffer = tt_metal::Buffer(device, in0_buffer_size,
+    auto in0_buffer = CreateBuffer(device, in0_buffer_size,
                                        single_tile_size, in0_buffer_type);
-    auto in1_buffer = tt_metal::Buffer(device, in1_buffer_size,
+    auto in1_buffer = CreateBuffer(device, in1_buffer_size,
                                        single_tile_size, in1_buffer_type);
-    auto out_buffer = tt_metal::Buffer(device, out_buffer_size,
+    auto out_buffer = CreateBuffer(device, out_buffer_size,
                                        single_tile_size, out_buffer_type);
 
     SHAPE in0_shape = {1, 1, Mt * 32, Kt * 32};

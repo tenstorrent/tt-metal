@@ -35,18 +35,7 @@ int main(int argc, char **argv) {
     for (int do_max = 0; do_max <= 1; do_max++) {
     log_info(LogTest, "Running reduce test for max={}", do_max);
     try {
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Initial Runtime Args Parse
-        ////////////////////////////////////////////////////////////////////////////
-        std::vector<std::string> input_args(argv, argv + argc);
-        string arch_name = "";
-        try {
-            std::tie(arch_name, input_args) =
-                test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
-        } catch (const std::exception& e) {
-            log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
-        }
-        const tt::ARCH arch = tt::get_arch_from_string(arch_name);
+
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
@@ -84,10 +73,10 @@ int main(int argc, char **argv) {
             dst_page_size = dram_buffer_bytes/Wt;
         }
 
-        auto src0_dram_buffer = tt_metal::Buffer(device, dram_buffer_bytes, src_page_size, tt_metal::BufferType::DRAM);
+        auto src0_dram_buffer = CreateBuffer(device, dram_buffer_bytes, src_page_size, tt_metal::BufferType::DRAM);
         uint32_t dram_buffer_src0_addr = src0_dram_buffer.address();
 
-        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_bytes/Wt, dst_page_size, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = CreateBuffer(device, dram_buffer_bytes/Wt, dst_page_size, tt_metal::BufferType::DRAM);
         uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
 
         auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();

@@ -65,19 +65,19 @@ int main(int argc, char** argv) {
             if (not multibank) {
                 page_size = dram_buffer_size;
             }
-            auto src0_dram_buffer = tt_metal::Buffer(
+            auto src0_dram_buffer = CreateBuffer(
                 device,
                 dram_buffer_size,
                 page_size,
                 tt_metal::BufferType::DRAM);
             uint32_t dram_buffer_src0_addr = src0_dram_buffer.address();
-            auto src1_dram_buffer = tt_metal::Buffer(
+            auto src1_dram_buffer = CreateBuffer(
                 device,
                 dram_buffer_size,
                 page_size,
                 tt_metal::BufferType::DRAM);
             uint32_t dram_buffer_src1_addr = src1_dram_buffer.address();
-            auto dst_dram_buffer = tt_metal::Buffer(
+            auto dst_dram_buffer = CreateBuffer(
                 device,
                 dram_buffer_size,
                 page_size,

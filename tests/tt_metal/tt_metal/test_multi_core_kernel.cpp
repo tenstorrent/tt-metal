@@ -205,9 +205,9 @@ bool test_multi_core_kernel_same_runtime_args(tt_metal::Device *device) {
     int32_t num_tiles = 2048;
     uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-    auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+    auto src_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
     uint32_t dram_buffer_src_addr = src_dram_buffer.address();
-    auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+    auto dst_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
     uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -264,13 +264,13 @@ bool test_multi_core_kernel_unique_runtime_args(tt_metal::Device *device) {
     int32_t num_tiles = 2048;
     uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-    auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+    auto src_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
     uint32_t dram_buffer_src_addr = src_dram_buffer.address();
-    auto dst_dram_buffer_1 = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+    auto dst_dram_buffer_1 = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
     uint32_t dram_buffer_dst_addr_1 = dst_dram_buffer_1.address();
-    auto dst_dram_buffer_2 = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+    auto dst_dram_buffer_2 = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
     uint32_t dram_buffer_dst_addr_2 = dst_dram_buffer_2.address();
-    auto dst_dram_buffer_3 = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+    auto dst_dram_buffer_3 = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
     uint32_t dram_buffer_dst_addr_3 = dst_dram_buffer_3.address();
 
 
@@ -330,18 +330,7 @@ int main(int argc, char **argv) {
 
     try {
 
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Initial Runtime Args Parse
-        ////////////////////////////////////////////////////////////////////////////
-        std::vector<std::string> input_args(argv, argv + argc);
-        string arch_name = "";
-        try {
-            std::tie(arch_name, input_args) =
-                test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
-        } catch (const std::exception& e) {
-            log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
-        }
-        const tt::ARCH arch = tt::get_arch_from_string(arch_name);
+
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////

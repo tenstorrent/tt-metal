@@ -114,7 +114,7 @@ bool test_l1_buffer_do_not_grow_beyond_512KB(tt_metal::Device *device) {
 
     try {
         uint32_t buffer_size_bytes = 128 * 1024;
-        auto l1_buffer = tt_metal::Buffer(device, buffer_size_bytes, buffer_size_bytes, tt_metal::BufferType::L1);
+        auto l1_buffer = CreateBuffer(device, buffer_size_bytes, buffer_size_bytes, tt_metal::BufferType::L1);
     } catch (const std::exception &e) {
         pass = true;
     }
@@ -150,18 +150,7 @@ int main(int argc, char **argv) {
     bool pass = true;
 
     try {
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Initial Runtime Args Parse
-        ////////////////////////////////////////////////////////////////////////////
-        std::vector<std::string> input_args(argv, argv + argc);
-        string arch_name = "";
-        try {
-            std::tie(arch_name, input_args) =
-                test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
-        } catch (const std::exception& e) {
-            log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
-        }
-        const tt::ARCH arch = tt::get_arch_from_string(arch_name);
+
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////

@@ -22,18 +22,7 @@ int main(int argc, char **argv) {
     tt::log_assert(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     try {
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Initial Runtime Args Parse
-        ////////////////////////////////////////////////////////////////////////////
-        std::vector<std::string> input_args(argv, argv + argc);
-        string arch_name = "";
-        try {
-            std::tie(arch_name, input_args) =
-                test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
-        } catch (const std::exception& e) {
-            log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
-        }
-        const tt::ARCH arch = tt::get_arch_from_string(arch_name);
+
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////

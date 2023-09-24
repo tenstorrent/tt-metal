@@ -410,6 +410,11 @@ void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
     }
 }
 
+Buffer CreateBuffer(Device *device, std::uint64_t size, std::uint64_t page_size, const BufferType buffer_type)
+{
+    return Buffer(device, size, page_size, buffer_type);
+}
+
 void DeallocateBuffer(Buffer &buffer) { buffer.deallocate(); }
 
 

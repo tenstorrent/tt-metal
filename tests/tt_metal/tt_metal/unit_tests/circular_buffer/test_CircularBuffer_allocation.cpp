@@ -93,7 +93,7 @@ TEST_F(SingleDeviceFixture, TestCircularBuffersAndL1BuffersCollision) {
     CBConfig cb_config {.num_pages = 5};
 
     auto buffer_size = cb_config.page_size * 128;
-    auto l1_buffer = Buffer(this->device_, buffer_size, buffer_size, BufferType::L1);
+    auto l1_buffer = CreateBuffer(this->device_, buffer_size, buffer_size, BufferType::L1);
 
     // L1 buffer is entirely in bank 0
     auto core = l1_buffer.logical_core_from_bank_id(0);

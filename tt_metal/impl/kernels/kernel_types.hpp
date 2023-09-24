@@ -7,6 +7,9 @@
 #pragma once
 
 #include "common/base_types.hpp"
+#include <map>
+#include <vector>
+#include <string>
 
 namespace tt::tt_metal {
 

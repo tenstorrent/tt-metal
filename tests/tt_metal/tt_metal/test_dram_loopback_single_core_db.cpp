@@ -20,18 +20,7 @@ int main(int argc, char **argv) {
     tt::log_assert(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     try {
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Initial Runtime Args Parse
-        ////////////////////////////////////////////////////////////////////////////
-        std::vector<std::string> input_args(argv, argv + argc);
-        string arch_name = "";
-        try {
-            std::tie(arch_name, input_args) =
-                test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
-        } catch (const std::exception& e) {
-            log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
-        }
-        const tt::ARCH arch = tt::get_arch_from_string(arch_name);
+
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
@@ -59,10 +48,10 @@ int main(int argc, char **argv) {
         TT_ASSERT(total_l1_buffer_size_tiles % 2 == 0);
         uint32_t total_l1_buffer_size_bytes = total_l1_buffer_size_tiles * single_tile_size;
 
-        auto input_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_bytes, dram_buffer_size_bytes, tt_metal::BufferType::DRAM);
+        auto input_dram_buffer = CreateBuffer(device, dram_buffer_size_bytes, dram_buffer_size_bytes, tt_metal::BufferType::DRAM);
         uint32_t input_dram_buffer_addr = input_dram_buffer.address();
 
-        auto output_dram_buffer = tt_metal::Buffer(device, dram_buffer_size_bytes, dram_buffer_size_bytes, tt_metal::BufferType::DRAM);
+        auto output_dram_buffer = CreateBuffer(device, dram_buffer_size_bytes, dram_buffer_size_bytes, tt_metal::BufferType::DRAM);
         uint32_t output_dram_buffer_addr = output_dram_buffer.address();
 
         auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();

@@ -81,18 +81,7 @@ int main(int argc, char **argv) {
     log_info(LogTest, "=============================================================");
     log_info(LogTest, "======= Running bcast test for bdim={}, op={}", bdim_to_log_string[bcast_dim], op_id_to_op_name[bcast_op]);
     try {
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Initial Runtime Args Parse
-        ////////////////////////////////////////////////////////////////////////////
-        std::vector<std::string> input_args(argv, argv + argc);
-        string arch_name = "";
-        try {
-            std::tie(arch_name, input_args) =
-                test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
-        } catch (const std::exception& e) {
-            log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
-        }
-        const tt::ARCH arch = tt::get_arch_from_string(arch_name);
+
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
@@ -125,9 +114,9 @@ int main(int argc, char **argv) {
             page_size = dram_buffer_bytes;
         }
 
-        auto src0_dram_buffer = tt_metal::Buffer(device, dram_buffer_bytes, page_size, tt_metal::BufferType::DRAM);
+        auto src0_dram_buffer = CreateBuffer(device, dram_buffer_bytes, page_size, tt_metal::BufferType::DRAM);
         uint32_t dram_buffer_src0_addr = src0_dram_buffer.address();
-        auto dst_dram_buffer = tt_metal::Buffer(device, dram_buffer_bytes, page_size, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = CreateBuffer(device, dram_buffer_bytes, page_size, tt_metal::BufferType::DRAM);
         uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
         auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
         auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
@@ -228,7 +217,7 @@ int main(int argc, char **argv) {
         if (not multibank) {
             src1_page_size = bcast_vals_nbytes;
         }
-        auto src1_dram_buffer = tt_metal::Buffer(device, bcast_vals_nbytes, src1_page_size, tt_metal::BufferType::DRAM);
+        auto src1_dram_buffer = CreateBuffer(device, bcast_vals_nbytes, src1_page_size, tt_metal::BufferType::DRAM);
         uint32_t dram_buffer_src1_addr = src1_dram_buffer.address();
         auto dram_src1_noc_xy = src1_dram_buffer.noc_coordinates();
         tt_metal::WriteToBuffer(src1_dram_buffer, bcast_tiled_u32);

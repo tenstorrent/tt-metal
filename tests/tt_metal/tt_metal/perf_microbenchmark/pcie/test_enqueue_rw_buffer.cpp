@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
     // Application Setup
     uint32_t single_tile_size = 2 * 1024;
     auto page_size = single_tile_size;
-    auto buffer = tt_metal::Buffer(device, buffer_size, page_size,
+    auto buffer = CreateBuffer(device, buffer_size, page_size,
                                    buffer_type == 0 ? tt_metal::BufferType::DRAM
                                                     : tt_metal::BufferType::L1);
 

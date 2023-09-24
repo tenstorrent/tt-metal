@@ -96,7 +96,7 @@ operation::ProgramWithCallbacks embeddings_tilized(
         core_group_2, num_blocks_per_core_group_1,
         num_blocks_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, problem_size);
 
-    tt_metal::Buffer dst_buffer_l1 = tt_metal::Buffer(device,
+    tt_metal::Buffer dst_buffer_l1 = CreateBuffer(device,
                                                         sizeof(uint32_t)*2,
                                                         sizeof(uint32_t)*2,
                                                         tt_metal::BufferType::L1);
@@ -385,12 +385,12 @@ operation::ProgramWithCallbacks embeddings_rm(
     // Create Kernels
 
     std::vector <tt_metal::Buffer> dst_buffer_l1 (embedding_risc_cores_per_tensix,
-                                        tt_metal::Buffer(device,
+                                        CreateBuffer(device,
                                                         sizeof(uint32_t)*2,
                                                         sizeof(uint32_t)*2,
                                                         tt_metal::BufferType::L1));
     std::vector <tt_metal::Buffer> weights_buffer_l1 (embedding_risc_cores_per_tensix,
-                                        tt_metal::Buffer(device,
+                                        CreateBuffer(device,
                                                         single_page_size*2,
                                                         single_page_size,
                                                         tt_metal::BufferType::L1));

@@ -38,18 +38,7 @@ int main(int argc, char **argv) {
         std::string env_var = "TT_PCI_DMA_BUF_SIZE=1048576";
         int result = putenv(const_cast<char*>(env_var.c_str()));
 
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Initial Runtime Args Parse
-        ////////////////////////////////////////////////////////////////////////////
-        std::vector<std::string> input_args(argv, argv + argc);
-        string arch_name = "";
-        try {
-            std::tie(arch_name, input_args) =
-                test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
-        } catch (const std::exception& e) {
-            log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
-        }
-        const tt::ARCH arch = tt::get_arch_from_string(arch_name);
+
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
@@ -205,16 +194,16 @@ int main(int argc, char **argv) {
         CoreCoord dst_noc_xy;
 
         if (IO_data_in_dram) {
-            src_buffer = tt_metal::Buffer(device, buffer_size, buffer_size, tt_metal::BufferType::DRAM);
-            dst_buffer = tt_metal::Buffer(device, buffer_size, buffer_size, tt_metal::BufferType::DRAM);
+            src_buffer = CreateBuffer(device, buffer_size, buffer_size, tt_metal::BufferType::DRAM);
+            dst_buffer = CreateBuffer(device, buffer_size, buffer_size, tt_metal::BufferType::DRAM);
 
             src_address = src_buffer.address();
             src_noc_xy = src_buffer.noc_coordinates();
             dst_address = dst_buffer.address();
             dst_noc_xy = dst_buffer.noc_coordinates();
         } else {
-            src_buffer = tt_metal::Buffer(device, buffer_size, buffer_size, tt_metal::BufferType::L1);
-            dst_buffer = tt_metal::Buffer(device, buffer_size, buffer_size, tt_metal::BufferType::L1);
+            src_buffer = CreateBuffer(device, buffer_size, buffer_size, tt_metal::BufferType::L1);
+            dst_buffer = CreateBuffer(device, buffer_size, buffer_size, tt_metal::BufferType::L1);
 
             src_address = src_buffer.address();
             src_noc_xy = src_buffer.noc_coordinates();

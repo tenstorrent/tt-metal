@@ -65,9 +65,9 @@ bool l1_reader_cb_writer_l1(Device* device, const BankedL1Config& cfg, const boo
         output_page_size_bytes = cfg.size_bytes;
     }
 
-    Buffer input_buffer = Buffer(device, cfg.size_bytes, input_page_size_bytes, cfg.input_buffer_type);
+    Buffer input_buffer = CreateBuffer(device, cfg.size_bytes, input_page_size_bytes, cfg.input_buffer_type);
 
-    Buffer output_buffer = Buffer(device, cfg.size_bytes, output_page_size_bytes, cfg.output_buffer_type);
+    Buffer output_buffer = CreateBuffer(device, cfg.size_bytes, output_page_size_bytes, cfg.output_buffer_type);
 
     tt::log_debug(tt::LogTest, "Input buffer: [address: {} B, size: {} B] at noc coord {}", input_buffer.address(), input_buffer.size(), input_buffer.noc_coordinates().str());
     tt::log_debug(tt::LogTest, "Output buffer: [address: {} B, size: {} B] at noc coord {}", output_buffer.address(), output_buffer.size(), output_buffer.noc_coordinates().str());
@@ -150,8 +150,8 @@ bool l1_reader_datacopy_l1_writer(Device* device, const BankedL1Config& cfg) {
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
     Program program = Program();
-    auto input_buffer = Buffer(device, cfg.size_bytes, cfg.page_size_bytes, cfg.input_buffer_type);
-    auto output_buffer = Buffer(device, cfg.size_bytes, cfg.page_size_bytes, cfg.output_buffer_type);
+    auto input_buffer = CreateBuffer(device, cfg.size_bytes, cfg.page_size_bytes, cfg.input_buffer_type);
+    auto output_buffer = CreateBuffer(device, cfg.size_bytes, cfg.page_size_bytes, cfg.output_buffer_type);
 
     TT_ASSERT(cfg.num_tiles * cfg.page_size_bytes == cfg.size_bytes);
     constexpr uint32_t num_pages_cb = 1;

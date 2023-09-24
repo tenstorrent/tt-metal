@@ -39,7 +39,7 @@ operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const Sh
 
     uint32_t dst_buffer_size = dst_stick_size;
 
-    auto dst_buffer_l1 = tt_metal::Buffer(device, dst_buffer_size, dst_buffer_size, tt_metal::BufferType::L1);
+    auto dst_buffer_l1 = CreateBuffer(device, dst_buffer_size, dst_buffer_size, tt_metal::BufferType::L1);
 
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});

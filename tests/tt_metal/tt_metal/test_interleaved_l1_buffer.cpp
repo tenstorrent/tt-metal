@@ -21,7 +21,7 @@ bool test_interleaved_l1_buffer(tt_metal::Device *device, int num_pages_one, int
 
     uint32_t buffer_size = num_pages_one * page_size;
 
-    auto interleaved_buffer = tt_metal::Buffer(device, buffer_size, page_size, tt_metal::BufferType::L1);
+    auto interleaved_buffer = CreateBuffer(device, buffer_size, page_size, tt_metal::BufferType::L1);
 
     std::vector<uint32_t> host_buffer = create_random_vector_of_bfloat16(
         buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
@@ -35,7 +35,7 @@ bool test_interleaved_l1_buffer(tt_metal::Device *device, int num_pages_one, int
 
     uint32_t second_buffer_size = num_pages_two * page_size;
 
-    auto second_interleaved_buffer = tt_metal::Buffer(device, second_buffer_size, page_size, tt_metal::BufferType::L1);
+    auto second_interleaved_buffer = CreateBuffer(device, second_buffer_size, page_size, tt_metal::BufferType::L1);
 
     std::vector<uint32_t> second_host_buffer = create_random_vector_of_bfloat16(
         second_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
@@ -56,18 +56,7 @@ int main(int argc, char **argv) {
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     tt::log_assert(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
     try {
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Initial Runtime Args Parse
-        ////////////////////////////////////////////////////////////////////////////
-        std::vector<std::string> input_args(argv, argv + argc);
-        string arch_name = "";
-        try {
-            std::tie(arch_name, input_args) =
-                test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
-        } catch (const std::exception& e) {
-            log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
-        }
-        const tt::ARCH arch = tt::get_arch_from_string(arch_name);
+
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////

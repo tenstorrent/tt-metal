@@ -10,8 +10,8 @@
 #include <variant>
 #include <vector>
 #include "common/core_coord.h"
-#include "tt_metal/impl/kernels/kernel_types.hpp"
-#include "tt_metal/common/tt_backend_api_types.hpp"
+#include "tt_metal/impl/program.hpp"
+#include "tt_metal/impl/buffers/buffer.hpp"
 
 /** @file */
 
@@ -30,7 +30,6 @@ namespace tt {
 namespace tt_metal {
 
 class Program;
-class Buffer;
 class Host;
 class Device;
 class CommandQueue;
@@ -218,6 +217,21 @@ uint32_t CreateSemaphore(Program &program, const CoreRange &core_range, uint32_t
  * | initial_value  | Initial value of the semaphore                              | uint32_t               |                                                           | Yes      |
  */
 uint32_t CreateSemaphore(Program &program, const CoreRangeSet &core_range_set, uint32_t initial_value);
+
+/**
+*  Allocates a DRAM or L1 buffer on device
+*
+*  Return value: Buffer
+*
+*  | Argument    | Description                             | Type       | Valid Range | Required |
+*  |-------------|---------------------------------------- |------------|-------------|----------|
+*  | device      | The device that the buffer will reside  | Device     |             | Yes      |
+*  | size        | size of buffer                          | uint64_t   |             | Yes      |
+*  | page_size   | buffer page size                        | uint64_t   |             | Yes      |
+*  | buffer_type | type of buffer (L1 or DRAM)             | BufferType |             | Yes      |
+
+*/
+Buffer CreateBuffer(Device *device, std::uint64_t size, std::uint64_t page_size, const BufferType buffer_type);
 
 /**
 * Copies data from a host buffer into the specified buffer

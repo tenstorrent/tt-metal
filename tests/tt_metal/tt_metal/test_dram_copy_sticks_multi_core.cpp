@@ -31,18 +31,7 @@ int main(int argc, char **argv) {
     tt::log_assert(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     try {
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Initial Runtime Args Parse
-        ////////////////////////////////////////////////////////////////////////////
-        std::vector<std::string> input_args(argv, argv + argc);
-        string arch_name = "";
-        try {
-            std::tie(arch_name, input_args) =
-                test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
-        } catch (const std::exception& e) {
-            log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
-        }
-        const tt::ARCH arch = tt::get_arch_from_string(arch_name);
+
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
@@ -69,7 +58,7 @@ int main(int argc, char **argv) {
         int num_elements_in_stick_as_packed_uint32 = num_elements_in_stick / 2;
         uint32_t dram_buffer_size =  num_sticks * stick_size; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-        auto src_dram_buffer = tt_metal::Buffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto src_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
         uint32_t dram_buffer_src_addr = src_dram_buffer.address();
 
         auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
@@ -79,7 +68,7 @@ int main(int argc, char **argv) {
         for(int i = start_core.y; i < start_core.y + num_cores_r; i++) {
             for(int j = start_core.x; j < start_core.x + num_cores_c; j++) {
                 CoreCoord core = {(std::size_t) j, (std::size_t) i};
-                auto l1_b0 = tt_metal::Buffer(device, per_core_l1_size, per_core_l1_size, tt_metal::BufferType::L1);
+                auto l1_b0 = CreateBuffer(device, per_core_l1_size, per_core_l1_size, tt_metal::BufferType::L1);
                 core_to_l1_addr[core] = l1_b0.address();
             }
         }

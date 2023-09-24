@@ -256,19 +256,19 @@ bool single_core_matmul(tt_metal::Device* device, const SingleCoreMatmulConfig& 
     uint32_t dram_buffer_size_output =
         single_tile_size * cfg.M * cfg.N;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-    auto input0_dram_buffer = tt_metal::Buffer(
+    auto input0_dram_buffer = CreateBuffer(
         device,
         dram_buffer_size_input0,
         dram_buffer_size_input0,
         tt_metal::BufferType::DRAM);
     uint32_t input0_dram_byte_address = input0_dram_buffer.address();
-    auto input1_dram_buffer = tt_metal::Buffer(
+    auto input1_dram_buffer = CreateBuffer(
         device,
         dram_buffer_size_input1,
         dram_buffer_size_input1,
         tt_metal::BufferType::DRAM);
     uint32_t input1_dram_byte_address = input1_dram_buffer.address();
-    auto output_dram_buffer = tt_metal::Buffer(
+    auto output_dram_buffer = CreateBuffer(
         device,
         dram_buffer_size_output,
         dram_buffer_size_output,
@@ -475,13 +475,13 @@ bool single_tile_matmul(tt_metal::Device* device) {
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program = tt_metal::Program();
-    auto input0_dram_buffer = tt_metal::Buffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
+    auto input0_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
     const uint32_t in0_dram_addr = input0_dram_buffer.address();
     auto input0_dram_noc_xy = input0_dram_buffer.noc_coordinates();
-    auto input1_dram_buffer = tt_metal::Buffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
+    auto input1_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
     const uint32_t in1_dram_addr = input1_dram_buffer.address();
     auto input1_dram_noc_xy = input1_dram_buffer.noc_coordinates();
-    auto output_dram_buffer = tt_metal::Buffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
+    auto output_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
     const uint32_t out_dram_addr = output_dram_buffer.address();
     auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 
@@ -596,13 +596,13 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program = tt_metal::Program();
-    auto input0_dram_buffer = tt_metal::Buffer(device, in0_byte_size, in0_byte_size, tt_metal::BufferType::DRAM);
+    auto input0_dram_buffer = CreateBuffer(device, in0_byte_size, in0_byte_size, tt_metal::BufferType::DRAM);
     const uint32_t in0_dram_addr = input0_dram_buffer.address();
     auto input0_dram_noc_xy = input0_dram_buffer.noc_coordinates();
-    auto input1_dram_buffer = tt_metal::Buffer(device, in1_byte_size, in1_byte_size, tt_metal::BufferType::DRAM);
+    auto input1_dram_buffer = CreateBuffer(device, in1_byte_size, in1_byte_size, tt_metal::BufferType::DRAM);
     const uint32_t in1_dram_addr = input1_dram_buffer.address();
     auto input1_dram_noc_xy = input1_dram_buffer.noc_coordinates();
-    auto output_dram_buffer = tt_metal::Buffer(device, out_byte_size, out_byte_size, tt_metal::BufferType::DRAM);
+    auto output_dram_buffer = CreateBuffer(device, out_byte_size, out_byte_size, tt_metal::BufferType::DRAM);
     auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
     const uint32_t out_dram_addr = output_dram_buffer.address();
 
@@ -734,13 +734,13 @@ bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program = tt_metal::Program();
-    auto input0_dram_buffer = tt_metal::Buffer(device, in0_byte_size, in0_byte_size, tt_metal::BufferType::DRAM);
+    auto input0_dram_buffer = CreateBuffer(device, in0_byte_size, in0_byte_size, tt_metal::BufferType::DRAM);
     const uint32_t in0_dram_addr = input0_dram_buffer.address();
     auto input0_dram_noc_xy = input0_dram_buffer.noc_coordinates();
-    auto input1_dram_buffer = tt_metal::Buffer(device, in1_byte_size, in1_byte_size, tt_metal::BufferType::DRAM);
+    auto input1_dram_buffer = CreateBuffer(device, in1_byte_size, in1_byte_size, tt_metal::BufferType::DRAM);
     const uint32_t in1_dram_addr = input1_dram_buffer.address();
     auto input1_dram_noc_xy = input1_dram_buffer.noc_coordinates();
-    auto output_dram_buffer = tt_metal::Buffer(device, out_byte_size, out_byte_size, tt_metal::BufferType::DRAM);
+    auto output_dram_buffer = CreateBuffer(device, out_byte_size, out_byte_size, tt_metal::BufferType::DRAM);
     const uint32_t out_dram_addr = output_dram_buffer.address();
 
     auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
