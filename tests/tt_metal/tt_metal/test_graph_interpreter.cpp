@@ -106,7 +106,7 @@ const map<string, std::function<float(float, float)>> binary_op_to_function = {
 
 // This test just runs a chain of eltwise unary sfpu ops, and it's a good baseline test for the
 // graph interpreter since there is no branching
-bool run_chained_sfpu_test(const tt::ARCH& arch, int chain_length) {
+bool run_chained_sfpu_test(int chain_length) {
 
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     tt::log_assert(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
@@ -342,7 +342,7 @@ bool run_chained_sfpu_test(const tt::ARCH& arch, int chain_length) {
 }
 
 // This test just runs an add followed by gelu
-bool run_binary_add_and_then_eltwise_gelu_test(const tt::ARCH& arch) {
+bool run_binary_add_and_then_eltwise_gelu_test() {
 
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     tt::log_assert(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
@@ -604,7 +604,7 @@ bool run_binary_add_and_then_eltwise_gelu_test(const tt::ARCH& arch) {
 
 // This test just runs a chain of eltwise binary ops, with branching
 // This runs a specific hardcoded graph
-bool run_forked_binary_test(const tt::ARCH& arch) {
+bool run_forked_binary_test() {
 
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     tt::log_assert(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
@@ -1105,19 +1105,6 @@ bool run_forked_binary_test(const tt::ARCH& arch) {
 
 int main(int argc, char **argv) {
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Initial Runtime Args Parse
-    ////////////////////////////////////////////////////////////////////////////
-    std::vector<std::string> input_args(argv, argv + argc);
-    string arch_name = "";
-    try {
-        std::tie(arch_name, input_args) =
-            test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
-    } catch (const std::exception& e) {
-        log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
-    }
-    const tt::ARCH arch = tt::get_arch_from_string(arch_name);
-
     // Trivial chain of sfpu ops
     char env[] = "HACK_FOR_GRAPH_INTERPRETER=1";
     putenv(env);
@@ -1125,13 +1112,13 @@ int main(int argc, char **argv) {
     bool pass = true;
 
     // Simple eltwise unary chain test
-    pass &= run_chained_sfpu_test(arch, 10);
+    pass &= run_chained_sfpu_test(10);
 
     // Binary add and then gelu on output
-    pass &= run_binary_add_and_then_eltwise_gelu_test(arch);
+    pass &= run_binary_add_and_then_eltwise_gelu_test();
 
     // Binary forked graph
-    pass &= run_forked_binary_test(arch);
+    pass &= run_forked_binary_test();
 
     TT_ASSERT(pass, "Graph interpreter test failed");
     return 0;

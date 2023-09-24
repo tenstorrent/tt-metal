@@ -230,16 +230,7 @@ int main(int argc, char **argv) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Initial Runtime Args Parse
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<std::string> input_args(argv, argv + argc);
-    string arch_name = "";
-    try {
-        std::tie(arch_name, input_args) =
-            test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
-    } catch (const std::exception& e) {
-        log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
-    }
     update_sfpu_op_to_hlk_op();
-    const tt::ARCH arch = tt::get_arch_from_string(arch_name);
     for (const auto& [op_name, _]: sfpu_op_to_hlk_op_name) {
         log_info(LogTest, "Running {}", op_name);
 

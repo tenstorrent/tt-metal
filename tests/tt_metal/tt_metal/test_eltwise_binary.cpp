@@ -30,19 +30,6 @@ int main(int argc, char** argv) {
     const char* op_id_to_op_define[] = {"add_tiles", "sub_tiles", "mul_tiles"};
     const char* op_id_to_op_code_define[] = {"0", "1", "2"};
     const char* op_id_to_op_name[] = {"ADD", "SUB", "MUL"};
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Initial Runtime Args Parse
-    ////////////////////////////////////////////////////////////////////////////
-    std::vector<std::string> input_args(argv, argv + argc);
-    string arch_name = "";
-    try {
-        std::tie(arch_name, input_args) =
-            test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
-    } catch (const std::exception& e) {
-        log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
-    }
-    const tt::ARCH arch = tt::get_arch_from_string(arch_name);
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////

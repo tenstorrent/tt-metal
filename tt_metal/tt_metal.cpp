@@ -448,29 +448,8 @@ void SetRuntimeArgs(const Program &program, KernelID kernel_id, const CoreRangeS
 std::vector<uint32_t> GetRuntimeArgs(const Program &program, KernelID kernel_id, const CoreCoord &logical_core) {
     return detail::GetKernel(program, kernel_id)->runtime_args(logical_core);
 }
-bool core_runs_ncrisc(const Program &program, const CoreCoord &logical_core) {
-    auto kernel_group = program.kernels_on_core(logical_core);
-    return kernel_group.riscv1_id.has_value();
-}
 
-bool core_runs_triscs(const Program &program, const CoreCoord &logical_core) {
-    auto kernel_group = program.kernels_on_core(logical_core);
-    return kernel_group.compute_id.has_value();
-}
-
-llrt::TensixRiscsOptions GetRiscOptionFromCoreConfig(bool core_runs_ncrisc, bool core_runs_triscs) {
-    auto risc_option = llrt::TensixRiscsOptions::BRISC_ONLY;
-    if (core_runs_ncrisc and not core_runs_triscs) {
-        risc_option = llrt::TensixRiscsOptions::BRISC_NCRISC;
-    } else if (not core_runs_ncrisc and core_runs_triscs) {
-        risc_option = llrt::TensixRiscsOptions::BRISC_TRISCS;
-    } else if (core_runs_ncrisc and core_runs_triscs) {
-        risc_option = llrt::TensixRiscsOptions::ALL_RISCS;
-    }
-    return risc_option;
-}
-
-bool LaunchProgram(Device *device, Program &program, bool stagger_start) {
+bool LaunchProgram(Device *device, Program &program) {
     bool pass = true;
     {//Profiler scope start
     ZoneScoped;
