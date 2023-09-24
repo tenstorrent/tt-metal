@@ -90,8 +90,7 @@ int main(int argc, char **argv) {
 
 
 
-        pass &= LaunchProgram(device, program);
-
+        LaunchProgram(device, program);
         /*
         * Validation & Teardown
         */

@@ -405,9 +405,9 @@ void Program::set_cb_data_fmt(
     }
 }
 
-bool Program::compile( Device * device )
+void Program::compile( Device * device )
 {
-    if( !compile_needed_) return true;
+    if( !compile_needed_) return;
 
     TT_ASSERT(
         device->is_initialized(),
@@ -476,7 +476,6 @@ bool Program::compile( Device * device )
         detail::MemoryReporter::inst().flush_program_memory_usage(*this, device);
     }
     compile_needed_ = false;
-    return true;
 }
 
 Program::~Program() {

@@ -90,7 +90,7 @@ bool load_all_blank_kernels(tt_metal::Device* device) {
     tt_metal::Program program = tt_metal::Program();
 
 
-    pass &= tt_metal::LaunchProgram(device, program);
+    tt_metal::LaunchProgram(device, program);
     return pass;
 }
 }  // namespace unit_tests::basic::device
@@ -418,7 +418,7 @@ TEST_F(SingleDeviceFixture, ValidateKernelDoesNotTargetHarvestedCores) {
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::NOC_0, .compile_args = {l1_address, intermediate_l1_addr, size_bytes}}
     );
 
-    ASSERT_TRUE(tt_metal::LaunchProgram(this->device_, program));
+    tt_metal::LaunchProgram(this->device_, program);
 
     std::vector<uint32_t> output;
     for (uint32_t bank_id = 0; bank_id < num_l1_banks; bank_id++) {

@@ -320,7 +320,7 @@ int main(int argc, char **argv) {
 
 
         log_info(LogTest, "Launching kernels...");
-        pass &= tt_metal::LaunchProgram(device, program);
+        tt_metal::LaunchProgram(device, program);
         log_info(LogTest, "Kernels done.");
 
         log_info(LogTest, "Reading results from device...");

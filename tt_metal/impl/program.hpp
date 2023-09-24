@@ -76,7 +76,7 @@ class Program {
 
     std::vector<std::string> cores_to_ops() const;
 
-    bool compile(Device * device);
+    void compile(Device * device);
 
     void invalidate() { compile_needed_ = true; }
 

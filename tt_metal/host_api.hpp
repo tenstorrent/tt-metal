@@ -229,7 +229,6 @@ uint32_t CreateSemaphore(Program &program, const CoreRangeSet &core_range_set, u
 *  | size        | size of buffer                          | uint64_t   |             | Yes      |
 *  | page_size   | buffer page size                        | uint64_t   |             | Yes      |
 *  | buffer_type | type of buffer (L1 or DRAM)             | BufferType |             | Yes      |
-
 */
 Buffer CreateBuffer(Device *device, std::uint64_t size, std::uint64_t page_size, const BufferType buffer_type);
 
@@ -282,7 +281,7 @@ void DeallocateBuffer(Buffer &buffer);
  *
  * | Argument     | Description                                                            | Type                          | Valid Range                                                      | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------------------------------------|----------|
-* | program       | The program containing the kernel                                      | const Program &               |                                                                  | Yes      |
+ * | program      | The program containing kernels, circular buffers, semaphores           | const Program &               |                                                                  | Yes      |
  * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelID (u64)                |                                                                  | Yes      |
  * | logical_core | The location of the Tensix core where the runtime args will be written | const CoreCoord &             | Any logical Tensix core coordinate on which the kernel is placed | Yes      |
  * | runtime_args | The runtime args to be written                                         | const std::vector<uint32_t> & |                                                                  | Yes      |
@@ -296,7 +295,7 @@ void SetRuntimeArgs(const Program &program, KernelID kernel, const CoreCoord &lo
  *
  * | Argument     | Description                                                                                            | Type                          | Valid Range                                                             | Required |
  * |--------------|--------------------------------------------------------------------------------------------------------|-------------------------------|-------------------------------------------------------------------------|----------|
- * | program      | The program containing the kernel                                                                      | const Program &               |                                    | Yes      |
+ * | program      | The program containing kernels, circular buffers, semaphores                                           | const Program &               |                                    | Yes      |
  * | kernel_id    | ID of the kernel that will receive the runtime args                                                    | KernelID (u64)                |                                    | Yes      |
  * | core_range   | The range of the Tensix co-ordinates which receive the runtime args (Logical co-ordinates)             | const CoreRange &             | A range of any logical Tensix core coordinate on which the kernel is placed | Yes      |
  * | runtime_args | The runtime args to be written to the core range                                                       | const std::vector<uint32_t> & |                                                                         | Yes      |
@@ -310,7 +309,7 @@ void SetRuntimeArgs(const Program &program, KernelID kernel, const CoreRange &co
  *
  * | Argument       | Description                                                                                            | Type                          | Valid Range                        | Required |
  * |----------------|--------------------------------------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | program      | The program containing the kernel                                                                        | const Program &               |                                    | Yes      |
+ * | program      | The program containing kernels, circular buffers, semaphores                                             | const Program &               |                                    | Yes      |
  * | kernel_id    | ID of the kernel that will receive the runtime args                                                      | KernelID (u64)                |                                    | Yes      |
  * | core_range_set | Set of ranges of Tensix co-ordinates which receive the runtime args (Logical co-ordinates)             | const CoreRangeSet &          | Ranges of any logical Tensix core coordinate on which the kernel is placed | Yes      |
  * | runtime_args   | The runtime args to be written to the core ranges                                                      | const std::vector<uint32_t> & |                                    | Yes      |
@@ -324,7 +323,7 @@ void SetRuntimeArgs(const Program &program, KernelID kernel, const CoreRangeSet 
  *
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | program      | The program containing the kernel                                      | const Program &               |                                    | Yes      |
+ * | program      | The program containing kernels, circular buffers, semaphores           | const Program &               |                                    | Yes      |
  * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelID (u64)                |                                    | Yes      |
  * | logical_core | The location of the Tensix core where the runtime args will be written | const CoreCoord &             | Any logical Tensix core coordinate | Yes      |
  */
@@ -332,7 +331,7 @@ std::vector<uint32_t> GetRuntimeArgs(const Program &program, KernelID kernel_id,
 
 // Launches all kernels on cores specified with kernels in the program.
 // All kernels on a given Tensix core must be launched.
-bool LaunchProgram(Device *device, Program &program);
+void LaunchProgram(Device *device, Program &program);
 
 /**
  * Reads a buffer from the device
@@ -346,7 +345,7 @@ bool LaunchProgram(Device *device, Program &program);
  * | dst          | The vector where the results that are read will be stored              | vector<u32> &                 |                                    | Yes      |
  * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
  */
-void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, std::vector<std::uint32_t>& dst, bool blocking);
+void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, std::vector<u32>& dst, bool blocking);
 
 /**
  * Writes a buffer to the device
@@ -357,10 +356,10 @@ void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, std::vector<std::uint32
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
  * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
  * | buffer       | The device buffer we are writing to                                    | Buffer &                      |                                    | Yes      |
- * | dst          | The vector we are writing to the device                                | vector<u32> &                 |                                    | Yes      |
+ * | src          | The vector we are writing to the device                                | vector<u32> &                 |                                    | Yes      |
  * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
  */
-void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, std::vector<std::uint32_t>& src, bool blocking);
+void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, std::vector<u32>& src, bool blocking);
 
 /**
  * Writes a program to the device and launches it
@@ -370,7 +369,7 @@ void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, std::vector<std::uint3
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
  * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
- * | program      | The program we are writing to the device                               | Program &                     |                                    | Yes      |
+ * | program      | The program that will be executed on the device that cq is bound to    | Program &                     |                                    | Yes      |
  * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
  */
 void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking);

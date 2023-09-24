@@ -301,7 +301,7 @@ bool run_chained_sfpu_test(int chain_length) {
 
 
         // TT_ASSERT(false);
-        pass &= tt_metal::LaunchProgram(device, program);
+        tt_metal::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
         tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);
@@ -564,7 +564,7 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
 
 
         // TT_ASSERT(false);
-        pass &= tt_metal::LaunchProgram(device, program);
+        tt_metal::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
         tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);
@@ -1058,7 +1058,7 @@ bool run_forked_binary_test() {
         tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, unary_writer_args);
 
 
-        pass &= tt_metal::LaunchProgram(device, program);
+        tt_metal::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
         tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);

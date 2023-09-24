@@ -18,8 +18,6 @@
 using namespace tt;
 
 bool test_compile_args(std::vector<uint32_t> compile_args_vec, int device_id) {
-    bool pass = true;
-
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -58,9 +56,9 @@ bool test_compile_args(std::vector<uint32_t> compile_args_vec, int device_id) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile Application
     ////////////////////////////////////////////////////////////////////////////
-    pass &= tt_metal::detail::CompileProgram(device, program);
+    tt_metal::detail::CompileProgram(device, program);
 
-    return pass;
+    return true;
 }
 
 int main(int argc, char **argv) {

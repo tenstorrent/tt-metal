@@ -431,7 +431,7 @@ bool single_core_matmul(tt_metal::Device* device, const SingleCoreMatmulConfig& 
     tt_metal::SetRuntimeArgs(program, writer_kernel, cfg.core, writer_rt_args);
 
 
-    pass &= tt_metal::LaunchProgram(device, program);
+    tt_metal::LaunchProgram(device, program);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Comparison Checking
@@ -566,7 +566,7 @@ bool single_tile_matmul(tt_metal::Device* device) {
         });
 
 
-    pass &= tt_metal::LaunchProgram(device, program);
+    tt_metal::LaunchProgram(device, program);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Comparison Checking
@@ -693,7 +693,7 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
             (uint32_t)M * N,
         });
 
-    pass &= tt_metal::LaunchProgram(device, program);
+    tt_metal::LaunchProgram(device, program);
     sleep(1);
     ////////////////////////////////////////////////////////////////////////////
     //                      Comparison Checking
@@ -845,7 +845,7 @@ bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N
             (uint32_t)M * N,
         });
 
-    pass &= tt_metal::LaunchProgram(device, program);
+    tt_metal::LaunchProgram(device, program);
     sleep(1);
     ////////////////////////////////////////////////////////////////////////////
     //                      Comparison Checking

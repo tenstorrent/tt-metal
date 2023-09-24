@@ -124,8 +124,7 @@ bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked
     SetRuntimeArgs(program, reader_kernel, cfg.logical_core, reader_runtime_args);
     SetRuntimeArgs(program, writer_kernel, cfg.logical_core, writer_runtime_args);
 
-    pass &= LaunchProgram(device, program);
-
+    LaunchProgram(device, program);
     std::vector<uint32_t> reread_input_packed;
     ReadFromBuffer(input_buffer, reread_input_packed);
 
@@ -232,8 +231,7 @@ bool reader_datacopy_writer(Device* device, const BankedConfig& cfg) {
             (uint32_t)cfg.num_tiles,
         }
     );
-    pass &= LaunchProgram(device, program);
-
+LaunchProgram(device, program);
     std::vector<uint32_t> dest_buffer_data;
     ReadFromBuffer(output_buffer, dest_buffer_data);
     pass &= input_packed == dest_buffer_data;

@@ -139,7 +139,7 @@ int main(int argc, char **argv) {
             num_tiles});
 
 
-        pass &= tt_metal::LaunchProgram(device, program);
+        tt_metal::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
         tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);

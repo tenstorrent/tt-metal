@@ -140,7 +140,7 @@ int main(int argc, char **argv) {
             transient_buffer_size_bytes});
 
 
-        pass &= tt_metal::LaunchProgram(device, program);
+        tt_metal::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
         tt_metal::ReadFromBuffer(output_dram_buffer, result_vec);

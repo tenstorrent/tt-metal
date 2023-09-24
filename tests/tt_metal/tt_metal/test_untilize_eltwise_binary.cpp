@@ -243,7 +243,7 @@ int main(int argc, char **argv) {
             (std::uint32_t)dram_dst_noc_xy.y,
             num_tiles});
 
-        pass &= tt_metal::LaunchProgram(device, program);
+        tt_metal::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
         tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);

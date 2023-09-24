@@ -161,9 +161,9 @@ namespace detail {
         }
     }
 
-    bool CompileProgram(Device *device, Program &program){
+    void CompileProgram(Device *device, Program &program){
         ZoneScoped;
-        return program.compile(device);
+        program.compile(device);
     }
 }
 
@@ -454,8 +454,7 @@ std::vector<uint32_t> GetRuntimeArgs(const Program &program, KernelID kernel_id,
     return detail::GetKernel(program, kernel_id)->runtime_args(logical_core);
 }
 
-bool LaunchProgram(Device *device, Program &program) {
-    bool pass = true;
+void LaunchProgram(Device *device, Program &program) {
     {//Profiler scope start
     ZoneScoped;
     detail::DispatchStateCheck( false );
@@ -513,7 +512,6 @@ bool LaunchProgram(Device *device, Program &program) {
 
     }//Profiler scope end
     detail::DumpDeviceProfileResults(device,program);
-    return pass;
 }
 
 

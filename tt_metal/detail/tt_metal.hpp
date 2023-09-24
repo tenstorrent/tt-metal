@@ -46,14 +46,14 @@ namespace tt::tt_metal{
          *  This cache is static is enabled for the duration of the running process.
          *  By default the cache does not persistent across runs, but can be enabled by calling EnablePersistentKernelCache(). Setting this will skip compilation when output binary directory exists.
          *
-         *  Return value: bool
+         *  Return value: void
          *
          * | Argument       | Description                                                      | Type      | Valid Range                                        | Required |
          * |----------------|------------------------------------------------------------------|-----------|----------------------------------------------------|----------|
          * | device         | Which device the program is compiled for                         | Device *  | Must be initialized via tt_metal::InitializeDevice | Yes      |
          * | program        | The program to compile                                           | Program & |                                                    | Yes      |
          */
-        bool CompileProgram(Device *device, Program &program);
+        void CompileProgram(Device *device, Program &program);
 
         /**
          * Writes runtime args that are saved in the program to device

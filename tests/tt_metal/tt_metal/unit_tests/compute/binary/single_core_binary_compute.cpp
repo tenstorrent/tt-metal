@@ -179,7 +179,7 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
             (uint32_t)test_config.num_tiles,
         });
 
-    pass &= tt_metal::LaunchProgram(device, program);
+    tt_metal::LaunchProgram(device, program);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Comparison Checking

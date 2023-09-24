@@ -100,7 +100,7 @@ int main(int argc, char **argv) {
 
 
         log_info(LogTest, "Launching kernels");
-        pass &= tt_metal::LaunchProgram(device, program);
+        tt_metal::LaunchProgram(device, program);
         log_info(LogTest, "Kernels done");
 
         for(int i = 0 ; i < grid_size.y; i++) {

@@ -210,10 +210,7 @@ TEST_F(SingleDeviceFixture, LegallyModifyRTArgsCompute) {
             }
         }
     }
-    detail::WriteRuntimeArgsToDevice(this->device_, program);
-    auto pass = tt_metal::LaunchProgram(this->device_, program);
-
-    ASSERT_TRUE(pass);
+    tt_metal::LaunchProgram(this->device_, program);
     EXPECT_TRUE(unit_tests::runtime_args::verify_result_compute(this->device_, program, core_to_rt_args, KernelType::COMPUTE));
 }
 

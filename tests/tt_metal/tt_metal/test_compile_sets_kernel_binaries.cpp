@@ -141,7 +141,7 @@ int main(int argc, char **argv) {
         std::vector<ll_api::memory> brisc_binaries;
         std::vector<ll_api::memory> ncrisc_binaries;
         for (int i = 0; i < num_compiles; i++) {
-            pass &= tt_metal::detail::CompileProgram(device, program);
+            tt_metal::detail::CompileProgram(device, program);
             if (i == 0) {
                 compute_binaries = compute_kernel->binaries();
                 TT_ASSERT(compute_binaries.size() == 3, "Expected 3 Compute binaries!");

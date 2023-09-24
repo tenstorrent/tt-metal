@@ -443,7 +443,7 @@ bool test_matmul_large_block(tt_metal::Device *device, bool activations_rm, bool
 
 
 
-        pass &= tt_metal::LaunchProgram(device, program);
+        tt_metal::LaunchProgram(device, program);
         std::vector<uint32_t> result_vec;
         tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);
 

@@ -137,7 +137,7 @@ Running the program
 
 .. code-block:: cpp
 
-   pass &= LaunchProgram(device, program);
+   LaunchProgram(device, program);
 
 Now we finally launch our program. This is a blocking call which will finish
 when the program on the device finishes.

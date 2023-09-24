@@ -1,4 +1,4 @@
 EnqueueReadBuffer
 ==================
 
-.. doxygenfunction:: EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& dst, bool blocking)
+.. doxygenfunction:: EnqueueReadBuffer(CommandQueue &cq, Buffer &buffer, std::vector<u32> &dst, bool blocking)

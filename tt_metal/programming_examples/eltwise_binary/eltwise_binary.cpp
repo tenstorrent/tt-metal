@@ -211,8 +211,7 @@ int main(int argc, char **argv) {
 
 
 
-        pass &= LaunchProgram(device, program);
-
+        LaunchProgram(device, program);
         /*
          * Read in result into a host vector.
          */
@@ -332,7 +331,7 @@ int main(int argc, char **argv) {
          * Execute.
          */
 
-        pass &= LaunchProgram(device, program_mul);
+        LaunchProgram(device, program_mul);
 
         /*
          * Read the result and compare to a golden result. Record pass/fail
