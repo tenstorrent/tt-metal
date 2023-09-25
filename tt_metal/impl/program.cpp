@@ -304,16 +304,14 @@ void Program::allocate_circular_buffers() {
         }
 
         // okay to access config and invalidate circular buffer address because it will be set below
-        std::optional<uint32_t> requested_address = circular_buffer->config().requested_address();
-        if (requested_address.has_value()) {
-            if (requested_address.value() < computed_addr.value()) {
-                log_fatal(tt::LogMetal, "Specified address {} should be at max local buffer region for core range set, try {} instead", requested_address.value(), computed_addr.value());
+        std::optional<uint32_t> globally_allocated_address = circular_buffer->config().globally_allocated_address();
+        if (globally_allocated_address.has_value()) {
+            // TODO: Add asserts that global cbs are within L1 space
+            computed_addr = globally_allocated_address;
+        } else {
+            for (auto &cb_allocator : cb_allocators) {
+                cb_allocator.get().mark_address(computed_addr.value(), circular_buffer->size());
             }
-            computed_addr = requested_address;
-        }
-
-        for (auto &cb_allocator : cb_allocators) {
-            cb_allocator.get().mark_address(computed_addr.value(), circular_buffer->size());
         }
 
         circular_buffer->set_address(computed_addr.value());

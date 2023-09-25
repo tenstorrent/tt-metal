@@ -22,7 +22,7 @@ using CircularBufferID = uintptr_t;
 
 class CircularBufferConfig {
    public:
-    CircularBufferConfig(uint32_t total_size, const std::map<uint8_t, tt::DataFormat> data_format_spec, std::optional<uint32_t> requested_address = std::nullopt) : total_size_(total_size), requested_address_(requested_address) {
+    CircularBufferConfig(uint32_t total_size, const std::map<uint8_t, tt::DataFormat> data_format_spec, std::optional<uint32_t> globally_allocated_address = std::nullopt) : total_size_(total_size), globally_allocated_address_(globally_allocated_address) {
         if (data_format_spec.size() > NUM_CIRCULAR_BUFFERS) {
             log_fatal(tt::LogMetal, "Only {} circular buffer slots are available but data formats are specified for {} indices", NUM_CIRCULAR_BUFFERS, data_format_spec.size());
         }
@@ -62,14 +62,14 @@ class CircularBufferConfig {
         return *this;
     }
 
-    CircularBufferConfig set_requested_address(uint32_t address) {
-        this->requested_address_ = address;
+    CircularBufferConfig set_globally_allocated_address(uint32_t address) {
+        this->globally_allocated_address_ = address;
         return *this;
     }
 
     uint32_t total_size() const { return this->total_size_; }
 
-    std::optional<uint32_t> requested_address() const { return this->requested_address_; }
+    std::optional<uint32_t> globally_allocated_address() const { return this->globally_allocated_address_; }
 
     const std::array<std::optional<tt::DataFormat>, NUM_CIRCULAR_BUFFERS> &data_formats() const { return this->data_formats_; }
 
@@ -77,7 +77,7 @@ class CircularBufferConfig {
 
    private:
     uint32_t total_size_;
-    std::optional<uint32_t> requested_address_;
+    std::optional<uint32_t> globally_allocated_address_;
     std::array<std::optional<tt::DataFormat>, NUM_CIRCULAR_BUFFERS> data_formats_;
     std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS> page_sizes_;
     std::unordered_set<uint8_t> buffer_indices_;

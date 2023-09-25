@@ -17,6 +17,7 @@
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_dnn/op_library/clone/clone_op.hpp"
+#include "tt_dnn/op_library/sharded/sharded_op.hpp"
 
 namespace tt::tt_metal::detail{
 
@@ -407,6 +408,12 @@ namespace tt::tt_metal::detail{
         detail::bind_unary_op(m_tensor, "transpose_cw", &transpose_cw, R"doc(Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``Z`` and ``X`` are swapped.)doc");
         detail::bind_unary_op(m_tensor, "transpose_nw", &transpose_nw, R"doc(Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``W`` and ``X`` are swapped.)doc");
 
+        // Sharding ops
+        m_tensor.def("interleaved_to_sharded", &interleaved_to_sharded,
+            py::arg("input"), py::arg("num_cores"), py::arg("shard_shape"), py::arg("shard_scheme").noconvert(),
+            R"doc(Converts tensor from interleaved to sharded memory layout)doc"
+        );
+        detail::bind_unary_op(m_tensor, "sharded_to_interleaved", &sharded_to_interleaved, R"doc(Converts tensor from sharded_to_interleaved memory layout)doc");
     }
 
 }

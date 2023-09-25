@@ -63,7 +63,6 @@ operation::ProgramWithCallbacks rotate_half_single_core(const Tensor &input, Ten
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
 
-    // Op not uplifted for L1 yet, but need to provide arg to kernel
     bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
         (uint32_t)src_no_mul_cb_index,
