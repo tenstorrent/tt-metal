@@ -139,13 +139,13 @@ inline std::set<CoreRange> num_cores_to_corerange_set(uint32_t target_num_cores,
 
 // This function takes in the core grid size, as well as the number of units of work to divide between the cores
 // This function returns the number of cores, the CoreRangeSet of all cores, and then the CoreRangeSet that does
-// the lesser amount of work, and the CoreRangeSet that does more work if work cannot be evenly divided
+// the greater amount of work, and the CoreRangeSet that does less work if work cannot be evenly divided
 // If it can be evenly divided, the second CoreRangeSet is the same as the first, and the last is empty
 // The last 2 args are the units of work for the two core grids
-inline std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores(CoreCoord grid_size, uint32_t units_to_divide) {
+inline std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores(CoreCoord grid_size, uint32_t units_to_divide, bool row_wise = false) {
 	uint32_t num_cores_x = grid_size.x, num_cores_y = grid_size.y;
 	auto target_num_cores = std::min(units_to_divide, num_cores_x * num_cores_y);
-	CoreRangeSet all_cores(num_cores_to_corerange_set(target_num_cores, grid_size));
+	CoreRangeSet all_cores(num_cores_to_corerange_set(target_num_cores, grid_size, row_wise));
 
 	std::set<CoreRange> core_group_1_set;
 	std::set<CoreRange> core_group_2_set;
@@ -159,33 +159,60 @@ inline std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, 
     // which is implicitly assumed in the following logic
 	} else {
         // Group of cores that do more work
-		core_group_2_set = num_cores_to_corerange_set(units_to_divide % target_num_cores, grid_size);
-		auto last_block_group_2 = (*core_group_2_set.rbegin());
-		auto last_block_all_cores = (*all_cores.ranges().rbegin());
-        // Case where only the last column is divided between core group 1 and 2
-		if (last_block_group_2.end.x == last_block_all_cores.end.x && last_block_group_2.end.y != last_block_all_cores.end.y) {
-			CoreRange leftover_block = {
-				.start={last_block_group_2.end.x, last_block_group_2.end.y + 1},
-				.end=last_block_all_cores.end
-			};
-			core_group_1_set.insert(leftover_block);
-		} else {
-            // Case where a middle column is divided between core group 1 and 2
-            if (last_block_group_2.end.y != num_cores_y - 1) {
-                CoreRange leftover_stick = {
-                    .start={last_block_group_2.end.x, last_block_group_2.end.y + 1},
-                    .end={last_block_group_2.end.x, num_cores_y - 1}
+        core_group_1_set = num_cores_to_corerange_set(units_to_divide % target_num_cores, grid_size, row_wise);
+        auto last_block_group_1 = (*core_group_1_set.rbegin());
+        auto last_block_all_cores = (*all_cores.ranges().rbegin());
+        if (row_wise) {
+            // Case where only the last row is divided between core group 1 and 2
+            if (last_block_group_1.end.y == last_block_all_cores.end.y && last_block_group_1.end.x != last_block_all_cores.end.x) {
+                CoreRange leftover_block = {
+                    .start={last_block_group_1.end.x + 1, last_block_group_1.end.y},
+                    .end=last_block_all_cores.end
                 };
-                core_group_1_set.insert(leftover_stick);
+                core_group_2_set.insert(leftover_block);
+            } else {
+                // Case where a middle row is divided between core group 1 and 2
+                if (last_block_group_1.end.x != num_cores_x - 1) {
+                    CoreRange leftover_stick = {
+                        .start={last_block_group_1.end.x + 1, last_block_group_1.end.y},
+                        .end={num_cores_x - 1, last_block_group_1.end.y}
+                    };
+                    core_group_2_set.insert(leftover_stick);
+                }
+                // Remaining rows of cores that does less work
+                CoreRange leftover_block = {
+                    .start={0, last_block_group_1.end.y + 1},
+                    .end=last_block_all_cores.end
+                };
+                core_group_2_set.insert(leftover_block);
             }
-            // Remaining columns of cores that does less work
-			CoreRange leftover_block = {
-				.start={last_block_group_2.end.x + 1, 0},
-				.end=last_block_all_cores.end
-			};
-			core_group_1_set.insert(leftover_block);
-		}
-		units_per_core_group_2 = units_per_core_group_1 + 1;
+        } else {
+            // Case where only the last column is divided between core group 1 and 2
+            if (last_block_group_1.end.x == last_block_all_cores.end.x && last_block_group_1.end.y != last_block_all_cores.end.y) {
+                CoreRange leftover_block = {
+                    .start={last_block_group_1.end.x, last_block_group_1.end.y + 1},
+                    .end=last_block_all_cores.end
+                };
+                core_group_2_set.insert(leftover_block);
+            } else {
+                // Case where a middle column is divided between core group 1 and 2
+                if (last_block_group_1.end.y != num_cores_y - 1) {
+                    CoreRange leftover_stick = {
+                        .start={last_block_group_1.end.x, last_block_group_1.end.y + 1},
+                        .end={last_block_group_1.end.x, num_cores_y - 1}
+                    };
+                    core_group_2_set.insert(leftover_stick);
+                }
+                // Remaining columns of cores that does less work
+                CoreRange leftover_block = {
+                    .start={last_block_group_1.end.x + 1, 0},
+                    .end=last_block_all_cores.end
+                };
+                core_group_2_set.insert(leftover_block);
+            }
+        }
+		units_per_core_group_2 = units_per_core_group_1;
+        units_per_core_group_1++;
 	}
 	CoreRangeSet core_group_1(core_group_1_set);
 	CoreRangeSet core_group_2(core_group_2_set);
