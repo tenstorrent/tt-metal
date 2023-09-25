@@ -23,12 +23,12 @@ namespace NAMESPACE {
 void MAIN {
     constexpr uint32_t onetile = 1;
 
-    constexpr auto cb_bcast_scaler = tt::CB::c_in2;
     constexpr auto cb_in0 = tt::CB::c_in0;
     constexpr auto cb_mask = tt::CB::c_in1;
+    constexpr auto cb_out0 = tt::CB::c_out0;
     constexpr auto cb_exps = tt::CB::c_intermed0;
     constexpr auto cb_recipsumexps = tt::CB::c_intermed1;
-    constexpr auto cb_out0 = tt::CB::c_out0;
+    constexpr auto cb_bcast_scaler = tt::CB::c_in2;
 
     binary_op_init_common(cb_in0, cb_bcast_scaler);
 
@@ -54,12 +54,14 @@ void MAIN {
             exp_tile_init();
             exp_tile(dst0);
 
-            constexpr int dst_mask = 1;
-            copy_tile_init();
-            copy_tile(cb_mask, 0, dst_mask);
+            if (w == Wt - 1) {
+                constexpr int dst_mask = 1;
+                copy_tile_init();
+                copy_tile(cb_mask, 0, dst_mask);
 
-            mask_tile_init();
-            mask_tile(dst0, dst_mask);
+                mask_tile_init();
+                mask_tile(dst0, dst_mask);
+            }
 
             pack_tile(dst0, cb_exps);
             cb_push_back(cb_exps, onetile);
