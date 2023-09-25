@@ -43,6 +43,13 @@ void kernel_main() {
     uint32_t nsticks_per_core_by_nblocks = get_arg_val<uint32_t>(42);
 
     uint32_t out_row_id = 0;
+    uint64_t out_noc_addr;
+    #ifdef SHARDED_OUT
+    constexpr uint32_t sharded_out_cb_id = tt::CB::c_out1;
+    out_noc_addr = get_noc_addr(get_read_ptr(sharded_out_cb_id));
+    cb_reserve_back(sharded_out_cb_id, out_nelems * nsticks_per_core_by_nblocks);
+    #endif
+
     for (uint32_t stick = 0; stick < nsticks_per_core_by_nblocks; ++ stick) {
         cb_wait_front(out_cb_id, out_nelems * out_ntiles_c);
         uint32_t out_l1_read_addr = get_read_ptr(out_cb_id);
@@ -50,7 +57,9 @@ void kernel_main() {
             // Write as tiled tensor, need to handle each face.
             // NOTE: this assumes that the stick size is 64 (2 tiles width)
 
-            uint64_t out_noc_addr = get_noc_addr(core_offset_out_row_id + out_row_id, s_out);
+            #ifndef SHARDED_OUT
+            out_noc_addr = get_noc_addr(core_offset_out_row_id + out_row_id, s_out);
+            #endif
 
             // tile 0
             // face 0
@@ -85,4 +94,8 @@ void kernel_main() {
         // kernel_profiler::mark_time(14);
         cb_pop_front(out_cb_id, out_nelems * out_ntiles_c);
     }
+    #ifdef SHARDED_OUT
+    cb_push_back(sharded_out_cb_id, out_nelems * nsticks_per_core_by_nblocks);
+    cb_wait_front(sharded_out_cb_id, out_nelems * nsticks_per_core_by_nblocks);
+    #endif
 } // kernel_main()

@@ -31,6 +31,14 @@ void MaxPool::validate(const std::vector<Tensor> &input_tensors) const {
     TT_ASSERT(2 * pad_h_ < kernel_size_h_ && 2 * pad_w_ < kernel_size_w_,
               "Total padding along a dim should be less than kernel/window size along same dim");
     TT_ASSERT(out_w_ % nblocks_ == 0, "Make sure out_w is divisible by nblocks for now.");
+
+    TT_ASSERT(input.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+    if (this->out_mem_config_.is_sharded()) {
+        TT_ASSERT(this->out_mem_config_.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+        TT_ASSERT(this->use_multicore_);
+    } else {
+        TT_ASSERT(this->out_mem_config_.memory_layout == TensorMemoryLayout::INTERLEAVED);
+    }
 }
 
 std::vector<Shape> MaxPool::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
@@ -66,7 +74,20 @@ std::vector<Shape> MaxPool::compute_output_shapes(const std::vector<Tensor> &inp
 
 std::vector<Tensor> MaxPool::create_output_tensors(const std::vector<Tensor> &inputs) const {
     const auto& input = inputs.at(0);
-    return operation::generic_create_output_tensors(*this, inputs, input.dtype(), input.layout(), out_mem_config_);
+    if (this->out_mem_config_.is_sharded()) {
+        Shape output_shape = this->compute_output_shapes(inputs).at(0);
+        uint32_t nbatch = input.shape()[0];
+        uint32_t out_hw = this->out_h_ * this->out_w_;
+        uint32_t out_nhw = out_hw * nbatch;
+        uint32_t ncores = max_pool_helpers::get_num_cores(input.device()->compute_with_storage_grid_size(), out_nhw);
+        uint32_t out_nhw_per_core = out_nhw / ncores;
+        CoreRangeSet shard_grid = num_cores_to_corerange_set(ncores, input.device()->compute_with_storage_grid_size(), true);
+        std::pair<uint32_t, uint32_t> shard_shape = {out_nhw_per_core, input.shape()[-1]};
+        auto shard_spec = ShardSpec{.shard_grid=shard_grid, .shard_shape=shard_shape};
+        return {create_sharded_device_tensor(output_shape, input.dtype(), input.layout(), input.device(), this->out_mem_config_, shard_spec)};
+    } else {
+        return operation::generic_create_output_tensors(*this, inputs, input.dtype(), input.layout(), out_mem_config_);
+    }
 }
 
 operation::ProgramWithCallbacks MaxPool::create_program(const std::vector<Tensor>& inputs, std::vector<Tensor> &outputs) const {

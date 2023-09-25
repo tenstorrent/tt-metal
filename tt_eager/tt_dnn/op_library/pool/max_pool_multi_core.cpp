@@ -55,16 +55,9 @@ std::tuple<CoreRange, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> get_decomp
     return std::make_tuple(all_cores, core_range, core_range_cliff, out_h_per_core, out_h_per_core_cliff);
 }
 
-// decompose along height = N * H * W
-std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t, uint32_t, uint32_t>
-get_decomposition_nhw(CoreCoord grid_size, uint32_t in_nhw, uint32_t out_nhw) {
-    std::set<CoreRange> all_cores, core_range, core_range_cliff;
+uint32_t get_num_cores(CoreCoord grid_size, uint32_t out_nhw) {
     uint32_t avail_ncores = grid_size.x * grid_size.y;
-    // // generic decomposition:
-    // uint32_t ncores = out_nhw / out_nhw_per_core;
-
-    // hardcoded for resnet shapes:
-    uint32_t ncores = 0, out_nhw_per_core = 0, in_nhw_per_core = 0;
+    uint32_t ncores;
     switch (out_nhw) {
         case 1024:  // test case
             ncores = 32;
@@ -84,10 +77,24 @@ get_decomposition_nhw(CoreCoord grid_size, uint32_t in_nhw, uint32_t out_nhw) {
             break;
         default:
             TT_ASSERT(false, "General case is not yet handled! Only RN50 shapes supported in multicore.");
-            out_nhw_per_core = (uint32_t) ceil((float) out_nhw / avail_ncores);
+            uint32_t out_nhw_per_core = (uint32_t) ceil((float) out_nhw / avail_ncores);
             ncores = out_nhw / out_nhw_per_core;
             break;
     }
+    return ncores;
+}
+
+// decompose along height = N * H * W
+std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t, uint32_t, uint32_t>
+get_decomposition_nhw(CoreCoord grid_size, uint32_t in_nhw, uint32_t out_nhw) {
+    std::set<CoreRange> all_cores, core_range, core_range_cliff;
+    uint32_t avail_ncores = grid_size.x * grid_size.y;
+    // // generic decomposition:
+    // uint32_t ncores = out_nhw / out_nhw_per_core;
+
+    // hardcoded for resnet shapes:
+    uint32_t ncores = 0, out_nhw_per_core = 0, in_nhw_per_core = 0;
+    ncores = get_num_cores(grid_size, out_nhw);
 
     out_nhw_per_core = out_nhw / ncores;
     in_nhw_per_core = in_nhw / ncores;
@@ -209,6 +216,18 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
 		.set_page_size(out_cb_id, out_cb_pagesize);
     auto cb_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
 
+
+    if (output.memory_config().is_sharded()) {
+        uint32_t sharded_out_cb_id = CB::c_out1; // output rows in RM
+        
+        uint32_t sharded_out_num_pages = output.shard_spec().value().shard_shape.first;
+
+        uint32_t sharded_out_cb_page_size = output.shard_spec().value().shard_shape.second * out_nbytes;    // there is just one row of channels after reduction
+        CircularBufferConfig cb_sharded_out_config = CircularBufferConfig(sharded_out_num_pages * sharded_out_cb_page_size, {{sharded_out_cb_id, out_df}})
+            .set_page_size(out_cb_id, sharded_out_cb_page_size).set_globally_allocated_address(output.buffer()->address());
+        auto cb_sharded_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_sharded_out_config);
+    }
+
     // Construct const buffer with -INF
     // uint32_t const_buffer_size = 32;
     uint32_t const_buffer_size = input_shape[3];    // set it equal to 1 row
@@ -318,10 +337,15 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
     /**
      * Writer Kernel: output cb -> output rows
      */
+    std::map<string, string> writer_defines;
+    if (output.memory_config().is_sharded()) {
+        writer_defines["SHARDED_OUT"] = "1";
+    }
     std::vector<uint32_t> writer_ct_args = reader_ct_args;
     auto writer_config = DataMovementConfig{.processor = DataMovementProcessor::RISCV_0,
                                             .noc = NOC::RISCV_0_default,
-                                            .compile_args = writer_ct_args};
+                                            .compile_args = writer_ct_args,
+                                            .defines = writer_defines};
     std::string writer_kernel_fname("tt_metal/kernels/dataflow/writer_max_pool_2d_multi_core.cpp");
     auto writer_kernel = CreateDataMovementKernel(program,
                                                   writer_kernel_fname,

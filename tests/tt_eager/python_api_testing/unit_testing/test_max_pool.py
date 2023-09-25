@@ -93,8 +93,9 @@ def volume(shape):
     (
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1),
     ),
-    ids=["out_DRAM", "out_L1"],
+    ids=["out_DRAM", "out_L1", "out_HEIGHT_SHARDED"],
 )
 @pytest.mark.parametrize(
     "nblocks",
@@ -159,6 +160,11 @@ def test_run_max_pool(
         logger.info("Multicore version only supports Resnet50 configs for now.")
         pytest.skip()
 
+    if out_mem_config.is_sharded():
+        if not use_multicore:
+            pytest.skip("Unsupported sharding")
+        interleaved_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+
     torch.set_printoptions(
         precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32
     )
@@ -211,6 +217,8 @@ def test_run_max_pool(
         nblocks,
         use_multicore,
     )
+    if out_mem_config.is_sharded():
+        out_padded = ttl.tensor.sharded_to_interleaved(out_padded, interleaved_mem_config)
     out_padded = out_padded.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
 
     out_shape_padded = out_padded.shape()

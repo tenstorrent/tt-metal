@@ -70,5 +70,9 @@ Tensor max_pool2d(const Tensor &input,
                   const MemoryConfig& out_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
                   uint32_t nblocks = 1, bool use_multicore = false);
 
+namespace max_pool_helpers {
+uint32_t get_num_cores(CoreCoord grid_size, uint32_t out_nhw);
+}
+
 }  // namespace tt_metal
 }  // namespace tt
