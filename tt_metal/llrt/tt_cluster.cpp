@@ -35,6 +35,20 @@ void tt_cluster::clean_system_resources() {
     device->clean_system_resources();
 }
 
+void tt_cluster::verify_eth_fw() {
+    const std::unordered_set<chip_id_t> &all_chips = device->get_all_chips_in_cluster();
+    for (const chip_id_t &chip : all_chips) {
+        std::vector<uint32_t> mem_vector;
+        std::vector<uint32_t> fw_versions;
+
+        for (CoreCoord &eth_core : get_soc_desc(chip).ethernet_cores) {
+            read_dram_vec(mem_vector, tt_cxy_pair(chip, eth_core), eth_l1_mem::address_map::FW_VERSION_ADDR, 4);
+            fw_versions.push_back(mem_vector.at(0));
+        }
+        verify_sw_fw_versions(chip, SW_VERSION, fw_versions);
+    }
+}
+
 int extract_chip_id_from_sdesc_path(std::filesystem::path sdesc_path) {
     string file = sdesc_path.filename().string();
     return atoi(file.substr(0, file.find(".")).c_str());
@@ -359,6 +373,23 @@ void tt_cluster::read_sysmem_vec(vector<uint32_t> &vec, uint64_t addr, uint32_t 
     // TODO: Uplift
     constexpr uint16_t channel = 0;
     device->read_from_sysmem(vec, addr, channel, size, src_device_id);
+}
+
+void tt_cluster::verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions) {
+    tt_version sw(sw_version), fw_first_eth_core(fw_versions.at(0));
+    tt::log_info(
+        tt::LogDevice,
+        "Software version {}, Ethernet FW version {} (Device {})",
+        sw.str(),
+        fw_first_eth_core.str(),
+        device_id);
+    for (std::uint32_t &fw_version : fw_versions) {
+        tt_version fw(fw_version);
+
+        TT_ASSERT(fw == fw_first_eth_core, "FW versions are not the same across different ethernet cores");
+        TT_ASSERT(sw.major == fw.major, "SW/FW major version number out of sync");
+        TT_ASSERT(sw.minor <= fw.minor, "SW version is newer than FW version");
+    }
 }
 
 void tt_cluster::on_destroy(tt_cluster_on_destroy_callback cb) {

@@ -25,6 +25,8 @@
 
 #include "dev_mem_map.h"
 
+static constexpr std::uint32_t SW_VERSION = 0x00020000;
+
 using tt_target_dram = std::tuple<int, int, int>;
 using tt::TargetDevice;
 using tt::DEVICE;
@@ -75,6 +77,9 @@ struct tt_cluster
 
     //! device driver and misc apis
     void clean_system_resources();
+
+    void verify_eth_fw();
+    void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions);
 
     void open_device(
         const tt::ARCH &arch,
