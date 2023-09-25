@@ -436,7 +436,7 @@ def log_sigmoid(x, *args, **kwargs):
 
 def heaviside(x, *args, **kwargs):
     value = kwargs.pop("scalar")
-    result = torch.heaviside(x, torch.tensor(value, dtype=torch.bfloat16))
+    result = torch.heaviside(x, torch.tensor(value))
     return result
 
 
