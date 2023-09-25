@@ -31,13 +31,13 @@ shapes = [
 
 if is_wormhole_b0():
     shapes = [ [[1, 1, 32, 32], (0.99, 0.85, 0.85, 0.9)], ]  # Single core
+    fns = ["normalize_hw"]
 
 @pytest.mark.parametrize(
     "input_shapes_and_pcc",
     shapes,
 )
 class TestStats:
-    @skip_for_wormhole_b0
     @pytest.mark.parametrize("fn_kind", fns)
     def test_run_stats_ops(
         self, input_shapes_and_pcc, fn_kind, device, function_level_defaults
