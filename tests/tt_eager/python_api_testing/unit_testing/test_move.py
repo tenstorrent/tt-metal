@@ -61,7 +61,10 @@ def run_move_op(test_id, shape, dtype, in0_mem_config, output_mem_config, device
 
     assert passing_pcc
 
-@skip_for_wormhole_b0
+shapes = [[1, 1, 32, 32], [1, 3, 320, 384],]
+if is_wormhole_b0():
+    del shapes[1:]
+
 @pytest.mark.parametrize(
     "in0_mem_config, output_mem_config",
     (
@@ -81,12 +84,11 @@ def run_move_op(test_id, shape, dtype, in0_mem_config, output_mem_config, device
     (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),
     ids=["BFLOAT8_B", "BFLOAT16"],
 )
-@pytest.mark.parametrize("shape", ([1, 1, 32, 32], [1, 3, 320, 384]))
+@pytest.mark.parametrize("shape", shapes)
 @pytest.mark.parametrize("test_id", (0, 1), ids=["overlap", "non_overlap"])
 def test_move_op(test_id, shape, dtype, in0_mem_config, output_mem_config, device):
     run_move_op(test_id, shape, dtype, in0_mem_config, output_mem_config, device)
 
-@skip_for_wormhole_b0
 def test_move_op_with_program_cache(use_program_cache, device):
     in0_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
     output_mem_config = ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)
