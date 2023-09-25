@@ -134,7 +134,6 @@ def run_groupnorm_tests(
 
 
 
-@skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "out_mem_config",
     (ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),),
