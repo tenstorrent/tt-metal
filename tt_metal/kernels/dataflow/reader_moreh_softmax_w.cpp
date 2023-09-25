@@ -29,9 +29,6 @@ void generate_mask() {
     cb_reserve_back(cb_mask, 1);
     auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_mask));
 
-    for (int j = 0; j < 1024; j++)
-        ptr[j] = uint16_t(0);
-
     for(int h = 0 ; h < 16; h++) {
         // sub tile 0
         {

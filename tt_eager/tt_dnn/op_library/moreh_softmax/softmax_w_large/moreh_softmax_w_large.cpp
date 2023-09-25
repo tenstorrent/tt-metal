@@ -95,8 +95,10 @@ operation::ProgramWithCallbacks moreh_softmax_w_large(const Tensor &input, const
         }
 
         float scaler = 1.0f;
+        uint32_t mask_w = shape.without_padding()[3] % TILE_WIDTH;
+        if(mask_w == 0) mask_w = TILE_WIDTH;
         vector<u32> reader_args = {
-            input.buffer()->address(), num_tiles_per_core, tile_offset, Wt, *reinterpret_cast<uint32_t *>(&scaler)};
+            input.buffer()->address(), num_tiles_per_core, tile_offset, Wt, *reinterpret_cast<uint32_t *>(&scaler), mask_w};
 
         vector<u32> writer_args = {output.buffer()->address(), num_tiles_per_core, tile_offset, Wt};
 

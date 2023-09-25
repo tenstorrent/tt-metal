@@ -50,6 +50,7 @@ operation::ProgramWithCallbacks moreh_softmax_h_large(const Tensor &input, const
         data_format,
         {
             {CB::c_in0, 2},        // input
+            {CB::c_in1, 1},        // mask
             {CB::c_out0, 2},       // output
             {CB::c_intermed0, 2},  // exp(x)
             {CB::c_intermed1, 1},  // reduce
@@ -94,8 +95,10 @@ operation::ProgramWithCallbacks moreh_softmax_h_large(const Tensor &input, const
         }
 
         float scaler = 1.0f;
+        uint32_t mask_h = shape.without_padding()[2] % TILE_HEIGHT;
+        if(mask_h == 0) mask_h = TILE_HEIGHT;
         vector<u32> reader_args = {
-            input.buffer()->address(), num_tiles_per_core, tile_offset, Ht, Wt, *reinterpret_cast<uint32_t *>(&scaler)};
+            input.buffer()->address(), num_tiles_per_core, tile_offset, Ht, Wt, *reinterpret_cast<uint32_t *>(&scaler), mask_h};
 
         vector<u32> writer_args = {output.buffer()->address(), num_tiles_per_core, tile_offset, Ht, Wt};
 
