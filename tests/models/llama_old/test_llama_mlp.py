@@ -23,12 +23,14 @@ import tt_lib
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from collections import OrderedDict
 
-from tests.models.llama.llama_utils import *
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+from models.llama.llama_utils import *
+from models.utility_functions import (
     comp_allclose,
     comp_pcc,
+    torch_to_tt_tensor_rm,
+    tt_to_torch_tensor,
 )
-from tests.models.llama.llama_mlp import TtLlamaMLP
+from tests.models.llama_old.llama_mlp import TtLlamaMLP
 
 
 class PytorchLlamaMLPModel(torch.nn.Module):
@@ -81,10 +83,10 @@ def run_test_LlamaMLP_inference(
         configuration.hidden_act,
     )
 
-    tt_mlp_input = torch2tt_tensor(llama_mlp_input, device)
+    tt_mlp_input = torch_to_tt_tensor_rm(llama_mlp_input, device)
 
     tt_out = tt_LlamaMLP_model(tt_mlp_input)
-    tt_out = tt2torch_tensor(tt_out)
+    tt_out = tt_to_torch_tensor(tt_out)
 
     # check outputs ----------------------------------------------------------------------
     logger.info(comp_allclose(pytorch_out, tt_out))

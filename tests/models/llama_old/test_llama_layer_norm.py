@@ -24,12 +24,14 @@ from loguru import logger
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from collections import OrderedDict
 
-from tests.models.llama.llama_utils import *
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+from models.llama.llama_utils import *
+from models.utility_functions import (
     comp_allclose,
     comp_pcc,
+    torch_to_tt_tensor_rm,
+    tt_to_torch_tensor,
 )
-from tests.models.llama.llama_layer_norm import TtLlamaRMSNorm
+from tests.models.llama_old.llama_layer_norm import TtLlamaRMSNorm
 
 
 class PytorchLlamaRMSNormModel(torch.nn.Module):
@@ -84,11 +86,11 @@ def run_test_LlamaLayerNorm_inference(
         configuration.hidden_size,
     )
 
-    tt_layer_norm_input = torch2tt_tensor(llama_layer_norm_input, device)
+    tt_layer_norm_input = torch_to_tt_tensor_rm(llama_layer_norm_input, device)
 
     # call model for input
     tt_out = tt_LlamaRMSNorm_model(tt_layer_norm_input)
-    tt_out = tt2torch_tensor(tt_out)
+    tt_out = tt_to_torch_tensor(tt_out)
     logger.info(f"TT output shape: {tt_out.shape}")
 
     # check outputs ----------------------------------------------------------------------

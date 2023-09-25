@@ -25,15 +25,17 @@ from typing import List, Optional, Tuple, Union
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from collections import OrderedDict
 
-from tests.models.llama.llama_utils import *
-from tests.models.llama.llama_mlp import TtLlamaMLP
-from tests.models.llama.llama_attention import TtLlamaAttention
-from tests.models.llama.llama_layer_norm import TtLlamaRMSNorm
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+from models.llama.llama_utils import *
+from tests.models.llama_old.llama_mlp import TtLlamaMLP
+from tests.models.llama_old.llama_attention import TtLlamaAttention
+from tests.models.llama_old.llama_layer_norm import TtLlamaRMSNorm
+from models.utility_functions import (
     comp_allclose,
     comp_pcc,
+    torch_to_tt_tensor_rm,
+    tt_to_torch_tensor,
 )
-from tests.models.llama.llama_decoder import TtLlamaDecoderLayer
+from tests.models.llama_old.llama_decoder import TtLlamaDecoderLayer
 
 
 class PytorchLlamaDecoderModel(torch.nn.Module):
@@ -92,7 +94,7 @@ def run_test_LlamaDecoder_inference(
 
     # TT hardware execution =================================================================
     tt_llama_input = llama_input.unsqueeze(1)
-    tt_llama_input = torch2tt_tensor(tt_llama_input, device)
+    tt_llama_input = torch_to_tt_tensor_rm(tt_llama_input, device)
 
     # get TT Attention module
     tt_LlamaDecoder_model = TtLlamaDecoderLayer(
@@ -108,7 +110,7 @@ def run_test_LlamaDecoder_inference(
     )
     # transform to PyTorch tensor
     # take only hidden_states tensor if tuple is obtained
-    tt_out = tt2torch_tensor(tt_out[0])
+    tt_out = tt_to_torch_tensor(tt_out[0])
     tt_out = tt_out.squeeze(1)
 
     # check outputs ----------------------------------------------------------------------

@@ -22,12 +22,13 @@ import tt_lib
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
-from tests.models.llama.llama_utils import *
+from models.llama.llama_utils import *
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
 )
-from tests.models.llama.llama_attention import TtLlamaAttention
+from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
+from tests.models.llama_old.llama_attention import TtLlamaAttention
 
 
 class PytorchLlamaAttentionModel(torch.nn.Module):
@@ -87,7 +88,7 @@ def run_test_LlamaAttention_inference(
 
     # TT hardware execution =================================================================
     tt_attention_input = attention_input.unsqueeze(1)
-    tt_attention_input = torch2tt_tensor(tt_attention_input, device)
+    tt_attention_input = torch_to_tt_tensor_rm(tt_attention_input, device)
 
     # get TT Attention module
     tt_LlamaAttention_model = TtLlamaAttention(
@@ -103,7 +104,7 @@ def run_test_LlamaAttention_inference(
     tt_out, attn_weights, past_key_value = tt_LlamaAttention_model(
         hidden_states=tt_attention_input, position_ids=position_ids
     )
-    tt_out = tt2torch_tensor(tt_out).squeeze(1)
+    tt_out = tt_to_torch_tensor(tt_out).squeeze(1)
 
     # check outputs ----------------------------------------------------------------------
     logger.info(comp_allclose(pytorch_out, tt_out))

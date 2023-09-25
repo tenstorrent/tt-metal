@@ -22,7 +22,7 @@ from transformers import (
     AutoModelForCausalLM,
 )
 
-from tests.models.llama.llama_model import TtLlamaModel
+from tests.models.llama_old.llama_model import TtLlamaModel
 import tt_lib
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, Profiler
 from models.utility_functions import (

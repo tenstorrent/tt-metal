@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
-# SPDX-License-Identifier: Apache-2.0import torch
+# SPDX-License-Identifier: Apache-2.0
 
 import pytest
 from loguru import logger

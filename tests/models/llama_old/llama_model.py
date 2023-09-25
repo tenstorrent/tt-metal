@@ -7,11 +7,10 @@ from abc import abstractmethod
 import torch
 from torch import nn
 import tt_lib
-from tests.models.llama.llama_utils import torch2tt_tensor, tt2torch_tensor
-from typing import List, Optional, Tuple, Union
+from models.utility_functions import torch_to_tt_tensor_rm
 
-from tests.models.llama.llama_layer_norm import TtLlamaRMSNorm
-from tests.models.llama.llama_decoder import TtLlamaDecoderLayer
+from tests.models.llama_old.llama_layer_norm import TtLlamaRMSNorm
+from tests.models.llama_old.llama_decoder import TtLlamaDecoderLayer
 
 
 class TtLlamaShared(torch.nn.Module):
@@ -86,7 +85,7 @@ class TtLlamaShared(torch.nn.Module):
         #     ttl.tensor.Layout.ROW_MAJOR,
         # ).to(ttl.tensor.Layout.TILE)
         # tt_embeddings = tt_embeddings.to(self.device)
-        tt_embeddings = torch2tt_tensor(embeddings, self.device)
+        tt_embeddings = torch_to_tt_tensor_rm(embeddings, self.device)
 
         # apply decoders
         # encoder_output = self.decoders(tt_embeddings)

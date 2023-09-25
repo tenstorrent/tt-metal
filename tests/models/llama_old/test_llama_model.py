@@ -14,23 +14,24 @@ sys.path.append(f"{f}/../../../..")
 
 import pytest
 import tt_lib
-from tests.models.llama.llama_utils import *
-from tests.models.llama.llama_mlp import TtLlamaMLP
-from tests.models.llama.llama_attention import TtLlamaAttention
-from tests.models.llama.llama_layer_norm import TtLlamaRMSNorm
-from tests.models.llama.llama_decoder import TtLlamaDecoderLayer
-from tests.models.llama.llama_embeddings import PytorchEmbeddings
+from models.llama.llama_utils import *
+from tests.models.llama_old.llama_mlp import TtLlamaMLP
+from tests.models.llama_old.llama_attention import TtLlamaAttention
+from tests.models.llama_old.llama_layer_norm import TtLlamaRMSNorm
+from tests.models.llama_old.llama_decoder import TtLlamaDecoderLayer
+from tests.models.llama_old.llama_embeddings import PytorchEmbeddings
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
     PreTrainedModel,
 )
 
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+from models.utility_functions import (
     comp_allclose,
     comp_pcc,
+    tt_to_torch_tensor,
 )
-from tests.models.llama.llama_model import TtLlamaShared, TtLlamaModel
+from tests.models.llama_old.llama_model import TtLlamaShared, TtLlamaModel
 
 
 def run_test_Llama_inference(
@@ -88,7 +89,7 @@ def run_test_Llama_inference(
     )
 
     tt_out = tt_llama_model(llama_input).cpu()
-    tt_out = tt2torch_tensor(tt_out)
+    tt_out = tt_to_torch_tensor(tt_out)
     tt_out = tt_out.squeeze(1)
 
     # check outputs ----------------------------------------------------------------------

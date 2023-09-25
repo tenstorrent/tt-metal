@@ -8,12 +8,12 @@ from torch import nn
 import tt_lib
 
 from typing import List, Optional, Tuple, Union
-from tests.models.llama.llama_layer_norm import TtLlamaRMSNorm
-from tests.models.llama.llama_decoder import TtLlamaDecoderLayer
-from tests.models.llama.llama_model import TtLlamaShared
+from tests.models.llama_old.llama_layer_norm import TtLlamaRMSNorm
+from tests.models.llama_old.llama_decoder import TtLlamaDecoderLayer
+from tests.models.llama_old.llama_model import TtLlamaShared
 
 from models.helper_funcs import Linear as TTLinear
-from models.utility_functions import torch2tt_tensor
+from models.utility_functions import torch_to_tt_tensor_rm
 
 
 class TtLlamaForCausalLM(TtLlamaShared):
@@ -34,7 +34,7 @@ class TtLlamaForCausalLM(TtLlamaShared):
         # instead of model itself
         self.state_dict = state_dict  # hugging_face_reference_model.state_dict()
 
-        self.weight = torch2tt_tensor(self.state_dict["lm_head.weight"], self.device)
+        self.weight = torch_to_tt_tensor_rm(self.state_dict["lm_head.weight"], self.device)
         self.bias = None
 
         self.linear = TTLinear(

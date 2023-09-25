@@ -7,7 +7,7 @@ from torch import nn
 import tt_lib
 
 from models.helper_funcs import Linear as TTLinear
-from models.utility_functions import torch2tt_tensor
+from models.utility_functions import torch_to_tt_tensor_rm
 
 
 class TtLlamaMLP(nn.Module):
@@ -29,13 +29,13 @@ class TtLlamaMLP(nn.Module):
         self.intermediate_size = intermediate_size
         self.bias = None
 
-        self.out_gate_proj = torch2tt_tensor(
+        self.out_gate_proj = torch_to_tt_tensor_rm(
             self.state_dict[f"{base_url}.{layer_num}.mlp.gate_proj.weight"], self.device
         )
-        self.out_down_proj = torch2tt_tensor(
+        self.out_down_proj = torch_to_tt_tensor_rm(
             self.state_dict[f"{base_url}.{layer_num}.mlp.down_proj.weight"], self.device
         )
-        self.out_up_proj = torch2tt_tensor(
+        self.out_up_proj = torch_to_tt_tensor_rm(
             self.state_dict[f"{base_url}.{layer_num}.mlp.up_proj.weight"], self.device
         )
 
