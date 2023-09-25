@@ -34,6 +34,7 @@ bool is_moreh_softmax_w_small_available(const Tensor &tensor) {
 
     int32_t cb_usage = 0;        // bytes
     cb_usage += 2 * tile_size;   // input;
+    cb_usage += 1 * tile_size;   // mask;
     cb_usage += 2 * tile_size;   // output;
     cb_usage += Wt * tile_size;  // exp(x);
     cb_usage += 1 * tile_size;   // reduce;
@@ -114,7 +115,8 @@ operation::ProgramWithCallbacks moreh_softmax_w_small(const Tensor &input, const
         }
 
         float scaler = 1.0f;
-        uint32_t mask_w = shape.without_padding()[3];
+        uint32_t mask_w = shape.without_padding()[3] % TILE_WIDTH;
+        if(mask_w == 0) mask_w = TILE_WIDTH;
         vector<u32> reader_args = {
             input.buffer()->address(), num_tiles_per_core, tile_offset, Wt, *reinterpret_cast<uint32_t *>(&scaler), mask_w};
 

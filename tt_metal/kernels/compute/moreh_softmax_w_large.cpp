@@ -23,16 +23,18 @@ namespace NAMESPACE {
 void MAIN {
     constexpr uint32_t onetile = 1;
 
-    constexpr auto cb_bcast_scaler = tt::CB::c_in2;
     constexpr auto cb_in0 = tt::CB::c_in0;
+    constexpr auto cb_mask = tt::CB::c_in1;
+    constexpr auto cb_out0 = tt::CB::c_out0;
     constexpr auto cb_exps = tt::CB::c_intermed0;
     constexpr auto cb_recipsumexps = tt::CB::c_intermed1;
     constexpr auto cb_add = tt::CB::c_intermed2;
-    constexpr auto cb_out0 = tt::CB::c_out0;
+    constexpr auto cb_bcast_scaler = tt::CB::c_in2;
 
     binary_op_init_common(cb_in0, cb_bcast_scaler);
 
     cb_wait_front(cb_bcast_scaler, onetile); // comes from the reader
+    cb_wait_front(cb_mask, onetile); // comes from the reader
 
     uint32_t N = get_compile_time_arg_val(0);
     uint32_t Wt = get_compile_time_arg_val(1);
@@ -53,6 +55,16 @@ void MAIN {
             cb_reserve_back(cb_exps, onetile);
             exp_tile_init();
             exp_tile(dst0);
+
+            if (w == Wt - 1) {
+                constexpr int dst_mask = 1;
+                copy_tile_init();
+                copy_tile(cb_mask, 0, dst_mask);
+
+                mask_tile_init();
+                mask_tile(dst0, dst_mask);
+            }
+
             pack_tile(dst0, cb_exps);
             cb_push_back(cb_exps, onetile);
             REL();
