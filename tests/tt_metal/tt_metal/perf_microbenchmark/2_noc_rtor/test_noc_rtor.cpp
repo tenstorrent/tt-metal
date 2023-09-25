@@ -26,7 +26,7 @@ using std::chrono::microseconds;
 // occurs.
 //
 // TODO: Currently, this benchmark uses only 1 NOC for communication.
-// Ultimately, it should use two NOCs together thorugh Metal's channel grouping
+// Ultimately, it should use two NOCs together through Metal's channel grouping
 // interface
 //
 // Usage example:
