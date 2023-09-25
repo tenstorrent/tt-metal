@@ -277,7 +277,7 @@ def run_bert_question_and_answering_inference(
         tt_out = tt_out_list[i].cpu()
         tt_untilized_output = (
             tt_out.to(ttl.tensor.Layout.ROW_MAJOR)
-            .to_torch()
+            .to_torch().float()
             .reshape(batch, 1, seq_len, -1)
         )
 
