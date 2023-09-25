@@ -9,6 +9,7 @@
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
+#include "tt_dnn/op_library/moreh_softmax/moreh_softmax_op.hpp"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -280,6 +281,11 @@ void py_module(py::module& m_primary) {
     m_primary.def("softmax_in_place", &softmax_in_place,
         "Performs a softmax operation on the last tensor dimension. Returns a reference to the input tensor modified in place.");
 
+    m_primary.def("moreh_softmax", &moreh_softmax,
+        py::arg("input_tensors").noconvert(),
+        py::arg("dim").noconvert(),
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        "Performs a softmax operation. Returns a output tensor.");
 }
 
 }  // namespace primary
