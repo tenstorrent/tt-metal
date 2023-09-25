@@ -58,6 +58,8 @@ bool test_compile_args(std::vector<uint32_t> compile_args_vec, int device_id) {
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::detail::CompileProgram(device, program);
 
+    CloseDevice(device);
+
     return true;
 }
 
