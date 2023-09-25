@@ -278,3 +278,87 @@ def test_sharded_matmul(device, in0_sharded, out_sharded, M, N, num_cores):
     passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)
     assert passing
+
+
+@pytest.mark.skip("Sharded tensors do not work with program cache")
+def test_sharded_program_cache(device, use_program_cache):
+    N = 1
+    C = 1
+    H = 25088
+    W = 64
+    x = torch.arange(N * C * H * W).reshape((N, C, H, W)).bfloat16().float()
+    x2 = (-1 * torch.arange(N * C * H * W)).reshape((N, C, H, W)).bfloat16().float()
+
+    xt = (
+        ttl.tensor.Tensor(
+            x.reshape(-1).tolist(),
+            x.shape,
+            ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.Layout.ROW_MAJOR,
+        )
+        .to(ttl.tensor.Layout.TILE)
+        .to(
+            device,
+            ttl.tensor.MemoryConfig(
+                memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+                buffer_type=ttl.tensor.BufferType.L1,
+            ),
+        )
+    )
+
+    yt = ttl.tensor.interleaved_to_sharded(
+        xt, 98, [H // 98, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
+    )
+
+    zt = ttl.tensor.sharded_to_interleaved(
+        yt,
+        ttl.tensor.MemoryConfig(
+            memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+            buffer_type=ttl.tensor.BufferType.L1,
+        ),
+    )
+
+    xt2 = (
+        ttl.tensor.Tensor(
+            x2.reshape(-1).tolist(),
+            x2.shape,
+            ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.Layout.ROW_MAJOR,
+        )
+        .to(ttl.tensor.Layout.TILE)
+        .to(
+            device,
+            ttl.tensor.MemoryConfig(
+                memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+                buffer_type=ttl.tensor.BufferType.L1,
+            ),
+        )
+    )
+
+    yt2 = ttl.tensor.interleaved_to_sharded(
+        xt2, 98, [H // 98, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
+    )
+
+    zt2 = ttl.tensor.sharded_to_interleaved(
+        yt2,
+        ttl.tensor.MemoryConfig(
+            memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+            buffer_type=ttl.tensor.BufferType.L1,
+        ),
+    )
+    zt = ttl.tensor.sharded_to_interleaved(
+        yt,
+        ttl.tensor.MemoryConfig(
+            memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+            buffer_type=ttl.tensor.BufferType.L1,
+        ),
+    )
+
+    tt_og = xt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_og2 = xt2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+
+    tt_got_back = zt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_got_back2 = zt2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+
+    assert torch.equal(tt_og, tt_got_back)
+    assert torch.equal(tt_og2, tt_got_back2)
