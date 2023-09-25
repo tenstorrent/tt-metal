@@ -7,7 +7,7 @@
 #include "ckernel_globals.h"
 #include "risc_common.h"
 #include <tensix.h>
-#include "run_sync.h"
+#include "dev_msgs.h"
 
 #include "tools/profiler/kernel_profiler.hpp"
 
@@ -27,27 +27,21 @@ volatile uint tt_reg_ptr * const reg_base = reinterpret_cast<volatile uint *>(0x
 volatile uint tt_reg_ptr * const pc_buf_base = reinterpret_cast<volatile uint *>(PC_BUF_BASE);
 volatile uint tt_reg_ptr * const regfile = reinterpret_cast<volatile uint *>(REGFILE_BASE);
 volatile uint tt_reg_ptr * const instrn_buffer = reinterpret_cast<volatile uint *>(INSTRN_BUF_BASE);
-volatile uint tt_reg_ptr *mailbox_base[4] = {
-    reinterpret_cast<volatile uint tt_reg_ptr *>(TENSIX_MAILBOX0_BASE), reinterpret_cast<volatile uint tt_reg_ptr *>(TENSIX_MAILBOX1_BASE),
-    reinterpret_cast<volatile uint tt_reg_ptr *>(TENSIX_MAILBOX2_BASE), reinterpret_cast<volatile uint tt_reg_ptr *>(TENSIX_MAILBOX3_BASE)
-};
-volatile tt_l1_ptr uint *dbg_event_scratch = nullptr;
+
 tt_reg_ptr uint *regmem = reinterpret_cast<tt_reg_ptr uint *>(REGFILE_BASE);
 
 uint32_t cfg_state_id __attribute__((used)) = 0;  // Flip between 0 and 1 to keep state between kernel calls
 uint32_t dest_offset_id __attribute__((used)) = 0; // Flip between 0 and 1 to keep dest pointer between kernel calls
 
-uint32_t dbg_event_index __attribute__((used)) = 0;
-uint32_t dbg_event_end __attribute__((used)) = 0;
-uint32_t op_info_offset  __attribute__((used)) = 0;
+uint32_t op_info_offset __attribute__((used)) = 0;
 
 const uint8_t thread_id = COMPILE_FOR_TRISC;
 
 volatile uint local_mem_barrier __attribute__((used));
 
-#define GET_TRISC_RUN_EVAL(x, t) (x)->trisc##t
+#define GET_TRISC_RUN_EVAL(x, t) x##t
 #define GET_TRISC_RUN(x, t) GET_TRISC_RUN_EVAL(x, t)
-volatile tt_l1_ptr uint8_t * const trisc_run = &GET_TRISC_RUN((tt_l1_ptr run_sync_message_t *)(MEM_SLAVE_RUN_MAILBOX_ADDRESS), COMPILE_FOR_TRISC);
+volatile tt_l1_ptr uint8_t * const trisc_run = &GET_TRISC_RUN(((tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE))->slave_sync.trisc, COMPILE_FOR_TRISC);
 } // namespace ckernel
 
 volatile tt_l1_ptr uint32_t l1_buffer[16] __attribute__ ((section ("l1_data"))) __attribute__ ((aligned (16))) __attribute__((used));
@@ -90,9 +84,8 @@ int main(int argc, char *argv[])
     // Cleanup profiler buffer incase we never get the go message
     kernel_profiler::init_profiler();
     while (1) {
-
         DEBUG_STATUS('W');
-        while (*trisc_run != RUN_SYNC_MESSAGE_GO);
+        while (*trisc_run != RUN_SYNC_MSG_GO);
 
         kernel_profiler::init_profiler();
         kernel_profiler::mark_time(CC_MAIN_START);
@@ -105,7 +98,7 @@ int main(int argc, char *argv[])
 
         // Signal completion
         tensix_sync();
-        *trisc_run = RUN_SYNC_MESSAGE_DONE;
+        *trisc_run = RUN_SYNC_MSG_DONE;
 
         kernel_profiler::mark_time(CC_MAIN_END);
     }

@@ -11,6 +11,8 @@
 
 #include "common/utils.hpp"
 #include "llrt/llrt.hpp"
+// XXXX TODO(PGK): fix include paths so device can export interfaces
+#include "tt_metal/src/firmware/riscv/common/dev_msgs.h"
 
 namespace tt {
 
@@ -159,7 +161,7 @@ void Device::initialize_hardware() {
 
     // Download to worker cores
     tt_cluster *cluster = this->cluster();
-    std::vector<uint32_t> run_mailbox_init_val = {RUN_MESSAGE_INIT};
+    std::vector<uint32_t> run_mailbox_init_val = {RUN_MSG_INIT};
     CoreCoord grid_size = this->logical_grid_size();
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
@@ -168,7 +170,7 @@ void Device::initialize_hardware() {
 
             if (this->storage_only_cores_.find(logical_core) == this->storage_only_cores_.end()) {
                 this->initialize_firmware(worker_core);
-                llrt::write_hex_vec_to_core(cluster, this->id(), worker_core, run_mailbox_init_val, RUN_MAILBOX_ADDR);
+                llrt::write_hex_vec_to_core(cluster, this->id(), worker_core, run_mailbox_init_val, GET_MAILBOX_ADDRESS_HOST(launch.run));
             }
         }
     }

@@ -38,16 +38,6 @@ public:
 
         return reinterpret_cast<uint32_t *>(TENSIX_CFG_BASE + CFG_STATE_SIZE * 4 * 4);
     }
-    static vptr_mailbox mailbox_base(uint32_t thread_id)
-    {
-        const uint32_t addr[] = { TENSIX_MAILBOX1_BASE, TENSIX_MAILBOX2_BASE, TENSIX_MAILBOX3_BASE };
-        return reinterpret_cast<uint32_t*>(addr[thread_id]);
-    }
-
-    static volatile uint64_t *wall_clock_mailbox()
-    {
-        return (uint64_t *)MEM_WALL_CLOCK_MAILBOX_ADDRESS;
-    }
 
     static void ex_setc16(uint addr, uint val, vptr_uint instrn_buf) { ::ex_setc16(addr, val, instrn_buf); }
     static void ex_rmw_cfg(uint8_t state_id, uint cfg_addr32, uint cfg_shamt, uint32_t cfg_mask, uint wr_val)
@@ -102,19 +92,6 @@ inline void c_tensix_core::ex_encc(vptr_uint instrn_buf)
 inline void c_tensix_core::ex_load_const(vptr_uint instrn_buf)
 {
     // Do nothing on grayskull
-}
-
-inline uint c_tensix_core::wait(int cycles)
-{
-  int count = 0;
-  uint bla = 0;
-
-  volatile uint * mailbox = mailbox_base(0);
-  while (count < cycles) {
-      bla = mailbox[0];
-      count++;
-  }
-  return bla;
 }
 
 // NOC API

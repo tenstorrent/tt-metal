@@ -81,23 +81,6 @@ inline void llk_math_pack_sync_init() {
     }
 }
 
-template <bool mail2math=true, bool mail2pack=true>
-inline void llk_math_get_tile(std::uint32_t operand, std::uint32_t tile_index, std::uint32_t *p_tile) {
-    if constexpr (mail2math) {
-       *p_tile = mailbox_read(ThreadId::UnpackThreadId);
-    } else {
-       *p_tile = 0;
-    }
-
-}
-
-template <bool mail2math=true, bool mail2pack=true>
-inline void llk_math_release_tile(std::uint32_t operand) {
-    if constexpr (mail2math) {
-       semaphore_get(semaphore::UNPACK_OPERAND_SYNC);
-    }
-}
-
 inline void llk_math_debug_dump(std::uint8_t *data, std::uint32_t byte_size) {
     debug_dump(data, byte_size);
 }

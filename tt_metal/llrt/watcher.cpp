@@ -16,6 +16,7 @@
 
 // XXXX TODO(PGK): fix include paths so device can export interfaces
 #include "tt_metal/src/firmware/riscv/common/debug_sanitize.h"
+#include "tt_metal/src/firmware/riscv/common/dev_msgs.h"
 
 #include "noc/noc_parameters.h"
 #include "noc/noc_overlay_parameters.h"
@@ -57,7 +58,6 @@ class WatcherDevice {
 constexpr uint64_t DEBUG_SANITIZE_NOC_SENTINEL_OK_64 = 0xbadabadabadabada;
 constexpr uint32_t DEBUG_SANITIZE_NOC_SENTINEL_OK_32 = 0xbadabada;
 constexpr uint16_t DEBUG_SANITIZE_NOC_SENTINEL_OK_16 = 0xbada;
-constexpr uint32_t N_NOCS = 2;
 
 static bool enabled = false;
 static std::mutex watch_mutex;
@@ -141,7 +141,7 @@ static const char * get_sanity_riscv_name(uint32_t type)
     return nullptr;
 }
 
-static void dump_noc_sanity_status(FILE *f, int noc, const debug_sanitize_noc_addr_t* san) {
+static void dump_noc_sanity_status(FILE *f, int noc, const debug_sanitize_noc_addr_msg_t* san) {
 
     switch (san->invalid) {
     case DebugSanitizeNocInvalidOK:
@@ -185,21 +185,20 @@ static void dump_noc_sanity_status(FILE *f, int noc, const debug_sanitize_noc_ad
 
 static void dump_noc_sanity_status(FILE *f, WatcherDevice *wdev, CoreCoord core) {
 
-    // Read L1 address 0, looking for memory corruption
     std::vector<uint32_t> data;
-    data = read_hex_vec_from_core(wdev->cluster_, wdev->device_id_, core, MEM_DEBUG_SANITIZE_NOC_MAILBOX_ADDRESS, N_NOCS * sizeof(debug_sanitize_noc_addr_t));
-    debug_sanitize_noc_addr_t *san = reinterpret_cast<debug_sanitize_noc_addr_t *>(&data[0]);
+    data = read_hex_vec_from_core(wdev->cluster_, wdev->device_id_, core, GET_MAILBOX_ADDRESS_HOST(sanitize_noc), NUM_NOCS * sizeof(debug_sanitize_noc_addr_msg_t));
+    debug_sanitize_noc_addr_msg_t *san = reinterpret_cast<debug_sanitize_noc_addr_msg_t *>(&data[0]);
 
-    for (uint32_t noc = 0; noc < N_NOCS; noc++) {
+    for (uint32_t noc = 0; noc < NUM_NOCS; noc++) {
         dump_noc_sanity_status(f, noc, &san[noc]);
     }
 }
 
 static void dump_run_state(FILE *f, uint32_t state) {
     char code = 'U';
-    if (state == RUN_MESSAGE_INIT) code = 'I';
-    else if (state == RUN_MESSAGE_GO) code = 'G';
-    else if (state == RUN_MESSAGE_DONE) code = 'D';
+    if (state == RUN_MSG_INIT) code = 'I';
+    else if (state == RUN_MSG_GO) code = 'G';
+    else if (state == RUN_MSG_DONE) code = 'D';
     if (code == 'U') {
         fprintf(f, "U(%d)", state);
     } else {
@@ -211,28 +210,25 @@ static void dump_run_mailboxes(FILE *f, WatcherDevice *wdev, CoreCoord core) {
 
     std::vector<uint32_t> data;
 
-    data = read_hex_vec_from_core(wdev->cluster_, wdev->device_id_, core, MEM_RUN_MAILBOX_ADDRESS, sizeof(uint32_t) * 4);
-    uint32_t run = data[0];
-    uint32_t enable_ncrisc = data[1];
-    uint32_t enable_trisc = data[2];
-
+    data = read_hex_vec_from_core(wdev->cluster_, wdev->device_id_, core, GET_MAILBOX_ADDRESS_HOST(launch), sizeof(launch_msg_t));
+    launch_msg_t *launch_msg = (launch_msg_t *)&data[0];
 
     fprintf(f, "rmsg:");
-    dump_run_state(f, run);
-    if (enable_ncrisc) fprintf(f, "N");
+    dump_run_state(f, launch_msg->run);
+    if (launch_msg->enable_ncrisc) fprintf(f, "N");
     else fprintf(f, "n");
-    if (enable_trisc) fprintf(f, "T");
+    if (launch_msg->enable_triscs) fprintf(f, "T");
     else fprintf(f, "t");
 
     fprintf(f, " ");
 
-    data = read_hex_vec_from_core(wdev->cluster_, wdev->device_id_, core, MEM_SLAVE_RUN_MAILBOX_ADDRESS, sizeof(uint32_t));
-    uint32_t slave_run = data[0];
+    data = read_hex_vec_from_core(wdev->cluster_, wdev->device_id_, core, GET_MAILBOX_ADDRESS_HOST(slave_sync), sizeof(slave_sync_msg_t));
+    slave_sync_msg_t *slave_sync = (slave_sync_msg_t *)&data[0];
     fprintf(f, "smsg:");
-    dump_run_state(f, slave_run & 0xff);
-    dump_run_state(f, (slave_run >> 8) & 0xff);
-    dump_run_state(f, (slave_run >> 16) & 0xff);
-    dump_run_state(f, (slave_run >> 24) & 0xff);
+    dump_run_state(f, slave_sync->ncrisc);
+    dump_run_state(f, slave_sync->trisc0);
+    dump_run_state(f, slave_sync->trisc1);
+    dump_run_state(f, slave_sync->trisc2);
 
     fprintf(f, " ");
 }
@@ -243,14 +239,12 @@ static void dump_debug_status(FILE *f, WatcherDevice *wdev, CoreCoord core) {
     // Just print brisc status
 
     std::vector<uint32_t> data;
-    data = read_hex_vec_from_core(wdev->cluster_, wdev->device_id_, core, MEM_DEBUG_STATUS_MAILBOX_START_ADDRESS, MEM_DEBUG_STATUS_MAILBOX_END_ADDRESS - MEM_DEBUG_STATUS_MAILBOX_START_ADDRESS);
-    constexpr int num_riscv_per_core = 5;
-    constexpr int num_status_bytes_per_riscv = 4;
-    static_assert(MEM_DEBUG_STATUS_MAILBOX_END_ADDRESS - MEM_DEBUG_STATUS_MAILBOX_START_ADDRESS == num_riscv_per_core * num_status_bytes_per_riscv);
+    data = read_hex_vec_from_core(wdev->cluster_, wdev->device_id_, core, GET_MAILBOX_ADDRESS_HOST(debug_status), sizeof(debug_status_msg_t) * num_riscv_per_core);
+    debug_status_msg_t *debug_status = (debug_status_msg_t *)&data[0];
 
     for (int cpu = 0; cpu < num_riscv_per_core; cpu++) {
         for (int byte = 0; byte < num_status_bytes_per_riscv; byte++) {
-            char v = ((char *)&data[cpu])[byte];
+            char v = ((char *)&debug_status[cpu])[byte];
             if (v == 0) break;
             if (isprint(v)) {
                 fprintf(f, "%c", v);
@@ -373,10 +367,10 @@ static void init_device(tt_cluster *cluster,
 
     // Initialize debug sanity L1/NOC addresses to sentinel "all ok"
     std::vector<uint32_t> debug_sanity_init_val;
-    debug_sanity_init_val.resize(watcher::N_NOCS * sizeof(debug_sanitize_noc_addr_t) / sizeof(uint32_t));
-    static_assert(sizeof(debug_sanitize_noc_addr_t) % sizeof(uint32_t) == 0);
-    debug_sanitize_noc_addr_t *data = reinterpret_cast<debug_sanitize_noc_addr_t *>(&(debug_sanity_init_val[0]));
-    for (int i = 0; i < watcher::N_NOCS; i++) {
+    debug_sanity_init_val.resize(NUM_NOCS * sizeof(debug_sanitize_noc_addr_msg_t) / sizeof(uint32_t));
+    static_assert(sizeof(debug_sanitize_noc_addr_msg_t) % sizeof(uint32_t) == 0);
+    debug_sanitize_noc_addr_msg_t *data = reinterpret_cast<debug_sanitize_noc_addr_msg_t *>(&(debug_sanity_init_val[0]));
+    for (int i = 0; i < NUM_NOCS; i++) {
         data[i].addr = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_64;
         data[i].len = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_32;
         data[i].which = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16;
@@ -388,8 +382,8 @@ static void init_device(tt_cluster *cluster,
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord logical_core(x, y);
             CoreCoord worker_core = worker_from_logical(logical_core);
-            tt::llrt::write_hex_vec_to_core(cluster, device_id, worker_core, debug_status_init_val, MEM_DEBUG_STATUS_MAILBOX_START_ADDRESS);
-            tt::llrt::write_hex_vec_to_core(cluster, device_id, worker_core, debug_sanity_init_val, MEM_DEBUG_SANITIZE_NOC_MAILBOX_ADDRESS);
+            tt::llrt::write_hex_vec_to_core(cluster, device_id, worker_core, debug_status_init_val, GET_MAILBOX_ADDRESS_HOST(debug_status));
+            tt::llrt::write_hex_vec_to_core(cluster, device_id, worker_core, debug_sanity_init_val, GET_MAILBOX_ADDRESS_HOST(sanitize_noc));
         }
     }
 }

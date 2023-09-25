@@ -16,16 +16,13 @@
 #include "tdma_xmov.h"
 #include "noc_nonblocking_api.h"
 #include "ckernel_globals.h"
-#include "run_sync.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "dev_msgs.h"
+#include "risc_attribs.h"
 
 #include "debug_status.h"
 #include "debug_print.h"
-#include "tt_metal/src/firmware/riscv/common/risc_attribs.h"
 
-
-// TODO(pgk) move this too
-static_assert(MEM_KERNEL_LAUNCH_PACKET_MAILBOX_ADDRESS % 16 == 0);
 
 constexpr uint32_t RISCV_IC_BRISC_MASK = 0x1;
 constexpr uint32_t RISCV_IC_TRISC0_MASK = 0x2;
@@ -33,9 +30,7 @@ constexpr uint32_t RISCV_IC_TRISC1_MASK = 0x4;
 constexpr uint32_t RISCV_IC_TRISC2_MASK = 0x8;
 constexpr uint32_t RISCV_IC_TRISC_ALL_MASK = RISCV_IC_TRISC0_MASK | RISCV_IC_TRISC1_MASK | RISCV_IC_TRISC2_MASK;
 
-volatile tt_l1_ptr uint32_t * const brisc_run = (volatile tt_l1_ptr uint32_t *)(MEM_RUN_MAILBOX_ADDRESS);
-volatile tt_l1_ptr run_sync_message_t * const slave_run = (volatile tt_l1_ptr run_sync_message_t *)(MEM_SLAVE_RUN_MAILBOX_ADDRESS);
-volatile tt_l1_ptr uint32_t * const ncrisc_resume_addr = (volatile tt_l1_ptr uint32_t *)MEM_NCRISC_RESUME_ADDR_MAILBOX_ADDRESS;
+tt_l1_ptr mailboxes_t * const mailboxes = (tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE);
 
 c_tensix_core core;
 
@@ -174,10 +169,6 @@ void device_setup() {
     pc_buf[1] = core.pc_buf_base(1);
     pc_buf[2] = core.pc_buf_base(2);
 
-    mailbox[0] = core.mailbox_base(0);
-    mailbox[1] = core.mailbox_base(1);
-    mailbox[2] = core.mailbox_base(2);
-
     volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
 
     stagger_startup();
@@ -233,9 +224,6 @@ void device_setup() {
 
     // // config state semaphore
     // core.ex_sem_init(semaphore::CFG_STATE_BUSY, MAX_CONFIG_STATES, 0, instrn_buf[0]);
-
-    // Read counter at start
-    core.wall_clock_mailbox()[0] = core.read_wall_clock();
 }
 
 void init_sync_registers() {
@@ -252,7 +240,7 @@ void init_sync_registers() {
 inline void deassert_ncrisc_trisc()
 {
     // Below sets ncrisc to go so we can wait until it is cleared on first iteration
-    slave_run->all = RUN_SYNC_MESSAGE_ALL_SLAVES_DONE;
+    mailboxes->slave_sync.all = RUN_SYNC_MSG_ALL_SLAVES_DONE;
 
     l1_to_ncrisc_iram_copy();
 
@@ -264,21 +252,19 @@ inline void set_ncrisc_kernel_resume_deassert_address()
 {
     volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
     DEBUG_STATUS('I', 'N', 'W');
-    while (*ncrisc_resume_addr == 0);
+    while (mailboxes->ncrisc_halt.resume_addr == 0);
     DEBUG_STATUS('I', 'N', 'D');
-    cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = *ncrisc_resume_addr;
+    cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = mailboxes->ncrisc_halt.resume_addr;
 }
 
 inline void run_ncrisc_trisc()
 {
-    bool use_triscs = *(volatile tt_l1_ptr uint32_t*)(MEM_ENABLE_TRISC_MAILBOX_ADDRESS);
-    if (use_triscs) {
-        slave_run->all = RUN_SYNC_MESSAGE_ALL_TRISCS_GO;
+    if (mailboxes->launch.enable_triscs) {
+        mailboxes->slave_sync.all = RUN_SYNC_MSG_ALL_TRISCS_GO;
     }
 
-    bool use_ncrisc = *(volatile tt_l1_ptr uint32_t*)(MEM_ENABLE_NCRISC_MAILBOX_ADDRESS);
-    if (use_ncrisc) {
-        slave_run->ncrisc = RUN_SYNC_MESSAGE_GO;
+    if (mailboxes->launch.enable_ncrisc) {
+        mailboxes->slave_sync.ncrisc = RUN_SYNC_MSG_GO;
 
         // TODO(pgk): don't copy all of iram! 1K cycles?
         l1_to_ncrisc_iram_copy();
@@ -291,7 +277,7 @@ inline void run_ncrisc_trisc()
 inline void wait_ncrisc_trisc()
 {
     DEBUG_STATUS('N', 'T', 'W');
-    while (slave_run->all != RUN_SYNC_MESSAGE_ALL_SLAVES_DONE);
+    while (mailboxes->slave_sync.all != RUN_SYNC_MSG_ALL_SLAVES_DONE);
     DEBUG_STATUS('N', 'T', 'D');
 }
 
@@ -309,13 +295,13 @@ int main() {
     device_setup();
 
     // Set ncrisc's resume address to 0 so we know when ncrisc has overwritten it
-    *ncrisc_resume_addr = 0;
+    mailboxes->ncrisc_halt.resume_addr = 0;
     deassert_ncrisc_trisc();
     set_ncrisc_kernel_resume_deassert_address();
 
     // Wait for ncrisc to halt
     DEBUG_STATUS('I', 'N', 'W');
-    while (slave_run->ncrisc != RUN_SYNC_MESSAGE_DONE);
+    while (mailboxes->slave_sync.ncrisc != RUN_SYNC_MSG_DONE);
     DEBUG_STATUS('I', 'N', 'D');
 
     // Cleanup profiler buffer incase we never get the go message
@@ -327,7 +313,7 @@ int main() {
 
         // Wait...
         DEBUG_STATUS('G', 'W');
-        while (*brisc_run != RUN_MESSAGE_GO);
+        while (mailboxes->launch.run != RUN_MSG_GO);
         DEBUG_STATUS('G', 'D');
 
         kernel_profiler::init_profiler();
@@ -348,7 +334,7 @@ int main() {
 
         wait_ncrisc_trisc();
 
-        *brisc_run = RUN_MESSAGE_DONE;
+        mailboxes->launch.run = RUN_MSG_DONE;
 
         // Not including any dispatch related code
         kernel_profiler::mark_time(CC_MAIN_END);

@@ -12,6 +12,8 @@
 #include <mutex>
 
 #include "tools/cpuprof/cpuprof.h"
+// XXXX TODO(PGK): fix include paths so device can export interfaces
+#include "tt_metal/src/firmware/riscv/common/dev_msgs.h"
 
 namespace tt {
 
@@ -262,25 +264,25 @@ bool test_load_write_read_trisc_binary(
 
 void disable_ncrisc(tt_cluster *cluster, int chip_id, const CoreCoord &core) {
     // disable NCRISC
-    uint64_t use_ncrisc_addr = MEM_ENABLE_NCRISC_MAILBOX_ADDRESS;
+    uint64_t use_ncrisc_addr = GET_MAILBOX_ADDRESS_HOST(launch.enable_ncrisc);
     write_hex_vec_to_core(cluster, chip_id, core, {0}, use_ncrisc_addr);
     log_debug(tt::LogLLRuntime, "disabled ncrisc");
 }
 
 void enable_ncrisc(tt_cluster *cluster, int chip_id, const CoreCoord &core) {
-    uint64_t use_ncrisc_addr = MEM_ENABLE_NCRISC_MAILBOX_ADDRESS;
+    uint64_t use_ncrisc_addr = GET_MAILBOX_ADDRESS_HOST(launch.enable_ncrisc);
     write_hex_vec_to_core(cluster, chip_id, core, {1}, use_ncrisc_addr);
     log_debug(tt::LogLLRuntime, "enabled ncrisc");
 }
 
 void enable_triscs(tt_cluster *cluster, int chip_id, const CoreCoord &core) {
-    uint64_t use_triscs_addr = MEM_ENABLE_TRISC_MAILBOX_ADDRESS;
+    uint64_t use_triscs_addr = GET_MAILBOX_ADDRESS_HOST(launch.enable_triscs);
     write_hex_vec_to_core(cluster, chip_id, core, {1}, use_triscs_addr);
     log_debug(tt::LogLLRuntime, "enabled triscs");
 }
 
 void disable_triscs(tt_cluster *cluster, int chip_id, const CoreCoord &core) {
-    uint64_t use_triscs_addr = MEM_ENABLE_TRISC_MAILBOX_ADDRESS;
+    uint64_t use_triscs_addr = GET_MAILBOX_ADDRESS_HOST(launch.enable_triscs);
     write_hex_vec_to_core(cluster, chip_id, core, {0}, use_triscs_addr);
     log_debug(tt::LogLLRuntime, "disabled triscs");
 }
@@ -363,16 +365,16 @@ bool check_if_riscs_on_specified_core_done(
         run_mailbox_read_val = read_hex_vec_from_core(
             cluster, chip_id, core, run_mailbox_address_, sizeof(uint32_t));  // read a single uint32_t
 
-        if (run_mailbox_read_val[0] != RUN_MESSAGE_GO && run_mailbox_read_val[0] != RUN_MESSAGE_DONE) {
-            fprintf(stderr, "Read unexpected run_mailbox value: 0x%x (expected %x or %x)\n", run_mailbox_read_val[0], RUN_MESSAGE_GO, RUN_MESSAGE_DONE);
+        if (run_mailbox_read_val[0] != RUN_MSG_GO && run_mailbox_read_val[0] != RUN_MSG_DONE) {
+            fprintf(stderr, "Read unexpected run_mailbox value: 0x%x (expected %x or %x)\n", run_mailbox_read_val[0], RUN_MSG_GO, RUN_MSG_DONE);
             TT_ASSERT(
-                run_mailbox_read_val[0] == RUN_MESSAGE_GO || run_mailbox_read_val[0] == RUN_MESSAGE_DONE);
+                run_mailbox_read_val[0] == RUN_MSG_GO || run_mailbox_read_val[0] == RUN_MSG_DONE);
         }
 
-        return run_mailbox_read_val[0] == RUN_MESSAGE_DONE;
+        return run_mailbox_read_val[0] == RUN_MSG_DONE;
     };
 
-    return get_mailbox_is_done(RUN_MAILBOX_ADDR);
+    return get_mailbox_is_done(GET_MAILBOX_ADDRESS_HOST(launch.run));
 }
 
 }  // namespace internal_

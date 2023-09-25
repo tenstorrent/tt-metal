@@ -42,31 +42,6 @@ void llk_zero_operand(std::uint32_t operand) {
     }
 }
 
-template <bool mail2math=true, bool mail2pack=true>
-inline void llk_unpack_get_tile(std::uint32_t operand, std::uint32_t tile_index, std::uint32_t *p_tile) {
-    std::uint32_t input = get_operand_id(operand);
-    std::uint32_t base_address = cb_interface[input].fifo_rd_ptr;
-    std::uint32_t offset_address = cb_interface[input].fifo_page_size * tile_index;
-    std::uint32_t byte_address = (base_address + offset_address + TILE_HEADER_SIZE)<<4;
-
-    if constexpr (mail2math) {
-       mailbox_write(ThreadId::MathThreadId, byte_address);
-       semaphore_post(semaphore::UNPACK_OPERAND_SYNC);
-    }
-
-    if constexpr (mail2pack) {
-       mailbox_write(ThreadId::PackThreadId, byte_address);
-       semaphore_post(semaphore::UNPACK_OPERAND_SYNC);
-    }
-
-    *p_tile = byte_address;
-}
-
-template <bool mail2math=true, bool mail2pack=true>
-inline void llk_unpack_release_tile(std::uint32_t operand) {
-    while (semaphore_read(semaphore::UNPACK_OPERAND_SYNC) > 0);
-}
-
 inline void llk_unpack_debug_dump(std::uint8_t *data, std::uint32_t byte_size) {
     debug_dump(data, byte_size);
 }

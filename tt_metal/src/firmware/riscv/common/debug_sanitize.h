@@ -16,19 +16,7 @@
 //
 #pragma once
 
-struct debug_sanitize_noc_addr_t {
-    uint64_t addr;
-    uint32_t len;
-    uint16_t which;
-    uint16_t invalid;
-};
-
-enum debug_sanitize_noc_invalid_enum {
-    DebugSanitizeNocInvalidOK         = 0,
-    DebugSanitizeNocInvalidL1         = 1,
-    DebugSanitizeNocInvalidUnicast    = 2,
-    DebugSanitizeNocInvalidMulticast  = 3,
-};
+#include "dev_msgs.h"
 
 // XXXX TODO(PGK): why why why do we not have this standardized
 enum debug_sanitize_which_riscv {
@@ -39,7 +27,7 @@ enum debug_sanitize_which_riscv {
     DebugSanitizeTrisc2 = 4,
 };
 
-#if defined(TENSIX_FIRMWARE)
+#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
 
 #if defined(WATCHER_ENABLED)
 
@@ -78,8 +66,7 @@ inline uint32_t debug_sanitize_get_which_riscv()
 //  - this isn't racy between riscvs so long as each gets their own loading_noc
 inline void debug_sanitize_post_noc_addr_and_hang(uint64_t a, uint32_t l, uint32_t invalid)
 {
-    volatile debug_sanitize_noc_addr_t tt_l1_ptr *v =
-        (volatile debug_sanitize_noc_addr_t tt_l1_ptr *)MEM_DEBUG_SANITIZE_NOC_MAILBOX_ADDRESS;
+    debug_sanitize_noc_addr_msg_t tt_l1_ptr *v = *GET_MAILBOX_ADDRESS_DEV(sanitize_noc);
 
     if (v[loading_noc].invalid == DebugSanitizeNocInvalidOK) {
         v[loading_noc].addr = a;

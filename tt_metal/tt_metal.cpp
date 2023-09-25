@@ -10,6 +10,8 @@
 
 #include "tt_metal/host_api.hpp"
 #include "llrt/tt_debug_print_server.hpp"
+// XXXX TODO(PGK): fix include paths so device can export interfaces
+#include "tt_metal/src/firmware/riscv/common/dev_msgs.h"
 
 #include "tools/profiler/profiler.hpp"
 #include "tools/cpuprof/cpuprof.h"
@@ -472,11 +474,11 @@ void LaunchProgram(Device *device, Program &program) {
     cluster->l1_barrier(device->id());
 
     std::vector<CoreCoord> logical_cores_used_in_program = program.logical_cores();
-    std::vector<uint32_t> run_mailbox_go_val = {RUN_MESSAGE_GO};
+    std::vector<uint32_t> run_mailbox_go_val = {RUN_MSG_GO};
     for (const auto &logical_core : logical_cores_used_in_program) {
         // XXXX move this to llrt
         auto worker_core = device->worker_core_from_logical_core(logical_core);
-        tt::llrt::write_hex_vec_to_core(cluster, device_id, worker_core, run_mailbox_go_val, MEM_RUN_MAILBOX_ADDRESS);
+        tt::llrt::write_hex_vec_to_core(cluster, device_id, worker_core, run_mailbox_go_val, GET_MAILBOX_ADDRESS_HOST(launch.run));
     }
 
     // Wait for all cores to be done

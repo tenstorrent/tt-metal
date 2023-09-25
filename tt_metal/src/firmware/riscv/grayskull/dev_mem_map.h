@@ -53,6 +53,7 @@
 
 #define MEM_BOOT_CODE_BASE             0
 #define MEM_MAILBOX_BASE               4
+#define MEM_MAILBOX_END                (MEM_MAILBOX_BASE + 128)
 #define MEM_ZEROS_BASE                 2048
 #define MEM_BRISC_FIRMWARE_BASE        (MEM_ZEROS_BASE + MEM_ZEROS_SIZE)
 #define MEM_NCRISC_FIRMWARE_BASE       MEM_NCRISC_IRAM_BASE
@@ -60,32 +61,10 @@
 #define MEM_TRISC1_BASE                (MEM_TRISC0_BASE + MEM_TRISC0_SIZE)
 #define MEM_TRISC2_BASE                (MEM_TRISC1_BASE + MEM_TRISC1_SIZE)
 
-/////////////
-// Mailboxes
-#define MEM_NCRISC_RESUME_ADDR_MAILBOX_ADDRESS   MEM_MAILBOX_BASE         // 4 bytes
-#define MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS    (MEM_MAILBOX_BASE +  4)  // 4 bytes
-
-// The following must be 16 byte aligned and fit in 16 bytes
-#define MEM_KERNEL_LAUNCH_PACKET_MAILBOX_ADDRESS (16) // includes next 4 items
-#define MEM_RUN_MAILBOX_ADDRESS                  (16) // 4 bytes
-#define MEM_ENABLE_NCRISC_MAILBOX_ADDRESS        (20) // 4 bytes
-#define MEM_ENABLE_TRISC_MAILBOX_ADDRESS         (24) // 4 bytes
-#define MEM_NCRISC_FW_SIZE_MAILBOX_ADDRESS       (28) // 4 bytes
-#define MEM_KERNEL_LAUNCH_PACKET_SIZE            16
-
-#define MEM_SLAVE_RUN_MAILBOX_ADDRESS            (MEM_MAILBOX_BASE +  32) // 4 bytes
-#define MEM_WALL_CLOCK_MAILBOX_ADDRESS (MEM_MAILBOX_BASE + 36) // 8 bytes * 1 core (brisc)
-
-#define MEM_DEBUG_STATUS_MAILBOX_START_ADDRESS   (MEM_MAILBOX_BASE + 44)
-#define MEM_DEBUG_BRISC_STATUS_MAILBOX_ADDRESS   (MEM_MAILBOX_BASE + 44)  // 4 bytes
-#define MEM_DEBUG_NCRISC_STATUS_MAILBOX_ADDRESS  (MEM_MAILBOX_BASE + 48)  // 4 bytes
-#define MEM_DEBUG_TRISC0_STATUS_MAILBOX_ADDRESS  (MEM_MAILBOX_BASE + 52)  // 4 bytes
-#define MEM_DEBUG_TRISC1_STATUS_MAILBOX_ADDRESS  (MEM_MAILBOX_BASE + 56)  // 4 bytes
-#define MEM_DEBUG_TRISC2_STATUS_MAILBOX_ADDRESS  (MEM_MAILBOX_BASE + 60)  // 4 bytes
-#define MEM_DEBUG_STATUS_MAILBOX_END_ADDRESS     (MEM_MAILBOX_BASE + 64)
-#define MEM_DEBUG_SANITIZE_NOC_MAILBOX_ADDRESS   (MEM_MAILBOX_BASE + 64) // 2 * 16 bytes
-#define MEM_BARRIER_ADDRESS                      (MEM_MAILBOX_BASE + 96) // 4 bytes
-#define MEM_MAILBOX_END                          (MEM_MAILBOX_BASE + 100)
+// These are used in ncrisc-halt.S, asserted in ncrisc.cc to be valid
+// Better way to do this would be to generate a file w/ these addresses
+#define MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS    8
+#define MEM_SLAVE_RUN_MAILBOX_ADDRESS            32
 
 /////////////
 // Initialization relocation L1 memory

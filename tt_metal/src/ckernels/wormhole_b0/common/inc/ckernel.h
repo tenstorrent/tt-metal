@@ -58,7 +58,6 @@ extern volatile uint tt_reg_ptr * const pc_buf_base;
 extern volatile uint tt_reg_ptr * const regfile;
 extern uint tt_reg_ptr * regmem;
 extern volatile uint tt_reg_ptr * const instrn_buffer;
-extern volatile uint tt_reg_ptr *mailbox_base[4];
 extern volatile uint tt_reg_ptr *dbg_event_scratch;
 extern volatile uint local_mem_barrier;
 
@@ -316,38 +315,6 @@ inline void cfg_reg_rmw_tensix(uint32_t val)
         uint8_t data_b3 = (wrdata) & 0xff;
         TT_RMWCIB3(mask_b3, data_b3, CfgAddr32);
     }
-}
-
-inline void mailbox_write(const uint8_t thread, const uint32_t data)
-{
-    mailbox_base[thread + 1][0] = data;
-}
-
-// Blocking read
-inline uint32_t mailbox_read(const uint8_t thread)
-{
-    return mailbox_base[thread + 1][0];
-}
-
-inline bool mailbox_not_empty(const uint8_t thread)
-{
-    return mailbox_base[thread + 1][1] > 0;
-}
-
-inline void mailbox_write_full(const uint8_t thread, const uint32_t data)
-{
-    mailbox_base[thread][0] = data;
-}
-
-// Blocking read
-inline uint32_t mailbox_read_full(const uint8_t thread)
-{
-    return mailbox_base[thread][0];
-}
-
-inline bool mailbox_not_empty_full(const uint8_t thread)
-{
-    return mailbox_base[thread][1] > 0;
 }
 
 template <class T>

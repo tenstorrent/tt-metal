@@ -112,9 +112,3 @@ constexpr static std::uint32_t DRAM_ALIGNMENT = 32;
 constexpr static std::uint32_t DRAM_BARRIER_SIZE = ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
 
 constexpr static std::uint32_t DRAM_UNRESERVED_BASE = DRAM_BARRIER_BASE + DRAM_BARRIER_SIZE; // Start of unreserved space
-
-// Messages for host to tell brisc to go
-constexpr static uint64_t RUN_MAILBOX_ADDR = MEM_RUN_MAILBOX_ADDRESS;
-constexpr uint32_t RUN_MESSAGE_INIT = 0x40;
-constexpr uint32_t RUN_MESSAGE_GO   = 0x80;
-constexpr uint32_t RUN_MESSAGE_DONE = 0;

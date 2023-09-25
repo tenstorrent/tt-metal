@@ -14,11 +14,11 @@
 static uint32_t deassert_packet __attribute__((section("l1_data"))) __attribute__((aligned(16))) = (uint32_t)TENSIX_DEASSERT_SOFT_RESET_NO_STAGGER;
 
 // TODO(pgk) move all this to host/device interface
-static uint32_t go_packet[4] __attribute__((section("l1_data"))) __attribute__((aligned(16))) = {
-    RUN_MESSAGE_GO,     // brisc
-    true,               // enable ncrisc (TODO(pgk))
-    true,               // enable trisc (TODO(pgk))
-    0,                  // ncrisc fw size (TODO(pgk))
+static launch_msg_t launch_msg __attribute__((section("l1_data"))) __attribute__((aligned(16))) = {
+    .fw_size = 0,
+    .enable_ncrisc = true,
+    .enable_triscs = true,
+    .run = RUN_MSG_GO
 };
 
 template <typename T>
@@ -227,11 +227,11 @@ FORCE_INLINE void launch_program(u32 num_workers, u32 num_multicast_messages, vo
     for (u32 i = 0; i < num_multicast_messages * 2; i += 2) {
         u64 worker_core_noc_coord = u64(command_ptr[i]) << 32;
         u32 num_messages = command_ptr[i + 1];
-        u64 launch_packet_dst_addr = worker_core_noc_coord | MEM_KERNEL_LAUNCH_PACKET_MAILBOX_ADDRESS;
+        u64 launch_packet_dst_addr = worker_core_noc_coord | (uint32_t)GET_MAILBOX_ADDRESS_DEV(launch);
 
-        noc_async_write_multicast((uint32_t)go_packet,
+        noc_async_write_multicast((uint32_t)&launch_msg,
                                   launch_packet_dst_addr,
-                                  MEM_KERNEL_LAUNCH_PACKET_SIZE,
+                                  sizeof(launch_msg_t),
                                   num_messages);
     }
     noc_async_write_barrier();

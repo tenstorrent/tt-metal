@@ -38,16 +38,6 @@ public:
 
         return reinterpret_cast<uint32_t *>(TENSIX_CFG_BASE + CFG_STATE_SIZE * 4 * 4);
     }
-    static vptr_mailbox mailbox_base(uint32_t thread_id)
-    {
-        const uint32_t addr[] = { TENSIX_MAILBOX1_BASE, TENSIX_MAILBOX2_BASE, TENSIX_MAILBOX3_BASE };
-        return reinterpret_cast<uint32_t*>(addr[thread_id]);
-    }
-
-    static volatile uint64_t *wall_clock_mailbox()
-    {
-        return (uint64_t *)MEM_WALL_CLOCK_MAILBOX_ADDRESS;
-    }
 
     static volatile uint32_t *get_io_queue_pointer_base(uint32_t base_addr, uint32_t id)
     {
@@ -57,9 +47,6 @@ public:
     // These are used to track dynamic allocation/deallocations for perf analysis. They don't do anything by default, but writes to perf scratch area could be added.
     static void record_dynamic_allocation(int buffer_id, int loc, std::intptr_t ptr, uint32_t size) {}
     static void record_dynamic_deallocation(int buffer_id) {}
-
-    //static void ex_sync_kernel(vptr_mailbox mailbox) { ::ex_sync_kernel(mailbox); }
-    //static void ex_sync_instrn(vptr_uint instrn_buf, vptr_mailbox mailbox) { ::ex_sync_instrn(instrn_buf, mailbox); }
 
     static void ex_setc16(uint addr, uint val, vptr_uint instrn_buf) { ::ex_setc16(addr, val, instrn_buf); }
     static void ex_instrn_wrcfg(uint gpr, uint cfg_addr, vptr_uint instrn_buf) { ::ex_instrn_wrcfg(gpr, cfg_addr, instrn_buf); }
@@ -224,19 +211,6 @@ inline uint c_tensix_core::read_accumulated_packed_size(uint thread)
   }
 
   return packed_size;
-}
-
-inline uint c_tensix_core::wait(int cycles)
-{
-  int count = 0;
-  uint bla = 0;
-
-  volatile uint * mailbox = mailbox_base(0);
-  while (count < cycles) {
-      bla = mailbox[0];
-      count++;
-  }
-  return bla;
 }
 
 // NOC API

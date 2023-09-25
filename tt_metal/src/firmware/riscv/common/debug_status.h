@@ -15,8 +15,6 @@
 //
 #pragma once
 
-#include "dev_mem_map.h"
-
 #if defined (WATCHER_ENABLED)
 
 inline uint32_t get_debug_status()
@@ -38,14 +36,14 @@ inline void write_debug_status(volatile tt_l1_ptr uint32_t *debug_status, uint32
 }
 
 #if defined(COMPILE_FOR_BRISC)
-#define DEBUG_STATUS_MAILBOX (volatile tt_l1_ptr uint32_t *)MEM_DEBUG_BRISC_STATUS_MAILBOX_ADDRESS
+#define DEBUG_STATUS_MAILBOX_OFFSET 0
 #elif defined(COMPILE_FOR_NCRISC)
-#define DEBUG_STATUS_MAILBOX (volatile tt_l1_ptr uint32_t *)MEM_DEBUG_NCRISC_STATUS_MAILBOX_ADDRESS
+#define DEBUG_STATUS_MAILBOX_OFFSET 1
 #else
-#define GET_TRISC_DEBUG_STATUS_MAILBOX_EVAL(x, t, y) x##t##y
-#define GET_TRISC_DEBUG_STATUS_MAILBOX(x, t, y) GET_TRISC_DEBUG_STATUS_MAILBOX_EVAL(x, t, y)
-#define DEBUG_STATUS_MAILBOX (volatile tt_l1_ptr uint32_t *)GET_TRISC_DEBUG_STATUS_MAILBOX(MEM_DEBUG_TRISC, COMPILE_FOR_TRISC, _STATUS_MAILBOX_ADDRESS)
+#define DEBUG_STATUS_MAILBOX_OFFSET (2 + COMPILE_FOR_TRISC)
 #endif
+
+#define DEBUG_STATUS_MAILBOX (volatile tt_l1_ptr uint32_t *)&((*GET_MAILBOX_ADDRESS_DEV(debug_status))[DEBUG_STATUS_MAILBOX_OFFSET])
 
 #define DEBUG_STATUS(x...) write_debug_status(DEBUG_STATUS_MAILBOX, x, 0)
 

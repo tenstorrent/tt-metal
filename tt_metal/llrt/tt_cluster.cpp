@@ -13,6 +13,8 @@
 #include "hostdevcommon/debug_print_common.h"
 #include "rtoptions.hpp"
 #include "watcher.hpp"
+// XXXX TODO(PGK): fix include paths so device can export interfaces
+#include "tt_metal/src/firmware/riscv/common/dev_msgs.h"
 
 using std::to_string;
 using std::cout;
@@ -477,7 +479,7 @@ void tt_cluster::set_l1_barrier(chip_id_t chip_id, uint32_t barrier_value) {
     std::vector<CoreCoord> cores_written;
     std::vector<uint32_t> barrier_vec = {barrier_value};
     for (const CoreCoord &physical_worker_core : soc_desc.physical_workers) {
-        this->write_dram_vec(barrier_vec, tt_cxy_pair(chip_id, physical_worker_core), MEM_BARRIER_ADDRESS);
+        this->write_dram_vec(barrier_vec, tt_cxy_pair(chip_id, physical_worker_core), GET_MAILBOX_ADDRESS_HOST(l1_barrier));
     }
 
     // sfence is sufficient to flush WC buffers, ensures the reads from barrier are not just hitting the cache
@@ -489,7 +491,7 @@ void tt_cluster::set_l1_barrier(chip_id_t chip_id, uint32_t barrier_value) {
         barrier_value_propagated = true;
         for (const CoreCoord &physical_worker_core : soc_desc.physical_workers) {
             vector<std::uint32_t> barrier_val;
-            this->read_dram_vec(barrier_val, tt_cxy_pair(chip_id, physical_worker_core), MEM_BARRIER_ADDRESS, sizeof(uint32_t));
+            this->read_dram_vec(barrier_val, tt_cxy_pair(chip_id, physical_worker_core), GET_MAILBOX_ADDRESS_HOST(l1_barrier), sizeof(uint32_t));
             barrier_value_propagated &= (barrier_val[0] == barrier_value);
         }
     }

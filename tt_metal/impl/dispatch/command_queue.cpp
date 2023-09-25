@@ -11,6 +11,8 @@
 #include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/third_party/umd/device/tt_xy_pair.h"
+// XXXX TODO(PGK): fix include paths so device can export interfaces
+#include "tt_metal/src/firmware/riscv/common/dev_msgs.h"
 
 namespace tt::tt_metal {
 
@@ -634,8 +636,8 @@ void send_dispatch_kernel_to_device(Device* device) {
     CoreCoord dpc = device->worker_core_from_logical_core(dispatch_logical_core);
     tt::llrt::disable_ncrisc(device->cluster(), device->id(), dpc);
     tt::llrt::disable_triscs(device->cluster(), device->id(), dpc);
-    std::vector<uint32_t> run_mailbox_go_val = {RUN_MESSAGE_GO};
-    tt::llrt::write_hex_vec_to_core(device->cluster(), device->id(), dpc, run_mailbox_go_val, MEM_RUN_MAILBOX_ADDRESS);
+    std::vector<uint32_t> run_mailbox_go_val = {RUN_MSG_GO};
+    tt::llrt::write_hex_vec_to_core(device->cluster(), device->id(), dpc, run_mailbox_go_val, GET_MAILBOX_ADDRESS_HOST(launch.run));
 }
 
 // CommandQueue section

@@ -56,7 +56,6 @@ extern volatile uint * const pc_buf_base;
 extern volatile uint * const regfile;
 extern uint *regmem;
 extern volatile uint * const instrn_buffer;
-extern volatile uint *mailbox_base[4];
 extern volatile uint *dbg_event_scratch;
 extern volatile uint local_mem_barrier;
 
@@ -312,38 +311,6 @@ inline void cfg_rmw_gpr(uint32_t cfg_addr32, uint32_t cfg_shamt, uint32_t cfg_ma
 {
     const uint32_t wrdata = regfile[gpr_index];
     cfg_rmw(cfg_addr32, cfg_shamt, cfg_mask, wrdata);
-}
-
-inline void mailbox_write(const uint8_t thread, const uint32_t data)
-{
-    mailbox_base[thread + 1][0] = data;
-}
-
-// Blocking read
-inline uint32_t mailbox_read(const uint8_t thread)
-{
-    return mailbox_base[thread + 1][0];
-}
-
-inline bool mailbox_not_empty(const uint8_t thread)
-{
-    return mailbox_base[thread + 1][1] > 0;
-}
-
-inline void mailbox_write_full(const uint8_t thread, const uint32_t data)
-{
-    mailbox_base[thread][0] = data;
-}
-
-// Blocking read
-inline uint32_t mailbox_read_full(const uint8_t thread)
-{
-    return mailbox_base[thread][0];
-}
-
-inline bool mailbox_not_empty_full(const uint8_t thread)
-{
-    return mailbox_base[thread][1] > 0;
 }
 
 template <class T>
