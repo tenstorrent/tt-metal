@@ -1,4 +1,4 @@
-name: Scheduled frequent build and run
+name: Scheduled slow dispatch frequent build and run
 
 on:
   push:

@@ -24,7 +24,7 @@ jobs:
           token: ${{ secrets.CHECKOUT_TOKEN }}
       - name: Set up dyanmic env vars for build
         run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV && echo "FAST_DISPATCH=1" >> $GITHUB_ENV
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Build tt-metal and libs
         run: make build
       - name: Run frequent reg tests scripts
