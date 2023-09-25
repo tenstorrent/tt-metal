@@ -22,6 +22,9 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/perf_microbenchmark/pcie/test_rw_buffer \
 		 tests/tt_metal/perf_microbenchmark/pcie/test_rw_device_dram \
 		 tests/tt_metal/perf_microbenchmark/pcie/test_rw_device_l1 \
+		 tests/tt_metal/perf_microbenchmark/2_noc_rtor/test_noc_rtor \
+		 tests/tt_metal/perf_microbenchmark/3_pcie_transfer/test_rw_buffer \
+		 tests/tt_metal/perf_microbenchmark/7_kernel_launch/test_kernel_launch \
 		 tests/tt_metal/test_add_two_ints \
 		 tests/tt_metal/test_compile_args \
 		 tests/tt_metal/test_eltwise_binary \
