@@ -147,7 +147,7 @@ int main(int argc, char** argv) {
         uint32_t slow_dispatch_mode;
         try {
             std::tie(arch_name, input_args) =
-                test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
+                test_args::get_command_option_and_remaining_args(input_args, "--arch", "wormhole_b0");
             std::tie(M, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--m", 11264);
             std::tie(N, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--n", 3072);
             std::tie(K, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--k", 768);
@@ -273,25 +273,25 @@ int main(int argc, char** argv) {
 
         // Phase 1
         if (slow_dispatch_mode) {
-            log_info(LogTest, "calling LaunchProgram");
+            log_debug(LogTest, "calling LaunchProgram");
             LaunchProgram(device, program);
-            log_info(LogTest, "LaunchProgram done");
+            log_debug(LogTest, "LaunchProgram done");
 
             uint64_t t0_to_any_riscfw_end = get_t0_to_any_riscfw_end_cycle(device, program);
             double cycle_time = 1 / static_cast<double>(tt_npu_clock) / giga_byte;
             auto execution_time = t0_to_any_riscfw_end * cycle_time;
             rmax_tflops = static_cast<double>(num_of_matmul_ops) / execution_time / tera_byte;
 
-            log_debug(LogTest, "cycle time {}s", cycle_time);
+            log_debug(LogTest, "cycle time {:.8f}s", cycle_time);
             log_debug(LogTest, "t0_to_any_riscfw_end {}", t0_to_any_riscfw_end);
         }
         else {
-            log_info(LogTest, "calling EnqueueProgram");
+            log_debug(LogTest, "calling EnqueueProgram");
             std::chrono::duration<double, std::nano> duration;
             auto t_begin = std::chrono::high_resolution_clock::now();
             EnqueueProgram(*::detail::GLOBAL_CQ, program, false);
             Finish(*::detail::GLOBAL_CQ);
-            log_info(LogTest, "EnqueProgram done");
+            log_debug(LogTest, "EnqueProgram done");
             auto t_end = std::chrono::high_resolution_clock::now();
             duration = t_end - t_begin;
             rmax_tflops = static_cast<double>(num_of_matmul_ops) / duration.count() / 1000;
@@ -299,7 +299,7 @@ int main(int argc, char** argv) {
         }
 
         double rmax_per_rpeak = rmax_tflops / rpeak_tflops;
-        log_info(LogTest, "Rmax(TFLOPS) {}, Rpeak {}, Rmax / Rpeak {}", rmax_tflops, rpeak_tflops, rmax_per_rpeak);
+        log_info(LogTest, "Rmax(TFLOPS) {:.3f}, Rpeak {:.3f}, Rmax / Rpeak {:.4f}", rmax_tflops, rpeak_tflops, rmax_per_rpeak);
         bool performance_result = true;
         if (rmax_per_rpeak < 0.9) {
             performance_result = false;
@@ -333,7 +333,7 @@ int main(int argc, char** argv) {
             log_error(
                 LogTest,
                 "The compute performance does not meet the criteria. "
-                "Current: Rmax / Rpeak = {}%, goal: > 90%",
+                "Current: Rmax / Rpeak = {:.4f}%, goal: > 90%",
                 rmax_per_rpeak);
             pass = false;
         }
