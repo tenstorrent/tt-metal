@@ -85,6 +85,7 @@ void tt_cluster::open_device(
         // this many hugepages as channels, and assert if workload uses more than available.
         uint32_t num_host_mem_ch_per_mmio_device = 1;
         std::unordered_map<std::string, std::int32_t> dynamic_tlb_config = {};
+        dynamic_tlb_config ["REG_TLB"] = DEVICE_DATA.REG_TLB;
         // This will remove harvested rows from the soc descriptor
         const bool perform_harvesting = true;
 
@@ -354,6 +355,33 @@ void tt_cluster::read_dram_vec(std::uint32_t *mem_ptr, tt_cxy_pair dram_core, ui
     }
     tt_cxy_pair virtual_dram_core = this->convert_physical_cxy_to_virtual(dram_core);
     device->read_from_device(mem_ptr, virtual_dram_core, addr, size_in_bytes, "LARGE_READ_TLB");
+}
+
+void tt_cluster::write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr)
+{
+    const unsigned int len = 1;
+    const unsigned int size_in_bytes = len*sizeof(uint32_t);
+    int chip_id = target.chip;
+    if (tt::llrt::OptionsG.get_watcher_enabled()) {
+        tt::llrt::watcher_sanitize_host_noc_write(get_soc_desc(chip_id), {target.x, target.y}, addr, size_in_bytes);
+    }
+    tt_cxy_pair virtual_target = this->convert_physical_cxy_to_virtual(target);
+    device->write_to_device(mem_ptr, len, virtual_target, addr, "REG_TLB");
+    if (device->get_target_remote_device_ids().find(virtual_target.chip) != device->get_target_remote_device_ids().end()) {
+        device->wait_for_non_mmio_flush();
+    }
+}
+
+void tt_cluster::read_reg(std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr)
+{
+    const unsigned int len = 1;
+    const unsigned int size_in_bytes = len*sizeof(uint32_t);
+    int chip_id = target.chip;
+    if (tt::llrt::OptionsG.get_watcher_enabled()) {
+        tt::llrt::watcher_sanitize_host_noc_read(get_soc_desc(chip_id), {target.x, target.y}, addr, size_in_bytes);
+    }
+    tt_cxy_pair virtual_target = this->convert_physical_cxy_to_virtual(target);
+    device->read_from_device(mem_ptr, virtual_target, addr, size_in_bytes, "REG_TLB");
 }
 
 void tt_cluster::read_dram_vec(vector<uint32_t> &vec, tt_cxy_pair dram_core, uint64_t addr, uint32_t size_in_bytes, bool small_access)

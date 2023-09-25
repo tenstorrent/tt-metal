@@ -105,6 +105,10 @@ struct tt_cluster
     void read_dram_vec(vector<uint32_t> &vec, tt_cxy_pair dram_core, uint64_t addr, uint32_t size, bool small_access = false);
     void read_dram_vec(uint32_t *mem_ptr, tt_cxy_pair dram_core, uint64_t addr, uint32_t size, bool small_access = false);
 
+
+    void write_reg(const std::uint32_t* mem_ptr, tt_cxy_pair target, uint64_t addr);
+    void read_reg(std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr);
+
     void write_sysmem_vec(vector<uint32_t> &vec, uint64_t addr, chip_id_t src_device_id);
     void read_sysmem_vec(vector<uint32_t> &vec, uint64_t addr, uint32_t size, chip_id_t src_device_id);
 

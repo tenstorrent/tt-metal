@@ -197,6 +197,13 @@ namespace tt::tt_metal{
             return true;
         }
 
+        inline bool WriteRegToDevice(Device *device, const CoreCoord &logical_core, uint32_t address, const uint32_t &regval)
+        {
+            auto worker_core = device->worker_core_from_logical_core(logical_core);
+            device->cluster()->write_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
+            return true;
+        }
+
 
         /**
          * Copy data from an L1 buffer into a host buffer. Must be a buffer, and not a CB.
@@ -216,6 +223,14 @@ namespace tt::tt_metal{
             device->cluster()->l1_barrier(device->id());
             auto worker_core = device->worker_core_from_logical_core(logical_core);
             host_buffer = llrt::read_hex_vec_from_core(device->cluster(), device->id(), worker_core, address, size);
+            return true;
+        }
+
+        inline bool ReadRegFromDevice(Device *device, const CoreCoord &logical_core, uint32_t address, uint32_t &regval)
+        {
+            device->cluster()->l1_barrier(device->id());
+            auto worker_core = device->worker_core_from_logical_core(logical_core);
+            device->cluster()->read_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
             return true;
         }
 
