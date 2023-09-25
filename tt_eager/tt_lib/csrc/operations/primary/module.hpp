@@ -13,6 +13,7 @@
 #include "tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
 #include "tt_dnn/op_library/moreh_matmul_backward/moreh_matmul_backward_op.hpp"
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
+#include "tt_dnn/op_library/moreh_softmax/moreh_softmax_op.hpp"
 
 namespace py = pybind11;
 
@@ -350,6 +351,11 @@ void py_module(py::module& m_primary) {
         "Performs a softmax operation on the last tensor dimension. Returns a reference to the input tensor modified "
         "in place.");
 
+    m_primary.def("moreh_softmax", &moreh_softmax,
+        py::arg("input_tensors").noconvert(),
+        py::arg("dim").noconvert(),
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        "Performs a softmax operation. Returns a output tensor.");
 }
 
 }  // namespace

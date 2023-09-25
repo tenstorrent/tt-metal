@@ -1,0 +1,171 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "tt_eager/tt_dnn/op_library/moreh_softmax/moreh_softmax_op.hpp"
+#include "tt_eager/tt_dnn/op_library/work_split.hpp"
+#include "tt_eager/tt_dnn/op_library/moreh_softmax/helper_functions.hpp"
+#include "tt_dnn/op_library/run_operation.hpp"
+
+#include "tt_metal/host_api.hpp"
+#include "tt_metal/common/constants.hpp"
+#include "tt_metal/detail/util.hpp"
+
+#include <optional>
+
+using u32 = std::uint32_t;
+using namespace tt::constants;
+using namespace std;
+using namespace tt::tt_metal;
+
+namespace tt {
+namespace operations {
+namespace primary {
+
+#define L1_512KB (512 * 1024)
+
+bool is_moreh_softmax_h_small_available(const Tensor &tensor) {
+    auto h = tensor.shape()[2];
+    int32_t Ht = (h + TILE_HEIGHT - 1) / TILE_HEIGHT;
+
+    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(tensor.dtype());
+
+    auto tile_size = tt_metal::detail::TileSize(data_format);
+
+    int32_t cb_usage = 0;        // bytes
+    cb_usage += 2 * tile_size;   // input;
+    cb_usage += 2 * tile_size;   // output;
+    cb_usage += Ht * tile_size;  // exp(x);
+    cb_usage += 1 * tile_size;   // reduce;
+    cb_usage += 1 * tile_size;   // scaler;
+
+    return (L1_UNRESERVED_BASE + cb_usage <= L1_512KB);
+}
+
+operation::ProgramWithCallbacks moreh_softmax_h_small(const Tensor &input, const Tensor &output, CoreRange core_range) {
+    // split work
+    auto shape = input.shape();
+    auto N = shape[0];
+    auto C = shape[1];
+    auto H = shape[2];
+    auto W = shape[3];
+
+    auto Ht = H / TILE_HEIGHT;
+    auto Wt = W / TILE_WIDTH;
+
+    uint32_t num_cols_tiles = N * C * Wt;
+    uint32_t core_w = core_range.end.x - core_range.start.x + 1;
+    uint32_t core_h = core_range.end.y - core_range.start.y + 1;
+
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
+        split_work_to_cores(core_range, num_cols_tiles);
+
+    Program program = Program();
+
+    // create circular buffers
+    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
+
+    CreateCircularBuffers(
+        program,
+        all_cores,
+        data_format,
+        {
+            {CB::c_in0, 2},         // input
+            {CB::c_out0, 2},        // output
+            {CB::c_intermed0, Ht},  // exp(x)
+            {CB::c_intermed1, 1},   // reduce
+            {CB::c_in2, 1}          // scaler
+        });
+
+    // create read/wrtie kernel
+    bool src_is_dram = input.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = output.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+
+    std::map<string, string> reader_defines;
+    std::map<string, string> writer_defines;
+
+    auto reader_kernel_id = CreateReadKernel(
+        program, "reader_moreh_softmax_h.cpp", all_cores, {src_is_dram}, reader_defines);
+    auto writer_kernel_id = CreateWriteKernel(
+        program, "writer_moreh_softmax_h.cpp", all_cores, {dst_is_dram}, writer_defines);
+
+    // create compute kernel
+    CreateComputeKernel(
+        program,
+        "moreh_softmax_h.cpp",
+        {
+            {core_group_1, num_tiles_per_core_group_1, {num_tiles_per_core_group_1, Ht}},
+            {core_group_2, num_tiles_per_core_group_2, {num_tiles_per_core_group_2, Ht}},
+        });
+
+    // Set Runtime Args
+    auto core_x_offset = core_range.start.x;
+    auto core_y_offset = core_range.start.y;
+
+    for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
+        CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
+        uint32_t num_tiles_per_core;
+        if (core_group_1.core_coord_in_core_ranges(core)) {
+            num_tiles_per_core = num_tiles_per_core_group_1;
+        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+            num_tiles_per_core = num_tiles_per_core_group_2;
+        } else {
+            TT_ASSERT(false, "Core not in specified core ranges");
+        }
+
+        float scaler = 1.0f;
+        vector<u32> reader_args = {
+            input.buffer()->address(), num_tiles_per_core, tile_offset, Ht, Wt, *reinterpret_cast<uint32_t *>(&scaler)};
+
+        vector<u32> writer_args = {output.buffer()->address(), num_tiles_per_core, tile_offset, Ht, Wt};
+
+        SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
+        SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
+
+        tile_offset += num_tiles_per_core;
+    }
+
+    CoreGridDesc grid(input.device());
+
+    auto override_runtime_args_callback = [
+            reader_kernel_id=reader_kernel_id,
+            writer_kernel_id=writer_kernel_id,
+            num_cores,
+            grid
+        ]
+    (
+        const Program &program,
+        const std::vector<Buffer*>& input_buffers,
+        const std::vector<Buffer*>& output_buffers
+    ) {
+        TT_ASSERT(input_buffers.size() == 1);
+        TT_ASSERT(output_buffers.size() == 1);
+
+        auto src_dram_buffer = input_buffers.at(0);
+        auto dst_dram_buffer = output_buffers.at(0);
+
+        for (uint32_t icore = 0; icore < num_cores; icore++) {
+            auto core = grid.wrap_core(icore);
+
+            // CoreCoord core = {icore / core_h + core_x_offset, icore % core_h + core_y_offset};
+
+            {
+                auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                runtime_args[0] = src_dram_buffer->address();
+                SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
+            }
+
+            {
+                auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                runtime_args[0] = dst_dram_buffer->address();
+                SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
+            }
+        }
+    };
+
+    return {std::move(program), override_runtime_args_callback};
+}
+
+}  // namespace primary
+}  // namespace operations
+}  // namespace tt
