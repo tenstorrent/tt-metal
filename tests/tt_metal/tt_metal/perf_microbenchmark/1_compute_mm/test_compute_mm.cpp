@@ -19,13 +19,13 @@ using namespace tt;
 ////////////////////////////////////////////////////////////////////////////////
 // This test measures the compute performance of MM.
 // When in slow dispatch mode, it uses LaunchProgram API and measures perf via device profiler.
-// In fast dispatch mode, it uses EnqueueProgram and Finish API and measures the execution time of them.
+// In fast dispatch mode, it uses EnqueueProgram API and measures the execution time of them.
 // Kernels are based on bmm op in tt_dnn with minimal modifications.
 // For input conditions where all cores cannot be used, only some cores are used with a warning log.
 //
 // Usage example:
-//   ./test_compute_mm --m <size in elements> --n <size in elements> --k <size in elements> --arch <grayskull, wormhole,
-//   wormhole_b0> --slow-dispatch-mode <0, 1>
+//   ./test_compute_mm --m <size in elements> --n <size in elements> --k <size in elements> --slow-dispatch-mode <0 for
+//   fast dispatch mode, 1 for slow dispatch mode>
 //
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -140,14 +140,11 @@ int main(int argc, char** argv) {
         //                      Initial Runtime Args Parse
         ////////////////////////////////////////////////////////////////////////////
         std::vector<std::string> input_args(argv, argv + argc);
-        string arch_name = "";
         uint32_t M;
         uint32_t N;
         uint32_t K;
         uint32_t slow_dispatch_mode;
         try {
-            std::tie(arch_name, input_args) =
-                test_args::get_command_option_and_remaining_args(input_args, "--arch", "wormhole_b0");
             std::tie(M, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--m", 11264);
             std::tie(N, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--n", 3072);
             std::tie(K, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--k", 768);
@@ -157,19 +154,17 @@ int main(int argc, char** argv) {
             log_fatal(LogTest, "Command line arguments found exception", e.what());
         }
 
-        const tt::ARCH arch = tt::get_arch_from_string(arch_name);
         ////////////////////////////////////////////////////////////////////////////
         //                      Env and Device Setup
         ////////////////////////////////////////////////////////////////////////////
         if (slow_dispatch_mode) {
-            // Phase 1: WH with slow disp. Measure perf via perf profiler.
             setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", true);
             setenv("TT_METAL_DEVICE_PROFILER", "1", true);
         }
 
         int pci_express_slot = 0;
         tt_metal::Device* device = tt_metal::CreateDevice(pci_express_slot);
-
+        const tt::ARCH arch = device->arch();
         ////////////////////////////////////////////////////////////////////////////
         //                      Check Input Args
         ////////////////////////////////////////////////////////////////////////////
@@ -271,7 +266,6 @@ int main(int argc, char** argv) {
             (2 * static_cast<uint64_t>(Kt) * 32 - 1) * (static_cast<uint64_t>(Mt) * static_cast<uint64_t>(Nt) * 1024);
         log_debug(LogTest, "number of matmul ops: {}", num_of_matmul_ops);
 
-        // Phase 1
         if (slow_dispatch_mode) {
             log_debug(LogTest, "calling LaunchProgram");
             LaunchProgram(device, program);
