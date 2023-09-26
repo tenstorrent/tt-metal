@@ -3,18 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
-#include <chrono>
 #include <cctype>
+#include <chrono>
 #include <functional>
 #include <random>
 #include <stdexcept>
 #include <string>
 
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/util.hpp"
 #include "common/bfloat16.hpp"
 #include "common/tt_backend_api_types.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/detail/util.hpp"
+#include "tt_metal/host_api.hpp"
 
 using namespace tt;
 using std::chrono::duration_cast;
@@ -76,13 +76,24 @@ int main(int argc, char **argv) {
             TT_ASSERT(false);
         }
 
+        TT_ASSERT(read_size != 0, "--read-size should not be zero");
+
+        tt::DataFormat tile_format = tt::DataFormat::Float16_b;
+        uint32_t single_tile_size = tt_metal::detail::TileSize(tile_format);
+        if (read_size % single_tile_size != 0) {
+            auto align_to_single_tile = [=](uint64_t value) -> uint64_t {
+                return ((value + (single_tile_size - 1)) / single_tile_size) * single_tile_size;
+            };
+
+            auto read_size_aligned = align_to_single_tile(read_size);
+            log_info(LogTest, "read size {} is aligned to {} bytes", read_size, read_size_aligned);
+            read_size = read_size_aligned;
+        }
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
-        tt::DataFormat tile_format = tt::DataFormat::Float16_b;
-        uint32_t single_tile_size = tt_metal::detail::TileSize(tile_format);
         auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
         uint32_t num_cores_x = compute_with_storage_grid_size.x;
         uint32_t num_cores_y = compute_with_storage_grid_size.y;
@@ -90,8 +101,38 @@ int main(int argc, char **argv) {
 
         uint32_t num_tiles = static_cast<uint32_t>((read_size + single_tile_size - 1) / single_tile_size);
         if (num_tiles % num_cores != 0) {
-            log_error(LogTest, "{} input tiles should be divided by {} cores", num_tiles, num_cores);
-            TT_ASSERT(false);
+            std::vector<std::tuple<uint32_t, uint32_t>> core_candidates;
+            for (uint32_t y = 1; y <= num_cores_y; ++y) {
+                for (uint32_t x = 1; x <= num_cores_x; ++x) {
+                    if (num_tiles % (x * y) == 0) {
+                        core_candidates.push_back({y, x});
+                    }
+                }
+            }
+            uint32_t num_proper_cores = 1;
+            uint32_t num_proper_cores_x = 1;
+            uint32_t num_proper_cores_y = 1;
+            for (auto &core : core_candidates) {
+                uint32_t y = std::get<0>(core);
+                uint32_t x = std::get<1>(core);
+                if (x * y >= num_proper_cores) {
+                    num_proper_cores_x = x;
+                    num_proper_cores_y = y;
+                    num_proper_cores = x * y;
+                }
+            }
+            TT_ASSERT(num_proper_cores != 0, "input tiles cannot bt divided");
+            log_warning(
+                LogTest,
+                "{} input tiles should be divided by {} cores. This run use {} x {} = {} cores",
+                num_tiles,
+                num_cores,
+                num_proper_cores_y,
+                num_proper_cores_x,
+                num_proper_cores);
+            num_cores_x = num_proper_cores_x;
+            num_cores_y = num_proper_cores_y;
+            num_cores = num_proper_cores;
         }
 
         uint32_t num_tiles_per_core = num_tiles / num_cores;
