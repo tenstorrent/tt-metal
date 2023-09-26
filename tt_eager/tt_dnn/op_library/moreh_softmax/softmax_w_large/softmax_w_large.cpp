@@ -22,7 +22,7 @@ namespace tt {
 namespace operations {
 namespace primary {
 
-operation::ProgramWithCallbacks moreh_softmax_w_large(const Tensor &input, const Tensor &output, CoreRange core_range) {
+operation::ProgramWithCallbacks moreh_softmax_w_large(const Tensor &input, Tensor &output, const CoreRange core_range) {
     // split work
     auto shape = input.shape();
     auto N = shape[0];
