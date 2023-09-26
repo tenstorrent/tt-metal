@@ -5,6 +5,7 @@
 #include "tt_lib_bindings_tensor.hpp"
 #include "tt_lib_bindings_tensor_impl.hpp"
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
+#include "tt_dnn/op_library/complex/complex_ops.hpp"
 
 namespace tt::tt_metal::detail{
     void TensorModuleCompositeOPs( py::module & m_tensor){
@@ -72,6 +73,8 @@ namespace tt::tt_metal::detail{
 
             ``tanhshrink(x) = x - tanh(x)``)doc"
         );
+        detail::bind_unary_op(m_tensor, "digamma", &digamma, R"doc(Computes the logarithmic derivative of the gamma function on input tensor ``{0}``.)doc");
+        detail::bind_unary_op(m_tensor, "lgamma", &lgamma, R"doc(Computes the natural logarithm of the absolute value of the gamma function on the  ``{0}`` tensor for positive range.)doc");
 
         detail::bind_unary_op_with_param(
             m_tensor, "softshrink", &softshrink,
@@ -182,6 +185,25 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
+        m_tensor.def("isclose", &isclose,
+            py::arg("input").noconvert(), py::arg("other").noconvert(), py::arg("rtol") = 1e-05f, py::arg("atol") = 1e-08f, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            Applies the isclose function to the elements of the input tensor ``input`` and ``other``.
+
+            Input tensor must have BFLOAT16 data type.
+
+            Output tensor will have BFLOAT16 data type.
+
+            isclose(input, other, rtol, atol) = ∣input−other∣ ≤ atol+rtol×∣other∣.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input", "Tensor isclose is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "other", "Tensor isclose is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "rtol", "rtol value", "float", "default to 1e-05f", "No"
+                "atol", "atol value", "float", "default to 1e-08f", "No"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
 
         m_tensor.def("hardsigmoid", &hardsigmoid,
             py::arg("input").noconvert(), py::arg("scale") = 1.0f/6.0f, py::arg("shift") = 0.5f, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
@@ -597,6 +619,23 @@ namespace tt::tt_metal::detail{
         );
 
         detail::bind_unary_op(m_tensor, "atanh", atanh, R"doc(Returns a new tensor with the inverse hyperbolic tangent of the elements of the input tensor ``{0}``.)doc");
+
+        // *** complex operations ***
+        detail::bind_unary_op(m_tensor, "real", &tt::tt_metal::real, R"doc(Returns real portion of complex tensor ``{0}``.)doc");
+        detail::bind_unary_op(m_tensor, "imag", &tt::tt_metal::imag, R"doc(Returns imag portion of complex tensor ``{0}``.)doc");
+        detail::bind_unary_op(m_tensor, "is_real", &tt::tt_metal::is_real, R"doc(Returns true if complex tensor ``{0}``  is real.)doc");
+        detail::bind_unary_op(m_tensor, "is_imag", &tt::tt_metal::is_imag, R"doc(Returns true if complex tensor ``{0}``  is imaginary.)doc");
+        detail::bind_unary_op(m_tensor, "complex_abs", &tt::tt_metal::complex_abs, R"doc(Returns elementwise abs value of complex tensor ``{0}``.)doc");
+        detail::bind_unary_op(m_tensor, "conj", &tt::tt_metal::conj, R"doc(Returns elementwise complex conjugate of tensor ``{0}``.)doc");
+        detail::bind_unary_op(m_tensor, "complex_recip", &tt::tt_metal::complex_recip, R"doc(Returns elementwise reciprocal of complex tensor ``{0}``.)doc");
+
+        m_tensor.def("complex_mul", &tt::tt_metal::complex_mul,
+            py::arg("input_a"), py::arg("input_b"),
+            py::arg("output_mem_config").noconvert() = std::nullopt,R"doc(Perform an eltwise-binary multiplication ``input_a * input_b`` on two complex tensors.)doc");
+
+        m_tensor.def("complex_div", &tt::tt_metal::complex_div,
+            py::arg("input_a"), py::arg("input_b"),
+            py::arg("output_mem_config").noconvert() = std::nullopt,R"doc(Perform an eltwise-binary divide ``input_a / input_b`` on two complex tensors.)doc");
 
         detail::bind_binary_op<false, true>(m_tensor, "logical_xor", &logical_xor, R"doc(Performs eltwise-binary logical_xor (``{0} ^ {1}``) on two tensors.)doc");
         detail::bind_binary_op<false, true>(m_tensor, "max", &tt::tt_metal::max, R"doc(Perform an eltwise-binary max on two tensors.)doc");

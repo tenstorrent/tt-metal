@@ -49,6 +49,7 @@ namespace tt::tt_metal::detail {
         detail::bind_unary_op(m_tensor, "log10", log10, R"doc(Returns tensor with the base 10 logarithm of elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "sin", tt::tt_metal::sin, R"doc(Returns tensor with the sine of elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "cos", tt::tt_metal::cos, R"doc(Returns tensor with the cosine of elements of the input tensor ``{0}``.)doc");
+        detail::bind_unary_op(m_tensor, "tan", tan, R"doc(Returns a new tensor with the tangent of the elements of the input tensor ``{0}`` for the range [-1.45, 1.45].)doc");
         detail::bind_unary_op(m_tensor, "abs", abs, R"doc(Returns tensor with elementwise absolute value of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "isfinite", isfinite, R"doc(Returns boolean tensor that is True where input tensor ``{0}``, is finite and False elsewhere.)doc");
         detail::bind_unary_op(m_tensor, "isinf", isinf, R"doc(Returns boolean tensor that is True where input tensor ``{0}``, is infinite and False elsewhere.)doc");
@@ -74,6 +75,8 @@ namespace tt::tt_metal::detail {
         detail::bind_unary_op(m_tensor, "acos", acos, R"doc(Returns a new tensor with the arccosine of the elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "logical_not_unary", logical_not_unary, R"doc(Returns a new tensor with the logical not of the elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "log_sigmoid", &log_sigmoid, R"doc(Applies the logsigmoid function to the elements of the input tensor ``{0}``.)doc");
+        detail::bind_unary_op(m_tensor, "erfinv", erfinv, R"doc(Computes inverse error function for all elements of the input tensor ``{0}`` in the range (-1,1) .)doc");
+        detail::bind_unary_op(m_tensor, "i0", i0, R"doc(Computes the zeroth order modified Bessel function of the first kind applied on the elements of the input tensor ``{0}``, for the input range -10 to 10.)doc");
 
         detail::bind_unary_op_with_param(
             m_tensor, "gelu", &gelu,
