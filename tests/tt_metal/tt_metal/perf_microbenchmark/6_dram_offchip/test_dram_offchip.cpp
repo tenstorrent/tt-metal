@@ -25,11 +25,9 @@ using std::chrono::microseconds;
 // It uses EnqueueProgram API to launch a reader kernel to read the data from DRAM to L1.
 //
 // Usage example:
-//   ./test_dram_offchip --read-size <size in bytes, size with unit (e.g. 512kb, 2gb)>
+//   ./test_dram_offchip --read-size <size in bytes>
 //
 ////////////////////////////////////////////////////////////////////////////////
-
-uint64_t get_read_size_from_string(string read_size_str);
 
 inline std::vector<std::uint32_t> create_random_vector_of_bfloat16(
     uint64_t num_bytes, int rand_max_float, int seed, float offset = 0.0f);
@@ -66,19 +64,17 @@ int main(int argc, char **argv) {
         //                      Initial Runtime Args Parse
         ////////////////////////////////////////////////////////////////////////////
         std::vector<std::string> input_args(argv, argv + argc);
-        string read_size_with_unit = "";
+        uint64_t read_size = 0;
         uint32_t num_reqs_at_a_time = 1;
         try {
-            std::tie(read_size_with_unit, input_args) =
-                test_args::get_command_option_and_remaining_args(input_args, "--read-size", "512kb");
+            std::tie(read_size, input_args) =
+                test_args::get_command_option_uint64_and_remaining_args(input_args, "--read-size", 512 * 1024 * 1024);
             /* std::tie(num_reqs_at_a_time, input_args) =
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--num-reqs-at-a-time", 1); */
         } catch (const std::exception &e) {
             log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
             TT_ASSERT(false);
         }
-
-        const uint64_t read_size = get_read_size_from_string(read_size_with_unit);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
@@ -205,40 +201,6 @@ int main(int argc, char **argv) {
     TT_ASSERT(pass);
 
     return 0;
-}
-
-uint64_t get_read_size_from_string(string read_size_str) {
-    constexpr uint32_t KB = 1024;
-    constexpr uint32_t MB = KB * KB;
-    constexpr uint32_t GB = MB * KB;
-
-    if (read_size_str.empty()) {
-        throw std::invalid_argument("read_size_str is empty");
-    }
-
-    uint32_t str_len = read_size_str.size();
-    bool has_unit =
-        (str_len > 2) && std::isalpha(read_size_str[str_len - 1]) && std::isalpha(read_size_str[str_len - 2]);
-
-    uint64_t read_size = 0;
-    if (!has_unit) {
-        read_size = stoull(read_size_str);
-        return read_size;
-    }
-
-    read_size = stoull(read_size_str.substr(0, str_len - 2));
-    string unit = read_size_str.substr(str_len - 2);
-    if (unit == "KB" || unit == "kb") {
-        read_size *= static_cast<uint64_t>(KB);
-    } else if (unit == "MB" || unit == "mb") {
-        read_size *= static_cast<uint64_t>(MB);
-    } else if (unit == "GB" || unit == "gb") {
-        read_size *= static_cast<uint64_t>(GB);
-    } else {
-        throw std::invalid_argument("unknown unit " + unit);
-    }
-
-    return read_size;
 }
 
 inline std::vector<std::uint32_t> create_random_vector_of_bfloat16(
