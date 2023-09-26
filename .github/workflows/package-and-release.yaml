@@ -41,10 +41,9 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           ignorePreReleases: true
           failOnError: true
+          outputFile: CHANGELOG.txt
       - name: Output changelog
-        run: |
-          echo "${{ steps.create-changelog.outputs.changelog }}" > CHANGELOG.txt
-          cat CHANGELOG.txt
+        run: cat CHANGELOG.txt
       - name: Upload changelog as artifact
         uses: actions/upload-artifact@v3
         with:
