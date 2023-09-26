@@ -299,7 +299,7 @@ int main(int argc, char** argv) {
         }
 
         double rmax_per_rpeak = rmax_tflops / rpeak_tflops;
-        log_info(LogTest, "Rmax(TFLOPS) {:.3f}, Rpeak {:.3f}, Rmax / Rpeak {:.4f}", rmax_tflops, rpeak_tflops, rmax_per_rpeak);
+        log_info(LogTest, "Rmax(TFLOPS) {:.3f}, Rpeak {:.3f}, Rmax / Rpeak {:.2f}%", rmax_tflops, rpeak_tflops, rmax_per_rpeak * 100);
         bool performance_result = true;
         if (rmax_per_rpeak < 0.9) {
             performance_result = false;
@@ -333,8 +333,8 @@ int main(int argc, char** argv) {
             log_error(
                 LogTest,
                 "The compute performance does not meet the criteria. "
-                "Current: Rmax / Rpeak = {:.4f}%, goal: > 90%",
-                rmax_per_rpeak);
+                "Current: Rmax / Rpeak = {:.2f}%, goal: > 90%",
+                rmax_per_rpeak * 100);
             pass = false;
         }
 
@@ -383,12 +383,14 @@ double get_tt_npu_rpeak_tflops(tt::ARCH arch, CoreCoord grid_size, int tt_npu_cl
     double clock = static_cast<double>(tt_npu_clock) / 1000;
     uint32_t num_compute_core = grid_size.x * grid_size.y;
     if (arch == tt::ARCH::WORMHOLE || arch == tt::ARCH::WORMHOLE_B0) {
-        rpeak_tflops = WH_FPU_BFP8_TFLOPS_PER_TENSIX * static_cast<double>(num_compute_core) * static_cast<double>(clock);
+        rpeak_tflops =
+            WH_FPU_BFP8_TFLOPS_PER_TENSIX * static_cast<double>(num_compute_core) * static_cast<double>(clock);
     } else if (arch == tt::ARCH::GRAYSKULL) {
-        rpeak_tflops = GS_FPU_BFP8_TFLOPS_PER_TENSIX * static_cast<double>(num_compute_core) * static_cast<double>(clock);
+        rpeak_tflops =
+            GS_FPU_BFP8_TFLOPS_PER_TENSIX * static_cast<double>(num_compute_core) * static_cast<double>(clock);
     }
-    log_debug(LogTest, "GS Rpeak {} TFLOPS", GS_FPU_BFP8_TFLOPS_PER_TENSIX * static_cast<double>(64) * static_cast<double>(clock));
-    log_debug(LogTest, "WH Rpeak {} TFLOPS", WH_FPU_BFP8_TFLOPS_PER_TENSIX * static_cast<double>(64) * static_cast<double>(clock));
+
+    log_debug(LogTest, "Rpeak {} TFLOPS", rpeak_tflops);
     return rpeak_tflops;
 }
 
