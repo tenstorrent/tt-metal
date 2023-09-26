@@ -7,7 +7,6 @@
 #pragma once
 
 #include <optional>
-#include <variant>
 
 #include "tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
@@ -22,28 +21,6 @@ inline bool is_dram(const Tensor &input_tensor);
 inline bool is_dram(const std::optional<const Tensor> input_tensor);
 inline bool is_dram(const Buffer *b);
 
-inline bool is_scalar(const Tensor &tensor) {
-    const auto &shape = tensor.shape().without_padding();
-    return (shape[0] == 1 && shape[1] == 1 && shape[2] == 1 && shape[3] == 1);
-}
-
-inline bool is_1d_tensor(const Tensor &tensor) {
-    const auto &shape = tensor.shape().without_padding();
-    return (shape[0] == 1 && shape[1] == 1 && shape[2] == 1);
-}
-
-inline bool is_same_shape(const Tensor &tensor_a, const Tensor &tensor_b) {
-    const auto &tensor_a_shape = tensor_a.shape().without_padding();
-    const auto &tensor_b_shape = tensor_b.shape().without_padding();
-    return (tensor_a_shape == tensor_b_shape);
-}
-
-inline bool is_same_batch_shape(const Tensor &tensor_a, const Tensor &tensor_b) {
-    const auto &tensor_a_shape = tensor_a.shape().without_padding();
-    const auto &tensor_b_shape = tensor_b.shape().without_padding();
-    return (tensor_a_shape[0] == tensor_b_shape[0] && tensor_a_shape[1] == tensor_b_shape[1]);
-}
-
 inline std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet> add_core_offset(
     CoreRangeSet all_cores, CoreRangeSet core_group_1, CoreRangeSet core_group_2, uint32_t offset_x, uint32_t offset_y);
 
@@ -53,36 +30,27 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 KernelID CreateReadKernel(
     Program &program,
     const std::string &file_name,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
+    const CoreRangeSet &core,
     const std::vector<uint32_t> &compile_args,
-    std::map<string, string> defines = {});
+    std::map<string, string> defines);
 
 KernelID CreateWriteKernel(
     Program &program,
     const std::string &file_name,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
+    const CoreRangeSet &core,
     const std::vector<uint32_t> &compile_args,
-    std::map<string, string> defines = {});
+    std::map<string, string> defines);
 
 struct ComputeKernelArg {
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec;
+    CoreRangeSet core_range;
     uint32_t num_tile_per_core_group;
     const std::vector<uint32_t> &compile_args;
 };
 
-[[maybe_unused]] std::vector<KernelID> CreateComputeKernel(
+void CreateComputeKernel(
     Program &program,
     const std::string &file_name,
     std::vector<ComputeKernelArg> args,
-    std::map<std::string, std::string> defines = {},
-    MathFidelity math_fidelity = MathFidelity::HiFi4,
-    bool fp32_dest_acc_en = false,
-    bool math_approx_mode = false);
-
-[[maybe_unused]] KernelID CreateComputeKernel(
-    Program &program,
-    const std::string &file_name,
-    ComputeKernelArg arg,
     std::map<std::string, std::string> defines = {},
     MathFidelity math_fidelity = MathFidelity::HiFi4,
     bool fp32_dest_acc_en = false,
@@ -103,11 +71,12 @@ struct CircularBufferArg {
     }
 };
 
-[[maybe_unused]] std::vector<CircularBufferID> CreateCircularBuffer(
-    Program &program, const CoreRangeSet &core_range, tt::DataFormat data_format, std::vector<CircularBufferArg> args);
-
-[[maybe_unused]] CircularBufferID CreateCircularBuffer(
-    Program &program, const CoreRangeSet &core_range, tt::DataFormat data_format, CircularBufferArg arg);
+void CreateCircularBuffers(
+    Program &program,
+    const CoreRangeSet &core_range,
+    tt::DataFormat data_format,
+    std::vector<CircularBufferArg> args,
+    std::optional<uint32_t> l1_address = std::nullopt);
 
 }  // namespace primary
 }  // namespace operations
