@@ -178,6 +178,22 @@ inline  std::tuple<std::uint32_t, std::vector<std::string>> get_command_option_u
     return {std::stoul(param, 0, 0), remaining_args};
 }
 
+inline  std::tuple<std::uint64_t, std::vector<std::string>> get_command_option_uint64_and_remaining_args(
+    const std::vector<std::string> &test_args,
+    const std::string &option,
+    const std::optional<std::uint64_t> &default_value = std::nullopt) {
+    std::vector<std::string> remaining_args = test_args;
+    std::string param;
+    if (default_value.has_value()) {
+        std::tie(param, remaining_args) =
+            get_command_option_and_remaining_args(test_args, option, std::to_string(default_value.value()));
+    } else {
+        std::tie(param, remaining_args) = get_command_option_and_remaining_args(test_args, option);
+    }
+
+    return {std::stoull(param, 0, 0), remaining_args};
+}
+
 inline std::tuple<std::int32_t, std::vector<std::string>> get_command_option_int32_and_remaining_args(
     const std::vector<std::string> &test_args,
     const std::string &option,
