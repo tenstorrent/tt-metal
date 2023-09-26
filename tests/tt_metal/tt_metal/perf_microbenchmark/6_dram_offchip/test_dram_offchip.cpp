@@ -22,10 +22,10 @@ using std::chrono::microseconds;
 
 ////////////////////////////////////////////////////////////////////////////////
 // This test measures the bandwidth of DRAM.
-// It uses EnqueueProgram API to launch a reader kernel to read the data from DRAM to L1.
 //
 // Usage example:
-//   ./test_dram_offchip --input-size <size in bytes>
+//   ./test_dram_offchip --input-size <size in bytes> --access_type <0 for read access, 1 for
+//   write access>
 //
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -44,7 +44,8 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, uint32_t> create_program(
     const int &num_cores_x,
     const uint32_t &num_reqs_at_a_time,
     const uint32_t &single_tile_size,
-    const tt::DataFormat &tile_format);
+    const tt::DataFormat &tile_format,
+    const uint32_t &access_type);
 
 bool assign_runtime_args_to_program(
     tt_metal::Device *device,
@@ -57,6 +58,18 @@ bool assign_runtime_args_to_program(
     const uint32_t &num_reqs_at_a_time,
     const uint32_t &single_tile_size,
     const tt::DataFormat &tile_format);
+
+bool validation(
+    tt_metal::Device *device,
+    tt_metal::Buffer &input_buffer,
+    std::vector<uint32_t> &input_vec,
+    const uint32_t &num_cores_y,
+    const uint32_t &num_cores_x,
+    const uint32_t &cb_addr,
+    const uint32_t &num_tiles_per_core,
+    const uint32_t &num_reqs_at_a_time,
+    const uint32_t &single_tile_size,
+    const uint32_t &access_type);
 
 int main(int argc, char **argv) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
@@ -76,6 +89,8 @@ int main(int argc, char **argv) {
         try {
             std::tie(input_size, input_args) =
                 test_args::get_command_option_uint64_and_remaining_args(input_args, "--input-size", 512 * 1024 * 1024);
+            std::tie(access_type, input_args) =
+                test_args::get_command_option_uint32_and_remaining_args(input_args, "--access-type", 0);
             /* std::tie(num_reqs_at_a_time, input_args) =
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--num-reqs-at-a-time", 1); */
         } catch (const std::exception &e) {
@@ -93,7 +108,7 @@ int main(int argc, char **argv) {
             };
 
             auto input_size_aligned = align_to_single_tile(input_size);
-            log_info(LogTest, "read size {} is aligned to {} bytes", input_size, input_size_aligned);
+            log_info(LogTest, "input size {} is aligned to {} bytes", input_size, input_size_aligned);
             input_size = input_size_aligned;
         }
         ////////////////////////////////////////////////////////////////////////////
@@ -116,22 +131,24 @@ int main(int argc, char **argv) {
 
         log_info(
             LogTest,
-            "Measuring DRAM read bandwidth for input_size = {} bytes ({} tiles), using {} cores",
+            "Measuring DRAM bandwidth for input_size = {} bytes ({} tiles), using {} cores",
             input_size,
             num_tiles,
             num_cores);
 
         ////////////////////////////////////////////////////////////////////////////
-        //                      Application Setup
+        //                      Input Setup
         ////////////////////////////////////////////////////////////////////////////
         std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
             input_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
         tt_metal::Buffer input_buffer(
             device, input_vec.size() * sizeof(u32), single_tile_size, tt_metal::BufferType::DRAM);
-        tt_metal::WriteToBuffer(input_buffer, input_vec);
 
+        ////////////////////////////////////////////////////////////////////////////
+        //                      Application Setup
+        ////////////////////////////////////////////////////////////////////////////
         auto [program, reader_kernel, cb_addr] =
-            create_program(device, num_cores_y, num_cores_x, num_reqs_at_a_time, single_tile_size, tile_format);
+            create_program(device, num_cores_y, num_cores_x, num_reqs_at_a_time, single_tile_size, tile_format, access_type);
         pass &= assign_runtime_args_to_program(
             device,
             program,
@@ -145,11 +162,32 @@ int main(int argc, char **argv) {
             tile_format);
 
         ////////////////////////////////////////////////////////////////////////////
+        //                      Copy Input To DRAM or L1
+        ////////////////////////////////////////////////////////////////////////////
+        if (access_type == 0) {
+            tt_metal::WriteToBuffer(input_buffer, input_vec);
+        } else {
+            for (int y = 0; y < num_cores_y; ++y) {
+                for (int x = 0; x < num_cores_x; ++x) {
+                    CoreCoord core = {(size_t)x, (size_t)y};
+                    auto input_offset = num_tiles_per_core * 512 * (y * num_cores_x + x);
+                    auto write_size = num_reqs_at_a_time * 512;
+                    auto sliced_input = slice(
+                        input_vec,
+                        input_offset,
+                        input_offset + write_size - 1);
+                    tt_metal::detail::WriteToDeviceL1(device, core, cb_addr, sliced_input);
+                }
+            }
+        }
+
+        ////////////////////////////////////////////////////////////////////////////
         //                      Execution Application
         ////////////////////////////////////////////////////////////////////////////
+        CommandQueue &cq = *tt::tt_metal::detail::GLOBAL_CQ;
         auto t_begin = std::chrono::steady_clock::now();
-        tt_metal::EnqueueProgram(*::detail::GLOBAL_CQ, program, false);
-        tt_metal::Finish(*::detail::GLOBAL_CQ);
+        tt_metal::EnqueueProgram(cq, program, false);
+        tt_metal::Finish(cq);
         auto t_end = std::chrono::steady_clock::now();
         auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
         dram_bandwidth = (input_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0);
@@ -158,26 +196,8 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
-        auto input_bf16 = unpack_uint32_vec_into_bfloat16_vec(input_vec);
-        for (int y = 0; y < num_cores_y; ++y) {
-            for (int x = 0; x < num_cores_x; ++x) {
-                std::vector<uint32_t> result_vec;
-                CoreCoord core = {(size_t)x, (size_t)y};
-                tt_metal::detail::ReadFromDeviceL1(
-                    device, core, cb_addr, num_reqs_at_a_time * single_tile_size, result_vec);
-                auto result_bf16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
+        pass = validation(device, input_buffer, input_vec, num_cores_y, num_cores_x, cb_addr, num_tiles_per_core, num_reqs_at_a_time, single_tile_size, access_type);
 
-                auto input_offset = num_tiles_per_core * (y * num_cores_x + x + 1);
-                auto sliced_input = slice(
-                    input_bf16,
-                    (input_offset - num_reqs_at_a_time) * constants::TILE_HW,
-                    input_offset * constants::TILE_HW - 1);
-
-                if (!(sliced_input == result_bf16)) {
-                    pass = false;
-                }
-            }
-        }
     } catch (const std::exception &e) {
         pass = false;
         // Capture the exception error message
@@ -291,7 +311,8 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, uint32_t> create_program(
     const int &num_cores_x,
     const uint32_t &num_reqs_at_a_time,
     const uint32_t &single_tile_size,
-    const tt::DataFormat &tile_format) {
+    const tt::DataFormat &tile_format,
+    const uint32_t &access_type) {
     tt_metal::Program program = tt_metal::Program();
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {(std::size_t)num_cores_x - 1, (std::size_t)num_cores_y - 1};
@@ -311,11 +332,14 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, uint32_t> create_program(
 
     auto reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/6_dram_offchip/kernels/"
-        "reader_dram.cpp",
+        (access_type == 0)
+        ? "tests/tt_metal/tt_metal/perf_microbenchmark/6_dram_offchip/kernels/reader_dram.cpp"
+        : "tests/tt_metal/tt_metal/perf_microbenchmark/6_dram_offchip/kernels/writer_dram.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+            .processor =
+                (access_type == 0) ? tt_metal::DataMovementProcessor::RISCV_1 : tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = (access_type == 0) ? tt_metal::NOC::RISCV_1_default : tt_metal::NOC::RISCV_0_default});
     return {std::move(program), reader_kernel, cb_addr};
 }
 
@@ -348,4 +372,64 @@ bool assign_runtime_args_to_program(
     }
 
     return pass;
+}
+
+bool validation(
+    tt_metal::Device *device,
+    tt_metal::Buffer &input_buffer,
+    std::vector<uint32_t> &input_vec,
+    const uint32_t &num_cores_y,
+    const uint32_t &num_cores_x,
+    const uint32_t &cb_addr,
+    const uint32_t &num_tiles_per_core,
+    const uint32_t &num_reqs_at_a_time,
+    const uint32_t &single_tile_size,
+    const uint32_t &access_type) {
+
+    if (access_type == 0) {
+        auto input_bf16 = unpack_uint32_vec_into_bfloat16_vec(input_vec);
+        for (int y = 0; y < num_cores_y; ++y) {
+            for (int x = 0; x < num_cores_x; ++x) {
+                std::vector<uint32_t> result_vec;
+                CoreCoord core = {(size_t)x, (size_t)y};
+                tt_metal::detail::ReadFromDeviceL1(
+                    device, core, cb_addr, num_reqs_at_a_time * single_tile_size, result_vec);
+                auto result_bf16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
+
+                auto input_offset = num_tiles_per_core * (y * num_cores_x + x + 1);
+                auto sliced_input = slice(
+                    input_bf16,
+                    (input_offset - num_reqs_at_a_time) * constants::TILE_HW,
+                    input_offset * constants::TILE_HW - 1);
+
+                if (!(sliced_input == result_bf16)) {
+                    return false;
+                }
+            }
+        }
+    } else {
+        std::vector<uint32_t> result_vec;
+        log_info(LogTest, "ReadFromBuffer API may take a long time if the input size is large");
+        tt_metal::ReadFromBuffer(input_buffer, result_vec);
+        log_info(LogTest, "ReadFromBuffer API done");
+        uint32_t num_blocks = num_tiles_per_core / num_reqs_at_a_time;
+        for (int y = 0; y < num_cores_y; ++y) {
+            for (int x = 0; x < num_cores_x; ++x) {
+                int test = 0;
+                auto input_offset = num_tiles_per_core * 512 * (y * num_cores_x + x);
+                auto write_size = num_reqs_at_a_time * 512;
+                auto sliced_input = slice(input_vec, input_offset, input_offset + write_size - 1);
+                for (int block = 0; block < num_blocks; ++block) {
+                    for (int req = 0; req < num_reqs_at_a_time * 512; ++req) {
+                        auto index = input_offset + block * (num_reqs_at_a_time * 512) + req;
+                        if (result_vec[index] != sliced_input[req]) {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return true;
 }
