@@ -120,7 +120,6 @@ int main(int argc, char** argv) {
                 tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
             vector<uint32_t> compute_kernel_args = {
-                2048,  // per_core_block_cnt
                 1,     // per_core_block_size
             };
 
@@ -135,6 +134,13 @@ int main(int argc, char** argv) {
                 "tt_metal/kernels/compute/eltwise_binary.cpp",
                 core,
                 tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = binary_defines});
+
+            SetRuntimeArgs(
+                program,
+                eltwise_binary_kernel,
+                core,
+                {2048} // per_core_block_cnt
+            );
 
             ////////////////////////////////////////////////////////////////////////////
             //                      Compile Application

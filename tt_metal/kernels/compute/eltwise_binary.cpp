@@ -13,9 +13,8 @@ ALWI void REL() { release_dst(tt::DstMode::Half); }
 
 namespace NAMESPACE {
 void MAIN {
-
-    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
-    uint32_t per_core_block_size = get_compile_time_arg_val(1);
+    uint32_t per_core_block_size = get_compile_time_arg_val(0);
+    uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
 
     #ifdef SFPU_OP_INIT_PRE_IN0_0
         constexpr auto cb_inp0 = tt::CB::c_intermed0;

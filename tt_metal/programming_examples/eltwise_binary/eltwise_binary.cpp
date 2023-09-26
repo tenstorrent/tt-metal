@@ -120,7 +120,6 @@ int main(int argc, char **argv) {
          * Set the parameters that the compute kernel will use.
          */
         vector<uint32_t> compute_kernel_args = {
-            2048, // per_core_block_cnt
             1 // per_core_block_size
         };
 
@@ -176,6 +175,16 @@ int main(int argc, char **argv) {
                 static_cast<uint32_t>(src1_dram_buffer.noc_coordinates().y),
                 num_tiles,
                 0
+            }
+        );
+
+
+        SetRuntimeArgs(
+            program,
+            eltwise_binary_kernel_id,
+            core,
+            {
+                2048, // per_core_block_cnt
             }
         );
 

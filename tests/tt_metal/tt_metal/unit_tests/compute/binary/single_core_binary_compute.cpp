@@ -92,7 +92,6 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     vector<uint32_t> compute_kernel_args = {
-        uint32_t(test_config.num_tiles),  // per_core_block_cnt
         1                                 // per_core_block_cnt
     };
     std::map<string, string> defines = {
@@ -103,6 +102,13 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
         "tt_metal/kernels/compute/eltwise_binary.cpp",
         test_config.core,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = defines});
+
+    SetRuntimeArgs(
+        program,
+        binary_kernel,
+        test_config.core,
+        {uint32_t(test_config.num_tiles),} // per_core_block_cnt
+    );
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation

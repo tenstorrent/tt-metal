@@ -32,13 +32,12 @@ Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b)
 }
 
 template <auto HostFunction, typename DeviceFunction, typename... Args>
-bool run_test(const DeviceFunction& device_function, Device* device, Args... args) {
-    Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
-    auto input_tensor_a = tt::numpy::random::random(shape, DataType::BFLOAT16).to(Layout::TILE);
-    auto input_tensor_b = tt::numpy::random::random(shape, DataType::BFLOAT16).to(Layout::TILE);
+bool run_test(const Shape& shape, const DeviceFunction& device_function, Device* device, Args... args) {
+    auto input_tensor_a = tt::numpy::random::random(shape, DataType::BFLOAT16);
+    auto input_tensor_b = tt::numpy::random::random(shape, DataType::BFLOAT16);
 
     auto host_output = HostFunction(input_tensor_a, input_tensor_b);
-    auto device_output = device_function(input_tensor_a.to(device), input_tensor_b.to(device)).cpu();
+    auto device_output = device_function(input_tensor_a.to(Layout::TILE).to(device), input_tensor_b.to(Layout::TILE).to(device)).cpu().to(Layout::ROW_MAJOR);
 
     return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
 }
@@ -53,39 +52,57 @@ int main() {
 
 
     {
-        auto allclose = run_test<host_function<std::plus<float>>>(tt::tt_metal::add, device);
+        Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+        auto allclose = run_test<host_function<std::plus<float>>>(shape, tt::tt_metal::add, device);
         TT_ASSERT(allclose);
     }
 
     {
-        auto allclose = run_test<host_function<std::minus<float>>>(tt::tt_metal::sub, device);
+        Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+        auto allclose = run_test<host_function<std::minus<float>>>(shape, tt::tt_metal::sub, device);
         TT_ASSERT(allclose);
     }
 
     {
-        auto allclose = run_test<host_function<std::multiplies<float>>>(tt::tt_metal::mul, device, 1e-2f, 1e-3f);
+        Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+        auto allclose = run_test<host_function<std::multiplies<float>>>(shape, tt::tt_metal::mul, device, 1e-2f, 1e-3f);
         TT_ASSERT(allclose);
     }
-
-    tt::tt_metal::program_cache::enable();
 
     auto run_binary_ops = [&] {
         {
-            auto allclose = run_test<host_function<std::plus<float>>>(tt::tt_metal::add, device);
+            Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+            auto allclose = run_test<host_function<std::plus<float>>>(shape, tt::tt_metal::add, device);
             TT_ASSERT(allclose);
         }
 
         {
-            auto allclose = run_test<host_function<std::minus<float>>>(tt::tt_metal::sub, device);
+            Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+            auto allclose = run_test<host_function<std::minus<float>>>(shape, tt::tt_metal::sub, device);
             TT_ASSERT(allclose);
         }
 
         {
+            Shape shape = {1, 1, tt::constants::TILE_HEIGHT * 2, tt::constants::TILE_WIDTH * 2};
+            auto allclose = run_test<host_function<std::plus<float>>>(shape, tt::tt_metal::add, device);
+            TT_ASSERT(allclose);
+        }
+
+        {
+            Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
             auto allclose =
-                run_test<host_function<std::multiplies<float>>>(tt::tt_metal::mul, device, 1e-2f, 1e-3f);
+                run_test<host_function<std::multiplies<float>>>(shape, tt::tt_metal::mul, device, 1e-2f, 1e-3f);
+            TT_ASSERT(allclose);
+        }
+
+        {
+            Shape shape = {1, 1, tt::constants::TILE_HEIGHT * 4, tt::constants::TILE_WIDTH * 4};
+            auto allclose = run_test<host_function<std::plus<float>>>(shape, tt::tt_metal::add, device);
             TT_ASSERT(allclose);
         }
     };
+
+    tt::tt_metal::program_cache::enable();
 
     run_binary_ops();
     run_binary_ops();
@@ -96,7 +113,7 @@ int main() {
 
     run_binary_ops();
 
-    TT_ASSERT(tt::tt_metal::program_cache::num_entries() == 3);
+    TT_ASSERT(tt::tt_metal::program_cache::num_entries() == 4);
 
     tt::tt_metal::program_cache::disable_and_clear();
 

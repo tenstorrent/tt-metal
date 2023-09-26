@@ -43,12 +43,14 @@ struct EltwiseBinary {
         const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(
         const std::vector<Tensor> &input_tensors) const;
-
-
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors,
         std::vector<Tensor> &output_tensors) const;
+
     tt::stl::reflection::Attributes attributes() const;
+
+    const operation::Hash compute_program_hash(
+        const std::vector<Tensor> &input_tensors) const;
 };
 
 template <BinaryOpType binary_op_type>
@@ -83,7 +85,7 @@ inline Tensor add_without_autoformat(const Tensor& input_tensor_a, const Tensor&
  constexpr auto ne = make_eltwise_binary<BinaryOpType::NE>{};
 
  // logical ops
- constexpr auto logical_and = make_eltwise_binary<BinaryOpType::LOGICAL_AND>{};  
+ constexpr auto logical_and = make_eltwise_binary<BinaryOpType::LOGICAL_AND>{};
  constexpr auto logical_or = make_eltwise_binary<BinaryOpType::LOGICAL_OR>{};
 }  // namespace tt_metal
 

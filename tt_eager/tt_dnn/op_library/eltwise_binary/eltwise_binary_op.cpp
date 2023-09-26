@@ -141,7 +141,7 @@ BinaryOpParallelizationStrategy EltwiseBinary::get_parallelization_strategy(cons
     const auto& input_tensor_a = input_tensors.at(0);
     uint32_t num_tiles = input_tensor_a.volume() / TILE_HW;
     if(num_tiles > 1){
-           return BinaryOpParallelizationStrategy::MULTI_CORE;
+        return BinaryOpParallelizationStrategy::MULTI_CORE;
     }
     else{
        return BinaryOpParallelizationStrategy::SINGLE_CORE;
@@ -154,6 +154,20 @@ tt::stl::reflection::Attributes EltwiseBinary::attributes() const {
         {"fused_activations", this->fused_activations},
         {"output_mem_config", this->output_mem_config},
     };
+}
+
+const operation::Hash EltwiseBinary::compute_program_hash(
+    const std::vector<Tensor> &input_tensors) const {
+    auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
+    return fmt::format(
+        "{}_{}_{}_{}_{}_{}",
+        *this,
+        parallelization_strategy,
+        input_tensors.at(0).memory_config(),
+        input_tensors.at(0).dtype(),
+        input_tensors.at(1).memory_config(),
+        input_tensors.at(1).dtype()
+    );
 }
 
 }  // namespace tt_metal

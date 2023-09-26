@@ -92,7 +92,6 @@ operation::ProgramWithCallbacks eltwise_binary_single_core(const Tensor &a, cons
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
     vector<uint32_t> compute_kernel_args = {
-        num_tiles, // per_core_block_cnt
         1, // per_core_block_size
     };
 
@@ -117,6 +116,15 @@ operation::ProgramWithCallbacks eltwise_binary_single_core(const Tensor &a, cons
 
     tt_metal::SetRuntimeArgs(
         program,
+        eltwise_binary_kernel_id,
+        core,
+        {
+            num_tiles, // per_core_block_cnt
+        }
+    );
+
+    tt_metal::SetRuntimeArgs(
+        program,
         unary_writer_kernel_id,
         core,
         {
@@ -126,39 +134,51 @@ operation::ProgramWithCallbacks eltwise_binary_single_core(const Tensor &a, cons
         }
     );
 
-    auto override_runtime_args_callback = [
+    auto override_runtime_arguments_callback = [
             binary_reader_kernel_id,
-            unary_writer_kernel_id
+            unary_writer_kernel_id,
+            eltwise_binary_kernel_id
         ]
     (
-        const Program &program,
-        const std::vector<Buffer*>& input_buffers,
-        const std::vector<Buffer*>& output_buffers
+        const void* operation,
+        const Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>&,
+        const std::vector<Tensor>& output_tensors
     ) {
 
-        auto src_buffer_a = input_buffers.at(0);
+        auto src_buffer_a = input_tensors.at(0).buffer();
+        auto src_buffer_b = input_tensors.at(1).buffer();
 
-        auto src_buffer_b = input_buffers.at(1);
-
-        auto dst_buffer = output_buffers.at(0);
+        auto dst_buffer = output_tensors.at(0).buffer();
 
         CoreCoord core = {0, 0};
+
+        uint32_t num_tiles = input_tensors.at(0).volume() / TILE_HW;
 
         {
             auto runtime_args = GetRuntimeArgs(program, binary_reader_kernel_id, core);
             runtime_args[0] = src_buffer_a->address();
             runtime_args[1] = src_buffer_b->address();
+            runtime_args[2] = num_tiles;
             SetRuntimeArgs(program, binary_reader_kernel_id, core, runtime_args);
+        }
+
+        {
+            auto runtime_args = GetRuntimeArgs(program, eltwise_binary_kernel_id, core);
+            runtime_args[0] = num_tiles;
+            SetRuntimeArgs(program, eltwise_binary_kernel_id, core, runtime_args);
         }
 
         {
             auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
+            runtime_args[1] = num_tiles;
             SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
 
 }  // namespace tt_metal
