@@ -216,117 +216,145 @@ hardcoded_matmul_config_conv = {
             "per_core_N": 2,
         },
     },
-    8 :
-    {
-        (25088, 64, 64) : tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                            compute_with_storage_grid_size = (12, 9),
-                            in0_block_w=2,
-                            out_subblock_h=4,
-                            out_subblock_w=2,
-                            per_core_M=8,
-                            per_core_N=2,
-                            fuse_batch=True,
-                            fused_activation=None,
-                            mcast_in0=False
-                        ),
-
-        (25088, 64, 256) : tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                            compute_with_storage_grid_size = (12, 9),
-                            in0_block_w=2,
-                            out_subblock_h=1,
-                            out_subblock_w=8,
-                            per_core_M=8,
-                            per_core_N=8,
-                            fuse_batch=True,
-                            fused_activation=None,
-                            mcast_in0=False
-                        ),
-        (25088, 256, 64) : tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                            compute_with_storage_grid_size = (12, 9),
-                            in0_block_w=8,
-                            out_subblock_h=4,
-                            out_subblock_w=2,
-                            per_core_M=8,
-                            per_core_N=2,
-                            fuse_batch=True,
-                            fused_activation=None,
-                            mcast_in0=False
-                        ),
-        (25088, 256, 128) : tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                            compute_with_storage_grid_size = (12, 9),
-                            in0_block_w=8,
-                            out_subblock_h=2,
-                            out_subblock_w=4,
-                            per_core_M=8,
-                            per_core_N=4,
-                            fuse_batch=True,
-                            fused_activation=None,
-                            mcast_in0=False
-                        ),
-        (6272, 128, 512) : tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                            compute_with_storage_grid_size = (12, 9),
-                            in0_block_w=4,
-                            out_subblock_h=1,
-                            out_subblock_w=8,
-                            per_core_M=2,
-                            per_core_N=16,
-                            fuse_batch=True,
-                            fused_activation=None,
-                            mcast_in0=False
-                        ),
-        (6272, 512, 128) : tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                            compute_with_storage_grid_size = (12, 9),
-                            in0_block_w=16,
-                            out_subblock_h=2,
-                            out_subblock_w=4,
-                            per_core_M=2,
-                            per_core_N=4,
-                            fuse_batch=True,
-                            fused_activation=None,
-                            mcast_in0=False
-                        ),
-        (6272, 512, 256) : {"compute_with_storage_grid_size" : (8,9),
-                        "in0_block_w" : 2,
-                        "out_subblock_h" : 1,
-                        "out_subblock_w": 1,
-                        "per_core_M": 22,
-                        "per_core_N": 1,
-                    },
-        (1568, 256, 1024) : {"compute_with_storage_grid_size" : (8,9),
-                        "in0_block_w" : 4,
-                        "out_subblock_h" : 1,
-                        "out_subblock_w": 1,
-                        "per_core_M": 6,
-                        "per_core_N": 4,
-                    },
-        (1568, 1024, 256) : {"compute_with_storage_grid_size" : (8,9),
-                        "in0_block_w" : 16,
-                        "out_subblock_h" : 1,
-                        "out_subblock_w": 1,
-                        "per_core_M": 6,
-                        "per_core_N": 1,
-                    },
-        (1568, 1024, 512) : {"compute_with_storage_grid_size" : (8,9),
-                        "in0_block_w" : 16,
-                        "out_subblock_h" : 1,
-                        "out_subblock_w": 1,
-                        "per_core_M": 6,
-                        "per_core_N": 2,
-                    },
-        (416, 512, 2048) : {"compute_with_storage_grid_size" : (8,7),
-                        "in0_block_w" : 16,
-                        "out_subblock_h" : 1,
-                        "out_subblock_w": 1,
-                        "per_core_M": 2,
-                        "per_core_N": 8,
-                    },
-        (416, 2048, 512) : {"compute_with_storage_grid_size" : (8,7),
-                        "in0_block_w" : 32,
-                        "out_subblock_h" : 1,
-                        "out_subblock_w": 1,
-                        "per_core_M": 2,
-                        "per_core_N": 2,
-                    },
+    8: {
+        (
+            25088,
+            64,
+            64,
+        ): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(12, 9),
+            in0_block_w=2,
+            out_subblock_h=4,
+            out_subblock_w=2,
+            per_core_M=8,
+            per_core_N=2,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+        ),
+        (
+            25088,
+            64,
+            256,
+        ): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(12, 9),
+            in0_block_w=2,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            per_core_M=8,
+            per_core_N=8,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+        ),
+        (
+            25088,
+            256,
+            64,
+        ): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(12, 9),
+            in0_block_w=8,
+            out_subblock_h=4,
+            out_subblock_w=2,
+            per_core_M=8,
+            per_core_N=2,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+        ),
+        (
+            25088,
+            256,
+            128,
+        ): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(12, 9),
+            in0_block_w=8,
+            out_subblock_h=2,
+            out_subblock_w=4,
+            per_core_M=8,
+            per_core_N=4,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+        ),
+        (
+            6272,
+            128,
+            512,
+        ): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(12, 9),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            per_core_M=2,
+            per_core_N=16,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+        ),
+        (
+            6272,
+            512,
+            128,
+        ): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(12, 9),
+            in0_block_w=16,
+            out_subblock_h=2,
+            out_subblock_w=4,
+            per_core_M=2,
+            per_core_N=4,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+        ),
+        (6272, 512, 256): {
+            "compute_with_storage_grid_size": (8, 9),
+            "in0_block_w": 2,
+            "out_subblock_h": 1,
+            "out_subblock_w": 1,
+            "per_core_M": 22,
+            "per_core_N": 1,
+        },
+        (1568, 256, 1024): {
+            "compute_with_storage_grid_size": (8, 9),
+            "in0_block_w": 4,
+            "out_subblock_h": 1,
+            "out_subblock_w": 1,
+            "per_core_M": 6,
+            "per_core_N": 4,
+        },
+        (1568, 1024, 256): {
+            "compute_with_storage_grid_size": (8, 9),
+            "in0_block_w": 16,
+            "out_subblock_h": 1,
+            "out_subblock_w": 1,
+            "per_core_M": 6,
+            "per_core_N": 1,
+        },
+        (1568, 1024, 512): {
+            "compute_with_storage_grid_size": (8, 9),
+            "in0_block_w": 16,
+            "out_subblock_h": 1,
+            "out_subblock_w": 1,
+            "per_core_M": 6,
+            "per_core_N": 2,
+        },
+        (416, 512, 2048): {
+            "compute_with_storage_grid_size": (8, 7),
+            "in0_block_w": 16,
+            "out_subblock_h": 1,
+            "out_subblock_w": 1,
+            "per_core_M": 2,
+            "per_core_N": 8,
+        },
+        (416, 2048, 512): {
+            "compute_with_storage_grid_size": (8, 7),
+            "in0_block_w": 32,
+            "out_subblock_h": 1,
+            "out_subblock_w": 1,
+            "per_core_M": 2,
+            "per_core_N": 2,
+        },
     },
 }
 
@@ -336,23 +364,36 @@ hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv = {
         (800, 128): [32, 128, 32, 64, 32, (5, 5), 32, 128],
         (224, 256): [32, 128, 32, 128, 32, (1, 7), 32, 256],
         (64, 512): [32, 64, 32, 64, 32, (1, 2), 32, 512],
+        # bypass convs
+        (3136, 256): [64, 64, 64, 64, 64, (7, 7), 64, 256],
+        (800, 512): [32, 64, 32, 64, 32, (5, 5), 32, 512],
+        (224, 1024): [32, 128, 32, 64, 32, (1, 7), 32, 1024],
+        (64, 2048): [32, 128, 32, 64, 32, (1, 2), 32, 2048],
     },
     2: {
         (6272, 64): [128, 64, 128, 64, 128, (7, 7), 128, 64],
         (1568, 128): [32, 128, 32, 64, 32, (7, 7), 32, 128],
         (416, 256): [64, 128, 64, 128, 64, (7, 1), 64, 256],
         (128, 512): [32, 64, 32, 64, 32, (1, 4), 32, 512],
+        # bypass convs
+        (6272, 256): [128, 64, 128, 64, 128, (7, 7), 128, 256],
+        (1568, 512): [32, 64, 32, 64, 32, (7, 7), 32, 512],
+        (416, 1024): [64, 128, 64, 64, 64, (7, 1), 64, 1024],
+        (128, 2048): [64, 128, 64, 64, 64, (1, 2), 64, 2048],
     },
     8: {
-        (25088, 64): [128, 64, 128, 64, 128, (7, 7), 512, 64],
-        (6272, 128): [64, 128, 64, 64, 64, (7, 7), 128, 128],
-        (1568, 256): [224, 32, 32, 32, 224, (7, 8), 224, 32],
+        (25088, 64): [256, 64, 128, 64, 256, (12, 9), 256, 64],
+        (6272, 128): [64, 128, 64, 64, 64, (12, 9), 64, 128],
+        (1568, 256): [160, 32, 32, 32, 160, (10, 8), 160, 32],
         (416, 512): [64, 32, 32, 32, 64, (7, 8), 64, 64],
+        # bypass convs
+        (6272, 512): [64, 512, 64, 64, 64, (12, 9), 64, 512],
+        (1568, 1024): [160, 128, 32, 64, 160, (10, 8), 160, 128],
+        (416, 2048): [64, 128, 32, 64, 64, (7, 8), 64, 256],
     },
 }
 
 
-@pytest.mark.parametrize("use_new_matmul", (True,))
 @pytest.mark.parametrize("N", (1, 2, 8))
 @pytest.mark.parametrize(
     "K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w",
@@ -393,39 +434,33 @@ hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv = {
             0,
             0,
         ),  # slightly slower with new matmul but less than old matmul + bias computation time
-        # # 3x3 convs in rn50 (not complete list)
+        # convs in rn50 (not complete list)
+        # layer1
         (64, 64, 56, 56, 3, 3, 1, 1, 1, 1),
+        # layer2
+        (512, 256, 56, 56, 1, 1, 2, 2, 0, 0),
+        (128, 128, 56, 56, 3, 3, 2, 2, 1, 1),
+        (128, 128, 28, 28, 3, 3, 1, 1, 1, 1),
+        # layer3
         (256, 256, 28, 28, 3, 3, 2, 2, 1, 1),
+        (1024, 512, 28, 28, 1, 1, 2, 2, 0, 0),
         (256, 256, 14, 14, 3, 3, 1, 1, 1, 1),
+        # layer4
         (512, 512, 14, 14, 3, 3, 2, 2, 1, 1),
+        (2048, 1024, 14, 14, 1, 1, 2, 2, 0, 0),
         (512, 512, 7, 7, 3, 3, 1, 1, 1, 1),
-        (512, 512, 7, 7, 3, 3, 1, 1, 1, 1),
-        # downsample convs in rn50 (not complete list)
-        (128, 128, 56, 56, 1, 1, 2, 2, 0, 0),
-        (256, 256, 28, 28, 3, 3, 2, 2, 1, 1),
     ),
 )
 def test_resnet50_conv(
-    use_program_cache,
-    device,
-    N,
-    K,
-    C,
-    H,
-    W,
-    R,
-    S,
-    stride_h,
-    stride_w,
-    pad_h,
-    pad_w,
-    use_new_matmul,
+    use_program_cache, device, N, K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w
 ):
     for i in range(1):  # increase num of iterations to test op caching
         assert C % 32 == 0
         assert K % 32 == 0
         torch.manual_seed(0)
-        memory_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
+        memory_config = tt_lib.tensor.MemoryConfig(
+            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+        )
         conv_input_shape = [N, C, H, W]
         conv_weight_shape = [K, C, R, S]
         conv_bias_shape = [1, 1, 1, K]
