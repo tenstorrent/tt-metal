@@ -16,13 +16,7 @@ import pytest
 import torch
 
 import tt_lib as ttl
-
-from tt_lib.utils import (
-    pad_weight,
-    tilize_to_list,
-    untilize,
-    is_close,
-)
+from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
 
@@ -32,10 +26,6 @@ def tensor_to_device(x, device, buffer_type):
 
     return x.to(device, buffer_type)
 
-# This ref implementation is only here for debugging
-def ref_eltwise_rsqrt(x):
-    result = torch.rsqrt(x)
-    return result
 
 def run_eltwise_rsqrt_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
     torch.manual_seed(data_seed)
@@ -48,9 +38,7 @@ def run_eltwise_rsqrt_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_
     for N, C, H, W in test_dims:
         for nrepeat in range(0, 1):
             x = torch.Tensor(size=(N, C, H, W)).uniform_(0, 100)
-
             x_ref = x.detach().clone()
-            ref_value = ref_eltwise_rsqrt(x_ref)
 
             ttx = ttl.tensor.Tensor(
                 x.reshape(-1).tolist(),
@@ -78,11 +66,11 @@ def run_eltwise_rsqrt_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_
             logger.debug(f"ttz is on: {ttz.memory_config().buffer_type}")
 
             # comapre results
-            t2_data = ttz.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-            tt_got_back = torch.Tensor(t2_data).reshape((N, C, H, W))
-
+            tt_result = ttz.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+            # compute ref value
+            ref_value = pytorch_ops.rsqrt(x_ref)
             # compare tt and golden outputs
-            success, pcc_value = comp_pcc(tt_got_back, ref_value)
+            success, pcc_value = comp_pcc(ref_value, tt_result)
             logger.debug(pcc_value)
 
             assert success

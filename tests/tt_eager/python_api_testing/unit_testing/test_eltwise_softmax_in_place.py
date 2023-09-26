@@ -8,6 +8,7 @@ import sys
 import time
 import os
 from loguru import logger
+import random
 
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/../../../../..")
@@ -16,9 +17,11 @@ import pytest
 import torch
 
 import tt_lib as ttl
+
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
+
 
 def tensor_to_device(x, device, buffer_type):
     if buffer_type == None:
@@ -26,7 +29,7 @@ def tensor_to_device(x, device, buffer_type):
 
     return x.to(device, buffer_type)
 
-def run_eltwise_heaviside_tests(input_shape, scalar, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
+def run_eltwise_softmax_in_place_tests(input_shape, dtype, dlayout, in_mem_config, data_seed, device):
     torch.manual_seed(data_seed)
     test_dims = (input_shape,)
 
@@ -39,19 +42,17 @@ def run_eltwise_heaviside_tests(input_shape, scalar, dtype, dlayout, in_mem_conf
             x = torch.Tensor(size=(N, C, H, W)).uniform_(-100, 100)
             x_ref = x.detach().clone()
 
-            ttx = ttl.tensor.Tensor(
+            t0 = ttl.tensor.Tensor(
                 x.reshape(-1).tolist(),
                 [N, C, H, W],
                 dtype,
                 ttl.tensor.Layout.ROW_MAJOR,
             )
-            ttx = ttx.to(dlayout)
+            t0 = t0.to(dlayout)
+            ttx = tensor_to_device(t0, device, input_mem_config)
 
-            ttx = tensor_to_device(ttx, device, input_mem_config)
-
-
-            logger.info("Running eltwise heaviside test")
-            ttz = ttl.tensor.heaviside(ttx, scalar, output_mem_config=out_mem_config)
+            logger.info("Running eltwise eltwise softmax-in-place test")
+            ttz = ttl.operations.primary.softmax_in_place(ttx)
             logger.info("Done")
 
             # check memory configs
@@ -61,15 +62,14 @@ def run_eltwise_heaviside_tests(input_shape, scalar, dtype, dlayout, in_mem_conf
             else:
                 logger.debug(f"ttx is on: SYSTEM_MEMORY")
 
-            assert ttz.memory_config().buffer_type == out_mem_config.buffer_type
-            logger.debug(f"ttz is on: {ttz.memory_config().buffer_type}")
+            # There is no output-memory-config supported for softmax_in_place
+            # assert ttz.memory_config().buffer_type == out_mem_config.buffer_type
+            # logger.debug(f"ttz is on: {ttz.memory_config().buffer_type}")
 
             # comapre results
             tt_result = ttz.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-            # get referent value
-            ref_value = pytorch_ops.heaviside(x_ref, scalar=scalar)
-
+            # get ref result
+            ref_value = pytorch_ops.softmax_in_place(x_ref)
             # compare tt and golden outputs
             success, pcc_value = comp_pcc(ref_value, tt_result)
             logger.debug(pcc_value)
@@ -78,20 +78,22 @@ def run_eltwise_heaviside_tests(input_shape, scalar, dtype, dlayout, in_mem_conf
 
 
 test_sweep_args=[
-    ((6, 2, 216, 186), 82.0, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR, "SYSTEM_MEMORY", ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 13482735),
-    ((6, 2, 216, 186), -83.5, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR,  ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1), ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 494232),
-    ((6, 2, 216, 186), 15.625, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR,  ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 4379583),
+    # only test that passes out of all sweeps run for pytorch_eltwise_softmax_in_place_test.yaml:
+    ((1, 9, 32, 32), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1), 38346),
+    # rest failed:
+    ((4, 7, 32, 96), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 17155532),
+    ((4, 7, 32, 96), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1), 16305027),
 ]
 
 @skip_for_wormhole_b0
 @pytest.mark.parametrize(
-    "input_shape, scalar, dtype, dlayout, in_mem_config, out_mem_config, data_seed",
+    "input_shape, dtype, dlayout, in_mem_config, data_seed",
     (
         test_sweep_args
     ),
 )
 
-def test_eltwise_heaviside_test(
-    input_shape, scalar, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device
+def test_eltwise_softmax_in_place_test(
+    input_shape, dtype, dlayout, in_mem_config, data_seed, device
 ):
-    run_eltwise_heaviside_tests(input_shape, scalar, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device)
+    run_eltwise_softmax_in_place_tests(input_shape, dtype, dlayout, in_mem_config, data_seed, device)

@@ -17,65 +17,35 @@ import torch
 
 import tt_lib as ttl
 
-from tt_lib.utils import (
-    pad_weight,
-    tilize_to_list,
-    untilize,
-    is_close,
-)
+from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
 
+def tensor_to_device(x, device, buffer_type):
+    if buffer_type == None:
+        return x
 
-# This ref implementation is only here for debugging
-def ref_eltwise_recip(x):
-
-    ones_tensor = torch.ones(x.shape, dtype=torch.float32)
-    recip = torch.div(ones_tensor, x)
-
-    return recip
-
+    return x.to(device, buffer_type)
 
 def run_eltwise_recip_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
     torch.manual_seed(data_seed)
-
-    # Initialize the device
-    tensor = ttl.tensor
-    dev = device
-
     test_dims = (input_shape,)
+
+    input_mem_config = in_mem_config
+    if in_mem_config == "SYSTEM_MEMORY":
+        input_mem_config = None
 
     for N, C, H, W in test_dims:
         for nrepeat in range(0, 1):
             x = torch.Tensor(size=(N, C, H, W)).uniform_(-100, 100)
-            x_ref = x
+            x_ref = x.detach().clone()
 
-            if dlayout == ttl.tensor.Layout.TILE:
-                x = tilize_to_list(x)
-            else:
-                x = x.reshape(-1).tolist()
-
-            if in_mem_config == "SYSTEM_MEMORY":
-                ttx = tensor.Tensor(
-                    x,
-                    [N, C, H, W],
-                    dtype,
-                    dlayout,
-                    dev,
-                ).cpu()
-            else:
-                ttx = tensor.Tensor(
-                    x,
-                    [N, C, H, W],
-                    dtype,
-                    dlayout,
-                    dev,
-                    in_mem_config,
-                )
+            t0 = ttl.tensor.Tensor(x, dtype)
+            t0 = t0.to(dlayout)
+            ttx = tensor_to_device(t0, device, input_mem_config)
 
             logger.info("Running Eltwise recip test")
-            ttz = tensor.recip(ttx, output_mem_config=out_mem_config)
-
+            ttz = ttl.tensor.recip(ttx, output_mem_config=out_mem_config)
             logger.info("Done")
 
             if in_mem_config != "SYSTEM_MEMORY":
@@ -87,18 +57,13 @@ def run_eltwise_recip_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_
             assert ttz.memory_config().buffer_type == out_mem_config.buffer_type
             logger.debug(f"ttz is on: {ttz.memory_config().buffer_type}")
 
-            t2_data = ttz.cpu().to_torch()
+            tt_result = ttz.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
-            tt_got_back = torch.Tensor(t2_data).reshape((N, C, H, W))
-
-            if dlayout == ttl.tensor.Layout.TILE:
-                tt_got_back = untilize(tt_got_back)
-
-            # get referent value
-            ref_value = ref_eltwise_recip(x_ref)
+            # get ref result
+            ref_value = pytorch_ops.recip(x_ref)
 
             # compare tt and golden outputs
-            success, pcc_value = comp_pcc(tt_got_back, ref_value)
+            success, pcc_value = comp_pcc(ref_value, tt_result)
             logger.debug(pcc_value)
 
             assert success
