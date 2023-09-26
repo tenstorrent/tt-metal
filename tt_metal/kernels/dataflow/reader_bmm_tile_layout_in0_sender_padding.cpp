@@ -43,17 +43,12 @@ void kernel_main() {
 
 
     constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_in2 = 2; // Dummy cb containing one tile of zeros for padding
 
     const uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
     const DataFormat in0_data_format = get_dataformat(cb_id_in0);
 
 
     uint32_t l1_write_addr_in0;
-
-    // Fill tile with zeros
-    cb_reserve_back(cb_id_in2, 1);
-    uint64_t l1_zeros_addr_in2_noc = get_noc_addr(get_write_ptr(cb_id_in2));
 
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
     volatile tt_l1_ptr uint32_t* in0_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_receiver_semaphore_addr);
@@ -85,9 +80,6 @@ void kernel_main() {
                 for(uint32_t w = 0; w < in0_block_w; w++) {
                     if (h < last_block_h) {
                         noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_in0);
-                    }
-                    else {
-                        noc_async_read(l1_zeros_addr_in2_noc, l1_write_addr_in0, in0_single_tile_size_bytes);
                     }
                     l1_write_addr_in0 += in0_single_tile_size_bytes;
                     in0_tensor_tile_id += in0_tensor_stride_w;

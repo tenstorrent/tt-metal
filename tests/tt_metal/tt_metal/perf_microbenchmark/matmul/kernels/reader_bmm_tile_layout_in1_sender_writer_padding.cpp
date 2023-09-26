@@ -99,7 +99,6 @@ void kernel_main() {
     #endif
 
     constexpr uint32_t cb_id_in1 = 1;
-    constexpr uint32_t cb_id_in2 = 2; // Dummy cb containing one tile of zeros for padding
 
     // WRITER
     constexpr uint32_t cb_id_out0 = 16;

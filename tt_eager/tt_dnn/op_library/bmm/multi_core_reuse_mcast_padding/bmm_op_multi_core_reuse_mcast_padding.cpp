@@ -43,10 +43,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t out_CB_tiles = out_block_tiles; // No double buffer
     uint32_t out_CB_size = out_CB_tiles * single_tile_size;
 
-    // Dummy cb to store one tile of zeros for padding
-    uint32_t in2_CB_tiles = 1; // No double buffer
-    uint32_t in2_CB_size = in2_CB_tiles * single_tile_size;
-
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
     uint32_t num_cores_c = core_range.x;
@@ -195,16 +191,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         all_cores,
         in1_CB_tiles,
         in1_CB_size,
-        cb_data_format
-    );
-
-    uint32_t src2_cb_index = 2;
-    auto cb_src2 = tt_metal::CreateCircularBuffers(
-        program,
-        src2_cb_index,
-        all_cores,
-        in2_CB_tiles,
-        in2_CB_size,
         cb_data_format
     );
 
@@ -485,10 +471,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     uint32_t out_CB_tiles = out_block_tiles; // No double buffer
     uint32_t out_CB_size = out_CB_tiles * single_tile_size;
 
-    // Dummy cb to store one tile of zeros for padding
-    uint32_t in2_CB_tiles = 1; // No double buffer
-    uint32_t in2_CB_size = in2_CB_tiles * single_tile_size;
-
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
     uint32_t num_cores_c = core_range.x;
@@ -600,16 +582,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         all_cores,
         in1_CB_tiles,
         in1_CB_size,
-        cb_data_format
-    );
-
-    uint32_t src2_cb_index = 2;
-    auto cb_src2 = tt_metal::CreateCircularBuffers(
-        program,
-        src2_cb_index,
-        all_cores,
-        in2_CB_tiles,
-        in2_CB_size,
         cb_data_format
     );
 
@@ -806,10 +778,6 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     uint32_t out_CB_tiles = out_block_tiles; // No double buffer
     uint32_t out_CB_size = out_CB_tiles * single_tile_size;
 
-    // Dummy cb to store one tile of zeros for padding
-    uint32_t in2_CB_tiles = 1; // No double buffer
-    uint32_t in2_CB_size = in2_CB_tiles * single_tile_size;
-
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
     uint32_t num_cores_c = core_range.x;
@@ -924,15 +892,6 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         cb_data_format
     );
 
-    uint32_t src2_cb_index = 2;
-    auto cb_src2 = tt_metal::CreateCircularBuffers(
-        program,
-        src2_cb_index,
-        all_cores,
-        in2_CB_tiles,
-        in2_CB_size,
-        cb_data_format
-    );
 
     uint32_t output_cb_index = 16; // output operands start at index 16
     uint32_t interm0_cb_index = 24;

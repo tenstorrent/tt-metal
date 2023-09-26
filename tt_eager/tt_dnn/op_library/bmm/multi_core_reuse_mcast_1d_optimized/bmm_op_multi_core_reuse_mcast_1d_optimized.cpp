@@ -52,9 +52,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     uint32_t out_CB_tiles = out_block_tiles; // No double buffer
     uint32_t out_CB_size = out_CB_tiles * output_single_tile_size;
 
-    // Dummy cb to store one tile of zeros for padding
-    uint32_t in2_CB_tiles = 1; // No double buffer
-
     uint32_t in3_block_tiles = per_core_N;
     uint32_t in3_CB_tiles = in3_block_tiles; // No double buffer
     uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
@@ -295,32 +292,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         in1_data_format
     );
 
-    // CB for padding; only need these in the senders
-    // NOTE: For first core, initialize cb to the larger tile size to prevent accidentally writing 0 to L1 space during cb init in the kernels
-    uint32_t src2_cb_index = 2;
-    auto in2_data_format = in1_data_format;
-    auto in2_single_tile_size = in1_single_tile_size;
-    if (in0_single_tile_size > in1_single_tile_size) {
-        in2_data_format = in0_data_format;
-        in2_single_tile_size = in0_single_tile_size;
-    }
-    auto in0_sender_cb_src2 = tt_metal::CreateCircularBuffers(
-        program,
-        src2_cb_index,
-        mcast_sender,
-        in2_CB_tiles,
-        in2_CB_tiles * in2_single_tile_size,
-        in2_data_format // This doesn't matter
-    );
-
-    auto in1_sender_cb_src2 = tt_metal::CreateCircularBuffers(
-        program,
-        src2_cb_index,
-        mcast_receivers,
-        in2_CB_tiles,
-        in2_CB_tiles * in1_single_tile_size,
-        in1_data_format
-    );
 
     uint32_t output_cb_index = 16; // output operands start at index 16
     uint32_t interm0_cb_index = 24;

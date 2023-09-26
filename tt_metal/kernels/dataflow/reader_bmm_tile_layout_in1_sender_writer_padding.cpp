@@ -99,7 +99,6 @@ void kernel_main() {
     #endif
 
     constexpr uint32_t cb_id_in1 = 1;
-    constexpr uint32_t cb_id_in2 = 2; // Dummy cb containing one tile of zeros for padding
 
     // WRITER
     constexpr uint32_t cb_id_out0 = 16;
@@ -111,9 +110,6 @@ void kernel_main() {
 
     uint32_t l1_write_addr_in1;
 
-    // Fill tile with zeros
-    cb_reserve_back(cb_id_in2, 1);
-    uint64_t l1_zeros_addr_in2_noc = get_noc_addr(get_write_ptr(cb_id_in2));
 
     #ifndef SKIP_MCAST
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
@@ -159,9 +155,6 @@ void kernel_main() {
                 for(uint32_t w = 0; w < in1_block_w; w++) {
                     if (w < last_block_w) {
                         noc_async_read_tile(in1_tensor_tile_id, s1, l1_write_addr_in1);
-                    }
-                    else {
-                        noc_async_read(l1_zeros_addr_in2_noc, l1_write_addr_in1, in1_single_tile_size_bytes);
                     }
                     l1_write_addr_in1 += in1_single_tile_size_bytes;
                     in1_tensor_tile_id += in1_tensor_stride_w;
@@ -225,9 +218,6 @@ void kernel_main() {
                 for(uint32_t w = 0; w < in1_block_w; w++) {
                     if (w < last_block_w) {
                         noc_async_read_tile(in3_tensor_tile_id, s3, l1_write_addr_in3);
-                    }
-                    else {
-                        noc_async_read(l1_zeros_addr_in2_noc, l1_write_addr_in3, bias_single_tile_size_bytes);
                     }
                     l1_write_addr_in3 += bias_single_tile_size_bytes;
                     in3_tensor_tile_id += in3_tensor_stride_w;
