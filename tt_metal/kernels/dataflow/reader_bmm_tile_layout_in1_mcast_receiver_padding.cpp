@@ -70,7 +70,7 @@ void kernel_main() {
 
     // Fill tile with zeros
     cb_reserve_back(cb_id_in2, 1);
-    uint32_t l1_zeros_addr_in2_noc = get_noc_addr(get_write_ptr(cb_id_in2));
+    uint64_t l1_zeros_addr_in2_noc = get_noc_addr(get_write_ptr(cb_id_in2));
 
     volatile tt_l1_ptr uint32_t* in1_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_mcast_receiver_semaphore_addr);
 

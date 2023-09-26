@@ -64,7 +64,7 @@ void kernel_main() {
 
     // Fill tile with zeros
     cb_reserve_back(cb_id_in2, 1);
-    uint32_t l1_zeros_addr_in2_noc = get_noc_addr(get_write_ptr(cb_id_in2));
+    uint64_t l1_zeros_addr_in2_noc = get_noc_addr(get_write_ptr(cb_id_in2));
 
     const InterleavedAddrGenFast<in0_is_dram> s0 = {
         .bank_base_address = in0_tensor_addr,

@@ -113,7 +113,7 @@ void kernel_main() {
 
     // Fill tile with zeros
     cb_reserve_back(cb_id_in2, 1);
-    uint32_t l1_zeros_addr_in2_noc = get_noc_addr(get_write_ptr(cb_id_in2));
+    uint64_t l1_zeros_addr_in2_noc = get_noc_addr(get_write_ptr(cb_id_in2));
 
     #ifndef SKIP_MCAST
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
