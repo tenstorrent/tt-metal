@@ -68,10 +68,10 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/moreh_helper_functions.cpp \
 	tt_eager/tt_dnn/op_library/moreh_softmax/moreh_softmax_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_softmax/helper_functions.cpp \
-	tt_eager/tt_dnn/op_library/moreh_softmax/softmax_w_small/moreh_softmax_w_small.cpp \
-	tt_eager/tt_dnn/op_library/moreh_softmax/softmax_h_small/moreh_softmax_h_small.cpp \
-	tt_eager/tt_dnn/op_library/moreh_softmax/softmax_w_large/moreh_softmax_w_large.cpp \
-	tt_eager/tt_dnn/op_library/moreh_softmax/softmax_h_large/moreh_softmax_h_large.cpp \
+	tt_eager/tt_dnn/op_library/moreh_softmax/softmax_w_small/softmax_w_small.cpp \
+	tt_eager/tt_dnn/op_library/moreh_softmax/softmax_h_small/softmax_h_small.cpp \
+	tt_eager/tt_dnn/op_library/moreh_softmax/softmax_w_large/softmax_w_large.cpp \
+	tt_eager/tt_dnn/op_library/moreh_softmax/softmax_h_large/softmax_h_large.cpp \
 	tt_eager/tt_dnn/op_library/moreh_softmax_backward/moreh_softmax_backward_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_softmax_backward/helper_functions.cpp \
 	tt_eager/tt_dnn/op_library/moreh_softmax_backward/softmax_backward_w_small/softmax_backward_w_small.cpp \

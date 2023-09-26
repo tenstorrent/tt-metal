@@ -22,35 +22,13 @@ namespace tt {
 namespace operations {
 namespace primary {
 
-#define L1_512KB (512 * 1024)
-
-bool is_moreh_softmax_h_small_available(const Tensor &tensor) {
-    auto h = tensor.shape()[2];
-    int32_t Ht = (h + TILE_HEIGHT - 1) / TILE_HEIGHT;
-
-    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(tensor.dtype());
-
-    auto tile_size = tt_metal::detail::TileSize(data_format);
-
-    int32_t cb_usage = 0;        // bytes
-    cb_usage += 2 * tile_size;   // input;
-    cb_usage += 1 * tile_size;   // mask;
-    cb_usage += 2 * tile_size;   // output;
-    cb_usage += Ht * tile_size;  // exp(x);
-    cb_usage += 1 * tile_size;   // reduce;
-    cb_usage += 1 * tile_size;   // scaler;
-
-    return (L1_UNRESERVED_BASE + cb_usage <= L1_512KB);
-}
-
-operation::ProgramWithCallbacks moreh_softmax_h_small(const Tensor &input, const Tensor &output, CoreRange core_range) {
+operation::ProgramWithCallbacks moreh_softmax_h_large(const Tensor &input, Tensor &output, const CoreRange core_range) {
     // split work
     auto shape = input.shape();
     auto N = shape[0];
     auto C = shape[1];
     auto H = shape[2];
     auto W = shape[3];
-
     auto Ht = H / TILE_HEIGHT;
     auto Wt = W / TILE_WIDTH;
 
@@ -71,12 +49,13 @@ operation::ProgramWithCallbacks moreh_softmax_h_small(const Tensor &input, const
         all_cores,
         data_format,
         {
-            {CB::c_in0, 2},         // input
-            {CB::c_in1, 1},         // mask
-            {CB::c_out0, 2},        // output
-            {CB::c_intermed0, Ht},  // exp(x)
-            {CB::c_intermed1, 1},   // reduce
-            {CB::c_in2, 1}          // scaler
+            {CB::c_in0, 2},        // input
+            {CB::c_in1, 1},        // mask
+            {CB::c_out0, 2},       // output
+            {CB::c_intermed0, 2},  // exp(x)
+            {CB::c_intermed1, 1},  // reduce
+            {CB::c_intermed2, 1},  // sum
+            {CB::c_in2, 1}         // scaler
         });
 
     // create read/wrtie kernel
@@ -87,14 +66,14 @@ operation::ProgramWithCallbacks moreh_softmax_h_small(const Tensor &input, const
     std::map<string, string> writer_defines;
 
     auto reader_kernel_id = CreateReadKernel(
-        program, "reader_moreh_softmax_h.cpp", all_cores, {src_is_dram}, reader_defines);
+        program, "reader_moreh_softmax_h_large.cpp", all_cores, {src_is_dram}, reader_defines);
     auto writer_kernel_id = CreateWriteKernel(
         program, "writer_moreh_softmax_h.cpp", all_cores, {dst_is_dram}, writer_defines);
 
     // create compute kernel
     CreateComputeKernel(
         program,
-        "moreh_softmax_h.cpp",
+        "moreh_softmax_h_large.cpp",
         {
             {core_group_1, num_tiles_per_core_group_1, {num_tiles_per_core_group_1, Ht}},
             {core_group_2, num_tiles_per_core_group_2, {num_tiles_per_core_group_2, Ht}},
