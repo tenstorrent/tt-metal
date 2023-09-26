@@ -23,7 +23,7 @@ using std::chrono::microseconds;
 // (buffer) can be resident in DRAM or L1.
 //
 // Usage example:
-//   ./test_rw_buffer --buffer_type <0 for DRAM, 1 for L1> --transfer_size <size
+//   ./test_rw_buffer --buffer-type <0 for DRAM, 1 for L1> --transfer-size <size
 //   in bytes>
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -41,10 +41,10 @@ int main(int argc, char** argv) {
     try {
       std::tie(buffer_type, input_args) =
           test_args::get_command_option_int32_and_remaining_args(
-              input_args, "--buffer_type", 0);
+              input_args, "--buffer-type", 0);
       std::tie(transfer_size, input_args) =
           test_args::get_command_option_uint32_and_remaining_args(
-              input_args, "--transfer_size", 512 * 1024 * 1024);
+              input_args, "--transfer-size", 512 * 1024 * 1024);
     } catch (const std::exception& e) {
       log_fatal(tt::LogTest, "Command line arguments found exception",
                 e.what());

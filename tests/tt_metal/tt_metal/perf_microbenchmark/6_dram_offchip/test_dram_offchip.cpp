@@ -29,7 +29,7 @@ using std::chrono::microseconds;
 // time if the input size is large.
 //
 // Usage example:
-//   ./test_dram_offchip --input-size <size in bytes> --access_type <0 for read access, 1 for
+//   ./test_dram_offchip --input-size <size in bytes> --access-type <0 for read access, 1 for
 //   write access>
 //
 ////////////////////////////////////////////////////////////////////////////////

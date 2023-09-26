@@ -21,8 +21,8 @@ using std::chrono::microseconds;
 // movement kernels and compute kernel.
 //
 // Usage example:
-//   ./test_kernel_launch --cores_r <number of cores in a row> --cores_c <number
-//   of cores in a column> --core_gropus <number of core grops where each core
+//   ./test_kernel_launch --cores-r <number of cores in a row> --cores-c <number
+//   of cores in a column> --core-gropus <number of core grops where each core
 //   group executes different kernel binaries>
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -44,14 +44,14 @@ int main(int argc, char** argv) {
   try {
     std::tie(num_cores_r, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(input_args,
-                                                                "--cores_r", 9);
+                                                                "--cores-r", 9);
     std::tie(num_cores_c, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(
-            input_args, "--cores_c", 12);
+            input_args, "--cores-c", 12);
 
     std::tie(num_core_groups, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(
-            input_args, "--core_groups", 4);
+            input_args, "--core-groups", 4);
   } catch (const std::exception& e) {
     log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
   }
