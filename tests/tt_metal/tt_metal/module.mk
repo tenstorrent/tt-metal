@@ -13,15 +13,15 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/test_bmm \
 		 tests/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch \
 		 tests/tt_metal/perf_microbenchmark/dispatch/test_bw_and_latency \
-		 tests/tt_metal/perf_microbenchmark/matmul/matmul_global_l1 \
-		 tests/tt_metal/perf_microbenchmark/matmul/matmul_local_l1 \
-		 tests/tt_metal/perf_microbenchmark/noc/test_noc_read_global_l1 \
-		 tests/tt_metal/perf_microbenchmark/noc/test_noc_read_local_l1 \
 		 tests/tt_metal/perf_microbenchmark/noc/test_noc_unicast_vs_multicast_to_single_core_latency \
-		 tests/tt_metal/perf_microbenchmark/pcie/test_enqueue_rw_buffer \
-		 tests/tt_metal/perf_microbenchmark/pcie/test_rw_buffer \
-		 tests/tt_metal/perf_microbenchmark/pcie/test_rw_device_dram \
-		 tests/tt_metal/perf_microbenchmark/pcie/test_rw_device_l1 \
+		 tests/tt_metal/perf_microbenchmark/old/matmul/matmul_global_l1 \
+		 tests/tt_metal/perf_microbenchmark/old/matmul/matmul_local_l1 \
+		 tests/tt_metal/perf_microbenchmark/old/noc/test_noc_read_global_l1 \
+		 tests/tt_metal/perf_microbenchmark/old/noc/test_noc_read_local_l1 \
+		 tests/tt_metal/perf_microbenchmark/old/pcie/test_enqueue_rw_buffer \
+		 tests/tt_metal/perf_microbenchmark/old/pcie/test_rw_buffer \
+		 tests/tt_metal/perf_microbenchmark/old/pcie/test_rw_device_dram \
+		 tests/tt_metal/perf_microbenchmark/old/pcie/test_rw_device_l1 \
 		 tests/tt_metal/perf_microbenchmark/1_compute_mm/test_compute_mm \
 		 tests/tt_metal/perf_microbenchmark/2_noc_rtor/test_noc_rtor \
 		 tests/tt_metal/perf_microbenchmark/3_pcie_transfer/test_rw_buffer \
