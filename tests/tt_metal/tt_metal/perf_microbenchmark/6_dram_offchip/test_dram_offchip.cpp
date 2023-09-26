@@ -25,9 +25,12 @@ using std::chrono::microseconds;
 // It uses EnqueueProgram API to launch a reader kernel to read the data from DRAM to L1.
 //
 // Usage example:
-//   ./test_dram_offchip --read-size <size in bytes>
+//   ./test_dram_offchip --input-size <size in bytes>
 //
 ////////////////////////////////////////////////////////////////////////////////
+
+std::tuple<uint32_t, uint32_t, uint32_t> get_num_cores_for_given_input(
+    tt_metal::Device *device, const uint64_t &input_size, const uint32_t &num_tiles);
 
 inline std::vector<std::uint32_t> create_random_vector_of_bfloat16(
     uint64_t num_bytes, int rand_max_float, int seed, float offset = 0.0f);
@@ -56,6 +59,9 @@ bool assign_runtime_args_to_program(
     const tt::DataFormat &tile_format);
 
 int main(int argc, char **argv) {
+    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
+        log_fatal("Test not supported w/ slow dispatch, exiting");
+    }
     bool pass = true;
     double dram_bandwidth = 0.0f;
 
@@ -64,11 +70,12 @@ int main(int argc, char **argv) {
         //                      Initial Runtime Args Parse
         ////////////////////////////////////////////////////////////////////////////
         std::vector<std::string> input_args(argv, argv + argc);
-        uint64_t read_size = 0;
+        uint64_t input_size;
+        uint32_t access_type;
         uint32_t num_reqs_at_a_time = 1;
         try {
-            std::tie(read_size, input_args) =
-                test_args::get_command_option_uint64_and_remaining_args(input_args, "--read-size", 512 * 1024 * 1024);
+            std::tie(input_size, input_args) =
+                test_args::get_command_option_uint64_and_remaining_args(input_args, "--input-size", 512 * 1024 * 1024);
             /* std::tie(num_reqs_at_a_time, input_args) =
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--num-reqs-at-a-time", 1); */
         } catch (const std::exception &e) {
@@ -76,64 +83,26 @@ int main(int argc, char **argv) {
             TT_ASSERT(false);
         }
 
-        TT_ASSERT(read_size != 0, "--read-size should not be zero");
+        TT_ASSERT(input_size != 0, "--input-size should not be zero");
 
         tt::DataFormat tile_format = tt::DataFormat::Float16_b;
         uint32_t single_tile_size = tt_metal::detail::TileSize(tile_format);
-        if (read_size % single_tile_size != 0) {
+        if (input_size % single_tile_size != 0) {
             auto align_to_single_tile = [=](uint64_t value) -> uint64_t {
                 return ((value + (single_tile_size - 1)) / single_tile_size) * single_tile_size;
             };
 
-            auto read_size_aligned = align_to_single_tile(read_size);
-            log_info(LogTest, "read size {} is aligned to {} bytes", read_size, read_size_aligned);
-            read_size = read_size_aligned;
+            auto input_size_aligned = align_to_single_tile(input_size);
+            log_info(LogTest, "read size {} is aligned to {} bytes", input_size, input_size_aligned);
+            input_size = input_size_aligned;
         }
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
-        auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-        uint32_t num_cores_x = compute_with_storage_grid_size.x;
-        uint32_t num_cores_y = compute_with_storage_grid_size.y;
-        uint32_t num_cores = num_cores_x * num_cores_y;
-
-        uint32_t num_tiles = static_cast<uint32_t>((read_size + single_tile_size - 1) / single_tile_size);
-        if (num_tiles % num_cores != 0) {
-            std::vector<std::tuple<uint32_t, uint32_t>> core_candidates;
-            for (uint32_t y = 1; y <= num_cores_y; ++y) {
-                for (uint32_t x = 1; x <= num_cores_x; ++x) {
-                    if (num_tiles % (x * y) == 0) {
-                        core_candidates.push_back({y, x});
-                    }
-                }
-            }
-            uint32_t num_proper_cores = 1;
-            uint32_t num_proper_cores_x = 1;
-            uint32_t num_proper_cores_y = 1;
-            for (auto &core : core_candidates) {
-                uint32_t y = std::get<0>(core);
-                uint32_t x = std::get<1>(core);
-                if (x * y >= num_proper_cores) {
-                    num_proper_cores_x = x;
-                    num_proper_cores_y = y;
-                    num_proper_cores = x * y;
-                }
-            }
-            TT_ASSERT(num_proper_cores != 0, "input tiles cannot bt divided");
-            log_warning(
-                LogTest,
-                "{} input tiles should be divided by {} cores. This run use {} x {} = {} cores",
-                num_tiles,
-                num_cores,
-                num_proper_cores_y,
-                num_proper_cores_x,
-                num_proper_cores);
-            num_cores_x = num_proper_cores_x;
-            num_cores_y = num_proper_cores_y;
-            num_cores = num_proper_cores;
-        }
+        uint32_t num_tiles = static_cast<uint32_t>((input_size + single_tile_size - 1) / single_tile_size);
+        auto [num_cores_x, num_cores_y, num_cores] = get_num_cores_for_given_input(device, input_size, num_tiles);
 
         uint32_t num_tiles_per_core = num_tiles / num_cores;
         if (num_tiles_per_core % num_reqs_at_a_time != 0) {
@@ -147,8 +116,8 @@ int main(int argc, char **argv) {
 
         log_info(
             LogTest,
-            "Measuring DRAM read bandwidth for read_size = {} bytes ({} tiles), using {} cores",
-            read_size,
+            "Measuring DRAM read bandwidth for input_size = {} bytes ({} tiles), using {} cores",
+            input_size,
             num_tiles,
             num_cores);
 
@@ -156,7 +125,7 @@ int main(int argc, char **argv) {
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
         std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
-            read_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
+            input_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
         tt_metal::Buffer input_buffer(
             device, input_vec.size() * sizeof(u32), single_tile_size, tt_metal::BufferType::DRAM);
         tt_metal::WriteToBuffer(input_buffer, input_vec);
@@ -183,7 +152,7 @@ int main(int argc, char **argv) {
         tt_metal::Finish(*::detail::GLOBAL_CQ);
         auto t_end = std::chrono::steady_clock::now();
         auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
-        dram_bandwidth = (read_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0);
+        dram_bandwidth = (input_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0);
         log_info(LogTest, "EnqueueProgram : {:.3f}ms, {:.3f}GB/s", elapsed_us / 1000.0, dram_bandwidth);
 
         ////////////////////////////////////////////////////////////////////////////
@@ -242,6 +211,51 @@ int main(int argc, char **argv) {
     TT_ASSERT(pass);
 
     return 0;
+}
+
+std::tuple<uint32_t, uint32_t, uint32_t> get_num_cores_for_given_input(
+    tt_metal::Device *device, const uint64_t &input_size, const uint32_t &num_tiles) {
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    uint32_t num_cores = num_cores_x * num_cores_y;
+
+    if (num_tiles % num_cores != 0) {
+        std::vector<std::tuple<uint32_t, uint32_t>> core_candidates;
+        for (uint32_t y = 1; y <= num_cores_y; ++y) {
+            for (uint32_t x = 1; x <= num_cores_x; ++x) {
+                if (num_tiles % (x * y) == 0) {
+                    core_candidates.push_back({y, x});
+                }
+            }
+        }
+        uint32_t num_proper_cores = 1;
+        uint32_t num_proper_cores_x = 1;
+        uint32_t num_proper_cores_y = 1;
+        for (auto &core : core_candidates) {
+            uint32_t y = std::get<0>(core);
+            uint32_t x = std::get<1>(core);
+            if (x * y >= num_proper_cores) {
+                num_proper_cores_x = x;
+                num_proper_cores_y = y;
+                num_proper_cores = x * y;
+            }
+        }
+        TT_ASSERT(num_proper_cores != 0, "input tiles cannot bt divided");
+        log_warning(
+            LogTest,
+            "{} input tiles should be divided by {} cores. This run use {} x {} = {} cores",
+            num_tiles,
+            num_cores,
+            num_proper_cores_y,
+            num_proper_cores_x,
+            num_proper_cores);
+        num_cores_x = num_proper_cores_x;
+        num_cores_y = num_proper_cores_y;
+        num_cores = num_proper_cores;
+    }
+
+    return {num_cores_x, num_cores_y, num_cores};
 }
 
 inline std::vector<std::uint32_t> create_random_vector_of_bfloat16(
