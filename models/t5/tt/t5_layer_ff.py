@@ -14,10 +14,6 @@ class TtT5LayerFF(torch.nn.Module):
     def __init__(self, config, state_dict, base_address, device):
         super().__init__()
 
-        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(
-            True, tt_lib.tensor.BufferType.L1
-        )
-
         if config.is_gated_act:
             self.DenseReluDense = TtT5DenseGatedActDense(
                 config, state_dict, f"{base_address}.DenseReluDense", device
@@ -34,7 +30,5 @@ class TtT5LayerFF(torch.nn.Module):
     def forward(self, hidden_states: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         forwarded_states = self.layer_norm(hidden_states)
         forwarded_states = self.DenseReluDense(forwarded_states)
-        hidden_states = tt_lib.tensor.add(
-            hidden_states, forwarded_states, output_mem_config=self.out_mem_config_l1
-        )
+        hidden_states = tt_lib.tensor.add(hidden_states, forwarded_states)
         return hidden_states

@@ -51,9 +51,6 @@ class TtT5LayerSelfAttention(torch.nn.Module):
             use_cache=use_cache,
             output_attentions=output_attentions,
         )
-        hidden_states = tt_lib.tensor.add(
-            hidden_states,
-            attention_output[0],
-        )
+        hidden_states = tt_lib.tensor.add(hidden_states, attention_output[0])
         outputs = (hidden_states,) + attention_output[1:]
         return outputs

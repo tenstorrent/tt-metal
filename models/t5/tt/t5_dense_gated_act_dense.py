@@ -17,10 +17,6 @@ class TtT5DenseGatedActDense(torch.nn.Module):
 
         self.device = device
 
-        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(
-            True, tt_lib.tensor.BufferType.L1
-        )
-
         self.wi_0_weights = torch_to_tt_tensor_rm(
             state_dict[f"{base_address}.wi_0.weight"], device, put_on_device=True
         )
@@ -28,7 +24,6 @@ class TtT5DenseGatedActDense(torch.nn.Module):
             config.d_model,
             config.d_ff,
             self.wi_0_weights,
-            output_mem_config=self.out_mem_config_l1,
         )
 
         self.wi_1_weights = torch_to_tt_tensor_rm(
@@ -38,7 +33,6 @@ class TtT5DenseGatedActDense(torch.nn.Module):
             config.d_model,
             config.d_ff,
             self.wi_1_weights,
-            output_mem_config=self.out_mem_config_l1,
         )
 
         self.wo_weights = torch_to_tt_tensor_rm(
@@ -48,7 +42,6 @@ class TtT5DenseGatedActDense(torch.nn.Module):
             config.d_ff,
             config.d_model,
             self.wo_weights,
-            output_mem_config=self.out_mem_config_l1,
         )
 
         self.act = tt_lib.tensor.gelu
@@ -56,8 +49,6 @@ class TtT5DenseGatedActDense(torch.nn.Module):
     def forward(self, hidden_states: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         hidden_gelu = self.act(self.wi_0(hidden_states))
         hidden_linear = self.wi_1(hidden_states)
-        hidden_states = tt_lib.tensor.mul(
-            hidden_gelu, hidden_linear, output_mem_config=self.out_mem_config_l1
-        )
+        hidden_states = tt_lib.tensor.mul(hidden_gelu, hidden_linear)
         hidden_states = self.wo(hidden_states)
         return hidden_states
