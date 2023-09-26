@@ -30,9 +30,9 @@ using std::chrono::microseconds;
 // interface
 //
 // Usage example:
-//   ./test_noc_rtor --cores_r <number of cores in a row> --cores_c <number
-//   of cores in a column> --num_tiles <number of tiles each core accesses>
-//   --noc_index <NOC index to use> --access_type <0 for read access, 1 for
+//   ./test_noc_rtor --cores-r <number of cores in a row> --cores-c <number
+//   of cores in a column> --num-tiles <number of tiles each core accesses>
+//   --noc-index <NOC index to use> --access-type <0 for read access, 1 for
 //   write access>
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -56,22 +56,22 @@ int main(int argc, char** argv) {
   try {
     std::tie(num_cores_r, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(input_args,
-                                                                "--cores_r", 9);
+                                                                "--cores-r", 9);
     std::tie(num_cores_c, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(
-            input_args, "--cores_c", 12);
+            input_args, "--cores-c", 12);
 
     std::tie(num_tiles, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(
-            input_args, "--num_tiles", 256);
+            input_args, "--num-tiles", 256);
 
     std::tie(noc_index, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(
-            input_args, "--noc_index", 0);
+            input_args, "--noc-index", 0);
 
     std::tie(access_type, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(
-            input_args, "--access_type", 0);
+            input_args, "--access-type", 0);
   } catch (const std::exception& e) {
     log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
   }
