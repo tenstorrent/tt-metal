@@ -92,14 +92,9 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads(const Tensor &a, Ten
 
     // Create circular buffers
     uint32_t cb0_num_tiles = per_tensor_tiles * 2; // double buffer
-    auto cb_src0 = tt_metal::CreateCircularBuffers(
-        program,
-        src0_cb_index,
-        all_cores,
-        cb0_num_tiles,
-        cb0_num_tiles * single_tile_size,
-        cb_data_format
-    );
+    tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(cb0_num_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
+		.set_page_size(src0_cb_index, single_tile_size);
+    auto cb_src0 = tt_metal::CreateCircularBuffers(program, all_cores, cb_src0_config);
 
     for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++){
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

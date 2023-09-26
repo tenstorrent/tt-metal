@@ -125,27 +125,15 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID> create_pro
 
             uint32_t in0_CB_addr = l1_valid_address;
             l1_valid_address += in0_CB_size;
-            auto cb_src0 = tt_metal::CreateCircularBuffer(
-                program,
-                in0_CB_index,
-                core,
-                in0_CB_tiles,
-                in0_CB_size,
-                tt::DataFormat::Float16_b,
-                in0_CB_addr
-            );
+            tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(in0_CB_size, {{in0_CB_index, tt::DataFormat::Float16_b}}, in0_CB_addr)
+                .set_page_size(in0_CB_index, single_tile_size);
+            auto cb_src0 = tt_metal::CreateCircularBuffers(program, core, cb_src0_config);
 
             uint32_t out_CB_addr = l1_valid_address;
             l1_valid_address += out_CB_size;
-            auto cb_output = tt_metal::CreateCircularBuffer(
-                program,
-                out_CB_index,
-                core,
-                out_CB_tiles,
-                out_CB_size,
-                tt::DataFormat::Float16_b,
-                out_CB_addr
-            );
+            tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(out_CB_size, {{out_CB_index, tt::DataFormat::Float16_b}}, out_CB_addr)
+                .set_page_size(out_CB_index, single_tile_size);
+            auto cb_output = tt_metal::CreateCircularBuffers(program, core, cb_output_config);
 
             TT_ASSERT(l1_valid_address < 1024 * 1024);
         }

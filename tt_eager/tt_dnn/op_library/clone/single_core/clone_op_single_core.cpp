@@ -31,27 +31,17 @@ operation::ProgramWithCallbacks clone_single_core(const Tensor &input, Tensor &o
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
-    auto cb_src0 = tt_metal::CreateCircularBuffers(
-        program,
-        src0_cb_index,
-        core,
-        num_input_tiles,
-        num_input_tiles * input_single_tile_size,
-        input_cb_data_format
-    );
+    tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * input_single_tile_size, {{src0_cb_index, input_cb_data_format}})
+		.set_page_size(src0_cb_index, input_single_tile_size);
+    auto cb_src0 = tt_metal::CreateCircularBuffers(program, core, cb_src0_config);
 
     uint32_t output_cb_index = 0; // same as input cb
     /* If we need dataformat conversion, use output buffer + compute kernel
     uint32_t output_cb_index = 16; // output operands start at index 16
     uint32_t num_output_tiles = 2;
-    auto cb_output = tt_metal::CreateCircularBuffers(
-        program,
-        output_cb_index,
-        core,
-        num_output_tiles,
-        num_output_tiles * output_single_tile_size,
-        output_cb_data_format
-    );
+    tt_metal::CircularBufferConfig output_cb_config = tt_metal::CircularBufferConfig(num_output_tiles * output_single_tile_size, {{output_cb_index, output_cb_data_format}})
+		.set_page_size(output_cb_index, output_single_tile_size);
+    auto cb_output = tt_metal::CreateCircularBuffers(program, core, output_cb_config);
     */
 
     auto src_buffer = input.buffer();

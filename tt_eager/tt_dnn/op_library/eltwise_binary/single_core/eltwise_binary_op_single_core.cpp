@@ -41,54 +41,31 @@ operation::ProgramWithCallbacks eltwise_binary_single_core(const Tensor &a, cons
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
-    auto cb_src0 = tt_metal::CreateCircularBuffers(
-        program,
-        src0_cb_index,
-        core,
-        num_input_tiles,
-        num_input_tiles * src0_single_tile_size,
-        src0_cb_data_format
-    );
+    tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * src0_single_tile_size, {{src0_cb_index, src0_cb_data_format}})
+		.set_page_size(src0_cb_index, src0_single_tile_size);
+    auto cb_src0 = tt_metal::CreateCircularBuffers(program, core, cb_src0_config);
 
     uint32_t src1_cb_index = 1;
-    auto cb_src1 = tt_metal::CreateCircularBuffers(
-        program,
-        src1_cb_index,
-        core,
-        num_input_tiles,
-        num_input_tiles * src1_single_tile_size,
-        src1_cb_data_format
-    );
+    tt_metal::CircularBufferConfig cb_src1_config = tt_metal::CircularBufferConfig(num_input_tiles * src1_single_tile_size, {{src1_cb_index, src1_cb_data_format}})
+		.set_page_size(src1_cb_index, src1_single_tile_size);
+    auto cb_src1 = tt_metal::CreateCircularBuffers(program, core, cb_src1_config);
+
     if (eltwise_defines.find("SFPU_OP_INIT_PRE_IN0_0") != eltwise_defines.end()) {
-        auto cb_interm = tt_metal::CreateCircularBuffers(
-            program,
-            CB::c_intermed0,
-            core,
-            1,
-            1 * src0_single_tile_size,
-            src0_cb_data_format
-        );
+        tt_metal::CircularBufferConfig cb_interm_config = tt_metal::CircularBufferConfig(1 * src0_single_tile_size, {{CB::c_intermed0, src0_cb_data_format}})
+		    .set_page_size(CB::c_intermed0, src0_single_tile_size);
+        auto cb_interm = tt_metal::CreateCircularBuffers(program, core, cb_interm_config);
     }
     if (eltwise_defines.find("SFPU_OP_INIT_PRE_IN1_0") != eltwise_defines.end()) {
-        auto cb_interm2 = tt_metal::CreateCircularBuffers(
-            program,
-            CB::c_intermed1,
-            core,
-            1,
-            1 * src1_single_tile_size,
-            src1_cb_data_format
-        );
+        tt_metal::CircularBufferConfig cb_interm2_config = tt_metal::CircularBufferConfig(1 * src1_single_tile_size, {{CB::c_intermed1, src1_cb_data_format}})
+		    .set_page_size(CB::c_intermed1, src1_single_tile_size);
+        auto cb_interm2 = tt_metal::CreateCircularBuffers(program, core, cb_interm2_config);
     }
     uint32_t output_cb_index = 16; // output operands start at index 16
     uint32_t num_output_tiles = 2;
-    auto cb_output = tt_metal::CreateCircularBuffers(
-        program,
-        output_cb_index,
-        core,
-        num_output_tiles,
-        num_output_tiles * dst_single_tile_size,
-        dst_cb_data_format
-    );
+    tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
+        .set_page_size(output_cb_index, dst_single_tile_size);
+    auto cb_output = tt_metal::CreateCircularBuffers(program, core, cb_output_config);
+
     bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {

@@ -61,35 +61,21 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
-    auto cb_src0 = tt_metal::CreateCircularBuffers(
-        program,
-        src0_cb_index,
-        all_cores,
-        num_input_tiles,
-        num_input_tiles * in0_single_tile_size,
-        in0_data_format
-    );
+    tt_metal::CircularBufferConfig src0_cb_config = tt_metal::CircularBufferConfig(num_input_tiles * in0_single_tile_size, {{src0_cb_index, in0_data_format}})
+		.set_page_size(src0_cb_index, in0_single_tile_size);
+	auto cb_src0 = tt_metal::CreateCircularBuffers(program, all_cores, src0_cb_config);
 
-    uint32_t src1_cb_index = 1;
-    auto cb_src1 = tt_metal::CreateCircularBuffers(
-        program,
-        src1_cb_index,
-        all_cores,
-        num_input_tiles,
-        num_input_tiles * in1_single_tile_size,
-        in1_data_format
-    );
+	uint32_t src1_cb_index = 1;
+	tt_metal::CircularBufferConfig src1_cb_config = tt_metal::CircularBufferConfig(num_input_tiles * in1_single_tile_size, {{src1_cb_index, in1_data_format}})
+		.set_page_size(src1_cb_index, in1_single_tile_size);
+	auto cb_src1 = tt_metal::CreateCircularBuffers(program, all_cores, src1_cb_config);
 
-    uint32_t output_cb_index = 16; // output operands start at index 16
-    uint32_t num_output_tiles = 2;
-    auto cb_output = tt_metal::CreateCircularBuffers(
-        program,
-        output_cb_index,
-        all_cores,
-        num_output_tiles,
-        num_output_tiles * output_single_tile_size,
-        output_data_format
-    );
+	uint32_t output_cb_index = 16; // output operands start at index 16
+	uint32_t num_output_tiles = 2;
+	tt_metal::CircularBufferConfig output_cb_config = tt_metal::CircularBufferConfig(num_output_tiles * output_single_tile_size, {{output_cb_index, output_data_format}})
+		.set_page_size(output_cb_index, output_single_tile_size);
+	auto cb_output = tt_metal::CreateCircularBuffers(program, all_cores, output_cb_config);
+
     bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};

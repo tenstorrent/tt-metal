@@ -102,25 +102,15 @@ Program create_program(Device *device, const ProgramAttributes &program_attribut
     // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input CB
     // CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to math kernel, input CB and reader
     uint32_t num_input_tiles = 8;
-    auto cb_src0 = tt_metal::CreateCircularBuffer(
-        program,
-        program_attributes.src_cb_index,
-        core,
-        num_input_tiles,
-        num_input_tiles * single_tile_size,
-        program_attributes.data_format
-    );
+    tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{program_attributes.src_cb_index, program_attributes.data_format}})
+        .set_page_size(program_attributes.src_cb_index, single_tile_size);
+    auto cb_src0 = tt_metal::CreateCircularBuffers(program, core, cb_src0_config);
 
     // output operands start at index 16
     uint32_t num_output_tiles = 1;
-    auto cb_output = tt_metal::CreateCircularBuffer(
-        program,
-        program_attributes.output_cb_index,
-        core,
-        num_output_tiles,
-        num_output_tiles * single_tile_size,
-        program_attributes.data_format
-    );
+    tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, {{program_attributes.output_cb_index, program_attributes.data_format}})
+        .set_page_size(program_attributes.output_cb_index, single_tile_size);
+    auto cb_output = tt_metal::CreateCircularBuffers(program, core, cb_output_config);
 
     auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
@@ -218,7 +208,7 @@ bool test_compile_program_after_clean_kernel_binary_directory(Device *device) {
     std::unordered_map<std::string, std::string> kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
 
     ClearKernelCache(device->id());
-    program.invalidate();
+    program.invalidate_compile();
     auto second_kernel_cache_status = CompileProgramTestWrapper(device, program);
     assert_program_cache_hit_status(program, /*hit_expected=*/false, second_kernel_cache_status);
     assert_kernel_hash_matches(kernel_name_to_hash, second_kernel_cache_status);

@@ -41,14 +41,9 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
-    auto cb_src0 = tt_metal::CreateCircularBuffers(
-        program,
-        src0_cb_index,
-        core,
-        num_input_tiles,
-        num_input_tiles * single_tile_size,
-        cb_data_format
-    );
+    tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
+		.set_page_size(src0_cb_index, single_tile_size);
+    auto cb_src0 = tt_metal::CreateCircularBuffers(program, core, cb_src0_config);
 
     bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t) src0_is_dram};
@@ -169,24 +164,14 @@ operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& 
         TT_ASSERT(num_input_tiles > 0 && num_output_tiles > 0, "Cannot fit input/output rows into L1");
     }
 
-    auto cb_src0 = tt_metal::CreateCircularBuffers(
-        program,
-        src0_cb_index,
-        core,
-        num_input_tiles,
-        num_input_tiles * single_tile_size,
-        cb_data_format
-    );
+    tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
+		.set_page_size(src0_cb_index, single_tile_size);
+    auto cb_src0 = tt_metal::CreateCircularBuffers(program, core, cb_src0_config);
 
     uint32_t output_cb_index = 16; // output operands start at index 16
-    auto cb_output = tt_metal::CreateCircularBuffers(
-        program,
-        output_cb_index,
-        core,
-        num_output_tiles,
-        num_output_tiles * single_tile_size,
-        cb_data_format
-    );
+    tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, cb_data_format}})
+		.set_page_size(output_cb_index, single_tile_size);
+    auto cb_output = tt_metal::CreateCircularBuffers(program, core, cb_output_config);
 
     // Reader compile-time args
     bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;

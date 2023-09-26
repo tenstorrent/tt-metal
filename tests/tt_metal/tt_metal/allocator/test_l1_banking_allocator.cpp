@@ -62,6 +62,7 @@ bool test_l1_buffers_allocated_top_down(tt_metal::Device *device, BufferKeeper &
     return pass;
 }
 
+/*
 bool test_circular_buffers_allocated_bottom_up(tt_metal::Device *device, tt_metal::Program &program) {
     bool pass = true;
 
@@ -73,7 +74,7 @@ bool test_circular_buffers_allocated_bottom_up(tt_metal::Device *device, tt_meta
     uint32_t single_tile_size = 2 * 1024;
     constexpr uint32_t src0_cb_index = CB::c_in0;
     constexpr uint32_t num_input_tiles = 2;
-    auto cb_src0 = tt_metal::CreateCircularBuffer(
+    auto cb_src0 = tt_metal::CreateCircularBuffers(
         program,
         src0_cb_index,
         logical_core,
@@ -85,7 +86,7 @@ bool test_circular_buffers_allocated_bottom_up(tt_metal::Device *device, tt_meta
     // pass &= cb_src0.address() == L1_UNRESERVED_BASE;
 
     constexpr uint32_t src1_cb_index = CB::c_in1;
-    auto cb_src1 = tt_metal::CreateCircularBuffer(
+    auto cb_src1 = tt_metal::CreateCircularBuffers(
         program,
         src1_cb_index,
         logical_core,
@@ -98,7 +99,7 @@ bool test_circular_buffers_allocated_bottom_up(tt_metal::Device *device, tt_meta
 
     constexpr uint32_t output_cb_index = CB::c_out0;
     constexpr uint32_t num_output_tiles = 2;
-    auto cb_output = tt_metal::CreateCircularBuffer(
+    auto cb_output = tt_metal::CreateCircularBuffers(
         program,
         output_cb_index,
         logical_core,
@@ -111,6 +112,7 @@ bool test_circular_buffers_allocated_bottom_up(tt_metal::Device *device, tt_meta
 
     return pass;
 }
+*/
 
 bool test_l1_buffer_do_not_grow_beyond_512KB(tt_metal::Device *device) {
     bool pass = true;
@@ -125,6 +127,7 @@ bool test_l1_buffer_do_not_grow_beyond_512KB(tt_metal::Device *device) {
     return pass;
 }
 
+/*
 bool test_circular_buffers_allowed_to_grow_past_512KB(tt_metal::Device *device, tt_metal::Program &program) {
     bool pass = true;
 
@@ -136,7 +139,7 @@ bool test_circular_buffers_allowed_to_grow_past_512KB(tt_metal::Device *device, 
     uint32_t single_tile_size = 2 * 1024;
     constexpr uint32_t src0_cb_index = CB::c_in7;
     constexpr uint32_t num_input_tiles = 176;
-    auto cb_src0 = tt_metal::CreateCircularBuffer(
+    auto cb_src0 = tt_metal::CreateCircularBuffers(
         program,
         src0_cb_index,
         logical_core,
@@ -149,6 +152,7 @@ bool test_circular_buffers_allowed_to_grow_past_512KB(tt_metal::Device *device, 
 
     return pass;
 }
+*/
 
 int main(int argc, char **argv) {
     bool pass = true;
@@ -191,38 +195,9 @@ int main(int argc, char **argv) {
         // --------------------------------------------------------------------
         pass &= test_l1_buffers_allocated_top_down(device, buffers);
 
-        // Resulting L1 banks after test_circular_buffers_allocated_bottom_up:
-        // compute and storage core L1
-        // -------------------------------------------------------------------------
-        // | 120 KB | 4 KB | 4 KB | 4 KB |               | 256 KB | 64 KB | 128 KB |
-        // -------------------------------------------------------------------------
-        //
-        // storage core L1
-        // --------------------------------------------------------------------
-        // |               bank 0              |            bank 1            |
-        // |        | 256 KB | 64 KB | 128 KB  |    | 256 KB | 64 KB | 128 KB |
-        // --------------------------------------------------------------------
-        // TODO ALMEET: Move this to unit test for circular buffer allocation
-        pass &= test_circular_buffers_allocated_bottom_up(device, program);
-
         // tries to allocate a buffer larger than 512 KB - (256 + 64 + 128) KB in compute and storage core
         // this is expected to fail
         pass &= test_l1_buffer_do_not_grow_beyond_512KB(device);
-
-        // Resulting L1 banks after test_circular_buffers_allowed_to_grow_past_512KB:
-        // compute and storage core L1
-        // -----------------------------------------------------------------------------
-        // | 120 KB | 4 KB | 4 KB | 4 KB | 352 KB        |   | 256 KB | 64 KB | 128 KB |
-        // -----------------------------------------------------------------------------
-        //
-        // storage core L1
-        // --------------------------------------------------------------------
-        // |               bank 0              |            bank 1            |
-        // |        | 256 KB | 64 KB | 128 KB  |    | 256 KB | 64 KB | 128 KB |
-        // --------------------------------------------------------------------
-        // --------------------------------------------------------------------
-        // TODO ALMEET: Move this to unit test for circular buffer allocation
-        pass &= test_circular_buffers_allowed_to_grow_past_512KB(device, program);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

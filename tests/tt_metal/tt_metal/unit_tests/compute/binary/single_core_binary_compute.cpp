@@ -36,9 +36,7 @@ struct SingleCoreBinaryConfig {
     size_t num_tiles = 0;
     size_t tile_byte_size = 0;
     size_t input_dram_byte_address = 0;
-    size_t l1_input_byte_address = 0;
     tt::DataFormat l1_input_data_format = tt::DataFormat::Invalid;
-    size_t l1_output_byte_address = 0;
     tt::DataFormat l1_output_data_format = tt::DataFormat::Invalid;
     CoreCoord core = {};
     std::string binary_op = "";
@@ -67,30 +65,17 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
     uint32_t output_dram_byte_address = output_dram_buffer.address();
     auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 
-    auto l1_input0_cb = tt_metal::CreateCircularBuffer(
-        program,
-        0,
-        test_config.core,
-        test_config.num_tiles,
-        byte_size,
-        test_config.l1_input_data_format,
-        test_config.l1_input_byte_address);
-    auto l1_input1_cb = tt_metal::CreateCircularBuffer(
-        program,
-        1,
-        test_config.core,
-        test_config.num_tiles,
-        byte_size,
-        test_config.l1_input_data_format,
-        test_config.l1_input_byte_address + byte_size);
-    auto l1_output_cb = tt_metal::CreateCircularBuffer(
-        program,
-        16,
-        test_config.core,
-        test_config.num_tiles,
-        byte_size,
-        test_config.l1_output_data_format,
-        test_config.l1_output_byte_address);
+    tt_metal::CircularBufferConfig l1_cb_config = tt_metal::CircularBufferConfig(byte_size, {{0, test_config.l1_input_data_format}})
+        .set_page_size(0, test_config.tile_byte_size);
+    auto l1_input0_cb = tt_metal::CreateCircularBuffers(program, test_config.core, l1_cb_config);
+
+    tt_metal::CircularBufferConfig l1_input1_cb_config = tt_metal::CircularBufferConfig(byte_size, {{1, test_config.l1_input_data_format}})
+        .set_page_size(1, test_config.tile_byte_size);
+    auto l1_input1_cb = tt_metal::CreateCircularBuffers(program, test_config.core, l1_input1_cb_config);
+
+    tt_metal::CircularBufferConfig l1_output_cb_config = tt_metal::CircularBufferConfig(byte_size, {{16, test_config.l1_output_data_format}})
+        .set_page_size(16, test_config.tile_byte_size);
+    auto l1_output_cb = tt_metal::CreateCircularBuffers(program, test_config.core, l1_output_cb_config);
 
     auto reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
@@ -194,9 +179,7 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
 TEST_F(SingleDeviceFixture, BinaryComputeSingleCoreSingleTileAdd) {
     unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
         .tile_byte_size = 2 * 32 * 32,
-        .l1_input_byte_address = L1_UNRESERVED_BASE,
         .l1_input_data_format = tt::DataFormat::Float16_b,
-        .l1_output_byte_address = L1_UNRESERVED_BASE + 16 * 32 * 32,
         .l1_output_data_format = tt::DataFormat::Float16_b,
         .core = {.x = 0, .y = 0},
         .binary_op = "add"};
@@ -206,9 +189,7 @@ TEST_F(SingleDeviceFixture, BinaryComputeSingleCoreSingleTileAdd) {
 TEST_F(SingleDeviceFixture, BinaryComputeSingleCoreSingleTileSub) {
     unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
         .tile_byte_size = 2 * 32 * 32,
-        .l1_input_byte_address = L1_UNRESERVED_BASE,
         .l1_input_data_format = tt::DataFormat::Float16_b,
-        .l1_output_byte_address = L1_UNRESERVED_BASE + 16 * 32 * 32,
         .l1_output_data_format = tt::DataFormat::Float16_b,
         .core = {.x = 0, .y = 0},
         .binary_op = "sub"};
@@ -218,9 +199,7 @@ TEST_F(SingleDeviceFixture, BinaryComputeSingleCoreSingleTileSub) {
 TEST_F(SingleDeviceFixture, BinaryComputeSingleCoreSingleTileMul) {
     unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
         .tile_byte_size = 2 * 32 * 32,
-        .l1_input_byte_address = L1_UNRESERVED_BASE,
         .l1_input_data_format = tt::DataFormat::Float16_b,
-        .l1_output_byte_address = L1_UNRESERVED_BASE + 16 * 32 * 32,
         .l1_output_data_format = tt::DataFormat::Float16_b,
         .core = {.x = 0, .y = 0},
         .binary_op = "mul"};
@@ -230,9 +209,7 @@ TEST_F(SingleDeviceFixture, BinaryComputeSingleCoreSingleTileMul) {
 TEST_F(SingleDeviceFixture, BinaryComputeSingleCoreMultiTileAdd) {
     unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
         .tile_byte_size = 2 * 32 * 32,
-        .l1_input_byte_address = L1_UNRESERVED_BASE,
         .l1_input_data_format = tt::DataFormat::Float16_b,
-        .l1_output_byte_address = L1_UNRESERVED_BASE + 16 * 32 * 32,
         .l1_output_data_format = tt::DataFormat::Float16_b,
         .core = {.x = 0, .y = 0},
         .binary_op = "add"};
@@ -242,9 +219,7 @@ TEST_F(SingleDeviceFixture, BinaryComputeSingleCoreMultiTileAdd) {
 TEST_F(SingleDeviceFixture, BinaryComputeSingleCoreMultiTileSub) {
     unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
         .tile_byte_size = 2 * 32 * 32,
-        .l1_input_byte_address = L1_UNRESERVED_BASE,
         .l1_input_data_format = tt::DataFormat::Float16_b,
-        .l1_output_byte_address = L1_UNRESERVED_BASE + 16 * 32 * 32,
         .l1_output_data_format = tt::DataFormat::Float16_b,
         .core = {.x = 0, .y = 0},
         .binary_op = "sub"};
@@ -254,9 +229,7 @@ TEST_F(SingleDeviceFixture, BinaryComputeSingleCoreMultiTileSub) {
 TEST_F(SingleDeviceFixture, BinaryComputeSingleCoreMultiTileMul) {
     unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
         .tile_byte_size = 2 * 32 * 32,
-        .l1_input_byte_address = L1_UNRESERVED_BASE,
         .l1_input_data_format = tt::DataFormat::Float16_b,
-        .l1_output_byte_address = L1_UNRESERVED_BASE + 16 * 32 * 32,
         .l1_output_data_format = tt::DataFormat::Float16_b,
         .core = {.x = 0, .y = 0},
         .binary_op = "mul"};

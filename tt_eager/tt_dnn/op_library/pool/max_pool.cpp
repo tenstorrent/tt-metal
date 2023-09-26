@@ -130,46 +130,34 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core(const Tensor &input, Tens
     uint32_t in_scalar_cb_id = CB::c_in1;
     uint32_t in_scalar_cb_pagesize = tile_size(in_df);
     uint32_t in_scalar_cb_npages = 1;
-    auto in_scalar_cb = CreateCircularBuffers(program,
-                                              in_scalar_cb_id,
-                                              all_cores,
-                                              in_scalar_cb_npages,
-                                              in_scalar_cb_npages * in_scalar_cb_pagesize,
-                                              in_df);
+    CircularBufferConfig in_scalar_cb_config = CircularBufferConfig(in_scalar_cb_npages * in_scalar_cb_pagesize, {{in_scalar_cb_id, in_df}})
+		.set_page_size(in_scalar_cb_id, in_scalar_cb_pagesize);
+    auto in_scalar_cb = tt_metal::CreateCircularBuffers(program, all_cores, in_scalar_cb_config);
 
     // reader output == input to tilize
     uint32_t in_cb_id = CB::c_in0;          // input rows for "multiple (out_nelems)" output pixels
     uint32_t in_cb_page_nelems_padded = ceil_multiple_of(input_shape[3] * kernel_size_hw_padded, constants::TILE_HW);    // NOTE: ceil to tile size since triscs work with tilesize instead of pagesize
     uint32_t in_cb_pagesize = in_nbytes * in_cb_page_nelems_padded;
     uint32_t in_cb_npages = multi_buffering_factor * out_nelems;
-    auto in_cb = CreateCircularBuffers(program,
-                                       in_cb_id,
-                                       all_cores,
-                                       in_cb_npages,
-                                       in_cb_npages * in_cb_pagesize,
-                                       in_df);
+    CircularBufferConfig in_cb_config = CircularBufferConfig(in_cb_npages * in_cb_pagesize, {{in_cb_id, in_df}})
+		.set_page_size(in_cb_id, in_cb_pagesize);
+    auto in_cb = tt_metal::CreateCircularBuffers(program, all_cores, in_cb_config);
 
     // output of tilize == input to reduce
     uint32_t in_tiled_cb_id = CB::c_intermed0;  // tiled input
     uint32_t in_tiled_cb_pagesize = tile_size(in_df);
     uint32_t in_tiled_cb_npages = in_ntiles_c * in_ntiles_hw * out_nelems;
-    auto in_tiled_cb = CreateCircularBuffers(program,
-                                             in_tiled_cb_id,
-                                             all_cores,
-                                             in_tiled_cb_npages,
-                                             in_tiled_cb_npages * in_tiled_cb_pagesize,
-                                             in_df);
+    CircularBufferConfig in_tiled_cb_config = CircularBufferConfig(in_tiled_cb_npages * in_tiled_cb_pagesize, {{in_tiled_cb_id, in_df}})
+		.set_page_size(in_tiled_cb_id, in_tiled_cb_pagesize);
+    auto in_tiled_cb = tt_metal::CreateCircularBuffers(program, all_cores, in_tiled_cb_config);
 
     // output of reduce == writer to write
     uint32_t out_cb_id = CB::c_out0;            // output rows in RM
     uint32_t out_cb_pagesize = tile_size(out_df);
     uint32_t out_cb_npages = out_ntiles_c * out_nelems * multi_buffering_factor;    // there is just one row of channels after reduction
-    auto cb_out = CreateCircularBuffers(program,
-                                        out_cb_id,
-                                        all_cores,
-                                        out_cb_npages,
-                                        out_cb_npages * out_cb_pagesize,
-                                        out_df);
+    CircularBufferConfig cb_out_config = CircularBufferConfig(out_cb_npages * out_cb_pagesize, {{out_cb_id, out_df}})
+		.set_page_size(out_cb_id, out_cb_pagesize);
+    auto cb_out = tt_metal::CreateCircularBuffers(program, all_cores, cb_out_config);
 
     // Construct const buffer with -INF
     uint32_t const_buffer_size = 32;
@@ -446,46 +434,34 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
     uint32_t in_scalar_cb_id = CB::c_in1;
     uint32_t in_scalar_cb_pagesize = tile_size(in_df);
     uint32_t in_scalar_cb_npages = 1;
-    auto in_scalar_cb = CreateCircularBuffers(program,
-                                              in_scalar_cb_id,
-                                              cores,
-                                              in_scalar_cb_npages,
-                                              in_scalar_cb_npages * in_scalar_cb_pagesize,
-                                              in_df);
+    CircularBufferConfig in_scalar_cb_config = CircularBufferConfig(in_scalar_cb_npages * in_scalar_cb_pagesize, {{in_scalar_cb_id, in_df}})
+		.set_page_size(in_scalar_cb_id, in_scalar_cb_pagesize);
+    auto in_scalar_cb = tt_metal::CreateCircularBuffers(program, cores, in_scalar_cb_config);
 
     // reader output == input to tilize
     uint32_t in_cb_id = CB::c_in0;          // input rows for "multiple (out_nelems)" output pixels
     uint32_t in_cb_page_nelems_padded = ceil_multiple_of(input_shape[3] * kernel_size_hw_padded, constants::TILE_HW);    // NOTE: ceil to tile size since triscs work with tilesize instead of pagesize
     uint32_t in_cb_pagesize = in_nbytes * in_cb_page_nelems_padded;
     uint32_t in_cb_npages = multi_buffering_factor * out_nelems;
-    auto in_cb = CreateCircularBuffers(program,
-                                       in_cb_id,
-                                       cores,
-                                       in_cb_npages,
-                                       in_cb_npages * in_cb_pagesize,
-                                       in_df);
+    CircularBufferConfig in_cb_config = CircularBufferConfig(in_cb_npages * in_cb_pagesize, {{in_cb_id, in_df}})
+		.set_page_size(in_cb_id, in_cb_pagesize);
+    auto in_cb = tt_metal::CreateCircularBuffers(program, cores, in_cb_config);
 
     // output of tilize == input to reduce
     uint32_t in_tiled_cb_id = CB::c_intermed0;  // tiled input
     uint32_t in_tiled_cb_pagesize = tile_size(in_df);
     uint32_t in_tiled_cb_npages = in_ntiles_c * in_ntiles_hw * out_nelems;
-    auto in_tiled_cb = CreateCircularBuffers(program,
-                                             in_tiled_cb_id,
-                                             cores,
-                                             in_tiled_cb_npages,
-                                             in_tiled_cb_npages * in_tiled_cb_pagesize,
-                                             in_df);
+    CircularBufferConfig in_tiled_cb_config = CircularBufferConfig(in_tiled_cb_npages * in_tiled_cb_pagesize, {{in_tiled_cb_id, in_df}})
+		.set_page_size(in_tiled_cb_id, in_tiled_cb_pagesize);
+    auto in_tiled_cb = tt_metal::CreateCircularBuffers(program, cores, in_tiled_cb_config);
 
     // output of reduce == writer to write
     uint32_t out_cb_id = CB::c_out0;            // output rows in RM
     uint32_t out_cb_pagesize = tile_size(out_df);
     uint32_t out_cb_npages = out_ntiles_c * out_nelems * multi_buffering_factor;    // there is just one row of channels after reduction
-    auto cb_out = CreateCircularBuffers(program,
-                                        out_cb_id,
-                                        cores,
-                                        out_cb_npages,
-                                        out_cb_npages * out_cb_pagesize,
-                                        out_df);
+    CircularBufferConfig cb_out_config = CircularBufferConfig(out_cb_npages * out_cb_pagesize, {{out_cb_id, out_df}})
+		.set_page_size(out_cb_id, out_cb_pagesize);
+    auto cb_out = tt_metal::CreateCircularBuffers(program, cores, cb_out_config);
 
     // Construct const buffer with -INF
     uint32_t const_buffer_size = 32;

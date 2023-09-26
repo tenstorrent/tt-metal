@@ -36,15 +36,9 @@ operation::ProgramWithCallbacks concat_multi_core(const std::vector<Tensor> &inp
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
-
-    auto cb_src0 = tt_metal::CreateCircularBuffers(
-        program,
-        src0_cb_index,
-        all_cores,
-        num_input_tiles,
-        num_input_tiles * single_tile_size,
-        cb_data_format
-    );
+    tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
+		.set_page_size(src0_cb_index, single_tile_size);
+    auto cb_src0 = tt_metal::CreateCircularBuffers(program, all_cores, cb_src0_config);
 
     uint32_t num_dims = input_tensors[0].shape().rank();
 

@@ -125,55 +125,26 @@ int main(int argc, char **argv) {
         auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
 
         uint32_t src0_cb_index = 0;
-        uint32_t src0_cb_addr = 200 * 1024;
         uint32_t num_input_tiles = num_tiles_c;
-        auto cb_src0 = tt_metal::CreateCircularBuffer(
-            program,
-            src0_cb_index,
-            core,
-            num_input_tiles,
-            num_input_tiles * single_tile_size,
-            tt::DataFormat::Float16_b,
-            src0_cb_addr
-        );
+        tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(src0_cb_index, single_tile_size);
+        auto cb_src0 = tt_metal::CreateCircularBuffers(program, core, cb_src0_config);
 
         uint32_t untilized_src0_cb_index = 24;
-        uint32_t untilized_src0_cb_addr = 300 * 1024;
-        auto cb_untilized_src0 = tt_metal::CreateCircularBuffer(
-            program,
-            untilized_src0_cb_index,
-            core,
-            num_input_tiles,
-            num_input_tiles * single_tile_size,
-            tt::DataFormat::Float16_b,
-            untilized_src0_cb_addr
-        );
-
+        tt_metal::CircularBufferConfig cb_untilized_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{untilized_src0_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(untilized_src0_cb_index, single_tile_size);
+        auto cb_untilized_src0 = tt_metal::CreateCircularBuffers(program, core, cb_untilized_src0_config);
 
         uint32_t src1_cb_index = 1;
-        uint32_t src1_cb_addr = 400 * 1024;
-        auto cb_src1 = tt_metal::CreateCircularBuffer(
-            program,
-            src1_cb_index,
-            core,
-            num_input_tiles,
-            num_input_tiles * single_tile_size,
-            tt::DataFormat::Float16_b,
-            src1_cb_addr
-        );
+        tt_metal::CircularBufferConfig cb_src1_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(src1_cb_index, single_tile_size);
+        auto cb_src1 = tt_metal::CreateCircularBuffers(program, core, cb_src1_config);
 
         uint32_t ouput_cb_index = 16; // output operands start at index 16
-        uint32_t output_cb_addr = 500 * 1024;
         uint32_t num_output_tiles = num_tiles_c;
-        auto cb_output = tt_metal::CreateCircularBuffer(
-            program,
-            ouput_cb_index,
-            core,
-            num_output_tiles,
-            num_output_tiles * single_tile_size,
-            tt::DataFormat::Float16_b,
-            output_cb_addr
-        );
+        tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(ouput_cb_index, single_tile_size);
+        auto cb_output = tt_metal::CreateCircularBuffers(program, core, cb_output_config);
 
         auto binary_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,

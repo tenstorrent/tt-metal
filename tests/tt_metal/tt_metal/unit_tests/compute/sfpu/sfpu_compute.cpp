@@ -100,9 +100,7 @@ namespace unit_tests::compute::sfpu {
 struct SfpuConfig {
     size_t num_tiles = 0;
     size_t tile_byte_size = 0;
-    size_t l1_input_byte_address = 0;
     tt::DataFormat l1_input_data_format = tt::DataFormat::Invalid;
-    size_t l1_output_byte_address = 0;
     tt::DataFormat l1_output_data_format = tt::DataFormat::Invalid;
     CoreRangeSet cores = {{}};
     std::string sfpu_op = "";
@@ -157,23 +155,13 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
     };
 
     for (const CoreRange& core_range : test_config.cores.ranges()) {
-        auto l1_input_cb = tt_metal::CreateCircularBuffers(
-            program,
-            0,
-            core_range,
-            test_config.num_tiles,
-            byte_size,
-            test_config.l1_input_data_format,
-            test_config.l1_input_byte_address);
+        tt_metal::CircularBufferConfig l1_input_cb_config = tt_metal::CircularBufferConfig(byte_size, {{0, test_config.l1_input_data_format}})
+            .set_page_size(0, test_config.tile_byte_size);
+        auto l1_input_cb = tt_metal::CreateCircularBuffers(program, core_range, l1_input_cb_config);
 
-        auto l1_output_cb = tt_metal::CreateCircularBuffers(
-            program,
-            16,
-            core_range,
-            test_config.num_tiles,
-            byte_size,
-            test_config.l1_output_data_format,
-            test_config.l1_output_byte_address);
+        tt_metal::CircularBufferConfig l1_output_cb_config = tt_metal::CircularBufferConfig(byte_size, {{16, test_config.l1_output_data_format}})
+            .set_page_size(16, test_config.tile_byte_size);
+        auto l1_output_cb = tt_metal::CreateCircularBuffers(program, core_range, l1_output_cb_config);
 
         auto reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
@@ -250,9 +238,7 @@ TEST_P(SingleCoreSingleDeviceSfpuParameterizedFixture, SfpuCompute) {
         unit_tests::compute::sfpu::SfpuConfig test_config = {
             .num_tiles = num_tiles,
             .tile_byte_size = 2 * 32 * 32,
-            .l1_input_byte_address = L1_UNRESERVED_BASE,
             .l1_input_data_format = tt::DataFormat::Float16_b,
-            .l1_output_byte_address = L1_UNRESERVED_BASE + 16 * 32 * 32,
             .l1_output_data_format = tt::DataFormat::Float16_b,
             .cores = core_range_set,
             .sfpu_op = sfpu_op,
@@ -300,9 +286,7 @@ TEST_P(SingleCoreSingleDeviceSfpuParameterizedApproxFixture, SfpuCompute) {
         unit_tests::compute::sfpu::SfpuConfig test_config = {
             .num_tiles = num_tiles,
             .tile_byte_size = 2 * 32 * 32,
-            .l1_input_byte_address = L1_UNRESERVED_BASE,
             .l1_input_data_format = tt::DataFormat::Float16_b,
-            .l1_output_byte_address = L1_UNRESERVED_BASE + 16 * 32 * 32,
             .l1_output_data_format = tt::DataFormat::Float16_b,
             .cores = core_range_set,
             .sfpu_op = sfpu_op,
@@ -337,9 +321,7 @@ TEST_F(SingleDeviceFixture, DISABLED_MultiContinguousCoreSingleTileSfpuApproxCom
     CoreRangeSet core_range_set({core_range});
     unit_tests::compute::sfpu::SfpuConfig test_config = {
         .tile_byte_size = 2 * 32 * 32,
-        .l1_input_byte_address = L1_UNRESERVED_BASE,
         .l1_input_data_format = tt::DataFormat::Float16_b,
-        .l1_output_byte_address = L1_UNRESERVED_BASE + 16 * 32 * 32,
         .l1_output_data_format = tt::DataFormat::Float16_b,
         .cores = core_range_set,
         .approx_mode = true};
@@ -377,9 +359,7 @@ TEST_F(SingleDeviceFixture, DISABLED_MultiContinguousCoreMultiTileSfpuApproxComp
     CoreRangeSet core_range_set({core_range});
     unit_tests::compute::sfpu::SfpuConfig test_config = {
         .tile_byte_size = 2 * 32 * 32,
-        .l1_input_byte_address = L1_UNRESERVED_BASE,
         .l1_input_data_format = tt::DataFormat::Float16_b,
-        .l1_output_byte_address = L1_UNRESERVED_BASE + 16 * 32 * 32,
         .l1_output_data_format = tt::DataFormat::Float16_b,
         .cores = core_range_set,
         .approx_mode = true};
@@ -415,9 +395,7 @@ TEST_F(SingleDeviceFixture, DISABLED_MultiContinguousCoreMultiTileSfpuApproxComp
 TEST_F(SingleDeviceFixture, DISABLED_AllCoreSingleTileSfpuApproxCompute) {
     unit_tests::compute::sfpu::SfpuConfig test_config = {
         .tile_byte_size = 2 * 32 * 32,
-        .l1_input_byte_address = L1_UNRESERVED_BASE,
         .l1_input_data_format = tt::DataFormat::Float16_b,
-        .l1_output_byte_address = L1_UNRESERVED_BASE + 16 * 32 * 32,
         .l1_output_data_format = tt::DataFormat::Float16_b,
         .cores = {{}},
         .approx_mode = true};
@@ -456,9 +434,7 @@ TEST_F(SingleDeviceFixture, DISABLED_AllCoreSingleTileSfpuApproxCompute) {
 TEST_F(SingleDeviceFixture, DISABLED_AllCoreMultiTileSfpuApproxCompute) {
     unit_tests::compute::sfpu::SfpuConfig test_config = {
         .tile_byte_size = 2 * 32 * 32,
-        .l1_input_byte_address = L1_UNRESERVED_BASE,
         .l1_input_data_format = tt::DataFormat::Float16_b,
-        .l1_output_byte_address = L1_UNRESERVED_BASE + 16 * 32 * 32,
         .l1_output_data_format = tt::DataFormat::Float16_b,
         .cores = {{}},
         .approx_mode = true};

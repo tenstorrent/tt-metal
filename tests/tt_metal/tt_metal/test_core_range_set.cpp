@@ -35,7 +35,7 @@ void check_program_is_mapped_to_correct_cores(const tt_metal::Program &program, 
                     }
                 }
                 for (auto cb : program.circular_buffers()) {
-                    TT_ASSERT(cb.is_on_logical_core(logical_core));
+                    TT_ASSERT(cb->is_on_logical_core(logical_core));
                 }
                 for (auto semaphore : program.semaphores() ){
                     TT_ASSERT(semaphore.initialized_on_logical_core(logical_core));
@@ -93,25 +93,15 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
     // CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to math kernel, input CB and reader
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 8;
-    auto cb_src0 = tt_metal::CreateCircularBuffers(
-        program,
-        src0_cb_index,
-        core_range_set,
-        num_input_tiles,
-        num_input_tiles * single_tile_size,
-        tt::DataFormat::Float16_b
-    );
+    tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
+        .set_page_size(src0_cb_index, single_tile_size);
+    auto cb_src0 = tt_metal::CreateCircularBuffers(program, core_range_set, cb_src0_config);
 
     uint32_t ouput_cb_index = 16; // output operands start at index 16
     uint32_t num_output_tiles = 1;
-    auto cb_output = tt_metal::CreateCircularBuffers(
-        program,
-        ouput_cb_index,
-        core_range_set,
-        num_output_tiles,
-        num_output_tiles * single_tile_size,
-        tt::DataFormat::Float16_b
-    );
+    tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
+        .set_page_size(ouput_cb_index, single_tile_size);
+    auto cb_output = tt_metal::CreateCircularBuffers(program, core_range_set, cb_output_config);
 
     auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,

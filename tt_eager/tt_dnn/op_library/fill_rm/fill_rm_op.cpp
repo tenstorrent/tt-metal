@@ -30,18 +30,14 @@ operation::ProgramWithCallbacks fill_rm_single_core(const Tensor& any, Tensor &o
 
     uint32_t num_cb_tiles = 16;
     TT_ASSERT(W < 1024*num_cb_tiles); // Limitation for simplifying the kernel
-    auto cb_src0 = tt_metal::CreateCircularBuffers(
-        program,
-        0, // cb index
-        core,
-        num_cb_tiles, num_cb_tiles * single_tile_size,
-        cb_data_format);
-    auto cb_src1 = tt_metal::CreateCircularBuffers(
-        program,
-        1, // cb index
-        core,
-        num_cb_tiles, num_cb_tiles * single_tile_size,
-        cb_data_format);
+
+    tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_cb_tiles * single_tile_size, {{0, cb_data_format}})
+		.set_page_size(0, single_tile_size);
+    auto cb_src0 = tt_metal::CreateCircularBuffers(program, core, cb_src0_config);
+
+    tt_metal::CircularBufferConfig cb_src1_config = tt_metal::CircularBufferConfig(num_cb_tiles * single_tile_size, {{1, cb_data_format}})
+		.set_page_size(1, single_tile_size);
+    auto cb_src1 = tt_metal::CreateCircularBuffers(program, core, cb_src1_config);
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t) dst_is_dram};

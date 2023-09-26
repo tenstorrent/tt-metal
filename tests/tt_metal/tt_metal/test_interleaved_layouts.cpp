@@ -113,29 +113,15 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
         // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input CB
         // CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to math kernel, input CB and reader
         uint32_t src0_cb_index = 0;
-        uint32_t src0_cb_addr = 200 * 1024;
         uint32_t num_input_tiles = num_tiles_c;
-        auto cb_src0 = tt_metal::CreateCircularBuffer(
-            program,
-            src0_cb_index,
-            core,
-            num_input_tiles,
-            num_input_tiles * single_tile_size,
-            tt::DataFormat::Float16_b,
-            src0_cb_addr
-        );
+        tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(src0_cb_index, single_tile_size);
+        auto cb_src0 = tt_metal::CreateCircularBuffers(program, core, cb_src0_config);
 
         uint32_t ouput_cb_index = 16; // output operands start at index 16
-        uint32_t output_cb_addr = 300 * 1024;
-        auto cb_output = tt_metal::CreateCircularBuffer(
-            program,
-            ouput_cb_index,
-            core,
-            1,
-            single_tile_size,
-            tt::DataFormat::Float16_b,
-            output_cb_addr
-        );
+        tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(ouput_cb_index, single_tile_size);
+        auto cb_output = tt_metal::CreateCircularBuffers(program, core, cb_output_config);
 
         auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
@@ -293,29 +279,15 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
         // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input CB
         // CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to math kernel, input CB and reader
         uint32_t src0_cb_index = 0;
-        uint32_t src0_cb_addr = 200 * 1024;
         uint32_t num_input_tiles = num_tiles_c;
-        auto cb_src0 = tt_metal::CreateCircularBuffer(
-            program,
-            src0_cb_index,
-            core,
-            num_input_tiles,
-            num_input_tiles * single_tile_size,
-            tt::DataFormat::Float16_b,
-            src0_cb_addr
-        );
+        tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(src0_cb_index, single_tile_size);
+        auto cb_src0 = tt_metal::CreateCircularBuffers(program, core, cb_src0_config);
 
         uint32_t ouput_cb_index = 16; // output operands start at index 16
-        uint32_t output_cb_addr = 300 * 1024;
-        auto cb_output = tt_metal::CreateCircularBuffer(
-            program,
-            ouput_cb_index,
-            core,
-            num_input_tiles,
-            num_input_tiles * single_tile_size,
-            tt::DataFormat::Float16_b,
-            output_cb_addr
-        );
+        tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(ouput_cb_index, single_tile_size);
+        auto cb_output = tt_metal::CreateCircularBuffers(program, core, cb_output_config);
 
         auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
@@ -428,23 +400,13 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
     tt_metal::Program program = tt_metal::Program();
     CoreCoord core = {0, 0};
 
-    auto cb_src0 = tt_metal::CreateCircularBuffer(
-        program,
-        0,
-        core,
-        2,
-        2 * num_bytes_per_page,
-        tt::DataFormat::Float16_b
-    );
+    tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(2 * num_bytes_per_page, {{0, tt::DataFormat::Float16_b}})
+        .set_page_size(0, num_bytes_per_page);
+    auto cb_src0 = tt_metal::CreateCircularBuffers(program, core, cb_src0_config);
 
-    auto cb_output = tt_metal::CreateCircularBuffer(
-        program,
-        16,
-        core,
-        2,
-        2 * num_bytes_per_page,
-        tt::DataFormat::Float16_b
-    );
+    tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(2 * num_bytes_per_page, {{16, tt::DataFormat::Float16_b}})
+        .set_page_size(16, num_bytes_per_page);
+    auto cb_output = tt_metal::CreateCircularBuffers(program, core, cb_output_config);
 
     auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,

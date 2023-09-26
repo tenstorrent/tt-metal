@@ -243,34 +243,54 @@ operation::ProgramWithCallbacks layernorm_(
     );
 
     // Create circular buffers
-    CreateCircularBuffers( program, CB::c_in0,       all_cores, in0_t,  in0_t*single_tile_size,  cb_data_format );
-    CreateCircularBuffers( program, CB::c_out0,      all_cores, out0_t, out0_t*single_tile_size, cb_data_format );
-    CreateCircularBuffers( program, CB::c_intermed1, all_cores, im1_t,  im1_t*single_tile_size,  cb_data_format );
-    CreateCircularBuffers( program, CB::c_in2,       all_cores, in2_t,  in2_t*bfloat16_tile_size,  DataFormat::Float16_b );
-    CreateCircularBuffers( program, CB::c_in3,       all_cores, in3_t,  in3_t*bfloat16_tile_size,  DataFormat::Float16_b );
-    CreateCircularBuffers( program, CB::c_intermed2, all_cores, im2_t,  im2_t*single_tile_size,  cb_data_format );
+    CircularBufferConfig cb_src0_config = CircularBufferConfig(in0_t*single_tile_size, {{CB::c_in0, cb_data_format}}).set_page_size(CB::c_in0, single_tile_size);
+    CreateCircularBuffers( program, all_cores, cb_src0_config );
+    CircularBufferConfig cb_out0_config = CircularBufferConfig(out0_t*single_tile_size, {{CB::c_out0, cb_data_format}}).set_page_size(CB::c_out0, single_tile_size);
+    CreateCircularBuffers( program, all_cores, cb_out0_config );
+    CircularBufferConfig cb_intermed1_config = CircularBufferConfig(im1_t*single_tile_size, {{CB::c_intermed1, cb_data_format}}).set_page_size(CB::c_intermed1, single_tile_size);
+    CreateCircularBuffers( program, all_cores,  cb_intermed1_config );
+    CircularBufferConfig cb_in2_config = CircularBufferConfig(in2_t*bfloat16_tile_size, {{CB::c_in2, DataFormat::Float16_b}}).set_page_size(CB::c_in2, bfloat16_tile_size);
+    CreateCircularBuffers( program, all_cores, cb_in2_config );
+    CircularBufferConfig cb_in3_config = CircularBufferConfig(in3_t*bfloat16_tile_size, {{CB::c_in3, DataFormat::Float16_b}}).set_page_size(CB::c_in3, bfloat16_tile_size);
+    CreateCircularBuffers( program, all_cores, cb_in3_config );
+    CircularBufferConfig cb_intermed2_config = CircularBufferConfig(im2_t*single_tile_size, {{CB::c_intermed2, cb_data_format}}).set_page_size(CB::c_intermed2, single_tile_size);
+    CreateCircularBuffers( program, all_cores, cb_intermed2_config );
     if (!rms_norm) {
-        CreateCircularBuffers( program, CB::c_intermed0, all_cores, im0_t,  im0_t*single_tile_size,  cb_data_format );
+        CircularBufferConfig cb_intermed0_config = CircularBufferConfig(im0_t*single_tile_size, {{CB::c_intermed0, cb_data_format}}).set_page_size(CB::c_intermed0, single_tile_size);
+        CreateCircularBuffers( program, all_cores, cb_intermed0_config );
     }
-    CreateCircularBuffers( program, CB::c_intermed3, all_cores, im3_t,  im3_t*single_tile_size,  cb_data_format );
-    CreateCircularBuffers( program, CB::c_intermed4, all_cores, im4_t,  im4_t*single_tile_size,  cb_data_format );
+    CircularBufferConfig c_intermed3_config = CircularBufferConfig(im3_t*single_tile_size, {{CB::c_intermed3, cb_data_format}}).set_page_size(CB::c_intermed3, single_tile_size);
+    CreateCircularBuffers( program, all_cores, c_intermed3_config );
+    CircularBufferConfig c_intermed4_config = CircularBufferConfig(im4_t*single_tile_size, {{CB::c_intermed4, cb_data_format}}).set_page_size(CB::c_intermed4, single_tile_size);
+    CreateCircularBuffers( program, all_cores, c_intermed4_config );
     if (gamma.has_value() || beta.has_value()) {
-        CreateCircularBuffers( program, CB::c_intermed5, all_cores, im5_t,  im5_t*single_tile_size,  cb_data_format );
+        CircularBufferConfig c_intermed5_config = CircularBufferConfig(im5_t*single_tile_size, {{CB::c_intermed5, cb_data_format}}).set_page_size(CB::c_intermed5, single_tile_size);
+        CreateCircularBuffers( program, all_cores, c_intermed5_config );
     }
     if (gamma.has_value()) {
-        CreateCircularBuffers( program, CB::c_in5,       all_cores, in5_t,  in5_t*(gamma.value().layout() == Layout::ROW_MAJOR ? bfloat16_tile_size : single_tile_size), gamma.value().layout() == Layout::ROW_MAJOR ? DataFormat::Float16_b : cb_data_format );
+        uint32_t c_in5_page_size = gamma.value().layout() == Layout::ROW_MAJOR ? bfloat16_tile_size : single_tile_size;
+        DataFormat c_in5_df = gamma.value().layout() == Layout::ROW_MAJOR ? DataFormat::Float16_b : cb_data_format;
+        CircularBufferConfig c_in5_config = CircularBufferConfig(in5_t * c_in5_page_size, {{CB::c_in5, c_in5_df}})
+            .set_page_size(CB::c_in5, c_in5_page_size);
+        CreateCircularBuffers( program, all_cores, c_in5_config );
     }
     if (beta.has_value()) {
-        CreateCircularBuffers( program, CB::c_in6,       all_cores, in6_t,  in6_t*(beta.value().layout() == Layout::ROW_MAJOR ? bfloat16_tile_size : single_tile_size), beta.value().layout() == Layout::ROW_MAJOR ? DataFormat::Float16_b : cb_data_format );
+        uint32_t c_in6_page_size = beta.value().layout() == Layout::ROW_MAJOR ? bfloat16_tile_size : single_tile_size;
+        DataFormat c_in6_df = beta.value().layout() == Layout::ROW_MAJOR ? DataFormat::Float16_b : cb_data_format;
+        CircularBufferConfig c_in6_config = CircularBufferConfig(in6_t * c_in6_page_size, {{CB::c_in6, c_in6_df}})
+            .set_page_size(CB::c_in6, c_in6_page_size);
+        CreateCircularBuffers( program, all_cores, c_in6_config );
     }
     if (b) {
         // x = a+b in this notation
         // result = ln(x)*gamma + beta
         // if there's no pre-add we use cb_in0 for x, otherwise a is pre-buffered into in0, added into im6, then im6 is used as x
         // b is buffered into c_in1
-        CreateCircularBuffers( program, CB::c_intermed6, all_cores, im6_t,  im6_t*single_tile_size,  cb_data_format );
+        CircularBufferConfig c_intermed6_config = CircularBufferConfig(im6_t*single_tile_size, {{CB::c_intermed6, cb_data_format}}).set_page_size(CB::c_intermed6, single_tile_size);
+        CreateCircularBuffers( program, all_cores, c_intermed6_config );
         // c_in1 is input buffer for b
-        CreateCircularBuffers( program, CB::c_in1,       all_cores, in1_t,  in1_t*single_tile_size,  cb_data_format );
+        CircularBufferConfig c_in1_config = CircularBufferConfig(in1_t*single_tile_size, {{CB::c_in1, cb_data_format}}).set_page_size(CB::c_in1, single_tile_size);
+        CreateCircularBuffers( program, all_cores, c_in1_config);
     }
 
     union { float f; uint32_t u; } winv; winv.f = 1.0f / W; // bcast-w scaler

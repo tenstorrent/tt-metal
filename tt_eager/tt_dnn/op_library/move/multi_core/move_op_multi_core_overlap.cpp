@@ -74,18 +74,12 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
 
     uint32_t size_per_l1_bank = tt_metal::detail::SizeBytesPerBank(output.buffer()->size(), output.buffer()->page_size(), num_l1_banks);
     TT_ASSERT(size_per_l1_bank % single_tile_size == 0);
-    uint32_t num_pages_per_l1_bank = size_per_l1_bank / single_tile_size;
 
     // CB is being used as temp L1 buffer to copy src data into before writing to dst
     uint32_t cb_index = 0;
-    auto cb = tt_metal::CreateCircularBuffers(
-        program,
-        cb_index,
-        all_cores,
-        num_pages_per_l1_bank,
-        size_per_l1_bank,
-        cb_data_format
-    );
+    tt_metal::CircularBufferConfig cb_config = tt_metal::CircularBufferConfig(size_per_l1_bank, {{cb_index, cb_data_format}})
+		.set_page_size(cb_index, single_tile_size);
+    auto cb = tt_metal::CreateCircularBuffers(program, all_cores, cb_config);
 
     auto semaphore_addr = CreateSemaphore(program, all_cores, 0);
 

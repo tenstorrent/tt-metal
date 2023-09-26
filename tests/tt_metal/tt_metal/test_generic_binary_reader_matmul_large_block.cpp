@@ -175,43 +175,30 @@ int main(int argc, char **argv) {
         uint32_t src0_cb_index = 0;
         uint32_t src0_cb_addr = 200 * 1024;
         uint32_t cb0_tiles = M * in0_block_w * 2;
-        auto cb_src0 = tt_metal::CreateCircularBuffer(
-            program,
-            src0_cb_index,
-            core,
-            cb0_tiles,
-            cb0_tiles * single_tile_size,
-            tt::DataFormat::Float16_b,
-            src0_cb_addr
-        );
+        tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(cb0_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}}, src0_cb_addr)
+            .set_page_size(src0_cb_index, single_tile_size);
+        auto cb_src0 = tt_metal::CreateCircularBuffers(program, core, cb_src0_config);
 
         uint32_t src1_cb_index = 1;
         uint32_t src1_cb_addr = 300 * 1024;
         uint32_t cb1_tiles = N * in0_block_w * 2;
-        auto cb_src1 = tt_metal::CreateCircularBuffer(
-            program,
-            src1_cb_index,
-            core,
-            cb1_tiles,
-            cb1_tiles * single_tile_size,
-            tt::DataFormat::Float16_b,
-            src1_cb_addr
-        );
+        tt_metal::CircularBufferConfig cb_src1_config = tt_metal::CircularBufferConfig(cb1_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}}, src1_cb_addr)
+            .set_page_size(src1_cb_index, single_tile_size);
+        auto cb_src1 = tt_metal::CreateCircularBuffers(program, core, cb_src1_config);
 
         uint32_t ouput_cb_index = 16; // output operands start at index 16
         uint32_t interm0_cb_index = 24;
         uint32_t output_cb_addr = 400 * 1024;
         uint32_t num_output_tiles = M * N;
         CoreRangeSet cores(std::set<CoreRange>{CoreRange{.start=core, .end=core}});
-        auto cb_output = tt_metal::CreateCircularBuffers(
-            program,
-            {ouput_cb_index, interm0_cb_index},
-            cores,
-            num_output_tiles,
-            num_output_tiles * single_tile_size,
-            tt::DataFormat::Float16_b,
-            output_cb_addr
-        );
+        std::map<uint8_t, tt::DataFormat> data_format_spec = {
+            {ouput_cb_index, tt::DataFormat::Float16_b},
+            {interm0_cb_index, tt::DataFormat::Float16_b}
+        };
+        tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, data_format_spec, output_cb_addr)
+            .set_page_size(ouput_cb_index, single_tile_size)
+            .set_page_size(interm0_cb_index, single_tile_size);
+        auto cb_output = tt_metal::CreateCircularBuffers(program, core, cb_output_config);
 
         // create source addresses
         uint32_t face_width = 16;

@@ -75,32 +75,19 @@ int main(int argc, char **argv) {
         auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
 
         uint32_t src0_cb_index = 0;
-        uint32_t src0_cb_addr = 200 * 1024;
         uint32_t num_buffer_tiles = 32;
         // this buffer is used in transpose_hc.cpp NCRISC kernel
-        auto cb_src0 = tt_metal::CreateCircularBuffer(
-            program,
-            src0_cb_index,
-            core,
-            num_buffer_tiles,
-            num_buffer_tiles * single_tile_bytes,
-            tt::DataFormat::Float16_b,
-            src0_cb_addr
-        );
+        tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_buffer_tiles * single_tile_bytes, {{src0_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(src0_cb_index, single_tile_bytes);
+        auto cb_src0 = tt_metal::CreateCircularBuffers(program, core, cb_src0_config);
 
         uint32_t ouput_cb_index = 16; // output operands start at index 16
-        uint32_t output_cb_addr = 300 * 1024;
         uint32_t num_output_buffer_tiles = 32;
         // this buffer is used in writer_unary.cpp BRISC kernel
-        auto cb_output = tt_metal::CreateCircularBuffer(
-            program,
-            ouput_cb_index,
-            core,
-            num_output_buffer_tiles,
-            num_output_buffer_tiles * single_tile_bytes,
-            tt::DataFormat::Float16_b,
-            output_cb_addr
-        );
+        tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_buffer_tiles * single_tile_bytes, {{ouput_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(ouput_cb_index, single_tile_bytes);
+        auto cb_output = tt_metal::CreateCircularBuffers(program, core, cb_output_config);
+
         // no need to create a buffer at CB::c_in2 since we pass scaler=0 to the reader
 
         auto reader_kernel = tt_metal::CreateDataMovementKernel(

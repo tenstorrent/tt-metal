@@ -119,14 +119,9 @@ operation::ProgramWithCallbacks multi_core_concat_heads(const Tensor &a, Tensor&
     // Create circular buffers
     uint32_t src0_cb_index = 0;
     uint32_t cb0_tiles = per_core_tiles * 2; // double buffer
-    auto cb_src0 = tt_metal::CreateCircularBuffers(
-        program,
-        src0_cb_index,
-        all_cores,
-        cb0_tiles,
-        cb0_tiles * single_tile_size,
-        cb_data_format
-    );
+    tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(cb0_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
+		.set_page_size(src0_cb_index, single_tile_size);
+    auto cb_src0 = tt_metal::CreateCircularBuffers(program, all_cores, cb_src0_config);
 
     for (int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
