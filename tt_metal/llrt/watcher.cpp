@@ -201,9 +201,9 @@ static void dump_run_state(FILE *f, uint32_t state) {
     else if (state == RUN_MESSAGE_GO) code = 'G';
     else if (state == RUN_MESSAGE_DONE) code = 'D';
     if (code == 'U') {
-        fprintf(f, "rmb:U(%d)", state);
+        fprintf(f, "U(%d)", state);
     } else {
-        fprintf(f, "rmb:%c", code);
+        fprintf(f, "%c", code);
     }
 }
 
