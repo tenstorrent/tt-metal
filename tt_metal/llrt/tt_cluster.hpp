@@ -73,7 +73,13 @@ struct tt_cluster
     void on_close_device(tt_cluster_on_close_device_callback callback);
 
     metal_SocDescriptor& get_soc_desc(chip_id_t chip) { return sdesc_per_chip.at(chip); }
-    uint32_t get_harvested_rows(chip_id_t chip) { return device->harvested_rows_per_target.at(chip); }
+    uint32_t get_harvested_rows(chip_id_t chip) {
+        if (type == TargetDevice::Versim) {
+            return 0;
+        } else {
+            return device->harvested_rows_per_target.at(chip);
+        }
+    }
 
     //! device driver and misc apis
     void clean_system_resources();
