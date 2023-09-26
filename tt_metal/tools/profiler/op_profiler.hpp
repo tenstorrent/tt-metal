@@ -66,9 +66,10 @@ namespace op_profiler {
             string tensorStorageStr;
             if (tensor.storage_type() == StorageType::DEVICE)
             {
-                tensorStorageStr = fmt::format("DEV_{}_{}",
+                tensorStorageStr = fmt::format("DEV_{}_{}_{}",
                         tensor.device()->id(),
-                        magic_enum::enum_name(tensor.memory_config().buffer_type));
+                        magic_enum::enum_name(tensor.memory_config().buffer_type),
+                        magic_enum::enum_name(tensor.memory_config().memory_layout));
             }
             else
             {
