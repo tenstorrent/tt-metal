@@ -64,7 +64,9 @@ def run_perf_resnet(
     torch_resnet50.eval()
 
     state_dict = torch_resnet50.state_dict()
-
+    sharded = False
+    if batch_size == 8:
+        sharded = True
     tt_resnet50 = ResNet(
         Bottleneck,
         [3, 4, 6, 3],
@@ -74,6 +76,7 @@ def run_perf_resnet(
         fold_batchnorm=True,
         storage_in_dram=False,
         batch_size=batch_size,
+        sharded=sharded,
     )
 
     with torch.no_grad():
