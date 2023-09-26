@@ -3,29 +3,31 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+import json
 import tt_lib
 from loguru import logger
-import pytest
-from transformers import AutoTokenizer, T5Model
+
+from transformers import AutoTokenizer, T5Tokenizer, T5Model
 from models.utility_functions import (
-    tt_to_torch_tensor,
+    torch2tt_tensor,
+    tt2torch_tensor,
 )
-from models.utility_functions import comp_pcc, comp_allclose
+from models.utility_functions import comp_pcc
 from models.t5.tt.t5_model import TtT5Model
 
 
-def run_test_T5Model_inference(pcc, device, use_attention_mask, model_name):
+def run_test_T5Model_inference(device, use_attention_mask, model_name):
     tokenizer = AutoTokenizer.from_pretrained(model_name, model_max_length=32)
     hf_reference_model = T5Model.from_pretrained(model_name)
     hf_reference_model.eval()
 
-    config = hf_reference_model.config
+    config = json.loads(hf_reference_model.config.to_json_string())
 
     # Prepare input
     input_sentance = "Studies have been shown that owning a dog is good for you"
     tokenized = tokenizer(
         input_sentance, padding="max_length", max_length=32, return_tensors="pt"
-    )
+    )  # Batch size 1
 
     input_ids = tokenized.input_ids
     attention_mask = tokenized.attention_mask if use_attention_mask else None
@@ -33,11 +35,13 @@ def run_test_T5Model_inference(pcc, device, use_attention_mask, model_name):
     decoder_input_sentence = "Studies show that"
     tokenized = tokenizer(
         decoder_input_sentence, padding="max_length", max_length=32, return_tensors="pt"
-    )
+    )  # Batch size 1
 
     decoder_input_ids = tokenized.input_ids
     decoder_attention_mask = tokenized.attention_mask if use_attention_mask else None
 
+    # preprocess: Prepend decoder_input_ids with start token which is pad token for T5Model.
+    # This is not needed for torch's T5ForConditionalGeneration as it does this internally using labels arg.
     decoder_input_ids = hf_reference_model._shift_right(decoder_input_ids)
 
     # PyTorch forward pass
@@ -60,9 +64,8 @@ def run_test_T5Model_inference(pcc, device, use_attention_mask, model_name):
         attention_mask=attention_mask,
         decoder_attention_mask=decoder_attention_mask,
     )
-    tt_out = tt_to_torch_tensor(tt_model_outputs.last_hidden_state)
-    does_pass, pcc_message = comp_pcc(pt_out, tt_out, pcc)
-    logger.info(comp_allclose(pt_out, tt_out))
+    tt_out = tt2torch_tensor(tt_model_outputs[0])
+    does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.98)
     logger.info(pcc_message)
 
     pt_decoded_out = tokenizer.decode(pt_out[0][0].softmax(0).argmax(1))
@@ -76,42 +79,18 @@ def run_test_T5Model_inference(pcc, device, use_attention_mask, model_name):
     else:
         logger.warning(f"test_T5Model_inference {model_name} Failed!")
 
-    assert does_pass, f"T5Model output does not meet PCC requirement {pcc}."
+    assert does_pass
 
 
-@pytest.mark.parametrize(
-    "pcc, model_name",
-    ((0.99, "t5-small"),),
-)
-def test_T5Model_inference_t5_small(pcc, model_name, reset_seeds):
-    device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.SetDefaultDevice(device)
+def test_T5Model_inference_t5_small(device):
+    run_test_T5Model_inference(device, use_attention_mask=True, model_name="t5-small")
+
+
+def test_T5Model_inference_flan_t5_small(device):
     run_test_T5Model_inference(
-        pcc, device, use_attention_mask=True, model_name=model_name
-    )
-    tt_lib.device.CloseDevice(device)
-
-
-@pytest.mark.parametrize(
-    "pcc, model_name",
-    ((0.99, "google/flan-t5-small"),),
-)
-def test_T5Model_inference_flan_t5_small(pcc, model_name, reset_seeds):
-    device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.SetDefaultDevice(device)
-    run_test_T5Model_inference(
-        pcc, device, use_attention_mask=True, model_name=model_name
+        device, use_attention_mask=True, model_name="google/flan-t5-small"
     )
 
 
-@pytest.mark.parametrize(
-    "pcc, model_name",
-    ((0.98, "t5-base"),),
-)
-def test_T5Model_inference_t5_base(pcc, model_name, reset_seeds):
-    device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.SetDefaultDevice(device)
-    run_test_T5Model_inference(
-        pcc, device, use_attention_mask=True, model_name=model_name
-    )
-    tt_lib.device.CloseDevice(device)
+def test_T5Model_inference_t5_base(device):
+    run_test_T5Model_inference(device, use_attention_mask=True, model_name="t5-base")

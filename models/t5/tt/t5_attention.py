@@ -6,36 +6,295 @@ import math
 import torch
 from torch import nn
 import tt_lib
-from tt_lib import fallback_ops
-from typing import Optional
+
+from loguru import logger
 from models.utility_functions import (
-    torch_to_tt_tensor_rm,
-    tt_to_torch_tensor,
+    torch2tt_tensor,
+    tt2torch_tensor,
 )
-from models.helper_funcs import Linear as TtLinear
 
 
-def t5_shape_tt(
-    states: tt_lib.tensor.Tensor,
-    batch_size: int,
-    n_heads: int,
-    key_value_proj_dim: int,
-    device,
-) -> tt_lib.tensor.Tensor:
-    # Layout of states is Layout.TILE
-    states = tt_to_torch_tensor(states)
-    states = torch_to_tt_tensor_rm(states, device, put_on_device=True)
-    tt_out = tt_lib.tensor.reshape(states, batch_size, -1, n_heads, key_value_proj_dim)
-    tt_out = tt_lib.tensor.transpose_hc(tt_out)
+def t5_shape_tt(states, batch_size, n_heads, key_value_proj_dim, device):
+    """projection"""
+    fall_back_to_torch = True
+
+    if fall_back_to_torch:
+        states = tt2torch_tensor(states)
+        states = torch.reshape(states, (batch_size, -1, n_heads, key_value_proj_dim))
+        states = states.transpose(1, 2)
+        tt_out = torch2tt_tensor(states, device)
+    else:
+        tt_out = tt_lib.tensor.reshape(
+            states, batch_size, -1, n_heads, key_value_proj_dim
+        )
+        tt_out = tt_lib.tensor.transpose_hc(tt_out)
+
     return tt_out
 
 
-def t5_unshape_tt(
-    states: tt_lib.tensor.Tensor, batch_size: int, inner_dim: int, device
-):
-    states = tt_lib.tensor.transpose_hc(states)
-    tt_out = tt_lib.tensor.reshape(states, 1, batch_size, -1, inner_dim)
+def t5_shape_pt(states, batch_size, n_heads, key_value_proj_dim):
+    """
+    projection
+    batch_size eg. 32
+    n_heads eg. 8
+    key_value_proj_dim eg 64
+    """
+    pt_out = states.view(batch_size, -1, n_heads, key_value_proj_dim)
+    return pt_out.transpose(1, 2)
+
+
+def t5_unshape_pt(states, batch_size, inner_dim):
+    return states.transpose(1, 2).contiguous().view(1, batch_size, -1, inner_dim)
+
+
+def t5_unshape_tt(states, batch_size, inner_dim, device):
+    # Leave as fallback due to perf
+    fall_back_to_torch = True
+
+    if fall_back_to_torch:
+        states = tt2torch_tensor(states)
+        states = t5_unshape_pt(states, batch_size, inner_dim)
+        tt_out = torch2tt_tensor(states, device)
+    else:
+        states = tt_lib.tensor.transpose_hc(states)
+        tt_out = tt_lib.tensor.reshape(states, 1, batch_size, -1, inner_dim)
+
     return tt_out
+
+
+# class T5Attention(nn.Module):
+#     def __init__(self, config, hf_reference_module, has_relative_attention_bias=False):
+#         super().__init__()
+#         self.is_decoder = config["is_decoder"]
+#         self.has_relative_attention_bias = has_relative_attention_bias
+#         self.relative_attention_num_buckets = config["relative_attention_num_buckets"]
+#         self.relative_attention_max_distance = config["relative_attention_max_distance"]
+#         self.d_model = config["d_model"]
+#         self.key_value_proj_dim = config["d_kv"]
+#         self.n_heads = config["num_heads"]
+#         self.dropout = config["dropout_rate"]
+#         self.inner_dim = self.n_heads * self.key_value_proj_dim
+
+#         self.q = hf_reference_module.q
+#         self.k = hf_reference_module.k
+#         self.v = hf_reference_module.v
+#         self.o = hf_reference_module.o
+
+#         if self.has_relative_attention_bias:
+#             self.relative_attention_bias = nn.Embedding(self.relative_attention_num_buckets, self.n_heads)
+#         self.pruned_heads = set()
+#         self.gradient_checkpointing = False
+
+#     def prune_heads(self, heads):
+#         if len(heads) == 0:
+#             return
+#         heads, index = find_pruneable_heads_and_indices(
+#             heads, self.n_heads, self.key_value_proj_dim, self.pruned_heads
+#         )
+#         # Prune linear layers
+#         self.q = prune_linear_layer(self.q, index)
+#         self.k = prune_linear_layer(self.k, index)
+#         self.v = prune_linear_layer(self.v, index)
+#         self.o = prune_linear_layer(self.o, index, dim=1)
+#         # Update hyper params
+#         self.n_heads = self.n_heads - len(heads)
+#         self.inner_dim = self.key_value_proj_dim * self.n_heads
+#         self.pruned_heads = self.pruned_heads.union(heads)
+
+#     @staticmethod
+#     def _relative_position_bucket(relative_position, bidirectional=True, num_buckets=32, max_distance=128):
+#         """
+#         Adapted from Mesh Tensorflow:
+#         https://github.com/tensorflow/mesh/blob/0cb87fe07da627bf0b7e60475d59f95ed6b5be3d/mesh_tensorflow/transformer/transformer_layers.py#L593
+#         Translate relative position to a bucket number for relative attention. The relative position is defined as
+#         memory_position - query_position, i.e. the distance in tokens from the attending position to the attended-to
+#         position. If bidirectional=False, then positive relative positions are invalid. We use smaller buckets for
+#         small absolute relative_position and larger buckets for larger absolute relative_positions. All relative
+#         positions >=max_distance map to the same bucket. All relative positions <=-max_distance map to the same bucket.
+#         This should allow for more graceful generalization to longer sequences than the model has been trained on
+#         Args:
+#             relative_position: an int32 Tensor
+#             bidirectional: a boolean - whether the attention is bidirectional
+#             num_buckets: an integer
+#             max_distance: an integer
+#         Returns:
+#             a Tensor with the same shape as relative_position, containing int32 values in the range [0, num_buckets)
+#         """
+#         relative_buckets = 0
+#         if bidirectional:
+#             num_buckets //= 2
+#             relative_buckets += (relative_position > 0).to(torch.long) * num_buckets
+#             relative_position = torch.abs(relative_position)
+#         else:
+#             relative_position = -torch.min(relative_position, torch.zeros_like(relative_position))
+#         # now relative_position is in the range [0, inf)
+
+#         # half of the buckets are for exact increments in positions
+#         max_exact = num_buckets // 2
+#         is_small = relative_position < max_exact
+
+#         # The other half of the buckets are for logarithmically bigger bins in positions up to max_distance
+#         relative_position_if_large = max_exact + (
+#             torch.log(relative_position.float() / max_exact)
+#             / math.log(max_distance / max_exact)
+#             * (num_buckets - max_exact)
+#         ).to(torch.long)
+#         relative_position_if_large = torch.min(
+#             relative_position_if_large, torch.full_like(relative_position_if_large, num_buckets - 1)
+#         )
+
+#         relative_buckets += torch.where(is_small, relative_position, relative_position_if_large)
+#         return relative_buckets
+
+#     def compute_bias(self, query_length, key_length, device=None):
+#         """Compute binned relative position bias"""
+#         if device is None:
+#             device = self.relative_attention_bias.weight.device
+#         context_position = torch.arange(query_length, dtype=torch.long, device=device)[:, None]
+#         memory_position = torch.arange(key_length, dtype=torch.long, device=device)[None, :]
+#         relative_position = memory_position - context_position  # shape (query_length, key_length)
+#         relative_position_bucket = self._relative_position_bucket(
+#             relative_position,  # shape (query_length, key_length)
+#             bidirectional=(not self.is_decoder),
+#             num_buckets=self.relative_attention_num_buckets,
+#             max_distance=self.relative_attention_max_distance,
+#         )
+#         values = self.relative_attention_bias(relative_position_bucket)  # shape (query_length, key_length, num_heads)
+#         values = values.permute([2, 0, 1]).unsqueeze(0)  # shape (1, num_heads, query_length, key_length)
+#         return values
+
+#     def forward(
+#         self,
+#         hidden_states,
+#         mask=None,
+#         key_value_states=None,
+#         position_bias=None,
+#         past_key_value=None,
+#         layer_head_mask=None,
+#         query_length=None,
+#         use_cache=False,
+#         output_attentions=False,
+#     ):
+#         """
+#         Self-attention (if key_value_states is None) or attention over source sentence (provided by key_value_states).
+#         """
+#         # Input is (batch_size, seq_length, dim)
+#         # Mask is (batch_size, key_length) (non-causal) or (batch_size, key_length, key_length)
+#         # past_key_value[0] is (batch_size, n_heads, q_len - 1, dim_per_head)
+#         batch_size, seq_length = hidden_states.shape[:2]
+
+#         real_seq_length = seq_length
+
+#         if past_key_value is not None:
+#             assert (
+#                 len(past_key_value) == 2
+#             ), f"past_key_value should have 2 past states: keys and values. Got { len(past_key_value)} past states"
+#             real_seq_length += past_key_value[0].shape[2] if query_length is None else query_length
+
+#         key_length = real_seq_length if key_value_states is None else key_value_states.shape[1]
+
+#         def shape(states):
+#             """projection"""
+#             return states.view(batch_size, -1, self.n_heads, self.key_value_proj_dim).transpose(1, 2)
+
+#         def unshape(states):
+#             """reshape"""
+#             return states.transpose(1, 2).contiguous().view(batch_size, -1, self.inner_dim)
+
+#         def project(hidden_states, proj_layer, key_value_states, past_key_value):
+#             """projects hidden states correctly to key/query states"""
+#             if key_value_states is None:
+#                 # self-attn
+#                 # (batch_size, n_heads, seq_length, dim_per_head)
+#                 hidden_states = shape(proj_layer(hidden_states))
+#             elif past_key_value is None:
+#                 # cross-attn
+#                 # (batch_size, n_heads, seq_length, dim_per_head)
+#                 hidden_states = shape(proj_layer(key_value_states))
+
+#             if past_key_value is not None:
+#                 if key_value_states is None:
+#                     # self-attn
+#                     # (batch_size, n_heads, key_length, dim_per_head)
+#                     hidden_states = torch.cat([past_key_value, hidden_states], dim=2)
+#                 elif past_key_value.shape[2] != key_value_states.shape[1]:
+#                     # checking that the `sequence_length` of the `past_key_value` is the same as
+#                     # the provided `key_value_states` to support prefix tuning
+#                     # cross-attn
+#                     # (batch_size, n_heads, seq_length, dim_per_head)
+#                     hidden_states = shape(proj_layer(key_value_states))
+#                 else:
+#                     # cross-attn
+#                     hidden_states = past_key_value
+#             return hidden_states
+
+#         # get query states
+#         query_states = shape(self.q(hidden_states))  # (batch_size, n_heads, seq_length, dim_per_head)
+
+#         # get key/value states
+#         key_states = project(
+#             hidden_states, self.k, key_value_states, past_key_value[0] if past_key_value is not None else None
+#         )
+#         value_states = project(
+#             hidden_states, self.v, key_value_states, past_key_value[1] if past_key_value is not None else None
+#         )
+
+#         # compute scores
+#         scores = torch.matmul(
+#             query_states, key_states.transpose(3, 2)
+#         )  # equivalent of torch.einsum("bnqd,bnkd->bnqk", query_states, key_states), compatible with onnx op>9
+
+#         if position_bias is None:
+#             if not self.has_relative_attention_bias:
+#                 position_bias = torch.zeros(
+#                     (1, self.n_heads, real_seq_length, key_length), device=scores.device, dtype=scores.dtype
+#                 )
+#                 if self.gradient_checkpointing and self.training:
+#                     position_bias.requires_grad = True
+#             else:
+#                 position_bias = self.compute_bias(real_seq_length, key_length, device=scores.device)
+
+#             # if key and values are already calculated
+#             # we want only the last query position bias
+#             if past_key_value is not None:
+#                 position_bias = position_bias[:, :, -hidden_states.size(1) :, :]
+
+#             if mask is not None:
+#                 position_bias = position_bias + mask  # (batch_size, n_heads, seq_length, key_length)
+
+#         if self.pruned_heads:
+#             mask = torch.ones(position_bias.shape[1])
+#             mask[list(self.pruned_heads)] = 0
+#             position_bias_masked = position_bias[:, mask.bool()]
+#         else:
+#             position_bias_masked = position_bias
+
+#         scores += position_bias_masked
+
+#         attn_weights = nn.functional.softmax(scores.float(), dim=-1).type_as(
+#             scores
+#         )  # (batch_size, n_heads, seq_length, key_length)
+
+#         #attn_weights = nn.functional.dropout(
+#         #    attn_weights, p=self.dropout, training=self.training
+#         #)  # (batch_size, n_heads, seq_length, key_length)
+
+#         # Mask heads if we want to
+#         if layer_head_mask is not None:
+#             attn_weights = attn_weights * layer_head_mask
+
+#         attn_output = torch.matmul(attn_weights, value_states)
+#         attn_output = unshape(attn_output)  # (batch_size, seq_length, dim)
+#         attn_output = self.o(attn_output)
+
+#         #return (attn_output, 0)
+
+#         present_key_value_state = (key_states, value_states) if (self.is_decoder and use_cache) else None
+#         outputs = (attn_output,) + (present_key_value_state,) + (position_bias,)
+
+#         if output_attentions:
+#             outputs = outputs + (attn_weights,)
+#         return outputs
 
 
 class TtT5Attention(nn.Module):
@@ -48,51 +307,27 @@ class TtT5Attention(nn.Module):
         has_relative_attention_bias=False,
     ):
         super().__init__()
-        self.is_decoder = config.is_decoder
+        self.is_decoder = config["is_decoder"]
         self.has_relative_attention_bias = has_relative_attention_bias
-        self.relative_attention_num_buckets = config.relative_attention_num_buckets
-        self.relative_attention_max_distance = config.relative_attention_max_distance
-        self.d_model = config.d_model
-        self.key_value_proj_dim = config.d_kv
-        self.n_heads = config.num_heads
+        self.relative_attention_num_buckets = config["relative_attention_num_buckets"]
+        self.relative_attention_max_distance = config["relative_attention_max_distance"]
+        self.d_model = config["d_model"]
+        self.key_value_proj_dim = config["d_kv"]
+        self.n_heads = config["num_heads"]
+        self.dropout = config["dropout_rate"]
         self.inner_dim = self.n_heads * self.key_value_proj_dim
         self.device = device
+        self.mem_config = tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1)
 
-        self.q_weights = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.q.weight"], self.device, put_on_device=True
-        )
-        self.query = TtLinear(
-            self.q_weights.shape()[-1],
-            self.q_weights.shape()[-2],
-            self.q_weights,
-        )
+        self.q_weights = torch2tt_tensor(state_dict[f"{base_address}.q.weight"], device)
+        self.k_weights = torch2tt_tensor(state_dict[f"{base_address}.k.weight"], device)
+        self.v_weights = torch2tt_tensor(state_dict[f"{base_address}.v.weight"], device)
+        self.o_weights = torch2tt_tensor(state_dict[f"{base_address}.o.weight"], device)
 
-        self.k_weights = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.k.weight"], self.device, put_on_device=True
-        )
-        self.key = TtLinear(
-            self.k_weights.shape()[-1],
-            self.k_weights.shape()[-2],
-            self.k_weights,
-        )
-
-        self.v_weights = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.v.weight"], self.device, put_on_device=True
-        )
-        self.value = TtLinear(
-            self.v_weights.shape()[-1],
-            self.v_weights.shape()[-2],
-            self.v_weights,
-        )
-
-        self.o_weights = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.o.weight"], self.device, put_on_device=True
-        )
-        self.output = TtLinear(
-            self.o_weights.shape()[-1],
-            self.o_weights.shape()[-2],
-            self.o_weights,
-        )
+        self.q_weights = tt_lib.tensor.transpose(self.q_weights)
+        self.k_weights = tt_lib.tensor.transpose(self.k_weights)
+        self.v_weights = tt_lib.tensor.transpose(self.v_weights)
+        self.o_weights = tt_lib.tensor.transpose(self.o_weights)
 
         if self.has_relative_attention_bias:
             self.relative_attention_bias = nn.Embedding(
@@ -111,31 +346,41 @@ class TtT5Attention(nn.Module):
 
     @staticmethod
     def _relative_position_bucket(
-        relative_position,
-        bidirectional=True,
-        num_buckets=32,
-        max_distance=128,
-        device=None,
+        relative_position, bidirectional=True, num_buckets=32, max_distance=128
     ):
+        """
+        Adapted from Mesh Tensorflow:
+        https://github.com/tensorflow/mesh/blob/0cb87fe07da627bf0b7e60475d59f95ed6b5be3d/mesh_tensorflow/transformer/transformer_layers.py#L593
+        Translate relative position to a bucket number for relative attention. The relative position is defined as
+        memory_position - query_position, i.e. the distance in tokens from the attending position to the attended-to
+        position. If bidirectional=False, then positive relative positions are invalid. We use smaller buckets for
+        small absolute relative_position and larger buckets for larger absolute relative_positions. All relative
+        positions >=max_distance map to the same bucket. All relative positions <=-max_distance map to the same bucket.
+        This should allow for more graceful generalization to longer sequences than the model has been trained on
+        Args:
+            relative_position: an int32 Tensor
+            bidirectional: a boolean - whether the attention is bidirectional
+            num_buckets: an integer
+            max_distance: an integer
+        Returns:
+            a Tensor with the same shape as relative_position, containing int32 values in the range [0, num_buckets)
+        """
         relative_buckets = 0
         if bidirectional:
             num_buckets //= 2
             relative_buckets += (relative_position > 0).to(torch.long) * num_buckets
-            relative_position = torch_to_tt_tensor_rm(
-                relative_position, device, put_on_device=True
-            )
-            relative_position = tt_lib.tensor.abs(relative_position)
-            relative_position = (
-                tt_to_torch_tensor(relative_position).squeeze(0).squeeze(0).long()
-            )
+            relative_position = torch.abs(relative_position)
         else:
             relative_position = -torch.min(
                 relative_position, torch.zeros_like(relative_position)
             )
+        # now relative_position is in the range [0, inf)
 
+        # half of the buckets are for exact increments in positions
         max_exact = num_buckets // 2
         is_small = relative_position < max_exact
 
+        # The other half of the buckets are for logarithmically bigger bins in positions up to max_distance
         relative_position_if_large = max_exact + (
             torch.log(relative_position.float() / max_exact)
             / math.log(max_distance / max_exact)
@@ -152,60 +397,45 @@ class TtT5Attention(nn.Module):
         return relative_buckets
 
     def compute_bias_const(self, query_length, key_length):
-        context_position = tt_lib.tensor.arange(0, query_length, 1).to(self.device)
-        context_position = tt_lib.tensor.permute(
-            context_position,
-            0,
-            1,
-            3,
-            2,
-        )
-        memory_position = tt_lib.tensor.arange(
-            0,
-            key_length,
-            1,
-        ).to(self.device)
-
-        memory_position = (
-            tt_to_torch_tensor(memory_position).squeeze(0).squeeze(0).long()
-        )
-        context_position = (
-            tt_to_torch_tensor(context_position).squeeze(0).squeeze(0).long()
-        )
-
-        # cannot broadcast tensor of size [1, 1, 1, 32] and [1, 1, 32, 1]
-        relative_position = memory_position - context_position
+        """Compute binned relative position bias"""
+        context_position = torch.arange(query_length, dtype=torch.long)[:, None]
+        memory_position = torch.arange(key_length, dtype=torch.long)[None, :]
+        relative_position = (
+            memory_position - context_position
+        )  # shape (query_length, key_length)
         relative_position_bucket = self._relative_position_bucket(
-            relative_position,
+            relative_position,  # shape (query_length, key_length)
             bidirectional=(not self.is_decoder),
             num_buckets=self.relative_attention_num_buckets,
             max_distance=self.relative_attention_max_distance,
-            device=self.device,
         )
-        values = self.relative_attention_bias(relative_position_bucket)
-        values = torch_to_tt_tensor_rm(values, self.device, put_on_device=True)
-        value = tt_lib.tensor.permute(
-            values,
-            0,
-            3,
-            1,
-            2,
-        )
-        values = tt_to_torch_tensor(value)
+        values = self.relative_attention_bias(
+            relative_position_bucket
+        )  # shape (query_length, key_length, num_heads)
+        values = values.permute([2, 0, 1]).unsqueeze(
+            0
+        )  # shape (1, num_heads, query_length, key_length)
         return values
 
     def forward(
         self,
-        hidden_states: Optional[tt_lib.tensor.Tensor],
-        mask: Optional[tt_lib.tensor.Tensor] = None,
-        key_value_states: Optional[tt_lib.tensor.Tensor] = None,
-        position_bias: Optional[tt_lib.tensor.Tensor] = None,
-        past_key_value: Optional[tt_lib.tensor.Tensor] = None,
-        layer_head_mask: Optional[tt_lib.tensor.Tensor] = None,
-        query_length: Optional[int] = None,
-        use_cache: Optional[bool] = False,
-        output_attentions: Optional[bool] = False,
-    ) -> tt_lib.tensor.Tensor:
+        hidden_states,
+        mask=None,
+        key_value_states=None,
+        position_bias=None,
+        past_key_value=None,
+        layer_head_mask=None,
+        query_length=None,
+        use_cache=False,
+        output_attentions=False,
+    ):
+        """
+        Self-attention (if key_value_states is None) or attention over source sentence (provided by key_value_states).
+
+        Input is (batch_size, seq_length, dim) in tt (1, batch_size, seq_length, dim) or (batch_size, 1, seq_length, dim)
+        Mask is (batch_size, key_length) (non-causal) or (batch_size, key_length, key_length)
+        past_key_value[0] is (batch_size, n_heads, q_len - 1, dim_per_head)
+        """
         batch_size = hidden_states.shape()[1]
         seq_length = hidden_states.shape()[2]
 
@@ -224,61 +454,75 @@ class TtT5Attention(nn.Module):
         )
 
         def shape(states):
+            """projection"""
+            # return states.view(batch_size, -1, self.n_heads, self.key_value_proj_dim).transpose(1, 2)
             return t5_shape_tt(
                 states, batch_size, self.n_heads, self.key_value_proj_dim, self.device
             )
 
         def unshape(states):
+            """reshape"""
+            # return states.transpose(1, 2).contiguous().view(batch_size, -1, self.inner_dim)
             return t5_unshape_tt(states, batch_size, self.inner_dim, self.device)
 
-        def project(hidden_states, proj_layer, key_value_states, past_key_value):
+        def project(hidden_states, proj_weights, key_value_states, past_key_value):
+            """projects hidden states correctly to key/query states"""
             if key_value_states is None:
-                layer = proj_layer(hidden_states.to(self.device))
-                hidden_states = shape(layer)
-
+                # self-attn
+                # (batch_size, n_heads, seq_length, dim_per_head)
+                hidden_states = shape(tt_lib.tensor.matmul(hidden_states, proj_weights, self.mem_config))
             elif past_key_value is None:
-                layer = proj_layer(key_value_states.to(self.device))
-                hidden_states = shape(layer)
+                # cross-attn
+                # (batch_size, n_heads, seq_length, dim_per_head)
+                hidden_states = shape(
+                    tt_lib.tensor.matmul(key_value_states, proj_weights, self.mem_config)
+                )
 
             if past_key_value is not None:
                 if key_value_states is None:
-                    hidden_states = tt_lib.tensor.concat(
-                        [past_key_value, hidden_states],
-                        dim=2,
-                    )
+                    # self-attn
+                    # (batch_size, n_heads, key_length, dim_per_head)
+                    hidden_states = tt2torch_tensor(hidden_states)
+                    hidden_states = torch.cat([past_key_value, hidden_states], dim=2)
+                    hidden_states = torch2tt_tensor(hidden_states, self.device)
                 elif past_key_value.shape[2] != key_value_states.shape()[2]:
-                    layer = proj_layer(key_value_states.to(self.device))
-                    hidden_states = shape(layer)
+                    # checking that the `sequence_length` of the `past_key_value` is the same as
+                    # the provided `key_value_states` to support prefix tuning
+                    # cross-attn
+                    # (batch_size, n_heads, seq_length, dim_per_head)
+                    hidden_states = shape(
+                        tt_lib.tensor.matmul(key_value_states, proj_weights, self.mem_config)
+                    )
                 else:
+                    # cross-attn
                     hidden_states = past_key_value
             return hidden_states
 
         # get query states
-        layer = self.query(hidden_states.to(self.device))
-        query_states = shape(layer)
+        query_states = shape(
+            tt_lib.tensor.matmul(hidden_states, self.q_weights, self.mem_config)
+            # self.q(hidden_states)
+        )  # (batch_size, n_heads, seq_length, dim_per_head)
 
         # get key/value states
         key_states = project(
             hidden_states,
-            self.key,
+            self.k_weights,
             key_value_states,
             past_key_value[0] if past_key_value is not None else None,
         )
         value_states = project(
             hidden_states,
-            self.value,
+            self.v_weights,
             key_value_states,
             past_key_value[1] if past_key_value is not None else None,
         )
 
-        transposed_key_states = tt_lib.tensor.transpose(
-            key_states,
-        )
-
-        scores = tt_lib.tensor.bmm(
-            query_states,
-            transposed_key_states,
-        )
+        # compute scores
+        # scores = torch.matmul(query_states, key_states.transpose(3, 2))
+        # equivalent of torch.einsum("bnqd,bnkd->bnqk", query_states, key_states), compatible with onnx op>9
+        transposed_key_states = tt_lib.tensor.transpose(key_states)
+        scores = tt_lib.tensor.bmm(query_states, transposed_key_states, self.mem_config)
 
         if (
             position_bias is None
@@ -289,7 +533,7 @@ class TtT5Attention(nn.Module):
 
         elif position_bias is None:
             if not self.has_relative_attention_bias:
-                position_bias = tt_lib.tensor.zeros(
+                position_bias = torch.zeros(
                     (1, self.n_heads, real_seq_length, key_length),
                 )
 
@@ -297,81 +541,49 @@ class TtT5Attention(nn.Module):
                     position_bias.requires_grad = True
             else:
                 position_bias = self.compute_bias_const(real_seq_length, key_length)
+            # if key and values are already calculated
+            # we want only the last query position bias
             if past_key_value is not None:
                 position_bias = position_bias[:, :, -hidden_states.shape()[2] :, :]
 
-            position_bias = fallback_ops.repeat(
-                position_bias,
-                ((batch_size, 1, 1, 1)),
-            )
-            position_bias = tt_to_torch_tensor(position_bias)
+            # "Broadcast" position bias so it can be used in + operation
+            position_bias = position_bias.repeat(batch_size, 1, 1, 1)
 
             if mask is not None:
-                position_bias = torch_to_tt_tensor_rm(
-                    position_bias, self.device, put_on_device=True
-                )
-                mask = torch_to_tt_tensor_rm(mask, self.device, put_on_device=True)
+                position_bias = (
+                    position_bias + mask
+                )  # (batch_size, n_heads, seq_length, key_length)
 
-                if position_bias.shape()[-2] == mask.shape()[-2]:
-                    position_bias = tt_lib.tensor.permute(position_bias, 0, 3, 1, 2)
-                    mask = tt_lib.tensor.permute(mask, 0, 3, 1, 2)
-                    position_bias = tt_lib.tensor.bcast(
-                        position_bias,
-                        mask,
-                        tt_lib.tensor.BcastOpMath.ADD,
-                        tt_lib.tensor.BcastOpDim.H,
-                    )
-                else:
-                    position_bias = tt_lib.tensor.permute(position_bias, 0, 3, 1, 2)
-                    mask = tt_lib.tensor.permute(mask, 0, 3, 1, 2)
-                    position_bias = tt_lib.tensor.bcast(
-                        position_bias,
-                        mask,
-                        tt_lib.tensor.BcastOpMath.ADD,
-                        tt_lib.tensor.BcastOpDim.HW,
-                    )
-
-                position_bias = tt_lib.tensor.permute(
-                    position_bias,
-                    0,
-                    2,
-                    3,
-                    1,
-                )
-
-            else:
-                position_bias = torch_to_tt_tensor_rm(
-                    position_bias, self.device, put_on_device=True
-                )
-
+            # Prunned heads!
             if self.pruned_heads:
                 mask = torch.ones(position_bias.shape()[2])
                 mask[list(self.pruned_heads)] = 0
                 position_bias = position_bias[:, mask.bool()]
 
+            # Transfer to tt device
+            position_bias = torch2tt_tensor(position_bias, self.device)
+
+            # Cache it
             self.cached_position_bias = position_bias
             self.cached_real_seq_length = real_seq_length
             self.cached_key_length = key_length
 
-        score = tt_lib.tensor.add(
-            scores,
-            position_bias,
-        )
-        attn_weights = tt_lib.operations.primary.softmax_in_place(score)
+        # scores += position_bias_masked
+        scores = tt_lib.tensor.add(scores, position_bias, output_mem_config = self.mem_config)
 
+        # attn_weights = nn.functional.softmax(scores.float(), dim=-1).type_as(scores)
+        attn_weights = tt_lib.operations.primary.softmax_in_place(scores)
+
+        # Dropout is not used in inference
+        # attn_weights = nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)  # (batch_size, n_heads, seq_length, key_length)
+
+        # Mask heads if we want to
         if layer_head_mask is not None:
-            attn_weights = tt_lib.tensor.mul(
-                attn_weights,
-                layer_head_mask,
-            )
+            attn_weights = tt_lib.tensor.mul(attn_weights, layer_head_mask, self.mem_config)
 
-        attn_output = tt_lib.tensor.bmm(
-            attn_weights,
-            value_states,
-        )
-
-        attn_output = unshape(attn_output)
-        attn_output = self.output(attn_output)
+        attn_output = tt_lib.tensor.bmm(attn_weights, value_states, self.mem_config)
+        attn_output = unshape(attn_output)  # (batch_size, seq_length, dim)
+        attn_output = tt_lib.tensor.matmul(attn_output, self.o_weights, self.mem_config)
 
         present_key_value_state = (
             (key_states, value_states) if (self.is_decoder and use_cache) else None

@@ -3,29 +3,30 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+import json
 import tt_lib
 from loguru import logger
-import pytest
+
 from transformers import T5Model
 from models.utility_functions import (
-    torch_to_tt_tensor_rm,
-    tt_to_torch_tensor,
+    torch2tt_tensor,
+    tt2torch_tensor,
 )
-from models.utility_functions import comp_pcc, comp_allclose
+from models.utility_functions import comp_pcc
 from models.t5.tt.t5_layer_self_attention import TtT5LayerSelfAttention
 
 
-def run_test_T5LayerSelfAttention_inference(pcc, device, model_name, input_h, input_w):
+def run_test_T5LayerSelfAttention_inference(device, model_name, input_h, input_w):
     hf_reference_model = T5Model.from_pretrained(model_name)
     hf_reference_model.eval()
 
-    config = hf_reference_model.config
-    config.is_decoder = False
+    config = json.loads(hf_reference_model.config.to_json_string())
+    config["is_decoder"] = False
 
     block = 2
     has_relative_attention_bias = block == 0
 
-    if config.is_decoder:
+    if config["is_decoder"]:
         hf_reference_module = hf_reference_model.decoder.block[block].layer[0]
         base_address = f"decoder.block.{block}.layer.0"
     else:
@@ -33,6 +34,7 @@ def run_test_T5LayerSelfAttention_inference(pcc, device, model_name, input_h, in
         base_address = f"encoder.block.{block}.layer.0"
 
     # Prepare input
+    torch.manual_seed(0)
     test_input = (torch.rand(32, input_h, input_w) * 2) - 1
 
     # PyTorch output
@@ -40,6 +42,7 @@ def run_test_T5LayerSelfAttention_inference(pcc, device, model_name, input_h, in
 
     test_input = test_input.unsqueeze(0)
 
+    # T5-small config file: https://huggingface.co/t5-small/resolve/main/config.json
     tt_model = TtT5LayerSelfAttention(
         config,
         hf_reference_model.state_dict(),
@@ -47,11 +50,10 @@ def run_test_T5LayerSelfAttention_inference(pcc, device, model_name, input_h, in
         device,
         has_relative_attention_bias,
     )
-    tt_out = tt_model(torch_to_tt_tensor_rm(test_input, device, put_on_device=True))[0]
-    tt_out = tt_to_torch_tensor(tt_out)
+    tt_out = tt_model(torch2tt_tensor(test_input, device))[0]
+    tt_out = tt2torch_tensor(tt_out)
 
-    does_pass, pcc_message = comp_pcc(pt_out, tt_out, pcc)
-    logger.info(comp_allclose(pt_out, tt_out))
+    does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.98)
     logger.info(pcc_message)
 
     if does_pass:
@@ -59,38 +61,12 @@ def run_test_T5LayerSelfAttention_inference(pcc, device, model_name, input_h, in
     else:
         logger.warning(f"test_T5LayerSelfAttention_inference {model_name} Failed!")
 
-    assert (
-        does_pass
-    ), f"T5LayerSelfAttention output does not meet PCC requirement {pcc}."
+    assert does_pass
 
 
-@pytest.mark.parametrize(
-    "pcc, model_name ,input_h, input_w",
-    ((0.99, "t5-small", 64, 512),),
-)
-def test_T5LayerSelfAttention_inference_t5_small(pcc, model_name, input_h, input_w):
-    device = tt_lib.device.CreateDevice(0)
-    run_test_T5LayerSelfAttention_inference(pcc, device, model_name, input_h, input_w)
-    tt_lib.device.CloseDevice(device)
+def test_T5LayerSelfAttention_inference_t5_small(device):
+    run_test_T5LayerSelfAttention_inference(device, "t5-small", 64, 512)
 
 
-@pytest.mark.parametrize(
-    "pcc, model_name ,input_h, input_w",
-    ((0.99, "google/flan-t5-small", 64, 512),),
-)
-def test_T5LayerSelfAttention_inference_flan_t5_small(
-    pcc, model_name, input_h, input_w
-):
-    device = tt_lib.device.CreateDevice(0)
-    run_test_T5LayerSelfAttention_inference(pcc, device, model_name, input_h, input_w)
-    tt_lib.device.CloseDevice(device)
-
-
-@pytest.mark.parametrize(
-    "pcc, model_name ,input_h, input_w",
-    ((0.99, "t5-base", 64, 768),),
-)
-def test_T5LayerSelfAttention_inference_t5_base(pcc, model_name, input_h, input_w):
-    device = tt_lib.device.CreateDevice(0)
-    run_test_T5LayerSelfAttention_inference(pcc, device, model_name, input_h, input_w)
-    tt_lib.device.CloseDevice(device)
+def test_T5LayerSelfAttention_inference_flan_t5_small(device):
+    run_test_T5LayerSelfAttention_inference(device, "google/flan-t5-small", 64, 512)

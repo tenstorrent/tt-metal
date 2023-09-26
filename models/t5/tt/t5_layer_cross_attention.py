@@ -4,7 +4,11 @@
 
 import torch
 import tt_lib
-from typing import Optional
+
+from models.utility_functions import (
+    torch2tt_tensor,
+    tt2torch_tensor,
+)
 from models.t5.tt.t5_attention import TtT5Attention
 from models.t5.tt.t5_layer_norm import TtT5LayerNorm
 
@@ -12,34 +16,34 @@ from models.t5.tt.t5_layer_norm import TtT5LayerNorm
 class TtT5LayerCrossAttention(torch.nn.Module):
     def __init__(self, config, state_dict, base_address, device):
         super().__init__()
-
         self.EncDecAttention = TtT5Attention(
-            config=config,
-            state_dict=state_dict,
-            base_address=f"{base_address}.EncDecAttention",
-            device=device,
+            config,
+            state_dict,
+            f"{base_address}.EncDecAttention",
+            device,
             has_relative_attention_bias=False,
         )
 
         # Cross attention is only in decoder
-        assert config.is_decoder
+        assert config["is_decoder"]
 
         self.layer_norm = TtT5LayerNorm(
             config, state_dict, f"{base_address}.layer_norm", device
         )
+        # self.dropout = nn.Dropout(config["dropout_rate"])
 
     def forward(
         self,
-        hidden_states: Optional[tt_lib.tensor.Tensor],
-        key_value_states: Optional[tt_lib.tensor.Tensor],
-        attention_mask: Optional[tt_lib.tensor.Tensor] = None,
-        position_bias: Optional[tt_lib.tensor.Tensor] = None,
-        layer_head_mask: Optional[tt_lib.tensor.Tensor] = None,
-        past_key_value: Optional[tt_lib.tensor.Tensor] = None,
-        use_cache: Optional[bool] = False,
-        query_length: Optional[int] = None,
-        output_attentions: Optional[bool] = False,
-    ) -> tt_lib.tensor.Tensor:
+        hidden_states,
+        key_value_states,
+        attention_mask=None,
+        position_bias=None,
+        layer_head_mask=None,
+        past_key_value=None,
+        use_cache=False,
+        query_length=None,
+        output_attentions=False,
+    ):
         normed_hidden_states = self.layer_norm(hidden_states)
         attention_output = self.EncDecAttention(
             normed_hidden_states,
@@ -52,6 +56,9 @@ class TtT5LayerCrossAttention(torch.nn.Module):
             query_length=query_length,
             output_attentions=output_attentions,
         )
+        # layer_output = hidden_states + self.dropout(attention_output[0])
         layer_output = tt_lib.tensor.add(hidden_states, attention_output[0])
-        outputs = (layer_output,) + attention_output[1:]
+        outputs = (layer_output,) + attention_output[
+            1:
+        ]  # add attentions if we output them
         return outputs

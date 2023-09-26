@@ -3,50 +3,52 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
+import torch
 from torch import nn
-from typing import Optional
-from dataclasses import dataclass
+
+from models.utility_functions import (
+    torch2tt_tensor,
+    tt2torch_tensor,
+)
 from models.t5.tt.t5_stack import TtT5Stack
-import tt_lib
-
-
-@dataclass
-class Seq2SeqModelOutput:
-    last_hidden_state: Optional[tt_lib.tensor.Tensor] = None
-    past_key_values: Optional[tt_lib.tensor.Tensor] = None
-    decoder_hidden_states: Optional[tt_lib.tensor.Tensor] = None
-    decoder_attentions: Optional[tt_lib.tensor.Tensor] = None
-    cross_attentions: Optional[tt_lib.tensor.Tensor] = None
-    encoder_last_hidden_state: Optional[tt_lib.tensor.Tensor] = None
-    encoder_hidden_states: Optional[tt_lib.tensor.Tensor] = None
-    encoder_attentions: Optional[tt_lib.tensor.Tensor] = None
 
 
 class TtT5Model(nn.Module):
+    _keys_to_ignore_on_load_missing = [
+        r"encoder.embed_tokens.weight",
+        r"decoder.embed_tokens.weight",
+    ]
+    _keys_to_ignore_on_load_unexpected = [
+        r"decoder.block.0.layer.1.EncDecAttention.relative_attention_bias.weight",
+    ]
+
     def __init__(self, config, state_dict, device):
         super().__init__()
 
-        self.config_use_cache = config.use_cache
-        self.config_use_return_dict = config.use_return_dict
+        self.config_use_cache = config["use_cache"] if "use_cache" in config else False
+        self.config_use_return_dict = (
+            config["use_return_dict"] if "use_return_dict" in config else False
+        )
 
-        self.shared = nn.Embedding(config.vocab_size, config.d_model)
+        # Re-use embedding layer from reference_module
+        self.shared = nn.Embedding(config["vocab_size"], config["d_model"])
         self.shared.weight = nn.Parameter(state_dict["shared.weight"])
 
         encoder_config = copy.deepcopy(config)
-        encoder_config.is_decoder = False
-        encoder_config.use_cache = False
-        encoder_config.is_encoder_decoder = False
+        encoder_config["is_decoder"] = False
+        encoder_config["use_cache"] = False
+        encoder_config["is_encoder_decoder"] = False
         self.encoder = TtT5Stack(
             encoder_config, state_dict, "encoder", device, self.shared
         )
 
-        if config.num_decoder_layers is None:
-            config.num_decoder_layers = config.num_layers
+        if "num_decoder_layers" not in config:
+            config["num_decoder_layers"] = config["num_layers"]
 
         decoder_config = copy.deepcopy(config)
-        decoder_config.is_decoder = True
-        decoder_config.is_encoder_decoder = False
-        decoder_config.num_layers = config.num_decoder_layers
+        decoder_config["is_decoder"] = True
+        decoder_config["is_encoder_decoder"] = False
+        decoder_config["num_layers"] = config["num_decoder_layers"]
         self.decoder = TtT5Stack(
             decoder_config, state_dict, "decoder", device, self.shared
         )
@@ -54,6 +56,7 @@ class TtT5Model(nn.Module):
         self.config = config
         self.device = device
 
+        # Model parallel
         self.model_parallel = False
         self.device_map = None
 
@@ -72,27 +75,50 @@ class TtT5Model(nn.Module):
         return self.decoder
 
     def _prune_heads(self, heads_to_prune):
+        """
+        Prunes heads of the model. heads_to_prune: dict of {layer_num: list of heads to prune in this layer} See base
+        class PreTrainedModel
+        """
         for layer, heads in heads_to_prune.items():
             self.encoder.layer[layer].attention.prune_heads(heads)
 
     def forward(
         self,
-        input_ids: Optional[tt_lib.tensor.Tensor] = None,
-        attention_mask: Optional[tt_lib.tensor.Tensor] = None,
-        decoder_input_ids: Optional[tt_lib.tensor.Tensor] = None,
-        decoder_attention_mask: Optional[tt_lib.tensor.Tensor] = None,
-        head_mask: Optional[tt_lib.tensor.Tensor] = None,
-        decoder_head_mask: Optional[tt_lib.tensor.Tensor] = None,
-        cross_attn_head_mask: Optional[tt_lib.tensor.Tensor] = None,
-        encoder_outputs: Optional[tt_lib.tensor.Tensor] = None,
-        past_key_values: Optional[tt_lib.tensor.Tensor] = None,
-        inputs_embeds: Optional[tt_lib.tensor.Tensor] = None,
-        decoder_inputs_embeds: Optional[tt_lib.tensor.Tensor] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
-    ) -> tt_lib.tensor.Tensor:
+        input_ids=None,  # Optional[torch.LongTensor]
+        attention_mask=None,  # Optional[torch.FloatTensor]
+        decoder_input_ids=None,  # Optional[torch.LongTensor]
+        decoder_attention_mask=None,  # Optional[torch.BoolTensor]
+        head_mask=None,  # Optional[torch.FloatTensor]
+        decoder_head_mask=None,  # Optional[torch.FloatTensor]
+        cross_attn_head_mask=None,  # Optional[torch.Tensor]
+        encoder_outputs=None,  # Optional[Tuple[Tuple[torch.FloatTensor]]]
+        past_key_values=None,  # Optional[Tuple[Tuple[torch.FloatTensor]]]
+        inputs_embeds=None,  # Optional[torch.Tensor]
+        decoder_inputs_embeds=None,  # Optional[torch.Tensor]
+        use_cache=None,  # Optional[bool]
+        output_attentions=None,  # Optional[bool]
+        output_hidden_states=None,  # Optional[bool]
+        return_dict=None,
+    ):  # Union[Tuple[torch.FloatTensor], Seq2SeqModelOutput]
+        r"""
+        Returns:
+        Example:
+        ```python
+        >>> from transformers import AutoTokenizer, T5Model
+        >>> tokenizer = AutoTokenizer.from_pretrained("t5-small")
+        >>> model = T5Model.from_pretrained("t5-small")
+        >>> input_ids = tokenizer(
+        ...     "Studies have been shown that owning a dog is good for you", return_tensors="pt"
+        ... ).input_ids  # Batch size 1
+        >>> decoder_input_ids = tokenizer("Studies show that", return_tensors="pt").input_ids  # Batch size 1
+        >>> # preprocess: Prepend decoder_input_ids with start token which is pad token for T5Model.
+        >>> # This is not needed for torch's T5ForConditionalGeneration as it does this internally using labels arg.
+        >>> decoder_input_ids = model._shift_right(decoder_input_ids)
+        >>> # forward pass
+        >>> outputs = model(input_ids=input_ids, decoder_input_ids=decoder_input_ids)
+        >>> last_hidden_states = outputs.last_hidden_state
+        ```"""
+
         use_cache = use_cache if use_cache is not None else self.config_use_cache
         return_dict = (
             return_dict if return_dict is not None else self.config_use_return_dict
@@ -100,10 +126,11 @@ class TtT5Model(nn.Module):
 
         # FutureWarning: head_mask was separated into two input args - head_mask, decoder_head_mask
         if head_mask is not None and decoder_head_mask is None:
-            if self.config.num_layers == self.config.num_decoder_layers:
+            if self.config["num_layers"] == self.config["num_decoder_layers"]:
                 warnings.warn(__HEAD_MASK_WARNING_MSG, FutureWarning)
                 decoder_head_mask = head_mask
 
+        # Encode if needed (training, first prediction pass)
         if encoder_outputs is None:
             encoder_outputs = self.encoder(
                 input_ids=input_ids,
@@ -121,7 +148,18 @@ class TtT5Model(nn.Module):
                 attentions=encoder_outputs[2] if len(encoder_outputs) > 2 else None,
             )
 
-        hidden_states = encoder_outputs.last_hidden_state
+        hidden_states = encoder_outputs[0]
+
+        # Set device for model parallelism
+        # if self.model_parallel:
+        #     torch.cuda.set_device(self.decoder.first_device)
+        #     hidden_states = hidden_states.to(self.decoder.first_device)
+        #     if decoder_input_ids is not None:
+        #         decoder_input_ids = decoder_input_ids.to(self.decoder.first_device)
+        #     if attention_mask is not None:
+        #         attention_mask = attention_mask.to(self.decoder.first_device)
+        #     if decoder_attention_mask is not None:
+        #         decoder_attention_mask = decoder_attention_mask.to(self.decoder.first_device)
 
         # Decode
         decoder_outputs = self.decoder(
