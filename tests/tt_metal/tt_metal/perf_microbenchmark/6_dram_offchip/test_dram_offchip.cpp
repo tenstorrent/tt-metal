@@ -21,7 +21,12 @@ using std::chrono::duration_cast;
 using std::chrono::microseconds;
 
 ////////////////////////////////////////////////////////////////////////////////
-// This test measures the bandwidth of DRAM.
+// This test measures DRAM bandwidth performance. It creates a bfloat16 format DRAM buffer of a given input size and all
+// Tensix cores read or write the buffer in a size divided by the number of all Tensix cores.
+//
+// Disclaimer: This benchmark is designed to support an input size larger than 4GB. But current tt-metal does not seem
+// to support buffer allocation larger than 4GB yet. Also, ReadFromBuffer API used in DRAM write test may take a long
+// time if the input size is large.
 //
 // Usage example:
 //   ./test_dram_offchip --input-size <size in bytes> --access_type <0 for read access, 1 for
@@ -415,7 +420,6 @@ bool validation(
         uint32_t num_blocks = num_tiles_per_core / num_reqs_at_a_time;
         for (int y = 0; y < num_cores_y; ++y) {
             for (int x = 0; x < num_cores_x; ++x) {
-                int test = 0;
                 auto input_offset = num_tiles_per_core * 512 * (y * num_cores_x + x);
                 auto write_size = num_reqs_at_a_time * 512;
                 auto sliced_input = slice(input_vec, input_offset, input_offset + write_size - 1);
