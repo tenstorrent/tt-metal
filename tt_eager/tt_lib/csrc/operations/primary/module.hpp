@@ -14,6 +14,7 @@
 #include "tt_dnn/op_library/moreh_matmul_backward/moreh_matmul_backward_op.hpp"
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
 #include "tt_dnn/op_library/moreh_softmax/moreh_softmax_op.hpp"
+#include "tt_dnn/op_library/moreh_softmax_backward/moreh_softmax_backward_op.hpp"
 
 namespace py = pybind11;
 
@@ -356,6 +357,13 @@ void py_module(py::module& m_primary) {
         py::arg("dim").noconvert(),
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         "Performs a softmax operation. Returns a output tensor.");
+
+    m_primary.def("moreh_softmax_backward", &moreh_softmax_backward,
+        py::arg("output_tensor").noconvert(),
+        py::arg("output_grad_tensor").noconvert(),
+        py::arg("dim").noconvert(),
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        "Performs a softmax backward operation. Returns a input grad tensor.");
 }
 
 }  // namespace
