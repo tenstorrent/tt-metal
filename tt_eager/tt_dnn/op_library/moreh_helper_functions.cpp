@@ -11,7 +11,13 @@ namespace tt {
 namespace operations {
 namespace primary {
 
-std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet> add_core_offset(
+inline bool is_dram(const Tensor &input_tensor) { return input_tensor.memory_config().buffer_type == BufferType::DRAM; }
+inline bool is_dram(const std::optional<const Tensor> input_tensor) {
+    return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
+}
+inline bool is_dram(const Buffer *b) { return b->buffer_type() == BufferType::DRAM; }
+
+inline std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet> add_core_offset(
     CoreRangeSet all_cores,
     CoreRangeSet core_group_1,
     CoreRangeSet core_group_2,
@@ -86,13 +92,16 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 KernelID CreateReadKernel(
     Program &program,
     const std::string &file_name,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
+    const CoreRangeSet &core,
     const std::vector<uint32_t> &compile_args,
     std::map<string, string> defines) {
-    return tt_metal::CreateKernel(
+    const string dir_path = "tt_metal/kernels/dataflow/";
+    string kernel_file = dir_path + file_name;
+
+    return tt_metal::CreateDataMovementKernel(
         program,
-        file_name,
-        core_spec,
+        kernel_file,
+        core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt_metal::NOC::RISCV_1_default,
@@ -103,13 +112,16 @@ KernelID CreateReadKernel(
 KernelID CreateWriteKernel(
     Program &program,
     const std::string &file_name,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
+    const CoreRangeSet &core,
     const std::vector<uint32_t> &compile_args,
     std::map<string, string> defines) {
-    return tt_metal::CreateKernel(
+    const string dir_path = "tt_metal/kernels/dataflow/";
+    string kernel_file = dir_path + file_name;
+
+    return tt_metal::CreateDataMovementKernel(
         program,
-        file_name,
-        core_spec,
+        kernel_file,
+        core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
@@ -117,7 +129,7 @@ KernelID CreateWriteKernel(
             .defines = defines});
 }
 
-[[maybe_unused]] std::vector<KernelID> CreateComputeKernel(
+void CreateComputeKernel(
     Program &program,
     const std::string &file_name,
     std::vector<ComputeKernelArg> args,
@@ -125,68 +137,47 @@ KernelID CreateWriteKernel(
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode) {
-    std::vector<KernelID> compute_kernel_ids{};
-    KernelID compute_kernel_id{};
+    const string dir_path = "kernels/compute/";
+
+    auto full_path = dir_path + file_name;
+
     for (auto arg : args) {
-        compute_kernel_id =
-            CreateComputeKernel(program, file_name, arg, defines, math_fidelity, fp32_dest_acc_en, math_approx_mode);
-        compute_kernel_ids.push_back(compute_kernel_id);
+        if (arg.num_tile_per_core_group > 0) {
+            auto coumpute_kernel = CreateComputeKernel(
+                program,
+                full_path,
+                arg.core_range,
+                tt_metal::ComputeConfig{
+                    .math_fidelity = math_fidelity,
+                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .math_approx_mode = math_approx_mode,
+                    .compile_args = arg.compile_args,
+                    .defines = defines});
+        }
     }
-    return compute_kernel_ids;
 }
 
-[[maybe_unused]] KernelID CreateComputeKernel(
+void CreateCircularBuffers(
     Program &program,
-    const std::string &file_name,
-    ComputeKernelArg arg,
-    std::map<std::string, std::string> defines,
-    MathFidelity math_fidelity,
-    bool fp32_dest_acc_en,
-    bool math_approx_mode) {
-    KernelID compute_kernel_id{0};
-    if (arg.num_tile_per_core_group > 0) {
-        compute_kernel_id = CreateKernel(
-            program,
-            file_name,
-            arg.core_spec,
-            tt_metal::ComputeConfig{
-                .math_fidelity = math_fidelity,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .math_approx_mode = math_approx_mode,
-                .compile_args = arg.compile_args,
-                .defines = defines});
-    }
-    return compute_kernel_id;
-}
-
-[[maybe_unused]] std::vector<CircularBufferID> CreateCircularBuffer(
-    Program &program, const CoreRangeSet &core_range, tt::DataFormat data_format, std::vector<CircularBufferArg> args) {
-    std::vector<CircularBufferID> cb_ids{};
-    CircularBufferID cb_id{};
+    const CoreRangeSet &core_range,
+    tt::DataFormat data_format,
+    std::vector<CircularBufferArg> args,
+    std::optional<uint32_t> l1_address) {
     for (auto arg : args) {
-        cb_id = CreateCircularBuffer(program, core_range, data_format, arg);
-        cb_ids.push_back(cb_id);
-    }
-    return cb_ids;
-}
-
-[[maybe_unused]] CircularBufferID CreateCircularBuffer(
-    Program &program, const CoreRangeSet &core_range, tt::DataFormat data_format, CircularBufferArg arg) {
-    CircularBufferID cb_id{0};
-    if (arg.num_tiles > 0) {
         auto _buffer_index = arg.buffer_index;
         auto _num_tiles = arg.num_tiles;
         auto _data_format = (arg.data_format != tt::DataFormat::Invalid) ? arg.data_format : data_format;
         auto _core_range = (arg.core_range != nullptr) ? *arg.core_range : core_range;
 
-        tt_metal::CircularBufferConfig cb_config =
-            tt_metal::CircularBufferConfig(
-                _num_tiles * tt_metal::detail::TileSize(_data_format), {{_buffer_index, _data_format}})
-                .set_page_size(_buffer_index, tt_metal::detail::TileSize(_data_format));
-
-        cb_id = tt_metal::CreateCircularBuffer(program, CoreRangeSet({_core_range}), cb_config);
+        CreateCircularBuffers(
+            program,
+            std::set<u32>({_buffer_index}),
+            CoreRangeSet({_core_range}),
+            _num_tiles,
+            _num_tiles * tt_metal::detail::TileSize(_data_format),
+            _data_format,
+            l1_address);
     }
-    return cb_id;
 }
 
 }  // namespace primary
