@@ -183,11 +183,7 @@ static void dump_noc_sanity_status(FILE *f, int noc, const debug_sanitize_noc_ad
     }
 }
 
-static void dump_noc_sanity_status(FILE *f, WatcherDevice *wdev, CoreCoord core) {
-
-    std::vector<uint32_t> data;
-    data = read_hex_vec_from_core(wdev->cluster_, wdev->device_id_, core, GET_MAILBOX_ADDRESS_HOST(sanitize_noc), NUM_NOCS * sizeof(debug_sanitize_noc_addr_msg_t));
-    debug_sanitize_noc_addr_msg_t *san = reinterpret_cast<debug_sanitize_noc_addr_msg_t *>(&data[0]);
+static void dump_noc_sanity_status(FILE *f, const debug_sanitize_noc_addr_msg_t *san) {
 
     for (uint32_t noc = 0; noc < NUM_NOCS; noc++) {
         dump_noc_sanity_status(f, noc, &san[noc]);
@@ -206,24 +202,19 @@ static void dump_run_state(FILE *f, uint32_t state) {
     }
 }
 
-static void dump_run_mailboxes(FILE *f, WatcherDevice *wdev, CoreCoord core) {
-
-    std::vector<uint32_t> data;
-
-    data = read_hex_vec_from_core(wdev->cluster_, wdev->device_id_, core, GET_MAILBOX_ADDRESS_HOST(launch), sizeof(launch_msg_t));
-    launch_msg_t *launch_msg = (launch_msg_t *)&data[0];
+static void dump_run_mailboxes(FILE *f,
+                               const launch_msg_t *launch,
+                               const slave_sync_msg_t *slave_sync) {
 
     fprintf(f, "rmsg:");
-    dump_run_state(f, launch_msg->run);
-    if (launch_msg->enable_ncrisc) fprintf(f, "N");
+    dump_run_state(f, launch->run);
+    if (launch->enable_ncrisc) fprintf(f, "N");
     else fprintf(f, "n");
-    if (launch_msg->enable_triscs) fprintf(f, "T");
+    if (launch->enable_triscs) fprintf(f, "T");
     else fprintf(f, "t");
 
     fprintf(f, " ");
 
-    data = read_hex_vec_from_core(wdev->cluster_, wdev->device_id_, core, GET_MAILBOX_ADDRESS_HOST(slave_sync), sizeof(slave_sync_msg_t));
-    slave_sync_msg_t *slave_sync = (slave_sync_msg_t *)&data[0];
     fprintf(f, "smsg:");
     dump_run_state(f, slave_sync->ncrisc);
     dump_run_state(f, slave_sync->trisc0);
@@ -233,14 +224,7 @@ static void dump_run_mailboxes(FILE *f, WatcherDevice *wdev, CoreCoord core) {
     fprintf(f, " ");
 }
 
-static void dump_debug_status(FILE *f, WatcherDevice *wdev, CoreCoord core) {
-
-    // Currently, debug status is redundant to go status for non-brisc
-    // Just print brisc status
-
-    std::vector<uint32_t> data;
-    data = read_hex_vec_from_core(wdev->cluster_, wdev->device_id_, core, GET_MAILBOX_ADDRESS_HOST(debug_status), sizeof(debug_status_msg_t) * num_riscv_per_core);
-    debug_status_msg_t *debug_status = (debug_status_msg_t *)&data[0];
+static void dump_debug_status(FILE *f, const debug_status_msg_t *debug_status) {
 
     for (int cpu = 0; cpu < num_riscv_per_core; cpu++) {
         for (int byte = 0; byte < num_status_bytes_per_riscv; byte++) {
@@ -286,15 +270,19 @@ static void dump_core(FILE *f, WatcherDevice *wdev, CoreCoord core, bool dump_al
     // Core (x, y): L1[0]=ok  R:RRRR
     fprintf(f, "Core %s: \t", core.str().c_str());
 
+    std::vector<uint32_t> data;
+    data = read_hex_vec_from_core(wdev->cluster_, wdev->device_id_, core, MEM_MAILBOX_BASE, sizeof(mailboxes_t));
+    mailboxes_t *mbox_data = (mailboxes_t *)(&data[0]);
+
     if (watcher::enabled) {
         // Dump state only gathered if device is compiled w/ watcher
-        dump_debug_status(f, wdev, core);
+        dump_debug_status(f, mbox_data->debug_status);
         dump_l1_status(f, wdev, core);
-        dump_noc_sanity_status(f, wdev, core);
+        dump_noc_sanity_status(f, mbox_data->sanitize_noc);
     }
 
     // Dump state always available
-    dump_run_mailboxes(f, wdev, core);
+    dump_run_mailboxes(f, &mbox_data->launch, &mbox_data->slave_sync);
     if (dump_all || OptionsG.get_watcher_dump_all()) {
         // Reading registers while running can cause hangs, only read if
         // requested explicitly
