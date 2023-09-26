@@ -71,6 +71,12 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/moreh_softmax/softmax_h_small/moreh_softmax_h_small.cpp \
 	tt_eager/tt_dnn/op_library/moreh_softmax/softmax_w_large/moreh_softmax_w_large.cpp \
 	tt_eager/tt_dnn/op_library/moreh_softmax/softmax_h_large/moreh_softmax_h_large.cpp \
+	tt_eager/tt_dnn/op_library/moreh_softmax_backward/moreh_softmax_backward_op.cpp \
+	tt_eager/tt_dnn/op_library/moreh_softmax_backward/helper_functions.cpp \
+	tt_eager/tt_dnn/op_library/moreh_softmax_backward/softmax_backward_w_small/softmax_backward_w_small.cpp \
+	tt_eager/tt_dnn/op_library/moreh_softmax_backward/softmax_backward_h_small/softmax_backward_h_small.cpp \
+	tt_eager/tt_dnn/op_library/moreh_softmax_backward/softmax_backward_w_large/softmax_backward_w_large.cpp \
+	tt_eager/tt_dnn/op_library/moreh_softmax_backward/softmax_backward_h_large/softmax_backward_h_large.cpp \
 	tt_eager/tt_dnn/op_library/layernorm/layernorm_op.cpp \
 	tt_eager/tt_dnn/op_library/groupnorm/groupnorm_op.cpp \
 	tt_eager/tt_dnn/op_library/reshape/reshape_op.cpp \
