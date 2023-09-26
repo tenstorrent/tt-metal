@@ -76,7 +76,7 @@ def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
 
     return conv_
 
-def resnet50_1x1_conv_as_matmul(weight: List[Union[int, float]], conv_params, device, bias, matmul_config, fuse_relu=False):
+def resnet50_1x1_conv_as_matmul(weight: List[Union[int, float]], conv_params, device, bias, matmul_config, fuse_relu=False, output_mem_config=None):
     """
     Returns a function that performs a Convolution. Bias is fused with matmul.
     """
@@ -110,19 +110,24 @@ def resnet50_1x1_conv_as_matmul(weight: List[Union[int, float]], conv_params, de
         .to(tensor.Layout.TILE)
     )
     bias_on_device = bias_.to(device)
-    matmul_program_config = operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-                                    compute_with_storage_grid_size=matmul_config["compute_with_storage_grid_size"],
-                                    in0_block_w=matmul_config["in0_block_w"],
-                                    out_subblock_h=matmul_config["out_subblock_h"],
-                                    out_subblock_w=matmul_config["out_subblock_w"],
-                                    per_core_M=matmul_config["per_core_M"],
-                                    per_core_N=matmul_config["per_core_N"],
-                                    fused_activation=tensor.FusibleActivationWithParam(tensor.FusibleActivation.RELU) if fuse_relu else None)
+    if isinstance(matmul_config, dict):
+        matmul_program_config = operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+                                        compute_with_storage_grid_size=matmul_config["compute_with_storage_grid_size"],
+                                        in0_block_w=matmul_config["in0_block_w"],
+                                        out_subblock_h=matmul_config["out_subblock_h"],
+                                        out_subblock_w=matmul_config["out_subblock_w"],
+                                        per_core_M=matmul_config["per_core_M"],
+                                        per_core_N=matmul_config["per_core_N"],
+                                        fused_activation=tensor.FusibleActivationWithParam(tensor.FusibleActivation.RELU) if fuse_relu else None)
+    else:
+        matmul_program_config = matmul_config
+        if fuse_relu:
+            matmul_program_config.fused_activation=tensor.FusibleActivationWithParam(tensor.FusibleActivation.RELU)
 
     def conv_(activation):
         # conv1x1 stride 1 padding 0, use matmul op
         output = operations.primary.matmul(activation, weight_on_device, bias=bias_on_device, program_config=matmul_program_config,
-                                            output_mem_config=activation.memory_config(),
+                                            output_mem_config=activation.memory_config() if output_mem_config is None else output_mem_config,
                                             output_dtype=activation.dtype(),
                                             math_fidelity=tensor.MathFidelity.HiFi4)
 
@@ -195,7 +200,7 @@ def resnet50_optimized_conv(weight: List[Union[int, float]], conv_params, device
 
     return conv_
 
-def resnet50_first_conv(weight: List[Union[int, float]], conv_params, device, act_block_shape_hw, weight_block_shape_hw, outsubblock_shape_hw, out_block_shape_h, grid_size, per_core_out_matrix_h_ntiles, bias, padded_filter_window_width, fuse_relu=False):
+def resnet50_first_conv(weight: List[Union[int, float]], conv_params, device, act_block_shape_hw, weight_block_shape_hw, outsubblock_shape_hw, out_block_shape_h, grid_size, per_core_out_matrix_h_ntiles, bias, padded_filter_window_width, fuse_relu=False, out_mem_config=None):
     """
     Returns a function that performs a Convolution. Bias is fused with conv.
     """
@@ -259,7 +264,8 @@ def resnet50_first_conv(weight: List[Union[int, float]], conv_params, device, ac
                                                 weight_block_w_ntiles=weight_block_w,
                                                 out_block_h_ntiles=out_block_h,
                                                 out_subblock_h_ntiles=out_subblock_h,
-                                                out_subblock_w_ntiles=out_subblock_w), extra_padding_for_32B_alignment)
+                                                out_subblock_w_ntiles=out_subblock_w), extra_padding_for_32B_alignment,
+                                                out_mem_config)
         #assert(output.storage_type() == tensor.StorageType.DEVICE)
         #assert output.layout() == tensor.Layout.TILE
         return output_plus_bias

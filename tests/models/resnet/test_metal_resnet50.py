@@ -37,6 +37,9 @@ def test_run_resnet50_inference(
 
         state_dict = torch_resnet50.state_dict()
         storage_in_dram = False
+        sharded = False
+        if batch_size == 8:
+            sharded = True
         # run once to compile ops
         tt_resnet50 = ResNet(
             Bottleneck,
@@ -47,6 +50,7 @@ def test_run_resnet50_inference(
             fold_batchnorm=True,
             storage_in_dram=storage_in_dram,
             batch_size=batch_size,
+            sharded=sharded,
         )
 
         torch_output = torch_resnet50(image).unsqueeze(1).unsqueeze(1)
