@@ -383,11 +383,11 @@ hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv = {
     },
     8: {
         (25088, 64): [256, 64, 128, 64, 256, (12, 9), 256, 64],
-        (6272, 128): [64, 128, 64, 64, 64, (12, 9), 64, 128],
+        (6272, 128): [64, 128, 64, 128, 64, (12, 9), 64, 128],
         (1568, 256): [160, 32, 32, 32, 160, (10, 8), 160, 32],
         (416, 512): [64, 32, 32, 32, 64, (7, 8), 64, 64],
         # bypass convs
-        (6272, 512): [64, 512, 64, 64, 64, (12, 9), 64, 512],
+        (6272, 512): [64, 512, 32, 256, 64, (12, 9), 64, 512],
         (1568, 1024): [160, 128, 32, 64, 160, (10, 8), 160, 128],
         (416, 2048): [64, 128, 32, 64, 64, (7, 8), 64, 256],
     },
@@ -454,6 +454,14 @@ hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv = {
 def test_resnet50_conv(
     use_program_cache, device, N, K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w
 ):
+    memory_config = tt_lib.tensor.MemoryConfig(
+        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+    )
+    if N == 8:
+        memory_config = tt_lib.tensor.MemoryConfig(
+            tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1
+        )
+
     for i in range(1):  # increase num of iterations to test op caching
         assert C % 32 == 0
         assert K % 32 == 0
@@ -546,6 +554,7 @@ def test_resnet50_conv(
                 per_core_out_matrix_h_ntiles,
                 per_core_weight_matrix_w_ntiles,
                 conv_bias_pyt.reshape(-1).tolist(),
+                memory_config,
             )
 
         conv_input_on_device = tt_lib.tensor.Tensor(

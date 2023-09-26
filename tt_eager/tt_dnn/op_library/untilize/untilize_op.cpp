@@ -59,7 +59,7 @@ std::vector<Tensor> Untilize::create_output_tensors(const std::vector<Tensor> &i
             return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), input_tensor.dtype(), Layout::ROW_MAJOR, input_tensor.device(), this->output_mem_config, input_tensor.shard_spec().value())};
         } else {
             uint32_t ntiles = input_tensor.volume() / TILE_HW;
-            uint32_t ntiles_per_block = input_tensor.shape()[3] / TILE_WIDTH;
+            uint32_t ntiles_per_block = input_tensor.shape()[-1] / TILE_WIDTH;
             uint32_t nblocks = ceil((float) ntiles / ntiles_per_block);
             auto num_cores = untilize_helpers::get_num_cores(input_tensor.device()->compute_with_storage_grid_size(), nblocks);
             auto shard_grid = num_cores_to_corerange_set(num_cores, input_tensor.device()->compute_with_storage_grid_size(), true);

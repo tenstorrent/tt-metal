@@ -262,6 +262,20 @@ def test_sharded_matmul(device, in0_sharded, out_sharded, M, N, num_cores):
     program_config = ttl.operations.primary.get_mcast_1d_config(
         in0_t, in1_t, True, None, False, out_sharded
     )
+    if N == 256:
+        program_config = (
+            ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(12, 9),
+                in0_block_w=2,
+                out_subblock_h=1,
+                out_subblock_w=8,
+                per_core_M=8,
+                per_core_N=8,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=False,
+            )
+        )
     output_t = ttl.operations.primary.matmul_1d(
         in0_t,
         in1_t,

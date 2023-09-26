@@ -136,7 +136,7 @@ def resnet50_1x1_conv_as_matmul(weight: List[Union[int, float]], conv_params, de
     return conv_
 
 def resnet50_optimized_conv(weight: List[Union[int, float]], conv_params, device, act_block_shape_hw, weight_block_shape_hw, outsubblock_shape_hw, out_block_shape_h,
-                            grid_size, per_core_out_matrix_h_ntiles, per_core_weight_matrix_w_ntiles, bias, fuse_relu=False):
+                            grid_size, per_core_out_matrix_h_ntiles, per_core_weight_matrix_w_ntiles, bias, fuse_relu=False, output_mem_config=None):
     """
     Returns a function that performs a Convolution. Bias is fused with conv.
     """
@@ -194,7 +194,8 @@ def resnet50_optimized_conv(weight: List[Union[int, float]], conv_params, device
                                                 weight_block_w_ntiles=weight_block_w,
                                                 out_block_h_ntiles=out_block_h,
                                                 out_subblock_h_ntiles=out_subblock_h,
-                                                out_subblock_w_ntiles=out_subblock_w))
+                                                out_subblock_w_ntiles=out_subblock_w), 0,
+                                                activation.memory_config() if output_mem_config is None else output_mem_config)
         #assert(output.storage_type() == tensor.StorageType.DEVICE)
         return output
 

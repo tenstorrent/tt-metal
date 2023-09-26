@@ -1013,6 +1013,14 @@ void OptimizedConv::validate(const std::vector<Tensor>& input_tensors, const std
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     // TODO: ...
+    TT_ASSERT(!input_tensor_a.memory_config().is_sharded());
+    TT_ASSERT(!input_tensor_b.memory_config().is_sharded());
+    if (this->output_mem_config.is_sharded()) {
+        TT_ASSERT(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+        uint32_t out_width_ntiles = this->compute_output_shapes(input_tensors).at(0)[-1] / TILE_WIDTH;
+        TT_ASSERT(this->parallelization_config.per_core_weight_matrix_width_ntiles == out_width_ntiles);
+        TT_ASSERT(this->block_config.out_subblock_w_ntiles == out_width_ntiles || this->block_config.out_subblock_h_ntiles == 1);
+    }
 }
 
 std::vector<Shape> OptimizedConv::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
@@ -1056,8 +1064,6 @@ std::vector<Tensor> OptimizedConv::create_output_tensors(const std::vector<Tenso
     if (this->output_mem_config.is_sharded()) {
         // Move asserts to validate
         // Asserts to check for height sharding
-        TT_ASSERT(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
-        TT_ASSERT(this->parallelization_config.per_core_weight_matrix_width_ntiles == (weight_tensor.shape()[-1] / TILE_WIDTH));
         auto output_shape = this->compute_output_shapes(input_tensors).at(0);
         uint32_t total_height_tiles = tt_metal::compute_volume(output_shape) / output_shape[-1] / TILE_HEIGHT;
         uint32_t num_cores = total_height_tiles / this->parallelization_config.per_core_out_matrix_height_ntiles;

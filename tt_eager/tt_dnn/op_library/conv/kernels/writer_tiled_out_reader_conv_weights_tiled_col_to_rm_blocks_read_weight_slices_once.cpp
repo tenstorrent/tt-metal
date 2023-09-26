@@ -175,6 +175,7 @@ void kernel_main() {
         // Increment weight start tile id for next block in width dim
         weight_start_tile_id += weight_next_block_stride_w;
 
+        #ifndef SHARDED_OUT
         uint32_t out_block_h_start_tile_id = out_block_w_start_tile_id;
         //DPRINT << "out_block_h_start_tile_id=" << out_block_h_start_tile_id << ENDL();
         uint32_t out_block_h_start_tile_id_h = out_start_tile_id_h;
@@ -225,5 +226,10 @@ void kernel_main() {
         } // out_num_blocks_h
         out_block_w_start_tile_id += out_next_block_stride_w;
         out_block_w_start_tile_id_w += weight_block_width_ntiles;
+        #endif
     } // out_num_blocks_w
+
+    #ifdef SHARDED_OUT
+    cb_wait_front(cb_id_out0, out_subblock_tile_count * out_num_subblocks_h * out_num_subblocks_w * out_num_blocks_w * out_num_blocks_h);
+    #endif
 }

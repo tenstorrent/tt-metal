@@ -494,7 +494,7 @@ hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv = {
     },
     8: {
         (25088, 64): [256, 64, 128, 64, 256, (12, 9), 256, 64],
-        (6272, 128): [64, 128, 64, 64, 64, (12, 9), 64, 128],
+        (6272, 128): [64, 128, 64, 128, 64, (12, 9), 64, 128],
         (1568, 256): [160, 32, 32, 32, 160, (10, 8), 160, 32],
         (416, 512): [32, 64, 32, 32, 96, (5, 8), 96, 64],
     },
@@ -515,7 +515,7 @@ hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_downsample_conv =
         (128, 2048): [64, 128, 64, 64, 64, (1, 2), 64, 2048],
     },
     8: {
-        (6272, 512): [64, 512, 64, 64, 64, (12, 9), 64, 512],
+        (6272, 512): [64, 512, 32, 256, 64, (12, 9), 64, 512],
         (1568, 1024): [160, 128, 32, 64, 160, (10, 8), 160, 128],
         (416, 2048): [32, 256, 32, 32, 96, (5, 8), 96, 256],
     },
@@ -551,6 +551,8 @@ class Bottleneck(nn.Module):
         storage_in_dram=True,
         input_shape=[],
         batch_size=1,
+        sharded=False,
+        out_sharded=False,
     ) -> None:
         super().__init__()
         self.device = device
@@ -573,6 +575,17 @@ class Bottleneck(nn.Module):
                 tt_lib.tensor.TensorMemoryLayout.INTERLEAVED,
                 tt_lib.tensor.BufferType.L1,
             )
+        if sharded:
+            self.sharded_memory_config = tt_lib.tensor.MemoryConfig(
+                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                tt_lib.tensor.BufferType.L1,
+            )
+        else:
+            self.sharded_memory_config = self.memory_config
+        self.out_memory_config = (
+            self.sharded_memory_config if out_sharded else self.memory_config
+        )
+
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
         width = int(planes * (base_width / 64.0)) * groups
@@ -676,6 +689,7 @@ class Bottleneck(nn.Module):
             conv1_bias.tolist(),
             matmul_config,
             fuse_relu=True,
+            output_mem_config=self.sharded_memory_config,
         )
 
         # With single buffered input CB, these shapes work -
@@ -739,6 +753,7 @@ class Bottleneck(nn.Module):
             per_core_weight_w_ntiles,
             conv2_bias.tolist(),
             True,
+            output_mem_config=self.sharded_memory_config,
         )
 
         self.conv3_params = [
@@ -778,6 +793,7 @@ class Bottleneck(nn.Module):
             self.device,
             conv3_bias.tolist(),
             matmul_config,
+            output_mem_config=self.sharded_memory_config,
         )
         self.conv3_output_shape = compute_conv_output_shape(
             self.conv3_params, self.conv2_output_shape
@@ -845,7 +861,7 @@ class Bottleneck(nn.Module):
         fused_activations = [tt_lib.tensor.FusibleActivation.RELU]
         # print("Running eltwise add")
         out = tt_lib.tensor.add_without_autoformat(
-            out, ds_out, fused_activations, output_mem_config=self.memory_config
+            out, ds_out, fused_activations, output_mem_config=self.out_memory_config
         )
         # out = self.relu(out, self.memory_config)
         return out
@@ -1011,6 +1027,8 @@ class ResNet(nn.Module):
             state_dict=state_dict,
             layer_input_shape=self.maxpool_output_shape,
             batch_size=batch_size,
+            sharded=sharded,
+            out_sharded=True,
         )
         self.layer2, self.layer2_output_shape = self._make_layer(
             block,
@@ -1022,6 +1040,8 @@ class ResNet(nn.Module):
             state_dict=state_dict,
             layer_input_shape=self.layer1_output_shape,
             batch_size=batch_size,
+            sharded=sharded,
+            out_sharded=False,
         )
         self.layer3, self.layer3_output_shape = self._make_layer(
             block,
@@ -1033,6 +1053,7 @@ class ResNet(nn.Module):
             state_dict=state_dict,
             layer_input_shape=self.layer2_output_shape,
             batch_size=batch_size,
+            sharded=False,
         )
         self.layer4, self.layer4_output_shape = self._make_layer(
             block,
@@ -1044,6 +1065,7 @@ class ResNet(nn.Module):
             state_dict=state_dict,
             layer_input_shape=self.layer3_output_shape,
             batch_size=batch_size,
+            sharded=False,
         )
 
         # All modules in RN50 are unrolled here. One variable for each module. Only specific number of modules supported - layers MUST equal to [3, 4, 6, 3]
@@ -1107,12 +1129,18 @@ class ResNet(nn.Module):
         state_dict=None,
         layer_input_shape=[],
         batch_size=1,
+        sharded=False,
+        out_sharded=False,
     ):
         norm_layer = self._norm_layer
         downsample = None
         previous_dilation = self.dilation
         self.downsample_conv_on_tt = None
         self.norm_layer_after_downsample_conv_on_tt = None
+        if sharded:
+            self.ds_conv_output_memory_config = self.sharded_memory_config
+        else:
+            self.ds_conv_output_memory_config = self.memory_config
         if dilate:
             self.dilation *= stride
             stride = 1
@@ -1213,7 +1241,7 @@ class ResNet(nn.Module):
                     self.device,
                     downsample_conv_bias.tolist(),
                     matmul_config,
-                    output_mem_config=self.memory_config,
+                    output_mem_config=self.ds_conv_output_memory_config,
                 )
             else:
                 assert (
@@ -1254,6 +1282,7 @@ class ResNet(nn.Module):
                     per_core_act_h_ntiles,
                     per_core_weight_w_ntiles,
                     downsample_conv_bias.tolist(),
+                    output_mem_config=self.ds_conv_output_memory_config,
                 )
             self.norm_layer_after_downsample_conv_on_tt = nl
 
@@ -1278,6 +1307,8 @@ class ResNet(nn.Module):
                 storage_in_dram=self.storage_in_dram,
                 input_shape=layer_input_shape,
                 batch_size=batch_size,
+                sharded=sharded,
+                out_sharded=sharded,
             )
         )
         self.inplanes = planes * block.expansion
@@ -1298,6 +1329,8 @@ class ResNet(nn.Module):
                     storage_in_dram=self.storage_in_dram,
                     input_shape=previous_layer.conv3_output_shape,
                     batch_size=batch_size,
+                    sharded=sharded,
+                    out_sharded=True if _ != blocks - 1 else out_sharded,
                 )
             )
         last_layer_shape = layers[-1].conv3_output_shape
