@@ -142,7 +142,7 @@ void create_CBs(tt_metal::Program &program,
     }
 }
 
-operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity,
+operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity,
                                        const OptimizedConvParallelizationConfig& parallelization_config,
                                        const OptimizedConvBlockConfig& block_config,
                                        uint32_t extra_padding_for_32B_alignment, Tensor &output) {
@@ -487,6 +487,28 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
     }
     CoreRangeSet noop_cores(noop_cores_set);
 
+    // Mcast cores
+    // If total_num_cores, there is no mcasting
+    CoreCoord top_left_core = {(std::size_t) 0, (std::size_t) 0};
+    CoreCoord bottom_right_core = {(std::size_t) num_cores_x - 1, (std::size_t) num_cores_y - 1};
+    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
+    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+
+    CoreRange mcast_sender_core{.start=CoreCoord(0, 0), .end=CoreCoord(0, 0)};
+    CoreRangeSet mcast_receiver_cores{{}};
+    uint32_t weights_mcast_sender_semaphore;
+    uint32_t weights_mcast_receiver_semaphore;
+    if (total_num_cores > 1) {
+        mcast_receiver_cores = {
+            {
+                {.start=CoreCoord(1, 0), .end=CoreCoord(num_cores_x - 1, 0)},
+                {.start=CoreCoord(0, 1), .end=CoreCoord(num_cores_x - 1, num_cores_y - 1)}
+            }
+        };
+        weights_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+        weights_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    }
+
     uint32_t num_weight_cb_tiles = weight_block_h_ntiles * weight_block_w_ntiles * num_blocks_act_w;
     if (rn50_first_conv) {
         num_weight_cb_tiles = weight_block_h_ntiles * weight_block_w_ntiles * num_blocks_weight_w * num_blocks_act_w;
@@ -522,20 +544,30 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
             output_cb_address);
 
     string reader_kernel;
-    string writer_kernel;
     string compute_kernel;
+    string writer_mcast_sender_kernel;
+    string writer_mcast_receiver_kernel;
     if (rn50_first_conv) {
         reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast_resnet50_first_conv.cpp";
         compute_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/bmm_tilize_untilize_all_weights_in_l1_single_output_block_width_dim.cpp";
-        writer_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_and_reader_weights_resnet50_first_conv_tiled_out.cpp";
+        // TODO: Add mcast to this conv (currently, it's doing the same thing for sender/receiver)
+        writer_mcast_sender_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_and_reader_weights_resnet50_first_conv_tiled_out.cpp";
+        writer_mcast_receiver_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_and_reader_weights_resnet50_first_conv_tiled_out.cpp";
     } else {
         reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast_for_col_major_conv_out_blocks.cpp";
         compute_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/conv_bmm_tilize_col_major_out_blocks_reuse_weights.cpp";
-        writer_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_tiled_out_reader_conv_weights_tiled_col_to_rm_blocks_read_weight_slices_once.cpp";
+        // TODO: Add support for 2D mcast for weights
+        if (weight_width_sliced) {
+            writer_mcast_sender_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_tiled_out_reader_conv_weights_tiled_col_to_rm_blocks_read_weight_slices_once.cpp";
+            writer_mcast_receiver_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_tiled_out_reader_conv_weights_tiled_col_to_rm_blocks_read_weight_slices_once.cpp";
+        } else {
+            writer_mcast_sender_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_tiled_out_mcast_sender_conv_weights_tiled_col_to_rm_blocks_read_weight_slices_once.cpp";
+            writer_mcast_receiver_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_tiled_out_mcast_receiver_conv_weights_tiled_col_to_rm_blocks_read_weight_slices_once.cpp";
+        }
     }
-    vector<vector<uint32_t>>reader_rt_args;
+    std::vector<uint32_t>reader_rt_args;
     std::vector<uint32_t> reader_compile_time_args;
-    vector<vector<uint32_t>> writer_rt_args;
+    std::vector<uint32_t> writer_rt_args;
     std::vector<uint32_t> writer_compile_time_args;
 
     TT_ASSERT(!(conv_act_size_c & (conv_act_size_c - 1))); // channel depth power of 2 is supported only
@@ -547,12 +579,18 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
 
     // define for bias
     std::map<string, string> writer_defines;
+    std::map<string, string> writer_mcast_sender_defines;
     std::map<string, string> compute_defines;
     if (output.memory_config().is_sharded()) {
         writer_defines["SHARDED_OUT"] = "1";
+        writer_mcast_sender_defines["SHARDED_OUT"] = "1";
+    }
+    if (total_num_cores == 1) {
+        writer_mcast_sender_defines["SKIP_MCAST"] = "1";
     }
     if (has_bias) {
         writer_defines["FUSE_BIAS"] = "1";
+        writer_mcast_sender_defines["FUSE_BIAS"] = "1";
         compute_defines["FUSE_BIAS"] = "1";
     }
 
@@ -597,15 +635,29 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
 
         bias_ntiles_per_core
     };
-    auto writer_id = CreateDataMovementKernel(
+
+    auto writer_mcast_sender_id = CreateDataMovementKernel(
     program,
-    writer_kernel,
-    all_cores,
+    writer_mcast_sender_kernel,
+    mcast_sender_core,
     DataMovementConfig{
         .processor = DataMovementProcessor::RISCV_0,
         .noc = NOC::RISCV_0_default,
         .compile_args = writer_compile_time_args,
-        .defines = writer_defines});
+        .defines = writer_mcast_sender_defines});
+
+    KernelID writer_mcast_receiver_id;
+    if (total_num_cores > 1) {
+        writer_mcast_receiver_id = CreateDataMovementKernel(
+        program,
+        writer_mcast_receiver_kernel,
+        mcast_receiver_cores,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = writer_compile_time_args,
+            .defines = writer_defines});
+    }
 
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(a.dtype());
     auto reader_id = CreateDataMovementKernel(
@@ -690,7 +742,7 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
         // cout << "n_start=" << n_start << endl;
         if (rn50_first_conv) {
             assert(pad_h == 0 && pad_w == 0);
-            reader_rt_args.push_back({
+            reader_rt_args = {
                 act_dram_addr,
                 conv_act_size_c,
                 conv_output_size_w,
@@ -703,9 +755,9 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
                 out_w_start,
                 last_start_in_h_curr_image,
                 (uint32_t) noop_core
-            });
+            };
         } else {
-            reader_rt_args.push_back({
+            reader_rt_args = {
                 // arguments for act
                 act_dram_addr,
                 act_noc_x,
@@ -747,10 +799,10 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
                 out_w_start,
                 total_h_start,
                 (uint32_t) noop_core
-            });
+            };
         }
 
-        writer_rt_args.push_back({
+        writer_rt_args = {
             out_dram_addr,
             weight_dram_addr,
             bias_dram_addr,
@@ -788,21 +840,46 @@ operation::ProgramWithCallbacks optimized_conv_single_core(const Tensor& a, cons
             bias_tile_offset,
 
             (uint32_t) noop_core
-        });
-
+        };
 
         SetRuntimeArgs(
             program, reader_id, core,
-            reader_rt_args.back()
+            reader_rt_args
         );
-
-        SetRuntimeArgs(
-            program, writer_id, core,
-            writer_rt_args.back()
-        );
-
         reader_ids.push_back(reader_id);
-        writer_ids.push_back(writer_id);
+
+        // Mcast sender
+        if (core_x_i == 0 and core_y_i == 0) {
+            if (not weight_width_sliced) {
+                writer_rt_args.push_back(bottom_right_core_physical.x); // weights_mcast_dest_noc_start_x
+                writer_rt_args.push_back(bottom_right_core_physical.y); // weights_mcast_dest_noc_start_y
+                writer_rt_args.push_back(top_left_core_physical.x); // weights_mcast_dest_noc_end_x
+                writer_rt_args.push_back(top_left_core_physical.y); // weights_mcast_dest_noc_end_y
+                writer_rt_args.push_back(total_active_num_cores - 1); // weights_mcast_num_dests
+                writer_rt_args.push_back(total_num_cores - 1); // weights_mcast_num_cores
+                writer_rt_args.push_back(weights_mcast_sender_semaphore);
+                writer_rt_args.push_back(weights_mcast_receiver_semaphore);
+            }
+
+            SetRuntimeArgs(
+                program, writer_mcast_sender_id, core,
+                writer_rt_args
+            );
+            writer_ids.push_back(writer_mcast_sender_id);
+        } else {
+            if (not weight_width_sliced) {
+                writer_rt_args.push_back(top_left_core_physical.x); // weights_mcast_dest_noc_end_x
+                writer_rt_args.push_back(top_left_core_physical.y); // weights_mcast_dest_noc_end_y
+                writer_rt_args.push_back(weights_mcast_sender_semaphore);
+                writer_rt_args.push_back(weights_mcast_receiver_semaphore);
+            }
+
+            SetRuntimeArgs(
+                program, writer_mcast_receiver_id, core,
+                writer_rt_args
+            );
+            writer_ids.push_back(writer_mcast_receiver_id);
+        }
 
     } // for num_cores
 
@@ -961,7 +1038,7 @@ operation::ProgramWithCallbacks OptimizedConv::create_program(const std::vector<
     const auto& input_tensor_b = input_tensors.at(1);
     const auto& input_tensor_bias = optional_input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    return {optimized_conv_single_core(input_tensor_a, input_tensor_b,
+    return {optimized_conv_(input_tensor_a, input_tensor_b,
             input_tensor_bias, conv_params, output_channels,
             untilize_out, has_bias,
             fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_tensor)};
