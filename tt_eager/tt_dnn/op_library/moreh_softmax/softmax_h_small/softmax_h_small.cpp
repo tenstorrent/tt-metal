@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_eager/tt_dnn/op_library/moreh_softmax/moreh_softmax_op.hpp"
-#include "tt_eager/tt_dnn/op_library/moreh_softmax/helper_functions.hpp"
 #include "tt_eager/tt_dnn/op_library/work_split.hpp"
+#include "tt_eager/tt_dnn/op_library/moreh_softmax/helper_functions.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 
 #include "tt_metal/host_api.hpp"
@@ -24,9 +24,9 @@ namespace primary {
 
 #define L1_512KB (512 * 1024)
 
-bool is_moreh_softmax_w_small_available(const Tensor &tensor) {
-    auto w = tensor.shape()[3];
-    int32_t Wt = (w + TILE_WIDTH - 1) / TILE_WIDTH;
+bool is_moreh_softmax_h_small_available(const Tensor &tensor) {
+    auto h = tensor.shape()[2];
+    int32_t Ht = (h + TILE_HEIGHT - 1) / TILE_HEIGHT;
 
     tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(tensor.dtype());
 
@@ -36,29 +36,30 @@ bool is_moreh_softmax_w_small_available(const Tensor &tensor) {
     cb_usage += 2 * tile_size;   // input;
     cb_usage += 1 * tile_size;   // mask;
     cb_usage += 2 * tile_size;   // output;
-    cb_usage += Wt * tile_size;  // exp(x);
+    cb_usage += Ht * tile_size;  // exp(x);
     cb_usage += 1 * tile_size;   // reduce;
     cb_usage += 1 * tile_size;   // scaler;
 
     return (L1_UNRESERVED_BASE + cb_usage <= L1_512KB);
 }
 
-operation::ProgramWithCallbacks moreh_softmax_w_small(const Tensor &input, const Tensor &output, CoreRange core_range) {
+operation::ProgramWithCallbacks moreh_softmax_h_small(const Tensor &input, Tensor &output, const CoreRange core_range) {
     // split work
     auto shape = input.shape();
     auto N = shape[0];
     auto C = shape[1];
     auto H = shape[2];
     auto W = shape[3];
+
     auto Ht = H / TILE_HEIGHT;
     auto Wt = W / TILE_WIDTH;
 
-    uint32_t num_kernel_rows = N * C * Ht;
+    uint32_t num_cols_tiles = N * C * Wt;
     uint32_t core_w = core_range.end.x - core_range.start.x + 1;
     uint32_t core_h = core_range.end.y - core_range.start.y + 1;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        split_work_to_cores(core_range, num_kernel_rows);
+        split_work_to_cores(core_range, num_cols_tiles);
 
     Program program = Program();
 
@@ -73,7 +74,7 @@ operation::ProgramWithCallbacks moreh_softmax_w_small(const Tensor &input, const
             {CB::c_in0, 2},         // input
             {CB::c_in1, 1},         // mask
             {CB::c_out0, 2},        // output
-            {CB::c_intermed0, Wt},  // exp(x)
+            {CB::c_intermed0, Ht},  // exp(x)
             {CB::c_intermed1, 1},   // reduce
             {CB::c_in2, 1}          // scaler
         });
@@ -86,17 +87,17 @@ operation::ProgramWithCallbacks moreh_softmax_w_small(const Tensor &input, const
     std::map<string, string> writer_defines;
 
     auto reader_kernel_id = CreateReadKernel(
-        program, "reader_moreh_softmax_w.cpp", all_cores, {src_is_dram}, reader_defines);
+        program, "reader_moreh_softmax_h.cpp", all_cores, {src_is_dram}, reader_defines);
     auto writer_kernel_id = CreateWriteKernel(
-        program, "writer_moreh_softmax_w.cpp", all_cores, {dst_is_dram}, writer_defines);
+        program, "writer_moreh_softmax_h.cpp", all_cores, {dst_is_dram}, writer_defines);
 
     // create compute kernel
     CreateComputeKernel(
         program,
-        "moreh_softmax_w.cpp",
+        "moreh_softmax_h.cpp",
         {
-            {core_group_1, num_tiles_per_core_group_1, {num_tiles_per_core_group_1, Wt}},
-            {core_group_2, num_tiles_per_core_group_2, {num_tiles_per_core_group_2, Wt}},
+            {core_group_1, num_tiles_per_core_group_1, {num_tiles_per_core_group_1, Ht}},
+            {core_group_2, num_tiles_per_core_group_2, {num_tiles_per_core_group_2, Ht}},
         });
 
     // Set Runtime Args
@@ -115,17 +116,17 @@ operation::ProgramWithCallbacks moreh_softmax_w_small(const Tensor &input, const
         }
 
         float scaler = 1.0f;
-        uint32_t mask_w = shape.without_padding()[3] % TILE_WIDTH;
-        if(mask_w == 0) mask_w = TILE_WIDTH;
+        uint32_t mask_h = shape.without_padding()[2] % TILE_HEIGHT;
+        if(mask_h == 0) mask_h = TILE_HEIGHT;
         vector<u32> reader_args = {
-            input.buffer()->address(), num_tiles_per_core, tile_offset, Wt, *reinterpret_cast<uint32_t *>(&scaler), mask_w};
+            input.buffer()->address(), num_tiles_per_core, tile_offset, Ht, Wt, *reinterpret_cast<uint32_t *>(&scaler), mask_h};
 
-        vector<u32> writer_args = {output.buffer()->address(), num_tiles_per_core, tile_offset, Wt};
+        vector<u32> writer_args = {output.buffer()->address(), num_tiles_per_core, tile_offset, Ht, Wt};
 
         SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
         SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
 
-        tile_offset += num_tiles_per_core * Wt;
+        tile_offset += num_tiles_per_core;
     }
 
     CoreGridDesc grid(input.device());
