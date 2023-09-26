@@ -11,31 +11,86 @@ namespace tt {
 
 namespace tt_metal {
 
-void validate_buffer_indices(const std::set<u32> &buffer_indices) {
-    log_assert(buffer_indices.size() <= NUM_CIRCULAR_BUFFERS, "Number of circular buffers requested ({}) exceeds max number of circular buffers allowed on a core ({})", buffer_indices.size(), NUM_CIRCULAR_BUFFERS);
-    // check that they're between 0 to NUM_CIRCULAR_BUFFERS - 1
-    for (u32 buffer_index : buffer_indices) {
-        log_assert(buffer_index < NUM_CIRCULAR_BUFFERS, "Buffer index can only be up to {}", NUM_CIRCULAR_BUFFERS - 1);
+CircularBuffer::CircularBuffer(const CoreRangeSet &core_ranges, const CircularBufferConfig &config) : id_(reinterpret_cast<uintptr_t>(this)), core_ranges_(core_ranges), config_(config), is_allocated_(false) {
+    if (this->config_.total_size() == 0) {
+        log_fatal(tt::LogMetal, "Circular Buffer Config Error: Circular buffer size cannot be 0 B");
+    }
+
+    for (uint8_t buffer_index = 0; buffer_index < NUM_CIRCULAR_BUFFERS; buffer_index++) {
+        std::optional<DataFormat> data_format_spec = this->config_.data_formats().at(buffer_index);
+        std::optional<uint32_t> page_size_spec = this->config_.page_sizes().at(buffer_index);
+
+        bool df_set = data_format_spec.has_value();
+        bool ps_set = page_size_spec.has_value();
+        if (df_set != ps_set) {
+            string df_set_str = df_set ? "Data format is set" : "Data format is not set";
+            string ps_set_str = ps_set ? "Page size is set" : "Page size is not set";
+            log_fatal(tt::LogMetal, "Expected both data format and page size to be set for buffer index {}. {}. {}.", buffer_index, df_set_str, ps_set_str);
+        }
+
+        if (df_set and ps_set) {
+            this->buffer_indices_.insert(buffer_index);
+        }
     }
 }
 
-CircularBuffer::CircularBuffer(
-    const CoreRangeSet &core_range_set,
-    const std::set<u32> &buffer_indices,
-    u32 num_tiles,
-    u32 size_in_bytes,
-    u32 address,
-    DataFormat data_format) :
-    id_(reinterpret_cast<uintptr_t>(this)), core_range_set_(core_range_set), buffer_indices_(buffer_indices), num_tiles_(num_tiles), size_(size_in_bytes), address_(address), data_format_(data_format) {
-    validate_buffer_indices(buffer_indices);
+CircularBufferConfig &CircularBuffer::config() {
+    this->invalidate_allocation();
+    return this->config_;
 }
 
 bool CircularBuffer::is_on_logical_corerange( const CoreRange & logical_cr ) const{
-    return this->core_range_set_.intersects(logical_cr);
+    return this->core_ranges_.intersects(logical_cr);
 }
 
 bool CircularBuffer::is_on_logical_core(const CoreCoord &logical_core) const {
-    return this->core_range_set_.core_coord_in_core_ranges(logical_core);
+    return this->core_ranges_.core_coord_in_core_ranges(logical_core);
+}
+
+bool CircularBuffer::uses_buffer_index(uint32_t buffer_index) const {
+    return this->buffer_indices_.find(buffer_index) != this->buffer_indices_.end();
+}
+
+uint32_t CircularBuffer::page_size(uint32_t buffer_index) const {
+    if (not this->uses_buffer_index(buffer_index)) {
+        log_fatal(tt::LogMetal, "Cannot access page size for buffer index {} because circular buffer is not configured on that index", buffer_index);
+    }
+    uint32_t page_size = this->config_.page_sizes().at(buffer_index).value();
+    if (this->size() % page_size != 0) {
+        log_fatal(tt::LogMetal, "Total circular buffer size {} B must be divisible by page size {} B", this->size(), page_size);
+    }
+    return page_size;
+}
+
+uint32_t CircularBuffer::size() const {
+    return this->config_.total_size();
+}
+
+uint32_t CircularBuffer::num_pages(uint32_t buffer_index) const {
+    uint32_t page_size = this->page_size(buffer_index);
+    if (this->size() % page_size != 0) {
+        log_fatal(tt::LogMetal, "Total circular buffer size {} B must be divisible by page size {} B", this->size(), page_size);
+    }
+    return this->size() / page_size;
+}
+
+DataFormat CircularBuffer::data_format(uint32_t buffer_index) const {
+    if (not this->uses_buffer_index(buffer_index)) {
+        log_fatal(tt::LogMetal, "Cannot access data format for buffer index {} because circular buffer is not configured on that index", buffer_index);
+    }
+    return this->config_.data_formats().at(buffer_index).value();
+}
+
+uint32_t CircularBuffer::address() const {
+    if (not this->is_allocated_) {
+        log_fatal(tt::LogMetal, "Circular buffer has not been allocated, cannot request address at this time!");
+    }
+    return this->address_;
+}
+
+void CircularBuffer::set_address(uint32_t address) {
+    this->address_ = address;
+    this->is_allocated_ = true;
 }
 
 }  // namespace tt_metal

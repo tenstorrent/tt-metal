@@ -118,10 +118,10 @@ auto Program::semaphores_on_core(const CoreCoord &core) const {
 
 std::atomic<u64> Program::program_counter = 0;
 
-Program::Program(): id(program_counter++),worker_crs_({}), compile_needed_(false) {}
+Program::Program(): id(program_counter++),worker_crs_({}), compile_needed_(false), circular_buffer_allocation_needed_(false) {}
 
 void Program::add_kernel(Kernel *kernel) {
-    this->invalidate();
+    this->invalidate_compile();
     kernel_ids_.push_back(kernel->id());
     kernel_by_id_[kernel->id()] = kernel;
 }
@@ -181,18 +181,22 @@ std::vector<std::string> Program::cores_to_ops() const {
     return ops;
 }
 
-void Program::CircularBufferConfig::add_index(u32 index) {
-    log_assert(0 <= index < NUM_CIRCULAR_BUFFERS, "Invalid circular buffer index: {} should be between 0 and {}", 0, NUM_CIRCULAR_BUFFERS);
-    log_assert(not (this->indices.to_ulong() & (1 << index)), "Invalid circular buffer index: Cannot add circular buffer at index {}, another circular buffer already exists", index);
+void Program::CircularBufferAllocator::add_index(u32 index) {
+    if (index > NUM_CIRCULAR_BUFFERS) {
+        log_fatal(tt::LogMetal, "Invalid circular buffer index: {} should be between 0 and {}", index, NUM_CIRCULAR_BUFFERS);
+    }
+    if (this->indices.to_ulong() & (1 << index)) {
+        log_fatal(tt::LogMetal, "Invalid circular buffer index: Cannot add circular buffer at index {}, another circular buffer already exists", index);
+    }
     this->indices[index] = 1;
 }
 
 // CBs on a core are sequential so the next available address for a local buffer is the end of the last
-u64 Program::CircularBufferConfig::get_address_candidate() const {
+u64 Program::CircularBufferAllocator::get_address_candidate() const {
     return this->l1_regions.back().second;
 }
 
-void Program::CircularBufferConfig::mark_address(u64 address, u64 size) {
+void Program::CircularBufferAllocator::mark_address(u64 address, u64 size) {
     auto &last_region = this->l1_regions.back();
     log_assert(address >= last_region.second, "Local buffer address {} has to append to last L1 region [{}, {}) or be at a higher address", address, last_region.first, last_region.second);
     if (address == last_region.second) {
@@ -202,90 +206,134 @@ void Program::CircularBufferConfig::mark_address(u64 address, u64 size) {
     }
 }
 
-CircularBufferID Program::add_circular_buffer(const CoreRangeSet &core_range_set, const std::set<u32> &indices, u32 num_tiles, u32 size_bytes, const DataFormat &data_format, std::optional<u32> address) {
-    log_assert(
-        indices.size() <= NUM_CIRCULAR_BUFFERS,
-        "Invalid number of circular buffers: Requested number of circular buffers ({}) exceeds max number of circular buffers per core ({})", indices.size(), NUM_CIRCULAR_BUFFERS
-    );
-    std::optional<u64> computed_addr = std::nullopt;
-    std::vector<std::reference_wrapper<CircularBufferConfig>> cb_configs;
+CircularBufferID Program::add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config) {
+    this->invalidate_compile();
+    this->invalidate_circular_buffer_allocation();
+    std::shared_ptr<CircularBuffer> circular_buffer = std::make_shared<CircularBuffer>(core_range_set, config);
+
+    // Mark which buffer indices are being used on each core the circular buffer is used on
     for (const auto &core_range : core_range_set.ranges()) {
         for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
             for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
                 CoreCoord logical_core(x, y);
-                auto &cb_config = this->per_core_cb_config_[logical_core];
+                auto &cb_config = this->per_core_cb_allocator_[logical_core];
 
-                for (auto buffer_index : indices) {
+                for (auto buffer_index : circular_buffer->buffer_indices()) {
                     cb_config.add_index(buffer_index);
                 }
+            }
+    }
+    }
 
-                auto candidate_addr = cb_config.get_address_candidate();
-                if (not computed_addr.has_value()) {
-                    computed_addr = candidate_addr;
-                } else {
-                    computed_addr = std::max(computed_addr.value(), candidate_addr);
+    this->circular_buffers_.push_back(circular_buffer);
+    this->circular_buffer_by_id_.insert({circular_buffer->id(), circular_buffer});
+    return circular_buffer->id();
+}
+
+std::shared_ptr<CircularBuffer> Program::get_circular_buffer(CircularBufferID cb_id) const {
+    if (this->circular_buffer_by_id_.find(cb_id) == this->circular_buffer_by_id_.end()) {
+        log_fatal(tt::LogMetal, "No circular buffer with id {} exists in Program {}", cb_id, this->id);
+    }
+    return this->circular_buffer_by_id_.at(cb_id);
+}
+
+const std::vector<std::shared_ptr<CircularBuffer>> Program::circular_buffers_on_core(const CoreCoord &core) const {
+    std::vector<std::shared_ptr<CircularBuffer>> cbs_on_core;
+    for (auto circular_buffer : circular_buffers_) {
+        if (circular_buffer->is_on_logical_core(core)) {
+            cbs_on_core.push_back(circular_buffer);
+        }
+    }
+    return cbs_on_core;
+}
+
+const std::vector<std::shared_ptr<CircularBuffer>> Program::circular_buffers_on_corerange(const CoreRange & cr) const {
+    std::vector<std::shared_ptr<CircularBuffer>> cbs_on_core;
+    for (auto circular_buffer : circular_buffers_) {
+        if (circular_buffer->is_on_logical_corerange(cr)) {
+            cbs_on_core.push_back(circular_buffer);
+        }
+    }
+    return cbs_on_core;
+}
+
+void Program::invalidate_circular_buffer_allocation() {
+    if (this->circular_buffer_allocation_needed_) {
+        return;
+    }
+    for (auto &[logical_core, cb_allocator] : this->per_core_cb_allocator_) {
+        cb_allocator.reset_available_addresses();
+    }
+    this->circular_buffer_allocation_needed_ = true;
+}
+
+void Program::allocate_circular_buffers() {
+    if (not this->circular_buffer_allocation_needed_) {
+        return;
+    }
+
+    for (std::shared_ptr<CircularBuffer> circular_buffer : this->circular_buffers_) {
+        std::optional<uint64_t> computed_addr = std::nullopt;
+        std::vector<std::reference_wrapper<CircularBufferAllocator>> cb_allocators;
+        for (const CoreRange &core_range : circular_buffer->core_ranges().ranges()) {
+            for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
+                for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+                    CoreCoord logical_core(x, y);
+                    auto &cb_allocator = this->per_core_cb_allocator_.at(logical_core);
+
+                    // Need the max available address across all cores circular buffer is placed on
+                    auto candidate_addr = cb_allocator.get_address_candidate();
+                    if (not computed_addr.has_value()) {
+                        computed_addr = candidate_addr;
+                    } else {
+                        computed_addr = std::max(computed_addr.value(), candidate_addr);
+                    }
+
+                    cb_allocators.push_back(cb_allocator);
                 }
-
-                cb_configs.push_back(cb_config);
             }
         }
-    }
 
-    if (address.has_value()) {
-        log_assert(address.value() >= computed_addr.value(), "Specified address {} should be at max local buffer region for core range set, try {} instead", address.value(), computed_addr.value());
-        computed_addr = address;
-    }
-
-    for (auto &cb_config : cb_configs) {
-        cb_config.get().mark_address(computed_addr.value(), size_bytes);
-    }
-    this->invalidate();
-    this->circular_buffers_.emplace_back(CircularBuffer(core_range_set, indices, num_tiles, size_bytes, computed_addr.value(), data_format));
-    return this->circular_buffers_.back().id();
-}
-
-const std::vector<CircularBuffer> Program::circular_buffers_on_core(const CoreCoord &core) const {
-    std::vector<CircularBuffer> cbs_on_core;
-    for (auto circular_buffer : circular_buffers_) {
-        if (circular_buffer.is_on_logical_core(core)) {
-            cbs_on_core.push_back(circular_buffer);
+        // okay to access config and invalidate circular buffer address because it will be set below
+        std::optional<uint32_t> requested_address = circular_buffer->config().requested_address();
+        if (requested_address.has_value()) {
+            if (requested_address.value() < computed_addr.value()) {
+                log_fatal(tt::LogMetal, "Specified address {} should be at max local buffer region for core range set, try {} instead", requested_address.value(), computed_addr.value());
+            }
+            computed_addr = requested_address;
         }
-    }
-    return cbs_on_core;
-}
 
-const std::vector<CircularBuffer>  Program::circular_buffers_on_corerange(const CoreRange & cr) const {
-    std::vector<CircularBuffer>  cbs_on_core;
-    for (auto circular_buffer : circular_buffers_) {
-        if (circular_buffer.is_on_logical_corerange(cr)) {
-            cbs_on_core.push_back(circular_buffer);
+        for (auto &cb_allocator : cb_allocators) {
+            cb_allocator.get().mark_address(computed_addr.value(), circular_buffer->size());
         }
+
+        circular_buffer->set_address(computed_addr.value());
     }
-    return cbs_on_core;
+    this->circular_buffer_allocation_needed_ = false;
 }
 
 void Program::validate_circular_buffer_region(const Device *device, std::optional<CoreCoord> logical_core) const {
     auto highest_cb_l1_region = [&](const CoreCoord &core) {
-        if (this->per_core_cb_config_.find(core) == this->per_core_cb_config_.end()) {
+        if (this->per_core_cb_allocator_.find(core) == this->per_core_cb_allocator_.end()) {
             return std::make_pair((u64)L1_UNRESERVED_BASE, (u64)L1_UNRESERVED_BASE);
         }
-        return this->per_core_cb_config_.at(core).l1_regions.back();
+        return this->per_core_cb_allocator_.at(core).l1_regions.back();
     };
 
     auto validate_cb_space_and_l1_buffer_space_disjoint = [&](const CoreCoord &core, const std::pair<u64, u64> &cb_space) {
         if (cb_space.second > device->l1_size()) {
-            log_assert(cb_space.second <= device->l1_size(), "Local buffers on core {} grow to {} KB which is beyond max L1 size of {} KB", core.str(), cb_space.second/1024, device->l1_size()/1024);
+            log_fatal(tt::LogMetal, "Local buffers on core {} grow to {} B which is beyond max L1 size of {} B", core.str(), cb_space.second, device->l1_size());
         }
 
         auto bank_ids = device->bank_ids_from_logical_core(core);
         if (bank_ids.size() != 1) {
-            log_assert(bank_ids.size() == 1, "Expected one bank on core that holds local and L1 buffers");
+            log_fatal(tt::LogMetal, "Expected one bank on core that holds local and L1 buffers but logical core {} has {} banks", core.str(), bank_ids.size());
         }
 
         auto lowest_address = allocator::lowest_occupied_l1_address(*device->allocator_, bank_ids.at(0));
         if (lowest_address.has_value()) {
             if (lowest_address.value() < cb_space.second) {
-                log_assert(lowest_address.value() >= cb_space.second, "Circular buffers in program {} clash with L1 buffers on core {}. L1 buffer allocated at {} and local buffers end at {}", this->id, core.str(), lowest_address.value(), cb_space.second);
+                log_fatal(tt::LogMetal, "Circular buffers in program {} clash with L1 buffers on core {}. L1 buffer allocated at {} and local buffers end at {}", this->id, core.str(), lowest_address.value(), cb_space.second);
             }
         }
     };
@@ -294,7 +342,7 @@ void Program::validate_circular_buffer_region(const Device *device, std::optiona
         const auto &cb_space = highest_cb_l1_region(logical_core.value());
         validate_cb_space_and_l1_buffer_space_disjoint(logical_core.value(), cb_space);
     } else {
-        for (const auto &[core, cb_config] : this->per_core_cb_config_) {
+        for (const auto &[core, cb_config] : this->per_core_cb_allocator_) {
             const auto &cb_space = highest_cb_l1_region(core);
             validate_cb_space_and_l1_buffer_space_disjoint(core, cb_space);
         }
@@ -321,7 +369,7 @@ void Program::init_semaphores( const Device & device, const CoreCoord &logical_c
 }
 
 void Program::add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t init_value) {
-    this->invalidate();
+    this->invalidate_compile();
     semaphores_.emplace_back(Semaphore( crs, address, init_value));
 }
 
@@ -398,8 +446,8 @@ void Program::set_cb_data_fmt(
     for (auto logical_cr : kernel->logical_coreranges()) {
         auto cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
         for (auto circular_buffer : cbs_on_core) {
-            for (auto buffer_index : circular_buffer.buffer_indices()) {
-                build_options.set_cb_dataformat_all_cores(static_cast<CB>(buffer_index), circular_buffer.data_format());
+            for (auto buffer_index : circular_buffer->buffer_indices()) {
+                build_options.set_cb_dataformat_all_cores(static_cast<CB>(buffer_index), circular_buffer->data_format(buffer_index));
             }
         }
     }

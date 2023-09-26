@@ -67,11 +67,13 @@ std::optional<uint32_t> get_semaphore_address(const Program &program, const Core
 
 namespace detail {
 
-    bool ConfigureDeviceWithProgram(Device *device, const Program &program) {
+    bool ConfigureDeviceWithProgram(Device *device, Program &program) {
         ZoneScoped;
         bool pass = true;
         detail::DispatchStateCheck( false );
         detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("ConfigureDeviceWithProgram");
+
+        program.allocate_circular_buffers();
 
         std::unordered_set<CoreCoord> worker_cores;
         auto cluster = device->cluster();
@@ -95,13 +97,13 @@ namespace detail {
 
             auto cbs_on_core = program.circular_buffers_on_core(logical_core);         // PROF_BEGIN("CBS")
             for (auto circular_buffer : cbs_on_core) {
-                for (auto buffer_index : circular_buffer.buffer_indices()) {
+                for (uint32_t buffer_index : circular_buffer->buffer_indices()) {
                     llrt::set_config_for_circular_buffer(
                         circular_buffer_config_vec,
                         buffer_index,
-                        circular_buffer.address(),
-                        circular_buffer.size(),
-                        circular_buffer.num_tiles());
+                        circular_buffer->address(),
+                        circular_buffer->size(),
+                        circular_buffer->num_pages(buffer_index));
                 }
             }  // PROF_END("CBS")
 
@@ -212,65 +214,14 @@ KernelID CreateComputeKernel(Program &program, const std::string &file_name, con
     return kernel->id();
 }
 
-CircularBufferID CreateCircularBuffer(
-    Program &program,
-    uint32_t buffer_index,
-    const CoreCoord &core,
-    uint32_t num_tiles,
-    uint32_t size_in_bytes,
-    DataFormat data_format,
-    std::optional<uint32_t> l1_address) {
-    CoreRange single_core_range = {.start = core, .end = core};
-    return CreateCircularBuffers(
-        program,
-        std::set<u32>({buffer_index}),
-        CoreRangeSet({single_core_range}),
-        num_tiles,
-        size_in_bytes,
-        data_format,
-        l1_address);
+CircularBufferID CreateCircularBuffers(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config) {
+    CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
+    return program.add_circular_buffer(core_ranges, config);
 }
 
-CircularBufferID CreateCircularBuffers(
-    Program &program,
-    uint32_t buffer_index,
-    const CoreRange &core_range,
-    uint32_t num_tiles,
-    uint32_t size_in_bytes,
-    DataFormat data_format,
-    std::optional<uint32_t> l1_address) {
-    return CreateCircularBuffers(
-        program,
-        std::set<u32>({buffer_index}),
-        CoreRangeSet({core_range}),
-        num_tiles,
-        size_in_bytes,
-        data_format,
-        l1_address);
-}
-
-CircularBufferID CreateCircularBuffers(
-    Program &program,
-    uint32_t buffer_index,
-    const CoreRangeSet &core_range_set,
-    uint32_t num_tiles,
-    uint32_t size_in_bytes,
-    DataFormat data_format,
-    std::optional<uint32_t> l1_address) {
-    return CreateCircularBuffers(
-        program, std::set<u32>({buffer_index}), core_range_set, num_tiles, size_in_bytes, data_format, l1_address);
-}
-
-CircularBufferID CreateCircularBuffers(
-    Program &program,
-    const std::set<uint32_t> &buffer_indices,
-    const CoreRangeSet &core_range_set,
-    uint32_t num_tiles,
-    uint32_t size_in_bytes,
-    DataFormat data_format,
-    std::optional<uint32_t> l1_address) {
-    return program.add_circular_buffer(
-        core_range_set, buffer_indices, num_tiles, size_in_bytes, data_format, l1_address);
+CircularBufferConfig &GetCircularBufferConfig(Program &program, CircularBufferID circular_buffer_id) {
+    program.invalidate_circular_buffer_allocation();
+    return detail::GetCircularBuffer(program, circular_buffer_id)->config();
 }
 
 uint32_t CreateSemaphore(Program &program, const CoreRange &core_range, uint32_t initial_value) {

@@ -88,7 +88,7 @@ int main(int argc, char **argv) {
          */
         constexpr uint32_t src0_cb_index = CB::c_in0;
         constexpr uint32_t num_input_tiles = 2;
-        CircularBufferID cb_src0 = CreateCircularBuffer(
+        CircularBufferID cb_src0 = CreateCircularBuffers(
             program,
             src0_cb_index,
             core,
@@ -98,7 +98,7 @@ int main(int argc, char **argv) {
         );
 
         constexpr uint32_t src1_cb_index = CB::c_in1;
-        CircularBufferID cb_src1 = CreateCircularBuffer(
+        CircularBufferID cb_src1 = CreateCircularBuffers(
             program,
             src1_cb_index,
             core,
@@ -109,7 +109,7 @@ int main(int argc, char **argv) {
 
         constexpr uint32_t output_cb_index = CB::c_out0;
         constexpr uint32_t num_output_tiles = 2;
-        CircularBufferID cb_output = CreateCircularBuffer(
+        CircularBufferID cb_output = CreateCircularBuffers(
             program,
             output_cb_index,
             core,
@@ -227,7 +227,7 @@ int main(int argc, char **argv) {
          * Because we're using a new program, we must redeclare all the
          * circular buffers and kernels.
          */
-        cb_src0 = CreateCircularBuffer(
+        cb_src0 = CreateCircularBuffers(
             program_mul,
             src0_cb_index,
             core,
@@ -236,7 +236,7 @@ int main(int argc, char **argv) {
             tt::DataFormat::Float16_b
         );
 
-        cb_src1 = CreateCircularBuffer(
+        cb_src1 = CreateCircularBuffers(
             program_mul,
             src1_cb_index,
             core,
@@ -245,7 +245,7 @@ int main(int argc, char **argv) {
             tt::DataFormat::Float16_b
         );
 
-        cb_output = CreateCircularBuffer(
+        cb_output = CreateCircularBuffers(
             program_mul,
             output_cb_index,
             core,

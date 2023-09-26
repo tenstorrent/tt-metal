@@ -71,7 +71,7 @@ namespace tt::tt_metal{
         // - Loads all kernel binaries into L1s of assigned Tensix cores
         // - Configures circular buffers (inits regs with buffer data)
         // - Takes the device out of reset
-        bool ConfigureDeviceWithProgram(Device *device, const Program &program);
+        bool ConfigureDeviceWithProgram(Device *device, Program &program);
 
         /**
          * Read device side profiler data and dump results into device side CSV log

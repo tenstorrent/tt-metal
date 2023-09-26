@@ -156,22 +156,7 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
             initialize_section();
         }
 
-        program_vector.push_back(cb.address() >> 4);
-        program_vector.push_back(cb.size() >> 4);
-        program_vector.push_back(cb.num_tiles());
-
-        u32 page_size = cb.size() / cb.num_tiles();
-        program_vector.push_back(page_size >> 4);  // Padding
-
-        if (DISPATCH_MAP_DUMP != nullptr) {
-            vector<u32> cb_config = {cb.address() >> 4, cb.size() >> 4, cb.num_tiles()};
-            for (auto buffer_index : cb.buffer_indices()) {
-                string name = "CB: " + std::to_string(buffer_index);
-                update_dispatch_map_dump(name, cb_config, dispatch_dump_file);
-            }
-        }
-
-        CoreRangeSet cr_set = cb.core_range_set();
+        CoreRangeSet cr_set = cb.core_ranges();
 
         for (const CoreRange& core_range : cr_set.ranges()) {
             CoreCoord physical_start = device->worker_core_from_logical_core(core_range.start);
@@ -180,6 +165,18 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
             u32 noc_multicast_encoding = get_noc_multicast_encoding(physical_start, physical_end);
 
             for (auto buffer_index : cb.buffer_indices()) {
+                program_vector.push_back(cb.address() >> 4);
+                program_vector.push_back(cb.size() >> 4);
+                program_vector.push_back(cb.num_pages(buffer_index));
+                u32 page_size = cb.page_size(buffer_index);
+                program_vector.push_back(page_size >> 4);  // Padding
+
+                if (DISPATCH_MAP_DUMP != nullptr) {
+                    vector<u32> cb_config = {cb.address() >> 4, cb.size() >> 4, cb.num_pages(buffer_index)};
+                    string name = "CB: " + std::to_string(cb.id()) + "_" + std::to_string(buffer_index);
+                    update_dispatch_map_dump(name, cb_config, dispatch_dump_file);
+                }
+
                 sections.at(current_section_idx)
                     .at(TransferType::CB)
                     .push_back(std::make_tuple(
@@ -189,10 +186,11 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
                         16,
                         noc_multicast_encoding,
                         core_range.size()));
+
+                start_in_bytes += 16;
+                sections.at(current_section_idx).size_in_bytes += 16;
             }
         }
-        start_in_bytes += 16;
-        sections.at(current_section_idx).size_in_bytes += 16;
     };
 
     // If only we could template lambdas in C++17, then wouldn't need this code duplication!
@@ -249,8 +247,8 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
         write_program_kernel_transfer(kernel, riscv_type);
     }
 
-    for (const CircularBuffer& cb : program.circular_buffers()) {
-        write_cb_config_transfer(cb);
+    for (const std::shared_ptr<CircularBuffer> cb : program.circular_buffers()) {
+        write_cb_config_transfer(*cb);
     }
 
     for (auto sem : program.semaphores()) {
@@ -854,6 +852,7 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
             "Cannot compare dispatch device output to host when dispatch map dump not enabled");
     }
 
+    program.allocate_circular_buffers();
     detail::ValidateCircularBufferRegion(program, cq.device);
     cq.enqueue_program(program, blocking);
 

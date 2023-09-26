@@ -26,6 +26,7 @@ namespace detail{
     void ValidateCircularBufferRegion(const Program &program, const Device *device, std::optional<CoreCoord> logical_core);
     void AddKernel ( Program & program, Kernel * kernel);
     Kernel *GetKernel(const Program &program, KernelID kernel_id);
+    std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CircularBufferID id);
 }
 
 struct KernelGroup {
@@ -52,7 +53,7 @@ class Program {
 
     std::vector<KernelID> kernel_ids() const { return kernel_ids_; }
 
-    const std::vector<CircularBuffer> &circular_buffers() const { return circular_buffers_; }
+    const std::vector<std::shared_ptr<CircularBuffer>> &circular_buffers() const { return circular_buffers_; }
 
     const std::vector< Semaphore > & semaphores() const { return semaphores_; }
 
@@ -60,9 +61,9 @@ class Program {
 
     std::map<CoreCoord, KernelGroup> core_to_kernel_group() const;
 
-    const std::vector<CircularBuffer> circular_buffers_on_core(const CoreCoord &core) const;
+    const std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_on_core(const CoreCoord &core) const;
 
-    const std::vector<CircularBuffer> circular_buffers_on_corerange(const CoreRange &cr) const;
+    const std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_on_corerange(const CoreRange &cr) const;
 
     auto semaphores_on_core(const CoreCoord &core) const;
 
@@ -78,10 +79,14 @@ class Program {
 
     void compile(Device * device);
 
-    void invalidate() { compile_needed_ = true; }
+    void invalidate_compile() { compile_needed_ = true; }
+
+    void invalidate_circular_buffer_allocation();
+
+    void allocate_circular_buffers();
 
    private:
-    struct CircularBufferConfig {
+    struct CircularBufferAllocator {
         // Tracks which circular buffer indices are being used
         std::bitset<NUM_CIRCULAR_BUFFERS> indices;
 
@@ -89,38 +94,40 @@ class Program {
         // There are multiple ranges because per core L1 regions are not in lockstep but circular buffers spanning multiple cores must share the same address
         // To enable this, circular buffer address is the maximum address amongst all of its target cores
         // This vector is sorted from lower to higher address spaces
-        std::vector<std::pair<u64, u64>> l1_regions = {{L1_UNRESERVED_BASE, L1_UNRESERVED_BASE}};
+        std::vector<std::pair<uint64_t, uint64_t>> l1_regions = {{L1_UNRESERVED_BASE, L1_UNRESERVED_BASE}};
 
         // Sets `indices` at position index
-        void add_index(u32 index);
+        void add_index(uint32_t index);
 
         // Returns address for next circular buffer
         // Circular buffers are placed sequentially on a core so the next available address gets appended to the last L1 region
-        u64 get_address_candidate() const;
+        uint64_t get_address_candidate() const;
 
         // If address is the end of the last L1 region, the last region is extended by size bytes,
         //  otherwise address must be higher than existing regions and a new L1 region [address, size) is added
-        void mark_address(u64 address, u64 size);
+        void mark_address(uint64_t address, uint64_t size);
+
+        // Reset when circular buffer allocation is invalidated
+        void reset_available_addresses() { this->l1_regions = {{L1_UNRESERVED_BASE, L1_UNRESERVED_BASE}}; }
     };
 
     u64 id; // Need to make non-const due to move constructor
     static std::atomic<u64> program_counter;
     std::vector<KernelID> kernel_ids_;
     std::unordered_map<KernelID, Kernel *> kernel_by_id_;
-    std::vector<CircularBuffer> circular_buffers_;
-    std::map<CoreCoord, CircularBufferConfig> per_core_cb_config_;
+
+    std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_;
+    std::unordered_map<CircularBufferID,  std::shared_ptr<CircularBuffer>> circular_buffer_by_id_;
+    std::unordered_map<CoreCoord, CircularBufferAllocator> per_core_cb_allocator_;
+
     std::vector<Semaphore> semaphores_;
+
     CoreRangeSet worker_crs_;
     bool compile_needed_;
+    bool circular_buffer_allocation_needed_;
 
-    friend CircularBufferID CreateCircularBuffers(
-        Program &program,
-        const std::set<uint32_t> &buffer_indices,
-        const CoreRangeSet &core_range_set,
-        uint32_t num_tiles,
-        uint32_t size_in_bytes,
-        DataFormat data_format,
-        std::optional<uint32_t> l1_address);
+    friend CircularBufferID CreateCircularBuffers(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
+    friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CircularBufferID id);
     friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device, std::optional<CoreCoord> logical_core);
 
     friend void detail::AddKernel(Program &program, Kernel *kernel);
@@ -131,7 +138,8 @@ class Program {
     void add_kernel(Kernel *kernel);
     Kernel *get_kernel(KernelID kernel_id) const;
 
-    CircularBufferID add_circular_buffer(const CoreRangeSet &core_range_set, const std::set<u32> &indices, u32 num_tiles, u32 size_bytes, const DataFormat &data_format, std::optional<u32> address);
+    CircularBufferID add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config);
+    std::shared_ptr<CircularBuffer> get_circular_buffer(CircularBufferID cb_id) const;
 
     void add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t init_value);
 
