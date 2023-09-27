@@ -39,9 +39,9 @@ LAYOUTS_TT_DICT = {
     "TILE": tt_lib.tensor.Layout.TILE,
 }
 
-BUFFER_TYPES_TT_DICT = {
-    "DRAM": tt_lib.tensor.BufferType.DRAM,
-    "L1": tt_lib.tensor.BufferType.L1,
+MEM_CONFIGS_TT_DICT = {
+    "DRAM": tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.DRAM),
+    "L1": tt_lib.tensor.MemoryConfig(True, tt_lib.tensor.BufferType.L1),
     "SYSTEM_MEMORY": None,
 }
 
@@ -142,13 +142,13 @@ def run_pytorch_test(args):
             # Set tests parameters --------------------------
             test_tt_dtypes = []
             test_tt_layouts = []
-            test_buffer_types = []
+            test_mem_configs = []
 
             if "inputs" in test_args:
                 for input_spec in test_args["inputs"]:
                     test_tt_dtypes.append([])
                     test_tt_layouts.append([])
-                    test_buffer_types.append([])
+                    test_mem_configs.append([])
 
                     assert 'data-type' in input_spec, f"For each input you need to specify 'data-type'"
                     assert 'data-layout' in input_spec, f"For each input you need to specify 'data-layout'"
@@ -161,12 +161,12 @@ def run_pytorch_test(args):
                         test_tt_layouts[-1].append(LAYOUTS_TT_DICT[layout])
 
                     for buffer_type in input_spec['buffer-type']:
-                        test_buffer_types[-1].append(BUFFER_TYPES_TT_DICT[buffer_type])
+                        test_mem_configs[-1].append(MEM_CONFIGS_TT_DICT[buffer_type])
             else:
                 for i in range(shape_dict["num-shapes"]):
                     test_tt_dtypes.append([])
                     test_tt_layouts.append([])
-                    test_buffer_types.append([])
+                    test_mem_configs.append([])
 
                     if 'data-layout' in test_args:
                         for layout in test_args['data-layout']:
@@ -182,33 +182,33 @@ def run_pytorch_test(args):
 
                     if 'buffer-type' in test_args:
                         for buffer_type in test_args['buffer-type']:
-                            test_buffer_types[-1].append(BUFFER_TYPES_TT_DICT[buffer_type])
+                            test_mem_configs[-1].append(MEM_CONFIGS_TT_DICT[buffer_type])
                     else:
-                        test_buffer_types[-1] = generation_funcs.supported_tt_buffer_types
+                        test_mem_configs[-1] = generation_funcs.supported_mem_configs
 
             if "outputs" in test_args:
                 for out_spec in test_args["outputs"]:
-                    test_buffer_types.append([])
+                    test_mem_configs.append([])
 
                     assert 'out-buffer-type' in out_spec, f"For output you need to specify 'out-buffer-type'"
 
                     for buffer_type in out_spec['out-buffer-type']:
-                        test_buffer_types[-1].append(buffer_type)
+                        test_mem_configs[-1].append(buffer_type)
             else:
-                test_buffer_types.append([])
+                test_mem_configs.append([])
 
                 if 'out-buffer-type' in test_args:
                     for buffer_type in test_args['out-buffer-type']:
-                        test_buffer_types[-1].append(BUFFER_TYPES_TT_DICT[buffer_type])
+                        test_mem_configs[-1].append(MEM_CONFIGS_TT_DICT[buffer_type])
                 else:
-                    test_buffer_types[-1] = [tt_lib.tensor.BufferType.DRAM]
+                    test_mem_configs[-1] = [MEM_CONFIGS_TT_DICT["DRAM"]]
             # Set tests parameters --------------------------
 
             ################# RUN TEST SWEEP #################
             for input_shapes, datagen_funcs in shapes_and_datagen(
                 shape_dict, datagen_dict
             ):
-                for generated_test_args in test_args_gen(input_shapes, test_tt_dtypes, test_tt_layouts, test_buffer_types):
+                for generated_test_args in test_args_gen(input_shapes, test_tt_dtypes, test_tt_layouts, test_mem_configs):
                     # generated_test_args.update(
                     #     test_args
                     # )  # specified test args overrides generated test args

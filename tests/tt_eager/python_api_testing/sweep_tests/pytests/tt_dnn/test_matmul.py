@@ -71,7 +71,7 @@ def test_run_matmul_test(input_shapes, device, dtype, function_level_defaults):
         {
             "dtype": [dtype, dtype],
             "layout": [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
-            "buffer_type": [ttl.tensor.BufferType.DRAM, ttl.tensor.BufferType.DRAM],
+            "input_mem_config": [ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)] * 2,
             "output_mem_config": ttl.tensor.MemoryConfig(
                 True, ttl.tensor.BufferType.DRAM
             ),
@@ -130,7 +130,7 @@ def test_run_bmm_test(input_shapes, device, dtype, function_level_defaults):
         {
             "dtype": [dtype, dtype],
             "layout": [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
-            "buffer_type": [ttl.tensor.BufferType.DRAM, ttl.tensor.BufferType.DRAM],
+            "input_mem_config": [ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)] * 2,
             "output_mem_config": ttl.tensor.MemoryConfig(
                 True, ttl.tensor.BufferType.DRAM
             ),

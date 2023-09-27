@@ -45,8 +45,6 @@ def test_run_pad_test(input_shapes, pad_args, device, function_level_defaults):
         )
     ]
 
-    print(f"pad_args {pad_args}")
-
     comparison_func = comparison_funcs.comp_equal
     run_single_pytorch_test(
         "pad",

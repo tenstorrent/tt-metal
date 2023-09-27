@@ -30,7 +30,7 @@ params += [
         {
             "dtype": [ttl.tensor.DataType.BFLOAT16],
             "layout": [ttl.tensor.Layout.TILE],
-            "buffer_type": [ttl.tensor.BufferType.DRAM],
+            "input_mem_config": [ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)],
             "output_mem_config": ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
             "reshape_dims": [-1, 2, 32, 32],
         },
@@ -40,7 +40,7 @@ params += [
         {
             "dtype": [ttl.tensor.DataType.BFLOAT16],
             "layout": [ttl.tensor.Layout.TILE],
-            "buffer_type": [ttl.tensor.BufferType.DRAM],
+            "input_mem_config": [ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)],
             "output_mem_config": ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
             "reshape_dims": [-1, 2, 32, 64],
         },
@@ -50,7 +50,7 @@ params += [
         {
             "dtype": [ttl.tensor.DataType.BFLOAT16],
             "layout": [ttl.tensor.Layout.TILE],
-            "buffer_type": [ttl.tensor.BufferType.DRAM],
+            "input_mem_config": [ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)],
             "output_mem_config": ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
             "reshape_dims": [2, -1, 32, 32],
         },
@@ -60,7 +60,7 @@ params += [
         {
             "dtype": [ttl.tensor.DataType.BFLOAT16],
             "layout": [ttl.tensor.Layout.TILE],
-            "buffer_type": [ttl.tensor.BufferType.DRAM],
+            "input_mem_config": [ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)],
             "output_mem_config": ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
             "reshape_dims": [2, -1, 32, 64],
         },
@@ -70,7 +70,7 @@ params += [
         {
             "dtype": [ttl.tensor.DataType.BFLOAT16],
             "layout": [ttl.tensor.Layout.TILE],
-            "buffer_type": [ttl.tensor.BufferType.DRAM],
+            "input_mem_config": [ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)],
             "output_mem_config": ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
             "reshape_dims": [4, 2, -1, 32],
         },
@@ -80,7 +80,7 @@ params += [
         {
             "dtype": [ttl.tensor.DataType.BFLOAT16],
             "layout": [ttl.tensor.Layout.TILE],
-            "buffer_type": [ttl.tensor.BufferType.DRAM],
+            "input_mem_config": [ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)],
             "output_mem_config": ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
             "reshape_dims": [4, 2, -1, 64],
         },
@@ -90,7 +90,7 @@ params += [
         {
             "dtype": [ttl.tensor.DataType.BFLOAT16],
             "layout": [ttl.tensor.Layout.TILE],
-            "buffer_type": [ttl.tensor.BufferType.DRAM],
+            "input_mem_config": [ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)],
             "output_mem_config": ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
             "reshape_dims": [4, 4, 32, -1],
         },
@@ -100,7 +100,7 @@ params += [
         {
             "dtype": [ttl.tensor.DataType.BFLOAT16],
             "layout": [ttl.tensor.Layout.TILE],
-            "buffer_type": [ttl.tensor.BufferType.DRAM],
+            "input_mem_config": [ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)],
             "output_mem_config": ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
             "reshape_dims": [4, 2, 32, -1],
         },

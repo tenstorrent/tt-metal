@@ -76,7 +76,7 @@ class TestEltwiseUnary:
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args.update(
             {
-                "input_mem_config": input_mem_config,
+                "input_mem_config": [input_mem_config],
                 "output_mem_config": output_mem_config,
             }
         )
@@ -329,7 +329,7 @@ class TestEltwiseUnary:
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args.update(
             {
-                "input_mem_config": input_mem_config,
+                "input_mem_config": [input_mem_config],
                 "output_mem_config": output_mem_config,
             }
         )
@@ -359,7 +359,7 @@ class TestEltwiseUnary:
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args.update(
             {
-                "input_mem_config": input_mem_config,
+                "input_mem_config": [input_mem_config],
                 "output_mem_config": output_mem_config,
             }
         )
@@ -423,7 +423,7 @@ class TestEltwiseUnary:
         test_args.update({f"{limit_type}_limit": limit})
         test_args.update(
             {
-                "input_mem_config": input_mem_config,
+                "input_mem_config": [input_mem_config],
                 "output_mem_config": output_mem_config,
             }
         )
@@ -553,7 +553,7 @@ class TestEltwiseUnary:
         test_args.update({"exponent": exponent})
         test_args.update(
             {
-                "input_mem_config": input_mem_config,
+                "input_mem_config": [input_mem_config],
                 "output_mem_config": output_mem_config,
             }
         )
@@ -591,7 +591,7 @@ class TestEltwiseUnary:
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args.update(
             {
-                "input_mem_config": input_mem_config,
+                "input_mem_config": [input_mem_config],
                 "output_mem_config": output_mem_config,
             }
         )
@@ -624,7 +624,7 @@ class TestEltwiseUnary:
         test_args.update({"scalar": scalar})
         test_args.update(
             {
-                "input_mem_config": input_mem_config,
+                "input_mem_config": [input_mem_config],
                 "output_mem_config": output_mem_config,
             }
         )
@@ -662,7 +662,7 @@ class TestEltwiseUnary:
         test_args.update({"scalar": scalar})
         test_args.update(
             {
-                "input_mem_config": input_mem_config,
+                "input_mem_config": [input_mem_config],
                 "output_mem_config": output_mem_config,
             }
         )
@@ -699,7 +699,7 @@ class TestEltwiseUnary:
         test_args.update(clip_range)
         test_args.update(
             {
-                "input_mem_config": input_mem_config,
+                "input_mem_config": [input_mem_config],
                 "output_mem_config": output_mem_config,
             }
         )
@@ -731,7 +731,7 @@ class TestEltwiseUnary:
         test_args.update({"alpha": alpha})
         test_args.update(
             {
-                "input_mem_config": input_mem_config,
+                "input_mem_config": [input_mem_config],
                 "output_mem_config": output_mem_config,
             }
         )
@@ -765,7 +765,7 @@ class TestEltwiseUnary:
         test_args.update({"negative_slope": negative_slope})
         test_args.update(
             {
-                "input_mem_config": input_mem_config,
+                "input_mem_config": [input_mem_config],
                 "output_mem_config": output_mem_config,
             }
         )
@@ -799,7 +799,7 @@ class TestEltwiseUnary:
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args.update(
             {
-                "input_mem_config": input_mem_config,
+                "input_mem_config": [input_mem_config],
                 "output_mem_config": output_mem_config,
             }
         )
@@ -831,7 +831,7 @@ class TestEltwiseUnary:
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args.update(
             {
-                "input_mem_config": input_mem_config,
+                "input_mem_config": [input_mem_config],
                 "output_mem_config": output_mem_config,
             }
         )
@@ -864,7 +864,7 @@ class TestEltwiseUnary:
         test_args["fast_and_appx"] = fast_and_appx
         test_args.update(
             {
-                "input_mem_config": input_mem_config,
+                "input_mem_config": [input_mem_config],
                 "output_mem_config": output_mem_config,
             }
         )
@@ -900,7 +900,7 @@ class TestEltwiseUnary:
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args.update(
             {
-                "input_mem_config": input_mem_config,
+                "input_mem_config": [input_mem_config],
                 "output_mem_config": output_mem_config,
             }
         )

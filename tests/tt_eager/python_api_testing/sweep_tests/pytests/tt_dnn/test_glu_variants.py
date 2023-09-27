@@ -69,7 +69,7 @@ class TestGLUVariants:
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args.update(
             {
-                "input_mem_config": input_mem_config,
+                "input_mem_config": [input_mem_config],
                 "output_mem_config": output_mem_config,
             }
         )

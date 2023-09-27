@@ -30,7 +30,7 @@ import tt_lib as ttl
         {
             "dtype": [ttl.tensor.DataType.BFLOAT16],
             "layout": [ttl.tensor.Layout.TILE],
-            "buffer_type": [ttl.tensor.BufferType.DRAM, ttl.tensor.BufferType.DRAM],
+            "input_mem_config": [ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)],
             "output_mem_config": ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
         },
     ),

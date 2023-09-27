@@ -17,7 +17,7 @@ test-list:
         function: comp_pcc
       output-file: untilize_sweep.csv
       args:
-        data-layout: ["ROW_MAJOR", "TILE"]
+        data-layout: ["TILE"]
         data-type: ["BFLOAT16", "BFLOAT8_B"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM"]

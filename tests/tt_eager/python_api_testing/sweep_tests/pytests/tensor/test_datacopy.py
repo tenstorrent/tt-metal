@@ -56,7 +56,7 @@ def test_run_datacopy_test(
         {
             "dtype": [dtype],
             "layout": [ttl.tensor.Layout.TILE],
-            "buffer_type": [ttl.tensor.BufferType.DRAM],
+            "input_mem_config": [ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)],
             "output_mem_config": memory_config,
         },
     )
