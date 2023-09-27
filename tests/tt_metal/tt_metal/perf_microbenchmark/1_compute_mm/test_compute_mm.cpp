@@ -31,9 +31,9 @@ using namespace tt;
 // repeatedly for the total number of blocks.
 // - Currently, TT's matmul implementation may not be able to use all Tensix cores for certain input shapes. In that
 // case, only some cores are used with a warning message.
-// - To measure perf in the slow dispatch mode, this benchmark copied device profiler's internal code to get the "t0 to
-// any riscfw end" cycles. If device profiler is changed, it also should be updated. Otherwise, it may get inappropriate
-// cycle value.
+// - To measure performance in the slow dispatch mode, build tt_metal project with the profiler build flag
+// (ENABLE_PROFILER=1) first. This benchmark copied device profiler's internal code to get the "t0 to any riscfw end"
+// cycles. If device profiler is changed, it also should be updated. Otherwise, it may get inappropriate cycle value.
 //
 // TODO:
 // - For validation, the output is compared with cpu-ref mm code. This benchamrk uses gold_mm function modified version
@@ -177,6 +177,12 @@ int main(int argc, char** argv) {
         if (slow_dispatch_mode) {
             setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", true);
             setenv("TT_METAL_DEVICE_PROFILER", "1", true);
+
+#if !defined(PROFILER)
+            log_error("In the slow dispatch mode, device profiler is used to get the performance");
+            log_error("Build the tt_metal project with the profiler build flag (ENABLE_PROFILER=1)");
+            TT_ASSERT(false);
+#endif
         }
 
         int pci_express_slot = 0;

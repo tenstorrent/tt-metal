@@ -10,6 +10,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 
 inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::Device *device, const tt::tt_metal::Program &program) {
+#if defined(PROFILER)
     // TODO: use enums from profiler_common.h
     enum BufferIndex { BUFFER_END_INDEX, DROPPED_MARKER_COUNTER, MARKER_DATA_START };
     enum TimerDataIndex { TIMER_ID, TIMER_VAL_L, TIMER_VAL_H, TIMER_DATA_UINT32_SIZE };
@@ -49,6 +50,10 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::Device *device, con
     }
 
     uint64_t t0_to_any_riscfw_end = max_cycle - min_cycle;
+#else
+    uint64_t t0_to_any_riscfw_end = 0;
+#endif
+
     return t0_to_any_riscfw_end;
 }
 
