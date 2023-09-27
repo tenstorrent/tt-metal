@@ -12,6 +12,11 @@ void kernel_main() {
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
     constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
 
+    #ifdef OUT_SHARDED
+    cb_wait_front(cb_id_out, num_tiles);
+    return;
+    #endif
+
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_out);

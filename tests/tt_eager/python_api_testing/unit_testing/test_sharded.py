@@ -280,6 +280,68 @@ def test_sharded_matmul(device, in0_sharded, out_sharded, M, N, num_cores):
     assert passing
 
 
+@pytest.mark.parametrize(
+    "in0_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"]
+)
+@pytest.mark.parametrize(
+    "in1_sharded", [True, False], ids=["in1_sharded", "in1_unsharded"]
+)
+@pytest.mark.parametrize(
+    "out_sharded", [True, False], ids=["out_sharded", "out_unsharded"]
+)
+@pytest.mark.parametrize("H, num_cores", [[25088, 98]])
+def test_sharded_binary(device, in0_sharded, in1_sharded, out_sharded, H, num_cores):
+    in0_shape = [1, 1, H, 64]
+    in1_shape = in0_shape
+
+    if out_sharded and not in0_sharded and not in1_sharded and H == 25088:
+        pytest.skip("Unsupported sharding config")
+
+    interleaved_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+    sharded_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+
+    in0 = torch.randn(in0_shape).bfloat16().float()
+    in1 = torch.randn(in1_shape).bfloat16().float()
+
+    in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config)
+    in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config)
+
+    output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
+
+    if in0_sharded:
+        in0_t = ttl.tensor.interleaved_to_sharded(
+            in0_t,
+            num_cores,
+            [H // num_cores, 64],
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        )
+
+    if in1_sharded:
+        in1_t = ttl.tensor.interleaved_to_sharded(
+            in1_t,
+            num_cores,
+            [H // num_cores, 64],
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        )
+
+    output_t = ttl.tensor.add(in0_t, in1_t, output_mem_config=output_mem_config)
+    if out_sharded:
+        output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+    pt_out = in0 + in1
+
+    tt_out = tt2torch_tensor(output_t)
+
+    passing, output = comp_pcc(pt_out, tt_out)
+    logger.info(output)
+    assert passing
+
+
 @pytest.mark.skip("Sharded tensors do not work with program cache")
 def test_sharded_program_cache(device, use_program_cache):
     N = 1

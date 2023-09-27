@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
+#include "tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 
 #include "tt_metal/host_api.hpp"
@@ -108,6 +109,39 @@ void EltwiseBinary::validate(const std::vector<Tensor>& input_tensors) const {
     TT_ASSERT((input_tensor_a.layout() == Layout::TILE && input_tensor_b.layout() == Layout::TILE), "Inputs to eltwise binary must be tilized");
     TT_ASSERT(input_tensor_a.dtype() == input_tensor_b.dtype());
     TT_ASSERT(input_tensor_a.dtype() == DataType::BFLOAT16);
+    if (input_tensor_a.memory_config().is_sharded()) {
+        TT_ASSERT(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+        if (input_tensor_b.memory_config().is_sharded()) {
+            TT_ASSERT(input_tensor_a.memory_config() == input_tensor_b.memory_config());
+            TT_ASSERT(input_tensor_a.shard_spec().value() == input_tensor_b.shard_spec().value());
+        }
+        if (this->output_mem_config.is_sharded()) {
+            TT_ASSERT(input_tensor_a.memory_config() == this->output_mem_config);
+        } else {
+            TT_ASSERT(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
+        }
+    } else if (input_tensor_b.memory_config().is_sharded()) {
+        TT_ASSERT(input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+        TT_ASSERT(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+        if (this->output_mem_config.is_sharded()) {
+            TT_ASSERT(input_tensor_b.memory_config() == this->output_mem_config);
+        } else {
+            TT_ASSERT(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
+        }
+    } else {
+        TT_ASSERT(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+        TT_ASSERT(input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+        if (this->output_mem_config.is_sharded()) {
+            TT_ASSERT(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+            uint32_t num_blocks = input_tensor_a.volume() / input_tensor_a.shape()[-1] / TILE_HEIGHT;
+            auto core_grid = input_tensor_a.device()->compute_with_storage_grid_size();
+            uint32_t num_cores = core_grid.x * core_grid.y;
+            TT_ASSERT(num_blocks < num_cores || num_blocks % num_cores == 0);
+
+        } else {
+            TT_ASSERT(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
+        }
+    }
 }
 
 std::vector<Shape> EltwiseBinary::compute_output_shapes(
@@ -118,8 +152,25 @@ std::vector<Shape> EltwiseBinary::compute_output_shapes(
 
 std::vector<Tensor> EltwiseBinary::create_output_tensors(
     const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);
+    if (this->output_mem_config.is_sharded()) {
+        ShardSpec shard_spec{.shard_grid=CoreRangeSet({}), .shard_shape={0, 0}};
+        if (input_tensor_a.memory_config().is_sharded()) {
+            shard_spec = input_tensor_a.shard_spec().value();
+        } else if (input_tensor_b.memory_config().is_sharded()) {
+            shard_spec = input_tensor_b.shard_spec().value();
+        } else {
+            uint32_t num_blocks = input_tensor_a.volume() / input_tensor_a.shape()[-1] / TILE_HEIGHT;
+            auto core_grid = input_tensor_a.device()->compute_with_storage_grid_size();
+            uint32_t num_grid_cores = core_grid.x * core_grid.y;
+            uint32_t target_num_cores = num_blocks < num_grid_cores ? num_blocks : num_grid_cores;
+            shard_spec.shard_grid = num_cores_to_corerange_set(target_num_cores, input_tensor_a.device()->compute_with_storage_grid_size(), true);
+            shard_spec.shard_shape = {num_blocks / target_num_cores * TILE_HEIGHT, input_tensor_a.shape()[-1]};
+        }
+        return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), input_tensor_a.dtype(), Layout::TILE, input_tensor_a.device(), this->output_mem_config, shard_spec)};
+    }
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor_a.dtype(), Layout::TILE, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks EltwiseBinary::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
