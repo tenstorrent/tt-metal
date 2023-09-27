@@ -458,7 +458,7 @@ void TilizeWithValPadding::validate(const std::vector<Tensor> &input_tensors) co
     TT_ASSERT(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
     TT_ASSERT(input_tensor_a.buffer() != nullptr , "Operands need to be allocated in buffers on device!");
     TT_ASSERT(input_tensor_a.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
-    TT_ASSERT(input_tensor_a.dtype() == DataType::BFLOAT16);
+    TT_ASSERT(input_tensor_a.dtype() == DataType::BFLOAT16 || input_tensor_a.dtype() == DataType::UINT32);
 
     TT_ASSERT(input_tensor_a.shape()[0] + this->input_tensor_start[0] <= this->output_tensor_shape[0]);
     TT_ASSERT(input_tensor_a.shape()[1] + this->input_tensor_start[1] <= this->output_tensor_shape[1]);

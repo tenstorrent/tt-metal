@@ -144,6 +144,11 @@ namespace tt::tt_metal::detail
             case DataType::FLOAT32: {
                 return owned_buffer::create<float>(std::move(data));
             }
+            case DataType::UINT32:{
+                std::vector<uint32_t> uint32_data(data.size());
+                uint32_data = std::vector<uint32_t>(data.begin(), data.end());
+                return owned_buffer::create<uint32_t>(std::move(uint32_data));
+            }
             case DataType::BFLOAT16: {
                 std::vector<bfloat16> bfloat16_data(data.size());
                 std::transform(
