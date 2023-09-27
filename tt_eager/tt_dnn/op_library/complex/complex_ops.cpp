@@ -32,13 +32,13 @@ namespace utility {
 Tensor is_real(const Tensor& input, const MemoryConfig& output_mem_config) {
     CHECK_FOR_COMPLEX(input);
     std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input,output_mem_config);
-    return eqz(ab[0],output_mem_config);
+    return eqz(ab[1],output_mem_config); //imaginary portion = 0
 }
 
 Tensor is_imag(const Tensor& input, const MemoryConfig& output_mem_config) {
     CHECK_FOR_COMPLEX(input);
     std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input,output_mem_config);
-    return eqz(ab[1],output_mem_config);
+    return eqz(ab[0],output_mem_config); //real portion = 0
 }
 
 Tensor real(const Tensor& input, const MemoryConfig& output_mem_config) {
@@ -94,6 +94,13 @@ Tensor complex_div(const Tensor& input_a, const Tensor& input_b,  const MemoryCo
     CHECK_FOR_COMPLEX(input_a);
     CHECK_FOR_COMPLEX(input_b);
     return complex_mul( input_a, complex_recip( input_b , output_mem_config ), output_mem_config  );
+}
+
+// theta = /_x + iy = atan2(y,x)
+Tensor angle(const Tensor& input, const MemoryConfig& output_mem_config) {
+    CHECK_FOR_COMPLEX(input);
+    std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input,output_mem_config);
+    return neg( atan2(ab[1],ab[0],output_mem_config), output_mem_config );
 }
 
 #undef CHECK_FOR_COMPLEX

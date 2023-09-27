@@ -622,6 +622,7 @@ namespace tt::tt_metal::detail{
         detail::bind_unary_op(m_tensor, "atanh", atanh, R"doc(Returns a new tensor with the inverse hyperbolic tangent of the elements of the input tensor ``{0}``.)doc");
 
         // *** complex operations ***
+        detail::bind_unary_op(m_tensor, "angle", &tt::tt_metal::angle, R"doc(Returns elementwise angle of complex tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "real", &tt::tt_metal::real, R"doc(Returns real portion of complex tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "imag", &tt::tt_metal::imag, R"doc(Returns imag portion of complex tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "is_real", &tt::tt_metal::is_real, R"doc(Returns true if complex tensor ``{0}``  is real.)doc");

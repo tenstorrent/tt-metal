@@ -35,6 +35,16 @@ class Complex:
     def reset(self, val: torch.Tensor):
         self._cplx = val
 
+    def is_imag(self):
+        return self.real == 0.0
+
+    def is_real(self):
+        return self.imag == 0.0
+
+    @property
+    def angle(self):
+        return torch.angle(self._cplx)
+
     @property
     def real(self):
         return self._cplx.real
@@ -78,6 +88,86 @@ class Complex:
     def div(self, that: "Complex"):
         self._cplx /= that._cplx
         return self
+
+
+@pytest.mark.parametrize(
+    "memcfg",
+    (
+        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
+    ),
+    ids=["out_DRAM", "out_L1"],
+)
+@pytest.mark.parametrize("dtype", ((ttl.tensor.DataType.BFLOAT16,)))
+def test_level1_is_real(memcfg, dtype, device, function_level_defaults):
+    input_shape = torch.Size([1, 1, 32, 64])
+    # check real
+    x = Complex(input_shape)
+    x = x.add( x.conj() )
+    xtt = (
+        ttl.tensor.Tensor(x.metal, dtype)
+        .to(ttl.tensor.Layout.ROW_MAJOR)
+        .to(device, memcfg)
+    )
+    tt_dev = ttl.tensor.is_real(xtt, memcfg)
+    tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_cpu = x.is_real()
+    passing, output = comp_pcc(tt_cpu, tt_dev)
+    logger.info(output)
+    assert passing
+
+
+@pytest.mark.parametrize(
+    "memcfg",
+    (
+        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
+    ),
+    ids=["out_DRAM", "out_L1"],
+)
+@pytest.mark.parametrize("dtype", ((ttl.tensor.DataType.BFLOAT16,)))
+def test_level1_is_imag(memcfg, dtype, device, function_level_defaults):
+    input_shape = torch.Size([1, 1, 32, 64])
+    # check real
+    x = Complex(input_shape)
+    x = x.sub( x.conj() )
+    xtt = (
+        ttl.tensor.Tensor(x.metal, dtype)
+        .to(ttl.tensor.Layout.ROW_MAJOR)
+        .to(device, memcfg)
+    )
+    tt_dev = ttl.tensor.is_imag(xtt, memcfg)
+    tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_cpu = x.is_imag()
+    passing, output = comp_pcc(tt_cpu, tt_dev)
+    logger.info(output)
+    assert passing
+
+
+@pytest.mark.parametrize(
+    "memcfg",
+    (
+        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1),
+    ),
+    ids=["out_DRAM", "out_L1"],
+)
+@pytest.mark.parametrize("dtype", ((ttl.tensor.DataType.BFLOAT16,)))
+def test_level1_angle(memcfg, dtype, device, function_level_defaults):
+    input_shape = torch.Size([1, 1, 32, 64])
+    # check real
+    x = Complex(input_shape)
+    xtt = (
+        ttl.tensor.Tensor(x.metal, dtype)
+        .to(ttl.tensor.Layout.ROW_MAJOR)
+        .to(device, memcfg)
+    )
+    tt_dev = ttl.tensor.angle(xtt, memcfg)
+    tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_cpu = x.angle
+    passing, output = comp_pcc(tt_cpu, tt_dev)
+    logger.info(output)
+    assert passing
 
 
 @pytest.mark.parametrize(
