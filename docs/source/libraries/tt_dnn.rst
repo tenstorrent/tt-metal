@@ -364,6 +364,8 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.logical_ori
 
+.. autofunction:: tt_lib.tensor.polygamma
+
 Tensor relational operations
 ----------------------------------
 .. autofunction:: tt_lib.tensor.gtz
