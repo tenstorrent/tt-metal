@@ -651,6 +651,13 @@ namespace tt::tt_metal::detail{
         );
 
         detail::bind_unary_op_with_param(
+            m_tensor, "polygamma", &polygamma,
+            py::arg("n"),
+            R"doc(Returns a tensor that is a polygamma of input tensor where the range supports from 1 to 10 with shape ``[W, Z, Y, X]`` along n ``{1}``.)doc",
+            R"doc("the order of the polygamma along", "int", "1 to 10")doc"
+        );
+
+        detail::bind_unary_op_with_param(
             m_tensor, "logical_xori", &logical_xori,
             py::arg("immediate"),
             R"doc(Perform an eltwise logical XOR (``{0} ^ {1}``) on input tensor and immediate value.)doc",

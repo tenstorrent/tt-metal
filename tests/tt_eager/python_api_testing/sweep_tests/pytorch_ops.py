@@ -409,6 +409,10 @@ def logit(x, *args, eps, **kwargs):
     return torch.special.logit(x, eps=eps)
 
 
+def polygamma(x, *args, k, **kwargs):
+    return torch.special.polygamma(n=k, input=x)
+
+
 def logical_xori(x, *args, **kwargs):
     value = kwargs.pop("immediate")
     result = torch.logical_xor(x, torch.tensor(value, dtype=torch.int32))
