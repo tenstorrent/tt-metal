@@ -22,7 +22,7 @@ using std::chrono::microseconds;
 //
 // Usage example:
 //   ./test_kernel_launch --cores-r <number of cores in a row> --cores-c <number
-//   of cores in a column> --core-gropus <number of core grops where each core
+//   of cores in a column> --core-groups <number of core groups where each core
 //   group executes different kernel binaries>
 ////////////////////////////////////////////////////////////////////////////////
 
