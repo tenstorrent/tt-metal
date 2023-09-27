@@ -501,6 +501,12 @@ def acosh(x, *args, **kwargs):
     return torch.acosh(x)
 
 
+def bitwise_or(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.bitwise_or(x, torch.tensor(value, dtype=torch.int32))
+    return result
+
+
 def lgamma(x, *args, **kwargs):
     return torch.lgamma(x)
 

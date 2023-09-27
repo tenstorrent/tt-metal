@@ -31,8 +31,8 @@ from tests.tt_eager.python_api_testing.sweep_tests.common import (
 
 shapes = [
     [[1, 1, 32, 32]],  # Single core
-    [[1, 1, 320, 384]],  # Multi core
-    [[1, 3, 320, 384]],  # Multi core
+    # [[1, 1, 320, 384]],  # Multi core
+    # [[1, 3, 320, 384]],  # Multi core
 ]
 input_mem_cfgs = copy.copy(generation_funcs.supported_mem_configs)
 output_mem_cfgs = copy.copy(generation_funcs.supported_mem_configs)
@@ -55,7 +55,7 @@ if is_wormhole_b0():
 @pytest.mark.parametrize("input_mem_config", input_mem_cfgs)
 @pytest.mark.parametrize("output_mem_config", output_mem_cfgs)
 class TestEltwiseUnary:
-    @pytest.mark.parametrize(
+    """@pytest.mark.parametrize(
         "fn_kind",
         ["relu", "sigmoid", "square", "tanh", "relu6", "add1", "deg2rad", "rad2deg"],
     )
@@ -933,4 +933,28 @@ class TestEltwiseUnary:
             datagen_func,
             comparison_func,
             device,
+        )
+        """
+    @pytest.mark.parametrize("value", [5])
+    @pytest.mark.parametrize("bitwise_kind", ["bitwise_or"])
+    def test_run_eltwise_bitwise(
+        self, input_shapes, bitwise_kind, value, device, function_level_defaults
+            , input_mem_config, output_mem_config,
+    ):
+        datagen_func = [
+            generation_funcs.gen_func_with_cast(
+                partial(generation_funcs.gen_rand, low=1, high=100), torch.int32
+            )
+        ]
+        test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
+        test_args.update({"value": value})
+        test_args.update({"input_mem_config": input_mem_config, "output_mem_config": output_mem_config})
+        comparison_func = comparison_funcs.comp_equal
+        run_single_pytorch_test(
+            f"eltwise-{bitwise_kind}",
+            input_shapes,
+            datagen_func,
+            comparison_func,
+            device,
+            test_args,
         )

@@ -21,7 +21,7 @@ enum class UnaryOpType {
     EXP = 0, RECIP = 1, GELU = 2, RELU = 3, SQRT = 4, SIGMOID = 5, LOG = 6, TANH = 7, LOG2 = 8, LOG10 = 9, SIN = 10, COS = 11,
     ABS=12, SIGN=13, SQUARE=14, EQZ = 15, NEZ = 16, GTZ = 17, LTZ = 18, GEZ = 19, LEZ = 20, RELU_MAX = 21, RELU_MIN = 22, POWER = 23, LEAKY_RELU = 24, ELU = 25, EXP2 = 26, HEAVISIDE = 27,
     EXPM1 = 28, SIGNBIT = 29, ASIN = 30, ACOS = 31, RSQRT = 32, RELU6 = 33, ATAN = 34, ERF = 35, ERFC = 36, ISINF = 37, ISPOSINF = 38, ISNEGINF = 39, ISNAN = 40, LOGICAL_NOT_UNARY = 41, ISFINITE = 42,
-    ERFINV = 43, I0 = 44, TAN = 45
+    ERFINV = 43, I0 = 44, TAN = 45, BITWISE_OR = 46
 };
 
 template <typename T>
@@ -35,6 +35,7 @@ bool is_parametrized_type(T val) {
     case UnaryOpType::GELU:
     case UnaryOpType::RSQRT:
     case UnaryOpType::HEAVISIDE:
+    case UnaryOpType::BITWISE_OR:
     case UnaryOpType::ERF:
     case UnaryOpType::ERFC:
         return true;
@@ -144,6 +145,7 @@ constexpr auto power = make_eltwise_unary_with_param<UnaryOpType::POWER>{};
 constexpr auto leaky_relu = make_eltwise_unary_with_param<UnaryOpType::LEAKY_RELU>{};
 constexpr auto elu = make_eltwise_unary_with_param<UnaryOpType::ELU>{};
 constexpr auto heaviside = make_eltwise_unary_with_param<UnaryOpType::HEAVISIDE>{};
+constexpr auto bitwise_or = make_eltwise_unary_with_param<UnaryOpType::BITWISE_OR>{};
 
 inline Tensor erf(const Tensor &input_tensor, bool fast_and_approx=true, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     return make_eltwise_unary_with_param<UnaryOpType::ERF>{}(input_tensor, static_cast<float>(fast_and_approx), output_mem_config);

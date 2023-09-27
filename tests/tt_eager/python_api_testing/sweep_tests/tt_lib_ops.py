@@ -1233,6 +1233,26 @@ def eltwise_heaviside(
 
 
 @setup_host_and_device
+def eltwise_bitwise_or(
+    x, *args, value, device, dtype, layout, buffer_type, output_mem_config, **kwargs
+):
+
+    t0 = ttl.tensor.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype[0],
+        ttl.tensor.Layout.ROW_MAJOR,
+    )
+
+    t0 = t0.to(layout[0])
+    t0 = tensor_to_device(t0, device, buffer_type[0])
+    t1 = ttl.tensor.bitwise_or(t0, value, output_mem_config=output_mem_config)
+
+    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    return output
+
+
+@setup_host_and_device
 def full_like(
     x, *args, scalar, device, dtype, layout, buffer_type, output_mem_config, **kwargs
 ):

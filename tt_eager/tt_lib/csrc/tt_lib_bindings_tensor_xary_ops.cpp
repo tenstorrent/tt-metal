@@ -259,5 +259,11 @@ namespace tt::tt_metal::detail {
             R"doc(Perform an eltwise-binary add on one tensor ``{0}`` and one scalar ``{1}``.)doc",
             R"doc("Scalar", "float", "")doc"
         );
+        detail::bind_unary_op_with_param(
+            m_tensor, "bitwise_or", bitwise_or,
+            py::arg("value"),
+            R"doc(Returns tensor with the bitwise OR computed for input tensor ``{0}`` and  the other ``{1}``)doc",
+            R"doc("value", "float", "")doc"
+        );
     }
 }

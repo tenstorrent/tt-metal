@@ -136,6 +136,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_cosh,
         "pytorch_op": pytorch_ops.cosh,
     },
+    "eltwise-bitwise_or": {
+        "tt_lib_op": tt_lib_ops.eltwise_bitwise_or,
+        "pytorch_op": pytorch_ops.bitwise_or,
+    },
     "eltwise-ltz": {
         "tt_lib_op": tt_lib_ops.eltwise_ltz,
         "pytorch_op": pytorch_ops.ltz,

@@ -294,4 +294,12 @@ ALWI void acos_tile(uint32_t idst) {
 ALWI void acos_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_acos_init<true>() ));
 }
+
+ALWI void bitwise_or_tile(uint32_t idst, uint32_t param0) {
+    MATH(( llk_math_eltwise_unary_sfpu_bitwise_or<APPROX, SyncHalf>(idst, param0) ));
+}
+
+ALWI void bitwise_or_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_bitwise_or_init<APPROX>() ));
+}
 } // namespace ckernel
