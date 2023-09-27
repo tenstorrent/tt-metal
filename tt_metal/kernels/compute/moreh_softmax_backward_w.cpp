@@ -56,7 +56,16 @@ void MAIN {
             mul_tiles_init();
             mul_tiles(cb_y, cb_dy, w, w, dst0);
 
+            if (w == Wt - 1) {
+                constexpr int dst_mask = 1;
+                copy_tile_init();
+                copy_tile(cb_mask, 0, dst_mask);
+
+                mask_tile_init();
+                mask_tile(dst0, dst_mask);
+            }
             pack_tile(dst0, cb_ydy);
+
             cb_push_back(cb_ydy, onetile);
 
             REL();
