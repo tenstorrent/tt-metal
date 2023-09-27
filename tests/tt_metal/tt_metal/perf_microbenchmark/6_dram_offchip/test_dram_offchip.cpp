@@ -186,6 +186,8 @@ int main(int argc, char **argv) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Execution Application
     ////////////////////////////////////////////////////////////////////////////
+    tt_metal::detail::CompileProgram(device, program);
+
     CommandQueue &cq = *tt::tt_metal::detail::GLOBAL_CQ;
     auto t_begin = std::chrono::steady_clock::now();
     tt_metal::EnqueueProgram(cq, program, false);
