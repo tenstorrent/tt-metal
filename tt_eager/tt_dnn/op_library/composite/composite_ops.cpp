@@ -762,6 +762,94 @@ Tensor logit(const Tensor& input_a, float eps, const MemoryConfig& output_mem_co
     return operation::decorate_as_composite(__func__, _logit)(input_a, eps, output_mem_config);
 }
 
+
+//polygamma support for the range of input(1, 10) and n(1, 10)
+Tensor _polygamma(const Tensor &input_a, uint32_t k, const MemoryConfig& output_mem_config) {
+
+    float k_der = 1.0f + k;
+    float fact_val;
+    float pos_neg = 1.0f;
+    if (k ==1){
+        fact_val = 1.0f;
+    }
+    else if(k == 2){
+        fact_val = 2.0f;
+        pos_neg  = -1.0f;
+    }
+    else if(k == 3){
+        fact_val = 6.0f;
+    }
+    else if(k == 4){
+        fact_val = 24.0f;
+        pos_neg  = -1.0f;
+    }
+    else if(k == 5){
+        fact_val = 120.0f;
+    }
+    else if(k == 6){
+        fact_val = 720.0f;
+        pos_neg  = -1.0f;
+    }
+    else if(k == 7){
+        fact_val = 5040.0f;
+    }
+    else if(k == 8){
+        fact_val = 40320.0f;
+        pos_neg  = -1.0f;
+    }
+    else if(k == 9){
+        fact_val = 362880.0f;
+    }
+    else{
+        fact_val = 3628800.0f;
+        pos_neg  = -1.0f;
+    }
+
+    Tensor temp(input_a);
+    {
+        Tensor z1 = recip(power(add_unary(input_a, 0.0f, output_mem_config), k_der, output_mem_config), output_mem_config);
+        temp = add_unary(z1, 0.0f, output_mem_config);
+
+        z1 = recip(power(add_unary(input_a, 1.0f, output_mem_config), k_der, output_mem_config), output_mem_config);
+        temp = add(temp, z1, std::nullopt, output_mem_config);
+
+        z1 = recip(power(add_unary(input_a, 2.0f, output_mem_config), k_der, output_mem_config), output_mem_config);
+        temp = add(temp, z1, std::nullopt, output_mem_config);
+
+        z1 = recip(power(add_unary(input_a, 3.0f, output_mem_config), k_der, output_mem_config), output_mem_config);
+        temp = add(temp, z1, std::nullopt, output_mem_config);
+
+        z1 = recip(power(add_unary(input_a, 4.0f, output_mem_config), k_der, output_mem_config), output_mem_config);
+        temp = add(temp, z1, std::nullopt, output_mem_config);
+
+        z1 = recip(power(add_unary(input_a, 5.0f, output_mem_config), k_der, output_mem_config), output_mem_config);
+        temp = add(temp, z1, std::nullopt, output_mem_config);
+
+        z1 = recip(power(add_unary(input_a, 6.0f, output_mem_config), k_der, output_mem_config), output_mem_config);
+        temp = add(temp, z1, std::nullopt, output_mem_config);
+
+        z1 = recip(power(add_unary(input_a, 7.0f, output_mem_config), k_der, output_mem_config), output_mem_config);
+        temp = add(temp, z1, std::nullopt, output_mem_config);
+
+        z1 = recip(power(add_unary(input_a, 8.0f, output_mem_config), k_der, output_mem_config), output_mem_config);
+        temp = add(temp, z1, std::nullopt, output_mem_config);
+
+        z1 = recip(power(add_unary(input_a, 9.0f, output_mem_config), k_der, output_mem_config), output_mem_config);
+        temp = add(temp, z1, std::nullopt, output_mem_config);
+
+        z1 = recip(power(add_unary(input_a, 10.0f, output_mem_config), k_der, output_mem_config), output_mem_config);
+        temp = add(temp, z1, std::nullopt, output_mem_config);
+    }
+    if ( pos_neg < 0 ) {
+           return neg(mul_unary(temp, fact_val, output_mem_config), output_mem_config);
+    }
+    return mul_unary(temp, fact_val, output_mem_config);
+}
+Tensor polygamma(const Tensor& input_a, uint32_t value, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _polygamma)(input_a, value, output_mem_config);
+}
+
 //logical_xori
 Tensor _logical_xori(const Tensor &input_a, float value, const MemoryConfig& output_mem_config) {
     if ( std::fpclassify(value) == FP_ZERO ) {
