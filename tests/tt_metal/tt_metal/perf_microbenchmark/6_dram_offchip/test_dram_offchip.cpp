@@ -81,12 +81,15 @@ bool validation(
     const uint32_t &single_tile_size,
     const uint32_t &access_type);
 
+uint32_t get_dram_bandwidth(tt::ARCH arch);
+
 int main(int argc, char **argv) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
         log_fatal("Test not supported w/ slow dispatch, exiting");
     }
     bool pass = true;
     double dram_bandwidth = 0.0f;
+    tt::ARCH arch;
 
     try {
         ////////////////////////////////////////////////////////////////////////////
@@ -122,6 +125,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+        arch = device->arch();
         uint32_t num_tiles = static_cast<uint32_t>((input_size + single_tile_size - 1) / single_tile_size);
         auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
         uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -232,9 +236,8 @@ int main(int argc, char **argv) {
 
     // Determine if it passes performance goal
     if (pass) {
-        // goal is 90% of peak DRAM bandwidth performance for WH
-        constexpr double WH_DRAM_BANDWIDTH = 384;
-        double target_bandwidth = WH_DRAM_BANDWIDTH * 0.9;
+        // goal is 90% of peak DRAM bandwidth performance
+        double target_bandwidth = static_cast<double>(get_dram_bandwidth(arch)) * 0.9;
         if (dram_bandwidth < target_bandwidth) {
             pass = false;
             log_error(
@@ -425,4 +428,17 @@ bool validation(
         }
     }
     return true;
+}
+
+uint32_t get_dram_bandwidth(tt::ARCH arch) {
+    constexpr uint32_t GS_DRAM_BANDWIDTH_GB_PER_SEC = 100;
+    constexpr uint32_t WH_DRAM_BANDWIDTH_GB_PER_SEC = 384;
+
+    uint32_t dram_bandwidth_gb_per_sec = 0;
+    if (arch == tt::ARCH::WORMHOLE || arch == tt::ARCH::WORMHOLE_B0) {
+        dram_bandwidth_gb_per_sec = WH_DRAM_BANDWIDTH_GB_PER_SEC;
+    } else if (arch == tt::ARCH::GRAYSKULL) {
+        dram_bandwidth_gb_per_sec = GS_DRAM_BANDWIDTH_GB_PER_SEC;
+    }
+    return dram_bandwidth_gb_per_sec;
 }
