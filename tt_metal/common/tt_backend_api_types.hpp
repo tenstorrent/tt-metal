@@ -106,6 +106,7 @@ inline constexpr static uint32_t tile_size(const DataFormat &format) {
         case DataFormat::Int8: return 1024;
         case DataFormat::Lf8: return 1024;
         case DataFormat::UInt16: return (1024 * 2);
+        case DataFormat::UInt32: return (1024 * 4);
         case DataFormat::RawUInt8: return 1024;
         case DataFormat::RawUInt16: return (1024 * 2);
         case DataFormat::RawUInt32: return (1024 * 4);
