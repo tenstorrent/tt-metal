@@ -53,7 +53,7 @@ inline void llk_unpack_tilize_hw_configure_disaggregated(
     llk_unpack_tilize_hw_configure(&unpack_tilize_params);
 }
 
-inline void llk_unpack_tilize_init() {
+inline void llk_unpack_tilize_init(const std::uint32_t operand=0 /* unused */) {
     TT_LLK_DUMP("llk_unpack_tilize_init()");
     llk_unpack_tilize_mop_config(); 
 }
