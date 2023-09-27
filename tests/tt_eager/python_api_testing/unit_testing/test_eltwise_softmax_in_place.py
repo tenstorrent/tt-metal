@@ -62,10 +62,6 @@ def run_eltwise_softmax_in_place_tests(input_shape, dtype, dlayout, in_mem_confi
             else:
                 logger.debug(f"ttx is on: SYSTEM_MEMORY")
 
-            # There is no output-memory-config supported for softmax_in_place
-            # assert ttz.memory_config().buffer_type == out_mem_config.buffer_type
-            # logger.debug(f"ttz is on: {ttz.memory_config().buffer_type}")
-
             # comapre results
             tt_result = ttz.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
             # get ref result

@@ -51,7 +51,7 @@ def run_eltwise_rsqrt_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_
             ttx = tensor_to_device(ttx, device, input_mem_config)
 
 
-            logger.info("Running eltwise heaviside test")
+            logger.info("Running eltwise rsqrt test")
             ttz = ttl.tensor.rsqrt(ttx, False, output_mem_config=out_mem_config)
             logger.info("Done")
 
