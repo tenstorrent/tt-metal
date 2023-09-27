@@ -114,6 +114,8 @@ if is_wormhole_b0():
                 "digamma",
                 "lgamma",
                 "multigammaln",
+                "assign_unary",
+                "assign_binary",
                 "polygamma",
             ),
             shapes,
