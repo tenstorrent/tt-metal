@@ -17,11 +17,28 @@
 
 using namespace tt;
 ////////////////////////////////////////////////////////////////////////////////
-// This test measures the compute performance of MM.
-// When in slow dispatch mode, it uses LaunchProgram API and measures perf via device profiler.
-// In fast dispatch mode, it uses EnqueueProgram API and measures the execution time of them.
-// Kernels are based on bmm op in tt_dnn with minimal modifications.
-// For input conditions where all cores cannot be used, only some cores are used with a warning log.
+// This benchmark measures the compute performance of matmul.
+// When in the slow dispatch mode, it uses LaunchProgram API and measures performance via device profiler.
+// In the fast dispatch mode, it uses EnqueueProgram API and measures the execution time.
+// Regarding kernels, the compute kernel used “bmm_large_block_zm_fused_bias_activation.cpp” as is and
+// the data movement kernels were implemented with reference to kernels of multi_core_reuse_mcast_2d_optimized bmm op in
+// tt_dnn. Matmul parameters such as in0_block_w, out_subblock_h, out_subblock_w are set considering to the given input
+// shape and L1 size.
+//
+// Disclaimer
+// - This benchmark uses a little trick for both inputs (M x K and K x N) to support as large an input as possible. Only
+// the first block of each input (per_core_Mt x in0_block_w, in0_block_w x per_core_Nt) is stored in L1 and used
+// repeatedly for the total number of blocks.
+// - Currently, TT's matmul implementation may not be able to use all Tensix cores for certain input shapes. In that
+// case, only some cores are used with a warning message.
+// - To measure perf in the slow dispatch mode, this benchmark copied device profiler's internal code to get the "t0 to
+// any riscfw end" cycles. If device profiler is changed, it also should be updated. Otherwise, it may get inappropriate
+// cycle value.
+//
+// TODO:
+// - For validation, the output is compared with cpu-ref mm code. This benchamrk uses gold_mm function modified version
+// of gold_bmm function from test_gold_impls.hpp. As K increases, the error in the results of both versions also
+// increases so it is required to find appropriate atol and rtol or alternatives.
 //
 // Usage example:
 //   ./test_compute_mm --m <size in elements> --n <size in elements> --k <size in elements> --slow-dispatch-mode <0 for
