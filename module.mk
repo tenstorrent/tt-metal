@@ -35,9 +35,11 @@ $(error Unknown value for CONFIG "$(CONFIG)")
 endif
 
 ifeq ($(TT_METAL_VERSIM_DISABLED),0)
+  UMD_VERSIM_STUB = 0
 else
   # Need to always define this versim disabled flag for cpp
   CONFIG_CFLAGS += -DTT_METAL_VERSIM_DISABLED
+  UMD_VERSIM_STUB = 1
 endif
 ifeq ($(ENABLE_CODE_TIMERS), 1)
 CONFIG_CFLAGS += -DTT_ENABLE_CODE_TIMERS
@@ -59,12 +61,6 @@ TOOLS = $(OUT)/tools
 UMD_HOME = $(TT_METAL_HOME)/tt_metal/third_party/umd
 UMD_VERSIM_HEADERS = $(TT_METAL_VERSIM_ROOT)/versim/
 UMD_USER_ROOT = $(TT_METAL_HOME)
-ifdef $(TT_METAL_VERSIM_ROOT)
-	UMD_VERSIM_STUB = 0
-else
-	UMD_VERSIM_STUB = 1
-endif
-
 # Top level flags, compiler, defines etc.
 
 ifeq ("$(ARCH_NAME)", "wormhole_b0")

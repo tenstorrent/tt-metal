@@ -400,10 +400,6 @@ namespace tt::tt_metal{
                 TargetDevice target_type;
 #ifdef TT_METAL_VERSIM_DISABLED
                 target_type = TargetDevice::Silicon;
-#else
-                target_type = TargetDevice::Versim;
-#endif
-
                 std::vector<chip_id_t> physical_mmio_device_ids = tt_SiliconDevice::detect_available_device_ids(true, false);
                 this->arch_ = detect_arch(physical_mmio_device_ids.at(0));
                 for (int dev_index = 1; dev_index < physical_mmio_device_ids.size(); dev_index++) {
@@ -411,6 +407,14 @@ namespace tt::tt_metal{
                     tt::ARCH detected_arch = detect_arch(device_id);
                     TT_ASSERT(this->arch_ == detected_arch, "Expected all devices to be {} but device {} is {}", get_arch_str(this->arch_), device_id, get_arch_str(detected_arch));
                 }
+#else
+                target_type = TargetDevice::Versim;
+                std::vector<chip_id_t> physical_mmio_device_ids = {0};
+                auto arch_env = getenv("ARCH_NAME");
+                TT_ASSERT(arch_env, "arch_env needs to be set for versim (ARCH_NAME=)");
+                this->arch_ = tt::get_arch_from_string(arch_env);
+#endif
+
 
                 const std::string sdesc_file = get_soc_description_file(this->arch_, target_type);
                 const std::string cluster_desc_path = (this->arch_ == tt::ARCH::WORMHOLE_B0) ? GetClusterDescYAML().string() : "";
