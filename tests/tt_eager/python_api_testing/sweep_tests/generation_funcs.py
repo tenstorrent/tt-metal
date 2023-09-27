@@ -326,7 +326,9 @@ def gen_default_dtype_layout_device(
     buffer_type = []
 
     for input_shape in input_shapes:
-        dtype.append(ttl.tensor.DataType.BFLOAT16)
+        #dtype.append(ttl.tensor.DataType.BFLOAT16)
+        # ToDo: Need to and pass update the Dtype
+        dtype.append(ttl.tensor.DataType.UINT32)
         buffer_type.append(ttl.tensor.BufferType.DRAM)
 
         if input_shape[-2] % 32 == 0 and input_shape[-1] % 32 == 0:
@@ -1423,5 +1425,3 @@ def gen_logit_args(
         dtype,
     ):
         yield input_info
-
-        
