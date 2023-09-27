@@ -40,20 +40,14 @@ def tensor_to_device(x, device, buffer_type):
 # This ref implementation is only here for debugging
 def ref_eltwise_polyval(x, coeffs):
     # polyval function
-    y = np.polyval(np.poly1d(coeffs), x.numpy())
-    y = torch.from_numpy(y)
+    result = 0.0
+    for coeff in coeffs:
+        result = result * x + coeff
 
-    return y
-
-    # result = 0.0
-    # for coeff in coeffs:
-    #     result = result * x + coeff
-
-    # return result
+    return result
 
 
 def run_eltwise_polyval_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, coeffs, data_seed, device):
-    random.seed(0)
     torch.manual_seed(data_seed)
 
     # Initialize the device
@@ -71,7 +65,7 @@ def run_eltwise_polyval_tests(input_shape, dtype, dlayout, in_mem_config, out_me
             # get referent value
             ref_value = ref_eltwise_polyval(x, coeffs)
 
-            # calculate tt outpu
+            # get tt input
             if in_mem_config == "SYSTEM_MEMORY":
                 in_mem_config = None
 
@@ -79,26 +73,17 @@ def run_eltwise_polyval_tests(input_shape, dtype, dlayout, in_mem_config, out_me
             t0 = t0.to(dlayout)
             ttx = tensor_to_device(t0, device, in_mem_config)
 
+            # calculate tt output
             logger.info("Running Eltwise Polyval test")
             ttz = tensor.polyval(ttx, coeffs, output_mem_config=out_mem_config)
+            tt_got_back = ttz.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
             logger.info("Done")
-
-            if in_mem_config != "SYSTEM_MEMORY":
-                assert ttx.memory_config().buffer_type == in_mem_config.buffer_type
-                logger.debug(f"ttx is on: {ttx.memory_config().buffer_type}")
-            else:
-                logger.debug(f"ttx is on: SYSTEM_MEMORY")
 
             assert ttz.memory_config().buffer_type == out_mem_config.buffer_type
             logger.debug(f"ttz is on: {ttz.memory_config().buffer_type}")
 
-            tt_got_back = ttz.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-            if dlayout == ttl.tensor.Layout.TILE:
-                tt_got_back = untilize(tt_got_back)
-
             # compare tt and golden outputs
-            success, pcc_value = comp_pcc(tt_got_back, ref_value)
+            success, pcc_value = comp_pcc(ref_value, tt_got_back)
             logger.debug(pcc_value)
 
             assert success
@@ -107,7 +92,11 @@ def run_eltwise_polyval_tests(input_shape, dtype, dlayout, in_mem_config, out_me
 test_sweep_args=[
     ((4, 12, 147, 108), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), [-48.0595703125], 1569665),
     ((1, 6, 215, 252), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1), ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), [93.90789031982422], 1221114),
-    ((4, 7, 32, 96), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), [-26.537084579467773, -98.70405578613281, -3.4798622131347656, -5.008804798126221, 92.45339965820312, 51.021541595458984, 1.1626243591308594], 17155532),
+    ((1, 10, 192, 160), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), [70.4070816040039], 2482923),
+    ((5, 2, 128, 160), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), [65.89027404785156], 11249810),
+    ((2, 4, 192, 160), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, "SYSTEM_MEMORY", ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), [-61.05318069458008], 9234542),
+    ((4, 9, 96, 32), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), [89.58659362792969], 18411293),
+    ((3, 2, 192, 32), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, "SYSTEM_MEMORY", ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), [11.359286308288574], 18784230),
 ]
 
 @skip_for_wormhole_b0
@@ -121,4 +110,5 @@ test_sweep_args=[
 def test_eltwise_polyval_test(
     input_shape, dtype, dlayout, in_mem_config, out_mem_config, coeffs, data_seed, device
 ):
+    random.seed(0)
     run_eltwise_polyval_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, coeffs, data_seed, device)

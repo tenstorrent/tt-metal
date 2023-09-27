@@ -34,10 +34,6 @@ def tensor_to_device(x, device, buffer_type):
     return x.to(device, buffer_type)
 
 # This ref implementation is only here for debugging
-def ref_ne(x, y):
-    return x != y
-
-
 def ref_eltwise_ne(x, y):
     # ne function
     z = torch.ne(x, y)
@@ -66,7 +62,7 @@ def run_eltwise_ne_tests(input_shape, in0_dtype, in1_dtype, in0_dlayout, in1_dla
             # get referent value
             ref_value = ref_eltwise_ne(x, y)
 
-            # calculate tt output
+            # get tt inputs
             t0 = ttl.tensor.Tensor(x, in0_dtype)
             t0 = t0.to(in0_dlayout)
             ttx = tensor_to_device(t0, device, input0_mem_config)
@@ -75,16 +71,14 @@ def run_eltwise_ne_tests(input_shape, in0_dtype, in1_dtype, in0_dlayout, in1_dla
             t1 = t1.to(in1_dlayout)
             tty = tensor_to_device(t1, device, input1_mem_config)
 
+            # calculate tt output
             logger.info("Running eltwise_ne test")
             ttz = ttl.tensor.ne(ttx, tty, output_mem_config=out_mem_config)
             tt_got_back = ttz.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
             logger.info("Done")
 
-            if in0_dlayout == ttl.tensor.Layout.TILE:
-                tt_got_back = untilize(tt_got_back)
-
             # compare tt and golden outputs
-            success, pcc_value = comp_pcc(tt_got_back, ref_value)
+            success, pcc_value = comp_pcc(ref_value, tt_got_back)
             logger.debug(pcc_value)
 
             assert success

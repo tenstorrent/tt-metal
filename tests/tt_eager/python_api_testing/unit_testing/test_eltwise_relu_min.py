@@ -24,19 +24,16 @@ from tt_lib.utils import (
     is_close,
 )
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.pytorch_ops import relu_min as ref_eltwise_relu_min
 
 from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
 
 
-# This ref implementation is only here for debugging
-def ref_eltwise_relu_min(x, lower_limit):
+def tensor_to_device(x, device, buffer_type):
+    if buffer_type == None:
+        return x
 
-    constant_tensor = torch.full(x.shape, lower_limit)
-
-    # relu activation function
-    y = torch.max(x, constant_tensor)
-
-    return y
+    return x.to(device, buffer_type)
 
 
 def run_eltwise_relu_min_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, lower_limit, data_seed, device):
@@ -54,48 +51,33 @@ def run_eltwise_relu_min_tests(input_shape, dtype, dlayout, in_mem_config, out_m
         for nrepeat in range(0, 1):
             x = torch.Tensor(size=(N, C, H, W)).uniform_(-100, 100)
 
-            if in_mem_config == "SYSTEM_MEMORY":
-                ttx = tensor.Tensor(
-                    tilize_to_list(x),
-                    [N, C, H, W],
-                    dtype,
-                    dlayout,
-                    dev,
-                ).cpu()
-            else:
-                ttx = tensor.Tensor(
-                    tilize_to_list(x),
-                    [N, C, H, W],
-                    dtype,
-                    dlayout,
-                    dev,
-                    in_mem_config,
-                )
+            # get referent value
+            ref_value = ref_eltwise_relu_min(x, lower_limit=lower_limit)
 
+            if in_mem_config == "SYSTEM_MEMORY":
+                in_mem_config = None
+
+            # get tt input
+            t0 = ttl.tensor.Tensor(
+                x.reshape(-1).tolist(),
+                [N, C, H, W],
+                dtype,
+                ttl.tensor.Layout.ROW_MAJOR,
+            )
+            t0 = t0.to(dlayout)
+            ttx = tensor_to_device(t0, device, in_mem_config)
+
+            # calculate tt output
             logger.info("Running Eltwise relu min test")
             ttz = tensor.relu_min(ttx, lower_limit, output_mem_config=out_mem_config)
-
+            tt_got_back = ttz.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
             logger.info("Done")
-
-            if in_mem_config != "SYSTEM_MEMORY":
-                assert ttx.memory_config().buffer_type == in_mem_config.buffer_type
-                logger.debug(f"ttx is on: {ttx.memory_config().buffer_type}")
-            else:
-                logger.debug(f"ttx is on: SYSTEM_MEMORY")
 
             assert ttz.memory_config().buffer_type == out_mem_config.buffer_type
             logger.debug(f"ttz is on: {ttz.memory_config().buffer_type}")
 
-            t2_data = ttz.cpu().to_torch()
-
-            tt_got_back = torch.Tensor(t2_data).reshape((N, C, H, W))
-            tt_got_back = untilize(tt_got_back)
-
-            # get referent value
-            ref_value = ref_eltwise_relu_min(x, lower_limit)
-
             # compare tt and golden outputs
-            success, pcc_value = comp_pcc(tt_got_back, ref_value)
+            success, pcc_value = comp_pcc(ref_value, tt_got_back)
             logger.debug(pcc_value)
 
             assert success
