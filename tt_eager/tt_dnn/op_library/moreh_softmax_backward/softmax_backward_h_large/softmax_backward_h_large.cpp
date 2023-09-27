@@ -119,7 +119,7 @@ operation::ProgramWithCallbacks moreh_softmax_backward_h_large(const Tensor &out
             reader_kernel_id=reader_kernel_id,
             writer_kernel_id=writer_kernel_id,
             num_cores,
-            grid
+            core_h
         ]
     (
         const Program &program,
@@ -134,9 +134,7 @@ operation::ProgramWithCallbacks moreh_softmax_backward_h_large(const Tensor &out
         auto input_grad_dram_buffer = output_buffers.at(0);
 
         for (uint32_t icore = 0; icore < num_cores; icore++) {
-            auto core = grid.wrap_core(icore);
-
-            // CoreCoord core = {icore / core_h + core_x_offset, icore % core_h + core_y_offset};
+            CoreCoord core = {icore / core_h, icore % core_h};
 
             {
                 auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
