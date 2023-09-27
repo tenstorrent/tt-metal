@@ -495,20 +495,39 @@ int main(int argc, char **argv) {
         tt_metal::CreateDevice(device_id);
 
 
-    // Tilized input, tilized output
+    // Tilized input, Tilized output
     pass &= test_matmul_large_block(device, false, false);
-
-    // Not supported yet for Wormhole
-    if (device->arch() == tt::ARCH::GRAYSKULL) {
-        // Row major input, tilized output
-        pass &= test_matmul_large_block(device, true, false);
-
-        // Row major input, untilized output
-        pass &= test_matmul_large_block(device, true, true);
-
-        // Tilized input, untilized output
-        pass &= test_matmul_large_block(device, false, true);
+    if (pass) {
+        log_info ("Tilized input, Tilized output Passed");
+    } else {
+        log_info ("Tilized input, Tilized output Failed");
     }
+
+    // Row major input, Tilized output
+    pass &= test_matmul_large_block(device, true, false);
+    if (pass) {
+        log_info ("Row major input, Tilized output Passed");
+    } else {
+        log_info ("Row major input, Tilized output Failed");
+    }
+
+    // Tilized input, Row major output
+    pass &= test_matmul_large_block(device, false, true);
+    if (pass) {
+        log_info ("Tilized input, Row major output Passed");
+    } else {
+        log_info ("Tilized input, Row major output Failed");
+    }
+
+    // Row major input, Row major output
+    pass &= test_matmul_large_block(device, true, true);
+    if (pass) {
+        log_info ("Row major input, Row major output Passed");
+    } else {
+        log_info ("Row major input, Row major output Failed");
+    }
+
+
 
     pass &= tt_metal::CloseDevice(device);;
 
