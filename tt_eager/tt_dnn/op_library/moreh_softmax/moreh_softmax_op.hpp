@@ -34,7 +34,7 @@ operation::ProgramWithCallbacks moreh_softmax_h_large(const Tensor &input, Tenso
 struct MorehSoftmax {
     const uint32_t dim;
     const MemoryConfig output_mem_config;
-    CoreRange core_range; // unused for now
+    const CoreRange core_range; // unused for now
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
