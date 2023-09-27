@@ -167,11 +167,17 @@ def resnet50_optimized_conv(weight: List[Union[int, float]], conv_params, device
     weight_untiled = tensor.Tensor(
         weight, weights_shape, tensor.DataType.BFLOAT16, tensor.Layout.ROW_MAJOR
     ).pad(weights_channels_padded_shape, (0, 0, 0, 0), 0)
-
+    act_block_w_equals_input_channels_x_filter_width = act_block_shape_hw[1] == (C * S)
     # for conv op, pad the weights to block shape
-    weight_tiled_ = tensor.convert_conv_weight_tensor_to_special_padding_tiled_layout(
+    if act_block_w_equals_input_channels_x_filter_width:
+        weight_tiled_ = tensor.convert_conv_weight_tensor_to_tiled_layout(
         weight_untiled, weight_block_h, weight_block_w
     )
+    else:
+        assert act_block_shape_hw[1] == C
+        weight_tiled_ = tensor.convert_conv_weight_tensor_to_tiled_layout(
+            weight_untiled, weight_block_h, weight_block_w
+        )
     weight_on_device = weight_tiled_.to(device)
     bias_shape = [1, 1, 1, K]
     assert(K % (weight_block_w * 32) == 0)

@@ -8,12 +8,7 @@ import tt_lib
 import torch
 import torch.nn as nn
 import math
-from tests.models.resnet.utils import (
-    conv3x3,
-    conv1x1,
-    fold_bn_to_conv,
-    fold_bn_to_conv_weights_bias,
-)
+from tests.models.resnet.utils import conv3x3, conv1x1, fold_bn_to_conv, fold_bn_to_conv_weights_bias
 from models.utility_functions import pad_by_zero, tt2torch_tensor
 from tt_lib.utils import pad_weight
 
@@ -21,11 +16,7 @@ from tt_lib.fused_ops.average_pool import run_avg_pool_on_device_wrapper as TtAv
 from tt_lib.fused_ops.max_pool import run_max_pool_on_device_wrapper as TtMaxPool
 from tt_lib.fused_ops.max_pool import compute_max_pool_shape
 from tt_lib.fused_ops.softmax import softmax as TtSoftmax
-from tt_lib.fused_ops.conv import (
-    resnet50_first_conv,
-    resnet50_1x1_conv_as_matmul,
-    resnet50_optimized_conv,
-)
+from tt_lib.fused_ops.conv import resnet50_first_conv, resnet50_1x1_conv_as_matmul, resnet50_optimized_conv
 from models.utility_functions import _nearest_32, profiler
 from tt_lib.fallback_ops import fallback_ops
 
@@ -50,20 +41,10 @@ def ResnetLinear(
             bias = bias.to(device)
 
     if transpose:
-        assert weight.shape() == [
-            1,
-            1,
-            out_features,
-            in_features,
-        ], "weight does not have the expected shape"
+        assert weight.shape() == [1, 1, out_features, in_features], "weight does not have the expected shape"
         weight_T = tt_lib.tensor.transpose(weight)
     else:
-        assert weight.shape() == [
-            1,
-            1,
-            in_features,
-            out_features,
-        ], "weight does not have the expected shape"
+        assert weight.shape() == [1, 1, in_features, out_features], "weight does not have the expected shape"
         weight_T = weight
     if device is not None:
         weight_T = weight_T.to(device)
@@ -117,13 +98,7 @@ def unpad_from_zero(x, desired_shape):
         if x.layout() != tt_lib.tensor.Layout.ROW_MAJOR:
             x = x.to(tt_lib.tensor.Layout.ROW_MAJOR)
         x = x.unpad(
-            (0, 0, 0, 0),
-            (
-                desired_shape[0] - 1,
-                desired_shape[1] - 1,
-                desired_shape[2] - 1,
-                desired_shape[3] - 1,
-            ),
+            (0, 0, 0, 0), (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1)
         )
         x = x.to_torch().to(torch.float)
     return x
@@ -338,11 +313,7 @@ hardcoded_matmul_config_conv = {
         },
     },
     8: {
-        (
-            25088,
-            64,
-            64,
-        ): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (25088, 64, 64): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=2,
             out_subblock_h=4,
@@ -353,11 +324,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (
-            25088,
-            64,
-            256,
-        ): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (25088, 64, 256): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=2,
             out_subblock_h=1,
@@ -368,11 +335,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (
-            25088,
-            256,
-            64,
-        ): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (25088, 256, 64): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=8,
             out_subblock_h=4,
@@ -383,11 +346,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (
-            25088,
-            256,
-            128,
-        ): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (25088, 256, 128): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=8,
             out_subblock_h=2,
@@ -398,11 +357,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (
-            6272,
-            128,
-            512,
-        ): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (6272, 128, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=4,
             out_subblock_h=1,
@@ -413,11 +368,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (
-            6272,
-            512,
-            128,
-        ): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (6272, 512, 128): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=16,
             out_subblock_h=2,
@@ -496,7 +447,7 @@ hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv = {
         (25088, 64): [256, 64, 128, 64, 256, (12, 9), 256, 64],
         (6272, 128): [64, 128, 64, 128, 64, (12, 9), 64, 128],
         (1568, 256): [160, 32, 32, 32, 160, (10, 8), 160, 32],
-        (416, 512): [32, 64, 32, 32, 96, (5, 8), 96, 64],
+        (416, 512): [96, 64, 32, 32, 96, (5, 8), 96, 64],
     },
 }
 
@@ -553,6 +504,7 @@ class Bottleneck(nn.Module):
         batch_size=1,
         sharded=False,
         out_sharded=False,
+        act_block_w_equals_input_channels_x_filter_width=False,
     ) -> None:
         super().__init__()
         self.device = device
@@ -560,31 +512,24 @@ class Bottleneck(nn.Module):
         self.base_address = base_address
         self.fold_batchnorm = fold_batchnorm
         self.downsample_conv_on_tt = downsample_conv_on_tt
-        self.norm_layer_after_downsample_conv_on_tt = (
-            norm_layer_after_downsample_conv_on_tt
-        )
+        self.norm_layer_after_downsample_conv_on_tt = norm_layer_after_downsample_conv_on_tt
         self.downsample_params = downsample_params
         self.storage_in_dram = storage_in_dram
         if self.storage_in_dram:
             self.memory_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED,
-                tt_lib.tensor.BufferType.DRAM,
+                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
             )
         else:
             self.memory_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED,
-                tt_lib.tensor.BufferType.L1,
+                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
             )
         if sharded:
             self.sharded_memory_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                tt_lib.tensor.BufferType.L1,
+                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1
             )
         else:
             self.sharded_memory_config = self.memory_config
-        self.out_memory_config = (
-            self.sharded_memory_config if out_sharded else self.memory_config
-        )
+        self.out_memory_config = self.sharded_memory_config if out_sharded else self.memory_config
 
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
@@ -597,15 +542,10 @@ class Bottleneck(nn.Module):
         self.bn1 = norm_layer(width)
         self.bn1.weight = nn.Parameter(state_dict[f"{self.base_address}.bn1.weight"])
         self.bn1.bias = nn.Parameter(state_dict[f"{self.base_address}.bn1.bias"])
-        self.bn1.running_mean = nn.Parameter(
-            state_dict[f"{self.base_address}.bn1.running_mean"]
-        )
-        self.bn1.running_var = nn.Parameter(
-            state_dict[f"{self.base_address}.bn1.running_var"]
-        )
+        self.bn1.running_mean = nn.Parameter(state_dict[f"{self.base_address}.bn1.running_mean"])
+        self.bn1.running_var = nn.Parameter(state_dict[f"{self.base_address}.bn1.running_var"])
         self.bn1.num_batches_tracked = nn.Parameter(
-            state_dict[f"{self.base_address}.bn1.num_batches_tracked"],
-            requires_grad=False,
+            state_dict[f"{self.base_address}.bn1.num_batches_tracked"], requires_grad=False
         )
         self.bn1.eval()
 
@@ -615,15 +555,10 @@ class Bottleneck(nn.Module):
         self.bn2 = norm_layer(width)
         self.bn2.weight = nn.Parameter(state_dict[f"{self.base_address}.bn2.weight"])
         self.bn2.bias = nn.Parameter(state_dict[f"{self.base_address}.bn2.bias"])
-        self.bn2.running_mean = nn.Parameter(
-            state_dict[f"{self.base_address}.bn2.running_mean"]
-        )
-        self.bn2.running_var = nn.Parameter(
-            state_dict[f"{self.base_address}.bn2.running_var"]
-        )
+        self.bn2.running_mean = nn.Parameter(state_dict[f"{self.base_address}.bn2.running_mean"])
+        self.bn2.running_var = nn.Parameter(state_dict[f"{self.base_address}.bn2.running_var"])
         self.bn2.num_batches_tracked = nn.Parameter(
-            state_dict[f"{self.base_address}.bn2.num_batches_tracked"],
-            requires_grad=False,
+            state_dict[f"{self.base_address}.bn2.num_batches_tracked"], requires_grad=False
         )
         self.bn2.eval()
 
@@ -633,15 +568,10 @@ class Bottleneck(nn.Module):
         self.bn3 = norm_layer(planes * self.expansion)
         self.bn3.weight = nn.Parameter(state_dict[f"{self.base_address}.bn3.weight"])
         self.bn3.bias = nn.Parameter(state_dict[f"{self.base_address}.bn3.bias"])
-        self.bn3.running_mean = nn.Parameter(
-            state_dict[f"{self.base_address}.bn3.running_mean"]
-        )
-        self.bn3.running_var = nn.Parameter(
-            state_dict[f"{self.base_address}.bn3.running_var"]
-        )
+        self.bn3.running_mean = nn.Parameter(state_dict[f"{self.base_address}.bn3.running_mean"])
+        self.bn3.running_var = nn.Parameter(state_dict[f"{self.base_address}.bn3.running_var"])
         self.bn3.num_batches_tracked = nn.Parameter(
-            state_dict[f"{self.base_address}.bn3.num_batches_tracked"],
-            requires_grad=False,
+            state_dict[f"{self.base_address}.bn3.num_batches_tracked"], requires_grad=False
         )
         self.bn3.eval()
 
@@ -650,37 +580,21 @@ class Bottleneck(nn.Module):
         self.stride = stride
 
         if self.fold_batchnorm:
-            conv1_weight, conv1_bias = fold_bn_to_conv_weights_bias(
-                conv1_weight, self.bn1
-            )
-            conv2_weight, conv2_bias = fold_bn_to_conv_weights_bias(
-                conv2_weight, self.bn2
-            )
-            conv3_weight, conv3_bias = fold_bn_to_conv_weights_bias(
-                conv3_weight, self.bn3
-            )
+            conv1_weight, conv1_bias = fold_bn_to_conv_weights_bias(conv1_weight, self.bn1)
+            conv2_weight, conv2_bias = fold_bn_to_conv_weights_bias(conv2_weight, self.bn2)
+            conv3_weight, conv3_bias = fold_bn_to_conv_weights_bias(conv3_weight, self.bn3)
             self.bn1 = nn.Identity()
             self.bn2 = nn.Identity()
             self.bn3 = nn.Identity()
 
         self.module_input_shape = input_shape
         self.conv1_params = [width, inplanes, 1, 1, 1, 1, 0, 0, dilation, groups]
-        self.conv1_output_shape = compute_conv_output_shape(
-            self.conv1_params, input_shape
-        )
+        self.conv1_output_shape = compute_conv_output_shape(self.conv1_params, input_shape)
         conv1_as_mm_padded_act_height = _nearest_32(
-            self.conv1_output_shape[0]
-            * self.conv1_output_shape[1]
-            * self.conv1_output_shape[2]
+            self.conv1_output_shape[0] * self.conv1_output_shape[1] * self.conv1_output_shape[2]
         )
-        assert (
-            conv1_as_mm_padded_act_height,
-            inplanes,
-            width,
-        ) in hardcoded_matmul_config_conv[batch_size]
-        matmul_config = hardcoded_matmul_config_conv[batch_size][
-            (conv1_as_mm_padded_act_height, inplanes, width)
-        ]
+        assert (conv1_as_mm_padded_act_height, inplanes, width) in hardcoded_matmul_config_conv[batch_size]
+        matmul_config = hardcoded_matmul_config_conv[batch_size][(conv1_as_mm_padded_act_height, inplanes, width)]
         # 1x1 conv with stride 1 padding 0 is run using regular matmul
         self.conv1 = resnet50_1x1_conv_as_matmul(
             conv1_weight.reshape(-1).tolist(),
@@ -709,20 +623,14 @@ class Bottleneck(nn.Module):
         # }
 
         self.conv2_params = [width, width, 3, 3, stride, stride, 1, 1, dilation, groups]
-        self.conv2_output_shape = compute_conv_output_shape(
-            self.conv2_params, self.conv1_output_shape
-        )
+        self.conv2_output_shape = compute_conv_output_shape(self.conv2_params, self.conv1_output_shape)
         conv2_output_padded_face_size = _nearest_32(
-            self.conv2_output_shape[0]
-            * self.conv2_output_shape[1]
-            * self.conv2_output_shape[2]
+            self.conv2_output_shape[0] * self.conv2_output_shape[1] * self.conv2_output_shape[2]
         )
         assert (
             conv2_output_padded_face_size,
             width,
-        ) in hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv[
-            batch_size
-        ]
+        ) in hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv[batch_size]
         [
             act_block_h_datums,
             weight_block_w_datums,
@@ -732,20 +640,22 @@ class Bottleneck(nn.Module):
             grid_size,
             per_core_act_h,
             per_core_weight_w,
-        ] = hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv[
-            batch_size
-        ][
+        ] = hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv[batch_size][
             (conv2_output_padded_face_size, width)
         ]
         assert per_core_act_h % 32 == 0
         per_core_act_h_ntiles = (int)(per_core_act_h / 32)
         per_core_weight_w_ntiles = (int)(per_core_weight_w / 32)
+        if act_block_w_equals_input_channels_x_filter_width:
+            act_block_w_datums = width * 3
+        else:
+            act_block_w_datums = width
         self.conv2 = resnet50_optimized_conv(
             conv2_weight.reshape(-1).tolist(),
             self.conv2_params,
             self.device,
-            [act_block_h_datums, width * 3],
-            [width * 3, weight_block_w_datums],
+            [act_block_h_datums, act_block_w_datums],
+            [act_block_w_datums, weight_block_w_datums],
             [out_subblock_h_datums, out_subblock_w_datums],
             out_block_h_datums,
             grid_size,
@@ -756,32 +666,15 @@ class Bottleneck(nn.Module):
             output_mem_config=self.sharded_memory_config,
         )
 
-        self.conv3_params = [
-            planes * self.expansion,
-            width,
-            1,
-            1,
-            1,
-            1,
-            0,
-            0,
-            dilation,
-            groups,
-        ]
-        self.conv3_output_shape = compute_conv_output_shape(
-            self.conv3_params, self.conv2_output_shape
-        )
+        self.conv3_params = [planes * self.expansion, width, 1, 1, 1, 1, 0, 0, dilation, groups]
+        self.conv3_output_shape = compute_conv_output_shape(self.conv3_params, self.conv2_output_shape)
         conv3_as_mm_padded_act_height = _nearest_32(
-            self.conv3_output_shape[0]
-            * self.conv3_output_shape[1]
-            * self.conv3_output_shape[2]
+            self.conv3_output_shape[0] * self.conv3_output_shape[1] * self.conv3_output_shape[2]
         )
         matmul_config = None
-        assert (
-            conv3_as_mm_padded_act_height,
-            width,
-            planes * self.expansion,
-        ) in hardcoded_matmul_config_conv[batch_size]
+        assert (conv3_as_mm_padded_act_height, width, planes * self.expansion) in hardcoded_matmul_config_conv[
+            batch_size
+        ]
         # print("Setting matmul config for 1x1 conv (third conv in module)")
         matmul_config = hardcoded_matmul_config_conv[batch_size][
             (conv3_as_mm_padded_act_height, width, planes * self.expansion)
@@ -795,28 +688,17 @@ class Bottleneck(nn.Module):
             matmul_config,
             output_mem_config=self.sharded_memory_config,
         )
-        self.conv3_output_shape = compute_conv_output_shape(
-            self.conv3_params, self.conv2_output_shape
-        )
+        self.conv3_output_shape = compute_conv_output_shape(self.conv3_params, self.conv2_output_shape)
 
         self.downsample_or_noop = self.downsample_conv_on_tt
         if self.downsample_or_noop is None:
             self.downsample_or_noop = do_nothing_op
         else:
-            if (
-                self.downsample_params[2] != 1
-                or self.downsample_params[4] != 1
-                or self.downsample_params[6] != 0
-            ):
+            if self.downsample_params[2] != 1 or self.downsample_params[4] != 1 or self.downsample_params[6] != 0:
                 # this downsample conv requires row major input
                 def downsample_conv_op_wrapper(op):
                     def downsample_conv_op_with_formatting(x):
-                        x = format_tensor(
-                            x,
-                            tt_lib.tensor.Layout.ROW_MAJOR,
-                            self.device,
-                            self.memory_config,
-                        )
+                        x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
                         x = x.reshape(
                             self.module_input_shape[0],
                             self.module_input_shape[1],
@@ -827,11 +709,10 @@ class Bottleneck(nn.Module):
 
                     return downsample_conv_op_with_formatting
 
-                self.downsample_or_noop = downsample_conv_op_wrapper(
-                    self.downsample_conv_on_tt
-                )
+                self.downsample_or_noop = downsample_conv_op_wrapper(self.downsample_conv_on_tt)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # print("This module input shape - ", self.module_input_shape)
         # conv1 is 1x1 conv
         # print("Running conv1")
         out = self.conv1(x)
@@ -841,9 +722,7 @@ class Bottleneck(nn.Module):
         # Relu after conv1 is fused with the 1x1 conv (matmul)
         # out = self.relu(out, self.memory_config)
         # print("Running untilize op")
-        out = format_tensor(
-            out, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config
-        )
+        out = format_tensor(out, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
         out = out.reshape(
             self.conv1_output_shape[0],
             self.conv1_output_shape[1],
@@ -889,9 +768,7 @@ class ResNet(nn.Module):
     ) -> None:
         super().__init__()
         self.device = device
-        self.base_address_with_dot = (
-            base_address  # this is root layer, no dot is needed
-        )
+        self.base_address_with_dot = base_address  # this is root layer, no dot is needed
         self.state_dict = state_dict
         self.fold_batchnorm = fold_batchnorm
         self.storage_in_dram = storage_in_dram
@@ -899,18 +776,15 @@ class ResNet(nn.Module):
         self.batch_size = batch_size
         if self.storage_in_dram:
             self.memory_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED,
-                tt_lib.tensor.BufferType.DRAM,
+                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
             )
         else:
             self.memory_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED,
-                tt_lib.tensor.BufferType.L1,
+                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
             )
         if sharded:
             self.sharded_memory_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                tt_lib.tensor.BufferType.L1,
+                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1
             )
         else:
             self.sharded_memory_config = self.memory_config
@@ -935,28 +809,17 @@ class ResNet(nn.Module):
         conv1_bias = None
 
         self.bn1 = norm_layer(self.inplanes)  # batch norm
-        self.bn1.weight = nn.Parameter(
-            state_dict[f"{self.base_address_with_dot}bn1.weight"]
-        )
-        self.bn1.bias = nn.Parameter(
-            state_dict[f"{self.base_address_with_dot}bn1.bias"]
-        )
-        self.bn1.running_mean = nn.Parameter(
-            state_dict[f"{self.base_address_with_dot}bn1.running_mean"]
-        )
-        self.bn1.running_var = nn.Parameter(
-            state_dict[f"{self.base_address_with_dot}bn1.running_var"]
-        )
+        self.bn1.weight = nn.Parameter(state_dict[f"{self.base_address_with_dot}bn1.weight"])
+        self.bn1.bias = nn.Parameter(state_dict[f"{self.base_address_with_dot}bn1.bias"])
+        self.bn1.running_mean = nn.Parameter(state_dict[f"{self.base_address_with_dot}bn1.running_mean"])
+        self.bn1.running_var = nn.Parameter(state_dict[f"{self.base_address_with_dot}bn1.running_var"])
         self.bn1.num_batches_tracked = nn.Parameter(
-            state_dict[f"{self.base_address_with_dot}bn1.num_batches_tracked"],
-            requires_grad=False,
+            state_dict[f"{self.base_address_with_dot}bn1.num_batches_tracked"], requires_grad=False
         )
         self.bn1.eval()
 
         if self.fold_batchnorm:
-            conv1_weight, conv1_bias = fold_bn_to_conv_weights_bias(
-                conv1_weight, self.bn1
-            )
+            conv1_weight, conv1_bias = fold_bn_to_conv_weights_bias(conv1_weight, self.bn1)
             self.bn1 = nn.Identity()
 
         self.conv1_params = [self.inplanes, 3, 7, 7, 2, 2, 3, 3, 1, groups]
@@ -996,12 +859,7 @@ class ResNet(nn.Module):
         )
         self.conv1_output_shape = compute_conv_output_shape(
             self.conv1_params,
-            [
-                batch_size,
-                self.conv_input_face_shape_hw[0],
-                self.conv_input_face_shape_hw[1],
-                self.inplanes,
-            ],
+            [batch_size, self.conv_input_face_shape_hw[0], self.conv_input_face_shape_hw[1], self.inplanes],
         )
         self.relu = tt_lib.tensor.relu_without_autoformat
         # self.maxpool = fallback_ops.MaxPool2d(kernel_size=3, stride=2, padding=1, channels_last=True, reshape_2d=True)
@@ -1016,9 +874,7 @@ class ResNet(nn.Module):
             channels_last=True,
             reshape_2d=True,
         )
-        self.maxpool_output_shape = compute_max_pool_shape(
-            3, 2, 1, self.conv1_output_shape
-        )
+        self.maxpool_output_shape = compute_max_pool_shape(3, 2, 1, self.conv1_output_shape)
         self.layer1, self.layer1_output_shape = self._make_layer(
             block,
             64,
@@ -1029,6 +885,7 @@ class ResNet(nn.Module):
             batch_size=batch_size,
             sharded=sharded,
             out_sharded=True,
+            act_block_w_equals_input_channels_x_filter_width=True,
         )
         self.layer2, self.layer2_output_shape = self._make_layer(
             block,
@@ -1102,10 +959,7 @@ class ResNet(nn.Module):
         ).to(tt_lib.tensor.Layout.TILE)
         fc_bias = pad_weight(state_dict[f"{self.base_address_with_dot}fc.bias"])
         fc_bias = tt_lib.tensor.Tensor(
-            fc_bias.reshape(-1).tolist(),
-            fc_bias.shape,
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            fc_bias.reshape(-1).tolist(), fc_bias.shape, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.Layout.ROW_MAJOR
         ).to(tt_lib.tensor.Layout.TILE)
         self.fc = ResnetLinear(
             512 * block.expansion,
@@ -1131,6 +985,7 @@ class ResNet(nn.Module):
         batch_size=1,
         sharded=False,
         out_sharded=False,
+        act_block_w_equals_input_channels_x_filter_width=False,
     ):
         norm_layer = self._norm_layer
         downsample = None
@@ -1146,39 +1001,22 @@ class ResNet(nn.Module):
             stride = 1
         if stride != 1 or self.inplanes != planes * block.expansion:
             nl = norm_layer(planes * block.expansion)
-            nl.weight = nn.Parameter(
-                state_dict[f"{self.base_address_with_dot}{name}.0.downsample.1.weight"]
-            )
-            nl.bias = nn.Parameter(
-                state_dict[f"{self.base_address_with_dot}{name}.0.downsample.1.bias"]
-            )
+            nl.weight = nn.Parameter(state_dict[f"{self.base_address_with_dot}{name}.0.downsample.1.weight"])
+            nl.bias = nn.Parameter(state_dict[f"{self.base_address_with_dot}{name}.0.downsample.1.bias"])
             nl.running_mean = nn.Parameter(
-                state_dict[
-                    f"{self.base_address_with_dot}{name}.0.downsample.1.running_mean"
-                ]
+                state_dict[f"{self.base_address_with_dot}{name}.0.downsample.1.running_mean"]
             )
-            nl.running_var = nn.Parameter(
-                state_dict[
-                    f"{self.base_address_with_dot}{name}.0.downsample.1.running_var"
-                ]
-            )
+            nl.running_var = nn.Parameter(state_dict[f"{self.base_address_with_dot}{name}.0.downsample.1.running_var"])
             nl.num_batches_tracked = nn.Parameter(
-                state_dict[
-                    f"{self.base_address_with_dot}{name}.0.downsample.1.num_batches_tracked"
-                ],
+                state_dict[f"{self.base_address_with_dot}{name}.0.downsample.1.num_batches_tracked"],
                 requires_grad=False,
             )
             nl.eval()
-            downsample_conv_weight = state_dict[
-                f"{self.base_address_with_dot}{name}.0.downsample.0.weight"
-            ]
+            downsample_conv_weight = state_dict[f"{self.base_address_with_dot}{name}.0.downsample.0.weight"]
             downsample_conv_bias = None
 
             if self.fold_batchnorm:
-                (
-                    downsample_conv_weight,
-                    downsample_conv_bias,
-                ) = fold_bn_to_conv_weights_bias(downsample_conv_weight, nl)
+                downsample_conv_weight, downsample_conv_bias = fold_bn_to_conv_weights_bias(downsample_conv_weight, nl)
                 nl = nn.Identity()
 
             # With single buffered input CB, these shapes work -
@@ -1202,9 +1040,7 @@ class ResNet(nn.Module):
                 self.dilation,
                 1,
             ]
-            self.downsample_conv_output_shape = compute_conv_output_shape(
-                self.downsample_params, layer_input_shape
-            )
+            self.downsample_conv_output_shape = compute_conv_output_shape(self.downsample_params, layer_input_shape)
             is_downsample_1x1_conv = stride == 1
             is_1x1_downsample_conv_sanity_check = (
                 self.downsample_params[2] == 1
@@ -1229,11 +1065,7 @@ class ResNet(nn.Module):
                 ) in hardcoded_matmul_config_conv[batch_size]
                 # print("Setting matmul config for 1x1 conv (downsample stride 1 conv in module)")
                 matmul_config = hardcoded_matmul_config_conv[batch_size][
-                    (
-                        downsample_output_padded_face_size,
-                        self.inplanes,
-                        downsample_output_channels,
-                    )
+                    (downsample_output_padded_face_size, self.inplanes, downsample_output_channels)
                 ]
                 self.downsample_conv_on_tt = resnet50_1x1_conv_as_matmul(
                     downsample_conv_weight.reshape(-1).tolist(),
@@ -1245,14 +1077,9 @@ class ResNet(nn.Module):
                 )
             else:
                 assert (
-                    (
-                        downsample_output_padded_face_size,
-                        downsample_output_channels,
-                    )
-                    in hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_downsample_conv[
-                        batch_size
-                    ]
-                )
+                    downsample_output_padded_face_size,
+                    downsample_output_channels,
+                ) in hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_downsample_conv[batch_size]
                 [
                     act_block_h_datums,
                     weight_block_w_datums,
@@ -1262,9 +1089,7 @@ class ResNet(nn.Module):
                     grid_size,
                     per_core_act_h,
                     per_core_weight_w,
-                ] = hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_downsample_conv[
-                    batch_size
-                ][
+                ] = hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_downsample_conv[batch_size][
                     (downsample_output_padded_face_size, downsample_output_channels)
                 ]
                 assert per_core_act_h % 32 == 0
@@ -1309,6 +1134,7 @@ class ResNet(nn.Module):
                 batch_size=batch_size,
                 sharded=sharded,
                 out_sharded=sharded,
+                act_block_w_equals_input_channels_x_filter_width=act_block_w_equals_input_channels_x_filter_width,
             )
         )
         self.inplanes = planes * block.expansion
@@ -1331,6 +1157,7 @@ class ResNet(nn.Module):
                     batch_size=batch_size,
                     sharded=sharded,
                     out_sharded=True if _ != blocks - 1 else out_sharded,
+                    act_block_w_equals_input_channels_x_filter_width=act_block_w_equals_input_channels_x_filter_width,
                 )
             )
         last_layer_shape = layers[-1].conv3_output_shape
@@ -1338,9 +1165,7 @@ class ResNet(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         extra_padding_for_32B_alignment = 25
-        x = torch.nn.functional.pad(
-            x, (3, 4 + extra_padding_for_32B_alignment, 3, 3, 0, 1)
-        )
+        x = torch.nn.functional.pad(x, (3, 4 + extra_padding_for_32B_alignment, 3, 3, 0, 1))
         # permute_key="permute_key"
         # input_tensor_construct_key="input_tensor_construct_key"
         # misc_key = "misc_key"
@@ -1377,9 +1202,7 @@ class ResNet(nn.Module):
         # x = self.relu(x, self.memory_config)
         # tt_lib.device.DumpDeviceMemoryState(self.device)
         # x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM))
-        x = format_tensor(
-            x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config
-        )
+        x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
         # time.sleep(2)
         x = x.reshape(
             self.conv1_output_shape[0],
@@ -1393,14 +1216,10 @@ class ResNet(nn.Module):
         x = x.reshape(
             1,
             1,
-            self.maxpool_output_shape[0]
-            * self.maxpool_output_shape[1]
-            * self.maxpool_output_shape[2],
+            self.maxpool_output_shape[0] * self.maxpool_output_shape[1] * self.maxpool_output_shape[2],
             self.maxpool_output_shape[3],
         )
-        x = format_tensor(
-            x, tt_lib.tensor.Layout.TILE, self.device, self.sharded_memory_config
-        )
+        x = format_tensor(x, tt_lib.tensor.Layout.TILE, self.device, self.sharded_memory_config)
 
         x = self.layer1_module1(x)
         x = self.layer1_module2(x)
@@ -1427,21 +1246,11 @@ class ResNet(nn.Module):
         x = tt_lib.tensor.unpad(
             x,
             (0, 0, 0, 0),
-            (
-                unpadded_shape[0] - 1,
-                unpadded_shape[1] - 1,
-                unpadded_shape[2] - 1,
-                unpadded_shape[3] - 1,
-            ),
+            (unpadded_shape[0] - 1, unpadded_shape[1] - 1, unpadded_shape[2] - 1, unpadded_shape[3] - 1),
             output_mem_config=self.memory_config,
         )
 
-        x = x.reshape(
-            self.batch_size,
-            x.shape()[1],
-            (int)(x.shape()[2] / self.batch_size),
-            x.shape()[3],
-        )
+        x = x.reshape(self.batch_size, x.shape()[1], (int)(x.shape()[2] / self.batch_size), x.shape()[3])
 
         unpadded_shape = x.shape()
         padded_shape = [
@@ -1451,27 +1260,15 @@ class ResNet(nn.Module):
             _nearest_32(unpadded_shape[3]),
         ]
         x = tt_lib.tensor.pad(
-            x,
-            padded_shape,
-            [0, 0, 0, 0],
-            0,
-            output_mem_config=self.memory_config,
-            use_multicore=True,
+            x, padded_shape, [0, 0, 0, 0], 0, output_mem_config=self.memory_config, use_multicore=True
         )
         x = tt_lib.tensor.tilize(x, output_mem_config=self.memory_config)
 
         x = self.avgpool(x, self.memory_config)
 
-        unpadded_shape_end = [
-            x.shape()[0] - 1,
-            x.shape()[1] - 1,
-            1 - 1,
-            x.shape()[3] - 1,
-        ]
+        unpadded_shape_end = [x.shape()[0] - 1, x.shape()[1] - 1, 1 - 1, x.shape()[3] - 1]
         x = tt_lib.tensor.untilize(x, self.memory_config, use_multicore=True)
-        x = tt_lib.tensor.unpad(
-            x, (0, 0, 0, 0), unpadded_shape_end, output_mem_config=self.memory_config
-        )
+        x = tt_lib.tensor.unpad(x, (0, 0, 0, 0), unpadded_shape_end, output_mem_config=self.memory_config)
 
         x = x.reshape(1, x.shape()[1], self.batch_size * x.shape()[2], x.shape()[3])
 
@@ -1483,37 +1280,19 @@ class ResNet(nn.Module):
             _nearest_32(unpadded_shape[3]),
         ]
         x = tt_lib.tensor.pad(
-            x,
-            padded_shape,
-            [0, 0, 0, 0],
-            0,
-            output_mem_config=self.memory_config,
-            use_multicore=True,
+            x, padded_shape, [0, 0, 0, 0], 0, output_mem_config=self.memory_config, use_multicore=True
         )
         x = tt_lib.tensor.tilize(x, output_mem_config=self.memory_config)
 
         x = self.fc(x)
-        x = format_tensor(
-            x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config
-        )
-        x = x.reshape(
-            self.batch_size,
-            x.shape()[1],
-            (int)(x.shape()[2] / self.batch_size),
-            x.shape()[3],
-        )
+        x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
+        x = x.reshape(self.batch_size, x.shape()[1], (int)(x.shape()[2] / self.batch_size), x.shape()[3])
         x = x.cpu()
         # assert x.layout() != tt_lib.tensor.Layout.ROW_MAJOR
         # x = x.to(tt_lib.tensor.Layout.ROW_MAJOR)
         desired_shape = [x.shape()[0], x.shape()[1], 1, 1000]
         x = x.unpad(
-            (0, 0, 0, 0),
-            (
-                desired_shape[0] - 1,
-                desired_shape[1] - 1,
-                desired_shape[2] - 1,
-                desired_shape[3] - 1,
-            ),
+            (0, 0, 0, 0), (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1)
         )
         # tt_to_torch_key = "tt_to_torch_key"
         # profiler.start(tt_to_torch_key)
@@ -1526,9 +1305,7 @@ class ResNet(nn.Module):
 
     def run_first_part(self, x):
         extra_padding_for_32B_alignment = 25
-        x = torch.nn.functional.pad(
-            x, (3, 4 + extra_padding_for_32B_alignment, 3, 3, 0, 1)
-        )
+        x = torch.nn.functional.pad(x, (3, 4 + extra_padding_for_32B_alignment, 3, 3, 0, 1))
         # permute_key="permute_key"
         # input_tensor_construct_key="input_tensor_construct_key"
         # misc_key = "misc_key"
@@ -1566,9 +1343,7 @@ class ResNet(nn.Module):
         # tt_lib.device.DumpDeviceMemoryState(self.device)
 
         # x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM))
-        x = format_tensor(
-            x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config
-        )
+        x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
         # time.sleep(2)
         x = x.reshape(
             self.conv1_output_shape[0],
@@ -1586,9 +1361,7 @@ class ResNet(nn.Module):
         # time.sleep(2)
         x = self.maxpool(x)
         max_pool_output_on_host = x.cpu().to_torch().to(torch.float)
-        max_pool_output_on_host = torch.reshape(
-            max_pool_output_on_host, self.maxpool_output_shape
-        )
+        max_pool_output_on_host = torch.reshape(max_pool_output_on_host, self.maxpool_output_shape)
         # Permute from nhwc to nchw
         max_pool_output_on_host = torch.transpose(max_pool_output_on_host, 2, 3)
         max_pool_output_on_host = torch.transpose(max_pool_output_on_host, 1, 2)
@@ -1598,9 +1371,7 @@ class ResNet(nn.Module):
         x = x.reshape(
             1,
             1,
-            self.maxpool_output_shape[0]
-            * self.maxpool_output_shape[1]
-            * self.maxpool_output_shape[2],
+            self.maxpool_output_shape[0] * self.maxpool_output_shape[1] * self.maxpool_output_shape[2],
             self.maxpool_output_shape[3],
         )
         x = format_tensor(x, tt_lib.tensor.Layout.TILE, self.device, self.memory_config)
@@ -1625,15 +1396,8 @@ class ResNet(nn.Module):
         x = self.layer4_module2(x)
         x = self.layer4_module3(x)
 
-        x = format_tensor(
-            x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config
-        )
-        x = x.reshape(
-            self.batch_size,
-            x.shape()[1],
-            (int)(x.shape()[2] / self.batch_size),
-            x.shape()[3],
-        )
+        x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
+        x = x.reshape(self.batch_size, x.shape()[1], (int)(x.shape()[2] / self.batch_size), x.shape()[3])
 
         unpadded_shape = x.shape()
         padded_shape = [
@@ -1642,19 +1406,12 @@ class ResNet(nn.Module):
             _nearest_32(unpadded_shape[2]),
             _nearest_32(unpadded_shape[3]),
         ]
-        x = tt_lib.tensor.pad(
-            x, padded_shape, [0, 0, 0, 0], 0, output_mem_config=self.memory_config
-        )
+        x = tt_lib.tensor.pad(x, padded_shape, [0, 0, 0, 0], 0, output_mem_config=self.memory_config)
         x = tt_lib.tensor.tilize(x, output_mem_config=self.memory_config)
 
         x = self.avgpool(x, self.memory_config)
 
-        unpadded_shape_end = [
-            x.shape()[0] - 1,
-            x.shape()[1] - 1,
-            1 - 1,
-            x.shape()[3] - 1,
-        ]
+        unpadded_shape_end = [x.shape()[0] - 1, x.shape()[1] - 1, 1 - 1, x.shape()[3] - 1]
         x = tt_lib.tensor.untilize_with_unpadding(
             x,
             output_tensor_end=unpadded_shape_end,
@@ -1670,33 +1427,18 @@ class ResNet(nn.Module):
             _nearest_32(unpadded_shape[2]),
             _nearest_32(unpadded_shape[3]),
         ]
-        x = tt_lib.tensor.pad(
-            x, padded_shape, [0, 0, 0, 0], 0, output_mem_config=self.memory_config
-        )
+        x = tt_lib.tensor.pad(x, padded_shape, [0, 0, 0, 0], 0, output_mem_config=self.memory_config)
         x = tt_lib.tensor.tilize(x, output_mem_config=self.memory_config)
 
         x = self.fc(x)
-        x = format_tensor(
-            x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config
-        )
-        x = x.reshape(
-            self.batch_size,
-            x.shape()[1],
-            (int)(x.shape()[2] / self.batch_size),
-            x.shape()[3],
-        )
+        x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
+        x = x.reshape(self.batch_size, x.shape()[1], (int)(x.shape()[2] / self.batch_size), x.shape()[3])
         x = x.cpu()
         # assert x.layout() != tt_lib.tensor.Layout.ROW_MAJOR
         # x = x.to(tt_lib.tensor.Layout.ROW_MAJOR)
         desired_shape = [x.shape()[0], x.shape()[1], 1, 1000]
         x = x.unpad(
-            (0, 0, 0, 0),
-            (
-                desired_shape[0] - 1,
-                desired_shape[1] - 1,
-                desired_shape[2] - 1,
-                desired_shape[3] - 1,
-            ),
+            (0, 0, 0, 0), (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1)
         )
         # tt_to_torch_key = "tt_to_torch_key"
         # profiler.start(tt_to_torch_key)

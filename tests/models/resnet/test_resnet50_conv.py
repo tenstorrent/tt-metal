@@ -385,11 +385,11 @@ hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv = {
         (25088, 64): [256, 64, 128, 64, 256, (12, 9), 256, 64],
         (6272, 128): [64, 128, 64, 128, 64, (12, 9), 64, 128],
         (1568, 256): [160, 32, 32, 32, 160, (10, 8), 160, 32],
-        (416, 512): [64, 32, 32, 32, 64, (7, 8), 64, 64],
+        (416, 512): [96, 64, 32, 32, 96, (5, 8), 96, 64],
         # bypass convs
         (6272, 512): [64, 512, 32, 256, 64, (12, 9), 64, 512],
         (1568, 1024): [160, 128, 32, 64, 160, (10, 8), 160, 128],
-        (416, 2048): [64, 128, 32, 64, 64, (7, 8), 64, 256],
+        (416, 2048): [32, 256, 32, 32, 96, (5, 8), 96, 256],
     },
 }
 
@@ -451,14 +451,12 @@ hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv = {
         (512, 512, 7, 7, 3, 3, 1, 1, 1, 1),
     ),
 )
-def test_resnet50_conv(
-    use_program_cache, device, N, K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w
-):
-    memory_config = tt_lib.tensor.MemoryConfig(
+def test_resnet50_conv(use_program_cache, device, N, K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w):
+    out_memory_config = tt_lib.tensor.MemoryConfig(
         tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
     )
     if N == 8:
-        memory_config = tt_lib.tensor.MemoryConfig(
+        out_memory_config = tt_lib.tensor.MemoryConfig(
             tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1
         )
 
@@ -485,33 +483,18 @@ def test_resnet50_conv(
             padding=(pad_h, pad_w),
         )
 
-        is_1x1_conv = (
-            R == 1
-            and S == 1
-            and stride_h == 1
-            and stride_w == 1
-            and pad_h == 0
-            and pad_w == 0
-        )
+        is_1x1_conv = R == 1 and S == 1 and stride_h == 1 and stride_w == 1 and pad_h == 0 and pad_w == 0
 
         conv_params = [K, C, R, S, stride_h, stride_w, pad_h, pad_w, 1, 1]
-        conv_output_shape = compute_conv_output_shape(
-            conv_params, conv_input_shape_nhwc
-        )
+        conv_output_shape = compute_conv_output_shape(conv_params, conv_input_shape_nhwc)
         print("Conv output shape - ", conv_output_shape)
-        conv_as_mm_padded_act_height = _nearest_32(
-            conv_output_shape[0] * conv_output_shape[1] * conv_output_shape[2]
-        )
+        conv_as_mm_padded_act_height = _nearest_32(conv_output_shape[0] * conv_output_shape[1] * conv_output_shape[2])
 
         if is_1x1_conv:
             matmul_config = None
-            assert (conv_as_mm_padded_act_height, C, K) in hardcoded_matmul_config_conv[
-                N
-            ]
+            assert (conv_as_mm_padded_act_height, C, K) in hardcoded_matmul_config_conv[N]
             print("Setting matmul config for 1x1 conv")
-            matmul_config = hardcoded_matmul_config_conv[N][
-                (conv_as_mm_padded_act_height, C, K)
-            ]
+            matmul_config = hardcoded_matmul_config_conv[N][(conv_as_mm_padded_act_height, C, K)]
             # 1x1 conv with stride 1 padding 0 is run using regular matmul
             conv = resnet50_1x1_conv_as_matmul(
                 conv_weight_pyt.reshape(-1).tolist(),
@@ -522,11 +505,9 @@ def test_resnet50_conv(
             )
         else:
             assert (
-                (conv_as_mm_padded_act_height, K)
-                in hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv[
-                    N
-                ]
-            )
+                conv_as_mm_padded_act_height,
+                K,
+            ) in hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv[N]
             [
                 act_block_h_datums,
                 weight_block_w_datums,
@@ -546,8 +527,8 @@ def test_resnet50_conv(
                 conv_weight_pyt.reshape(-1).tolist(),
                 conv_params,
                 device,
-                [act_block_h_datums, C * S],
-                [C * S, weight_block_w_datums],
+                [act_block_h_datums, C],
+                [C, weight_block_w_datums],
                 [out_subblock_h_datums, out_subblock_w_datums],
                 out_block_h_datums,
                 grid_size,
@@ -569,22 +550,16 @@ def test_resnet50_conv(
             conv_input_on_device = conv_input_on_device.reshape(
                 1,
                 1,
-                conv_input_shape_nhwc[0]
-                * conv_input_shape_nhwc[1]
-                * conv_input_shape_nhwc[2],
+                conv_input_shape_nhwc[0] * conv_input_shape_nhwc[1] * conv_input_shape_nhwc[2],
                 conv_input_shape_nhwc[3],
             )
-            conv_input_on_device = format_tensor(
-                conv_input_on_device, tt_lib.tensor.Layout.TILE, device, memory_config
-            )
+            conv_input_on_device = format_tensor(conv_input_on_device, tt_lib.tensor.Layout.TILE, device, memory_config)
 
         output_on_device = conv(conv_input_on_device)
 
         # convert tiled output to RM
         assert output_on_device.layout() == tt_lib.tensor.Layout.TILE
-        output_on_device = format_tensor(
-            output_on_device, tt_lib.tensor.Layout.ROW_MAJOR, device, memory_config
-        )
+        output_on_device = format_tensor(output_on_device, tt_lib.tensor.Layout.ROW_MAJOR, device, memory_config)
         output_on_device = output_on_device.reshape(
             conv_output_shape[0],
             conv_output_shape[1],

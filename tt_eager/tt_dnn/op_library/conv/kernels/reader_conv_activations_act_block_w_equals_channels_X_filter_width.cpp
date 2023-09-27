@@ -113,19 +113,19 @@ void kernel_main() {
         uint32_t n_reset = n_start;
         for(uint32_t nbh = 0; nbh < num_blocks_act_h; nbh++) {
             uint32_t in_h_offset_within_kernel_window = 0;
-            for (uint32_t channel_stick_h = 0; channel_stick_h < weight_size_h; channel_stick_h++) {
-                uint32_t in_w_offset_within_kernel_window = 0;
-                for (uint32_t channel_stick_w = 0; channel_stick_w < weight_size_w; channel_stick_w++) {
-                    out_h = out_h_reset;
-                    out_w = out_w_reset;
-                    total_h = total_h_reset;
-                    n = n_reset;
-                    cb_reserve_back(cb_id_act, act_block_num_tiles);
-                    uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
-                    uint32_t l1_addr_offset = 0;
-                    for(uint32_t bh = 0; bh < act_block_h_datums; bh++) {
-                        uint32_t in_h_offset = out_h * stride_h;
-                        uint32_t in_w_offset = out_w * stride_w; // expect stride 1 or 2.. make this compile time args - also conv input width
+            for (uint32_t nbw = 0; nbw < num_blocks_act_w; nbw++) {
+                out_h = out_h_reset;
+                out_w = out_w_reset;
+                total_h = total_h_reset;
+                n = n_reset;
+                cb_reserve_back(cb_id_act, act_block_num_tiles);
+                uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
+                uint32_t l1_addr_offset = 0;
+                for(uint32_t bh = 0; bh < act_block_h_datums; bh++) {
+                    uint32_t in_h_offset = out_h * stride_h;
+                    uint32_t in_w_offset = out_w * stride_w; // expect stride 1 or 2.. make this compile time args - also conv input width
+                    uint32_t in_w_offset_within_kernel_window = 0;
+                    for(uint32_t bw = 0; bw < weight_size_w; bw++) {
                         uint32_t read_size_bytes = conv_act_size_c_bytes;
 
                         if (total_h < act_matrix_height_unpadded) {
@@ -148,28 +148,37 @@ void kernel_main() {
                             }
                         } //else { DPRINT << "total_h here =" << total_h << ENDL();  } //do nothing. let garbage rows be in l1
                         l1_addr_offset += read_size_bytes;
-                        if(out_w < conv_output_size_w - 1) {
-                            out_w += 1;
-                        } else {
-                            out_w = 0;
-                            if (out_h < conv_output_size_h - 1) {
-                                out_h += 1;
-                            } else if (total_h < act_matrix_height_unpadded){
-                                // next image in batch
-                                out_h = 0;
-                                n += 1;
-                            }
+                        in_w_offset_within_kernel_window += 1;
+                    } // for block width
+                    // pad 0s for block padding on the right side of block.. only first conv since C%32 != 0.. ifdef with compile time define
+                    #ifdef ACT_BLOCK_WIDTH_PADDING_BYTES
+                        // pad 0s in l1
+                        uint32_t dst_addr = l1_write_addr_act + l1_addr_offset;
+                        pad_l1_buffer_with_zeroes(dst_addr, (uint32_t) ACT_BLOCK_WIDTH_PADDING_BYTES);
+                        l1_addr_offset += (uint32_t) ACT_BLOCK_WIDTH_PADDING_BYTES;
+                    #endif
+                    if(out_w < conv_output_size_w - 1) {
+                        out_w += 1;
+                    } else {
+                        out_w = 0;
+                        //DPRINT << "total_h=" << total_h << ENDL();
+                        if (out_h < conv_output_size_h - 1) {
+                            out_h += 1;
+                        } else if (total_h < act_matrix_height_unpadded){
+                            // next image in batch
+                            out_h = 0;
+                            n += 1;
+                            //DPRINT << "next image, n=" << n << ENDL();
                         }
-                        total_h += 1;
-                    } // for block height
-                    in_w_offset_within_kernel_window += 1;
-                    //DPRINT << "waiting on read barrier" << ENDL();
-                    noc_async_read_barrier();
-                    //DPRINT << "done on read barrier" << ENDL();
-                    cb_push_back(cb_id_act, act_block_num_tiles);
-                } // for filter window width
+                    }
+                    total_h += 1;
+                } // for block height
                 in_h_offset_within_kernel_window += 1;
-            } // for filter window height
+                //DPRINT << "waiting on read barrier" << ENDL();
+                noc_async_read_barrier();
+                //DPRINT << "done on read barrier" << ENDL();
+                cb_push_back(cb_id_act, act_block_num_tiles);
+            } // for num of act blocks in inner width dim
             out_h_reset = out_h;
             out_w_reset = out_w;
             total_h_reset = total_h;

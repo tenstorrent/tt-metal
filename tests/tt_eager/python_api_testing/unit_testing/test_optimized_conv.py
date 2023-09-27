@@ -34,10 +34,10 @@ import torch
     "K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w",
     (
         (64, 32, 2, 2, 1, 1, 1, 1, 0, 0),
-        (64, 3, 100, 100, 3, 3, 1, 1, 0, 0),
+        #(64, 3, 100, 100, 3, 3, 1, 1, 0, 0),
         (64, 32, 2, 2, 1, 1, 1, 1, 0, 0),
         # channels = 3 padding
-        (64, 3, 5, 5, 1, 1, 1, 1, 0, 0),
+        #(64, 3, 5, 5, 1, 1, 1, 1, 0, 0),
         # w/ conv padding
         (64, 32, 5, 5, 1, 1, 1, 1, 1, 1),
         # Hat = 1, Wat = 1, Wbt = 1
@@ -58,8 +58,6 @@ import torch
         (64, 64, 8, 8, 1, 1, 1, 1, 0, 0),
         # Hat = 8, Wat = 8, Wbt = 8
         (8 * 32, 8 * 32, 16, 16, 1, 1, 1, 1, 0, 0),
-        # resnet50 first conv
-        (64, 3, 224, 224, 7, 7, 2, 2, 3, 3),
         # num blocks weight w = 4, num blocks act h = 4, num blocks act w = 3
         (16 * 32, 32, 24, 24, 3, 3, 1, 1, 0, 0),
     ),
@@ -103,11 +101,11 @@ def test_run_optimized_conv(
         bias_pyt = torch.normal(mean=0, std=0.1, size=bias_shape)
         # bias_pyt = torch.zeros(bias_shape, dtype=torch.bfloat16).float() * 3.
         # bias_pyt = torch.range(start=0, end=(K - 1), dtype=torch.bfloat16).float()
-
+        assert C % 32 == 0
         # Parameters to define block dims
         act_block_h = 4
         out_block_h = 4
-        act_block_w = (int)((_nearest_32(_nearest_y(C, 16) * S))/32)
+        act_block_w =(int) (C/32)
         weight_block_h = act_block_w
         weight_block_w = 2
         out_subblock_h = 2
@@ -123,7 +121,7 @@ def test_run_optimized_conv(
         A = A_cl_host.to(device)
 
         # Prepare weights
-        B_tiled_host = create_conv_weight_tensor_special_padding(
+        B_tiled_host = create_conv_weight_tensor(
             B_pyt, K, C, R, S, weight_block_h, weight_block_w
         )
         B_tiled = B_tiled_host.to(device)
