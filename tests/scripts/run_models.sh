@@ -34,7 +34,9 @@ env pytest tests/models/deit/tests/test_deit_for_image_classification_with_teach
 
 env pytest tests/models/vit/tests/test_vit_image_classification.py -k test_vit_image_classification
 
-env pytest tests/models/metal_BERT_large_15/test_bert_batch_dram.py::test_bert_batch_dram
+# Split bert tests as a workaround to issue #2892
+env pytest tests/models/metal_BERT_large_15/test_bert_batch_dram.py::test_bert_batch_dram -k DRAM
+env pytest tests/models/metal_BERT_large_15/test_bert_batch_dram.py::test_bert_batch_dram -k L1
 env pytest tests/models/metal_BERT_large_15/test_bert_batch_dram.py::test_bert_batch_dram_with_program_cache
 
 env pytest tests/models/t5 -k t5_dense_act_dense
