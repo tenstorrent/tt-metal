@@ -16,7 +16,7 @@ inline void reduce_configure_addrmod();
 template <ReduceDim dim, int num_fidelity_phases>
 inline void reduce_configure_mop();
 
-template <PoolType type, ReduceDim dim, int num_fidelity_phases = 0, bool is_fp32_dest_acc_en = false /* unused */>
+template <PoolType type, ReduceDim dim, int num_fidelity_phases = 0, bool is_fp32_dest_acc_en = false /* unused */, bool is_int_fpu_en = false /* unused */>
 inline void llk_math_reduce(uint dst_index) {
     TT_LLK_DUMP("llk_math_reduce<{}, {}, {}, {}>({})", type, dim, num_fidelity_phases, is_fp32_dest_acc_en, dst_index);
     constexpr bool high_fidelity = num_fidelity_phases > 0 && num_fidelity_phases <= 4;
