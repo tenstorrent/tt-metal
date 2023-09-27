@@ -15,6 +15,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/tt_metal/perf_microbenchmark/common/work_split.hpp"
 
 using namespace tt;
 using std::chrono::duration_cast;
@@ -22,20 +23,17 @@ using std::chrono::microseconds;
 
 ////////////////////////////////////////////////////////////////////////////////
 // This test measures DRAM bandwidth performance. It creates a bfloat16 format DRAM buffer of a given input size and all
-// Tensix cores read or write the buffer in a size divided by the number of all Tensix cores.
+// Tensix cores read or write the buffer in a size by split_work_to_cores function.
 //
-// Disclaimer: This benchmark is designed to support an input size larger than 4GB. But current tt-metal does not seem
-// to support buffer allocation larger than 4GB yet. Also, ReadFromBuffer API used in DRAM write test may take a long
-// time if the input size is large.
+// Disclaimer
+// - This benchmark is designed to support an input size larger than 4GB. But current tt-metal does not seem
+// to support buffer allocation larger than 4GB yet.
+// - Also, ReadFromBuffer API used in DRAM write test may take a long time if the input size is large.
 //
 // Usage example:
-//   ./test_dram_offchip --input-size <size in bytes> --access-type <0 for read access, 1 for
-//   write access>
+//   ./test_dram_offchip --input-size <size in bytes> --access-type <0 for read access, 1 for write access>
 //
 ////////////////////////////////////////////////////////////////////////////////
-
-std::tuple<uint32_t, uint32_t, uint32_t> get_num_cores_for_given_input(
-    tt_metal::Device *device, const uint64_t &input_size, const uint32_t &num_tiles);
 
 inline std::vector<std::uint32_t> create_random_vector_of_bfloat16(
     uint64_t num_bytes, int rand_max_float, int seed, float offset = 0.0f);
@@ -45,8 +43,7 @@ std::vector<T> slice(std::vector<T> const &v, int m, int n);
 
 std::tuple<tt_metal::Program, tt_metal::KernelID, uint32_t> create_program(
     tt_metal::Device *device,
-    const int &num_cores_y,
-    const int &num_cores_x,
+    const CoreRangeSet &all_cores,
     const uint32_t &num_reqs_at_a_time,
     const uint32_t &single_tile_size,
     const tt::DataFormat &tile_format,
@@ -55,11 +52,15 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, uint32_t> create_program(
 bool assign_runtime_args_to_program(
     tt_metal::Device *device,
     tt_metal::Program &program,
-    const int &num_cores_y,
-    const int &num_cores_x,
-    const tt_metal::KernelID &reader_kernel,
+    const uint32_t &num_cores,
+    const uint32_t &num_cores_y,
+    const uint32_t &num_cores_x,
+    const CoreRangeSet &core_group_1,
+    const CoreRangeSet &core_group_2,
+    const uint32_t &num_tiles_per_core_group_1,
+    const uint32_t &num_tiles_per_core_group_2,
+    const tt_metal::KernelID &kernel,
     const uint32_t &input_buffer_addr,
-    const uint32_t &num_tiles_per_core,
     const uint32_t &num_reqs_at_a_time,
     const uint32_t &single_tile_size,
     const tt::DataFormat &tile_format);
@@ -68,10 +69,14 @@ bool validation(
     tt_metal::Device *device,
     tt_metal::Buffer &input_buffer,
     std::vector<uint32_t> &input_vec,
+    const uint32_t &num_cores,
     const uint32_t &num_cores_y,
     const uint32_t &num_cores_x,
+    const CoreRangeSet &core_group_1,
+    const CoreRangeSet &core_group_2,
+    const uint32_t &num_tiles_per_core_group_1,
+    const uint32_t &num_tiles_per_core_group_2,
     const uint32_t &cb_addr,
-    const uint32_t &num_tiles_per_core,
     const uint32_t &num_reqs_at_a_time,
     const uint32_t &single_tile_size,
     const uint32_t &access_type);
@@ -90,19 +95,15 @@ int main(int argc, char **argv) {
         std::vector<std::string> input_args(argv, argv + argc);
         uint64_t input_size;
         uint32_t access_type;
-        uint32_t num_reqs_at_a_time = 1;
         try {
             std::tie(input_size, input_args) =
                 test_args::get_command_option_uint64_and_remaining_args(input_args, "--input-size", 512 * 1024 * 1024);
             std::tie(access_type, input_args) =
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--access-type", 0);
-            /* std::tie(num_reqs_at_a_time, input_args) =
-                test_args::get_command_option_uint32_and_remaining_args(input_args, "--num-reqs-at-a-time", 1); */
         } catch (const std::exception &e) {
             log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
             TT_ASSERT(false);
         }
-
         TT_ASSERT(input_size != 0, "--input-size should not be zero");
 
         tt::DataFormat tile_format = tt::DataFormat::Float16_b;
@@ -122,22 +123,18 @@ int main(int argc, char **argv) {
         int device_id = 0;
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
         uint32_t num_tiles = static_cast<uint32_t>((input_size + single_tile_size - 1) / single_tile_size);
-        auto [num_cores_x, num_cores_y, num_cores] = get_num_cores_for_given_input(device, input_size, num_tiles);
-
-        uint32_t num_tiles_per_core = num_tiles / num_cores;
-        if (num_tiles_per_core % num_reqs_at_a_time != 0) {
-            log_error(
-                LogTest,
-                "{} input tiles per core should be divided by --num-of-reqs-at-a-time {} value",
-                num_tiles_per_core,
-                num_reqs_at_a_time);
-            TT_ASSERT(false);
-        }
+        auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+        uint32_t num_cores_x = compute_with_storage_grid_size.x;
+        uint32_t num_cores_y = compute_with_storage_grid_size.y;
+        auto
+            [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
+                split_work_to_cores(compute_with_storage_grid_size, num_tiles);
 
         log_info(
             LogTest,
-            "Measuring DRAM bandwidth for input_size = {} bytes ({} tiles), using {} cores",
+            "Measuring DRAM bandwidth for input_size = {} bytes ({:.3f} MB, {} tiles), using {} cores",
             input_size,
+            static_cast<double>(input_size) / 1024 / 1024,
             num_tiles,
             num_cores);
 
@@ -152,16 +149,21 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        auto [program, reader_kernel, cb_addr] =
-            create_program(device, num_cores_y, num_cores_x, num_reqs_at_a_time, single_tile_size, tile_format, access_type);
+        uint32_t num_reqs_at_a_time = 1;
+        auto [program, kernel, cb_addr] =
+            create_program(device, all_cores, num_reqs_at_a_time, single_tile_size, tile_format, access_type);
         pass &= assign_runtime_args_to_program(
             device,
             program,
+            num_cores,
             num_cores_y,
             num_cores_x,
-            reader_kernel,
+            core_group_1,
+            core_group_2,
+            num_tiles_per_core_group_1,
+            num_tiles_per_core_group_2,
+            kernel,
             input_buffer.address(),
-            num_tiles_per_core,
             num_reqs_at_a_time,
             single_tile_size,
             tile_format);
@@ -172,17 +174,20 @@ int main(int argc, char **argv) {
         if (access_type == 0) {
             tt_metal::WriteToBuffer(input_buffer, input_vec);
         } else {
-            for (int y = 0; y < num_cores_y; ++y) {
-                for (int x = 0; x < num_cores_x; ++x) {
-                    CoreCoord core = {(size_t)x, (size_t)y};
-                    auto input_offset = num_tiles_per_core * 512 * (y * num_cores_x + x);
-                    auto write_size = num_reqs_at_a_time * 512;
-                    auto sliced_input = slice(
-                        input_vec,
-                        input_offset,
-                        input_offset + write_size - 1);
-                    tt_metal::detail::WriteToDeviceL1(device, core, cb_addr, sliced_input);
+            for (uint32_t i = 0, input_offset = 0; i < num_cores; ++i) {
+                CoreCoord core = {i / num_cores_y, i % num_cores_y};
+                uint32_t num_tiles_per_core;
+                if (core_group_1.core_coord_in_core_ranges(core)) {
+                    num_tiles_per_core = num_tiles_per_core_group_1;
+                } else if (core_group_2.core_coord_in_core_ranges(core)) {
+                    num_tiles_per_core = num_tiles_per_core_group_2;
+                } else {
+                    TT_ASSERT(false, "Core not in specified core ranges");
                 }
+                auto write_size = num_reqs_at_a_time * 512;
+                auto sliced_input = slice(input_vec, input_offset, input_offset + write_size - 1);
+                tt_metal::detail::WriteToDeviceL1(device, core, cb_addr, sliced_input);
+                input_offset += (num_tiles_per_core) * 512;
             }
         }
 
@@ -201,7 +206,21 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
-        pass = validation(device, input_buffer, input_vec, num_cores_y, num_cores_x, cb_addr, num_tiles_per_core, num_reqs_at_a_time, single_tile_size, access_type);
+        pass = validation(
+            device,
+            input_buffer,
+            input_vec,
+            num_cores,
+            num_cores_y,
+            num_cores_x,
+            core_group_1,
+            core_group_2,
+            num_tiles_per_core_group_1,
+            num_tiles_per_core_group_2,
+            cb_addr,
+            num_reqs_at_a_time,
+            single_tile_size,
+            access_type);
 
     } catch (const std::exception &e) {
         pass = false;
@@ -238,51 +257,6 @@ int main(int argc, char **argv) {
     return 0;
 }
 
-std::tuple<uint32_t, uint32_t, uint32_t> get_num_cores_for_given_input(
-    tt_metal::Device *device, const uint64_t &input_size, const uint32_t &num_tiles) {
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    uint32_t num_cores = num_cores_x * num_cores_y;
-
-    if (num_tiles % num_cores != 0) {
-        std::vector<std::tuple<uint32_t, uint32_t>> core_candidates;
-        for (uint32_t y = 1; y <= num_cores_y; ++y) {
-            for (uint32_t x = 1; x <= num_cores_x; ++x) {
-                if (num_tiles % (x * y) == 0) {
-                    core_candidates.push_back({y, x});
-                }
-            }
-        }
-        uint32_t num_proper_cores = 1;
-        uint32_t num_proper_cores_x = 1;
-        uint32_t num_proper_cores_y = 1;
-        for (auto &core : core_candidates) {
-            uint32_t y = std::get<0>(core);
-            uint32_t x = std::get<1>(core);
-            if (x * y >= num_proper_cores) {
-                num_proper_cores_x = x;
-                num_proper_cores_y = y;
-                num_proper_cores = x * y;
-            }
-        }
-        TT_ASSERT(num_proper_cores != 0, "input tiles cannot bt divided");
-        log_warning(
-            LogTest,
-            "{} input tiles should be divided by {} cores. This run use {} x {} = {} cores",
-            num_tiles,
-            num_cores,
-            num_proper_cores_y,
-            num_proper_cores_x,
-            num_proper_cores);
-        num_cores_x = num_proper_cores_x;
-        num_cores_y = num_proper_cores_y;
-        num_cores = num_proper_cores;
-    }
-
-    return {num_cores_x, num_cores_y, num_cores};
-}
-
 inline std::vector<std::uint32_t> create_random_vector_of_bfloat16(
     uint64_t num_bytes, int rand_max_float, int seed, float offset) {
     auto rand_float = std::bind(std::uniform_real_distribution<float>(0, rand_max_float), std::mt19937(seed));
@@ -312,70 +286,66 @@ std::vector<T> slice(std::vector<T> const &v, int m, int n) {
 
 std::tuple<tt_metal::Program, tt_metal::KernelID, uint32_t> create_program(
     tt_metal::Device *device,
-    const int &num_cores_y,
-    const int &num_cores_x,
+    const CoreRangeSet &all_cores,
     const uint32_t &num_reqs_at_a_time,
     const uint32_t &single_tile_size,
     const tt::DataFormat &tile_format,
     const uint32_t &access_type) {
     tt_metal::Program program = tt_metal::Program();
-    CoreCoord start_core = {0, 0};
-    CoreCoord end_core = {(std::size_t)num_cores_x - 1, (std::size_t)num_cores_y - 1};
-    CoreRange all_cores{.start = start_core, .end = end_core};
 
-    uint32_t cb_addr = L1_UNRESERVED_BASE;
+    uint32_t cb_index = 0;
     uint32_t cb_tiles = num_reqs_at_a_time;
-    uint32_t cb_size = cb_tiles * single_tile_size;
-    for (int y = 0; y < num_cores_y; y++) {
-        for (int x = 0; x < num_cores_x; x++) {
-            int core_index = y * num_cores_x + x;
-            CoreCoord core = {(std::size_t)x, (std::size_t)y};
-            uint32_t cb_index = 0;
-            auto cb = tt_metal::CreateCircularBuffer(program, cb_index, core, cb_tiles, cb_size, tile_format, cb_addr);
-        }
-    }
+    auto cb = tt_metal::CreateCircularBuffers(
+        program, cb_index, all_cores, cb_tiles, cb_tiles * single_tile_size, tile_format);
 
     auto reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        (access_type == 0)
-        ? "tests/tt_metal/tt_metal/perf_microbenchmark/6_dram_offchip/kernels/reader_dram.cpp"
-        : "tests/tt_metal/tt_metal/perf_microbenchmark/6_dram_offchip/kernels/writer_dram.cpp",
+        (access_type == 0) ? "tests/tt_metal/tt_metal/perf_microbenchmark/6_dram_offchip/kernels/reader_dram.cpp"
+                           : "tests/tt_metal/tt_metal/perf_microbenchmark/6_dram_offchip/kernels/writer_dram.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
-            .processor =
-                (access_type == 0) ? tt_metal::DataMovementProcessor::RISCV_1 : tt_metal::DataMovementProcessor::RISCV_0,
+            .processor = (access_type == 0) ? tt_metal::DataMovementProcessor::RISCV_1
+                                            : tt_metal::DataMovementProcessor::RISCV_0,
             .noc = (access_type == 0) ? tt_metal::NOC::RISCV_1_default : tt_metal::NOC::RISCV_0_default});
-    return {std::move(program), reader_kernel, cb_addr};
+    return {std::move(program), reader_kernel, cb.address()};
 }
 
 bool assign_runtime_args_to_program(
     tt_metal::Device *device,
     tt_metal::Program &program,
-    const int &num_cores_y,
-    const int &num_cores_x,
-    const tt_metal::KernelID &reader_kernel,
+    const uint32_t &num_cores,
+    const uint32_t &num_cores_y,
+    const uint32_t &num_cores_x,
+    const CoreRangeSet &core_group_1,
+    const CoreRangeSet &core_group_2,
+    const uint32_t &num_tiles_per_core_group_1,
+    const uint32_t &num_tiles_per_core_group_2,
+    const tt_metal::KernelID &kernel,
     const uint32_t &input_buffer_addr,
-    const uint32_t &num_tiles_per_core,
     const uint32_t &num_reqs_at_a_time,
     const uint32_t &single_tile_size,
     const tt::DataFormat &tile_format) {
     bool pass = true;
-
-    uint32_t num_blocks = num_tiles_per_core / num_reqs_at_a_time;
-    for (int core_idx_y = 0; core_idx_y < num_cores_y; core_idx_y++) {
-        for (int core_idx_x = 0; core_idx_x < num_cores_x; core_idx_x++) {
-            CoreCoord core = {(std::size_t)core_idx_x, (std::size_t)core_idx_y};
-
-            std::vector<uint32_t> reader_args = {
-                (std::uint32_t)input_buffer_addr,
-                (std::uint32_t)(num_tiles_per_core * (core_idx_y * num_cores_x + core_idx_x)),
-                (std::uint32_t)num_blocks,
-                (std::uint32_t)num_reqs_at_a_time};
-
-            tt_metal::SetRuntimeArgs(program, reader_kernel, core, reader_args);
+    for (uint32_t i = 0, num_tiles_used = 0; i < num_cores; ++i) {
+        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        uint32_t num_tiles_per_core;
+        if (core_group_1.core_coord_in_core_ranges(core)) {
+            num_tiles_per_core = num_tiles_per_core_group_1;
+        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+            num_tiles_per_core = num_tiles_per_core_group_2;
+        } else {
+            TT_ASSERT(false, "Core not in specified core ranges");
         }
-    }
+        uint32_t num_blocks = num_tiles_per_core / num_reqs_at_a_time;
+        std::vector<uint32_t> kernel_args = {
+            (std::uint32_t)input_buffer_addr,
+            (std::uint32_t)(num_tiles_used),
+            (std::uint32_t)num_blocks,
+            (std::uint32_t)num_reqs_at_a_time};
 
+        tt_metal::SetRuntimeArgs(program, kernel, core, kernel_args);
+        num_tiles_used += num_tiles_per_core;
+    }
     return pass;
 }
 
@@ -383,57 +353,76 @@ bool validation(
     tt_metal::Device *device,
     tt_metal::Buffer &input_buffer,
     std::vector<uint32_t> &input_vec,
+    const uint32_t &num_cores,
     const uint32_t &num_cores_y,
     const uint32_t &num_cores_x,
+    const CoreRangeSet &core_group_1,
+    const CoreRangeSet &core_group_2,
+    const uint32_t &num_tiles_per_core_group_1,
+    const uint32_t &num_tiles_per_core_group_2,
     const uint32_t &cb_addr,
-    const uint32_t &num_tiles_per_core,
     const uint32_t &num_reqs_at_a_time,
     const uint32_t &single_tile_size,
     const uint32_t &access_type) {
-
     if (access_type == 0) {
         auto input_bf16 = unpack_uint32_vec_into_bfloat16_vec(input_vec);
-        for (int y = 0; y < num_cores_y; ++y) {
-            for (int x = 0; x < num_cores_x; ++x) {
-                std::vector<uint32_t> result_vec;
-                CoreCoord core = {(size_t)x, (size_t)y};
-                tt_metal::detail::ReadFromDeviceL1(
-                    device, core, cb_addr, num_reqs_at_a_time * single_tile_size, result_vec);
-                auto result_bf16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
-
-                auto input_offset = num_tiles_per_core * (y * num_cores_x + x + 1);
-                auto sliced_input = slice(
-                    input_bf16,
-                    (input_offset - num_reqs_at_a_time) * constants::TILE_HW,
-                    input_offset * constants::TILE_HW - 1);
-
-                if (!(sliced_input == result_bf16)) {
-                    return false;
-                }
+        for (uint32_t i = 0, input_offset = 0; i < num_cores; ++i) {
+            CoreCoord core = {i / num_cores_y, i % num_cores_y};
+            uint32_t num_tiles_per_core;
+            if (core_group_1.core_coord_in_core_ranges(core)) {
+                num_tiles_per_core = num_tiles_per_core_group_1;
+            } else if (core_group_2.core_coord_in_core_ranges(core)) {
+                num_tiles_per_core = num_tiles_per_core_group_2;
+            } else {
+                TT_ASSERT(false, "Core not in specified core ranges");
             }
+
+            std::vector<uint32_t> result_vec;
+            tt_metal::detail::ReadFromDeviceL1(
+                device, core, cb_addr, num_reqs_at_a_time * single_tile_size, result_vec);
+            auto result_bf16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
+            auto sliced_input = slice(
+                input_bf16,
+                (input_offset + num_tiles_per_core - num_reqs_at_a_time) * constants::TILE_HW,
+                (input_offset + num_tiles_per_core) * constants::TILE_HW - 1);
+
+            if (!(sliced_input == result_bf16)) {
+                return false;
+            }
+
+            input_offset += num_tiles_per_core;
         }
     } else {
         std::vector<uint32_t> result_vec;
         log_info(LogTest, "ReadFromBuffer API may take a long time if the input size is large");
         tt_metal::ReadFromBuffer(input_buffer, result_vec);
         log_info(LogTest, "ReadFromBuffer API done");
-        uint32_t num_blocks = num_tiles_per_core / num_reqs_at_a_time;
-        for (int y = 0; y < num_cores_y; ++y) {
-            for (int x = 0; x < num_cores_x; ++x) {
-                auto input_offset = num_tiles_per_core * 512 * (y * num_cores_x + x);
-                auto write_size = num_reqs_at_a_time * 512;
-                auto sliced_input = slice(input_vec, input_offset, input_offset + write_size - 1);
-                for (int block = 0; block < num_blocks; ++block) {
-                    for (int req = 0; req < num_reqs_at_a_time * 512; ++req) {
-                        auto index = input_offset + block * (num_reqs_at_a_time * 512) + req;
-                        if (result_vec[index] != sliced_input[req]) {
-                            return false;
-                        }
+
+        for (uint32_t i = 0, input_offset = 0; i < num_cores; ++i) {
+            CoreCoord core = {i / num_cores_y, i % num_cores_y};
+            uint32_t num_tiles_per_core;
+            if (core_group_1.core_coord_in_core_ranges(core)) {
+                num_tiles_per_core = num_tiles_per_core_group_1;
+            } else if (core_group_2.core_coord_in_core_ranges(core)) {
+                num_tiles_per_core = num_tiles_per_core_group_2;
+            } else {
+                TT_ASSERT(false, "Core not in specified core ranges");
+            }
+
+            uint32_t num_blocks = num_tiles_per_core / num_reqs_at_a_time;
+
+            auto write_size = num_reqs_at_a_time * 512;
+            auto sliced_input = slice(input_vec, input_offset, input_offset + write_size - 1);
+            for (int block = 0; block < num_blocks; ++block) {
+                for (int req = 0; req < num_reqs_at_a_time * 512; ++req) {
+                    auto index = input_offset + block * (num_reqs_at_a_time * 512) + req;
+                    if (result_vec[index] != sliced_input[req]) {
+                        return false;
                     }
                 }
             }
+            input_offset += (num_tiles_per_core) * 512;
         }
     }
-
     return true;
 }
