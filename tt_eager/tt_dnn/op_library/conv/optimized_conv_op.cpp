@@ -74,36 +74,36 @@ void create_CBs(tt_metal::Program &program,
     // Invariants
     CircularBufferConfig cb_act_config = CircularBufferConfig(num_cb0_tiles * single_tile_size, {{act_cb, tt::DataFormat::Float16_b}})
 		.set_page_size(act_cb, single_tile_size);
-    auto cb_act = tt_metal::CreateCircularBuffers(program, core, cb_act_config);
+    auto cb_act = tt_metal::CreateCircularBuffer(program, core, cb_act_config);
 
     CircularBufferConfig cb_weight_config = CircularBufferConfig(num_cb1_tiles * single_tile_size, {{weight_cb, tt::DataFormat::Float16_b}})
 		.set_page_size(weight_cb, single_tile_size);
-    auto cb_weight = tt_metal::CreateCircularBuffers(program, core, cb_weight_config);
+    auto cb_weight = tt_metal::CreateCircularBuffer(program, core, cb_weight_config);
 
     // Used for placing tilized activations
     CircularBufferConfig cb_src0_tilized_config = CircularBufferConfig(num_cb0_tilized_tiles * single_tile_size, {{tilize_mode_tilized_act_cb, tt::DataFormat::Float16_b}})
 		.set_page_size(tilize_mode_tilized_act_cb, single_tile_size);
-    auto cb_src0_tilized = tt_metal::CreateCircularBuffers(program, core, cb_src0_tilized_config);
+    auto cb_src0_tilized = tt_metal::CreateCircularBuffer(program, core, cb_src0_tilized_config);
 
     if (untilize_out) {
         CircularBufferConfig cb_matmul_partials_config = CircularBufferConfig(num_output_tiles * single_tile_size, {{matmul_partials_cb, tt::DataFormat::Float16_b}})
 		    .set_page_size(matmul_partials_cb, single_tile_size);
-        auto cb_matmul_partials = tt_metal::CreateCircularBuffers(program, core, cb_matmul_partials_config);
+        auto cb_matmul_partials = tt_metal::CreateCircularBuffer(program, core, cb_matmul_partials_config);
 
         // Shares same address space as matmul partials
         CircularBufferConfig cb_final_matmul_partials_config = CircularBufferConfig(num_output_tiles * single_tile_size, {{untilize_mode_final_matmul_partials_cb, tt::DataFormat::Float16_b}})
 		    .set_page_size(untilize_mode_final_matmul_partials_cb, single_tile_size);
-        auto cb_final_matmul_partials = tt_metal::CreateCircularBuffers(program, core, cb_final_matmul_partials_config);
+        auto cb_final_matmul_partials = tt_metal::CreateCircularBuffer(program, core, cb_final_matmul_partials_config);
 
         // Supposed to be a small CB only responsible for reorganizing
         // the output blocks to fill the whole "per core output block width"
         CircularBufferConfig cb_reblock_config = CircularBufferConfig(num_reblock_cb_tiles * single_tile_size, {{untilize_mode_reblock_cb, tt::DataFormat::Float16_b}})
 		    .set_page_size(untilize_mode_reblock_cb, single_tile_size);
-        auto cb_reblock = tt_metal::CreateCircularBuffers(program, core, cb_reblock_config);
+        auto cb_reblock = tt_metal::CreateCircularBuffer(program, core, cb_reblock_config);
 
         CircularBufferConfig cb_output_config = CircularBufferConfig(num_writer_output_tiles * single_tile_size, {{out0_cb, tt::DataFormat::Float16_b}})
 		    .set_page_size(out0_cb, single_tile_size);
-        auto cb_output = tt_metal::CreateCircularBuffers(program, core, cb_output_config);
+        auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
     } else {
         CoreRangeSet cores(std::set<CoreRange>({core}));
         std::map<uint8_t, tt::DataFormat> cb_output_data_format_spec = {
@@ -113,7 +113,7 @@ void create_CBs(tt_metal::Program &program,
         CircularBufferConfig cb_matmul_partials_config = CircularBufferConfig(num_output_tiles * single_tile_size, cb_output_data_format_spec)
 		    .set_page_size(out0_cb, single_tile_size)
             .set_page_size(matmul_partials_cb, single_tile_size);
-        auto cb_matmul_partials = tt_metal::CreateCircularBuffers(program, cores, cb_matmul_partials_config);
+        auto cb_matmul_partials = tt_metal::CreateCircularBuffer(program, cores, cb_matmul_partials_config);
     }
 
     if (with_bias) {
@@ -121,12 +121,12 @@ void create_CBs(tt_metal::Program &program,
         uint32_t bias_pagesize = single_tile_size;
         CircularBufferConfig cb_bias_config = CircularBufferConfig(bias_ntiles * bias_pagesize, {{bias_cb, tt::DataFormat::Float16_b}})
 		    .set_page_size(bias_cb, bias_pagesize);
-        auto cb_bias = tt_metal::CreateCircularBuffers(program, core, cb_bias_config);
+        auto cb_bias = tt_metal::CreateCircularBuffer(program, core, cb_bias_config);
 
         // intermed mm output
         CircularBufferConfig cb_out_for_bias_config = CircularBufferConfig(num_output_tiles * single_tile_size, {{bias_cb, tt::DataFormat::Float16_b}})
 		    .set_page_size(bias_cb, single_tile_size);
-        auto cb_out_for_bias = tt_metal::CreateCircularBuffers(program, core, cb_out_for_bias_config);
+        auto cb_out_for_bias = tt_metal::CreateCircularBuffer(program, core, cb_out_for_bias_config);
         log_debug("BIAS CBs: {} {} {}", bias_cb, bias_ntiles, bias_pagesize);
     }
 }

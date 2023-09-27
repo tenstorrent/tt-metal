@@ -134,20 +134,20 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
         uint32_t cb0_tiles = M * 2;
         tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(cb0_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, single_tile_size);
-        auto cb_src0 = tt_metal::CreateCircularBuffers(program, core, cb_src0_config);
+        auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
         uint32_t src1_cb_index = 1;
         uint32_t cb1_tiles = N * 2;
         tt_metal::CircularBufferConfig cb_src1_config = tt_metal::CircularBufferConfig(cb1_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src1_cb_index, single_tile_size);
-        auto cb_src1 = tt_metal::CreateCircularBuffers(program, core, cb_src1_config);
+        auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
         if (with_bias) {
             uint32_t src2_cb_index = 2;
             uint32_t cb2_tiles = N * 2;
             tt_metal::CircularBufferConfig cb_src2_config = tt_metal::CircularBufferConfig(cb2_tiles * single_tile_size, {{src2_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(src2_cb_index, single_tile_size);
-            auto cb_src2 = tt_metal::CreateCircularBuffers(program, core, cb_src2_config);
+            auto cb_src2 = tt_metal::CreateCircularBuffer(program, core, cb_src2_config);
         }
 
         // NOTE: intermediate and output CB share same address space since we operate it on it sequentially, not in parallel
@@ -163,7 +163,7 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
         tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, partials_and_out_data_format_spec)
             .set_page_size(ouput_cb_index, single_tile_size)
             .set_page_size(intermediate_cb_index, single_tile_size);
-        auto cb_output = tt_metal::CreateCircularBuffers(program, cores, cb_output_config);
+        auto cb_output = tt_metal::CreateCircularBuffer(program, cores, cb_output_config);
 
         string reader_kernel = "tt_metal/kernels/dataflow/reader_matmul_with_bias_blocked.cpp";
 

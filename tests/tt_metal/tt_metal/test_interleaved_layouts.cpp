@@ -116,12 +116,12 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
         uint32_t num_input_tiles = num_tiles_c;
         tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, single_tile_size);
-        auto cb_src0 = tt_metal::CreateCircularBuffers(program, core, cb_src0_config);
+        auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
         uint32_t ouput_cb_index = 16; // output operands start at index 16
         tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(ouput_cb_index, single_tile_size);
-        auto cb_output = tt_metal::CreateCircularBuffers(program, core, cb_output_config);
+        auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
         auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
@@ -282,12 +282,12 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
         uint32_t num_input_tiles = num_tiles_c;
         tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, single_tile_size);
-        auto cb_src0 = tt_metal::CreateCircularBuffers(program, core, cb_src0_config);
+        auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
         uint32_t ouput_cb_index = 16; // output operands start at index 16
         tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(ouput_cb_index, single_tile_size);
-        auto cb_output = tt_metal::CreateCircularBuffers(program, core, cb_output_config);
+        auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
         auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
@@ -402,11 +402,11 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
 
     tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(2 * num_bytes_per_page, {{0, tt::DataFormat::Float16_b}})
         .set_page_size(0, num_bytes_per_page);
-    auto cb_src0 = tt_metal::CreateCircularBuffers(program, core, cb_src0_config);
+    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(2 * num_bytes_per_page, {{16, tt::DataFormat::Float16_b}})
         .set_page_size(16, num_bytes_per_page);
-    auto cb_output = tt_metal::CreateCircularBuffers(program, core, cb_output_config);
+    auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
     auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,

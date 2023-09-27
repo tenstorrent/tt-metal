@@ -160,7 +160,7 @@ int main(int argc, char **argv) {
     u32 cb_tiles = cb_n;  // cb can be smaller than l1 buffer.
     tt_metal::CircularBufferConfig cb_dst_config = tt_metal::CircularBufferConfig(cb_tiles * single_tile_size, {{dst_cb_index, data_format}}, dst_cb_addr)
       .set_page_size(dst_cb_index, single_tile_size);
-    auto cb_dst = tt_metal::CreateCircularBuffers(program, all_cores, cb_dst_config);
+    auto cb_dst = tt_metal::CreateCircularBuffer(program, all_cores, cb_dst_config);
 
     u32 activations_addr = dst_cb_addr + (cb_tiles * single_tile_size);
     uint32_t total_tiles_size_bytes = Nt * single_tile_size;

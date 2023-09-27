@@ -72,13 +72,13 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
     uint32_t num_input_tiles = num_tiles_per_block;
     tt_metal::CircularBufferConfig src0_cb_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
 		.set_page_size(src0_cb_index, single_tile_size);
-	auto cb_src0 = tt_metal::CreateCircularBuffers(program, core, src0_cb_config);
+	auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, src0_cb_config);
 
     uint32_t output_cb_index = 16; // output operands start at index 16
     uint32_t num_output_tiles = num_tiles_per_block;
     tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, cb_data_format}})
 		.set_page_size(output_cb_index, single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffers(program, core, cb_output_config);
+    auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
     vector<uint32_t> reader_kernel_args = {
         src0_buffer->address(),
@@ -309,13 +309,13 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
     assert(num_input_tiles > 0);
     tt_metal::CircularBufferConfig src0_cb_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
 		.set_page_size(src0_cb_index, single_tile_size);
-	auto cb_src0 = tt_metal::CreateCircularBuffers(program, core, src0_cb_config);
+	auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, src0_cb_config);
 
     uint32_t output_cb_index = 16; // output operands start at index 16
     uint32_t num_output_tiles = num_tiles_per_block;
     tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, cb_data_format}})
 		.set_page_size(output_cb_index, single_tile_size);
-	auto cb_output = tt_metal::CreateCircularBuffers(program, core, cb_output_config);
+	auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});

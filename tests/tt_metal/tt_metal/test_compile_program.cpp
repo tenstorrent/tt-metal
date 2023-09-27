@@ -104,13 +104,13 @@ Program create_program(Device *device, const ProgramAttributes &program_attribut
     uint32_t num_input_tiles = 8;
     tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{program_attributes.src_cb_index, program_attributes.data_format}})
         .set_page_size(program_attributes.src_cb_index, single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffers(program, core, cb_src0_config);
+    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     // output operands start at index 16
     uint32_t num_output_tiles = 1;
     tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, {{program_attributes.output_cb_index, program_attributes.data_format}})
         .set_page_size(program_attributes.output_cb_index, single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffers(program, core, cb_output_config);
+    auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
     auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,

@@ -75,13 +75,13 @@ int main(int argc, char **argv) {
         // this buffer is used in transpose_hc.cpp NCRISC kernel
         tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_buffer_tiles * single_tile_bytes, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, single_tile_bytes);
-        auto cb_src0 = tt_metal::CreateCircularBuffers(program, core, cb_src0_config);
+        auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
         uint32_t ouput_cb_index = 16; // output operands start at index 16
         // this buffer is used in writer_unary.cpp BRISC kernel
         tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_buffer_tiles * single_tile_bytes, {{ouput_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(ouput_cb_index, single_tile_bytes);
-        auto cb_output = tt_metal::CreateCircularBuffers(program, core, cb_output_config);
+        auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
         u32 W = shape[3], H = shape[2], C = shape[1], N = shape[0];
         u32 HW = H*W;

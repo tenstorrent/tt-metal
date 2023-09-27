@@ -60,7 +60,7 @@ namespace tt::test::buffer::detail {
 
         tt_metal::CircularBufferConfig l1_cb_config = tt_metal::CircularBufferConfig(byte_size, {{cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(cb_index, page_size);
-        auto l1_cb = tt_metal::CreateCircularBuffers(program, core, l1_cb_config);
+        auto l1_cb = tt_metal::CreateCircularBuffer(program, core, l1_cb_config);
 
         auto reader_kernel = tt_metal::CreateDataMovementKernel(
             program,

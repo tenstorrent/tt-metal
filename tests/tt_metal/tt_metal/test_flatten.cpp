@@ -112,13 +112,13 @@ int main(int argc, char **argv) {
         uint32_t num_input_tiles = 8;
         tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, single_tile_size);
-        auto cb_src0 = tt_metal::CreateCircularBuffers(program, core, cb_src0_config);
+        auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
         uint32_t ouput_cb_index = 16; // output operands start at index 16
         uint32_t num_output_tiles = 1;
         tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(ouput_cb_index, single_tile_size);
-        auto cb_output = tt_metal::CreateCircularBuffers(program, core, cb_output_config);
+        auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
         auto flatten_kernel = tt_metal::CreateDataMovementKernel(
             program,

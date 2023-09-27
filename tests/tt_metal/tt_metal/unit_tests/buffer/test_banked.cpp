@@ -76,7 +76,7 @@ bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked
     constexpr uint32_t num_pages_cb = 1;
     CircularBufferConfig input_buffer_cb_config = CircularBufferConfig(cfg.page_size_bytes, {{cb_id, cfg.l1_data_format}})
         .set_page_size(cb_id, cfg.page_size_bytes);
-    auto input_buffer_cb = CreateCircularBuffers(program, cfg.logical_core, input_buffer_cb_config);
+    auto input_buffer_cb = CreateCircularBuffer(program, cfg.logical_core, input_buffer_cb_config);
 
     bool input_is_dram = cfg.input_buffer_type == BufferType::DRAM;
     bool output_is_dram = cfg.output_buffer_type == BufferType::DRAM;
@@ -158,11 +158,11 @@ bool reader_datacopy_writer(Device* device, const BankedConfig& cfg) {
     constexpr uint32_t num_pages_cb = 1;
     CircularBufferConfig l1_input_cb_config = CircularBufferConfig(cfg.page_size_bytes, {{input0_cb_index, cfg.l1_data_format}})
         .set_page_size(input0_cb_index, cfg.page_size_bytes);
-    auto l1_input_cb = CreateCircularBuffers(program, cfg.logical_core, l1_input_cb_config);
+    auto l1_input_cb = CreateCircularBuffer(program, cfg.logical_core, l1_input_cb_config);
 
     CircularBufferConfig l1_output_cb_config = CircularBufferConfig(cfg.page_size_bytes, {{output_cb_index, cfg.l1_data_format}})
         .set_page_size(output_cb_index, cfg.page_size_bytes);
-    auto l1_output_cb = CreateCircularBuffers(program, cfg.logical_core, l1_output_cb_config);
+    auto l1_output_cb = CreateCircularBuffer(program, cfg.logical_core, l1_output_cb_config);
 
     bool input_is_dram = cfg.input_buffer_type == BufferType::DRAM;
     bool output_is_dram = cfg.output_buffer_type == BufferType::DRAM;

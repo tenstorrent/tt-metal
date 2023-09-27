@@ -39,14 +39,14 @@ tt_metal::Program generate_eltwise_unary_program(Device *device) {
     uint32_t num_input_tiles = 2;
     tt_metal::CircularBufferConfig src_cb_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}}, src0_cb_addr)
         .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffers(program, core, src_cb_config);
+    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, src_cb_config);
 
     uint32_t ouput_cb_index = 16;  // output operands start at index 16
     uint32_t output_cb_addr = 400 * 1024;
     uint32_t num_output_tiles = 2;
     tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}}, output_cb_addr)
         .set_page_size(ouput_cb_index, single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffers(program, core, cb_output_config);
+    auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
     auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,

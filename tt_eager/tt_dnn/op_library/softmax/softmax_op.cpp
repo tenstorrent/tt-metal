@@ -174,22 +174,22 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
     // see softmax.cpp for which buffers are needed
 
     CircularBufferConfig c_in0_config = CircularBufferConfig(in0_t * in0_tile_size, {{CB::c_in0, in0_cb_data_format}}).set_page_size(CB::c_in0, in0_tile_size);
-    CreateCircularBuffers( program, all_cores, c_in0_config);
+    CreateCircularBuffer( program, all_cores, c_in0_config);
     CircularBufferConfig c_out0_config = CircularBufferConfig(out0_t * in0_tile_size, {{CB::c_out0, in0_cb_data_format}}).set_page_size(CB::c_out0, in0_tile_size);
-    CreateCircularBuffers( program, all_cores, c_out0_config );
+    CreateCircularBuffer( program, all_cores, c_out0_config );
     CircularBufferConfig c_intermed1_config = CircularBufferConfig(im1_t * in0_tile_size, {{CB::c_intermed1, in0_cb_data_format}}).set_page_size(CB::c_intermed1, in0_tile_size);
-    CreateCircularBuffers( program, all_cores, c_intermed1_config );
+    CreateCircularBuffer( program, all_cores, c_intermed1_config );
     CircularBufferConfig c_in2_config = CircularBufferConfig(in2_t * scalar_tile_size, {{CB::c_in2, DataFormat::Float16_b}}).set_page_size(CB::c_in2, scalar_tile_size);
-    CreateCircularBuffers( program, all_cores, c_in2_config );
+    CreateCircularBuffer( program, all_cores, c_in2_config );
     CircularBufferConfig c_intermed0_config = CircularBufferConfig(im0_t * in0_tile_size, {{CB::c_intermed0, in0_cb_data_format}}).set_page_size(CB::c_intermed0, in0_tile_size);
-    CreateCircularBuffers( program, all_cores, c_intermed0_config );
+    CreateCircularBuffer( program, all_cores, c_intermed0_config );
     if (mask.has_value()) {
         CircularBufferConfig c_intermed3_config = CircularBufferConfig(im3_t * in0_tile_size, {{CB::c_intermed3, in0_cb_data_format}}).set_page_size(CB::c_intermed3, in0_tile_size);
-        CreateCircularBuffers( program, all_cores, c_intermed3_config );
+        CreateCircularBuffer( program, all_cores, c_intermed3_config );
         CircularBufferConfig c_in3_config = CircularBufferConfig(in3_t * scalar_tile_size, {{CB::c_in3, DataFormat::Float16_b}}).set_page_size(CB::c_in3, scalar_tile_size);
-        CreateCircularBuffers( program, all_cores, c_in3_config );
+        CreateCircularBuffer( program, all_cores, c_in3_config );
         CircularBufferConfig c_in4_config = CircularBufferConfig(in4_t * mask_tile_size, {{CB::c_in4, mask_cb_data_format}}).set_page_size(CB::c_in4, mask_tile_size);
-        CreateCircularBuffers( program, all_cores, c_in4_config);
+        CreateCircularBuffer( program, all_cores, c_in4_config);
     }
     uint32_t src_addr = src0_dram_buffer->address();
     uint32_t mask_addr = mask.has_value() ? mask.value().buffer()->address() : 0;

@@ -175,7 +175,7 @@ int main(int argc, char **argv) {
         for (auto core : cores) {
             tt_metal::CircularBufferConfig cb_config = tt_metal::CircularBufferConfig(cb_size_bytes, {{cb_index, tt::DataFormat::Float16_b}}, cb_addr)
                 .set_page_size(cb_index, single_tile_size);
-            auto cb = tt_metal::CreateCircularBuffers(program, core, cb_config);
+            auto cb = tt_metal::CreateCircularBuffer(program, core, cb_config);
         }
 
         /// used only if IO data in DRAM

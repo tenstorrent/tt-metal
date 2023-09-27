@@ -354,19 +354,19 @@ int main(int argc, char **argv) {
     uint32_t cb_activations_tiles = per_core_activations_tiles;
     tt_metal::CircularBufferConfig cb_activations_config = tt_metal::CircularBufferConfig(cb_activations_tiles * single_tile_size, {{cb_activations_index, data_format}}, activations_addr)
       .set_page_size(cb_activations_index, single_tile_size);
-    auto cb_activations = tt_metal::CreateCircularBuffers(program, all_cores, cb_activations_config);
+    auto cb_activations = tt_metal::CreateCircularBuffer(program, all_cores, cb_activations_config);
 
     uint32_t cb_weights_index = 1;
     uint32_t cb_weights_tiles = per_core_weights_tiles;
     tt_metal::CircularBufferConfig cb_weights_config = tt_metal::CircularBufferConfig(cb_weights_tiles * single_tile_size, {{cb_weights_index, data_format}}, weights_addr)
       .set_page_size(cb_weights_index, single_tile_size);
-    auto cb_weights = tt_metal::CreateCircularBuffers(program, all_cores, cb_weights_config);
+    auto cb_weights = tt_metal::CreateCircularBuffer(program, all_cores, cb_weights_config);
 
     uint32_t cb_output_index = 16;
     uint32_t cb_output_tiles = per_core_output_tiles;
     tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(cb_output_tiles * single_tile_size, {{cb_output_index, data_format}}, output_addr)
       .set_page_size(cb_output_index, single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffers(program, all_cores, cb_output_config);
+    auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     // compute kernel setup
     vector<uint32_t> compute_kernel_args = {uint(per_core_Mt), uint(Kt),

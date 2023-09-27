@@ -79,7 +79,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
     uint32_t cb_index = 0;
     tt_metal::CircularBufferConfig cb_config = tt_metal::CircularBufferConfig(size_per_l1_bank, {{cb_index, cb_data_format}})
 		.set_page_size(cb_index, single_tile_size);
-    auto cb = tt_metal::CreateCircularBuffers(program, all_cores, cb_config);
+    auto cb = tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
 
     auto semaphore_addr = CreateSemaphore(program, all_cores, 0);
 

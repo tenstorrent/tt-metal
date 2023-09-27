@@ -44,7 +44,7 @@ bool test_cb_config_written_to_core(Program &program, Device *device, const Core
     return pass;
 }
 
-TEST_F(SingleDeviceFixture, TestCreateCircularBuffersAtValidIndices) {
+TEST_F(SingleDeviceFixture, TestCreateCircularBufferAtValidIndices) {
     CBConfig cb_config;
 
     CoreRange cr = {.start = {0, 0}, .end = {0, 1}};
@@ -70,25 +70,25 @@ TEST_F(SingleDeviceFixture, TestCreateCircularBuffersAtValidIndices) {
         .set_page_size(2, cb_config.page_size)
         .set_page_size(16, cb_config.page_size)
         .set_page_size(24, cb_config.page_size);
-    auto cb = CreateCircularBuffers(program, cr_set, config);
+    auto cb = CreateCircularBuffer(program, cr_set, config);
 
     EXPECT_TRUE(test_cb_config_written_to_core(program, this->device_, cr_set, golden_cb_config));
 }
 
-TEST_F(SingleDeviceFixture, TestCreateCircularBuffersAtInvalidIndex) {
+TEST_F(SingleDeviceFixture, TestCreateCircularBufferAtInvalidIndex) {
     CBConfig cb_config;
 
     EXPECT_ANY_THROW(CircularBufferConfig(cb_config.page_size, {{NUM_CIRCULAR_BUFFERS, cb_config.data_format}}));
 }
 
-TEST_F(SingleDeviceFixture, TestCreateCircularBuffersWithMismatchingConfig) {
+TEST_F(SingleDeviceFixture, TestCreateCircularBufferWithMismatchingConfig) {
     Program program;
     CBConfig cb_config;
 
     EXPECT_ANY_THROW(CircularBufferConfig(cb_config.page_size, {{0, cb_config.data_format}}).set_page_size(1, cb_config.page_size));
 }
 
-TEST_F(SingleDeviceFixture, TestCreateCircularBuffersAtOverlappingIndex) {
+TEST_F(SingleDeviceFixture, TestCreateCircularBufferAtOverlappingIndex) {
     Program program;
     CBConfig cb_config;
 
@@ -113,9 +113,9 @@ TEST_F(SingleDeviceFixture, TestCreateCircularBuffersAtOverlappingIndex) {
         .set_page_size(2, cb_config.page_size)
         .set_page_size(16, cb_config.page_size);
 
-    auto valid_cb = CreateCircularBuffers(program, cr_set, config1);
+    auto valid_cb = CreateCircularBuffer(program, cr_set, config1);
 
-    EXPECT_ANY_THROW(CreateCircularBuffers(program, cr_set, config2));
+    EXPECT_ANY_THROW(CreateCircularBuffer(program, cr_set, config2));
 }
 
 }   // end namespace basic_tests::circular_buffer

@@ -159,7 +159,7 @@ int main(int argc, char **argv) {
         uint32_t source_addresses_in_l1_addr = cb0_addr + cb0_size;
         tt_metal::CircularBufferConfig cb0_config = tt_metal::CircularBufferConfig(cb0_size, {{cb0_index, tt::DataFormat::Float16_b}}, cb0_addr)
             .set_page_size(cb0_index, single_tile_size);
-        auto cb0 = tt_metal::CreateCircularBuffers(program, core, cb0_config);
+        auto cb0 = tt_metal::CreateCircularBuffer(program, core, cb0_config);
 
         uint32_t cb1_index = 1;
         uint32_t cb1_addr = 300 * 1024;
@@ -167,7 +167,7 @@ int main(int argc, char **argv) {
         uint32_t cb1_size = num_cb1_tiles * single_tile_size;
         tt_metal::CircularBufferConfig cb1_config = tt_metal::CircularBufferConfig(cb1_size, {{cb1_index, tt::DataFormat::Float16_b}}, cb1_addr)
             .set_page_size(cb1_index, single_tile_size);
-        auto cb1 = tt_metal::CreateCircularBuffers(program, core, cb1_config);
+        auto cb1 = tt_metal::CreateCircularBuffer(program, core, cb1_config);
 
         uint32_t ouput_cb_index = 16; // output operands start at index 16
         uint32_t interm0_cb_index = 24;
@@ -180,7 +180,7 @@ int main(int argc, char **argv) {
             )
             .set_page_size(ouput_cb_index, single_tile_size)
             .set_page_size(interm0_cb_index, single_tile_size);
-        auto cb_output = tt_metal::CreateCircularBuffers(program, cores, cb_output_config);
+        auto cb_output = tt_metal::CreateCircularBuffer(program, cores, cb_output_config);
 
         std::vector<uint32_t> generic_binary_reader_args {
             dram_buffer_src0_addr,

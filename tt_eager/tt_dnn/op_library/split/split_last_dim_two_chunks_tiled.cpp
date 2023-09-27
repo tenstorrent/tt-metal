@@ -225,7 +225,7 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     uint32_t num_input_tiles = 2;
     tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
 		.set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffers(program, all_cores, cb_src0_config);
+    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     setup_runtime(
         program,

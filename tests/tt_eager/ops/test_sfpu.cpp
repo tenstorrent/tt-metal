@@ -89,7 +89,7 @@ bool run_sfpu_test(string sfpu_name) {
         uint32_t num_input_tiles = 8;
         tt_metal::CircularBufferConfig src_cb_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, single_tile_size);
-        auto cb_src0 = tt_metal::CreateCircularBuffers(program, core, src_cb_config);
+        auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, src_cb_config);
 
         // no need for c_in2 buffer since scaler=0 in the reader kernel
 
@@ -97,7 +97,7 @@ bool run_sfpu_test(string sfpu_name) {
         uint32_t num_output_tiles = 1;
         tt_metal::CircularBufferConfig output_cb_config = tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(ouput_cb_index, single_tile_size);
-        auto cb_output = tt_metal::CreateCircularBuffers(program, core, output_cb_config);
+        auto cb_output = tt_metal::CreateCircularBuffer(program, core, output_cb_config);
 
         auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,

@@ -62,7 +62,7 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
     for (auto core : cores) {
         tt_metal::CircularBufferConfig cb_config = tt_metal::CircularBufferConfig(cb_size_bytes, {{cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(cb_index, single_tile_size);
-        auto cb = tt_metal::CreateCircularBuffers(program, core, cb_config);
+        auto cb = tt_metal::CreateCircularBuffer(program, core, cb_config);
     }
 
     /// used only if IO data in DRAM

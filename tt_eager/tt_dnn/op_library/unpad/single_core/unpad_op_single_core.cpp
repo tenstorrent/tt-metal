@@ -45,7 +45,7 @@ operation::ProgramWithCallbacks unpad_rm_single_core(const Tensor &a, Tensor& ou
     uint32_t cb_page_size = round_up(unpadded_row_size_bytes, TILE_WIDTH);
     tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_pages * cb_page_size, {{src0_cb_index, cb_data_format}})
 		.set_page_size(src0_cb_index, cb_page_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffers(program, core, cb_src0_config);
+    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     uint32_t num_dims = a.shape().rank();
 
@@ -189,7 +189,7 @@ operation::ProgramWithCallbacks unpad_tile_single_core(const Tensor &a, Tensor& 
     uint32_t num_input_tiles = 2;
     tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
 		.set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffers(program, core, cb_src0_config);
+    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     uint32_t num_dims = a.shape().rank();
 

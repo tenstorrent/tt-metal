@@ -214,7 +214,7 @@ KernelID CreateComputeKernel(Program &program, const std::string &file_name, con
     return kernel->id();
 }
 
-CircularBufferID CreateCircularBuffers(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config) {
+CircularBufferID CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config) {
     CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
     return program.add_circular_buffer(core_ranges, config);
 }

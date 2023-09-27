@@ -49,7 +49,7 @@ TEST_F(SingleDeviceFixture, TestCircularBuffersSequentiallyPlaced) {
     auto expected_cb_addr = L1_UNRESERVED_BASE;
     for (uint8_t cb_id = 0; cb_id < NUM_CIRCULAR_BUFFERS; cb_id++) {
         CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size, {{cb_id, cb_config.data_format}}).set_page_size(cb_id, cb_config.page_size);
-        auto cb = CreateCircularBuffers(program, core, config1);
+        auto cb = CreateCircularBuffer(program, core, config1);
         expected_addresses[cb_id] = expected_cb_addr;
         expected_cb_addr += cb_config.page_size;
     }
@@ -81,7 +81,7 @@ TEST_F(SingleDeviceFixture, TestCircularBufferSequentialAcrossAllCores) {
         std::map<uint8_t, uint32_t> expected_addresses;
         for (u32 buffer_id = 0; buffer_id < num_cbs; buffer_id++) {
             CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size, {{buffer_id, cb_config.data_format}}).set_page_size(buffer_id, cb_config.page_size);
-            auto cb = CreateCircularBuffers(program, core, config1);
+            auto cb = CreateCircularBuffer(program, core, config1);
             expected_addresses[buffer_id] = expected_cb_addr;
             expected_cb_addr += cb_config.page_size;
         }
@@ -94,7 +94,7 @@ TEST_F(SingleDeviceFixture, TestCircularBufferSequentialAcrossAllCores) {
     auto expected_multi_core_address = L1_UNRESERVED_BASE + (max_num_cbs * cb_config.page_size);
     uint8_t multicore_buffer_idx = NUM_CIRCULAR_BUFFERS - 1;
     CircularBufferConfig config2 = CircularBufferConfig(cb_config.page_size, {{multicore_buffer_idx, cb_config.data_format}}).set_page_size(multicore_buffer_idx, cb_config.page_size);
-    auto multi_core_cb = CreateCircularBuffers(program, cr_set, config2);
+    auto multi_core_cb = CreateCircularBuffer(program, cr_set, config2);
     golden_addresses_per_core[core0][multicore_buffer_idx] = expected_multi_core_address;
     golden_addresses_per_core[core1][multicore_buffer_idx] = expected_multi_core_address;
     golden_addresses_per_core[core2][multicore_buffer_idx] = expected_multi_core_address;
@@ -115,7 +115,7 @@ TEST_F(SingleDeviceFixture, TestValidCircularBufferAddress) {
     CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size, {{buffer_indices[0], cb_config.data_format}, {buffer_indices[1], cb_config.data_format}}, expected_cb_addr)
         .set_page_size(buffer_indices[0], cb_config.page_size)
         .set_page_size(buffer_indices[1], cb_config.page_size);
-    auto multi_core_cb = CreateCircularBuffers(program, cr_set, config1);
+    auto multi_core_cb = CreateCircularBuffer(program, cr_set, config1);
 
     std::map<CoreCoord, std::map<uint8_t, uint32_t>> golden_addresses_per_core;
     for (const CoreRange &core_range : cr_set.ranges()) {
@@ -141,7 +141,7 @@ TEST_F(SingleDeviceFixture, TestInvalidCircularBufferAddress) {
     const static u32 core0_num_cbs = 3;
     for (u32 buffer_id = 0; buffer_id < core0_num_cbs; buffer_id++) {
         CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size, {{buffer_id, cb_config.data_format}}).set_page_size(buffer_id, cb_config.page_size);
-        auto cb = CreateCircularBuffers(program, core0, config1);
+        auto cb = CreateCircularBuffer(program, core0, config1);
     }
 
     CoreRange cr = {.start = {0, 0}, .end = {0, 1}};
@@ -151,7 +151,7 @@ TEST_F(SingleDeviceFixture, TestInvalidCircularBufferAddress) {
     uint32_t invalid_requested_address = L1_UNRESERVED_BASE;
 
     CircularBufferConfig config2 = CircularBufferConfig(cb_config.page_size, {{multi_core_cb_index, cb_config.data_format}}, invalid_requested_address).set_page_size(multi_core_cb_index, cb_config.page_size);
-    auto cb2 = CreateCircularBuffers(program, cr_set, config2);
+    auto cb2 = CreateCircularBuffer(program, cr_set, config2);
 
     initialize_program(program, cr_set);
     EXPECT_ANY_THROW(LaunchProgram(this->device_, program));
@@ -174,7 +174,7 @@ TEST_F(SingleDeviceFixture, TestCircularBuffersAndL1BuffersCollision) {
     auto cb_addr = l1_buffer.address() - (cb_buffer_size * (NUM_CIRCULAR_BUFFERS - 1));
     for (u32 buffer_id = 0; buffer_id < NUM_CIRCULAR_BUFFERS; buffer_id++) {
         CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size, {{buffer_id, cb_config.data_format}}, cb_addr).set_page_size(buffer_id, cb_config.page_size);
-        auto cb = CreateCircularBuffers(program, core, config1);
+        auto cb = CreateCircularBuffer(program, core, config1);
         cb_addr += cb_buffer_size;
     }
 
@@ -197,7 +197,7 @@ TEST_F(SingleDeviceFixture, TestValidUpdateCircularBufferSize) {
     auto expected_cb_addr = L1_UNRESERVED_BASE;
     for (u32 buffer_idx = 0; buffer_idx < core0_num_cbs; buffer_idx++) {
         CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size, {{buffer_idx, cb_config.data_format}}).set_page_size(buffer_idx, cb_config.page_size);
-        auto cb = CreateCircularBuffers(program, core0, config1);
+        auto cb = CreateCircularBuffer(program, core0, config1);
         golden_addresses_per_core[core0][buffer_idx] = expected_cb_addr;
         cb_ids.push_back(cb);
         expected_cb_addr += cb_config.page_size;
@@ -228,7 +228,7 @@ TEST_F(SingleDeviceFixture, TestInvalidUpdateCircularBufferSize) {
     auto expected_cb_addr = L1_UNRESERVED_BASE;
     for (u32 buffer_idx = 0; buffer_idx < core0_num_cbs; buffer_idx++) {
         CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size, {{buffer_idx, cb_config.data_format}}).set_page_size(buffer_idx, cb_config.page_size);
-        auto cb = CreateCircularBuffers(program, core0, config1);
+        auto cb = CreateCircularBuffer(program, core0, config1);
         golden_addresses_per_core[core0][buffer_idx] = expected_cb_addr;
         cb_ids.push_back(cb);
         expected_cb_addr += cb_config.page_size;
@@ -256,7 +256,7 @@ TEST_F(SingleDeviceFixture, TestUpdateCircularBufferAddress) {
     auto expected_cb_addr = L1_UNRESERVED_BASE;
     for (u32 buffer_idx = 0; buffer_idx < core0_num_cbs; buffer_idx++) {
         CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size, {{buffer_idx, cb_config.data_format}}).set_page_size(buffer_idx, cb_config.page_size);
-        auto cb = CreateCircularBuffers(program, core0, config1);
+        auto cb = CreateCircularBuffer(program, core0, config1);
         golden_addresses_per_core[core0][buffer_idx] = expected_cb_addr;
         cb_ids.push_back(cb);
         expected_cb_addr += cb_config.page_size;
@@ -286,7 +286,7 @@ TEST_F(SingleDeviceFixture, TestUpdateCircularBufferPageSize) {
     auto expected_cb_addr = L1_UNRESERVED_BASE;
     for (u32 buffer_idx = 0; buffer_idx < core0_num_cbs; buffer_idx++) {
         CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size, {{buffer_idx, cb_config.data_format}}).set_page_size(buffer_idx, cb_config.page_size);
-        auto cb = CreateCircularBuffers(program, core0, config1);
+        auto cb = CreateCircularBuffer(program, core0, config1);
         golden_addresses_per_core[core0][buffer_idx] = expected_cb_addr;
         golden_num_pages_per_core[core0][buffer_idx] = 1;
         cb_ids.push_back(cb);
@@ -357,7 +357,7 @@ TEST_F(SingleDeviceFixture, TestDataCopyWithUpdatedCircularBufferConfig) {
     uint32_t cb_index = 0;
     uint32_t num_input_tiles = num_tiles;
     CircularBufferConfig cb_src0_config = CircularBufferConfig(buffer_size, {{cb_index, tt::DataFormat::Float16_b}}).set_page_size(cb_index, single_tile_size);
-    auto cb_src0 = CreateCircularBuffers(program, core, cb_src0_config);
+    auto cb_src0 = CreateCircularBuffer(program, core, cb_src0_config);
 
     auto reader_kernel = CreateDataMovementKernel(
         program,

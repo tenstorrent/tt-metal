@@ -97,7 +97,9 @@ KernelID CreateComputeKernel(Program &program, const std::string &file_name, con
 //                  HOST API: buffers
 // ==================================================
 /**
- * Creates Circular Buffers (CBs) in L1 memory of all cores within core ranges (inclusive) and adds it to the program.
+ * Creates a Circular Buffer (CB) in L1 memory of all cores within core ranges (inclusive) and adds it to the program. There can be a total of NUM_CIRCULAR_BUFFERS (32) circular buffers per core.
+ * Circular buffers hold data and have an associated config which indicates usage of the address space.
+ * If the config is specified for multiple buffer indices, the circular buffer address space is shared and each buffer index can potentially have a unique view of the shared space.
  *
  * Return value: Circular Buffer ID (uintptr_t)
  *
@@ -107,7 +109,7 @@ KernelID CreateComputeKernel(Program &program, const std::string &file_name, con
  * | core_spec | Either a single logical core, a range of logical cores or a set of logical core ranges that indicate where the circular buffer will be configured | const std::variant<CoreCoord, CoreRange, CoreRangeSet> & |             | Yes      |
  * | config    | Config for circular buffer                                                                                                                        | const CircularBufferConfig &                             |             | Yes      |
  */
-CircularBufferID CreateCircularBuffers(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
+CircularBufferID CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
 
 /**
  * Gets a reference to the config owned by circular buffer at the given circular buffer ID. This should be used to update the circular buffer config.
@@ -118,7 +120,7 @@ CircularBufferID CreateCircularBuffers(Program &program, const std::variant<Core
  * | Argument           | Description                                                    | Type                         | Valid Range | Required |
  * |--------------------|----------------------------------------------------------------|------------------------------|-------------|----------|
  * | program            | The program containing the circular buffer                     | Program &                    |             | Yes      |
- * | circular_buffer_id | ID of the circular buffer, returned by `CreateCircularBuffers` | CircularBufferID (uintptr_t) |             | Yes      |
+ * | circular_buffer_id | ID of the circular buffer, returned by `CreateCircularBuffer`  | CircularBufferID (uintptr_t) |             | Yes      |
 */
 CircularBufferConfig &GetCircularBufferConfig(Program &program, CircularBufferID circular_buffer_id);
 

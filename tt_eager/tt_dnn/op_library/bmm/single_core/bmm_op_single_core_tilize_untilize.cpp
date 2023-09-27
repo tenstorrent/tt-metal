@@ -55,41 +55,41 @@ void create_cb_bmm_single_core_tilize_untilize(Program &program,
     // in0 (RM/TM)
     CircularBufferConfig cb_in0_config = CircularBufferConfig(cb0_ntiles * in0_tile_nbytes, {{in0_cb, in0_df}})
 		.set_page_size(in0_cb, in0_tile_nbytes);
-    auto cb_in0 = CreateCircularBuffers(program, core, cb_in0_config);
+    auto cb_in0 = CreateCircularBuffer(program, core, cb_in0_config);
 
     // in1 (TM)
     CircularBufferConfig cb_in1_config = CircularBufferConfig(cb1_ntiles * in1_tile_nbytes, {{in1_cb, in1_df}})
 		.set_page_size(in1_cb, in1_tile_nbytes);
-    auto cb_in1 = CreateCircularBuffers(program, core, cb_in1_config);
+    auto cb_in1 = CreateCircularBuffer(program, core, cb_in1_config);
 
     if (tilize_in0) {
         // in0 (RM -> TM)
         CircularBufferConfig cb_src0_tilized_config = CircularBufferConfig(cb0_ntiles * in0_tile_nbytes, {{tilize_mode_tilized_in0_cb, in0_df}})
 		    .set_page_size(tilize_mode_tilized_in0_cb, in0_tile_nbytes);
-        auto cb_src0_tilized = CreateCircularBuffers(program, core, cb_src0_tilized_config);
+        auto cb_src0_tilized = CreateCircularBuffer(program, core, cb_src0_tilized_config);
     }
 
     if (untilize_out) {
         // partial sums
         CircularBufferConfig cb_matmul_partials_config = CircularBufferConfig(out_ntiles * out_tile_nbytes, {{matmul_partials_cb, out_df}})
 		    .set_page_size(matmul_partials_cb, out_tile_nbytes);
-        auto cb_matmul_partials = CreateCircularBuffers(program, core, cb_matmul_partials_config);
+        auto cb_matmul_partials = CreateCircularBuffer(program, core, cb_matmul_partials_config);
 
         // final partial sums
         CircularBufferConfig cb_final_matmul_partials_config = CircularBufferConfig(out_ntiles * out_tile_nbytes, {{untilize_mode_final_matmul_partials_cb, out_df}})
 		    .set_page_size(untilize_mode_final_matmul_partials_cb, out_tile_nbytes);
-        auto cb_final_matmul_partials = CreateCircularBuffers(program, core, cb_final_matmul_partials_config);
+        auto cb_final_matmul_partials = CreateCircularBuffer(program, core, cb_final_matmul_partials_config);
 
         // to reorganize output blocks to fill the whole "per core output block width"
         // in1_block_w depicts single row of tiles
         CircularBufferConfig cb_reblock_config = CircularBufferConfig(in1_block_w * out_tile_nbytes, {{untilize_mode_reblock_cb, out_df}})
 		    .set_page_size(untilize_mode_reblock_cb, out_tile_nbytes);
-        auto cb_reblock = CreateCircularBuffers(program, core, cb_reblock_config);
+        auto cb_reblock = CreateCircularBuffer(program, core, cb_reblock_config);
 
         // output
         CircularBufferConfig cb_output_config = CircularBufferConfig(out_ntiles * out_tile_nbytes, {{out_cb, out_df}})
 		    .set_page_size(out_cb, out_tile_nbytes);
-        auto cb_output = CreateCircularBuffers(program, core, cb_output_config);
+        auto cb_output = CreateCircularBuffer(program, core, cb_output_config);
     } else {
         // partials and output share same memory
         std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec = {
@@ -100,7 +100,7 @@ void create_cb_bmm_single_core_tilize_untilize(Program &program,
 		    .set_page_size(out_cb, out_tile_nbytes)
             .set_page_size(matmul_partials_cb, out_tile_nbytes);
         CoreRangeSet cores(std::set<CoreRange>{core});
-        auto cb_matmul_partials = CreateCircularBuffers(program, cores, cb_matmul_partials_config);
+        auto cb_matmul_partials = CreateCircularBuffer(program, cores, cb_matmul_partials_config);
     }
 }
 

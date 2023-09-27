@@ -67,15 +67,15 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
 
     tt_metal::CircularBufferConfig l1_cb_config = tt_metal::CircularBufferConfig(byte_size, {{0, test_config.l1_input_data_format}})
         .set_page_size(0, test_config.tile_byte_size);
-    auto l1_input0_cb = tt_metal::CreateCircularBuffers(program, test_config.core, l1_cb_config);
+    auto l1_input0_cb = tt_metal::CreateCircularBuffer(program, test_config.core, l1_cb_config);
 
     tt_metal::CircularBufferConfig l1_input1_cb_config = tt_metal::CircularBufferConfig(byte_size, {{1, test_config.l1_input_data_format}})
         .set_page_size(1, test_config.tile_byte_size);
-    auto l1_input1_cb = tt_metal::CreateCircularBuffers(program, test_config.core, l1_input1_cb_config);
+    auto l1_input1_cb = tt_metal::CreateCircularBuffer(program, test_config.core, l1_input1_cb_config);
 
     tt_metal::CircularBufferConfig l1_output_cb_config = tt_metal::CircularBufferConfig(byte_size, {{16, test_config.l1_output_data_format}})
         .set_page_size(16, test_config.tile_byte_size);
-    auto l1_output_cb = tt_metal::CreateCircularBuffers(program, test_config.core, l1_output_cb_config);
+    auto l1_output_cb = tt_metal::CreateCircularBuffer(program, test_config.core, l1_output_cb_config);
 
     auto reader_kernel = tt_metal::CreateDataMovementKernel(
         program,

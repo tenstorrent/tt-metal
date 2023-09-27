@@ -113,12 +113,12 @@ operation::ProgramWithCallbacks embeddings_tilized(
     uint32_t src0_cb_index = 0;
     tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_tiles_per_block * single_tile_size, {{src0_cb_index, cb_data_format}})
 		.set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffers(program, all_cores, cb_src0_config);
+    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t output_cb_index = 16; // output operands start at index 16
     tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_tiles_per_block * single_tile_size, {{output_cb_index, cb_data_format}})
 		.set_page_size(output_cb_index, single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffers(program, all_cores, cb_output_config);
+    auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     bool weight_stick_size_is_power_of_two = is_power_of_two_at_least_32(single_page_size);
     uint32_t weight_log2_stick_size = weight_stick_size_is_power_of_two ? (std::uint32_t)log2(single_page_size) : 0;

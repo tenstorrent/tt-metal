@@ -158,11 +158,11 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
     for (const CoreRange& core_range : test_config.cores.ranges()) {
         tt_metal::CircularBufferConfig l1_input_cb_config = tt_metal::CircularBufferConfig(byte_size, {{0, test_config.l1_input_data_format}})
             .set_page_size(0, test_config.tile_byte_size);
-        auto l1_input_cb = tt_metal::CreateCircularBuffers(program, core_range, l1_input_cb_config);
+        auto l1_input_cb = tt_metal::CreateCircularBuffer(program, core_range, l1_input_cb_config);
 
         tt_metal::CircularBufferConfig l1_output_cb_config = tt_metal::CircularBufferConfig(byte_size, {{16, test_config.l1_output_data_format}})
             .set_page_size(16, test_config.tile_byte_size);
-        auto l1_output_cb = tt_metal::CreateCircularBuffers(program, core_range, l1_output_cb_config);
+        auto l1_output_cb = tt_metal::CreateCircularBuffer(program, core_range, l1_output_cb_config);
 
         auto reader_kernel = tt_metal::CreateDataMovementKernel(
             program,

@@ -177,14 +177,14 @@ int main(int argc, char **argv) {
         uint32_t cb0_tiles = M * in0_block_w * 2;
         tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(cb0_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}}, src0_cb_addr)
             .set_page_size(src0_cb_index, single_tile_size);
-        auto cb_src0 = tt_metal::CreateCircularBuffers(program, core, cb_src0_config);
+        auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
         uint32_t src1_cb_index = 1;
         uint32_t src1_cb_addr = 300 * 1024;
         uint32_t cb1_tiles = N * in0_block_w * 2;
         tt_metal::CircularBufferConfig cb_src1_config = tt_metal::CircularBufferConfig(cb1_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}}, src1_cb_addr)
             .set_page_size(src1_cb_index, single_tile_size);
-        auto cb_src1 = tt_metal::CreateCircularBuffers(program, core, cb_src1_config);
+        auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
         uint32_t ouput_cb_index = 16; // output operands start at index 16
         uint32_t interm0_cb_index = 24;
@@ -198,7 +198,7 @@ int main(int argc, char **argv) {
         tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, data_format_spec, output_cb_addr)
             .set_page_size(ouput_cb_index, single_tile_size)
             .set_page_size(interm0_cb_index, single_tile_size);
-        auto cb_output = tt_metal::CreateCircularBuffers(program, core, cb_output_config);
+        auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
         // create source addresses
         uint32_t face_width = 16;

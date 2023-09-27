@@ -74,7 +74,7 @@ bool test_circular_buffers_allocated_bottom_up(tt_metal::Device *device, tt_meta
     uint32_t single_tile_size = 2 * 1024;
     constexpr uint32_t src0_cb_index = CB::c_in0;
     constexpr uint32_t num_input_tiles = 2;
-    auto cb_src0 = tt_metal::CreateCircularBuffers(
+    auto cb_src0 = tt_metal::CreateCircularBuffer(
         program,
         src0_cb_index,
         logical_core,
@@ -86,7 +86,7 @@ bool test_circular_buffers_allocated_bottom_up(tt_metal::Device *device, tt_meta
     // pass &= cb_src0.address() == L1_UNRESERVED_BASE;
 
     constexpr uint32_t src1_cb_index = CB::c_in1;
-    auto cb_src1 = tt_metal::CreateCircularBuffers(
+    auto cb_src1 = tt_metal::CreateCircularBuffer(
         program,
         src1_cb_index,
         logical_core,
@@ -99,7 +99,7 @@ bool test_circular_buffers_allocated_bottom_up(tt_metal::Device *device, tt_meta
 
     constexpr uint32_t output_cb_index = CB::c_out0;
     constexpr uint32_t num_output_tiles = 2;
-    auto cb_output = tt_metal::CreateCircularBuffers(
+    auto cb_output = tt_metal::CreateCircularBuffer(
         program,
         output_cb_index,
         logical_core,
@@ -139,7 +139,7 @@ bool test_circular_buffers_allowed_to_grow_past_512KB(tt_metal::Device *device, 
     uint32_t single_tile_size = 2 * 1024;
     constexpr uint32_t src0_cb_index = CB::c_in7;
     constexpr uint32_t num_input_tiles = 176;
-    auto cb_src0 = tt_metal::CreateCircularBuffers(
+    auto cb_src0 = tt_metal::CreateCircularBuffer(
         program,
         src0_cb_index,
         logical_core,

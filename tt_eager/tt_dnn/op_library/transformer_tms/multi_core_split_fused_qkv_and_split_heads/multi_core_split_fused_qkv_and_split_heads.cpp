@@ -146,15 +146,15 @@ operation::ProgramWithCallbacks multi_core_split_fused_qkv_and_split_heads(const
     uint32_t cb1_tiles = num_tiles_per_tensor * 4; // 2 tensors + double buffer
     tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(cb0_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
 		.set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffers(program, all_cores, cb_src0_config);
+    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     tt_metal::CircularBufferConfig cb_src1_config = tt_metal::CircularBufferConfig(cb1_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
 		.set_page_size(src1_cb_index, single_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffers(program, all_cores, cb_src1_config);
+    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     tt_metal::CircularBufferConfig cb_out_config = tt_metal::CircularBufferConfig(out_cb_tiles * single_tile_size, {{out_cb_index, cb_data_format}})
 		.set_page_size(out_cb_index, single_tile_size);
-    auto cb_out = tt_metal::CreateCircularBuffers(program, all_cores, cb_out_config);
+    auto cb_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
 
     for (int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
