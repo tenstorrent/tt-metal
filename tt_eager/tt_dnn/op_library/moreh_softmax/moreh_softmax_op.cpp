@@ -50,22 +50,20 @@ operation::ProgramWithCallbacks MorehSoftmax::create_program(
 
     auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
 
-    CoreRange all_cores = {.start{0, 0}, .end = {11, 8}};
-
     switch (parallelization_strategy){
         case MorehSoftmaxParallelizationStrategy::SMALL_W:
-            return {moreh_softmax_w_small(input, output, all_cores)};
+            return {moreh_softmax_w_small(input, output, this->core_range)};
         case MorehSoftmaxParallelizationStrategy::SMALL_H:
-            return {moreh_softmax_h_small(input, output, all_cores)};
+            return {moreh_softmax_h_small(input, output, this->core_range)};
         case MorehSoftmaxParallelizationStrategy::LARGE_W:
-            return {moreh_softmax_w_large(input, output, all_cores)};
+            return {moreh_softmax_w_large(input, output, this->core_range)};
         case MorehSoftmaxParallelizationStrategy::LARGE_H:
-            return {moreh_softmax_h_large(input, output, all_cores)};
+            return {moreh_softmax_h_large(input, output, this->core_range)};
         // default:
         //     break;
     }
 
-    return {moreh_softmax_h_large(input, output, all_cores)};
+    return {moreh_softmax_h_large(input, output, this->core_range)};
 }
 
 MorehSoftmaxParallelizationStrategy MorehSoftmax::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
@@ -91,11 +89,12 @@ MorehSoftmaxParallelizationStrategy MorehSoftmax::get_parallelization_strategy(c
 tt::stl::reflection::Attributes MorehSoftmax::attributes() const {
     return {
         {"dim", this->dim},
+        {"output_mem_config", this->output_mem_config},
     };
 }
 
 Tensor moreh_softmax(const Tensor& input_tensor, uint32_t dim, const MemoryConfig& output_mem_config) {
-    CoreRange all_cores = {.start{0, 0}, .end = {11, 8}};
+    const CoreRange all_cores = {.start{0, 0}, .end = {11, 8}};
 
     return operation::run(MorehSoftmax{.dim=dim, .output_mem_config=output_mem_config, .core_range=all_cores}, {input_tensor}, {}).at(0);
 }
