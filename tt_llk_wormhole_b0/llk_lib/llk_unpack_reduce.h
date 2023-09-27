@@ -81,9 +81,10 @@ inline void llk_unpack_reduce_init(const std::uint32_t within_face_16x16_transpo
     llk_unpack_reduce_mop_config<type, dim>();
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
 
-    uint unpack_src_df  = (uint) DataFormat::Float32;
+    const uint unpack_src_df  = (uint) DataFormat::Float32;
 
-    uint unpack_dst_df = (((uint)unpack_dst_format[0]>>2)&0x1) ? (uint) DataFormat::Float16_b : (uint) DataFormat::Float16;
+    const uint unpack_dst_df = ((uint)unpack_dst_format[0] == (uint) DataFormat::Int8) ? (uint) DataFormat::Float16 : // Int8 is treated as fp16_a 
+                               ((((uint)unpack_dst_format[0]>>2)&0x1) ? (uint) DataFormat::Float16_b : (uint) DataFormat::Float16);
 
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG1_SrcB_RMW>(unpack_dst_df);
 

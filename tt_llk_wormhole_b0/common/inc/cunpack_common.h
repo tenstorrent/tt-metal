@@ -244,6 +244,10 @@ namespace ckernel::unpacker
       alu_config_u alu_payload = {.val = 0};
 
       uint32_t fp32_dest_acc_en = (is_fp32_dest_acc_en) ? (1) : (0);
+      uint32_t int8_math_enabled = ((uint)unpack_dst_format[unpA_operand_id] == (uint)DataFormat::Int8) || 
+                                   ((uint)unpack_dst_format[unpB_operand_id] == (uint)DataFormat::Int8) || 
+                                   ((uint)unpack_dst_format[unpA_operand_id] == (uint)DataFormat::Int32) || 
+                                   ((uint)unpack_dst_format[unpB_operand_id] == (uint)DataFormat::Int32);
 
       alu_payload.f.ALU_FORMAT_SPEC_REG0_SrcA = unpack_dst_format[unpA_operand_id];
       alu_payload.f.ALU_FORMAT_SPEC_REG1_SrcB = row_pool ? ((uint) DataFormat::Float16 | (exp_width<<2)) : unpack_dst_format[unpB_operand_id];
@@ -253,10 +257,7 @@ namespace ckernel::unpacker
       static_assert(ALU_ACC_CTRL_Fp32_enabled_ADDR32 == ALU_ACC_CTRL_SFPU_Fp32_enabled_ADDR32);
       alu_payload.f.ALU_ACC_CTRL_Fp32_enabled = fp32_dest_acc_en;
       alu_payload.f.ALU_ACC_CTRL_SFPU_Fp32_enabled = fp32_dest_acc_en;
-      alu_payload.f.ALU_ACC_CTRL_INT8_math_enabled = ((uint)unpack_dst_format[unpA_operand_id] == (uint)DataFormat::Int8) || 
-                                                     ((uint)unpack_dst_format[unpB_operand_id] == (uint)DataFormat::Int8) || 
-                                                     ((uint)unpack_dst_format[unpA_operand_id] == (uint)DataFormat::Int32) || 
-                                                     ((uint)unpack_dst_format[unpB_operand_id] == (uint)DataFormat::Int32);
+      alu_payload.f.ALU_ACC_CTRL_INT8_math_enabled = int8_math_enabled;
 
       constexpr uint mask1 = ALU_ACC_CTRL_INT8_math_enabled_MASK | ALU_ACC_CTRL_SFPU_Fp32_enabled_MASK | ALU_ACC_CTRL_Fp32_enabled_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK | ALU_FORMAT_SPEC_REG0_SrcA_MASK;
 
@@ -345,6 +346,11 @@ namespace ckernel::unpacker
                                                                  // workaround for bug tenstorrent/budabackend#1372
       }
       */
+      // Workaround for HW bug (int32 dest and movd2a/b is used with srcA/B configured as int8)
+      if (int8_math_enabled) {
+          reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1<<11); // Set debug feature disable bit 11 
+                                                                 // workaround for bug tenstorrent/budabackend#1948
+      }
 
       // Clear context ID
       reset_config_context();

@@ -16,9 +16,9 @@ inline void reduce_configure_addrmod();
 template <ReduceDim dim, int num_fidelity_phases>
 inline void reduce_configure_mop();
 
-template <PoolType type, ReduceDim dim, int num_fidelity_phases = 0, bool is_fp32_dest_acc_en = false>
-inline void llk_math_reduce(uint dst_index) {
-    TT_LLK_DUMP("llk_math_reduce<{}, {}, {}, {}>({})", type, dim, num_fidelity_phases, is_fp32_dest_acc_en, dst_index);
+template <PoolType type, ReduceDim dim, int num_fidelity_phases = 0, bool is_fp32_dest_acc_en = false, bool is_int_fpu_en = false>
+inline void llk_math_reduce(const uint dst_index) {
+    TT_LLK_DUMP("llk_math_reduce<{}, {}, {}, {}, {}>({})", type, dim, num_fidelity_phases, is_fp32_dest_acc_en, is_int_fpu_en, dst_index);
     constexpr bool high_fidelity = num_fidelity_phases > 0 && num_fidelity_phases <= 4;
     math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
     if constexpr (dim == ReduceDim::REDUCE_ROW) {
@@ -44,6 +44,17 @@ inline void llk_math_reduce(uint dst_index) {
             }
         }
 
+        // Workaround for tenstorrent/budabackend#1948
+        if constexpr (is_int_fpu_en) {
+            TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+            TTI_SFPLOAD(0, 4, ADDR_MOD_0, 0);
+            TTI_SFPSTORE(0,5,ADDR_MOD_0,0);
+            TTI_SFPLOAD(0, 4, ADDR_MOD_0, 2);
+            TTI_SFPSTORE(0,5,ADDR_MOD_0,2);
+            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
+            TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x1);
+        }
+
         // Move back to B and transpose
         // we avoid clobbering weights in src B by moving to rows 16 - 31
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
@@ -61,6 +72,9 @@ inline void llk_math_reduce(uint dst_index) {
         // Note: transpose on src B on works on rows 16 - 31
         TTI_TRNSPSRCB;
         TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        if constexpr (is_int_fpu_en) {
+            TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x0);
+        }    
 
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
@@ -99,6 +113,16 @@ inline void llk_math_reduce(uint dst_index) {
                 TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
             }
         }
+        // Workaround for tenstorrent/budabackend#1948
+        if constexpr (is_int_fpu_en) {
+            TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+            TTI_SFPLOAD(0, 4, ADDR_MOD_0, 0);
+            TTI_SFPSTORE(0,5,ADDR_MOD_0,0);
+            TTI_SFPLOAD(0, 4, ADDR_MOD_0, 2);
+            TTI_SFPSTORE(0,5,ADDR_MOD_0,2);
+            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
+            TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x1);
+        }    
 
         // Move back to B and transpose
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
@@ -116,6 +140,9 @@ inline void llk_math_reduce(uint dst_index) {
         // Note: transpose on src B on works on rows 16 - 31
         TTI_TRNSPSRCB;
         TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        if constexpr (is_int_fpu_en) {
+            TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x0);
+        }
 
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
@@ -152,6 +179,7 @@ inline void llk_math_reduce(uint dst_index) {
             // Reset Dest Counter
             TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AD);
         }
+
     } else if constexpr (dim == ReduceDim::REDUCE_SCALAR) {
         //fp32 dest unsupported with reduce scalar, must fix zeroacc
         static_assert(!is_fp32_dest_acc_en);
