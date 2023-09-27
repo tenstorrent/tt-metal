@@ -215,9 +215,12 @@ constexpr void raise_unsupported_storage() {
 
 struct ShardSpec {
     CoreRangeSet shard_grid;
-    std::pair<uint32_t, uint32_t> shard_shape;
+    std::array<uint32_t, 2> shard_shape;
     tt::stl::reflection::Attributes attributes() const;
 };
+
+bool operator==(const ShardSpec& spec_a, const ShardSpec& spec_b);
+bool operator!=(const ShardSpec& spec_a, const ShardSpec& spec_b);
 
 
 }  // namespace tt_metal

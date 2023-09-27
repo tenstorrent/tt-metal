@@ -37,7 +37,7 @@ struct Sharded {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-inline Tensor interleaved_to_sharded(const Tensor &input_tensor, uint32_t num_cores, std::pair<uint32_t, uint32_t> shard_shape, TensorMemoryLayout shard_scheme) {
+inline Tensor interleaved_to_sharded(const Tensor &input_tensor, uint32_t num_cores, std::array<uint32_t, 2> shard_shape, TensorMemoryLayout shard_scheme) {
     CoreRangeSet grid = num_cores_to_corerange_set(num_cores, input_tensor.device()->compute_with_storage_grid_size(), true);
     auto shard_spec = ShardSpec{.shard_grid=grid, .shard_shape=shard_shape};
     MemoryConfig sharded_mem_config = MemoryConfig{.memory_layout = shard_scheme, .buffer_type = BufferType::L1};

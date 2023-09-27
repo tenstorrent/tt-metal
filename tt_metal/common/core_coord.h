@@ -295,6 +295,21 @@ class CoreRangeSet {
   private:
     std::set<CoreRange> ranges_;
 };
+const inline bool operator==(const CoreRangeSet &a, const CoreRangeSet &b) {
+  if (a.ranges().size() == b.ranges().size()) {
+    auto range_a = a.ranges();
+    auto range_b = b.ranges();
+    for (auto it_a = range_a.begin(), it_b = range_b.begin(); it_a != range_a.end(); it_a++, it_b++) {
+      if (*it_a != *it_b) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return false;
+}
+
+const inline bool operator!=(const CoreRangeSet &a, const CoreRangeSet &b) { return !(a == b); }
 
 namespace std {
 template <>

@@ -208,10 +208,24 @@ tt::stl::reflection::Attributes BorrowedStorage::attributes() const {
     return {};
 }
 
+bool operator==(const ShardSpec& spec_a, const ShardSpec& spec_b) {
+    if (spec_a.shard_shape != spec_b.shard_shape) {
+        return false;
+    }
+    if (spec_a.shard_grid != spec_b.shard_grid) {
+        return false;
+    }
+    return true;
+}
+
+bool operator!=(const ShardSpec& spec_a, const ShardSpec& spec_b) {
+    return !(spec_a == spec_b);
+}
+
 tt::stl::reflection::Attributes ShardSpec::attributes() const {
     return {
         {"shard_grid", this->shard_grid.str()},
-        {"shard_shape", "(" + std::to_string(this->shard_shape.first) + ", " + std::to_string(this->shard_shape.second) + ")"},
+        {"shard_shape", this->shard_shape},
     };
 }
 

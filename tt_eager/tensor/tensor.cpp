@@ -266,8 +266,8 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
     ZoneScoped;
     TT_ASSERT(memory_config.is_sharded());
     TT_ASSERT(memory_config.buffer_type == BufferType::L1);
-    auto shard_grid = shard_spec.shard_grid;
-    auto shard_shape = shard_spec.shard_shape;
+    auto& shard_grid = shard_spec.shard_grid;
+    auto& shard_shape = shard_spec.shard_shape;
 
     // TODO: Assert for Contiguous RM Cores
     uint32_t num_cores = 0;
@@ -278,8 +278,8 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
     uint32_t num_shards;
     if (memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         uint32_t total_height = tt_metal::compute_volume(shape) / shape[-1];
-        TT_ASSERT(total_height % shard_shape.first == 0 && shape[-1] == shard_shape.second);
-        num_shards = total_height / shard_shape.first;
+        TT_ASSERT(total_height % shard_shape[0] == 0 && shape[-1] == shard_shape[1]);
+        num_shards = total_height / shard_shape[0];
     } else {
         TT_ASSERT("Unsupported sharding scheme");
     }
@@ -287,10 +287,10 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
     TT_ASSERT(num_shards == num_cores, "Number of shards must match number of cores");
 
     if (layout == Layout::TILE) {
-        TT_ASSERT((shard_shape.first % TILE_HEIGHT == 0 && shard_shape.second % TILE_WIDTH == 0), "Shard shape must be tile sized");
+        TT_ASSERT((shard_shape[0] % TILE_HEIGHT == 0 && shard_shape[1] % TILE_WIDTH == 0), "Shard shape must be tile sized");
     }
 
-    uint32_t shard_size = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(Shape({shard_shape.first, shard_shape.second}), data_type));
+    uint32_t shard_size = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(Shape({shard_shape[0], shard_shape[1]}), data_type));
 
     uint32_t packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
     auto device_buffer = tensor_impl::allocate_sharded_buffer_on_device(packed_size_in_bytes, device, shard_size, memory_config);

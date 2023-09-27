@@ -34,11 +34,11 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
         num_units = input.volume() / TILE_HW;
         tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
         unit_size = tt_metal::detail::TileSize(cb_data_format);
-        num_units_per_shard = shard_spec.shard_shape.first * shard_spec.shard_shape.second / TILE_HW;
+        num_units_per_shard = shard_spec.shard_shape[0] * shard_spec.shard_shape[1] / TILE_HW;
     } else {
         num_units = input.volume() / input.shape()[-1];
         unit_size = input.shape()[-1] * input.element_size();
-        num_units_per_shard = shard_spec.shard_shape.first;
+        num_units_per_shard = shard_spec.shard_shape[0];
     }
 
     auto all_cores = shard_spec.shard_grid;
@@ -201,11 +201,11 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
         num_units = input.volume() / TILE_HW;
         tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
         unit_size = tt_metal::detail::TileSize(cb_data_format);
-        num_units_per_shard = shard_spec.shard_shape.first * shard_spec.shard_shape.second / TILE_HW;
+        num_units_per_shard = shard_spec.shard_shape[0] * shard_spec.shard_shape[1] / TILE_HW;
     } else {
         num_units = input.volume() / input.shape()[-1];
         unit_size = input.shape()[-1] * input.element_size();
-        num_units_per_shard = shard_spec.shard_shape.first;
+        num_units_per_shard = shard_spec.shard_shape[0];
     }
 
     auto all_cores = shard_spec.shard_grid;

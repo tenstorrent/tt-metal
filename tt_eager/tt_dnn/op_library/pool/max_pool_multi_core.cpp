@@ -218,11 +218,11 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
 
 
     if (output.memory_config().is_sharded()) {
-        uint32_t sharded_out_cb_id = CB::c_out1; // output rows in RM
-        
-        uint32_t sharded_out_num_pages = output.shard_spec().value().shard_shape.first;
+        uint32_t sharded_out_cb_id = CB::c_out1;            // output rows in RM
 
-        uint32_t sharded_out_cb_page_size = output.shard_spec().value().shard_shape.second * out_nbytes;    // there is just one row of channels after reduction
+        uint32_t sharded_out_num_pages = output.shard_spec().value().shard_shape[0];
+
+        uint32_t sharded_out_cb_page_size = output.shard_spec().value().shard_shape[1] * out_nbytes;    // there is just one row of channels after reduction
         CircularBufferConfig cb_sharded_out_config = CircularBufferConfig(sharded_out_num_pages * sharded_out_cb_page_size, {{sharded_out_cb_id, out_df}})
             .set_page_size(sharded_out_cb_id, sharded_out_cb_page_size).set_globally_allocated_address(output.buffer()->address());
         auto cb_sharded_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_sharded_out_config);

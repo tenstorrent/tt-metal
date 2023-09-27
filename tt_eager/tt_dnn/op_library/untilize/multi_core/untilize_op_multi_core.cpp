@@ -183,7 +183,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
         ncores = num_cores;
         core_range = all_cores;
         core_range_cliff = CoreRangeSet({});
-        nblocks_per_core = a.shard_spec().value().shard_shape.first / TILE_HEIGHT;
+        nblocks_per_core = a.shard_spec().value().shard_shape[0] / TILE_HEIGHT;
         nblocks_per_core_cliff = 0;
     }
     {
