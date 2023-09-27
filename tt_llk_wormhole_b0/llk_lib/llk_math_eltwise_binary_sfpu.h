@@ -31,8 +31,8 @@ inline void eltwise_binary_sfpu_configure_mop();
 template <SfpuType sfpu_op, bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
 inline void llk_math_eltwise_binary_sfpu(
     const uint operand,
-    uint dst_index_a, 
-    uint dst_index_b, 
+    uint dst_index_a,
+    uint dst_index_b,
     int vector_mode = (int)Dim::RC,
     uint param0 = 0,
     uint param1 = 0,
@@ -40,6 +40,7 @@ inline void llk_math_eltwise_binary_sfpu(
     uint param3 = 0,
     uint param4 = 0,
     uint param5 = 0) {
+    TT_LLK_DUMP("llk_math_eltwise_binary_sfpu<{}, {}, {}>({}, {}, {}, {}, {}, {}, {}, {}, {}, {})", sfpu_op, APPROXIMATE, Dst, operand, dst_index_a, dst_index_b, vector_mode, param0, param1, param2, param3, param4, param5);
     constexpr int ITERATIONS = 8;
     uint dst_index = (dst_index_a <= dst_index_b) ? dst_index_a : dst_index_b;
     param0 = (dst_index_a > dst_index_b) ? dst_index_a-dst_index_b : dst_index_b-dst_index_a;
