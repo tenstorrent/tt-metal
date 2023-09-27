@@ -244,6 +244,8 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Kernel Execution and Perf Profiling
         ////////////////////////////////////////////////////////////////////////////
+        tt_metal::detail::CompileProgram(device, program);
+
         constexpr int giga_byte = 1000000;
         constexpr long long tera_byte = 1000000000000LL;
         int tt_npu_clock = get_tt_npu_clock(device);

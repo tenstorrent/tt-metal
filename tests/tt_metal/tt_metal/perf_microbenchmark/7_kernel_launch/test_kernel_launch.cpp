@@ -158,6 +158,8 @@ int main(int argc, char** argv) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
+    tt_metal::detail::CompileProgram(device, program);
+
     auto t_begin = std::chrono::steady_clock::now();
     EnqueueProgram(cq, program, false);
     Finish(cq);
