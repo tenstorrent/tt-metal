@@ -28,6 +28,8 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
     ),
 )
 def test_softmax_for_dim_hw(shape_dim, device):
+    ttl.program_cache.enable()
+
     shape, dim = shape_dim
     torch.manual_seed(0)
 
@@ -63,6 +65,7 @@ def test_softmax_for_dim_hw(shape_dim, device):
     ),
 )
 def test_softmax_not_multiple_of_32(shape_dim, device):
+    ttl.program_cache.enable()
     shape, dim = shape_dim
     torch.manual_seed(0)
 
@@ -160,6 +163,7 @@ def test_softmax_not_multiple_of_32(shape_dim, device):
     ),
 )
 def test_softmax_backward_for_dim_hw(shape_dim, device):
+    ttl.program_cache.enable()
     shape, dim = shape_dim
     torch.manual_seed(0)
 
@@ -204,6 +208,7 @@ def test_softmax_backward_for_dim_hw(shape_dim, device):
     ),
 )
 def test_softmax_backward_not_multiple_of_32_for_dim_hw(shape_dim, device):
+    ttl.program_cache.enable()
     shape, dim = shape_dim
     torch.manual_seed(0)
 
