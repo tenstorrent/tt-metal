@@ -38,22 +38,20 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb = 16)
     UNPACK(( llk_setup_operands() ));
     #ifdef ARCH_GRAYSKULL
     UNPACK(( llk_unpack_tilize_hw_configure_disaggregated(icb) ));
-    UNPACK(( llk_unpack_tilize_init(icb, block) ));
     #else
     UNPACK(( llk_unpack_tilize_hw_configure_disaggregated<>(icb, block) ));
-    UNPACK(( llk_unpack_tilize_init() ));
     #endif
+    UNPACK(( llk_unpack_tilize_init(icb, block) ));
 }
 
 ALWI void tilize_init_short(uint32_t icb, uint32_t block)
 {
     #ifdef ARCH_GRAYSKULL
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, false>() ));
-    UNPACK(( llk_unpack_tilize_init(icb, block) ));
     #else
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0, icb) ));
-    UNPACK(( llk_unpack_tilize_init() ));
     #endif
+    UNPACK(( llk_unpack_tilize_init(icb, block) ));
 }
 
 ALWI void tilize_block(uint32_t icb, uint32_t block, uint32_t ocb)

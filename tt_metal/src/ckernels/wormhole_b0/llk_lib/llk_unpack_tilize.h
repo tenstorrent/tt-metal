@@ -54,20 +54,6 @@ inline void llk_unpack_tilize_hw_configure(const llk_unpack_tilize_params_t *unp
     constexpr bool transpose_xy_srca = false;
     const uint32_t srca_operand = get_operand_id(unpack_tilize_params->unpA_operand);
     configure_unpack_AB(srca_operand, srca_operand, srca_height, srcb_height, is_row_pool, transpose_xy_srca, is_fp32_dest_acc_en);
-
-    // Override default settings
-    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
-    unpack_config_u config = {0};
-
-    config.f.out_data_format = (uint)unpack_dst_format[srca_operand];
-    config.f.throttle_mode = 2;
-    config.f.tileize_mode = 1;
-    config.f.shift_amount = (SCALE_DATUM_SIZE((uint)unpack_src_format[srca_operand], unpack_tilize_params->unpA_block_c_dim)) >> 4;
-
-    wait_for_idle();
-
-    cfg[THCON_SEC0_REG2_Out_data_format_ADDR32 + 0] = config.val[0];
-    cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32] = 16 | (16 << 16);
 }
 
 
@@ -81,7 +67,23 @@ inline void llk_unpack_tilize_hw_configure_disaggregated(
     llk_unpack_tilize_hw_configure<is_fp32_dest_acc_en>(&unpack_tilize_params);
 }
 
-inline void llk_unpack_tilize_init() { llk_unpack_tilize_mop_config(); }
+inline void llk_unpack_tilize_init(const uint32_t srca_operand, const uint32_t unpA_block_c_tiles) {
+    llk_unpack_tilize_mop_config();
+
+    wait_for_idle();
+
+    // Override default settings
+    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
+    unpack_config_u config = {0};
+
+    config.f.out_data_format = (uint)unpack_dst_format[srca_operand];
+    config.f.throttle_mode = 2;
+    config.f.tileize_mode = 1;
+    config.f.shift_amount = (SCALE_DATUM_SIZE((uint)unpack_src_format[srca_operand], unpA_block_c_tiles*TILE_WIDTH)) >> 4;
+
+    cfg[THCON_SEC0_REG2_Out_data_format_ADDR32 + 0] = config.val[0];
+    cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32] = 16 | (16 << 16);
+}
 
 inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index, std::uint32_t block_ct_dim) {
     std::uint32_t input = get_operand_id(operand);
