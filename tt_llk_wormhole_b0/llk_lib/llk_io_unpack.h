@@ -127,7 +127,9 @@ inline void llk_pop_tiles(
     std::uint32_t num_words;
 
     if constexpr (pop_blocks) {
-        num_words = num_tiles * GET_L1_HEADERLESS_TILE_SIZE((uint)unpack_src_format[input]);
+        const std::uint32_t face_r_dim = get_face_r_dim(input);
+        const std::uint32_t num_faces = get_num_faces(input);
+        num_words = num_tiles * SCALE_DATUM_SIZE((uint)unpack_src_format[input], face_r_dim*num_faces*(FACE_C_DIM/16)); //16B word size
     } else {
         num_words = num_tiles * operands[input].f.tile_size_words;
     }
