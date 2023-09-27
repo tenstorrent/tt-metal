@@ -36,7 +36,6 @@ reference_pcc["swish"] = reference_pcc["silu"]
 reference_pcc["softplus"] = 0.9984
 
 
-
 def custom_compare(*args, **kwargs):
     function = kwargs.pop("function")
     if function in [
@@ -119,6 +118,7 @@ if is_wormhole_b0():
                 "multigammaln",
                 "assign_unary",
                 "assign_binary",
+                "polygamma",
             ),
             shapes,
         )
@@ -144,6 +144,7 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
     options["digamma"] = (1, 1000)
     options["lgamma"] = (0.1, 1e32)
     options["multigammaln"] = (1.6, 1e32)
+    options["polygamma"] = (1, 10)
 
     options["sinh"] = (-9, 9)
     options["tanhshrink"] = (-100, 100)
@@ -221,6 +222,8 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
         test_args.update({"bias": np.random.randint(1, 100)})
     elif fn in ["logit"]:
         test_args.update({"eps": np.random.randint(-1e-6, 1e6)})
+    elif fn in ["polygamma"]:
+        test_args.update({"k": np.random.randint(1, 10)})
     elif fn in ["logical_ori", "logical_andi", "logical_xori", "logical_noti"]:
         test_args.update({"immediate": np.random.randint(0, 100)})
     elif fn in ["isclose"]:
