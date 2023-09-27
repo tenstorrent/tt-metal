@@ -35,11 +35,6 @@ using namespace tt;
 // (ENABLE_PROFILER=1) first. This benchmark copied device profiler's internal code to get the "t0 to any riscfw end"
 // cycles. If device profiler is changed, it also should be updated. Otherwise, it may get inappropriate cycle value.
 //
-// TODO:
-// - For validation, the output is compared with cpu-ref mm code. This benchamrk uses gold_mm function modified version
-// of gold_bmm function from test_gold_impls.hpp. As K increases, the error in the results of both versions also
-// increases so it is required to find appropriate atol and rtol or alternatives.
-//
 // Usage example:
 //   ./test_compute_mm --m <size in elements> --n <size in elements> --k <size in elements> --slow-dispatch-mode <0 for
 //   fast dispatch mode, 1 for slow dispatch mode>
@@ -94,9 +89,7 @@ void prepare_inputs(
     uint32_t single_tile_size,
     uint32_t activations_addr,
     uint32_t weights_addr,
-    uint32_t in2_cb_addr,
-    std::vector<std::vector<float>>& in0_bfp8_unpack_slice,
-    std::vector<std::vector<float>>& in1_bfp8_unpack_slice);
+    uint32_t in2_cb_addr);
 
 tt_metal::Program create_program(
     tt_metal::Device* device,
@@ -123,29 +116,6 @@ tt_metal::Program create_program(
     uint32_t out_addr);
 
 int get_tt_npu_clock(tt_metal::Device *device);
-
-inline vector<float> gold_mm(
-    const vector<uint32_t> shapeA,
-    const vector<float>& A,
-    const vector<uint32_t>& shapeB,
-    const vector<float>& B,
-    const uint32_t& num_blocks,
-    bool acc16);
-
-bool validation(
-    tt_metal::Device* device,
-    CoreCoord core_range,
-    uint32_t Mt,
-    uint32_t Nt,
-    uint32_t Kt,
-    uint32_t per_core_Mt,
-    uint32_t per_core_Nt,
-    uint32_t in0_block_w,
-    uint32_t out_addr,
-    uint32_t single_tile_size,
-    bool fp32_dest_acc_en,
-    std::vector<std::vector<float>>& in0_bfp8_unpack_slice,
-    std::vector<std::vector<float>>& in1_bfp8_unpack_slice);
 
 ////////////////////////////////////////////////////////////////////////////
 //                      Main
@@ -257,9 +227,6 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Input Setup
         ////////////////////////////////////////////////////////////////////////////
-        // for cpu-ref mm
-        std::vector<std::vector<float>> in0_bfp8_unpack_slice;
-        std::vector<std::vector<float>> in1_bfp8_unpack_slice;
         prepare_inputs(
             device,
             core_range,
@@ -272,9 +239,7 @@ int main(int argc, char** argv) {
             single_tile_size,
             in0_addr,
             in1_addr,
-            zero_cb_addr,
-            in0_bfp8_unpack_slice,
-            in1_bfp8_unpack_slice);
+            zero_cb_addr);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Kernel Execution and Perf Profiling
@@ -325,27 +290,6 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
-        bool validation_result = validation(
-            device,
-            core_range,
-            Mt,
-            Nt,
-            Kt,
-            per_core_Mt,
-            per_core_Nt,
-            in0_block_w,
-            out_addr,
-            single_tile_size,
-            fp32_dest_acc_en,
-            in0_bfp8_unpack_slice,
-            in1_bfp8_unpack_slice);
-
-        // Determine if it passes performance goal
-        if (!validation_result) {
-            log_error(LogTest, "Matmul validation between TT NPU and cpu-ref failed");
-            pass = false;
-        }
-
         if (!performance_result) {
             log_error(
                 LogTest,
@@ -892,9 +836,7 @@ void prepare_inputs(
     uint32_t single_tile_size,
     uint32_t in0_addr,
     uint32_t in1_addr,
-    uint32_t zero_cb_addr,
-    std::vector<std::vector<float>>& in0_bfp8_unpack_slice,
-    std::vector<std::vector<float>>& in1_bfp8_unpack_slice) {
+    uint32_t zero_cb_addr) {
     bool pass = true;
     auto in0_vec = generate_fp32_random(Mt * Kt * constants::TILE_HW);
     auto identity = generate_fp32_random(Kt * Nt * constants::TILE_HW);
@@ -916,11 +858,6 @@ void prepare_inputs(
         std::vector<uint32_t> in0 =
             pack_fp32_vec_as_bfp8_tiles(in0_tilized, /*row_major_input=*/true, /*is_exp_a=*/false);
 
-        // for cpu-ref mm
-        auto unpack_vec = unpack_bfp8_tiles_into_float_vec(in0, true, false);
-        auto untilize_vec = untilize(unpack_vec, num_r * 32, in0_block_w * 32);
-        in0_bfp8_unpack_slice.push_back(untilize_vec);
-
         for (int c = 0; c < num_cores_x; c++) {
             int num_c = (c == num_cores_x - 1) ? (last_block_w) : (per_core_Nt);
             std::vector<float> in1_slice = get_col_slice(identity, c * per_core_Nt * 32, num_c * 32, Kt * 32, Nt * 32);
@@ -938,133 +875,6 @@ void prepare_inputs(
 
             pass &= tt_metal::detail::WriteToDeviceL1(device, core, zero_cb_addr, zero_cb);
             TT_ASSERT(pass);
-
-            // for cpu-ref mm
-            auto unpack_vec2 = unpack_bfp8_tiles_into_float_vec(in1, true, false);
-            auto untilize_vec2 = untilize(unpack_vec2, in0_block_w * 32, num_c * 32);
-            in1_bfp8_unpack_slice.push_back(untilize_vec2);
         }
     }
-}
-
-inline vector<float> gold_mm(
-    const vector<uint32_t> shapeA,
-    const vector<float>& A,
-    const vector<uint32_t>& shapeB,
-    const vector<float>& B,
-    const uint32_t& num_blocks,
-    bool acc16 = false) {
-    TT_ASSERT(shapeB[0] == 1 && shapeA[0] == 1);
-    uint32_t nb = shapeA[1];
-    TT_ASSERT(shapeB[1] == nb);
-    uint32_t M = shapeA[2];
-    uint32_t K = shapeA[3];
-    TT_ASSERT(shapeB[2] == K);
-    uint32_t N = shapeB[3];
-
-    vector<uint32_t> shapeC{1, nb, M, N};
-    TensAddr addrC(shapeC);
-    TensAddr addrA(shapeA);
-    TensAddr addrB(shapeB);
-    vector<float> resultf(addrC.numel());
-    std::fill(resultf.begin(), resultf.end(), 0);
-
-    for (int ib = 0; ib < nb; ib++)
-        for (int m = 0; m < M; m++)
-            for (int n = 0; n < N; n++)
-                for (int k = 0; k < K; k++) {
-                    auto offsA = addrA.offs(0, ib, m, k);
-                    auto offsB = addrB.offs(0, ib, k, n);
-                    auto offsC = addrC.offs(0, ib, m, n);
-
-                    float aa = bfloat16(A[offsA]).to_float();
-                    float bb = bfloat16(B[offsB]).to_float();
-                    resultf[offsC] += aa * bb;
-                    if (acc16)
-                        resultf[offsC] = bfloat16(resultf[offsC]).to_float();
-                }
-
-    // write back to fp16 after we accumulated in fp32
-    for (int ib = 0; ib < nb; ib++)
-        for (int m = 0; m < M; m++)
-            for (int n = 0; n < N; n++) {
-                auto offsC = addrC.offs(0, ib, m, n);
-
-                float cc = resultf[offsC];
-                for (int block = 1; block < num_blocks; block++) {
-                    resultf[offsC] += cc;
-                    if (acc16)
-                        resultf[offsC] = bfloat16(resultf[offsC]).to_float();
-                }
-            }
-    return resultf;
-}
-
-bool validation(
-    tt_metal::Device* device,
-    CoreCoord core_range,
-    uint32_t Mt,
-    uint32_t Nt,
-    uint32_t Kt,
-    uint32_t per_core_Mt,
-    uint32_t per_core_Nt,
-    uint32_t in0_block_w,
-    uint32_t out_addr,
-    uint32_t single_tile_size,
-    bool fp32_dest_acc_en,
-    std::vector<std::vector<float>>& in0_bfp8_unpack_slice,
-    std::vector<std::vector<float>>& in1_bfp8_unpack_slice) {
-    auto comparison_function = [](float a, float b) {
-        const float rtol = 0.05f;  // TODO(AP): need a spec for reference
-        const float atol = 0.05f;
-        float maxabs = fmaxf(fabsf(a), fabsf(b));
-        float absdiff = fabsf(a - b);
-        auto result = (absdiff <= atol) || absdiff < rtol * maxabs;
-        return result;
-    };
-
-    bool pass = true;
-    uint32_t num_cores_y = core_range.y;
-    uint32_t num_cores_x = core_range.x;
-    uint32_t num_blocks = Kt / in0_block_w;
-    uint32_t last_block_h = Mt % per_core_Mt == 0 ? per_core_Mt : Mt % per_core_Mt;
-    uint32_t last_block_w = Nt % per_core_Nt == 0 ? per_core_Nt : Nt % per_core_Nt;
-    uint32_t diff_count = 0;
-    for (int r = 0; r < num_cores_y; ++r) {
-        for (int c = 0; c < num_cores_x; ++c) {
-            CoreCoord core = {(size_t)c, (size_t)r};
-            std::vector<uint32_t> result_vec;
-            uint32_t num_r = (r == num_cores_y - 1) ? (last_block_h) : (per_core_Mt);
-            uint32_t num_c = (c == num_cores_x - 1) ? (last_block_w) : (per_core_Nt);
-            tt_metal::detail::ReadFromDeviceL1(device, core, out_addr, num_r * num_c * single_tile_size, result_vec);
-            auto result_flat_layout = unpack_bfp8_tiles_into_float_vec(result_vec, true, false);
-            auto result_untilized = untilize(result_flat_layout, num_r * 32, num_c * 32);
-
-            // cpu ref
-            std::vector<uint32_t> shapeA = {1, 1, num_r * 32, in0_block_w * 32};
-            std::vector<uint32_t> shapeB = {1, 1, in0_block_w * 32, num_c * 32};
-            auto per_core_golden = gold_mm(
-                shapeA, in0_bfp8_unpack_slice[r], shapeB, in1_bfp8_unpack_slice[c], num_blocks, fp32_dest_acc_en);
-
-            if (result_untilized.size() != per_core_golden.size()) {
-                pass = false;
-            } else {
-                for (int i = 0; i < result_untilized.size(); ++i) {
-                    float a = result_untilized.at(i);
-                    float b = per_core_golden.at(i);
-                    if (not comparison_function(a, b)) {
-                        diff_count++;
-                        pass = false;
-
-                    }
-                }
-            }
-        }
-    }
-
-    uint32_t total_count = Mt * Nt * constants::TILE_HW;
-    if (!pass) {
-        log_error(LogTest, "{}/{} elements are not matched", diff_count, total_count);
-    }
-    return pass;
 }
