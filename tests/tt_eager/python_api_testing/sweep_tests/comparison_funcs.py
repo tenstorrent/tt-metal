@@ -110,6 +110,9 @@ def comp_equal(golden, calculated):
     _, _, _, output_str = get_atol_rtol_pcc(golden, calculated)
     equal = torch.equal(golden, calculated)
 
+    if not equal:
+        output_str += ", Equal check failed"
+
     return equal, output_str
 
 
@@ -118,14 +121,20 @@ def comp_allclose(golden, calculated, rtol=1e-05, atol=1e-08):
         calculated = calculated.type(golden.dtype)
 
     _, _, _, output_str = get_atol_rtol_pcc(golden, calculated)
-    return torch.allclose(golden, calculated, rtol, atol, True), output_str
+    passing = torch.allclose(golden, calculated, rtol, atol, True)
+    if not passing:
+        output_str += ", Allclose check failed"
+    return passing, output_str
 
 
 def comp_pcc(golden, calculated, pcc=0.99):
     if golden.dtype != calculated.dtype:
         calculated = calculated.type(golden.dtype)
     _, _, cal_pcc, output_str = get_atol_rtol_pcc(golden, calculated)
-    return cal_pcc >= pcc, output_str
+    passing = cal_pcc >= pcc
+    if not passing:
+        output_str += ", PCC check failed"
+    return passing, output_str
 
 
 def comp_pcc_list(golden, calculated, pcc=0.99):
@@ -142,7 +151,10 @@ def comp_pcc_list(golden, calculated, pcc=0.99):
         if cal_pcc < min_pcc:
             min_pcc = cal_pcc
 
-    return min_pcc >= pcc, total_str
+    passing = min_pcc >= pcc
+    if not passing:
+        total_str += ", PCC check failed"
+    return passing, total_str
 
 
 def comp_allclose_and_pcc(golden, calculated, rtol=1e-05, atol=1e-08, pcc=0.99):
@@ -151,8 +163,14 @@ def comp_allclose_and_pcc(golden, calculated, rtol=1e-05, atol=1e-08, pcc=0.99):
 
     _, _, cal_pcc, output_str = get_atol_rtol_pcc(golden, calculated)
     passing = True
-    passing &= torch.allclose(golden, calculated, rtol, atol, True)
-    passing &= cal_pcc >= pcc
+    allclose_passing = torch.allclose(golden, calculated, rtol, atol, True)
+    passing &= allclose_passing
+    if not allclose_passing:
+        output_str += ", Allclose check failed"
+    pcc_passing = cal_pcc >= pcc
+    passing &= pcc_passing
+    if not pcc_passing:
+        output_str += ", PCC check failed"
     return passing, output_str
 
 
