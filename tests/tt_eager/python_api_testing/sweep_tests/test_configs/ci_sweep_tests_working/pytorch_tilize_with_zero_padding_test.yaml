@@ -17,7 +17,7 @@ test-list:
       comparison:
         function: comp_equal
       args-gen: gen_dtype_layout_device
-      output-file: gen_tilize_with_zero_padding_args.csv
+      output-file: tilize_with_zero_padding_sweep.csv
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16", "BFLOAT8_B"]
