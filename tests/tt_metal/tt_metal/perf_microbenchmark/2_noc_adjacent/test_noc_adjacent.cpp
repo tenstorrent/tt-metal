@@ -68,7 +68,7 @@ int main(int argc, char** argv) {
 
     std::tie(num_tiles, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(
-            input_args, "--num-tiles", 102400);
+            input_args, "--num-tiles", 204800);
 
     std::tie(tiles_per_transfer, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(

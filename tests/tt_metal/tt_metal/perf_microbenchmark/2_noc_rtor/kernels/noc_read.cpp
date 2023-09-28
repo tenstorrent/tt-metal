@@ -24,7 +24,9 @@ void kernel_main() {
   cb_addr = get_write_ptr(cb_id);
 
   for (uint32_t i = 0; i < iter_count; i++) {
-    uint64_t l1_buffer_noc_addr = get_noc_addr(i * num_cores + core_index, s);
+    uint32_t i_256 = i & 0xFF;
+    uint64_t l1_buffer_noc_addr =
+        get_noc_addr(i_256 * num_cores + core_index, s);
     noc_async_read(l1_buffer_noc_addr, cb_addr, single_tile_size_bytes);
     noc_async_read_barrier();
   }
