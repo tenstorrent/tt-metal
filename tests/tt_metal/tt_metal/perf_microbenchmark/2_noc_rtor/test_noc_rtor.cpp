@@ -10,6 +10,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_metal/tt_metal/perf_microbenchmark/common/util_device_profiler.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -36,6 +37,8 @@ using std::chrono::microseconds;
 //     --num-tiles <number of tiles each core accesses>
 //     --noc-index <NOC index to use>
 //     --access-type <0 for read access, 1 for write access>
+//     --use-device-profiler (set to use device profiler for measurement)
+//     --bypass-check (set to bypass checking performance criteria fulfillment)
 ////////////////////////////////////////////////////////////////////////////////
 
 int main(int argc, char** argv) {
@@ -45,6 +48,7 @@ int main(int argc, char** argv) {
 
   bool pass = true;
   unsigned long elapsed_us;
+  unsigned long elapsed_cc;
 
   ////////////////////////////////////////////////////////////////////////////
   //                      Initial Runtime Args Parse
@@ -55,6 +59,7 @@ int main(int argc, char** argv) {
   uint32_t num_tiles;
   uint32_t noc_index;
   uint32_t access_type;
+  bool use_device_profiler;
   bool bypass_check;
   try {
     std::tie(num_cores_r, input_args) =
@@ -76,6 +81,10 @@ int main(int argc, char** argv) {
         test_args::get_command_option_uint32_and_remaining_args(
             input_args, "--access-type", 0);
 
+    std::tie(use_device_profiler, input_args) =
+        test_args::has_command_option_and_remaining_args(
+            input_args, "--use-device-profiler");
+
     std::tie(bypass_check, input_args) =
         test_args::has_command_option_and_remaining_args(input_args,
                                                          "--bypass-check");
@@ -83,6 +92,15 @@ int main(int argc, char** argv) {
     test_args::validate_remaining_args(input_args);
   } catch (const std::exception& e) {
     log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
+  }
+
+  if (use_device_profiler) {
+#if !defined(PROFILER)
+    log_fatal(LogTest,
+              "Metal library and test code should be build with "
+              "'ENABLE_PROFILER=1' to use device profiler");
+#endif
+    setenv("TT_METAL_DEVICE_PROFILER", "1", true);
   }
 
   try {
@@ -160,6 +178,12 @@ int main(int argc, char** argv) {
     elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
 
     log_info(LogTest, "Time elapsed for NOC transfers: {}us", elapsed_us);
+
+    if (use_device_profiler) {
+      elapsed_cc = get_t0_to_any_riscfw_end_cycle(device, program);
+      log_info(LogTest, "Clock cycles with device profiler: {}cycles",
+               elapsed_cc);
+    }
 
     pass &= tt_metal::CloseDevice(device);
   } catch (const std::exception& e) {

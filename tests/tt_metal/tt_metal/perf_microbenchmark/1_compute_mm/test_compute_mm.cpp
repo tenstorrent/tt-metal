@@ -109,8 +109,6 @@ tt_metal::Program create_program(
     uint32_t in1_cb_addr, uint32_t zero_cb_addr, uint32_t out_cb_addr,
     uint32_t in0_addr, uint32_t in1_addr, uint32_t out_addr);
 
-int get_tt_npu_clock(tt_metal::Device* device);
-
 ////////////////////////////////////////////////////////////////////////////
 //                      Main
 ////////////////////////////////////////////////////////////////////////////
