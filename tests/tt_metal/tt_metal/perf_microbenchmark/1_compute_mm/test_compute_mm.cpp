@@ -47,6 +47,7 @@ using namespace tt;
 //     --n <size in elements>
 //     --k <size in elements>
 //     --slow-dispatch-mode <0 for fast dispatch mode, 1 for slow dispatch mode>
+//     --bypass-check (set to bypass checking performance criteria fulfillment)
 ////////////////////////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////////////////////

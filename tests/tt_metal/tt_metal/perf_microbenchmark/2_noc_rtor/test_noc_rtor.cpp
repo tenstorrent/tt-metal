@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
   uint32_t noc_index;
   uint32_t access_type;
   bool use_device_profiler;
-  bool bypass_check;
+  bool bypass_check = false;
   try {
     std::tie(num_cores_r, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(input_args,
@@ -110,6 +110,8 @@ int main(int argc, char** argv) {
     int device_id = 0;
     tt_metal::Device* device = tt_metal::CreateDevice(device_id);
     CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
+
+    int clock_freq_mhz = get_tt_npu_clock(device);
 
     uint32_t single_tile_size = 2 * 1024;
     uint32_t page_size = single_tile_size;
@@ -181,8 +183,9 @@ int main(int argc, char** argv) {
 
     if (use_device_profiler) {
       elapsed_cc = get_t0_to_any_riscfw_end_cycle(device, program);
-      log_info(LogTest, "Clock cycles with device profiler: {}cycles",
-               elapsed_cc);
+      elapsed_us = (double)elapsed_cc / clock_freq_mhz;
+      log_info(LogTest, "Time elapsed uisng device profiler: {}us ({}cycles)",
+               elapsed_us, elapsed_cc);
     }
 
     pass &= tt_metal::CloseDevice(device);
