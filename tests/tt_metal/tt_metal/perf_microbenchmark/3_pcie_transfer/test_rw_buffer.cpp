@@ -31,7 +31,7 @@ using std::chrono::microseconds;
 
 int main(int argc, char** argv) {
   bool pass = true;
-  bool bypass_check = false;
+  bool bypass_check;
   double h2d_bandwidth = 0;
   double d2h_bandwidth = 0;
 
