@@ -554,7 +554,7 @@ def test_resnet50_conv(
                 per_core_out_matrix_h_ntiles,
                 per_core_weight_matrix_w_ntiles,
                 conv_bias_pyt.reshape(-1).tolist(),
-                memory_config,
+                output_mem_config=memory_config,
             )
 
         conv_input_on_device = tt_lib.tensor.Tensor(
