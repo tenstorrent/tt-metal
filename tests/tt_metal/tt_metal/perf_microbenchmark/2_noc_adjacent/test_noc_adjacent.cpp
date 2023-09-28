@@ -17,7 +17,21 @@ using std::chrono::duration_cast;
 using std::chrono::microseconds;
 
 ////////////////////////////////////////////////////////////////////////////////
-// TODO
+// This test measures the performance of adjacent NOC data transfer. Every
+// Tensix cores read from or write to the L1 of the neighbor Tensix core. The
+// direction of the transfer is fixed within a test. A user can change the
+// direction of the transfer by giving an input argument.
+//
+// Usage example:
+//   ./test_noc_adjacent
+//     --cores-r <number of cores in a row>
+//     --cores-c <number of cores in a column>
+//     --num-tiles <total number of tiles each core transfers>
+//     --tiles-per-transfer <number of tiles for each transfer>
+//     --noc-index <NOC index to use>
+//     --noc-direction <direction of data transfer:
+//                      0 for +x, 1 for -y, 2 for -x, and 3 for +y>
+//     --access-type <0 for read access, 1 for write access>
 ////////////////////////////////////////////////////////////////////////////////
 
 int main(int argc, char** argv) {
@@ -26,7 +40,7 @@ int main(int argc, char** argv) {
   }
 
   bool pass = true;
-  unsigned long elapsed_us;
+  double measured_bandwidth = 0;
 
   ////////////////////////////////////////////////////////////////////////////
   //                      Initial Runtime Args Parse
@@ -38,6 +52,7 @@ int main(int argc, char** argv) {
   uint32_t noc_index;
   uint32_t noc_direction;
   uint32_t access_type;
+  uint32_t tiles_per_transfer;
   try {
     std::tie(num_cores_r, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(input_args,
@@ -50,6 +65,10 @@ int main(int argc, char** argv) {
         test_args::get_command_option_uint32_and_remaining_args(
             input_args, "--num-tiles", 256);
 
+    std::tie(tiles_per_transfer, input_args) =
+        test_args::get_command_option_uint32_and_remaining_args(
+            input_args, "--tiles-per-transfer", 1);
+
     std::tie(noc_index, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(
             input_args, "--noc-index", 0);
@@ -61,6 +80,8 @@ int main(int argc, char** argv) {
     std::tie(access_type, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(
             input_args, "--access-type", 0);
+
+    test_args::validate_remaining_args(input_args);
   } catch (const std::exception& e) {
     log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
   }
@@ -72,6 +93,9 @@ int main(int argc, char** argv) {
     int device_id = 0;
     tt_metal::Device* device = tt_metal::CreateDevice(device_id);
     CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
+
+    tt_cluster* cluster = device->cluster();
+    int clock_freq_mhz = cluster->get_device_aiclk(0);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -131,9 +155,10 @@ int main(int argc, char** argv) {
         CoreCoord adjacent_core_noc =
             device->worker_core_from_logical_core(adjacent_core_logical);
 
-        vector<uint32_t> noc_runtime_args = {(uint32_t)adjacent_core_noc.x,
-                                             (uint32_t)adjacent_core_noc.y,
-                                             cb_src1.address(), num_tiles};
+        vector<uint32_t> noc_runtime_args = {
+            (uint32_t)adjacent_core_noc.x, (uint32_t)adjacent_core_noc.y,
+            cb_src1.address(), num_tiles / tiles_per_transfer,
+            tiles_per_transfer};
         SetRuntimeArgs(program, noc_kernel, logical_core, noc_runtime_args);
       }
     }
@@ -147,9 +172,18 @@ int main(int argc, char** argv) {
     EnqueueProgram(cq, program, false);
     Finish(cq);
     auto t_end = std::chrono::steady_clock::now();
-    elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
+    unsigned long elapsed_us =
+        duration_cast<microseconds>(t_end - t_begin).count();
+    unsigned long elapsed_cc = clock_freq_mhz * elapsed_us;
 
-    log_info(LogTest, "Time elapsed for NOC transfers: {}us", elapsed_us);
+    log_info(LogTest, "Time elapsed for NOC transfers: {}us ({}cycles)",
+             elapsed_us, elapsed_cc);
+
+    // total transfer amount per core = tile size * number of tiles
+    // NOC bandwidth = total transfer amount per core / elapsed clock cycle
+    measured_bandwidth = (double)single_tile_size * num_tiles / elapsed_cc;
+
+    log_info(LogTest, "Measured NOC bandwidth: {:.3f}B/cc", measured_bandwidth);
 
     pass &= tt_metal::CloseDevice(device);
   } catch (const std::exception& e) {
@@ -160,8 +194,17 @@ int main(int argc, char** argv) {
 
   // Determine if it passes performance goal
   if (pass) {
-    // TODO: Numbers are TBD in SoW
-    ;
+    // goal is 95% of theoretical peak using a single NOC channel
+    // theoretical peak: 32bytes per clock cycle
+    double target_bandwidth = 32 * 0.9;
+
+    if (measured_bandwidth > target_bandwidth) {
+      pass = false;
+      log_error(LogTest,
+                "The NOC bandwidth does not meet the criteria. "
+                "Current: {:.3f}B/cc, goal: <{:.3f}B/cc",
+                measured_bandwidth, target_bandwidth);
+    }
   }
 
   if (pass) {
