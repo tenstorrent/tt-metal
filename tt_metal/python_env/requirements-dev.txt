@@ -26,3 +26,5 @@ accelerate==0.19.0
 ftfy==6.1.1
 gitpython==3.1.32
 einops==0.6.1
+evaluate==0.4.0
+bert-score==0.3.12
