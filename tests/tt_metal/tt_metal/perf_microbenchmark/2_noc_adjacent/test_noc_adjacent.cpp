@@ -86,6 +86,21 @@ int main(int argc, char** argv) {
     log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
   }
 
+  if (num_tiles % tiles_per_transfer != 0) {
+    log_fatal(
+        tt::LogTest,
+        "Total number of tiles each core transfers ({}) must be the multiple "
+        "of number of tiles for each transfer ({})",
+        num_tiles, tiles_per_transfer);
+  }
+
+  if (num_tiles > tiles_per_transfer) {
+    log_fatal(tt::LogTest,
+              "Total number of tiles each core transfers ({}) must be bigger "
+              "than or equal to the number of tiles for each transfer ({})",
+              num_tiles, tiles_per_transfer);
+  }
+
   try {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
