@@ -15,6 +15,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/tt_metal/perf_microbenchmark/common/util_device_profiler.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/work_split.hpp"
 
 using namespace tt;
@@ -38,6 +39,8 @@ using std::chrono::microseconds;
 //   ./test_dram_offchip
 //     --input-size <size in bytes>
 //     --access-type <0 for read access, 1 for write access>
+//     --use-device-profiler (set to use device profiler for measurement)
+//     --bypass-check (set to bypass checking performance criteria fulfillment)
 ////////////////////////////////////////////////////////////////////////////////
 
 inline std::vector<std::uint32_t> create_random_vector_of_bfloat16(
@@ -80,7 +83,8 @@ int main(int argc, char **argv) {
   }
 
   bool pass = true;
-  bool bypass_check;
+  bool use_device_profiler;
+  bool bypass_check = false;
   double dram_bandwidth = 0.0f;
   tt::ARCH arch;
 
@@ -95,9 +99,15 @@ int main(int argc, char **argv) {
       std::tie(input_size, input_args) =
           test_args::get_command_option_uint64_and_remaining_args(
               input_args, "--input-size", 512 * 1024 * 1024);
+
       std::tie(access_type, input_args) =
           test_args::get_command_option_uint32_and_remaining_args(
               input_args, "--access-type", 0);
+
+      std::tie(use_device_profiler, input_args) =
+          test_args::has_command_option_and_remaining_args(
+              input_args, "--use-device-profiler");
+
       std::tie(bypass_check, input_args) =
           test_args::has_command_option_and_remaining_args(input_args,
                                                            "--bypass-check");
@@ -109,6 +119,15 @@ int main(int argc, char **argv) {
       TT_ASSERT(false);
     }
     TT_ASSERT(input_size != 0, "--input-size should not be zero");
+
+    if (use_device_profiler) {
+#if !defined(PROFILER)
+      log_fatal(LogTest,
+                "Metal library and test code should be build with "
+                "'ENABLE_PROFILER=1' to use device profiler");
+#endif
+      setenv("TT_METAL_DEVICE_PROFILER", "1", true);
+    }
 
     tt::DataFormat tile_format = tt::DataFormat::Float16_b;
     uint32_t single_tile_size = tt_metal::detail::TileSize(tile_format);
@@ -129,6 +148,9 @@ int main(int argc, char **argv) {
     int device_id = 0;
     tt_metal::Device *device = tt_metal::CreateDevice(device_id);
     arch = device->arch();
+
+    int clock_freq_mhz = get_tt_npu_clock(device);
+
     uint32_t num_tiles = static_cast<uint32_t>(
         (input_size + single_tile_size - 1) / single_tile_size);
     auto compute_with_storage_grid_size =
@@ -204,8 +226,19 @@ int main(int argc, char **argv) {
     auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
     dram_bandwidth = (input_size / 1024.0 / 1024.0 / 1024.0) /
                      (elapsed_us / 1000.0 / 1000.0);
-    log_info(LogTest, "EnqueueProgram : {:.3f}ms, {:.3f}GB/s",
+    log_info(LogTest, "Time elapsed for DRAM accesses: {:.3f}ms ({:.3f}GB/s)",
              elapsed_us / 1000.0, dram_bandwidth);
+
+    if (use_device_profiler) {
+      unsigned long elapsed_cc =
+          get_t0_to_any_riscfw_end_cycle(device, program);
+      elapsed_us = (double)elapsed_cc / clock_freq_mhz;
+      dram_bandwidth = (input_size / 1024.0 / 1024.0 / 1024.0) /
+                       (elapsed_us / 1000.0 / 1000.0);
+      log_info(LogTest,
+               "Time elapsed using device profiler: {:.3f}ms ({:.3f}GB/s)",
+               elapsed_us / 1000.0, dram_bandwidth);
+    }
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Validation & Teardown
@@ -215,7 +248,6 @@ int main(int argc, char **argv) {
                    num_cores_x, core_group_1, core_group_2,
                    num_tiles_per_core_group_1, num_tiles_per_core_group_2,
                    cb_addr, num_reqs_at_a_time, single_tile_size, access_type);
-
   } catch (const std::exception &e) {
     pass = false;
     // Capture the exception error message

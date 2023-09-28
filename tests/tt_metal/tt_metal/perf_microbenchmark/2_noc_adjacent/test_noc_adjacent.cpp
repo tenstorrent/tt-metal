@@ -57,7 +57,7 @@ int main(int argc, char** argv) {
   uint32_t access_type;
   uint32_t tiles_per_transfer;
   bool use_device_profiler;
-  bool bypass_check;
+  bool bypass_check = false;
   try {
     std::tie(num_cores_r, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(input_args,
@@ -68,7 +68,7 @@ int main(int argc, char** argv) {
 
     std::tie(num_tiles, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(
-            input_args, "--num-tiles", 256);
+            input_args, "--num-tiles", 102400);
 
     std::tie(tiles_per_transfer, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(
@@ -217,8 +217,9 @@ int main(int argc, char** argv) {
 
     if (use_device_profiler) {
       elapsed_cc = get_t0_to_any_riscfw_end_cycle(device, program);
-      log_info(LogTest, "Clock cycles with device profiler: {}cycles",
-               elapsed_cc);
+      elapsed_us = (double)elapsed_cc / clock_freq_mhz;
+      log_info(LogTest, "Time elapsed using device profiler: {}us ({}cycles)",
+               elapsed_us, elapsed_cc);
     }
 
     // total transfer amount per core = tile size * number of tiles
@@ -238,13 +239,13 @@ int main(int argc, char** argv) {
   if (pass && bypass_check == false) {
     // goal is 95% of theoretical peak using a single NOC channel
     // theoretical peak: 32bytes per clock cycle
-    double target_bandwidth = 32 * 0.9;
+    double target_bandwidth = 32.0 * 0.9;
 
-    if (measured_bandwidth > target_bandwidth) {
+    if (measured_bandwidth < target_bandwidth) {
       pass = false;
       log_error(LogTest,
                 "The NOC bandwidth does not meet the criteria. "
-                "Current: {:.3f}B/cc, goal: <{:.3f}B/cc",
+                "Current: {:.3f}B/cc, goal: >={:.3f}B/cc",
                 measured_bandwidth, target_bandwidth);
     }
   }

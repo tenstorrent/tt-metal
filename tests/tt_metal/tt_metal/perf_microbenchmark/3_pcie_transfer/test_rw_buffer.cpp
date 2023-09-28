@@ -26,11 +26,12 @@ using std::chrono::microseconds;
 //   ./test_rw_buffer
 //     --buffer-type <0 for DRAM, 1 for L1>
 //     --transfer-size <size in bytes>
+//     --bypass-check (set to bypass checking performance criteria fulfillment)
 ////////////////////////////////////////////////////////////////////////////////
 
 int main(int argc, char** argv) {
   bool pass = true;
-  bool bypass_check;
+  bool bypass_check = false;
   double h2d_bandwidth = 0;
   double d2h_bandwidth = 0;
 
